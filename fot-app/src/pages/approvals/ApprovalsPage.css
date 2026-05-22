@@ -1029,6 +1029,29 @@
   margin-left: 0;
   align-self: flex-start;
 }
+.cor-toolbar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cor-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.cor-settings-btn:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
 
 .cor-actionbar {
   display: flex;

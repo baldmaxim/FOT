@@ -1,0 +1,145 @@
+/* Модалка «Настройка согласования выходных дней» — дерево отделов с галочками. */
+
+.casm-modal {
+  width: min(560px, 100%);
+  max-height: min(82dvh, 720px);
+}
+
+.casm-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px;
+}
+
+.casm-hint {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.casm-search {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  font-size: 16px; /* ≥16px — нет авто-зума на мобильных */
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+.casm-search:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
+.casm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.casm-count {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.casm-count b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.casm-bulk {
+  display: inline-flex;
+  gap: 14px;
+  flex-shrink: 0;
+}
+.casm-bulk button {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--primary);
+  cursor: pointer;
+}
+.casm-bulk button:hover {
+  text-decoration: underline;
+}
+
+.casm-tree {
+  flex: 1;
+  min-height: 140px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.casm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-height: 38px;
+}
+.casm-row:hover {
+  background: var(--surface-hover);
+}
+.casm-row input {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.casm-row-name {
+  font-size: 13.5px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.casm-row--brigade .casm-row-name,
+.casm-row--object .casm-row-name {
+  color: var(--text-secondary);
+}
+.casm-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.casm-empty,
+.casm-loading {
+  padding: 28px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.casm-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  cursor: pointer;
+}
+.casm-save:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

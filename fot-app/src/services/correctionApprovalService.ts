@@ -36,6 +36,11 @@ export interface IBulkResult {
   skipped_no_access: number;
 }
 
+export interface ICorrectionApprovalSettings {
+  /** UUID отделов, которым требуется согласование работы в выходной день. */
+  requiredDepartmentIds: string[];
+}
+
 interface ApiResponse<T> {
   data: T;
   message?: string;
@@ -108,5 +113,20 @@ export const correctionApprovalService = {
 
   async revert(id: number): Promise<void> {
     await apiClient.post(`/correction-approvals/${id}/revert`, {});
+  },
+
+  async getSettings(): Promise<ICorrectionApprovalSettings> {
+    const res = await apiClient.get<ApiResponse<ICorrectionApprovalSettings>>(
+      '/correction-approvals/settings',
+    );
+    return res.data ?? { requiredDepartmentIds: [] };
+  },
+
+  async saveSettings(requiredDepartmentIds: string[]): Promise<ICorrectionApprovalSettings> {
+    const res = await apiClient.put<ApiResponse<ICorrectionApprovalSettings>>(
+      '/correction-approvals/settings',
+      { requiredDepartmentIds },
+    );
+    return res.data ?? { requiredDepartmentIds };
   },
 };

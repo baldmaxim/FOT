@@ -7,6 +7,8 @@ import {
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
+import { correctionApprovalSettingsService } from '../services/correction-approval-settings.service.js';
+import { reapproveAdjustmentsForRange } from './timesheet.controller.js';
 
 const DIRECT_REPORTS_GROUP_ID = '__direct_reports__';
 const DIRECT_REPORTS_GROUP_NAME = 'Непосредственные подчинённые';
@@ -88,21 +90,21 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
     }
 
     const employeeIds = [...new Set(adjustments.map(a => Number(a.employee_id)))];
-    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null; kind: string | null }>(
-      `SELECT e.id, e.full_name, e.org_department_id, d.kind
+    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null }>(
+      `SELECT e.id, e.full_name, e.org_department_id
          FROM employees e
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
         WHERE e.id = ANY($1::bigint[])`,
       [employeeIds],
     );
 
     const allowedDeptIds = accessible === 'all' ? null : new Set(accessible);
+    const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
     const filteredEmployees = employees.filter(e => {
-      // Бригады не участвуют в согласовании корректировок.
-      if (e.kind === 'brigade') return false;
-      if (!allowedDeptIds) return true;
+      // Согласование требуется только отделам из настройки (whitelist).
       const deptId = e.org_department_id ? String(e.org_department_id) : null;
-      const inDeptSubtree = deptId !== null && allowedDeptIds.has(deptId);
+      if (!deptId || !requiredDepartments.has(deptId)) return false;
+      if (!allowedDeptIds) return true;
+      const inDeptSubtree = allowedDeptIds.has(deptId);
       const isDirectReport = directReportsSet.has(Number(e.id));
       return inDeptSubtree || isDirectReport;
     });
@@ -711,21 +713,21 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
     }
 
     const employeeIds = [...new Set(adjustments.map(a => Number(a.employee_id)))];
-    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null; kind: string | null }>(
-      `SELECT e.id, e.full_name, e.org_department_id, d.kind
+    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null }>(
+      `SELECT e.id, e.full_name, e.org_department_id
          FROM employees e
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
         WHERE e.id = ANY($1::bigint[])`,
       [employeeIds],
     );
 
     const allowedDeptIds = accessible === 'all' ? null : new Set(accessible);
+    const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
     const filteredEmployees = employees.filter(e => {
-      // Бригады не участвуют в истории согласований корректировок.
-      if (e.kind === 'brigade') return false;
-      if (!allowedDeptIds) return true;
+      // История согласований — только по отделам из настройки (whitelist).
       const deptId = e.org_department_id ? String(e.org_department_id) : null;
-      const inDeptSubtree = deptId !== null && allowedDeptIds.has(deptId);
+      if (!deptId || !requiredDepartments.has(deptId)) return false;
+      if (!allowedDeptIds) return true;
+      const inDeptSubtree = allowedDeptIds.has(deptId);
       const isDirectReport = directReportsSet.has(Number(e.id));
       return inDeptSubtree || isDirectReport;
     });
@@ -898,6 +900,80 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
   }
 };
 
+/** Окно пересчёта approval_status после смены настройки: 12 мес. назад … конец текущего месяца. */
+function settingsRecomputeWindow(): { start: string; end: string } {
+  const now = new Date();
+  const startD = new Date(now.getFullYear(), now.getMonth() - 12, 1);
+  const endD = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const iso = (d: Date): string =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { start: iso(startD), end: iso(endD) };
+}
+
+/** GET /settings — список отделов, которым требуется согласование выходных дней. */
+const getSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
+    res.json({ success: true, data: { requiredDepartmentIds: [...requiredDepartments] } });
+  } catch (err) {
+    console.error('correction-approval.getSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения настроек согласования' });
+  }
+};
+
+/**
+ * PUT /settings — сохранить whitelist отделов. После сохранения пересчитывает
+ * approval_status корректировок (auto_approved/pending) у сотрудников отделов,
+ * чей флаг изменился — записи появляются/исчезают из очереди сразу.
+ */
+const saveSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const raw = req.body?.requiredDepartmentIds;
+    if (!Array.isArray(raw)) {
+      res.status(400).json({ success: false, error: 'requiredDepartmentIds: ожидается массив' });
+      return;
+    }
+    const ids = raw.filter((v): v is string => typeof v === 'string');
+
+    const before = await correctionApprovalSettingsService.getRequiredDepartmentIds();
+    const saved = await correctionApprovalSettingsService.setRequiredDepartmentIds(ids, req.user.id);
+    const after = new Set(saved);
+
+    // Отделы, у которых флаг «требуется согласование» изменился.
+    const changedDeptIds: string[] = [];
+    for (const id of before) if (!after.has(id)) changedDeptIds.push(id);
+    for (const id of after) if (!before.has(id)) changedDeptIds.push(id);
+
+    let recomputed = 0;
+    if (changedDeptIds.length > 0) {
+      const empRows = await query<{ id: number }>(
+        `SELECT id FROM employees WHERE org_department_id = ANY($1::uuid[])`,
+        [changedDeptIds],
+      );
+      const employeeIds = empRows.map(r => Number(r.id));
+      if (employeeIds.length > 0) {
+        const { start, end } = settingsRecomputeWindow();
+        recomputed = await reapproveAdjustmentsForRange(employeeIds, start, end);
+      }
+    }
+
+    await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CORRECTION_APPROVAL_SETTINGS_CHANGED, {
+      entityType: 'system_setting',
+      entityId: 'correction_approval_required_department_ids',
+      details: {
+        required_count: saved.length,
+        changed_departments: changedDeptIds.length,
+        recomputed_adjustments: recomputed,
+      },
+    });
+
+    res.json({ success: true, data: { requiredDepartmentIds: saved } });
+  } catch (err) {
+    console.error('correction-approval.saveSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка сохранения настроек согласования' });
+  }
+};
+
 export const correctionApprovalController = {
   getPendingByDepartment,
   getHistoryByDepartment,
@@ -908,4 +984,6 @@ export const correctionApprovalController = {
   bulkApproveByIds,
   bulkRejectByIds,
   bulkRevertByIds,
+  getSettings,
+  saveSettings,
 };

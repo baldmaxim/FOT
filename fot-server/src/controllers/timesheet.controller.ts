@@ -44,6 +44,7 @@ import {
 import { fetchTimesheetDataForDepartment, fetchTimesheetDataForEmployees } from '../services/timesheet-export.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
+import { correctionApprovalSettingsService } from '../services/correction-approval-settings.service.js';
 import {
   loadEmployeeFullName as loadEmployeeFullNameForAudit,
   loadEmployeeFullNamesMap,
@@ -292,12 +293,11 @@ async function resolveAdjustmentApprovalStatus(
   if (hoursOverride !== null && Number(hoursOverride) === 0) return 'auto_approved';
   if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return 'auto_approved';
 
-  let employee: { id: number | string; kind: string | null } | null = null;
+  let employee: { id: number | string; org_department_id: string | null } | null = null;
   try {
-    employee = await query<{ id: number | string; kind: string | null }>(
-      `SELECT e.id, d.kind
+    employee = await query<{ id: number | string; org_department_id: string | null }>(
+      `SELECT e.id, e.org_department_id
          FROM employees e
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
         WHERE e.id = $1 LIMIT 1`,
       [employeeId],
     ).then(rows => rows[0] ?? null);
@@ -305,8 +305,11 @@ async function resolveAdjustmentApprovalStatus(
     return 'auto_approved';
   }
   if (!employee) return 'auto_approved';
-  // Бригады: правило согласования выходов в нерабочий день к ним не применяется.
-  if (employee.kind === 'brigade') return 'auto_approved';
+  // Согласование требуется только отделам из настройки (whitelist). Остальные
+  // (в т.ч. бригады и новые отделы) — auto_approved без проверок графика.
+  const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
+  const employeeDeptId = employee.org_department_id ? String(employee.org_department_id) : null;
+  if (!employeeDeptId || !requiredDepartments.has(employeeDeptId)) return 'auto_approved';
 
   const schedules = await resolveSchedulesForPeriod(
     [{ id: Number(employee.id) }],
@@ -335,7 +338,7 @@ async function resolveAdjustmentApprovalStatus(
  * Пересчитываем только строки в состоянии 'auto_approved'/'pending' — решения
  * руководителя ('approved'/'rejected') не трогаем. Возвращает число изменённых.
  */
-async function reapproveAdjustmentsForRange(
+export async function reapproveAdjustmentsForRange(
   employeeIds: number[] | null,
   startDate: string,
   endDate: string,
@@ -363,18 +366,25 @@ async function reapproveAdjustmentsForRange(
   const empList = empIds.map(id => ({ id }));
   const schedules = await resolveSchedulesForPeriod(empList, startDate, endDate);
 
-  // Один запрос на весь диапазон: сотрудники бригад идут в auto_approved без проверок графика.
-  const kindMap = new Map<number, string | null>();
+  // Один запрос на весь диапазон: отдел сотрудника + whitelist отделов из
+  // настройки. Отдел не из whitelist → auto_approved без проверок графика.
+  const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
+  const deptMap = new Map<number, string | null>();
   if (empIds.length > 0) {
-    const kindRows = await query<{ id: number | string; kind: string | null }>(
-      `SELECT e.id, d.kind
+    const deptRows = await query<{ id: number | string; org_department_id: string | null }>(
+      `SELECT e.id, e.org_department_id
          FROM employees e
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
         WHERE e.id = ANY($1::int[])`,
       [empIds],
     );
-    for (const r of kindRows) kindMap.set(Number(r.id), r.kind);
+    for (const r of deptRows) {
+      deptMap.set(Number(r.id), r.org_department_id ? String(r.org_department_id) : null);
+    }
   }
+  const isDepartmentApprovalRequired = (empId: number): boolean => {
+    const deptId = deptMap.get(empId) ?? null;
+    return deptId != null && requiredDepartments.has(deptId);
+  };
 
   // Производственный календарь грузим по месяцам диапазона один раз.
   const calendarCache = new Map<string, Awaited<ReturnType<typeof loadCalendarMonth>>>();
@@ -400,7 +410,7 @@ async function reapproveAdjustmentsForRange(
       target = 'auto_approved';
     } else if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) {
       target = 'auto_approved';
-    } else if (kindMap.get(empId) === 'brigade') {
+    } else if (!isDepartmentApprovalRequired(empId)) {
       target = 'auto_approved';
     } else {
       const schedule = schedules.get(empId)?.get(workDate);

@@ -1,6 +1,6 @@
 import { type FC, useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, FileText, Download } from 'lucide-react';
+import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, FileText, Download, Settings } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -17,6 +17,7 @@ import {
 import { timesheetService } from '../../services/timesheetService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
+import { CorrectionApprovalSettingsModal } from './CorrectionApprovalSettingsModal';
 const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
   default: module.TimesheetCorrectionModal,
 })));
@@ -168,6 +169,7 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showSettings, setShowSettings] = useState(false);
 
   const toggleNotes = (id: number) => {
     setExpandedNotes(prev => {
@@ -311,25 +313,38 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   return (
     <>
       <div className="approvals-toolbar cor-toolbar">
-        <div className="cor-view-tabs" role="tablist" aria-label="Раздел согласования">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === 'pending'}
-            className={`cor-view-tab${view === 'pending' ? ' is-active' : ''}`}
-            onClick={() => { if (view !== 'pending') { setSelectedIds(new Set()); setView('pending'); } }}
-          >
-            На проверке
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === 'history'}
-            className={`cor-view-tab${view === 'history' ? ' is-active' : ''}`}
-            onClick={() => { if (view !== 'history') { setSelectedIds(new Set()); setView('history'); } }}
-          >
-            История
-          </button>
+        <div className="cor-toolbar-top">
+          <div className="cor-view-tabs" role="tablist" aria-label="Раздел согласования">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'pending'}
+              className={`cor-view-tab${view === 'pending' ? ' is-active' : ''}`}
+              onClick={() => { if (view !== 'pending') { setSelectedIds(new Set()); setView('pending'); } }}
+            >
+              На проверке
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'history'}
+              className={`cor-view-tab${view === 'history' ? ' is-active' : ''}`}
+              onClick={() => { if (view !== 'history') { setSelectedIds(new Set()); setView('history'); } }}
+            >
+              История
+            </button>
+          </div>
+          {canReview && (
+            <button
+              type="button"
+              className="cor-settings-btn"
+              onClick={() => setShowSettings(true)}
+              title="Настройка согласования по отделам"
+              aria-label="Настройка согласования по отделам"
+            >
+              <Settings size={16} />
+            </button>
+          )}
         </div>
 
         {canSelect && groups.length > 0 && (
@@ -501,6 +516,10 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
             );
           })}
         </ul>
+      )}
+
+      {showSettings && (
+        <CorrectionApprovalSettingsModal onClose={() => setShowSettings(false)} />
       )}
     </>
   );

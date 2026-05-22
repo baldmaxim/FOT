@@ -28,6 +28,18 @@ router.use((req, res, next) => {
 });
 
 router.get(
+  '/settings',
+  requirePageAccess('/timesheet-hr', 'view'),
+  correctionApprovalController.getSettings,
+);
+
+router.put(
+  '/settings',
+  requirePageAccess('/timesheet-hr', 'edit'),
+  correctionApprovalController.saveSettings,
+);
+
+router.get(
   '/pending-by-department',
   requirePageAccess('/timesheet-hr', 'view'),
   correctionApprovalController.getPendingByDepartment,
