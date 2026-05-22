@@ -12,7 +12,7 @@ export const CONTRACTOR_ROOT_NAME = 'подрядные организации';
 export const getContractorRootId = async (): Promise<string | null> => {
   const row = await queryOne<{ id: string }>(
     `SELECT id FROM org_departments
-      WHERE name = $1 AND is_active = true
+      WHERE lower(name) = lower($1) AND is_active = true
       LIMIT 1`,
     [CONTRACTOR_ROOT_NAME],
   );
