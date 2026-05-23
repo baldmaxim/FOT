@@ -36,9 +36,6 @@ router.post('/:id/approve', requirePageAccess('/timesheet-hr', 'edit'), timeshee
 router.post('/:id/reject', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.reject);
 router.post('/:id/return-to-rework', requirePageAccess('/timesheet-hr', 'edit'), timesheetApprovalController.returnToRework);
 
-// Отделы прямых подчинённых — для селектора отдела у руководителя «по людям».
-router.get('/direct-report-departments', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.getDirectReportDepartments);
-
 // Вложения к подаче табеля (подтверждения работы в выходные).
 // Загрузка — multipart через бэкенд (файл идёт в R2 серверно, без браузерного PUT).
 router.post('/attachments', requirePageAccess('/timesheet', 'edit'), upload.single('file'), timesheetApprovalController.uploadAttachment);

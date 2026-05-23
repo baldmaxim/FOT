@@ -35,15 +35,23 @@ const iterateDates = (startDate: string, endDate: string, cb: (iso: string) => v
  * нерабочий по его графику день — выходной, даже если по календарю это будний
  * (важно для сменных/цикличных графиков). Праздники производственного
  * календаря учитываются внутри isWorkingDay (respects_holidays).
+ *
+ * Если передан employeeIds — используется он (персональная подача руководителя
+ * «по людям»); иначе тянется состав отдела через listEmployeeIdsAssignedToDepartmentPeriod.
  */
 export async function checkWeekendWorkRequirement(params: {
-  departmentId: string;
+  departmentId: string | null;
   startDate: string;
   endDate: string;
+  employeeIds?: number[];
 }): Promise<IWeekendWorkCheck> {
   const { departmentId, startDate, endDate } = params;
 
-  const employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate);
+  const employeeIds = params.employeeIds
+    ? [...new Set(params.employeeIds)].filter((id): id is number => Number.isInteger(id) && id > 0)
+    : departmentId
+      ? await listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate)
+      : [];
   if (employeeIds.length === 0) {
     return { requires: false, weekendDates: [], weekendWorkDates: [] };
   }
@@ -159,10 +167,11 @@ export function evaluateManagerObjMemoRequirement(input: {
  */
 export async function checkManagerObjWeekendMemoRequirement(params: {
   submitterRoleCode: string;
-  departmentId: string;
+  departmentId: string | null;
   startDate: string;
   endDate: string;
   approvalId: number | null;
+  employeeIds?: number[];
 }): Promise<IManagerObjMemoCheck> {
   if (params.submitterRoleCode !== MANAGER_OBJ_ROLE_CODE) {
     return { required: false, satisfied: true, weekendWorkDates: [] };
@@ -172,6 +181,7 @@ export async function checkManagerObjWeekendMemoRequirement(params: {
     departmentId: params.departmentId,
     startDate: params.startDate,
     endDate: params.endDate,
+    employeeIds: params.employeeIds,
   });
 
   const attachmentCount = params.approvalId

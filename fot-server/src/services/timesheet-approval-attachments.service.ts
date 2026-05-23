@@ -17,19 +17,32 @@ export interface IApprovalAttachment {
 }
 
 export async function findOrCreateDraftApproval(params: {
-  departmentId: string;
+  departmentId: string | null;
+  managerEmployeeId: number | null;
   startDate: string;
   endDate: string;
   userId: string;
 }): Promise<{ id: number; status: string }> {
-  const { departmentId, startDate, endDate } = params;
+  const { departmentId, managerEmployeeId, startDate, endDate } = params;
 
-  const existing = await queryOne<{ id: number | string; status: string }>(
-    `SELECT id, status FROM timesheet_approvals
-       WHERE department_id = $1 AND start_date = $2 AND end_date = $3
-       LIMIT 1`,
-    [departmentId, startDate, endDate],
-  );
+  if ((departmentId == null) === (managerEmployeeId == null)) {
+    throw new Error('findOrCreateDraftApproval: ровно одно из departmentId/managerEmployeeId должно быть указано');
+  }
+
+  const existing = managerEmployeeId != null
+    ? await queryOne<{ id: number | string; status: string }>(
+        `SELECT id, status FROM timesheet_approvals
+           WHERE manager_employee_id = $1 AND start_date = $2 AND end_date = $3
+           LIMIT 1`,
+        [managerEmployeeId, startDate, endDate],
+      )
+    : await queryOne<{ id: number | string; status: string }>(
+        `SELECT id, status FROM timesheet_approvals
+           WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+             AND manager_employee_id IS NULL
+           LIMIT 1`,
+        [departmentId, startDate, endDate],
+      );
 
   if (existing) {
     return { id: Number(existing.id), status: String(existing.status) };
@@ -37,10 +50,10 @@ export async function findOrCreateDraftApproval(params: {
 
   const now = new Date().toISOString();
   const inserted = await queryOne<{ id: number | string; status: string }>(
-    `INSERT INTO timesheet_approvals (department_id, start_date, end_date, status, updated_at)
-       VALUES ($1, $2, $3, 'draft', $4)
+    `INSERT INTO timesheet_approvals (department_id, manager_employee_id, start_date, end_date, status, updated_at)
+       VALUES ($1, $2, $3, $4, 'draft', $5)
        RETURNING id, status`,
-    [departmentId, startDate, endDate, now],
+    [departmentId, managerEmployeeId, startDate, endDate, now],
   );
   if (!inserted) {
     throw new Error('Failed to create draft approval');

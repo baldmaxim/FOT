@@ -1,17 +1,23 @@
 import { useQuery } from '@tanstack/react-query';
-import { timesheetApprovalService, type TimesheetApprovalStatus } from '../services/timesheetApprovalService';
+import {
+  timesheetApprovalService,
+  type TimesheetApprovalStatus,
+  type TimesheetSubmissionMode,
+} from '../services/timesheetApprovalService';
 import { timesheetService, type IWeekendMemoPreview } from '../services/timesheetService';
 
 export const getTimesheetApprovalStatusQueryKey = (
+  mode: TimesheetSubmissionMode,
   departmentId: string | null,
   startDate: string,
   endDate: string,
-) => ['timesheet-approval', 'status', departmentId, startDate, endDate] as const;
+) => ['timesheet-approval', 'status', mode, departmentId, startDate, endDate] as const;
 
 export const getTimesheetApprovalDepartmentListQueryKey = (
+  mode: TimesheetSubmissionMode,
   departmentId: string | null,
   month: string,
-) => ['timesheet-approval', 'department-list', departmentId, month] as const;
+) => ['timesheet-approval', 'department-list', mode, departmentId, month] as const;
 
 export const getTimesheetApprovalReviewListQueryKey = (
   status: TimesheetApprovalStatus | 'submitted',
@@ -29,27 +35,42 @@ export const getTimesheetResponsibleCandidatesQueryKey = (
   departmentId: string | null,
 ) => ['timesheet-approval', 'responsible-candidates', departmentId] as const;
 
-/** Статус согласования отдела для конкретного диапазона (точное совпадение). */
+/**
+ * Статус согласования для конкретного диапазона.
+ * mode='department' — по отделу; mode='personal' — персональная подача текущего пользователя.
+ */
 export const useTimesheetApprovalStatus = (
+  mode: TimesheetSubmissionMode,
   departmentId: string | null,
   startDate: string,
   endDate: string,
 ) => useQuery({
-  queryKey: getTimesheetApprovalStatusQueryKey(departmentId, startDate, endDate),
-  queryFn: () => timesheetApprovalService.getStatus(departmentId as string, startDate, endDate),
-  enabled: !!departmentId && !!startDate && !!endDate,
+  queryKey: getTimesheetApprovalStatusQueryKey(mode, departmentId, startDate, endDate),
+  queryFn: () => timesheetApprovalService.getStatus(
+    mode === 'personal' ? { mode: 'personal' } : { mode: 'department', department_id: departmentId },
+    startDate,
+    endDate,
+  ),
+  enabled: !!startDate && !!endDate && (mode === 'personal' || !!departmentId),
   staleTime: 30_000,
 });
 
-/** Список всех согласований отдела, пересекающихся с месяцем (для отображения блокировок). */
+/**
+ * Список согласований за месяц (для отображения блокировок).
+ * mode='department' — по выбранному отделу; mode='personal' — свои персональные.
+ */
 export const useTimesheetDepartmentApprovals = (
+  mode: TimesheetSubmissionMode,
   departmentId: string | null,
   month: string,
   enabled = true,
 ) => useQuery({
-  queryKey: getTimesheetApprovalDepartmentListQueryKey(departmentId, month),
-  queryFn: () => timesheetApprovalService.listDepartment(departmentId as string, month),
-  enabled: enabled && !!departmentId && !!month,
+  queryKey: getTimesheetApprovalDepartmentListQueryKey(mode, departmentId, month),
+  queryFn: () => (mode === 'personal'
+    ? timesheetApprovalService.listPersonal(month)
+    : timesheetApprovalService.listDepartment(departmentId as string, month)
+  ),
+  enabled: enabled && !!month && (mode === 'personal' || !!departmentId),
   staleTime: 30_000,
   placeholderData: previousData => previousData,
 });

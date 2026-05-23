@@ -42,7 +42,7 @@ import {
 } from '../services/timesheet-approval-employees-snapshot.service.js';
 import {
   listDirectReportDepartmentIds,
-  listDirectReportDepartments,
+  listDirectSubordinates,
 } from '../services/employee-direct-reports.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
 import path from 'path';
@@ -97,6 +97,14 @@ async function loadDepartmentName(departmentId: string): Promise<string> {
   return (data?.name as string | undefined) || departmentId;
 }
 
+async function loadEmployeeFullName(employeeId: number): Promise<string | null> {
+  const row = await queryOne<{ full_name: string | null }>(
+    `SELECT full_name FROM employees WHERE id = $1 LIMIT 1`,
+    [employeeId],
+  );
+  return row?.full_name ?? null;
+}
+
 async function loadApprovalById(id: string): Promise<TimesheetApproval | null> {
   return queryOne<TimesheetApproval>(
     `SELECT * FROM timesheet_approvals WHERE id = $1 LIMIT 1`,
@@ -104,17 +112,32 @@ async function loadApprovalById(id: string): Promise<TimesheetApproval | null> {
   );
 }
 
-async function ensureApprovalDepartmentAccess(
+/**
+ * HR-доступ к согласованию: для подачи отдела — обычная проверка по scope;
+ * для персональной подачи (department_id NULL) — пускаем самого автора (manager)
+ * и всех, у кого scope='all' (admin/HR с data.scope.all).
+ */
+async function ensureApprovalAccess(
   req: AuthenticatedRequest,
-  departmentId: string,
+  approval: Pick<TimesheetApproval, 'department_id' | 'manager_employee_id'>,
 ): Promise<boolean> {
-  const scopedDepartmentId = await resolveScopedDepartmentId(req, departmentId);
-  return !!scopedDepartmentId && scopedDepartmentId === departmentId;
+  if (approval.department_id) {
+    const scopedDepartmentId = await resolveScopedDepartmentId(req, approval.department_id);
+    return !!scopedDepartmentId && scopedDepartmentId === approval.department_id;
+  }
+  if (approval.manager_employee_id != null) {
+    if (req.user.employee_id && req.user.employee_id === approval.manager_employee_id) {
+      return true;
+    }
+    const scope = await resolveRequestDataScope(req);
+    return scope === 'all';
+  }
+  return false;
 }
 
 /**
  * Доступ к подаче/вложениям табеля отдела. В отличие от строгого
- * ensureApprovalDepartmentAccess (HR-эндпоинты), даёт доступ ещё и руководителю
+ * ensureApprovalAccess (HR-эндпоинты), даёт доступ ещё и руководителю
  * «по людям»: если у пользователя есть активный прямой подчинённый
  * (employee_direct_reports) в этом отделе — он управляет его табелем, даже без
  * employee_department_access. Использовать ТОЛЬКО для /timesheet-эндпоинтов.
@@ -138,6 +161,43 @@ async function ensureTimesheetActionDepartmentAccess(
 ): Promise<boolean> {
   const resolved = await resolveTimesheetActionDepartmentId(req, departmentId);
   return resolved === departmentId;
+}
+
+/**
+ * Контекст персональной подачи для руководителя «по людям» (direct-reports-only).
+ * Возвращает список активных подчинённых, объединение их отделов
+ * (для адресации HR-уведомлений). Возвращает null, если у пользователя
+ * нет employee_id или нет ни одного активного подчинённого с org_department_id.
+ */
+async function resolvePersonalSubmissionContext(req: AuthenticatedRequest): Promise<{
+  managerEmployeeId: number;
+  employeeIds: number[];
+  affectedDepartmentIds: string[];
+} | null> {
+  if (!req.user.employee_id) return null;
+  const managerEmployeeId = req.user.employee_id;
+  const subordinateIds = await listDirectSubordinates(managerEmployeeId);
+  if (subordinateIds.length === 0) return null;
+
+  const rows = await query<{ id: number; org_department_id: string | null }>(
+    `SELECT id, org_department_id
+       FROM employees
+      WHERE id = ANY($1::int[])
+        AND (is_archived IS NULL OR is_archived = false)
+        AND (employment_status IS NULL OR employment_status = 'active')`,
+    [subordinateIds],
+  );
+
+  const employeeIds = rows.map(r => Number(r.id)).filter(id => Number.isInteger(id) && id > 0);
+  if (employeeIds.length === 0) return null;
+
+  const affectedDepartmentIds = [...new Set(
+    rows
+      .map(r => r.org_department_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  )];
+
+  return { managerEmployeeId, employeeIds, affectedDepartmentIds };
 }
 
 async function logApprovalAudit(
@@ -166,18 +226,44 @@ async function logApprovalAudit(
   });
 }
 
-async function notifyHrAboutSubmittedApproval(
-  departmentId: string,
-  range: ITimesheetDateRange,
-): Promise<void> {
-  const recipients = await listTimesheetWorkflowRecipientIds(departmentId, ['review', 'monitor']);
+async function notifyHrAboutSubmittedApproval(input: {
+  departmentId: string | null;
+  managerEmployeeId: number | null;
+  affectedDepartmentIds: string[];
+  employeeCount: number;
+  range: ITimesheetDateRange;
+}): Promise<void> {
+  const { departmentId, managerEmployeeId, affectedDepartmentIds, employeeCount, range } = input;
+
+  // Адресация: для полной подачи — получатели отдела; для персональной — объединение
+  // получателей всех отделов, в которых сидят подчинённые руководителя.
+  const recipientLists = await Promise.all(
+    (departmentId ? [departmentId] : affectedDepartmentIds).map(dept =>
+      listTimesheetWorkflowRecipientIds(dept, ['review', 'monitor']),
+    ),
+  );
+  const recipients = [...new Set(recipientLists.flat())];
   if (recipients.length === 0) return;
 
-  const departmentName = await loadDepartmentName(departmentId);
   const rangeLabel = formatTimesheetRangeLabel(range.startDate, range.endDate);
   const title = 'Табель отправлен на проверку';
-  const body = `Отдел ${departmentName}: табель за ${rangeLabel} отправлен на проверку HR.`;
-  const path = buildRangeRedirectPath('/timesheet-hr', range);
+  let body: string;
+  let path: string;
+  let tag: string;
+
+  if (managerEmployeeId != null) {
+    const managerName = (await loadEmployeeFullName(managerEmployeeId)) ?? 'руководитель';
+    body = `Персональная подача (${managerName}): табель за ${rangeLabel} — ${employeeCount} сотр. на проверке HR.`;
+    path = buildRangeRedirectPath('/timesheet-hr', range);
+    tag = `timesheet-submitted:personal:m${managerEmployeeId}:${range.startDate}:${range.endDate}`;
+  } else if (departmentId) {
+    const departmentName = await loadDepartmentName(departmentId);
+    body = `Отдел ${departmentName}: табель за ${rangeLabel} отправлен на проверку HR.`;
+    path = buildRangeRedirectPath('/timesheet-hr', range);
+    tag = `timesheet-submitted:${departmentId}:${range.startDate}:${range.endDate}`;
+  } else {
+    return;
+  }
 
   await notificationService.createMany(recipients.map(userId => ({
     userId,
@@ -186,6 +272,7 @@ async function notifyHrAboutSubmittedApproval(
     body,
     metadata: {
       departmentId,
+      managerEmployeeId,
       start_date: range.startDate,
       end_date: range.endDate,
       path,
@@ -201,50 +288,66 @@ async function notifyHrAboutSubmittedApproval(
       path,
       start_date: range.startDate,
       end_date: range.endDate,
-      tag: `timesheet-submitted:${departmentId}:${range.startDate}:${range.endDate}`,
+      tag,
     },
   );
 }
 
-async function notifyDepartmentAboutReview(
-  departmentId: string,
-  range: ITimesheetDateRange,
-  status: ReviewStatus,
-  submittedBy: string | null,
-  comment: string | null,
-): Promise<void> {
-  const recipients = new Set<string>();
-  const submitRecipients = await listTimesheetWorkflowRecipientIds(departmentId, ['submit']);
+async function notifyDepartmentAboutReview(input: {
+  departmentId: string | null;
+  managerEmployeeId: number | null;
+  affectedDepartmentIds: string[];
+  range: ITimesheetDateRange;
+  status: ReviewStatus;
+  submittedBy: string | null;
+  comment: string | null;
+}): Promise<void> {
+  const { departmentId, managerEmployeeId, affectedDepartmentIds, range, status, submittedBy, comment } = input;
 
-  for (const userId of submitRecipients) recipients.add(userId);
+  const recipients = new Set<string>();
+  const submitRecipientLists = await Promise.all(
+    (departmentId ? [departmentId] : affectedDepartmentIds).map(dept =>
+      listTimesheetWorkflowRecipientIds(dept, ['submit']),
+    ),
+  );
+  for (const list of submitRecipientLists) {
+    for (const userId of list) recipients.add(userId);
+  }
   if (submittedBy) recipients.add(submittedBy);
 
   if (recipients.size === 0) return;
 
-  const departmentName = await loadDepartmentName(departmentId);
   const rangeLabel = formatTimesheetRangeLabel(range.startDate, range.endDate);
   const commentSuffix = comment ? ` Комментарий: ${comment}` : '';
-  const path = buildRangeRedirectPath('/timesheet', range, departmentId);
+  const path = departmentId
+    ? buildRangeRedirectPath('/timesheet', range, departmentId)
+    : buildRangeRedirectPath('/timesheet', range);
+
+  const subjectName = managerEmployeeId != null
+    ? `Персональная подача (${(await loadEmployeeFullName(managerEmployeeId)) ?? 'руководитель'})`
+    : departmentId
+      ? `Отдел ${await loadDepartmentName(departmentId)}`
+      : 'Табель';
 
   let title = 'Статус табеля изменён';
-  let body = `Отдел ${departmentName}: статус табеля за ${rangeLabel} изменён.${commentSuffix}`;
+  let body = `${subjectName}: статус табеля за ${rangeLabel} изменён.${commentSuffix}`;
   let type = 'timesheet_approval_reviewed';
 
   if (status === 'approved') {
     title = 'Табель утверждён';
-    body = `Отдел ${departmentName}: табель за ${rangeLabel} утверждён.${commentSuffix}`;
+    body = `${subjectName}: табель за ${rangeLabel} утверждён.${commentSuffix}`;
     type = 'timesheet_approval_approved';
   }
 
   if (status === 'rejected') {
     title = 'Табель отклонён';
-    body = `Отдел ${departmentName}: табель за ${rangeLabel} отклонён, нужна переподача.${commentSuffix}`;
+    body = `${subjectName}: табель за ${rangeLabel} отклонён, нужна переподача.${commentSuffix}`;
     type = 'timesheet_approval_rejected';
   }
 
   if (status === 'returned') {
     title = 'Табель возвращён на доработку';
-    body = `Отдел ${departmentName}: утверждённый табель за ${rangeLabel} возвращён на доработку.${commentSuffix}`;
+    body = `${subjectName}: утверждённый табель за ${rangeLabel} возвращён на доработку.${commentSuffix}`;
     type = 'timesheet_approval_returned';
   }
 
@@ -257,6 +360,7 @@ async function notifyDepartmentAboutReview(
     body,
     metadata: {
       departmentId,
+      managerEmployeeId,
       start_date: range.startDate,
       end_date: range.endDate,
       status,
@@ -273,7 +377,7 @@ async function notifyDepartmentAboutReview(
 
 async function persistApprovalTransition(input: {
   approvalId: number;
-  departmentId: string;
+  departmentId: string | null;
   range: ITimesheetDateRange;
   fromStatus: TimesheetApprovalStatus | null;
   toStatus: Exclude<TimesheetApprovalStatus, 'draft'>;
@@ -294,21 +398,18 @@ async function persistApprovalTransition(input: {
   });
 }
 
-/** Руководитель подаёт табель отдела за произвольный диапазон дат. */
+/**
+ * Руководитель подаёт табель за произвольный диапазон.
+ * Два режима:
+ *  - personal=true  → персональная подача руководителя «по людям»
+ *                     (department_id=NULL, manager_employee_id=user.employee_id,
+ *                      snapshot = его активные direct reports).
+ *  - personal=false → полная подача отдела (как раньше).
+ */
 const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
-    const deptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+    const personal = req.body?.personal === true;
     const range = parseRangeFromBody(req.body);
-
-    if (requestedDeptId && !deptId) {
-      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
-      return;
-    }
-    if (!deptId) {
-      res.status(400).json({ success: false, error: 'department_id обязателен' });
-      return;
-    }
 
     if (!range) {
       res.status(400).json({
@@ -335,14 +436,59 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const existing = await queryOne<TimesheetApproval>(
-      `SELECT * FROM timesheet_approvals
-         WHERE department_id = $1 AND start_date = $2 AND end_date = $3
-         LIMIT 1`,
-      [deptId, range.startDate, range.endDate],
-    );
+    let deptId: string | null = null;
+    let managerEmployeeId: number | null = null;
+    let employeeIds: number[] = [];
+    let affectedDepartmentIds: string[] = [];
 
-    const correctionCheck = await validateCorrectionAttachments(deptId, range);
+    if (personal) {
+      const ctx = await resolvePersonalSubmissionContext(req);
+      if (!ctx) {
+        res.status(403).json({
+          success: false,
+          error: 'Нет активных подчинённых для персональной подачи табеля',
+          code: 'NO_DIRECT_REPORTS',
+        });
+        return;
+      }
+      managerEmployeeId = ctx.managerEmployeeId;
+      employeeIds = ctx.employeeIds;
+      affectedDepartmentIds = ctx.affectedDepartmentIds;
+    } else {
+      const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id
+        ? req.body.department_id
+        : null;
+      const resolvedDeptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+      if (requestedDeptId && !resolvedDeptId) {
+        res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+        return;
+      }
+      if (!resolvedDeptId) {
+        res.status(400).json({ success: false, error: 'department_id обязателен' });
+        return;
+      }
+      deptId = resolvedDeptId;
+    }
+
+    const existing = personal
+      ? await queryOne<TimesheetApproval>(
+          `SELECT * FROM timesheet_approvals
+             WHERE manager_employee_id = $1 AND start_date = $2 AND end_date = $3
+             LIMIT 1`,
+          [managerEmployeeId, range.startDate, range.endDate],
+        )
+      : await queryOne<TimesheetApproval>(
+          `SELECT * FROM timesheet_approvals
+             WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+               AND manager_employee_id IS NULL
+             LIMIT 1`,
+          [deptId, range.startDate, range.endDate],
+        );
+
+    const correctionScope = personal
+      ? { kind: 'personal' as const, employeeIds }
+      : { kind: 'department' as const, departmentId: deptId! };
+    const correctionCheck = await validateCorrectionAttachments(correctionScope, range);
     if (!correctionCheck.ok) {
       res.status(400).json({
         success: false,
@@ -359,6 +505,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       startDate: range.startDate,
       endDate: range.endDate,
       approvalId: existing?.id ?? null,
+      employeeIds: personal ? employeeIds : undefined,
     });
     if (memoCheck.required && !memoCheck.satisfied) {
       res.status(400).json({
@@ -407,16 +554,21 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         } else {
           const result = await client.query<TimesheetApproval>(
             `INSERT INTO timesheet_approvals
-               (department_id, start_date, end_date, status, submitted_by, submitted_at,
-                reviewed_by, reviewed_at, review_comment, updated_at)
-               VALUES ($1, $2, $3, 'submitted', $4, $5, NULL, NULL, NULL, $6)
+               (department_id, manager_employee_id, start_date, end_date, status,
+                submitted_by, submitted_at, reviewed_by, reviewed_at, review_comment, updated_at)
+               VALUES ($1, $2, $3, $4, 'submitted', $5, $6, NULL, NULL, NULL, $7)
                RETURNING *`,
-            [deptId, range.startDate, range.endDate, req.user.id, now, now],
+            [deptId, managerEmployeeId, range.startDate, range.endDate, req.user.id, now, now],
           );
           row = result.rows[0] ?? null;
         }
         if (row) {
-          await snapshotApprovalEmployees(client, row.id, deptId, range.startDate, range.endDate);
+          const snapshotIds = personal
+            ? employeeIds
+            : await import('../services/timesheet-department-assignments.service.js').then(m =>
+                m.listEmployeeIdsAssignedToDepartmentPeriod(deptId!, range.startDate, range.endDate),
+              );
+          await snapshotApprovalEmployees(client, row.id, snapshotIds);
         }
         return row;
       });
@@ -425,7 +577,9 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       if (code === '23P01') {
         res.status(409).json({
           success: false,
-          error: 'Выбранный диапазон пересекается с уже поданным или утверждённым табелем этого отдела.',
+          error: personal
+            ? 'У вас уже есть персональная подача за этот период.'
+            : 'Выбранный диапазон пересекается с уже поданным или утверждённым табелем этого отдела.',
         });
         return;
       }
@@ -449,13 +603,23 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     await logApprovalAudit(req, approval.id, 'TIMESHEET_APPROVAL_SUBMITTED', {
       department_id: deptId,
+      manager_employee_id: managerEmployeeId,
       start_date: range.startDate,
       end_date: range.endDate,
       from_status: existing?.status ?? null,
       to_status: 'submitted',
     });
 
-    void notifyHrAboutSubmittedApproval(deptId, range).catch(notifyError => {
+    const employeeCount = personal
+      ? employeeIds.length
+      : (await listApprovalEmployees(approval.id)).length;
+    void notifyHrAboutSubmittedApproval({
+      departmentId: deptId,
+      managerEmployeeId,
+      affectedDepartmentIds,
+      employeeCount,
+      range,
+    }).catch(notifyError => {
       console.error('timesheet-approval.submit notify error:', notifyError);
     });
 
@@ -472,18 +636,9 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
  */
 const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id ? req.body.department_id : null;
-    const deptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+    const personal = req.body?.personal === true;
     const range = parseRangeFromBody(req.body);
 
-    if (requestedDeptId && !deptId) {
-      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
-      return;
-    }
-    if (!deptId) {
-      res.status(400).json({ success: false, error: 'department_id обязателен' });
-      return;
-    }
     if (!range) {
       res.status(400).json({
         success: false,
@@ -492,12 +647,45 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const existing = await queryOne<TimesheetApproval>(
-      `SELECT * FROM timesheet_approvals
-         WHERE department_id = $1 AND start_date = $2 AND end_date = $3
-         LIMIT 1`,
-      [deptId, range.startDate, range.endDate],
-    );
+    let deptId: string | null = null;
+    let managerEmployeeId: number | null = null;
+
+    if (personal) {
+      if (!req.user.employee_id) {
+        res.status(403).json({ success: false, error: 'Нет привязки к сотруднику', code: 'NO_DIRECT_REPORTS' });
+        return;
+      }
+      managerEmployeeId = req.user.employee_id;
+    } else {
+      const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id
+        ? req.body.department_id
+        : null;
+      const resolvedDeptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+      if (requestedDeptId && !resolvedDeptId) {
+        res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+        return;
+      }
+      if (!resolvedDeptId) {
+        res.status(400).json({ success: false, error: 'department_id обязателен' });
+        return;
+      }
+      deptId = resolvedDeptId;
+    }
+
+    const existing = personal
+      ? await queryOne<TimesheetApproval>(
+          `SELECT * FROM timesheet_approvals
+             WHERE manager_employee_id = $1 AND start_date = $2 AND end_date = $3
+             LIMIT 1`,
+          [managerEmployeeId, range.startDate, range.endDate],
+        )
+      : await queryOne<TimesheetApproval>(
+          `SELECT * FROM timesheet_approvals
+             WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+               AND manager_employee_id IS NULL
+             LIMIT 1`,
+          [deptId, range.startDate, range.endDate],
+        );
 
     if (!existing || existing.status !== 'submitted') {
       res.status(409).json({
@@ -529,6 +717,7 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     await logApprovalAudit(req, approval.id, 'TIMESHEET_APPROVAL_RECALLED', {
       department_id: deptId,
+      manager_employee_id: managerEmployeeId,
       start_date: range.startDate,
       end_date: range.endDate,
       from_status: existing.status,
@@ -542,12 +731,36 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-/** Статус согласования по отделу и конкретному диапазону. */
+/**
+ * Статус согласования по отделу+диапазону (personal=false) или по персональной
+ * подаче текущего пользователя+диапазону (personal=true).
+ */
 const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const personal = req.query.personal === 'true' || req.query.personal === '1';
+    const range = parseRangeFromQuery(req.query as Record<string, unknown>);
+    if (!range) {
+      res.json({ success: true, data: null });
+      return;
+    }
+
+    if (personal) {
+      if (!req.user.employee_id) {
+        res.json({ success: true, data: null });
+        return;
+      }
+      const data = await queryOne<TimesheetApproval>(
+        `SELECT * FROM timesheet_approvals
+           WHERE manager_employee_id = $1 AND start_date = $2 AND end_date = $3
+           LIMIT 1`,
+        [req.user.employee_id, range.startDate, range.endDate],
+      );
+      res.json({ success: true, data });
+      return;
+    }
+
     const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
     const department_id = await resolveTimesheetActionDepartmentId(req, requestedDepartmentId);
-    const range = parseRangeFromQuery(req.query as Record<string, unknown>);
 
     // Раньше при недоступном отделе тихо возвращали data: null — клиент думал «согласования
     // нет», хотя на деле просто нет прав смотреть. Делаем явный 403, чтобы не маскировать.
@@ -555,7 +768,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
       res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
       return;
     }
-    if (!department_id || !range) {
+    if (!department_id) {
       res.json({ success: true, data: null });
       return;
     }
@@ -563,6 +776,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
     const data = await queryOne<TimesheetApproval>(
       `SELECT * FROM timesheet_approvals
          WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+           AND manager_employee_id IS NULL
          LIMIT 1`,
       [department_id, range.startDate, range.endDate],
     );
@@ -574,23 +788,16 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
 };
 
 /**
- * Список согласований отдела, пересекающихся с указанным диапазоном (или с месяцем,
- * если передан month=YYYY-MM). Используется фронтом для показа всех заблокированных
- * и поданных диапазонов вокруг текущей выборки.
+ * Список согласований, пересекающихся с указанным диапазоном (или с месяцем).
+ * scope:
+ *  - 'department' (по умолчанию) — полные подачи отдела (manager_employee_id IS NULL);
+ *  - 'personal'                 — персональные подачи текущего пользователя;
+ *  - 'all'                      — оба (для совмещённых ролей).
  */
 const listDepartmentApprovals = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-    const department_id = await resolveTimesheetActionDepartmentId(req, requestedDepartmentId);
-
-    if (requestedDepartmentId && !department_id) {
-      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
-      return;
-    }
-    if (!department_id) {
-      res.status(400).json({ success: false, error: 'department_id обязателен' });
-      return;
-    }
+    const scopeParam = typeof req.query.scope === 'string' ? req.query.scope : 'department';
+    const scope = (scopeParam === 'personal' || scopeParam === 'all') ? scopeParam : 'department';
 
     let rangeStart: string | null = null;
     let rangeEnd: string | null = null;
@@ -608,8 +815,50 @@ const listDepartmentApprovals = async (req: AuthenticatedRequest, res: Response)
       }
     }
 
-    const whereParts: string[] = ['department_id = $1'];
-    const params: unknown[] = [department_id];
+    const whereParts: string[] = [];
+    const params: unknown[] = [];
+
+    if (scope === 'department' || scope === 'all') {
+      const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      const department_id = await resolveTimesheetActionDepartmentId(req, requestedDepartmentId);
+      if (requestedDepartmentId && !department_id) {
+        res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+        return;
+      }
+      if (scope === 'department') {
+        if (!department_id) {
+          res.status(400).json({ success: false, error: 'department_id обязателен' });
+          return;
+        }
+        params.push(department_id);
+        whereParts.push(`(department_id = $${params.length} AND manager_employee_id IS NULL)`);
+      } else {
+        // 'all': объединение полной подачи отдела (если указан) и персональных подач юзера.
+        const orParts: string[] = [];
+        if (department_id) {
+          params.push(department_id);
+          orParts.push(`(department_id = $${params.length} AND manager_employee_id IS NULL)`);
+        }
+        if (req.user.employee_id) {
+          params.push(req.user.employee_id);
+          orParts.push(`manager_employee_id = $${params.length}`);
+        }
+        if (orParts.length === 0) {
+          res.json({ success: true, data: [] });
+          return;
+        }
+        whereParts.push(`(${orParts.join(' OR ')})`);
+      }
+    } else {
+      // 'personal'
+      if (!req.user.employee_id) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+      params.push(req.user.employee_id);
+      whereParts.push(`manager_employee_id = $${params.length}`);
+    }
+
     if (rangeStart && rangeEnd) {
       params.push(rangeEnd);
       whereParts.push(`start_date <= $${params.length}`);
@@ -660,8 +909,8 @@ async function changeApprovalReviewState(
       return;
     }
 
-    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к табелю этого отдела' });
+    if (!(await ensureApprovalAccess(req, approval))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
 
@@ -700,6 +949,7 @@ async function changeApprovalReviewState(
 
     await logApprovalAudit(req, updatedApproval.id, input.auditAction, {
       department_id: updatedApproval.department_id,
+      manager_employee_id: updatedApproval.manager_employee_id,
       start_date: range.startDate,
       end_date: range.endDate,
       from_status: approval.status,
@@ -707,13 +957,21 @@ async function changeApprovalReviewState(
       comment,
     });
 
-    void notifyDepartmentAboutReview(
-      approval.department_id,
+    let affectedDepartmentIds: string[] = [];
+    if (approval.manager_employee_id != null) {
+      const drDepts = await listDirectReportDepartmentIds(approval.manager_employee_id);
+      affectedDepartmentIds = drDepts;
+    }
+
+    void notifyDepartmentAboutReview({
+      departmentId: approval.department_id,
+      managerEmployeeId: approval.manager_employee_id,
+      affectedDepartmentIds,
       range,
-      input.nextStatus,
-      approval.submitted_by,
+      status: input.nextStatus,
+      submittedBy: approval.submitted_by,
       comment,
-    ).catch(notifyError => {
+    }).catch(notifyError => {
       console.error(`timesheet-approval.${input.action} notify error:`, notifyError);
     });
 
@@ -729,9 +987,18 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   try {
     const approval = await loadApprovalById(req.params.id);
     if (approval) {
-      const employeeIds = await import('../services/timesheet-department-assignments.service.js').then(m =>
-        m.listEmployeeIdsAssignedToDepartmentPeriod(approval.department_id, approval.start_date, approval.end_date),
-      );
+      // Для персональной подачи берём состав из снимка — иначе подцепим чужих сотрудников отдела.
+      let employeeIds: number[];
+      if (approval.manager_employee_id != null) {
+        const snap = await listApprovalEmployees(approval.id);
+        employeeIds = snap.map(s => s.employee_id);
+      } else if (approval.department_id) {
+        employeeIds = await import('../services/timesheet-department-assignments.service.js').then(m =>
+          m.listEmployeeIdsAssignedToDepartmentPeriod(approval.department_id!, approval.start_date, approval.end_date),
+        );
+      } else {
+        employeeIds = [];
+      }
       let count = 0;
       if (employeeIds.length > 0) {
         const row = await queryOne<{ count: number | string }>(
@@ -805,8 +1072,8 @@ const getHistory = async (req: AuthenticatedRequest, res: Response): Promise<voi
       return;
     }
 
-    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к табелю этого отдела' });
+    if (!(await ensureApprovalAccess(req, approval))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
 
@@ -832,7 +1099,7 @@ const getPending = async (_req: AuthenticatedRequest, res: Response): Promise<vo
         return;
       }
       params.push(managedDepartmentIds);
-      whereParts.push(`department_id = ANY($${params.length}::uuid[])`);
+      whereParts.push(`(department_id = ANY($${params.length}::uuid[]) AND manager_employee_id IS NULL)`);
     } else if (scope === 'self') {
       res.json({ success: true, data: [] });
       return;
@@ -880,7 +1147,7 @@ const getByStatus = async (req: AuthenticatedRequest, res: Response): Promise<vo
         return;
       }
       params.push(managedDepartmentIds);
-      whereParts.push(`department_id = ANY($${params.length}::uuid[])`);
+      whereParts.push(`(department_id = ANY($${params.length}::uuid[]) AND manager_employee_id IS NULL)`);
     } else if (scope === 'self') {
       res.json({ success: true, data: [] });
       return;
@@ -995,27 +1262,41 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
       return;
     }
 
-    const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id
-      ? req.body.department_id
-      : null;
-    const deptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+    const personal = req.body?.personal === true || req.body?.personal === 'true';
     const range = parseRangeFromBody(req.body);
 
-    if (requestedDeptId && !deptId) {
-      res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
-      return;
-    }
-    if (!deptId) {
-      res.status(400).json({ success: false, error: 'department_id обязателен' });
-      return;
-    }
     if (!range) {
       res.status(400).json({ success: false, error: 'start_date и end_date обязательны' });
       return;
     }
 
+    let deptId: string | null = null;
+    let managerEmployeeId: number | null = null;
+    if (personal) {
+      if (!req.user.employee_id) {
+        res.status(403).json({ success: false, error: 'Нет привязки к сотруднику', code: 'NO_DIRECT_REPORTS' });
+        return;
+      }
+      managerEmployeeId = req.user.employee_id;
+    } else {
+      const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id
+        ? req.body.department_id
+        : null;
+      const resolvedDeptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+      if (requestedDeptId && !resolvedDeptId) {
+        res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+        return;
+      }
+      if (!resolvedDeptId) {
+        res.status(400).json({ success: false, error: 'department_id обязателен' });
+        return;
+      }
+      deptId = resolvedDeptId;
+    }
+
     const draft = await findOrCreateDraftApproval({
       departmentId: deptId,
+      managerEmployeeId,
       startDate: range.startDate,
       endDate: range.endDate,
       userId: req.user.id,
@@ -1050,6 +1331,7 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
 
     await logApprovalAudit(req, draft.id, 'TIMESHEET_APPROVAL_ATTACHMENT_UPLOADED', {
       department_id: deptId,
+      manager_employee_id: managerEmployeeId,
       start_date: range.startDate,
       end_date: range.endDate,
       document_id: created.document_id,
@@ -1064,20 +1346,24 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
 };
 
 /**
- * Руководитель «по людям»: отделы своих прямых подчинённых — для селектора
- * отдела в шапке табеля (подача/служебка привязаны к одному отделу).
+ * Подбор доступа к существующей подаче для attachment-операций:
+ * - полная подача (manager_employee_id IS NULL): обычная проверка ensureTimesheetActionDepartmentAccess;
+ * - персональная (manager_employee_id NOT NULL): автор подачи или HR со scope='all'.
  */
-const getDirectReportDepartments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const data = req.user.employee_id
-      ? await listDirectReportDepartments(req.user.employee_id)
-      : [];
-    res.json({ success: true, data });
-  } catch (err) {
-    console.error('timesheet-approval.getDirectReportDepartments error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка получения отделов подчинённых' });
+async function ensureAttachmentAccess(
+  req: AuthenticatedRequest,
+  approval: Pick<TimesheetApproval, 'department_id' | 'manager_employee_id'>,
+): Promise<boolean> {
+  if (approval.manager_employee_id != null) {
+    if (req.user.employee_id && req.user.employee_id === approval.manager_employee_id) return true;
+    const scope = await resolveRequestDataScope(req);
+    return scope === 'all';
   }
-};
+  if (approval.department_id) {
+    return ensureTimesheetActionDepartmentAccess(req, approval.department_id);
+  }
+  return false;
+}
 
 /** Руководитель / HR: список вложений подачи табеля. */
 const listAttachments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -1087,28 +1373,52 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
     if (approvalIdRaw && typeof approvalIdRaw === 'string') {
       approvalId = Number(approvalIdRaw);
     } else {
-      const deptIdRaw = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-      const deptId = await resolveTimesheetActionDepartmentId(req, deptIdRaw);
+      const personal = req.query.personal === 'true' || req.query.personal === '1';
       const range = parseRangeFromQuery(req.query as Record<string, unknown>);
-      if (deptIdRaw && !deptId) {
-        res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+      if (!range) {
+        res.status(400).json({ success: false, error: 'approval_id или start_date+end_date обязательны' });
         return;
       }
-      if (!deptId || !range) {
-        res.status(400).json({ success: false, error: 'approval_id или department_id+start_date+end_date обязательны' });
-        return;
+      if (personal) {
+        if (!req.user.employee_id) {
+          res.json({ success: true, data: [] });
+          return;
+        }
+        const match = await queryOne<{ id: number | string }>(
+          `SELECT id FROM timesheet_approvals
+             WHERE manager_employee_id = $1 AND start_date = $2 AND end_date = $3
+             LIMIT 1`,
+          [req.user.employee_id, range.startDate, range.endDate],
+        );
+        if (!match) {
+          res.json({ success: true, data: [] });
+          return;
+        }
+        approvalId = Number(match.id);
+      } else {
+        const deptIdRaw = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+        const deptId = await resolveTimesheetActionDepartmentId(req, deptIdRaw);
+        if (deptIdRaw && !deptId) {
+          res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
+          return;
+        }
+        if (!deptId) {
+          res.status(400).json({ success: false, error: 'approval_id или department_id+start_date+end_date обязательны' });
+          return;
+        }
+        const match = await queryOne<{ id: number | string }>(
+          `SELECT id FROM timesheet_approvals
+             WHERE department_id = $1 AND start_date = $2 AND end_date = $3
+               AND manager_employee_id IS NULL
+             LIMIT 1`,
+          [deptId, range.startDate, range.endDate],
+        );
+        if (!match) {
+          res.json({ success: true, data: [] });
+          return;
+        }
+        approvalId = Number(match.id);
       }
-      const match = await queryOne<{ id: number | string; department_id: string }>(
-        `SELECT id, department_id FROM timesheet_approvals
-           WHERE department_id = $1 AND start_date = $2 AND end_date = $3
-           LIMIT 1`,
-        [deptId, range.startDate, range.endDate],
-      );
-      if (!match) {
-        res.json({ success: true, data: [] });
-        return;
-      }
-      approvalId = Number(match.id);
     }
 
     if (!approvalId) {
@@ -1121,8 +1431,8 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
       res.json({ success: true, data: [] });
       return;
     }
-    if (!(await ensureTimesheetActionDepartmentAccess(req, approval.department_id))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
+    if (!(await ensureAttachmentAccess(req, approval))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
 
@@ -1162,8 +1472,8 @@ const deleteAttachment = async (req: AuthenticatedRequest, res: Response): Promi
       res.status(404).json({ success: false, error: 'Подача не найдена' });
       return;
     }
-    if (!(await ensureTimesheetActionDepartmentAccess(req, approval.department_id))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
+    if (!(await ensureAttachmentAccess(req, approval))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
     if (approval.status !== 'draft' && approval.status !== 'rejected' && approval.status !== 'returned') {
@@ -1174,6 +1484,7 @@ const deleteAttachment = async (req: AuthenticatedRequest, res: Response): Promi
     const result = await deleteAttachmentRecord(documentId);
     await logApprovalAudit(req, approval.id, 'TIMESHEET_APPROVAL_ATTACHMENT_DELETED', {
       department_id: approval.department_id,
+      manager_employee_id: approval.manager_employee_id,
       start_date: approval.start_date,
       end_date: approval.end_date,
       document_id: documentId,
@@ -1218,8 +1529,8 @@ const getAttachmentDownloadUrl = async (req: AuthenticatedRequest, res: Response
       res.status(404).json({ success: false, error: 'Подача не найдена' });
       return;
     }
-    if (!(await ensureTimesheetActionDepartmentAccess(req, approval.department_id))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
+    if (!(await ensureAttachmentAccess(req, approval))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
 
@@ -1285,7 +1596,9 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         return;
       }
       params.push(managedDepartmentIds);
-      whereParts.push(`department_id = ANY($${params.length}::uuid[])`);
+      // Для dept-scope HR показываем только полные подачи назначенных отделов.
+      // Персональные подачи видны только админам/HR со scope='all' — это допустимо для MVP.
+      whereParts.push(`(department_id = ANY($${params.length}::uuid[]) AND manager_employee_id IS NULL)`);
     } else if (scope === 'self') {
       res.json({ success: true, data: [] });
       return;
@@ -1302,12 +1615,15 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const deptIds = [...new Set(rows.map((r) => r.department_id))];
+    const deptIds = [...new Set(rows.map((r) => r.department_id).filter((id): id is string => !!id))];
     const userIds = [...new Set(
       rows.flatMap((r) => [r.submitted_by, r.reviewed_by]).filter((id): id is string => Boolean(id)),
     )];
+    const managerEmpIds = [...new Set(
+      rows.map(r => r.manager_employee_id).filter((id): id is number => Number.isInteger(id) && (id ?? 0) > 0),
+    )];
 
-    const [deptRows, userRows] = await Promise.all([
+    const [deptRows, userRows, managerRows] = await Promise.all([
       deptIds.length > 0
         ? query<{ id: string; name: string | null }>(
           `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
@@ -1320,20 +1636,37 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
           [userIds],
         )
         : Promise.resolve([] as Array<{ id: string; full_name: string | null }>),
+      managerEmpIds.length > 0
+        ? query<{ id: number; full_name: string | null }>(
+          `SELECT id, full_name FROM employees WHERE id = ANY($1::int[])`,
+          [managerEmpIds],
+        )
+        : Promise.resolve([] as Array<{ id: number; full_name: string | null }>),
     ]);
 
     const deptNames = new Map(deptRows.map((row) => [String(row.id), String(row.name ?? '')]));
     const userNames = new Map(userRows.map((row) => [String(row.id), String(row.full_name ?? '')]));
+    const managerNames = new Map(managerRows.map((row) => [Number(row.id), row.full_name ?? null]));
 
     const enriched = await Promise.all(rows.map(async (row) => {
+      const isPersonal = row.manager_employee_id != null;
+      const snapshotIds = isPersonal
+        ? (await listApprovalEmployees(row.id)).map(s => s.employee_id)
+        : undefined;
+
       const weekend = await checkWeekendWorkRequirement({
         departmentId: row.department_id,
         startDate: row.start_date,
         endDate: row.end_date,
+        employeeIds: snapshotIds,
       });
 
-      const employeeIds = await import('../services/timesheet-department-assignments.service.js')
-        .then((mod) => mod.listEmployeeIdsAssignedToDepartmentPeriod(row.department_id, row.start_date, row.end_date));
+      const employeeIds = isPersonal
+        ? snapshotIds!
+        : row.department_id
+          ? await import('../services/timesheet-department-assignments.service.js')
+              .then((mod) => mod.listEmployeeIdsAssignedToDepartmentPeriod(row.department_id!, row.start_date, row.end_date))
+          : [];
 
       let anyCorrection = false;
       let correctionExceedsSkud = false;
@@ -1407,7 +1740,8 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
 
       return {
         ...row,
-        department_name: deptNames.get(row.department_id) ?? null,
+        department_name: row.department_id ? deptNames.get(row.department_id) ?? null : null,
+        manager_employee_name: row.manager_employee_id != null ? managerNames.get(row.manager_employee_id) ?? null : null,
         submitted_by_name: row.submitted_by ? userNames.get(row.submitted_by) ?? null : null,
         reviewed_by_name: row.reviewed_by ? userNames.get(row.reviewed_by) ?? null : null,
         weekend_work_dates: weekend.weekendWorkDates,
@@ -1438,8 +1772,8 @@ const getSubmittedEmployees = async (req: AuthenticatedRequest, res: Response): 
       res.status(404).json({ success: false, error: 'Запись не найдена' });
       return;
     }
-    if (!(await ensureApprovalDepartmentAccess(req, approval.department_id))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к табелю этого отдела' });
+    if (!(await ensureApprovalAccess(req, approval))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
       return;
     }
     const employees = await listApprovalEmployees(approval.id);
@@ -1468,7 +1802,6 @@ export const timesheetApprovalController = {
   listAttachments,
   deleteAttachment,
   getAttachmentDownloadUrl,
-  getDirectReportDepartments,
   getReviewList,
   getSubmittedEmployees,
 };

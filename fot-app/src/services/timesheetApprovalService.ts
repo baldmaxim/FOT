@@ -6,7 +6,8 @@ export type TimesheetResolvedApprovalStatus = 'submitted' | 'approved' | 'reject
 
 export interface ITimesheetApproval {
   id: number;
-  department_id: string;
+  department_id: string | null;
+  manager_employee_id: number | null;
   start_date: string;
   end_date: string;
   status: TimesheetApprovalStatus;
@@ -22,7 +23,7 @@ export interface ITimesheetApproval {
 export interface ITimesheetApprovalEvent {
   id: number;
   approval_id: number;
-  department_id: string;
+  department_id: string | null;
   start_date: string;
   end_date: string;
   action: TimesheetApprovalEventAction;
@@ -77,13 +78,9 @@ export interface IApprovalAttachment {
   created_at: string;
 }
 
-export interface IDirectReportDepartment {
-  id: string;
-  name: string;
-}
-
 export interface IApprovalReviewItem extends ITimesheetApproval {
   department_name: string | null;
+  manager_employee_name: string | null;
   submitted_by_name: string | null;
   reviewed_by_name: string | null;
   weekend_work_dates: string[];
@@ -97,33 +94,56 @@ export interface IApprovalReviewItem extends ITimesheetApproval {
   };
 }
 
+export type TimesheetSubmissionMode = 'department' | 'personal';
+
+interface ISubmissionTarget {
+  mode: TimesheetSubmissionMode;
+  department_id?: string | null;
+}
+
+function buildSubmissionBody(target: ISubmissionTarget, range: { start_date: string; end_date: string }) {
+  if (target.mode === 'personal') {
+    return { personal: true, start_date: range.start_date, end_date: range.end_date };
+  }
+  return { department_id: target.department_id ?? null, start_date: range.start_date, end_date: range.end_date };
+}
+
 export const timesheetApprovalService = {
-  submit: async (department_id: string, start_date: string, end_date: string) => {
-    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>('/timesheet-approvals/submit', {
-      department_id,
-      start_date,
-      end_date,
-    });
+  submit: async (target: ISubmissionTarget, start_date: string, end_date: string) => {
+    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(
+      '/timesheet-approvals/submit',
+      buildSubmissionBody(target, { start_date, end_date }),
+    );
     return res.data;
   },
 
-  recall: async (department_id: string, start_date: string, end_date: string) => {
-    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>('/timesheet-approvals/recall', {
-      department_id,
-      start_date,
-      end_date,
-    });
+  recall: async (target: ISubmissionTarget, start_date: string, end_date: string) => {
+    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(
+      '/timesheet-approvals/recall',
+      buildSubmissionBody(target, { start_date, end_date }),
+    );
     return res.data;
   },
 
-  getStatus: async (department_id: string, start_date: string, end_date: string) => {
-    const params = new URLSearchParams({ department_id, start_date, end_date });
+  getStatus: async (target: ISubmissionTarget, start_date: string, end_date: string) => {
+    const params = new URLSearchParams({ start_date, end_date });
+    if (target.mode === 'personal') {
+      params.set('personal', 'true');
+    } else if (target.department_id) {
+      params.set('department_id', target.department_id);
+    }
     const res = await apiClient.get<ApiResponse<ITimesheetApproval | null>>(`/timesheet-approvals/status?${params.toString()}`);
     return res.data;
   },
 
   listDepartment: async (department_id: string, month: string) => {
-    const params = new URLSearchParams({ department_id, month });
+    const params = new URLSearchParams({ department_id, month, scope: 'department' });
+    const res = await apiClient.get<ApiResponse<ITimesheetApproval[]>>(`/timesheet-approvals/department?${params.toString()}`);
+    return res.data;
+  },
+
+  listPersonal: async (month: string) => {
+    const params = new URLSearchParams({ month, scope: 'personal' });
     const res = await apiClient.get<ApiResponse<ITimesheetApproval[]>>(`/timesheet-approvals/department?${params.toString()}`);
     return res.data;
   },
@@ -177,10 +197,19 @@ export const timesheetApprovalService = {
     return res.data;
   },
 
-  listAttachments: async (params: { approval_id?: number; department_id?: string; start_date?: string; end_date?: string }) => {
+  listAttachments: async (params: {
+    approval_id?: number;
+    target?: ISubmissionTarget;
+    start_date?: string;
+    end_date?: string;
+  }) => {
     const qs = new URLSearchParams();
     if (params.approval_id) qs.set('approval_id', String(params.approval_id));
-    if (params.department_id) qs.set('department_id', params.department_id);
+    if (params.target?.mode === 'personal') {
+      qs.set('personal', 'true');
+    } else if (params.target?.department_id) {
+      qs.set('department_id', params.target.department_id);
+    }
     if (params.start_date) qs.set('start_date', params.start_date);
     if (params.end_date) qs.set('end_date', params.end_date);
     const res = await apiClient.get<ApiResponse<IApprovalAttachment[]>>(`/timesheet-approvals/attachments?${qs.toString()}`);
@@ -188,7 +217,7 @@ export const timesheetApprovalService = {
   },
 
   uploadAttachment: async (params: {
-    department_id: string;
+    target: ISubmissionTarget;
     start_date: string;
     end_date: string;
     file: File;
@@ -197,19 +226,16 @@ export const timesheetApprovalService = {
     // файл идёт в R2 через бэкенд — без браузерного PUT и CORS-проблем.
     const form = new FormData();
     form.append('file', params.file);
-    form.append('department_id', params.department_id);
+    if (params.target.mode === 'personal') {
+      form.append('personal', 'true');
+    } else if (params.target.department_id) {
+      form.append('department_id', params.target.department_id);
+    }
     form.append('start_date', params.start_date);
     form.append('end_date', params.end_date);
     const res = await apiClient.post<ApiResponse<IApprovalAttachment>>(
       '/timesheet-approvals/attachments',
       form,
-    );
-    return res.data;
-  },
-
-  getDirectReportDepartments: async () => {
-    const res = await apiClient.get<ApiResponse<IDirectReportDepartment[]>>(
-      '/timesheet-approvals/direct-report-departments',
     );
     return res.data;
   },

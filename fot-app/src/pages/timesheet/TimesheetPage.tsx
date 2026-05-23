@@ -30,7 +30,7 @@ import type {
   ISubmitProblemEmployee,
   ISubmitProblemDay,
 } from '../../components/timesheet/TimesheetSubmitConfirmModal';
-import { APPROVAL_STATUS_LABELS, timesheetApprovalService } from '../../services/timesheetApprovalService';
+import { APPROVAL_STATUS_LABELS } from '../../services/timesheetApprovalService';
 import {
   useTimesheetApprovalStatus,
   useTimesheetDepartmentApprovals,
@@ -160,26 +160,11 @@ export const TimesheetPage: FC = () => {
   // Department selector
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
 
-  // Руководитель «по людям»: выбранный отдел для подачи табеля и служебки.
-  const [drApprovalDeptId, setDrApprovalDeptId] = useState<string | null>(null);
-
   // Assignee selector (assigned-mode)
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState('');
   const assigneeRef = useRef<HTMLDivElement>(null);
   const assigneesQuery = useAssignedEmployees(canUseAssignedMode && timesheetMode === 'assigned');
-
-  // Отделы прямых подчинённых — для подачи табеля руководителем «по людям».
-  const directReportDepartmentsQuery = useQuery({
-    queryKey: ['timesheet-approval-dr-departments'],
-    queryFn: () => timesheetApprovalService.getDirectReportDepartments(),
-    enabled: isDirectReportsOnly,
-    staleTime: 5 * 60_000,
-  });
-  const directReportDepartments = useMemo(
-    () => directReportDepartmentsQuery.data ?? [],
-    [directReportDepartmentsQuery.data],
-  );
 
   // Brigade selector (assigned-mode, multi-brigade assignee)
   const [brigadeOpen, setBrigadeOpen] = useState(false);
@@ -239,13 +224,6 @@ export const TimesheetPage: FC = () => {
     setSelectedDeptId(primaryDepartmentId || managedDepartmentIds[0] || null);
   }, [effectiveSelectedDeptId, isMultiDepartmentManager, managedDepartmentIds, primaryDepartmentId]);
 
-  // Дефолт выбранного отдела подачи для руководителя «по людям».
-  useEffect(() => {
-    if (!isDirectReportsOnly || directReportDepartments.length === 0) return;
-    if (drApprovalDeptId && directReportDepartments.some(d => d.id === drApprovalDeptId)) return;
-    setDrApprovalDeptId(directReportDepartments[0].id);
-  }, [isDirectReportsOnly, directReportDepartments, drApprovalDeptId]);
-
   useEffect(() => {
     if (timesheetMode !== 'department') return;
     if (!queryAssignedDept) return;
@@ -286,9 +264,10 @@ export const TimesheetPage: FC = () => {
     ? assignedExpandedDeptId
     : (effectiveSelectedDeptId || (isDirectReportsOnly && !selectedDeptId ? DIRECT_REPORTS_DEPT : null));
   const isDirectReportsMarker = activeGridDeptId === DIRECT_REPORTS_DEPT;
-  // Реальный отдел для подачи/служебки: руководитель «по людям» подаёт по
-  // выбранному отделу своих подчинённых, остальные — по отделу сетки.
-  const approvalBarDeptId = isDirectReportsMarker ? drApprovalDeptId : activeGridDeptId;
+  // Режим подачи: руководитель «по людям» подаёт персонально (своих подчинённых,
+  // department_id=null); остальные — по отделу сетки.
+  const approvalSubmissionMode: 'department' | 'personal' = isDirectReportsMarker ? 'personal' : 'department';
+  const approvalBarDeptId = isDirectReportsMarker ? null : activeGridDeptId;
   const includeObjectDetails = viewMode === 'objects';
   const timesheetQuery = useQuery({
     queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', includeObjectDetails ? 'objects' : 'employees'],
@@ -1479,26 +1458,11 @@ export const TimesheetPage: FC = () => {
   ]);
 
   const headerApprovalDeptId = !isAssignedMode ? approvalBarDeptId : null;
-  const headerApproval = useTimesheetApprovalStatus(headerApprovalDeptId, rangeStart, rangeEnd);
+  const headerApprovalMode = !isAssignedMode ? approvalSubmissionMode : 'department';
+  const headerApproval = useTimesheetApprovalStatus(headerApprovalMode, headerApprovalDeptId, rangeStart, rangeEnd);
   const headerApprovalStatus = headerApproval.data?.status ?? null;
   const headerMonth = `${year}-${String(month).padStart(2, '0')}`;
-  const headerMonthApprovals = useTimesheetDepartmentApprovals(headerApprovalDeptId, headerMonth);
-
-  // Селектор отдела подачи — только для руководителя «по людям» с подчинёнными
-  // более чем в одном отделе (подача/служебка привязаны к одному отделу).
-  const directReportsDeptSelect = (isDirectReportsMarker && directReportDepartments.length > 1) ? (
-    <label className="ts-dr-dept-select">
-      Отдел подачи:
-      <select
-        value={drApprovalDeptId ?? ''}
-        onChange={(e) => setDrApprovalDeptId(e.target.value || null)}
-      >
-        {directReportDepartments.map(dept => (
-          <option key={dept.id} value={dept.id}>{dept.name}</option>
-        ))}
-      </select>
-    </label>
-  ) : null;
+  const headerMonthApprovals = useTimesheetDepartmentApprovals(headerApprovalMode, headerApprovalDeptId, headerMonth);
 
   const headerEmployeeCounter = useMemo(() => {
     if (isAssignedMode) return null;
@@ -1700,8 +1664,8 @@ export const TimesheetPage: FC = () => {
             {modeControl}
             {mobileApprovalVisible && !isAssignedMode && (
               <div className="ts-mobile-approval-panel">
-                {directReportsDeptSelect}
                 <TimesheetApprovalBar
+                  submissionMode={approvalSubmissionMode}
                   departmentId={approvalBarDeptId}
                   startDate={rangeStart}
                   endDate={rangeEnd}
@@ -1725,8 +1689,8 @@ export const TimesheetPage: FC = () => {
                 {segmentControl}
               </div>
               <div className="ts-header-cell ts-header-cell--right">
-                {directReportsDeptSelect}
                 <TimesheetApprovalBar
+                  submissionMode={approvalSubmissionMode}
                   departmentId={approvalBarDeptId}
                   startDate={rangeStart}
                   endDate={rangeEnd}
@@ -1935,6 +1899,7 @@ export const TimesheetPage: FC = () => {
             visibleDays={visibleDays}
             selectedCellKeys={bulkSelectedCellKeys}
             splitDayKeys={splitDayKeys}
+            approvalStatusByDate={lockedDateStatus}
             canManageTeam={canManageTeam}
             pendingEmployeeId={teamPendingEmployeeId}
             departmentName={selectedDeptName}
@@ -1971,6 +1936,7 @@ export const TimesheetPage: FC = () => {
           visibleDays={visibleDays}
           selectedCellKeys={bulkSelectedCellKeys}
           splitDayKeys={splitDayKeys}
+          approvalStatusByDate={lockedDateStatus}
           canManageTeam={canManageTeam}
           pendingEmployeeId={teamPendingEmployeeId}
           departmentName={selectedDeptName}

@@ -11,7 +11,7 @@ type TimesheetResolvedStatus = Exclude<TimesheetApprovalStatus, 'draft'>;
 interface IApprovalEventRow {
   id: number;
   approval_id: number;
-  department_id: string;
+  department_id: string | null;
   start_date: string;
   end_date: string;
   action: TimesheetApprovalEventAction;
@@ -64,7 +64,7 @@ async function resolveActorPositionName(profile: IActorProfile | undefined): Pro
 export const timesheetApprovalHistoryService = {
   async appendEvent(input: {
     approvalId: number;
-    departmentId: string;
+    departmentId: string | null;
     startDate: string;
     endDate: string;
     action: TimesheetApprovalEventAction;

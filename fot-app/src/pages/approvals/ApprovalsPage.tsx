@@ -721,23 +721,30 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   const monthStr = `${year}-${String(month).padStart(2, '0')}`;
   const monthBounds = useMemo(() => getMonthBounds(monthStr), [monthStr]);
 
-  const tsQuery = useQuery({
-    queryKey: ['approval-timesheet', row.id],
-    queryFn: () => timesheetService.getAll({
-      month: monthStr,
-      department_id: row.department_id,
-      from: monthBounds?.firstDate ?? row.start_date,
-      to: monthBounds?.lastDate ?? row.end_date,
-      include_objects: true,
-      schedule_payload: 'compact',
-    }),
-    staleTime: 30_000,
-  });
+  const isPersonal = row.manager_employee_id != null;
 
   const submittedQuery = useQuery({
     queryKey: ['approval-submitted-employees', row.id],
     queryFn: () => timesheetApprovalService.getSubmittedEmployees(row.id),
     staleTime: 60_000,
+  });
+
+  // Для персональной подачи department_id=null — тянем табель по списку сотрудников снимка,
+  // а не по отделу. Ждём подгрузки снимка, потом запрашиваем по employee_ids.
+  const personalEmployeeIds = submittedQuery.data?.employees.map(e => e.employee_id) ?? [];
+  const tsQuery = useQuery({
+    queryKey: ['approval-timesheet', row.id, isPersonal ? personalEmployeeIds.join(',') : null],
+    queryFn: () => timesheetService.getAll({
+      month: monthStr,
+      department_id: isPersonal ? undefined : (row.department_id ?? undefined),
+      employee_ids: isPersonal ? personalEmployeeIds : undefined,
+      from: monthBounds?.firstDate ?? row.start_date,
+      to: monthBounds?.lastDate ?? row.end_date,
+      include_objects: true,
+      schedule_payload: 'compact',
+    }),
+    enabled: !isPersonal || personalEmployeeIds.length > 0,
+    staleTime: 30_000,
   });
 
   const outOfPeriodDates = useMemo(() => {
@@ -786,8 +793,12 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
     <div className="approvals-card-body">
       <div className="approvals-submission-summary">
         <div className="approvals-submission-row">
-          <span className="approvals-submission-label">Отдел:</span>
-          <span className="approvals-submission-value">{row.department_name ?? row.department_id}</span>
+          <span className="approvals-submission-label">{isPersonal ? 'Подача:' : 'Отдел:'}</span>
+          <span className="approvals-submission-value">
+            {isPersonal
+              ? `Персональная подача · ${row.manager_employee_name ?? '—'}`
+              : (row.department_name ?? row.department_id ?? '—')}
+          </span>
         </div>
         <div className="approvals-submission-row">
           <span className="approvals-submission-label">Руководитель:</span>
@@ -795,7 +806,7 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
         </div>
         <div className="approvals-submission-row approvals-submission-row--employees">
           <span className="approvals-submission-label">
-            Сотрудники{submittedQuery.data ? ` (${submittedQuery.data.employees.length})` : ''}:
+            {isPersonal ? 'Подчинённые' : 'Сотрудники'}{submittedQuery.data ? ` (${submittedQuery.data.employees.length})` : ''}:
           </span>
           {submittedQuery.isLoading ? (
             <span className="approvals-submission-value">Загрузка…</span>

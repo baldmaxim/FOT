@@ -9,6 +9,7 @@ import {
   timesheetApprovalService,
   APPROVAL_STATUS_LABELS,
   type ITimesheetApproval,
+  type TimesheetSubmissionMode,
 } from '../../services/timesheetApprovalService';
 import { ApiError } from '../../api/client';
 import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
@@ -27,6 +28,13 @@ import { STATUS_COLORS, STATUS_ICONS } from './timesheetApprovalStatus';
 const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
 
 interface IProps {
+  /**
+   * Режим подачи:
+   *  - 'department' — обычная подача отдела (требуется departmentId);
+   *  - 'personal'   — персональная подача руководителя «по людям» (departmentId игнорируется,
+   *                   бэк определяет автора и состав через employee_id).
+   */
+  submissionMode: TimesheetSubmissionMode;
   departmentId: string | null;
   startDate: string;
   endDate: string;
@@ -192,7 +200,7 @@ const ActiveCard: FC<IActiveCardProps> = ({
 };
 
 interface IWeekendMemoPopoverProps {
-  departmentId: string | null;
+  uploadDisabled: boolean;
   loading: boolean;
   errorText: string | null;
   onUploadClick: () => void;
@@ -202,7 +210,7 @@ interface IWeekendMemoPopoverProps {
 }
 
 const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
-  departmentId,
+  uploadDisabled,
   loading,
   errorText,
   onUploadClick,
@@ -259,7 +267,7 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
           type="button"
           className="ts-btn"
           onClick={onUploadClick}
-          disabled={loading || !departmentId}
+          disabled={loading || uploadDisabled}
         >
           <Upload size={14} /> Прикрепить файл
         </button>
@@ -276,6 +284,7 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
 };
 
 export const TimesheetApprovalBar: FC<IProps> = ({
+  submissionMode,
   departmentId,
   startDate,
   endDate,
@@ -295,7 +304,11 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const allowedRange = getHalfRange(allowedHalf.year, allowedHalf.month, allowedHalf.half);
   const submitDisabledReason = `Подача доступна только за ${formatTimesheetRangeLabel(allowedRange.startDate, allowedRange.endDate)} — последний завершённый период. За «Весь месяц» подача недоступна.`;
   const queryClient = useQueryClient();
-  const activeStatus = useTimesheetApprovalStatus(departmentId, startDate, endDate);
+  const isPersonal = submissionMode === 'personal';
+  const submissionTarget = isPersonal
+    ? ({ mode: 'personal' } as const)
+    : ({ mode: 'department', department_id: departmentId } as const);
+  const activeStatus = useTimesheetApprovalStatus(submissionMode, departmentId, startDate, endDate);
   const [loading, setLoading] = useState(false);
   const [comment, setComment] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -322,13 +335,13 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   };
 
   const handleSubmit = async () => {
-    if (!departmentId) return;
+    if (!isPersonal && !departmentId) return;
     setSubmitError(null);
     setMissingDays([]);
     setMemoRequired(false);
     setLoading(true);
     try {
-      await timesheetApprovalService.submit(departmentId, startDate, endDate);
+      await timesheetApprovalService.submit(submissionTarget, startDate, endDate);
       await invalidate();
     } catch (err) {
       if (err instanceof ApiError && err.code === 'CORRECTION_VALIDATION_FAILED') {
@@ -352,12 +365,12 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   };
 
   const handleRecall = async () => {
-    if (!departmentId) return;
+    if (!isPersonal && !departmentId) return;
     setSubmitError(null);
     setMissingDays([]);
     setMemoRequired(false);
     await runAction(async () => {
-      await timesheetApprovalService.recall(departmentId, startDate, endDate);
+      await timesheetApprovalService.recall(submissionTarget, startDate, endDate);
     });
   };
 
@@ -366,12 +379,12 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const handleMemoFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !departmentId) return;
+    if (!file || (!isPersonal && !departmentId)) return;
     setLoading(true);
     setSubmitError(null);
     try {
       await timesheetApprovalService.uploadAttachment({
-        department_id: departmentId,
+        target: submissionTarget,
         start_date: startDate,
         end_date: endDate,
         file,
@@ -458,7 +471,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
         />
         {memoOpen && memoSectionAllowed && (
           <WeekendMemoPopover
-            departmentId={departmentId}
+            uploadDisabled={!isPersonal && !departmentId}
             loading={loading}
             errorText={memoErrorText}
             onUploadClick={handleUploadMemoClick}

@@ -79,6 +79,10 @@ interface ILeaveRow {
   correction_date: string | null;
 }
 
+export type ICorrectionValidationScope =
+  | { kind: 'department'; departmentId: string }
+  | { kind: 'personal'; employeeIds: number[] };
+
 /**
  * Подача табеля блокируется в двух случаях:
  * 1) есть approved leave_requests типа remote/vacation без файла-подтверждения;
@@ -89,14 +93,16 @@ interface ILeaveRow {
  * а блокировку даёт уже шаг утверждения табеля админом.
  */
 export async function validateCorrectionAttachments(
-  departmentId: string,
+  scope: ICorrectionValidationScope,
   range: ITimesheetDateRange,
 ): Promise<ICorrectionValidationResult> {
-  const employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(
-    departmentId,
-    range.startDate,
-    range.endDate,
-  );
+  const employeeIds = scope.kind === 'department'
+    ? await listEmployeeIdsAssignedToDepartmentPeriod(
+        scope.departmentId,
+        range.startDate,
+        range.endDate,
+      )
+    : [...new Set(scope.employeeIds)].filter((id): id is number => Number.isInteger(id) && id > 0);
   if (employeeIds.length === 0) {
     return { ok: true };
   }

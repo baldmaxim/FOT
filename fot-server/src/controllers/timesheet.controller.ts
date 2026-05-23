@@ -282,7 +282,7 @@ async function loadAcceptedSaturdaysForMonth(
   return result;
 }
 
-async function resolveAdjustmentApprovalStatus(
+export async function resolveAdjustmentApprovalStatus(
   employeeId: number,
   workDate: string,
   status: TimeStatus,
@@ -1078,6 +1078,18 @@ export const timesheetController = {
       const requestedEmployeeId = typeof req.query.employee_id === 'string'
         ? Number.parseInt(req.query.employee_id, 10)
         : null;
+      // employee_ids: список через запятую — HR использует для просмотра табеля
+      // персональной подачи руководителя (department_id отсутствует, состав = снимок).
+      const requestedEmployeeIdsRaw = typeof req.query.employee_ids === 'string' ? req.query.employee_ids : null;
+      const requestedEmployeeIds = requestedEmployeeIdsRaw
+        ? [...new Set(
+            requestedEmployeeIdsRaw
+              .split(',')
+              .map(s => Number.parseInt(s.trim(), 10))
+              .filter((n): n is number => Number.isInteger(n) && n > 0),
+          )]
+        : [];
+      const hasEmployeeIdsFilter = requestedEmployeeIds.length > 0;
       const department_id = await resolveTimesheetScopedDepartmentId(req, requestedDepartmentId);
 
       if (!month) {
@@ -1128,6 +1140,14 @@ export const timesheetController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
+      if (hasEmployeeIdsFilter && scope !== 'all') {
+        for (const empId of requestedEmployeeIds) {
+          if (!(await canAccessEmployeeForTimesheetPeriod(req, empId, startDate, endDate))) {
+            return res.status(403).json({ success: false, error: 'Нет доступа к одному из сотрудников' });
+          }
+        }
+      }
+
       if (hasEmployeeFilter && isSelfEmployeeRequest(req, requestedEmployeeId)) {
         const selfLimit = getSelfHistoryLimitForUser(req.user, today);
         if (selfLimit.minDate !== null && startDate < selfLimit.minDate) {
@@ -1161,7 +1181,7 @@ export const timesheetController = {
         ...(selfTimesheetId != null ? [selfTimesheetId] : []),
       ])];
 
-      if (scope !== 'self' && !hasDeptFilter && !hasEmployeeFilter && !isDirectReportsOnlyScope) {
+      if (scope !== 'self' && !hasDeptFilter && !hasEmployeeFilter && !isDirectReportsOnlyScope && !hasEmployeeIdsFilter) {
         return res.json(emptyResponse);
       }
 
@@ -1207,7 +1227,12 @@ export const timesheetController = {
         `is_archived = false`,
       ];
 
-      if (shouldApplyDeptFilter) {
+      if (hasEmployeeIdsFilter) {
+        // HR-режим: список сотрудников передан явно (например, для просмотра табеля
+        // персональной подачи). Игнорируем dept/direct-reports-фильтры — берём ровно их.
+        empParams.push(requestedEmployeeIds);
+        empWhere.push(`id = ANY($${empParams.length}::int[])`);
+      } else if (shouldApplyDeptFilter) {
         const unionEmployeeIds = [...new Set([
           ...departmentEmployeeIds,
           ...additionalEmployeeIds,

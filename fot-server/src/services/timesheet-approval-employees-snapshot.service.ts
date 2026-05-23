@@ -1,6 +1,5 @@
 import type { PoolClient } from 'pg';
 import { query } from '../config/postgres.js';
-import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 
 export interface IApprovalEmployeeSnapshot {
   employee_id: number;
@@ -8,19 +7,17 @@ export interface IApprovalEmployeeSnapshot {
 }
 
 /**
- * Пересобирает снимок состава для approval_id: вычисляет назначенных сотрудников на период,
+ * Пересобирает снимок состава для approval_id: принимает явный список employeeIds,
  * подтягивает full_name из employees, перезаписывает строки в timesheet_approval_employees.
- * Выполняется внутри транзакции (client).
+ * Выполняется внутри транзакции (client). Контроллер сам решает, как составить список —
+ * для полной подачи это все сотрудники отдела на период, для персональной — только
+ * direct reports руководителя.
  */
 export async function snapshotApprovalEmployees(
   client: PoolClient,
   approvalId: number,
-  departmentId: string,
-  startDate: string,
-  endDate: string,
+  employeeIds: number[],
 ): Promise<number> {
-  const employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate);
-
   await client.query('DELETE FROM timesheet_approval_employees WHERE approval_id = $1', [approvalId]);
 
   if (employeeIds.length === 0) return 0;

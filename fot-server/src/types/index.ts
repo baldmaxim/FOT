@@ -360,7 +360,7 @@ export interface OrgStructureTree {
   departments: OrgDepartmentNode[];
 }
 
-export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate';
+export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid' | 'work';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 export interface LeaveRequest {
@@ -583,7 +583,8 @@ export type TimesheetApprovalEventAction = 'submitted' | 'approved' | 'rejected'
 
 export interface TimesheetApproval {
   id: number;
-  department_id: string;
+  department_id: string | null;
+  manager_employee_id: number | null;
   start_date: string;
   end_date: string;
   status: TimesheetApprovalStatus;
@@ -599,7 +600,7 @@ export interface TimesheetApproval {
 export interface TimesheetApprovalEvent {
   id: number;
   approval_id: number;
-  department_id: string;
+  department_id: string | null;
   start_date: string;
   end_date: string;
   action: TimesheetApprovalEventAction;

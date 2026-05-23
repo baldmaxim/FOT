@@ -14,6 +14,9 @@ interface TimesheetFilters {
   month: string; // YYYY-MM
   department_id?: string;
   employee_id?: number;
+  // employee_ids: явный список сотрудников (HR-режим для персональной подачи руководителя).
+  // При указании игнорируются dept/direct-reports фильтры.
+  employee_ids?: number[];
   half?: TimesheetExportHalf;
   from?: string; // YYYY-MM-DD (приоритетнее half)
   to?: string;
@@ -161,6 +164,9 @@ export const timesheetService = {
     params.append('month', filters.month);
     if (filters.department_id) params.append('department_id', filters.department_id);
     if (filters.employee_id) params.append('employee_id', String(filters.employee_id));
+    if (filters.employee_ids && filters.employee_ids.length > 0) {
+      params.append('employee_ids', filters.employee_ids.join(','));
+    }
     if (filters.from && filters.to) {
       params.append('from', filters.from);
       params.append('to', filters.to);
