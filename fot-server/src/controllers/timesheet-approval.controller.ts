@@ -1782,8 +1782,7 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       .filter(r => r.manager_employee_id != null)
       .map(r => r.id);
 
-    // Snapshot personal-подач: грузим разом, чтобы по ним собрать org_department_id всех
-    // подчинённых и определить общий участок для группировки.
+    // Snapshot personal-подач — для weekend-check внутри enriched (employeeIds).
     const personalSnapshotRows = personalApprovalIds.length > 0
       ? await query<{ approval_id: number; employee_id: number }>(
         `SELECT approval_id, employee_id
@@ -1792,37 +1791,20 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         [personalApprovalIds],
       )
       : [];
-    const personalEmployeeIds = [...new Set(personalSnapshotRows.map(s => Number(s.employee_id)))];
-
-    const employeeDeptRows = personalEmployeeIds.length > 0
-      ? await query<{ id: number; org_department_id: string | null }>(
-        `SELECT id, org_department_id FROM employees WHERE id = ANY($1::int[])`,
-        [personalEmployeeIds],
-      )
-      : [];
-    const employeeDeptMap = new Map(employeeDeptRows.map(r => [Number(r.id), r.org_department_id ?? null]));
-
-    const allDeptIdsForParents = new Set<string>(deptIds);
-    for (const r of employeeDeptRows) {
-      if (r.org_department_id) allDeptIdsForParents.add(r.org_department_id);
-    }
 
     const [deptRows, userRows, managerRows] = await Promise.all([
-      allDeptIdsForParents.size > 0
-        ? query<{ id: string; name: string | null; parent_id: string | null; parent_name: string | null }>(
-          `SELECT d.id, d.name, d.parent_id, p.name AS parent_name
-             FROM org_departments d
-             LEFT JOIN org_departments p ON p.id = d.parent_id
-            WHERE d.id = ANY($1::uuid[])`,
-          [[...allDeptIdsForParents]],
+      deptIds.length > 0
+        ? query<{ id: string; name: string | null }>(
+          `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+          [deptIds],
         )
-        : Promise.resolve([] as Array<{ id: string; name: string | null; parent_id: string | null; parent_name: string | null }>),
+        : Promise.resolve([] as Array<{ id: string; name: string | null }>),
       userIds.length > 0
-        ? query<{ id: string; full_name: string | null }>(
-          `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        ? query<{ id: string; full_name: string | null; is_site_supervisor: boolean | null }>(
+          `SELECT id, full_name, is_site_supervisor FROM user_profiles WHERE id = ANY($1::uuid[])`,
           [userIds],
         )
-        : Promise.resolve([] as Array<{ id: string; full_name: string | null }>),
+        : Promise.resolve([] as Array<{ id: string; full_name: string | null; is_site_supervisor: boolean | null }>),
       managerEmpIds.length > 0
         ? query<{ id: number; full_name: string | null }>(
           `SELECT id, full_name FROM employees WHERE id = ANY($1::int[])`,
@@ -1832,14 +1814,10 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
     ]);
 
     const deptNames = new Map(deptRows.map((row) => [String(row.id), String(row.name ?? '')]));
-    const deptParents = new Map(deptRows.map((row) => [
-      String(row.id),
-      { parentId: row.parent_id, parentName: row.parent_name },
-    ]));
     const userNames = new Map(userRows.map((row) => [String(row.id), String(row.full_name ?? '')]));
+    const supervisorFlag = new Map(userRows.map(row => [String(row.id), Boolean(row.is_site_supervisor)]));
     const managerNames = new Map(managerRows.map((row) => [Number(row.id), row.full_name ?? null]));
 
-    // Группируем snapshot по approval_id → список employee_id для personal-подач.
     const snapshotByApproval = new Map<number, number[]>();
     for (const s of personalSnapshotRows) {
       const list = snapshotByApproval.get(Number(s.approval_id)) ?? [];
@@ -1847,52 +1825,28 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       snapshotByApproval.set(Number(s.approval_id), list);
     }
 
-    // Для каждой подачи определяем group-инфо: общий parent-участок для UI-группировки.
-    const groupInfoByApproval = new Map<number, {
+    // Группировка по «участку» = по начальнику участка (user_profiles.is_site_supervisor=true,
+    // который подал табель). Все его подачи (любые бригады + его persona-подача) сворачиваются
+    // в одну карточку «Участок: <ФИО супервайзера>». Подачи обычных пользователей идут одиночками.
+    const deriveGroup = (row: TimesheetApproval): {
       parentDeptId: string | null;
       parentDeptName: string | null;
       groupKey: string;
-    }>();
-    for (const r of rows) {
-      if (r.department_id) {
-        const parent = deptParents.get(r.department_id);
-        const pid = parent?.parentId ?? null;
-        const pname = parent?.parentName ?? null;
-        groupInfoByApproval.set(r.id, {
-          parentDeptId: pid,
-          parentDeptName: pname,
-          // Если у отдела нет родителя — каждый отдел сам себе участок.
-          groupKey: `parent:${pid ?? r.department_id}`,
-        });
-      } else if (r.manager_employee_id != null) {
-        const snapshotEmpIds = snapshotByApproval.get(r.id) ?? [];
-        const empDepts = snapshotEmpIds
-          .map(id => employeeDeptMap.get(id) ?? null)
-          .filter((d): d is string => !!d);
-        const parentSet = new Set<string>();
-        for (const d of empDepts) {
-          const p = deptParents.get(d);
-          // Если у бригады нет parent — используем сам id (отдел без родителя — корень).
-          parentSet.add(p?.parentId ?? d);
-        }
-        if (parentSet.size === 1) {
-          const commonParentId = [...parentSet][0];
-          const parentMeta = deptParents.get(empDepts[0]!);
-          groupInfoByApproval.set(r.id, {
-            parentDeptId: parentMeta?.parentId ?? null,
-            parentDeptName: parentMeta?.parentName ?? (parentMeta?.parentId ? null : deptNames.get(empDepts[0]!) ?? null),
-            groupKey: `parent:${commonParentId}`,
-          });
-        } else {
-          // Разные участки → группа = персональная подача руководителя.
-          groupInfoByApproval.set(r.id, {
-            parentDeptId: null,
-            parentDeptName: null,
-            groupKey: `manager:${r.manager_employee_id}`,
-          });
-        }
+    } => {
+      const submitter = row.submitted_by;
+      const isSupervisor = submitter != null && supervisorFlag.get(submitter) === true;
+      if (isSupervisor) {
+        return {
+          parentDeptId: null,
+          parentDeptName: userNames.get(submitter) ?? null,
+          groupKey: `supervisor:${submitter}`,
+        };
       }
-    }
+      return { parentDeptId: null, parentDeptName: null, groupKey: `approval:${row.id}` };
+    };
+
+    const groupInfoByApproval = new Map<number, ReturnType<typeof deriveGroup>>();
+    for (const r of rows) groupInfoByApproval.set(r.id, deriveGroup(r));
 
     const enriched = await Promise.all(rows.map(async (row) => {
       const isPersonal = row.manager_employee_id != null;
