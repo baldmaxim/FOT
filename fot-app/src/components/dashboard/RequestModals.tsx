@@ -310,7 +310,6 @@ const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'unpaid', label: 'За свой счёт' },
   { value: 'sick_leave', label: 'Больничный' },
   { value: 'certificate', label: 'Справка' },
-  { value: 'time_correction', label: 'Корректировка табеля' },
 ];
 
 interface IUnifiedRequestModalProps {
