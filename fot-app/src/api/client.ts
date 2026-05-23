@@ -108,7 +108,14 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // список из HTTP-кэша (Cache-Control: max-age=30 на всех GET /api/*).
     || path === '/correction-approvals/pending-by-department'
     || path === '/correction-approvals/history-by-department'
-    || path === '/timesheet-approvals/review-list';
+    || path === '/timesheet-approvals/review-list'
+    // Заявления: после создания/отмены/одобрения юзер ждёт мгновенного
+    // обновления списка. Браузерный max-age=30 ловил все эти случаи —
+    // карточка не появлялась/не пропадала до перезагрузки страницы.
+    || path === '/leave-requests/my'
+    || path === '/leave-requests/department'
+    || path === '/leave-requests'
+    || path === '/leave-requests/pending-count';
 };
 
 const refreshSession = async (): Promise<boolean> => {
