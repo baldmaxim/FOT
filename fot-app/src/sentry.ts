@@ -85,6 +85,10 @@ if (dsn && import.meta.env.PROD) {
       /Unable to preload CSS/,
       // Шум из webview-инжектов (Telegram WebApp и т.п.) — не наш код.
       /Error invoking postEvent/i,
+      // Chrome Mobile 114 WebView инжект: вызов RPC `Method not found` (FOT-APP-N).
+      /Method not found/,
+      // Safari iOS: bare network error при разрыве/таймауте, аналог Failed to fetch (FOT-APP-2S).
+      /^Load failed$/,
     ],
   });
 }

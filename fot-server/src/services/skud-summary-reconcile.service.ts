@@ -40,8 +40,12 @@ let runInFlight: Promise<void> | null = null;
 // подхватятся после рестарта или выпадения из окна.
 const stableNoSummary = new Set<string>();
 // Реальная потеря событий (recalc что-то восстановил) — сигнал, но без
-// спама: не чаще раза в 6ч.
-const ALERT_THROTTLE_MS = 6 * 60 * 60_000;
+// спама: не чаще раза в 24ч и только при существенном масштабе восстановления.
+// Why: 1-50 пар восстанавливаются на каждом тике как фоновый процесс
+// (events приходят позже, summary агрегируется раньше) — это не инцидент,
+// а штатная работа второй линии защиты. Шуметь надо только при всплесках.
+const ALERT_THROTTLE_MS = 24 * 60 * 60_000;
+const ALERT_RECOVERED_THRESHOLD = 50;
 let lastAlertAt = 0;
 
 const pairKey = (empId: number, date: string): string => `${empId}:${date}`;
@@ -178,11 +182,12 @@ async function runReconcileCycle(): Promise<void> {
       );
 
       // Шум убран: warning в Sentry ТОЛЬКО при реальном сбое (failedChunks>0)
-      // или реальной потере событий (recalc что-то восстановил), и не чаще
-      // раза в ALERT_THROTTLE_MS. «Невосстановимые» пары больше не шумят.
-      const realLoss = recovered > 0;
+      // или существенной потере событий (recovered > ALERT_RECOVERED_THRESHOLD),
+      // и не чаще раза в ALERT_THROTTLE_MS. «Невосстановимые» пары и мелкие
+      // штатные recovery (1-50 пар/тик) больше не шумят.
+      const significantLoss = recovered > ALERT_RECOVERED_THRESHOLD;
       const now = Date.now();
-      if (failedChunks > 0 || (realLoss && now - lastAlertAt >= ALERT_THROTTLE_MS)) {
+      if (failedChunks > 0 || (significantLoss && now - lastAlertAt >= ALERT_THROTTLE_MS)) {
         if (!failedChunks) lastAlertAt = now;
         Sentry.captureMessage('skud-summary-reconcile recovered orphan summaries', {
           level: 'warning',

@@ -369,6 +369,15 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     setSubmitError(null);
     setMissingDays([]);
     setMemoRequired(false);
+    // Guard от race condition: кнопка Recall могла остаться видна из устаревшего
+    // кэша, пока статус на бэке уже approved/rejected. Не дёргаем API впустую —
+    // показываем ошибку и инвалидируем, чтобы кнопка пропала.
+    const currentStatus = activeStatus.data?.status;
+    if (currentStatus && currentStatus !== 'submitted') {
+      setSubmitError('Табель уже рассмотрен — обновляем статус.');
+      await invalidate();
+      return;
+    }
     await runAction(async () => {
       await timesheetApprovalService.recall(submissionTarget, startDate, endDate);
     });

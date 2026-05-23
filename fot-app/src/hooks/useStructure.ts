@@ -27,7 +27,9 @@ export const useStructureTree = (enabled = true) => {
         if (res.error) throw new Error(res.error);
         const data = res.data as OrgStructureResponse;
         const dt = performance.now() - t0;
-        if (dt > 3000) {
+        // 8s, не 3s: на 3G/слабом мобильном wifi 3-5s — норма, а не аномалия бэка.
+        // Шумим в Sentry только при реальных просадках бэка > 8s.
+        if (dt > 8000) {
           Sentry.captureMessage('structure-tree slow fetch', {
             level: 'warning',
             tags: { query: 'structure-tree', durationMs: String(Math.round(dt)) },

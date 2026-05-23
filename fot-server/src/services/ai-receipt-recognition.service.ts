@@ -346,7 +346,7 @@ export const aiReceiptRecognitionService = {
         { modelOverride: opts?.modelOverride },
       );
 
-      const content = completion.choices[0]?.message.content;
+      const content = completion.choices?.[0]?.message?.content;
       rawLlmContent = content ?? null;
       if (!content) throw new Error('LLM вернул пустой ответ');
 
