@@ -5,8 +5,11 @@
 // (на проде путь к CA в .env — линуксовый, локально не существует, поэтому
 // собственный pg.Client с CA из репозитория). Не модифицирует .env.
 //
-// Usage: node fot-server/scripts/diagnose-user-approval.mjs [email]
-//   email по умолчанию: shadrov.s.i@mstroy.pro
+// Usage: node fot-server/scripts/diagnose-user-approval.mjs [email] [surname]
+//   email   — по умолчанию: shadrov.s.i@mstroy.pro
+//   surname — необязательный шаблон фамилии для поиска по ФИО (user_profiles.
+//             full_name — кириллица; латинский токен из email её не матчит).
+//             Пример: node ... diagnose-user-approval.mjs arkhipov.x@mstroy.pro Архипов
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,8 +20,16 @@ const ENV_PATH = path.resolve(REPO_ROOT, 'fot-server/.env');
 const CA_PATH = path.resolve(REPO_ROOT, '.migration/yandex-ca.pem');
 
 const emailArg = (process.argv[2] || 'shadrov.s.i@mstroy.pro').trim();
+const surnameArg = (process.argv[3] || '').trim();
 const surnameToken = (emailArg.split('@')[0] || emailArg).split('.')[0] || emailArg;
 const likeLocal = `%${surnameToken}%`;
+
+// Шаблоны для поиска по ФИО (user_profiles.full_name). Латинский токен из email
+// не матчит кириллические ФИО — поэтому surname-аргумент (если передан).
+const profileNamePatterns = [...new Set([
+  likeLocal,
+  surnameArg ? `%${surnameArg}%` : null,
+].filter(Boolean))];
 
 function parseEnv(text) {
   const out = {};
@@ -57,7 +68,8 @@ function section(t) { console.log(`\n=== ${t} ===`); }
 
 async function runDiagnostics(client) {
   console.log(`БД host: ${sanitizedHost}`);
-  console.log(`Диагностика для: ${emailArg} (surname-token: "${surnameToken}")`);
+  console.log(`Диагностика для: ${emailArg} (surname-token: "${surnameToken}"`
+    + `${surnameArg ? `, surname-arg: "${surnameArg}"` : ''})`);
 
   const roles = (await client.query('SELECT id, code, name FROM system_roles')).rows;
   const roleById = new Map(roles.map(r => [r.id, `${r.code}${r.name ? ` (${r.name})` : ''}`]));
@@ -105,15 +117,18 @@ async function runDiagnostics(client) {
   }
 
   section('3. user_profiles по ФИО (orphan-профили без app_auth.users / рассинхрон id)');
+  const nameWhere = profileNamePatterns
+    .map((_, i) => `up.full_name ILIKE $${i + 1}`)
+    .join(' OR ');
   const orphans = (await client.query(
     `SELECT up.id, up.full_name, up.is_approved, up.approved_at, up.approved_by,
             up.system_role_id, up.employee_id, up.created_at,
             au.id AS auth_id, au.email AS auth_email
        FROM user_profiles up
        LEFT JOIN app_auth.users au ON au.id = up.id
-      WHERE up.full_name ILIKE $1 OR up.full_name ILIKE $2 OR up.full_name ILIKE $3
+      WHERE ${nameWhere}
       ORDER BY up.created_at`,
-    ['%шадров%', '%shadrov%', likeLocal],
+    profileNamePatterns,
   )).rows;
   if (orphans.length === 0) {
     console.log('  По ФИО профили не найдены.');

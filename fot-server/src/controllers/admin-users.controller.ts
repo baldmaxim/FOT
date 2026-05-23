@@ -762,10 +762,15 @@ export const adminUsersController = {
     try {
       let users: UserProfile[];
       try {
+        // JOIN на app_auth.users — orphan-профили (строка user_profiles без
+        // учётной записи) исключаются: по ним вход невозможен, одобрять их
+        // бессмысленно, а в очереди они перехватывают одобрение у актуальной
+        // заявки → одобренный пользователь видит «Ожидание одобрения».
         users = await query<UserProfile>(
-          `SELECT * FROM user_profiles
-            WHERE is_approved = false
-            ORDER BY created_at DESC`,
+          `SELECT up.* FROM user_profiles up
+             JOIN app_auth.users au ON au.id = up.id
+            WHERE up.is_approved = false
+            ORDER BY up.created_at DESC`,
         );
       } catch (usersError) {
         logSupabaseError('GetPendingUsers', usersError);
@@ -1272,6 +1277,18 @@ export const adminUsersController = {
         return;
       }
 
+      // Профиль без app_auth.users — устаревший orphan-дубль. Логин ходит через
+      // app_auth.users, по orphan-профилю войти нельзя; его одобрение ничего не
+      // даёт — человек продолжит видеть «Ожидание одобрения». Отклоняем явно.
+      const authUser = await localAuthService.getUserById(id);
+      if (!authUser) {
+        res.status(409).json({
+          success: false,
+          error: 'У этого профиля нет учётной записи для входа (устаревший дубль). Одобрите актуальную заявку пользователя.',
+        });
+        return;
+      }
+
       const setClauses: string[] = [
         'is_approved = true',
         'approved_by = $2::uuid',
@@ -1284,14 +1301,19 @@ export const adminUsersController = {
         params.push(employee_id);
       }
 
+      let approvedRows: Array<{ id: string }>;
       try {
-        await execute(
-          `UPDATE user_profiles SET ${setClauses.join(', ')} WHERE id = $1::uuid`,
+        approvedRows = await query<{ id: string }>(
+          `UPDATE user_profiles SET ${setClauses.join(', ')} WHERE id = $1::uuid RETURNING id`,
           params,
         );
       } catch (updateError) {
         console.error('Approve user error:', updateError);
         res.status(500).json({ success: false, error: 'Failed to approve user' });
+        return;
+      }
+      if (approvedRows.length === 0) {
+        res.status(404).json({ success: false, error: 'User not found' });
         return;
       }
 
