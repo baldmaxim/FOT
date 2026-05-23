@@ -5,10 +5,15 @@ import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import styles from './FilePreviewModal.module.css';
 
 interface IFilePreviewModalProps {
-  documentId: number;
+  documentId?: number;
   fileName: string;
   mimeType?: string | null;
   onClose: () => void;
+  /**
+   * Альтернативный источник signed URL. Если задан — используется он;
+   * иначе берётся documentService.getDownloadUrl(documentId).
+   */
+  urlLoader?: () => Promise<string>;
 }
 
 export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
@@ -16,6 +21,7 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
   fileName,
   mimeType,
   onClose,
+  urlLoader,
 }) => {
   const overlayHandlers = useOverlayDismiss(onClose);
   const [url, setUrl] = useState<string | null>(null);
@@ -23,11 +29,16 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
 
   useEffect(() => {
     let active = true;
-    documentService.getDownloadUrl(documentId)
-      .then(({ download_url }) => { if (active) setUrl(download_url); })
+    const loader = urlLoader
+      ? urlLoader()
+      : documentId != null
+        ? documentService.getDownloadUrl(documentId).then(r => r.download_url)
+        : Promise.reject(new Error('Не указан источник файла'));
+    loader
+      .then(u => { if (active) setUrl(u); })
       .catch(() => { if (active) setError('Не удалось получить ссылку на файл'); });
     return () => { active = false; };
-  }, [documentId]);
+  }, [documentId, urlLoader]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };

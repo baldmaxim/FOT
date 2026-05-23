@@ -83,6 +83,11 @@ export interface IApprovalReviewItem extends ITimesheetApproval {
   manager_employee_name: string | null;
   submitted_by_name: string | null;
   reviewed_by_name: string | null;
+  /** Родительский «участок» — общий parent отделов всех подач группы. NULL если общий участок не определён. */
+  parent_department_id: string | null;
+  parent_department_name: string | null;
+  /** Ключ группировки в UI: `parent:<id>` для общего участка, `manager:<id>` если у personal-подачи нет общего участка. */
+  group_key: string;
   weekend_work_dates: string[];
   pending_weekend_dates: string[];
   approved_weekend_dates: string[];

@@ -7,7 +7,9 @@ import {
   APPROVAL_STATUS_LABELS,
   type TimesheetApprovalStatus,
   type IApprovalReviewItem,
+  type IApprovalAttachment,
 } from '../../services/timesheetApprovalService';
+import { FilePreviewModal } from '../../components/documents/FilePreviewModal';
 import {
   correctionApprovalService,
   type ICorrectionDepartmentGroup,
@@ -534,8 +536,8 @@ interface IApprovalCardExtrasProps {
 
 const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) => {
   const toast = useToast();
-  const [openingId, setOpeningId] = useState<number | null>(null);
-  const [exporting, setExporting] = useState<'fact' | '1c' | 'employee' | null>(null);
+  const [previewAtt, setPreviewAtt] = useState<IApprovalAttachment | null>(null);
+  const [exporting, setExporting] = useState<'fact' | '1c' | 'employee' | 'employee_1c' | null>(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | ''>('');
 
   const monthStr = useMemo(() => {
@@ -551,17 +553,13 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
   });
   const attachments = attachmentsQuery.data ?? [];
 
-  const handleView = async (documentId: number) => {
-    setOpeningId(documentId);
-    try {
+  const loadAttachmentUrl = useCallback(
+    async (documentId: number): Promise<string> => {
       const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(documentId);
-      window.open(download_url, '_blank', 'noopener');
-    } catch (err) {
-      toast.error?.(err instanceof Error ? err.message : 'Не удалось открыть файл');
-    } finally {
-      setOpeningId(null);
-    }
-  };
+      return download_url;
+    },
+    [],
+  );
 
   const downloadBlob = (blob: Blob, name: string) => {
     const url = URL.createObjectURL(blob);
@@ -632,6 +630,29 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
     }
   };
 
+  const handleExportEmployee1C = async () => {
+    if (selectedEmployeeId === '') return;
+    const emp = employees.find(e => e.id === selectedEmployeeId);
+    setExporting('employee_1c');
+    try {
+      const blob = await timesheetService.export({
+        month: monthStr,
+        department_id: row.department_id,
+        from: row.start_date,
+        to: row.end_date,
+        presentation: 'hr',
+        employee_id: selectedEmployeeId,
+        export_as_1c: true,
+      });
+      const empLabel = sanitizeFilePart(emp?.full_name ?? String(selectedEmployeeId));
+      downloadBlob(blob, `1С_${empLabel}_${row.start_date}_${row.end_date}.xlsx`);
+    } catch (err) {
+      toast.error?.(err instanceof Error ? err.message : 'Ошибка выгрузки для 1С');
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <>
       {attachments.length > 0 && (
@@ -642,13 +663,21 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
               key={att.document_id}
               type="button"
               className="approvals-attachment-btn"
-              onClick={() => handleView(att.document_id)}
-              disabled={openingId === att.document_id}
+              onClick={() => setPreviewAtt(att)}
             >
               <FileText size={14} /> {att.file_name}
             </button>
           ))}
         </div>
+      )}
+      {previewAtt && (
+        <FilePreviewModal
+          documentId={previewAtt.document_id}
+          fileName={previewAtt.file_name}
+          mimeType={previewAtt.mime_type}
+          urlLoader={() => loadAttachmentUrl(previewAtt.document_id)}
+          onClose={() => setPreviewAtt(null)}
+        />
       )}
       <div className="approvals-export">
         <button
@@ -687,6 +716,14 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
           disabled={selectedEmployeeId === '' || exporting !== null}
         >
           <Download size={16} /> {exporting === 'employee' ? 'Выгрузка…' : 'Выгрузка в Excel'}
+        </button>
+        <button
+          type="button"
+          className="approvals-export-btn"
+          onClick={handleExportEmployee1C}
+          disabled={selectedEmployeeId === '' || exporting !== null}
+        >
+          <Download size={16} /> {exporting === 'employee_1c' ? 'Выгрузка…' : 'Выгрузка для 1С'}
         </button>
       </div>
     </>
@@ -983,6 +1020,27 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
 
   const rows: IApprovalReviewItem[] = useMemo(() => query.data ?? [], [query.data]);
 
+  // Группировка карточек по «участку» (общему parent_department_id) — см. group_key с бэка.
+  // Группы с одной подачей отрисовываются как раньше (без обёртки), чтобы не плодить шум.
+  const grouped = useMemo(() => {
+    const map = new Map<string, IApprovalReviewItem[]>();
+    for (const row of rows) {
+      const key = row.group_key ?? `approval:${row.id}`;
+      const list = map.get(key);
+      if (list) list.push(row);
+      else map.set(key, [row]);
+    }
+    return [...map.entries()].map(([key, items]) => ({
+      key,
+      items,
+      // Заголовок участка — сначала parent_department_name, иначе ФИО руководителя для manager-ключа.
+      label: items[0]?.parent_department_name
+        ?? (key.startsWith('manager:')
+          ? items[0]?.manager_employee_name ?? 'Персональная подача руководителя'
+          : items[0]?.department_name ?? null),
+    }));
+  }, [rows]);
+
   const handleConfirmComment = (comment: string) => {
     if (!commentModal) return;
     if (commentModal.mode === 'rework') {
@@ -1015,49 +1073,71 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
         <div className="approvals-empty">Нет подач в этом статусе</div>
       ) : (
         <ul className="approvals-list">
-          {rows.map(row => {
-            const expanded = expandedId === row.id;
-            return (
-              <li key={row.id} className="approvals-card">
-                <button
-                  type="button"
-                  className="approvals-card-header"
-                  onClick={() => setExpandedId(expanded ? null : row.id)}
-                >
-                  <div className="approvals-card-info">
-                    <strong>{row.department_name ?? row.department_id}</strong>
-                    <span className="approvals-card-range">{formatDate(row.start_date)} — {formatDate(row.end_date)}</span>
-                  </div>
-                  <span className="approvals-card-status">{APPROVAL_STATUS_LABELS[row.status]}</span>
-                  {row.status === 'approved' && canReview && (
-                    <span
-                      className="approvals-card-return-hint"
-                      title="Можно вернуть на доработку — раскройте карточку"
-                      aria-label="Можно вернуть на доработку"
-                    >
-                      <RotateCcw size={14} />
+          {grouped.map(group => {
+            const renderCard = (row: IApprovalReviewItem, inGroup: boolean) => {
+              const expanded = expandedId === row.id;
+              // Подзаголовок секции: для personal-подачи показываем «Руководитель: ФИО»,
+              // для подачи отдела — её собственное имя (отличающееся от заголовка участка).
+              const sectionLabel = row.manager_employee_id != null
+                ? `Руководитель: ${row.manager_employee_name ?? '—'}`
+                : row.department_name ?? row.department_id ?? '—';
+              return (
+                <li key={row.id} className={`approvals-card${inGroup ? ' approvals-card--in-group' : ''}`}>
+                  <button
+                    type="button"
+                    className="approvals-card-header"
+                    onClick={() => setExpandedId(expanded ? null : row.id)}
+                  >
+                    <div className="approvals-card-info">
+                      <strong>{sectionLabel}</strong>
+                      <span className="approvals-card-range">{formatDate(row.start_date)} — {formatDate(row.end_date)}</span>
+                    </div>
+                    <span className="approvals-card-status">{APPROVAL_STATUS_LABELS[row.status]}</span>
+                    {row.status === 'approved' && canReview && (
+                      <span
+                        className="approvals-card-return-hint"
+                        title="Можно вернуть на доработку — раскройте карточку"
+                        aria-label="Можно вернуть на доработку"
+                      >
+                        <RotateCcw size={14} />
+                      </span>
+                    )}
+                    <span className="approvals-card-submitted">
+                      {row.status === 'submitted'
+                        ? `${row.submitted_by_name ?? '—'}${row.submitted_at ? `, ${formatDate(row.submitted_at.slice(0, 10))}` : ''}`
+                        : `${row.reviewed_by_name ?? row.submitted_by_name ?? '—'}${row.reviewed_at ? `, ${formatDate(row.reviewed_at.slice(0, 10))}` : ''}`}
                     </span>
-                  )}
-                  <span className="approvals-card-submitted">
-                    {row.status === 'submitted'
-                      ? `${row.submitted_by_name ?? '—'}${row.submitted_at ? `, ${formatDate(row.submitted_at.slice(0, 10))}` : ''}`
-                      : `${row.reviewed_by_name ?? row.submitted_by_name ?? '—'}${row.reviewed_at ? `, ${formatDate(row.reviewed_at.slice(0, 10))}` : ''}`}
-                  </span>
-                  {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                </button>
+                    {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
 
-                {expanded && (
-                  <ApprovalCardBody
-                    row={row}
-                    canReview={canReview}
-                    isApproving={approveMutation.isPending}
-                    isRejecting={rejectMutation.isPending}
-                    isReturning={returnMutation.isPending}
-                    onApprove={() => approveMutation.mutate(row.id)}
-                    onSendToRework={() => setCommentModal({ row, mode: 'rework' })}
-                    onReturnApproved={() => setCommentModal({ row, mode: 'return' })}
-                  />
-                )}
+                  {expanded && (
+                    <ApprovalCardBody
+                      row={row}
+                      canReview={canReview}
+                      isApproving={approveMutation.isPending}
+                      isRejecting={rejectMutation.isPending}
+                      isReturning={returnMutation.isPending}
+                      onApprove={() => approveMutation.mutate(row.id)}
+                      onSendToRework={() => setCommentModal({ row, mode: 'rework' })}
+                      onReturnApproved={() => setCommentModal({ row, mode: 'return' })}
+                    />
+                  )}
+                </li>
+              );
+            };
+
+            if (group.items.length === 1) {
+              return renderCard(group.items[0]!, false);
+            }
+            return (
+              <li key={group.key} className="approvals-group">
+                <div className="approvals-group-header">
+                  <strong>Участок: {group.label ?? '—'}</strong>
+                  <span className="approvals-group-meta">{group.items.length} подач</span>
+                </div>
+                <ul className="approvals-group-items">
+                  {group.items.map(row => renderCard(row, true))}
+                </ul>
               </li>
             );
           })}

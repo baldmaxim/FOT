@@ -5,7 +5,11 @@ import {
   fetchTimesheetDataForDepartment,
   type TimesheetExportRangeArg,
 } from '../services/timesheet-export.service.js';
-import { buildTimesheetSheet, writeTimesheetWorkbookBuffer } from '../services/timesheet-excel.service.js';
+import {
+  build1CTimesheetWorkbook,
+  buildTimesheetSheet,
+  writeTimesheetWorkbookBuffer,
+} from '../services/timesheet-excel.service.js';
 import { resolveRequestDataScope, resolveScopedDepartmentId } from '../services/data-scope.service.js';
 import { isDepartmentMonthAllowed, monthAccessFromUser, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
 
@@ -28,10 +32,10 @@ function resolveExportRangeArg(query: Record<string, unknown>): TimesheetExportR
   return half === 'H1' || half === 'H2' || half === 'FULL' ? half : 'FULL';
 }
 
-/** GET /api/timesheet/export?month=YYYY-MM&department_id=...&employee_id=...&from=YYYY-MM-DD&to=YYYY-MM-DD&presentation=hr|manager */
+/** GET /api/timesheet/export?month=YYYY-MM&department_id=...&employee_id=...&from=YYYY-MM-DD&to=YYYY-MM-DD&presentation=hr|manager&export_as_1c=true */
 export async function exportTimesheet(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, department_id, presentation, employee_id } = req.query;
+    const { month, department_id, presentation, employee_id, export_as_1c } = req.query;
 
     if (!month || typeof month !== 'string') {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен' });
@@ -39,6 +43,7 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
 
     const employeeIdRaw = typeof employee_id === 'string' ? Number.parseInt(employee_id, 10) : NaN;
     const employeeId = Number.isInteger(employeeIdRaw) && employeeIdRaw > 0 ? employeeIdRaw : null;
+    const exportAs1C = export_as_1c === 'true' || export_as_1c === '1';
 
     const rangeArg = resolveExportRangeArg(req.query as Record<string, unknown>);
     const requestedDepartmentId = department_id && typeof department_id === 'string' ? department_id : null;
@@ -85,8 +90,13 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
       selectedEmployeeName = emp.full_name;
     }
 
-    const wb = new ExcelJS.Workbook();
-    buildTimesheetSheet(wb, 'Табель', exportData);
+    const wb = exportAs1C
+      ? await build1CTimesheetWorkbook('Табель', exportData)
+      : (() => {
+          const w = new ExcelJS.Workbook();
+          buildTimesheetSheet(w, 'Табель', exportData);
+          return w;
+        })();
 
     const buf = await writeTimesheetWorkbookBuffer(wb);
     const isCustomRange = typeof rangeArg === 'object';
@@ -99,10 +109,12 @@ export async function exportTimesheet(req: AuthenticatedRequest, res: Response) 
       segmentSuffix = `_${data.exportHalf === 'H1' ? '1-15' : `16-${data.daysInMonth}`}`;
     }
     const presentationSuffix = explicitPresentation === 'manager' ? '_Руководитель' : '';
+    const employeePrefix = exportAs1C ? '1С_' : 'Табель_';
+    const deptOneCSuffix = exportAs1C ? '_1С' : '';
 
     const rawFileName = selectedEmployeeName
-      ? `Табель_${selectedEmployeeName}_${MONTH_NAMES[data.mon]}_${data.year}${segmentSuffix}.xlsx`
-      : `${data.departmentName}_${MONTH_NAMES[data.mon]}_${data.year}${segmentSuffix}${presentationSuffix}.xlsx`;
+      ? `${employeePrefix}${selectedEmployeeName}_${MONTH_NAMES[data.mon]}_${data.year}${segmentSuffix}.xlsx`
+      : `${data.departmentName}_${MONTH_NAMES[data.mon]}_${data.year}${segmentSuffix}${presentationSuffix}${deptOneCSuffix}.xlsx`;
     const safeFileName = rawFileName.replace(/[\/\\?%*:|"<>]/g, '_');
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

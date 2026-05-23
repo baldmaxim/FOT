@@ -31,6 +31,7 @@ type TimesheetExportPresentation = 'hr' | 'manager';
 interface TimesheetExportFilters extends TimesheetFilters {
   half?: TimesheetExportHalf;
   presentation?: TimesheetExportPresentation;
+  export_as_1c?: boolean;
 }
 
 interface ApiResponse<T> {
@@ -526,6 +527,7 @@ export const timesheetService = {
       params.append('half', filters.half);
     }
     if (filters.presentation) params.append('presentation', filters.presentation);
+    if (filters.export_as_1c) params.append('export_as_1c', 'true');
 
     const response = await fetch(
       buildApiUrl(`/timesheet/export?${params.toString()}`),

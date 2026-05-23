@@ -200,6 +200,114 @@ async function resolvePersonalSubmissionContext(req: AuthenticatedRequest): Prom
   return { managerEmployeeId, employeeIds, affectedDepartmentIds };
 }
 
+/**
+ * Гарантирует, что у руководителя «по людям» за указанный диапазон есть persona-подача,
+ * включающая его самого. Используется после успешной полной подачи отдела:
+ * если руководитель сидит вне подаваемой бригады, его собственный табель иначе
+ * не попадёт ни в одну подачу. Идемпотентно — повторные вызовы для того же диапазона
+ * не создают дублей, partial EXCLUDE на manager_employee_id это поддерживает.
+ *
+ * Возвращает:
+ *  - null, если подача не нужна (нет employee_id, нет direct reports, руководитель
+ *    уже включён в snapshot какой-то существующей department-подачи за этот период,
+ *    либо persona-подача уже в submitted/approved).
+ *  - { approval, transitioned: true } — если подача создана или переведена в submitted
+ *    (нужно отправить notify HR + событие в историю).
+ */
+async function ensureManagerSelfApprovalForRange(
+  req: AuthenticatedRequest,
+  range: ITimesheetDateRange,
+): Promise<{ approval: TimesheetApproval; transitioned: boolean } | null> {
+  const managerEmpId = req.user.employee_id;
+  if (!managerEmpId) return null;
+
+  const subordinates = await listDirectSubordinates(managerEmpId);
+  if (subordinates.length === 0) return null;
+
+  // Если руководитель уже сидит в snapshot какой-то submitted/approved/returned
+  // department-подачи за этот период (т.е. он реально в этой бригаде) — отдельная
+  // persona-подача не нужна, табель и так согласуется.
+  const selfInDeptSnapshot = await queryOne<{ approval_id: number }>(
+    `SELECT a.id AS approval_id
+       FROM timesheet_approvals a
+       JOIN timesheet_approval_employees s ON s.approval_id = a.id AND s.employee_id = $1
+       WHERE a.start_date = $2 AND a.end_date = $3
+         AND a.manager_employee_id IS NULL
+         AND a.status IN ('submitted','approved','returned')
+       LIMIT 1`,
+    [managerEmpId, range.startDate, range.endDate],
+  );
+  if (selfInDeptSnapshot) return null;
+
+  const now = new Date().toISOString();
+
+  const existing = await queryOne<TimesheetApproval>(
+    `SELECT * FROM timesheet_approvals
+       WHERE manager_employee_id = $1 AND start_date = $2 AND end_date = $3
+       LIMIT 1`,
+    [managerEmpId, range.startDate, range.endDate],
+  );
+
+  if (existing) {
+    // Если уже submitted/approved — подача актуальна, не трогаем. Гарантируем только,
+    // что сам руководитель есть в snapshot (idempotent upsert на одной строке).
+    if (existing.status === 'submitted' || existing.status === 'approved') {
+      await withTransaction(async client => {
+        await client.query(
+          `INSERT INTO timesheet_approval_employees (approval_id, employee_id, full_name)
+           SELECT $1, e.id, e.full_name FROM employees e WHERE e.id = $2
+           ON CONFLICT (approval_id, employee_id) DO UPDATE SET full_name = EXCLUDED.full_name`,
+          [existing.id, managerEmpId],
+        );
+      });
+      return null;
+    }
+    // draft / returned / rejected → переводим в submitted и добавляем себя в snapshot.
+    const updated = await withTransaction(async client => {
+      const r = await client.query<TimesheetApproval>(
+        `UPDATE timesheet_approvals
+           SET status = 'submitted', submitted_by = $1, submitted_at = $2,
+               reviewed_by = NULL, reviewed_at = NULL, review_comment = NULL,
+               updated_at = $3
+           WHERE id = $4
+           RETURNING *`,
+        [req.user.id, now, now, existing.id],
+      );
+      await client.query(
+        `INSERT INTO timesheet_approval_employees (approval_id, employee_id, full_name)
+         SELECT $1, e.id, e.full_name FROM employees e WHERE e.id = $2
+         ON CONFLICT (approval_id, employee_id) DO UPDATE SET full_name = EXCLUDED.full_name`,
+        [existing.id, managerEmpId],
+      );
+      return r.rows[0] ?? null;
+    });
+    return updated ? { approval: updated, transitioned: true } : null;
+  }
+
+  try {
+    const created = await withTransaction(async client => {
+      const r = await client.query<TimesheetApproval>(
+        `INSERT INTO timesheet_approvals
+           (department_id, manager_employee_id, start_date, end_date, status,
+            submitted_by, submitted_at, reviewed_by, reviewed_at, review_comment, updated_at)
+         VALUES (NULL, $1, $2, $3, 'submitted', $4, $5, NULL, NULL, NULL, $6)
+         RETURNING *`,
+        [managerEmpId, range.startDate, range.endDate, req.user.id, now, now],
+      );
+      const row = r.rows[0] ?? null;
+      if (row) await snapshotApprovalEmployees(client, row.id, [managerEmpId]);
+      return row;
+    });
+    return created ? { approval: created, transitioned: true } : null;
+  } catch (err) {
+    // Гонка двух submit'ов в один и тот же момент — partial EXCLUDE отшил один.
+    // Тихо: другая попытка уже создала подачу.
+    const code = (err as { code?: string } | null)?.code;
+    if (code === '23P01') return null;
+    throw err;
+  }
+}
+
 async function logApprovalAudit(
   req: AuthenticatedRequest,
   approvalId: number,
@@ -622,6 +730,54 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }).catch(notifyError => {
       console.error('timesheet-approval.submit notify error:', notifyError);
     });
+
+    // Если это была полная подача отдела, а сам submitter сидит вне этой бригады —
+    // его собственный табель иначе нигде не согласуется. Гарантируем persona-подачу
+    // самого руководителя, чтобы он не «терялся» в UI согласований.
+    if (!personal) {
+      try {
+        const selfResult = await ensureManagerSelfApprovalForRange(req, range);
+        if (selfResult?.transitioned && req.user.employee_id) {
+          const selfDeptRow = await queryOne<{ org_department_id: string | null }>(
+            `SELECT org_department_id FROM employees WHERE id = $1 LIMIT 1`,
+            [req.user.employee_id],
+          );
+          const selfAffectedDepartmentIds = selfDeptRow?.org_department_id
+            ? [selfDeptRow.org_department_id]
+            : [];
+          await persistApprovalTransition({
+            approvalId: selfResult.approval.id,
+            departmentId: null,
+            range,
+            fromStatus: null,
+            toStatus: 'submitted',
+            action: 'submitted',
+            actorUserId: req.user.id,
+          });
+          await logApprovalAudit(req, selfResult.approval.id, 'TIMESHEET_APPROVAL_SUBMITTED', {
+            department_id: null,
+            manager_employee_id: req.user.employee_id,
+            start_date: range.startDate,
+            end_date: range.endDate,
+            from_status: null,
+            to_status: 'submitted',
+            auto_self_personal: true,
+          });
+          void notifyHrAboutSubmittedApproval({
+            departmentId: null,
+            managerEmployeeId: req.user.employee_id,
+            affectedDepartmentIds: selfAffectedDepartmentIds,
+            employeeCount: 1,
+            range,
+          }).catch(notifyError => {
+            console.error('timesheet-approval.submit self-personal notify error:', notifyError);
+          });
+        }
+      } catch (selfErr) {
+        // Не валим основную подачу: persona-self — best-effort.
+        console.error('timesheet-approval.submit ensureManagerSelfApproval error:', selfErr);
+      }
+    }
 
     res.json({ success: true, data: approval });
   } catch (err) {
@@ -1622,14 +1778,45 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
     const managerEmpIds = [...new Set(
       rows.map(r => r.manager_employee_id).filter((id): id is number => Number.isInteger(id) && (id ?? 0) > 0),
     )];
+    const personalApprovalIds = rows
+      .filter(r => r.manager_employee_id != null)
+      .map(r => r.id);
+
+    // Snapshot personal-подач: грузим разом, чтобы по ним собрать org_department_id всех
+    // подчинённых и определить общий участок для группировки.
+    const personalSnapshotRows = personalApprovalIds.length > 0
+      ? await query<{ approval_id: number; employee_id: number }>(
+        `SELECT approval_id, employee_id
+           FROM timesheet_approval_employees
+           WHERE approval_id = ANY($1::bigint[])`,
+        [personalApprovalIds],
+      )
+      : [];
+    const personalEmployeeIds = [...new Set(personalSnapshotRows.map(s => Number(s.employee_id)))];
+
+    const employeeDeptRows = personalEmployeeIds.length > 0
+      ? await query<{ id: number; org_department_id: string | null }>(
+        `SELECT id, org_department_id FROM employees WHERE id = ANY($1::int[])`,
+        [personalEmployeeIds],
+      )
+      : [];
+    const employeeDeptMap = new Map(employeeDeptRows.map(r => [Number(r.id), r.org_department_id ?? null]));
+
+    const allDeptIdsForParents = new Set<string>(deptIds);
+    for (const r of employeeDeptRows) {
+      if (r.org_department_id) allDeptIdsForParents.add(r.org_department_id);
+    }
 
     const [deptRows, userRows, managerRows] = await Promise.all([
-      deptIds.length > 0
-        ? query<{ id: string; name: string | null }>(
-          `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
-          [deptIds],
+      allDeptIdsForParents.size > 0
+        ? query<{ id: string; name: string | null; parent_id: string | null; parent_name: string | null }>(
+          `SELECT d.id, d.name, d.parent_id, p.name AS parent_name
+             FROM org_departments d
+             LEFT JOIN org_departments p ON p.id = d.parent_id
+            WHERE d.id = ANY($1::uuid[])`,
+          [[...allDeptIdsForParents]],
         )
-        : Promise.resolve([] as Array<{ id: string; name: string | null }>),
+        : Promise.resolve([] as Array<{ id: string; name: string | null; parent_id: string | null; parent_name: string | null }>),
       userIds.length > 0
         ? query<{ id: string; full_name: string | null }>(
           `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
@@ -1645,14 +1832,71 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
     ]);
 
     const deptNames = new Map(deptRows.map((row) => [String(row.id), String(row.name ?? '')]));
+    const deptParents = new Map(deptRows.map((row) => [
+      String(row.id),
+      { parentId: row.parent_id, parentName: row.parent_name },
+    ]));
     const userNames = new Map(userRows.map((row) => [String(row.id), String(row.full_name ?? '')]));
     const managerNames = new Map(managerRows.map((row) => [Number(row.id), row.full_name ?? null]));
 
+    // Группируем snapshot по approval_id → список employee_id для personal-подач.
+    const snapshotByApproval = new Map<number, number[]>();
+    for (const s of personalSnapshotRows) {
+      const list = snapshotByApproval.get(Number(s.approval_id)) ?? [];
+      list.push(Number(s.employee_id));
+      snapshotByApproval.set(Number(s.approval_id), list);
+    }
+
+    // Для каждой подачи определяем group-инфо: общий parent-участок для UI-группировки.
+    const groupInfoByApproval = new Map<number, {
+      parentDeptId: string | null;
+      parentDeptName: string | null;
+      groupKey: string;
+    }>();
+    for (const r of rows) {
+      if (r.department_id) {
+        const parent = deptParents.get(r.department_id);
+        const pid = parent?.parentId ?? null;
+        const pname = parent?.parentName ?? null;
+        groupInfoByApproval.set(r.id, {
+          parentDeptId: pid,
+          parentDeptName: pname,
+          // Если у отдела нет родителя — каждый отдел сам себе участок.
+          groupKey: `parent:${pid ?? r.department_id}`,
+        });
+      } else if (r.manager_employee_id != null) {
+        const snapshotEmpIds = snapshotByApproval.get(r.id) ?? [];
+        const empDepts = snapshotEmpIds
+          .map(id => employeeDeptMap.get(id) ?? null)
+          .filter((d): d is string => !!d);
+        const parentSet = new Set<string>();
+        for (const d of empDepts) {
+          const p = deptParents.get(d);
+          // Если у бригады нет parent — используем сам id (отдел без родителя — корень).
+          parentSet.add(p?.parentId ?? d);
+        }
+        if (parentSet.size === 1) {
+          const commonParentId = [...parentSet][0];
+          const parentMeta = deptParents.get(empDepts[0]!);
+          groupInfoByApproval.set(r.id, {
+            parentDeptId: parentMeta?.parentId ?? null,
+            parentDeptName: parentMeta?.parentName ?? (parentMeta?.parentId ? null : deptNames.get(empDepts[0]!) ?? null),
+            groupKey: `parent:${commonParentId}`,
+          });
+        } else {
+          // Разные участки → группа = персональная подача руководителя.
+          groupInfoByApproval.set(r.id, {
+            parentDeptId: null,
+            parentDeptName: null,
+            groupKey: `manager:${r.manager_employee_id}`,
+          });
+        }
+      }
+    }
+
     const enriched = await Promise.all(rows.map(async (row) => {
       const isPersonal = row.manager_employee_id != null;
-      const snapshotIds = isPersonal
-        ? (await listApprovalEmployees(row.id)).map(s => s.employee_id)
-        : undefined;
+      const snapshotIds = isPersonal ? (snapshotByApproval.get(row.id) ?? []) : undefined;
 
       const weekend = await checkWeekendWorkRequirement({
         departmentId: row.department_id,
@@ -1738,12 +1982,21 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         }
       }
 
+      const groupInfo = groupInfoByApproval.get(row.id) ?? {
+        parentDeptId: null,
+        parentDeptName: null,
+        groupKey: row.department_id ? `parent:${row.department_id}` : `approval:${row.id}`,
+      };
+
       return {
         ...row,
         department_name: row.department_id ? deptNames.get(row.department_id) ?? null : null,
         manager_employee_name: row.manager_employee_id != null ? managerNames.get(row.manager_employee_id) ?? null : null,
         submitted_by_name: row.submitted_by ? userNames.get(row.submitted_by) ?? null : null,
         reviewed_by_name: row.reviewed_by ? userNames.get(row.reviewed_by) ?? null : null,
+        parent_department_id: groupInfo.parentDeptId,
+        parent_department_name: groupInfo.parentDeptName,
+        group_key: groupInfo.groupKey,
         weekend_work_dates: weekend.weekendWorkDates,
         pending_weekend_dates: pendingWeekendDates,
         approved_weekend_dates: approvedWeekendDates,
