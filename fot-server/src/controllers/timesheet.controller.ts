@@ -1681,10 +1681,6 @@ export const timesheetController = {
 	      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
 	        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
 	      }
-	      const existingCreatedBy = typeof existing.created_by === 'string' ? existing.created_by : null;
-	      if (scope === 'department' && existingCreatedBy && existingCreatedBy !== req.user.id) {
-	        return res.status(403).json({ success: false, error: 'Редактировать можно только свои корректировки' });
-	      }
 	      const approvalLockUpdate = await ensureNotLockedForScope(
 	        req,
 	        scope,
@@ -2080,14 +2076,13 @@ export const timesheetController = {
           ? await ensureNotLockedForScope(req, 'department', item.employee_id, item.work_date)
           : null;
         const approvalLocked = Boolean(lockInfo);
-        const isOwner = scope === 'department' ? item.created_by === req.user.id : true;
         const [yStr, mStr] = item.work_date.split('-');
         const monthAllowed = scope === 'all'
           ? true
           : isDepartmentMonthAllowed(Number(yStr), Number(mStr), monthAccessFromUser(req.user));
         const canEdit = scope === 'all'
           ? !(lockInfo && lockInfo.status === 'approved')
-          : isOwner && !approvalLocked && monthAllowed && item.source_type === 'manual';
+          : !approvalLocked && monthAllowed && item.source_type === 'manual';
         const canDelete = canEdit && item.source_type === 'manual';
         return {
           id: item.id,
@@ -2157,11 +2152,6 @@ export const timesheetController = {
 
       if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
-      }
-
-      const existingCreatedBy = typeof existing.created_by === 'string' ? existing.created_by : null;
-      if (scope === 'department' && existingCreatedBy && existingCreatedBy !== req.user.id) {
-        return res.status(403).json({ success: false, error: 'Удалять можно только свои корректировки' });
       }
 
       const approvalLockDel = await ensureNotLockedForScope(
