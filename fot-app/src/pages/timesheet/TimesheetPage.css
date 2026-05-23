@@ -3007,6 +3007,23 @@
 
 .ts-day--corrected:hover { cursor: help; }
 
+/* Подсветка ячеек, попавших в уже отправленный/согласованный период табеля.
+   Реализована через inset box-shadow с большим spread — это полупрозрачная
+   заливка поверх существующего фона ячейки, не конфликтует с ::before/::after
+   у .ts-day--corrected и работает с уже занятыми background/outline. */
+.ts-day--in-submitted-period {
+  box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0.16);
+}
+.ts-day--in-approved-period {
+  box-shadow: inset 0 0 0 9999px rgba(34, 197, 94, 0.16);
+}
+[data-theme="light"] .ts-day--in-submitted-period {
+  box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0.20);
+}
+[data-theme="light"] .ts-day--in-approved-period {
+  box-shadow: inset 0 0 0 9999px rgba(34, 197, 94, 0.20);
+}
+
 @keyframes ts-day-flash {
   0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
   20%, 80% { box-shadow: inset 0 0 0 3px var(--primary); }

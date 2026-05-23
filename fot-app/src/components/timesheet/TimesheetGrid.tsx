@@ -41,6 +41,7 @@ interface ITimesheetGridProps {
   selectedCellKeys?: Set<string>;
   splitDayKeys?: Set<string>;
   lockedDates?: Set<string>;
+  approvalStatusByDate?: Map<string, 'draft' | 'submitted' | 'approved' | 'returned' | 'rejected'>;
   problemDates?: { red?: Set<string>; yellow?: Set<string> };
   outOfPeriodDates?: Set<string>;
   highlightedCell?: { employeeId: number; date: string } | null;
@@ -217,6 +218,7 @@ const getDayCellClass = (
   today: boolean,
   future: boolean,
   thresholdHours = 8,
+  periodApprovalStatus?: string,
 ): string => {
   const classes = ['ts-day'];
   if (today) classes.push('ts-day--today');
@@ -236,6 +238,8 @@ const getDayCellClass = (
   if (entry && ((entry.travel_problematic_segments || 0) > 0 || (entry.travel_delay_minutes || 0) > 0)) {
     classes.push('ts-day--travel-issue');
   }
+  if (periodApprovalStatus === 'submitted') classes.push('ts-day--in-submitted-period');
+  else if (periodApprovalStatus === 'approved') classes.push('ts-day--in-approved-period');
   return classes.join(' ');
 };
 
@@ -366,6 +370,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   visibleDays,
   selectedCellKeys = EMPTY_CELL_SELECTION,
   splitDayKeys = EMPTY_CELL_SELECTION,
+  approvalStatusByDate,
   problemDates,
   outOfPeriodDates,
   highlightedCell = null,
@@ -931,7 +936,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const threshold = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const clickEntry = topEntry || bottomEntry;
                         const clickObj = topEntry ? topObj : bottomObj;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold);
+                        const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate));
                         const classes = [baseCls, 'ts-mobile-day-btn', 'ts-mobile-day-btn--dual'];
 
                         return (
@@ -1111,7 +1117,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const entry = row.days.get(day) || null;
                         const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
-                        const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours);
+                        const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusByDate?.get(isoDate));
                         const text = getDayCellTextMobile(entry, dayOff);
                         const baseTitle = getDayCellTitle(entry, dayOff);
                         const title = preHoliday
@@ -1119,7 +1126,6 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           : baseTitle;
                         const inactiveCls = inactive ? ' ts-day--inactive' : '';
                         const preHolidayCls = preHoliday ? ' ts-day--pre-holiday' : '';
-                        const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const cellKey = `${row.employee.id}_${isoDate}`;
                         const problemCls = (problemDates?.red?.has(cellKey) || problemDates?.red?.has(isoDate))
                           ? ' ts-day--problem-red'
@@ -1224,7 +1230,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           : baseTitle;
                         const isClickable = !dayOff;
                         const isBlocked = row.isSynthetic;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold);
+                        const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate));
                         return (
                           <td
                             key={`${group.object_key}_${row.employee.id}_${day}`}
@@ -1407,7 +1414,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         && highlightedCell.date === isoDate
                         ? ' ts-day--flash'
                         : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours)}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusByDate?.get(isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
                       const text = inactive ? '' : getDayCellText(entry, dayOff);
                       const baseTitle = getDayCellTitle(entry, dayOff);
                       const title = preHoliday
@@ -1481,7 +1488,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             .join(' • ')
                           : baseTitle;
                         const isClickable = !dayOff;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold);
+                        const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate));
                         return (
                           <td
                             key={`${objectRow.object_key}_${day}`}
