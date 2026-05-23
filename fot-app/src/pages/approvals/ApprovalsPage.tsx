@@ -544,7 +544,12 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
     const d = new Date(row.start_date + 'T00:00:00');
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }, [row.start_date]);
-  const deptLabel = sanitizeFilePart(row.department_name ?? row.department_id);
+  const isPersonal = row.manager_employee_id != null;
+  const deptLabel = sanitizeFilePart(
+    isPersonal
+      ? (row.manager_employee_name ?? `employee_${row.manager_employee_id ?? 'unknown'}`)
+      : (row.department_name ?? row.department_id ?? 'department')
+  );
 
   const attachmentsQuery = useQuery({
     queryKey: ['approval-attachments', row.id],
@@ -571,6 +576,7 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
   };
 
   const handleExportFact = async () => {
+    if (!row.department_id) return;
     setExporting('fact');
     try {
       const blob = await timesheetService.export({
@@ -589,6 +595,7 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
   };
 
   const handleExport1C = async () => {
+    if (!row.department_id) return;
     setExporting('1c');
     try {
       const blob = await timesheetService.exportMass({
@@ -615,7 +622,7 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
     try {
       const blob = await timesheetService.export({
         month: monthStr,
-        department_id: row.department_id,
+        department_id: row.department_id ?? undefined,
         from: row.start_date,
         to: row.end_date,
         presentation: 'hr',
@@ -637,7 +644,7 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
     try {
       const blob = await timesheetService.export({
         month: monthStr,
-        department_id: row.department_id,
+        department_id: row.department_id ?? undefined,
         from: row.start_date,
         to: row.end_date,
         presentation: 'hr',
@@ -679,24 +686,26 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
           onClose={() => setPreviewAtt(null)}
         />
       )}
-      <div className="approvals-export">
-        <button
-          type="button"
-          className="approvals-export-btn"
-          onClick={handleExportFact}
-          disabled={exporting !== null}
-        >
-          <Download size={16} /> {exporting === 'fact' ? 'Выгрузка…' : 'Выгрузка факта'}
-        </button>
-        <button
-          type="button"
-          className="approvals-export-btn"
-          onClick={handleExport1C}
-          disabled={exporting !== null}
-        >
-          <Download size={16} /> {exporting === '1c' ? 'Выгрузка…' : 'Выгрузка для 1С'}
-        </button>
-      </div>
+      {!isPersonal && (
+        <div className="approvals-export">
+          <button
+            type="button"
+            className="approvals-export-btn"
+            onClick={handleExportFact}
+            disabled={exporting !== null}
+          >
+            <Download size={16} /> {exporting === 'fact' ? 'Выгрузка…' : 'Выгрузка факта'}
+          </button>
+          <button
+            type="button"
+            className="approvals-export-btn"
+            onClick={handleExport1C}
+            disabled={exporting !== null}
+          >
+            <Download size={16} /> {exporting === '1c' ? 'Выгрузка…' : 'Выгрузка для 1С'}
+          </button>
+        </div>
+      )}
       <div className="approvals-export-employee">
         <select
           className="approvals-export-select"

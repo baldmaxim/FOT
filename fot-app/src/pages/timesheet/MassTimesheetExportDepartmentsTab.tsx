@@ -163,6 +163,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     const ids = new Set<string>();
     for (const item of approvedList ?? []) {
       if (item.start_date === rangeStart && item.end_date === rangeEnd) {
+        if (!item.department_id) continue;
         ids.add(item.department_id);
       }
     }
