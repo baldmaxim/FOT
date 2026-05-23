@@ -298,6 +298,7 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
 
 const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'remote', label: 'Удалённая работа' },
+  { value: 'work', label: 'Работа' },
   { value: 'vacation', label: 'Отпуск' },
   { value: 'unpaid', label: 'За свой счёт' },
   { value: 'sick_leave', label: 'Больничный' },
