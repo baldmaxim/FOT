@@ -1,6 +1,6 @@
 import { apiClient } from '../api/client';
 
-export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid';
+export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid' | 'work';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 export interface ILeaveRequestAttachment {
@@ -33,6 +33,12 @@ export interface ILeaveRequest {
   is_direct_subordinate?: boolean;
   attachments?: ILeaveRequestAttachment[];
   reviewer?: { id: string; full_name: string | null } | null;
+  /**
+   * Для time_correction заявок в статусе approved — текущий approval_status
+   * связанной attendance_adjustment. 'pending' = ждёт дополнительного
+   * согласования администратором на странице /approvals (выходной в whitelist-отделе).
+   */
+  correction_approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
 }
 
 export const CORRECTION_STATUS_LABELS: Record<string, string> = {
@@ -52,6 +58,7 @@ export const REQUEST_TYPE_LABELS: Record<string, string> = {
   certificate: 'Справка',
   time_correction: 'Корректировка табеля',
   unpaid: 'За свой счёт',
+  work: 'Работа',
 };
 
 export const STATUS_LABELS: Record<LeaveRequestStatus, string> = {

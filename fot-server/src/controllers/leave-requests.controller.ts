@@ -12,18 +12,22 @@ import {
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
+import { resolveSchedule, getScheduleForDate } from '../services/schedule.service.js';
+import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
 import type { TimeStatus } from '../types/index.js';
 
-const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid'] as const;
+const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work'] as const;
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
+  work: 'Работа',
 };
-const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid', TimeStatus> = {
+const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid' | 'work', TimeStatus> = {
   vacation: 'vacation',
   sick_leave: 'sick',
   remote: 'remote',
   unpaid: 'unpaid',
+  work: 'work',
 };
 
 function isTimeStatus(value: unknown): value is TimeStatus {
@@ -117,6 +121,32 @@ async function loadAttachmentsByLeaveRequestIds(
       file_size: row.file_size,
     });
     result.set(key, list);
+  }
+  return result;
+}
+
+/**
+ * Для уже approved заявок time_correction поднимаем текущий approval_status
+ * связанной attendance_adjustments — фронт показывает «Ожидает доп. согласования
+ * администратором», если корректировка в статусе 'pending' (выходной в whitelist-отделе).
+ */
+async function loadCorrectionApprovalStatusByRequestIds(
+  requestIds: number[],
+): Promise<Map<number, string>> {
+  const result = new Map<number, string>();
+  if (requestIds.length === 0) return result;
+  const sourceIds = requestIds.map(id => `${id}:time_correction`);
+  const rows = await query<{ source_id: string; approval_status: string }>(
+    `SELECT source_id, approval_status
+       FROM attendance_adjustments
+      WHERE source_type = 'leave_request'
+        AND source_id = ANY($1::text[])`,
+    [sourceIds],
+  );
+  for (const row of rows) {
+    const reqIdStr = String(row.source_id).split(':')[0];
+    const reqId = Number(reqIdStr);
+    if (Number.isFinite(reqId)) result.set(reqId, row.approval_status);
   }
   return result;
 }
@@ -254,13 +284,22 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       return;
     }
 
-    const data = await query(
+    const data = await query<{ id: number; request_type: string; status: string; [k: string]: unknown }>(
       `SELECT * FROM leave_requests
         WHERE employee_id = $1
         ORDER BY created_at DESC`,
       [employeeId],
     );
-    res.json({ success: true, data });
+    const correctionRequestIds = data
+      .filter(r => r.request_type === 'time_correction' && r.status === 'approved')
+      .map(r => Number(r.id))
+      .filter(Number.isFinite);
+    const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
+    const enriched = data.map(r => ({
+      ...r,
+      correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
+    }));
+    res.json({ success: true, data: enriched });
   } catch (err) {
     console.error('leave-requests.getMy error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения заявлений' });
@@ -287,7 +326,7 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const data = await query<{ id: number; employee_id: number; [k: string]: unknown }>(
+    const data = await query<{ id: number; employee_id: number; request_type: string; status: string; [k: string]: unknown }>(
       `SELECT * FROM leave_requests
         WHERE employee_id = ANY($1::bigint[])
         ORDER BY created_at DESC`,
@@ -297,6 +336,11 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
     const metaMap = await loadEmployeeMeta(empIds);
     const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
+    const correctionRequestIds = data
+      .filter(r => r.request_type === 'time_correction' && r.status === 'approved')
+      .map(r => Number(r.id))
+      .filter(Number.isFinite);
+    const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
     const directOnlySet = new Set(directOnlyIds);
 
     const enriched = data.map(r => {
@@ -308,6 +352,7 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
         position_name: meta?.position_name ?? null,
         is_direct_subordinate: directOnlySet.has(Number(r.employee_id)),
         attachments: attachmentsMap.get(Number(r.id)) ?? [],
+        correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
       };
     });
     res.json({ success: true, data: enriched });
@@ -360,7 +405,7 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
 
-    const data = await query<{ id: number; employee_id: number; [k: string]: unknown }>(
+    const data = await query<{ id: number; employee_id: number; request_type: string; status: string; [k: string]: unknown }>(
       `SELECT * FROM leave_requests
         ${whereSql}
         ORDER BY created_at DESC`,
@@ -371,6 +416,11 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const metaMap = await loadEmployeeMeta(empIds);
     const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
+    const correctionRequestIds = data
+      .filter(r => r.request_type === 'time_correction' && r.status === 'approved')
+      .map(r => Number(r.id))
+      .filter(Number.isFinite);
+    const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
 
     const enriched = data.map(r => {
       const meta = metaMap.get(r.employee_id);
@@ -381,6 +431,7 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         position_name: meta?.position_name ?? null,
         is_direct_subordinate: directOnlySet.has(Number(r.employee_id)),
         attachments: attachmentsMap.get(Number(r.id)) ?? [],
+        correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
       };
     });
     res.json({ success: true, data: enriched });
@@ -438,6 +489,8 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     const request = await queryOne<{
       employee_id: number;
       reviewer_id: string | null;
+      request_type: string;
+      status: string;
       [k: string]: unknown;
     }>(
       `SELECT * FROM leave_requests WHERE id = $1`,
@@ -472,12 +525,19 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       if (reviewerProfile) reviewer = reviewerProfile;
     }
 
+    let correctionApprovalStatus: string | null = null;
+    if (request.request_type === 'time_correction' && request.status === 'approved') {
+      const statusMap = await loadCorrectionApprovalStatusByRequestIds([Number(id)]);
+      correctionApprovalStatus = statusMap.get(Number(id)) ?? null;
+    }
+
     res.json({
       success: true,
       data: {
         ...request,
         employee_name: emp?.full_name ?? null,
         reviewer,
+        correction_approval_status: correctionApprovalStatus,
       },
     });
   } catch (err) {
@@ -550,22 +610,39 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       ? LEAVE_TO_TIMESHEET[request.request_type as keyof typeof LEAVE_TO_TIMESHEET]
       : undefined;
     if (timesheetStatus) {
+      const isWorkKind = request.request_type === 'work';
+      // Для kind='work' разрешаем выход на смену в любой день, включая выходные/праздники.
+      // Часы берём по графику дня; на выходной (work_hours=0) — fallback 8ч.
+      // Статус 'work' не имеет fallback в attendance.service при null hours_override,
+      // поэтому передаём явные часы (см. attendance.service.ts: ABSENCE_STATUSES_AS_WORKED не включает 'work').
+      const schedule = isWorkKind
+        ? await resolveSchedule(request.employee_id, null, request.start_date)
+        : null;
       const startDate = new Date(request.start_date);
       const endDate = new Date(request.end_date);
 
       for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
         const dayOfWeek = d.getDay();
-        if (dayOfWeek === 0 || dayOfWeek === 6) continue; // Пропускаем выходные
+        if (!isWorkKind && (dayOfWeek === 0 || dayOfWeek === 6)) continue; // Пропускаем выходные
+
+        const iso = d.toISOString().split('T')[0];
+        const hoursOverride = isWorkKind
+          ? (getScheduleForDate(schedule!, d).work_hours || 8)
+          : null;
+        const approvalStatus = isWorkKind
+          ? await resolveAdjustmentApprovalStatus(request.employee_id, iso, timesheetStatus, hoursOverride)
+          : undefined;
 
         await upsertAttendanceAdjustment({
           employee_id: request.employee_id,
-          work_date: d.toISOString().split('T')[0],
+          work_date: iso,
           status: timesheetStatus,
-          hours_override: null,
+          hours_override: hoursOverride,
           source_type: 'leave_request',
           source_id: String(request.id),
           reason: `Approved leave request: ${request.request_type}`,
           created_by: authorUserId,
+          ...(approvalStatus ? { approval_status: approvalStatus } : {}),
         });
       }
     }
@@ -573,6 +650,15 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     // Обработка корректировки табеля
     if (request.request_type === 'time_correction' && request.correction_date) {
       const correctionStatus: TimeStatus = isTimeStatus(request.correction_status) ? request.correction_status : 'work';
+      // Если день — выходной по графику сотрудника И его отдел в whitelist
+      // настройки «Согласование выходных дней», корректировка попадает в pending
+      // и должна быть дополнительно одобрена админом на /approvals.
+      const approvalStatus = await resolveAdjustmentApprovalStatus(
+        request.employee_id,
+        request.correction_date,
+        correctionStatus,
+        request.correction_hours ?? null,
+      );
       await upsertAttendanceAdjustment({
         employee_id: request.employee_id,
         work_date: request.correction_date,
@@ -582,6 +668,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         source_id: `${request.id}:time_correction`,
         reason: request.reason || 'Approved time correction request',
         created_by: authorUserId,
+        approval_status: approvalStatus,
       });
     }
 
@@ -642,7 +729,9 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-/** Отмена заявления (worker отменяет своё pending-заявление) */
+/** Отмена заявления автором (статусы pending или approved). Для approved
+ *  откатываем побочный эффект approve(): удаляем созданные строки
+ *  attendance_adjustments в той же транзакции. */
 const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
@@ -657,24 +746,34 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    if (request.status !== 'pending') {
-      res.status(400).json({ success: false, error: 'Можно отменить только ожидающее заявление' });
+    if (request.status !== 'pending' && request.status !== 'approved') {
+      res.status(400).json({ success: false, error: 'Нельзя отменить отклонённое или уже отменённое заявление' });
       return;
     }
 
-    // Только автор может отменить
     if (request.employee_id !== req.user.employee_id) {
       res.status(403).json({ success: false, error: 'Можно отменить только своё заявление' });
       return;
     }
 
     const nowIso = new Date().toISOString();
-    const data = await queryOne(
-      `UPDATE leave_requests SET status = 'cancelled', updated_at = $1
-        WHERE id = $2
-        RETURNING *`,
-      [nowIso, id],
-    );
+    const data = await withTransaction(async (client) => {
+      const updated = await client.query(
+        `UPDATE leave_requests SET status = 'cancelled', updated_at = $1
+          WHERE id = $2
+          RETURNING *`,
+        [nowIso, id],
+      );
+      if (request.status === 'approved') {
+        await client.query(
+          `DELETE FROM attendance_adjustments
+             WHERE source_type = 'leave_request'
+               AND source_id = ANY($1::text[])`,
+          [[String(id), `${id}:time_correction`]],
+        );
+      }
+      return updated.rows[0] ?? null;
+    });
 
     broadcastPendingChanged();
 

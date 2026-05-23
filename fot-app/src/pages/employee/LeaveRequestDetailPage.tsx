@@ -62,9 +62,21 @@ export const LeaveRequestDetailPage: FC = () => {
   const request = requestQuery.data;
   const attachments = attachmentsQuery.data ?? [];
 
+  const today = new Date().toLocaleDateString('en-CA');
+  const isPast = request
+    ? request.request_type === 'time_correction'
+      ? !!request.correction_date && request.correction_date < today
+      : request.end_date < today
+    : false;
+  const canCancel =
+    !!request && (request.status === 'pending' || request.status === 'approved') && !isPast;
+
   const handleCancel = async () => {
     if (!request) return;
-    if (!confirm('Отменить заявку?')) return;
+    const confirmText = request.status === 'approved'
+      ? 'Отменить уже одобренное заявление? Связанные корректировки табеля будут удалены.'
+      : 'Отменить заявление?';
+    if (!confirm(confirmText)) return;
     try {
       await leaveRequestService.cancel(request.id);
       await queryClient.invalidateQueries({ queryKey: ['leave-request', requestId] });
@@ -123,6 +135,14 @@ export const LeaveRequestDetailPage: FC = () => {
           <StatusIcon size={20} /> {STATUS_LABELS[request.status]}
         </span>
       </div>
+
+      {request.request_type === 'time_correction'
+        && request.status === 'approved'
+        && request.correction_approval_status === 'pending' && (
+          <div className="lr-card-pending-admin" style={{ color: '#f59e0b', marginTop: 12 }}>
+            <Clock size={14} /> <strong>Ожидает доп. согласования администратором</strong>
+          </div>
+        )}
 
       <div className="lr-detail-grid">
         <section className="lr-detail-card">
@@ -229,7 +249,7 @@ export const LeaveRequestDetailPage: FC = () => {
         </section>
       </div>
 
-      {request.status === 'pending' && (
+      {canCancel && (
         <div className="lr-detail-actions">
           <button className="lr-cancel-btn" onClick={handleCancel}>
             Отменить заявку

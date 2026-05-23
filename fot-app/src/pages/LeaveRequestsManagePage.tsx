@@ -137,14 +137,32 @@ export const LeaveRequestsManagePage: FC = () => {
     });
   };
 
+  // Оптимистичное удаление: мгновенно убираем карточку из всех кэшей
+  // ['leave-requests-manage', ...] до refetch'а, иначе из-за placeholderData
+  // в useLeaveRequestsManage юзер видит «старые» данные пока запрос идёт.
+  const removeRequestFromCache = (id: number) => {
+    queryClient.setQueriesData<ILeaveRequest[] | undefined>(
+      { queryKey: ['leave-requests-manage'] },
+      (prev) => (prev ? prev.filter(r => r.id !== id) : prev),
+    );
+  };
+
   const handleApprove = async (id: number) => {
     try {
       await leaveRequestService.approve(id, comment || undefined);
       setCommentId(null);
       setComment('');
-      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
+      removeRequestFromCache(id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+        // Выходные корректировки попадают в очередь админа на /approvals
+        queryClient.invalidateQueries({ queryKey: ['correction-approvals'] }),
+      ]);
     } catch (err) {
       console.error('Approve error:', err);
+      // Откат оптимистичного удаления через рефетч
+      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
     }
   };
 
@@ -153,9 +171,14 @@ export const LeaveRequestsManagePage: FC = () => {
       await leaveRequestService.reject(id, comment || undefined);
       setCommentId(null);
       setComment('');
-      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
+      removeRequestFromCache(id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+      ]);
     } catch (err) {
       console.error('Reject error:', err);
+      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
     }
   };
 
@@ -185,6 +208,9 @@ export const LeaveRequestsManagePage: FC = () => {
       isCorrection &&
       eventsPanel.employeeId === r.employee_id &&
       eventsPanel.date === r.correction_date;
+    const awaitingAdmin = isCorrection
+      && r.status === 'approved'
+      && r.correction_approval_status === 'pending';
     return (
       <div
         key={r.id}
@@ -215,6 +241,11 @@ export const LeaveRequestsManagePage: FC = () => {
               <Icon size={14} /> <strong>{STATUS_LABELS[r.status]}</strong>
             </span>
           </div>
+          {awaitingAdmin && (
+            <div className="lrm-card-pending-admin" style={{ color: '#f59e0b' }}>
+              <Clock size={12} /> <strong>Ожидает доп. согласования администратором</strong>
+            </div>
+          )}
           <div className="lrm-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>
           {r.request_type === 'time_correction' && r.correction_date ? (
             <div className="lrm-card-dates">

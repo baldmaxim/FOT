@@ -136,6 +136,17 @@
   margin-top: 6px;
 }
 
+.lrm-card-pending-admin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: rgba(245, 158, 11, 0.12);
+  border-radius: 6px;
+}
+
 .lrm-card-comment {
   font-size: 13px;
   color: var(--text-primary);
