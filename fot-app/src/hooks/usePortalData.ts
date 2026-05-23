@@ -37,6 +37,10 @@ export const useMyLeaveRequests = () => useQuery({
   queryKey: getMyLeaveRequestsQueryKey(),
   queryFn: () => leaveRequestService.getMy(),
   staleTime: 30_000,
+  // Статус заявления могли поменять извне (руководитель одобрил/отклонил),
+  // поэтому при возврате на страницу всегда тянем актуальные данные —
+  // иначе у юзера висит кнопка «Отменить» на уже отклонённом заявлении.
+  refetchOnMount: 'always',
 });
 
 export const useLeaveRequestsManage = (

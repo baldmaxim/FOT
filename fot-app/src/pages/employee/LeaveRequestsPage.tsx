@@ -66,9 +66,17 @@ export const LeaveRequestsPage: FC = () => {
     if (!window.confirm(confirmText)) return;
     try {
       await leaveRequestService.cancel(id);
+      // Оптимистично переключаем статус, чтобы кнопка «Отменить» исчезла мгновенно.
+      queryClient.setQueryData<ILeaveRequest[] | undefined>(
+        getMyLeaveRequestsQueryKey(),
+        (prev) => prev?.map(r => r.id === id ? { ...r, status: 'cancelled' } : r),
+      );
       await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
     } catch (err) {
       console.error('Cancel leave request error:', err);
+      // 400 «уже обработано» → кэш устарел; принудительно подтянем актуальные
+      // данные, чтобы кнопка пропала и юзер увидел реальный статус.
+      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
     }
   };
 

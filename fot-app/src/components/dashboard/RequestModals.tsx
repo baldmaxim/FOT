@@ -1,6 +1,6 @@
 import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { leaveRequestService, type LeaveRequestType } from '../../services/leaveRequestService';
+import { leaveRequestService, type ILeaveRequest, type LeaveRequestType } from '../../services/leaveRequestService';
 import { documentService } from '../../services/documentService';
 import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
@@ -123,6 +123,13 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
         }
       }
 
+      // Оптимистично добавляем созданное заявление в начало списка, чтобы оно
+      // появилось на странице «Мои заявления» сразу при закрытии модалки —
+      // не ждём пока refetch завершится.
+      queryClient.setQueryData<ILeaveRequest[] | undefined>(
+        getMyLeaveRequestsQueryKey(),
+        (prev) => (prev ? [created, ...prev.filter(r => r.id !== created.id)] : [created]),
+      );
       await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
       showToast('success', 'Заявление отправлено');
       onClose();
@@ -391,6 +398,12 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
         const failed = uploads.filter(u => u.status === 'rejected').length;
         if (failed > 0) showToast('warning', `Заявка создана, но ${failed} файл(ов) не загрузились`);
       }
+      // Оптимистично добавляем созданное заявление в кэш — чтобы оно появилось
+      // на странице «Мои заявления» сразу при закрытии модалки.
+      queryClient.setQueryData<ILeaveRequest[] | undefined>(
+        getMyLeaveRequestsQueryKey(),
+        (prev) => (prev ? [created, ...prev.filter(r => r.id !== created.id)] : [created]),
+      );
       await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
       showToast('success', 'Заявление отправлено');
       onClose();
