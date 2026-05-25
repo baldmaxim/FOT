@@ -241,7 +241,11 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const [positionDate, setPositionDate] = useState(() => getLocalISODate());
   const [positionReason, setPositionReason] = useState('');
   const [deptVal, setDeptVal] = useState(() => modalEmp?.org_department_id || '');
-  const [deptDate, setDeptDate] = useState(() => getLocalISODate());
+  const [deptDate, setDeptDate] = useState(() => (
+    modalEmp?.excluded_from_timesheet && modalEmp.excluded_from_timesheet_at
+      ? new Date(modalEmp.excluded_from_timesheet_at).toLocaleDateString('en-CA')
+      : getLocalISODate()
+  ));
   const [deptReason, setDeptReason] = useState('');
   const [scheduleVal, setScheduleVal] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.scheduleId || '' : '');
   const [scheduleDate, setScheduleDate] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.effectiveFrom || getLocalISODate() : getLocalISODate());
@@ -535,6 +539,11 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
           <button className="sc-modal-close" onClick={onClose}>&times;</button>
         </div>
         <div className="sc-modal-body">
+          {modalEmp.excluded_from_timesheet && modalEmp.excluded_from_timesheet_at && (
+            <div className="sc-modal-note">
+              Исключён из табеля: <strong>{new Date(modalEmp.excluded_from_timesheet_at).toLocaleDateString('ru-RU')}</strong>
+            </div>
+          )}
           <div className="sc-field">
             <label>Отдел</label>
             <select value={deptVal} onChange={e => setDeptVal(e.target.value)} autoFocus>
@@ -1912,20 +1921,6 @@ export const StaffControlPage: FC = () => {
         divideBefore: true,
       });
     }
-    if (isAdmin && statusFilter !== 'excluded') {
-      items.push({
-        label: 'Исключённые из табеля',
-        icon: <ShieldCheck size={14} />,
-        onClick: () => { setStatusFilter('excluded'); setPage(1); },
-        divideBefore: items.length > 0,
-      });
-    } else if (isAdmin && statusFilter === 'excluded') {
-      items.push({
-        label: 'Вернуться к активным',
-        icon: <ShieldCheck size={14} />,
-        onClick: () => { setStatusFilter('active'); setPage(1); },
-      });
-    }
     return items;
   }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total]);
 
@@ -1963,7 +1958,7 @@ export const StaffControlPage: FC = () => {
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>
-      {isAdmin && statusFilter !== 'excluded' && (
+      {isAdmin && (
         <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
           <button
             type="button"
@@ -1983,12 +1978,15 @@ export const StaffControlPage: FC = () => {
           >
             Уволенные
           </button>
-        </div>
-      )}
-      {isAdmin && statusFilter === 'excluded' && (
-        <div className="sc-segmented" aria-label="Статус сотрудников">
-          <button type="button" className="sc-seg-btn is-active" disabled>
-            Исключённые из табеля
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'excluded'}
+            className={`sc-seg-btn${statusFilter === 'excluded' ? ' is-active' : ''}`}
+            onClick={() => { setStatusFilter('excluded'); setPage(1); }}
+            title="Сотрудники с флагом excluded_from_timesheet (не уволенные)"
+          >
+            Исключённые
           </button>
         </div>
       )}
