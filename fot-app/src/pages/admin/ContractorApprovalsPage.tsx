@@ -9,16 +9,26 @@
  *    «активен / не активен» + история ФИО и решений.
  */
 import { useState, type FC } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { PoolTab } from '../../components/contractor/PoolTab';
 import { SentTab } from '../../components/contractor/SentTab';
 import { SubmissionsTab } from '../../components/contractor/SubmissionsTab';
 import { MonitorTab } from '../../components/contractor/MonitorTab';
+import { contractorAdminService } from '../../services/contractorService';
 import styles from '../contractor/Contractor.module.css';
 
 type Tab = 'pool' | 'sent' | 'submissions' | 'monitor';
 
 export const ContractorApprovalsPage: FC = () => {
   const [tab, setTab] = useState<Tab>('pool');
+
+  const pendingSubsQuery = useQuery({
+    queryKey: ['contractor-pending-subs'],
+    queryFn: contractorAdminService.getPendingSubmissions,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  });
+  const pendingCount = pendingSubsQuery.data?.length ?? 0;
 
   return (
     <div className={styles.page}>
@@ -40,6 +50,7 @@ export const ContractorApprovalsPage: FC = () => {
           onClick={() => setTab('submissions')}
         >
           Заявки на согласование
+          {pendingCount > 0 && <span className={styles.tabBadge}>{pendingCount}</span>}
         </button>
         <button
           className={`${styles.tab} ${tab === 'monitor' ? styles.tabActive : ''}`}

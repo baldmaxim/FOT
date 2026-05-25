@@ -206,6 +206,11 @@ export interface IObjectAccessPoint {
   access_point_name: string;
 }
 
+export interface ISigurAccessPointOption {
+  id: number;
+  name: string;
+}
+
 export interface IIssuePassBatchInput {
   org_department_id: string;
   from: number;
@@ -314,6 +319,12 @@ export const contractorAdminService = {
   },
   async getPendingSubmissions(): Promise<IPendingSubmission[]> {
     const r = await apiClient.get<ApiResponse<IPendingSubmission[]>>('/admin/contractor/submissions/pending');
+    return r.data ?? [];
+  },
+  async listSigurAccessPoints(): Promise<ISigurAccessPointOption[]> {
+    const r = await apiClient.get<ApiResponse<ISigurAccessPointOption[]>>(
+      '/admin/contractor/sigur-access-points',
+    );
     return r.data ?? [];
   },
   async getSubmissionDetail(id: string): Promise<ISubmissionDetailRow[]> {

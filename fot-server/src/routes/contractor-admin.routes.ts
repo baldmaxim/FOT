@@ -28,6 +28,7 @@ router.get('/users/:id/org', usersView, contractorAdminController.getUserOrg);
 router.put('/users/:id/org', usersEdit, contractorAdminController.replaceUserOrg);
 
 // Заявки на согласование.
+router.get('/sigur-access-points', apprView, contractorAdminController.listSigurAccessPoints);
 router.get('/submissions/pending', apprView, contractorAdminController.getPendingSubmissions);
 router.get('/submissions/:id', apprView, contractorAdminController.getSubmissionDetail);
 router.post('/submissions/:id/approve', apprEdit, requireCritical2FA, contractorAdminController.approveSubmission);

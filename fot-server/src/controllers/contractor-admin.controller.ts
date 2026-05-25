@@ -391,6 +391,19 @@ export const contractorAdminController = {
     }
   },
 
+  /** GET /sigur-access-points — каталог точек доступа Sigur для модалки одобрения. */
+  async listSigurAccessPoints(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const connection = await sigurService.getBackgroundConnectionType();
+      const data = await sigurService.getAccessPointOptionsCached(connection);
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Contractor listSigurAccessPoints error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить точки доступа Sigur' });
+    }
+  },
+
   /** GET /submissions/pending — заявки на согласовании. */
   async getPendingSubmissions(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
