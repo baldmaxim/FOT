@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { leaveRequestsController } from '../controllers/leave-requests.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { noStore } from '../middleware/noStore.js';
 
 const router = Router();
 
 router.use(authenticate);
+router.use(noStore);
 
 // POST /api/leave-requests — создание заявления (worker+)
 router.post(
