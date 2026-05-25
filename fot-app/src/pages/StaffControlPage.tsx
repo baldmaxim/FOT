@@ -17,6 +17,7 @@ import type {
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useStaffData } from '../hooks/useStaffData';
+import { useInvalidateEmployeeData } from '../hooks/useInvalidateEmployeeData';
 import { useStructureTree } from '../hooks/useStructure';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
@@ -112,15 +113,16 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
         </td>
       )}
       <td className="sc-td-num">{index + 1}</td>
-      <td className="sc-td-name">
+      <td className="sc-td-name" title={emp.full_name}>
         {emp.full_name}
+        {/* Бейдж = employees.excluded_from_timesheet. Независим от employment_status='fired'. */}
         {emp.excluded_from_timesheet && (
           <span className="sc-excluded-badge" title={emp.excluded_from_timesheet_at ? `Исключён из табеля: ${new Date(emp.excluded_from_timesheet_at).toLocaleString('ru-RU')}` : 'Исключён из табеля'}>
             Исключён
           </span>
         )}
       </td>
-      <td>
+      <td title={emp.department || ''}>
         <span className="sc-cell-with-btn">
           {emp.department || '—'}
           {canEditDept && (
@@ -621,6 +623,15 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   return (
     <div className="sc-table-wrap" ref={scrollRef}>
       <table className="sc-table">
+        <colgroup>
+          {selectionMode && <col className="sc-col-check" />}
+          <col className="sc-col-num" />
+          <col className="sc-col-name" />
+          <col className="sc-col-dept" />
+          <col className="sc-col-position" />
+          <col className="sc-col-schedule" />
+          <col className="sc-col-actions" />
+        </colgroup>
         <thead>
           <tr>
             {selectionMode && (
@@ -1013,6 +1024,8 @@ export const StaffControlPage: FC = () => {
     scheduleId: scheduleFilter || undefined,
     status: statusFilter,
   });
+
+  const invalidateEmployee = useInvalidateEmployeeData();
 
   const structureTree = useStructureTree();
   const archiveDepartmentId = structureTree.data?.stats.archive_department_id ?? null;
@@ -1456,12 +1469,7 @@ export const StaffControlPage: FC = () => {
       } else {
         await scheduleService.removeEmployeeAssignment(empId, effectiveFrom);
       }
-      await Promise.all([
-        employeeScheduleAssignmentsQuery.refetch(),
-        queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
-      ]);
-      refresh();
-      void queryClient.invalidateQueries({ queryKey: ['employees'] });
+      invalidateEmployee(empId);
       invalidateTimesheetQueries();
       toast.success(scheduleId ? 'График назначен' : 'Персональный график снят');
       closeModal();
@@ -1470,7 +1478,7 @@ export const StaffControlPage: FC = () => {
       // показываем тост, модалку оставляем открытой для повтора.
       toast.error(e instanceof ApiError ? e.message : 'Не удалось сохранить график');
     }
-  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
+  }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries]);
 
   const handleFixAssignment = useCallback(async (
     empId: number,
@@ -1478,19 +1486,14 @@ export const StaffControlPage: FC = () => {
   ) => {
     try {
       await scheduleService.fixEmployeeAssignment(empId, data);
-      await Promise.all([
-        employeeScheduleAssignmentsQuery.refetch(),
-        queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
-      ]);
-      refresh();
-      void queryClient.invalidateQueries({ queryKey: ['employees'] });
+      invalidateEmployee(empId);
       invalidateTimesheetQueries();
       toast.success('Даты назначения исправлены');
       closeModal();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Не удалось исправить даты назначения');
     }
-  }, [closeModal, employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
+  }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries]);
 
   const applyScheduleToEmployees = useCallback(async (
     employeeIds: number[],
@@ -1525,12 +1528,7 @@ export const StaffControlPage: FC = () => {
   const handleBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
     const ids = selectedEmployees.map(employee => employee.id);
     const { ok, failed, sampleError } = await applyScheduleToEmployees(ids, scheduleId, effectiveFrom);
-    await Promise.all([
-      employeeScheduleAssignmentsQuery.refetch(),
-      queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
-    ]);
-    refresh();
-    void queryClient.invalidateQueries({ queryKey: ['employees'] });
+    invalidateEmployee();
     invalidateTimesheetQueries();
     setBulkScheduleOpen(false);
     setSelectedEmployeeIds([]);
@@ -1540,7 +1538,7 @@ export const StaffControlPage: FC = () => {
     } else {
       toast.success(`Сотрудников обновлено: ${ok}.`);
     }
-  }, [applyScheduleToEmployees, employeeScheduleAssignmentsQuery, queryClient, refresh, selectedEmployees, toast, invalidateTimesheetQueries]);
+  }, [applyScheduleToEmployees, invalidateEmployee, selectedEmployees, toast, invalidateTimesheetQueries]);
 
   const [rehireEmp, setRehireEmp] = useState<Employee | null>(null);
   const [rehireDeptId, setRehireDeptId] = useState('');
@@ -1562,16 +1560,17 @@ export const StaffControlPage: FC = () => {
     setRehireInFlight(true);
     try {
       await employeeService.rehire(rehireEmp.id, rehireDeptId);
+      const rehiredId = rehireEmp.id;
       setRehireEmp(null);
       setRehireDeptId('');
-      refresh();
+      invalidateEmployee(rehiredId);
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Ошибка восстановления сотрудника';
       toast.error(msg);
     } finally {
       setRehireInFlight(false);
     }
-  }, [rehireEmp, rehireDeptId, refresh, toast]);
+  }, [rehireEmp, rehireDeptId, invalidateEmployee, toast]);
 
   const [fireEmp, setFireEmp] = useState<Employee | null>(null);
   const [fireDate, setFireDate] = useState<string>(() => getLocalISODate());
@@ -1592,26 +1591,27 @@ export const StaffControlPage: FC = () => {
     setFireInFlight(true);
     try {
       await employeeService.fire(fireEmp.id, fireDate);
+      const firedId = fireEmp.id;
       setFireEmp(null);
-      refresh();
+      invalidateEmployee(firedId);
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Ошибка увольнения сотрудника';
       toast.error(msg);
     } finally {
       setFireInFlight(false);
     }
-  }, [fireEmp, fireDate, refresh, toast]);
+  }, [fireEmp, fireDate, invalidateEmployee, toast]);
 
   const handleCancelDismissal = useCallback(async (emp: Employee) => {
     if (!confirm(`Отменить запланированное увольнение ${emp.full_name} на ${emp.dismissal_date}?`)) return;
     try {
       await employeeService.cancelDismissal(emp.id);
-      refresh();
+      invalidateEmployee(emp.id);
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : 'Не удалось отменить запланированное увольнение';
       toast.error(msg);
     }
-  }, [refresh, toast]);
+  }, [invalidateEmployee, toast]);
 
   const handleFilteredBulkSaveSchedule = useCallback(async (scheduleId: string | null, effectiveFrom: string) => {
     const employeeIds = await employeeService.getFilteredIds({
@@ -1621,12 +1621,7 @@ export const StaffControlPage: FC = () => {
       view: 'list',
     });
     const { ok, failed, sampleError } = await applyScheduleToEmployees(employeeIds, scheduleId, effectiveFrom);
-    await Promise.all([
-      employeeScheduleAssignmentsQuery.refetch(),
-      queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
-    ]);
-    refresh();
-    void queryClient.invalidateQueries({ queryKey: ['employees'] });
+    invalidateEmployee();
     invalidateTimesheetQueries();
     setBulkFilterScheduleOpen(false);
     if (employeeIds.length === 0) return;
@@ -1635,7 +1630,7 @@ export const StaffControlPage: FC = () => {
     } else {
       toast.success(`Сотрудников обновлено: ${ok}.`);
     }
-  }, [applyScheduleToEmployees, debouncedSearch, deptId, employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
+  }, [applyScheduleToEmployees, debouncedSearch, deptId, invalidateEmployee, toast, invalidateTimesheetQueries]);
 
   const handleBrigadeBulkSaveSchedule = useCallback(async (
     departmentIds: string[],
@@ -1672,15 +1667,10 @@ export const StaffControlPage: FC = () => {
         ? `${error.message}. Видимые графики на странице обновлены для проверки состояния.`
         : 'Не удалось массово назначить график по бригадам. Видимые графики на странице обновлены для проверки состояния.');
     } finally {
-      await Promise.all([
-        employeeScheduleAssignmentsQuery.refetch(),
-        queryClient.invalidateQueries({ queryKey: ['schedules', 'employee-assignments'] }),
-      ]);
-      refresh();
-      void queryClient.invalidateQueries({ queryKey: ['employees'] });
+      invalidateEmployee();
       invalidateTimesheetQueries();
     }
-  }, [employeeScheduleAssignmentsQuery, queryClient, refresh, toast, invalidateTimesheetQueries]);
+  }, [invalidateEmployee, toast, invalidateTimesheetQueries]);
 
   /* ─── history panel data changed ─── */
 
@@ -1924,7 +1914,7 @@ export const StaffControlPage: FC = () => {
     }
     if (isAdmin && statusFilter !== 'excluded') {
       items.push({
-        label: 'Без отдела (диагностика)',
+        label: 'Исключённые из табеля',
         icon: <ShieldCheck size={14} />,
         onClick: () => { setStatusFilter('excluded'); setPage(1); },
         divideBefore: items.length > 0,
@@ -1996,9 +1986,9 @@ export const StaffControlPage: FC = () => {
         </div>
       )}
       {isAdmin && statusFilter === 'excluded' && (
-        <div className="sc-segmented" aria-label="Режим диагностики">
+        <div className="sc-segmented" aria-label="Статус сотрудников">
           <button type="button" className="sc-seg-btn is-active" disabled>
-            Без отдела (диагностика)
+            Исключённые из табеля
           </button>
         </div>
       )}

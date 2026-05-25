@@ -127,20 +127,6 @@ export const employeeService = {
     return response.data;
   },
 
-  async delete(id: number): Promise<void> {
-    await apiClient.delete(`/employees/${id}`);
-  },
-
-  async archive(id: number): Promise<Employee> {
-    const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/archive`);
-    return response.data;
-  },
-
-  async restore(id: number): Promise<Employee> {
-    const response = await apiClient.post<ApiResponse<Employee>>(`/employees/${id}/restore`);
-    return response.data;
-  },
-
   async getHistory(id: number): Promise<EmployeeHistoryEvent[]> {
     const response = await apiClient.get<ApiResponse<EmployeeHistoryEvent[]>>(`/employees/${id}/history`);
     return response.data || [];

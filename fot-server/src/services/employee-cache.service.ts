@@ -1,9 +1,13 @@
 import crypto from 'crypto';
 import type { Employee } from '../types/index.js';
+import { employeeCountsCache } from './employee-counts-cache.service.js';
 
 /**
  * In-memory кэш карточки сотрудника с ETag для HTTP 304.
  * TTL: 60с. Инвалидация по id при любых мутациях сотрудника.
+ * Любая invalidate(id) также чистит кэш счётчиков
+ * (employment_status / org_department_id / excluded_from_timesheet
+ * могут поменяться и сдвинуть byDepartment / byStatus).
  */
 
 interface CacheEntry {
@@ -43,9 +47,11 @@ export const employeeCache = {
 
   invalidate(id: number | string): void {
     cache.delete(Number(id));
+    employeeCountsCache.invalidateAll();
   },
 
   clear(): void {
     cache.clear();
+    employeeCountsCache.invalidateAll();
   },
 };

@@ -31,13 +31,12 @@ import { moscowTodayIso } from '../utils/date.utils.js';
 // Полный список колонок employees для getById / lifecycle-хэндлеров
 const EMPLOYEE_FULL_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
 
-// Кэш счётчиков /api/employees/counts (TTL 60с)
-interface ICountsPayload { byDepartment: Record<string, number>; byStatus: { active: number; fired: number } }
-const countsCache = new Map<string, { data: ICountsPayload; expiresAt: number }>();
-const COUNTS_TTL_MS = 60_000;
+// Кэш счётчиков /api/employees/counts вынесен в сервис, чтобы мутации могли
+// инвалидировать его рядом с employeeCache.invalidate(id).
+import { employeeCountsCache } from '../services/employee-counts-cache.service.js';
 
 // Импорт методов из подконтроллеров
-import { archive, restore, fire, rehire, cancelDismissal, moveDepartment, batchMoveEmployees, getHistory, updateHistoryEvent, deleteHistoryEvent } from './employee-lifecycle.controller.js';
+import { fire, rehire, cancelDismissal, moveDepartment, batchMoveEmployees, getHistory, updateHistoryEvent, deleteHistoryEvent } from './employee-lifecycle.controller.js';
 import { deleteAll } from './employee-import.controller.js';
 
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -412,10 +411,10 @@ export const employeesController = {
       }
       const showArchived = req.query.archived === 'true';
       const cacheKey = `counts:${scope}:${req.user.id}:${showArchived ? 'archived' : 'active'}`;
-      const cached = countsCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
+      const cached = employeeCountsCache.get(cacheKey);
+      if (cached) {
         res.setHeader('Cache-Control', 'private, max-age=30');
-        res.json({ success: true, data: cached.data });
+        res.json({ success: true, data: cached });
         return;
       }
 
@@ -493,7 +492,7 @@ export const employeesController = {
       }
 
       const payload = { byDepartment, byStatus };
-      countsCache.set(cacheKey, { data: payload, expiresAt: Date.now() + COUNTS_TTL_MS });
+      employeeCountsCache.set(cacheKey, payload);
       res.setHeader('Cache-Control', 'private, max-age=30');
       res.json({ success: true, data: payload });
     } catch (error) {
@@ -1056,39 +1055,6 @@ export const employeesController = {
     }
   },
 
-  /**
-   * DELETE /api/employees/:id
-   */
-  async delete(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const { id } = req.params;
-      if (!(await canAccessEmployeeInScope(req, Number(id)))) {
-        res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
-        return;
-      }
-
-      try {
-        await execute('DELETE FROM employees WHERE id = $1', [id]);
-      } catch (err) {
-        console.error('Delete employee error:', err);
-        res.status(500).json({ success: false, error: 'Failed to delete employee' });
-        return;
-      }
-
-      employeeCache.invalidate(id);
-
-      await auditService.logFromRequest(req, req.user.id, 'DELETE_EMPLOYEE', {
-        entityType: 'employee',
-        entityId: id,
-      });
-
-      res.json({ success: true, message: 'Employee deleted' });
-    } catch (error) {
-      console.error('Delete employee error:', error);
-      res.status(500).json({ success: false, error: 'Failed to delete employee' });
-    }
-  },
-
   // POST /api/employees/:id/change-salary
   async changeSalary(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -1216,8 +1182,6 @@ export const employeesController = {
   },
 
   // Методы из employee-lifecycle.controller.ts
-  archive,
-  restore,
   fire,
   rehire,
   cancelDismissal,

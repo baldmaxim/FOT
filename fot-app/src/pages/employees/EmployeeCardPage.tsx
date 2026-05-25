@@ -2,13 +2,14 @@ import { Suspense, lazy, useState, useEffect, useCallback, useMemo, type FC } fr
 import { useParams, useNavigate, useLocation, useSearchParams, useNavigationType } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ArrowLeft, Edit3, Archive, RotateCcw, Trash2,
+  ArrowLeft, Edit3,
   Briefcase, FolderOpen, CalendarDays, CheckCircle,
   Clock, DollarSign, BarChart3, ShieldCheck, CalendarX,
 } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { skudService } from '../../services/skudService';
 import { useAuth } from '../../contexts/AuthContext';
+import { useInvalidateEmployeeData } from '../../hooks/useInvalidateEmployeeData';
 import { useStructureTree } from '../../hooks/useStructure';
 import { getSortedFlatDepartments } from '../../utils/departmentUtils';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
@@ -203,10 +204,15 @@ export const EmployeeCardPage: FC = () => {
     return [...todayEventsFromMonth].sort((a, b) => a.event_time.localeCompare(b.event_time));
   }, [todayEventsQuery.data, todayEventsFromMonth]);
 
+  const invalidateEmployee = useInvalidateEmployeeData();
+
+  // Освежить карточку и сопутствующие данные (списки/дерево/счётчики),
+  // чтобы изменения через карточку (rehire, редактирование ФИО и т.п.) сразу
+  // отражались на /staff-control и в сайдбаре без F5.
   const reloadEmployee = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['employee', empIdNum] });
+    invalidateEmployee(empIdNum);
     queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', empIdNum] });
-  }, [queryClient, empIdNum]);
+  }, [invalidateEmployee, queryClient, empIdNum]);
 
   // Calculated attendance data
   const attendance = useMemo(() => {
@@ -374,18 +380,6 @@ export const EmployeeCardPage: FC = () => {
     }
   };
 
-  const handleArchive = async () => {
-    if (!employee || !confirm('Перевести сотрудника в архив?')) return;
-    try { await employeeService.archive(employee.id); reloadEmployee(); }
-    catch { setError('Ошибка архивации'); }
-  };
-
-  const handleRestore = async () => {
-    if (!employee) return;
-    try { await employeeService.restore(employee.id); reloadEmployee(); }
-    catch { setError('Ошибка восстановления'); }
-  };
-
   const [rehireModalOpen, setRehireModalOpen] = useState(false);
   const [rehireDeptId, setRehireDeptId] = useState('');
   const [rehireInFlight, setRehireInFlight] = useState(false);
@@ -415,13 +409,6 @@ export const EmployeeCardPage: FC = () => {
       setRehireInFlight(false);
     }
   };
-
-  const handleDelete = async () => {
-    if (!employee || !confirm('Удалить сотрудника? Это действие необратимо.')) return;
-    try { await employeeService.delete(employee.id); handleBack(); }
-    catch { setError('Ошибка удаления'); }
-  };
-
 
   // Loading / Error states
   if (loading) return <div className="ec-content"><div className="ec-loading">Загрузка...</div></div>;
@@ -537,18 +524,6 @@ export const EmployeeCardPage: FC = () => {
                     <ShieldCheck size={16} /> Восстановить из уволенных
                   </button>
                 )}
-                {employee.is_archived ? (
-                  <button className="ec-action-btn" onClick={handleRestore}>
-                    <RotateCcw size={16} /> Восстановить
-                  </button>
-                ) : (
-                  <button className="ec-action-btn" onClick={handleArchive}>
-                    <Archive size={16} /> В архив
-                  </button>
-                )}
-                <button className="ec-action-btn danger" onClick={handleDelete}>
-                  <Trash2 size={16} /> Удалить
-                </button>
               </div>
             )}
           </div>

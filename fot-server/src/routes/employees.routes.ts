@@ -176,28 +176,6 @@ router.put(
   employeesController.update
 );
 
-// DELETE /api/employees/:id - удаление (admin+, требуется 2FA)
-router.delete(
-  '/:id',
-  requirePageAccess('/staff-control', 'edit'),
-  requireCritical2FA,
-  employeesController.delete
-);
-
-// POST /api/employees/:id/archive - архивация (header+)
-router.post(
-  '/:id/archive',
-  requirePageAccess('/staff-control', 'edit'),
-  employeesController.archive
-);
-
-// POST /api/employees/:id/restore - восстановление (header+)
-router.post(
-  '/:id/restore',
-  requirePageAccess('/staff-control', 'edit'),
-  employeesController.restore
-);
-
 // POST /api/employees/:id/fire - уволить (header+)
 router.post(
   '/:id/fire',

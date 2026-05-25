@@ -280,16 +280,6 @@
   border-color: var(--border-light);
 }
 
-.ec-action-btn.danger {
-  background: var(--error-muted);
-  border-color: rgba(239, 68, 68, 0.3);
-  color: var(--error);
-}
-
-.ec-action-btn.danger:hover {
-  background: rgba(239, 68, 68, 0.2);
-}
-
 .ec-action-btn svg {
   width: 16px;
   height: 16px;

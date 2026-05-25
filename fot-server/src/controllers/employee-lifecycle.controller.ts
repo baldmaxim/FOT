@@ -25,7 +25,6 @@ import {
 } from '../services/data-scope.service.js';
 import {
   upsertTechnicalDepartmentAccess,
-  deactivateAllDepartmentAccessForEmployee,
 } from '../services/employee-department-access.service.js';
 
 const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, dismissal_date, excluded_from_timesheet, excluded_from_timesheet_date, created_at, updated_at';
@@ -384,92 +383,6 @@ async function sendUpdatedEmployee(res: Response, employeeId: number): Promise<v
     success: true,
     data: decryptEmployee(updatedEmployee, structureCache),
   });
-}
-
-export async function archive(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try {
-    const { id } = req.params;
-    if (!(await canAccessEmployeeInScope(req, Number(id)))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
-      return;
-    }
-
-    const data = await queryOne<EmployeeEncrypted>(
-      `UPDATE employees
-          SET is_archived = true, archived_at = $1
-        WHERE id = $2
-      RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
-      [new Date().toISOString(), id],
-    );
-
-    if (!data) {
-      res.status(404).json({ success: false, error: 'Employee not found' });
-      return;
-    }
-
-    await deactivateAllDepartmentAccessForEmployee(Number(id));
-
-    employeeCache.invalidate(id);
-
-    await auditService.logFromRequest(req, req.user.id, 'ARCHIVE_EMPLOYEE', {
-      entityType: 'employee',
-      entityId: id,
-    });
-
-    const structureCache = await loadStructureCache();
-    const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
-    res.json({ success: true, data: employee });
-  } catch (error) {
-    console.error('Archive employee error:', error);
-    res.status(500).json({ success: false, error: 'Failed to archive employee' });
-  }
-}
-
-export async function restore(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try {
-    const { id } = req.params;
-    if (!(await canAccessEmployeeInScope(req, Number(id)))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
-      return;
-    }
-
-    const data = await queryOne<EmployeeEncrypted>(
-      `UPDATE employees
-          SET is_archived = false, archived_at = NULL
-        WHERE id = $1
-      RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
-      [id],
-    );
-
-    if (!data) {
-      res.status(404).json({ success: false, error: 'Employee not found' });
-      return;
-    }
-
-    if (data.org_department_id) {
-      await upsertTechnicalDepartmentAccess(
-        Number(id),
-        data.org_department_id as string,
-        null,
-        data.sigur_employee_id ? 'sigur_sync' : 'portal_lifecycle',
-      );
-    }
-
-    employeeCache.invalidate(id);
-
-    const structureCache = await loadStructureCache();
-    const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
-
-    await auditService.logFromRequest(req, req.user.id, 'RESTORE_EMPLOYEE', {
-      entityType: 'employee',
-      entityId: id,
-    });
-
-    res.json({ success: true, data: employee });
-  } catch (error) {
-    console.error('Restore employee error:', error);
-    res.status(500).json({ success: false, error: 'Failed to restore employee' });
-  }
 }
 
 export async function fire(req: AuthenticatedRequest, res: Response): Promise<void> {
