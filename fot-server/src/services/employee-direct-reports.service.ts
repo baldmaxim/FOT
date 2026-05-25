@@ -155,6 +155,56 @@ export async function getActiveDirectManagerFor(
   }
 }
 
+export interface IActiveDirectManagerInfo {
+  managerId: number;
+  managerFullName: string | null;
+}
+
+/**
+ * Batch-вариант getActiveDirectManagerFor: для каждого подчинённого
+ * возвращает его активного руководителя с раскрытым ФИО.
+ * Используется в админ-списке «Назначения сотрудников» для подсветки
+ * уже назначенных людей в селекторе.
+ */
+export async function getActiveDirectManagersFor(
+  subordinateEmployeeIds: number[],
+): Promise<Map<number, IActiveDirectManagerInfo>> {
+  const ids = [...new Set(
+    (subordinateEmployeeIds || []).filter(id => Number.isInteger(id) && id > 0),
+  )];
+  if (ids.length === 0) return new Map();
+  try {
+    const rows = await query<{
+      subordinate_employee_id: number;
+      manager_employee_id: number;
+      manager_full_name: string | null;
+    }>(
+      `SELECT dr.subordinate_employee_id,
+              dr.manager_employee_id,
+              e.full_name AS manager_full_name
+         FROM employee_direct_reports dr
+         JOIN employees e ON e.id = dr.manager_employee_id
+        WHERE dr.is_active = true
+          AND dr.subordinate_employee_id = ANY($1::int[])`,
+      [ids],
+    );
+    const map = new Map<number, IActiveDirectManagerInfo>();
+    for (const row of rows) {
+      map.set(row.subordinate_employee_id, {
+        managerId: row.manager_employee_id,
+        managerFullName: row.manager_full_name ?? null,
+      });
+    }
+    return map;
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      warnMissingTable();
+      return new Map();
+    }
+    throw err;
+  }
+}
+
 /**
  * Список назначений с раскрытыми employee-полями.
  * Если managerEmployeeId не передан — возвращает все активные связи (для админ-панели).

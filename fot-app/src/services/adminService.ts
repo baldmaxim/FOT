@@ -54,6 +54,8 @@ export interface EmployeeDepartmentAssignmentFromApi {
   assigned_department_ids: string[];
   position_name?: string | null;
   department_name?: string | null;
+  direct_manager_employee_id?: number | null;
+  direct_manager_full_name?: string | null;
 }
 
 export type BrigadeWorkerStatus =

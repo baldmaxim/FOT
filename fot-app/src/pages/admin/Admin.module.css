@@ -2528,6 +2528,30 @@
   text-overflow: ellipsis;
 }
 
+.assignmentPanelPersonAssigned {
+  font-size: 11px;
+  color: var(--warning);
+  line-height: 1.3;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assignmentPanelPerson[aria-disabled="true"] {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.assignmentPanelPerson[aria-disabled="true"]:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-subtle);
+}
+
+.assignmentPanelPerson[aria-disabled="true"] input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
 .assignmentPanelFooter {
   display: flex;
   justify-content: flex-end;

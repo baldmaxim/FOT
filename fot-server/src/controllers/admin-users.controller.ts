@@ -35,6 +35,7 @@ import {
 } from '../services/manager-department-import.service.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
+import { getActiveDirectManagersFor } from '../services/employee-direct-reports.service.js';
 import { getIo } from '../socket/io-instance.js';
 
 function emitDepartmentAccessChanged(targetUserId: string | null | undefined): void {
@@ -709,7 +710,10 @@ export const adminUsersController = {
       // HR-экран «Назначения сотрудников»: показываем только ручные
       // назначения (manual/excel/manager_excel), sigur_sync (членство) сюда
       // не попадает — иначе каждый сотрудник виднелся бы с 1 «назначением».
-      const explicitDepartmentMap = await loadEmployeeManagerAssignmentMap(employeeIds);
+      const [explicitDepartmentMap, directManagerMap] = await Promise.all([
+        loadEmployeeManagerAssignmentMap(employeeIds),
+        getActiveDirectManagersFor(employeeIds),
+      ]);
 
       const positionIds = [...new Set(employees
         .map(e => e.position_id)
@@ -740,17 +744,22 @@ export const adminUsersController = {
         departmentRows.map(d => [String(d.id), d.name]),
       );
 
-      const payload = employees.map(employee => ({
-        employee_id: employee.id,
-        full_name: employee.full_name,
-        assigned_department_ids: explicitDepartmentMap.get(employee.id) || [],
-        position_name: employee.position_id != null
-          ? (positionMap.get(String(employee.position_id)) ?? null)
-          : null,
-        department_name: employee.org_department_id
-          ? (departmentMap.get(String(employee.org_department_id)) ?? null)
-          : null,
-      }));
+      const payload = employees.map(employee => {
+        const managerInfo = directManagerMap.get(employee.id) ?? null;
+        return {
+          employee_id: employee.id,
+          full_name: employee.full_name,
+          assigned_department_ids: explicitDepartmentMap.get(employee.id) || [],
+          position_name: employee.position_id != null
+            ? (positionMap.get(String(employee.position_id)) ?? null)
+            : null,
+          department_name: employee.org_department_id
+            ? (departmentMap.get(String(employee.org_department_id)) ?? null)
+            : null,
+          direct_manager_employee_id: managerInfo?.managerId ?? null,
+          direct_manager_full_name: managerInfo?.managerFullName ?? null,
+        };
+      });
 
       res.json({ success: true, data: payload });
     } catch (error) {

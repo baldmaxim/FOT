@@ -341,6 +341,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
             <PersonList
               candidates={personCandidates}
               selectedIdsSet={directIdsSet}
+              currentManagerEmployeeId={employee.employee_id}
               onToggle={toggleDirect}
             />
           )}
@@ -470,8 +471,9 @@ const DepartmentList: FC<{
 const PersonList: FC<{
   candidates: EmployeeDepartmentAssignmentFromApi[];
   selectedIdsSet: Set<number>;
+  currentManagerEmployeeId: number;
   onToggle: (id: number) => void;
-}> = ({ candidates, selectedIdsSet, onToggle }) => {
+}> = ({ candidates, selectedIdsSet, currentManagerEmployeeId, onToggle }) => {
   if (candidates.length === 0) {
     return <div className={styles.departmentAccessEmpty}>Сотрудники не найдены</div>;
   }
@@ -481,14 +483,19 @@ const PersonList: FC<{
 
   const renderItem = (candidate: EmployeeDepartmentAssignmentFromApi, keyPrefix: string) => {
     const checked = selectedIdsSet.has(candidate.employee_id);
+    const otherManagerId = candidate.direct_manager_employee_id ?? null;
+    const isPinnedToOther = otherManagerId != null && otherManagerId !== currentManagerEmployeeId;
+    const disabled = isPinnedToOther && !checked;
     return (
       <label
         key={`${keyPrefix}-${candidate.employee_id}`}
         className={`${styles.assignmentPanelPerson} ${checked ? styles.departmentAccessItemChecked : ''}`}
+        aria-disabled={disabled || undefined}
       >
         <input
           type="checkbox"
           checked={checked}
+          disabled={disabled}
           onChange={() => onToggle(candidate.employee_id)}
         />
         <div className={styles.assignmentPanelPersonInfo}>
@@ -497,6 +504,11 @@ const PersonList: FC<{
             {candidate.position_name || 'Должность не указана'}
             {candidate.department_name ? ` · ${candidate.department_name}` : ''}
           </div>
+          {isPinnedToOther && (
+            <div className={styles.assignmentPanelPersonAssigned}>
+              Уже назначен: {candidate.direct_manager_full_name || `ID ${otherManagerId}`}
+            </div>
+          )}
         </div>
       </label>
     );
