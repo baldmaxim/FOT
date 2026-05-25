@@ -743,6 +743,13 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
           value={searchInput}
           onValueChange={setSearchInput}
           placeholder="Найти пользователя по ФИО или email..."
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return;
+            const top = globalSearchResults[0];
+            if (!top) return;
+            event.preventDefault();
+            handleGlobalResultClick(top);
+          }}
         />
         {showGlobalDropdown && (
           <div className={styles.skudSearchResults}>
