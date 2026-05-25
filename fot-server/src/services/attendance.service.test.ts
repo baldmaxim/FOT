@@ -359,6 +359,62 @@ describe('attendance.service', () => {
     });
   });
 
+  it('skips empty skud_daily_summary row on a non-working day (no bogus absent on weekend)', async () => {
+    mockedState.isWorkingDay = false;
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-04',
+      first_entry: null,
+      last_exit: null,
+      total_hours: null,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-04-04',
+      endDate: '2026-04-04',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-04-04', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-06',
+    });
+
+    expect(result.entries).toEqual([]);
+  });
+
+  it('still records actual presence on a non-working day (employee came in on Saturday)', async () => {
+    mockedState.isWorkingDay = false;
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-04',
+      first_entry: '10:00:00',
+      last_exit: '14:00:00',
+      total_hours: 4,
+      total_minutes: 240,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-04-04',
+      endDate: '2026-04-04',
+      dailySchedulesMap: new Map([
+        [1, new Map([['2026-04-04', {} as IResolvedSchedule]])],
+      ]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-06',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-04-04',
+      status: 'work',
+      first_entry: '10:00:00',
+      last_exit: '14:00:00',
+    });
+  });
+
   it('keeps absent adjustment intact when day has object entries (does not overwrite status/hours)', async () => {
     const objectEntry = {
       adjustment_id: null,

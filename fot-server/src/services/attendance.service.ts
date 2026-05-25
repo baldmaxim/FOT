@@ -579,6 +579,13 @@ export async function buildAttendanceEntries(params: {
     const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
     const hoursWorked = roundHours(baseHours + travelCreditedHours);
     const isPresent = baseHours > 0 || summary.first_entry !== null;
+    // Пустой summary (без часов и без first_entry) на не-рабочий день — это заглушка
+    // от batch_recalculate_skud_daily_summary, а не реальная неявка. Симметрично
+    // ветке adjustments (NON_WORK_ADJUSTMENT_STATUSES + !isAdjWorkingDay), без entry
+    // фронт покажет «—», как у остальных сотрудников с тем же графиком.
+    if (!isPresent && schedule && !isWorkingDay(schedule, dateObject, calendarMonth)) {
+      continue;
+    }
     let presenceCoversShift: boolean | undefined;
     if (!isPresent) {
       presenceCoversShift = false;
