@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import crypto from 'crypto';
 import { z } from 'zod';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { localAuthService } from '../services/local-auth.service.js';
@@ -1469,6 +1470,73 @@ export const adminUsersController = {
     } catch (error) {
       console.error('Confirm email error:', error);
       res.status(500).json({ success: false, error: 'Failed to confirm email' });
+    }
+  },
+
+  async generatePasswordResetLink(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const scopeCheck = await assertTargetUserInScope(req, id);
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      const authRow = await queryOne<{ id: string; email: string | null }>(
+        'SELECT id, email FROM app_auth.users WHERE id = $1::uuid',
+        [id],
+      );
+      if (!authRow) {
+        res.status(404).json({ success: false, error: 'Пользователь не найден' });
+        return;
+      }
+
+      const profileRow = await queryOne<{ id: string }>(
+        'SELECT id FROM user_profiles WHERE id = $1::uuid',
+        [id],
+      );
+      if (!profileRow) {
+        res.status(404).json({ success: false, error: 'Профиль пользователя не найден' });
+        return;
+      }
+
+      const resetToken = crypto.randomBytes(32).toString('hex');
+      const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+      try {
+        await execute(
+          `UPDATE user_profiles
+              SET reset_token = $1, reset_token_expires = $2
+            WHERE id = $3::uuid`,
+          [resetTokenHash, expiresAt.toISOString(), id],
+        );
+      } catch (updateError) {
+        console.error('Admin reset link: update token error:', updateError);
+        res.status(500).json({ success: false, error: 'Не удалось создать ссылку для сброса пароля' });
+        return;
+      }
+
+      const appUrlBase = (process.env.APP_URL || 'https://fot.su10.ru').replace(/\/+$/, '');
+      const resetUrl = `${appUrlBase}/reset-password?token=${resetToken}`;
+
+      await auditService.logFromRequest(req, req.user.id, 'PASSWORD_RESET_LINK_GENERATED_BY_ADMIN', {
+        entityType: 'user',
+        entityId: id,
+        details: {
+          target_email: authRow.email,
+          expires_at: expiresAt.toISOString(),
+        },
+      });
+
+      res.json({
+        success: true,
+        resetUrl,
+        expiresAt: expiresAt.toISOString(),
+      });
+    } catch (error) {
+      console.error('Generate password reset link error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка при создании ссылки для сброса пароля' });
     }
   },
 

@@ -13,6 +13,7 @@ import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { SearchInput } from '../ui/SearchInput';
 import { UserCompanyAccessSection } from './UserCompanyAccessSection';
 import { ContractorOrgAccessSection } from './ContractorOrgAccessSection';
+import { PasswordResetLinkModal } from './PasswordResetLinkModal';
 import styles from '../../pages/admin/Admin.module.css';
 
 export interface IUserFromApi {
@@ -62,6 +63,7 @@ interface IUserRowExpandedProps {
   onConfirmEmail: (userId: string) => Promise<void>;
   onGenerate2FA: (userId: string, userName: string) => Promise<void>;
   onDisable2FA: (userId: string) => Promise<void>;
+  onResetPassword: (userId: string, userName: string) => Promise<void>;
   onDelete: (userId: string) => Promise<void>;
 }
 
@@ -77,6 +79,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   onConfirmEmail,
   onGenerate2FA,
   onDisable2FA,
+  onResetPassword,
   onDelete,
 }) => {
   const userRole = useMemo(
@@ -321,6 +324,13 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
         )}
 
         <button
+          className={styles.primaryBtn}
+          onClick={() => onResetPassword(user.id, user.full_name || user.email || '')}
+        >
+          Сбросить пароль (ссылка)
+        </button>
+
+        <button
           className={styles.rejectBtn}
           onClick={() => onDelete(user.id)}
         >
@@ -360,6 +370,11 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     data: null,
     loading: false,
   });
+  const [resetLinkModal, setResetLinkModal] = useState<{
+    resetUrl: string;
+    expiresAt: string;
+    userLabel: string;
+  } | null>(null);
   // Глобальный combobox-поиск: dropdown ищет по всем ролям и позволяет «прыгнуть»
   // к конкретному пользователю (см. ниже). Список ниже параллельно фильтруется
   // по текущей вкладке роли — это два разных потребителя debouncedSearch.
@@ -645,6 +660,17 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     }
   }, [patchUserInPageCaches, toast]);
 
+  const handleResetPassword = useCallback(async (userId: string, userName: string) => {
+    const label = userName || 'пользователя';
+    if (!confirm(`Сгенерировать ссылку для сброса пароля ${label}? Если у пользователя уже была активная ссылка — она перестанет работать.`)) return;
+    try {
+      const { resetUrl, expiresAt } = await adminService.generatePasswordResetLink(userId);
+      setResetLinkModal({ resetUrl, expiresAt, userLabel: label });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось сгенерировать ссылку');
+    }
+  }, [toast]);
+
   const handleConfirmEmail = useCallback(async (userId: string) => {
     try {
       await adminService.confirmUserEmail(userId);
@@ -821,6 +847,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
                   onConfirmEmail={handleConfirmEmail}
                   onGenerate2FA={handleGenerate2FA}
                   onDisable2FA={handleDisable2FA}
+                  onResetPassword={handleResetPassword}
                   onDelete={handleDeleteUser}
                 />
               )}
@@ -891,6 +918,15 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
             )}
           </div>
         </div>
+      )}
+
+      {resetLinkModal && (
+        <PasswordResetLinkModal
+          resetUrl={resetLinkModal.resetUrl}
+          expiresAt={resetLinkModal.expiresAt}
+          userLabel={resetLinkModal.userLabel}
+          onClose={() => setResetLinkModal(null)}
+        />
       )}
     </>
   );

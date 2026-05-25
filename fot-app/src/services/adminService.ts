@@ -199,6 +199,13 @@ export const adminService = {
     await apiClient.post(`/admin/users/${userId}/confirm-email`);
   },
 
+  async generatePasswordResetLink(userId: string): Promise<{ resetUrl: string; expiresAt: string }> {
+    const response = await apiClient.post<{ success: boolean; resetUrl: string; expiresAt: string }>(
+      `/admin/users/${userId}/reset-link`,
+    );
+    return { resetUrl: response.resetUrl, expiresAt: response.expiresAt };
+  },
+
   async updateUserPosition(userId: string, positionType: EmployeePositionType): Promise<void> {
     await apiClient.patch(`/admin/users/${userId}/position`, { position_type: positionType });
   },
