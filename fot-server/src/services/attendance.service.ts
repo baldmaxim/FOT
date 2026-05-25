@@ -4,27 +4,16 @@ import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
 import { getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import {
+  ABSENCE_STATUSES_AS_WORKED,
+  getAdjustmentPriority,
+  NON_WORK_ADJUSTMENT_STATUSES,
+  roundHours,
+} from './time-calculation/primitives.js';
+import {
   buildObjectAttendanceData,
   OBJECT_ADJUSTMENT_SOURCE_TYPE,
   type IAttendanceObjectEntry,
 } from './timesheet-object.service.js';
-
-const ADJUSTMENT_PRIORITY: Record<string, number> = {
-  manual: 300,
-  leave_request: 200,
-  legacy_tender_timesheet: 100,
-};
-
-const NON_WORK_ADJUSTMENT_STATUSES = new Set<TimeStatus>([
-  'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote',
-]);
-
-// Статусы отсутствия, которые засчитываются как полный рабочий день при пустом hours_override:
-// часы берутся из планового графика. Для удалёнки исторически уже работало; теперь то же
-// для отпуска/больничного и т.п. — иначе в табеле они показывались как недоработка.
-const ABSENCE_STATUSES_AS_WORKED = new Set<TimeStatus>([
-  'vacation', 'sick', 'dayoff', 'remote', 'educational_leave', 'unpaid', 'absent',
-]);
 
 const BATCH_SIZE = 2000;
 
@@ -153,10 +142,6 @@ interface ISummaryRow {
   break_minutes?: number | null;
 }
 
-function roundHours(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 function clampToScheduleHours(value: number, plannedHours: number): number {
   return roundHours(Math.max(0, Math.min(value, plannedHours)));
 }
@@ -274,10 +259,6 @@ function computePresenceCoversShift(params: {
   const workSec = totalMinutes * 60;
   const gapsSec = Math.max(0, spanSec - workSec);
   return spanSec >= shiftDurationHours * 3600 && gapsSec <= lunchMinutes * 60;
-}
-
-function getAdjustmentPriority(sourceType: string): number {
-  return ADJUSTMENT_PRIORITY[sourceType] ?? 0;
 }
 
 function extractLegacyCorrectorId(metadata: Record<string, unknown>): number | null {

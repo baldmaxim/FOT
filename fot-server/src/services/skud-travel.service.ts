@@ -3,6 +3,7 @@ import { getInternalAccessPoints } from './skud-shared.service.js';
 import { settingsService } from './settings.service.js';
 import { createCache } from '../utils/cache.js';
 import { SKUD_OBJECT_MAPS_BUCKET, objectMapStorageService } from './object-map-storage.service.js';
+import { minutesToHours } from './time-calculation/primitives.js';
 
 const BATCH_SIZE = 500;
 const TRAVEL_SEGMENTS_CACHE_TTL_MS = 60_000;
@@ -405,8 +406,6 @@ const timeToMinutes = (value: string): number => {
   const [hours = 0, minutes = 0, seconds = 0] = value.split(':').map(Number);
   return hours * 60 + minutes + Math.floor(seconds / 60);
 };
-
-const roundHours = (minutes: number): number => Math.round((minutes / 60) * 100) / 100;
 
 const dedupeAccessPoints = (accessPoints: string[]): string[] => {
   const unique = new Set<string>();
@@ -1599,7 +1598,7 @@ export const getTravelHoursSummaryForRange = async ({
   }
 };
 
-export const travelMinutesToHours = (minutes: number): number => roundHours(minutes);
+export const travelMinutesToHours = (minutes: number): number => minutesToHours(minutes);
 
 const fetchSegmentRowById = async (segmentId: string): Promise<ITravelSegmentRow | null> => {
   try {

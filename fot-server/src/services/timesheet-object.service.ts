@@ -1,27 +1,19 @@
 import { query } from '../config/postgres.js';
+import type { TimeStatus } from '../types/index.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { listObjectIdsForEmployees } from './employee-skud-object-access.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
+import {
+  getAdjustmentPriority,
+  NON_WORK_ADJUSTMENT_STATUSES,
+  roundHours,
+} from './time-calculation/primitives.js';
 
 const BATCH_SIZE = 500;
 
 export const OBJECT_ADJUSTMENT_SOURCE_TYPE = 'manual_object';
 export const UNKNOWN_OBJECT_KEY = '__unknown_object__';
 export const UNKNOWN_OBJECT_NAME = 'Не определён';
-
-// Зеркало attendance.service.ts: статусы без реально отработанного времени.
-// Импортировать оттуда нельзя — attendance.service импортирует этот модуль (цикл).
-const NON_WORK_ADJUSTMENT_STATUSES = new Set<string>([
-  'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote',
-]);
-
-// Зеркало ADJUSTMENT_PRIORITY из attendance.service.ts: какая корректировка дня
-// авторитетна (определяет entry.hours_worked). Объектную разбивку строим по той же.
-const DAILY_ADJUSTMENT_PRIORITY: Record<string, number> = {
-  manual: 300,
-  leave_request: 200,
-  legacy_tender_timesheet: 100,
-};
 
 export interface IObjectAdjustmentSource {
   id: number;
@@ -95,8 +87,6 @@ const normalizeAccessPoint = (value: string | null | undefined): string | null =
   const normalized = value.trim().replace(/\s+/g, ' ');
   return normalized || null;
 };
-
-const roundHours = (value: number): number => Math.round(value * 100) / 100;
 
 const timeToSeconds = (value: string): number => {
   const [hours, minutes, seconds = 0] = value.split(':').map(Number);
@@ -533,8 +523,7 @@ export async function buildObjectAttendanceData(params: {
   );
 
   const sortedDailyAdjustments = [...dailyAdjustments].sort((left, right) => {
-    const diff = (DAILY_ADJUSTMENT_PRIORITY[right.source_type] ?? 0)
-      - (DAILY_ADJUSTMENT_PRIORITY[left.source_type] ?? 0);
+    const diff = getAdjustmentPriority(right.source_type) - getAdjustmentPriority(left.source_type);
     if (diff !== 0) return diff;
     return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
   });
@@ -551,7 +540,7 @@ export async function buildObjectAttendanceData(params: {
     const hoursOverride = adjustment.hours_override;
     // Делим по объектам только реально отработанное время с явным hours_override.
     if (hoursOverride == null || hoursOverride <= 0) continue;
-    if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status)) continue;
+    if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status as TimeStatus)) continue;
 
     // Корректировка перекрывает фактические СКУД-события дня — иначе двойной счёт.
     for (const entryKey of [...baseObjectEntries.keys()]) {
