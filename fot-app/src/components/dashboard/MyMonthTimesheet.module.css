@@ -116,7 +116,7 @@
 }
 
 .cellToday {
-  outline: 2px solid var(--accent-primary, #3b82f6);
+  outline: 2px solid #f59e0b;
   outline-offset: -2px;
 }
 
