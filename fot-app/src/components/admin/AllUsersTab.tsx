@@ -376,13 +376,11 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     expiresAt: string;
     userLabel: string;
   } | null>(null);
-  // Глобальный combobox-поиск: dropdown ищет по всем ролям и позволяет «прыгнуть»
-  // к конкретному пользователю (см. ниже). Список ниже параллельно фильтруется
-  // по текущей вкладке роли — это два разных потребителя debouncedSearch.
-  const [globalDropdownOpen, setGlobalDropdownOpen] = useState(false);
+  // Поиск без выпадайки: счётчики на табах ролей приходят из meta.roleCounts
+  // (scope+search, без фильтра роли), а ниже эффект сам перескакивает на
+  // первый таб с совпадением и раскрывает единственный матч.
   const [pendingScrollUserId, setPendingScrollUserId] = useState<string | null>(null);
   const userRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const searchWrapRef = useRef<HTMLDivElement | null>(null);
 
   const departmentTree = useMemo<OrgDepartmentNode[]>(
     () => structureQuery.data?.departments ?? [],
@@ -437,23 +435,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     placeholderData: keepPreviousData,
   });
 
-  // Глобальный поиск по всем ролям для combobox-выпадайки. Минимум 2 символа,
-  // top-10 совпадений. Используется только для dropdown — список ниже остаётся
-  // под фильтром текущей вкладки.
-  const globalSearchQuery = useQuery({
-    queryKey: ['admin-users', 'global-search', debouncedSearch],
-    queryFn: () => adminService.getUsersPaginated({
-      page: 1,
-      pageSize: 10,
-      search: debouncedSearch,
-    }),
-    enabled: debouncedSearch.length >= 2,
-    staleTime: 30_000,
-    placeholderData: keepPreviousData,
-  });
-  const globalSearchResults = globalSearchQuery.data?.data ?? [];
-  const showGlobalDropdown = globalDropdownOpen && debouncedSearch.length >= 2;
-
   const users = useMemo(() => pageQuery.data?.data ?? [], [pageQuery.data]);
   const meta = pageQuery.data?.meta;
   const totalPages = meta?.totalPages ?? 1;
@@ -493,29 +474,30 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     setExpandedUserId(prev => prev === userId ? null : userId);
   }, []);
 
-  // Закрытие dropdown по клику/тапу вне поисковой обёртки.
+  // Авто-перекид по результатам поиска: если в текущей вкладке роли совпадений
+  // нет, прыгаем в первую вкладку (в порядке отображения), где они есть.
+  // Серверный roleCounts уже учитывает search и не зависит от роли, поэтому
+  // переключение вкладки не сбрасывает счётчики.
   useEffect(() => {
-    if (!showGlobalDropdown) return;
-    const handler = (event: MouseEvent | TouchEvent) => {
-      const node = searchWrapRef.current;
-      if (!node) return;
-      const target = event.target as Node | null;
-      if (target && node.contains(target)) return;
-      setGlobalDropdownOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    document.addEventListener('touchstart', handler);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      document.removeEventListener('touchstart', handler);
-    };
-  }, [showGlobalDropdown]);
+    if (!debouncedSearch) return;
+    const currentCount = effectiveRoleFilter ? roleCounts[effectiveRoleFilter] ?? 0 : 0;
+    if (currentCount > 0) return;
+    const firstHit = roleOptions.find(option => (roleCounts[option.code] ?? 0) > 0);
+    if (firstHit && firstHit.code !== effectiveRoleFilter) {
+      setRoleFilter(firstHit.code);
+    }
+  }, [debouncedSearch, roleCounts, effectiveRoleFilter, roleOptions]);
 
-  // Открыть dropdown заново, как только debounced-значение перешло порог.
+  // Единственное совпадение на все роли — раскрываем карточку и скроллим к ней,
+  // чтобы не пришлось вручную листать.
   useEffect(() => {
-    if (debouncedSearch.length >= 2) setGlobalDropdownOpen(true);
-    else setGlobalDropdownOpen(false);
-  }, [debouncedSearch]);
+    if (!debouncedSearch) return;
+    const total = Object.values(roleCounts).reduce((a, b) => a + b, 0);
+    if (total !== 1 || users.length !== 1) return;
+    const onlyUser = users[0];
+    setExpandedUserId(onlyUser.id);
+    setPendingScrollUserId(onlyUser.id);
+  }, [debouncedSearch, roleCounts, users]);
 
   // Deeplink ?openUser=<id> — приход с уведомления «Запрос на сброс пароля»
   // (forgotPassword шлёт админам). Резолвим роль через peek, переключаем
@@ -543,8 +525,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     return () => { cancelled = true; };
   }, [searchParams, setSearchParams, toast]);
 
-  // Скролл к выбранному пользователю после клика по dropdown: ждём, пока строка
-  // окажется на текущей странице (после смены roleFilter и refetch), и scroll'им.
+  // Скролл к выбранному пользователю: ждём, пока строка окажется на текущей
+  // странице (после смены roleFilter и refetch), и scroll'им.
   useLayoutEffect(() => {
     if (!pendingScrollUserId) return;
     const node = userRowRefs.current.get(pendingScrollUserId);
@@ -552,14 +534,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     node.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setPendingScrollUserId(null);
   }, [pendingScrollUserId, pageQuery.data]);
-
-  const handleGlobalResultClick = useCallback((user: IUserFromApi) => {
-    setRoleFilter(user.position_type);
-    setExpandedUserId(user.id);
-    setSearchInput('');
-    setGlobalDropdownOpen(false);
-    setPendingScrollUserId(user.id);
-  }, []);
 
   const getPositionName = useCallback((positionType: EmployeePositionType) => {
     return getRoleLabel(positionType);
@@ -738,43 +712,12 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
 
   return (
     <>
-      <div className={styles.userSearchRow} ref={searchWrapRef}>
+      <div className={styles.userSearchRow}>
         <SearchInput
           value={searchInput}
           onValueChange={setSearchInput}
           placeholder="Найти пользователя по ФИО или email..."
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter') return;
-            const top = globalSearchResults[0];
-            if (!top) return;
-            event.preventDefault();
-            handleGlobalResultClick(top);
-          }}
         />
-        {showGlobalDropdown && (
-          <div className={styles.skudSearchResults}>
-            {globalSearchQuery.isFetching && globalSearchResults.length === 0 ? (
-              <div className={styles.skudSearchLoading} style={{ padding: '10px' }}>Поиск…</div>
-            ) : globalSearchResults.length === 0 ? (
-              <div className={styles.skudSearchLoading} style={{ padding: '10px' }}>Ничего не найдено</div>
-            ) : (
-              globalSearchResults.map(user => (
-                <div
-                  key={user.id}
-                  className={styles.skudSearchItem}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => handleGlobalResultClick(user)}
-                >
-                  <div style={{ fontWeight: 500 }}>{user.full_name || 'Без имени'}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
-                    {user.email || ''}
-                    {user.position_type ? ` · ${getPositionName(user.position_type)}` : ''}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
       </div>
 
       <div className={styles.roleTabs}>
