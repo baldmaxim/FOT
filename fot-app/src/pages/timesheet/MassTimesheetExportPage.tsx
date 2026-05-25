@@ -1,9 +1,8 @@
 import { type FC, useState, useMemo, useCallback, useEffect } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
-import { useAuth } from '../../contexts/AuthContext';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
-import { isTimesheetWindowExempt } from '../../utils/timesheetMonthAccess';
+import { useTimesheetMonthAccess } from '../../hooks/useTimesheetMonthAccess';
 import {
   formatHalfLabel,
   getCurrentHalf,
@@ -41,11 +40,9 @@ const toMonthIndex = (year: number, month: number): number => year * 12 + month 
 
 export const MassTimesheetExportPage: FC = () => {
   const now = useMemo(() => new Date(), []);
-  const { hasPermission, profile, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const { isDepartmentScope } = useManagedDepartments();
-  const isAdmin = profile?.is_admin === true;
-  const canManageAllDepartments = isAdmin || hasPermission('data.scope.all');
-  const isRestrictedManagerView = !isTimesheetWindowExempt({ isAdmin: isAdmin, canManageAllDepartments }) && isDepartmentScope;
+  const monthAccess = useTimesheetMonthAccess({ enforceWhen: isDepartmentScope });
+  const isRestrictedManagerView = monthAccess.isWindowEnforced;
 
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -63,8 +60,8 @@ export const MassTimesheetExportPage: FC = () => {
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
   const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
-  const minAllowedMonthIndex = currentMonthIndex - timesheetMonthsBack;
-  const maxAllowedMonthIndex = currentMonthIndex + timesheetMonthsForward;
+  const minAllowedMonthIndex = currentMonthIndex - monthAccess.monthsBack;
+  const maxAllowedMonthIndex = currentMonthIndex + monthAccess.monthsForward;
   const selectedMonthIndex = toMonthIndex(year, month);
 
   const canGoPrev = !isRestrictedManagerView || selectedMonthIndex > minAllowedMonthIndex;
@@ -73,13 +70,13 @@ export const MassTimesheetExportPage: FC = () => {
   useEffect(() => {
     if (!isRestrictedManagerView) return;
     if (selectedMonthIndex > maxAllowedMonthIndex) {
-      const d = new Date(currentYear, currentMonth - 1 + timesheetMonthsForward, 1);
+      const d = new Date(currentYear, currentMonth - 1 + monthAccess.monthsForward, 1);
       queueMicrotask(() => { setYear(d.getFullYear()); setMonth(d.getMonth() + 1); });
     } else if (selectedMonthIndex < minAllowedMonthIndex) {
-      const d = new Date(currentYear, currentMonth - 1 - timesheetMonthsBack, 1);
+      const d = new Date(currentYear, currentMonth - 1 - monthAccess.monthsBack, 1);
       queueMicrotask(() => { setYear(d.getFullYear()); setMonth(d.getMonth() + 1); });
     }
-  }, [isRestrictedManagerView, selectedMonthIndex, minAllowedMonthIndex, maxAllowedMonthIndex, currentYear, currentMonth, timesheetMonthsBack, timesheetMonthsForward]);
+  }, [isRestrictedManagerView, selectedMonthIndex, minAllowedMonthIndex, maxAllowedMonthIndex, currentYear, currentMonth, monthAccess.monthsBack, monthAccess.monthsForward]);
 
   useEffect(() => {
     saveStoredActiveTab(activeTab);

@@ -5,7 +5,7 @@ import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { usePresenceRealtime } from '../hooks/usePresenceRealtime';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
-import { useAuth } from '../contexts/AuthContext';
+import { useTimesheetMonthAccess } from '../hooks/useTimesheetMonthAccess';
 import type { DashboardPeriod } from '../types';
 import { filterDepartmentTreeByIds, findDepartmentName } from '../utils/departmentUtils';
 import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
@@ -45,7 +45,7 @@ export const DashboardPage: React.FC = () => {
     primaryDepartmentId,
     structureQuery,
   } = useManagedDepartments();
-  const { timesheetMonthsBack, timesheetMonthsForward } = useAuth();
+  const { isWindowEnforced, minDate, maxDate } = useTimesheetMonthAccess({ enforceWhen: isDepartmentScope });
   const isSingleManagedDept = isDepartmentScope && managedDepartmentIds.length === 1;
   const noDepartmentsAssigned = isDepartmentScope && managedDepartmentIds.length === 0;
 
@@ -120,31 +120,24 @@ export const DashboardPage: React.FC = () => {
     }
   }, [period, searchParams, selectedMonth, setSearchParams]);
 
-  const monthBoundaries = useMemo(() => {
-    const now = new Date();
-    const minDate = new Date(now.getFullYear(), now.getMonth() - timesheetMonthsBack, 1);
-    const maxDate = new Date(now.getFullYear(), now.getMonth() + timesheetMonthsForward, 1);
-    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    return { minMonth: fmt(minDate), maxMonth: fmt(maxDate) };
-  }, [timesheetMonthsBack, timesheetMonthsForward]);
-  const prevMonthLimit = monthBoundaries.minMonth;
-  const nextMonthLimit = monthBoundaries.maxMonth;
-  const isTooOldMonth = isDepartmentScope && selectedMonth <= prevMonthLimit;
+  const prevMonthLimit = minDate ? minDate.slice(0, 7) : '';
+  const nextMonthLimit = maxDate ? maxDate.slice(0, 7) : '';
+  const isTooOldMonth = isWindowEnforced && selectedMonth <= prevMonthLimit;
 
   useEffect(() => {
-    if (!isDepartmentScope) return;
+    if (!isWindowEnforced) return;
     if (selectedMonth < prevMonthLimit) {
       queueMicrotask(() => setSelectedMonth(prevMonthLimit));
     } else if (selectedMonth > nextMonthLimit) {
       queueMicrotask(() => setSelectedMonth(nextMonthLimit));
     }
-  }, [isDepartmentScope, prevMonthLimit, nextMonthLimit, selectedMonth]);
+  }, [isWindowEnforced, prevMonthLimit, nextMonthLimit, selectedMonth]);
 
   const shiftMonth = (delta: number) => {
     const [y, m] = selectedMonth.split('-').map(Number);
     const d = new Date(y, m - 1 + delta, 1);
     const next = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    if (isDepartmentScope) {
+    if (isWindowEnforced) {
       if (delta < 0 && next < prevMonthLimit) return;
       if (delta > 0 && next > nextMonthLimit) return;
     }
@@ -157,7 +150,7 @@ export const DashboardPage: React.FC = () => {
     return `${MONTH_NAMES[m - 1]} ${y}`;
   };
 
-  const isFutureMonth = isDepartmentScope ? selectedMonth >= nextMonthLimit : selectedMonth >= getCurrentMonth();
+  const isFutureMonth = isWindowEnforced ? selectedMonth >= nextMonthLimit : selectedMonth >= getCurrentMonth();
   const employeeCardBackState = useMemo(() => {
     const params = new URLSearchParams();
     if (effectiveSelectedDeptId) params.set('dept', effectiveSelectedDeptId);

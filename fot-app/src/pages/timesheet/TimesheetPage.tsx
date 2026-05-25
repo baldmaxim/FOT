@@ -13,7 +13,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { getMonthLabel, formatDateRu, getDaysInMonth } from '../../utils/calendarUtils';
-import { isTimesheetWindowExempt } from '../../utils/timesheetMonthAccess';
+import { useTimesheetMonthAccess } from '../../hooks/useTimesheetMonthAccess';
 import type {
   TimesheetEntry,
   TimesheetEmployee,
@@ -101,7 +101,7 @@ import {
 const DIRECT_REPORTS_DEPT = '__direct_reports__';
 
 export const TimesheetPage: FC = () => {
-  const { hasPermission, profile, canEditPage, canViewPage, showActualHours, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
+  const { hasPermission, profile, canEditPage, canViewPage, showActualHours } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -118,7 +118,10 @@ export const TimesheetPage: FC = () => {
     primaryDepartmentId,
     structureQuery,
   } = useManagedDepartments();
-  const isTimesheetDepartmentScope = !isTimesheetWindowExempt({ isAdmin: isAdmin, canManageAllDepartments }) && isDepartmentScope && canViewManagedTimesheet;
+  const monthAccess = useTimesheetMonthAccess({
+    enforceWhen: isDepartmentScope && canViewManagedTimesheet,
+  });
+  const isTimesheetDepartmentScope = monthAccess.isWindowEnforced;
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
   const queryMonth = searchParams.get('month');
   const queryFrom = searchParams.get('from');
@@ -139,8 +142,8 @@ export const TimesheetPage: FC = () => {
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
   const currentMonthIndex = toMonthIndex(currentYear, currentMonth);
-  const minAllowedMonthIndex = currentMonthIndex - timesheetMonthsBack;
-  const maxAllowedMonthIndex = currentMonthIndex + timesheetMonthsForward;
+  const minAllowedMonthIndex = currentMonthIndex - monthAccess.monthsBack;
+  const maxAllowedMonthIndex = currentMonthIndex + monthAccess.monthsForward;
   const isRestrictedManagerView = isTimesheetDepartmentScope;
   const requestedMonth = useMemo(() => parseMonthParam(queryMonth), [queryMonth]);
   const requestedMonthIndex = requestedMonth

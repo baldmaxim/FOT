@@ -1,6 +1,7 @@
 import { type FC, useMemo, useState } from 'react';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
 import { useAuth } from '../../contexts/AuthContext';
+import { useTimesheetMonthAccess } from '../../hooks/useTimesheetMonthAccess';
 import { useMyLeaveRequests } from '../../hooks/usePortalData';
 import {
   getFullDayThresholdHoursForDay,
@@ -107,14 +108,13 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
   noCard,
   allowFuture,
 }) => {
-  const { showActualHours, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
+  const { showActualHours } = useAuth();
+  const { minOffset, maxOffset } = useTimesheetMonthAccess({ ignoreExempt: true });
   const today = useMemo(() => new Date(), []);
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
   const todayIso = useMemo(() => buildIsoDate(currentYear, currentMonth, today.getDate()), [currentYear, currentMonth, today]);
 
-  const minOffset = -timesheetMonthsBack;
-  const maxOffset = timesheetMonthsForward;
   const [monthOffset, setMonthOffset] = useState<number>(0);
   const offset = Math.min(maxOffset, Math.max(minOffset, monthOffset));
 
