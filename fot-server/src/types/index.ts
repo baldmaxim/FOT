@@ -110,6 +110,7 @@ export interface AuthenticatedRequest extends Request {
     company_scope?: CompanyScope;
     __company_subtree_ids?: string[];
     __manager_subtree_ids?: string[];
+    __direct_subordinates?: Set<number>;
     __skud_object_scope?: { is_unrestricted: boolean; object_ids: string[] };
   };
 }

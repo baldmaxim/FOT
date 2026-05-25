@@ -226,14 +226,31 @@ export async function canAccessEmployeeInScope(
 
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return true;
-  if (accessible.length === 0) return false;
 
-  const targetAccessMap = await loadEmployeeAccessMap([employeeId]);
-  const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
-  if (targetDepartmentIds.length === 0) return false;
+  if (accessible.length > 0) {
+    const targetAccessMap = await loadEmployeeAccessMap([employeeId]);
+    const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
+    if (targetDepartmentIds.length > 0) {
+      const accessibleSet = new Set(accessible);
+      if (targetDepartmentIds.some(id => accessibleSet.has(id))) return true;
+    }
+  }
 
-  const accessibleSet = new Set(accessible);
-  return targetDepartmentIds.some(id => accessibleSet.has(id));
+  // Fallback: руководитель «по людям» (manager_obj и обычный manager без
+  // employee_department_access) — доступ к approve/reject заявлений,
+  // документам, расчёткам, СКУД его прямых подчинённых. Симметрично
+  // getDepartment/getAll в leave-requests.controller и
+  // resolveRequestDataScopeWithDirectReports.
+  if (req.user.employee_id) {
+    if (req.user.__direct_subordinates === undefined) {
+      req.user.__direct_subordinates = new Set(
+        await listDirectSubordinates(req.user.employee_id),
+      );
+    }
+    if (req.user.__direct_subordinates.has(employeeId)) return true;
+  }
+
+  return false;
 }
 
 export async function canAccessDepartmentInScope(

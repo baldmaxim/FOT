@@ -24,6 +24,10 @@ vi.mock('./department-access.service.js', () => ({
   loadEmployeeAccessMap: vi.fn().mockResolvedValue(new Map()),
 }));
 
+vi.mock('./employee-direct-reports.service.js', () => ({
+  listDirectSubordinates: vi.fn().mockResolvedValue([]),
+}));
+
 const mockState = vi.hoisted(() => ({
   /** Записи user_company_access по user_id */
   userCompanyAccess: [] as Array<{ user_id: string; company_root_id: string }>,
@@ -31,7 +35,9 @@ const mockState = vi.hoisted(() => ({
   rpcSubtree: new Map<string, string[]>(),
 }));
 
-import { getSelfHistoryLimitForUser, invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
+import { canAccessEmployeeInScope, getSelfHistoryLimitForUser, invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
+import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
+import { listDirectSubordinates } from './employee-direct-reports.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): AuthenticatedRequest {
@@ -61,6 +67,9 @@ beforeEach(() => {
   pgQueryOne.mockReset();
   pgExecute.mockReset();
   pgTx.mockReset();
+  vi.mocked(listExplicitDepartmentIdsForUser).mockReset().mockResolvedValue([]);
+  vi.mocked(loadEmployeeAccessMap).mockReset().mockResolvedValue(new Map());
+  vi.mocked(listDirectSubordinates).mockReset().mockResolvedValue([]);
 
   pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     if (/FROM user_company_access/i.test(sql)) {
@@ -154,6 +163,89 @@ describe('resolveAccessibleDepartmentIds (для админа)', () => {
     mockState.rpcSubtree.set('comp-A', ['comp-A', 'extra']);
     const second = await resolveAccessibleDepartmentIds(req);
     expect(second).toEqual(['comp-A']);
+  });
+});
+
+describe('canAccessEmployeeInScope', () => {
+  function buildManagerReq(employeeId = 100): AuthenticatedRequest {
+    return buildReq({
+      is_admin: false,
+      role_code: 'manager_obj',
+      employee_id: employeeId,
+    });
+  }
+
+  it('employeeId == null → false', async () => {
+    const req = buildManagerReq();
+    expect(await canAccessEmployeeInScope(req, null)).toBe(false);
+    expect(await canAccessEmployeeInScope(req, undefined)).toBe(false);
+    expect(vi.mocked(listDirectSubordinates)).not.toHaveBeenCalled();
+  });
+
+  it('self-доступ: employeeId === req.user.employee_id → true без запросов', async () => {
+    const req = buildManagerReq(42);
+    expect(await canAccessEmployeeInScope(req, 42)).toBe(true);
+    expect(vi.mocked(listExplicitDepartmentIdsForUser)).not.toHaveBeenCalled();
+    expect(vi.mocked(listDirectSubordinates)).not.toHaveBeenCalled();
+  });
+
+  it("админ ('all') → true без обращения к direct reports", async () => {
+    const req = buildReq();
+    expect(await canAccessEmployeeInScope(req, 999)).toBe(true);
+    expect(vi.mocked(listDirectSubordinates)).not.toHaveBeenCalled();
+  });
+
+  it('manager без отделов и без direct reports → false', async () => {
+    vi.mocked(listExplicitDepartmentIdsForUser).mockResolvedValue([]);
+    vi.mocked(listDirectSubordinates).mockResolvedValue([]);
+    const req = buildManagerReq();
+    expect(await canAccessEmployeeInScope(req, 555)).toBe(false);
+  });
+
+  it('manager_obj без отделов, но с direct report → true (фикс 403 одобрения)', async () => {
+    vi.mocked(listExplicitDepartmentIdsForUser).mockResolvedValue([]);
+    vi.mocked(listDirectSubordinates).mockResolvedValue([555, 777]);
+    const req = buildManagerReq();
+    expect(await canAccessEmployeeInScope(req, 555)).toBe(true);
+    expect(await canAccessEmployeeInScope(req, 777)).toBe(true);
+  });
+
+  it('manager с отделами, employee в чужом отделе и не direct report → false', async () => {
+    vi.mocked(listExplicitDepartmentIdsForUser).mockResolvedValue(['dept-A']);
+    mockState.rpcSubtree.set('dept-A', ['dept-A']);
+    vi.mocked(loadEmployeeAccessMap).mockResolvedValue(new Map([[555, ['dept-FOREIGN']]]));
+    vi.mocked(listDirectSubordinates).mockResolvedValue([]);
+    const req = buildManagerReq();
+    expect(await canAccessEmployeeInScope(req, 555)).toBe(false);
+  });
+
+  it('manager с отделами + чужой отдел, но это direct report → true', async () => {
+    vi.mocked(listExplicitDepartmentIdsForUser).mockResolvedValue(['dept-A']);
+    mockState.rpcSubtree.set('dept-A', ['dept-A']);
+    vi.mocked(loadEmployeeAccessMap).mockResolvedValue(new Map([[555, ['dept-FOREIGN']]]));
+    vi.mocked(listDirectSubordinates).mockResolvedValue([555]);
+    const req = buildManagerReq();
+    expect(await canAccessEmployeeInScope(req, 555)).toBe(true);
+  });
+
+  it('manager с отделом, employee в назначенном отделе → true', async () => {
+    vi.mocked(listExplicitDepartmentIdsForUser).mockResolvedValue(['dept-A']);
+    mockState.rpcSubtree.set('dept-A', ['dept-A']);
+    vi.mocked(loadEmployeeAccessMap).mockResolvedValue(new Map([[555, ['dept-A']]]));
+    const req = buildManagerReq();
+    expect(await canAccessEmployeeInScope(req, 555)).toBe(true);
+    // ветка отделов сработала раньше — direct reports не запрашиваются
+    expect(vi.mocked(listDirectSubordinates)).not.toHaveBeenCalled();
+  });
+
+  it('мемоизация: повторные вызовы для разных подчинённых не дёргают listDirectSubordinates повторно', async () => {
+    vi.mocked(listExplicitDepartmentIdsForUser).mockResolvedValue([]);
+    vi.mocked(listDirectSubordinates).mockResolvedValue([555, 777]);
+    const req = buildManagerReq();
+    expect(await canAccessEmployeeInScope(req, 555)).toBe(true);
+    expect(await canAccessEmployeeInScope(req, 777)).toBe(true);
+    expect(await canAccessEmployeeInScope(req, 999)).toBe(false);
+    expect(vi.mocked(listDirectSubordinates)).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -19,6 +19,7 @@ declare global {
         company_scope?: { roots: 'all' | string[] };
         __company_subtree_ids?: string[];
         __manager_subtree_ids?: string[];
+        __direct_subordinates?: Set<number>;
       };
     }
   }
