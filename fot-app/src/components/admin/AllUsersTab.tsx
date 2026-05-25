@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FC } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import { rolesService } from '../../services/rolesService';
@@ -515,6 +516,32 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     if (debouncedSearch.length >= 2) setGlobalDropdownOpen(true);
     else setGlobalDropdownOpen(false);
   }, [debouncedSearch]);
+
+  // Deeplink ?openUser=<id> — приход с уведомления «Запрос на сброс пароля»
+  // (forgotPassword шлёт админам). Резолвим роль через peek, переключаем
+  // вкладку и раскрываем строку. Параметр сразу убираем, чтобы повторный
+  // mount не зацикливал эффект.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const openUserId = searchParams.get('openUser');
+    if (!openUserId) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('openUser');
+    setSearchParams(next, { replace: true });
+    let cancelled = false;
+    void adminService.peekUser(openUserId)
+      .then(peek => {
+        if (cancelled) return;
+        if (peek.position_type) setRoleFilter(peek.position_type);
+        setExpandedUserId(peek.id);
+        setPendingScrollUserId(peek.id);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        toast.error('Не удалось открыть пользователя из уведомления');
+      });
+    return () => { cancelled = true; };
+  }, [searchParams, setSearchParams, toast]);
 
   // Скролл к выбранному пользователю после клика по dropdown: ждём, пока строка
   // окажется на текущей странице (после смены roleFilter и refetch), и scroll'им.

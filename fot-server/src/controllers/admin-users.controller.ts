@@ -1473,6 +1473,51 @@ export const adminUsersController = {
     }
   },
 
+  async peekUser(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const scopeCheck = await assertTargetUserInScope(req, id);
+      if (!scopeCheck.ok) {
+        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      const row = await queryOne<{
+        id: string;
+        full_name: string | null;
+        email: string | null;
+        position_type: string | null;
+      }>(
+        `SELECT up.id,
+                up.full_name,
+                au.email,
+                sr.code AS position_type
+           FROM user_profiles up
+           LEFT JOIN app_auth.users au ON au.id = up.id
+           LEFT JOIN system_roles sr ON sr.id = up.system_role_id
+          WHERE up.id = $1::uuid`,
+        [id],
+      );
+      if (!row) {
+        res.status(404).json({ success: false, error: 'Пользователь не найден' });
+        return;
+      }
+
+      res.json({
+        success: true,
+        data: {
+          id: row.id,
+          full_name: row.full_name,
+          email: row.email,
+          position_type: row.position_type,
+        },
+      });
+    } catch (error) {
+      console.error('Peek user error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить пользователя' });
+    }
+  },
+
   async generatePasswordResetLink(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;

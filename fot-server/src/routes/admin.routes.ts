@@ -169,6 +169,7 @@ router.post('/users/:id/reject', requirePageAccess('/admin/users', 'edit'), admi
 router.delete('/users/:id', requirePageAccess('/admin/users', 'edit'), adminController.deleteUser);
 router.post('/users/:id/confirm-email', requirePageAccess('/admin/users', 'edit'), adminController.confirmUserEmail);
 router.post('/users/:id/reset-link', requirePageAccess('/admin/users', 'edit'), adminController.generatePasswordResetLink);
+router.get('/users/:id/peek', requirePageAccess('/admin/users', 'view'), adminController.peekUser);
 router.patch('/users/:id/position', requirePageAccess('/admin/users', 'edit'), adminController.updateUserPosition);
 router.patch('/users/:id/name', requirePageAccess('/admin/users', 'edit'), adminController.updateUserName);
 router.patch('/users/:id/chat-inbound-mode', requirePageAccess('/admin/users', 'edit'), adminController.updateUserChatInboundMode);

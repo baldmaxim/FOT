@@ -6,6 +6,8 @@ import { execute, query, queryOne } from '../config/postgres.js';
 import { localAuthService, LocalAuthError } from '../services/local-auth.service.js';
 import { auditService } from '../services/audit.service.js';
 import { mailerService } from '../services/mailer.service.js';
+import { notificationService } from '../services/notification.service.js';
+import { pushService } from '../services/push.service.js';
 import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse } from '../types/index.js';
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
 import { getRolePageAccess } from '../services/access-control.service.js';
@@ -313,6 +315,43 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
 
     const appUrlBase = (process.env.APP_URL || 'https://fot.su10.ru').replace(/\/+$/, '');
     const resetUrl = `${appUrlBase}/reset-password?token=${resetToken}`;
+
+    try {
+      const targetProfile = await queryOne<{ full_name: string | null }>(
+        'SELECT full_name FROM user_profiles WHERE id = $1::uuid',
+        [userRow.id],
+      );
+      const fullName = targetProfile?.full_name?.trim() || normalizedEmail;
+
+      const adminRows = await query<{ id: string }>(
+        `SELECT up.id
+           FROM user_profiles up
+           JOIN system_roles sr ON sr.id = up.system_role_id
+          WHERE sr.is_admin = true
+            AND up.id <> $1::uuid
+            AND NOT EXISTS (SELECT 1 FROM user_company_access uca WHERE uca.user_id = up.id)`,
+        [userRow.id],
+      );
+      const adminIds = adminRows.map(r => r.id);
+
+      if (adminIds.length > 0) {
+        const title = 'Запрос на сброс пароля';
+        const body = `${fullName} (${normalizedEmail}) запросил сброс пароля. Откройте карточку пользователя и нажмите «Сбросить пароль (ссылка)».`;
+        const path = `/admin/users?openUser=${userRow.id}`;
+
+        await notificationService.createMany(adminIds.map(uid => ({
+          userId: uid,
+          type: 'password_reset_requested',
+          title,
+          body,
+          metadata: { path, targetUserId: userRow.id, targetEmail: normalizedEmail },
+        })));
+
+        await pushService.sendGenericNotification(adminIds, title, body, { path });
+      }
+    } catch (notifyError) {
+      console.error('Forgot password admin notification failed:', notifyError);
+    }
 
     if (mailerService.isConfigured()) {
       try {

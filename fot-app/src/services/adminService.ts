@@ -206,6 +206,21 @@ export const adminService = {
     return { resetUrl: response.resetUrl, expiresAt: response.expiresAt };
   },
 
+  async peekUser(userId: string): Promise<{
+    id: string;
+    full_name: string | null;
+    email: string | null;
+    position_type: EmployeePositionType | null;
+  }> {
+    const response = await apiClient.get<ApiResponse<{
+      id: string;
+      full_name: string | null;
+      email: string | null;
+      position_type: EmployeePositionType | null;
+    }>>(`/admin/users/${userId}/peek`);
+    return response.data;
+  },
+
   async updateUserPosition(userId: string, positionType: EmployeePositionType): Promise<void> {
     await apiClient.patch(`/admin/users/${userId}/position`, { position_type: positionType });
   },
