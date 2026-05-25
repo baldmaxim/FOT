@@ -379,7 +379,16 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  table-layout: fixed;
 }
+
+.sc-col-check    { width: 44px; }
+.sc-col-num      { width: 48px; }
+.sc-col-name     { width: 320px; }
+.sc-col-dept     { width: 200px; }
+.sc-col-position { width: auto; }
+.sc-col-schedule { width: 200px; }
+.sc-col-actions  { width: 140px; }
 
 .sc-table thead {
   position: sticky;
@@ -443,6 +452,8 @@
   padding: 4px 12px;
   border-bottom: 1px solid var(--border);
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sc-td-num {
@@ -461,6 +472,8 @@
 .sc-td-name {
   font-weight: 500;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sc-excluded-badge {
