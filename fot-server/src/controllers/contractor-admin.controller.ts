@@ -28,6 +28,10 @@ import {
   deleteSigurEmployee,
 } from '../services/sigur-live-employees-crud.service.js';
 import {
+  getOrgDocumentDownloadUrl,
+  listOrgDocuments,
+} from '../services/contractor-documents.service.js';
+import {
   assignSigurEmployeeCardBinding,
   replaceSigurEmployeeAccessPoints,
 } from '../services/sigur-live-cards.service.js';
@@ -479,6 +483,44 @@ export const contractorAdminController = {
       if (!res.headersSent) {
         res.status(500).json({ success: false, error: 'Не удалось сформировать файл' });
       }
+    }
+  },
+
+  /** GET /orgs/:orgId/documents — список документов организации подрядчика для модалки заявки. */
+  async getOrgDocuments(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const orgId = z.string().uuid().parse(req.params.orgId);
+      const data = await listOrgDocuments(orgId);
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректная организация' });
+        return;
+      }
+      console.error('Contractor getOrgDocuments error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить документы' });
+    }
+  },
+
+  /** GET /documents/:id/download — pre-signed URL (админ имеет доступ ко всем оргам). */
+  async getOrgDocumentDownloadUrl(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const docId = z.string().uuid().parse(req.params.id);
+      const out = await getOrgDocumentDownloadUrl(docId, null);
+      if (!out) {
+        res.status(404).json({ success: false, error: 'Документ не найден' });
+        return;
+      }
+      res.json({ success: true, data: out });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный id' });
+        return;
+      }
+      console.error('Contractor getOrgDocumentDownloadUrl error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить ссылку' });
     }
   },
 

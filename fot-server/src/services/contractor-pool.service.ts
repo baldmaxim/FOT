@@ -18,6 +18,7 @@ import { isContractorSigurDryRun } from '../config/contractor.js';
 import {
   createSigurEmployee,
   moveSigurEmployee,
+  updateSigurEmployee,
 } from './sigur-live-employees-crud.service.js';
 import { assignSigurEmployeeCardBinding } from './sigur-live-cards.service.js';
 import { getOrgSigurDepartmentId, ContractorScopeError } from './contractor-scope.service.js';
@@ -134,27 +135,35 @@ export interface IPoolRangesResult {
  * revoked в выборку не попадает.
  */
 export const getPoolRanges = async (): Promise<IPoolRangesResult> => {
+  // Один и тот же pass_number может фигурировать в нескольких строках
+  // (исторически: один раз в пуле, потом назначен подрядчику и т.д.).
+  // Дедуплицируем: если ВСЕ строки номера — free (in_pool без org), то free;
+  // если есть хоть одна занятая — occupied.
   const rows = await query<{ pass_number: string; bucket: 'free' | 'occupied' }>(
     `SELECT pass_number,
             CASE
-              WHEN status = 'in_pool' AND org_department_id IS NULL THEN 'free'
+              WHEN bool_and(status = 'in_pool' AND org_department_id IS NULL)
+                THEN 'free'
               ELSE 'occupied'
             END AS bucket
        FROM contractor_passes
       WHERE pass_number ~ '^[0-9]+$'
         AND status <> 'revoked'
+      GROUP BY pass_number
       ORDER BY pass_number::bigint ASC`,
   );
 
   const ranges: IPoolRange[] = [];
-  let cur: { fromNum: number; toNum: number; width: number; status: 'free' | 'occupied' } | null = null;
+  let cur: { fromNum: number; toNum: number; status: 'free' | 'occupied' } | null = null;
   let freeCount = 0;
   let occupiedCount = 0;
 
   const flush = () => {
     if (!cur) return;
-    const from = String(cur.fromNum).padStart(cur.width, '0');
-    const to = String(cur.toNum).padStart(cur.width, '0');
+    // Без padStart: номера выводим как числа, без ведущих нулей. БД может
+    // хранить «0991» (padded при выпуске пакета), но в отчёте показываем 991.
+    const from = String(cur.fromNum);
+    const to = String(cur.toNum);
     ranges.push({ from, to, status: cur.status, count: cur.toNum - cur.fromNum + 1 });
     cur = null;
   };
@@ -163,12 +172,11 @@ export const getPoolRanges = async (): Promise<IPoolRangesResult> => {
     const num = Number(r.pass_number);
     if (!Number.isFinite(num)) continue;
     if (r.bucket === 'free') freeCount += 1; else occupiedCount += 1;
-    const w = r.pass_number.length;
-    if (cur && cur.status === r.bucket && num === cur.toNum + 1 && w === cur.width) {
+    if (cur && cur.status === r.bucket && num === cur.toNum + 1) {
       cur.toNum = num;
     } else {
       flush();
-      cur = { fromNum: num, toNum: num, width: w, status: r.bucket };
+      cur = { fromNum: num, toNum: num, status: r.bucket };
     }
   }
   flush();
@@ -339,6 +347,90 @@ export const assignPoolPassesToContractor = async (input: {
   }
 
   return { assigned, failed };
+};
+
+export interface IRevokeToPoolResult {
+  pass_id: string;
+  pass_number: string;
+  status: 'returned_to_pool';
+}
+
+/**
+ * Отозвать отправленный подрядчику пропуск обратно в общий пул.
+ *
+ * Покрывает все «занятые» статусы (assigned/submitted/applied/blocked).
+ * В Sigur: профиль move обратно в папку пула + переименование в «Пропуск NNNN»
+ * + blocked=true. В PG: status='in_pool', org_department_id=NULL, holder_name=NULL,
+ * submission_id=NULL, access_point_names=NULL, approval_status='not_submitted';
+ * открытая holder-строка закрывается valid_until=now().
+ */
+export const revokePassToPool = async (input: {
+  passId: string;
+  userId: string;
+}): Promise<IRevokeToPoolResult> => {
+  const dryRun = isContractorSigurDryRun();
+  const connection = dryRun ? undefined : await sigurService.getBackgroundConnectionType();
+
+  const pass = await queryOne<{
+    id: string; pass_number: string; status: string;
+    sigur_employee_id: number | null; org_department_id: string | null;
+  }>(
+    `SELECT id, pass_number, status, sigur_employee_id, org_department_id
+       FROM contractor_passes WHERE id = $1::uuid`,
+    [input.passId],
+  );
+  if (!pass) throw new Error('Пропуск не найден');
+  if (pass.status === 'in_pool') {
+    throw new Error('Пропуск уже в пуле');
+  }
+  if (pass.status === 'revoked') {
+    throw new Error('Пропуск отозван и недоступен');
+  }
+
+  const poolDeptId = dryRun ? 0 : await requireFreePoolDepartmentId();
+
+  if (!dryRun && pass.sigur_employee_id) {
+    try {
+      await moveSigurEmployee(pass.sigur_employee_id, poolDeptId, connection);
+    } catch (e) {
+      throw new Error(`Sigur move: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    try {
+      await updateSigurEmployee(
+        pass.sigur_employee_id,
+        { name: `Пропуск ${pass.pass_number}`, blocked: true },
+        connection,
+      );
+    } catch (e) {
+      // некритично — оставляем как есть
+      console.error('revokePassToPool: rename/block warning', e);
+    }
+  }
+
+  await withTransaction(async client => {
+    await client.query(
+      `UPDATE contractor_passes
+          SET status = 'in_pool',
+              org_department_id = NULL,
+              holder_name = NULL,
+              submission_id = NULL,
+              access_point_names = NULL,
+              approval_status = 'not_submitted',
+              is_active = false,
+              updated_at = now()
+        WHERE id = $1::uuid`,
+      [pass.id],
+    );
+    await client.query(
+      `UPDATE contractor_pass_holders
+          SET valid_until = now()
+        WHERE pass_id = $1::uuid AND valid_until IS NULL`,
+      [pass.id],
+    );
+  });
+
+  void input.userId;
+  return { pass_id: pass.id, pass_number: pass.pass_number, status: 'returned_to_pool' };
 };
 
 /** Отозвать пропуск из пула (физически из Sigur не удаляем — оставляем как blocked-инвентарь). */

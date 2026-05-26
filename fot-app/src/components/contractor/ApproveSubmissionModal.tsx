@@ -4,15 +4,25 @@ import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   contractorAdminService,
+  type IContractorDocument,
   type IDecideItem,
   type ISubmissionDetailRow,
   type ISigurAccessPointOption,
 } from '../../services/contractorService';
 import styles from '../../pages/contractor/Contractor.module.css';
 
+const fmtSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+};
+
 interface IProps {
   submissionId: string;
   orgName: string;
+  orgDepartmentId: string;
+  initialSelected?: Set<string>;
+  onSelectedChange?: (next: Set<string>) => void;
   onClose: () => void;
   onApplied: () => void;
 }
@@ -20,6 +30,9 @@ interface IProps {
 export const ApproveSubmissionModal: FC<IProps> = ({
   submissionId,
   orgName,
+  orgDepartmentId,
+  initialSelected,
+  onSelectedChange,
   onClose,
   onApplied,
 }) => {
@@ -37,6 +50,21 @@ export const ApproveSubmissionModal: FC<IProps> = ({
     queryFn: () => contractorAdminService.listSigurAccessPoints(),
     staleTime: 5 * 60_000,
   });
+  const docsQuery = useQuery({
+    queryKey: ['contractor-org-documents', orgDepartmentId],
+    queryFn: () => contractorAdminService.listOrgDocuments(orgDepartmentId),
+    staleTime: 30_000,
+    enabled: !!orgDepartmentId,
+  });
+
+  const handleDownloadDoc = async (doc: IContractorDocument) => {
+    try {
+      const { url } = await contractorAdminService.getOrgDocumentDownloadUrl(doc.id);
+      window.open(url, '_blank', 'noopener');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось получить ссылку');
+    }
+  };
 
   const pendingRows = useMemo<ISubmissionDetailRow[]>(
     () => (detailQuery.data ?? []).filter(r => r.approval_status === 'pending'),
@@ -47,8 +75,8 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   const [points, setPoints] = useState<Map<string, string[]>>(new Map());
   const [expandedPass, setExpandedPass] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // По умолчанию все pending-пропуска выбраны.
-  const [selectedPasses, setSelectedPasses] = useState<Set<string>>(new Set());
+  // По умолчанию все pending-пропуска выбраны (если родитель не передал initialSelected).
+  const [selectedPasses, setSelectedPasses] = useState<Set<string>>(initialSelected ?? new Set());
 
   // Предзаполнение при загрузке деталей.
   useEffect(() => {
@@ -64,21 +92,24 @@ export const ApproveSubmissionModal: FC<IProps> = ({
     });
     setSelectedPasses(prev => {
       if (prev.size > 0) return prev;
+      if (initialSelected && initialSelected.size > 0) return new Set(initialSelected);
       return new Set(detailQuery.data.filter(r => r.approval_status === 'pending').map(r => r.id));
     });
-  }, [detailQuery.data]);
+  }, [detailQuery.data, initialSelected]);
 
   const togglePassSelected = (passId: string) => {
     setSelectedPasses(prev => {
       const next = new Set(prev);
       if (next.has(passId)) next.delete(passId); else next.add(passId);
+      onSelectedChange?.(next);
       return next;
     });
   };
   const toggleAllPasses = () => {
     setSelectedPasses(prev => {
-      if (prev.size === pendingRows.length) return new Set();
-      return new Set(pendingRows.map(r => r.id));
+      const next = prev.size === pendingRows.length ? new Set<string>() : new Set(pendingRows.map(r => r.id));
+      onSelectedChange?.(next);
+      return next;
     });
   };
 
@@ -138,6 +169,35 @@ export const ApproveSubmissionModal: FC<IProps> = ({
     >
       <div className={styles.modal} style={{ maxWidth: 720 }}>
         <h2 className={styles.modalTitle}>Открыть пропуска — {orgName}</h2>
+
+        <div style={{ marginBottom: 12 }}>
+          <div className={styles.statusNote} style={{ marginBottom: 6 }}>
+            Документы организации:
+          </div>
+          {docsQuery.isLoading ? (
+            <div className={styles.detailRow}>Загрузка…</div>
+          ) : (docsQuery.data ?? []).length === 0 ? (
+            <div className={styles.statusNote}>Подрядчик не приложил документы</div>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {(docsQuery.data ?? []).map((d: IContractorDocument) => (
+                <li key={d.id} style={{ marginBottom: 4 }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ padding: '2px 8px', fontSize: 13 }}
+                    onClick={() => void handleDownloadDoc(d)}
+                  >
+                    ↓ {d.file_name}
+                  </button>
+                  <span className={styles.statusNote} style={{ marginLeft: 8 }}>
+                    {fmtSize(d.file_size)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
         {loading && <div className={styles.detailRow}>Загрузка…</div>}
 

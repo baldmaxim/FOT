@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { contractorService, type IRosterRow, type IPassRow } from '../../services/contractorService';
+import { ContractorDocumentsBlock } from '../../components/contractor/ContractorDocumentsBlock';
 import styles from './Contractor.module.css';
 
 type Tab = 'roster' | 'passes';
@@ -205,6 +206,7 @@ export const ContractorPage: FC = () => {
 
       {tab === 'passes' && (
         <>
+          <ContractorDocumentsBlock />
           <div className={styles.toolbar}>
             <button
               className="btn-primary"

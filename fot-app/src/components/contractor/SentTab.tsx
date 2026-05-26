@@ -1,5 +1,6 @@
-import { useMemo, type FC } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState, type FC } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '../../contexts/ToastContext';
 import { contractorAdminService, type ISentPassRow } from '../../services/contractorService';
 import styles from '../../pages/contractor/Contractor.module.css';
 
@@ -17,6 +18,10 @@ const approvalLabel: Record<string, string> = {
 };
 
 export const SentTab: FC = () => {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [busyId, setBusyId] = useState<string | null>(null);
+
   const query = useQuery({
     queryKey: ['contractor-sent-passes'],
     queryFn: () => contractorAdminService.listSentPasses(),
@@ -34,6 +39,27 @@ export const SentTab: FC = () => {
     return Array.from(map.entries()).map(([id, v]) => ({ id, ...v }));
   }, [query.data]);
 
+  const handleRevoke = async (r: ISentPassRow) => {
+    if (busyId) return;
+    const ok = window.confirm(
+      `Отозвать пропуск №${r.pass_number} (${r.holder_name ?? '—'}) и вернуть его в общий пул?`,
+    );
+    if (!ok) return;
+    setBusyId(r.id);
+    try {
+      await contractorAdminService.revokePass(r.id);
+      toast.success(`Пропуск №${r.pass_number} возвращён в пул`);
+      await qc.invalidateQueries({ queryKey: ['contractor-sent-passes'] });
+      await qc.invalidateQueries({ queryKey: ['contractor-pool'] });
+      await qc.invalidateQueries({ queryKey: ['contractor-pool-ranges'] });
+      await qc.invalidateQueries({ queryKey: ['contractor-pending-subs'] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось отозвать');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   if (query.isLoading) return <div className={styles.empty}>Загрузка…</div>;
   if (grouped.length === 0) return <div className={styles.empty}>Нет отправленных пропусков</div>;
 
@@ -46,7 +72,7 @@ export const SentTab: FC = () => {
             <thead>
               <tr>
                 <th>№</th><th>UID</th><th>ФИО</th><th>Статус</th>
-                <th>Согласование</th><th>Активен</th><th>Обновлён</th>
+                <th>Согласование</th><th>Активен</th><th>Обновлён</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -61,6 +87,16 @@ export const SentTab: FC = () => {
                     <td>{approvalLabel[r.approval_status] ?? r.approval_status}</td>
                     <td>{r.is_active ? '✓' : '—'}</td>
                     <td>{new Date(r.updated_at).toLocaleString('ru')}</td>
+                    <td>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => void handleRevoke(r)}
+                        disabled={busyId === r.id}
+                        title="Вернуть в общий пул"
+                      >
+                        {busyId === r.id ? '…' : 'Отозвать'}
+                      </button>
+                    </td>
                   </tr>
                 );
               })}

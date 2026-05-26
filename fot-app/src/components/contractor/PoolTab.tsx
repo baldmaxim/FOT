@@ -374,9 +374,6 @@ export const PoolTab: FC = () => {
 
           <h3 className={styles.title} style={{ marginTop: 24 }}>Пул свободных пропусков</h3>
           <div className={styles.toolbar}>
-            <button className="btn-secondary" onClick={toggleAll} disabled={pool.length === 0}>
-              {allOnPageSelected ? 'Снять на странице' : 'Выделить на странице'}
-            </button>
             <button
               className="btn-primary"
               onClick={() => setAssignOpen(true)}
@@ -396,7 +393,23 @@ export const PoolTab: FC = () => {
             <>
               <table className={styles.table}>
                 <thead>
-                  <tr><th></th><th>№</th><th>UID</th><th>Sigur ID</th><th>Добавлен</th></tr>
+                  <tr>
+                    <th style={{ width: 32 }}>
+                      <input
+                        type="checkbox"
+                        checked={allOnPageSelected}
+                        ref={el => {
+                          if (el) {
+                            const someOnPage = pool.some(p => selected.has(p.id));
+                            el.indeterminate = someOnPage && !allOnPageSelected;
+                          }
+                        }}
+                        onChange={toggleAll}
+                        title="Выделить на странице / снять"
+                      />
+                    </th>
+                    <th>№</th><th>UID</th><th>Sigur ID</th><th>Добавлен</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {pool.map(p => (

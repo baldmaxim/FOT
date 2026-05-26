@@ -13,6 +13,16 @@ import { syncRosterFromSigur, getRoster, getPasses } from '../services/contracto
 import { sigurService } from '../services/sigur.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
 import { updateSigurEmployee } from '../services/sigur-live-employees-crud.service.js';
+import {
+  deleteOrgDocument,
+  getOrgDocumentDownloadUrl,
+  listOrgDocuments,
+  uploadOrgDocument,
+} from '../services/contractor-documents.service.js';
+
+interface IMulterRequest extends AuthenticatedRequest {
+  file?: Express.Multer.File;
+}
 
 /** Резолвит организацию подрядчика; при отсутствии — отвечает 403 и возвращает null. */
 const resolveOrgOr403 = async (
@@ -564,6 +574,100 @@ export const contractorController = {
     } catch (error) {
       console.error('Contractor getSubmissions error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить заявки' });
+    }
+  },
+
+  /** GET /contractor/documents — список документов организации подрядчика. */
+  async getDocuments(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      const data = await listOrgDocuments(orgId);
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Contractor getDocuments error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить документы' });
+    }
+  },
+
+  /** POST /contractor/documents (multipart/form-data, поле "file"). */
+  async uploadDocument(req: IMulterRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      if (!req.file) {
+        res.status(400).json({ success: false, error: 'Файл обязателен' });
+        return;
+      }
+      const doc = await uploadOrgDocument({
+        orgId,
+        fileName: req.file.originalname,
+        buffer: req.file.buffer,
+        mimeType: req.file.mimetype || 'application/octet-stream',
+        uploadedBy: req.user.id,
+      });
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_DOCUMENT_UPLOADED, {
+        entityType: 'contractor_document',
+        entityId: doc.id,
+        details: { org_department_id: orgId, file_name: doc.file_name, file_size: doc.file_size },
+      });
+      res.json({ success: true, data: doc });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Не удалось загрузить файл';
+      const status = /R2|не настроено|Недопустимый|больше|лимит/i.test(msg) ? 400 : 500;
+      if (status === 500) console.error('Contractor uploadDocument error:', error);
+      res.status(status).json({ success: false, error: msg });
+    }
+  },
+
+  /** DELETE /contractor/documents/:id. */
+  async deleteDocument(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      const docId = z.string().uuid().parse(req.params.id);
+      try {
+        await deleteOrgDocument(orgId, docId);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Не удалось удалить';
+        res.status(404).json({ success: false, error: msg });
+        return;
+      }
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_DOCUMENT_DELETED, {
+        entityType: 'contractor_document',
+        entityId: docId,
+        details: { org_department_id: orgId },
+      });
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный id' });
+        return;
+      }
+      console.error('Contractor deleteDocument error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось удалить документ' });
+    }
+  },
+
+  /** GET /contractor/documents/:id/download — pre-signed URL. */
+  async getDocumentDownloadUrl(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      const docId = z.string().uuid().parse(req.params.id);
+      const out = await getOrgDocumentDownloadUrl(docId, orgId);
+      if (!out) {
+        res.status(404).json({ success: false, error: 'Документ не найден' });
+        return;
+      }
+      res.json({ success: true, data: out });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный id' });
+        return;
+      }
+      console.error('Contractor getDocumentDownloadUrl error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить ссылку' });
     }
   },
 };

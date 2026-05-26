@@ -18,6 +18,7 @@ import {
   getPoolRanges,
   listPool,
   PoolNotConfiguredError,
+  revokePassToPool,
   setFreePoolDepartmentId,
 } from '../services/contractor-pool.service.js';
 import { sigurService } from '../services/sigur.service.js';
@@ -244,6 +245,47 @@ export const contractorPoolController = {
       }
       console.error('Pool assign error:', error);
       res.status(500).json({ success: false, error: 'Не удалось назначить пропуска' });
+    }
+  },
+
+  /**
+   * POST /admin/contractor/passes/:id/revoke — отозвать пропуск, отправленный
+   * подрядчику, обратно в общий пул. Возвращает в Sigur папку пула + blocked.
+   */
+  async revokePass(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const passId = z.string().uuid().parse(req.params.id);
+      let result;
+      try {
+        result = await revokePassToPool({ passId, userId: req.user.id });
+      } catch (e) {
+        if (e instanceof PoolNotConfiguredError) {
+          sendPoolNotConfigured(res);
+          return;
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/не найден|уже в пуле|отозван/i.test(msg)) {
+          res.status(400).json({ success: false, error: msg });
+          return;
+        }
+        throw e;
+      }
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_ADDED, {
+        entityType: 'contractor_pass',
+        entityId: passId,
+        details: { action: 'revoked_to_pool', pass_number: result.pass_number },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный id пропуска' });
+        return;
+      }
+      console.error('Pool revokePass error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось отозвать пропуск' });
     }
   },
 

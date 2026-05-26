@@ -245,6 +245,17 @@ export interface IIssuePassBatchResult {
   warnings: string[];
 }
 
+export interface IContractorDocument {
+  id: string;
+  org_department_id: string;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  r2_key: string;
+  uploaded_by: string | null;
+  created_at: string;
+}
+
 /** Контрактор-фасад (роль «Подрядчик»). */
 export const contractorService = {
   async getMyOrg(): Promise<{ id: string; name: string } | null> {
@@ -288,6 +299,36 @@ export const contractorService = {
   async getSubmissions(): Promise<ISubmissionRow[]> {
     const r = await apiClient.get<ApiResponse<ISubmissionRow[]>>('/contractor/submissions');
     return r.data ?? [];
+  },
+
+  // Документы организации
+  async listDocuments(): Promise<IContractorDocument[]> {
+    const r = await apiClient.get<ApiResponse<IContractorDocument[]>>('/contractor/documents');
+    return r.data ?? [];
+  },
+  async uploadDocument(file: File): Promise<IContractorDocument> {
+    const form = new FormData();
+    form.append('file', file);
+    const response = await fetch(buildApiUrl('/contractor/documents'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: buildAuthHeaders(),
+      body: form,
+    });
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error((json && json.error) || 'Не удалось загрузить файл');
+    }
+    return json.data as IContractorDocument;
+  },
+  async deleteDocument(id: string): Promise<void> {
+    await apiClient.delete(`/contractor/documents/${id}`);
+  },
+  async getDocumentDownloadUrl(id: string): Promise<{ url: string; file_name: string }> {
+    const r = await apiClient.get<ApiResponse<{ url: string; file_name: string }>>(
+      `/contractor/documents/${id}/download`,
+    );
+    return r.data;
   },
 };
 
@@ -415,6 +456,27 @@ export const contractorAdminService = {
       pass_ids: passIds,
       org_department_id: orgDepartmentId,
     });
+    return r.data;
+  },
+
+  async revokePass(passId: string): Promise<{ pass_id: string; pass_number: string; status: 'returned_to_pool' }> {
+    const r = await apiClient.post<ApiResponse<{ pass_id: string; pass_number: string; status: 'returned_to_pool' }>>(
+      `/admin/contractor/passes/${passId}/revoke`,
+    );
+    return r.data;
+  },
+
+  // Документы организации (админ-просмотр)
+  async listOrgDocuments(orgId: string): Promise<IContractorDocument[]> {
+    const r = await apiClient.get<ApiResponse<IContractorDocument[]>>(
+      `/admin/contractor/orgs/${orgId}/documents`,
+    );
+    return r.data ?? [];
+  },
+  async getOrgDocumentDownloadUrl(id: string): Promise<{ url: string; file_name: string }> {
+    const r = await apiClient.get<ApiResponse<{ url: string; file_name: string }>>(
+      `/admin/contractor/documents/${id}/download`,
+    );
     return r.data;
   },
 

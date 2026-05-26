@@ -21,6 +21,8 @@ router.get('/orgs', apprView, contractorAdminController.listOrgs);
 router.get('/objects', apprView, contractorAdminController.listObjects);
 router.get('/objects/access-points', apprView, contractorAdminController.listObjectAccessPoints);
 router.get('/orgs/:orgId/next-pass', apprView, contractorAdminController.getNextPassNumber);
+router.get('/orgs/:orgId/documents', apprView, contractorAdminController.getOrgDocuments);
+router.get('/documents/:id/download', apprView, contractorAdminController.getOrgDocumentDownloadUrl);
 router.post('/passes/issue', passEdit, requireCritical2FA, contractorAdminController.issuePassBatch);
 
 router.get('/users', usersView, contractorAdminController.listContractorUsers);
@@ -41,6 +43,7 @@ router.post('/submissions/:id/decide', apprEdit, requireCritical2FA, contractorA
 router.get('/passes/sent', apprView, contractorAdminController.listSentPasses);
 router.get('/passes/monitor', apprView, contractorAdminController.monitorPasses);
 router.get('/passes/:id/history', apprView, contractorAdminController.getPassHistoryAdmin);
+router.post('/passes/:id/revoke', apprEdit, requireCritical2FA, contractorPoolController.revokePass);
 
 // Общий пул свободных пропусков.
 router.get('/pool/settings', apprView, contractorPoolController.getSettings);
