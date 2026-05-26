@@ -420,27 +420,41 @@ export async function syncEmployeesLogic(
 
   if (missingPositions.size > 0) {
     send({ type: 'employees_progress', phase: 'positions', current: 0, total: totalEmployees, percent: 0 });
-    const posInserts = [...missingPositions].map(name => ({
-      name,
-      category: 'other' as const,
-    }));
+    const missingList = [...missingPositions];
+    const lowerKeys = missingList.map(n => n.toLowerCase().trim());
+
+    // Re-fetch: на positions(name) нет UNIQUE, поэтому ON CONFLICT бы упал
+    // (FOT-SERVER-1S). Защищаемся от гонки с параллельной вставкой так же,
+    // как делают остальные insert'ы в positions в кодовой базе — повторно
+    // вычитываем существующие и не вставляем их повторно.
+    const existing = await query<{ id: string; name: string | null }>(
+      'SELECT id, name FROM positions WHERE lower(name) = ANY($1::text[])',
+      [lowerKeys],
+    );
+    for (const p of existing || []) {
+      if (p.name) {
+        const k = p.name.toLowerCase().trim();
+        if (k && !posNameToDbId.has(k)) posNameToDbId.set(k, p.id);
+      }
+    }
+
+    const toInsert = missingList.filter(n => !posNameToDbId.has(n.toLowerCase().trim()));
     const POS_BATCH = 100;
-    for (let i = 0; i < posInserts.length; i += POS_BATCH) {
-      const batch = posInserts.slice(i, i + POS_BATCH);
+    for (let i = 0; i < toInsert.length; i += POS_BATCH) {
+      const batch = toInsert.slice(i, i + POS_BATCH);
       const params: unknown[] = [];
       const placeholders: string[] = [];
-      for (const row of batch) {
-        params.push(row.name, row.category);
+      for (const name of batch) {
+        params.push(name, 'other');
         placeholders.push(`($${params.length - 1}, $${params.length})`);
       }
       const created = await query<{ id: string; name: string | null }>(
         `INSERT INTO positions (name, category) VALUES ${placeholders.join(', ')}
-         ON CONFLICT (name) DO NOTHING
          RETURNING id, name`,
         params,
       );
       for (const p of created || []) {
-        if (p.name) posNameToDbId.set(p.name.toLowerCase(), p.id);
+        if (p.name) posNameToDbId.set(p.name.toLowerCase().trim(), p.id);
       }
     }
   }

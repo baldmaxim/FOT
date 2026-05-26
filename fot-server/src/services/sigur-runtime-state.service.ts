@@ -38,14 +38,22 @@ interface ISigurRuntimeLeaseRow {
   refreshed?: boolean;
 }
 
-const PG_RETRY_ATTEMPTS = 3;
+const PG_RETRY_ATTEMPTS = 5;
 const PG_RETRY_BASE_MS = 500;
+// SQLSTATE-коды и подстроки сообщений транзитных ошибок Postgres.
+// 25006 — read_only_sql_transaction (failover/мастер ушёл в read-only).
+// 57P01/02/03 — admin_shutdown / crash_shutdown / cannot_connect_now.
 const PG_RETRY_PATTERNS = [
+  '25006', 'read-only transaction',
+  '57p01', '57p02', '57p03',
   '502', '503', '504',
   'bad gateway', 'gateway timeout', 'service unavailable',
   'fetch failed', 'network', 'econnreset', 'etimedout', 'eai_again',
   'connection terminated',
 ];
+
+const PG_FAILURE_CAPTURE_INTERVAL_MS = 5 * 60_000;
+let lastPgFailureCaptureAt = 0;
 
 function isTransientPgError(error: unknown): boolean {
   if (!error) return false;
@@ -54,7 +62,27 @@ function isTransientPgError(error: unknown): boolean {
   return PG_RETRY_PATTERNS.some(pattern => haystack.includes(pattern));
 }
 
-async function withPgRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+function capturePgFailureRateLimited(label: string, error: unknown): void {
+  const now = Date.now();
+  if (now - lastPgFailureCaptureAt < PG_FAILURE_CAPTURE_INTERVAL_MS) return;
+  lastPgFailureCaptureAt = now;
+  const e = error as { message?: string; code?: string };
+  Sentry.captureMessage('pg_transient_failure_persistent', {
+    level: 'warning',
+    extra: {
+      label,
+      sqlstate: e.code || null,
+      message: e.message?.slice(0, 300) || null,
+    },
+  });
+}
+
+// Экспорт для тестов: проверяем retry-логику и rate-limited captureMessage.
+export function __resetPgFailureCaptureForTests(): void {
+  lastPgFailureCaptureAt = 0;
+}
+
+export async function withPgRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
   let attempt = 0;
   let lastError: unknown;
 
@@ -63,7 +91,14 @@ async function withPgRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
       return await fn();
     } catch (error) {
       lastError = error;
-      if (attempt >= PG_RETRY_ATTEMPTS || !isTransientPgError(error)) {
+      if (!isTransientPgError(error)) {
+        throw error;
+      }
+      if (attempt >= PG_RETRY_ATTEMPTS) {
+        // Исчерпали ретраи на транзитной ошибке — не плодим captureException
+        // на каждом тике polling (см. FOT-SERVER-1P: 14 650 событий за 28 ч).
+        // Одно warning-сообщение в Sentry на интервал, ошибка уходит наверх.
+        capturePgFailureRateLimited(label, error);
         throw error;
       }
       const delay = PG_RETRY_BASE_MS * Math.pow(2, attempt);

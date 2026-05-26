@@ -79,6 +79,36 @@ let consecutiveEmptyTicks = 0;
 // видимость реальных проблем. Раз в час достаточно, чтобы заметить «стало хуже».
 let lastQuarantineSentryAt = 0;
 const QUARANTINE_SENTRY_INTERVAL_MS = 60 * 60_000;
+// Sigur 46.38.49.169:9555 моргает ECONNREFUSED/503 — внешний сервис. Без rate-limit
+// presence-polling шлёт error на каждом тике (FOT-SERVER-15: 135+ событий/неделю).
+// Сводим к одному warning раз в 5 минут на процесс: видимость остаётся, шум падает.
+const SIGUR_UNREACHABLE_CAPTURE_INTERVAL_MS = 5 * 60_000;
+let lastSigurUnreachableCaptureAt = 0;
+
+const SIGUR_NETWORK_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+]);
+
+const SIGUR_NETWORK_HTTP_STATUS = new Set([502, 503, 504]);
+
+function isSigurNetworkError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { code?: string; response?: { status?: number }; message?: string };
+  if (e.code && SIGUR_NETWORK_ERROR_CODES.has(e.code)) return true;
+  if (e.response && typeof e.response.status === 'number' && SIGUR_NETWORK_HTTP_STATUS.has(e.response.status)) return true;
+  // axios иногда не сохраняет code на дочерней ошибке после нескольких ретраев —
+  // ловим по сообщению "connect ECONNREFUSED ip:port" / "Request failed with status code 503".
+  const msg = e.message || '';
+  if (/ECONN(REFUSED|RESET)|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(msg)) return true;
+  if (/status code (502|503|504)/i.test(msg)) return true;
+  return false;
+}
 let startupTimeout: ReturnType<typeof setTimeout> | null = null;
 let manualSyncLocks = 0;
 let pollInFlight: Promise<void> | null = null;
@@ -1147,7 +1177,24 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
     }
   } catch (error) {
     console.error('[presence-polling] error:', (error as Error).message);
-    Sentry.captureException(error, { tags: { service: 'presence-polling', stage: 'pollEvents' } });
+    if (isSigurNetworkError(error)) {
+      const now = Date.now();
+      if (now - lastSigurUnreachableCaptureAt >= SIGUR_UNREACHABLE_CAPTURE_INTERVAL_MS) {
+        lastSigurUnreachableCaptureAt = now;
+        const e = error as { code?: string; response?: { status?: number }; message?: string };
+        Sentry.captureMessage('sigur_unreachable', {
+          level: 'warning',
+          tags: { service: 'presence-polling', stage: 'pollEvents' },
+          extra: {
+            code: e.code || null,
+            httpStatus: e.response?.status ?? null,
+            message: e.message?.slice(0, 300) || null,
+          },
+        });
+      }
+    } else {
+      Sentry.captureException(error, { tags: { service: 'presence-polling', stage: 'pollEvents' } });
+    }
     const monitorCheckedAt = new Date();
     const cycleFinishedAt = new Date();
     await mergeSigurRuntimeState({
