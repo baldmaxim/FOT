@@ -23,10 +23,10 @@ export const TasksTab: FC = () => {
 
   return (
     <section className={styles.card}>
-      <div className={styles.tableHeader}>
-        <h2 className={styles.cardTitle}>
-          Задачи МТС {tasksQuery.data ? `(${tasksQuery.data.length})` : ''}
-        </h2>
+      <div className={styles.toolbarRow}>
+        <span className={styles.hint}>
+          {tasksQuery.data ? `Всего задач: ${tasksQuery.data.length}` : ''}
+        </span>
         <div className={styles.actions}>
           <button className={styles.btn} onClick={() => setOpen(true)} disabled={busy}>
             + Создать задачу

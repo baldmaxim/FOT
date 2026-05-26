@@ -91,7 +91,6 @@ export const ConnectionTab: FC = () => {
 
   return (
     <section className={styles.card}>
-      <h2 className={styles.cardTitle}>Подключение МТС «Мобильные сотрудники»</h2>
 
       {configured && !editing ? (
         <>

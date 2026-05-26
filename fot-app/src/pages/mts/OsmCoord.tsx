@@ -62,8 +62,6 @@ export const OsmCoord: FC<IProps> = ({ lat, lng, title, label }) => {
 
   const triggerRef = useRef<HTMLAnchorElement>(null);
   const [pos, setPos] = useState<IPos | null>(null);
-  const closerRef = useRef<() => void>(() => setPos(null));
-  closerRef.current = () => setPos(null);
 
   const recompute = useCallback(() => {
     const el = triggerRef.current;
@@ -78,6 +76,13 @@ export const OsmCoord: FC<IProps> = ({ lat, lng, title, label }) => {
     setPos({ top, left });
   }, []);
 
+  // Стабильный closer (useCallback с пустым deps → одна и та же ссылка между
+  // ре-рендерами). Используем её и для регистрации в active, и для сравнения
+  // в active.close === close при cleanup.
+  const close = useCallback(() => {
+    setPos(null);
+  }, []);
+
   const open = useCallback(() => {
     const el = triggerRef.current;
     if (!el) return;
@@ -88,13 +93,13 @@ export const OsmCoord: FC<IProps> = ({ lat, lng, title, label }) => {
       prev();
     }
     recompute();
-    active = { close: closerRef.current, el };
+    active = { close, el };
     ensureGlobalMove();
-  }, [recompute]);
+  }, [recompute, close]);
 
-  const close = useCallback(() => {
-    closeAndDeactivate(closerRef.current);
-  }, []);
+  const closeAndUnregister = useCallback(() => {
+    closeAndDeactivate(close);
+  }, [close]);
 
   useEffect(() => {
     if (pos == null) return;
@@ -108,14 +113,10 @@ export const OsmCoord: FC<IProps> = ({ lat, lng, title, label }) => {
     };
   }, [pos, recompute]);
 
-  // Гарантированный cleanup при unmount: если строка таблицы пересоздалась,
-  // пока курсор был на ссылке, mouseleave не выстрелит — и мини-карта остаётся
-  // висеть в document.body. Снимаем сами.
+  // Гарантированный cleanup при unmount.
   useEffect(() => () => {
-    const myCloser = closerRef.current;
-    if (active && active.close === myCloser) active = null;
-    // setPos уже невалиден после unmount, но React это поглотит.
-  }, []);
+    if (active && active.close === close) active = null;
+  }, [close]);
 
   return (
     <span className={styles.coordCell}>
@@ -127,9 +128,9 @@ export const OsmCoord: FC<IProps> = ({ lat, lng, title, label }) => {
         rel="noreferrer"
         title={title}
         onPointerEnter={open}
-        onPointerLeave={close}
+        onPointerLeave={closeAndUnregister}
         onFocus={open}
-        onBlur={close}
+        onBlur={closeAndUnregister}
       >
         {text}
       </a>

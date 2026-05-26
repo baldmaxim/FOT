@@ -7,7 +7,6 @@ import {
   useMtsEmployeesLinked,
   useMtsGeofences,
   useMtsTasks,
-  useMtsSkudObjectsLite,
 } from '../../hooks/useMtsData';
 import styles from './MtsLayout.module.css';
 
@@ -22,28 +21,30 @@ export const MtsLayout: FC = () => {
   const location = useLocation();
   const connQuery = useMtsConnectionSettings();
   const configured = Boolean(connQuery.data?.hasToken);
+  // Пока запрос настроек не завершён — НЕ редиректим (иначе всегда улетаем
+  // в /mts/connection до загрузки, и UX «при первом заходе открывается Подключение»).
+  const connSettled = !connQuery.isLoading;
 
   const summaryQuery = useMtsSummary(configured);
   const subsQuery = useMtsSubscribers(configured);
   const linkedQuery = useMtsEmployeesLinked({ pageSize: 1 }, configured);
   const geofencesQuery = useMtsGeofences(configured);
   const tasksQuery = useMtsTasks(configured);
-  const objectsQuery = useMtsSkudObjectsLite(configured);
 
-  // Дефолт: /mts → /mts/subscribers. Если нет токена — /mts/connection.
-  if (location.pathname === '/mts' || location.pathname === '/mts/') {
+  // Дефолт: /mts → /mts/subscribers (или /mts/connection если не настроено).
+  if (connSettled && (location.pathname === '/mts' || location.pathname === '/mts/')) {
     return <Navigate to={configured ? '/mts/subscribers' : '/mts/connection'} replace />;
   }
   // Защита: без токена доступна только вкладка «Подключение».
-  if (!configured && location.pathname !== '/mts/connection') {
+  if (connSettled && !configured && location.pathname !== '/mts/connection') {
     return <Navigate to="/mts/connection" replace />;
   }
 
   const navItems: INavItem[] = [
     { to: 'subscribers', label: 'Абоненты МТС', badge: subsQuery.data?.length, requiresConfigured: true },
     { to: 'linked', label: 'Сотрудники', badge: linkedQuery.data?.total, requiresConfigured: true },
+    { to: 'map', label: 'Карта местонахождений', requiresConfigured: true },
     { to: 'geofences', label: 'Геозоны', badge: geofencesQuery.data?.length, requiresConfigured: true },
-    { to: 'objects', label: 'Объекты FOT', badge: objectsQuery.data?.length, requiresConfigured: true },
     { to: 'tracks', label: 'Треки', requiresConfigured: true },
     { to: 'tasks', label: 'Задачи МТС', badge: tasksQuery.data?.length, requiresConfigured: true },
     { to: 'dictionaries', label: 'Справочники', requiresConfigured: true },

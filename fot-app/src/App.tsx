@@ -71,8 +71,8 @@ const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').th
 const MtsLayout = lazy(() => import('./pages/mts/MtsLayout').then(m => ({ default: m.MtsLayout })));
 const MtsSubscribersTab = lazy(() => import('./pages/mts/SubscribersTab').then(m => ({ default: m.SubscribersTab })));
 const MtsLinkedTab = lazy(() => import('./pages/mts/LinkedTab').then(m => ({ default: m.LinkedTab })));
+const MtsLocationsMapTab = lazy(() => import('./pages/mts/LocationsMapTab').then(m => ({ default: m.LocationsMapTab })));
 const MtsGeofencesTab = lazy(() => import('./pages/mts/GeofencesTab').then(m => ({ default: m.GeofencesTab })));
-const MtsObjectsTab = lazy(() => import('./pages/mts/ObjectsTab').then(m => ({ default: m.ObjectsTab })));
 const MtsTracksTab = lazy(() => import('./pages/mts/TracksTab').then(m => ({ default: m.TracksTab })));
 const MtsTasksTab = lazy(() => import('./pages/mts/TasksTab').then(m => ({ default: m.TasksTab })));
 const MtsDictionariesTab = lazy(() => import('./pages/mts/DictionariesTab').then(m => ({ default: m.DictionariesTab })));
@@ -446,12 +446,14 @@ const AppRoutes = () => {
             <Route index element={<MtsSubscribersTab />} />
             <Route path="subscribers" element={<MtsSubscribersTab />} />
             <Route path="linked" element={<MtsLinkedTab />} />
+            <Route path="map" element={<MtsLocationsMapTab />} />
             <Route path="geofences" element={<MtsGeofencesTab />} />
-            <Route path="objects" element={<MtsObjectsTab />} />
             <Route path="tracks" element={<MtsTracksTab />} />
             <Route path="tasks" element={<MtsTasksTab />} />
             <Route path="dictionaries" element={<MtsDictionariesTab />} />
             <Route path="connection" element={<MtsConnectionTab />} />
+            {/* Legacy: /mts/objects удалена — функция переехала в карточку геозоны. */}
+            <Route path="objects" element={<Navigate to="/mts/geofences" replace />} />
           </Route>
         </Route>
 

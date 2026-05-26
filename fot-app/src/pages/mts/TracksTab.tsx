@@ -63,7 +63,6 @@ export const TracksTab: FC = () => {
   return (
     <section className={styles.card}>
       <div className={styles.titleRow}>
-        <h2 className={styles.cardTitle}>Треки за период</h2>
         <span className={styles.badgeFree}>бесплатно · GET</span>
         <select
           className={styles.daysSelect}

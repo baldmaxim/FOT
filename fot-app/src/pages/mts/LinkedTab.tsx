@@ -81,18 +81,15 @@ export const LinkedTab: FC = () => {
 
   return (
     <section className={styles.card}>
-      <div className={styles.tableHeader}>
-        <h2 className={styles.cardTitle}>
-          Сотрудники с MTS-привязкой {total > 0 ? `(${total})` : ''}
-        </h2>
+      <div className={styles.toolbarRow}>
+        <input
+          className={`${styles.input} ${styles.searchInput}`}
+          type="search"
+          placeholder="Поиск по ФИО…"
+          value={search}
+          onChange={e => { setSearch(e.target.value); setPage(1); }}
+        />
         <div className={styles.actions}>
-          <input
-            className={`${styles.input} ${styles.searchInput}`}
-            type="search"
-            placeholder="Поиск по ФИО…"
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }}
-          />
           <button
             className={styles.btnSecondary}
             disabled={autoLinkMutation.isPending}

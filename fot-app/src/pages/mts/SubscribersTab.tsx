@@ -130,18 +130,15 @@ export const SubscribersTab: FC = () => {
 
   return (
     <section className={styles.card}>
-      <div className={styles.tableHeader}>
-        <h2 className={styles.cardTitle}>
-          Абоненты МТС {subsQuery.data ? `(${filtered.length}/${subsQuery.data.length})` : ''}
-        </h2>
+      <div className={styles.toolbarRow}>
+        <input
+          className={`${styles.input} ${styles.searchInput}`}
+          type="search"
+          placeholder="Поиск по ФИО, телефону, ID…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
         <div className={styles.actions}>
-          <input
-            className={`${styles.input} ${styles.searchInput}`}
-            type="search"
-            placeholder="Поиск по ФИО, телефону, ID…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
           <button
             className={styles.btnSecondary}
             onClick={() => {

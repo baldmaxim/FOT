@@ -1,4 +1,4 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Polygon, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import '@geoman-io/leaflet-geoman-free';
@@ -81,6 +81,58 @@ const FitBounds: FC<IFitProps> = ({ polygons }) => {
   return null;
 };
 
+/**
+ * Один полигон геозоны на карте. Поддерживает режим редактирования геометрии
+ * через Geoman (pm.enable). При drag вершин — onGeometryChange получает новый
+ * массив координат; сохранение делает родитель (по кнопке).
+ */
+interface IPolygonProps {
+  g: IMtsGeofence;
+  isSelected: boolean;
+  isEditing: boolean;
+  onSelect: () => void;
+  onGeometryChange: (ring: IGeoPoint[]) => void;
+}
+
+const EditableGeofencePolygon: FC<IPolygonProps> = ({ g, isSelected, isEditing, onSelect, onGeometryChange }) => {
+  const ref = useRef<L.Polygon | null>(null);
+
+  useEffect(() => {
+    const layer = ref.current;
+    if (!layer) return;
+    const lyr = layer as unknown as { pm: { enable: (o?: object) => void; disable: () => void } };
+    if (isEditing) {
+      lyr.pm.enable({ allowSelfIntersection: false });
+      const onEdit = (): void => {
+        const ring = (layer.getLatLngs()[0] as L.LatLng[]).map(ll => ({ lat: ll.lat, lng: ll.lng }));
+        onGeometryChange(ring);
+      };
+      layer.on('pm:edit', onEdit);
+      layer.on('pm:markerdragend', onEdit);
+      return () => {
+        layer.off('pm:edit', onEdit);
+        layer.off('pm:markerdragend', onEdit);
+        lyr.pm.disable();
+      };
+    }
+    lyr.pm.disable();
+  }, [isEditing, onGeometryChange]);
+
+  return (
+    <Polygon
+      ref={ref}
+      positions={g.geometry.map(p => [p.lat, p.lng]) as L.LatLngTuple[]}
+      pathOptions={{
+        color: isEditing ? '#f59e0b' : isSelected ? '#2563eb' : g.isActive ? '#16a34a' : '#94a3b8',
+        weight: isSelected || isEditing ? 3 : 2,
+        fillOpacity: isSelected ? 0.25 : 0.15,
+        dashArray: isEditing ? '5,5' : undefined,
+      }}
+      eventHandlers={{ click: onSelect }}
+    />
+  );
+};
+
 export const GeofencesTab: FC = () => {
   const connQuery = useMtsConnectionSettings();
   const configured = Boolean(connQuery.data?.hasToken);
@@ -94,6 +146,8 @@ export const GeofencesTab: FC = () => {
   const setObjectsMutation = useSetGeofenceObjects();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingGeometryId, setEditingGeometryId] = useState<string | null>(null);
+  const [editedRing, setEditedRing] = useState<IGeoPoint[] | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [pendingRing, setPendingRing] = useState<IGeoPoint[] | null>(null);
   const [pendingName, setPendingName] = useState('');
@@ -108,6 +162,21 @@ export const GeofencesTab: FC = () => {
     for (const o of objectsQuery.data ?? []) m.set(o.id, o);
     return m;
   }, [objectsQuery.data]);
+
+  const toggleCard = (g: IMtsGeofence): void => {
+    if (selectedId === g.id) {
+      // Повторный клик — свернуть карточку.
+      setSelectedId(null);
+      // Если включён режим редактирования — отменить.
+      if (editingGeometryId === g.id) {
+        setEditingGeometryId(null);
+        setEditedRing(null);
+      }
+    } else {
+      setSelectedId(g.id);
+      setRenameDraft(g.name);
+    }
+  };
 
   const handlePolygonCreated = (ring: IGeoPoint[]): void => {
     setPendingRing(ring);
@@ -139,6 +208,7 @@ export const GeofencesTab: FC = () => {
     try {
       await deleteMutation.mutateAsync(g.id);
       if (selectedId === g.id) setSelectedId(null);
+      if (editingGeometryId === g.id) { setEditingGeometryId(null); setEditedRing(null); }
       setFeedback({ ok: true, msg: 'Удалено' });
     } catch (e) {
       setFeedback({ ok: false, msg: errText(e, 'Не удалось удалить (нужен 2FA)') });
@@ -175,10 +245,37 @@ export const GeofencesTab: FC = () => {
     }
   };
 
+  const startEditGeometry = (g: IMtsGeofence): void => {
+    setEditingGeometryId(g.id);
+    setEditedRing(null);
+    setFeedback({ ok: true, msg: 'Перетаскивайте вершины полигона. Кнопка «Сохранить геометрию» сохранит изменения.' });
+  };
+
+  const cancelEditGeometry = (): void => {
+    setEditingGeometryId(null);
+    setEditedRing(null);
+  };
+
+  const saveGeometry = async (g: IMtsGeofence): Promise<void> => {
+    if (!editedRing || editedRing.length < 3) {
+      setFeedback({ ok: false, msg: 'Полигон должен иметь минимум 3 точки' });
+      return;
+    }
+    setFeedback(null);
+    try {
+      await updateMutation.mutateAsync({ id: g.id, input: { geometry: editedRing } });
+      setEditingGeometryId(null);
+      setEditedRing(null);
+      setFeedback({ ok: true, msg: 'Геометрия обновлена' });
+    } catch (e) {
+      setFeedback({ ok: false, msg: errText(e, 'Не удалось сохранить геометрию (нужен 2FA)') });
+    }
+  };
+
   return (
     <section className={pageStyles.card}>
-      <div className={pageStyles.tableHeader}>
-        <h2 className={pageStyles.cardTitle}>Геозоны {all.length > 0 ? `(${all.length})` : ''}</h2>
+      <div className={pageStyles.toolbarRow}>
+        <span className={pageStyles.hint}>Всего: {all.length}</span>
         <div className={pageStyles.actions}>
           <button
             className={drawing ? pageStyles.btn : pageStyles.btnSecondary}
@@ -230,21 +327,25 @@ export const GeofencesTab: FC = () => {
           )}
           {all.map(g => {
             const isSel = g.id === selectedId;
+            const isEditing = editingGeometryId === g.id;
             return (
               <div
                 key={g.id}
                 className={`${styles.geoCard} ${isSel ? styles.geoCardActive : ''} ${!g.isActive ? styles.inactive : ''}`}
-                onClick={() => { setSelectedId(g.id); setRenameDraft(g.name); }}
+                onClick={() => toggleCard(g)}
               >
                 <div className={styles.geoCardHeader}>
-                  <span className={styles.geoCardName}>{g.name}</span>
+                  <span className={styles.geoCardName}>
+                    {isSel ? '▾ ' : '▸ '}{g.name}
+                  </span>
                   <button
-                    className={pageStyles.btnSm}
+                    className={`${pageStyles.btnIcon} ${pageStyles.btnIconDanger}`}
                     onClick={(e) => { e.stopPropagation(); remove(g); }}
                     disabled={deleteMutation.isPending}
                     title="Удалить геозону"
+                    aria-label="Удалить"
                   >
-                    ✕
+                    🗑
                   </button>
                 </div>
                 <div className={styles.geoMeta}>
@@ -281,12 +382,38 @@ export const GeofencesTab: FC = () => {
                         Активна
                       </label>
                     </div>
+                    <div className={styles.editorRow}>
+                      {!isEditing ? (
+                        <button
+                          className={pageStyles.btnSecondary}
+                          onClick={() => startEditGeometry(g)}
+                          disabled={updateMutation.isPending}
+                        >
+                          ✎ Редактировать геометрию
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            className={pageStyles.btn}
+                            onClick={() => saveGeometry(g)}
+                            disabled={updateMutation.isPending || !editedRing || editedRing.length < 3}
+                          >
+                            Сохранить геометрию
+                          </button>
+                          <button
+                            className={pageStyles.btnSecondary}
+                            onClick={cancelEditGeometry}
+                            disabled={updateMutation.isPending}
+                          >
+                            Отмена
+                          </button>
+                        </>
+                      )}
+                    </div>
                     <div>
                       <label className={pageStyles.label}>Привязка к объектам FOT</label>
                       <GeofenceMultiSelect
-                        // Переиспользуем — но «options» сюда подаём как fake-IMtsGeofence массив объектов
-                        // через простой adapter: мы хотим показать список skud_objects.
-                        // Чтобы не плодить компоненты, маппим objects → IMtsGeofence-shape с минимумом полей.
+                        // Адаптер: маппим skud_objects в shape IMtsGeofence для переиспользования компонента.
                         options={(objectsQuery.data ?? []).map(o => ({
                           id: o.id,
                           name: o.name,
@@ -321,21 +448,16 @@ export const GeofencesTab: FC = () => {
             <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} maxZoom={19} />
             <GeomanControls enabled={drawing} onPolygonCreated={handlePolygonCreated} />
             <FitBounds polygons={polygonsForFit} />
-            {all.map(g => {
-              const isSel = g.id === selectedId;
-              return (
-                <Polygon
-                  key={g.id}
-                  positions={g.geometry.map(p => [p.lat, p.lng]) as L.LatLngTuple[]}
-                  pathOptions={{
-                    color: isSel ? '#2563eb' : g.isActive ? '#16a34a' : '#94a3b8',
-                    weight: isSel ? 3 : 2,
-                    fillOpacity: isSel ? 0.25 : 0.15,
-                  }}
-                  eventHandlers={{ click: () => { setSelectedId(g.id); setRenameDraft(g.name); } }}
-                />
-              );
-            })}
+            {all.map(g => (
+              <EditableGeofencePolygon
+                key={`${g.id}-${editingGeometryId === g.id ? 'edit' : 'view'}`}
+                g={g}
+                isSelected={selectedId === g.id}
+                isEditing={editingGeometryId === g.id}
+                onSelect={() => toggleCard(g)}
+                onGeometryChange={setEditedRing}
+              />
+            ))}
           </MapContainer>
         </div>
       </div>
@@ -346,4 +468,3 @@ export const GeofencesTab: FC = () => {
     </section>
   );
 };
-
