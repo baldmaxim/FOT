@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { mtsController } from '../controllers/mts.controller.js';
-import { authenticate, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAdmin, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 
 // МТС «Мобильные сотрудники» — отдельный модуль геолокации. Доступ — страница /mts
@@ -22,6 +22,9 @@ router.put(
   mtsController.saveConnectionSettings,
 );
 router.post('/connection-settings/test', requirePageAccess('/mts', 'view'), mtsController.testConnection);
+
+// Диагностика raw-ответа абонентов (admin-only, без PII в payload)
+router.get('/_debug/raw-subscriber', requireAdmin, mtsController.getRawSubscriberDebug);
 
 // Данные МТС
 router.get('/subscribers', requirePageAccess('/mts', 'view'), mtsController.getSubscribers);
@@ -71,6 +74,14 @@ router.post('/geofences', requirePageAccess('/mts', 'edit'), requireCritical2FA,
 router.put('/geofences/:id', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.updateGeofence);
 router.delete('/geofences/:id', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.deleteGeofence);
 router.put('/geofences/:id/assignments', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.setGeofenceAssignments);
+router.put('/geofences/:id/objects', requirePageAccess('/mts', 'edit'), requireCritical2FA, mtsController.setGeofenceObjects);
 router.get('/violations', requirePageAccess('/mts', 'view'), mtsController.listGeofenceViolations);
+
+// Объекты FOT (skud_objects) для привязки геозон
+router.get('/skud-objects-lite', requirePageAccess('/mts', 'view'), mtsController.listSkudObjectsLite);
+router.get('/objects/:id/geofences', requirePageAccess('/mts', 'view'), mtsController.getObjectGeofences);
+
+// Сводка для верхней панели /mts
+router.get('/summary', requirePageAccess('/mts', 'view'), mtsController.getSummary);
 
 export default router;

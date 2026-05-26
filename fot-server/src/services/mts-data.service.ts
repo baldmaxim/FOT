@@ -158,6 +158,58 @@ class MtsDataService extends MtsServiceBase {
     return data;
   }
 
+  /**
+   * Диагностика: возвращает первый сырой объект из ответа MTS /subscribers
+   * с зачищенными PII-полями (имя/телефон/externalID/координаты). Используется
+   * только админом, чтобы понять реальные имена полей у апстрима. PII НЕ
+   * раскрывается — отдаём только длину строки и тип значения.
+   */
+  async getRawSubscriberDebug(): Promise<{
+    topLevelKeys: string[];
+    redacted: Record<string, unknown>;
+    valueTypes: Record<string, string>;
+    fetchedAt: string;
+  } | null> {
+    const payload = await this.request<unknown>(
+      'get',
+      '/subscriberManagement/subscribers',
+      { params: { withCustomTemplateItems: true, count: 1 } },
+    );
+    const items = this.extractItems<Record<string, unknown>>(payload);
+    if (items.length === 0) return null;
+    const first = items[0];
+    const piiKeys = new Set([
+      'name', 'phone', 'phoneNumber', 'Phone', 'PhoneNumber',
+      'externalID', 'ExternalID', 'external_id',
+      'latitude', 'longitude', 'Latitude', 'Longitude',
+      'address', 'Address',
+    ]);
+    const redacted: Record<string, unknown> = {};
+    const valueTypes: Record<string, string> = {};
+    for (const [k, v] of Object.entries(first)) {
+      valueTypes[k] = v === null ? 'null' : Array.isArray(v) ? `array(len=${v.length})` : typeof v;
+      if (piiKeys.has(k)) {
+        if (v === null || v === undefined) {
+          redacted[k] = v;
+        } else if (typeof v === 'string') {
+          redacted[k] = `<redacted, str len=${v.length}>`;
+        } else if (typeof v === 'number') {
+          redacted[k] = `<redacted, ${typeof v}>`;
+        } else {
+          redacted[k] = `<redacted, ${typeof v}>`;
+        }
+      } else {
+        redacted[k] = v;
+      }
+    }
+    return {
+      topLevelKeys: Object.keys(first),
+      redacted,
+      valueTypes,
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
   async getSubscriberGroups(): Promise<Array<{ subscriberGroupID: number; name: string | null }>> {
     const payload = await this.request<unknown>('get', '/subscriberManagement/subscriberGroups');
     return this.extractItems<Record<string, unknown>>(payload).map(r => ({

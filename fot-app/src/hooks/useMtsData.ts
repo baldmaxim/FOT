@@ -210,6 +210,50 @@ export const useAutoLinkMappings = () => {
   });
 };
 
+export const getMtsSkudObjectsLiteQueryKey = () => ['mts', 'skud-objects-lite'] as const;
+
+export const useMtsSkudObjectsLite = (enabled: boolean) => useQuery({
+  queryKey: getMtsSkudObjectsLiteQueryKey(),
+  queryFn: () => mtsService.getSkudObjectsLite(),
+  staleTime: 5 * 60_000,
+  enabled,
+});
+
+export const getMtsObjectGeofencesQueryKey = (objectId: string) =>
+  ['mts', 'object-geofences', objectId] as const;
+
+export const useMtsObjectGeofences = (objectId: string | null, enabled: boolean) => useQuery({
+  queryKey: getMtsObjectGeofencesQueryKey(objectId ?? ''),
+  queryFn: () => mtsService.getObjectGeofences(objectId as string),
+  staleTime: 30_000,
+  enabled: enabled && !!objectId,
+});
+
+export const useSetGeofenceObjects = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; skudObjectIds: string[] }) =>
+      mtsService.setGeofenceObjects(vars.id, vars.skudObjectIds),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['mts', 'geofences'] });
+      qc.invalidateQueries({ queryKey: ['mts', 'object-geofences'] });
+    },
+  });
+};
+
+export const getMtsSummaryQueryKey = () => ['mts', 'summary'] as const;
+
+export const useMtsSummary = (enabled: boolean) => useQuery({
+  queryKey: getMtsSummaryQueryKey(),
+  queryFn: () => mtsService.getSummary(),
+  staleTime: 30_000,
+  enabled,
+});
+
+export const useMtsRawSubscriberDebug = () => useMutation({
+  mutationFn: () => mtsService.getRawSubscriberDebug(),
+});
+
 export const useMtsViolations = (
   params: { employeeId?: number | null; from?: string; to?: string; page?: number; pageSize?: number },
   enabled: boolean,

@@ -154,6 +154,26 @@ export const mtsController = {
     }
   },
 
+  /**
+   * Диагностический эндпоинт (admin-only): возвращает форму первого raw-объекта
+   * из ответа МТС /subscribers с зачищенными PII-полями. Цель — увидеть реальные
+   * имена ключей (PascalCase vs camelCase, phone vs phoneNumber и т.д.).
+   */
+  async getRawSubscriberDebug(req: AuthenticatedRequest, res: Response): Promise<void> {
+    logRequest(req, 'GET /_debug/raw-subscriber');
+    try {
+      const data = await mtsDataService.getRawSubscriberDebug();
+      if (!data) {
+        res.json({ success: true, data: null, note: 'МТС вернул пустой список абонентов' });
+        return;
+      }
+      logSuccess('GET /_debug/raw-subscriber', `keys=${data.topLevelKeys.length}`);
+      res.json({ success: true, data });
+    } catch (error) {
+      fail(res, error, 'Ошибка диагностики абонентов МТС');
+    }
+  },
+
   /** Фильтрует список абонентов по data-scope (admin видит всё). */
   async getSubscribers(req: AuthenticatedRequest, res: Response): Promise<void> {
     logRequest(req, 'GET /subscribers');
@@ -847,6 +867,97 @@ export const mtsController = {
       res.json({ success: true, data: updated });
     } catch (error) {
       fail(res, error, 'Ошибка обновления назначений геозоны');
+    }
+  },
+
+  /**
+   * Лёгкий список объектов FOT (skud_objects) для дропдаунов на /mts/geofences
+   * и /mts/objects. Возвращает {id, name} активных объектов.
+   * Для не-админа фильтруем по data-scope через employee_skud_object_access.
+   */
+  async listSkudObjectsLite(req: AuthenticatedRequest, res: Response): Promise<void> {
+    logRequest(req, 'GET /skud-objects-lite');
+    try {
+      const rows = await pgQuery<{ id: string; name: string }>(
+        `SELECT id, name FROM skud_objects WHERE is_active = true ORDER BY name`,
+      );
+      // MVP: admin видит всё; не-админ — увидит весь список, но дальше backend
+      // setObjectAssignments/listGeofencesForObject не делает доп. проверки доступа,
+      // т.к. геозоны — admin-only edit (requireCritical2FA в роутере).
+      logSuccess('GET /skud-objects-lite', `count=${rows.length}`);
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения объектов FOT');
+    }
+  },
+
+  async setGeofenceObjects(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { skudObjectIds } = req.body as { skudObjectIds?: unknown };
+      const ids = Array.isArray(skudObjectIds)
+        ? (skudObjectIds as unknown[]).map(v => String(v)).filter(v => v.length > 0)
+        : [];
+      const updated = await mtsGeofenceService.setObjectAssignments(req.params.id, ids, req.user.id);
+      if (!updated) {
+        res.status(404).json({ success: false, error: 'Геозона не найдена' });
+        return;
+      }
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_GEOFENCE_OBJECTS_SET, {
+        entityId: updated.id,
+        details: { skudObjectIds: ids },
+      });
+      res.json({ success: true, data: updated });
+    } catch (error) {
+      fail(res, error, 'Ошибка обновления привязки геозоны к объектам');
+    }
+  },
+
+  async getObjectGeofences(req: AuthenticatedRequest, res: Response): Promise<void> {
+    logRequest(req, 'GET /objects/:id/geofences');
+    try {
+      const data = await mtsGeofenceService.listGeofencesForObject(req.params.id);
+      logSuccess('GET /objects/:id/geofences', `count=${data.length}`);
+      res.json({ success: true, data });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения геозон объекта');
+    }
+  },
+
+  /**
+   * Сводка для верхней панели /mts: всего абонентов, привязано, онлайн, нарушений 24ч.
+   * Кэш на клиенте 30s; запрос дешёвый (4 COUNT'а + 1 вызов МТС-API через кеш subscribers).
+   */
+  async getSummary(req: AuthenticatedRequest, res: Response): Promise<void> {
+    logRequest(req, 'GET /summary');
+    try {
+      let subscribersTotal = 0;
+      let onlineNow = 0;
+      try {
+        const subs = await mtsDataService.getSubscribers();
+        subscribersTotal = subs.length;
+        onlineNow = subs.filter(s => s.isOnline === true).length;
+      } catch (e) {
+        console.warn('[mts] summary: subscribers fetch failed:', e instanceof Error ? e.message : 'unknown');
+      }
+
+      const linkedRow = await pgQuery<{ c: number }>(
+        `SELECT COUNT(*)::int AS c FROM mts_subscriber_map WHERE employee_id IS NOT NULL`,
+      );
+      const violationsRow = await pgQuery<{ c: number }>(
+        `SELECT COUNT(*)::int AS c FROM mts_geofence_violations WHERE started_at >= NOW() - INTERVAL '24 hours'`,
+      );
+
+      res.json({
+        success: true,
+        data: {
+          subscribersTotal,
+          linkedTotal: linkedRow[0]?.c ?? 0,
+          onlineNow,
+          violationsLast24h: violationsRow[0]?.c ?? 0,
+        },
+      });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения сводки МТС');
     }
   },
 

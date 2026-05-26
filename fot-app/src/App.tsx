@@ -68,7 +68,15 @@ const TimesheetTransfersAdminPage = lazy(() => import('./pages/admin/TimesheetTr
 // Employees & SKUD
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
 const SigurSettingsPage = lazy(() => import('./pages/skud/SigurSettingsPage').then(m => ({ default: m.SigurSettingsPage })));
-const MtsPage = lazy(() => import('./pages/mts/MtsPage').then(m => ({ default: m.MtsPage })));
+const MtsLayout = lazy(() => import('./pages/mts/MtsLayout').then(m => ({ default: m.MtsLayout })));
+const MtsSubscribersTab = lazy(() => import('./pages/mts/SubscribersTab').then(m => ({ default: m.SubscribersTab })));
+const MtsLinkedTab = lazy(() => import('./pages/mts/LinkedTab').then(m => ({ default: m.LinkedTab })));
+const MtsGeofencesTab = lazy(() => import('./pages/mts/GeofencesTab').then(m => ({ default: m.GeofencesTab })));
+const MtsObjectsTab = lazy(() => import('./pages/mts/ObjectsTab').then(m => ({ default: m.ObjectsTab })));
+const MtsTracksTab = lazy(() => import('./pages/mts/TracksTab').then(m => ({ default: m.TracksTab })));
+const MtsTasksTab = lazy(() => import('./pages/mts/TasksTab').then(m => ({ default: m.TasksTab })));
+const MtsDictionariesTab = lazy(() => import('./pages/mts/DictionariesTab').then(m => ({ default: m.DictionariesTab })));
+const MtsConnectionTab = lazy(() => import('./pages/mts/ConnectionTab').then(m => ({ default: m.ConnectionTab })));
 const SigurPage = lazy(() => import('./pages/skud/SigurPage').then(m => ({ default: m.SigurPage })));
 const SkudCardReaderPage = lazy(() => import('./pages/skud/SkudCardReaderPage').then(m => ({ default: m.SkudCardReaderPage })));
 const ContractorPage = lazy(() => import('./pages/contractor/ContractorPage').then(m => ({ default: m.ContractorPage })));
@@ -431,10 +439,20 @@ const AppRoutes = () => {
             path="/mts"
             element={
               <Layout title="Мобильные сотрудники МТС" theme={theme} onToggleTheme={toggleTheme}>
-                <MtsPage />
+                <MtsLayout />
               </Layout>
             }
-          />
+          >
+            <Route index element={<MtsSubscribersTab />} />
+            <Route path="subscribers" element={<MtsSubscribersTab />} />
+            <Route path="linked" element={<MtsLinkedTab />} />
+            <Route path="geofences" element={<MtsGeofencesTab />} />
+            <Route path="objects" element={<MtsObjectsTab />} />
+            <Route path="tracks" element={<MtsTracksTab />} />
+            <Route path="tasks" element={<MtsTasksTab />} />
+            <Route path="dictionaries" element={<MtsDictionariesTab />} />
+            <Route path="connection" element={<MtsConnectionTab />} />
+          </Route>
         </Route>
 
         <Route element={<ProtectedRoute requiredPage="/skud-card-reader" />}>

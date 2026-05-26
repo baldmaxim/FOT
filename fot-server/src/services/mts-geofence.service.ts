@@ -20,6 +20,7 @@ export interface IMtsGeofence {
   createdAt: string;
   updatedAt: string;
   employeeIds: number[];
+  skudObjectIds: string[];
 }
 
 export interface IMtsGeofenceAssignment {
@@ -83,6 +84,7 @@ interface IGeofenceRow {
   created_at: string;
   updated_at: string;
   employee_ids: number[] | null;
+  skud_object_ids: string[] | null;
 }
 
 const mapRow = (row: IGeofenceRow): IMtsGeofence => ({
@@ -94,6 +96,7 @@ const mapRow = (row: IGeofenceRow): IMtsGeofence => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   employeeIds: row.employee_ids ?? [],
+  skudObjectIds: row.skud_object_ids ?? [],
 });
 
 export const mtsGeofenceService = {
@@ -101,11 +104,18 @@ export const mtsGeofenceService = {
     const onlyActive = opts.onlyActive ?? false;
     const rows = await query<IGeofenceRow>(
       `SELECT g.id, g.name, g.geometry, g.is_active, g.created_by, g.created_at, g.updated_at,
-              COALESCE(ARRAY_AGG(a.employee_id) FILTER (WHERE a.employee_id IS NOT NULL AND a.is_active = true), '{}') AS employee_ids
+              COALESCE((
+                SELECT ARRAY_AGG(a.employee_id)
+                  FROM mts_geofence_assignments a
+                 WHERE a.geofence_id = g.id AND a.is_active = true
+              ), '{}') AS employee_ids,
+              COALESCE((
+                SELECT ARRAY_AGG(o.skud_object_id::text)
+                  FROM mts_geofence_objects o
+                 WHERE o.geofence_id = g.id
+              ), '{}') AS skud_object_ids
          FROM mts_geofences g
-         LEFT JOIN mts_geofence_assignments a ON a.geofence_id = g.id
         ${onlyActive ? 'WHERE g.is_active = true' : ''}
-        GROUP BY g.id
         ORDER BY g.created_at DESC`,
     );
     return rows.map(mapRow);
@@ -114,11 +124,18 @@ export const mtsGeofenceService = {
   async getById(geofenceId: string): Promise<IMtsGeofence | null> {
     const row = await queryOne<IGeofenceRow>(
       `SELECT g.id, g.name, g.geometry, g.is_active, g.created_by, g.created_at, g.updated_at,
-              COALESCE(ARRAY_AGG(a.employee_id) FILTER (WHERE a.employee_id IS NOT NULL AND a.is_active = true), '{}') AS employee_ids
+              COALESCE((
+                SELECT ARRAY_AGG(a.employee_id)
+                  FROM mts_geofence_assignments a
+                 WHERE a.geofence_id = g.id AND a.is_active = true
+              ), '{}') AS employee_ids,
+              COALESCE((
+                SELECT ARRAY_AGG(o.skud_object_id::text)
+                  FROM mts_geofence_objects o
+                 WHERE o.geofence_id = g.id
+              ), '{}') AS skud_object_ids
          FROM mts_geofences g
-         LEFT JOIN mts_geofence_assignments a ON a.geofence_id = g.id
-        WHERE g.id = $1
-        GROUP BY g.id`,
+        WHERE g.id = $1`,
       [geofenceId],
     );
     return row ? mapRow(row) : null;
@@ -204,6 +221,58 @@ export const mtsGeofenceService = {
     });
 
     return this.getById(geofenceId);
+  },
+
+  /** Replace-семантика для привязки геозоны к объектам FOT (skud_objects). */
+  async setObjectAssignments(
+    geofenceId: string,
+    skudObjectIds: string[],
+    userId: string,
+  ): Promise<IMtsGeofence | null> {
+    const existing = await this.getById(geofenceId);
+    if (!existing) return null;
+    const validIds = Array.from(new Set(skudObjectIds.filter(id => typeof id === 'string' && id.length > 0)));
+
+    await withTransaction(async client => {
+      await client.query(
+        'DELETE FROM mts_geofence_objects WHERE geofence_id = $1',
+        [geofenceId],
+      );
+      if (validIds.length > 0) {
+        await client.query(
+          `INSERT INTO mts_geofence_objects (geofence_id, skud_object_id, assigned_by, assigned_at)
+             SELECT $1, o.id, $2, NOW()
+               FROM unnest($3::uuid[]) AS u(id)
+               JOIN skud_objects o ON o.id = u.id
+            ON CONFLICT (geofence_id, skud_object_id) DO NOTHING`,
+          [geofenceId, userId, validIds],
+        );
+      }
+    });
+
+    return this.getById(geofenceId);
+  },
+
+  async listGeofencesForObject(skudObjectId: string): Promise<IMtsGeofence[]> {
+    const rows = await query<IGeofenceRow>(
+      `SELECT g.id, g.name, g.geometry, g.is_active, g.created_by, g.created_at, g.updated_at,
+              COALESCE((
+                SELECT ARRAY_AGG(a.employee_id)
+                  FROM mts_geofence_assignments a
+                 WHERE a.geofence_id = g.id AND a.is_active = true
+              ), '{}') AS employee_ids,
+              COALESCE((
+                SELECT ARRAY_AGG(o2.skud_object_id::text)
+                  FROM mts_geofence_objects o2
+                 WHERE o2.geofence_id = g.id
+              ), '{}') AS skud_object_ids
+         FROM mts_geofences g
+         JOIN mts_geofence_objects o ON o.geofence_id = g.id
+        WHERE o.skud_object_id = $1
+        ORDER BY g.created_at DESC`,
+      [skudObjectId],
+    );
+    return rows.map(mapRow);
   },
 
   /** Активные назначения по сотруднику (используется поллером). */

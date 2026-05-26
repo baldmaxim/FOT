@@ -167,6 +167,26 @@ export interface IMtsGeofence {
   createdAt: string;
   updatedAt: string;
   employeeIds: number[];
+  skudObjectIds: string[];
+}
+
+export interface ISkudObjectLite {
+  id: string;
+  name: string;
+}
+
+export interface IMtsSummary {
+  subscribersTotal: number;
+  linkedTotal: number;
+  onlineNow: number;
+  violationsLast24h: number;
+}
+
+export interface IMtsRawSubscriberDebug {
+  topLevelKeys: string[];
+  redacted: Record<string, unknown>;
+  valueTypes: Record<string, string>;
+  fetchedAt: string;
 }
 
 export interface IMtsGeofenceViolation {
@@ -356,6 +376,31 @@ export const mtsService = {
 
   setGeofenceAssignments: async (id: string, employeeIds: number[]): Promise<IMtsGeofence> => {
     const res = await apiClient.put<ApiResponse<IMtsGeofence>>(`/mts/geofences/${id}/assignments`, { employeeIds });
+    return res.data;
+  },
+
+  setGeofenceObjects: async (id: string, skudObjectIds: string[]): Promise<IMtsGeofence> => {
+    const res = await apiClient.put<ApiResponse<IMtsGeofence>>(`/mts/geofences/${id}/objects`, { skudObjectIds });
+    return res.data;
+  },
+
+  getSkudObjectsLite: async (): Promise<ISkudObjectLite[]> => {
+    const res = await apiClient.get<ApiResponse<ISkudObjectLite[]>>('/mts/skud-objects-lite');
+    return res.data;
+  },
+
+  getObjectGeofences: async (objectId: string): Promise<IMtsGeofence[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsGeofence[]>>(`/mts/objects/${objectId}/geofences`);
+    return res.data;
+  },
+
+  getSummary: async (): Promise<IMtsSummary> => {
+    const res = await apiClient.get<ApiResponse<IMtsSummary>>('/mts/summary');
+    return res.data;
+  },
+
+  getRawSubscriberDebug: async (): Promise<IMtsRawSubscriberDebug | null> => {
+    const res = await apiClient.get<ApiResponse<IMtsRawSubscriberDebug | null>>('/mts/_debug/raw-subscriber');
     return res.data;
   },
 
