@@ -1,6 +1,6 @@
 import { query } from '../config/postgres.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
-import { loadCalendarMonth } from './schedule.service.js';
+import { getOffDatesByEmployee } from './timesheet-approval-weekend-check.service.js';
 import type { ITimesheetDateRange } from './timesheet-range.service.js';
 
 const ATTACHMENT_REQUIRED_LEAVE_TYPES = ['remote', 'vacation'] as const;
@@ -23,47 +23,6 @@ const LEAVE_TYPE_LABELS_RU: Record<string, string> = {
   remote: 'Удалёнка',
   vacation: 'Отпуск',
 };
-
-const iterateDates = (startDate: string, endDate: string, cb: (iso: string) => void): void => {
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  const cursor = new Date(start);
-  while (cursor <= end) {
-    const y = cursor.getFullYear();
-    const m = String(cursor.getMonth() + 1).padStart(2, '0');
-    const d = String(cursor.getDate()).padStart(2, '0');
-    cb(`${y}-${m}-${d}`);
-    cursor.setDate(cursor.getDate() + 1);
-  }
-};
-
-async function collectWeekendDates(startDate: string, endDate: string): Promise<Set<string>> {
-  const weekends = new Set<string>();
-  const months = new Set<string>();
-  iterateDates(startDate, endDate, (iso) => {
-    months.add(iso.slice(0, 7));
-    const d = new Date(`${iso}T00:00:00`);
-    const dow = d.getDay();
-    if (dow === 0 || dow === 6) weekends.add(iso);
-  });
-
-  for (const ym of months) {
-    const [y, m] = ym.split('-').map(Number);
-    const calendar = await loadCalendarMonth(y, m);
-    if (!calendar) continue;
-    for (const holiday of calendar.holidays ?? []) {
-      if (typeof holiday === 'string' && holiday >= startDate && holiday <= endDate) {
-        weekends.add(holiday);
-      }
-    }
-    for (const holiday of calendar.mandatory_holidays ?? []) {
-      if (typeof holiday === 'string' && holiday >= startDate && holiday <= endDate) {
-        weekends.add(holiday);
-      }
-    }
-  }
-  return weekends;
-}
 
 interface IAdjustmentDateRow {
   employee_id: number;
@@ -143,26 +102,34 @@ export async function validateCorrectionAttachments(
     }
   }
 
-  const weekendDates = await collectWeekendDates(range.startDate, range.endDate);
+  const offByEmployee = await getOffDatesByEmployee(employeeIds, range.startDate, range.endDate);
   const adjustmentByEmployeeDate = new Set<string>();
   for (const adj of adjustments) {
     adjustmentByEmployeeDate.add(`${adj.employee_id}|${adj.work_date}`);
   }
 
+  let anyOff = false;
+  for (const set of offByEmployee.values()) {
+    if (set.size > 0) { anyOff = true; break; }
+  }
+
   let weekendSkudRows: Array<{ employee_id: number; date: string }> = [];
-  if (weekendDates.size > 0) {
+  if (anyOff) {
     const skudRows = await query<{ employee_id: number; date: string; total_minutes: number }>(
-      `SELECT employee_id, date, total_minutes
+      `SELECT employee_id, date::text AS date, total_minutes
          FROM skud_daily_summary
         WHERE employee_id = ANY($1::int[])
-          AND date = ANY($2::date[])
+          AND date >= $2::date
+          AND date <= $3::date
           AND total_minutes > 0`,
-      [employeeIds, [...weekendDates]],
+      [employeeIds, range.startDate, range.endDate],
     );
-    weekendSkudRows = skudRows.map(row => ({
-      employee_id: Number(row.employee_id),
-      date: String(row.date),
-    }));
+    weekendSkudRows = skudRows
+      .map(row => ({
+        employee_id: Number(row.employee_id),
+        date: String(row.date).slice(0, 10),
+      }))
+      .filter(row => offByEmployee.get(row.employee_id)?.has(row.date) === true);
   }
 
   const referencedEmployeeIds = new Set<number>();

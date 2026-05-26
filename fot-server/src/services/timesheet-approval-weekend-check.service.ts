@@ -31,6 +31,58 @@ const iterateDates = (startDate: string, endDate: string, cb: (iso: string) => v
 };
 
 /**
+ * Для каждого сотрудника возвращает множество нерабочих по ЕГО графику дат
+ * в диапазоне [startDate; endDate]. Использует isWorkingDay → учитывается
+ * personal schedule (work_days, cycle), respects_holidays и mandatory_holidays.
+ *
+ * Дни, для которых график не разрешён (нет записи в resolveSchedulesForPeriod),
+ * в Set не попадают — такие даты считаются «нет данных», а не «выходной».
+ */
+export async function getOffDatesByEmployee(
+  employeeIds: number[],
+  startDate: string,
+  endDate: string,
+): Promise<Map<number, Set<string>>> {
+  const result = new Map<number, Set<string>>();
+  if (employeeIds.length === 0) return result;
+
+  const rangeDates: string[] = [];
+  iterateDates(startDate, endDate, (iso) => rangeDates.push(iso));
+
+  const schedules = await resolveSchedulesForPeriod(
+    employeeIds.map((id) => ({ id })),
+    startDate,
+    endDate,
+  );
+
+  const calendarCache = new Map<string, Awaited<ReturnType<typeof loadCalendarMonth>>>();
+  const getCalendar = async (dateObj: Date) => {
+    const key = `${dateObj.getFullYear()}-${dateObj.getMonth() + 1}`;
+    if (!calendarCache.has(key)) {
+      calendarCache.set(key, await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1));
+    }
+    return calendarCache.get(key) ?? null;
+  };
+
+  for (const empId of employeeIds) {
+    const dailyMap = schedules.get(empId);
+    const offSet = new Set<string>();
+    for (const iso of rangeDates) {
+      const schedule = dailyMap?.get(iso);
+      if (!schedule) continue;
+      const dateObj = new Date(`${iso}T00:00:00`);
+      const calendar = await getCalendar(dateObj);
+      if (!isWorkingDay(schedule, dateObj, calendar)) {
+        offSet.add(iso);
+      }
+    }
+    result.set(empId, offSet);
+  }
+
+  return result;
+}
+
+/**
  * Выходной день определяется по ЛИЧНОМУ графику сотрудника (isWorkingDay):
  * нерабочий по его графику день — выходной, даже если по календарю это будний
  * (важно для сменных/цикличных графиков). Праздники производственного
@@ -56,42 +108,10 @@ export async function checkWeekendWorkRequirement(params: {
     return { requires: false, weekendDates: [], weekendWorkDates: [] };
   }
 
-  const rangeDates: string[] = [];
-  iterateDates(startDate, endDate, (iso) => rangeDates.push(iso));
-
-  const schedules = await resolveSchedulesForPeriod(
-    employeeIds.map((id) => ({ id })),
-    startDate,
-    endDate,
-  );
-
-  // Производственный календарь по месяцам диапазона грузим один раз.
-  const calendarCache = new Map<string, Awaited<ReturnType<typeof loadCalendarMonth>>>();
-  const getCalendar = async (dateObj: Date) => {
-    const key = `${dateObj.getFullYear()}-${dateObj.getMonth() + 1}`;
-    if (!calendarCache.has(key)) {
-      calendarCache.set(key, await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1));
-    }
-    return calendarCache.get(key) ?? null;
-  };
-
-  // Для каждого сотрудника — множество нерабочих по ЕГО графику дат.
-  const offByEmployee = new Map<number, Set<string>>();
+  const offByEmployee = await getOffDatesByEmployee(employeeIds, startDate, endDate);
   const allOffDates = new Set<string>();
-  for (const empId of employeeIds) {
-    const dailyMap = schedules.get(empId);
-    const offSet = new Set<string>();
-    for (const iso of rangeDates) {
-      const schedule = dailyMap?.get(iso);
-      if (!schedule) continue;
-      const dateObj = new Date(`${iso}T00:00:00`);
-      const calendar = await getCalendar(dateObj);
-      if (!isWorkingDay(schedule, dateObj, calendar)) {
-        offSet.add(iso);
-        allOffDates.add(iso);
-      }
-    }
-    offByEmployee.set(empId, offSet);
+  for (const set of offByEmployee.values()) {
+    for (const iso of set) allOffDates.add(iso);
   }
 
   const weekendDates = [...allOffDates].sort();
