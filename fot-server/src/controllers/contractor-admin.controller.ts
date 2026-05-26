@@ -6,6 +6,7 @@
  */
 import type { Response } from 'express';
 import { z } from 'zod';
+import ExcelJS from 'exceljs';
 import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
@@ -401,6 +402,83 @@ export const contractorAdminController = {
     } catch (error) {
       console.error('Contractor listSigurAccessPoints error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить точки доступа Sigur' });
+    }
+  },
+
+  /** GET /submissions/pending/count — счётчик pending-заявок для бейджа в меню. */
+  async getPendingSubmissionsCount(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const row = await queryOne<{ count: string }>(
+        `SELECT COUNT(*)::text AS count
+           FROM contractor_submissions
+          WHERE status IN ('pending', 'partially_applied')`,
+      );
+      res.json({ success: true, data: { count: Number(row?.count ?? 0) } });
+    } catch (error) {
+      console.error('Contractor getPendingSubmissionsCount error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить счётчик заявок' });
+    }
+  },
+
+  /**
+   * GET /submissions/:id/export — xlsx со списком пропусков заявки.
+   * Колонки: «№ пропуска», «ФИО». Нужен для согласования с заказчиком по почте.
+   */
+  async exportSubmission(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const submissionId = req.params.id;
+
+      const sub = await queryOne<{ id: string; org_name: string; submitted_at: string }>(
+        `SELECT s.id, d.name AS org_name, s.submitted_at
+           FROM contractor_submissions s
+           JOIN org_departments d ON d.id = s.org_department_id
+          WHERE s.id = $1::uuid`,
+        [submissionId],
+      );
+      if (!sub) {
+        res.status(404).json({ success: false, error: 'Заявка не найдена' });
+        return;
+      }
+
+      const rows = await query<{ pass_number: string; holder_name: string | null }>(
+        `SELECT p.pass_number,
+                COALESCE(h.holder_name, p.holder_name) AS holder_name
+           FROM contractor_passes p
+           LEFT JOIN contractor_pass_holders h
+             ON h.pass_id = p.id AND h.valid_until IS NULL
+          WHERE p.submission_id = $1::uuid
+          ORDER BY p.pass_number::int ASC`,
+        [submissionId],
+      );
+
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Заявка');
+      ws.columns = [
+        { header: '№ пропуска', key: 'pass_number', width: 16 },
+        { header: 'ФИО', key: 'holder_name', width: 48 },
+      ];
+      ws.getRow(1).font = { bold: true };
+      for (const r of rows) {
+        ws.addRow({ pass_number: r.pass_number, holder_name: r.holder_name ?? '' });
+      }
+
+      const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+      const dateIso = new Date(sub.submitted_at).toISOString().slice(0, 10);
+      const safeOrg = sub.org_name.replace(/[\\/:*?"<>|]+/g, '_').trim();
+      const fileName = `Заявка_${safeOrg}_${dateIso}.xlsx`;
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition',
+        `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.send(buf);
+    } catch (error) {
+      console.error('Contractor exportSubmission error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: 'Не удалось сформировать файл' });
+      }
     }
   },
 

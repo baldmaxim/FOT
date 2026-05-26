@@ -1,4 +1,4 @@
-import { apiClient } from '../api/client';
+import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 
 interface ApiResponse<T> {
   data: T;
@@ -84,6 +84,23 @@ export interface IPoolItem {
   card_uid: string | null;
   sigur_employee_id: number | null;
   created_at: string;
+}
+
+export interface IPoolListPage {
+  items: IPoolItem[];
+  total: number;
+}
+
+export interface IPoolRange {
+  from: string;
+  to: string;
+  status: 'free' | 'occupied';
+  count: number;
+}
+
+export interface IPoolRangesResult {
+  ranges: IPoolRange[];
+  totals: { free: number; occupied: number };
 }
 
 export interface ISigurDepartmentNode {
@@ -321,6 +338,18 @@ export const contractorAdminService = {
     const r = await apiClient.get<ApiResponse<IPendingSubmission[]>>('/admin/contractor/submissions/pending');
     return r.data ?? [];
   },
+  async getPendingSubmissionsCount(): Promise<{ count: number }> {
+    const r = await apiClient.get<ApiResponse<{ count: number }>>('/admin/contractor/submissions/pending/count');
+    return r.data ?? { count: 0 };
+  },
+  async exportSubmission(id: string): Promise<Blob> {
+    const response = await fetch(
+      buildApiUrl(`/admin/contractor/submissions/${id}/export`),
+      { credentials: 'include', headers: buildAuthHeaders() },
+    );
+    if (!response.ok) throw new Error('Не удалось скачать файл');
+    return response.blob();
+  },
   async listSigurAccessPoints(): Promise<ISigurAccessPointOption[]> {
     const r = await apiClient.get<ApiResponse<ISigurAccessPointOption[]>>(
       '/admin/contractor/sigur-access-points',
@@ -360,10 +389,18 @@ export const contractorAdminService = {
     const r = await apiClient.get<ApiResponse<ISigurDepartmentNode[]>>('/admin/contractor/sigur-departments');
     return r.data ?? [];
   },
-  async listPool(search?: string): Promise<IPoolItem[]> {
-    const qs = search ? `?search=${encodeURIComponent(search)}` : '';
-    const r = await apiClient.get<ApiResponse<IPoolItem[]>>(`/admin/contractor/pool${qs}`);
-    return r.data ?? [];
+  async listPool(params?: { search?: string; limit?: number; offset?: number }): Promise<IPoolListPage> {
+    const qp = new URLSearchParams();
+    if (params?.search) qp.set('search', params.search);
+    if (params?.limit != null) qp.set('limit', String(params.limit));
+    if (params?.offset != null) qp.set('offset', String(params.offset));
+    const qs = qp.toString() ? `?${qp.toString()}` : '';
+    const r = await apiClient.get<ApiResponse<IPoolListPage>>(`/admin/contractor/pool${qs}`);
+    return r.data ?? { items: [], total: 0 };
+  },
+  async getPoolRanges(): Promise<IPoolRangesResult> {
+    const r = await apiClient.get<ApiResponse<IPoolRangesResult>>('/admin/contractor/pool/ranges');
+    return r.data ?? { ranges: [], totals: { free: 0, occupied: 0 } };
   },
   async getPoolNextNumber(): Promise<number> {
     const r = await apiClient.get<ApiResponse<{ next: number }>>('/admin/contractor/pool/next-number');

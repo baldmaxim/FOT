@@ -15,6 +15,7 @@ import {
   addPassesToPool,
   assignPoolPassesToContractor,
   getFreePoolDepartmentId,
+  getPoolRanges,
   listPool,
   PoolNotConfiguredError,
   setFreePoolDepartmentId,
@@ -129,16 +130,32 @@ export const contractorPoolController = {
     }
   },
 
-  /** GET /pool — пропуска в общем пуле. */
+  /** GET /pool?limit=&offset=&search= — пропуска в общем пуле (пагинация). */
   async list(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureSystemAdmin(req, res))) return;
       const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-      const data = await listPool({ search });
+      const limitRaw = Number(req.query.limit);
+      const offsetRaw = Number(req.query.offset);
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 50;
+      const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+      const data = await listPool({ search, limit, offset });
       res.json({ success: true, data });
     } catch (error) {
       console.error('Pool list error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить пул' });
+    }
+  },
+
+  /** GET /pool/ranges — диапазоны для шапки вкладки «Общий пул». */
+  async getRanges(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const data = await getPoolRanges();
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Pool getRanges error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить диапазоны пула' });
     }
   },
 

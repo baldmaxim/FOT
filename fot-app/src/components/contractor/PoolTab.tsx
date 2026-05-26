@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, type FC } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
@@ -7,10 +7,12 @@ import { useCardReaderAgent } from '../../contexts/CardReaderAgentContext';
 import { contractorAdminService, type IPoolItem, type ISigurDepartmentNode } from '../../services/contractorService';
 import { DepartmentTreeSelect } from '../staff/DepartmentTreeSelect';
 import { ContractorPassBatchPanel } from '../skud/ContractorPassBatchPanel';
+import { PoolRangesHeader } from './PoolRangesHeader';
 import type { OrgDepartmentNode } from '../../types/organization';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 const CHUNK = 10;
+const PAGE_SIZE = 50;
 
 interface IScanRow {
   uid: string;
@@ -75,6 +77,7 @@ export const PoolTab: FC = () => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignOrgId, setAssignOrgId] = useState<string>('');
   const [assignOpen, setAssignOpen] = useState(false);
+  const [page, setPage] = useState(1);
   const lastSeqRef = useRef(0);
 
   const settingsOverlay = useOverlayDismiss(() => setSelectFolderOpen(false));
@@ -98,14 +101,17 @@ export const PoolTab: FC = () => {
     staleTime: 5 * 60_000,
   });
   const poolQuery = useQuery({
-    queryKey: ['contractor-pool'],
-    queryFn: () => contractorAdminService.listPool(),
+    queryKey: ['contractor-pool', page],
+    queryFn: () => contractorAdminService.listPool({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
+    placeholderData: keepPreviousData,
     staleTime: 15_000,
   });
 
   const folderId = settingsQuery.data?.sigur_department_id ?? null;
   const folderName = settingsQuery.data?.name ?? null;
-  const pool: IPoolItem[] = poolQuery.data ?? [];
+  const pool: IPoolItem[] = poolQuery.data?.items ?? [];
+  const poolTotal = poolQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(poolTotal / PAGE_SIZE));
 
   // Прешник стартового номера при первом открытии (или после выпуска).
   useEffect(() => {
@@ -177,7 +183,9 @@ export const PoolTab: FC = () => {
       } else {
         toast.error(`Добавлено ${agg.created.length}, ошибок ${agg.failed.length}`);
       }
+      setPage(1);
       await qc.invalidateQueries({ queryKey: ['contractor-pool'] });
+      await qc.invalidateQueries({ queryKey: ['contractor-pool-ranges'] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка добавления');
     } finally {
@@ -207,9 +215,17 @@ export const PoolTab: FC = () => {
       return next;
     });
   };
+  const allOnPageSelected = pool.length > 0 && pool.every(p => selected.has(p.id));
   const toggleAll = () => {
-    if (selected.size === pool.length) setSelected(new Set());
-    else setSelected(new Set(pool.map(p => p.id)));
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (allOnPageSelected) {
+        for (const p of pool) next.delete(p.id);
+      } else {
+        for (const p of pool) next.add(p.id);
+      }
+      return next;
+    });
   };
 
   const handleAssign = async () => {
@@ -224,7 +240,9 @@ export const PoolTab: FC = () => {
       }
       setSelected(new Set());
       setAssignOpen(false);
+      setPage(1);
       await qc.invalidateQueries({ queryKey: ['contractor-pool'] });
+      await qc.invalidateQueries({ queryKey: ['contractor-pool-ranges'] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка назначения');
     } finally {
@@ -352,10 +370,12 @@ export const PoolTab: FC = () => {
             </button>
           </div>
 
+          <PoolRangesHeader />
+
           <h3 className={styles.title} style={{ marginTop: 24 }}>Пул свободных пропусков</h3>
           <div className={styles.toolbar}>
             <button className="btn-secondary" onClick={toggleAll} disabled={pool.length === 0}>
-              {selected.size === pool.length && pool.length > 0 ? 'Снять выделение' : 'Выделить все'}
+              {allOnPageSelected ? 'Снять на странице' : 'Выделить на странице'}
             </button>
             <button
               className="btn-primary"
@@ -364,34 +384,74 @@ export const PoolTab: FC = () => {
             >
               Назначить подрядчику ({selected.size})
             </button>
+            <span className={styles.statusNote} style={{ marginLeft: 'auto' }}>
+              Всего: {poolTotal}
+            </span>
           </div>
           {poolQuery.isLoading ? (
             <div className={styles.empty}>Загрузка…</div>
           ) : pool.length === 0 ? (
             <div className={styles.empty}>Пул пуст</div>
           ) : (
-            <table className={styles.table}>
-              <thead>
-                <tr><th></th><th>№</th><th>UID</th><th>Sigur ID</th><th>Добавлен</th></tr>
-              </thead>
-              <tbody>
-                {pool.map(p => (
-                  <tr key={p.id}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(p.id)}
-                        onChange={() => toggleSelect(p.id)}
-                      />
-                    </td>
-                    <td>{p.pass_number}</td>
-                    <td>{p.card_uid ?? '—'}</td>
-                    <td>{p.sigur_employee_id ?? '—'}</td>
-                    <td>{new Date(p.created_at).toLocaleString('ru')}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <table className={styles.table}>
+                <thead>
+                  <tr><th></th><th>№</th><th>UID</th><th>Sigur ID</th><th>Добавлен</th></tr>
+                </thead>
+                <tbody>
+                  {pool.map(p => (
+                    <tr key={p.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(p.id)}
+                          onChange={() => toggleSelect(p.id)}
+                        />
+                      </td>
+                      <td>{p.pass_number}</td>
+                      <td>{p.card_uid ?? '—'}</td>
+                      <td>{p.sigur_employee_id ?? '—'}</td>
+                      <td>{new Date(p.created_at).toLocaleString('ru')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {totalPages > 1 && (
+                <div className={styles.toolbar} style={{ justifyContent: 'center', marginTop: 12 }}>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => setPage(1)}
+                    disabled={page === 1 || poolQuery.isFetching}
+                  >
+                    «
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1 || poolQuery.isFetching}
+                  >
+                    ← Назад
+                  </button>
+                  <span className={styles.statusNote} style={{ alignSelf: 'center' }}>
+                    {page} / {totalPages}
+                  </span>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages || poolQuery.isFetching}
+                  >
+                    Вперёд →
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => setPage(totalPages)}
+                    disabled={page >= totalPages || poolQuery.isFetching}
+                  >
+                    »
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

@@ -29,7 +29,9 @@ router.put('/users/:id/org', usersEdit, contractorAdminController.replaceUserOrg
 
 // Заявки на согласование.
 router.get('/sigur-access-points', apprView, contractorAdminController.listSigurAccessPoints);
+router.get('/submissions/pending/count', apprView, contractorAdminController.getPendingSubmissionsCount);
 router.get('/submissions/pending', apprView, contractorAdminController.getPendingSubmissions);
+router.get('/submissions/:id/export', apprView, contractorAdminController.exportSubmission);
 router.get('/submissions/:id', apprView, contractorAdminController.getSubmissionDetail);
 router.post('/submissions/:id/approve', apprEdit, requireCritical2FA, contractorAdminController.approveSubmission);
 router.post('/submissions/:id/reject', apprEdit, contractorAdminController.rejectSubmission);
@@ -45,6 +47,7 @@ router.get('/pool/settings', apprView, contractorPoolController.getSettings);
 router.put('/pool/settings', apprEdit, contractorPoolController.setSettings);
 router.get('/sigur-departments', apprView, contractorPoolController.listSigurDepartments);
 router.get('/pool', apprView, contractorPoolController.list);
+router.get('/pool/ranges', apprView, contractorPoolController.getRanges);
 router.get('/pool/next-number', apprView, contractorPoolController.getNextNumber);
 router.post('/pool/issue', apprEdit, requireCritical2FA, contractorPoolController.issueToPool);
 router.post('/pool/assign', apprEdit, requireCritical2FA, contractorPoolController.assign);

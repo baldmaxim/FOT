@@ -298,6 +298,41 @@
   margin-top: 6px;
 }
 
+.rangeChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 140px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.rangeChip {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.rangeChipFree {
+  background: var(--success-muted);
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.rangeChipOccupied {
+  background: var(--error-muted);
+  color: var(--error);
+  border-color: var(--error);
+}
+
 @media (max-width: 768px) {
   .page { padding: 12px; }
   .table th, .table td { padding: 6px 8px; font-size: 13px; }

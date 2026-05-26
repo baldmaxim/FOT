@@ -67,25 +67,113 @@ export interface IPoolItem {
   created_at: string;
 }
 
-/** Список пропусков, лежащих в общем пуле (status='in_pool'). */
-export const listPool = async (filter?: { search?: string }): Promise<IPoolItem[]> => {
+export interface IPoolListResult {
+  items: IPoolItem[];
+  total: number;
+}
+
+/** Список пропусков, лежащих в общем пуле (status='in_pool'). С пагинацией. */
+export const listPool = async (filter?: {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<IPoolListResult> => {
   const search = filter?.search?.trim();
+  const limit = filter?.limit ?? 50;
+  const offset = filter?.offset ?? 0;
+
   if (search) {
-    return query<IPoolItem>(
+    const items = await query<IPoolItem>(
       `SELECT id, pass_number, card_uid, sigur_employee_id, created_at
          FROM contractor_passes
         WHERE status = 'in_pool'
           AND (pass_number ILIKE $1 OR card_uid ILIKE $1)
-        ORDER BY pass_number::int ASC`,
+        ORDER BY pass_number::int ASC
+        LIMIT $2 OFFSET $3`,
+      [`%${search}%`, limit, offset],
+    );
+    const cnt = await queryOne<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM contractor_passes
+        WHERE status = 'in_pool' AND (pass_number ILIKE $1 OR card_uid ILIKE $1)`,
       [`%${search}%`],
     );
+    return { items, total: Number(cnt?.count ?? 0) };
   }
-  return query<IPoolItem>(
+
+  const items = await query<IPoolItem>(
     `SELECT id, pass_number, card_uid, sigur_employee_id, created_at
        FROM contractor_passes
       WHERE status = 'in_pool'
-      ORDER BY pass_number::int ASC`,
+      ORDER BY pass_number::int ASC
+      LIMIT $1 OFFSET $2`,
+    [limit, offset],
   );
+  const cnt = await queryOne<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM contractor_passes WHERE status = 'in_pool'`,
+  );
+  return { items, total: Number(cnt?.count ?? 0) };
+};
+
+export interface IPoolRange {
+  from: string;
+  to: string;
+  status: 'free' | 'occupied';
+  count: number;
+}
+
+export interface IPoolRangesResult {
+  ranges: IPoolRange[];
+  totals: { free: number; occupied: number };
+}
+
+/**
+ * Диапазоны номеров пропусков для шапки «Общий пул». Склейка подряд идущих
+ * номеров одинакового статуса (gaps-and-islands в JS-цикле).
+ *   free     — status='in_pool' AND org_department_id IS NULL
+ *   occupied — назначен подрядчику / отправлен / открыт / заблокирован
+ * revoked в выборку не попадает.
+ */
+export const getPoolRanges = async (): Promise<IPoolRangesResult> => {
+  const rows = await query<{ pass_number: string; bucket: 'free' | 'occupied' }>(
+    `SELECT pass_number,
+            CASE
+              WHEN status = 'in_pool' AND org_department_id IS NULL THEN 'free'
+              ELSE 'occupied'
+            END AS bucket
+       FROM contractor_passes
+      WHERE pass_number ~ '^[0-9]+$'
+        AND status <> 'revoked'
+      ORDER BY pass_number::bigint ASC`,
+  );
+
+  const ranges: IPoolRange[] = [];
+  let cur: { fromNum: number; toNum: number; width: number; status: 'free' | 'occupied' } | null = null;
+  let freeCount = 0;
+  let occupiedCount = 0;
+
+  const flush = () => {
+    if (!cur) return;
+    const from = String(cur.fromNum).padStart(cur.width, '0');
+    const to = String(cur.toNum).padStart(cur.width, '0');
+    ranges.push({ from, to, status: cur.status, count: cur.toNum - cur.fromNum + 1 });
+    cur = null;
+  };
+
+  for (const r of rows) {
+    const num = Number(r.pass_number);
+    if (!Number.isFinite(num)) continue;
+    if (r.bucket === 'free') freeCount += 1; else occupiedCount += 1;
+    const w = r.pass_number.length;
+    if (cur && cur.status === r.bucket && num === cur.toNum + 1 && w === cur.width) {
+      cur.toNum = num;
+    } else {
+      flush();
+      cur = { fromNum: num, toNum: num, width: w, status: r.bucket };
+    }
+  }
+  flush();
+
+  return { ranges, totals: { free: freeCount, occupied: occupiedCount } };
 };
 
 export interface IAddPoolInput {

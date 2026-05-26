@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMyEmployee } from '../../hooks/useMyEmployee';
 import { usePendingLeaveRequestsCount } from '../../hooks/usePendingLeaveRequestsCount';
+import { usePendingContractorSubmissionsCount } from '../../hooks/usePendingContractorSubmissionsCount';
 import { formatFioShort } from '../../utils/formatFio';
 import styles from './Sidebar.module.css';
 import {
@@ -95,6 +96,7 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
   const { profile, logout, canViewPage, hideSidebar, employeeVariant } = useAuth();
   const { data: myEmployee } = useMyEmployee(!profile?.imported_position);
   const leaveRequestsBadge = usePendingLeaveRequestsCount();
+  const contractorBadge = usePendingContractorSubmissionsCount();
 
   // Defense in depth: если Layout по какой-то причине отрендерил Sidebar,
   // а флаг hide_sidebar активен (и пользователь не админ), всё равно не показываем меню.
@@ -197,6 +199,7 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
         {navGroups.map(group => {
           const visibleItems = group.items
             .map(item => item.id === 'leave-requests' ? { ...item, badge: leaveRequestsBadge } : item)
+            .map(item => item.id === 'contractor-approvals' ? { ...item, badge: contractorBadge } : item)
             .filter(item => {
               if (item.systemAdminOnly && isCompanyAdmin) return false;
               // ЛК подрядчика виден только если у роли тип кабинета = contractor

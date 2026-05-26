@@ -47,6 +47,8 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   const [points, setPoints] = useState<Map<string, string[]>>(new Map());
   const [expandedPass, setExpandedPass] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // По умолчанию все pending-пропуска выбраны.
+  const [selectedPasses, setSelectedPasses] = useState<Set<string>>(new Set());
 
   // Предзаполнение при загрузке деталей.
   useEffect(() => {
@@ -60,7 +62,25 @@ export const ApproveSubmissionModal: FC<IProps> = ({
       }
       return next;
     });
+    setSelectedPasses(prev => {
+      if (prev.size > 0) return prev;
+      return new Set(detailQuery.data.filter(r => r.approval_status === 'pending').map(r => r.id));
+    });
   }, [detailQuery.data]);
+
+  const togglePassSelected = (passId: string) => {
+    setSelectedPasses(prev => {
+      const next = new Set(prev);
+      if (next.has(passId)) next.delete(passId); else next.add(passId);
+      return next;
+    });
+  };
+  const toggleAllPasses = () => {
+    setSelectedPasses(prev => {
+      if (prev.size === pendingRows.length) return new Set();
+      return new Set(pendingRows.map(r => r.id));
+    });
+  };
 
   const allOptions: ISigurAccessPointOption[] = apQuery.data ?? [];
 
@@ -77,11 +97,12 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   };
 
   const handleApply = async () => {
-    if (pendingRows.length === 0) {
-      toast.error('Нет пропусков для открытия');
+    const targets = pendingRows.filter(r => selectedPasses.has(r.id));
+    if (targets.length === 0) {
+      toast.error('Выберите пропуска для одобрения');
       return;
     }
-    const decisions: IDecideItem[] = pendingRows.map(r => ({
+    const decisions: IDecideItem[] = targets.map(r => ({
       pass_id: r.id,
       decision: 'approved',
       access_point_names: points.get(r.id) ?? r.access_point_names ?? [],
@@ -129,6 +150,18 @@ export const ApproveSubmissionModal: FC<IProps> = ({
             <table className={styles.table}>
               <thead>
                 <tr>
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedPasses.size === pendingRows.length && pendingRows.length > 0}
+                      ref={el => {
+                        if (el) el.indeterminate = selectedPasses.size > 0 && selectedPasses.size < pendingRows.length;
+                      }}
+                      onChange={toggleAllPasses}
+                      disabled={busy}
+                      title="Выделить всё / снять"
+                    />
+                  </th>
                   <th>№</th>
                   <th>ФИО</th>
                   <th>Точки доступа</th>
@@ -138,8 +171,17 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                 {pendingRows.map(r => {
                   const selected = points.get(r.id) ?? [];
                   const isOpen = expandedPass === r.id;
+                  const isChecked = selectedPasses.has(r.id);
                   return (
-                    <tr key={r.id}>
+                    <tr key={r.id} style={{ opacity: isChecked ? 1 : 0.55 }}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => togglePassSelected(r.id)}
+                          disabled={busy}
+                        />
+                      </td>
                       <td>{r.pass_number}</td>
                       <td>{r.holder_name ?? '—'}</td>
                       <td>
@@ -196,9 +238,9 @@ export const ApproveSubmissionModal: FC<IProps> = ({
           <button
             className="btn-primary"
             onClick={() => void handleApply()}
-            disabled={busy || loading || pendingRows.length === 0}
+            disabled={busy || loading || selectedPasses.size === 0}
           >
-            Открыть пропуска ({pendingRows.length})
+            Открыть пропуска ({selectedPasses.size})
           </button>
         </div>
       </div>

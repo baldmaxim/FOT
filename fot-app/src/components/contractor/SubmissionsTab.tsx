@@ -69,6 +69,27 @@ export const SubmissionsTab: FC = () => {
 
   const refreshSubs = () => qc.invalidateQueries({ queryKey: ['contractor-pending-subs'] });
 
+  const handleExport = async (sub: IPendingSubmission) => {
+    setBusy(true);
+    try {
+      const blob = await contractorAdminService.exportSubmission(sub.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safeOrg = sub.org_name.replace(/[\\/:*?"<>|]+/g, '_').trim();
+      const dateIso = new Date(sub.submitted_at).toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `Заявка_${safeOrg}_${dateIso}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось скачать');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleReject = async () => {
     if (!rejectId) return;
     setBusy(true);
@@ -144,6 +165,14 @@ export const SubmissionsTab: FC = () => {
                       disabled={busy || s.status === 'partially_applied'}
                     >
                       Отклонить всю
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      onClick={() => void handleExport(s)}
+                      disabled={busy || total === 0}
+                      title="Скачать список людей в Excel"
+                    >
+                      Excel ↓
                     </button>
                   </td>
                 </tr>
