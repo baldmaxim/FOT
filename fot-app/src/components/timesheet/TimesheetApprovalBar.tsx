@@ -2,7 +2,7 @@ import { type FC, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Check, X, Send, RotateCcw, AlertCircle,
-  Upload, FileText, ChevronDown,
+  Upload, FileText, ChevronDown, MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -100,26 +100,21 @@ const ActiveCard: FC<IActiveCardProps> = ({
   const status = approval?.status || 'draft';
   const Icon = STATUS_ICONS[status];
   const [showComment, setShowComment] = useState(false);
+  const [reviewCommentOpen, setReviewCommentOpen] = useState(false);
   const submitLabel = status === 'returned' || status === 'rejected' ? 'Переподать' : 'Подать';
   const canShowSubmit = canSubmitDepartment && (status === 'draft' || status === 'rejected' || status === 'returned');
+  const reviewComment = approval?.review_comment ?? '';
 
   return (
     <div className={`ts-approval-card${compact ? ' ts-approval-card--compact' : ''}`}>
-      {(compact || approval?.review_comment) && (
+      {compact && (
         <div className="ts-approval-card-info">
-          {compact && (
-            <>
-              <strong className="ts-approval-period">
-                {formatTimesheetRangeLabel(startDate, endDate)}
-              </strong>
-              <span className="ts-approval-status" style={{ color: STATUS_COLORS[status] }}>
-                <Icon size={14} /> {APPROVAL_STATUS_LABELS[status]}
-              </span>
-            </>
-          )}
-          {approval?.review_comment && (
-            <span className="ts-approval-comment-preview">{approval.review_comment}</span>
-          )}
+          <strong className="ts-approval-period">
+            {formatTimesheetRangeLabel(startDate, endDate)}
+          </strong>
+          <span className="ts-approval-status" style={{ color: STATUS_COLORS[status] }}>
+            <Icon size={14} /> {APPROVAL_STATUS_LABELS[status]}
+          </span>
         </div>
       )}
 
@@ -134,6 +129,18 @@ const ActiveCard: FC<IActiveCardProps> = ({
           >
             <Send size={14} /> {submitLabel}
           </button>
+          {reviewComment && (
+            <button
+              type="button"
+              className={`ts-btn ts-btn-split-toggle${reviewCommentOpen ? ' ts-btn-split-toggle--open' : ''}`}
+              onClick={() => setReviewCommentOpen(v => !v)}
+              title={reviewComment}
+              aria-label="Комментарий проверяющего"
+              aria-expanded={reviewCommentOpen}
+            >
+              <MessageSquare size={14} />
+            </button>
+          )}
           {showMemoToggle && (
             <button
               className={`ts-btn ts-btn-split-toggle${memoOpen ? ' ts-btn-split-toggle--open' : ''}`}
@@ -146,6 +153,11 @@ const ActiveCard: FC<IActiveCardProps> = ({
               <ChevronDown size={14} />
             </button>
           )}
+        </div>
+      )}
+      {reviewComment && reviewCommentOpen && (
+        <div className="ts-approval-comment-preview" style={{ whiteSpace: 'pre-wrap' }}>
+          {reviewComment}
         </div>
       )}
 
