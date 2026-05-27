@@ -466,48 +466,61 @@ const fixEmployeeAssignmentDates = async (
 
   if (patch.effectiveFrom !== undefined && patch.effectiveFrom !== target.effective_from) {
     const newFrom = patch.effectiveFrom;
+    const isBackdating = newFrom < target.effective_from;
 
-    // Стейл-строка — другой record того же сотрудника с effective_from = newFrom.
-    // У УОК_2 (Габараева/Корж/Миоков/Узун) такие записи накопились в проде.
-    // Если её диапазон [effective_from, effective_to] целиком оказывается
-    // ВНУТРИ нового диапазона target — она будет «поглощена» движением target
-    // и теряет смысл. Удаляем такие стейл-строки в той же транзакции.
-    // Иначе — ясная развёрнутая ошибка вместо немотивированного «уже существует».
-    const conflictingRow = rows.find(row => row.id !== target.id && row.effective_from === newFrom);
-    if (conflictingRow) {
-      const isBackdating = newFrom < target.effective_from;
-      // Back-dating: conflict сидит ДО старого target.effective_from →
-      // должен быть полностью раньше target. Условие: conflict.effective_to
-      // не позднее предыдущего дня от старого target.effective_from.
-      const backdatingAbsorbs = isBackdating
-        && conflictingRow.effective_to !== null
-        && conflictingRow.effective_to < target.effective_from;
-      // Forward-dating: conflict сидит ПОСЛЕ старого target.effective_from →
-      // должен быть полностью внутри [oldFrom, newFrom-1] (между target и до newFrom).
-      const forwardAbsorbs = !isBackdating
-        && conflictingRow.effective_from > target.effective_from
-        && conflictingRow.effective_to !== null
-        && conflictingRow.effective_to < newFrom;
-
-      if (backdatingAbsorbs || forwardAbsorbs) {
-        await db.execute('DELETE FROM employee_schedule_assignments WHERE id = $1', [conflictingRow.id]);
+    // Поглощённые строки — другие назначения сотрудника, чей диапазон целиком
+    // попадает в новый диапазон target после сдвига. У УОК_2 (Габараева/Корж/
+    // Миоков/Узун) такие закрытые исторические фрагменты накопились в проде и
+    // блокировали сдвиг открытой записи назад строгой проверкой «должна быть
+    // позже предыдущего назначения». Удаляем их в той же транзакции.
+    //
+    // Back-dating (newFrom < target.from): absorbed range = [newFrom, target.from-1].
+    //   Сюда попадают rows с effective_from >= newFrom AND effective_from < target.from.
+    //   Их effective_to гарантированно < target.from (rows не пересекаются), значит
+    //   полностью поглощаются.
+    // Forward-dating (newFrom > target.from): absorbed range = [target.from, newFrom-1].
+    //   Сюда попадают rows с effective_from > target.from AND effective_from < newFrom.
+    //   Полное поглощение требует effective_to !== null AND effective_to < newFrom;
+    //   иначе — частичный overlap с новым диапазоном target, операцию блокируем.
+    const fullyAbsorbed: EmployeeScheduleRow[] = [];
+    const partialOverlap: EmployeeScheduleRow[] = [];
+    for (const row of rows) {
+      if (row.id === target.id) continue;
+      if (isBackdating) {
+        if (row.effective_from >= newFrom && row.effective_from < target.effective_from) {
+          fullyAbsorbed.push(row);
+        }
       } else {
-        const toLabel = conflictingRow.effective_to ?? 'сейчас';
-        throw new AssignmentFixError(
-          `Дата ${newFrom} уже занята другим назначением (с ${conflictingRow.effective_from} по ${toLabel}). Сначала удалите или перенесите его, либо выберите другую дату.`,
-        );
+        if (row.effective_from > target.effective_from && row.effective_from < newFrom) {
+          if (row.effective_to !== null && row.effective_to < newFrom) {
+            fullyAbsorbed.push(row);
+          } else {
+            partialOverlap.push(row);
+          }
+        }
       }
     }
 
-    // После возможного удаления стейл-строки пересчитываем prev/next без неё.
-    const conflictId = conflictingRow?.id ?? null;
-    const others = rows.filter(row => row.id !== target.id && row.id !== conflictId);
+    if (partialOverlap.length > 0) {
+      const r = partialOverlap[0];
+      throw new AssignmentFixError(
+        `Дата ${newFrom} перекрывает другое назначение (с ${r.effective_from} по ${r.effective_to ?? 'сейчас'}). Сначала удалите или сдвиньте его.`,
+      );
+    }
+
+    for (const row of fullyAbsorbed) {
+      await db.execute('DELETE FROM employee_schedule_assignments WHERE id = $1', [row.id]);
+    }
+
+    // После поглощения пересчитываем prev/next.
+    const absorbedIds = new Set(fullyAbsorbed.map(r => r.id));
+    const others = rows.filter(row => row.id !== target.id && !absorbedIds.has(row.id));
     const prev = [...others].reverse().find(row => row.effective_from < target.effective_from) || null;
     const next = others.find(row => row.effective_from > target.effective_from) || null;
 
-    if (prev && newFrom <= prev.effective_from) {
-      throw new AssignmentFixError('Дата вступления должна быть позже предыдущего назначения');
-    }
+    // Проверка «newFrom > prev.effective_from» больше не нужна: если бы prev
+    // нарушал условие — он бы попал в fullyAbsorbed (effective_from >= newFrom)
+    // и был удалён выше.
     if (next && newFrom >= next.effective_from) {
       throw new AssignmentFixError('Дата вступления должна быть раньше следующего назначения');
     }
@@ -519,7 +532,9 @@ const fixEmployeeAssignmentDates = async (
     params.push(newFrom);
     p++;
 
-    if (prev) {
+    // Если prev открыт или его effective_to >= newFrom — закрываем prev на (newFrom-1).
+    // Если prev уже закончился строго раньше newFrom — оставляем разрыв.
+    if (prev && (prev.effective_to === null || prev.effective_to >= newFrom)) {
       await db.execute(
         `UPDATE employee_schedule_assignments SET effective_to = $1, updated_at = $2 WHERE id = $3`,
         [previousIsoDate(newFrom), nowIso, prev.id],
@@ -1040,6 +1055,67 @@ export const scheduleController = {
       }
       console.error('[schedules] assignEmployee error:', err);
       res.status(500).json({ success: false, error: 'Ошибка назначения персонального графика сотруднику' });
+    }
+  },
+
+  /** GET /api/schedules/employee/:employeeId/history — все назначения сотрудника (любого статуса). */
+  async listEmployeeHistory(req: AuthenticatedRequest, res: Response) {
+    try {
+      const parsedEmployeeId = employeeIdParamSchema.safeParse(req.params.employeeId);
+      if (!parsedEmployeeId.success) {
+        return res.status(400).json({ success: false, error: 'Неверный employeeId' });
+      }
+
+      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      const data = await query<Record<string, unknown>>(
+        `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')}
+          WHERE a.employee_id = $1
+          ORDER BY a.effective_from ASC`,
+        [parsedEmployeeId.data],
+      );
+      res.json({ success: true, data });
+    } catch (err) {
+      console.error('[schedules] listEmployeeHistory error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка загрузки истории назначений' });
+    }
+  },
+
+  /**
+   * DELETE /api/schedules/employee/:employeeId/assignment/:assignmentId — жёсткое
+   * удаление КОНКРЕТНОЙ строки назначения по id. В отличие от
+   * removeEmployeeAssignment (который закрывает активную запись через effective_to),
+   * этот эндпоинт стирает строку полностью — используется блоком «История
+   * назначений» для удаления стейл-фрагментов руками админа.
+   */
+  async deleteEmployeeAssignment(req: AuthenticatedRequest, res: Response) {
+    try {
+      const parsedEmployeeId = employeeIdParamSchema.safeParse(req.params.employeeId);
+      if (!parsedEmployeeId.success) {
+        return res.status(400).json({ success: false, error: 'Неверный employeeId' });
+      }
+      const parsedAssignmentId = objectIdParamSchema.safeParse(req.params.assignmentId);
+      if (!parsedAssignmentId.success) {
+        return res.status(400).json({ success: false, error: 'Неверный assignmentId' });
+      }
+
+      if (!(await canAccessEmployeeInScope(req, parsedEmployeeId.data))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      const affected = await execute(
+        'DELETE FROM employee_schedule_assignments WHERE id = $1 AND employee_id = $2',
+        [parsedAssignmentId.data, parsedEmployeeId.data],
+      );
+      if (affected === 0) {
+        return res.status(404).json({ success: false, error: 'Назначение не найдено у этого сотрудника' });
+      }
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[schedules] deleteEmployeeAssignment error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка удаления записи назначения' });
     }
   },
 

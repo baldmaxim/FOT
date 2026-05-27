@@ -735,7 +735,7 @@ describe('scheduleController.fixEmployeeAssignment', () => {
     expect(targetUpdate).toBeTruthy();
   });
 
-  it('коллизия с активной (открытой) записью → 400 с развёрнутым текстом, без мутаций', async () => {
+  it('коллизия с активной (открытой) записью → 400, без мутаций', async () => {
     pgQuery.mockResolvedValue([
       { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', effective_to: null },
       { id: ASSIGN_B, schedule_id: SCHEDULE_ID, effective_from: '2026-05-01', effective_to: null },
@@ -751,8 +751,73 @@ describe('scheduleController.fixEmployeeAssignment', () => {
 
     expect(res.statusCode).toBe(400);
     const text = (res.payload as { error: string }).error;
-    expect(text).toContain('2026-05-01');
-    expect(text).toMatch(/уже занята|сейчас/);
+    // Forward-dating с newFrom = next.effective_from блокируется проверкой
+    // «раньше следующего назначения» (ASSIGN_B стартует ровно на newFrom).
+    expect(text).toMatch(/раньше следующего|перекрывает/);
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+
+  // Регресс УОК_2: открытая запись target и закрытый исторический предшественник
+  // с effective_from > newFrom. Старая логика блокировала: prev был ИД-фрагмент,
+  // newFrom <= prev.effective_from → «должна быть позже предыдущего назначения».
+  // Новая логика поглощает фрагмент DELETE'ом и сдвигает target назад.
+  it('back-dating: поглощается закрытый исторический фрагмент с effective_from > newFrom', async () => {
+    pgQuery.mockResolvedValue([
+      // Закрытый «ИД (объекты) 5/2 +1 суб», как у Корж/Миоков/Узун.
+      { id: ASSIGN_P, schedule_id: SCHEDULE_ID, effective_from: '2026-04-26', effective_to: '2026-04-29' },
+      // Открытый target «5+2 (Линия С/О)».
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-04-30', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+    pgQueryOne.mockResolvedValue({ id: ASSIGN_A, effective_from: '2026-04-20' });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      // Двигаем target на дату РАНЬШЕ effective_from закрытого предшественника.
+      body: { assignment_id: ASSIGN_A, effective_from: '2026-04-20' },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(200);
+
+    // Поглощённый фрагмент удалён.
+    const deletedStale = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().startsWith('delete from employee_schedule_assignments')
+      && Array.isArray(params)
+      && (params as unknown[]).includes(ASSIGN_P));
+    expect(deletedStale).toBeTruthy();
+
+    // target сдвинут на 2026-04-20.
+    const targetUpdate = findUpdate((sql, params) =>
+      /effective_from\s*=/i.test(sql) && params.includes('2026-04-20') && params.includes(ASSIGN_A));
+    expect(targetUpdate).toBeTruthy();
+  });
+
+  // Forward-dating с частичным overlap: между target и newFrom есть открытый
+  // ближний сосед (effective_to=null), его нельзя поглотить без data loss.
+  it('forward-dating с частичным overlap соседа → 400 с указанием конфликта', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-01-01', effective_to: null },
+      // Сосед открыт (effective_to=null) и стартует между старой target.from и newFrom.
+      { id: ASSIGN_B, schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', effective_to: null },
+    ]);
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { assignment_id: ASSIGN_A, effective_from: '2026-04-01' },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    // Forward-dating: newFrom=2026-04-01, target=2026-01-01, B=2026-03-01 (open).
+    // B попадает в [target.from, newFrom-1] но effective_to=null → не fullyAbsorbed
+    // → partialOverlap → 400.
+    expect(res.statusCode).toBe(400);
+    expect((res.payload as { error: string }).error).toMatch(/перекрывает|раньше следующего/);
     expect(pgExecute).not.toHaveBeenCalled();
   });
 
@@ -824,6 +889,64 @@ describe('scheduleController.fixEmployeeAssignment', () => {
 
     expect(res.statusCode).toBe(400);
     expect(pgQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe('scheduleController.listEmployeeHistory + deleteEmployeeAssignment', () => {
+  const ASSIGN_A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+    installDefaultTx();
+    mockedState.scope = 'all';
+  });
+
+  it('listEmployeeHistory: возвращает все строки сотрудника (открытые + закрытые)', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_A, employee_id: 7, schedule_id: SCHEDULE_ID, effective_from: '2026-04-26', effective_to: '2026-04-29' },
+      { id: 'open-id', employee_id: 7, schedule_id: SCHEDULE_ID, effective_from: '2026-04-30', effective_to: null },
+    ]);
+
+    const req = makeReq({ params: { employeeId: '7' } });
+    const res = makeRes();
+
+    await scheduleController.listEmployeeHistory(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const rows = (res.payload as { data: unknown[] }).data;
+    expect(rows).toHaveLength(2);
+  });
+
+  it('deleteEmployeeAssignment: удаляет строку по id и проверяет employee_id', async () => {
+    pgExecute.mockResolvedValue(1);
+
+    const req = makeReq({ params: { employeeId: '7', assignmentId: ASSIGN_A } });
+    const res = makeRes();
+
+    await scheduleController.deleteEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const del = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().startsWith('delete from employee_schedule_assignments')
+      && Array.isArray(params)
+      && (params as unknown[]).includes(ASSIGN_A)
+      && (params as unknown[]).includes(7));
+    expect(del).toBeTruthy();
+  });
+
+  it('deleteEmployeeAssignment: 404, если строка не принадлежит сотруднику', async () => {
+    pgExecute.mockResolvedValue(0);
+
+    const req = makeReq({ params: { employeeId: '7', assignmentId: ASSIGN_A } });
+    const res = makeRes();
+
+    await scheduleController.deleteEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(404);
   });
 });
 

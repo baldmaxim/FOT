@@ -40,6 +40,12 @@ router.get('/employees', requireAnyPageAccess(['/admin/schedules', '/staff-contr
 router.get('/objects', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listObjectAssignments);
 router.put('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.assignEmployee);
 router.patch('/employee/:employeeId/assignment', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.fixEmployeeAssignment);
+// История назначений конкретного сотрудника (все строки: открытые, закрытые, будущие).
+// Используется блоком «История назначений» в модалке «График работы».
+router.get('/employee/:employeeId/history', requireAnyPageAccess(['/admin/schedules', '/staff-control'], 'view'), scheduleController.listEmployeeHistory);
+// Удаление одной конкретной записи из истории. Закрытие активной записи делает старый
+// router.delete('/employee/:employeeId') — здесь именно DELETE-by-id.
+router.delete('/employee/:employeeId/assignment/:assignmentId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.deleteEmployeeAssignment);
 router.put('/object/:objectId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.assignObject);
 router.delete('/employee/:employeeId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.removeEmployeeAssignment);
 router.delete('/object/:objectId', requireAnyPageAccess(['/admin/schedules', '/staff-control/schedule'], 'edit'), scheduleController.removeObjectAssignment);

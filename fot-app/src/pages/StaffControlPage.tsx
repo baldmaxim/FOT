@@ -217,6 +217,7 @@ interface IStaffModalsProps {
   onSaveDepartment: (empId: number, deptId: string, effectiveDate?: string, reason?: string) => Promise<void>;
   onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null, mergeIntoNext?: boolean) => Promise<void>;
   onFixAssignment: (empId: number, data: { assignment_id: string; effective_from?: string; anchor_date?: string | null }) => Promise<void>;
+  onDeleteAssignmentRow: (empId: number, assignmentId: string) => Promise<void>;
 }
 
 const StaffModals: FC<IStaffModalsProps> = memo(({
@@ -232,6 +233,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   onSaveDepartment,
   onSaveSchedule,
   onFixAssignment,
+  onDeleteAssignmentRow,
 }) => {
   const currentSchedule = modalEmp ? scheduleViews.get(modalEmp.id) : undefined;
   const [salaryVal, setSalaryVal] = useState('');
@@ -254,7 +256,20 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const [scheduleTab, setScheduleTab] = useState<'fix' | 'new'>(() => (hasFixableAssignment ? 'fix' : 'new'));
   const [fixFrom, setFixFrom] = useState(() => currentSchedule?.effectiveFrom || '');
   const [fixAnchor, setFixAnchor] = useState(() => currentSchedule?.assignmentAnchorDate ?? '');
+  // Fix-таб по умолчанию работает с активной (employee-source) записью. Когда
+  // пользователь нажимает ✎ на конкретной строке в «Истории назначений» — сюда
+  // кладётся её id, и handleFix отправляет PATCH именно ей. null = активная.
+  const [fixTargetId, setFixTargetId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // История всех назначений сотрудника — для блока «История назначений».
+  const historyQuery = useQuery({
+    queryKey: ['schedules', 'employee-history', modalEmp?.id],
+    queryFn: () => scheduleService.listEmployeeHistory(modalEmp!.id),
+    enabled: modalType === 'schedule' && !!modalEmp?.id,
+    staleTime: 30_000,
+  });
+  const history = historyQuery.data ?? [];
   // Когда пользователь выбрал в «Новое назначение» ту же запись графика, что и
   // активная сейчас, но с более ранней датой — серверная case-2-логика молча
   // сдвинула бы effective_from текущей записи назад. Показываем явное
@@ -325,21 +340,59 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   };
 
   const handleFix = async () => {
-    if (!currentSchedule?.assignmentId) return;
+    // Если включён режим «правим конкретную строку из истории» — используем её id
+    // и её исходные даты. Иначе — активная employee-запись (currentSchedule).
+    const targetRow = fixTargetId ? history.find(r => r.id === fixTargetId) ?? null : null;
+    const assignmentId = targetRow?.id ?? currentSchedule?.assignmentId;
+    if (!assignmentId) return;
+    const baseEffectiveFrom = targetRow ? targetRow.effective_from : (currentSchedule?.effectiveFrom || '');
+    const baseAnchor = targetRow ? (targetRow.anchor_date ?? null) : (currentSchedule?.assignmentAnchorDate ?? null);
+    const isCycleRow = targetRow
+      ? targetRow.work_schedules?.pattern_type === 'cycle'
+      : currentSchedule?.templatePatternType === 'cycle';
+
     const payload: { assignment_id: string; effective_from?: string; anchor_date?: string | null } = {
-      assignment_id: currentSchedule.assignmentId,
+      assignment_id: assignmentId,
     };
-    if (fixFrom && fixFrom !== (currentSchedule.effectiveFrom || '')) payload.effective_from = fixFrom;
-    if (currentSchedule.templatePatternType === 'cycle') {
+    if (fixFrom && fixFrom !== baseEffectiveFrom) payload.effective_from = fixFrom;
+    if (isCycleRow) {
       const norm = fixAnchor.trim() ? fixAnchor : null;
-      if (norm !== (currentSchedule.assignmentAnchorDate ?? null)) payload.anchor_date = norm;
+      if (norm !== baseAnchor) payload.anchor_date = norm;
     }
     if (payload.effective_from === undefined && !('anchor_date' in payload)) return;
     setSaving(true);
     try {
       await onFixAssignment(modalEmp.id, payload);
+      // Сбрасываем выбранную «строку из истории» — следующее открытие fix-таба
+      // снова будет работать с активной записью.
+      setFixTargetId(null);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleEditHistoryRow = (row: IEmployeeScheduleAssignment) => {
+    setFixTargetId(row.id);
+    setFixFrom(row.effective_from);
+    setFixAnchor(row.anchor_date ?? '');
+    setScheduleTab('fix');
+  };
+
+  const handleDeleteHistoryRow = async (row: IEmployeeScheduleAssignment) => {
+    const schedName = row.work_schedules?.name ?? '—';
+    const eto = row.effective_to ?? 'открыто';
+    if (!window.confirm(`Удалить запись «${schedName}» с ${row.effective_from} по ${eto}? Действие необратимо.`)) return;
+    setDeletingId(row.id);
+    try {
+      await onDeleteAssignmentRow(modalEmp.id, row.id);
+      if (fixTargetId === row.id) {
+        setFixTargetId(null);
+        setFixFrom(currentSchedule?.effectiveFrom || '');
+        setFixAnchor(currentSchedule?.assignmentAnchorDate ?? '');
+      }
+      await historyQuery.refetch();
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -425,13 +478,29 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
       && !anchorChanged;
 
     // ── Вкладка «Исправить назначение» ──────────────────────────────────────
-    const currentTemplate = templates.find(t => t.id === effectiveSchedule?.scheduleId) ?? null;
-    const isCurrentCycle = effectiveSchedule?.templatePatternType === 'cycle';
+    // Если из истории выбрана конкретная строка для правки — используем её
+    // данные, иначе — текущая активная employee-запись.
+    const fixTargetRow = fixTargetId ? history.find(r => r.id === fixTargetId) ?? null : null;
+    const baseFixFrom = fixTargetRow ? fixTargetRow.effective_from : (effectiveSchedule?.effectiveFrom || '');
+    const baseFixAnchor = fixTargetRow ? (fixTargetRow.anchor_date ?? null) : (effectiveSchedule?.assignmentAnchorDate ?? null);
+    const fixTargetIsCycle = fixTargetRow
+      ? fixTargetRow.work_schedules?.pattern_type === 'cycle'
+      : (effectiveSchedule?.templatePatternType === 'cycle');
+    const fixTargetScheduleName = fixTargetRow?.work_schedules?.name ?? effectiveSchedule?.scheduleName ?? '—';
+    const fixTargetTemplate = fixTargetRow
+      ? templates.find(t => t.id === fixTargetRow.schedule_id) ?? null
+      : templates.find(t => t.id === effectiveSchedule?.scheduleId) ?? null;
     const fixAnchorNorm = fixAnchor.trim() ? fixAnchor : null;
-    const fixFromChanged = !!fixFrom && fixFrom !== (effectiveSchedule?.effectiveFrom || '');
-    const fixAnchorChanged = isCurrentCycle && fixAnchorNorm !== (effectiveSchedule?.assignmentAnchorDate ?? null);
-    const fixDisabled = saving || !effectiveSchedule?.assignmentId || !fixFrom || (!fixFromChanged && !fixAnchorChanged);
-    const onFixTab = scheduleTab === 'fix' && hasFixableAssignment;
+    const fixFromChanged = !!fixFrom && fixFrom !== baseFixFrom;
+    const fixAnchorChanged = fixTargetIsCycle && fixAnchorNorm !== baseFixAnchor;
+    const fixAssignmentId = fixTargetRow?.id ?? effectiveSchedule?.assignmentId ?? null;
+    const fixDisabled = saving || !fixAssignmentId || !fixFrom || (!fixFromChanged && !fixAnchorChanged);
+    const hasAnyAssignment = history.length > 0 || hasFixableAssignment;
+    const onFixTab = scheduleTab === 'fix' && hasAnyAssignment;
+    // Алиасы для совместимости с дальнейшей разметкой (которая раньше читала
+    // currentTemplate / isCurrentCycle от текущей активной записи).
+    const currentTemplate = fixTargetTemplate;
+    const isCurrentCycle = fixTargetIsCycle;
 
     return (
       <div className="sc-overlay" onClick={onClose}>
@@ -441,36 +510,64 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
             <button className="sc-modal-close" onClick={onClose}>&times;</button>
           </div>
           <div className="sc-modal-body">
-            <div className="sc-segmented" role="tablist" aria-label="Режим" style={{ marginBottom: 14 }}>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={onFixTab}
-                disabled={!hasFixableAssignment}
-                title={hasFixableAssignment ? '' : 'У сотрудника нет персонального назначения'}
-                className={`sc-seg-btn${onFixTab ? ' is-active' : ''}`}
-                onClick={() => setScheduleTab('fix')}
-              >
-                Исправить назначение
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={!onFixTab}
-                className={`sc-seg-btn${!onFixTab ? ' is-active' : ''}`}
-                onClick={() => setScheduleTab('new')}
-              >
-                Новое назначение
-              </button>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+              <div className="sc-segmented" role="tablist" aria-label="Режим">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={onFixTab}
+                  disabled={!hasFixableAssignment}
+                  title={hasFixableAssignment ? '' : 'У сотрудника нет персонального назначения'}
+                  className={`sc-seg-btn${onFixTab ? ' is-active' : ''}`}
+                  onClick={() => setScheduleTab('fix')}
+                >
+                  Исправить назначение
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={!onFixTab}
+                  className={`sc-seg-btn${!onFixTab ? ' is-active' : ''}`}
+                  onClick={() => setScheduleTab('new')}
+                >
+                  Новое назначение
+                </button>
+              </div>
             </div>
 
             {onFixTab ? (
               <>
                 <div className="sc-schedule-help" style={{ marginBottom: 14 }}>
-                  <div><strong>Текущий график:</strong> {effectiveSchedule?.scheduleName || '—'}</div>
-                  <div><strong>Дата вступления:</strong> {effectiveSchedule?.effectiveFrom || '—'}</div>
-                  {isCurrentCycle && (
-                    <div><strong>Якорь назначения:</strong> {effectiveSchedule?.assignmentAnchorDate || `— (якорь паттерна ${currentTemplate?.anchor_date || '—'})`}</div>
+                  {fixTargetRow ? (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                        <span><strong>Правим запись из истории:</strong> {fixTargetScheduleName}</span>
+                        <button
+                          type="button"
+                          className="sc-btn cancel"
+                          style={{ fontSize: 11, padding: '2px 8px' }}
+                          onClick={() => {
+                            setFixTargetId(null);
+                            setFixFrom(effectiveSchedule?.effectiveFrom || '');
+                            setFixAnchor(effectiveSchedule?.assignmentAnchorDate ?? '');
+                          }}
+                        >
+                          Вернуться к активной
+                        </button>
+                      </div>
+                      <div><strong>Исходная дата вступления:</strong> {fixTargetRow.effective_from}</div>
+                      {fixTargetIsCycle && (
+                        <div><strong>Якорь назначения:</strong> {fixTargetRow.anchor_date || `— (якорь паттерна ${fixTargetTemplate?.anchor_date || '—'})`}</div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div><strong>Текущий график:</strong> {effectiveSchedule?.scheduleName || '—'}</div>
+                      <div><strong>Дата вступления:</strong> {effectiveSchedule?.effectiveFrom || '—'}</div>
+                      {isCurrentCycle && (
+                        <div><strong>Якорь назначения:</strong> {effectiveSchedule?.assignmentAnchorDate || `— (якорь паттерна ${currentTemplate?.anchor_date || '—'})`}</div>
+                      )}
+                    </>
                   )}
                 </div>
                 <div className="sc-field">
@@ -569,6 +666,88 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
                 )}
               </>
             )}
+
+            {/* ── История назначений ─────────────────────────────────── */}
+            <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--border-light)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <strong>История назначений</strong>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {historyQuery.isLoading ? 'Загрузка…' : `${history.length} ${history.length === 1 ? 'запись' : history.length < 5 && history.length > 1 ? 'записи' : 'записей'}`}
+                </span>
+              </div>
+              {!historyQuery.isLoading && history.length === 0 && (
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  Персональных назначений нет — сотрудник на графике {defaultScheduleLabel}.
+                </div>
+              )}
+              {history.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {history.map(row => {
+                    const isOpen = row.effective_to === null;
+                    const today = getLocalISODate();
+                    const isFuture = row.effective_from > today;
+                    const isClosed = !isOpen && (row.effective_to ?? '') < today;
+                    const badge = isOpen ? 'открыта' : isFuture ? 'будущая' : isClosed ? 'закрыта' : 'активна';
+                    const badgeColor = isOpen ? 'var(--success)' : isFuture ? 'var(--accent)' : 'var(--text-tertiary)';
+                    const isBeingEdited = fixTargetId === row.id;
+                    const isDeleting = deletingId === row.id;
+                    return (
+                      <div
+                        key={row.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '8px 10px',
+                          background: isBeingEdited ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
+                          border: `1px solid ${isBeingEdited ? 'var(--accent)' : 'var(--border-light)'}`,
+                          borderRadius: 6,
+                          fontSize: 13,
+                        }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {row.work_schedules?.name ?? '—'}
+                            </strong>
+                            <span style={{ fontSize: 11, color: badgeColor, border: `1px solid ${badgeColor}`, padding: '0 6px', borderRadius: 4 }}>
+                              {badge}
+                            </span>
+                          </div>
+                          <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                            с {row.effective_from} {row.effective_to ? `по ${row.effective_to}` : '— открыта'}
+                            {row.anchor_date ? ` · якорь ${row.anchor_date}` : ''}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            className="sc-btn cancel"
+                            style={{ padding: '4px 10px', fontSize: 12 }}
+                            disabled={saving || isDeleting}
+                            onClick={() => handleEditHistoryRow(row)}
+                            title="Изменить даты этой записи"
+                          >
+                            ✎ Изменить
+                          </button>
+                          <button
+                            type="button"
+                            className="sc-btn cancel"
+                            style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
+                            disabled={saving || isDeleting}
+                            onClick={() => handleDeleteHistoryRow(row)}
+                            title="Удалить запись полностью"
+                          >
+                            {isDeleting ? '…' : '🗑'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
           <div className="sc-modal-footer">
             <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
@@ -1573,6 +1752,24 @@ export const StaffControlPage: FC = () => {
     }
   }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries, employeeScheduleAssignmentsQuery]);
 
+  // Жёсткое удаление КОНКРЕТНОЙ строки из истории назначений (через кнопку 🗑
+  // в блоке «История» внутри модалки). Модалку не закрываем — пользователь
+  // продолжает чистить список или править оставшиеся записи.
+  const handleDeleteAssignmentRow = useCallback(async (
+    empId: number,
+    assignmentId: string,
+  ) => {
+    try {
+      await scheduleService.deleteEmployeeAssignment(empId, assignmentId);
+      invalidateEmployee(empId);
+      invalidateTimesheetQueries();
+      await employeeScheduleAssignmentsQuery.refetch();
+      toast.success('Запись назначения удалена');
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Не удалось удалить запись назначения');
+    }
+  }, [invalidateEmployee, toast, invalidateTimesheetQueries, employeeScheduleAssignmentsQuery]);
+
   const applyScheduleToEmployees = useCallback(async (
     employeeIds: number[],
     scheduleId: string | null,
@@ -2207,6 +2404,7 @@ export const StaffControlPage: FC = () => {
         onSaveDepartment={handleSaveDepartment}
         onSaveSchedule={handleSaveSchedule}
         onFixAssignment={handleFixAssignment}
+        onDeleteAssignmentRow={handleDeleteAssignmentRow}
       />
       <BulkScheduleModal
         open={bulkScheduleOpen}

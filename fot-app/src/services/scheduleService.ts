@@ -130,6 +130,19 @@ export const scheduleService = {
     return res.data;
   },
 
+  /** Полная история всех назначений сотрудника (открытые + закрытые + будущие). */
+  async listEmployeeHistory(employeeId: number): Promise<IEmployeeScheduleAssignment[]> {
+    const res = await apiClient.get<ApiResponse<IEmployeeScheduleAssignment[]>>(`/schedules/employee/${employeeId}/history`);
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки истории назначений');
+    return res.data;
+  },
+
+  /** Жёсткое удаление конкретной строки назначения по id. */
+  async deleteEmployeeAssignment(employeeId: number, assignmentId: string): Promise<void> {
+    const res = await apiClient.delete<ApiResponse<null>>(`/schedules/employee/${employeeId}/assignment/${assignmentId}`);
+    if (res.error) throw new Error(res.error);
+  },
+
   /** Снять персональный график сотрудника */
   async removeEmployeeAssignment(employeeId: number, effectiveTo?: string): Promise<void> {
     const query = effectiveTo ? `?effective_to=${encodeURIComponent(effectiveTo)}` : '';
