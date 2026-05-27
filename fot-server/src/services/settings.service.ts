@@ -67,6 +67,7 @@ export interface IOpenRouterResolvedConfig {
 
 export const ALLOWED_OPENROUTER_MODELS: IOpenRouterModelInfo[] = [
   { id: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true },
+  { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true },
 ];
 
 export const DEFAULT_OPENROUTER_SETTINGS = {
