@@ -599,7 +599,15 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   };
 
   return (
-    <div className="ts-modal-body" style={{ borderTop: '1px solid var(--border, #e5e7eb)', paddingTop: 12 }}>
+    <div
+      className="ts-modal-body"
+      style={{
+        borderTop: '1px solid var(--border, #e5e7eb)',
+        paddingTop: 12,
+        maxHeight: '50vh',
+        overflowY: 'auto',
+      }}
+    >
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Корректировки по объектам</div>
       {objectEntries.map(entry => {
         const state = rowState[entry.object_key] ?? { hours: 0, notes: '' };
@@ -867,19 +875,23 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         </div>
       ) : showCorrectionTab ? (
         <>
-          <CorrectionTab
-            onClose={onClose}
-            onSave={wrappedOnSave}
-            onDelete={onDelete}
-            initialStatus={initialStatus}
-            initialHours={initialHours ?? 8}
-            initialNotes={initialNotes}
-            confirmLabel={confirmLabel}
-            deleteLabel={deleteLabel}
-            allowedStatuses={allowedStatuses}
-            maxHours={maxHours}
-            correctionInfo={correctionInfo}
-          />
+          {/* При наличии объектов у дня day-level форма не нужна: корректировки
+              делаются per-object, иначе агрегат становится двусмысленным. */}
+          {!hasObjectsBlock && (
+            <CorrectionTab
+              onClose={onClose}
+              onSave={wrappedOnSave}
+              onDelete={onDelete}
+              initialStatus={initialStatus}
+              initialHours={initialHours ?? 8}
+              initialNotes={initialNotes}
+              confirmLabel={confirmLabel}
+              deleteLabel={deleteLabel}
+              allowedStatuses={allowedStatuses}
+              maxHours={maxHours}
+              correctionInfo={correctionInfo}
+            />
+          )}
           {hasObjectsBlock && (
             <ObjectCorrectionsList
               objectEntries={objectEntries!}
