@@ -1186,7 +1186,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             .filter(Boolean)
                             .join(' • ')
                           : baseTitle;
-                        const isClickable = !dayOff;
+                        // Одиночный клик разрешён и в выходной — для корректировок руководителем.
+                        // Bulk остаётся под !dayOff.
+                        const isBulkClickable = !dayOff;
                         const isBlocked = row.isSynthetic;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate));
@@ -1195,17 +1197,17 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             key={`${group.object_key}_${row.employee.id}_${day}`}
                             className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
-                            onMouseDown={bulkEditMode && isClickable ? (event) => handleBulkCellMouseDown(
+                            onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,
                               getObjectBulkRowKey(row.employee.id, row.object_key),
                               day,
                               isBlocked,
                             ) : undefined}
-                            onMouseEnter={bulkEditMode && isClickable ? () => handleBulkCellMouseEnter(
+                            onMouseEnter={bulkEditMode && isBulkClickable ? () => handleBulkCellMouseEnter(
                               getObjectBulkRowKey(row.employee.id, row.object_key),
                               day,
                             ) : undefined}
-                            onClick={!bulkEditMode && isClickable ? () => {
+                            onClick={!bulkEditMode ? () => {
                               if (row.isSynthetic) {
                                 onDayClick(row.employee, day, row.dailyEntries.get(day) || null);
                                 return;
@@ -1445,7 +1447,10 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             .filter(Boolean)
                             .join(' • ')
                           : baseTitle;
-                        const isClickable = !dayOff;
+                        // Одиночный клик разрешён и в выходной — руководитель может внести
+                        // корректировку (например, выход в выходной). Bulk оставляем под !dayOff,
+                        // чтобы случайное протягивание не цепляло выходные.
+                        const isBulkClickable = !dayOff;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate));
                         return (
@@ -1453,17 +1458,17 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             key={`${objectRow.object_key}_${day}`}
                             className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
-                            onMouseDown={bulkEditMode && isClickable ? (event) => handleBulkCellMouseDown(
+                            onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,
                               getObjectBulkRowKey(row.employee.id, objectRow.object_key),
                               day,
                               false,
                             ) : undefined}
-                            onMouseEnter={bulkEditMode && isClickable ? () => handleBulkCellMouseEnter(
+                            onMouseEnter={bulkEditMode && isBulkClickable ? () => handleBulkCellMouseEnter(
                               getObjectBulkRowKey(row.employee.id, objectRow.object_key),
                               day,
                             ) : undefined}
-                            onClick={!bulkEditMode && isClickable ? () => onObjectDayClick(row.employee, day, {
+                            onClick={!bulkEditMode ? () => onObjectDayClick(row.employee, day, {
                               object_key: objectRow.object_key,
                               object_id: objectRow.object_id,
                               object_name: objectRow.object_name,
