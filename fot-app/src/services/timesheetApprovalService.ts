@@ -99,6 +99,67 @@ export interface IApprovalReviewItem extends ITimesheetApproval {
   };
 }
 
+export type ManagerRoleCode = 'manager' | 'manager_obj';
+
+export interface ITimesheetDashboardTotals {
+  departments_total: number;
+  departments_submitted: number;
+  departments_approved: number;
+  departments_returned: number;
+  departments_not_submitted: number;
+  managers_personal_total: number;
+  managers_personal_submitted: number;
+  managers_personal_approved: number;
+}
+
+export interface ITimesheetDashboardNotSubmittedDept {
+  department_id: string;
+  department_name: string;
+  parent_path: string;
+  responsible_user_id: string | null;
+  responsible_name: string | null;
+}
+
+export interface ITimesheetDashboardNotSubmittedManager {
+  employee_id: number;
+  full_name: string;
+  department_path: string;
+}
+
+export interface ITimesheetDashboardManagerBound {
+  user_id: string;
+  full_name: string;
+  role_code: ManagerRoleCode;
+  departments: Array<{ id: string; name: string }>;
+}
+
+export interface ITimesheetDashboardManagerUnbound {
+  user_id: string;
+  full_name: string;
+  role_code: ManagerRoleCode;
+}
+
+export interface ITimesheetDashboardUnregisteredManager {
+  employee_id: number;
+  full_name: string;
+  position_name: string;
+  department_path: string;
+}
+
+export interface ITimesheetDashboard {
+  period: { start_date: string; end_date: string };
+  approvals: {
+    totals: ITimesheetDashboardTotals;
+    not_submitted_departments: ITimesheetDashboardNotSubmittedDept[];
+    not_submitted_managers: ITimesheetDashboardNotSubmittedManager[];
+  };
+  managers: {
+    registered_bound: ITimesheetDashboardManagerBound[];
+    registered_unbound: ITimesheetDashboardManagerUnbound[];
+    unregistered: ITimesheetDashboardUnregisteredManager[];
+  };
+}
+
 export type TimesheetSubmissionMode = 'department' | 'personal';
 
 interface ISubmissionTarget {
@@ -271,6 +332,14 @@ export const timesheetApprovalService = {
   getSubmittedEmployees: async (id: number) => {
     const res = await apiClient.get<ApiResponse<{ employees: Array<{ employee_id: number; full_name: string }> }>>(
       `/timesheet-approvals/${id}/employees`,
+    );
+    return res.data;
+  },
+
+  getDashboard: async (start_date: string, end_date: string) => {
+    const qs = new URLSearchParams({ start_date, end_date });
+    const res = await apiClient.get<ApiResponse<ITimesheetDashboard>>(
+      `/timesheet-approvals/dashboard?${qs.toString()}`,
     );
     return res.data;
   },

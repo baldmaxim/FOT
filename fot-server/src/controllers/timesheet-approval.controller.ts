@@ -7,6 +7,7 @@ import type {
   TimesheetApprovalStatus,
 } from '../types/index.js';
 import {
+  resolveAccessibleDepartmentIds,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
   resolveScopedDepartmentId,
@@ -1970,6 +1971,312 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
   }
 };
 
+/**
+ * HR-дашборд: сводка по подаче/утверждению табелей за период + карта руководителей
+ * (с привязкой к отделам и без, зарегистрированных в ФОТ и не зарегистрированных).
+ */
+const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const range = parseRangeFromQuery(req.query as Record<string, unknown>);
+    if (!range) {
+      res.status(400).json({ success: false, error: 'start_date и end_date обязательны' });
+      return;
+    }
+
+    const accessible = await resolveAccessibleDepartmentIds(req);
+    if (accessible !== 'all' && accessible.length === 0) {
+      res.status(403).json({ success: false, error: 'Нет доступа' });
+      return;
+    }
+
+    const scopeIsAll = accessible === 'all';
+    const scopeIds = scopeIsAll ? [] : accessible;
+
+    // 1. Список отделов в скоупе (для расчёта «не подано»).
+    type DeptRow = {
+      id: string;
+      name: string | null;
+      parent_id: string | null;
+    };
+    const deptRows = scopeIsAll
+      ? await query<DeptRow>(`SELECT id, name, parent_id FROM org_departments`)
+      : await query<DeptRow>(
+        `SELECT id, name, parent_id FROM org_departments WHERE id = ANY($1::uuid[])`,
+        [scopeIds],
+      );
+    const deptById = new Map(deptRows.map(d => [d.id, d]));
+    const deptPath = (id: string | null): string => {
+      const parts: string[] = [];
+      let cur: string | null = id;
+      const guard = new Set<string>();
+      while (cur && !guard.has(cur)) {
+        guard.add(cur);
+        const d = deptById.get(cur);
+        if (!d) break;
+        parts.unshift(d.name ?? cur);
+        cur = d.parent_id;
+      }
+      return parts.join(' / ');
+    };
+
+    // 2. Согласования табелей в выбранном диапазоне (пересечение).
+    type ApprovalSlim = {
+      id: number;
+      department_id: string | null;
+      manager_employee_id: number | null;
+      status: TimesheetApprovalStatus;
+      start_date: string;
+      end_date: string;
+    };
+    const approvalWhere: string[] = [
+      `ta.start_date <= $1`,
+      `ta.end_date >= $2`,
+    ];
+    const approvalParams: unknown[] = [range.endDate, range.startDate];
+    if (!scopeIsAll) {
+      approvalParams.push(scopeIds);
+      approvalWhere.push(
+        `(ta.department_id = ANY($${approvalParams.length}::uuid[])` +
+        ` OR ta.manager_employee_id IS NOT NULL)`,
+      );
+    }
+    const approvals = await query<ApprovalSlim>(
+      `SELECT id, department_id, manager_employee_id, status, start_date, end_date
+         FROM timesheet_approvals ta
+         WHERE ${approvalWhere.join(' AND ')}`,
+      approvalParams,
+    );
+
+    const submittedStatuses = new Set<TimesheetApprovalStatus>(['submitted', 'approved']);
+    const approvedStatuses = new Set<TimesheetApprovalStatus>(['approved']);
+    const returnedStatuses = new Set<TimesheetApprovalStatus>(['returned', 'rejected']);
+
+    const departmentsSubmitted = new Set<string>();
+    const departmentsApproved = new Set<string>();
+    const departmentsReturned = new Set<string>();
+    const managersSubmitted = new Set<number>();
+    const managersApproved = new Set<number>();
+    const managersReturned = new Set<number>();
+    const allManagersInPeriod = new Set<number>();
+
+    for (const a of approvals) {
+      if (a.department_id) {
+        if (submittedStatuses.has(a.status)) departmentsSubmitted.add(a.department_id);
+        if (approvedStatuses.has(a.status)) departmentsApproved.add(a.department_id);
+        if (returnedStatuses.has(a.status)) departmentsReturned.add(a.department_id);
+      } else if (a.manager_employee_id != null) {
+        allManagersInPeriod.add(a.manager_employee_id);
+        if (submittedStatuses.has(a.status)) managersSubmitted.add(a.manager_employee_id);
+        if (approvedStatuses.has(a.status)) managersApproved.add(a.manager_employee_id);
+        if (returnedStatuses.has(a.status)) managersReturned.add(a.manager_employee_id);
+      }
+    }
+
+    // 3. Отделы без подачи (в скоупе) + ответственные.
+    const notSubmittedDeptIds = deptRows
+      .map(d => d.id)
+      .filter(id => !departmentsSubmitted.has(id));
+
+    type ResponsibleRow = {
+      department_id: string;
+      user_id: string;
+      full_name: string | null;
+    };
+    const responsibleRows = notSubmittedDeptIds.length > 0
+      ? await query<ResponsibleRow>(
+        `SELECT tr.department_id, tr.user_id, up.full_name
+           FROM timesheet_responsibles tr
+           JOIN user_profiles up ON up.id = tr.user_id
+          WHERE tr.is_active = TRUE
+            AND tr.role = 'primary'
+            AND tr.department_id = ANY($1::uuid[])`,
+        [notSubmittedDeptIds],
+      )
+      : [];
+    const responsibleByDept = new Map<string, ResponsibleRow>(
+      responsibleRows.map(r => [r.department_id, r]),
+    );
+
+    const not_submitted_departments = notSubmittedDeptIds.map(id => {
+      const d = deptById.get(id);
+      const resp = responsibleByDept.get(id);
+      return {
+        department_id: id,
+        department_name: d?.name ?? id,
+        parent_path: deptPath(id),
+        responsible_user_id: resp?.user_id ?? null,
+        responsible_name: resp?.full_name ?? null,
+      };
+    });
+
+    // 4. Карта руководителей: зарегистрированные в ФОТ (+ привязка к отделам).
+    type RegisteredRow = {
+      user_id: string;
+      full_name: string | null;
+      role_code: string;
+      department_id: string | null;
+      department_name: string | null;
+    };
+    const registeredRows = await query<RegisteredRow>(
+      `SELECT up.id::text AS user_id,
+              up.full_name,
+              sr.code AS role_code,
+              od.id::text AS department_id,
+              od.name AS department_name
+         FROM user_profiles up
+         JOIN system_roles sr ON sr.id = up.system_role_id
+         LEFT JOIN user_department_access uda
+                ON uda.user_id = up.id AND uda.is_active = TRUE
+         LEFT JOIN org_departments od ON od.id = uda.department_id
+        WHERE sr.code IN ('manager','manager_obj')
+          AND up.is_approved = TRUE
+        ORDER BY up.full_name NULLS LAST`,
+    );
+
+    type ManagerEntry = {
+      user_id: string;
+      full_name: string;
+      role_code: 'manager' | 'manager_obj';
+      departments: Array<{ id: string; name: string }>;
+    };
+    const registeredById = new Map<string, ManagerEntry>();
+    for (const row of registeredRows) {
+      const id = row.user_id;
+      let entry = registeredById.get(id);
+      if (!entry) {
+        entry = {
+          user_id: id,
+          full_name: row.full_name ?? '',
+          role_code: (row.role_code === 'manager_obj' ? 'manager_obj' : 'manager') as 'manager' | 'manager_obj',
+          departments: [],
+        };
+        registeredById.set(id, entry);
+      }
+      if (row.department_id) {
+        const inScope = scopeIsAll || scopeIds.includes(row.department_id);
+        if (inScope) {
+          entry.departments.push({ id: row.department_id, name: row.department_name ?? row.department_id });
+        }
+      }
+    }
+
+    const registered_bound: ManagerEntry[] = [];
+    const registered_unbound: Array<Omit<ManagerEntry, 'departments'>> = [];
+    for (const entry of registeredById.values()) {
+      if (entry.departments.length > 0) {
+        registered_bound.push(entry);
+      } else {
+        registered_unbound.push({
+          user_id: entry.user_id,
+          full_name: entry.full_name,
+          role_code: entry.role_code,
+        });
+      }
+    }
+
+    // 5. Незарегистрированные руководители: employees с positions.category='manager' и без user_profile.
+    type UnregisteredRow = {
+      employee_id: number;
+      full_name: string | null;
+      position_name: string | null;
+      department_id: string | null;
+    };
+    const unregisteredParams: unknown[] = [];
+    const unregisteredWhere: string[] = [
+      `p.category = 'manager'`,
+      `up.id IS NULL`,
+      `COALESCE(e.is_archived, FALSE) = FALSE`,
+      `COALESCE(e.current_status, '') NOT IN ('Уволен','Уволена','уволен','уволена','dismissed')`,
+    ];
+    if (!scopeIsAll) {
+      unregisteredParams.push(scopeIds);
+      unregisteredWhere.push(`e.org_department_id = ANY($${unregisteredParams.length}::uuid[])`);
+    }
+    const unregisteredRows = await query<UnregisteredRow>(
+      `SELECT e.id::int AS employee_id,
+              e.full_name,
+              p.name AS position_name,
+              e.org_department_id::text AS department_id
+         FROM employees e
+         JOIN positions p ON p.id = e.position_id
+         LEFT JOIN user_profiles up ON up.employee_id = e.id
+        WHERE ${unregisteredWhere.join(' AND ')}
+        ORDER BY e.full_name NULLS LAST`,
+      unregisteredParams,
+    );
+
+    const unregistered = unregisteredRows.map(r => ({
+      employee_id: r.employee_id,
+      full_name: r.full_name ?? '',
+      position_name: r.position_name ?? '',
+      department_path: deptPath(r.department_id),
+    }));
+
+    // 6. Личные подачи менеджеров «не подали»: те, у кого есть direct_reports в скоупе,
+    //    но в выбранном периоде не появилось ни submitted/approved. Берём пул менеджеров
+    //    из user_profiles (manager_obj + manager с is_site_supervisor=true): они и подают
+    //    личные табели. Простой агрегат — manager_employee_id_in_period.
+    type PersonalManagerRow = {
+      employee_id: number;
+      full_name: string | null;
+      department_id: string | null;
+    };
+    const personalManagerRows = await query<PersonalManagerRow>(
+      `SELECT DISTINCT e.id::int AS employee_id,
+              e.full_name,
+              e.org_department_id::text AS department_id
+         FROM employee_direct_reports edr
+         JOIN employees e ON e.id = edr.manager_employee_id
+        WHERE COALESCE(edr.is_active, TRUE) = TRUE
+          AND COALESCE(e.is_archived, FALSE) = FALSE`,
+    );
+
+    const personalManagerIds = personalManagerRows.map(r => r.employee_id);
+    const not_submitted_managers = personalManagerRows
+      .filter(r => !managersSubmitted.has(r.employee_id) && !managersApproved.has(r.employee_id))
+      .map(r => ({
+        employee_id: r.employee_id,
+        full_name: r.full_name ?? '',
+        department_path: deptPath(r.department_id),
+      }));
+
+    const departments_total = deptRows.length;
+    const departments_submitted = departmentsSubmitted.size;
+    const departments_approved = departmentsApproved.size;
+    const departments_returned = departmentsReturned.size;
+    const departments_not_submitted = Math.max(0, departments_total - departments_submitted);
+
+    res.json({
+      success: true,
+      data: {
+        period: { start_date: range.startDate, end_date: range.endDate },
+        approvals: {
+          totals: {
+            departments_total,
+            departments_submitted,
+            departments_approved,
+            departments_returned,
+            departments_not_submitted,
+            managers_personal_total: personalManagerIds.length,
+            managers_personal_submitted: managersSubmitted.size,
+            managers_personal_approved: managersApproved.size,
+          },
+          not_submitted_departments,
+          not_submitted_managers,
+        },
+        managers: {
+          registered_bound,
+          registered_unbound,
+          unregistered,
+        },
+      },
+    });
+  } catch (err) {
+    console.error('timesheet-approval.getDashboard error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения дашборда' });
+  }
+};
+
 /** HR / руководитель в скоупе: состав сотрудников, поданных на согласование (снимок на момент submit). */
 const getSubmittedEmployees = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -2011,4 +2318,5 @@ export const timesheetApprovalController = {
   getAttachmentDownloadUrl,
   getReviewList,
   getSubmittedEmployees,
+  getDashboard,
 };

@@ -94,6 +94,24 @@ export const useTimesheetApprovalHistory = (approvalId: number | null, enabled =
   placeholderData: previousData => previousData,
 });
 
+export const getTimesheetApprovalDashboardQueryKey = (
+  startDate: string,
+  endDate: string,
+) => ['timesheet-approval', 'dashboard', startDate, endDate] as const;
+
+/** HR-дашборд: сводка подачи/утверждения + карта руководителей. */
+export const useTimesheetApprovalDashboard = (
+  startDate: string,
+  endDate: string,
+  enabled = true,
+) => useQuery({
+  queryKey: getTimesheetApprovalDashboardQueryKey(startDate, endDate),
+  queryFn: () => timesheetApprovalService.getDashboard(startDate, endDate),
+  enabled: enabled && !!startDate && !!endDate,
+  staleTime: 60_000,
+  placeholderData: previousData => previousData,
+});
+
 export const getWeekendMemoPreviewQueryKey = (
   departmentId: string | null,
   startDate: string,

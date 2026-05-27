@@ -46,4 +46,7 @@ router.delete('/attachments/:document_id', requirePageAccess('/timesheet', 'edit
 // Объединённый review-list для админской страницы согласований.
 router.get('/review-list', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getReviewList);
 
+// Дашборд HR: статистика подачи/утверждения + карта руководителей.
+router.get('/dashboard', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getDashboard);
+
 export default router;

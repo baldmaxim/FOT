@@ -11,17 +11,18 @@ import {
 } from '../../utils/timesheetApprovalPeriod';
 import { MassTimesheetExportDepartmentsTab } from './MassTimesheetExportDepartmentsTab';
 import { MassTimesheetExportAssignedTab } from './MassTimesheetExportAssignedTab';
+import { MassTimesheetExportDashboardTab } from './MassTimesheetExportDashboardTab';
 import './MassTimesheetExportPage.css';
 
 type TimesheetGroupingMode = 'employees' | 'objects';
-type ExportTab = 'departments' | 'assigned';
+type ExportTab = 'departments' | 'assigned' | 'dashboard';
 
-const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v2';
+const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v3';
 
 const loadStoredActiveTab = (): ExportTab => {
   try {
     const raw = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-    if (raw === 'departments' || raw === 'assigned') return raw;
+    if (raw === 'departments' || raw === 'assigned' || raw === 'dashboard') return raw;
   } catch {
     // ignore
   }
@@ -94,67 +95,71 @@ export const MassTimesheetExportPage: FC = () => {
     else setMonth(m => m + 1);
   }, [canGoNext, month]);
 
+  const isDashboardTab = activeTab === 'dashboard';
+
   return (
     <div className="mte-page">
-      <div className="mte-toolbar">
-        <div className="mte-month-nav">
-          <button className="mte-month-btn" onClick={prevMonth} disabled={!canGoPrev}>
-            <ChevronLeft size={16} />
-          </button>
-          <span className="mte-month-label">{getMonthLabel(year, month)}</span>
-          <button className="mte-month-btn" onClick={nextMonth} disabled={!canGoNext}>
-            <ChevronRight size={16} />
-          </button>
+      {!isDashboardTab && (
+        <div className="mte-toolbar">
+          <div className="mte-month-nav">
+            <button className="mte-month-btn" onClick={prevMonth} disabled={!canGoPrev}>
+              <ChevronLeft size={16} />
+            </button>
+            <span className="mte-month-label">{getMonthLabel(year, month)}</span>
+            <button className="mte-month-btn" onClick={nextMonth} disabled={!canGoNext}>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+          <section className="mte-half-toggle" aria-label="Период выгрузки табелей">
+            <button
+              type="button"
+              className={`mte-half-chip ${half === 'H1' ? 'mte-half-chip--active' : ''}`}
+              onClick={() => setHalf('H1')}
+            >
+              {formatHalfLabel(year, month, 'H1')}
+            </button>
+            <button
+              type="button"
+              className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
+              onClick={() => setHalf('H2')}
+            >
+              {formatHalfLabel(year, month, 'H2')}
+            </button>
+            <button
+              type="button"
+              className={`mte-half-chip ${half === 'FULL' ? 'mte-half-chip--active' : ''}`}
+              onClick={() => setHalf('FULL')}
+            >
+              {formatHalfLabel(year, month, 'FULL')}
+            </button>
+          </section>
+          <div className="mte-half-toggle" role="group" aria-label="Группировка">
+            <button
+              type="button"
+              className={`mte-half-chip ${groupBy === 'employees' ? 'mte-half-chip--active' : ''}`}
+              onClick={() => setGroupBy('employees')}
+            >
+              Сотрудники
+            </button>
+            <button
+              type="button"
+              className={`mte-half-chip ${groupBy === 'objects' ? 'mte-half-chip--active' : ''}`}
+              onClick={() => setGroupBy('objects')}
+            >
+              Объекты
+            </button>
+          </div>
+          <label className={`mte-inline-check mte-inline-check--push ${exportAs1C ? 'mte-inline-check--on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={exportAs1C}
+              onChange={e => setExportAs1C(e.target.checked)}
+            />
+            <span className="mte-inline-check-box" aria-hidden="true" />
+            <span className="mte-inline-check-label">Как в 1С</span>
+          </label>
         </div>
-        <section className="mte-half-toggle" aria-label="Период выгрузки табелей">
-          <button
-            type="button"
-            className={`mte-half-chip ${half === 'H1' ? 'mte-half-chip--active' : ''}`}
-            onClick={() => setHalf('H1')}
-          >
-            {formatHalfLabel(year, month, 'H1')}
-          </button>
-          <button
-            type="button"
-            className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
-            onClick={() => setHalf('H2')}
-          >
-            {formatHalfLabel(year, month, 'H2')}
-          </button>
-          <button
-            type="button"
-            className={`mte-half-chip ${half === 'FULL' ? 'mte-half-chip--active' : ''}`}
-            onClick={() => setHalf('FULL')}
-          >
-            {formatHalfLabel(year, month, 'FULL')}
-          </button>
-        </section>
-        <div className="mte-half-toggle" role="group" aria-label="Группировка">
-          <button
-            type="button"
-            className={`mte-half-chip ${groupBy === 'employees' ? 'mte-half-chip--active' : ''}`}
-            onClick={() => setGroupBy('employees')}
-          >
-            Сотрудники
-          </button>
-          <button
-            type="button"
-            className={`mte-half-chip ${groupBy === 'objects' ? 'mte-half-chip--active' : ''}`}
-            onClick={() => setGroupBy('objects')}
-          >
-            Объекты
-          </button>
-        </div>
-        <label className={`mte-inline-check mte-inline-check--push ${exportAs1C ? 'mte-inline-check--on' : ''}`}>
-          <input
-            type="checkbox"
-            checked={exportAs1C}
-            onChange={e => setExportAs1C(e.target.checked)}
-          />
-          <span className="mte-inline-check-box" aria-hidden="true" />
-          <span className="mte-inline-check-label">Как в 1С</span>
-        </label>
-      </div>
+      )}
 
       <div className="mte-tabs" role="tablist">
         <button
@@ -175,10 +180,19 @@ export const MassTimesheetExportPage: FC = () => {
         >
           Участки
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'dashboard'}
+          className={`mte-tab-button ${activeTab === 'dashboard' ? 'mte-tab-button--active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          Дашборд
+        </button>
       </div>
 
       <div className="mte-body">
-        {activeTab === 'departments' ? (
+        {activeTab === 'departments' && (
           <MassTimesheetExportDepartmentsTab
             year={year}
             month={month}
@@ -187,7 +201,8 @@ export const MassTimesheetExportPage: FC = () => {
             groupBy={groupBy}
             exportAs1C={exportAs1C}
           />
-        ) : (
+        )}
+        {activeTab === 'assigned' && (
           <MassTimesheetExportAssignedTab
             year={year}
             month={month}
@@ -196,6 +211,9 @@ export const MassTimesheetExportPage: FC = () => {
             groupBy={groupBy}
             exportAs1C={exportAs1C}
           />
+        )}
+        {activeTab === 'dashboard' && (
+          <MassTimesheetExportDashboardTab />
         )}
       </div>
     </div>
