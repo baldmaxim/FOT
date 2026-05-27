@@ -32,6 +32,26 @@ export class PoolNotConfiguredError extends Error {
   }
 }
 
+export type SigurOperation = 'move' | 'rename_block';
+
+export class SigurOperationError extends Error {
+  public readonly op: SigurOperation;
+  public readonly sigurEmployeeId: number;
+  public readonly cause: unknown;
+
+  constructor(op: SigurOperation, sigurEmployeeId: number, cause: unknown) {
+    const causeMsg = cause instanceof Error ? cause.message : String(cause);
+    const action = op === 'move'
+      ? 'перенести профиль в папку пула'
+      : 'переименовать/заблокировать профиль';
+    super(`Sigur API: не удалось ${action} (id ${sigurEmployeeId}) — ${causeMsg}`);
+    this.name = 'SigurOperationError';
+    this.op = op;
+    this.sigurEmployeeId = sigurEmployeeId;
+    this.cause = cause;
+  }
+}
+
 /** Sigur-id выбранной папки общего пула или null, если не настроено. */
 export const getFreePoolDepartmentId = async (): Promise<number | null> => {
   const raw = await settingsService.get(POOL_SETTINGS_KEY);
@@ -353,6 +373,17 @@ export interface IRevokeToPoolResult {
   pass_id: string;
   pass_number: string;
   status: 'returned_to_pool';
+  /** true, если профиль в Sigur уже удалён (orphan) — sigur_employee_id обнулён. */
+  sigur_orphan?: boolean;
+}
+
+/** Sigur через axios отдаёт 404 на удалённые профили — отличаем это от прочих ошибок. */
+function isSigurNotFound(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { response?: { status?: number }; status?: number; message?: string };
+  if (e.response?.status === 404 || e.status === 404) return true;
+  const msg = (e.message || '').toLowerCase();
+  return msg.includes('not found') || msg.includes('404');
 }
 
 /**
@@ -389,21 +420,45 @@ export const revokePassToPool = async (input: {
 
   const poolDeptId = dryRun ? 0 : await requireFreePoolDepartmentId();
 
+  let orphanInSigur = false;
   if (!dryRun && pass.sigur_employee_id) {
     try {
       await moveSigurEmployee(pass.sigur_employee_id, poolDeptId, connection);
     } catch (e) {
-      throw new Error(`Sigur move: ${e instanceof Error ? e.message : String(e)}`);
+      if (isSigurNotFound(e)) {
+        orphanInSigur = true;
+        console.warn('[revokePassToPool] Sigur profile missing (orphan), unbinding', {
+          passId: pass.id,
+          passNumber: pass.pass_number,
+          sigurEmployeeId: pass.sigur_employee_id,
+        });
+      } else {
+        throw new SigurOperationError('move', pass.sigur_employee_id, e);
+      }
     }
-    try {
-      await updateSigurEmployee(
-        pass.sigur_employee_id,
-        { name: `Пропуск ${pass.pass_number}`, blocked: true },
-        connection,
-      );
-    } catch (e) {
-      // некритично — оставляем как есть
-      console.error('revokePassToPool: rename/block warning', e);
+    if (!orphanInSigur) {
+      try {
+        await updateSigurEmployee(
+          pass.sigur_employee_id,
+          { name: `Пропуск ${pass.pass_number}`, blocked: true },
+          connection,
+        );
+      } catch (e) {
+        if (isSigurNotFound(e)) {
+          orphanInSigur = true;
+          console.warn('[revokePassToPool] Sigur profile vanished mid-revoke', {
+            passId: pass.id,
+            sigurEmployeeId: pass.sigur_employee_id,
+          });
+        } else {
+          // некритично — оставляем как есть, но логируем деградацию
+          console.warn('[revokePassToPool] rename/block warning', {
+            sigurEmployeeId: pass.sigur_employee_id,
+            passNumber: pass.pass_number,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
     }
   }
 
@@ -417,9 +472,10 @@ export const revokePassToPool = async (input: {
               access_point_names = NULL,
               approval_status = 'not_submitted',
               is_active = false,
+              sigur_employee_id = CASE WHEN $2::boolean THEN NULL ELSE sigur_employee_id END,
               updated_at = now()
         WHERE id = $1::uuid`,
-      [pass.id],
+      [pass.id, orphanInSigur],
     );
     await client.query(
       `UPDATE contractor_pass_holders
@@ -430,7 +486,12 @@ export const revokePassToPool = async (input: {
   });
 
   void input.userId;
-  return { pass_id: pass.id, pass_number: pass.pass_number, status: 'returned_to_pool' };
+  return {
+    pass_id: pass.id,
+    pass_number: pass.pass_number,
+    status: 'returned_to_pool',
+    ...(orphanInSigur ? { sigur_orphan: true } : {}),
+  };
 };
 
 /** Отозвать пропуск из пула (физически из Sigur не удаляем — оставляем как blocked-инвентарь). */

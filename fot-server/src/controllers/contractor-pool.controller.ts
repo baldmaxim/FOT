@@ -7,6 +7,7 @@
  */
 import type { Response } from 'express';
 import { z } from 'zod';
+import { Sentry } from '../instrument.js';
 import { query } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
@@ -20,6 +21,7 @@ import {
   PoolNotConfiguredError,
   revokePassToPool,
   setFreePoolDepartmentId,
+  SigurOperationError,
 } from '../services/contractor-pool.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import { ContractorScopeError } from '../services/contractor-scope.service.js';
@@ -69,6 +71,7 @@ export const contractorPoolController = {
       }
       res.json({ success: true, data: { sigur_department_id: id, name } });
     } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.getSettings' } });
       console.error('Pool getSettings error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить настройки пула' });
     }
@@ -103,6 +106,7 @@ export const contractorPoolController = {
         res.status(400).json({ success: false, error: error.errors[0].message });
         return;
       }
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.setSettings' } });
       console.error('Pool setSettings error:', error);
       res.status(500).json({ success: false, error: 'Не удалось сохранить настройки' });
     }
@@ -126,6 +130,7 @@ export const contractorPoolController = {
         .filter(d => d.id != null && d.name != null);
       res.json({ success: true, data });
     } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.listSigurDepartments' } });
       console.error('Pool listSigurDepartments error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить отделы Sigur' });
     }
@@ -143,6 +148,7 @@ export const contractorPoolController = {
       const data = await listPool({ search, limit, offset });
       res.json({ success: true, data });
     } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.list' } });
       console.error('Pool list error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить пул' });
     }
@@ -155,6 +161,7 @@ export const contractorPoolController = {
       const data = await getPoolRanges();
       res.json({ success: true, data });
     } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.getRanges' } });
       console.error('Pool getRanges error:', error);
       res.status(500).json({ success: false, error: 'Не удалось получить диапазоны пула' });
     }
@@ -199,6 +206,10 @@ export const contractorPoolController = {
         res.status(400).json({ success: false, error: error.errors[0].message });
         return;
       }
+      Sentry.captureException(error, {
+        tags: { route: 'contractor.pool.issueToPool' },
+        extra: { userId: req.user?.id },
+      });
       console.error('Pool issueToPool error:', error);
       res.status(500).json({ success: false, error: 'Не удалось добавить пропуска в пул' });
     }
@@ -243,6 +254,10 @@ export const contractorPoolController = {
         res.status(400).json({ success: false, error: error.errors[0].message });
         return;
       }
+      Sentry.captureException(error, {
+        tags: { route: 'contractor.pool.assign' },
+        extra: { userId: req.user?.id },
+      });
       console.error('Pool assign error:', error);
       res.status(500).json({ success: false, error: 'Не удалось назначить пропуска' });
     }
@@ -253,15 +268,24 @@ export const contractorPoolController = {
    * подрядчику, обратно в общий пул. Возвращает в Sigur папку пула + blocked.
    */
   async revokePass(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const passId = typeof req.params.id === 'string' ? req.params.id : undefined;
     try {
       if (!(await ensureSystemAdmin(req, res))) return;
-      const passId = z.string().uuid().parse(req.params.id);
+      const parsedPassId = z.string().uuid().parse(req.params.id);
       let result;
       try {
-        result = await revokePassToPool({ passId, userId: req.user.id });
+        result = await revokePassToPool({ passId: parsedPassId, userId: req.user.id });
       } catch (e) {
         if (e instanceof PoolNotConfiguredError) {
           sendPoolNotConfigured(res);
+          return;
+        }
+        if (e instanceof SigurOperationError) {
+          Sentry.captureException(e, {
+            tags: { route: 'contractor.revokePass', sigur_op: e.op },
+            extra: { passId: parsedPassId, sigurEmployeeId: e.sigurEmployeeId },
+          });
+          res.status(502).json({ success: false, error: e.message });
           return;
         }
         const msg = e instanceof Error ? e.message : String(e);
@@ -274,7 +298,7 @@ export const contractorPoolController = {
 
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_ADDED, {
         entityType: 'contractor_pass',
-        entityId: passId,
+        entityId: parsedPassId,
         details: { action: 'revoked_to_pool', pass_number: result.pass_number },
       });
 
@@ -284,6 +308,10 @@ export const contractorPoolController = {
         res.status(400).json({ success: false, error: 'Некорректный id пропуска' });
         return;
       }
+      Sentry.captureException(error, {
+        tags: { route: 'contractor.revokePass' },
+        extra: { passId, userId: req.user?.id },
+      });
       console.error('Pool revokePass error:', error);
       res.status(500).json({ success: false, error: 'Не удалось отозвать пропуск' });
     }
@@ -300,6 +328,7 @@ export const contractorPoolController = {
       const max = rows[0]?.max_num ?? null;
       res.json({ success: true, data: { next: max ? max + 1 : 1 } });
     } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.getNextNumber' } });
       console.error('Pool getNextNumber error:', error);
       res.status(500).json({ success: false, error: 'Не удалось получить номер' });
     }
