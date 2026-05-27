@@ -120,7 +120,12 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // в модалке «График работы») refetch должен идти на сервер. Иначе кэш 30с
     // отдавал старый список — удалённая строка визуально оставалась, а вторая
     // попытка удалить её получала 404 «Назначение не найдено».
-    || /^\/schedules\/employee\/\d+\/history$/.test(path);
+    || /^\/schedules\/employee\/\d+\/history$/.test(path)
+    // Активные назначения для списка «Управление кадрами»: после
+    // PUT/PATCH/DELETE «График работы» в модалке refetch должен подтянуть
+    // свежие данные, иначе новые назначения визуально не появлялись /
+    // изменённая дата не обновлялась до принудительного reload.
+    || path === '/schedules/employees';
 };
 
 const refreshSession = async (): Promise<boolean> => {
