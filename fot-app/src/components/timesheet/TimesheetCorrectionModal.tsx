@@ -570,6 +570,12 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   const handleSave = (entry: TimesheetObjectEntry) => {
     const state = rowState[entry.object_key];
     if (!state) return;
+    // 0 часов = снять корректировку (иначе агрегат дня уходит в «неявка»).
+    if (state.hours <= 0) {
+      if (entry.adjustment_id == null || !entry.is_correction) return;
+      handleDelete(entry);
+      return;
+    }
     const trimmedNotes = state.notes.trim();
     if (trimmedNotes.length === 0) return;
     if (hasDayLevelCorrection && !window.confirm(
@@ -605,8 +611,15 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
           handleHoursChange(entry.object_key, clampedH + clampedM / 60);
         };
         const trimmedNotes = state.notes.trim();
-        const canSave = trimmedNotes.length > 0;
         const hasExisting = entry.adjustment_id != null && entry.is_correction;
+        const isZero = state.hours <= 0;
+        // При 0 часов кнопка «Сохранить объект» работает как «Снять» (если есть запись),
+        // иначе disabled — нет смысла создавать пустую корректировку.
+        const canSave = isZero ? hasExisting : trimmedNotes.length > 0;
+        const saveLabel = isZero ? 'Снять корректировку' : 'Сохранить объект';
+        const saveTitle = isZero
+          ? (hasExisting ? '0 часов — корректировка будет снята' : 'Нечего сохранять: 0 часов и нет существующей корректировки')
+          : (canSave ? undefined : 'Укажите комментарий');
         return (
           <div
             key={entry.object_key}
@@ -661,9 +674,9 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
                 className="ts-btn ts-btn--primary"
                 onClick={() => handleSave(entry)}
                 disabled={!canSave}
-                title={canSave ? undefined : 'Укажите комментарий'}
+                title={saveTitle}
               >
-                Сохранить объект
+                {saveLabel}
               </button>
             </div>
           </div>

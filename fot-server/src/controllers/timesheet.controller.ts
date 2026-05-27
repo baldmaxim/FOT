@@ -1910,6 +1910,35 @@ export const timesheetController = {
         [parsed.employee_id, parsed.work_date],
       );
 
+      // 0 часов на объекте = снять корректировку. Иначе агрегат по дню падает в 'absent'
+      // (см. attendance.service.ts) — будет «неявка» в режиме «по сотрудникам».
+      if (allowedHours <= 0) {
+        await deleteAttendanceAdjustmentBySource({
+          employee_id: parsed.employee_id,
+          work_date: parsed.work_date,
+          source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+          source_id: parsed.object_key,
+        });
+        res.json({
+          success: true,
+          data: {
+            adjustment_id: null,
+            employee_id: parsed.employee_id,
+            work_date: parsed.work_date,
+            object_key: parsed.object_key,
+            object_id: parsed.object_id ?? null,
+            object_name: parsed.object_name,
+            hours_worked: 0,
+            display_hours_worked: 0,
+            base_hours_worked: 0,
+            is_correction: false,
+            notes: null,
+            removed: true,
+          },
+        });
+        return;
+      }
+
       const raw = await upsertAttendanceAdjustment({
         employee_id: parsed.employee_id,
         work_date: parsed.work_date,
