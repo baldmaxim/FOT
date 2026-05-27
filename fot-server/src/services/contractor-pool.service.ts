@@ -377,11 +377,19 @@ export interface IRevokeToPoolResult {
   sigur_orphan?: boolean;
 }
 
-/** Sigur через axios отдаёт 404 на удалённые профили — отличаем это от прочих ошибок. */
+/**
+ * Sigur через axios отдаёт «нет такого профиля» по-разному.
+ * - 404 — каноничный «не найден».
+ * - 422 — Sigur 1.6.3.14 quirk: GET /api/v1/employees/{id} на удалённый профиль
+ *   возвращает 422 (Unprocessable Entity), а не 404. Поэтому 422 на read-операции
+ *   тоже трактуем как «orphan». Использовать ТОЛЬКО для probe-чтения; на PUT/POST
+ *   422 — это настоящая validation error.
+ */
 function isSigurNotFound(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const e = error as { response?: { status?: number }; status?: number; message?: string };
-  if (e.response?.status === 404 || e.status === 404) return true;
+  const status = e.response?.status ?? e.status;
+  if (status === 404 || status === 422) return true;
   const msg = (e.message || '').toLowerCase();
   return msg.includes('not found') || msg.includes('404');
 }
@@ -422,12 +430,16 @@ export const revokePassToPool = async (input: {
 
   let orphanInSigur = false;
   if (!dryRun && pass.sigur_employee_id) {
+    // Probe-чтение: Sigur 1.6.3.14 на GET удалённого профиля отвечает 422 (а не
+    // 404), а updateSigurEmployee внутри делает префлайт-getProfile, который на
+    // orphan сразу падает 422. Проверяем существование явно — так разделяем
+    // «профиль удалён» (orphan path) и «реальная ошибка Sigur» (502).
     try {
-      await moveSigurEmployee(pass.sigur_employee_id, poolDeptId, connection);
+      await sigurService.getEmployeeById(pass.sigur_employee_id, connection);
     } catch (e) {
       if (isSigurNotFound(e)) {
         orphanInSigur = true;
-        console.warn('[revokePassToPool] Sigur profile missing (orphan), unbinding', {
+        console.warn('[revokePassToPool] Sigur profile missing (probe), unbinding', {
           passId: pass.id,
           passNumber: pass.pass_number,
           sigurEmployeeId: pass.sigur_employee_id,
@@ -436,6 +448,23 @@ export const revokePassToPool = async (input: {
         throw new SigurOperationError('move', pass.sigur_employee_id, e);
       }
     }
+
+    if (!orphanInSigur) {
+      try {
+        await moveSigurEmployee(pass.sigur_employee_id, poolDeptId, connection);
+      } catch (e) {
+        if (isSigurNotFound(e)) {
+          orphanInSigur = true;
+          console.warn('[revokePassToPool] Sigur profile vanished between probe and move', {
+            passId: pass.id,
+            sigurEmployeeId: pass.sigur_employee_id,
+          });
+        } else {
+          throw new SigurOperationError('move', pass.sigur_employee_id, e);
+        }
+      }
+    }
+
     if (!orphanInSigur) {
       try {
         await updateSigurEmployee(
