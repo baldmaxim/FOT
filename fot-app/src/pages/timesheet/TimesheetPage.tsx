@@ -88,8 +88,6 @@ import {
   parseMonthParam,
   sanitizeDownloadName,
   toMonthIndex,
-  UNASSIGNED_OBJECT_KEY,
-  UNASSIGNED_OBJECT_NAME,
   type IBulkCorrectionTarget,
   type IBulkObjectCorrectionTarget,
   type IObjectModalTarget,
@@ -600,6 +598,58 @@ export const TimesheetPage: FC = () => {
     }
   }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
+  // Сохранение/удаление per-object из «День»-модалки (modalMode='day'): таргет приходит из аргументов,
+  // а не из modalObjectTarget — позволяет редактировать любой объект в списке.
+  const handleSaveObjectByTarget = useCallback(async (
+    target: { object_key: string; object_id: string | null; object_name: string },
+    hours: number,
+    notes: string,
+  ) => {
+    if (!modalEmployee) return;
+    try {
+      const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+      await timesheetService.upsertObjectEntry({
+        employee_id: modalEmployee.id,
+        work_date: workDate,
+        object_key: target.object_key,
+        object_id: target.object_id,
+        object_name: target.object_name,
+        hours_worked: hours,
+        notes,
+      });
+      closeModal();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+      ]);
+    } catch (error) {
+      console.error('Save object correction (by target) error:', error);
+      toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку по объекту');
+    }
+  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+
+  const handleDeleteObjectByTarget = useCallback(async (
+    target: { object_key: string; object_id: string | null; object_name: string },
+  ) => {
+    if (!modalEmployee) return;
+    try {
+      const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+      await timesheetService.deleteObjectEntry({
+        employee_id: modalEmployee.id,
+        work_date: workDate,
+        object_key: target.object_key,
+      });
+      closeModal();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+      ]);
+    } catch (error) {
+      console.error('Delete object correction (by target) error:', error);
+      toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
+    }
+  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+
   // Export
   const canExport = timesheetMode === 'assigned'
     ? Boolean(selectedAssigneeId)
@@ -860,31 +910,6 @@ export const TimesheetPage: FC = () => {
       });
     }
 
-    for (const employee of employees) {
-      for (const day of visibleDays) {
-        const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const dayEntry = entryMap.get(`${employee.id}_${workDate}`) || null;
-        const visibleHours = dayEntry?.display_hours_worked ?? dayEntry?.hours_worked ?? 0;
-        if (visibleHours <= 0.001) continue;
-
-        const dayObjectEntries = objectEntriesByEmployeeDate.get(employee.id)?.get(workDate) || [];
-        const allocatedHours = dayObjectEntries.reduce((sum, item) => (
-          sum + (item.display_hours_worked ?? item.hours_worked ?? 0)
-        ), 0);
-        if (visibleHours - allocatedHours <= 0.001) continue;
-
-        metaMap.set(buildObjectBulkMetaKey(employee.id, UNASSIGNED_OBJECT_KEY), {
-          employee,
-          objectTarget: {
-            object_key: UNASSIGNED_OBJECT_KEY,
-            object_id: null,
-            object_name: UNASSIGNED_OBJECT_NAME,
-          },
-          isSynthetic: true,
-        });
-      }
-    }
-
     return metaMap;
   }, [
     objectEntries,
@@ -989,7 +1014,7 @@ export const TimesheetPage: FC = () => {
     }
     if (isObjectBulkOperation) {
       if (bulkObjectTargets.length === 0) {
-        toast.info('Выделите диапазон ячеек по объектам. Строка "Не определён / без объекта" корректируется только точечно.');
+        toast.info('Выделите диапазон ячеек по объектам.');
         return;
       }
       setBulkModalOpen(true);
@@ -1776,11 +1801,7 @@ export const TimesheetPage: FC = () => {
               <div className="ts-bulk-info">
                 <div className="ts-bulk-title">Массовая корректировка по объектам</div>
                 <div className="ts-bulk-hint">
-                  Зажмите левую кнопку мыши и протяните по табелю объектов нужный диапазон. Для строк
-                  {' '}
-                  `Не определён / без объекта`
-                  {' '}
-                  оставлена точечная корректировка. {bulkSelectionSummary}
+                  Зажмите левую кнопку мыши и протяните по табелю объектов нужный диапазон. {bulkSelectionSummary}
                 </div>
               </div>
               <div className="ts-bulk-actions">
@@ -2008,11 +2029,7 @@ export const TimesheetPage: FC = () => {
                   ? handleDeleteDayCorrection
                   : undefined
             }
-            infoBanner={
-              modalMode === 'day' && modalEntry?.has_object_adjustments
-                ? 'Часы за этот день заданы корректировкой по объекту. Чтобы изменить или снять её, переключитесь в режим «По объектам».'
-                : null
-            }
+            infoBanner={null}
             initialStatus={
               modalMode === 'object' && modalObjectEntry?.adjustment_id
                 ? 'manual'
@@ -2047,6 +2064,20 @@ export const TimesheetPage: FC = () => {
                 showActualHours,
               };
             })() : undefined}
+            objectEntries={modalMode === 'day' && modalEmployee
+              ? (objectEntriesByEmployeeDate.get(modalEmployee.id)?.get(modalWorkDate) ?? [])
+              : undefined}
+            plannedHours={modalMode === 'day' && modalEmployee
+              ? getWorkHoursForDay(
+                  getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay),
+                  year, month, modalDay,
+                )
+              : null}
+            hasDayLevelCorrection={Boolean(
+              modalMode === 'day' && modalEntry?.is_correction && modalEntry?.id != null && !modalEntry?.has_object_adjustments,
+            )}
+            onSaveObject={modalMode === 'day' ? handleSaveObjectByTarget : undefined}
+            onDeleteObject={modalMode === 'day' ? handleDeleteObjectByTarget : undefined}
           />
         </Suspense>
       )}

@@ -13,7 +13,7 @@ import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
-import { resolveSchedulesForPeriod, resolveObjectSchedule, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
+import { resolveSchedulesForPeriod, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getSelfHistoryLimitForUser,
   isSelfEmployeeRequest,
@@ -488,7 +488,7 @@ async function findApprovalLockForDate(
   const rows = await query<IApprovalLockInfo>(
     `SELECT id, start_date, end_date, status FROM timesheet_approvals
        WHERE department_id = $1
-         AND status IN ('submitted', 'approved', 'returned')
+         AND status IN ('submitted', 'approved')
          AND start_date <= $2
          AND end_date >= $2
        ORDER BY status DESC
@@ -510,7 +510,7 @@ async function loadApprovalLockedDatesForDepartment(
   const data = await query<{ start_date: string; end_date: string; status: string }>(
     `SELECT start_date, end_date, status FROM timesheet_approvals
        WHERE department_id = $1
-         AND status IN ('submitted', 'approved', 'returned')
+         AND status IN ('submitted', 'approved')
          AND start_date <= $2
          AND end_date >= $3`,
     [departmentId, endDate, startDate],
@@ -587,33 +587,6 @@ async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; wo
       : 8;
     return [`${item.employee_id}_${item.work_date}`, plannedHours] as const;
   }));
-}
-
-async function resolvePlannedHoursForObjectItem(params: {
-  employee_id: number;
-  work_date: string;
-  object_id?: string | null;
-}): Promise<number | null> {
-  const employees = await query<{ id: number | string }>(
-    `SELECT id FROM employees WHERE id = $1 LIMIT 1`,
-    [params.employee_id],
-  );
-  const employee = employees[0] ?? null;
-  if (!employee) return null;
-
-  const employeeSchedule = await resolveSchedulesForPeriod(
-    [{ id: Number(employee.id) }],
-    params.work_date,
-    params.work_date,
-  );
-
-  const objectSchedule = params.object_id
-    ? await resolveObjectSchedule(params.object_id, params.work_date)
-    : null;
-  const effectiveSchedule = objectSchedule || employeeSchedule.get(params.employee_id)?.get(params.work_date) || null;
-  if (!effectiveSchedule) return null;
-
-  return getScheduleForDate(effectiveSchedule, new Date(`${params.work_date}T00:00:00`)).work_hours;
 }
 
 async function canAccessEmployeeForTimesheetDate(
@@ -709,29 +682,6 @@ async function canAccessEmployeeForTimesheetPeriod(
   }
 
   return false;
-}
-
-async function resolveAllowedObjectHours(
-  scope: string | null,
-  employeeId: number,
-  workDate: string,
-  objectId: string | null | undefined,
-  requestedHours: number,
-): Promise<number> {
-  if (scope !== 'department') {
-    return requestedHours;
-  }
-
-  const plannedHours = await resolvePlannedHoursForObjectItem({
-    employee_id: employeeId,
-    work_date: workDate,
-    object_id: objectId ?? null,
-  });
-  if (plannedHours == null) {
-    return requestedHours;
-  }
-
-  return Math.max(0, Math.min(requestedHours, plannedHours));
 }
 
 export async function hasManagedTimesheetAccess(
@@ -1630,6 +1580,14 @@ export const timesheetController = {
         normalizedHours,
       );
 
+      // День-уровневая корректировка взаимоисключающа с per-object: снимаем все
+      // manual_object строки на тот же (employee, work_date) перед сохранением.
+      await execute(
+        `DELETE FROM attendance_adjustments
+           WHERE employee_id = $1 AND work_date = $2 AND source_type = $3`,
+        [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE],
+      );
+
 	      const raw = await upsertAttendanceAdjustment({
 	        employee_id: parsed.employee_id,
 	        work_date: parsed.work_date,
@@ -1942,12 +1900,14 @@ export const timesheetController = {
           error: `Период ${approvalLockObj.start_date} – ${approvalLockObj.end_date} уже ${approvalLockObj.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
         });
       }
-      const allowedHours = await resolveAllowedObjectHours(
-        scope,
-        parsed.employee_id,
-        parsed.work_date,
-        parsed.object_id,
-        parsed.hours_worked,
+      const allowedHours = Math.max(0, parsed.hours_worked);
+
+      // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
+      // строки на тот же (employee, work_date) перед сохранением.
+      await execute(
+        `DELETE FROM attendance_adjustments
+           WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'`,
+        [parsed.employee_id, parsed.work_date],
       );
 
       const raw = await upsertAttendanceAdjustment({

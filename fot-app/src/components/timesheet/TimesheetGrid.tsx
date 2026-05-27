@@ -513,66 +513,28 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
       return next;
     };
 
-    const allocatedHoursByEmployeeDay = new Map<string, number>();
-    const backendObjectDayKeys = new Set<string>();
-
     for (const objectEntry of objectEntries) {
       if (!visibleDateSet.has(objectEntry.work_date)) continue;
       const employee = employeeById.get(objectEntry.employee_id);
       if (!employee) continue;
-      backendObjectDayKeys.add(`${objectEntry.employee_id}_${objectEntry.work_date}`);
+      const normalizedName = objectEntry.object_name?.trim();
+      // Записи без привязки к объекту не показываем в режиме «по объектам» —
+      // они должны быть либо day-level (виден в «по сотрудникам»), либо
+      // мигрированы в конкретный объект.
+      if (!normalizedName) continue;
 
-      const normalizedName = objectEntry.object_name?.trim() || UNASSIGNED_OBJECT_NAME;
-      const normalizedKey = normalizedName === UNASSIGNED_OBJECT_NAME ? UNASSIGNED_OBJECT_KEY : objectEntry.object_key;
       const group = ensureGroup(
-        normalizedKey,
-        normalizedKey === UNASSIGNED_OBJECT_KEY ? null : objectEntry.object_id,
+        objectEntry.object_key,
+        objectEntry.object_id,
         normalizedName,
-        normalizedKey === UNASSIGNED_OBJECT_KEY,
+        false,
       );
-      const row = ensureRow(group, employee, normalizedKey === UNASSIGNED_OBJECT_KEY);
+      const row = ensureRow(group, employee, false);
       const day = Number.parseInt(objectEntry.work_date.slice(-2), 10);
       row.days.set(day, {
         ...objectEntry,
-        object_key: normalizedKey,
-        object_id: normalizedKey === UNASSIGNED_OBJECT_KEY ? null : objectEntry.object_id,
         object_name: normalizedName,
       });
-
-      const allocationKey = `${objectEntry.employee_id}_${objectEntry.work_date}`;
-      allocatedHoursByEmployeeDay.set(
-        allocationKey,
-        roundHours((allocatedHoursByEmployeeDay.get(allocationKey) || 0) + getObjectVisibleHours(objectEntry)),
-      );
-    }
-
-    for (const row of employeeRows) {
-      for (const day of days) {
-        const dailyEntry = row.days.get(day);
-        const visibleHours = getVisibleHours(dailyEntry);
-        if (!hasPositiveHours(visibleHours)) continue;
-
-        const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        if (backendObjectDayKeys.has(`${row.employee.id}_${workDate}`)) continue;
-        const allocatedHours = allocatedHoursByEmployeeDay.get(`${row.employee.id}_${workDate}`) || 0;
-        const remainingHours = roundHours((visibleHours as number) - allocatedHours);
-        if (remainingHours <= 0.001) continue;
-
-        const group = ensureGroup(UNASSIGNED_OBJECT_KEY, null, UNASSIGNED_OBJECT_NAME, true);
-        const objectRow = ensureRow(group, row.employee, true);
-        objectRow.days.set(day, {
-          adjustment_id: null,
-          employee_id: row.employee.id,
-          work_date: workDate,
-          object_key: UNASSIGNED_OBJECT_KEY,
-          object_id: null,
-          object_name: UNASSIGNED_OBJECT_NAME,
-          hours_worked: remainingHours,
-          display_hours_worked: remainingHours,
-          base_hours_worked: remainingHours,
-          is_correction: false,
-        });
-      }
     }
 
     return [...groups.values()]
@@ -580,11 +542,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         ...group,
         rows: [...group.rows].sort((left, right) => compareEmployeeNames(left.employee, right.employee)),
       }))
-      .sort((left, right) => {
-        if (left.object_key === UNASSIGNED_OBJECT_KEY) return 1;
-        if (right.object_key === UNASSIGNED_OBJECT_KEY) return -1;
-        return left.object_name.localeCompare(right.object_name, 'ru');
-      });
+      .sort((left, right) => left.object_name.localeCompare(right.object_name, 'ru'));
   }, [days, employees, employeeRows, objectEntries, year, month]);
 
   const activeExpandedEmployeeIds = useMemo(() => (

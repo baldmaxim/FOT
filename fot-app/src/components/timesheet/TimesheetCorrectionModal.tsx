@@ -1,6 +1,6 @@
 import { type FC, type ReactNode, useState, useEffect, useCallback, useRef } from 'react';
 import { X, LogIn, LogOut, Timer, Pencil, Trash2, Check, XCircle } from 'lucide-react';
-import type { TimesheetEntry, TimesheetStatus, SkudEvent, SkudEventFailure } from '../../types';
+import type { TimesheetEntry, TimesheetObjectEntry, TimesheetStatus, SkudEvent, SkudEventFailure } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
@@ -60,6 +60,17 @@ interface ICorrectionModalProps {
     fullDayThresholdHours: number;
     showActualHours: boolean;
   };
+  // Список объектов дня (из СКУД + per-object корректировки). Передаётся только в day-mode;
+  // если непуст, под формой «День» рендерится список блоков по объектам.
+  objectEntries?: TimesheetObjectEntry[];
+  // План часов дня по графику — для суммирующего чипа (Σ корректировок / план).
+  plannedHours?: number | null;
+  // Есть ли активная day-level корректировка — используется для confirm-диалога:
+  // сохранение по-объектной корректировки её снимет (по правилу взаимоисключения на бэке).
+  hasDayLevelCorrection?: boolean;
+  // Сохранение/удаление корректировки по конкретному объекту.
+  onSaveObject?: (target: { object_key: string; object_id: string | null; object_name: string }, hours: number, notes: string) => void;
+  onDeleteObject?: (target: { object_key: string; object_id: string | null; object_name: string }) => void;
 }
 
 interface ITypeOption {
@@ -508,6 +519,176 @@ const formatCorrectionDate = (iso: string): string => {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
+interface IObjectRowState {
+  hours: number;
+  notes: string;
+}
+
+interface IObjectCorrectionsListProps {
+  objectEntries: TimesheetObjectEntry[];
+  hasDayLevelCorrection: boolean;
+  plannedHours?: number | null;
+  onSaveObject: (target: { object_key: string; object_id: string | null; object_name: string }, hours: number, notes: string) => void;
+  onDeleteObject: (target: { object_key: string; object_id: string | null; object_name: string }) => void;
+}
+
+const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
+  objectEntries,
+  hasDayLevelCorrection,
+  plannedHours,
+  onSaveObject,
+  onDeleteObject,
+}) => {
+  const initState = useCallback((): Record<string, IObjectRowState> => {
+    const map: Record<string, IObjectRowState> = {};
+    for (const entry of objectEntries) {
+      map[entry.object_key] = {
+        hours: Number(entry.display_hours_worked ?? entry.hours_worked ?? 0),
+        notes: entry.notes ?? '',
+      };
+    }
+    return map;
+  }, [objectEntries]);
+
+  const [rowState, setRowState] = useState<Record<string, IObjectRowState>>(initState);
+  useEffect(() => {
+    setRowState(initState());
+  }, [initState]);
+
+  // Сумма берётся из текущего состояния (учитывает несохранённый ввод),
+  // чтобы предупреждение появлялось живо при наборе.
+  const totalHours = Object.values(rowState).reduce((sum, row) => sum + (row.hours || 0), 0);
+  const planned = plannedHours ?? null;
+  const exceedsPlanned = planned != null && totalHours > planned + 0.001;
+
+  const handleHoursChange = (key: string, hours: number) => {
+    setRowState(prev => ({ ...prev, [key]: { ...(prev[key] ?? { hours: 0, notes: '' }), hours } }));
+  };
+  const handleNotesChange = (key: string, notes: string) => {
+    setRowState(prev => ({ ...prev, [key]: { ...(prev[key] ?? { hours: 0, notes: '' }), notes } }));
+  };
+  const handleSave = (entry: TimesheetObjectEntry) => {
+    const state = rowState[entry.object_key];
+    if (!state) return;
+    const trimmedNotes = state.notes.trim();
+    if (trimmedNotes.length === 0) return;
+    if (hasDayLevelCorrection && !window.confirm(
+      'Сохранение корректировки по объекту снимет общую корректировку дня. Продолжить?',
+    )) {
+      return;
+    }
+    onSaveObject(
+      { object_key: entry.object_key, object_id: entry.object_id, object_name: entry.object_name },
+      state.hours,
+      trimmedNotes,
+    );
+  };
+  const handleDelete = (entry: TimesheetObjectEntry) => {
+    if (!window.confirm(`Удалить корректировку по объекту «${entry.object_name}»?`)) return;
+    onDeleteObject({
+      object_key: entry.object_key,
+      object_id: entry.object_id,
+      object_name: entry.object_name,
+    });
+  };
+
+  return (
+    <div className="ts-modal-body" style={{ borderTop: '1px solid var(--border, #e5e7eb)', paddingTop: 12 }}>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>Корректировки по объектам</div>
+      {objectEntries.map(entry => {
+        const state = rowState[entry.object_key] ?? { hours: 0, notes: '' };
+        const wholeHours = Math.floor(state.hours);
+        const minutes = Math.round((state.hours - wholeHours) * 60);
+        const applyHM = (h: number, m: number) => {
+          const clampedM = Math.max(0, Math.min(59, m));
+          const clampedH = Math.max(0, h);
+          handleHoursChange(entry.object_key, clampedH + clampedM / 60);
+        };
+        const trimmedNotes = state.notes.trim();
+        const canSave = trimmedNotes.length > 0;
+        const hasExisting = entry.adjustment_id != null && entry.is_correction;
+        return (
+          <div
+            key={entry.object_key}
+            style={{
+              borderBottom: '1px dashed var(--border, #e5e7eb)',
+              paddingBottom: 10,
+              marginBottom: 10,
+            }}
+          >
+            <div style={{ fontWeight: 500, marginBottom: 6 }}>{entry.object_name}</div>
+            <div className="ts-hours-inputs" style={{ marginBottom: 6 }}>
+              <input
+                type="number"
+                className="ts-form-input ts-form-input--hm"
+                value={wholeHours}
+                onChange={e => applyHM(parseInt(e.target.value, 10) || 0, minutes)}
+                min={0}
+                max={24}
+              />
+              <span className="ts-hours-separator">ч</span>
+              <input
+                type="number"
+                className="ts-form-input ts-form-input--hm"
+                value={minutes}
+                onChange={e => applyHM(wholeHours, parseInt(e.target.value, 10) || 0)}
+                min={0}
+                max={59}
+              />
+              <span className="ts-hours-separator">м</span>
+            </div>
+            <input
+              type="text"
+              className="ts-form-input"
+              value={state.notes}
+              onChange={e => handleNotesChange(entry.object_key, e.target.value)}
+              placeholder="Причина корректировки..."
+              style={{ marginBottom: 6 }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              {hasExisting && (
+                <button
+                  type="button"
+                  className="ts-btn"
+                  onClick={() => handleDelete(entry)}
+                  title="Снять корректировку"
+                >
+                  Снять
+                </button>
+              )}
+              <button
+                type="button"
+                className="ts-btn ts-btn--primary"
+                onClick={() => handleSave(entry)}
+                disabled={!canSave}
+                title={canSave ? undefined : 'Укажите комментарий'}
+              >
+                Сохранить объект
+              </button>
+            </div>
+          </div>
+        );
+      })}
+      {planned != null && (
+        <div
+          style={{
+            marginTop: 4,
+            padding: '6px 10px',
+            borderRadius: 6,
+            background: exceedsPlanned ? 'var(--warning-bg, #fff7ed)' : 'var(--bg-tertiary, #f5f6f8)',
+            color: exceedsPlanned ? 'var(--warning, #c2410c)' : 'var(--text-secondary, #5b6573)',
+            fontSize: 13,
+          }}
+        >
+          {exceedsPlanned ? '⚠ ' : '✓ '}
+          Σ корректировок = {formatHM(totalHours)} / план {formatHM(planned)}
+          {exceedsPlanned && ' — превышение, согласующий увидит'}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   onClose,
   onSave,
@@ -534,7 +715,21 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   maxHours,
   dayStatusContext,
   infoBanner,
+  objectEntries,
+  plannedHours,
+  hasDayLevelCorrection,
+  onSaveObject,
+  onDeleteObject,
 }) => {
+  const hasObjectsBlock = Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
+  const dayHasObjectAdjustments = hasObjectsBlock && objectEntries!.some(entry => entry.is_correction && entry.adjustment_id != null);
+  // Save «День» при наличии объектных корректировок предупреждает: бэк их снимет.
+  const wrappedOnSave: ICorrectionModalProps['onSave'] = (status, hours, notes) => {
+    if (dayHasObjectAdjustments && !window.confirm(
+      'Сохранение общей корректировки дня снимет все корректировки по объектам. Продолжить?',
+    )) return;
+    onSave(status, hours, notes);
+  };
   const showEventsTab = !hideSkudTab;
   const showCorrectionTab = !hideCorrectionTab;
   const [tab, setTab] = useState<ModalTab>(() => {
@@ -658,19 +853,30 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           <div className="ts-modal-events-empty">Нет данных</div>
         </div>
       ) : showCorrectionTab ? (
-        <CorrectionTab
-          onClose={onClose}
-          onSave={onSave}
-          onDelete={onDelete}
-          initialStatus={initialStatus}
-          initialHours={initialHours ?? 8}
-          initialNotes={initialNotes}
-          confirmLabel={confirmLabel}
-          deleteLabel={deleteLabel}
-          allowedStatuses={allowedStatuses}
-          maxHours={maxHours}
-          correctionInfo={correctionInfo}
-        />
+        <>
+          <CorrectionTab
+            onClose={onClose}
+            onSave={wrappedOnSave}
+            onDelete={onDelete}
+            initialStatus={initialStatus}
+            initialHours={initialHours ?? 8}
+            initialNotes={initialNotes}
+            confirmLabel={confirmLabel}
+            deleteLabel={deleteLabel}
+            allowedStatuses={allowedStatuses}
+            maxHours={maxHours}
+            correctionInfo={correctionInfo}
+          />
+          {hasObjectsBlock && (
+            <ObjectCorrectionsList
+              objectEntries={objectEntries!}
+              hasDayLevelCorrection={!!hasDayLevelCorrection}
+              plannedHours={plannedHours ?? null}
+              onSaveObject={onSaveObject!}
+              onDeleteObject={onDeleteObject!}
+            />
+          )}
+        </>
       ) : null}
     </div>
   );
