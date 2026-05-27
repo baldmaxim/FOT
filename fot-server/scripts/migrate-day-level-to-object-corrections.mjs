@@ -11,9 +11,17 @@
 //   node scripts/migrate-day-level-to-object-corrections.mjs [--dry-run]
 //
 // Env-файл и CA читаются автоматически:
-//   - .env: $FOT_REPO_ROOT/fot-server/.env, либо ../fot-server/.env от скрипта,
-//           либо $PWD/.env.
-//   - CA:   $FOT_REPO_ROOT/.migration/yandex-ca.pem, либо ../.migration/yandex-ca.pem.
+//   - .env: $FOT_ENV_FILE (явный путь), либо $FOT_REPO_ROOT/fot-server/.env,
+//           либо ../fot-server/.env от скрипта, либо $PWD/.env.
+//           Если .env не найден, но DATABASE_URL задан в process.env — используется он.
+//   - CA:   $FOT_CA_FILE (явный путь), либо $FOT_REPO_ROOT/.migration/yandex-ca.pem,
+//           либо ../.migration/yandex-ca.pem. Без CA — sslmode=relaxed (rejectUnauthorized=false).
+//
+// На проде, где .env лежит в SITE_DIR, не в BUILD_DIR:
+//   FOT_ENV_FILE=/opt/<site>/.env node scripts/migrate-day-level-to-object-corrections.mjs --dry-run
+//
+// Или через PM2-окружение (получить DATABASE_URL и передать напрямую):
+//   DATABASE_URL="$(pm2 env <pid> | grep ^DATABASE_URL= | cut -d= -f2-)" node ... --dry-run
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,14 +37,16 @@ const REPO_ROOT = process.env.FOT_REPO_ROOT
   || path.resolve(__dirname, '..', '..'); // <repo>/fot-server/scripts -> <repo>
 
 const ENV_CANDIDATES = [
+  process.env.FOT_ENV_FILE,
   path.resolve(REPO_ROOT, 'fot-server', '.env'),
   path.resolve(process.cwd(), '.env'),
   path.resolve(__dirname, '..', '.env'),
-];
+].filter(Boolean);
 const CA_CANDIDATES = [
+  process.env.FOT_CA_FILE,
   path.resolve(REPO_ROOT, '.migration', 'yandex-ca.pem'),
   path.resolve(__dirname, '..', '..', '.migration', 'yandex-ca.pem'),
-];
+].filter(Boolean);
 
 function firstExisting(paths) {
   for (const p of paths) {
@@ -58,14 +68,15 @@ function parseEnv(text) {
 }
 
 const envPath = firstExisting(ENV_CANDIDATES);
-if (!envPath) {
-  console.error('[migrate] .env не найден. Проверь пути:');
-  for (const p of ENV_CANDIDATES) console.error(`  - ${p}`);
+const fileEnv = envPath ? parseEnv(fs.readFileSync(envPath, 'utf8')) : {};
+const dbUrl = fileEnv.DATABASE_URL || process.env.DATABASE_URL;
+if (!dbUrl) {
+  console.error('[migrate] DATABASE_URL не задан. Передай через env-переменную или укажи .env:');
+  console.error('  DATABASE_URL=... node scripts/...mjs --dry-run');
+  console.error('  FOT_ENV_FILE=/path/to/.env node scripts/...mjs --dry-run');
+  console.error('  (искали .env: ' + ENV_CANDIDATES.join(', ') + ')');
   process.exit(2);
 }
-const env = parseEnv(fs.readFileSync(envPath, 'utf8'));
-const dbUrl = env.DATABASE_URL || process.env.DATABASE_URL;
-if (!dbUrl) { console.error(`[migrate] DATABASE_URL не задан (.env: ${envPath})`); process.exit(2); }
 
 const caPath = firstExisting(CA_CANDIDATES);
 const ca = caPath ? fs.readFileSync(caPath, 'utf8') : null;
@@ -92,7 +103,7 @@ const REPORT_PATH = path.resolve(
 
 async function main() {
   console.log(`[migrate] dry-run = ${DRY_RUN}`);
-  console.log(`[migrate] env: ${envPath}`);
+  console.log(`[migrate] env: ${envPath || '(none — DATABASE_URL из process.env)'}`);
   console.log(`[migrate] ca:  ${caPath || '(none — sslmode=relaxed)'}`);
   console.log(`[migrate] db:  ${host}`);
 
