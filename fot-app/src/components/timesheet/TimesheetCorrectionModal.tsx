@@ -527,6 +527,10 @@ interface IObjectRowState {
 interface IObjectCorrectionsListProps {
   objectEntries: TimesheetObjectEntry[];
   hasDayLevelCorrection: boolean;
+  // Сводка day-level корректировки (часы + комментарий) — рисуем сверху,
+  // если у дня есть и day-level и объекты: иначе кнопку «Снять» нечем дать.
+  dayLevelSummary?: { hours: number; notes: string } | null;
+  onDeleteDayLevel?: () => void;
   plannedHours?: number | null;
   onSaveObject: (target: { object_key: string; object_id: string | null; object_name: string }, hours: number, notes: string) => void;
   onDeleteObject: (target: { object_key: string; object_id: string | null; object_name: string }) => void;
@@ -535,6 +539,8 @@ interface IObjectCorrectionsListProps {
 const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   objectEntries,
   hasDayLevelCorrection,
+  dayLevelSummary,
+  onDeleteDayLevel,
   plannedHours,
   onSaveObject,
   onDeleteObject,
@@ -554,6 +560,38 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   useEffect(() => {
     setRowState(initState());
   }, [initState]);
+
+  // Уже внесённые корректировки по умолчанию показываются сводкой (read-only),
+  // редактор раскрывается по клику «Изменить». Для строк без корректировки
+  // (новый объект) форма открыта сразу — иначе не понятно как туда внести часы.
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    for (const e of objectEntries) {
+      if (!(e.is_correction && e.adjustment_id != null)) initial.add(e.object_key);
+    }
+    return initial;
+  });
+  useEffect(() => {
+    setExpanded(prev => {
+      const next = new Set<string>();
+      for (const e of objectEntries) {
+        const hasExisting = e.is_correction && e.adjustment_id != null;
+        // Сохраняем «развёрнутость» если пользователь её уже включил/выключил,
+        // иначе по дефолту: read-only для существующих, форма — для новых.
+        if (prev.has(e.object_key)) next.add(e.object_key);
+        else if (!hasExisting) next.add(e.object_key);
+      }
+      return next;
+    });
+  }, [objectEntries]);
+  const toggleExpanded = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   // Сумма берётся из текущего состояния (учитывает несохранённый ввод),
   // чтобы предупреждение появлялось живо при наборе.
@@ -609,8 +647,85 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       }}
     >
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Корректировки по объектам</div>
+      {hasDayLevelCorrection && dayLevelSummary && onDeleteDayLevel && (
+        <div
+          style={{
+            borderBottom: '1px dashed var(--border, #e5e7eb)',
+            paddingBottom: 10,
+            marginBottom: 10,
+            background: 'var(--bg-tertiary, #f5f6f8)',
+            padding: 10,
+            borderRadius: 6,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontWeight: 500, flex: 1, minWidth: 0 }}>
+              День целиком
+              <span style={{ marginLeft: 8, color: 'var(--text-secondary, #5b6573)' }}>
+                {formatHM(dayLevelSummary.hours)}
+                {dayLevelSummary.notes.trim() && ` · «${dayLevelSummary.notes.trim()}»`}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="ts-btn ts-btn--danger"
+              onClick={() => {
+                if (window.confirm('Снять общую корректировку дня?')) onDeleteDayLevel();
+              }}
+              title="Снять корректировку дня"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+      )}
       {objectEntries.map(entry => {
         const state = rowState[entry.object_key] ?? { hours: 0, notes: '' };
+        const hasExisting = entry.adjustment_id != null && entry.is_correction;
+        const isExpanded = expanded.has(entry.object_key);
+        const rowStyle = {
+          borderBottom: '1px dashed var(--border, #e5e7eb)',
+          paddingBottom: 10,
+          marginBottom: 10,
+        };
+
+        // Сводный режим: уже внесённая корректировка → один компактный ряд с
+        // часами/комментарием и кнопками «Изменить»/«Снять».
+        if (hasExisting && !isExpanded) {
+          const baseHours = Number(entry.display_hours_worked ?? entry.hours_worked ?? 0);
+          const trimmedNotes = (entry.notes ?? '').trim();
+          return (
+            <div key={entry.object_key} style={rowStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ fontWeight: 500, flex: 1, minWidth: 0 }}>
+                  {entry.object_name}
+                  <span style={{ marginLeft: 8, color: 'var(--text-secondary, #5b6573)' }}>
+                    {formatHM(baseHours)}
+                    {trimmedNotes && ` · «${trimmedNotes}»`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="ts-btn"
+                  onClick={() => toggleExpanded(entry.object_key)}
+                  title="Изменить часы"
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="ts-btn ts-btn--danger"
+                  onClick={() => handleDelete(entry)}
+                  title="Снять корректировку"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        // Редактируемый ряд (новый объект или нажали «Изменить»).
         const wholeHours = Math.floor(state.hours);
         const minutes = Math.round((state.hours - wholeHours) * 60);
         const applyHM = (h: number, m: number) => {
@@ -619,24 +734,14 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
           handleHoursChange(entry.object_key, clampedH + clampedM / 60);
         };
         const trimmedNotes = state.notes.trim();
-        const hasExisting = entry.adjustment_id != null && entry.is_correction;
         const isZero = state.hours <= 0;
-        // При 0 часов кнопка «Сохранить объект» работает как «Снять» (если есть запись),
-        // иначе disabled — нет смысла создавать пустую корректировку.
         const canSave = isZero ? hasExisting : trimmedNotes.length > 0;
         const saveLabel = isZero ? 'Снять корректировку' : 'Сохранить объект';
         const saveTitle = isZero
           ? (hasExisting ? '0 часов — корректировка будет снята' : 'Нечего сохранять: 0 часов и нет существующей корректировки')
           : (canSave ? undefined : 'Укажите комментарий');
         return (
-          <div
-            key={entry.object_key}
-            style={{
-              borderBottom: '1px dashed var(--border, #e5e7eb)',
-              paddingBottom: 10,
-              marginBottom: 10,
-            }}
-          >
+          <div key={entry.object_key} style={rowStyle}>
             <div style={{ fontWeight: 500, marginBottom: 6 }}>{entry.object_name}</div>
             <div className="ts-hours-inputs" style={{ marginBottom: 6 }}>
               <input
@@ -668,14 +773,24 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
             />
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               {hasExisting && (
-                <button
-                  type="button"
-                  className="ts-btn"
-                  onClick={() => handleDelete(entry)}
-                  title="Снять корректировку"
-                >
-                  Снять
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="ts-btn"
+                    onClick={() => toggleExpanded(entry.object_key)}
+                    title="Свернуть"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    className="ts-btn"
+                    onClick={() => handleDelete(entry)}
+                    title="Снять корректировку"
+                  >
+                    Снять
+                  </button>
+                </>
               )}
               <button
                 type="button"
@@ -896,6 +1011,11 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
             <ObjectCorrectionsList
               objectEntries={objectEntries!}
               hasDayLevelCorrection={!!hasDayLevelCorrection}
+              dayLevelSummary={hasDayLevelCorrection && timesheetEntry ? {
+                hours: Number(timesheetEntry.display_hours_worked ?? timesheetEntry.hours_worked ?? 0),
+                notes: timesheetEntry.notes ?? '',
+              } : null}
+              onDeleteDayLevel={hasDayLevelCorrection ? onDelete : undefined}
               plannedHours={plannedHours ?? null}
               onSaveObject={onSaveObject!}
               onDeleteObject={onDeleteObject!}
