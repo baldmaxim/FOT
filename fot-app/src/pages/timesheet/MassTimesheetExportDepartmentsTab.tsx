@@ -6,6 +6,7 @@ import {
   Download,
   Search,
   CheckSquare,
+  MinusSquare,
   Square,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -76,21 +77,25 @@ interface IDeptTreeNodeProps {
 }
 
 const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds }) => {
-  const isChecked = checkedIds.has(node.id);
+  const descendantIds = useMemo(() => collectAllIds([node]), [node]);
+  const checkedCount = descendantIds.reduce((acc, id) => acc + (checkedIds.has(id) ? 1 : 0), 0);
+  const isAllChecked = checkedCount === descendantIds.length;
+  const isPartiallyChecked = checkedCount > 0 && !isAllChecked;
   const hasChildren = node.children && node.children.length > 0;
   const isExpanded = expandedIds.has(node.id);
   const isBrigade = node.kind === 'brigade';
   const isApproved = approvedDeptIds.has(node.id);
 
   const handleCheck = () => {
-    onToggle([node.id], !isChecked);
+    onToggle(descendantIds, !isAllChecked);
   };
 
-  const CheckIcon = isChecked ? CheckSquare : Square;
+  const CheckIcon = isAllChecked ? CheckSquare : isPartiallyChecked ? MinusSquare : Square;
+  const iconActive = isAllChecked || isPartiallyChecked;
 
   return (
     <div className="mte-tree-node">
-      <div className={`mte-tree-row ${isChecked ? 'mte-tree-row--checked' : ''}`}>
+      <div className={`mte-tree-row ${iconActive ? 'mte-tree-row--checked' : ''}`}>
         {hasChildren ? (
           <button className="mte-tree-expand" onClick={() => onToggleExpand(node.id)}>
             {isExpanded ? <ChevronDown size={14} /> : <ChevronR size={14} />}
@@ -99,7 +104,7 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
           <span className="mte-tree-expand mte-tree-expand--placeholder" />
         )}
         <button className="mte-tree-check" onClick={handleCheck}>
-          <CheckIcon size={18} className={isChecked ? 'mte-check-active' : 'mte-check-inactive'} />
+          <CheckIcon size={18} className={iconActive ? 'mte-check-active' : 'mte-check-inactive'} />
         </button>
         <span className="mte-tree-name" onClick={handleCheck}>
           {node.name}
