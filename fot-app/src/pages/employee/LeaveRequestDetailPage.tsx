@@ -1,4 +1,4 @@
-import { type FC } from 'react';
+import { type FC, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Download, Clock, CheckCircle, XCircle, Ban, FileText, Image as ImageIcon } from 'lucide-react';
@@ -12,6 +12,7 @@ import { documentService, type IDocument } from '../../services/documentService'
 import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
 import { formatFioShort } from '../../utils/formatFio';
+import { FilePreviewModal } from '../../components/documents/FilePreviewModal';
 import './LeaveRequestsPage.css';
 
 const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
@@ -61,6 +62,7 @@ export const LeaveRequestDetailPage: FC = () => {
 
   const request = requestQuery.data;
   const attachments = attachmentsQuery.data ?? [];
+  const [previewDoc, setPreviewDoc] = useState<IDocument | null>(null);
 
   const today = new Date().toLocaleDateString('en-CA');
   const isPast = request
@@ -198,7 +200,15 @@ export const LeaveRequestDetailPage: FC = () => {
                 const isImage = doc.mime_type.startsWith('image/');
                 const Icon = isImage ? ImageIcon : FileText;
                 return (
-                  <div key={doc.id} className="lr-attachment">
+                  <div
+                    key={doc.id}
+                    className="lr-attachment lr-attachment-clickable"
+                    onClick={() => setPreviewDoc(doc)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreviewDoc(doc); } }}
+                    title="Открыть предпросмотр"
+                  >
                     <Icon size={18} />
                     <div className="lr-attachment-info">
                       <div className="lr-attachment-name">{doc.file_name}</div>
@@ -206,7 +216,7 @@ export const LeaveRequestDetailPage: FC = () => {
                     </div>
                     <button
                       className="lr-attachment-download"
-                      onClick={() => handleDownload(doc)}
+                      onClick={e => { e.stopPropagation(); handleDownload(doc); }}
                       aria-label="Скачать"
                     >
                       <Download size={16} />
@@ -255,6 +265,15 @@ export const LeaveRequestDetailPage: FC = () => {
             Отменить заявку
           </button>
         </div>
+      )}
+
+      {previewDoc && (
+        <FilePreviewModal
+          documentId={previewDoc.id}
+          fileName={previewDoc.file_name}
+          mimeType={previewDoc.mime_type}
+          onClose={() => setPreviewDoc(null)}
+        />
       )}
     </div>
   );

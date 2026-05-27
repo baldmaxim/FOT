@@ -12,9 +12,11 @@ import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import { useMyLeaveRequests } from '../../hooks/usePortalData';
 import {
   CORRECTION_STATUS_LABELS,
+  REQUEST_TYPE_LABELS as LR_TYPE_LABELS,
   STATUS_LABELS as LR_STATUS_LABELS,
   type ILeaveRequest,
   type LeaveRequestStatus,
+  type LeaveRequestType,
 } from '../../services/leaveRequestService';
 import styles from './EmployeeDashboard.module.css';
 
@@ -56,6 +58,15 @@ const REQ_STATUS_PRIORITY: Record<LeaveRequestStatus, number> = {
   rejected: 1,
   cancelled: 0,
 };
+
+const ABSENCE_REQUEST_TYPES: ReadonlySet<LeaveRequestType> = new Set([
+  'vacation',
+  'sick_leave',
+  'unpaid',
+]);
+
+const formatRuDate = (iso: string): string =>
+  new Date(iso + 'T00:00:00').toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -250,6 +261,23 @@ export const EmployeeDashboardPage: React.FC = () => {
     return best;
   }, [leaveRequestsQuery.data, activeDayIso]);
 
+  // Если выбранный день попадает в период отпуска / больничного / за-свой-счёт —
+  // показываем сводку «Тип с … по …» с текущим статусом согласования.
+  const activeAbsence = useMemo<ILeaveRequest | null>(() => {
+    const list = leaveRequestsQuery.data ?? [];
+    let best: ILeaveRequest | null = null;
+    for (const req of list) {
+      if (!ABSENCE_REQUEST_TYPES.has(req.request_type)) continue;
+      if (req.status === 'cancelled') continue;
+      if (!req.start_date || !req.end_date) continue;
+      if (activeDayIso < req.start_date || activeDayIso > req.end_date) continue;
+      if (!best || REQ_STATUS_PRIORITY[req.status] > REQ_STATUS_PRIORITY[best.status]) {
+        best = req;
+      }
+    }
+    return best;
+  }, [leaveRequestsQuery.data, activeDayIso]);
+
   const handleSetup2FA = async () => {
     try {
       const data = await apiClient.post<{ secret: string; qrCode: string; recoveryCodes: string[] }>('/auth/2fa/setup');
@@ -337,6 +365,23 @@ export const EmployeeDashboardPage: React.FC = () => {
                 </div>
               )}
             </div>
+            {activeAbsence && (
+              <div className={styles.correctionInfo}>
+                <div className={styles.correctionInfoHeader}>
+                  <span className={styles.correctionInfoTitle}>
+                    {LR_TYPE_LABELS[activeAbsence.request_type]} с {formatRuDate(activeAbsence.start_date)} по {formatRuDate(activeAbsence.end_date)}
+                  </span>
+                  <span
+                    className={`${styles.correctionInfoStatus} ${styles[`correctionStatus_${activeAbsence.status}`]}`}
+                  >
+                    {LR_STATUS_LABELS[activeAbsence.status]}
+                  </span>
+                </div>
+                {activeAbsence.reason && (
+                  <div className={styles.correctionInfoReason}>{activeAbsence.reason}</div>
+                )}
+              </div>
+            )}
             {activeCorrection && (
               <div className={styles.correctionInfo}>
                 <div className={styles.correctionInfoHeader}>

@@ -10,6 +10,7 @@ import {
   isScheduleDayOff,
 } from '../../utils/scheduleUtils';
 import { getDayStatus, type DayStatus } from '../../utils/dayStatus';
+import { formatHoursLabel, selectVisibleHours } from '../../utils/hoursDisplay';
 import {
   REQUEST_TYPE_LABELS,
   STATUS_LABELS,
@@ -18,6 +19,18 @@ import {
 } from '../../services/leaveRequestService';
 import type { TimesheetEntry } from '../../types';
 import styles from './MyMonthTimesheet.module.css';
+
+const APPROVED_ABSENCE_TYPES: ReadonlySet<ILeaveRequest['request_type']> = new Set([
+  'vacation',
+  'sick_leave',
+  'unpaid',
+]);
+
+const REQUEST_TYPE_TO_DS: Partial<Record<ILeaveRequest['request_type'], DayStatus>> = {
+  vacation: 'vacation',
+  sick_leave: 'sick',
+  unpaid: 'unpaid',
+};
 
 const WEEKDAY_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
@@ -251,27 +264,39 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
           const reqBadgeCls = reqInfo && reqInfo.status !== 'cancelled'
             ? styles[REQ_STATUS_TO_CSS[reqInfo.status as Exclude<LeaveRequestStatus, 'cancelled'>]]
             : '';
+          // Выходной, попавший в период одобренного отпуска/больничного/за-свой-счёт,
+          // должен быть подсвечен как период отсутствия, а не серым weekend (включая
+          // праздничные дни внутри периода).
+          const absenceOverrideDs =
+            reqInfo
+            && reqInfo.status === 'approved'
+            && APPROVED_ABSENCE_TYPES.has(reqInfo.request_type)
+            && !cell.entry
+              ? REQUEST_TYPE_TO_DS[reqInfo.request_type] ?? null
+              : null;
+          const effectiveDs = absenceOverrideDs ?? cell.ds;
+          const visibleHours = selectVisibleHours(cell.entry, showActualHours);
           const cellCls = [
             styles.cell,
             cell.isToday ? styles.cellToday : '',
-            styles[STATUS_TO_CSS[cell.ds]] || '',
-            cell.isHoliday ? styles.cellHoliday : '',
+            styles[STATUS_TO_CSS[effectiveDs]] || '',
+            cell.isHoliday && !absenceOverrideDs ? styles.cellHoliday : '',
             cell.isPreHoliday ? styles.cellPreHoliday : '',
             isActive ? styles.cellActive : '',
             isSelected ? styles.cellSelected : '',
             cell.entry?.is_correction ? styles.cellCorrection : '',
           ].filter(Boolean).join(' ');
 
-          const label = STATUS_LABEL[cell.ds];
+          const label = STATUS_LABEL[effectiveDs];
           const dayHints: string[] = [];
           if (cell.isHoliday) dayHints.push('праздник');
           if (cell.isPreHoliday) dayHints.push('сокращённый −1ч');
-          if (!cell.entry && cell.ds === 'weekend' && !cell.isHoliday) dayHints.push('выходной');
+          if (!cell.entry && cell.ds === 'weekend' && !cell.isHoliday && !absenceOverrideDs) dayHints.push('выходной');
           const hintsStr = dayHints.length > 0 ? ` (${dayHints.join(', ')})` : '';
-          const isAbsenceDay = ABSENCE_DAY_STATUSES.has(cell.ds);
-          const showHours = !!cell.entry?.hours_worked && !isAbsenceDay;
+          const isAbsenceDay = ABSENCE_DAY_STATUSES.has(effectiveDs);
+          const showHours = visibleHours != null && visibleHours > 0 && !isAbsenceDay;
           const baseTitle = cell.entry
-            ? `${cell.day}: ${label}${showHours ? ` (${cell.entry.hours_worked}ч)` : ''}${cell.entry.is_correction ? ' • корр.' : ''}${hintsStr}`
+            ? `${cell.day}: ${label}${showHours ? ` (${formatHoursLabel(visibleHours)})` : ''}${cell.entry.is_correction ? ' • корр.' : ''}${hintsStr}`
             : `${cell.day}${hintsStr}`;
           const reqTitle = reqInfo
             ? ` • ${REQUEST_TYPE_LABELS[reqInfo.request_type] || 'заявка'}: ${STATUS_LABELS[reqInfo.status]}`
@@ -288,7 +313,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
             >
               <span className={styles.cellDay}>{cell.day}</span>
               {showHours ? (
-                <span className={styles.cellHours}>{cell.entry!.hours_worked}ч</span>
+                <span className={styles.cellHours}>{formatHoursLabel(visibleHours)}</span>
               ) : null}
               {reqInfo && reqInfo.status !== 'cancelled' ? (
                 <span
