@@ -99,7 +99,6 @@ interface IBulkCellCoord {
 }
 
 const EMPTY_CELL_SELECTION = new Set<string>();
-const UNASSIGNED_OBJECT_KEY = '__timesheet_unassigned__';
 const UNASSIGNED_OBJECT_NAME = 'Не определён / без объекта';
 
 const getEmployeeBulkRowKey = (employeeId: number): string => `employee:${employeeId}`;
@@ -128,7 +127,6 @@ const parseBulkRowKey = (rowKey: string): ParsedRowKey | null => {
   return null;
 };
 
-const roundHours = (value: number): number => Math.round(value * 100) / 100;
 // Per-role «фактические vs урезанные» часы. Делегируем единому хелперу, чтобы
 // весь UI был согласован. Подмена через module-level flag — TimesheetGrid
 // инстанцируется единожды на дашборде, race conditions не ожидаются.
