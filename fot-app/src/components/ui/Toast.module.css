@@ -1,6 +1,6 @@
 .toast {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   padding: 14px 16px;
   background: var(--surface-elevated);
@@ -9,7 +9,7 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
   animation: slideIn 0.3s ease;
   min-width: 300px;
-  max-width: 400px;
+  max-width: 420px;
 }
 
 @keyframes slideIn {
@@ -63,9 +63,9 @@
   font-size: 13px;
   color: var(--text-secondary);
   line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .close {

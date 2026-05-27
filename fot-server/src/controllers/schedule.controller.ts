@@ -97,6 +97,11 @@ const assignmentBodySchema = z.object({
   effective_from: isoDateString,
   effective_to: isoDateString.nullable().optional(),
   anchor_date: isoDateString.nullable().optional(),
+  // Только для одиночного PUT /api/schedules/employee/:id. Если false — НЕ
+  // сдвигать effective_from существующей next-записи того же графика, а
+  // создавать новый исторический фрагмент INSERT'ом. Дефолт (undefined) — true
+  // для обратной совместимости с bulkApplyToBrigades и старыми клиентами.
+  merge_into_next: z.boolean().optional(),
 });
 const employeeIdParamSchema = z.coerce.number().int().positive();
 const objectIdParamSchema = z.string().uuid();
@@ -278,6 +283,9 @@ const loadObjectScheduleRows = async (objectId: string): Promise<ObjectScheduleR
   );
 };
 
+/** Ошибка UNIQUE-конфликта с уже существующим фрагментом → controller отдаёт 409. */
+class AssignmentConflictError extends Error {}
+
 const assignEmployeeSchedule = async (
   db: Db,
   employeeId: number,
@@ -287,6 +295,7 @@ const assignEmployeeSchedule = async (
   effectiveTo?: string | null,
   preloadedRows?: EmployeeScheduleRow[],
   anchorDate?: string | null,
+  mergeIntoNext: boolean = true,
 ): Promise<unknown> => {
   const rows = preloadedRows ?? await loadEmployeeScheduleRows(employeeId, db);
   const nowIso = new Date().toISOString();
@@ -333,7 +342,9 @@ const assignEmployeeSchedule = async (
   // создавался мёртвый отрезок [newFrom .. day-before], а активная запись
   // оставалась со старой датой — пользователю казалось, что «дата не
   // меняется» (одиночно и при массовом назначении бригаде).
-  if (!activeAtDate && nextAssignment && nextAssignment.schedule_id === scheduleId) {
+  // mergeIntoNext=false (одиночный PUT с явным выбором «создать новый
+  // фрагмент») — пропускаем эту ветку и идём в INSERT.
+  if (mergeIntoNext && !activeAtDate && nextAssignment && nextAssignment.schedule_id === scheduleId) {
     const between = rows.find(row =>
       row.id !== nextAssignment.id
       && row.effective_from > effectiveFrom
@@ -386,18 +397,32 @@ const assignEmployeeSchedule = async (
   }
 
   const nextEffectiveTo = effectiveTo ?? (nextAssignment ? previousIsoDate(nextAssignment.effective_from) : null);
-  const inserted = await db.queryOne<{ id: string }>(
-    anchorDate !== undefined
-      ? `INSERT INTO employee_schedule_assignments
-           (employee_id, schedule_id, effective_from, effective_to, created_by, anchor_date)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
-      : `INSERT INTO employee_schedule_assignments
-           (employee_id, schedule_id, effective_from, effective_to, created_by)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    anchorDate !== undefined
-      ? [employeeId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy, anchorDate]
-      : [employeeId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy],
-  );
+  let inserted: { id: string } | null;
+  try {
+    inserted = await db.queryOne<{ id: string }>(
+      anchorDate !== undefined
+        ? `INSERT INTO employee_schedule_assignments
+             (employee_id, schedule_id, effective_from, effective_to, created_by, anchor_date)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
+        : `INSERT INTO employee_schedule_assignments
+             (employee_id, schedule_id, effective_from, effective_to, created_by)
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      anchorDate !== undefined
+        ? [employeeId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy, anchorDate]
+        : [employeeId, scheduleId, effectiveFrom, nextEffectiveTo, createdBy],
+    );
+  } catch (e) {
+    // UNIQUE(employee_id, effective_from) — на эту дату уже есть исторический
+    // фрагмент. Отдаём 409 с понятным текстом, чтобы фронт мог направить
+    // пользователя в «Исправить назначение».
+    const code = typeof (e as { code?: unknown } | null)?.code === 'string' ? (e as { code: string }).code : null;
+    if (code === '23505') {
+      throw new AssignmentConflictError(
+        `У сотрудника уже есть запись назначения с датой вступления ${effectiveFrom}. Воспользуйтесь вкладкой «Исправить назначение», чтобы изменить даты существующей записи.`,
+      );
+    }
+    throw e;
+  }
   if (!inserted) throw new Error('Failed to insert employee_schedule_assignment');
   const data = await db.queryOne<Record<string, unknown>>(
     `SELECT ${SCHEDULE_ASSIGNMENT_JOIN('employee_schedule_assignments')} WHERE a.id = $1`,
@@ -442,11 +467,41 @@ const fixEmployeeAssignmentDates = async (
   if (patch.effectiveFrom !== undefined && patch.effectiveFrom !== target.effective_from) {
     const newFrom = patch.effectiveFrom;
 
-    if (rows.some(row => row.id !== target.id && row.effective_from === newFrom)) {
-      throw new AssignmentFixError(`У сотрудника уже есть назначение с датой вступления ${newFrom}`);
+    // Стейл-строка — другой record того же сотрудника с effective_from = newFrom.
+    // У УОК_2 (Габараева/Корж/Миоков/Узун) такие записи накопились в проде.
+    // Если её диапазон [effective_from, effective_to] целиком оказывается
+    // ВНУТРИ нового диапазона target — она будет «поглощена» движением target
+    // и теряет смысл. Удаляем такие стейл-строки в той же транзакции.
+    // Иначе — ясная развёрнутая ошибка вместо немотивированного «уже существует».
+    const conflictingRow = rows.find(row => row.id !== target.id && row.effective_from === newFrom);
+    if (conflictingRow) {
+      const isBackdating = newFrom < target.effective_from;
+      // Back-dating: conflict сидит ДО старого target.effective_from →
+      // должен быть полностью раньше target. Условие: conflict.effective_to
+      // не позднее предыдущего дня от старого target.effective_from.
+      const backdatingAbsorbs = isBackdating
+        && conflictingRow.effective_to !== null
+        && conflictingRow.effective_to < target.effective_from;
+      // Forward-dating: conflict сидит ПОСЛЕ старого target.effective_from →
+      // должен быть полностью внутри [oldFrom, newFrom-1] (между target и до newFrom).
+      const forwardAbsorbs = !isBackdating
+        && conflictingRow.effective_from > target.effective_from
+        && conflictingRow.effective_to !== null
+        && conflictingRow.effective_to < newFrom;
+
+      if (backdatingAbsorbs || forwardAbsorbs) {
+        await db.execute('DELETE FROM employee_schedule_assignments WHERE id = $1', [conflictingRow.id]);
+      } else {
+        const toLabel = conflictingRow.effective_to ?? 'сейчас';
+        throw new AssignmentFixError(
+          `Дата ${newFrom} уже занята другим назначением (с ${conflictingRow.effective_from} по ${toLabel}). Сначала удалите или перенесите его, либо выберите другую дату.`,
+        );
+      }
     }
 
-    const others = rows.filter(row => row.id !== target.id);
+    // После возможного удаления стейл-строки пересчитываем prev/next без неё.
+    const conflictId = conflictingRow?.id ?? null;
+    const others = rows.filter(row => row.id !== target.id && row.id !== conflictId);
     const prev = [...others].reverse().find(row => row.effective_from < target.effective_from) || null;
     const next = others.find(row => row.effective_from > target.effective_from) || null;
 
@@ -961,6 +1016,11 @@ export const scheduleController = {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
+      // merge_into_next не указан → дефолт true (старое поведение и совместимость
+      // с массовым назначением по бригадам). Фронт «Управление кадрами» шлёт
+      // явный false при выборе «Создать новый исторический фрагмент».
+      const mergeIntoNext = parsed.data.merge_into_next ?? true;
+
       const data = await withTransaction(client => assignEmployeeSchedule(
         clientDb(client),
         parsedEmployeeId.data,
@@ -970,10 +1030,14 @@ export const scheduleController = {
         parsed.data.effective_to,
         undefined,
         parsed.data.anchor_date,
+        mergeIntoNext,
       ));
 
       res.json({ success: true, data });
     } catch (err) {
+      if (err instanceof AssignmentConflictError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
       console.error('[schedules] assignEmployee error:', err);
       res.status(500).json({ success: false, error: 'Ошибка назначения персонального графика сотруднику' });
     }

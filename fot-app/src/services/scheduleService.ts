@@ -84,10 +84,23 @@ export const scheduleService = {
     return res.data;
   },
 
-  /** Назначить персональный график сотруднику */
+  /**
+   * Назначить персональный график сотруднику.
+   * merge_into_next: false — НЕ сдвигать effective_from существующей next-записи
+   * того же графика, а INSERT'ом создать новый исторический фрагмент. Используется,
+   * когда пользователь в UI явно выбрал «Создать новый исторический фрагмент»
+   * вместо «Сдвинуть дату начала текущего назначения». Если не указано — дефолт
+   * на бэке (true) сохраняет старое поведение.
+   */
   async assignEmployee(
     employeeId: number,
-    data: { schedule_id: string; effective_from: string; effective_to?: string | null; anchor_date?: string | null },
+    data: {
+      schedule_id: string;
+      effective_from: string;
+      effective_to?: string | null;
+      anchor_date?: string | null;
+      merge_into_next?: boolean;
+    },
   ): Promise<IEmployeeScheduleAssignment> {
     const res = await apiClient.put<ApiResponse<IEmployeeScheduleAssignment>>(`/schedules/employee/${employeeId}`, data);
     if (!res.data) throw new Error(res.error || 'Ошибка назначения графика сотруднику');

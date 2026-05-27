@@ -735,7 +735,7 @@ describe('scheduleController.fixEmployeeAssignment', () => {
     expect(targetUpdate).toBeTruthy();
   });
 
-  it('коллизия effective_from с другой записью → 400, без записи в БД', async () => {
+  it('коллизия с активной (открытой) записью → 400 с развёрнутым текстом, без мутаций', async () => {
     pgQuery.mockResolvedValue([
       { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', effective_to: null },
       { id: ASSIGN_B, schedule_id: SCHEDULE_ID, effective_from: '2026-05-01', effective_to: null },
@@ -750,8 +750,49 @@ describe('scheduleController.fixEmployeeAssignment', () => {
     await scheduleController.fixEmployeeAssignment(req, res);
 
     expect(res.statusCode).toBe(400);
-    expect((res.payload as { error: string }).error).toContain('уже есть назначение');
+    const text = (res.payload as { error: string }).error;
+    expect(text).toContain('2026-05-01');
+    expect(text).toMatch(/уже занята|сейчас/);
     expect(pgExecute).not.toHaveBeenCalled();
+  });
+
+  // Регресс УОК_2: у target есть стейл-«предок» с effective_from = newFrom и
+  // effective_to строго раньше старого target.effective_from. Старая логика
+  // блокировала операцию ошибкой «уже есть назначение». Новая логика поглощает
+  // стейл-строку DELETE'ом в той же транзакции и сдвигает effective_from target.
+  it('back-dating: поглощённый стейл-предок удаляется, target обновляется', async () => {
+    pgQuery.mockResolvedValue([
+      // Старый закрытый фрагмент — будет полностью поглощён движением target назад.
+      { id: ASSIGN_P, schedule_id: SCHEDULE_ID, effective_from: '2026-01-01', effective_to: '2026-02-10' },
+      // target начинается позже стейл-предка.
+      { id: ASSIGN_A, schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+    pgQueryOne.mockResolvedValue({ id: ASSIGN_A, effective_from: '2026-01-01' });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      // target двигаем на дату стейл-предка.
+      body: { assignment_id: ASSIGN_A, effective_from: '2026-01-01' },
+    });
+    const res = makeRes();
+
+    await scheduleController.fixEmployeeAssignment(req, res);
+
+    expect(res.statusCode).toBe(200);
+
+    // Стейл-предок удалён.
+    const deletedStale = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().startsWith('delete from employee_schedule_assignments')
+      && Array.isArray(params)
+      && (params as unknown[]).includes(ASSIGN_P));
+    expect(deletedStale).toBeTruthy();
+
+    // target обновлён effective_from = 2026-01-01.
+    const targetUpdate = findUpdate((sql, params) =>
+      /effective_from\s*=/i.test(sql) && params.includes('2026-01-01') && params.includes(ASSIGN_A));
+    expect(targetUpdate).toBeTruthy();
   });
 
   it('назначение не принадлежит сотруднику → 400 not-found', async () => {
@@ -833,6 +874,113 @@ describe('scheduleController.assignEmployee — коррекция даты на
     const inserts = pgQueryOne.mock.calls.filter(([sql]) =>
       typeof sql === 'string' && sql.toLowerCase().trimStart().startsWith('insert'));
     expect(inserts).toHaveLength(0);
+  });
+
+  // merge_into_next: false — единичный PUT с явным выбором «создать новый фрагмент».
+  // Существующая открытая запись не трогается, INSERT нового фрагмента и UPDATE
+  // effective_to у текущей открытой записи на день-перед-newFrom (через ветку 3,
+  // если activeAtDate присутствует) — но в этом сценарии активной на newFrom нет:
+  // newFrom < existing.effective_from. Ожидаем чистый INSERT + UPDATE effective_to
+  // существующей записи закрывается на (newFrom - 1)? Нет — activeAtDate is null
+  // (existing.effective_from > newFrom), nextAssignment exists, merge ветка
+  // пропущена, activeAtDate condition false → сразу INSERT. UPDATE существующего
+  // НЕ выполняется. effective_to новой записи = previousIsoDate(existing.from).
+  it('одиночный PUT с merge_into_next=false: INSERT нового фрагмента, существующая запись не трогается', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_X, schedule_id: SCHEDULE_ID, effective_from: '2026-05-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+    let insertCounter = 0;
+    pgQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.toLowerCase().trimStart().startsWith('insert into employee_schedule_assignments')) {
+        insertCounter += 1;
+        return { id: `new-${insertCounter}` };
+      }
+      return { id: 'fetched' };
+    });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', merge_into_next: false },
+    });
+    const res = makeRes();
+
+    await scheduleController.assignEmployee(req, res);
+
+    expect(res.statusCode).toBe(200);
+
+    // Должен быть ровно один INSERT.
+    const inserts = pgQueryOne.mock.calls.filter(([sql]) =>
+      typeof sql === 'string' && sql.toLowerCase().trimStart().startsWith('insert into employee_schedule_assignments'));
+    expect(inserts).toHaveLength(1);
+
+    // Существующая запись ASSIGN_X не трогается — никаких UPDATE по её id.
+    const updatedExisting = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && Array.isArray(params)
+      && (params as unknown[]).includes(ASSIGN_X));
+    expect(updatedExisting).toBeUndefined();
+  });
+
+  // merge_into_next: true (по умолчанию / явно) — старое поведение «коррекция
+  // даты вступления»: UPDATE existing вместо INSERT.
+  it('одиночный PUT с merge_into_next=true: сдвигает effective_from существующей записи (как раньше)', async () => {
+    pgQuery.mockResolvedValue([
+      { id: ASSIGN_X, schedule_id: SCHEDULE_ID, effective_from: '2026-05-01', effective_to: null },
+    ]);
+    pgExecute.mockResolvedValue(1);
+    pgQueryOne.mockResolvedValue({ id: ASSIGN_X, effective_from: '2026-03-01' });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', merge_into_next: true },
+    });
+    const res = makeRes();
+
+    await scheduleController.assignEmployee(req, res);
+
+    expect(res.statusCode).toBe(200);
+
+    const shift = pgExecute.mock.calls.find(([sql, params]) =>
+      typeof sql === 'string'
+      && sql.toLowerCase().includes('update employee_schedule_assignments')
+      && /effective_from\s*=/i.test(sql)
+      && Array.isArray(params)
+      && (params as unknown[]).includes('2026-03-01')
+      && (params as unknown[]).includes(ASSIGN_X));
+    expect(shift).toBeTruthy();
+
+    const inserts = pgQueryOne.mock.calls.filter(([sql]) =>
+      typeof sql === 'string' && sql.toLowerCase().trimStart().startsWith('insert'));
+    expect(inserts).toHaveLength(0);
+  });
+
+  // INSERT нарвался на UNIQUE(employee_id, effective_from) — стейл-строка с той
+  // же датой. assignEmployeeSchedule должен поймать SQLSTATE 23505 и
+  // controller отдать 409 с человекочитаемым текстом.
+  it('UNIQUE-конфликт при INSERT → 409 с подсказкой про «Исправить назначение»', async () => {
+    pgQuery.mockResolvedValue([]); // нет существующих записей в кэше rows
+    pgQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.toLowerCase().trimStart().startsWith('insert into employee_schedule_assignments')) {
+        const err = new Error('duplicate key value violates unique constraint') as Error & { code: string };
+        err.code = '23505';
+        throw err;
+      }
+      return { id: 'fetched' };
+    });
+
+    const req = makeReq({
+      params: { employeeId: '7' },
+      body: { schedule_id: SCHEDULE_ID, effective_from: '2026-03-01', merge_into_next: false },
+    });
+    const res = makeRes();
+
+    await scheduleController.assignEmployee(req, res);
+
+    expect(res.statusCode).toBe(409);
+    const text = (res.payload as { error: string }).error;
+    expect(text).toContain('Исправить назначение');
   });
 
   it('массово по бригаде: ранняя дата того же графика двигает существующую запись, новым — INSERT', async () => {

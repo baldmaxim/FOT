@@ -215,7 +215,7 @@ interface IStaffModalsProps {
   onSaveSalary: (empId: number, val: number, type: ModalType, reason?: string, date?: string) => Promise<void>;
   onSavePosition: (empId: number, val: string, reason?: string, date?: string) => Promise<void>;
   onSaveDepartment: (empId: number, deptId: string, effectiveDate?: string, reason?: string) => Promise<void>;
-  onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null) => Promise<void>;
+  onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null, mergeIntoNext?: boolean) => Promise<void>;
   onFixAssignment: (empId: number, data: { assignment_id: string; effective_from?: string; anchor_date?: string | null }) => Promise<void>;
 }
 
@@ -255,6 +255,11 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const [fixFrom, setFixFrom] = useState(() => currentSchedule?.effectiveFrom || '');
   const [fixAnchor, setFixAnchor] = useState(() => currentSchedule?.assignmentAnchorDate ?? '');
   const [saving, setSaving] = useState(false);
+  // Когда пользователь выбрал в «Новое назначение» ту же запись графика, что и
+  // активная сейчас, но с более ранней датой — серверная case-2-логика молча
+  // сдвинула бы effective_from текущей записи назад. Показываем явное
+  // подтверждение и оставляем выбор за пользователем (см. план 2-glowing-pixel).
+  const [pendingMergeChoice, setPendingMergeChoice] = useState(false);
   const selectedScheduleTemplate = scheduleVal ? templates.find(t => t.id === scheduleVal) ?? null : null;
   const isCycleTemplate = selectedScheduleTemplate?.pattern_type === 'cycle';
 
@@ -286,15 +291,37 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     }
   };
 
-  const handleSchedule = async () => {
+  // Детектор серверной ветки case 2 (assignEmployeeSchedule): тот же график,
+  // что у текущей employee-записи, но более ранняя дата → бэк бы молча
+  // сдвинул effective_from существующей записи назад. Пользователь должен
+  // явно выбрать поведение.
+  const wouldTriggerSilentMerge = (
+    currentSchedule?.source === 'employee'
+    && !!currentSchedule.effectiveFrom
+    && scheduleVal !== ''
+    && scheduleVal === currentSchedule.scheduleId
+    && !!scheduleDate
+    && scheduleDate < currentSchedule.effectiveFrom
+  );
+
+  const submitSchedule = async (mergeIntoNext?: boolean) => {
     setSaving(true);
     const value = scheduleVal === '' ? null : scheduleVal;
     const anchor = isCycleTemplate && scheduleAnchor.trim() ? scheduleAnchor : null;
     try {
-      await onSaveSchedule(modalEmp.id, value, scheduleDate, anchor);
+      await onSaveSchedule(modalEmp.id, value, scheduleDate, anchor, mergeIntoNext);
     } finally {
       setSaving(false);
+      setPendingMergeChoice(false);
     }
+  };
+
+  const handleSchedule = async () => {
+    if (wouldTriggerSilentMerge && !pendingMergeChoice) {
+      setPendingMergeChoice(true);
+      return;
+    }
+    await submitSchedule();
   };
 
   const handleFix = async () => {
@@ -507,6 +534,39 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
                   <div><strong>Базовый график:</strong> {baseSchedule?.scheduleName || defaultScheduleLabel}</div>
                   <div>Если оставить пусто, с выбранной даты сотрудник вернётся к графику {defaultScheduleLabel}. Создаётся новая датированная запись.</div>
                 </div>
+                {pendingMergeChoice && (
+                  <div className="sc-schedule-help" style={{ borderTop: '1px solid var(--border-light)', marginTop: 12, paddingTop: 12 }}>
+                    <div style={{ marginBottom: 8 }}>
+                      <strong>Уточните действие.</strong> Тот же график «{effectiveSchedule?.scheduleName}» уже действует у сотрудника с <strong>{effectiveSchedule?.effectiveFrom}</strong>. Вы выбрали более раннюю дату <strong>{scheduleDate}</strong>. Что сделать?
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <button
+                        type="button"
+                        className="sc-btn apply"
+                        onClick={() => submitSchedule(true)}
+                        disabled={saving}
+                      >
+                        Сдвинуть дату начала текущей записи с {effectiveSchedule?.effectiveFrom} на {scheduleDate}
+                      </button>
+                      <button
+                        type="button"
+                        className="sc-btn apply"
+                        onClick={() => submitSchedule(false)}
+                        disabled={saving}
+                      >
+                        Создать новый исторический фрагмент с {scheduleDate} (текущая запись не меняется)
+                      </button>
+                      <button
+                        type="button"
+                        className="sc-btn cancel"
+                        onClick={() => setPendingMergeChoice(false)}
+                        disabled={saving}
+                      >
+                        Отмена выбора
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -517,13 +577,15 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
                 {saving ? 'Сохранение...' : 'Исправить даты'}
               </button>
             ) : (
-              <button
-                className="sc-btn apply"
-                onClick={handleSchedule}
-                disabled={saving || !scheduleDate || (!hasEmployeeOverride && scheduleVal === '') || isUnchanged}
-              >
-                {saving ? 'Сохранение...' : 'Применить'}
-              </button>
+              !pendingMergeChoice && (
+                <button
+                  className="sc-btn apply"
+                  onClick={handleSchedule}
+                  disabled={saving || !scheduleDate || (!hasEmployeeOverride && scheduleVal === '') || isUnchanged}
+                >
+                  {saving ? 'Сохранение...' : 'Применить'}
+                </button>
+              )
             )}
           </div>
         </div>
@@ -1467,19 +1529,25 @@ export const StaffControlPage: FC = () => {
     void queryClient.invalidateQueries({ queryKey: ['employee-timesheet'] });
   }, [queryClient]);
 
-  const handleSaveSchedule = useCallback(async (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null) => {
+  const handleSaveSchedule = useCallback(async (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null, mergeIntoNext?: boolean) => {
     try {
       if (scheduleId) {
         await scheduleService.assignEmployee(empId, {
           schedule_id: scheduleId,
           effective_from: effectiveFrom,
           anchor_date: anchorDate,
+          ...(mergeIntoNext !== undefined ? { merge_into_next: mergeIntoNext } : {}),
         });
       } else {
         await scheduleService.removeEmployeeAssignment(empId, effectiveFrom);
       }
       invalidateEmployee(empId);
       invalidateTimesheetQueries();
+      // Дожидаемся подтягивания свежих employee-assignments из бэка ДО закрытия
+      // модалки, чтобы строка сотрудника в списке обновилась без перезагрузки
+      // страницы. invalidate сам по себе помечает запрос stale, но рефетч
+      // активного подписчика — асинхронный.
+      await employeeScheduleAssignmentsQuery.refetch();
       toast.success(scheduleId ? 'График назначен' : 'Персональный график снят');
       closeModal();
     } catch (e) {
@@ -1487,7 +1555,7 @@ export const StaffControlPage: FC = () => {
       // показываем тост, модалку оставляем открытой для повтора.
       toast.error(e instanceof ApiError ? e.message : 'Не удалось сохранить график');
     }
-  }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries]);
+  }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries, employeeScheduleAssignmentsQuery]);
 
   const handleFixAssignment = useCallback(async (
     empId: number,
@@ -1497,12 +1565,13 @@ export const StaffControlPage: FC = () => {
       await scheduleService.fixEmployeeAssignment(empId, data);
       invalidateEmployee(empId);
       invalidateTimesheetQueries();
+      await employeeScheduleAssignmentsQuery.refetch();
       toast.success('Даты назначения исправлены');
       closeModal();
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : 'Не удалось исправить даты назначения');
     }
-  }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries]);
+  }, [closeModal, invalidateEmployee, toast, invalidateTimesheetQueries, employeeScheduleAssignmentsQuery]);
 
   const applyScheduleToEmployees = useCallback(async (
     employeeIds: number[],
