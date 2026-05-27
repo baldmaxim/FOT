@@ -314,6 +314,8 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
               <span className={styles.cellDay}>{cell.day}</span>
               {showHours ? (
                 <span className={styles.cellHours}>{formatHoursLabel(visibleHours)}</span>
+              ) : effectiveDs === 'vacation' ? (
+                <span className={styles.cellHours}>От</span>
               ) : null}
               {reqInfo && reqInfo.status !== 'cancelled' ? (
                 <span
