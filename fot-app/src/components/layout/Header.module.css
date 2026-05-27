@@ -95,3 +95,14 @@
     text-overflow: ellipsis;
   }
 }
+
+/* Landscape iPhone — компактная шапка, чтобы контент влез по высоте. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .header {
+    height: calc(40px + env(safe-area-inset-top, 0px));
+  }
+
+  .title {
+    font-size: 13px;
+  }
+}

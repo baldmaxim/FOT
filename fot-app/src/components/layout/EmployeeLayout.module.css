@@ -6,7 +6,8 @@
 
 .main {
   flex: 1;
-  margin-left: var(--sidebar-width);
+  margin-left: calc(var(--sidebar-width) + env(safe-area-inset-left, 0px));
+  padding-right: env(safe-area-inset-right, 0px);
   display: flex;
   flex-direction: column;
   transition: margin-left 0.2s ease;
@@ -206,5 +207,23 @@
   /* присутствие остаётся видимым в профиле сайдбара */
   .presenceBadge {
     display: none;
+  }
+}
+
+/* Landscape iPhone — сжимаем шапку, чтобы оставить место контенту. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .header {
+    height: calc(44px + env(safe-area-inset-top, 0px));
+  }
+
+  .headerBtn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .pageTitle {
+    font-size: 13px;
   }
 }

@@ -4599,7 +4599,21 @@
     gap: 6px;
   }
 
-  .ts-half-chip {
+  .ts-half-toggle {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .ts-half-toggle .ts-half-chip {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 9px 6px;
+    border-radius: 14px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .ts-half-switch .ts-half-chip {
     min-width: calc(50% - 3px);
     padding: 9px 10px;
     border-radius: 14px;
@@ -4722,7 +4736,16 @@
   .ts-half-switch {
     gap: 4px;
   }
-  .ts-half-chip {
+  .ts-half-toggle {
+    gap: 4px;
+  }
+  .ts-half-toggle .ts-half-chip {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 8px 4px;
+    font-size: 11px;
+  }
+  .ts-half-switch .ts-half-chip {
     min-width: calc(50% - 3px);
     padding: 8px;
     font-size: 12px;
@@ -5050,7 +5073,67 @@
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--text-secondary, #5b6573);
-  background: var(--surface-muted, #f5f6f8);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
+
+/* Landscape iPhone и компактные viewport'ы по высоте: шапка не должна
+   съедать весь экран, table-scroll должен оставаться прокручиваемым.
+   Брейкпоинт max-height: 500px ловит iPhone 15 Pro Max landscape (430×932→932×430),
+   iPhone 12 landscape и подобные. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .ts-top-panel,
+  .ts-top-panel--mobile {
+    padding: 4px 8px;
+    border-radius: 8px;
+  }
+
+  .ts-header-grid {
+    gap: 2px 8px;
+  }
+
+  .ts-header-cell--center .ts-month-label {
+    font-size: 12px;
+    min-width: 100px;
+  }
+
+  .ts-half-toggle {
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .ts-half-toggle .ts-half-chip {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 28px;
+    padding: 4px 6px;
+    font-size: 11px;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+
+  .ts-view-switch {
+    gap: 4px;
+  }
+
+  .ts-view-chip {
+    min-height: 28px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .ts-legend {
+    display: none;
+  }
+
+  .ts-table-header-bar {
+    padding: 6px 10px;
+  }
+
+  .ts-table-title {
+    font-size: 12px;
+  }
+}
+
