@@ -26,7 +26,7 @@ export const ContractorApprovalsPage: FC = () => {
     queryKey: ['contractor-pending-subs'],
     queryFn: contractorAdminService.getPendingSubmissions,
     staleTime: 15_000,
-    refetchInterval: 30_000,
+    refetchInterval: 10_000,
   });
   const pendingCount = pendingSubsQuery.data?.length ?? 0;
 

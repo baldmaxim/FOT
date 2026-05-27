@@ -146,8 +146,10 @@ export const ApproveSubmissionModal: FC<IProps> = ({
       } else {
         toast.error(`Открыто: ${res.applied}, ошибок: ${res.failed}. ${res.errors.slice(0, 1).join('; ')}`);
       }
-      await qc.invalidateQueries({ queryKey: ['contractor-pending-subs'] });
-      await qc.invalidateQueries({ queryKey: ['contractor-sub-detail', submissionId] });
+      await Promise.all([
+        qc.refetchQueries({ queryKey: ['contractor-pending-subs'] }),
+        qc.refetchQueries({ queryKey: ['contractor-sub-detail', submissionId] }),
+      ]);
       onApplied();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка');

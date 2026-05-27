@@ -308,6 +308,17 @@ export const contractorPoolController = {
         res.status(400).json({ success: false, error: 'Некорректный id пропуска' });
         return;
       }
+      if (error && typeof error === 'object' && (error as { code?: string }).code === '23505') {
+        Sentry.captureException(error, {
+          tags: { route: 'contractor.revokePass', kind: 'unique_violation' },
+          extra: { passId, userId: req.user?.id },
+        });
+        res.status(409).json({
+          success: false,
+          error: 'В пуле уже есть пропуск с этим номером (дубликат в БД). Обратитесь к администратору для очистки.',
+        });
+        return;
+      }
       Sentry.captureException(error, {
         tags: { route: 'contractor.revokePass' },
         extra: { passId, userId: req.user?.id },

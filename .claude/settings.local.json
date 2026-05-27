@@ -82,7 +82,19 @@
       "WebFetch(domain:developers.mts.ru)",
       "WebSearch",
       "Bash(grep -A 2 \"mts\\\\\\\\|EmployeeFio\\\\\\\\|OsmCoord\")",
-      "PowerShell(git push personal main)"
+      "PowerShell(git push personal main)",
+      "Bash(git -C \"c:/Users/Usrr/VSCode/Odintsov/FOT\" diff fot-server/src/services/attendance.service.ts)",
+      "Bash(cd /c/Users/Usrr/VSCode/Odintsov/FOT/fot-app && grep -rn \"<select\" src/pages/timesheet src/components/timesheet | head -20)",
+      "Read(//c/c/Users/Usrr/VSCode/Odintsov/FOT/fot-app/src/pages/**)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT\" -Directory)",
+      "Bash(Select-Object Name)",
+      "Bash(git --no-pager diff fot-server/src/controllers/timesheet-approval.controller.ts fot-server/src/controllers/push.controller.ts fot-app/src/hooks/usePushNotifications.ts)",
+      "Bash(python -c \"import pptx; print\\('python-pptx', pptx.__version__\\)\")",
+      "Bash(python -m pip install python-pptx)",
+      "Bash(Select-Object -Last 5)",
+      "Bash(python build_fot_pptx.py)",
+      "Bash(python -c \"from pptx import Presentation; p=Presentation\\('Портал ФОТ - возможности руководителей.pptx'\\); print\\('slides:', len\\(p.slides._sldIdLst\\)\\)\")",
+      "Bash(awk 'END{print NR}' fot-app/src/pages/timesheet/TimesheetPage.css)"
     ],
     "additionalDirectories": [
       "c:\\Users\\Usrr\\VSCode\\Odintsov\\FOT\\.claude\\commands"

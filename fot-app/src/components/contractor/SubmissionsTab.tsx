@@ -121,7 +121,7 @@ export const SubmissionsTab: FC = () => {
     staleTime: 15_000,
   });
 
-  const refreshSubs = () => qc.invalidateQueries({ queryKey: ['contractor-pending-subs'] });
+  const refreshSubs = () => qc.refetchQueries({ queryKey: ['contractor-pending-subs'] });
 
   const setSelectedFor = (submissionId: string, next: Set<string>) => {
     setSelectedByPass(prev => {
@@ -154,15 +154,20 @@ export const SubmissionsTab: FC = () => {
 
   const handleReject = async () => {
     if (!rejectId) return;
+    const idToRemove = rejectId;
     setBusy(true);
+    qc.setQueryData<IPendingSubmission[]>(['contractor-pending-subs'], old =>
+      old ? old.filter(s => s.id !== idToRemove) : old,
+    );
     try {
-      await contractorAdminService.rejectSubmission(rejectId, rejectComment.trim() || undefined);
+      await contractorAdminService.rejectSubmission(idToRemove, rejectComment.trim() || undefined);
       toast.success('Заявка отклонена');
       setRejectId(null);
       setRejectComment('');
       await refreshSubs();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка отклонения');
+      await refreshSubs();
     } finally {
       setBusy(false);
     }
