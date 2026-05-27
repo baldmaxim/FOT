@@ -131,6 +131,10 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
         (prev) => (prev ? [created, ...prev.filter(r => r.id !== created.id)] : [created]),
       );
       await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
+      // Календарь личного кабинета (MyMonthTimesheet) читает табель по ключу
+      // ['employee-timesheet-summary', employeeId, monthKey] — без этой
+      // инвалидации часы/бейдж заявки не появлялись до перезагрузки.
+      await queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', employeeId] });
       showToast('success', 'Заявление отправлено');
       onClose();
     } catch (err) {
@@ -405,6 +409,10 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
         (prev) => (prev ? [created, ...prev.filter(r => r.id !== created.id)] : [created]),
       );
       await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
+      // Календарь личного кабинета (MyMonthTimesheet) читает табель по ключу
+      // ['employee-timesheet-summary', employeeId, monthKey] — без этой
+      // инвалидации часы/бейдж корректировки не появлялись до reload.
+      await queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', employeeId] });
       showToast('success', 'Заявление отправлено');
       onClose();
     } catch (err) {

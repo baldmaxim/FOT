@@ -221,4 +221,8 @@
     border-left: none;
     z-index: 1000;
   }
+
+  .header {
+    padding-top: max(14px, env(safe-area-inset-top));
+  }
 }

@@ -61,22 +61,24 @@ export const HubShell: FC<IHubShellProps> = ({ tabs, defaultTab }) => {
 
   return (
     <div className={styles.hub}>
-      <div className={styles.tabs}>
-        {visibleTabs.map(tab => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.key}
-              type="button"
-              className={`${styles.tab} ${current.key === tab.key ? styles.tabActive : ''}`}
-              onClick={() => setActiveTab(tab.key)}
-            >
-              {Icon && <Icon size={12} />}
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      {visibleTabs.length > 1 && (
+        <div className={styles.tabs}>
+          {visibleTabs.map(tab => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                className={`${styles.tab} ${current.key === tab.key ? styles.tabActive : ''}`}
+                onClick={() => setActiveTab(tab.key)}
+              >
+                {Icon && <Icon size={12} />}
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div className={styles.content}>
         <Suspense fallback={<div className={styles.loading}>Загрузка раздела…</div>}>

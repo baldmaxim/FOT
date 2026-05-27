@@ -127,4 +127,8 @@
     height: 100dvh;
     border-radius: 0;
   }
+
+  .header {
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
 }

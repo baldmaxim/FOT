@@ -864,7 +864,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   );
 
   if (compact && viewMode === 'objects') {
-    const jsDow = new Date(year, month - 1, 1).getDay();
+    const firstDay = days[0] ?? 1;
+    const jsDow = new Date(year, month - 1, firstDay).getDay();
     const firstDayOffset = (jsDow + 6) % 7;
     const formatHourCell = (hours: number): string => {
       if (hours <= 0) return '';
@@ -1088,7 +1089,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 </div>
 
                 {expanded && (() => {
-                  const jsDow = new Date(year, month - 1, 1).getDay();
+                  const firstDay = days[0] ?? 1;
+                  const jsDow = new Date(year, month - 1, firstDay).getDay();
                   const firstDayOffset = (jsDow + 6) % 7;
                   return (
                   <div className="ts-mobile-days-wrap">

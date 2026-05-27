@@ -125,7 +125,12 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // PUT/PATCH/DELETE «График работы» в модалке refetch должен подтянуть
     // свежие данные, иначе новые назначения визуально не появлялись /
     // изменённая дата не обновлялась до принудительного reload.
-    || path === '/schedules/employees';
+    || path === '/schedules/employees'
+    // Месячный табель сотрудника / общий табель: после подачи корректировки
+    // (time_correction) сам календарь личного кабинета должен показать новые
+    // часы/бейдж заявки сразу. Иначе HTTP-кэш 30 сек отдавал старый body
+    // /timesheet?... и юзеру приходилось обновлять страницу.
+    || path === '/timesheet';
 };
 
 const refreshSession = async (): Promise<boolean> => {
