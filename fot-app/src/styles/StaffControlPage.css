@@ -140,6 +140,36 @@
   color: #fff;
 }
 
+/* Деструктивная кнопка «Удалить» в блоке «История назначений» модалки графика.
+ * Чтобы пользователь видел, что это опасное действие — заметный красный outline
+ * и явный hover с заливкой. До правки кнопка была sc-btn cancel + цвет текста red,
+ * выглядела блёкло и при наведении ничего не происходило. */
+.sc-history-delete {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--error);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+
+.sc-history-delete:hover:not(:disabled) {
+  background: var(--error);
+  color: #fff;
+}
+
+.sc-history-delete:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.sc-history-delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 
 .sc-btn--icon {
   flex-shrink: 0;

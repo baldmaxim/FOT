@@ -115,7 +115,12 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     || path === '/leave-requests/my'
     || path === '/leave-requests/department'
     || path === '/leave-requests'
-    || path === '/leave-requests/pending-count';
+    || path === '/leave-requests/pending-count'
+    // История назначений сотрудника: после DELETE/PATCH (блок «История назначений»
+    // в модалке «График работы») refetch должен идти на сервер. Иначе кэш 30с
+    // отдавал старый список — удалённая строка визуально оставалась, а вторая
+    // попытка удалить её получала 404 «Назначение не найдено».
+    || /^\/schedules\/employee\/\d+\/history$/.test(path);
 };
 
 const refreshSession = async (): Promise<boolean> => {

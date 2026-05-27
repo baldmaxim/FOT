@@ -720,7 +720,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
                             {row.anchor_date ? ` · якорь ${row.anchor_date}` : ''}
                           </div>
                         </div>
-                        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                           <button
                             type="button"
                             className="sc-btn cancel"
@@ -733,13 +733,13 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
                           </button>
                           <button
                             type="button"
-                            className="sc-btn cancel"
-                            style={{ padding: '4px 10px', fontSize: 12, color: 'var(--error)' }}
+                            className="sc-history-delete"
                             disabled={saving || isDeleting}
                             onClick={() => handleDeleteHistoryRow(row)}
                             title="Удалить запись полностью"
+                            aria-label="Удалить запись"
                           >
-                            {isDeleting ? '…' : '🗑'}
+                            {isDeleting ? '…' : '🗑 Удалить'}
                           </button>
                         </div>
                       </div>
