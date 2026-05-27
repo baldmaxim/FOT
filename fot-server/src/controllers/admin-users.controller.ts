@@ -1594,6 +1594,47 @@ export const adminUsersController = {
     }
   },
 
+  async getPasswordResetRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      // company-admin не входит в notify-список forgotPassword (см. auth.controller.ts),
+      // и список содержит юзеров из любой компании — показывать его компанийному
+      // админу некорректно. Для не-системного админа возвращаем пустой массив,
+      // как в getPendingUsers.
+      const companyScope = await resolveCompanyScope(req);
+      if (companyScope.roots !== 'all') {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      const rows = await query<{
+        id: string;
+        full_name: string | null;
+        email: string | null;
+        reset_token_expires: string;
+      }>(
+        `SELECT up.id, up.full_name, au.email, up.reset_token_expires
+           FROM user_profiles up
+           JOIN app_auth.users au ON au.id = up.id
+          WHERE up.reset_token IS NOT NULL
+            AND up.reset_token_expires > NOW()
+          ORDER BY up.reset_token_expires ASC`,
+      );
+
+      res.json({
+        success: true,
+        data: rows.map(r => ({
+          id: r.id,
+          email: r.email || '',
+          full_name: r.full_name,
+          expires_at: r.reset_token_expires,
+        })),
+      });
+    } catch (error) {
+      console.error('GetPasswordResetRequests error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить запросы на сброс пароля' });
+    }
+  },
+
   async updateUserPosition(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;

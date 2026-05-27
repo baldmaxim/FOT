@@ -101,6 +101,13 @@ const pendingUsersCache = registerCache(
   { staleMs: 60_000, max: 200 },
 );
 
+const passwordResetRequestsCache = registerCache(
+  'admin:users:password-reset-requests',
+  (req: Request) => `prr:${(req as AuthenticatedRequest).user?.id ?? 'anon'}`,
+  30_000,
+  { staleMs: 60_000, max: 50 },
+);
+
 // Write-through invalidation: после успешной мутации /users/* или
 // /employees/.../department-access сбрасываем оба кеша. Регистронезависимо
 // проверяем /skud-objects и /companies — они тоже могут изменить агрегаты,
@@ -127,7 +134,7 @@ router.use((req, res, next) => {
   // редких не-json 2xx ответов (повторный clear идемпотентен).
   const invalidateOnSuccess = () => {
     if (res.statusCode >= 200 && res.statusCode < 300) {
-      invalidateCaches('admin:users:list', 'admin:users:pending');
+      invalidateCaches('admin:users:list', 'admin:users:pending', 'admin:users:password-reset-requests');
     }
   };
   const originalJson = res.json.bind(res);
@@ -142,6 +149,14 @@ router.use((req, res, next) => {
 // Пользователи — доступно admin
 router.get('/users', requirePageAccess('/admin/users', 'view'), usersListCache, adminController.getAllUsers);
 router.get('/users/pending', requirePageAccess('/admin/users', 'view'), pendingUsersCache, adminController.getPendingUsers);
+// Запросы на сброс пароля — должен быть выше /users/:id/..., иначе Express
+// смэтчит как `:id = 'password-reset-requests'`.
+router.get(
+  '/users/password-reset-requests',
+  requirePageAccess('/admin/users', 'view'),
+  passwordResetRequestsCache,
+  adminController.getPasswordResetRequests,
+);
 router.get('/employees/department-access', requirePageAccess('/admin/users', 'view'), adminController.getEmployeeDepartmentAssignments);
 router.post(
   '/users/department-access-import/preview',

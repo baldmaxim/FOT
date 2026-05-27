@@ -48,6 +48,13 @@ interface PendingUserFromApi {
   created_at: string;
 }
 
+export interface IPasswordResetRequest {
+  id: string;
+  email: string;
+  full_name: string | null;
+  expires_at: string;
+}
+
 export interface EmployeeDepartmentAssignmentFromApi {
   employee_id: number;
   full_name: string;
@@ -206,6 +213,13 @@ export const adminService = {
       `/admin/users/${userId}/reset-link`,
     );
     return { resetUrl: response.resetUrl, expiresAt: response.expiresAt };
+  },
+
+  async getPasswordResetRequests(): Promise<IPasswordResetRequest[]> {
+    const response = await apiClient.get<ApiResponse<IPasswordResetRequest[]>>(
+      '/admin/users/password-reset-requests',
+    );
+    return response.data || [];
   },
 
   async peekUser(userId: string): Promise<{

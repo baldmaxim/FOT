@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { adminService, type IUserSlim } from '../../services/adminService';
+import { adminService, type IUserSlim, type IPasswordResetRequest } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
 import type { IPendingUser } from '../../components/admin/PendingUsersTab';
 import styles from './Admin.module.css';
@@ -17,14 +17,22 @@ const DepartmentAccessImportTab = lazy(() => import('../../components/admin/Depa
 const EmployeeDepartmentAssignmentsTab = lazy(() => import('../../components/admin/EmployeeDepartmentAssignmentsTab').then(module => ({
   default: module.EmployeeDepartmentAssignmentsTab,
 })));
+const PasswordResetRequestsTab = lazy(() => import('../../components/admin/PasswordResetRequestsTab').then(module => ({
+  default: module.PasswordResetRequestsTab,
+})));
 
 export const UserManagementPage: React.FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'pending' | 'all' | 'employee-access' | 'import'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'all' | 'employee-access' | 'import' | 'password-reset'>('pending');
   const pendingUsersQuery = useQuery<IPendingUser[]>({
     queryKey: ['admin-users', 'pending'],
     queryFn: () => adminService.getPendingUsers(),
+    staleTime: 30_000,
+  });
+  const passwordResetRequestsQuery = useQuery<IPasswordResetRequest[]>({
+    queryKey: ['admin-users', 'password-reset-requests'],
+    queryFn: () => adminService.getPasswordResetRequests(),
     staleTime: 30_000,
   });
   // Лёгкий COUNT(*) для бейджа «Все пользователи (N)» — грузим всегда (≤ десятки мс).
@@ -47,7 +55,9 @@ export const UserManagementPage: React.FC = () => {
   const pendingLoading = pendingUsersQuery.isPending;
   const allCountLoading = allUsersCountQuery.isPending;
   const allSlimLoading = needsSlim && allUsersSlimQuery.isPending;
-  const hasQueryError = pendingUsersQuery.isError || allUsersCountQuery.isError || allUsersSlimQuery.isError;
+  const hasQueryError = pendingUsersQuery.isError || allUsersCountQuery.isError || allUsersSlimQuery.isError || passwordResetRequestsQuery.isError;
+  const passwordResetRequests = passwordResetRequestsQuery.data || [];
+  const passwordResetLoading = passwordResetRequestsQuery.isPending;
 
   const reloadUsers = async () => {
     try {
@@ -99,6 +109,12 @@ export const UserManagementPage: React.FC = () => {
         >
           Импорт назначений
         </button>
+        <button
+          className={`${styles.tab} ${activeTab === 'password-reset' ? styles.active : ''}`}
+          onClick={() => setActiveTab('password-reset')}
+        >
+          Запросы на сброс пароля ({passwordResetLoading ? '…' : passwordResetRequests.length})
+        </button>
       </div>
 
       {activeTab === 'pending' && (
@@ -132,6 +148,16 @@ export const UserManagementPage: React.FC = () => {
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
           <DepartmentAccessImportTab
             allUsers={allUsersSlim}
+            onReload={reloadUsers}
+          />
+        </Suspense>
+      )}
+
+      {activeTab === 'password-reset' && (
+        <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
+          <PasswordResetRequestsTab
+            requests={passwordResetRequests}
+            loading={passwordResetLoading}
             onReload={reloadUsers}
           />
         </Suspense>
