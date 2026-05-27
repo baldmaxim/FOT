@@ -1,6 +1,6 @@
 import { type FC, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp, FileText } from 'lucide-react';
 
 export const PatentReceiptsEncryptionBadge: FC = () => (
   <span
@@ -254,6 +254,17 @@ export const PatentReceiptsPage: FC = () => {
                     </td>
                     <td>
                       <div className={styles.rowActions}>
+                        {r.download_url && (
+                          <a
+                            className={styles.iconBtn}
+                            href={r.download_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Открыть файл чека"
+                          >
+                            <FileText size={14} />
+                          </a>
+                        )}
                         {r.id !== null && (
                           <button className={styles.iconBtn} onClick={() => setEditingId(r.id!)} title="Открыть">
                             <Eye size={14} />

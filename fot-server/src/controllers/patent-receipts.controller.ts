@@ -93,6 +93,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       employee_id: number | null;
       file_name: string | null;
       mime_type: string | null;
+      r2_key: string | null;
       recognition_status: string | null;
       recognition_attempts: number | null;
       recognized_at: string | null;
@@ -109,6 +110,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
          d.employee_id,
          d.file_name,
          d.mime_type,
+         d.r2_key,
          d.recognition_status,
          d.recognition_attempts,
          d.recognized_at,
@@ -126,7 +128,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       params,
     );
 
-    const result = docs
+    const mapped = docs
       .map(doc => {
         const rawReceipt = doc.receipt_data;
         const receipt = rawReceipt
@@ -154,6 +156,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
           period_start: (receipt?.period_start as string | null | undefined) ?? null,
           period_end: (receipt?.period_end as string | null | undefined) ?? null,
           created_at: (receipt?.created_at as string | undefined) ?? doc.created_at,
+          r2_key: doc.r2_key,
           documents: {
             file_name: doc.file_name,
             mime_type: doc.mime_type,
@@ -170,6 +173,20 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
         if (needs_review === 'false' && (!row.id || row.needs_review)) return false;
         return true;
       });
+
+    const result = await Promise.all(mapped.map(async row => {
+      let download_url: string | null = null;
+      if (row.r2_key) {
+        try {
+          download_url = await r2Service.generateDownloadUrl(row.r2_key);
+        } catch (err) {
+          console.warn('patent-receipts.list download_url failed:', err);
+        }
+      }
+      const { r2_key: _r2_key, ...rest } = row;
+      void _r2_key;
+      return { ...rest, download_url };
+    }));
 
     res.json({ success: true, data: result });
   } catch (err) {

@@ -25,6 +25,7 @@ export interface IPatentReceiptListRow {
   period_start: string | null;
   period_end: string | null;
   created_at: string;
+  download_url: string | null;
   documents: { file_name: string | null; mime_type: string | null; recognition_status: RecognitionStatus | null; recognition_error: string | null } | null;
   employees: { full_name: string | null } | null;
 }
