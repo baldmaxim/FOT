@@ -250,8 +250,27 @@ const buildObjectIntervals = ({
     }
   }
 
-  if (openEntry && workDate === todayStr) {
-    pushInterval(openEntry, null, formatTimeValue(new Date()));
+  if (openEntry) {
+    if (workDate === todayStr) {
+      pushInterval(openEntry, null, formatTimeValue(new Date()));
+    } else {
+      // Прошлый день с entry без exit — фактических часов посчитать нельзя, но запись с
+      // привязкой к объекту нужна: иначе сотрудник пропадает из режима «по объектам» и
+      // руководитель не может проставить корректировку (см. кейс Тихонович, 02.05.2026).
+      // Длительность 0 — фронт покажет строку с 0ч, клик откроет модалку корректировки.
+      const entryPoint = normalizeAccessPoint(openEntry.access_point);
+      const entryObjectId = entryPoint ? accessPointToObjectId.get(entryPoint) || null : null;
+      const objectKey = entryObjectId || UNKNOWN_OBJECT_KEY;
+      const objectName = entryObjectId
+        ? objectNameById.get(entryObjectId) || UNKNOWN_OBJECT_NAME
+        : UNKNOWN_OBJECT_NAME;
+      intervals.push({
+        object_key: objectKey,
+        object_id: entryObjectId,
+        object_name: objectName,
+        minutes: 0,
+      });
+    }
   }
 
   return intervals;
