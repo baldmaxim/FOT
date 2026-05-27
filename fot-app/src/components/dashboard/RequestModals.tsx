@@ -313,9 +313,10 @@ const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'vacation', label: 'Отпуск' },
   { value: 'unpaid', label: 'За свой счёт' },
   { value: 'sick_leave', label: 'Больничный' },
-  { value: 'certificate', label: 'Справка' },
   { value: 'time_correction', label: 'Корректировка табеля' },
 ];
+
+const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'unpaid', 'sick_leave'];
 
 interface IUnifiedRequestModalProps {
   onClose: () => void;
@@ -337,8 +338,19 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const [correctionDate, setCorrectionDate] = useState('');
   const [correctionStatus, setCorrectionStatus] = useState('work');
   const [correctionHours, setCorrectionHours] = useState<number>(8);
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
 
   const isCorrection = requestType === 'time_correction';
+  const isRangeType = RANGE_TYPES.includes(requestType);
+
+  const handleTypeChange = (next: LeaveRequestType) => {
+    setRequestType(next);
+    setSelectedDates(new Set());
+    setRangeStart('');
+    setRangeEnd('');
+    setCorrectionDate('');
+  };
 
   const toggleDay = (iso: string) => {
     setSelectedDates(prev => {
@@ -371,30 +383,39 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
     if (!employeeId) return showToast('error', 'Не найден ID сотрудника');
     if (isCorrection) {
       if (!correctionDate) return showToast('error', 'Укажите дату корректировки');
+    } else if (isRangeType) {
+      if (!rangeStart || !rangeEnd) return showToast('error', 'Укажите период (с — по)');
+      if (rangeEnd < rangeStart) return showToast('error', 'Дата окончания раньше даты начала');
+      if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
     } else {
       if (selectedDates.size === 0) return showToast('error', 'Выберите хотя бы один день');
-      if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
     }
     setSubmitting(true);
     try {
-      const created = await leaveRequestService.create(
-        isCorrection
+      const payload = isCorrection
+        ? {
+            request_type: requestType,
+            start_date: correctionDate,
+            end_date: correctionDate,
+            reason: reason.trim() || undefined,
+            correction_date: correctionDate,
+            correction_status: correctionStatus,
+            correction_hours: correctionHours,
+          }
+        : isRangeType
           ? {
               request_type: requestType,
-              start_date: correctionDate,
-              end_date: correctionDate,
+              start_date: rangeStart,
+              end_date: rangeEnd,
               reason: reason.trim() || undefined,
-              correction_date: correctionDate,
-              correction_status: correctionStatus,
-              correction_hours: correctionHours,
             }
           : {
               request_type: requestType,
               start_date: sortedDates[0],
               end_date: sortedDates[sortedDates.length - 1],
               reason: reason.trim() || undefined,
-            },
-      );
+            };
+      const created = await leaveRequestService.create(payload);
       if (files.length > 0) {
         const uploads = await Promise.allSettled(
           files.map(file => documentService.uploadFile(file, employeeId, 'leave_request_attachment', created.id)),
@@ -439,52 +460,76 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
             <select
               className={styles.formSelect}
               value={requestType}
-              onChange={e => setRequestType(e.target.value as LeaveRequestType)}
+              onChange={e => handleTypeChange(e.target.value as LeaveRequestType)}
             >
               {UNIFIED_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </div>
 
-          {/* Calendar (с часами и статусами заявок) */}
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>
+          {isRangeType ? (
+            <div className={styles.formRow}>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Дата начала <span className={styles.required}>*</span></label>
+                <input
+                  type="date"
+                  className={styles.formInput}
+                  value={rangeStart}
+                  onChange={e => setRangeStart(e.target.value)}
+                />
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Дата окончания <span className={styles.required}>*</span></label>
+                <input
+                  type="date"
+                  className={styles.formInput}
+                  value={rangeEnd}
+                  min={rangeStart || undefined}
+                  onChange={e => setRangeEnd(e.target.value)}
+                />
+              </div>
+            </div>
+          ) : (
+            /* Calendar (с часами и статусами заявок) */
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>
+                {isCorrection ? (
+                  <>Выберите день <span className={styles.required}>*</span></>
+                ) : (
+                  <>Выберите дни <span className={styles.required}>*</span></>
+                )}
+                {!isCorrection && selectedDates.size > 0 && (
+                  <span className={styles.reqCalSelectedCount}> — выбрано: {selectedDates.size} дн.</span>
+                )}
+              </label>
               {isCorrection ? (
-                <>Выберите день <span className={styles.required}>*</span></>
+                <MyMonthTimesheet
+                  employeeId={employeeId}
+                  activeDayIso={correctionDate || null}
+                  onDayActivate={handleCorrectionPick}
+                  noCard
+                  allowFuture
+                />
               ) : (
-                <>Выберите дни <span className={styles.required}>*</span></>
+                <MyMonthTimesheet
+                  employeeId={employeeId}
+                  selectedDates={selectedDates}
+                  onDayToggle={iso => toggleDay(iso)}
+                  noCard
+                  allowFuture
+                />
               )}
               {!isCorrection && selectedDates.size > 0 && (
-                <span className={styles.reqCalSelectedCount}> — выбрано: {selectedDates.size} дн.</span>
+                <div className={styles.reqCalChips}>
+                  {sortedDates.map(d => (
+                    <span key={d} className={styles.reqCalChip}>
+                      {new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
+                      <button type="button" className={styles.reqCalChipRemove} onClick={() => toggleDay(d)}>×</button>
+                    </span>
+                  ))}
+                </div>
               )}
-            </label>
-            {isCorrection ? (
-              <MyMonthTimesheet
-                employeeId={employeeId}
-                activeDayIso={correctionDate || null}
-                onDayActivate={handleCorrectionPick}
-                noCard
-                allowFuture
-              />
-            ) : (
-              <MyMonthTimesheet
-                employeeId={employeeId}
-                selectedDates={selectedDates}
-                onDayToggle={iso => toggleDay(iso)}
-                noCard
-                allowFuture
-              />
-            )}
-            {!isCorrection && selectedDates.size > 0 && (
-              <div className={styles.reqCalChips}>
-                {sortedDates.map(d => (
-                  <span key={d} className={styles.reqCalChip}>
-                    {new Date(d + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
-                    <button type="button" className={styles.reqCalChipRemove} onClick={() => toggleDay(d)}>×</button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {isCorrection && (
             <div className={styles.formRow}>
