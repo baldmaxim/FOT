@@ -269,9 +269,11 @@ export const TimesheetPage: FC = () => {
   // department_id=null); остальные — по отделу сетки.
   const approvalSubmissionMode: 'department' | 'personal' = isDirectReportsMarker ? 'personal' : 'department';
   const approvalBarDeptId = isDirectReportsMarker ? null : activeGridDeptId;
-  const includeObjectDetails = viewMode === 'objects';
+  // Объектные детали нужны в обоих режимах: «по объектам» — для группировки строк,
+  // «по сотрудникам» — для per-object корректировок в дневной модалке.
+  const includeObjectDetails = true;
   const timesheetQuery = useQuery({
-    queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', includeObjectDetails ? 'objects' : 'employees'],
+    queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', 'with-objects'],
     queryFn: () => timesheetService.getAll({
       month: monthStr,
       department_id: (activeGridDeptId && !isDirectReportsMarker) ? activeGridDeptId : undefined,
