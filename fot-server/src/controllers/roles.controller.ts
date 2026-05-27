@@ -49,6 +49,7 @@ const createRoleSchema = z.object({
   hide_sidebar: z.boolean().optional().default(false),
   timesheet_months_back: timesheetMonthsSchema.optional().default(1),
   timesheet_months_forward: timesheetMonthsSchema.optional().default(1),
+  timesheet_show_full_period: z.boolean().optional().default(true),
 });
 
 const updateRoleSchema = z.object({
@@ -61,6 +62,7 @@ const updateRoleSchema = z.object({
   hide_sidebar: z.boolean().optional(),
   timesheet_months_back: timesheetMonthsSchema.optional(),
   timesheet_months_forward: timesheetMonthsSchema.optional(),
+  timesheet_show_full_period: z.boolean().optional(),
 });
 
 const updateAccessProfileSchema = z.object({
@@ -78,6 +80,7 @@ const cloneRoleSchema = z.object({
   hide_sidebar: z.boolean().optional(),
   timesheet_months_back: timesheetMonthsSchema.optional(),
   timesheet_months_forward: timesheetMonthsSchema.optional(),
+  timesheet_show_full_period: z.boolean().optional(),
 });
 
 function isMissingFunctionError(error: unknown): boolean {
@@ -265,6 +268,7 @@ export const rolesController = {
       hide_sidebar,
       timesheet_months_back,
       timesheet_months_forward,
+      timesheet_show_full_period,
     } = parsed.data;
 
     let data: SystemRole | null;
@@ -272,8 +276,8 @@ export const rolesController = {
       data = await queryOne<SystemRole>(
         `INSERT INTO system_roles
            (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar,
-            timesheet_months_back, timesheet_months_forward, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
+            timesheet_months_back, timesheet_months_forward, timesheet_show_full_period, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true)
          RETURNING *`,
         [
           code,
@@ -285,6 +289,7 @@ export const rolesController = {
           !!hide_sidebar,
           timesheet_months_back ?? 1,
           timesheet_months_forward ?? 1,
+          timesheet_show_full_period ?? true,
         ],
       );
     } catch (error) {
@@ -337,8 +342,8 @@ export const rolesController = {
         createdRole = await queryOne<SystemRole>(
           `INSERT INTO system_roles
              (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar,
-              timesheet_months_back, timesheet_months_forward, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+              timesheet_months_back, timesheet_months_forward, timesheet_show_full_period, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            RETURNING *`,
           [
             targetCode,
@@ -352,6 +357,7 @@ export const rolesController = {
             parsed.data.hide_sidebar ?? sourceRole.hide_sidebar,
             parsed.data.timesheet_months_back ?? sourceRole.timesheet_months_back ?? 1,
             parsed.data.timesheet_months_forward ?? sourceRole.timesheet_months_forward ?? 1,
+            parsed.data.timesheet_show_full_period ?? sourceRole.timesheet_show_full_period ?? true,
             parsed.data.is_active ?? true,
           ],
         );
@@ -429,6 +435,7 @@ export const rolesController = {
     if (parsed.data.hide_sidebar !== undefined) setClauses.push(`hide_sidebar = ${addParam(parsed.data.hide_sidebar)}`);
     if (parsed.data.timesheet_months_back !== undefined) setClauses.push(`timesheet_months_back = ${addParam(parsed.data.timesheet_months_back)}`);
     if (parsed.data.timesheet_months_forward !== undefined) setClauses.push(`timesheet_months_forward = ${addParam(parsed.data.timesheet_months_forward)}`);
+    if (parsed.data.timesheet_show_full_period !== undefined) setClauses.push(`timesheet_show_full_period = ${addParam(parsed.data.timesheet_show_full_period)}`);
 
     const codePlaceholder = addParam(code);
 

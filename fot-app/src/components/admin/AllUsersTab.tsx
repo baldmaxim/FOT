@@ -703,6 +703,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
         hide_sidebar: false,
         timesheet_months_back: 1,
         timesheet_months_forward: 1,
+        timesheet_show_full_period: true,
         created_at: '',
         updated_at: '',
       });

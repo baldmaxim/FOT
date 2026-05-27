@@ -21,6 +21,8 @@ export interface SystemRole {
   timesheet_months_back: number;
   /** Окно доступных месяцев табеля: сколько месяцев вперёд от текущего. Применяется когда is_admin=false. */
   timesheet_months_forward: number;
+  /** true → пользователи роли видят кнопку «Весь месяц» в переключателе периода табеля; false → только 1–15 и 16–N. */
+  timesheet_show_full_period: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -59,6 +61,7 @@ export interface UserProfile {
   hide_sidebar: boolean;
   timesheet_months_back: number;
   timesheet_months_forward: number;
+  timesheet_show_full_period: boolean;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];

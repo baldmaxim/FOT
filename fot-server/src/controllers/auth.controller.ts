@@ -120,6 +120,7 @@ async function buildProfileResponse(
     hide_sidebar: !!role.hide_sidebar,
     timesheet_months_back: Number.isFinite(role.timesheet_months_back) ? role.timesheet_months_back : 1,
     timesheet_months_forward: Number.isFinite(role.timesheet_months_forward) ? role.timesheet_months_forward : 1,
+    timesheet_show_full_period: role.timesheet_show_full_period !== false,
     employee_id: profile.employee_id,
     department_id: departmentId,
     managed_department_ids,

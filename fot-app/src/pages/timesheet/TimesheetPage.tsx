@@ -105,6 +105,7 @@ export const TimesheetPage: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const isAdmin = profile?.is_admin === true;
   const isManagerObj = profile?.role_code === 'manager_obj';
+  const showFullPeriod = profile?.timesheet_show_full_period !== false;
   const canEditTimesheet = canEditPage('/timesheet') || canEditPage('/timesheet-hr');
   const canViewManagedTimesheet = canEditTimesheet || canViewPage('/timesheet') || canViewPage('/timesheet-hr');
   const canEditTeamManagement = isAdmin || canEditPage('timesheet-team-management');
@@ -253,11 +254,14 @@ export const TimesheetPage: FC = () => {
   const monthStr = useMemo(() => `${year}-${String(month).padStart(2, '0')}`, [year, month]);
   const daysInMonth = useMemo(() => getDaysInMonth(year, month), [year, month]);
   const selectedHalf = useMemo<TimesheetHalf>(() => {
-    if (queryHalf === 'H1' || queryHalf === 'H2' || queryHalf === 'FULL') return queryHalf;
-    if (queryFrom) return getHalfFromDate(queryFrom);
-    const current = getCurrentHalf(now);
-    return (current.year === year && current.month === month) ? current.half : 'H1';
-  }, [queryHalf, queryFrom, now, year, month]);
+    const raw: TimesheetHalf = (() => {
+      if (queryHalf === 'H1' || queryHalf === 'H2' || queryHalf === 'FULL') return queryHalf;
+      if (queryFrom) return getHalfFromDate(queryFrom);
+      const current = getCurrentHalf(now);
+      return (current.year === year && current.month === month) ? current.half : 'H1';
+    })();
+    return (!showFullPeriod && raw === 'FULL') ? 'H1' : raw;
+  }, [queryHalf, queryFrom, now, year, month, showFullPeriod]);
   const activeRange = useMemo(() => getHalfRange(year, month, selectedHalf), [year, month, selectedHalf]);
   const rangeStart = activeRange.startDate;
   const rangeEnd = activeRange.endDate;
@@ -1559,13 +1563,15 @@ export const TimesheetPage: FC = () => {
       >
         {formatHalfLabel(year, month, 'H2')}
       </button>
-      <button
-        type="button"
-        className={`ts-half-chip ${selectedHalf === 'FULL' ? 'ts-half-chip--active' : ''}`}
-        onClick={() => handleHalfChange('FULL')}
-      >
-        {formatHalfLabel(year, month, 'FULL')}
-      </button>
+      {showFullPeriod && (
+        <button
+          type="button"
+          className={`ts-half-chip ${selectedHalf === 'FULL' ? 'ts-half-chip--active' : ''}`}
+          onClick={() => handleHalfChange('FULL')}
+        >
+          {formatHalfLabel(year, month, 'FULL')}
+        </button>
+      )}
     </section>
   ) : null;
 

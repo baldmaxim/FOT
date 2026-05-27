@@ -48,6 +48,7 @@ export interface CreateRoleData {
   hide_sidebar?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
+  timesheet_show_full_period?: boolean;
 }
 
 export interface UpdateRoleData {
@@ -60,6 +61,7 @@ export interface UpdateRoleData {
   hide_sidebar?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
+  timesheet_show_full_period?: boolean;
 }
 
 export interface CloneRoleData {
@@ -73,6 +75,7 @@ export interface CloneRoleData {
   hide_sidebar?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
+  timesheet_show_full_period?: boolean;
 }
 
 export interface UpdateAccessProfileData {

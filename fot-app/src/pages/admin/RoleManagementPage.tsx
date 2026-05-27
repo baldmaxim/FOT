@@ -21,6 +21,7 @@ interface INewRoleForm {
   hide_sidebar: boolean;
   timesheet_months_back: number;
   timesheet_months_forward: number;
+  timesheet_show_full_period: boolean;
 }
 
 interface ICloneRoleForm {
@@ -33,6 +34,7 @@ interface ICloneRoleForm {
   hide_sidebar: boolean;
   timesheet_months_back: number;
   timesheet_months_forward: number;
+  timesheet_show_full_period: boolean;
 }
 
 interface IEditState {
@@ -44,6 +46,7 @@ interface IEditState {
   hide_sidebar: boolean;
   timesheet_months_back: number;
   timesheet_months_forward: number;
+  timesheet_show_full_period: boolean;
 }
 
 const TIMESHEET_MONTHS_MIN = 0;
@@ -120,6 +123,7 @@ export const RoleManagementPage: FC = () => {
     hide_sidebar: false,
     timesheet_months_back: 1,
     timesheet_months_forward: 1,
+    timesheet_show_full_period: true,
   });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [savingRole, setSavingRole] = useState(false);
@@ -140,6 +144,7 @@ export const RoleManagementPage: FC = () => {
     hide_sidebar: false,
     timesheet_months_back: 1,
     timesheet_months_forward: 1,
+    timesheet_show_full_period: true,
   });
 
   const rolesQuery = useQuery<SystemRole[]>({
@@ -252,12 +257,14 @@ export const RoleManagementPage: FC = () => {
         hide_sidebar: newForm.hide_sidebar,
         timesheet_months_back: clampTimesheetMonths(newForm.timesheet_months_back),
         timesheet_months_forward: clampTimesheetMonths(newForm.timesheet_months_forward),
+        timesheet_show_full_period: newForm.timesheet_show_full_period,
       });
       toast.success('Роль создана');
       setNewForm({
         code: '', name: '', is_admin: false, employee_variant: '',
         show_actual_hours: false, hide_sidebar: false,
         timesheet_months_back: 1, timesheet_months_forward: 1,
+        timesheet_show_full_period: true,
       });
       setShowNewForm(false);
       setSelectedRoleCode(createdRole.code);
@@ -286,6 +293,7 @@ export const RoleManagementPage: FC = () => {
         hide_sidebar: editState.hide_sidebar,
         timesheet_months_back: clampTimesheetMonths(editState.timesheet_months_back),
         timesheet_months_forward: clampTimesheetMonths(editState.timesheet_months_forward),
+        timesheet_show_full_period: editState.timesheet_show_full_period,
       });
       toast.success('Роль обновлена');
       setEditState(null);
@@ -316,6 +324,27 @@ export const RoleManagementPage: FC = () => {
       queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка изменения часов роли');
+    }
+  };
+
+  const handleToggleShowFullPeriod = async (role: SystemRole, next: boolean) => {
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: role.show_actual_hours,
+        hide_sidebar: role.hide_sidebar,
+        timesheet_show_full_period: next,
+      });
+      toast.success(next ? '«Весь месяц» доступен роли' : '«Весь месяц» скрыт у роли');
+      upsertRoleInCache(updated);
+      await refreshProfile();
+      queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения периода роли');
     }
   };
 
@@ -407,6 +436,7 @@ export const RoleManagementPage: FC = () => {
       hide_sidebar: selectedRole.hide_sidebar,
       timesheet_months_back: clampTimesheetMonths(selectedRole.timesheet_months_back),
       timesheet_months_forward: clampTimesheetMonths(selectedRole.timesheet_months_forward),
+      timesheet_show_full_period: selectedRole.timesheet_show_full_period !== false,
     });
     setShowCloneForm(true);
   };
@@ -429,6 +459,7 @@ export const RoleManagementPage: FC = () => {
         hide_sidebar: cloneForm.hide_sidebar,
         timesheet_months_back: clampTimesheetMonths(cloneForm.timesheet_months_back),
         timesheet_months_forward: clampTimesheetMonths(cloneForm.timesheet_months_forward),
+        timesheet_show_full_period: cloneForm.timesheet_show_full_period,
       });
       toast.success('Роль-копия создана');
       setShowCloneForm(false);
@@ -579,6 +610,14 @@ export const RoleManagementPage: FC = () => {
                   onChange={e => setNewForm(s => ({ ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) }))}
                 />
               </label>
+              <label className={styles.inlineCheckbox} title="Показывать кнопку «Весь месяц» в переключателе периода табеля. Если выключено — пользователям доступны только полумесячные периоды (1–15 и 16–N).">
+                <input
+                  type="checkbox"
+                  checked={newForm.timesheet_show_full_period}
+                  onChange={e => setNewForm(s => ({ ...s, timesheet_show_full_period: e.target.checked }))}
+                />
+                <span>Показывать «Весь месяц» в табеле</span>
+              </label>
                 </div>
                 <div className={styles.formActions}>
                   <button className={styles.successButton} onClick={handleCreateRole} disabled={savingRole}>
@@ -606,6 +645,7 @@ export const RoleManagementPage: FC = () => {
                     <th title="Какой личный кабинет открывается у пользователей этой роли на /employee">Кабинет</th>
                     <th title="Сколько месяцев назад от текущего доступно для табеля (0–12). Для админов не применяется.">Окно ←</th>
                     <th title="Сколько месяцев вперёд от текущего доступно для табеля (0–12). Для админов не применяется.">Окно →</th>
+                    <th title="Показывать кнопку «Весь месяц» в переключателе периода табеля. Если выключено — только полумесячные периоды (1–15 / 16–N).">Весь мес.</th>
                     <th>Статус</th>
                     <th></th>
                   </tr>
@@ -684,6 +724,19 @@ export const RoleManagementPage: FC = () => {
                           />
                         ) : (clampTimesheetMonths(role.timesheet_months_forward))}
                       </td>
+                      <td title={role.timesheet_show_full_period !== false ? '«Весь месяц» доступен' : 'Только 1–15 и 16–N'}>
+                        <input
+                          type="checkbox"
+                          checked={editState?.code === role.code ? editState.timesheet_show_full_period : role.timesheet_show_full_period !== false}
+                          onChange={e => {
+                            if (editState?.code === role.code) {
+                              setEditState(s => (s ? { ...s, timesheet_show_full_period: e.target.checked } : s));
+                            } else {
+                              void handleToggleShowFullPeriod(role, e.target.checked);
+                            }
+                          }}
+                        />
+                      </td>
                       <td>
                         <button
                           className={role.is_active ? styles.statusActive : styles.statusInactive}
@@ -716,6 +769,7 @@ export const RoleManagementPage: FC = () => {
                                   hide_sidebar: role.hide_sidebar,
                                   timesheet_months_back: clampTimesheetMonths(role.timesheet_months_back),
                                   timesheet_months_forward: clampTimesheetMonths(role.timesheet_months_forward),
+                                  timesheet_show_full_period: role.timesheet_show_full_period !== false,
                                 })
                               }
                             >Изменить</button>
@@ -871,6 +925,14 @@ export const RoleManagementPage: FC = () => {
                         value={cloneForm.timesheet_months_forward}
                         onChange={e => setCloneForm(s => ({ ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) }))}
                       />
+                    </label>
+                    <label className={styles.inlineCheckbox} title="Показывать кнопку «Весь месяц» в переключателе периода табеля. Если выключено — только полумесячные периоды (1–15 и 16–N).">
+                      <input
+                        type="checkbox"
+                        checked={cloneForm.timesheet_show_full_period}
+                        onChange={e => setCloneForm(s => ({ ...s, timesheet_show_full_period: e.target.checked }))}
+                      />
+                      <span>Показывать «Весь месяц» в табеле</span>
                     </label>
                     <div className={styles.formActions}>
                       <button className={styles.successButton} onClick={handleCloneRole} disabled={savingRole}>
