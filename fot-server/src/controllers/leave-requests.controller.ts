@@ -618,12 +618,15 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       const schedule = isWorkKind
         ? await resolveSchedule(request.employee_id, null, request.start_date)
         : null;
+      // Отсутствие сотрудника (отпуск/больничный/за свой счёт) идёт подряд календарно,
+      // включая выходные. Для 'remote' (удалёнка) — это рабочая активность, выходные пропускаем.
+      const skipWeekends = request.request_type === 'remote';
       const startDate = new Date(request.start_date);
       const endDate = new Date(request.end_date);
 
       for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
         const dayOfWeek = d.getDay();
-        if (!isWorkKind && (dayOfWeek === 0 || dayOfWeek === 6)) continue; // Пропускаем выходные
+        if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
 
         const iso = d.toISOString().split('T')[0];
         const hoursOverride = isWorkKind

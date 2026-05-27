@@ -36,6 +36,13 @@ const STATUS_TO_CSS: Record<DayStatus, string> = {
   empty: 'cellEmpty',
 };
 
+const ABSENCE_DAY_STATUSES: ReadonlySet<DayStatus> = new Set([
+  'vacation',
+  'sick',
+  'unpaid',
+  'educational_leave',
+]);
+
 const STATUS_LABEL: Record<DayStatus, string> = {
   present: 'Работа',
   underwork: 'Недоработка',
@@ -261,8 +268,10 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
           if (cell.isPreHoliday) dayHints.push('сокращённый −1ч');
           if (!cell.entry && cell.ds === 'weekend' && !cell.isHoliday) dayHints.push('выходной');
           const hintsStr = dayHints.length > 0 ? ` (${dayHints.join(', ')})` : '';
+          const isAbsenceDay = ABSENCE_DAY_STATUSES.has(cell.ds);
+          const showHours = !!cell.entry?.hours_worked && !isAbsenceDay;
           const baseTitle = cell.entry
-            ? `${cell.day}: ${label}${cell.entry.hours_worked ? ` (${cell.entry.hours_worked}ч)` : ''}${cell.entry.is_correction ? ' • корр.' : ''}${hintsStr}`
+            ? `${cell.day}: ${label}${showHours ? ` (${cell.entry.hours_worked}ч)` : ''}${cell.entry.is_correction ? ' • корр.' : ''}${hintsStr}`
             : `${cell.day}${hintsStr}`;
           const reqTitle = reqInfo
             ? ` • ${REQUEST_TYPE_LABELS[reqInfo.request_type] || 'заявка'}: ${STATUS_LABELS[reqInfo.status]}`
@@ -278,8 +287,8 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
               title={title}
             >
               <span className={styles.cellDay}>{cell.day}</span>
-              {cell.entry?.hours_worked ? (
-                <span className={styles.cellHours}>{cell.entry.hours_worked}ч</span>
+              {showHours ? (
+                <span className={styles.cellHours}>{cell.entry!.hours_worked}ч</span>
               ) : null}
               {reqInfo && reqInfo.status !== 'cancelled' ? (
                 <span
