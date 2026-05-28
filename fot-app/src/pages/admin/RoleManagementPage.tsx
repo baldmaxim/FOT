@@ -239,7 +239,11 @@ export const RoleManagementPage: FC = () => {
   });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [savingRole, setSavingRole] = useState(false);
+  const [restrictionsModalCode, setRestrictionsModalCode] = useState<string | null>(null);
+  const [restrictionsForm, setRestrictionsForm] = useState<ICorrectionRestrictionsForm>(DEFAULT_CORRECTION_RESTRICTIONS);
+  const [savingRestrictions, setSavingRestrictions] = useState(false);
   const newRoleOverlay = useOverlayDismiss(() => setShowNewForm(false));
+  const restrictionsOverlay = useOverlayDismiss(() => setRestrictionsModalCode(null));
 
   const [roleSearch, setRoleSearch] = useState('');
   const [selectedRoleCode, setSelectedRoleCode] = useState<string | null>(null);
@@ -409,7 +413,6 @@ export const RoleManagementPage: FC = () => {
         timesheet_months_back: clampTimesheetMonths(editState.timesheet_months_back),
         timesheet_months_forward: clampTimesheetMonths(editState.timesheet_months_forward),
         timesheet_show_full_period: editState.timesheet_show_full_period,
-        ...correctionRestrictionsToPayload(editState),
       });
       toast.success('Роль обновлена');
       setEditState(null);
@@ -498,6 +501,37 @@ export const RoleManagementPage: FC = () => {
       upsertRoleInCache(updated);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка изменения статуса роли');
+    }
+  };
+
+  const openRestrictionsModal = (role: SystemRole) => {
+    setRestrictionsModalCode(role.code);
+    setRestrictionsForm(correctionRestrictionsFromRole(role));
+  };
+
+  const handleSaveRestrictions = async () => {
+    if (!restrictionsModalCode) return;
+    const role = roles.find(r => r.code === restrictionsModalCode);
+    if (!role) return;
+    setSavingRestrictions(true);
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: role.show_actual_hours,
+        hide_sidebar: role.hide_sidebar,
+        ...correctionRestrictionsToPayload(restrictionsForm),
+      });
+      toast.success('Ограничения корректировок сохранены');
+      upsertRoleInCache(updated);
+      setRestrictionsModalCode(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка сохранения ограничений');
+    } finally {
+      setSavingRestrictions(false);
     }
   };
 
@@ -753,6 +787,54 @@ export const RoleManagementPage: FC = () => {
             </div>
           )}
 
+          {restrictionsModalCode && (
+            <div
+              className={styles.modalOverlay}
+              onMouseDown={restrictionsOverlay.onMouseDown}
+              onMouseUp={restrictionsOverlay.onMouseUp}
+              onMouseLeave={restrictionsOverlay.onMouseLeave}
+              onTouchStart={restrictionsOverlay.onTouchStart}
+              onTouchEnd={restrictionsOverlay.onTouchEnd}
+            >
+              <div className={styles.modal}>
+                <div className={styles.modalHeader}>
+                  <h2 className={styles.modalTitle}>
+                    Ограничения корректировок — {roles.find(r => r.code === restrictionsModalCode)?.name ?? restrictionsModalCode}
+                  </h2>
+                  <button
+                    type="button"
+                    className={styles.iconButton}
+                    onClick={() => setRestrictionsModalCode(null)}
+                    aria-label="Закрыть"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className={styles.modalBody}>
+                  <CorrectionRestrictionsBlock
+                    value={restrictionsForm}
+                    onChange={setRestrictionsForm}
+                  />
+                </div>
+                <div className={styles.formActions}>
+                  <button
+                    className={styles.successButton}
+                    onClick={handleSaveRestrictions}
+                    disabled={savingRestrictions}
+                  >
+                    {savingRestrictions ? 'Сохранение...' : 'Сохранить'}
+                  </button>
+                  <button
+                    className={styles.secondaryButton}
+                    onClick={() => setRestrictionsModalCode(null)}
+                  >
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {rolesQuery.isPending ? (
             <div className={styles.loading}>Загрузка...</div>
           ) : (
@@ -896,6 +978,13 @@ export const RoleManagementPage: FC = () => {
                                 })
                               }
                             >Изменить</button>
+                            <button
+                              className={styles.secondaryButton}
+                              title="Ограничения корректировок табеля"
+                              onClick={() => openRestrictionsModal(role)}
+                            >
+                              Огр.
+                            </button>
                             {role.code !== 'admin' && (
                               <button className={styles.dangerButton} onClick={() => handleDeleteRole(role.code)}>
                                 Удалить
@@ -908,14 +997,6 @@ export const RoleManagementPage: FC = () => {
                   ))}
                 </tbody>
               </table>
-              {editState && (
-                <div className={styles.editRestrictionsBox}>
-                  <CorrectionRestrictionsBlock
-                    value={editState}
-                    onChange={next => setEditState(s => (s ? { ...s, ...next } : s))}
-                  />
-                </div>
-              )}
             </div>
           )}
         </div>
