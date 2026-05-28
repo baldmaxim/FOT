@@ -158,6 +158,7 @@ describe('mts-geofence-geometry', () => {
       respects_holidays: false,
       pattern_type: 'custom',
       expected_saturdays_per_month: 0,
+      expected_sundays_per_month: 0,
       full_day_threshold_minutes: null,
       weekend_full_day_threshold_minutes: null,
       cycle_length: null,

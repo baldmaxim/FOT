@@ -35,6 +35,7 @@ export interface IWorkSchedule {
   respects_holidays: boolean;
   pattern_type: PatternType;
   expected_saturdays_per_month: number;
+  expected_sundays_per_month: number;
   full_day_threshold_minutes: number | null;
   weekend_full_day_threshold_minutes: number | null;
   cycle_length: number | null;
@@ -84,6 +85,7 @@ export interface IResolvedSchedule {
   respects_holidays: boolean;
   pattern_type: PatternType;
   expected_saturdays_per_month: number;
+  expected_sundays_per_month: number;
   full_day_threshold_minutes: number | null;
   weekend_full_day_threshold_minutes: number | null;
   cycle_length: number | null;

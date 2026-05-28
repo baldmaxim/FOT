@@ -33,6 +33,7 @@ const DEFAULT_SCHEDULE: IResolvedSchedule = {
   respects_holidays: true,
   pattern_type: 'custom',
   expected_saturdays_per_month: 0,
+  expected_sundays_per_month: 0,
   full_day_threshold_minutes: null,
   weekend_full_day_threshold_minutes: null,
   cycle_length: null,
@@ -336,8 +337,9 @@ export const getEffectiveLateThreshold = (schedule: IResolvedSchedule, date?: Da
 /**
  * Норма часов в месяце:
  *  - сумма work_hours по будням графика (с учётом праздников),
- *  - плюс expected_saturdays_per_month × work_hours (обязательные субботы:
- *    legacy 5+2 и cycle-графики с включённой опцией).
+ *  - плюс expected_saturdays_per_month × work_hours (обязательные субботы),
+ *  - плюс expected_sundays_per_month  × work_hours (обязательные воскресенья).
+ * Обязательные выходные применяются и к legacy 5+2, и к cycle-графикам.
  * Обед в норму НЕ входит — считается как length of shift, так как сотрудник физически присутствует.
  */
 export const countNormHoursForSchedule = (
@@ -351,11 +353,14 @@ export const countNormHoursForSchedule = (
   for (let d = 1; d <= daysInMonth; d++) {
     total += getDayNormHours(schedule, new Date(year, month - 1, d), calendar);
   }
-  // Обязательные субботы. Суббота не входит в work_days (5+2) и в cycle —
+  // Обязательные выходные. Сб/Вс не входят в work_days (5+2) и в cycle —
   // выходной слот (work_hours 0), поэтому getDayNormHours их не учёл:
   // двойного счёта нет.
   if (schedule.expected_saturdays_per_month > 0) {
     total += schedule.expected_saturdays_per_month * schedule.work_hours;
+  }
+  if (schedule.expected_sundays_per_month > 0) {
+    total += schedule.expected_sundays_per_month * schedule.work_hours;
   }
   return total;
 };
@@ -381,7 +386,7 @@ export const countNormHoursUpToToday = (
   for (let d = 1; d <= today; d++) {
     total += getDayNormHours(schedule, new Date(year, month - 1, d), calendar);
   }
-  // Субботы 5+2 учитываются только на полный месяц; до сегодня — пропорционально не считаем
+  // Обязательные Сб/Вс учитываются только на полный месяц; до сегодня — пропорционально не считаем
   return total;
 };
 
@@ -755,6 +760,7 @@ function mapToResolved(
     respects_holidays: ws.respects_holidays !== false,
     pattern_type: (ws.pattern_type as PatternType) || 'custom',
     expected_saturdays_per_month: Number(ws.expected_saturdays_per_month) || 0,
+    expected_sundays_per_month: Number(ws.expected_sundays_per_month) || 0,
     full_day_threshold_minutes:
       ws.full_day_threshold_minutes == null ? null : Number(ws.full_day_threshold_minutes),
     weekend_full_day_threshold_minutes:

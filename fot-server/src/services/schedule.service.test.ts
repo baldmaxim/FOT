@@ -59,6 +59,7 @@ describe('schedule.service object assignments', () => {
           respects_holidays: true,
           pattern_type: 'custom',
           expected_saturdays_per_month: 0,
+          expected_sundays_per_month: 0,
           full_day_threshold_minutes: null,
           weekend_full_day_threshold_minutes: null,
         },
@@ -105,6 +106,7 @@ describe('schedule.service object assignments', () => {
             respects_holidays: true,
             pattern_type: 'custom',
             expected_saturdays_per_month: 0,
+            expected_sundays_per_month: 0,
             full_day_threshold_minutes: null,
             weekend_full_day_threshold_minutes: null,
           },
@@ -128,6 +130,7 @@ describe('schedule.service object assignments', () => {
             respects_holidays: true,
             pattern_type: 'custom',
             expected_saturdays_per_month: 0,
+            expected_sundays_per_month: 0,
             full_day_threshold_minutes: null,
             weekend_full_day_threshold_minutes: null,
           },
@@ -168,6 +171,7 @@ describe('schedule.service pre-holidays', () => {
     respects_holidays: true,
     pattern_type: 'custom',
     expected_saturdays_per_month: 0,
+    expected_sundays_per_month: 0,
     full_day_threshold_minutes: null,
     weekend_full_day_threshold_minutes: null,
     cycle_length: null,
@@ -243,6 +247,7 @@ describe('schedule.service cycle patterns', () => {
     respects_holidays: false,
     pattern_type: 'cycle',
     expected_saturdays_per_month: 0,
+    expected_sundays_per_month: 0,
     full_day_threshold_minutes: null,
     weekend_full_day_threshold_minutes: null,
     cycle_length: 4,
@@ -272,6 +277,7 @@ describe('schedule.service cycle patterns', () => {
     respects_holidays: false,
     pattern_type: 'cycle',
     expected_saturdays_per_month: 0,
+    expected_sundays_per_month: 0,
     full_day_threshold_minutes: null,
     weekend_full_day_threshold_minutes: null,
     cycle_length: 4,
@@ -392,6 +398,7 @@ describe('schedule.service cycle patterns', () => {
       respects_holidays: true,
       pattern_type: 'custom',
       expected_saturdays_per_month: 0,
+      expected_sundays_per_month: 0,
       full_day_threshold_minutes: null,
       weekend_full_day_threshold_minutes: null,
       cycle_length: null,
@@ -468,6 +475,22 @@ describe('schedule.service cycle patterns', () => {
     expect(countNormHoursForSchedule(2026, 5, s)).toBe(187);
   });
 
+  it('countNormHoursForSchedule: cycle с обязательными воскресеньями добавляет M×work_hours', () => {
+    // 165 + 1 воскресенье × 11ч = 176
+    const s = buildCycle22({ pattern_type: 'cycle', expected_sundays_per_month: 1 });
+    expect(countNormHoursForSchedule(2026, 5, s)).toBe(176);
+  });
+
+  it('countNormHoursForSchedule: обязательные субботы и воскресенья суммируются', () => {
+    // 165 + 2×11 + 1×11 = 198
+    const s = buildCycle22({
+      pattern_type: 'cycle',
+      expected_saturdays_per_month: 2,
+      expected_sundays_per_month: 1,
+    });
+    expect(countNormHoursForSchedule(2026, 5, s)).toBe(198);
+  });
+
   it('cycle с битыми данными (cycle_days длина не совпадает с cycle_length) → null, фоллбек на work_days', () => {
     const broken: IResolvedSchedule = {
       ...buildCycle22(),
@@ -513,6 +536,7 @@ describe('schedule.service computeCappedFactHours', () => {
     respects_holidays: true,
     pattern_type: 'custom',
     expected_saturdays_per_month: 0,
+    expected_sundays_per_month: 0,
     full_day_threshold_minutes: null,
     weekend_full_day_threshold_minutes: null,
     cycle_length: null,
@@ -546,6 +570,7 @@ describe('schedule.service computeCappedFactHours', () => {
     respects_holidays: false,
     pattern_type: 'cycle',
     expected_saturdays_per_month: 0,
+    expected_sundays_per_month: 0,
     full_day_threshold_minutes: null,
     weekend_full_day_threshold_minutes: null,
     cycle_length: 4,

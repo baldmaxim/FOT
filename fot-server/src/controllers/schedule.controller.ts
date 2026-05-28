@@ -47,6 +47,7 @@ const baseScheduleSchema = z.object({
   respects_holidays: z.boolean().optional(),
   pattern_type: patternTypeEnum.optional(),
   expected_saturdays_per_month: z.number().int().min(0).max(5).optional(),
+  expected_sundays_per_month: z.number().int().min(0).max(5).optional(),
   full_day_threshold_minutes: z.number().int().min(0).max(1440).nullable().optional(),
   weekend_full_day_threshold_minutes: z.number().int().min(0).max(1440).nullable().optional(),
   cycle_length: z.number().int().min(2).max(28).nullable().optional(),
