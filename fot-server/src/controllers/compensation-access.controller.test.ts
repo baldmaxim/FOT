@@ -28,6 +28,14 @@ vi.mock('../services/payslip-generation.service.js', () => ({
   generatePayslipsForMonth: vi.fn(async () => ({ generated: 0, payslips: [] })),
 }));
 
+// Realtime-уведомления резолвят получателей отдельным запросом (recipients.service).
+// В этих тестах нас интересует только storage-запись — мокаем, чтобы лишний
+// queryOne от роутинга уведомлений не искажал счётчик вызовов.
+vi.mock('../services/recipients.service.js', () => ({
+  getEmployeeUserId: vi.fn(async () => null),
+  getUserIdsByEmployeeIds: vi.fn(async () => []),
+}));
+
 import { payslipsController } from './payslips.controller.js';
 import { paymentsController } from './payments.controller.js';
 
