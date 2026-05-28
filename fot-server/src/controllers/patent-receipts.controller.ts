@@ -13,6 +13,28 @@ import {
   decryptRawResponse,
   encryptReceiptFields,
 } from '../services/patent-receipt-encryption.helper.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getEmployeeUserId } from '../services/recipients.service.js';
+
+function emitPatentReceiptChanged(params: {
+  entityId?: number;
+  authorUserId?: string | null;
+  ownerUserId?: string | null;
+  action: string;
+}): void {
+  const targetUserIds = [params.authorUserId, params.ownerUserId].filter(
+    (u): u is string => typeof u === 'string' && u.length > 0,
+  );
+  if (targetUserIds.length === 0) return;
+  emitDomainChange({
+    event: 'patent_receipt:changed',
+    targetUserIds: [...new Set(targetUserIds)],
+    payload: {
+      ...(params.entityId != null ? { entityId: params.entityId } : {}),
+      action: params.action,
+    },
+  });
+}
 
 interface MulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
@@ -314,6 +336,26 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
+    const employeeId = typeof data.employee_id === 'number' ? data.employee_id : null;
+    if (employeeId != null) {
+      getEmployeeUserId(employeeId)
+        .then((ownerUserId) => {
+          emitPatentReceiptChanged({
+            entityId: id,
+            authorUserId: req.user.id,
+            ownerUserId,
+            action: 'update',
+          });
+        })
+        .catch((e) => console.error('[patent-receipts] emit update realtime error:', e));
+    } else {
+      emitPatentReceiptChanged({
+        entityId: id,
+        authorUserId: req.user.id,
+        action: 'update',
+      });
+    }
+
     res.json({ success: true, data: decryptReceiptRow(data) });
   } catch (err) {
     console.error('patent-receipts.update error:', err);
@@ -469,6 +511,12 @@ const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
 
     res.json({ success: true, data });
 
+    emitPatentReceiptChanged({
+      entityId: documentId,
+      authorUserId: req.user.id,
+      action: 'upload',
+    });
+
     void aiReceiptRecognitionService.enqueueRecognition(documentId);
   } catch (err) {
     console.error('patent-receipts.uploadMy error:', err);
@@ -508,12 +556,38 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
+    // Получаем employee_id перед удалением — нужно для notification сотруднику.
+    const receiptOwner = await queryOne<{ employee_id: number | null }>(
+      `SELECT employee_id FROM patent_payment_receipts WHERE document_id = $1`,
+      [documentId],
+    );
+
     // Удаляем связанные записи в одной транзакции.
     await withTransaction(async (client) => {
       await client.query('DELETE FROM patent_payment_receipts WHERE document_id = $1', [documentId]);
       await client.query('DELETE FROM document_links WHERE document_id = $1', [documentId]);
       await client.query('DELETE FROM documents WHERE id = $1', [documentId]);
     });
+
+    const ownerEmployeeId = receiptOwner?.employee_id ?? null;
+    if (ownerEmployeeId != null) {
+      getEmployeeUserId(ownerEmployeeId)
+        .then((ownerUserId) => {
+          emitPatentReceiptChanged({
+            entityId: documentId,
+            authorUserId: req.user.id,
+            ownerUserId,
+            action: 'delete',
+          });
+        })
+        .catch((e) => console.error('[patent-receipts] emit delete realtime error:', e));
+    } else {
+      emitPatentReceiptChanged({
+        entityId: documentId,
+        authorUserId: req.user.id,
+        action: 'delete',
+      });
+    }
 
     res.json({ success: true });
   } catch (err) {

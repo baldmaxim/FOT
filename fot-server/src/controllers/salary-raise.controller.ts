@@ -7,6 +7,21 @@ import { employeeChangesService } from '../services/employee-changes.service.js'
 import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+
+function emitSalaryRaiseChanged(params: {
+  requestId: number;
+  recipients: string[];
+  action: string;
+}): void {
+  const targetUserIds = [...new Set(params.recipients.filter(Boolean))];
+  if (targetUserIds.length === 0) return;
+  emitDomainChange({
+    event: 'salary_raise:changed',
+    targetUserIds,
+    payload: { entityId: params.requestId, action: params.action },
+  });
+}
 import { canAccessEmployeeInScope, resolveManagedDepartmentIds, resolveRequestDataScope } from '../services/data-scope.service.js';
 import { listTravelObjects } from '../services/skud-travel.service.js';
 import { buildAttendanceEntries, type IAttendanceEntry } from '../services/attendance.service.js';
@@ -928,6 +943,12 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       throw new Error('Insert returned no row');
     }
 
+    emitSalaryRaiseChanged({
+      requestId: Number(data.id),
+      recipients: [req.user.id],
+      action: 'create',
+    });
+
     res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
     console.error('salary-raise.create error:', error);
@@ -1042,6 +1063,12 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json({ success: false, error: 'Заявка не найдена' });
       return;
     }
+
+    emitSalaryRaiseChanged({
+      requestId,
+      recipients: [req.user.id],
+      action: 'update',
+    });
 
     res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
@@ -1313,6 +1340,12 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       `Новая заявка на повышение оклада: ${String(employeeSnapshot.full_name || 'Сотрудник')}`,
     );
 
+    emitSalaryRaiseChanged({
+      requestId,
+      recipients: [req.user.id, ...reviewerIds],
+      action: 'submit',
+    });
+
     res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
     console.error('salary-raise.submit error:', error);
@@ -1354,6 +1387,12 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(404).json({ success: false, error: 'Заявка не найдена' });
       return;
     }
+
+    emitSalaryRaiseChanged({
+      requestId,
+      recipients: [req.user.id],
+      action: 'cancel',
+    });
 
     res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {
@@ -1440,6 +1479,12 @@ const adminReview = async (req: AuthenticatedRequest, res: Response): Promise<vo
         ? 'Ваша заявка на повышение оклада одобрена.'
         : 'Ваша заявка на повышение оклада отклонена.',
     );
+
+    emitSalaryRaiseChanged({
+      requestId,
+      recipients: [String(request.author_user_id), req.user.id],
+      action: parsed.data.action === 'approve' ? 'approve' : 'reject',
+    });
 
     res.json({ success: true, data: normalizeSalaryRaiseRequest(data) });
   } catch (error) {

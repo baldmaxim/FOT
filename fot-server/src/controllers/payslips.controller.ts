@@ -3,6 +3,8 @@ import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { generatePayslipsForMonth } from '../services/payslip-generation.service.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getEmployeeUserId, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 
 const PAYSLIP_COLUMNS =
   'id, employee_id, period, gross_amount, net_amount, deductions, details, document_id, created_by, created_at';
@@ -90,6 +92,19 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         req.user.id,
       ],
     );
+
+    getEmployeeUserId(Number(employee_id))
+      .then((uid) => {
+        if (uid) {
+          emitDomainChange({
+            event: 'payslip:changed',
+            targetUserIds: [uid],
+            payload: { employeeId: Number(employee_id), action: 'create' },
+          });
+        }
+      })
+      .catch((e) => console.error('[payslips] emit realtime error:', e));
+
     res.json({ success: true, data });
   } catch (err) {
     console.error('payslips.create error:', err);
@@ -145,6 +160,19 @@ const importBatch = async (req: AuthenticatedRequest, res: Response): Promise<vo
       imported += 1;
     }
 
+    const employeeIds = [...new Set(list.map((item) => Number(item.employee_id)).filter(Number.isFinite))];
+    getUserIdsByEmployeeIds(employeeIds)
+      .then((userIds) => {
+        if (userIds.length > 0) {
+          emitDomainChange({
+            event: 'payslip:changed',
+            targetUserIds: userIds,
+            payload: { action: 'import' },
+          });
+        }
+      })
+      .catch((e) => console.error('[payslips] emit batch realtime error:', e));
+
     res.json({ success: true, data: { imported } });
   } catch (err) {
     console.error('payslips.importBatch error:', err);
@@ -162,6 +190,22 @@ const generate = async (req: AuthenticatedRequest, res: Response): Promise<void>
     }
 
     const result = await generatePayslipsForMonth(Number(year), Number(month), req.user.id, department_id || undefined);
+
+    if (result.generated > 0 && result.payslips.length > 0) {
+      const employeeIds = result.payslips.map((p: { employee_id: number }) => p.employee_id);
+      getUserIdsByEmployeeIds(employeeIds)
+        .then((userIds) => {
+          if (userIds.length > 0) {
+            emitDomainChange({
+              event: 'payslip:changed',
+              targetUserIds: userIds,
+              payload: { action: 'generate' },
+            });
+          }
+        })
+        .catch((e) => console.error('[payslips] emit generate realtime error:', e));
+    }
+
     res.json({ success: true, data: result });
   } catch (err) {
     console.error('payslips.generate error:', err);

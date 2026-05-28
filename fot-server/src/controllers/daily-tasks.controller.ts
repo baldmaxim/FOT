@@ -1,6 +1,8 @@
 import type { Response } from 'express';
 import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getEmployeeOwnerAndSupervisor } from '../services/recipients.service.js';
 
 const MAX_CONTENT_LENGTH = 5000;
 
@@ -85,6 +87,16 @@ const upsert = async (req: AuthenticatedRequest, res: Response): Promise<void> =
        RETURNING *`,
       [employeeId, taskDate, content, nowIso],
     );
+
+    getEmployeeOwnerAndSupervisor(employeeId)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'daily_task:changed',
+          targetUserIds: recipients,
+          payload: { employeeId, action: 'upsert' },
+        });
+      })
+      .catch((e) => console.error('[daily-tasks] emit realtime error:', e));
 
     res.json({ success: true, data });
   } catch (err) {

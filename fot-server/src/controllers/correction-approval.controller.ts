@@ -9,6 +9,28 @@ import { listDirectSubordinates } from '../services/employee-direct-reports.serv
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { correctionApprovalSettingsService } from '../services/correction-approval-settings.service.js';
 import { reapproveAdjustmentsForRange } from './timesheet.controller.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+
+async function emitCorrectionChanged(params: {
+  employeeIds: number[];
+  reviewerUserId: string;
+  action: 'approve' | 'reject' | 'revert' | 'bulk_approve' | 'bulk_reject' | 'bulk_revert';
+  entityId?: number;
+}): Promise<void> {
+  try {
+    const userIds = await getUserIdsByEmployeeIds(params.employeeIds);
+    const targetUserIds = [...new Set([...userIds, params.reviewerUserId])];
+    if (targetUserIds.length === 0) return;
+    emitDomainChange({
+      event: 'correction:changed',
+      targetUserIds,
+      payload: { action: params.action, ...(params.entityId != null ? { entityId: params.entityId } : {}) },
+    });
+  } catch (e) {
+    console.error('[correction-approval] emit realtime error:', e);
+  }
+}
 
 const DIRECT_REPORTS_GROUP_ID = '__direct_reports__';
 const DIRECT_REPORTS_GROUP_NAME = 'Непосредственные подчинённые';
@@ -305,6 +327,13 @@ async function changeAdjustmentApproval(
     },
   });
 
+  void emitCorrectionChanged({
+    employeeIds: [adj.employee_id],
+    reviewerUserId: req.user.id,
+    action: nextStatus === 'approved' ? 'approve' : 'reject',
+    entityId: adjustmentId,
+  });
+
   res.json({ success: true, data: { id: adjustmentId, approval_status: nextStatus } });
 }
 
@@ -442,6 +471,18 @@ async function bulkChangeByIds(
     },
   });
 
+  if (processedCount > 0) {
+    const processedSet = new Set(updated.map((r) => Number(r.id)));
+    const affectedEmployeeIds = [...new Set(
+      pending.filter((a) => processedSet.has(Number(a.id))).map((a) => Number(a.employee_id)),
+    )];
+    void emitCorrectionChanged({
+      employeeIds: affectedEmployeeIds,
+      reviewerUserId: req.user.id,
+      action: nextStatus === 'approved' ? 'bulk_approve' : 'bulk_reject',
+    });
+  }
+
   res.json({
     success: true,
     data: {
@@ -576,6 +617,18 @@ async function bulkRevertByIdsImpl(
     },
   });
 
+  if (processedCount > 0) {
+    const processedSet = new Set(updated.map((r) => Number(r.id)));
+    const affectedEmployeeIds = [...new Set(
+      revertable.filter((a) => processedSet.has(Number(a.id))).map((a) => Number(a.employee_id)),
+    )];
+    void emitCorrectionChanged({
+      employeeIds: affectedEmployeeIds,
+      reviewerUserId: req.user.id,
+      action: 'bulk_revert',
+    });
+  }
+
   res.json({
     success: true,
     data: {
@@ -648,6 +701,14 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
         approved_count: approvedCount,
       },
     });
+
+    if (approvedCount > 0) {
+      void emitCorrectionChanged({
+        employeeIds,
+        reviewerUserId: req.user.id,
+        action: 'bulk_approve',
+      });
+    }
 
     res.json({ success: true, data: { approved_count: approvedCount } });
   } catch (err) {
@@ -891,6 +952,13 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
         from_status: prevStatus,
         to_status: 'pending',
       },
+    });
+
+    void emitCorrectionChanged({
+      employeeIds: [adj.employee_id],
+      reviewerUserId: req.user.id,
+      action: 'revert',
+      entityId: id,
     });
 
     res.json({ success: true, data: { id, approval_status: 'pending' } });

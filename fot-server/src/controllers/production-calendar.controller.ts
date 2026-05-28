@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 
 const dateArraySchema = z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional();
 
@@ -86,6 +87,12 @@ const update = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         parsed.data.pre_holidays ?? [],
       ],
     );
+
+    emitDomainChange({
+      event: 'production_calendar:changed',
+      broadcast: true,
+      payload: { year, month, action: 'update' },
+    });
 
     res.json({ success: true, data });
   } catch (err) {

@@ -26,6 +26,36 @@ import {
 import {
   upsertTechnicalDepartmentAccess,
 } from '../services/employee-department-access.service.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+
+async function emitEmployeeChanged(employeeId: number, action: string): Promise<void> {
+  try {
+    const recipients = await getEmployeeOwnerAndSupervisor(employeeId);
+    if (recipients.length === 0) return;
+    emitDomainChange({
+      event: 'employee:changed',
+      targetUserIds: recipients,
+      payload: { entityId: employeeId, employeeId, action },
+    });
+  } catch (e) {
+    console.error('[employee-lifecycle] emit realtime error:', e);
+  }
+}
+
+async function emitEmployeeChangedBatch(employeeIds: number[], action: string): Promise<void> {
+  try {
+    const recipients = await getUserIdsByEmployeeIds(employeeIds);
+    if (recipients.length === 0) return;
+    emitDomainChange({
+      event: 'employee:changed',
+      targetUserIds: recipients,
+      payload: { action },
+    });
+  } catch (e) {
+    console.error('[employee-lifecycle] emit batch realtime error:', e);
+  }
+}
 
 const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, dismissal_date, excluded_from_timesheet, excluded_from_timesheet_date, created_at, updated_at';
 
@@ -447,6 +477,8 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
         },
       });
 
+      void emitEmployeeChanged(employeeId, 'fire_scheduled');
+
       res.json({ success: true, data: decryptEmployee(data, structureCache) });
       return;
     }
@@ -475,6 +507,8 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
           dismissal_date: dismissalDate,
         },
       });
+
+      void emitEmployeeChanged(employeeId, 'fire');
 
       res.json({ success: true, data: decryptEmployee(data, structureCache) });
     } catch (innerErr) {
@@ -582,6 +616,8 @@ export async function cancelDismissal(req: AuthenticatedRequest, res: Response):
       entityId: id,
       details: { prev_dismissal_date: prevDate },
     });
+
+    void emitEmployeeChanged(employeeId, 'cancel_dismissal');
 
     const structureCache = await loadStructureCache();
     res.json({ success: true, data: decryptEmployee(data, structureCache) });
@@ -796,6 +832,8 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       console.warn('[rehire] audit log failed (non-critical):', auditErr);
     }
 
+    void emitEmployeeChanged(employeeId, 'rehire');
+
     try {
       const structureCache = await loadStructureCache();
       const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
@@ -901,6 +939,8 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
         source: source === 'noop' ? (employeeRow.sigur_employee_id ? 'sigur' : 'portal') : source,
       },
     });
+
+    void emitEmployeeChanged(employeeId, 'transfer');
 
     await sendUpdatedEmployee(res, employeeId);
   } catch (error) {
@@ -1026,6 +1066,10 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
           error: getErrorMessage(error, 'Failed to move employee'),
         });
       }
+    }
+
+    if (movedIds.length > 0) {
+      void emitEmployeeChangedBatch(movedIds, 'batch_transfer');
     }
 
     res.json({

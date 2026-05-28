@@ -4,6 +4,8 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getLeaveRequestRecipients } from '../services/recipients.service.js';
 import {
   canAccessEmployeeInScope,
   resolveAccessibleDepartmentIds,
@@ -296,6 +298,17 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     });
 
     broadcastPendingChanged();
+
+    // Realtime: инвалидируем списки заявлений у автора и согласующих.
+    getLeaveRequestRecipients(employeeId, req.user.id)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'leave_request:changed',
+          targetUserIds: recipients,
+          payload: { entityId: data.id, employeeId, action: 'create' },
+        });
+      })
+      .catch((e) => console.error('[leave-requests] emit create realtime error:', e));
 
     // Уведомляем руководителя отдела и админов (fire-and-forget)
     const label = LEAVE_TYPE_LABELS[request_type] || request_type;
@@ -737,6 +750,17 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
     broadcastPendingChanged();
 
+    // Realtime: статус заявки изменился — синхронизируем автору и остальным approvers.
+    getLeaveRequestRecipients(request.employee_id, req.user.id)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'leave_request:changed',
+          targetUserIds: recipients,
+          payload: { entityId: request.id, employeeId: request.employee_id, action: 'approve' },
+        });
+      })
+      .catch((e) => console.error('[leave-requests] emit approve realtime error:', e));
+
     res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.approve error:', err);
@@ -784,6 +808,17 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     );
 
     broadcastPendingChanged();
+
+    // Realtime: статус заявки изменился — синхронизируем автору и остальным approvers.
+    getLeaveRequestRecipients(request.employee_id, req.user.id)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'leave_request:changed',
+          targetUserIds: recipients,
+          payload: { entityId: request.id, employeeId: request.employee_id, action: 'reject' },
+        });
+      })
+      .catch((e) => console.error('[leave-requests] emit reject realtime error:', e));
 
     res.json({ success: true, data });
   } catch (err) {
@@ -839,6 +874,17 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     });
 
     broadcastPendingChanged();
+
+    // Realtime: заявка отменена автором — синхронизируем самому автору и approvers.
+    getLeaveRequestRecipients(request.employee_id, req.user.id)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'leave_request:changed',
+          targetUserIds: recipients,
+          payload: { entityId: request.id, employeeId: request.employee_id, action: 'cancel' },
+        });
+      })
+      .catch((e) => console.error('[leave-requests] emit cancel realtime error:', e));
 
     res.json({ success: true, data });
   } catch (err) {

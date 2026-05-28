@@ -38,6 +38,22 @@ import { employeeCountsCache } from '../services/employee-counts-cache.service.j
 // Импорт методов из подконтроллеров
 import { fire, rehire, cancelDismissal, moveDepartment, batchMoveEmployees, getHistory, updateHistoryEvent, deleteHistoryEvent } from './employee-lifecycle.controller.js';
 import { deleteAll } from './employee-import.controller.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getEmployeeOwnerAndSupervisor } from '../services/recipients.service.js';
+
+async function emitEmployeeChangedHere(employeeId: number, action: string): Promise<void> {
+  try {
+    const recipients = await getEmployeeOwnerAndSupervisor(employeeId);
+    if (recipients.length === 0) return;
+    emitDomainChange({
+      event: 'employee:changed',
+      targetUserIds: recipients,
+      payload: { entityId: employeeId, employeeId, action },
+    });
+  } catch (e) {
+    console.error('[employees] emit realtime error:', e);
+  }
+}
 
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -1042,6 +1058,8 @@ export const employeesController = {
         details: { updated_fields: Object.keys(validated) },
       });
 
+      void emitEmployeeChangedHere(employeeId, 'update');
+
       const structureCache = await loadStructureCache();
       const employee = decryptEmployee(data, structureCache);
       res.json({ success: true, data: employee });
@@ -1083,6 +1101,8 @@ export const employeesController = {
         entityId: id,
         details: { salary, reason },
       });
+
+      void emitEmployeeChangedHere(Number(id), 'change_salary');
 
       res.json({ success: true });
     } catch (error) {
@@ -1173,6 +1193,8 @@ export const employeesController = {
         entityId: id,
         details: { position_name: name, reason, source: employeeRow.sigur_employee_id ? 'sigur' : 'portal' },
       });
+
+      void emitEmployeeChangedHere(employeeId, 'change_position');
 
       res.json({ success: true });
     } catch (error) {

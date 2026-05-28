@@ -11,6 +11,7 @@ import {
 } from '../api/queryKeys';
 import { wsService } from '../services/websocket';
 import { presenceByObjectQueryKey } from '../hooks/useEmployeeDirectory';
+import { useRealtimeQueryInvalidation } from '../hooks/useRealtimeQueryInvalidation';
 import type { RoleLabel } from '../services/rolesService';
 import type {
   User,
@@ -270,6 +271,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       wsService.disconnect('auth-context');
     };
   }, [token, state.isAuthenticated, queryClient]);
+
+  // Глобальный listener domain-событий: leave_request:changed, correction:changed и т.д.
+  // Не открывает свой socket — переиспользует тот, что держит auth-context выше.
+  useRealtimeQueryInvalidation({
+    enabled: !!token && state.isAuthenticated,
+    queryClient,
+    myEmployeeId: state.profile?.employee_id ?? null,
+    onMyEmploymentChanged: () => { void refreshProfileRef.current(); },
+  });
 
   const getRoleLabel = useCallback((code: string): string => {
     return roles.find(r => r.code === code)?.name ?? code;

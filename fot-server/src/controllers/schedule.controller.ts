@@ -10,6 +10,44 @@ import { canAccessEmployeeInScope, resolveRequestDataScope, resolveScopedDepartm
 import { collectDeptIds } from '../services/skud-shared.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+
+async function emitScheduleChangedForEmployee(employeeId: number, action: string): Promise<void> {
+  try {
+    const recipients = await getEmployeeOwnerAndSupervisor(employeeId);
+    if (recipients.length === 0) return;
+    emitDomainChange({
+      event: 'schedule:changed',
+      targetUserIds: recipients,
+      payload: { employeeId, action },
+    });
+  } catch (e) {
+    console.error('[schedules] emit realtime error:', e);
+  }
+}
+
+async function emitScheduleChangedForEmployees(employeeIds: number[], action: string): Promise<void> {
+  try {
+    const recipients = await getUserIdsByEmployeeIds(employeeIds);
+    if (recipients.length === 0) return;
+    emitDomainChange({
+      event: 'schedule:changed',
+      targetUserIds: recipients,
+      payload: { action },
+    });
+  } catch (e) {
+    console.error('[schedules] emit bulk realtime error:', e);
+  }
+}
+
+function emitScheduleTemplateChanged(action: string): void {
+  emitDomainChange({
+    event: 'schedule:changed',
+    broadcast: true,
+    payload: { action },
+  });
+}
 
 const scheduleTypeEnum = z.enum(['office', 'remote', 'hybrid', 'shift']);
 const patternTypeEnum = z.enum(['5+0', '5+2', '6+0', 'custom', 'cycle']);
@@ -812,6 +850,7 @@ export const scheduleController = {
         values,
       );
       if (!data) throw new Error('Insert work_schedules вернул пустой результат');
+      emitScheduleTemplateChanged('template_create');
       res.status(201).json({ success: true, data });
     } catch (err) {
       console.error('[schedules] create error:', err);
@@ -888,6 +927,7 @@ export const scheduleController = {
         values,
       );
       if (!data) throw new Error('График не найден');
+      emitScheduleTemplateChanged('template_update');
       res.json({ success: true, data });
     } catch (err) {
       console.error('[schedules] update error:', err);
@@ -924,6 +964,7 @@ export const scheduleController = {
         'DELETE FROM work_schedules WHERE id = $1 AND is_default = false',
         [id],
       );
+      emitScheduleTemplateChanged('template_delete');
       res.json({ success: true });
     } catch (err) {
       console.error('[schedules] remove error:', err);
@@ -1049,6 +1090,8 @@ export const scheduleController = {
         mergeIntoNext,
       ));
 
+      void emitScheduleChangedForEmployee(parsedEmployeeId.data, 'assign');
+
       res.json({ success: true, data });
     } catch (err) {
       if (err instanceof AssignmentConflictError) {
@@ -1113,6 +1156,7 @@ export const scheduleController = {
       if (affected === 0) {
         return res.status(404).json({ success: false, error: 'Назначение не найдено у этого сотрудника' });
       }
+      void emitScheduleChangedForEmployee(parsedEmployeeId.data, 'assignment_delete');
       res.json({ success: true });
     } catch (err) {
       console.error('[schedules] deleteEmployeeAssignment error:', err);
@@ -1142,6 +1186,7 @@ export const scheduleController = {
 
       const data = await withTransaction(client =>
         fixEmployeeAssignmentDates(clientDb(client), parsedEmployeeId.data, body.assignment_id, patch));
+      void emitScheduleChangedForEmployee(parsedEmployeeId.data, 'assignment_fix');
       res.json({ success: true, data });
     } catch (err) {
       if (err instanceof AssignmentFixError) {
@@ -1273,6 +1318,10 @@ export const scheduleController = {
           ? `Не удалось обновить ${employeesFailed} из ${employeeIds.length}`
           : undefined;
 
+      if (employeesUpdated > 0 && employeeIds.length > 0) {
+        void emitScheduleChangedForEmployees(employeeIds, `bulk_${action}`);
+      }
+
       res.json({
         success: true,
         data: {
@@ -1314,6 +1363,7 @@ export const scheduleController = {
       if (!updated) {
         return res.json({ success: true });
       }
+      void emitScheduleChangedForEmployee(parsedEmployeeId.data, 'assignment_remove');
       res.json({ success: true });
     } catch (err) {
       console.error('[schedules] removeEmployeeAssignment error:', err);

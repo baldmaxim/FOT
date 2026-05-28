@@ -2,6 +2,8 @@ import type { Response } from 'express';
 import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getEmployeeUserId, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 
 const PAYMENT_TYPES = ['salary', 'advance', 'bonus', 'vacation_pay', 'sick_pay', 'other'] as const;
 
@@ -82,6 +84,19 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         req.user.id,
       ],
     );
+
+    getEmployeeUserId(Number(employee_id))
+      .then((uid) => {
+        if (uid) {
+          emitDomainChange({
+            event: 'payment:changed',
+            targetUserIds: [uid],
+            payload: { employeeId: Number(employee_id), action: 'create' },
+          });
+        }
+      })
+      .catch((e) => console.error('[payments] emit realtime error:', e));
+
     res.json({ success: true, data });
   } catch (err) {
     console.error('payments.create error:', err);
@@ -130,6 +145,21 @@ const importBatch = async (req: AuthenticatedRequest, res: Response): Promise<vo
        RETURNING id`,
       [empIds, dates, amounts, types, descriptions, periods, createdBy],
     );
+
+    if (inserted.length > 0) {
+      const uniqueEmpIds = [...new Set(empIds.filter((n) => Number.isFinite(n)))];
+      getUserIdsByEmployeeIds(uniqueEmpIds)
+        .then((userIds) => {
+          if (userIds.length > 0) {
+            emitDomainChange({
+              event: 'payment:changed',
+              targetUserIds: userIds,
+              payload: { action: 'import' },
+            });
+          }
+        })
+        .catch((e) => console.error('[payments] emit batch realtime error:', e));
+    }
 
     res.json({ success: true, data: { imported: inserted.length } });
   } catch (err) {
