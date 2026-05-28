@@ -17,7 +17,7 @@ import './MassTimesheetExportPage.css';
 type TimesheetGroupingMode = 'employees' | 'objects';
 type ExportTab = 'departments' | 'assigned' | 'dashboard';
 
-const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v3';
+const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v4';
 
 const loadStoredActiveTab = (): ExportTab => {
   try {
@@ -26,7 +26,7 @@ const loadStoredActiveTab = (): ExportTab => {
   } catch {
     // ignore
   }
-  return 'departments';
+  return 'dashboard';
 };
 
 const saveStoredActiveTab = (tab: ExportTab): void => {
@@ -165,6 +165,15 @@ export const MassTimesheetExportPage: FC = () => {
         <button
           type="button"
           role="tab"
+          aria-selected={activeTab === 'dashboard'}
+          className={`mte-tab-button ${activeTab === 'dashboard' ? 'mte-tab-button--active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          Дашборд
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={activeTab === 'departments'}
           className={`mte-tab-button ${activeTab === 'departments' ? 'mte-tab-button--active' : ''}`}
           onClick={() => setActiveTab('departments')}
@@ -179,15 +188,6 @@ export const MassTimesheetExportPage: FC = () => {
           onClick={() => setActiveTab('assigned')}
         >
           Участки
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'dashboard'}
-          className={`mte-tab-button ${activeTab === 'dashboard' ? 'mte-tab-button--active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
-        >
-          Дашборд
         </button>
       </div>
 

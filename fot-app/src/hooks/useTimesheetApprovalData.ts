@@ -97,16 +97,21 @@ export const useTimesheetApprovalHistory = (approvalId: number | null, enabled =
 export const getTimesheetApprovalDashboardQueryKey = (
   startDate: string,
   endDate: string,
-) => ['timesheet-approval', 'dashboard', startDate, endDate] as const;
+  departmentIds: string[] | undefined,
+) => ['timesheet-approval', 'dashboard', startDate, endDate, departmentIds ?? null] as const;
 
-/** HR-дашборд: сводка подачи/утверждения + карта руководителей. */
+/**
+ * HR-дашборд: сводка подачи/утверждения + карта руководителей.
+ * departmentIds: undefined — без фильтра; массив (в т.ч. пустой) — фильтр отделов (весь дашборд).
+ */
 export const useTimesheetApprovalDashboard = (
   startDate: string,
   endDate: string,
+  departmentIds?: string[],
   enabled = true,
 ) => useQuery({
-  queryKey: getTimesheetApprovalDashboardQueryKey(startDate, endDate),
-  queryFn: () => timesheetApprovalService.getDashboard(startDate, endDate),
+  queryKey: getTimesheetApprovalDashboardQueryKey(startDate, endDate, departmentIds),
+  queryFn: () => timesheetApprovalService.getDashboard(startDate, endDate, departmentIds),
   enabled: enabled && !!startDate && !!endDate,
   staleTime: 60_000,
   placeholderData: previousData => previousData,

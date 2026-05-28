@@ -123,6 +123,7 @@ export interface ITimesheetDashboardNotSubmittedDept {
 export interface ITimesheetDashboardNotSubmittedManager {
   employee_id: number;
   full_name: string;
+  department_id: string | null;
   department_path: string;
 }
 
@@ -139,24 +140,43 @@ export interface ITimesheetDashboardManagerUnbound {
   role_code: ManagerRoleCode;
 }
 
-export interface ITimesheetDashboardUnregisteredManager {
-  employee_id: number;
-  full_name: string;
-  position_name: string;
-  department_path: string;
+/** Отдел, которому никто не назначен ответственным (некому подавать табель). */
+export interface ITimesheetDashboardUnassignedDept {
+  department_id: string;
+  department_name: string;
+  parent_path: string;
+}
+
+export type DepartmentSubmissionStatus = 'approved' | 'submitted' | 'returned' | 'not_submitted';
+
+/** Статус подачи табеля на отдел — для карты «температуры». */
+export interface ITimesheetDashboardDeptStatus {
+  department_id: string;
+  name: string;
+  parent_path: string;
+  status: DepartmentSubmissionStatus;
+}
+
+/** Отдел полного доступного скоупа — источник для чекбоксов фильтра. */
+export interface ITimesheetDashboardScopeDept {
+  department_id: string;
+  name: string;
+  parent_path: string;
 }
 
 export interface ITimesheetDashboard {
   period: { start_date: string; end_date: string };
+  scope_departments: ITimesheetDashboardScopeDept[];
   approvals: {
     totals: ITimesheetDashboardTotals;
     not_submitted_departments: ITimesheetDashboardNotSubmittedDept[];
     not_submitted_managers: ITimesheetDashboardNotSubmittedManager[];
+    unassigned_departments: ITimesheetDashboardUnassignedDept[];
+    department_status_map: ITimesheetDashboardDeptStatus[];
   };
   managers: {
     registered_bound: ITimesheetDashboardManagerBound[];
     registered_unbound: ITimesheetDashboardManagerUnbound[];
-    unregistered: ITimesheetDashboardUnregisteredManager[];
   };
 }
 
@@ -336,8 +356,10 @@ export const timesheetApprovalService = {
     return res.data;
   },
 
-  getDashboard: async (start_date: string, end_date: string) => {
+  getDashboard: async (start_date: string, end_date: string, departmentIds?: string[]) => {
     const qs = new URLSearchParams({ start_date, end_date });
+    // Фильтр отделов: undefined → без фильтра; [] → «снять все» (явно пустой → нулевой дашборд).
+    if (departmentIds !== undefined) qs.set('department_ids', departmentIds.join(','));
     const res = await apiClient.get<ApiResponse<ITimesheetDashboard>>(
       `/timesheet-approvals/dashboard?${qs.toString()}`,
     );
