@@ -161,11 +161,7 @@
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  padding: 0 16px;
 }
 
 .mte-controls {
@@ -593,7 +589,8 @@
 
 .mte-tab-button:hover {
   color: var(--text-primary);
-  background: var(--surface-hover);
+  background: rgba(14, 165, 233, 0.10);
+  border-bottom-color: rgba(14, 165, 233, 0.45);
 }
 
 .mte-tab-button--active {
@@ -601,6 +598,10 @@
   font-weight: 700;
   border-bottom-color: var(--primary);
   background: rgba(14, 165, 233, 0.06);
+}
+
+.mte-tab-button--active:hover {
+  background: rgba(14, 165, 233, 0.12);
 }
 
 .mte-assigned-row {
