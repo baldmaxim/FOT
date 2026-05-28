@@ -114,7 +114,7 @@ const formatDuration = (seconds: number): string => {
 };
 
 const TYPE_OPTIONS: ITypeOption[] = [
-  { status: 'work',              icon: '✔',  label: 'Присутствие' },
+  { status: 'work',              icon: '✔',  label: 'Работа' },
   { status: 'remote',            icon: '🏠', label: 'Удалёнка' },
   { status: 'sick',              icon: '🏥', label: 'Больничный' },
   { status: 'vacation',          icon: '🏖', label: 'Отпуск' },
@@ -123,9 +123,10 @@ const TYPE_OPTIONS: ITypeOption[] = [
   { status: 'absent',            icon: '❌', label: 'Неявка' },
 ];
 
+// manual — work, прицепленная к СКУД-объекту: показываем как «Работа», не «Ручная корр.».
 const LEGACY_TYPE_OPTIONS: Record<string, ITypeOption> = {
   dayoff: { status: 'dayoff', icon: '📅', label: 'Отгул' },
-  manual: { status: 'manual', icon: '✏️', label: 'Ручная корр.' },
+  manual: { status: 'manual', icon: '✔', label: 'Работа' },
 };
 
 const EventsTab: FC<{

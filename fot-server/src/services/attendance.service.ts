@@ -511,6 +511,11 @@ export async function buildAttendanceEntries(params: {
       effectiveHours = 0;
     } else if (adjustment.hours_override != null) {
       effectiveHours = adjustment.hours_override;
+    } else if (adjustment.status === 'work') {
+      // 'work' без явных часов = разрешён/согласован выход, но фактическое время берём из СКУД.
+      // Вышел → часы по СКУД; не вышел (нет summary) → 0. Так согласование «работы» влияет
+      // только на согласование, а не на отображаемое время.
+      effectiveHours = existingSkud ? existingSkud.hours : null;
     } else if (ABSENCE_STATUSES_AS_WORKED.has(adjustment.status) && adjSchedule) {
       effectiveHours = isAdjWorkingDay ? getScheduleForDate(adjSchedule, adjDate).work_hours : 0;
     } else {

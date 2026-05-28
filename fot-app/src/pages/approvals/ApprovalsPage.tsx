@@ -46,13 +46,16 @@ const TIMESHEET_STATUS_TABS: Array<{ code: TimesheetApprovalStatus; label: strin
   { code: 'rejected', label: 'Отклонённые / на доработке' },
 ];
 
+// На согласование выходных дней попадают только статусы work/remote, а также
+// manual (work, прицепленная к СКУД-объекту в POST /api/timesheet). Все они по
+// смыслу = «Работа» или «Удалёнка», поэтому manual/work показываем как «Работа».
 const STATUS_LABELS: Record<string, string> = {
-  work: 'Присутствие',
+  work: 'Работа',
   remote: 'Удалёнка',
   sick: 'Больничный',
   vacation: 'Отпуск',
   absent: 'Неявка',
-  manual: 'Ручная корр.',
+  manual: 'Работа',
   dayoff: 'Отгул',
   unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
@@ -64,7 +67,7 @@ const STATUS_ICONS: Record<string, string> = {
   sick: '🏥',
   vacation: '🏖',
   absent: '❌',
-  manual: '✏️',
+  manual: '✔',
   dayoff: '📅',
   unpaid: '💸',
   educational_leave: '🎓',

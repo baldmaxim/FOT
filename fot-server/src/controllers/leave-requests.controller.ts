@@ -14,7 +14,6 @@ import {
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
-import { resolveSchedule, getScheduleForDate } from '../services/schedule.service.js';
 import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
 import type { TimeStatus } from '../types/index.js';
 
@@ -706,12 +705,10 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     if (timesheetStatus) {
       const isWorkKind = request.request_type === 'work';
       // Для kind='work' разрешаем выход на смену в любой день, включая выходные/праздники.
-      // Часы берём по графику дня; на выходной (work_hours=0) — fallback 8ч.
-      // Статус 'work' не имеет fallback в attendance.service при null hours_override,
-      // поэтому передаём явные часы (см. attendance.service.ts: ABSENCE_STATUSES_AS_WORKED не включает 'work').
-      const schedule = isWorkKind
-        ? await resolveSchedule(request.employee_id, null, request.start_date)
-        : null;
+      // Часы НЕ зашиваем: 'work' — это только разрешение/согласование выхода, фактическое
+      // время берётся из СКУД (см. attendance.service.ts: status==='work' && hours_override===null
+      // → часы из skud_daily_summary, 0 если не вышел). Иначе при отсутствии человека в табеле
+      // ошибочно появлялись бы 8ч.
       // Отсутствие сотрудника (отпуск/больничный/за свой счёт) идёт подряд календарно,
       // включая выходные. Для 'remote' (удалёнка) — это рабочая активность, выходные пропускаем.
       const skipWeekends = request.request_type === 'remote';
@@ -723,9 +720,9 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
 
         const iso = d.toISOString().split('T')[0];
-        const hoursOverride = isWorkKind
-          ? (getScheduleForDate(schedule!, d).work_hours || 8)
-          : null;
+        // 'work' не зашивает часы (время из СКУД); остальные статусы — null здесь,
+        // часы по графику проставляет attendance.service (ABSENCE_STATUSES_AS_WORKED).
+        const hoursOverride = null;
         const approvalStatus = isWorkKind
           ? await resolveAdjustmentApprovalStatus(request.employee_id, iso, timesheetStatus, hoursOverride)
           : undefined;
