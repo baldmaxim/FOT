@@ -2482,6 +2482,42 @@
   margin-top: 0;
 }
 
+.departmentAccessGroupHeaderToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.departmentAccessGroupHeaderToggle:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+
+.departmentAccessGroupHeaderToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.departmentAccessGroupChevron {
+  flex: 0 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+}
+
 .assignmentPanelPerson {
   display: flex;
   align-items: center;

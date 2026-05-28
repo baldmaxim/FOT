@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import {
   adminService,
   type EmployeeDepartmentAssignmentFromApi,
@@ -11,6 +12,8 @@ import { ApiError } from '../../api/client';
 import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import styles from '../../pages/admin/Admin.module.css';
+
+const AUTO_EXPAND_ALL_THRESHOLD = 40;
 
 interface IEmployeeAssignmentPanelProps {
   isOpen: boolean;
@@ -387,6 +390,59 @@ const DepartmentList: FC<{
   onToggle: (id: string) => void;
 }> = ({ departments, search, selectedIds, onToggle }) => {
   const normalizedSearch = normalizeText(search);
+
+  // child→parent (ближайший предок) по плоскому массиву через стек: предок
+  // имеет level < n.level и идёт раньше в обходе.
+  const parentMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const stack: IFlatDepartmentOption[] = [];
+    for (const node of departments) {
+      while (stack.length > 0 && stack[stack.length - 1].level >= node.level) {
+        stack.pop();
+      }
+      if (stack.length > 0) map.set(node.id, stack[stack.length - 1].id);
+      stack.push(node);
+    }
+    return map;
+  }, [departments]);
+
+  const initialExpansion = useMemo(() => {
+    if (departments.length === 0) return new Set<string>();
+    if (departments.length <= AUTO_EXPAND_ALL_THRESHOLD) {
+      return new Set(departments.filter(d => d.hasChildren).map(d => d.id));
+    }
+    const result = new Set<string>();
+    for (const id of selectedIds) {
+      let cur = parentMap.get(id);
+      while (cur && !result.has(cur)) {
+        result.add(cur);
+        cur = parentMap.get(cur);
+      }
+    }
+    return result;
+  }, [departments, selectedIds, parentMap]);
+
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(initialExpansion);
+  const initialAppliedRef = useRef(departments.length > 0);
+
+  // Departments прилетают асинхронно (structureQuery). Первая ненулевая загрузка —
+  // переинициализируем раскрытие; дальше не трогаем, чтобы не перетереть toggle юзера.
+  useEffect(() => {
+    if (!initialAppliedRef.current && departments.length > 0) {
+      initialAppliedRef.current = true;
+      setExpandedIds(initialExpansion);
+    }
+  }, [departments.length, initialExpansion]);
+
+  const toggleExpanded = useCallback((id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   const filtered = departments.filter(d => !normalizedSearch || normalizeText(d.name).includes(normalizedSearch));
   const selectedSet = new Set(selectedIds);
 
@@ -416,6 +472,23 @@ const DepartmentList: FC<{
       if (!next.hasChildren) { hasLeafDescendant = true; break; }
     }
     if (hasLeafDescendant) restItems.push(item);
+  }
+
+  // При активном поиске показываем все совпадения (collapse игнорируется),
+  // иначе скрываем потомков свёрнутых заголовков.
+  const visibleRestItems: IFlatDepartmentOption[] = [];
+  if (normalizedSearch) {
+    visibleRestItems.push(...restItems);
+  } else {
+    const headerStack: IFlatDepartmentOption[] = [];
+    for (const item of restItems) {
+      while (headerStack.length > 0 && headerStack[headerStack.length - 1].level >= item.level) {
+        headerStack.pop();
+      }
+      const ancestorCollapsed = headerStack.some(h => !expandedIds.has(h.id));
+      if (!ancestorCollapsed) visibleRestItems.push(item);
+      if (item.hasChildren) headerStack.push(item);
+    }
   }
 
   const renderLeaf = (dept: IFlatDepartmentOption, keyPrefix: string, indent: number) => {
@@ -450,16 +523,23 @@ const DepartmentList: FC<{
           {selectedLeaves.map(dept => renderLeaf(dept, 'selected', 0))}
         </>
       )}
-      {restItems.map(dept => {
+      {visibleRestItems.map(dept => {
         if (dept.hasChildren) {
+          const isExpanded = normalizedSearch ? true : expandedIds.has(dept.id);
           return (
-            <div
+            <button
               key={dept.id}
-              className={styles.departmentAccessGroupHeader}
+              type="button"
+              className={`${styles.departmentAccessGroupHeader} ${styles.departmentAccessGroupHeaderToggle}`}
               style={{ paddingLeft: `${dept.level * 14}px` }}
+              onClick={() => toggleExpanded(dept.id)}
+              aria-expanded={isExpanded}
             >
-              {dept.name}
-            </div>
+              <span className={styles.departmentAccessGroupChevron}>
+                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </span>
+              <span>{dept.name}</span>
+            </button>
           );
         }
         return renderLeaf(dept, 'rest', dept.level);
