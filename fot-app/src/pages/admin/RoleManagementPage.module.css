@@ -292,6 +292,42 @@
   width: 100%;
   border-collapse: collapse;
   min-width: 720px;
+  table-layout: fixed;
+}
+
+.colCode { width: 8%; }
+.colName { width: 18%; }
+.colAdmin { width: 7%; }
+.colHours { width: 8%; }
+.colCabinet { width: 13%; }
+.colWindow { width: 8%; }
+.colFull { width: 8%; }
+.colStatus { width: 10%; }
+.colActions { width: 12%; }
+
+/* Контролы инлайн-редактирования строки роли: заполняют ячейку,
+   держат компактную высоту — строка не растёт, колонки не «прыгают». */
+.cellControl {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.cellControl:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* Узкие числовые поля «Окно ←/→» — фикс-ширина, не во всю колонку. */
+.cellControlNum {
+  width: 56px;
 }
 
 .table th {

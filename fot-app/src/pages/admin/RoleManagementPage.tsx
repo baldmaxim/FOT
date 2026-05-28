@@ -840,6 +840,18 @@ export const RoleManagementPage: FC = () => {
           ) : (
             <div className={styles.tableWrapper}>
               <table className={styles.table}>
+                <colgroup>
+                  <col className={styles.colCode} />
+                  <col className={styles.colName} />
+                  <col className={styles.colAdmin} />
+                  <col className={styles.colHours} />
+                  <col className={styles.colCabinet} />
+                  <col className={styles.colWindow} />
+                  <col className={styles.colWindow} />
+                  <col className={styles.colFull} />
+                  <col className={styles.colStatus} />
+                  <col className={styles.colActions} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Код</th>
@@ -861,7 +873,7 @@ export const RoleManagementPage: FC = () => {
                       <td>
                         {editState?.code === role.code ? (
                           <input
-                            className={styles.inputInline}
+                            className={styles.cellControl}
                             value={editState.name}
                             onChange={e => setEditState(s => (s ? { ...s, name: e.target.value } : s))}
                             autoFocus
@@ -893,7 +905,7 @@ export const RoleManagementPage: FC = () => {
                       <td>
                         {editState?.code === role.code ? (
                           <select
-                            className={styles.inputInline}
+                            className={styles.cellControl}
                             value={editState.employee_variant}
                             onChange={e => setEditState(s => (s ? { ...s, employee_variant: e.target.value as EmployeeVariant | '' } : s))}
                           >
@@ -910,7 +922,7 @@ export const RoleManagementPage: FC = () => {
                             type="number"
                             min={TIMESHEET_MONTHS_MIN}
                             max={TIMESHEET_MONTHS_MAX}
-                            className={styles.inputInline}
+                            className={`${styles.cellControl} ${styles.cellControlNum}`}
                             value={editState.timesheet_months_back}
                             onChange={e => setEditState(s => (s ? { ...s, timesheet_months_back: clampTimesheetMonths(e.target.value) } : s))}
                           />
@@ -922,7 +934,7 @@ export const RoleManagementPage: FC = () => {
                             type="number"
                             min={TIMESHEET_MONTHS_MIN}
                             max={TIMESHEET_MONTHS_MAX}
-                            className={styles.inputInline}
+                            className={`${styles.cellControl} ${styles.cellControlNum}`}
                             value={editState.timesheet_months_forward}
                             onChange={e => setEditState(s => (s ? { ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) } : s))}
                           />
