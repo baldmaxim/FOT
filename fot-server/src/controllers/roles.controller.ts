@@ -7,6 +7,7 @@ import {
   invalidateRoleListCache,
   invalidateRolePageAccessCache,
 } from '../services/access-control.service.js';
+import { invalidateCorrectionRestrictionsCache } from '../services/correction-restrictions.service.js';
 import {
   loadAccessCatalog,
   normalizeKnownPageAccessModes,
@@ -39,6 +40,8 @@ async function emitRoleAccessChanged(roleId: string | null | undefined): Promise
 const employeeVariantSchema = z.enum(['object', 'office', 'contractor']).nullable().optional();
 const timesheetMonthsSchema = z.number().int().min(0).max(12);
 
+const maxCorrectionsSchema = z.number().int().min(0).max(100000).nullable();
+
 const createRoleSchema = z.object({
   code: z.string().min(1).max(50).regex(/^[a-z_]+$/, 'Только строчные буквы и подчёркивание'),
   name: z.string().min(1).max(100),
@@ -50,6 +53,11 @@ const createRoleSchema = z.object({
   timesheet_months_back: timesheetMonthsSchema.optional().default(1),
   timesheet_months_forward: timesheetMonthsSchema.optional().default(1),
   timesheet_show_full_period: z.boolean().optional().default(true),
+  corrections_anomalies_only: z.boolean().optional().default(false),
+  corrections_cap_by_schedule_norm: z.boolean().optional().default(false),
+  corrections_allow_zero_short_attendance: z.boolean().optional().default(false),
+  corrections_disable_bulk: z.boolean().optional().default(false),
+  max_corrections_per_month: maxCorrectionsSchema.optional(),
 });
 
 const updateRoleSchema = z.object({
@@ -63,6 +71,11 @@ const updateRoleSchema = z.object({
   timesheet_months_back: timesheetMonthsSchema.optional(),
   timesheet_months_forward: timesheetMonthsSchema.optional(),
   timesheet_show_full_period: z.boolean().optional(),
+  corrections_anomalies_only: z.boolean().optional(),
+  corrections_cap_by_schedule_norm: z.boolean().optional(),
+  corrections_allow_zero_short_attendance: z.boolean().optional(),
+  corrections_disable_bulk: z.boolean().optional(),
+  max_corrections_per_month: maxCorrectionsSchema.optional(),
 });
 
 const updateAccessProfileSchema = z.object({
@@ -81,6 +94,11 @@ const cloneRoleSchema = z.object({
   timesheet_months_back: timesheetMonthsSchema.optional(),
   timesheet_months_forward: timesheetMonthsSchema.optional(),
   timesheet_show_full_period: z.boolean().optional(),
+  corrections_anomalies_only: z.boolean().optional(),
+  corrections_cap_by_schedule_norm: z.boolean().optional(),
+  corrections_allow_zero_short_attendance: z.boolean().optional(),
+  corrections_disable_bulk: z.boolean().optional(),
+  max_corrections_per_month: maxCorrectionsSchema.optional(),
 });
 
 function isMissingFunctionError(error: unknown): boolean {
@@ -269,6 +287,11 @@ export const rolesController = {
       timesheet_months_back,
       timesheet_months_forward,
       timesheet_show_full_period,
+      corrections_anomalies_only,
+      corrections_cap_by_schedule_norm,
+      corrections_allow_zero_short_attendance,
+      corrections_disable_bulk,
+      max_corrections_per_month,
     } = parsed.data;
 
     let data: SystemRole | null;
@@ -276,8 +299,11 @@ export const rolesController = {
       data = await queryOne<SystemRole>(
         `INSERT INTO system_roles
            (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar,
-            timesheet_months_back, timesheet_months_forward, timesheet_show_full_period, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true)
+            timesheet_months_back, timesheet_months_forward, timesheet_show_full_period,
+            corrections_anomalies_only, corrections_cap_by_schedule_norm,
+            corrections_allow_zero_short_attendance, corrections_disable_bulk,
+            max_corrections_per_month, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, true)
          RETURNING *`,
         [
           code,
@@ -290,6 +316,11 @@ export const rolesController = {
           timesheet_months_back ?? 1,
           timesheet_months_forward ?? 1,
           timesheet_show_full_period ?? true,
+          !!corrections_anomalies_only,
+          !!corrections_cap_by_schedule_norm,
+          !!corrections_allow_zero_short_attendance,
+          !!corrections_disable_bulk,
+          max_corrections_per_month ?? null,
         ],
       );
     } catch (error) {
@@ -342,8 +373,11 @@ export const rolesController = {
         createdRole = await queryOne<SystemRole>(
           `INSERT INTO system_roles
              (code, name, description, is_admin, employee_variant, show_actual_hours, hide_sidebar,
-              timesheet_months_back, timesheet_months_forward, timesheet_show_full_period, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              timesheet_months_back, timesheet_months_forward, timesheet_show_full_period,
+              corrections_anomalies_only, corrections_cap_by_schedule_norm,
+              corrections_allow_zero_short_attendance, corrections_disable_bulk,
+              max_corrections_per_month, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
            RETURNING *`,
           [
             targetCode,
@@ -358,6 +392,13 @@ export const rolesController = {
             parsed.data.timesheet_months_back ?? sourceRole.timesheet_months_back ?? 1,
             parsed.data.timesheet_months_forward ?? sourceRole.timesheet_months_forward ?? 1,
             parsed.data.timesheet_show_full_period ?? sourceRole.timesheet_show_full_period ?? true,
+            parsed.data.corrections_anomalies_only ?? sourceRole.corrections_anomalies_only ?? false,
+            parsed.data.corrections_cap_by_schedule_norm ?? sourceRole.corrections_cap_by_schedule_norm ?? false,
+            parsed.data.corrections_allow_zero_short_attendance ?? sourceRole.corrections_allow_zero_short_attendance ?? false,
+            parsed.data.corrections_disable_bulk ?? sourceRole.corrections_disable_bulk ?? false,
+            parsed.data.max_corrections_per_month !== undefined
+              ? parsed.data.max_corrections_per_month
+              : (sourceRole.max_corrections_per_month ?? null),
             parsed.data.is_active ?? true,
           ],
         );
@@ -436,6 +477,11 @@ export const rolesController = {
     if (parsed.data.timesheet_months_back !== undefined) setClauses.push(`timesheet_months_back = ${addParam(parsed.data.timesheet_months_back)}`);
     if (parsed.data.timesheet_months_forward !== undefined) setClauses.push(`timesheet_months_forward = ${addParam(parsed.data.timesheet_months_forward)}`);
     if (parsed.data.timesheet_show_full_period !== undefined) setClauses.push(`timesheet_show_full_period = ${addParam(parsed.data.timesheet_show_full_period)}`);
+    if (parsed.data.corrections_anomalies_only !== undefined) setClauses.push(`corrections_anomalies_only = ${addParam(parsed.data.corrections_anomalies_only)}`);
+    if (parsed.data.corrections_cap_by_schedule_norm !== undefined) setClauses.push(`corrections_cap_by_schedule_norm = ${addParam(parsed.data.corrections_cap_by_schedule_norm)}`);
+    if (parsed.data.corrections_allow_zero_short_attendance !== undefined) setClauses.push(`corrections_allow_zero_short_attendance = ${addParam(parsed.data.corrections_allow_zero_short_attendance)}`);
+    if (parsed.data.corrections_disable_bulk !== undefined) setClauses.push(`corrections_disable_bulk = ${addParam(parsed.data.corrections_disable_bulk)}`);
+    if (parsed.data.max_corrections_per_month !== undefined) setClauses.push(`max_corrections_per_month = ${addParam(parsed.data.max_corrections_per_month)}`);
 
     const codePlaceholder = addParam(code);
 
@@ -460,6 +506,7 @@ export const rolesController = {
     }
 
     invalidateRoleListCache();
+    invalidateCorrectionRestrictionsCache(data.id);
     await emitRoleAccessChanged(data.id);
     res.json({ success: true, data });
   },

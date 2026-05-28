@@ -67,10 +67,6 @@ const updateEmployeeSkudObjectsSchema = z.object({
   object_ids: z.array(z.string().uuid()).default([]),
 });
 
-const setSiteSupervisorSchema = z.object({
-  is_site_supervisor: z.boolean(),
-});
-
 const applyBrigadeWorkerTransfersSchema = z.object({
   transfers: z.array(z.object({
     employee_id: z.number().int().positive(),
@@ -517,7 +513,6 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
       email_confirmed: authInfo?.email_confirmed ?? false,
       full_name: u.full_name,
       assigned_department_ids: assignedDepartmentIds,
-      is_site_supervisor: Boolean(u.is_site_supervisor),
       position_type: roleCodeById.get(u.system_role_id) ?? '',
       imported_position: u.imported_position,
       employee_id: u.employee_id,
@@ -645,7 +640,6 @@ export const adminUsersController = {
           assigned_department_ids: assignedDepartmentIds,
           assigned_employee_ids: assignedEmployeeIds,
           assigned_employees: assignedEmployees,
-          is_site_supervisor: Boolean(u.is_site_supervisor),
           position_type: roleCodeById.get(u.system_role_id) ?? '',
           imported_position: u.imported_position,
           employee_id: u.employee_id,
@@ -1935,53 +1929,6 @@ export const adminUsersController = {
       }
       console.error('Update user department access error:', error);
       res.status(500).json({ success: false, error: 'Failed to update department access' });
-    }
-  },
-
-  /**
-   * PATCH /api/admin/users/:id/site-supervisor
-   * Toggle is_site_supervisor флага на user_profiles.
-   */
-  async setSiteSupervisor(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const { id } = req.params;
-      const { is_site_supervisor } = setSiteSupervisorSchema.parse(req.body);
-
-      const scopeCheck = await assertTargetUserInScope(req, id);
-      if (!scopeCheck.ok) {
-        res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
-        return;
-      }
-
-      const updated = await queryOne<{ id: string; is_site_supervisor: boolean }>(
-        `UPDATE user_profiles
-            SET is_site_supervisor = $1::boolean, updated_at = NOW()
-          WHERE id = $2::uuid
-        RETURNING id, is_site_supervisor`,
-        [is_site_supervisor, id],
-      );
-
-      if (!updated) {
-        res.status(404).json({ success: false, error: 'Пользователь не найден' });
-        return;
-      }
-
-      await auditService.logFromRequest(req, req.user.id, 'USER_SITE_SUPERVISOR_CHANGED', {
-        entityType: 'user',
-        entityId: id,
-        details: { is_site_supervisor },
-      });
-
-      emitDepartmentAccessChanged(id);
-
-      res.json({ success: true, data: { id: updated.id, is_site_supervisor: updated.is_site_supervisor } });
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ success: false, error: error.errors[0].message });
-        return;
-      }
-      console.error('Set site supervisor error:', error);
-      res.status(500).json({ success: false, error: 'Не удалось обновить флаг начальника участка' });
     }
   },
 

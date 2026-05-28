@@ -22,6 +22,12 @@ export interface SystemRole {
   timesheet_months_forward: number;
   /** true → пользователи роли видят кнопку «Весь месяц» в переключателе периода табеля; false → только 1–15 и 16–N. Дефолт true. */
   timesheet_show_full_period: boolean;
+  /** Блок «Ограничения корректировок табеля» (см. миграцию 132). Дефолт false/NULL — старое поведение. */
+  corrections_anomalies_only: boolean;
+  corrections_cap_by_schedule_norm: boolean;
+  corrections_allow_zero_short_attendance: boolean;
+  corrections_disable_bulk: boolean;
+  max_corrections_per_month: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -74,7 +80,6 @@ export interface UserProfile {
   chat_inbound_mode: ChatInboundMode;
   imported_position: string | null;
   is_approved: boolean;
-  is_site_supervisor: boolean;
   approved_by: string | null;
   approved_at: string | null;
   totp_secret: string | null;

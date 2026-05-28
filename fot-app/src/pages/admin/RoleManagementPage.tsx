@@ -12,7 +12,16 @@ import styles from './RoleManagementPage.module.css';
 
 type Tab = 'roles' | 'access';
 
-interface INewRoleForm {
+interface ICorrectionRestrictionsForm {
+  corrections_anomalies_only: boolean;
+  corrections_cap_by_schedule_norm: boolean;
+  corrections_allow_zero_short_attendance: boolean;
+  corrections_disable_bulk: boolean;
+  max_corrections_per_month: number | null;
+  max_corrections_unlimited: boolean;
+}
+
+interface INewRoleForm extends ICorrectionRestrictionsForm {
   code: string;
   name: string;
   is_admin: boolean;
@@ -24,7 +33,7 @@ interface INewRoleForm {
   timesheet_show_full_period: boolean;
 }
 
-interface ICloneRoleForm {
+interface ICloneRoleForm extends ICorrectionRestrictionsForm {
   code: string;
   name: string;
   description: string;
@@ -37,7 +46,7 @@ interface ICloneRoleForm {
   timesheet_show_full_period: boolean;
 }
 
-interface IEditState {
+interface IEditState extends ICorrectionRestrictionsForm {
   code: string;
   name: string;
   is_admin: boolean;
@@ -48,6 +57,32 @@ interface IEditState {
   timesheet_months_forward: number;
   timesheet_show_full_period: boolean;
 }
+
+const DEFAULT_CORRECTION_RESTRICTIONS: ICorrectionRestrictionsForm = {
+  corrections_anomalies_only: false,
+  corrections_cap_by_schedule_norm: false,
+  corrections_allow_zero_short_attendance: false,
+  corrections_disable_bulk: false,
+  max_corrections_per_month: null,
+  max_corrections_unlimited: true,
+};
+
+const correctionRestrictionsFromRole = (role: SystemRole): ICorrectionRestrictionsForm => ({
+  corrections_anomalies_only: role.corrections_anomalies_only ?? false,
+  corrections_cap_by_schedule_norm: role.corrections_cap_by_schedule_norm ?? false,
+  corrections_allow_zero_short_attendance: role.corrections_allow_zero_short_attendance ?? false,
+  corrections_disable_bulk: role.corrections_disable_bulk ?? false,
+  max_corrections_per_month: role.max_corrections_per_month ?? null,
+  max_corrections_unlimited: role.max_corrections_per_month == null,
+});
+
+const correctionRestrictionsToPayload = (form: ICorrectionRestrictionsForm) => ({
+  corrections_anomalies_only: form.corrections_anomalies_only,
+  corrections_cap_by_schedule_norm: form.corrections_cap_by_schedule_norm,
+  corrections_allow_zero_short_attendance: form.corrections_anomalies_only && form.corrections_allow_zero_short_attendance,
+  corrections_disable_bulk: form.corrections_disable_bulk,
+  max_corrections_per_month: form.max_corrections_unlimited ? null : Math.max(0, Math.floor(form.max_corrections_per_month ?? 0)),
+});
 
 const TIMESHEET_MONTHS_MIN = 0;
 const TIMESHEET_MONTHS_MAX = 12;
@@ -107,6 +142,82 @@ const HoursToggle: FC<IHoursToggleProps> = ({ checked, onChange, withLabels = tr
   </label>
 );
 
+interface ICorrectionRestrictionsBlockProps {
+  value: ICorrectionRestrictionsForm;
+  onChange: (next: ICorrectionRestrictionsForm) => void;
+}
+
+const CorrectionRestrictionsBlock: FC<ICorrectionRestrictionsBlockProps> = ({ value, onChange }) => {
+  const patch = (p: Partial<ICorrectionRestrictionsForm>) => onChange({ ...value, ...p });
+  const anomaliesOff = !value.corrections_anomalies_only;
+  return (
+    <fieldset className={styles.restrictionsFieldset}>
+      <legend className={styles.restrictionsLegend}>Ограничения корректировок табеля</legend>
+      <label className={styles.inlineCheckbox} title="Корректировка с часами больше нуля разрешена только в дни-аномалии СКУД: orphan exit, незакрытый entry, ошибки СКУД, пропуск скана при рабочем дне.">
+        <input
+          type="checkbox"
+          checked={value.corrections_anomalies_only}
+          onChange={e => patch({ corrections_anomalies_only: e.target.checked })}
+        />
+        <span>Только в дни-аномалии СКУД</span>
+      </label>
+      <label className={styles.inlineCheckbox} title="hours_override корректировки не может превысить плановые часы дня (с учётом графика и предпраздничного −1ч).">
+        <input
+          type="checkbox"
+          checked={value.corrections_cap_by_schedule_norm}
+          onChange={e => patch({ corrections_cap_by_schedule_norm: e.target.checked })}
+        />
+        <span>Не больше плановых часов дня</span>
+      </label>
+      <label className={styles.inlineCheckbox} title="Разрешает обнуление дня (hours=0), если день рабочий по графику и фактически по СКУД явка меньше 4 часов. Имеет смысл только при «Только аномалии».">
+        <input
+          type="checkbox"
+          checked={value.corrections_allow_zero_short_attendance}
+          disabled={anomaliesOff}
+          onChange={e => patch({ corrections_allow_zero_short_attendance: e.target.checked })}
+        />
+        <span>Разрешить обнуление дня при явке &lt; 4ч{anomaliesOff && ' (зависит от «Только аномалии»)'}</span>
+      </label>
+      <label className={styles.inlineCheckbox} title="Запрещает POST /api/timesheet/bulk — массовое сохранение корректировок для этой роли.">
+        <input
+          type="checkbox"
+          checked={value.corrections_disable_bulk}
+          onChange={e => patch({ corrections_disable_bulk: e.target.checked })}
+        />
+        <span>Запретить массовое редактирование</span>
+      </label>
+      <label className={styles.inlineCheckbox} title="Лимит корректировок аномалий per (создатель, сотрудник, календарный месяц). Имеет смысл только при «Только аномалии».">
+        <span>Лимит аномалий/мес</span>
+        <input
+          type="number"
+          min={0}
+          className={styles.inputInline}
+          disabled={anomaliesOff || value.max_corrections_unlimited}
+          value={value.max_corrections_per_month ?? ''}
+          onChange={e => {
+            const raw = e.target.value;
+            patch({
+              max_corrections_per_month: raw === '' ? null : Math.max(0, Math.floor(Number(raw) || 0)),
+            });
+          }}
+        />
+        <label className={styles.inlineCheckbox}>
+          <input
+            type="checkbox"
+            disabled={anomaliesOff}
+            checked={value.max_corrections_unlimited}
+            onChange={e => patch({
+              max_corrections_unlimited: e.target.checked,
+              max_corrections_per_month: e.target.checked ? null : (value.max_corrections_per_month ?? 0),
+            })}
+          />
+          <span>Неограниченно</span>
+        </label>
+      </label>
+    </fieldset>
+  );
+};
+
 export const RoleManagementPage: FC = () => {
   const toast = useToast();
   const { refreshProfile } = useAuth();
@@ -124,6 +235,7 @@ export const RoleManagementPage: FC = () => {
     timesheet_months_back: 1,
     timesheet_months_forward: 1,
     timesheet_show_full_period: true,
+    ...DEFAULT_CORRECTION_RESTRICTIONS,
   });
   const [editState, setEditState] = useState<IEditState | null>(null);
   const [savingRole, setSavingRole] = useState(false);
@@ -145,6 +257,7 @@ export const RoleManagementPage: FC = () => {
     timesheet_months_back: 1,
     timesheet_months_forward: 1,
     timesheet_show_full_period: true,
+    ...DEFAULT_CORRECTION_RESTRICTIONS,
   });
 
   const rolesQuery = useQuery<SystemRole[]>({
@@ -258,6 +371,7 @@ export const RoleManagementPage: FC = () => {
         timesheet_months_back: clampTimesheetMonths(newForm.timesheet_months_back),
         timesheet_months_forward: clampTimesheetMonths(newForm.timesheet_months_forward),
         timesheet_show_full_period: newForm.timesheet_show_full_period,
+        ...correctionRestrictionsToPayload(newForm),
       });
       toast.success('Роль создана');
       setNewForm({
@@ -265,6 +379,7 @@ export const RoleManagementPage: FC = () => {
         show_actual_hours: false, hide_sidebar: false,
         timesheet_months_back: 1, timesheet_months_forward: 1,
         timesheet_show_full_period: true,
+        ...DEFAULT_CORRECTION_RESTRICTIONS,
       });
       setShowNewForm(false);
       setSelectedRoleCode(createdRole.code);
@@ -294,6 +409,7 @@ export const RoleManagementPage: FC = () => {
         timesheet_months_back: clampTimesheetMonths(editState.timesheet_months_back),
         timesheet_months_forward: clampTimesheetMonths(editState.timesheet_months_forward),
         timesheet_show_full_period: editState.timesheet_show_full_period,
+        ...correctionRestrictionsToPayload(editState),
       });
       toast.success('Роль обновлена');
       setEditState(null);
@@ -437,6 +553,7 @@ export const RoleManagementPage: FC = () => {
       timesheet_months_back: clampTimesheetMonths(selectedRole.timesheet_months_back),
       timesheet_months_forward: clampTimesheetMonths(selectedRole.timesheet_months_forward),
       timesheet_show_full_period: selectedRole.timesheet_show_full_period !== false,
+      ...correctionRestrictionsFromRole(selectedRole),
     });
     setShowCloneForm(true);
   };
@@ -460,6 +577,7 @@ export const RoleManagementPage: FC = () => {
         timesheet_months_back: clampTimesheetMonths(cloneForm.timesheet_months_back),
         timesheet_months_forward: clampTimesheetMonths(cloneForm.timesheet_months_forward),
         timesheet_show_full_period: cloneForm.timesheet_show_full_period,
+        ...correctionRestrictionsToPayload(cloneForm),
       });
       toast.success('Роль-копия создана');
       setShowCloneForm(false);
@@ -618,6 +736,10 @@ export const RoleManagementPage: FC = () => {
                 />
                 <span>Показывать «Весь месяц» в табеле</span>
               </label>
+              <CorrectionRestrictionsBlock
+                value={newForm}
+                onChange={next => setNewForm(s => ({ ...s, ...next }))}
+              />
                 </div>
                 <div className={styles.formActions}>
                   <button className={styles.successButton} onClick={handleCreateRole} disabled={savingRole}>
@@ -770,6 +892,7 @@ export const RoleManagementPage: FC = () => {
                                   timesheet_months_back: clampTimesheetMonths(role.timesheet_months_back),
                                   timesheet_months_forward: clampTimesheetMonths(role.timesheet_months_forward),
                                   timesheet_show_full_period: role.timesheet_show_full_period !== false,
+                                  ...correctionRestrictionsFromRole(role),
                                 })
                               }
                             >Изменить</button>
@@ -785,6 +908,14 @@ export const RoleManagementPage: FC = () => {
                   ))}
                 </tbody>
               </table>
+              {editState && (
+                <div className={styles.editRestrictionsBox}>
+                  <CorrectionRestrictionsBlock
+                    value={editState}
+                    onChange={next => setEditState(s => (s ? { ...s, ...next } : s))}
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -934,6 +1065,10 @@ export const RoleManagementPage: FC = () => {
                       />
                       <span>Показывать «Весь месяц» в табеле</span>
                     </label>
+                    <CorrectionRestrictionsBlock
+                      value={cloneForm}
+                      onChange={next => setCloneForm(s => ({ ...s, ...next }))}
+                    />
                     <div className={styles.formActions}>
                       <button className={styles.successButton} onClick={handleCloneRole} disabled={savingRole}>
                         Создать копию

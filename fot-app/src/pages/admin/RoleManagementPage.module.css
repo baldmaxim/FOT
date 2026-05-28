@@ -739,3 +739,29 @@
     min-width: 640px;
   }
 }
+
+.restrictionsFieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--background-subtle, transparent);
+}
+
+.restrictionsLegend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.editRestrictionsBox {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--background-subtle, transparent);
+}

@@ -197,8 +197,7 @@ router.get('/skud-objects', requirePageAccess('/admin/users', 'view'), adminCont
 router.get('/employees/:id/skud-objects', requirePageAccess('/admin/users', 'view'), adminController.getEmployeeSkudObjects);
 router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeSkudObjectAccess);
 
-// Начальник участка: флаг + прямые назначения сотрудников (миграция 090).
-router.patch('/users/:id/site-supervisor', requirePageAccess('/admin/users', 'edit'), adminController.setSiteSupervisor);
+// Начальник участка — это роль site_supervisor (миграция 133); прямые назначения сотрудников ниже (миграция 090).
 router.put('/users/:id/employee-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserEmployeeAccess);
 
 // Привязка администраторов к «компаниям» (корневым узлам Sigur). Только системный админ.

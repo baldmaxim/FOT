@@ -70,8 +70,8 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
   }
 
   // 1) Назначения отделов через employee_department_access.
-  // Только пользователи с явным флагом user_profiles.is_site_supervisor = true
-  // считаются «начальниками участка» и попадают в выгрузку.
+  // Только пользователи с ролью site_supervisor («Начальник участка»)
+  // попадают в выгрузку.
   const edaWhere: string[] = [
     `eda.is_active = true`,
     `eda.source <> 'sigur_sync'`,
@@ -79,7 +79,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
     `e.is_archived = false`,
     `e.excluded_from_timesheet = false`,
     `od.is_active = true`,
-    `up.is_site_supervisor = true`,
+    `sr.code = 'site_supervisor'`,
   ];
   const edaParams: unknown[] = [];
   if (managedIds) {
@@ -101,6 +101,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
        INNER JOIN employees e ON e.id = eda.employee_id
        INNER JOIN org_departments od ON od.id = eda.department_id
        INNER JOIN user_profiles up ON up.employee_id = e.id
+       INNER JOIN system_roles sr ON sr.id = up.system_role_id
       WHERE ${edaWhere.join(' AND ')}`,
     edaParams,
   );
@@ -110,7 +111,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
   // Department-scope: подчинённый должен попадать по primary org_department_id.
   const ueaWhere: string[] = [
     'uea.is_active = true',
-    `up.is_site_supervisor = true`,
+    `sr.code = 'site_supervisor'`,
     `leader.employment_status = 'active'`,
     `leader.is_archived = false`,
     `direct.employment_status = 'active'`,
@@ -135,6 +136,7 @@ async function collectAssignedEmployees(req: AuthenticatedRequest): Promise<{
             leader.email     AS leader_email
        FROM user_employee_access uea
        INNER JOIN user_profiles up ON up.id = uea.user_id
+       INNER JOIN system_roles sr ON sr.id = up.system_role_id
        INNER JOIN employees leader ON leader.id = up.employee_id
        INNER JOIN employees direct ON direct.id = uea.employee_id
       WHERE ${ueaWhere.join(' AND ')}`,

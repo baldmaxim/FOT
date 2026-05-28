@@ -5,6 +5,7 @@ import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } f
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { cacheWithShortTtlForToday } from '../middleware/skipCacheForToday.js';
 import { serverTiming } from '../middleware/serverTiming.js';
+import correctionAttachmentsRouter from './correction-attachments.routes.js';
 
 const router = Router();
 
@@ -239,11 +240,23 @@ router.get(
   timesheetController.listCorrections
 );
 
+// /api/timesheet/corrections/:id/attachments
+router.use('/corrections', correctionAttachmentsRouter);
+
 // POST /api/timesheet/refresh
 router.post(
   '/refresh',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
   timesheetController.refresh
+);
+
+// GET /api/timesheet/correction-eligibility?employee_ids=...&start=...&end=...
+// Доступность корректировок для ролей с включёнными «Ограничениями корректировок»
+// (см. миграцию 132, сервис correction-restrictions.service).
+router.get(
+  '/correction-eligibility',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.getCorrectionEligibility
 );
 
 // POST /api/timesheet

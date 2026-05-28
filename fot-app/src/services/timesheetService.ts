@@ -91,6 +91,8 @@ export interface ITimesheetCorrectionRow {
   hours_override: number | null;
   source_type: string;
   reason: string | null;
+  approval_comment?: string | null;
+  attachments_count?: number;
   author_name: string | null;
   created_by: string | null;
   created_at: string;
@@ -157,6 +159,25 @@ export interface ITimesheetRefreshResult {
 
 export interface ITimesheetRefreshOptions {
   signal?: AbortSignal;
+}
+
+export interface ICorrectionEligibilityRestrictions {
+  corrections_anomalies_only: boolean;
+  corrections_cap_by_schedule_norm: boolean;
+  corrections_allow_zero_short_attendance: boolean;
+  corrections_disable_bulk: boolean;
+  max_corrections_per_month: number | null;
+}
+
+export interface ICorrectionEligibilityForEmployee {
+  anomaly_dates: string[];
+  short_attendance_dates: string[];
+  anomaly_used: number;
+}
+
+export interface ICorrectionEligibilityResponse {
+  restrictions: ICorrectionEligibilityRestrictions;
+  by_employee: Record<string, ICorrectionEligibilityForEmployee>;
 }
 
 export const timesheetService = {
@@ -539,5 +560,26 @@ export const timesheetService = {
 
     if (!response.ok) throw new Error('Ошибка экспорта');
     return response.blob();
+  },
+
+  /**
+   * Доступность корректировок для ролей с включёнными «Ограничениями корректировок».
+   * Для остальных ролей возвращает пустой `by_employee` — фронт может проверить флаги в `restrictions`
+   * и не дёргать эндпоинт повторно.
+   */
+  async getCorrectionEligibility(params: {
+    employee_ids: number[];
+    start: string;
+    end: string;
+  }): Promise<ICorrectionEligibilityResponse> {
+    const query = new URLSearchParams();
+    query.append('employee_ids', params.employee_ids.join(','));
+    query.append('start', params.start);
+    query.append('end', params.end);
+    const res = await apiClient.get<ApiResponse<ICorrectionEligibilityResponse>>(
+      `/timesheet/correction-eligibility?${query.toString()}`,
+    );
+    if (!res.data) throw new Error(res.error || 'Не удалось получить доступность корректировок');
+    return res.data;
   },
 };

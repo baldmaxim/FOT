@@ -21,6 +21,34 @@ import {
   type ITimesheetDateRange,
 } from '../services/timesheet-range.service.js';
 import { timesheetResponsiblesService } from '../services/timesheet-responsibles.service.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { IS_PRODUCTION } from '../config/features.js';
+
+async function emitTimesheetApprovalChanged(params: {
+  approvalId: string | number;
+  departmentId?: string | null;
+  submittedBy?: string | null;
+  reviewerUserId?: string | null;
+  action: string;
+}): Promise<void> {
+  try {
+    const recipients = new Set<string>();
+    if (params.submittedBy) recipients.add(params.submittedBy);
+    if (params.reviewerUserId) recipients.add(params.reviewerUserId);
+    if (params.departmentId) {
+      const reviewers = await listTimesheetWorkflowRecipientIds(params.departmentId, ['review', 'monitor']);
+      for (const uid of reviewers) recipients.add(uid);
+    }
+    if (recipients.size === 0) return;
+    emitDomainChange({
+      event: 'timesheet_approval:changed',
+      targetUserIds: Array.from(recipients),
+      payload: { entityId: params.approvalId, action: params.action },
+    });
+  } catch (e) {
+    console.error('[timesheet-approval] emit realtime error:', e);
+  }
+}
 import { timesheetApprovalHistoryService } from '../services/timesheet-approval-history.service.js';
 import { listTimesheetWorkflowRecipientIds } from '../services/timesheet-workflow-recipients.service.js';
 import {
@@ -732,6 +760,13 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       console.error('timesheet-approval.submit notify error:', notifyError);
     });
 
+    void emitTimesheetApprovalChanged({
+      approvalId: approval.id,
+      departmentId: deptId,
+      submittedBy: req.user.id,
+      action: 'submit',
+    });
+
     // Если это была полная подача отдела, а сам submitter сидит вне этой бригады —
     // его собственный табель иначе нигде не согласуется. Гарантируем persona-подачу
     // самого руководителя, чтобы он не «терялся» в UI согласований.
@@ -879,6 +914,14 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       end_date: range.endDate,
       from_status: existing.status,
       to_status: 'draft',
+    });
+
+    void emitTimesheetApprovalChanged({
+      approvalId: approval.id,
+      departmentId: deptId,
+      submittedBy: existing.submitted_by ?? req.user.id,
+      reviewerUserId: req.user.id,
+      action: 'recall',
     });
 
     res.json({ success: true, data: approval });
@@ -1130,6 +1173,14 @@ async function changeApprovalReviewState(
       comment,
     }).catch(notifyError => {
       console.error(`timesheet-approval.${input.action} notify error:`, notifyError);
+    });
+
+    void emitTimesheetApprovalChanged({
+      approvalId: updatedApproval.id,
+      departmentId: approval.department_id,
+      submittedBy: approval.submitted_by,
+      reviewerUserId: req.user.id,
+      action: input.action,
     });
 
     res.json({ success: true, data: updatedApproval });
@@ -1801,11 +1852,14 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         )
         : Promise.resolve([] as Array<{ id: string; name: string | null }>),
       userIds.length > 0
-        ? query<{ id: string; full_name: string | null; is_site_supervisor: boolean | null }>(
-          `SELECT id, full_name, is_site_supervisor FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        ? query<{ id: string; full_name: string | null; role_code: string | null }>(
+          `SELECT up.id, up.full_name, sr.code AS role_code
+             FROM user_profiles up
+             LEFT JOIN system_roles sr ON sr.id = up.system_role_id
+            WHERE up.id = ANY($1::uuid[])`,
           [userIds],
         )
-        : Promise.resolve([] as Array<{ id: string; full_name: string | null; is_site_supervisor: boolean | null }>),
+        : Promise.resolve([] as Array<{ id: string; full_name: string | null; role_code: string | null }>),
       managerEmpIds.length > 0
         ? query<{ id: number; full_name: string | null }>(
           `SELECT id, full_name FROM employees WHERE id = ANY($1::int[])`,
@@ -1816,7 +1870,7 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
 
     const deptNames = new Map(deptRows.map((row) => [String(row.id), String(row.name ?? '')]));
     const userNames = new Map(userRows.map((row) => [String(row.id), String(row.full_name ?? '')]));
-    const supervisorFlag = new Map(userRows.map(row => [String(row.id), Boolean(row.is_site_supervisor)]));
+    const supervisorFlag = new Map(userRows.map(row => [String(row.id), row.role_code === 'site_supervisor']));
     const managerNames = new Map(managerRows.map((row) => [Number(row.id), row.full_name ?? null]));
 
     const snapshotByApproval = new Map<number, number[]>();
@@ -1826,7 +1880,7 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
       snapshotByApproval.set(Number(s.approval_id), list);
     }
 
-    // Группировка по «участку» = по начальнику участка (user_profiles.is_site_supervisor=true,
+    // Группировка по «участку» = по начальнику участка (роль site_supervisor,
     // который подал табель). Все его подачи (любые бригады + его persona-подача) сворачиваются
     // в одну карточку «Участок: <ФИО супервайзера>». Подачи обычных пользователей идут одиночками.
     const deriveGroup = (row: TimesheetApproval): {
@@ -2214,7 +2268,7 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
 
     // 6. Личные подачи менеджеров «не подали»: те, у кого есть direct_reports в скоупе,
     //    но в выбранном периоде не появилось ни submitted/approved. Берём пул менеджеров
-    //    из user_profiles (manager_obj + manager с is_site_supervisor=true): они и подают
+    //    из user_profiles (manager_obj + site_supervisor): они и подают
     //    личные табели. Простой агрегат — manager_employee_id_in_period.
     type PersonalManagerRow = {
       employee_id: number;
@@ -2272,8 +2326,44 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
       },
     });
   } catch (err) {
-    console.error('timesheet-approval.getDashboard error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка получения дашборда' });
+    const pg = err as {
+      code?: string;
+      message?: string;
+      detail?: string;
+      hint?: string;
+      position?: string;
+      where?: string;
+      schema?: string;
+      table?: string;
+      column?: string;
+      constraint?: string;
+      stack?: string;
+    };
+    console.error('timesheet-approval.getDashboard error:', {
+      code: pg.code,
+      message: pg.message,
+      detail: pg.detail,
+      hint: pg.hint,
+      position: pg.position,
+      where: pg.where,
+      schema: pg.schema,
+      table: pg.table,
+      column: pg.column,
+      constraint: pg.constraint,
+      start_date: req.query?.start_date,
+      end_date: req.query?.end_date,
+      userId: req.user?.id,
+      is_admin: req.user?.is_admin,
+      stack: pg.stack,
+    });
+    const payload: { success: false; error: string; debug?: { code?: string; message?: string } } = {
+      success: false,
+      error: 'Ошибка получения дашборда',
+    };
+    if (!IS_PRODUCTION) {
+      payload.debug = { code: pg.code, message: pg.message };
+    }
+    res.status(500).json(payload);
   }
 };
 

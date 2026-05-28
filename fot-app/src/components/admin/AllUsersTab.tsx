@@ -23,7 +23,6 @@ export interface IUserFromApi {
   email_confirmed?: boolean;
   full_name: string | null;
   assigned_department_ids: string[];
-  is_site_supervisor: boolean;
   position_type: EmployeePositionType;
   imported_position: string | null;
   employee_id: number | null;
@@ -60,7 +59,6 @@ interface IUserRowExpandedProps {
   onChangePosition: (userId: string, position: EmployeePositionType) => Promise<void>;
   onChangeChatMode: (userId: string, mode: ChatInboundMode) => Promise<void>;
   onLinkEmployee: (userId: string, employeeId: number | null, empName?: string) => Promise<void>;
-  onToggleSiteSupervisor: (userId: string, value: boolean) => Promise<void>;
   onConfirmEmail: (userId: string) => Promise<void>;
   onGenerate2FA: (userId: string, userName: string) => Promise<void>;
   onDisable2FA: (userId: string) => Promise<void>;
@@ -76,7 +74,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   onChangePosition,
   onChangeChatMode,
   onLinkEmployee,
-  onToggleSiteSupervisor,
   onConfirmEmail,
   onGenerate2FA,
   onDisable2FA,
@@ -95,8 +92,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   const [empSearchResults, setEmpSearchResults] = useState<{ id: number; full_name: string; org_department_id: string | null }[]>([]);
   const empSearchSeqRef = useRef(0);
   const skudSearchWrapRef = useRef<HTMLDivElement | null>(null);
-
-  const [savingSiteSupervisor, setSavingSiteSupervisor] = useState(false);
 
   // Debounce поиска сотрудника СКУД (250 мс) + защита от устаревших ответов
   useEffect(() => {
@@ -153,15 +148,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
     await onLinkEmployee(user.id, employeeId, empName);
     setEmpSearchQuery('');
     setEmpSearchResults([]);
-  };
-
-  const handleSiteSupervisorChange = async (next: boolean) => {
-    setSavingSiteSupervisor(true);
-    try {
-      await onToggleSiteSupervisor(user.id, next);
-    } finally {
-      setSavingSiteSupervisor(false);
-    }
   };
 
   return (
@@ -285,18 +271,6 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
           <ContractorOrgAccessSection userId={user.id} />
         </div>
       )}
-
-      <div className={styles.controlGroup}>
-        <label>Начальник участка:</label>
-        <label className={styles.editNameBtn} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={user.is_site_supervisor}
-            disabled={savingSiteSupervisor}
-            onChange={(e) => { void handleSiteSupervisorChange(e.target.checked); }}
-          />
-        </label>
-      </div>
 
       <div className={styles.controlActions}>
         {!user.email_confirmed && (
@@ -614,16 +588,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     }
   }, [patchUserInPageCaches, toast]);
 
-  const handleSiteSupervisorToggle = useCallback(async (userId: string, value: boolean) => {
-    try {
-      await adminService.setSiteSupervisor(userId, value);
-      patchUserInPageCaches(userId, { is_site_supervisor: value });
-      toast.success(value ? 'Назначен начальником участка' : 'Снят с роли начальника участка');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Ошибка изменения флага');
-    }
-  }, [patchUserInPageCaches, toast]);
-
   const handleDeleteUser = useCallback(async (userId: string) => {
     if (!confirm('Удалить пользователя из системы? Это действие необратимо.')) return;
     try {
@@ -704,6 +668,11 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
         timesheet_months_back: 1,
         timesheet_months_forward: 1,
         timesheet_show_full_period: true,
+        corrections_anomalies_only: false,
+        corrections_cap_by_schedule_norm: false,
+        corrections_allow_zero_short_attendance: false,
+        corrections_disable_bulk: false,
+        max_corrections_per_month: null,
         created_at: '',
         updated_at: '',
       });
@@ -821,7 +790,6 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
                   onChangePosition={handlePositionChange}
                   onChangeChatMode={handleChatInboundModeChange}
                   onLinkEmployee={handleEmpLink}
-                  onToggleSiteSupervisor={handleSiteSupervisorToggle}
                   onConfirmEmail={handleConfirmEmail}
                   onGenerate2FA={handleGenerate2FA}
                   onDisable2FA={handleDisable2FA}

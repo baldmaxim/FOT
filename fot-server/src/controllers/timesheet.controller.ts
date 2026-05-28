@@ -46,11 +46,23 @@ import { listDirectSubordinates } from '../services/employee-direct-reports.serv
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { correctionApprovalSettingsService } from '../services/correction-approval-settings.service.js';
 import {
+  assertCorrectionAllowed,
+  assertBulkAllowed,
+  CorrectionRestrictionError,
+  computeCorrectionEligibility,
+  loadRoleRestrictions,
+} from '../services/correction-restrictions.service.js';
+import {
   loadEmployeeFullName as loadEmployeeFullNameForAudit,
   loadEmployeeFullNamesMap,
 } from '../services/audit-context.helpers.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { notifySkudRealtimeChanged } from '../services/skud-realtime.service.js';
+import {
+  countCorrectionAttachments,
+  purgeCorrectionAttachments,
+} from '../services/correction-attachments.service.js';
+import { r2Service } from '../services/r2.service.js';
 import {
   isDepartmentMonthAllowed,
   isTimesheetWindowExempt,
@@ -586,6 +598,16 @@ async function ensureNotLockedForScope(
   const departmentId = await resolveEmployeeManagedDepartment(req, employeeId, workDate);
   if (!departmentId) return null;
   return findApprovalLockForDate(departmentId, workDate);
+}
+
+/** Норма часов дня с учётом графика и предпраздничного -1ч (см. getDayNormHours). */
+async function resolveScheduledNormHours(employeeId: number, workDate: string): Promise<number> {
+  const schedules = await resolveSchedulesForPeriod([{ id: employeeId }], workDate, workDate);
+  const schedule = schedules.get(employeeId)?.get(workDate);
+  if (!schedule) return 0;
+  const date = new Date(`${workDate}T00:00:00`);
+  const calendarMonth = await loadCalendarMonth(date.getFullYear(), date.getMonth() + 1);
+  return getDayNormHours(schedule, date, calendarMonth);
 }
 
 async function resolvePlannedHoursByItems(items: Array<{ employee_id: number; work_date: string }>): Promise<Map<string, number>> {
@@ -1608,6 +1630,19 @@ export const timesheetController = {
         ? (plannedHours || 8)
         : (parsed.hours_worked ?? null);
 
+      // Гарды роли: «только аномалии», «не больше плана», «лимит за месяц».
+      if (parsed.status === 'work' || parsed.status === 'remote') {
+        const scheduledNorm = await resolveScheduledNormHours(parsed.employee_id, parsed.work_date);
+        await assertCorrectionAllowed({
+          systemRoleId: req.user.system_role_id,
+          createdBy: req.user.id,
+          employeeId: parsed.employee_id,
+          workDate: parsed.work_date,
+          hoursOverride: typeof normalizedHours === 'number' ? normalizedHours : 0,
+          scheduledNormHours: scheduledNorm,
+        });
+      }
+
       const approvalStatus = await resolveAdjustmentApprovalStatus(
         parsed.employee_id,
         parsed.work_date,
@@ -1666,6 +1701,9 @@ export const timesheetController = {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
+      if (err instanceof CorrectionRestrictionError) {
+        return res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
+      }
       console.error('timesheet.create error:', err);
       res.status(500).json({ success: false, error: 'Ошибка создания записи' });
     }
@@ -1719,6 +1757,22 @@ export const timesheetController = {
         const normalizedHours = nextStatus === 'remote'
           ? (plannedHours || 8)
           : parsed.hours_worked;
+
+        if (nextStatus === 'work' || nextStatus === 'remote') {
+          const scheduledNormUpd = await resolveScheduledNormHours(
+            Number(existing.employee_id),
+            String(existing.work_date),
+          );
+          await assertCorrectionAllowed({
+            systemRoleId: req.user.system_role_id,
+            createdBy: req.user.id,
+            employeeId: Number(existing.employee_id),
+            workDate: String(existing.work_date),
+            hoursOverride: typeof normalizedHours === 'number' ? normalizedHours : 0,
+            scheduledNormHours: scheduledNormUpd,
+            excludeAdjustmentId: id,
+          });
+        }
 
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           Number(existing.employee_id),
@@ -1775,6 +1829,9 @@ export const timesheetController = {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
+      if (err instanceof CorrectionRestrictionError) {
+        return res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
+      }
       console.error('timesheet.update error:', err);
       const message = err instanceof Error ? err.message : '';
       if (/schema cache/i.test(message)) {
@@ -1790,6 +1847,7 @@ export const timesheetController = {
   /** POST /api/timesheet/bulk */
   async bulkSave(req: AuthenticatedRequest, res: Response) {
     try {
+      await assertBulkAllowed(req.user.system_role_id);
       const parsed = bulkCorrectionSchema.parse(req.body);
       const scope = await resolveTimesheetScope(req);
       const uniqueItems = Array.from(
@@ -1839,6 +1897,17 @@ export const timesheetController = {
         const itemHoursOverride = parsed.status === 'remote'
           ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) || 8)
           : (parsed.hours_worked ?? null);
+        if (parsed.status === 'work' || parsed.status === 'remote') {
+          const scheduledNormBulk = await resolveScheduledNormHours(item.employee_id, item.work_date);
+          await assertCorrectionAllowed({
+            systemRoleId: req.user.system_role_id,
+            createdBy: req.user.id,
+            employeeId: item.employee_id,
+            workDate: item.work_date,
+            hoursOverride: typeof itemHoursOverride === 'number' ? itemHoursOverride : 0,
+            scheduledNormHours: scheduledNormBulk,
+          });
+        }
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           item.employee_id,
           item.work_date,
@@ -1909,6 +1978,10 @@ export const timesheetController = {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
+      if (err instanceof CorrectionRestrictionError) {
+        const status = err.code === 'bulk_disabled' ? 403 : 422;
+        return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
+      }
       console.error('timesheet.bulkSave error:', err);
       res.status(500).json({ success: false, error: 'Ошибка массового обновления табеля' });
     }
@@ -1938,22 +2011,44 @@ export const timesheetController = {
       const allowedHours = Math.max(0, parsed.hours_worked);
 
       // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
-      // строки на тот же (employee, work_date) перед сохранением.
-      await execute(
+      // строки на тот же (employee, work_date) перед сохранением. RETURNING нужен
+      // чтобы каскадно подчистить файлы и R2-объекты этих корректировок.
+      const removedManualRows = await query<{ id: number | string }>(
         `DELETE FROM attendance_adjustments
-           WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'`,
+           WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'
+         RETURNING id`,
         [parsed.employee_id, parsed.work_date],
       );
+      if (removedManualRows.length > 0) {
+        try {
+          const r2Keys = (await Promise.all(
+            removedManualRows.map(row => purgeCorrectionAttachments(Number(row.id))),
+          )).flat();
+          if (r2Keys.length > 0 && await r2Service.isEnabledAsync()) {
+            await Promise.allSettled(r2Keys.map(key => r2Service.deleteObject(key)));
+          }
+        } catch (cleanupErr) {
+          console.warn('timesheet.upsertObjectEntry: day-level mutex cleanup failed', cleanupErr);
+        }
+      }
 
       // 0 часов на объекте = снять корректировку. Иначе агрегат по дню падает в 'absent'
       // (см. attendance.service.ts) — будет «неявка» в режиме «по сотрудникам».
       if (allowedHours <= 0) {
-        await deleteAttendanceAdjustmentBySource({
+        const removedIdsForCleanup = await deleteAttendanceAdjustmentBySource({
           employee_id: parsed.employee_id,
           work_date: parsed.work_date,
           source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
           source_id: parsed.object_key,
         });
+        try {
+          const r2Keys = (await Promise.all(removedIdsForCleanup.map(id => purgeCorrectionAttachments(id)))).flat();
+          if (r2Keys.length > 0 && await r2Service.isEnabledAsync()) {
+            await Promise.allSettled(r2Keys.map(key => r2Service.deleteObject(key)));
+          }
+        } catch (cleanupErr) {
+          console.warn('timesheet.upsertObjectEntry: attachments cleanup failed', cleanupErr);
+        }
         res.json({
           success: true,
           data: {
@@ -2052,12 +2147,21 @@ export const timesheetController = {
         });
       }
 
-      await deleteAttendanceAdjustmentBySource({
+      const removedIds = await deleteAttendanceAdjustmentBySource({
         employee_id: parsed.employee_id,
         work_date: parsed.work_date,
         source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
         source_id: parsed.object_key,
       });
+
+      try {
+        const r2Keys = (await Promise.all(removedIds.map(id => purgeCorrectionAttachments(id)))).flat();
+        if (r2Keys.length > 0 && await r2Service.isEnabledAsync()) {
+          await Promise.allSettled(r2Keys.map(key => r2Service.deleteObject(key)));
+        }
+      } catch (cleanupErr) {
+        console.warn('timesheet.deleteObjectEntry: attachments cleanup failed', cleanupErr);
+      }
 
       const auditFullNameObjDel = await loadEmployeeFullNameForAudit(parsed.employee_id);
 
@@ -2120,6 +2224,13 @@ export const timesheetController = {
       }
 
       const adjustments = await loadAttendanceAdjustmentsWithAuthors(employeeIds, startDate, endDate);
+      const attachmentCounts = await countCorrectionAttachments(
+        adjustments.map(item => ({
+          id: Number(item.id),
+          source_type: item.source_type,
+          source_id: item.source_id ?? null,
+        })),
+      );
       const rows = await Promise.all(adjustments.map(async (item) => {
         const lockInfo = scope === 'department'
           ? await ensureNotLockedForScope(req, 'department', item.employee_id, item.work_date)
@@ -2142,6 +2253,8 @@ export const timesheetController = {
           hours_override: item.hours_override,
           source_type: item.source_type,
           reason: item.reason,
+          approval_comment: item.approval_comment ?? null,
+          attachments_count: attachmentCounts.get(Number(item.id)) ?? 0,
           author_name: item.author_name,
           created_by: item.created_by,
           created_at: item.created_at,
@@ -2218,6 +2331,15 @@ export const timesheetController = {
 
       const ok = await deleteAttendanceAdjustmentById(id);
       if (!ok) return res.status(404).json({ success: false, error: 'Запись не найдена' });
+
+      try {
+        const orphanedR2Keys = await purgeCorrectionAttachments(id);
+        if (orphanedR2Keys.length > 0 && await r2Service.isEnabledAsync()) {
+          await Promise.allSettled(orphanedR2Keys.map(key => r2Service.deleteObject(key)));
+        }
+      } catch (cleanupErr) {
+        console.warn('timesheet.deleteEntry: attachments cleanup failed', cleanupErr);
+      }
 
       const auditFullName = await loadEmployeeFullNameForAudit(Number(existing.employee_id));
       await auditService.logFromRequest(req, req.user.id, 'DELETE_TIMESHEET_ENTRY', {
@@ -2420,4 +2542,78 @@ export const timesheetController = {
 
   /** POST /api/timesheet/weekend-memo/generate */
   generateWeekendMemo,
+
+  /**
+   * GET /api/timesheet/correction-eligibility?employee_ids=1,2&start=YYYY-MM-DD&end=YYYY-MM-DD
+   * Возвращает разрешённые типы корректировок (аномалии / обнуление коротких явок)
+   * по сотрудникам и счётчик уже поданных корректировок аномалий. Для ролей без
+   * включённых флагов «Ограничения корректировок» возвращается пустой `by_employee`.
+   */
+  async getCorrectionEligibility(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const restrictions = await loadRoleRestrictions(req.user.system_role_id);
+      const noNeed = !restrictions.corrections_anomalies_only
+        && !restrictions.corrections_allow_zero_short_attendance;
+      if (noNeed) {
+        res.json({ success: true, data: { restrictions, by_employee: {} } });
+        return;
+      }
+
+      const rawIds = String(req.query.employee_ids ?? '').trim();
+      const employeeIds = rawIds
+        ? Array.from(new Set(
+          rawIds.split(',').map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0),
+        ))
+        : [];
+      const start = String(req.query.start ?? '');
+      const end = String(req.query.end ?? '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+        res.status(400).json({ success: false, error: 'Параметры start/end должны быть YYYY-MM-DD' });
+        return;
+      }
+      if (employeeIds.length === 0) {
+        res.json({ success: true, data: { restrictions, by_employee: {} } });
+        return;
+      }
+
+      const allowed: number[] = [];
+      for (const id of employeeIds) {
+        if (await canAccessEmployeeForTimesheetDate(req, id, start)) allowed.push(id);
+      }
+
+      const dates: string[] = [];
+      for (let d = new Date(`${start}T00:00:00Z`); d <= new Date(`${end}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) {
+        dates.push(d.toISOString().slice(0, 10));
+      }
+      const schedules = allowed.length > 0
+        ? await resolveSchedulesForPeriod(allowed.map(id => ({ id })), start, end)
+        : new Map<number, Map<string, IResolvedSchedule>>();
+      const startDate = new Date(`${start}T00:00:00`);
+      const calendarMonth = await loadCalendarMonth(startDate.getFullYear(), startDate.getMonth() + 1);
+      const scheduledNorms = new Map<number, Map<string, number>>();
+      for (const e of allowed) {
+        const inner = new Map<string, number>();
+        for (const dt of dates) {
+          const schedule = schedules.get(e)?.get(dt);
+          if (!schedule) { inner.set(dt, 0); continue; }
+          const norm = getDayNormHours(schedule, new Date(`${dt}T00:00:00`), calendarMonth);
+          inner.set(dt, Math.max(0, norm));
+        }
+        scheduledNorms.set(e, inner);
+      }
+
+      const data = await computeCorrectionEligibility({
+        systemRoleId: req.user.system_role_id,
+        createdBy: req.user.id,
+        employeeIds: allowed,
+        startDate: start,
+        endDate: end,
+        scheduledNorms,
+      });
+      res.json({ success: true, data });
+    } catch (err) {
+      console.error('timesheet.getCorrectionEligibility error:', err);
+      res.status(500).json({ success: false, error: 'Не удалось рассчитать доступность корректировок' });
+    }
+  },
 };

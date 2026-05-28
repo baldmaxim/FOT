@@ -99,7 +99,7 @@ export interface IApprovalReviewItem extends ITimesheetApproval {
   };
 }
 
-export type ManagerRoleCode = 'manager' | 'manager_obj';
+export type ManagerRoleCode = 'manager' | 'manager_obj' | 'site_supervisor';
 
 export interface ITimesheetDashboardTotals {
   departments_total: number;

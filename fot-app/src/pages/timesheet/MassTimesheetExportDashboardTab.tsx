@@ -21,6 +21,7 @@ import './MassTimesheetExportDashboardTab.css';
 const ROLE_LABEL: Record<ManagerRoleCode, string> = {
   manager: 'Руководитель',
   manager_obj: 'Руководитель строительства',
+  site_supervisor: 'Начальник участка',
 };
 
 interface IStatCardProps {

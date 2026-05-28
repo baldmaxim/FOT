@@ -38,7 +38,16 @@ export interface RoleLabel {
   show_actual_hours: boolean;
 }
 
-export interface CreateRoleData {
+/** Блок «Ограничения корректировок табеля» (см. миграцию 132). */
+export interface CorrectionRestrictionFields {
+  corrections_anomalies_only?: boolean;
+  corrections_cap_by_schedule_norm?: boolean;
+  corrections_allow_zero_short_attendance?: boolean;
+  corrections_disable_bulk?: boolean;
+  max_corrections_per_month?: number | null;
+}
+
+export interface CreateRoleData extends CorrectionRestrictionFields {
   code: string;
   name: string;
   description?: string | null;
@@ -51,7 +60,7 @@ export interface CreateRoleData {
   timesheet_show_full_period?: boolean;
 }
 
-export interface UpdateRoleData {
+export interface UpdateRoleData extends CorrectionRestrictionFields {
   name: string;
   description?: string | null;
   is_admin?: boolean;
@@ -64,7 +73,7 @@ export interface UpdateRoleData {
   timesheet_show_full_period?: boolean;
 }
 
-export interface CloneRoleData {
+export interface CloneRoleData extends CorrectionRestrictionFields {
   code: string;
   name: string;
   description?: string | null;
