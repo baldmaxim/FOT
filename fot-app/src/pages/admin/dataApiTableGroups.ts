@@ -18,8 +18,6 @@ export const TABLE_GROUPS: ITableGroup[] = [
       { name: 'employee_assignments', label: 'Назначения сотрудников' },
       { name: 'employee_department_access', label: 'Доступ сотрудников к отделам' },
       { name: 'salary_history', label: 'История зарплат' },
-      { name: 'manager_department_import_brigade_aliases', label: 'Импорт: алиасы бригад' },
-      { name: 'manager_department_import_employee_aliases', label: 'Импорт: алиасы сотрудников' },
     ],
   },
   {

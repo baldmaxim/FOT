@@ -411,7 +411,6 @@ export async function consolidateDuplicateDepartments(): Promise<IConsolidateRes
       `UPDATE org_sites t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`,
       `UPDATE timesheet_approval_events t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`,
       `UPDATE timesheet_approvals t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`,
-      `UPDATE manager_department_import_brigade_aliases t SET department_id = m.canonical_id FROM dept_dedup_map m WHERE t.department_id = m.orphan_id`,
       `UPDATE org_departments t SET parent_id = m.canonical_id FROM dept_dedup_map m WHERE t.parent_id = m.orphan_id`,
     ];
     for (const sql of flat) await client.query(sql);

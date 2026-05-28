@@ -11,9 +11,6 @@ const PendingUsersTab = lazy(() => import('../../components/admin/PendingUsersTa
 const AllUsersTab = lazy(() => import('../../components/admin/AllUsersTab').then(module => ({
   default: module.AllUsersTab,
 })));
-const DepartmentAccessImportTab = lazy(() => import('../../components/admin/DepartmentAccessImportTab').then(module => ({
-  default: module.DepartmentAccessImportTab,
-})));
 const EmployeeDepartmentAssignmentsTab = lazy(() => import('../../components/admin/EmployeeDepartmentAssignmentsTab').then(module => ({
   default: module.EmployeeDepartmentAssignmentsTab,
 })));
@@ -24,7 +21,7 @@ const PasswordResetRequestsTab = lazy(() => import('../../components/admin/Passw
 export const UserManagementPage: React.FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'pending' | 'all' | 'employee-access' | 'import' | 'password-reset'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'all' | 'employee-access' | 'password-reset'>('pending');
   const pendingUsersQuery = useQuery<IPendingUser[]>({
     queryKey: ['admin-users', 'pending'],
     queryFn: () => adminService.getPendingUsers(),
@@ -41,8 +38,8 @@ export const UserManagementPage: React.FC = () => {
     queryFn: () => adminService.getAllUsersCount(),
     staleTime: 60_000,
   });
-  // Полный slim-список нужен только вкладкам assignments/import — лениво.
-  const needsSlim = activeTab === 'employee-access' || activeTab === 'import';
+  // Полный slim-список нужен только вкладке assignments — лениво.
+  const needsSlim = activeTab === 'employee-access';
   const allUsersSlimQuery = useQuery<IUserSlim[]>({
     queryKey: ['admin-users', 'slim'],
     queryFn: () => adminService.getAllUsersSlim(),
@@ -104,12 +101,6 @@ export const UserManagementPage: React.FC = () => {
           Назначения сотрудников
         </button>
         <button
-          className={`${styles.tab} ${activeTab === 'import' ? styles.active : ''}`}
-          onClick={() => setActiveTab('import')}
-        >
-          Импорт назначений
-        </button>
-        <button
           className={`${styles.tab} ${activeTab === 'password-reset' ? styles.active : ''}`}
           onClick={() => setActiveTab('password-reset')}
         >
@@ -139,15 +130,6 @@ export const UserManagementPage: React.FC = () => {
           <EmployeeDepartmentAssignmentsTab
             allUsers={allUsersSlim}
             allUsersLoading={allSlimLoading}
-            onReload={reloadUsers}
-          />
-        </Suspense>
-      )}
-
-      {activeTab === 'import' && (
-        <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
-          <DepartmentAccessImportTab
-            allUsers={allUsersSlim}
             onReload={reloadUsers}
           />
         </Suspense>
