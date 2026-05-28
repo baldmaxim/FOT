@@ -437,6 +437,29 @@ export const timesheetService = {
     return response.blob();
   },
 
+  async exportMassUnified(filters: {
+    month: string;
+    department_ids: string[];
+    half?: TimesheetExportHalf;
+    from?: string;
+    to?: string;
+  }): Promise<Blob> {
+    const response = await fetch(
+      buildApiUrl('/timesheet/export-mass-unified'),
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildAuthHeaders(),
+        },
+        body: JSON.stringify(filters),
+      }
+    );
+    if (!response.ok) throw new Error('Ошибка единого экспорта для 1С');
+    return response.blob();
+  },
+
   async exportAssigned(filters: {
     month: string;
     half?: TimesheetExportHalf;

@@ -10,7 +10,7 @@ import type {
 } from '../types/index.js';
 import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
-import { exportTimesheetMass } from './timesheet-mass-export.controller.js';
+import { exportTimesheetMass, exportTimesheetMassUnified } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
 import { resolveSchedulesForPeriod, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
@@ -2527,6 +2527,9 @@ export const timesheetController = {
 
   /** POST /api/timesheet/export-mass  body: { month, department_ids } */
   exportMass: exportTimesheetMass,
+
+  /** POST /api/timesheet/export-mass-unified  body: { month, department_ids, half?, from?, to? } */
+  exportMassUnified: exportTimesheetMassUnified,
 
   /** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c, employee_ids? } */
   exportAssigned: exportTimesheetAssigned,

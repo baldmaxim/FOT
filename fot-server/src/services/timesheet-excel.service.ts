@@ -199,7 +199,7 @@ export const listObjectExportTargets = (data: IDepartmentTimesheetData): IObject
   return [...byKey.values()].sort((left, right) => left.object_name.localeCompare(right.object_name, 'ru'));
 };
 
-interface IOneCDisplayDayValue {
+export interface IOneCDisplayDayValue {
   hours: number;
   label?: string;
   isUnderwork: boolean;
@@ -207,7 +207,7 @@ interface IOneCDisplayDayValue {
   isWeekend?: boolean;
 }
 
-interface IOneCExportRow {
+export interface IOneCExportRow {
   fullName: string;
   dayValues: Map<number, IOneCDisplayDayValue>;
   totalHours: number;
@@ -340,7 +340,7 @@ const ensureOneCBodyRows = (worksheet: ExcelJS.Worksheet, lastRow: number): void
   }
 };
 
-const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCExportRow[] => {
+export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCExportRow[] => {
   return data.employees.map(employee => {
     const schedule = data.schedulesMap.get(employee.id);
     const employeeDays = data.dataMap.get(employee.id);
@@ -388,7 +388,7 @@ const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCExportRo
   });
 };
 
-const buildObjectRowsForOneC = (
+export const buildObjectRowsForOneC = (
   data: IDepartmentTimesheetData,
   target: IObjectExportTarget,
 ): IOneCExportRow[] => {

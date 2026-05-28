@@ -158,6 +158,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
   const [presentation, setPresentation] = useState<TimesheetExportPresentation>('hr');
   const [exporting, setExporting] = useState(false);
   const [exportingApproved, setExportingApproved] = useState(false);
+  const [exportingUnified, setExportingUnified] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { profile } = useAuth();
@@ -329,6 +330,38 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     }
   };
 
+  const handleExportUnified = async () => {
+    if (selectedDeptIds.length === 0) return;
+    setExportingUnified(true);
+    setError(null);
+    try {
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const blob = await timesheetService.exportMassUnified({
+        month: monthStr,
+        department_ids: selectedDeptIds,
+        from: rangeStart,
+        to: rangeEnd,
+      });
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const startDay = Number.parseInt(rangeStart.slice(-2), 10);
+      const endDay = Number.parseInt(rangeEnd.slice(-2), 10);
+      const isFullMonth = startDay === 1 && endDay === daysInMonth;
+      const segmentSuffix = isFullMonth ? '' : `_${startDay}-${endDay}`;
+      const filename = `Единый_1С_${MONTH_NAMES[month]}_${year}${segmentSuffix}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Mass export unified error:', err);
+      setError('Ошибка единого экспорта для 1С. Попробуйте ещё раз.');
+    } finally {
+      setExportingUnified(false);
+    }
+  };
+
   const handleExportApproved = async () => {
     if (approvedSelectedIds.length === 0) return;
     setExportingApproved(true);
@@ -426,10 +459,14 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
         )}
       </div>
 
-      {exporting && (
+      {(exporting || exportingUnified) && (
         <div className="mte-progress">
           <div className="mte-spinner" />
-          <span>Генерация табелей ({checkedIds.size} отд.)... Это может занять некоторое время</span>
+          <span>
+            {exportingUnified
+              ? `Сборка единого файла для 1С (${checkedIds.size} отд.)... Это может занять некоторое время`
+              : `Генерация табелей (${checkedIds.size} отд.)... Это может занять некоторое время`}
+          </span>
         </div>
       )}
 
@@ -439,7 +476,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
         <button
           className={`mte-export-btn ${presentation === 'hr' ? 'mte-export-btn--active' : ''}`}
           onClick={() => handleExport('hr')}
-          disabled={exporting || exportingApproved || checkedIds.size === 0}
+          disabled={exporting || exportingApproved || exportingUnified || checkedIds.size === 0}
         >
           <Download size={16} />
           {exporting && presentation === 'hr'
@@ -451,7 +488,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
             <button
               className={`mte-export-btn mte-export-btn--secondary ${presentation === 'manager' ? 'mte-export-btn--active' : ''}`}
               onClick={() => handleExport('manager')}
-              disabled={exporting || exportingApproved || checkedIds.size === 0}
+              disabled={exporting || exportingApproved || exportingUnified || checkedIds.size === 0}
             >
               <Download size={16} />
               {exporting && presentation === 'manager'
@@ -461,7 +498,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
             <button
               className="mte-export-btn mte-export-btn--approved"
               onClick={handleExportApproved}
-              disabled={exporting || exportingApproved || approvedSelectedIds.length === 0}
+              disabled={exporting || exportingApproved || exportingUnified || approvedSelectedIds.length === 0}
               title={approvedSelectedIds.length === 0 ? 'Среди выбранных нет утверждённых табелей за этот период' : undefined}
             >
               <CheckCircle size={16} />
@@ -471,6 +508,17 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
             </button>
           </>
         )}
+        <button
+          className="mte-export-btn mte-export-btn--secondary"
+          onClick={handleExportUnified}
+          disabled={exporting || exportingApproved || exportingUnified || checkedIds.size === 0}
+          title="Один Excel-файл по выбранным отделам, с разбивкой по объектам и колонками «Отдел» и «Адрес объекта»"
+        >
+          <Download size={16} />
+          {exportingUnified
+            ? 'Сборка единого файла…'
+            : `Единый файл для 1С (${checkedIds.size})`}
+        </button>
       </div>
     </>
   );

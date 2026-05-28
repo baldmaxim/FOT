@@ -198,6 +198,13 @@ router.post(
   timesheetController.exportMass
 );
 
+// POST /api/timesheet/export-mass-unified — единый Excel-файл для 1С по выбранным отделам.
+router.post(
+  '/export-mass-unified',
+  requirePageAccess('/timesheet-hr', 'view'),
+  timesheetController.exportMassUnified
+);
+
 // POST /api/timesheet/export-assigned
 router.post(
   '/export-assigned',

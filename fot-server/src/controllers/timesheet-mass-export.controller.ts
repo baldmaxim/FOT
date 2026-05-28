@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import {
   fetchTimesheetDataForDepartment,
+  type IDepartmentTimesheetData,
   type TimesheetExportGrouping,
   type TimesheetExportHalf,
   type TimesheetExportPresentation,
@@ -19,6 +20,7 @@ import {
   sanitizeSheetName,
   writeTimesheetWorkbookBuffer,
 } from '../services/timesheet-excel.service.js';
+import { buildUnified1CWorkbook } from '../services/timesheet-1c-unified.service.js';
 import { isDepartmentMonthAllowed, monthAccessFromUser, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -183,6 +185,90 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
     console.error('timesheet.exportMass error:', err);
     if (!res.headersSent) {
       res.status(500).json({ success: false, error: 'Ошибка массового экспорта' });
+    }
+  }
+}
+
+/** POST /api/timesheet/export-mass-unified  body: { month, department_ids, half?|from?/to? } */
+export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res: Response) {
+  try {
+    const { month, department_ids, half, from, to } = req.body;
+
+    if (!month || typeof month !== 'string') {
+      return res.status(400).json({ success: false, error: 'Параметр month обязателен' });
+    }
+    if (!Array.isArray(department_ids) || department_ids.length === 0) {
+      return res.status(400).json({ success: false, error: 'Нужно выбрать хотя бы один отдел' });
+    }
+    const scope = await resolveRequestDataScope(req);
+    if (!scope || scope === 'self') {
+      return res.status(403).json({ success: false, error: 'Недостаточно прав для массового экспорта табелей' });
+    }
+    const requestedDepartmentIds = [...new Set(
+      department_ids
+        .map((value: unknown) => typeof value === 'string' ? value : null)
+        .filter((value): value is string => Boolean(value)),
+    )];
+    const scopedDepartmentIds = await resolveScopedDepartmentIds(req, requestedDepartmentIds);
+    if (scope === 'department' && scopedDepartmentIds.length !== requestedDepartmentIds.length) {
+      return res.status(403).json({ success: false, error: 'В массовый экспорт можно включать только назначенные бригады' });
+    }
+    if (scopedDepartmentIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'Нужно выбрать хотя бы один отдел' });
+    }
+
+    const [yearStr, monthStr] = month.split('-');
+    const year = parseInt(yearStr);
+    const mon = parseInt(monthStr);
+    if (scope === 'department' && Number.isFinite(year) && Number.isFinite(mon) && !isDepartmentMonthAllowed(year, mon, monthAccessFromUser(req.user))) {
+      return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
+    }
+    const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+    const hasRange = typeof from === 'string' && typeof to === 'string'
+      && isoDate.test(from) && isoDate.test(to) && to >= from;
+    const exportHalf: TimesheetExportHalf = half === 'H1' || half === 'H2' || half === 'FULL'
+      ? half
+      : 'FULL';
+    const rangeArg: TimesheetExportRangeArg = hasRange
+      ? { startDate: from as string, endDate: to as string }
+      : exportHalf;
+    const daysInMonth = new Date(year, mon, 0).getDate();
+    let segmentSuffix = '';
+    if (hasRange) {
+      const sd = Number((from as string).slice(-2));
+      const ed = Number((to as string).slice(-2));
+      segmentSuffix = `_${sd}-${ed}`;
+    } else if (exportHalf !== 'FULL') {
+      segmentSuffix = `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
+    }
+
+    const CONCURRENCY = 5;
+    const collected: IDepartmentTimesheetData[] = [];
+    for (let i = 0; i < scopedDepartmentIds.length; i += CONCURRENCY) {
+      const batch = scopedDepartmentIds.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map((deptId: string) => fetchTimesheetDataForDepartment(
+          month, deptId, rangeArg, 'actual', true,
+        )),
+      );
+      collected.push(...batchResults);
+    }
+
+    const workbook = await buildUnified1CWorkbook(mon, year, collected);
+    const buffer = await writeTimesheetWorkbookBuffer(workbook);
+
+    const fileName = `Единый_1С_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`
+      .replace(/[\/\\?%*:|"<>]/g, '_');
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.end(buffer);
+  } catch (err) {
+    console.error('timesheet.exportMassUnified error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: 'Ошибка единого экспорта для 1С' });
     }
   }
 }
