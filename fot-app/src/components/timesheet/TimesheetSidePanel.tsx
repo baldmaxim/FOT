@@ -200,7 +200,7 @@ export const TimesheetSidePanel: FC<ISidePanelProps> = ({
     if (entry.status === 'absent') return 'Неявка';
     if (entry.status === 'sick') return 'Б/л';
     if (entry.status === 'vacation') return 'Отпуск';
-    return formatHoursLabel(visibleHours);
+    return formatHoursLabel(visibleHours != null ? Math.round(visibleHours) : null);
   };
 
   const getTravelIssueLabel = (entry: TimesheetEntry): string => {

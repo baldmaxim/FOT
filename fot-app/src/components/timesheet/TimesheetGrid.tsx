@@ -182,12 +182,7 @@ const getDeviationCellClass = (deviation: number): string => {
   return 'ts-day--deviation-zero';
 };
 
-const formatCellHM = (decimal: number): string => {
-  const h = Math.floor(decimal);
-  const m = Math.round((decimal - h) * 60);
-  if (m === 0) return `${h}`;
-  return `${h}:${String(m).padStart(2, '0')}`;
-};
+const formatCellHM = (decimal: number): string => String(Math.round(decimal));
 
 const getSectionLabel = (
   source: NonNullable<TimesheetEmployee['source']>,
@@ -268,7 +263,7 @@ const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string
 
   const parts: string[] = [];
   if (visibleHours != null) {
-    parts.push(`Часы: ${formatHoursLabel(visibleHours)}`);
+    parts.push(`Часы: ${formatHoursLabel(Math.round(visibleHours))}`);
   }
   if ((entry.status === 'work' || entry.status === 'manual') && entry.presence_covers_shift === false) {
     parts.push('Присутствие меньше длительности смены');
@@ -302,7 +297,7 @@ const getObjectCellTitle = (entry: TimesheetObjectEntry | null, objectName?: str
   if (!entry && !objectName) return undefined;
   const parts = [`Объект: ${objectName || entry?.object_name || UNASSIGNED_OBJECT_NAME}`];
   if (entry) {
-    parts.push(`Часы: ${formatHoursLabel(getObjectVisibleHours(entry))}`);
+    parts.push(`Часы: ${formatHoursLabel(Math.round(getObjectVisibleHours(entry)))}`);
     if (entry.is_correction) {
       parts.push('Есть корректировка по объекту');
     }
@@ -1000,14 +995,19 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         Исключён {formatBadgeDate(row.employee.excluded_from_timesheet_date)}
                       </span>
                     )}
-                    {stat && (
-                      <span
-                        className={`ts-mobile-deviation ${getDeviationCellClass(stat.deviation_hours)}`}
-                        title={`План ${formatHoursLabel(stat.norm_hours)}, факт ${formatHoursLabel(stat.fact_hours)}`}
-                      >
-                        {formatDeviationHours(stat.deviation_hours)}
-                      </span>
-                    )}
+                    {stat && (() => {
+                      const normR = Math.round(stat.norm_hours);
+                      const factR = Math.round(stat.fact_hours);
+                      const devR = normR - factR;
+                      return (
+                        <span
+                          className={`ts-mobile-deviation ${getDeviationCellClass(devR)}`}
+                          title={`План ${formatHoursLabel(normR)}, факт ${formatHoursLabel(factR)}`}
+                        >
+                          {formatDeviationHours(devR)}
+                        </span>
+                      );
+                    })()}
                     <button
                       type="button"
                       className="ts-mobile-chip-btn"
@@ -1414,12 +1414,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       if (!stat) {
                         return <td className="ts-col-deviation-sticky ts-day--deviation-zero">—</td>;
                       }
-                      const dev = stat.deviation_hours;
-                      const cls = getDeviationCellClass(dev);
-                      const tip = `План ${formatHoursLabel(stat.norm_hours)}, факт ${formatHoursLabel(stat.fact_hours)}`;
+                      const normR = Math.round(stat.norm_hours);
+                      const factR = Math.round(stat.fact_hours);
+                      const devR = normR - factR;
+                      const cls = getDeviationCellClass(devR);
+                      const tip = `План ${formatHoursLabel(normR)}, факт ${formatHoursLabel(factR)}`;
                       return (
                         <td className={`ts-col-deviation-sticky ${cls}`} title={tip}>
-                          {formatDeviationHours(dev)}
+                          {formatDeviationHours(devR)}
                         </td>
                       );
                     })()}

@@ -275,7 +275,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
               ? REQUEST_TYPE_TO_DS[reqInfo.request_type] ?? null
               : null;
           const effectiveDs = absenceOverrideDs ?? cell.ds;
-          const visibleHours = selectVisibleHours(cell.entry, showActualHours);
+          const visibleHours = selectVisibleHours(cell.entry, true);
           const cellCls = [
             styles.cell,
             cell.isToday ? styles.cellToday : '',
