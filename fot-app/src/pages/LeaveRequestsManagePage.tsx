@@ -26,6 +26,7 @@ import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
 import { formatLeaveRequestDatesCompact } from '../utils/leaveRequestDates';
 import { displayFileName } from '../utils/fileNameDisplay';
+import { formatFioShort } from '../utils/formatFio';
 import './LeaveRequestsManagePage.css';
 
 const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
@@ -230,9 +231,18 @@ export const LeaveRequestsManagePage: FC = () => {
                 </div>
               )}
             </div>
-            <span className="lrm-status" style={{ color: STATUS_COLORS[r.status] }}>
-              <Icon size={14} /> <strong>{STATUS_LABELS[r.status]}</strong>
-            </span>
+            <div className="lrm-status-wrap">
+              <span className="lrm-status" style={{ color: STATUS_COLORS[r.status] }}>
+                <Icon size={14} /> <strong>{STATUS_LABELS[r.status]}</strong>
+              </span>
+              {(r.status === 'approved' || r.status === 'rejected') && (r.reviewer || r.reviewed_at) && (
+                <div className="lrm-status-meta">
+                  {formatFioShort(r.reviewer?.full_name)}
+                  {r.reviewer?.full_name && r.reviewed_at ? ' · ' : ''}
+                  {r.reviewed_at ? formatDate(r.reviewed_at) : ''}
+                </div>
+              )}
+            </div>
           </div>
           {awaitingAdmin && (
             <div className="lrm-card-pending-admin" style={{ color: '#f59e0b' }}>
@@ -296,13 +306,13 @@ export const LeaveRequestsManagePage: FC = () => {
                     className="lrm-action-btn approve"
                     onClick={(e) => { e.stopPropagation(); handleApprove(r.id); }}
                   >
-                    <Check size={14} /> Одобрить
+                    <Check size={14} /> Согласовать
                   </button>
                   <button
                     className="lrm-action-btn reject"
                     onClick={(e) => { e.stopPropagation(); handleReject(r.id); }}
                   >
-                    <X size={14} /> Отклонить
+                    <X size={14} /> Не согласовать
                   </button>
                 </div>
               </div>
@@ -312,13 +322,13 @@ export const LeaveRequestsManagePage: FC = () => {
                   className="lrm-action-btn approve"
                   onClick={(e) => { e.stopPropagation(); handleApprove(r.id); }}
                 >
-                  <Check size={14} /> Одобрить
+                  <Check size={14} /> Согласовать
                 </button>
                 <button
                   className="lrm-action-btn reject"
                   onClick={(e) => { e.stopPropagation(); setCommentId(r.id); }}
                 >
-                  <X size={14} /> Отклонить
+                  <X size={14} /> Не согласовать
                 </button>
               </div>
             )}

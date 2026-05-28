@@ -124,6 +124,18 @@ async function loadEmployeeMeta(employeeIds: number[]): Promise<Map<number, IEmp
   return new Map(rows.map(r => [r.id, r]));
 }
 
+/** ФИО рецензентов (user_profiles) по reviewer_id для list-эндпоинтов. */
+async function loadReviewerProfiles(
+  reviewerIds: string[],
+): Promise<Map<string, { id: string; full_name: string | null }>> {
+  if (reviewerIds.length === 0) return new Map();
+  const rows = await query<{ id: string; full_name: string | null }>(
+    `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+    [reviewerIds],
+  );
+  return new Map(rows.map(r => [r.id, r]));
+}
+
 async function loadAttachmentsByLeaveRequestIds(
   requestIds: number[],
 ): Promise<Map<number, Array<{ id: number; file_name: string; mime_type: string | null; file_size: number | null }>>> {
@@ -368,9 +380,12 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
+    const reviewerIds = [...new Set(data.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
+    const reviewerMap = await loadReviewerProfiles(reviewerIds);
     const enriched = data.map(r => ({
       ...r,
       correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
+      reviewer: r.reviewer_id ? (reviewerMap.get(String(r.reviewer_id)) ?? null) : null,
     }));
     res.json({ success: true, data: enriched });
   } catch (err) {
@@ -414,6 +429,8 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
+    const reviewerIds = [...new Set(data.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
+    const reviewerMap = await loadReviewerProfiles(reviewerIds);
     const directOnlySet = new Set(directOnlyIds);
 
     const enriched = data.map(r => {
@@ -426,6 +443,7 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
         is_direct_subordinate: directOnlySet.has(Number(r.employee_id)),
         attachments: attachmentsMap.get(Number(r.id)) ?? [],
         correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
+        reviewer: r.reviewer_id ? (reviewerMap.get(String(r.reviewer_id)) ?? null) : null,
       };
     });
     res.json({ success: true, data: enriched });
@@ -494,6 +512,8 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
+    const reviewerIds = [...new Set(data.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
+    const reviewerMap = await loadReviewerProfiles(reviewerIds);
 
     const enriched = data.map(r => {
       const meta = metaMap.get(r.employee_id);
@@ -505,6 +525,7 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         is_direct_subordinate: directOnlySet.has(Number(r.employee_id)),
         attachments: attachmentsMap.get(Number(r.id)) ?? [],
         correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
+        reviewer: r.reviewer_id ? (reviewerMap.get(String(r.reviewer_id)) ?? null) : null,
       };
     });
     res.json({ success: true, data: enriched });

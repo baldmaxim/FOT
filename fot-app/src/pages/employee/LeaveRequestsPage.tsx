@@ -12,6 +12,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
 import { formatLeaveRequestDatesCompact } from '../../utils/leaveRequestDates';
+import { formatFioShort } from '../../utils/formatFio';
 import './LeaveRequestsPage.css';
 
 const UnifiedRequestModal = lazy(() =>
@@ -158,9 +159,18 @@ export const LeaveRequestsPage: FC = () => {
                   {r.review_comment && <div className="lr-card-comment">Комментарий: {r.review_comment}</div>}
                 </div>
                 <div className="lr-card-right">
-                  <span className="lr-status" style={{ color: STATUS_COLORS[r.status] }}>
-                    <Icon size={16} /> {STATUS_LABELS[r.status]}
-                  </span>
+                  <div className="lr-status-wrap">
+                    <span className="lr-status" style={{ color: STATUS_COLORS[r.status] }}>
+                      <Icon size={16} /> {STATUS_LABELS[r.status]}
+                    </span>
+                    {(r.status === 'approved' || r.status === 'rejected') && (r.reviewer || r.reviewed_at) && (
+                      <div className="lr-status-meta">
+                        {formatFioShort(r.reviewer?.full_name)}
+                        {r.reviewer?.full_name && r.reviewed_at ? ' · ' : ''}
+                        {r.reviewed_at ? formatDate(r.reviewed_at) : ''}
+                      </div>
+                    )}
+                  </div>
                   {canCancel && (
                     <button className="btn-secondary lr-cancel-btn" onClick={() => handleCancel(r.id, r.status)}>Отменить</button>
                   )}

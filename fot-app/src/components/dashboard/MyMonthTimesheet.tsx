@@ -339,7 +339,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
         <span><i className={`${styles.dot} ${styles.cellPreHoliday}`}/>Сокращённый день</span>
         <span><i className={`${styles.dot} ${styles.cellAbsent}`}/>Неявка</span>
         <span><i className={`${styles.dotReq} ${styles.reqPending}`}/>Заявка на рассмотрении</span>
-        <span><i className={`${styles.dotReq} ${styles.reqApproved}`}/>Одобрено</span>
+        <span><i className={`${styles.dotReq} ${styles.reqApproved}`}/>Согласовано</span>
         <span><i className={`${styles.dotReq} ${styles.reqRejected}`}/>Отклонено</span>
       </div>
     </div>

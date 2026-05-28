@@ -65,7 +65,7 @@ export const REQUEST_TYPE_LABELS: Record<string, string> = {
 
 export const STATUS_LABELS: Record<LeaveRequestStatus, string> = {
   pending: 'На рассмотрении',
-  approved: 'Одобрено',
+  approved: 'Согласовано',
   rejected: 'Отклонено',
   cancelled: 'Отменено',
 };
