@@ -7,6 +7,7 @@ import { hasPageView } from '../services/access-control.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 import { trimWhiteBorders } from '../services/image-trim.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 
 interface MulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
@@ -145,11 +146,7 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
     let buffer = file.buffer;
     let mimeType = file.mimetype || 'application/octet-stream';
     let fileSize = file.size;
-    // Browser отправляет filename в multipart как UTF-8 байты, а multer/busboy
-    // декодирует их как latin1 → кириллица превращается в иероглифы
-    // (Ð_Ð_ÑеÐ¿Ð°Ñ...). Конвертируем обратно к UTF-8.
-    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
-    const safeFileName = sanitizeFileName(originalName);
+    const safeFileName = sanitizeFileName(decodeMulterFilename(file.originalname));
 
     if (category === 'patent_check') {
       const trimmed = await trimWhiteBorders(buffer, mimeType);

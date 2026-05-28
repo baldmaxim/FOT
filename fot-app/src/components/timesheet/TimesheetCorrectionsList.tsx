@@ -269,7 +269,7 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
                             <CorrectionAttachments
                               adjustmentId={row.id}
                               variant="popover"
-                              canEdit={row.can_edit}
+                              canEdit={false}
                             />
                           </div>
                         )}
@@ -331,6 +331,7 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
           initialStatus={editingRow.status}
           initialHours={editingRow.hours_override}
           initialNotes={editingRow.reason ?? ''}
+          initialMode="edit"
           correctionInfo={{
             is_correction: true,
             corrected_at: editingRow.updated_at,

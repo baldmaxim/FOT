@@ -74,6 +74,7 @@ import {
   listDirectSubordinates,
 } from '../services/employee-direct-reports.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import path from 'path';
 import { randomUUID } from 'crypto';
 
@@ -1516,7 +1517,7 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
 
     const file = req.file;
     const mimeType = file.mimetype || 'application/octet-stream';
-    const safeFileName = sanitizeFileName(file.originalname);
+    const safeFileName = sanitizeFileName(decodeMulterFilename(file.originalname));
     const ext = path.extname(safeFileName) || '.bin';
     const r2Key = `documents/timesheet-approvals/${draft.id}/${randomUUID()}${ext}`;
 

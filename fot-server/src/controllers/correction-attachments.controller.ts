@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import { canAccessEmployeeInScope } from '../services/data-scope.service.js';
 import { r2Service } from '../services/r2.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   createCorrectionAttachment,
@@ -114,9 +115,7 @@ const upload = async (req: MulterRequest, res: Response): Promise<void> => {
       return;
     }
 
-    // Браузер кодирует filename в multipart как UTF-8 байты, multer декодирует latin1.
-    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
-    const safeFileName = sanitizeFileName(originalName);
+    const safeFileName = sanitizeFileName(decodeMulterFilename(file.originalname));
 
     const r2Key = r2Service.generateKey(adj.employee_id, safeFileName);
     await r2Service.uploadObject(r2Key, file.buffer, mimeType);

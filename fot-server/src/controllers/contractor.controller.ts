@@ -19,6 +19,7 @@ import {
   listOrgDocuments,
   uploadOrgDocument,
 } from '../services/contractor-documents.service.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 
 interface IMulterRequest extends AuthenticatedRequest {
   file?: Express.Multer.File;
@@ -601,7 +602,7 @@ export const contractorController = {
       }
       const doc = await uploadOrgDocument({
         orgId,
-        fileName: req.file.originalname,
+        fileName: decodeMulterFilename(req.file.originalname),
         buffer: req.file.buffer,
         mimeType: req.file.mimetype || 'application/octet-stream',
         uploadedBy: req.user.id,

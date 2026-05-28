@@ -139,7 +139,7 @@ export const CorrectionAttachments: FC<IProps> = ({ adjustmentId, variant, canEd
         </ul>
       )}
 
-      {canEdit && (
+      {canEdit && variant !== 'popover' && (
         <div className="ts-corr-attachments__upload">
           <input
             ref={fileInputRef}

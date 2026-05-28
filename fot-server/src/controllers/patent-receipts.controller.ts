@@ -6,6 +6,7 @@ import { r2Service } from '../services/r2.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 import { trimWhiteBorders } from '../services/image-trim.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import type { PatentPaymentReceiptPatch } from '../types/patent-receipt.types.js';
 import { isAllowedOpenRouterModel } from '../services/settings.service.js';
 import {
@@ -456,7 +457,7 @@ const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
     let buffer = file.buffer;
     let mimeType = file.mimetype || 'application/octet-stream';
     let fileSize = file.size;
-    const safeFileName = sanitizeFileName(file.originalname);
+    const safeFileName = sanitizeFileName(decodeMulterFilename(file.originalname));
 
     const trimmed = await trimWhiteBorders(buffer, mimeType);
     buffer = trimmed.buffer;
