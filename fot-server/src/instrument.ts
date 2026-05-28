@@ -2,7 +2,6 @@
 // до любых import express/http/socket.io. Sentry для Node использует
 // OpenTelemetry-инструментирование, патчит модули при загрузке.
 import * as Sentry from '@sentry/node';
-import { nodeProfilingIntegration } from '@sentry/profiling-node';
 
 const dsn = process.env.SENTRY_DSN;
 
@@ -37,9 +36,8 @@ if (dsn) {
     dsn,
     environment: process.env.NODE_ENV ?? 'development',
     release: process.env.SENTRY_RELEASE,
-    integrations: [nodeProfilingIntegration()],
+    integrations: [],
     tracesSampleRate: 0.1,
-    profilesSampleRate: 0.1,
     sendDefaultPii: false,
     beforeSend(event) {
       // Defense-in-depth: CORS-отказ чужого Origin — это ожидаемое

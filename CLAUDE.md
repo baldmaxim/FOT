@@ -116,7 +116,7 @@ cd fot-data-api && uvicorn app.main:app --reload --port 4001
 
 ## Observability
 
-- **Sentry бэк** (`fot-server/src/instrument.ts`) — импорт первой строкой `index.ts`, profiling включён, `tracesSampleRate` 0.1. Глобальные `unhandledRejection`/`uncaughtException` ловят в Sentry, процесс не падает (PM2 решит сам).
+- **Sentry бэк** (`fot-server/src/instrument.ts`) — импорт первой строкой `index.ts`, profiling отключён (платная фича сверх free-тарифа), `tracesSampleRate` 0.1. Глобальные `unhandledRejection`/`uncaughtException` ловят в Sentry, процесс не падает (PM2 решит сам).
 - **Sentry фронт** — `Sentry.ErrorBoundary` оборачивает приложение, `api/client.ts` шлёт 5xx в Sentry. Ошибки stale-чанков игнорируются (`ignoreErrors`).
 - **Логирование** — `console.log` / `console.error`, без pino/winston.
 - **Sentry MCP** доступен в Claude Code: стеки и события читать через `mcp__sentry__*`, не просить пользователя копировать.
