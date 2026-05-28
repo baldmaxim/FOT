@@ -1,4 +1,4 @@
-import { execute, query, queryOne } from '../config/postgres.js';
+import { query, queryOne } from '../config/postgres.js';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
 import { getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
@@ -1023,15 +1023,17 @@ export async function deleteAttendanceAdjustmentBySource(input: {
   work_date: string;
   source_type: string;
   source_id: string;
-}): Promise<void> {
-  await execute(
+}): Promise<number[]> {
+  const rows = await query<{ id: number | string }>(
     `DELETE FROM attendance_adjustments
        WHERE employee_id = $1
          AND work_date = $2
          AND source_type = $3
-         AND source_id = $4`,
+         AND source_id = $4
+     RETURNING id`,
     [input.employee_id, input.work_date, input.source_type, input.source_id],
   );
+  return rows.map(row => Number(row.id));
 }
 
 export async function getAttendanceAdjustmentById(id: number): Promise<Record<string, unknown> | null> {

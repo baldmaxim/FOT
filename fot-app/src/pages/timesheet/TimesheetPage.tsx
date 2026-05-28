@@ -2056,14 +2056,29 @@ export const TimesheetPage: FC = () => {
             deleteLabel={modalMode === 'object' ? 'Снять корректировку' : undefined}
             timesheetEntry={modalEntry}
             maxHours={modalMaxHours}
-            correctionInfo={modalEntry?.is_correction ? {
-              is_correction: true,
-              corrected_at: modalEntry.corrected_at,
-              corrected_by_name: modalEntry.corrected_by_name,
-              approved_at: modalEntry.approved_at,
-              approved_by_name: modalEntry.approved_by_name,
-            } : null}
-            dayStatusContext={modalMode === 'day' && modalEmployee && modalDay ? (() => {
+            correctionInfo={
+              modalMode === 'object' && modalObjectEntry?.adjustment_id
+                ? {
+                    is_correction: true,
+                    corrected_at: modalEntry?.corrected_at ?? null,
+                    corrected_by_name: modalEntry?.corrected_by_name ?? null,
+                    approved_at: modalEntry?.approved_at ?? null,
+                    approved_by_name: modalEntry?.approved_by_name ?? null,
+                    adjustment_id: modalObjectEntry.adjustment_id,
+                  }
+                : modalEntry?.is_correction
+                  ? {
+                      is_correction: true,
+                      corrected_at: modalEntry.corrected_at,
+                      corrected_by_name: modalEntry.corrected_by_name,
+                      approved_at: modalEntry.approved_at,
+                      approved_by_name: modalEntry.approved_by_name,
+                      adjustment_id: modalEntry.id,
+                    }
+                  : null
+            }
+            preselectedObjectKey={modalMode === 'object' ? modalObjectTarget?.object_key ?? null : null}
+            dayStatusContext={modalEmployee && modalDay ? (() => {
               const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
               return {
                 isScheduledDayOff: isScheduleDayOff(sched, calendar, year, month, modalDay),
@@ -2072,21 +2087,21 @@ export const TimesheetPage: FC = () => {
                 showActualHours,
               };
             })() : undefined}
-            objectEntries={modalMode === 'day' && modalEmployee
+            objectEntries={modalEmployee
               ? (objectEntriesByEmployeeDate.get(modalEmployee.id)?.get(modalWorkDate) ?? [])
               : undefined}
-            plannedHours={modalMode === 'day' && modalEmployee
+            plannedHours={modalEmployee
               ? getWorkHoursForDay(
                   getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay),
                   year, month, modalDay,
                 )
               : null}
             hasDayLevelCorrection={Boolean(
-              modalMode === 'day' && modalEntry?.is_correction && modalEntry?.id != null && !modalEntry?.has_object_adjustments,
+              modalEntry?.is_correction && modalEntry?.id != null && !modalEntry?.has_object_adjustments,
             )}
-            onSaveObject={modalMode === 'day' ? handleSaveObjectByTarget : undefined}
-            onDeleteObject={modalMode === 'day' ? handleDeleteObjectByTarget : undefined}
-            onZeroOutDay={modalMode === 'day' ? (notes) => handleSaveCorrection('work', 0, notes) : undefined}
+            onSaveObject={handleSaveObjectByTarget}
+            onDeleteObject={handleDeleteObjectByTarget}
+            onZeroOutDay={(notes) => handleSaveCorrection('work', 0, notes)}
           />
         </Suspense>
       )}

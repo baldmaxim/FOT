@@ -5,6 +5,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
+import { CorrectionAttachments } from './CorrectionAttachments';
 import {
   buildDisplayItems,
   calculateWorkSeconds,
@@ -50,7 +52,11 @@ interface ICorrectionModalProps {
     corrected_by_name?: string | null;
     approved_at?: string | null;
     approved_by_name?: string | null;
+    approval_comment?: string | null;
+    adjustment_id?: number | null;
   } | null;
+  // Открытие из «По объектам» — какой объект подсветить/раскрыть справа.
+  preselectedObjectKey?: string | null;
   // Контекст дня для рендера чипа со статусом в шапке. Если не передан — чип не рисуется.
   // Прокидывает родитель: те же значения, что считают TimesheetGrid и TimesheetSidePanel
   // через scheduleUtils, чтобы цвет/подпись совпадали с табелем и боковой панелью.
@@ -304,6 +310,8 @@ const CorrectionTab: FC<{
     corrected_by_name?: string | null;
     approved_at?: string | null;
     approved_by_name?: string | null;
+    approval_comment?: string | null;
+    adjustment_id?: number | null;
   } | null;
 }> = ({
   onClose,
@@ -540,6 +548,8 @@ interface IObjectCorrectionsListProps {
   // Когда day-level корректировки нет, но у дня есть объектные СКУД-записи —
   // даём явный путь «не работал»: создаёт day-level 0ч (бэк снимет manual_object).
   onZeroOutDay?: (notes: string) => void;
+  // Открытие из «По объектам» — этот ключ всегда раскрыт по умолчанию.
+  preselectedObjectKey?: string | null;
 }
 
 const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
@@ -551,6 +561,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   onSaveObject,
   onDeleteObject,
   onZeroOutDay,
+  preselectedObjectKey,
 }) => {
   const [zeroOutOpen, setZeroOutOpen] = useState(false);
   const [zeroOutNotes, setZeroOutNotes] = useState('');
@@ -573,11 +584,13 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   // Уже внесённые корректировки по умолчанию показываются сводкой (read-only),
   // редактор раскрывается по клику «Изменить». Для строк без корректировки
   // (новый объект) форма открыта сразу — иначе не понятно как туда внести часы.
+  // preselectedObjectKey (из «По объектам») раскрывается всегда.
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     for (const e of objectEntries) {
       if (!(e.is_correction && e.adjustment_id != null)) initial.add(e.object_key);
     }
+    if (preselectedObjectKey) initial.add(preselectedObjectKey);
     return initial;
   });
   useEffect(() => {
@@ -590,9 +603,10 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
         if (prev.has(e.object_key)) next.add(e.object_key);
         else if (!hasExisting) next.add(e.object_key);
       }
+      if (preselectedObjectKey) next.add(preselectedObjectKey);
       return next;
     });
-  }, [objectEntries]);
+  }, [objectEntries, preselectedObjectKey]);
   const toggleExpanded = (key: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
@@ -941,6 +955,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   onSaveObject,
   onDeleteObject,
   onZeroOutDay,
+  preselectedObjectKey,
 }) => {
   const hasObjectsBlock = Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
   const dayHasObjectAdjustments = hasObjectsBlock && objectEntries!.some(entry => entry.is_correction && entry.adjustment_id != null);
@@ -1007,12 +1022,68 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
     );
   }
 
+  // Двухколоночный layout: и СКУД, и корректировка одновременно (когда есть данные).
+  // На <1024 CSS схлопывает grid в одну колонку и табы возвращаются.
+  const useTwoColumnLayout = Boolean(showEventsTab && showCorrectionTab && employeeId && workDate);
+  const adjustmentId = correctionInfo?.adjustment_id ?? null;
+  const attachmentsCanEdit = Boolean(correctionInfo?.is_correction && adjustmentId);
+
+  const correctionPanel = showCorrectionTab ? (
+    <>
+      {!hasObjectsBlock && (
+        <CorrectionTab
+          onClose={onClose}
+          onSave={wrappedOnSave}
+          onDelete={onDelete}
+          initialStatus={initialStatus}
+          initialHours={initialHours ?? 8}
+          initialNotes={initialNotes}
+          confirmLabel={confirmLabel}
+          deleteLabel={deleteLabel}
+          allowedStatuses={allowedStatuses}
+          maxHours={maxHours}
+          correctionInfo={correctionInfo}
+        />
+      )}
+      {hasObjectsBlock && (
+        <ObjectCorrectionsList
+          objectEntries={objectEntries!}
+          hasDayLevelCorrection={!!hasDayLevelCorrection}
+          dayLevelSummary={hasDayLevelCorrection && timesheetEntry ? {
+            hours: Number(timesheetEntry.display_hours_worked ?? timesheetEntry.hours_worked ?? 0),
+            notes: timesheetEntry.notes ?? '',
+          } : null}
+          onDeleteDayLevel={hasDayLevelCorrection ? onDelete : undefined}
+          plannedHours={plannedHours ?? null}
+          onSaveObject={onSaveObject!}
+          onDeleteObject={onDeleteObject!}
+          onZeroOutDay={onZeroOutDay}
+          preselectedObjectKey={preselectedObjectKey}
+        />
+      )}
+      {adjustmentId && (
+        <div style={{ padding: useTwoColumnLayout ? '0' : '12px 20px 20px' }}>
+          <CorrectionAttachments
+            adjustmentId={adjustmentId}
+            variant="modal"
+            canEdit={attachmentsCanEdit}
+          />
+        </div>
+      )}
+    </>
+  ) : null;
+
   return (
-    <div className="ts-modal" onClick={e => e.stopPropagation()}>
+    <div className={`ts-modal${useTwoColumnLayout ? ' ts-modal--two-col' : ''}`} onClick={e => e.stopPropagation()}>
       <div className="ts-modal-header">
         <h3 className="ts-modal-title">
           {headerTitle}
           {statusChip}
+          <CorrectionApprovalBadge
+            approvedAt={correctionInfo?.approved_at ?? null}
+            approverName={correctionInfo?.approved_by_name ?? null}
+            approvalComment={correctionInfo?.approval_comment ?? null}
+          />
           {headerSubtitle && <div className="ts-modal-subtitle">{headerSubtitle}</div>}
         </h3>
         <button className="ts-panel-close" onClick={onClose}>
@@ -1020,19 +1091,12 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         </button>
       </div>
 
-      {correctionInfo?.is_correction && (correctionInfo.corrected_by_name || correctionInfo.corrected_at || correctionInfo.approved_at) && (
+      {correctionInfo?.is_correction && (correctionInfo.corrected_by_name || correctionInfo.corrected_at) && (
         <div className="ts-correction-info">
           <span className="ts-correction-info-icon">✎</span>
           {correctionInfo.corrected_by_name}
           {correctionInfo.corrected_by_name && correctionInfo.corrected_at && ', '}
           {correctionInfo.corrected_at && formatCorrectionDate(correctionInfo.corrected_at)}
-          {correctionInfo.approved_at && (
-            <>
-              {(correctionInfo.corrected_by_name || correctionInfo.corrected_at) && ' • '}
-              {`Согласовано: ${formatCorrectionDate(correctionInfo.approved_at)}`}
-              {correctionInfo.approved_by_name && ` (${correctionInfo.approved_by_name})`}
-            </>
-          )}
         </div>
       )}
 
@@ -1043,72 +1107,55 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         </div>
       )}
 
-      {showEventsTab && showCorrectionTab && (
-        <div className="ts-modal-tabs">
-          <button
-            className={`ts-modal-tab ${tab === 'events' ? 'ts-modal-tab--active' : ''}`}
-            onClick={() => setTab('events')}
-          >
-            События СКУД
-          </button>
-          <button
-            className={`ts-modal-tab ${tab === 'correction' ? 'ts-modal-tab--active' : ''}`}
-            onClick={() => setTab('correction')}
-          >
-            Корректировка
-          </button>
+      {useTwoColumnLayout ? (
+        <div className="ts-modal-body ts-modal-body--grid">
+          <div className="ts-corr-col ts-corr-col--left">
+            <EventsTab
+              employeeId={employeeId!}
+              workDate={workDate!}
+              allowAccessPointMap={allowAccessPointMap}
+              timesheetEntry={timesheetEntry}
+            />
+          </div>
+          <div className="ts-corr-col ts-corr-col--right">
+            {correctionPanel}
+          </div>
         </div>
-      )}
-
-      {tab === 'events' && showEventsTab && employeeId && workDate ? (
-        <div className="ts-modal-body">
-          <EventsTab
-            employeeId={employeeId}
-            workDate={workDate}
-            allowAccessPointMap={allowAccessPointMap}
-            timesheetEntry={timesheetEntry}
-          />
-        </div>
-      ) : tab === 'events' && showEventsTab ? (
-        <div className="ts-modal-body">
-          <div className="ts-modal-events-empty">Нет данных</div>
-        </div>
-      ) : showCorrectionTab ? (
+      ) : (
         <>
-          {/* При наличии объектов у дня day-level форма не нужна: корректировки
-              делаются per-object, иначе агрегат становится двусмысленным. */}
-          {!hasObjectsBlock && (
-            <CorrectionTab
-              onClose={onClose}
-              onSave={wrappedOnSave}
-              onDelete={onDelete}
-              initialStatus={initialStatus}
-              initialHours={initialHours ?? 8}
-              initialNotes={initialNotes}
-              confirmLabel={confirmLabel}
-              deleteLabel={deleteLabel}
-              allowedStatuses={allowedStatuses}
-              maxHours={maxHours}
-              correctionInfo={correctionInfo}
-            />
+          {showEventsTab && showCorrectionTab && (
+            <div className="ts-modal-tabs">
+              <button
+                className={`ts-modal-tab ${tab === 'events' ? 'ts-modal-tab--active' : ''}`}
+                onClick={() => setTab('events')}
+              >
+                События СКУД
+              </button>
+              <button
+                className={`ts-modal-tab ${tab === 'correction' ? 'ts-modal-tab--active' : ''}`}
+                onClick={() => setTab('correction')}
+              >
+                Корректировка
+              </button>
+            </div>
           )}
-          {hasObjectsBlock && (
-            <ObjectCorrectionsList
-              objectEntries={objectEntries!}
-              hasDayLevelCorrection={!!hasDayLevelCorrection}
-              dayLevelSummary={hasDayLevelCorrection && timesheetEntry ? {
-                hours: Number(timesheetEntry.display_hours_worked ?? timesheetEntry.hours_worked ?? 0),
-                notes: timesheetEntry.notes ?? '',
-              } : null}
-              onDeleteDayLevel={hasDayLevelCorrection ? onDelete : undefined}
-              plannedHours={plannedHours ?? null}
-              onSaveObject={onSaveObject!}
-              onDeleteObject={onDeleteObject!}
-              onZeroOutDay={onZeroOutDay}
-            />
-          )}
+
+          {tab === 'events' && showEventsTab && employeeId && workDate ? (
+            <div className="ts-modal-body">
+              <EventsTab
+                employeeId={employeeId}
+                workDate={workDate}
+                allowAccessPointMap={allowAccessPointMap}
+                timesheetEntry={timesheetEntry}
+              />
+            </div>
+          ) : tab === 'events' && showEventsTab ? (
+            <div className="ts-modal-body">
+              <div className="ts-modal-events-empty">Нет данных</div>
+            </div>
+          ) : correctionPanel}
         </>
-      ) : null}
+      )}
     </div>
   );
 };

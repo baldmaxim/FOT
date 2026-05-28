@@ -703,7 +703,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
           hours_override: hoursOverride,
           source_type: 'leave_request',
           source_id: String(request.id),
-          reason: `Approved leave request: ${request.request_type}`,
+          reason: request.reason ?? null,
           created_by: authorUserId,
           ...(approvalStatus ? { approval_status: approvalStatus } : {}),
         });
@@ -729,7 +729,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         hours_override: request.correction_hours ?? null,
         source_type: 'leave_request',
         source_id: `${request.id}:time_correction`,
-        reason: request.reason || 'Approved time correction request',
+        reason: request.reason ?? null,
         created_by: authorUserId,
         approval_status: approvalStatus,
       });

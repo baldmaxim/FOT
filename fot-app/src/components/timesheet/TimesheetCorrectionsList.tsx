@@ -1,10 +1,12 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Lock, Pencil, Trash2, Plus } from 'lucide-react';
+import { Lock, Pencil, Trash2, Plus, Paperclip } from 'lucide-react';
 import { timesheetService, type ITimesheetCorrectionRow } from '../../services/timesheetService';
 import type { TimesheetStatus, TimesheetEmployee } from '../../types';
 import { TimesheetCorrectionModal } from './TimesheetCorrectionModal';
 import { TimesheetBulkCorrectionModal } from './TimesheetBulkCorrectionModal';
+import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
+import { CorrectionAttachments } from './CorrectionAttachments';
 import { generateDateRange } from '../../utils/calendarUtils';
 
 interface IProps {
@@ -46,6 +48,26 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
   const [filterEmployeeId, setFilterEmployeeId] = useState<string>('');
   const [editingRow, setEditingRow] = useState<ITimesheetCorrectionRow | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [attachmentsOpenForId, setAttachmentsOpenForId] = useState<number | null>(null);
+  const attachmentsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (attachmentsOpenForId == null) return;
+    const handleClick = (e: MouseEvent) => {
+      if (attachmentsRef.current && !attachmentsRef.current.contains(e.target as Node)) {
+        setAttachmentsOpenForId(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAttachmentsOpenForId(null);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [attachmentsOpenForId]);
 
   const invalidateAll = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
@@ -200,6 +222,7 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
                 <th>Часы</th>
                 <th>Автор</th>
                 <th>Комментарий</th>
+                <th aria-label="Согласовано"></th>
                 <th>Действия</th>
               </tr>
             </thead>
@@ -212,12 +235,46 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
                   <td>{formatHours(row.hours_override)}</td>
                   <td>{row.author_name ?? '—'}</td>
                   <td className="ts-corrections-reason">{row.reason ?? ''}</td>
+                  <td>
+                    <CorrectionApprovalBadge
+                      approvedAt={row.approved_at ?? null}
+                      approverName={row.approver_name ?? null}
+                      approvalComment={row.approval_comment ?? null}
+                    />
+                  </td>
                   <td className="ts-corrections-actions">
                     {row.approval_locked && (
                       <span className="ts-corrections-lock" title="Период заблокирован">
                         <Lock size={14} />
                       </span>
                     )}
+                    {(row.attachments_count ?? 0) > 0 || row.can_edit ? (
+                      <span className="ts-corrections-attach-cell">
+                        <button
+                          type="button"
+                          className="ts-corrections-btn ts-corrections-attach-btn"
+                          onClick={() => setAttachmentsOpenForId(
+                            attachmentsOpenForId === row.id ? null : row.id,
+                          )}
+                          title="Приложенные файлы"
+                          aria-label="Приложенные файлы"
+                        >
+                          <Paperclip size={14} />
+                          {(row.attachments_count ?? 0) > 0 && (
+                            <span className="ts-corrections-attach-btn__count">{row.attachments_count}</span>
+                          )}
+                        </button>
+                        {attachmentsOpenForId === row.id && (
+                          <div ref={attachmentsRef} className="ts-corrections-attach-popover">
+                            <CorrectionAttachments
+                              adjustmentId={row.id}
+                              variant="popover"
+                              canEdit={row.can_edit}
+                            />
+                          </div>
+                        )}
+                      </span>
+                    ) : null}
                     <button
                       type="button"
                       className="ts-corrections-btn"
@@ -280,6 +337,8 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
             corrected_by_name: editingRow.author_name,
             approved_at: editingRow.approved_at ?? null,
             approved_by_name: editingRow.approver_name ?? null,
+            approval_comment: editingRow.approval_comment ?? null,
+            adjustment_id: editingRow.id,
           }}
           onClose={() => setEditingRow(null)}
           onSave={(status, hours, notes) => {
