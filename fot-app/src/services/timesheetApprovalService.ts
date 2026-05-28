@@ -157,11 +157,14 @@ export interface ITimesheetDashboardDeptStatus {
   status: DepartmentSubmissionStatus;
 }
 
-/** Отдел полного доступного скоупа — источник для чекбоксов фильтра. */
+/** Отдел полного доступного скоупа — источник для дерева-пикера фильтра. */
 export interface ITimesheetDashboardScopeDept {
   department_id: string;
+  parent_id: string | null;
   name: string;
   parent_path: string;
+  /** false для корневых каталогов (уровень 1–2) — показываются в дереве, но не считаются. */
+  countable: boolean;
 }
 
 export interface ITimesheetDashboard {

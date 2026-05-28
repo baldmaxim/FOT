@@ -2108,7 +2108,22 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
     }
     const effSet: Set<string> | null = effectiveIsAll ? null : new Set(effectiveIds);
     const inEffective = (id: string | null): boolean => !effSet || (id != null && effSet.has(id));
-    const deptRows = fullScopeDeptRows.filter(d => inEffective(d.id));
+
+    // Корневые каталоги (уровень 1–2: «Объект» и компании/СМ) не считаются статистической
+    // единицей и не отбираются — учитываем только уровень ≥ 3. Глубину считаем по полному
+    // дереву org_departments (не по скоупу), чтобы у department-scoped пользователей не
+    // принять L3-отдел с обрезанным предком за корень.
+    const nonCountableRows = await query<{ id: string }>(
+      `WITH RECURSIVE t AS (
+         SELECT id, 1 AS lvl FROM org_departments WHERE parent_id IS NULL
+         UNION ALL
+         SELECT d.id, t.lvl + 1 FROM org_departments d JOIN t ON d.parent_id = t.id
+       )
+       SELECT id::text AS id FROM t WHERE lvl <= 2`,
+    );
+    const nonCountableSet = new Set(nonCountableRows.map(r => r.id));
+    const isCountable = (id: string): boolean => !nonCountableSet.has(id);
+    const deptRows = fullScopeDeptRows.filter(d => inEffective(d.id) && isCountable(d.id));
 
     // 2. Пул личных менеджеров (есть активные direct_reports). Нужен заранее — для фильтрации
     //    личных подач по эффективному скоупу (по org_department_id руководителя).
@@ -2169,7 +2184,7 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
 
     for (const a of approvals) {
       if (a.department_id) {
-        if (!inEffective(a.department_id)) continue;
+        if (!inEffective(a.department_id) || !isCountable(a.department_id)) continue;
         if (submittedStatuses.has(a.status)) departmentsSubmitted.add(a.department_id);
         if (approvedStatuses.has(a.status)) departmentsApproved.add(a.department_id);
         if (returnedStatuses.has(a.status)) departmentsReturned.add(a.department_id);
@@ -2348,12 +2363,15 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
         department_path: deptPath(r.department_id),
       }));
 
-    // 9. Список отделов полного скоупа — для чекбоксов пикера (не зависит от фильтра).
+    // 9. Список отделов полного скоупа — для дерева-пикера (не зависит от фильтра).
+    //    parent_id нужен фронту для построения дерева с каскадным выбором.
     const scope_departments = fullScopeDeptRows
       .map(d => ({
         department_id: d.id,
+        parent_id: d.parent_id,
         name: d.name ?? d.id,
         parent_path: deptPath(d.id),
+        countable: isCountable(d.id),
       }))
       .sort((a, b) => a.parent_path.localeCompare(b.parent_path, 'ru'));
 

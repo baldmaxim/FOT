@@ -1,7 +1,7 @@
 import { type FC, useMemo, useState, useCallback, useEffect } from 'react';
 import {
-  ChevronLeft, ChevronRight, AlertTriangle, CheckCircle2, Clock, Users, Building2,
-  SlidersHorizontal, X, RotateCcw, Circle, UserX, type LucideIcon,
+  ChevronLeft, ChevronRight, ChevronDown, AlertTriangle, CheckCircle2, Clock, Users, Building2,
+  SlidersHorizontal, X, RotateCcw, Circle, UserX, CheckSquare, MinusSquare, Square, type LucideIcon,
 } from 'lucide-react';
 import { getMonthLabel } from '../../utils/calendarUtils';
 import {
@@ -66,6 +66,109 @@ const saveStoredDeptFilter = (ids: string[] | undefined): void => {
 
 const includesQuery = (haystack: string, query: string): boolean =>
   haystack.toLowerCase().includes(query.trim().toLowerCase());
+
+interface IScopeTreeNode {
+  id: string;
+  name: string;
+  countable: boolean;
+  children: IScopeTreeNode[];
+}
+
+/** Дерево отделов из плоского scope_departments (по parent_id). Ветки без countable-узлов вырезаются. */
+const buildScopeTree = (depts: ITimesheetDashboardScopeDept[]): IScopeTreeNode[] => {
+  const byId = new Map<string, IScopeTreeNode>();
+  for (const d of depts) {
+    byId.set(d.department_id, { id: d.department_id, name: d.name, countable: d.countable, children: [] });
+  }
+  const roots: IScopeTreeNode[] = [];
+  for (const d of depts) {
+    const node = byId.get(d.department_id);
+    if (!node) continue;
+    const parent = d.parent_id ? byId.get(d.parent_id) : undefined;
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+  }
+  const sortRec = (nodes: IScopeTreeNode[]): void => {
+    nodes.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    nodes.forEach(n => sortRec(n.children));
+  };
+  sortRec(roots);
+  const prune = (nodes: IScopeTreeNode[]): IScopeTreeNode[] =>
+    nodes
+      .map(n => ({ ...n, children: prune(n.children) }))
+      .filter(n => n.countable || n.children.length > 0);
+  return prune(roots);
+};
+
+/** Countable-id поддерева (включая сам узел, если countable) — для каскада и tri-state. */
+const collectCountableIds = (node: IScopeTreeNode): string[] => {
+  const ids: string[] = [];
+  if (node.countable) ids.push(node.id);
+  for (const c of node.children) ids.push(...collectCountableIds(c));
+  return ids;
+};
+
+const filterScopeTree = (nodes: IScopeTreeNode[], query: string): IScopeTreeNode[] => {
+  if (!query) return nodes;
+  const res: IScopeTreeNode[] = [];
+  for (const n of nodes) {
+    const kids = filterScopeTree(n.children, query);
+    if (n.name.toLowerCase().includes(query) || kids.length > 0) res.push({ ...n, children: kids });
+  }
+  return res;
+};
+
+interface IScopeTreeNodeProps {
+  node: IScopeTreeNode;
+  checked: Set<string>;
+  onToggle: (ids: string[], checked: boolean) => void;
+  expanded: Set<string>;
+  onExpand: (id: string) => void;
+}
+
+const ScopeTreeNode: FC<IScopeTreeNodeProps> = ({ node, checked, onToggle, expanded, onExpand }) => {
+  const countableIds = useMemo(() => collectCountableIds(node), [node]);
+  const checkedCount = countableIds.reduce((acc, id) => acc + (checked.has(id) ? 1 : 0), 0);
+  const isAll = countableIds.length > 0 && checkedCount === countableIds.length;
+  const isPartial = checkedCount > 0 && !isAll;
+  const hasChildren = node.children.length > 0;
+  const isExpanded = expanded.has(node.id);
+  const active = isAll || isPartial;
+  const CheckIcon = isAll ? CheckSquare : isPartial ? MinusSquare : Square;
+  const handleCheck = () => { if (countableIds.length > 0) onToggle(countableIds, !isAll); };
+
+  return (
+    <div className="mte-tree-node">
+      <div className={`mte-tree-row ${active ? 'mte-tree-row--checked' : ''}`}>
+        {hasChildren ? (
+          <button type="button" className="mte-tree-expand" onClick={() => onExpand(node.id)}>
+            {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+        ) : (
+          <span className="mte-tree-expand mte-tree-expand--placeholder" />
+        )}
+        <button type="button" className="mte-tree-check" onClick={handleCheck} disabled={countableIds.length === 0}>
+          <CheckIcon size={18} className={active ? 'mte-check-active' : 'mte-check-inactive'} />
+        </button>
+        <span className="mte-tree-name" onClick={handleCheck}>{node.name}</span>
+      </div>
+      {hasChildren && isExpanded && (
+        <div className="mte-tree-children">
+          {node.children.map(c => (
+            <ScopeTreeNode
+              key={c.id}
+              node={c}
+              checked={checked}
+              onToggle={onToggle}
+              expanded={expanded}
+              onExpand={onExpand}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface IStatCardProps {
   label: string;
@@ -156,10 +259,18 @@ export const MassTimesheetExportDashboardTab: FC = () => {
     [registeredUnbound, searchUnbound],
   );
 
+  // Дерево отделов для пикера + список countable-id (только уровень ≥ 3 участвует в отборе).
+  const scopeTree = useMemo(() => buildScopeTree(scopeDepts), [scopeDepts]);
+  const countableIdList = useMemo(
+    () => scopeDepts.filter(d => d.countable).map(d => d.department_id),
+    [scopeDepts],
+  );
+
   // Модалка настроек фильтра.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modalSearch, setModalSearch] = useState('');
   const [draft, setDraft] = useState<Set<string>>(new Set());
+  const [expandedTree, setExpandedTree] = useState<Set<string>>(new Set());
 
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const overlayHandlers = useOverlayDismiss(closeSettings);
@@ -172,14 +283,22 @@ export const MassTimesheetExportDashboardTab: FC = () => {
   }, [settingsOpen]);
 
   const openSettings = useCallback(() => {
-    const all = scopeDepts.map(d => d.department_id);
-    setDraft(new Set(appliedDeptIds ?? all));
+    setDraft(new Set(appliedDeptIds ?? countableIdList));
+    setExpandedTree(new Set(scopeDepts.map(d => d.department_id)));
     setModalSearch('');
     setSettingsOpen(true);
-  }, [scopeDepts, appliedDeptIds]);
+  }, [appliedDeptIds, countableIdList, scopeDepts]);
 
-  const toggleDraft = useCallback((id: string) => {
+  const onTreeToggle = useCallback((ids: string[], checked: boolean) => {
     setDraft(prev => {
+      const next = new Set(prev);
+      for (const id of ids) { if (checked) next.add(id); else next.delete(id); }
+      return next;
+    });
+  }, []);
+
+  const toggleTreeExpand = useCallback((id: string) => {
+    setExpandedTree(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
@@ -187,21 +306,24 @@ export const MassTimesheetExportDashboardTab: FC = () => {
   }, []);
 
   const applySettings = useCallback(() => {
-    const all = scopeDepts.map(d => d.department_id);
-    const next = all.filter(id => draft.has(id));
-    const applied = next.length === all.length ? undefined : next;
+    const next = countableIdList.filter(id => draft.has(id));
+    const applied = next.length === countableIdList.length ? undefined : next;
     setAppliedDeptIds(applied);
     saveStoredDeptFilter(applied);
     setSettingsOpen(false);
-  }, [scopeDepts, draft]);
+  }, [countableIdList, draft]);
 
-  const modalDeptsShown = useMemo(
-    () => scopeDepts.filter(d => !modalSearch || includesQuery(`${d.name} ${d.parent_path}`, modalSearch)),
-    [scopeDepts, modalSearch],
+  const treeShown = useMemo(
+    () => filterScopeTree(scopeTree, modalSearch.trim().toLowerCase()),
+    [scopeTree, modalSearch],
+  );
+  const draftCountableCount = useMemo(
+    () => countableIdList.reduce((acc, id) => acc + (draft.has(id) ? 1 : 0), 0),
+    [countableIdList, draft],
   );
 
   const filterActive = appliedDeptIds !== undefined;
-  const selectedCount = appliedDeptIds?.length ?? scopeDepts.length;
+  const selectedCount = appliedDeptIds?.length ?? countableIdList.length;
 
   return (
     <div className="mte-dash">
@@ -402,24 +524,26 @@ export const MassTimesheetExportDashboardTab: FC = () => {
           Отделы без ответственного
           <span className="mte-dash__badge mte-dash__badge--bad">{unassignedDepts.length}</span>
         </h2>
-        <div className="mte-dash__hint mte-dash__hint--block">
-          Отделу не назначен ни ответственный за табель, ни привязанный руководитель — некому подавать табель.
+        <div className="mte-dash__list-block">
+          <div className="mte-dash__hint mte-dash__hint--block">
+            Отделу не назначен ни ответственный за табель, ни привязанный руководитель — некому подавать табель.
+          </div>
+          {unassignedDepts.length > SEARCH_THRESHOLD && (
+            <SearchInput value={searchUnassigned} onValueChange={setSearchUnassigned} placeholder="Поиск отдела…" />
+          )}
+          {unassignedDepts.length === 0 ? (
+            <div className="mte-dash__empty">У всех отделов есть ответственный или привязанный руководитель.</div>
+          ) : (
+            <ul className="mte-dash__rows mte-dash__rows--tall">
+              {unassignedShown.map(d => (
+                <li key={d.department_id} className="mte-dash__row">
+                  <div className="mte-dash__row-main">{d.parent_path || d.department_name}</div>
+                </li>
+              ))}
+              {unassignedShown.length === 0 && <li className="mte-dash__empty">Ничего не найдено.</li>}
+            </ul>
+          )}
         </div>
-        {unassignedDepts.length > SEARCH_THRESHOLD && (
-          <SearchInput value={searchUnassigned} onValueChange={setSearchUnassigned} placeholder="Поиск отдела…" />
-        )}
-        {unassignedDepts.length === 0 ? (
-          <div className="mte-dash__empty">У всех отделов есть ответственный или привязанный руководитель.</div>
-        ) : (
-          <ul className="mte-dash__rows mte-dash__rows--tall">
-            {unassignedShown.map(d => (
-              <li key={d.department_id} className="mte-dash__row">
-                <div className="mte-dash__row-main">{d.parent_path || d.department_name}</div>
-              </li>
-            ))}
-            {unassignedShown.length === 0 && <li className="mte-dash__empty">Ничего не найдено.</li>}
-          </ul>
-        )}
       </section>
 
       <section className="mte-dash__section">
@@ -526,7 +650,7 @@ export const MassTimesheetExportDashboardTab: FC = () => {
                 <button
                   type="button"
                   className="mte-dash__link-btn"
-                  onClick={() => setDraft(new Set(scopeDepts.map(d => d.department_id)))}
+                  onClick={() => setDraft(new Set(countableIdList))}
                 >
                   Выбрать все
                 </button>
@@ -539,22 +663,24 @@ export const MassTimesheetExportDashboardTab: FC = () => {
                 </button>
               </div>
             </div>
-            <div className="mte-dash__modal-list">
-              {modalDeptsShown.map(d => (
-                <label key={d.department_id} className="mte-dash__check-row">
-                  <input
-                    type="checkbox"
-                    checked={draft.has(d.department_id)}
-                    onChange={() => toggleDraft(d.department_id)}
-                  />
-                  <span className="mte-dash__check-box" aria-hidden="true" />
-                  <span className="mte-dash__check-label">{d.parent_path || d.name}</span>
-                </label>
+            <div className="mte-dash__modal-hint">
+              Корневые каталоги (компании, объект) не считаются — отметка по ним выбирает вложенные отделы.
+            </div>
+            <div className="mte-dash__modal-list mte-dash__modal-tree">
+              {treeShown.map(n => (
+                <ScopeTreeNode
+                  key={n.id}
+                  node={n}
+                  checked={draft}
+                  onToggle={onTreeToggle}
+                  expanded={expandedTree}
+                  onExpand={toggleTreeExpand}
+                />
               ))}
-              {modalDeptsShown.length === 0 && <div className="mte-dash__empty">Ничего не найдено.</div>}
+              {treeShown.length === 0 && <div className="mte-dash__empty">Ничего не найдено.</div>}
             </div>
             <div className="mte-dash__modal-foot">
-              <span className="mte-dash__modal-count">Выбрано {draft.size} из {scopeDepts.length}</span>
+              <span className="mte-dash__modal-count">Выбрано {draftCountableCount} из {countableIdList.length}</span>
               <button type="button" className="mte-dash__btn-primary" onClick={applySettings}>Применить</button>
             </div>
           </div>
