@@ -209,6 +209,52 @@ describe('attendance.service', () => {
     expect(result.objectEntries).toEqual([]);
   });
 
+  it('keeps the by-employees day at 0h when a work day is zeroed out (status=work, hours_override=0), ignoring skud hours', async () => {
+    mockedState.summaryRows = [{
+      employee_id: 1010,
+      date: '2026-05-17',
+      first_entry: '10:47:43',
+      last_exit: '11:50:08',
+      total_hours: 1.05,
+      total_minutes: 63,
+    }];
+
+    mockedState.adjustmentRows = [{
+      id: 3579,
+      employee_id: 1010,
+      work_date: '2026-05-17',
+      status: 'work',
+      hours_override: 0,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'не согласован рабочий день',
+      created_by: 'user-1',
+      created_at: '2026-05-18T06:08:42.890Z',
+      updated_at: '2026-05-23T11:21:41.972Z',
+      metadata: {},
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1010, full_name: 'Луис Дженс Жоаким Матиас' }],
+      startDate: '2026-05-17',
+      endDate: '2026-05-17',
+      dailySchedulesMap: new Map(),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-05-28',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: 3579,
+      employee_id: 1010,
+      work_date: '2026-05-17',
+      status: 'work',
+      hours_worked: 0,
+      display_hours_worked: 0,
+      is_correction: true,
+    });
+  });
+
   it('adds credited travel minutes (within limit) to summary hours and exposes delay metadata', async () => {
     mockedState.travelSummary = new Map([
       ['1_2026-04-01', {

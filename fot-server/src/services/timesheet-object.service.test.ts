@@ -386,4 +386,66 @@ describe('timesheet-object.service', () => {
     expect(result.objectEntries).toEqual([]);
     expect(result.legacyBlockedDays.size).toBe(0);
   });
+
+  it('clears same-day skud intervals when a work day is zeroed out (status=work, hours_override=0)', async () => {
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-05-17', event_time: '10:47:43', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-05-17', event_time: '11:50:08', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-05-17',
+      endDate: '2026-05-17',
+      todayStr: '2026-05-17',
+      adjustments: [
+        {
+          id: 3579,
+          employee_id: 1,
+          work_date: '2026-05-17',
+          hours_override: 0,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'work',
+          reason: 'не согласован рабочий день',
+          updated_at: '2026-05-18T06:08:42.890Z',
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([]);
+  });
+
+  it('clears same-day skud intervals for an absence correction with a stray skud swipe', async () => {
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-13', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-13', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-13',
+      endDate: '2026-04-13',
+      todayStr: '2026-04-13',
+      adjustments: [
+        {
+          id: 82,
+          employee_id: 1,
+          work_date: '2026-04-13',
+          hours_override: null,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'vacation',
+          reason: 'Отпуск',
+          updated_at: '2026-04-13T10:00:00.000Z',
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([]);
+  });
 });

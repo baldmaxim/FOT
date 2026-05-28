@@ -688,10 +688,21 @@ export async function buildObjectAttendanceData(params: {
     seenSplitDays.add(dKey);
     if (objectAdjustedDays.has(dKey)) continue;
 
+    const isNonWork = NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status as TimeStatus);
     const hoursOverride = adjustment.hours_override;
-    // Делим по объектам только реально отработанное время с явным hours_override.
-    if (hoursOverride == null || hoursOverride <= 0) continue;
-    if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status as TimeStatus)) continue;
+
+    // Авторитетная корректировка дня НЕ даёт отработанных часов
+    // (обнулённый рабочий день: status=work + hours_override<=0; либо отсутствие:
+    // отпуск/больничный/прогул/удалёнка). Снимаем СКУД-распределение дня, иначе
+    // остаточный интервал переживёт корректировку и «по объектам» покажет
+    // фантомные часы, расходясь с «по сотрудникам» (там day-level entry держит 0ч/статус).
+    if (isNonWork || hoursOverride == null || hoursOverride <= 0) {
+      for (const entryKey of [...baseObjectEntries.keys()]) {
+        if (entryKey.startsWith(`${dKey}_`)) baseObjectEntries.delete(entryKey);
+      }
+      baseDistinctObjectKeys.delete(dKey);
+      continue;
+    }
 
     // Снимок СКУД-распределения дня ДО удаления — нужен для fallback'а ниже,
     // если у сотрудника нет приписки в employee_skud_object_access.
