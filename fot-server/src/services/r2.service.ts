@@ -118,10 +118,24 @@ export const r2Service = {
     await client.send(new PutObjectCommand(input));
   },
 
-  generateDownloadUrl: async (key: string): Promise<string> => {
+  generateDownloadUrl: async (key: string, fileName?: string): Promise<string> => {
     const { client, bucket } = await getR2();
     if (!client) throw new Error('R2 не настроен');
-    const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+    // R2/S3 принимают в headers только ASCII. Браузер при сохранении уважает
+    // именно ResponseContentDisposition (атрибут <a download> для
+    // кросс-доменных URL игнорируется). Формируем по RFC 5987:
+    //   filename="ASCII-fallback"; filename*=UTF-8''<percent-encoded UTF-8>
+    let responseContentDisposition: string | undefined;
+    if (fileName) {
+      const asciiFallback = fileName.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
+      const utf8Encoded = encodeURIComponent(fileName).replace(/['()]/g, escape);
+      responseContentDisposition = `attachment; filename="${asciiFallback}"; filename*=UTF-8''${utf8Encoded}`;
+    }
+    const command = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ResponseContentDisposition: responseContentDisposition,
+    });
     return getSignedUrl(client, command, { expiresIn: URL_EXPIRY });
   },
 

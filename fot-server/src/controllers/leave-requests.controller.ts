@@ -34,6 +34,35 @@ function isTimeStatus(value: unknown): value is TimeStatus {
   return ['work', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'].includes(String(value));
 }
 
+/** Компактная подпись дат для текста уведомлений: `01.05, 02.05, 11.05.2026` или `01.05.2026 — 16.05.2026`. */
+function formatLeaveDateLabel(input: {
+  request_type: string;
+  start_date: string;
+  end_date: string;
+  correction_date: string | null;
+  selected_dates: string[] | null;
+}): string {
+  const fmt = (iso: string): string => {
+    const [y, m, d] = iso.split('-');
+    return `${d}.${m}.${y}`;
+  };
+  const fmtShort = (iso: string): string => {
+    const [, m, d] = iso.split('-');
+    return `${d}.${m}`;
+  };
+  if (input.request_type === 'time_correction' && input.correction_date) {
+    return fmt(input.correction_date);
+  }
+  if (input.selected_dates && input.selected_dates.length > 0) {
+    const dates = input.selected_dates;
+    if (dates.length === 1) return fmt(dates[0]);
+    const year = dates[dates.length - 1].slice(0, 4);
+    if (dates.length <= 4) return `${dates.slice(0, -1).map(fmtShort).join(', ')}, ${fmt(dates[dates.length - 1])}`;
+    return `${dates.slice(0, 3).map(fmtShort).join(', ')} и ещё ${dates.length - 3} ${year}`;
+  }
+  return `${fmt(input.start_date)} — ${fmt(input.end_date)}`;
+}
+
 async function loadEmployeeIdsByDepartment(departmentId: string): Promise<Array<{ id: number; full_name: string | null }>> {
   return query<{ id: number; full_name: string | null }>(
     `SELECT id, full_name
@@ -159,7 +188,7 @@ function broadcastPendingChanged(): void {
 /** Создание заявления (worker+) */
 const create = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { request_type, start_date, end_date, reason, correction_date, correction_status, correction_hours, attachments } = req.body;
+    const { request_type, start_date, end_date, reason, correction_date, correction_status, correction_hours, attachments, selected_dates } = req.body;
     if (!request_type || !start_date || !end_date) {
       res.status(400).json({ success: false, error: 'request_type, start_date, end_date обязательны' });
       return;
@@ -175,6 +204,22 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         res.status(400).json({ success: false, error: 'correction_date и correction_status обязательны для корректировки' });
         return;
       }
+    }
+
+    // Дискретный набор дней (только для типов с календарём: work/remote/certificate/dayoff).
+    // Для непрерывных периодов (vacation/sick_leave/unpaid) и time_correction игнорируется.
+    const DISCRETE_TYPES = new Set(['work', 'remote', 'certificate']);
+    let normalizedSelectedDates: string[] | null = null;
+    if (DISCRETE_TYPES.has(request_type) && Array.isArray(selected_dates) && selected_dates.length > 0) {
+      const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+      const uniq = Array.from(new Set(selected_dates.map(String))).sort();
+      for (const d of uniq) {
+        if (!dateRe.test(d) || d < start_date || d > end_date) {
+          res.status(400).json({ success: false, error: 'selected_dates содержит некорректную или внепериодную дату' });
+          return;
+        }
+      }
+      normalizedSelectedDates = uniq;
     }
 
     const attachmentIds = Array.isArray(attachments)
@@ -203,11 +248,18 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const data = await withTransaction(async (client) => {
       const insertCols: string[] = ['employee_id', 'request_type', 'start_date', 'end_date', 'reason'];
       const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
+      const insertCasts: string[] = ['', '', '', '', ''];
       if (request_type === 'time_correction') {
         insertCols.push('correction_date', 'correction_status', 'correction_hours');
         insertVals.push(correction_date, correction_status, correction_hours ?? null);
+        insertCasts.push('', '', '');
       }
-      const placeholders = insertVals.map((_, i) => `$${i + 1}`).join(', ');
+      if (normalizedSelectedDates) {
+        insertCols.push('selected_dates');
+        insertVals.push(normalizedSelectedDates);
+        insertCasts.push('::date[]');
+      }
+      const placeholders = insertVals.map((_, i) => `$${i + 1}${insertCasts[i] || ''}`).join(', ');
 
       const insRes = await client.query(
         `INSERT INTO leave_requests (${insertCols.join(', ')})
@@ -247,7 +299,15 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     // Уведомляем руководителя отдела и админов (fire-and-forget)
     const label = LEAVE_TYPE_LABELS[request_type] || request_type;
-    pushService.sendLeaveRequestNotification(employeeId, request_type, req.user.id)
+    const dateLabel = formatLeaveDateLabel({
+      request_type,
+      start_date,
+      end_date,
+      correction_date: request_type === 'time_correction' ? correction_date : null,
+      selected_dates: normalizedSelectedDates,
+    });
+    const bodyText = `Сотрудник подал заявление: ${label}${dateLabel ? ` (${dateLabel})` : ''}`;
+    pushService.sendLeaveRequestNotification(employeeId, request_type, req.user.id, dateLabel)
       .then((recipientIds) => {
         const io = getIo();
         if (io) {
@@ -261,7 +321,7 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
             userId: uid,
             type: 'leave_request',
             title: 'Новое заявление',
-            body: `Сотрудник подал заявление: ${label}`,
+            body: bodyText,
             metadata: { requestType: request_type, employeeId },
           })),
         ).catch((e) => console.error('leave-request notification save error:', e));

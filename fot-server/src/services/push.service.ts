@@ -150,6 +150,7 @@ export const pushService = {
     employeeId: number,
     requestType: string,
     submitterUserId: string,
+    dateLabel?: string,
   ): Promise<string[]> {
     const profile = await queryOne<{ supervisor_id: string | null }>(
       'SELECT supervisor_id FROM user_profiles WHERE employee_id = $1 LIMIT 1',
@@ -166,9 +167,10 @@ export const pushService = {
     if (!vapidReady || ids.length === 0) return ids;
 
     const label = LEAVE_TYPE_LABELS[requestType] || requestType;
+    const suffix = dateLabel ? ` (${dateLabel})` : '';
     const notification = JSON.stringify({
       title: 'Новое заявление',
-      body: `Сотрудник подал заявление: ${label}`,
+      body: `Сотрудник подал заявление: ${label}${suffix}`,
     });
 
     const subscriptions = await query<ISubscriptionRow>(

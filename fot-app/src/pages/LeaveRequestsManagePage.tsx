@@ -24,6 +24,7 @@ import {
 import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
+import { formatLeaveRequestDatesCompact } from '../utils/leaveRequestDates';
 import './LeaveRequestsManagePage.css';
 
 const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
@@ -260,7 +261,7 @@ export const LeaveRequestsManagePage: FC = () => {
             </div>
           ) : (
             <div className="lrm-card-dates">
-              <strong>{formatDate(r.start_date)} — {formatDate(r.end_date)}</strong>
+              <strong>{formatLeaveRequestDatesCompact(r)}</strong>
             </div>
           )}
           {r.reason && <div className="lrm-card-reason">{r.reason}</div>}

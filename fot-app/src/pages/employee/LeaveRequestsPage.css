@@ -207,6 +207,7 @@
   grid-template-columns: 1fr;
   gap: 16px;
   margin-bottom: 20px;
+  max-width: 640px;
 }
 
 .lr-detail-card {
@@ -256,6 +257,23 @@
 .lr-detail-row-col .lr-detail-value {
   text-align: left;
   white-space: pre-wrap;
+}
+
+.lr-detail-days-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lr-detail-day-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .lr-detail-empty {

@@ -24,6 +24,8 @@ export interface ILeaveRequest {
   correction_date: string | null;
   correction_status: string | null;
   correction_hours: number | null;
+  /** Дискретно выбранные дни (work/remote/certificate). NULL для непрерывных периодов. */
+  selected_dates: string[] | null;
   created_at: string;
   updated_at: string;
   employee_name?: string | null;
@@ -83,6 +85,7 @@ export const leaveRequestService = {
     correction_status?: string;
     correction_hours?: number;
     attachments?: number[];
+    selected_dates?: string[];
   }) => {
     const res = await apiClient.post<ApiResponse<ILeaveRequest>>('/leave-requests', data);
     return res.data;

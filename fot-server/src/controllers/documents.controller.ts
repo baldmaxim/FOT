@@ -145,7 +145,11 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
     let buffer = file.buffer;
     let mimeType = file.mimetype || 'application/octet-stream';
     let fileSize = file.size;
-    const safeFileName = sanitizeFileName(file.originalname);
+    // Browser отправляет filename в multipart как UTF-8 байты, а multer/busboy
+    // декодирует их как latin1 → кириллица превращается в иероглифы
+    // (Ð_Ð_ÑеÐ¿Ð°Ñ...). Конвертируем обратно к UTF-8.
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    const safeFileName = sanitizeFileName(originalName);
 
     if (category === 'patent_check') {
       const trimmed = await trimWhiteBorders(buffer, mimeType);
@@ -240,7 +244,7 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
-    const downloadUrl = await r2Service.generateDownloadUrl(doc.r2_key);
+    const downloadUrl = await r2Service.generateDownloadUrl(doc.r2_key, doc.file_name);
     res.json({ success: true, data: { download_url: downloadUrl, file_name: doc.file_name } });
   } catch (err) {
     console.error('documents.getDownloadUrl error:', err);

@@ -414,6 +414,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
               start_date: sortedDates[0],
               end_date: sortedDates[sortedDates.length - 1],
               reason: reason.trim() || undefined,
+              selected_dates: sortedDates,
             };
       const created = await leaveRequestService.create(payload);
       if (files.length > 0) {

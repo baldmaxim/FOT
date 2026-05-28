@@ -11,6 +11,7 @@ import {
 } from '../../services/leaveRequestService';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
+import { formatLeaveRequestDatesCompact } from '../../utils/leaveRequestDates';
 import './LeaveRequestsPage.css';
 
 const UnifiedRequestModal = lazy(() =>
@@ -38,6 +39,9 @@ type TabKey = 'active' | 'archive';
 const todayIso = (): string => new Date().toLocaleDateString('en-CA');
 
 const isArchived = (r: ILeaveRequest, today: string): boolean => {
+  // На рассмотрении — всегда «Активные», даже если все даты уже прошли:
+  // руководитель ещё не отреагировал, сотрудник должен видеть заявку.
+  if (r.status === 'pending') return false;
   if (r.request_type === 'time_correction') {
     return !!r.correction_date && r.correction_date < today;
   }
@@ -143,7 +147,7 @@ export const LeaveRequestsPage: FC = () => {
                   {r.request_type === 'time_correction' && r.correction_date ? (
                     <div className="lr-card-dates">Дата: {formatDate(r.correction_date)} · Статус: {r.correction_status} · {r.correction_hours != null ? `${r.correction_hours}ч` : ''}</div>
                   ) : (
-                    <div className="lr-card-dates">{formatDate(r.start_date)} — {formatDate(r.end_date)}</div>
+                    <div className="lr-card-dates">{formatLeaveRequestDatesCompact(r)}</div>
                   )}
                   {r.reason && <div className="lr-card-reason">{r.reason}</div>}
                   {awaitingAdmin && (

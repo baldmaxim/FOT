@@ -12,6 +12,7 @@ import { documentService, type IDocument } from '../../services/documentService'
 import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
 import { formatFioShort } from '../../utils/formatFio';
+import { hasDiscreteDates } from '../../utils/leaveRequestDates';
 import { FilePreviewModal } from '../../components/documents/FilePreviewModal';
 import './LeaveRequestsPage.css';
 
@@ -153,6 +154,15 @@ export const LeaveRequestDetailPage: FC = () => {
             <div className="lr-detail-row">
               <span className="lr-detail-label">Дата</span>
               <span className="lr-detail-value">{formatDate(request.correction_date)}</span>
+            </div>
+          ) : hasDiscreteDates(request) ? (
+            <div className="lr-detail-row lr-detail-row-col">
+              <span className="lr-detail-label">Дни ({request.selected_dates!.length})</span>
+              <div className="lr-detail-days-list">
+                {request.selected_dates!.map(d => (
+                  <span key={d} className="lr-detail-day-chip">{formatDate(d)}</span>
+                ))}
+              </div>
             </div>
           ) : (
             <>
