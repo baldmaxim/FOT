@@ -1,6 +1,7 @@
 import { type FC, useState, useMemo } from 'react';
 import { X, Plus } from 'lucide-react';
 import type { TimesheetEmployee, TimesheetStatus } from '../../types';
+import { CREATABLE_STATUS_META } from '../../utils/correctionStatus';
 
 interface IProps {
   open: boolean;
@@ -17,17 +18,13 @@ interface IProps {
   }) => void;
 }
 
-const STATUS_OPTIONS: { value: TimesheetStatus; label: string }[] = [
-  { value: 'vacation',          label: '🏖 Отпуск' },
-  { value: 'sick',              label: '🏥 Больничный' },
-  { value: 'remote',            label: '🏠 Удалёнка' },
-  { value: 'unpaid',            label: '💸 За свой счёт' },
-  { value: 'educational_leave', label: '🎓 Учебный отпуск' },
-  { value: 'absent',            label: '❌ Неявка' },
-  { value: 'work',              label: '✔ Присутствие' },
-];
+const STATUS_OPTIONS: { value: TimesheetStatus; label: string }[] = CREATABLE_STATUS_META.map(meta => ({
+  value: meta.status,
+  label: `${meta.icon} ${meta.label}`,
+}));
 
-const HOURS_EDITABLE = new Set<TimesheetStatus>(['work', 'remote']);
+// work/manual («Корректировка табеля») требуют часы; remote — опционально (пусто = из графика).
+const HOURS_EDITABLE = new Set<TimesheetStatus>(['work', 'manual', 'remote']);
 const MAX_RANGE_DAYS = 60;
 
 const todayIso = (): string => new Date().toISOString().slice(0, 10);

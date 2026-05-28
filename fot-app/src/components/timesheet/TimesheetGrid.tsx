@@ -211,6 +211,10 @@ const getDayCellClass = (
   future: boolean,
   thresholdHours = 8,
   periodApprovalStatus?: string,
+  // markCorrection=false для объектных ячеек: метку (оранжевый треугольник) там
+  // задаёт ТОЛЬКО objectEntry.is_correction, а не дневная запись. Иначе day-level
+  // корректировка течёт на все объекты дня (фантомы на «чужих» объектах, #3).
+  markCorrection = true,
 ): string => {
   const classes = ['ts-day'];
   if (today) classes.push('ts-day--today');
@@ -223,7 +227,7 @@ const getDayCellClass = (
   });
   classes.push(STATUS_TO_GRID_CLASS[status]);
 
-  if (entry?.is_correction) classes.push('ts-day--corrected');
+  if (markCorrection && entry?.is_correction) classes.push('ts-day--corrected');
   if (entry?.approval_status === 'pending') classes.push('ts-day--approval-pending');
   else if (entry?.approval_status === 'approved') classes.push('ts-day--approval-approved');
   else if (entry?.approval_status === 'rejected') classes.push('ts-day--approval-rejected');
@@ -888,8 +892,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const clickEntry = topEntry || bottomEntry;
                         const clickObj = topEntry ? topObj : bottomObj;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate));
+                        // markCorrection=false: метку даёт только корректировка самого объекта,
+                        // а не дневная запись — иначе течёт на «чужие» объекты (#3).
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
+                        const objCorrected = Boolean(topEntry?.is_correction || bottomEntry?.is_correction);
                         const classes = [baseCls, 'ts-mobile-day-btn', 'ts-mobile-day-btn--dual'];
+                        if (objCorrected) classes.push('ts-day--corrected');
 
                         return (
                           <button
@@ -1190,7 +1198,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const isBulkClickable = !dayOff;
                         const isBlocked = row.isSynthetic;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate));
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
                         return (
                           <td
                             key={`${group.object_key}_${row.employee.id}_${day}`}
@@ -1453,7 +1461,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         // чтобы случайное протягивание не цепляло выходные.
                         const isBulkClickable = !dayOff;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate));
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
                         return (
                           <td
                             key={`${objectRow.object_key}_${day}`}

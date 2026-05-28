@@ -18,6 +18,7 @@ import {
 import { formatFailureType } from '../../utils/skudFailureTypes';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
 import { getDayStatus, STATUS_LABEL_RU, STATUS_TO_DETAIL_HOURS_CLASS } from '../../utils/dayStatus';
+import { CREATABLE_STATUS_META, getStatusMeta, HOURS_EDITABLE_STATUSES } from '../../utils/correctionStatus';
 
 interface ICorrectionModalProps {
   open: boolean;
@@ -50,6 +51,7 @@ interface ICorrectionModalProps {
     is_correction: boolean;
     corrected_at?: string | null;
     corrected_by_name?: string | null;
+    approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
     approved_at?: string | null;
     approved_by_name?: string | null;
     approval_comment?: string | null;
@@ -86,14 +88,7 @@ interface ICorrectionModalProps {
   initialMode?: 'view' | 'edit';
 }
 
-interface ITypeOption {
-  status: TimesheetStatus;
-  icon: string;
-  label: string;
-}
-
 type ModalTab = 'events' | 'correction';
-const HOURS_EDITABLE_STATUSES = new Set<TimesheetStatus>(['work', 'manual']);
 
 const formatHM = (decimal: number): string => {
   const h = Math.floor(decimal);
@@ -113,21 +108,8 @@ const formatDuration = (seconds: number): string => {
   return `${h}ч ${m}м`;
 };
 
-const TYPE_OPTIONS: ITypeOption[] = [
-  { status: 'work',              icon: '✔',  label: 'Работа' },
-  { status: 'remote',            icon: '🏠', label: 'Удалёнка' },
-  { status: 'sick',              icon: '🏥', label: 'Больничный' },
-  { status: 'vacation',          icon: '🏖', label: 'Отпуск' },
-  { status: 'unpaid',            icon: '💸', label: 'За свой счёт' },
-  { status: 'educational_leave', icon: '🎓', label: 'Учебный отпуск' },
-  { status: 'absent',            icon: '❌', label: 'Неявка' },
-];
-
-// manual — work, прицепленная к СКУД-объекту: показываем как «Работа», не «Ручная корр.».
-const LEGACY_TYPE_OPTIONS: Record<string, ITypeOption> = {
-  dayoff: { status: 'dayoff', icon: '📅', label: 'Отгул' },
-  manual: { status: 'manual', icon: '✔', label: 'Работа' },
-};
+// Источник опций статусов в пикерах — общий CREATABLE_STATUS_META (utils/correctionStatus).
+const TYPE_OPTIONS = CREATABLE_STATUS_META;
 
 const EventsTab: FC<{
   employeeId: number;
@@ -329,6 +311,8 @@ const CorrectionTab: FC<{
     adjustment_id?: number | null;
   } | null;
   initialMode?: 'view' | 'edit';
+  // Блок «Файлы корректировки» — рендерится перед футером (#1: «Сохранить» в самом низу).
+  attachmentsSlot?: ReactNode;
 }> = ({
   onClose,
   onSave,
@@ -342,6 +326,7 @@ const CorrectionTab: FC<{
   maxHours,
   correctionInfo,
   initialMode,
+  attachmentsSlot,
 }) => {
   const hasExistingCorrection = Boolean(correctionInfo?.is_correction);
   const [mode, setMode] = useState<'view' | 'edit'>(
@@ -378,9 +363,9 @@ const CorrectionTab: FC<{
   };
 
   if (mode === 'view' && hasExistingCorrection) {
-    const statusOption = TYPE_OPTIONS.find(option => option.status === initialStatus) ?? LEGACY_TYPE_OPTIONS[initialStatus];
-    const statusLabel = statusOption?.label ?? initialStatus;
-    const statusIcon = statusOption?.icon ?? '✎';
+    const statusMeta = getStatusMeta(initialStatus);
+    const statusLabel = statusMeta?.label ?? initialStatus;
+    const statusIcon = statusMeta?.icon ?? '✎';
     const hoursLabel = HOURS_EDITABLE_STATUSES.has(initialStatus)
       ? formatHM(initialHours)
       : '—';
@@ -432,6 +417,7 @@ const CorrectionTab: FC<{
             <div className="ts-correction-view-comment">{trimmedInitialNotes}</div>
           )}
         </div>
+        {attachmentsSlot}
       </>
     );
   }
@@ -516,6 +502,7 @@ const CorrectionTab: FC<{
           )}
         </div>
       </div>
+      {attachmentsSlot}
       <div className="ts-modal-footer">
         <button
           className="ts-btn"
@@ -557,10 +544,14 @@ interface IObjectCorrectionsListProps {
   // Сводка day-level корректировки (часы + комментарий) — рисуем сверху,
   // если у дня есть и day-level и объекты: иначе кнопку «Снять» нечем дать.
   dayLevelSummary?: { hours: number; notes: string } | null;
+  dayLevelStatus?: TimesheetStatus | null;
   onDeleteDayLevel?: () => void;
   plannedHours?: number | null;
   onSaveObject: (target: { object_key: string; object_id: string | null; object_name: string }, hours: number, notes: string) => void;
   onDeleteObject: (target: { object_key: string; object_id: string | null; object_name: string }) => void;
+  // Сохранение дневной (не объектной) корректировки: статус Удалёнка/Отпуск/… или
+  // «Работа» с часами. Бэк по правилу взаимоисключения снимет объектные правки дня.
+  onSaveDayLevel?: (status: TimesheetStatus, hours: number | null, notes: string) => void;
   // Когда day-level корректировки нет, но у дня есть объектные СКУД-записи —
   // даём явный путь «не работал»: создаёт day-level 0ч (бэк снимет manual_object).
   onZeroOutDay?: (notes: string) => void;
@@ -572,14 +563,24 @@ interface IObjectCorrectionsListProps {
   initialMode?: 'view' | 'edit';
 }
 
+// Серая скруглённая карточка для inline-форм (единый стиль с «День целиком»/«Удалёнка»).
+const FORM_CARD_STYLE = {
+  background: 'var(--bg-tertiary, #f5f6f8)',
+  padding: 10,
+  borderRadius: 8,
+  marginBottom: 10,
+};
+
 const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   objectEntries,
   hasDayLevelCorrection,
   dayLevelSummary,
+  dayLevelStatus,
   onDeleteDayLevel,
   plannedHours,
   onSaveObject,
   onDeleteObject,
+  onSaveDayLevel,
   onZeroOutDay,
   preselectedObjectKey,
   initialMode,
@@ -597,6 +598,12 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
     () => objectEntries.filter(e => !(e.is_correction && e.adjustment_id != null)),
     [objectEntries],
   );
+
+  // Базовое (насчитанное по СКУД) время объекта — дефолт для «Корректировки табеля» (#5.2).
+  const baseHoursForObject = useCallback((objectKey: string): number => {
+    const e = objectEntries.find(x => x.object_key === objectKey);
+    return Number(e?.base_hours_worked ?? e?.display_hours_worked ?? e?.hours_worked ?? 0);
+  }, [objectEntries]);
 
   const initState = useCallback((): Record<string, IObjectRowState> => {
     const map: Record<string, IObjectRowState> = {};
@@ -640,49 +647,82 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
     });
   };
 
-  // Добавление новой корректировки через «+»: меню выбора объекта /
-  // «обнулить день», затем inline-форма для выбранного варианта.
-  type AddTarget =
-    | { kind: 'object'; entry: TimesheetObjectEntry }
-    | { kind: 'zero-out' }
-    | null;
-  const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const [addTarget, setAddTarget] = useState<AddTarget>(null);
-  const [newRow, setNewRow] = useState<IObjectRowState>({ hours: 0, notes: '' });
+  // ── Форма добавления: статус → (для «Корректировки табеля» — объект + часы) ──
+  const [adding, setAdding] = useState(false);
+  const [addStatus, setAddStatus] = useState<TimesheetStatus>('manual');
+  const [addObjectKey, setAddObjectKey] = useState<string>('');
+  const [addHours, setAddHours] = useState<number>(0);
+  const [addNotes, setAddNotes] = useState('');
 
-  // Если приехал preselected, по которому нет корректировки — сразу открыть
-  // форму создания для него (без меню).
+  const openAdd = useCallback((presetObjectKey?: string) => {
+    const objKey = presetObjectKey ?? availableForAdd[0]?.object_key ?? '';
+    setAddStatus('manual');
+    setAddObjectKey(objKey);
+    setAddHours(objKey ? baseHoursForObject(objKey) : 0);
+    setAddNotes('');
+    setAdding(true);
+  }, [availableForAdd, baseHoursForObject]);
+  const cancelAdd = () => {
+    setAdding(false);
+    setAddNotes('');
+  };
+
+  // Открытие из «По объектам» по объекту без корректировки — сразу форма добавления.
   useEffect(() => {
     if (!preselectedObjectKey) return;
-    const existing = correctedEntries.some(e => e.object_key === preselectedObjectKey);
-    if (existing) return;
-    const candidate = objectEntries.find(e => e.object_key === preselectedObjectKey);
-    if (!candidate) return;
-    setAddTarget({ kind: 'object', entry: candidate });
-    setNewRow({ hours: 0, notes: '' });
-  }, [preselectedObjectKey, correctedEntries, objectEntries]);
+    if (correctedEntries.some(e => e.object_key === preselectedObjectKey)) return;
+    if (!objectEntries.some(e => e.object_key === preselectedObjectKey)) return;
+    openAdd(preselectedObjectKey);
+  }, [preselectedObjectKey, correctedEntries, objectEntries, openAdd]);
 
-  const openAddObject = (entry: TimesheetObjectEntry) => {
-    setAddMenuOpen(false);
-    setAddTarget({ kind: 'object', entry });
-    setNewRow({ hours: 0, notes: '' });
+  const changeAddObject = (key: string) => {
+    setAddObjectKey(key);
+    setAddHours(key ? baseHoursForObject(key) : 0); // #5.2: подставляем базовое время
   };
-  const openZeroOut = () => {
-    setAddMenuOpen(false);
-    setAddTarget({ kind: 'zero-out' });
-    setNewRow({ hours: 0, notes: '' });
-  };
-  const cancelAdd = () => {
-    setAddTarget(null);
-    setNewRow({ hours: 0, notes: '' });
+  const changeAddStatus = (status: TimesheetStatus) => {
+    setAddStatus(status);
+    if (status === 'manual') {
+      const key = addObjectKey || availableForAdd[0]?.object_key || '';
+      setAddObjectKey(key);
+      setAddHours(key ? baseHoursForObject(key) : 0);
+    }
   };
 
-  // Сумма берётся из текущего состояния — для подсчёта берём только
-  // сохранённые корректировки + (если есть) форму создания.
+  const addIsManual = addStatus === 'manual';
+  const addHoursEditable = HOURS_EDITABLE_STATUSES.has(addStatus);
+  const addCanSave = addNotes.trim().length > 0
+    && (!addIsManual || (Boolean(addObjectKey) && addHours > 0));
+
+  const saveAdd = () => {
+    const notes = addNotes.trim();
+    if (notes.length === 0) return;
+    if (addIsManual) {
+      if (!addObjectKey || addHours <= 0) return;
+      const obj = objectEntries.find(e => e.object_key === addObjectKey);
+      if (!obj) return;
+      if (hasDayLevelCorrection && !window.confirm(
+        'Сохранение корректировки по объекту снимет общую корректировку дня. Продолжить?',
+      )) return;
+      onSaveObject(
+        { object_key: obj.object_key, object_id: obj.object_id, object_name: obj.object_name },
+        addHours,
+        notes,
+      );
+    } else {
+      if (!onSaveDayLevel) return;
+      if (correctedEntries.length > 0 && !window.confirm(
+        'Дневная корректировка снимет все корректировки по объектам за этот день. Продолжить?',
+      )) return;
+      onSaveDayLevel(addStatus, addHoursEditable ? addHours : null, notes);
+    }
+    cancelAdd();
+  };
+
+  // Σ — учитываем сохранённые + форму добавления (только для manual).
   const totalHours = correctedEntries.reduce(
     (sum, e) => sum + Number(e.display_hours_worked ?? e.hours_worked ?? 0),
     0,
-  ) + (addTarget?.kind === 'object' ? (newRow.hours || 0) : 0);
+  ) + (adding && addIsManual ? (addHours || 0) : 0);
   const planned = plannedHours ?? null;
   const exceedsPlanned = planned != null && totalHours > planned + 0.001;
 
@@ -713,31 +753,6 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       trimmedNotes,
     );
   };
-  const handleSaveNew = () => {
-    if (addTarget?.kind !== 'object') return;
-    const entry = addTarget.entry;
-    if (newRow.hours <= 0) return;
-    const trimmedNotes = newRow.notes.trim();
-    if (trimmedNotes.length === 0) return;
-    if (hasDayLevelCorrection && !window.confirm(
-      'Сохранение корректировки по объекту снимет общую корректировку дня. Продолжить?',
-    )) return;
-    onSaveObject(
-      { object_key: entry.object_key, object_id: entry.object_id, object_name: entry.object_name },
-      newRow.hours,
-      trimmedNotes,
-    );
-    cancelAdd();
-  };
-  const handleConfirmZeroOut = () => {
-    const notes = newRow.notes.trim();
-    if (notes.length === 0 || !onZeroOutDay) return;
-    if (correctedEntries.length > 0 && !window.confirm(
-      'Обнуление дня снимет все корректировки по объектам за этот день. Продолжить?',
-    )) return;
-    onZeroOutDay(notes);
-    cancelAdd();
-  };
   const handleDelete = (entry: TimesheetObjectEntry) => {
     if (!window.confirm(`Удалить корректировку по объекту «${entry.object_name}»?`)) return;
     onDeleteObject({
@@ -746,6 +761,42 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       object_name: entry.object_name,
     });
   };
+
+  // Поля «часы (ч/м)» — единый рендер для форм редактирования и добавления.
+  const renderHoursInputs = (value: number, onChange: (next: number) => void) => {
+    const whole = Math.floor(value);
+    const minutes = Math.round((value - whole) * 60);
+    const applyHM = (h: number, m: number) => {
+      const cm = Math.max(0, Math.min(59, m));
+      const ch = Math.max(0, h);
+      onChange(ch + cm / 60);
+    };
+    return (
+      <div className="ts-hours-inputs" style={{ marginBottom: 6 }}>
+        <input
+          type="number"
+          className="ts-form-input ts-form-input--hm"
+          value={whole}
+          onChange={e => applyHM(parseInt(e.target.value, 10) || 0, minutes)}
+          min={0}
+          max={24}
+        />
+        <span className="ts-hours-separator">ч</span>
+        <input
+          type="number"
+          className="ts-form-input ts-form-input--hm"
+          value={minutes}
+          onChange={e => applyHM(whole, parseInt(e.target.value, 10) || 0)}
+          min={0}
+          max={59}
+        />
+        <span className="ts-hours-separator">м</span>
+      </div>
+    );
+  };
+
+  const canAdd = availableForAdd.length > 0 || Boolean(onSaveDayLevel);
+  const dayLevelMeta = dayLevelStatus ? getStatusMeta(dayLevelStatus) : null;
 
   return (
     <div
@@ -757,29 +808,33 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
         overflowY: 'auto',
       }}
     >
-      <div style={{ fontWeight: 600, marginBottom: 8 }}>Корректировки по объектам</div>
+      {/* Шапка блока: заголовок + кнопка «Добавить корректировку» вверху справа (#4) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>Корректировки по объектам</div>
+        {!adding && !hasDayLevelCorrection && (
+          <button
+            type="button"
+            className="ts-btn ts-btn--primary"
+            onClick={() => openAdd()}
+            disabled={!canAdd}
+            title={canAdd ? 'Добавить корректировку' : 'Нет объектов для новой корректировки'}
+          >
+            + Добавить корректировку
+          </button>
+        )}
+      </div>
+
       {hasDayLevelCorrection && dayLevelSummary && onDeleteDayLevel && (
-        <div
-          style={{
-            borderBottom: '1px dashed var(--border, #e5e7eb)',
-            paddingBottom: 10,
-            marginBottom: 10,
-            background: 'var(--bg-tertiary, #f5f6f8)',
-            padding: 10,
-            borderRadius: 6,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontWeight: 500, flex: 1, minWidth: 0 }}>
-              День целиком
-              <span style={{ marginLeft: 8, color: 'var(--text-secondary, #5b6573)' }}>
-                {formatHM(dayLevelSummary.hours)}
-                {dayLevelSummary.notes.trim() && ` · «${dayLevelSummary.notes.trim()}»`}
-              </span>
-            </div>
+        <div className="ts-correction-view-row" style={{ marginBottom: 10 }}>
+          <span className="ts-correction-view-row__icon">{dayLevelMeta?.icon ?? '📝'}</span>
+          <span className="ts-correction-view-row__text">
+            {dayLevelMeta?.label ?? 'День целиком'} · <b>{formatHM(dayLevelSummary.hours)}</b>
+            {dayLevelSummary.notes.trim() && ` · «${dayLevelSummary.notes.trim()}»`}
+          </span>
+          <span className="ts-correction-view-row__actions">
             <button
               type="button"
-              className="ts-btn ts-btn--danger"
+              className="ts-corrections-btn ts-corrections-btn--danger"
               onClick={() => {
                 if (window.confirm('Снять общую корректировку дня?')) onDeleteDayLevel();
               }}
@@ -787,98 +842,70 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
             >
               <Trash2 size={14} />
             </button>
-          </div>
+          </span>
         </div>
       )}
-      {correctedEntries.length === 0 && !addTarget && (
+
+      {correctedEntries.length === 0 && !adding && !hasDayLevelCorrection && (
         <div style={{ color: 'var(--text-secondary, #5b6573)', fontSize: 13, marginBottom: 10 }}>
           Корректировок по объектам пока нет.
         </div>
       )}
+
       {correctedEntries.map(entry => {
         const state = rowState[entry.object_key] ?? { hours: 0, notes: '' };
         const hasExisting = entry.adjustment_id != null && entry.is_correction;
         const isExpanded = expanded.has(entry.object_key);
-        const rowStyle = {
-          borderBottom: '1px dashed var(--border, #e5e7eb)',
-          paddingBottom: 10,
-          marginBottom: 10,
-        };
 
-        // Сводный режим: уже внесённая корректировка → один компактный ряд с
-        // часами/комментарием и кнопками «Изменить»/«Снять».
+        // Сводный режим: единый стиль карточки (#2) — иконка + «объект · часы» + комментарий.
         if (hasExisting && !isExpanded) {
           const baseHours = Number(entry.display_hours_worked ?? entry.hours_worked ?? 0);
           const trimmedNotes = (entry.notes ?? '').trim();
           return (
-            <div key={entry.object_key} style={rowStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ fontWeight: 500, flex: 1, minWidth: 0 }}>
-                  {entry.object_name}
-                  <span style={{ marginLeft: 8, color: 'var(--text-secondary, #5b6573)' }}>
-                    {formatHM(baseHours)}
-                    {trimmedNotes && ` · «${trimmedNotes}»`}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="ts-btn"
-                  onClick={() => toggleExpanded(entry.object_key)}
-                  title="Изменить часы"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button
-                  type="button"
-                  className="ts-btn ts-btn--danger"
-                  onClick={() => handleDelete(entry)}
-                  title="Снять корректировку"
-                >
-                  <Trash2 size={14} />
-                </button>
+            <div key={entry.object_key} style={{ marginBottom: 10 }}>
+              <div className="ts-correction-view-row">
+                <span className="ts-correction-view-row__icon">📝</span>
+                <span className="ts-correction-view-row__text">
+                  {entry.object_name} · <b>{formatHM(baseHours)}</b>
+                </span>
+                <span className="ts-correction-view-row__actions">
+                  <button
+                    type="button"
+                    className="ts-corrections-btn"
+                    onClick={() => toggleExpanded(entry.object_key)}
+                    title="Изменить часы"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="ts-corrections-btn ts-corrections-btn--danger"
+                    onClick={() => handleDelete(entry)}
+                    title="Снять корректировку"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </span>
               </div>
+              {trimmedNotes && (
+                <div className="ts-correction-view-comment">{trimmedNotes}</div>
+              )}
             </div>
           );
         }
 
-        // Редактируемый ряд (новый объект или нажали «Изменить»).
-        const wholeHours = Math.floor(state.hours);
-        const minutes = Math.round((state.hours - wholeHours) * 60);
-        const applyHM = (h: number, m: number) => {
-          const clampedM = Math.max(0, Math.min(59, m));
-          const clampedH = Math.max(0, h);
-          handleHoursChange(entry.object_key, clampedH + clampedM / 60);
-        };
+        // Редактируемый ряд (нажали «Изменить»).
         const trimmedNotes = state.notes.trim();
         const isZero = state.hours <= 0;
         const canSave = isZero ? hasExisting : trimmedNotes.length > 0;
         const saveLabel = isZero ? 'Снять корректировку' : 'Сохранить объект';
         const saveTitle = isZero
-          ? (hasExisting ? '0 часов — корректировка будет снята' : 'Нечего сохранять: 0 часов и нет существующей корректировки')
+          ? (hasExisting ? '0 часов — корректировка будет снята' : 'Нечего сохранять: 0 часов')
           : (canSave ? undefined : 'Укажите комментарий');
         return (
-          <div key={entry.object_key} style={rowStyle}>
+          <div key={entry.object_key} style={FORM_CARD_STYLE}>
             <div style={{ fontWeight: 500, marginBottom: 6 }}>{entry.object_name}</div>
-            <div className="ts-hours-inputs" style={{ marginBottom: 6 }}>
-              <input
-                type="number"
-                className="ts-form-input ts-form-input--hm"
-                value={wholeHours}
-                onChange={e => applyHM(parseInt(e.target.value, 10) || 0, minutes)}
-                min={0}
-                max={24}
-              />
-              <span className="ts-hours-separator">ч</span>
-              <input
-                type="number"
-                className="ts-form-input ts-form-input--hm"
-                value={minutes}
-                onChange={e => applyHM(wholeHours, parseInt(e.target.value, 10) || 0)}
-                min={0}
-                max={59}
-              />
-              <span className="ts-hours-separator">м</span>
-            </div>
+            {renderHoursInputs(state.hours, h => handleHoursChange(entry.object_key, h))}
             <input
               type="text"
               className="ts-form-input"
@@ -889,24 +916,14 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
             />
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               {hasExisting && (
-                <>
-                  <button
-                    type="button"
-                    className="ts-btn"
-                    onClick={() => toggleExpanded(entry.object_key)}
-                    title="Свернуть"
-                  >
-                    Отмена
-                  </button>
-                  <button
-                    type="button"
-                    className="ts-btn"
-                    onClick={() => handleDelete(entry)}
-                    title="Снять корректировку"
-                  >
-                    Снять
-                  </button>
-                </>
+                <button
+                  type="button"
+                  className="ts-btn"
+                  onClick={() => toggleExpanded(entry.object_key)}
+                  title="Свернуть"
+                >
+                  Отмена
+                </button>
               )}
               <button
                 type="button"
@@ -921,167 +938,98 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
           </div>
         );
       })}
-      {/* Inline-форма создания (под кнопкой «+») */}
-      {addTarget?.kind === 'object' && (() => {
-        const entry = addTarget.entry;
-        const wholeHours = Math.floor(newRow.hours);
-        const minutes = Math.round((newRow.hours - wholeHours) * 60);
-        const applyHM = (h: number, m: number) => {
-          const clampedM = Math.max(0, Math.min(59, m));
-          const clampedH = Math.max(0, h);
-          setNewRow(prev => ({ ...prev, hours: clampedH + clampedM / 60 }));
-        };
-        const canSave = newRow.hours > 0 && newRow.notes.trim().length > 0;
-        return (
-          <div
-            style={{
-              borderBottom: '1px dashed var(--border, #e5e7eb)',
-              paddingBottom: 10,
-              marginBottom: 10,
-              background: 'var(--bg-tertiary, #f5f6f8)',
-              padding: 10,
-              borderRadius: 6,
-            }}
-          >
-            <div style={{ fontWeight: 500, marginBottom: 6 }}>{entry.object_name}</div>
-            <div className="ts-hours-inputs" style={{ marginBottom: 6 }}>
-              <input
-                type="number"
-                className="ts-form-input ts-form-input--hm"
-                value={wholeHours}
-                onChange={e => applyHM(parseInt(e.target.value, 10) || 0, minutes)}
-                min={0}
-                max={24}
-              />
-              <span className="ts-hours-separator">ч</span>
-              <input
-                type="number"
-                className="ts-form-input ts-form-input--hm"
-                value={minutes}
-                onChange={e => applyHM(wholeHours, parseInt(e.target.value, 10) || 0)}
-                min={0}
-                max={59}
-              />
-              <span className="ts-hours-separator">м</span>
+
+      {/* Форма добавления: статус → объект (#5/#5.1/#5.2) */}
+      {adding && (
+        <div style={FORM_CARD_STYLE}>
+          <div className="ts-form-group">
+            <label className="ts-form-label">Тип записи</label>
+            <select
+              className="ts-form-select"
+              value={addStatus}
+              onChange={e => changeAddStatus(e.target.value as TimesheetStatus)}
+            >
+              {CREATABLE_STATUS_META.map(meta => (
+                <option key={meta.status} value={meta.status}>{meta.icon} {meta.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {addIsManual && (
+            <div className="ts-form-group">
+              <label className="ts-form-label">Объект</label>
+              {availableForAdd.length === 0 ? (
+                <div className="ts-form-hint ts-form-hint--error">
+                  Все объекты сотрудника уже скорректированы.
+                </div>
+              ) : (
+                <select
+                  className="ts-form-select"
+                  value={addObjectKey}
+                  onChange={e => changeAddObject(e.target.value)}
+                >
+                  {availableForAdd.map(entry => (
+                    <option key={entry.object_key} value={entry.object_key}>{entry.object_name}</option>
+                  ))}
+                </select>
+              )}
             </div>
+          )}
+
+          {addStatus === 'remote' && (
+            <div className="ts-hours-hint">Для удалёнки автоматически будет проставлен полный день по графику.</div>
+          )}
+
+          {addHoursEditable && (!addIsManual || availableForAdd.length > 0) && (
+            <div className="ts-form-group">
+              <label className="ts-form-label">Часы</label>
+              {renderHoursInputs(addHours, setAddHours)}
+            </div>
+          )}
+
+          <div className="ts-form-group">
+            <label className="ts-form-label">Комментарий <span className="ts-form-required">*</span></label>
             <input
               type="text"
               className="ts-form-input"
-              value={newRow.notes}
-              onChange={e => setNewRow(prev => ({ ...prev, notes: e.target.value }))}
+              value={addNotes}
+              onChange={e => setAddNotes(e.target.value)}
               placeholder="Причина корректировки..."
-              style={{ marginBottom: 6 }}
             />
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button type="button" className="ts-btn" onClick={cancelAdd}>Отмена</button>
-              <button
-                type="button"
-                className="ts-btn ts-btn--primary"
-                onClick={handleSaveNew}
-                disabled={!canSave}
-                title={canSave ? undefined : 'Укажите часы и комментарий'}
-              >
-                Сохранить
-              </button>
-            </div>
           </div>
-        );
-      })()}
-      {addTarget?.kind === 'zero-out' && (
-        <div
-          style={{
-            borderBottom: '1px dashed var(--border, #e5e7eb)',
-            paddingBottom: 10,
-            marginBottom: 10,
-            background: 'var(--bg-tertiary, #f5f6f8)',
-            padding: 10,
-            borderRadius: 6,
-          }}
-        >
-          <div style={{ fontWeight: 500, marginBottom: 6 }}>Обнулить день</div>
-          <input
-            type="text"
-            className="ts-form-input"
-            value={newRow.notes}
-            onChange={e => setNewRow(prev => ({ ...prev, notes: e.target.value }))}
-            placeholder="Причина обнуления (обязательно)…"
-            style={{ marginBottom: 6 }}
-            autoFocus
-          />
+
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button type="button" className="ts-btn" onClick={cancelAdd}>Отмена</button>
             <button
               type="button"
               className="ts-btn ts-btn--primary"
-              onClick={handleConfirmZeroOut}
-              disabled={newRow.notes.trim().length === 0}
-              title={newRow.notes.trim().length === 0 ? 'Укажите комментарий' : 'Сохранить день 0 ч'}
+              onClick={saveAdd}
+              disabled={!addCanSave}
+              title={addCanSave ? undefined : 'Заполните поля и комментарий'}
             >
-              Подтвердить
+              Сохранить
             </button>
           </div>
         </div>
       )}
 
-      {/* Меню «+ Добавить корректировку» */}
-      {!addTarget && !hasDayLevelCorrection && (
-        <div style={{ marginBottom: 10 }}>
-          {!addMenuOpen ? (
-            <button
-              type="button"
-              className="ts-btn ts-btn--primary"
-              onClick={() => setAddMenuOpen(true)}
-              disabled={availableForAdd.length === 0 && !onZeroOutDay}
-              title={availableForAdd.length === 0 && !onZeroOutDay
-                ? 'Нет объектов для новой корректировки'
-                : 'Добавить корректировку'}
-            >
-              + Добавить корректировку
-            </button>
-          ) : (
-            <div
-              style={{
-                border: '1px solid var(--border, #e5e7eb)',
-                borderRadius: 6,
-                padding: 8,
-                background: 'var(--surface)',
-              }}
-            >
-              <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 6 }}>Что добавить?</div>
-              {availableForAdd.length === 0 && (
-                <div style={{ color: 'var(--text-secondary, #5b6573)', fontSize: 12, marginBottom: 6 }}>
-                  Все объекты сотрудника уже скорректированы.
-                </div>
-              )}
-              {availableForAdd.map(entry => (
-                <button
-                  key={entry.object_key}
-                  type="button"
-                  className="ts-btn"
-                  style={{ display: 'block', width: '100%', marginBottom: 4, textAlign: 'left' }}
-                  onClick={() => openAddObject(entry)}
-                >
-                  {entry.object_name}
-                </button>
-              ))}
-              {onZeroOutDay && (
-                <button
-                  type="button"
-                  className="ts-btn"
-                  style={{ display: 'block', width: '100%', marginBottom: 4, textAlign: 'left' }}
-                  onClick={openZeroOut}
-                >
-                  Обнулить день целиком
-                </button>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
-                <button type="button" className="ts-btn" onClick={() => setAddMenuOpen(false)}>
-                  Закрыть
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+      {/* «Обнулить день целиком» — отдельная мелкая ссылка (#5: zero-out сохранён) */}
+      {!adding && !hasDayLevelCorrection && onZeroOutDay && (
+        <button
+          type="button"
+          className="ts-btn ts-btn--link"
+          style={{ marginBottom: 10 }}
+          onClick={() => {
+            const notes = window.prompt('Причина обнуления дня (обязательно):')?.trim();
+            if (!notes) return;
+            if (correctedEntries.length > 0 && !window.confirm(
+              'Обнуление дня снимет все корректировки по объектам за этот день. Продолжить?',
+            )) return;
+            onZeroOutDay(notes);
+          }}
+        >
+          Обнулить день целиком
+        </button>
       )}
 
       {planned != null && (
@@ -1227,6 +1175,69 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
       </div>
     ) : null;
 
+  // Блок файлов корректировки. Для day-level формы передаётся слотом в CorrectionTab
+  // (рендерится перед футером → «Сохранить» в самом низу, #1). Для objects-блока —
+  // рендерится отдельно после списка.
+  const attachmentsNode = adjustmentId ? (
+    <div style={{ padding: useTwoColumnLayout ? '0' : '12px 20px 0' }}>
+      <CorrectionAttachments
+        adjustmentId={adjustmentId}
+        variant="modal"
+        canEdit={attachmentsCanEdit}
+      />
+    </div>
+  ) : null;
+
+  // Плашка согласования времени внизу модалки (#6).
+  const approvalStatus = correctionInfo?.approval_status ?? null;
+  const approvalMeta = [
+    correctionInfo?.approved_by_name ?? null,
+    correctionInfo?.approved_at ? formatCorrectionDate(correctionInfo.approved_at) : null,
+  ].filter(Boolean).join(' • ');
+  const approvalBanner = correctionInfo?.is_correction && approvalStatus ? (() => {
+    if (approvalStatus === 'approved') {
+      return (
+        <div className="ts-corr-approval ts-corr-approval--approved">
+          <span className="ts-corr-approval__icon">✓</span>
+          <span>
+            Время согласовано и зачтено в табель
+            {approvalMeta && <span className="ts-corr-approval__meta">{approvalMeta}</span>}
+          </span>
+        </div>
+      );
+    }
+    if (approvalStatus === 'auto_approved') {
+      return (
+        <div className="ts-corr-approval ts-corr-approval--approved">
+          <span className="ts-corr-approval__icon">✓</span>
+          <span>Время зачтено в табель</span>
+        </div>
+      );
+    }
+    if (approvalStatus === 'pending') {
+      return (
+        <div className="ts-corr-approval ts-corr-approval--pending">
+          <span className="ts-corr-approval__icon">⏳</span>
+          <span>Время на согласовании администратора</span>
+        </div>
+      );
+    }
+    if (approvalStatus === 'rejected') {
+      return (
+        <div className="ts-corr-approval ts-corr-approval--rejected">
+          <span className="ts-corr-approval__icon">✗</span>
+          <span>
+            Корректировка отклонена
+            {correctionInfo?.approval_comment && (
+              <span className="ts-corr-approval__meta">{correctionInfo.approval_comment}</span>
+            )}
+          </span>
+        </div>
+      );
+    }
+    return null;
+  })() : null;
+
   const correctionPanel = showCorrectionTab ? (
     <>
       {correctionAuthorBlock}
@@ -1244,6 +1255,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           maxHours={maxHours}
           correctionInfo={correctionInfo}
           initialMode={initialMode}
+          attachmentsSlot={attachmentsNode}
         />
       )}
       {hasObjectsBlock && (
@@ -1254,24 +1266,19 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
             hours: Number(timesheetEntry.display_hours_worked ?? timesheetEntry.hours_worked ?? 0),
             notes: timesheetEntry.notes ?? '',
           } : null}
+          dayLevelStatus={timesheetEntry?.status ?? null}
           onDeleteDayLevel={hasDayLevelCorrection ? onDelete : undefined}
           plannedHours={plannedHours ?? null}
           onSaveObject={onSaveObject!}
           onDeleteObject={onDeleteObject!}
+          onSaveDayLevel={onSave}
           onZeroOutDay={onZeroOutDay}
           preselectedObjectKey={preselectedObjectKey}
           initialMode={initialMode}
         />
       )}
-      {adjustmentId && (
-        <div style={{ padding: useTwoColumnLayout ? '0' : '12px 20px 20px' }}>
-          <CorrectionAttachments
-            adjustmentId={adjustmentId}
-            variant="modal"
-            canEdit={attachmentsCanEdit}
-          />
-        </div>
-      )}
+      {hasObjectsBlock && attachmentsNode}
+      {approvalBanner}
     </>
   ) : null;
 

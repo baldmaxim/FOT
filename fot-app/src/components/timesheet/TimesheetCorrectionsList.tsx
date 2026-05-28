@@ -8,6 +8,7 @@ import { TimesheetBulkCorrectionModal } from './TimesheetBulkCorrectionModal';
 import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
 import { CorrectionAttachments } from './CorrectionAttachments';
 import { generateDateRange } from '../../utils/calendarUtils';
+import { STATUS_META, getStatusMeta } from '../../utils/correctionStatus';
 
 interface IProps {
   startDate: string;
@@ -15,18 +16,6 @@ interface IProps {
   departmentId: string | null;
   employees: TimesheetEmployee[];
 }
-
-const STATUS_LABELS: Record<TimesheetStatus, string> = {
-  work: 'Присутствие',
-  vacation: 'Отпуск',
-  dayoff: 'Отгул',
-  remote: 'Удалёнка',
-  unpaid: 'За свой счёт',
-  absent: 'Неявка',
-  sick: 'Больничный',
-  manual: 'Ручная корр.',
-  educational_leave: 'Учебный отпуск',
-};
 
 const formatDate = (iso: string): string => {
   const d = new Date(iso + 'T00:00:00');
@@ -191,8 +180,8 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
           Статус:
           <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as '' | TimesheetStatus)}>
             <option value="">Все</option>
-            {Object.entries(STATUS_LABELS).map(([code, label]) => (
-              <option key={code} value={code}>{label}</option>
+            {STATUS_META.map(meta => (
+              <option key={meta.status} value={meta.status}>{meta.icon} {meta.label}</option>
             ))}
           </select>
         </label>
@@ -231,7 +220,17 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
                 <tr key={row.id} className={row.approval_locked ? 'ts-corrections-row--locked' : ''}>
                   <td>{formatDate(row.work_date)}</td>
                   <td>{row.employee_full_name ?? `#${row.employee_id}`}</td>
-                  <td>{STATUS_LABELS[row.status] ?? row.status}</td>
+                  <td>
+                    {(() => {
+                      const meta = getStatusMeta(row.status);
+                      return (
+                        <span className="ts-status-badge">
+                          <span className="ts-status-badge__icon">{meta?.icon ?? '✎'}</span>
+                          {meta?.label ?? row.status}
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td>{formatHours(row.hours_override)}</td>
                   <td>{row.author_name ?? '—'}</td>
                   <td className="ts-corrections-reason">{row.reason ?? ''}</td>

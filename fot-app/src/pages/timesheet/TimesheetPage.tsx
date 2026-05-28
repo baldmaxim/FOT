@@ -221,6 +221,15 @@ export const TimesheetPage: FC = () => {
         ? 'transfers'
         : 'employees';
 
+  // Запоминаем последний «сеточный» вид (по сотрудникам/по объектам), чтобы кнопка
+  // «Корректировки» работала переключателем: повторный клик возвращает сюда (#10).
+  const prevGridViewRef = useRef<'employees' | 'objects'>('employees');
+  useEffect(() => {
+    if (viewMode === 'employees' || viewMode === 'objects') {
+      prevGridViewRef.current = viewMode;
+    }
+  }, [viewMode]);
+
   useEffect(() => {
     if (!isMultiDepartmentManager) return;
     if (effectiveSelectedDeptId && managedDepartmentIds.includes(effectiveSelectedDeptId)) return;
@@ -1173,6 +1182,12 @@ export const TimesheetPage: FC = () => {
     });
   }, [clearBulkState, setSearchParams]);
 
+  // Кнопка «Корректировки» — переключатель: из corrections возвращает в исходный
+  // «сеточный» вид, иначе открывает corrections (#10).
+  const handleCorrectionsChipClick = useCallback(() => {
+    handleViewModeChange(viewMode === 'corrections' ? prevGridViewRef.current : 'corrections');
+  }, [viewMode, handleViewModeChange]);
+
   const handleTimesheetModeChange = useCallback((nextMode: 'department' | 'assigned') => {
     clearBulkState();
     closeTeamManagement();
@@ -1601,7 +1616,7 @@ export const TimesheetPage: FC = () => {
       <button
         type="button"
         className={`ts-view-chip ${viewMode === 'corrections' ? ' ts-view-chip--active' : ''}`}
-        onClick={() => handleViewModeChange('corrections')}
+        onClick={handleCorrectionsChipClick}
       >
         Корректировки
       </button>
@@ -1640,7 +1655,7 @@ export const TimesheetPage: FC = () => {
     <button
       type="button"
       className={`ts-view-chip ${viewMode === 'corrections' ? ' ts-view-chip--active' : ''}`}
-      onClick={() => handleViewModeChange('corrections')}
+      onClick={handleCorrectionsChipClick}
     >
       Корректировки
     </button>
@@ -1789,7 +1804,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {activeGridDeptId && (
+                {activeGridDeptId && (viewMode === 'employees' || viewMode === 'objects') && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
@@ -2078,6 +2093,7 @@ export const TimesheetPage: FC = () => {
                       is_correction: true,
                       corrected_at: modalEntry.corrected_at,
                       corrected_by_name: modalEntry.corrected_by_name,
+                      approval_status: modalEntry.approval_status ?? null,
                       approved_at: modalEntry.approved_at,
                       approved_by_name: modalEntry.approved_by_name,
                       adjustment_id: modalEntry.id,

@@ -9,6 +9,7 @@ import { employeeEnrichContactsController } from '../controllers/employee-enrich
 import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA, requireAdmin } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
 import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 
 const router = Router();
 
@@ -49,7 +50,7 @@ function validateExcelUpload(req: Request, res: Response, next: NextFunction): v
       });
       return;
     }
-    file.originalname = sanitizeFileName(file.originalname);
+    file.originalname = sanitizeFileName(decodeMulterFilename(file.originalname));
   }
   next();
 }
