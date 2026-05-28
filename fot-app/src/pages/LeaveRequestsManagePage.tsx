@@ -25,6 +25,7 @@ import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
 import { formatLeaveRequestDatesCompact } from '../utils/leaveRequestDates';
+import { displayFileName } from '../utils/fileNameDisplay';
 import './LeaveRequestsManagePage.css';
 
 const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
@@ -46,18 +47,9 @@ const DIRECT_REPORTS_KEY = '__direct_reports__';
 const DIRECT_REPORTS_TITLE = 'Непосредственные подчинённые';
 
 // Старые вложения (до Unicode-фикса sanitizeFileName) хранятся в БД как
-// «________.pdf» — буквы/цифры были схлопнуты в подчёркивания. Показываем для
-// них fallback «Документ.ext», исходное имя остаётся в title.
-const formatAttachmentName = (fileName: string): string => {
-  const base = fileName.replace(/^.*[\\/]/, '');
-  const dot = base.lastIndexOf('.');
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : '';
-  if (!/[\p{L}\p{N}]/u.test(stem)) {
-    return `Документ${ext}`;
-  }
-  return base;
-};
+// «________.pdf» или с двойной UTF-8→latin1 кодировкой. Показываем им
+// fallback «Документ.ext» через общий хелпер; исходное имя остаётся в title.
+const formatAttachmentName = displayFileName;
 
 interface IPreviewState {
   documentId: number;

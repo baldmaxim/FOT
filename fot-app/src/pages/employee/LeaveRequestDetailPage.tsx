@@ -13,6 +13,7 @@ import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
 import { formatFioShort } from '../../utils/formatFio';
 import { hasDiscreteDates } from '../../utils/leaveRequestDates';
+import { displayFileName } from '../../utils/fileNameDisplay';
 import { FilePreviewModal } from '../../components/documents/FilePreviewModal';
 import './LeaveRequestsPage.css';
 
@@ -221,7 +222,7 @@ export const LeaveRequestDetailPage: FC = () => {
                   >
                     <Icon size={18} />
                     <div className="lr-attachment-info">
-                      <div className="lr-attachment-name">{doc.file_name}</div>
+                      <div className="lr-attachment-name" title={doc.file_name}>{displayFileName(doc.file_name)}</div>
                       <div className="lr-attachment-meta">{formatBytes(doc.file_size)}</div>
                     </div>
                     <button

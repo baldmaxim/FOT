@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Paperclip, Trash2, Upload, Eye, FileText } from 'lucide-react';
 import { correctionAttachmentsService, type ICorrectionAttachment } from '../../services/correctionAttachmentsService';
 import { FilePreviewModal } from '../documents/FilePreviewModal';
+import { displayFileName } from '../../utils/fileNameDisplay';
 
 interface IProps {
   adjustmentId: number;
@@ -95,6 +96,7 @@ export const CorrectionAttachments: FC<IProps> = ({ adjustmentId, variant, canEd
         <ul className="ts-corr-attachments__list">
           {items.map(item => {
             const isLeaveRequest = item.source === 'leave_request';
+            const shownName = displayFileName(item.original_name);
             return (
               <li key={item.id} className="ts-corr-attachments__item">
                 <FileText size={14} className="ts-corr-attachments__icon" />
@@ -102,7 +104,7 @@ export const CorrectionAttachments: FC<IProps> = ({ adjustmentId, variant, canEd
                   className="ts-corr-attachments__name"
                   title={`${item.original_name} · ${formatSize(item.file_size)}${isLeaveRequest ? ' · из заявки' : ''}`}
                 >
-                  {item.original_name}
+                  {shownName}
                 </span>
                 <span className="ts-corr-attachments__meta">{formatSize(item.file_size)}</span>
                 {isLeaveRequest && (

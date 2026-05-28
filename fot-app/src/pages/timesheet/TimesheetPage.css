@@ -814,6 +814,14 @@
 
 .ts-btn--primary:disabled {
   box-shadow: none;
+  /* Сохраняем зелёный фон даже в disabled — иначе кнопка читается как
+   * «белая с зелёной обводкой» (наследует .ts-btn:disabled { background: var(--surface) })
+   * и пользователь не понимает, что это primary action.
+   */
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+  opacity: 0.55;
 }
 
 .ts-btn--success {
@@ -3832,6 +3840,14 @@
   margin-top: 8px;
 }
 
+/* Inline-вариант: «автор корректировки» рендерится в правой колонке вместо
+ * sticky-плашки под шапкой. Без боковых отступов, тонкий шрифт. */
+.ts-correction-info--inline {
+  margin: 0 20px 8px;
+  font-size: 11px;
+  padding: 5px 8px;
+}
+
 /* Modal tabs */
 .ts-modal-tabs {
   display: flex;
@@ -4232,7 +4248,7 @@
 
 /* Form */
 .ts-form-group {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .ts-form-label {
@@ -4240,13 +4256,13 @@
   font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .ts-form-input {
   width: 100%;
-  padding: 10px 14px;
-  border-radius: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   font-size: 14px;
   background: var(--surface);

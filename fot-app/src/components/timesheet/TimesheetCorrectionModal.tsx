@@ -130,7 +130,7 @@ const EventsTab: FC<{
   allowAccessPointMap?: boolean;
   timesheetEntry?: Pick<TimesheetEntry, 'first_entry' | 'last_exit' | 'hours_worked' | 'display_hours_worked'> | null;
 }> = ({ employeeId, workDate, allowAccessPointMap = false, timesheetEntry }) => {
-  const { canViewPage } = useAuth();
+  const { canViewPage, showActualHours } = useAuth();
   const {
     canOpenAccessPointMap,
     openAccessPointMap,
@@ -179,7 +179,17 @@ const EventsTab: FC<{
   const fallbackTotalSec = calculateWorkSeconds(events, internalPoints, workDate);
   const fallbackFirstEntry = findFirstExternalEntry(events, internalPoints);
   const fallbackLastExit = findLastExternalExit(events, internalPoints);
-  const visibleHours = timesheetEntry?.display_hours_worked ?? timesheetEntry?.hours_worked ?? null;
+  // Уважаем per-role флаг show_actual_hours (system_roles.show_actual_hours,
+  // миграция 077): админ с флагом «факт» видит hours_worked, остальные —
+  // display_hours_worked (урезано под план). Раньше здесь был хардкод на
+  // display_hours_worked → нижний бейдж модалки рассинхрон с табелем и боковой
+  // панелью, где уже используется selectVisibleHours.
+  // Inline (а не selectVisibleHours) — у нас Pick<>, а не полный TimesheetEntry.
+  const visibleHours = timesheetEntry
+    ? (showActualHours
+        ? timesheetEntry.hours_worked ?? timesheetEntry.display_hours_worked ?? null
+        : timesheetEntry.display_hours_worked ?? timesheetEntry.hours_worked ?? null)
+    : null;
   const totalSec = visibleHours != null
     ? Math.max(0, Math.round(visibleHours * 3600))
     : fallbackTotalSec;
@@ -412,9 +422,6 @@ const CorrectionTab: FC<{
           {trimmedInitialNotes && (
             <div className="ts-correction-view-comment">{trimmedInitialNotes}</div>
           )}
-        </div>
-        <div className="ts-modal-footer">
-          <button className="ts-btn" onClick={onClose} type="button">Закрыть</button>
         </div>
       </>
     );
@@ -702,7 +709,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
           </div>
         </div>
       )}
-      {!hasDayLevelCorrection && onZeroOutDay && (
+      {!hasDayLevelCorrection && onZeroOutDay && objectEntries.some(e => e.is_correction && e.adjustment_id != null) && (
         <div
           style={{
             borderBottom: '1px dashed var(--border, #e5e7eb)',
@@ -1028,8 +1035,22 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   const adjustmentId = correctionInfo?.adjustment_id ?? null;
   const attachmentsCanEdit = Boolean(correctionInfo?.is_correction && adjustmentId);
 
+  // Плашка «автор последней корректировки + время» — раньше висела sticky под
+  // шапкой модалки. Перенесена в правую колонку, чтобы не сдвигать шапку и
+  // быть рядом с самим списком корректировок.
+  const correctionAuthorBlock = correctionInfo?.is_correction
+    && (correctionInfo.corrected_by_name || correctionInfo.corrected_at) ? (
+      <div className="ts-correction-info ts-correction-info--inline">
+        <span className="ts-correction-info-icon">✎</span>
+        {correctionInfo.corrected_by_name}
+        {correctionInfo.corrected_by_name && correctionInfo.corrected_at && ', '}
+        {correctionInfo.corrected_at && formatCorrectionDate(correctionInfo.corrected_at)}
+      </div>
+    ) : null;
+
   const correctionPanel = showCorrectionTab ? (
     <>
+      {correctionAuthorBlock}
       {!hasObjectsBlock && (
         <CorrectionTab
           onClose={onClose}
@@ -1090,15 +1111,6 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           <X size={18} />
         </button>
       </div>
-
-      {correctionInfo?.is_correction && (correctionInfo.corrected_by_name || correctionInfo.corrected_at) && (
-        <div className="ts-correction-info">
-          <span className="ts-correction-info-icon">✎</span>
-          {correctionInfo.corrected_by_name}
-          {correctionInfo.corrected_by_name && correctionInfo.corrected_at && ', '}
-          {correctionInfo.corrected_at && formatCorrectionDate(correctionInfo.corrected_at)}
-        </div>
-      )}
 
       {infoBanner && (
         <div className="ts-correction-info ts-correction-info--notice">

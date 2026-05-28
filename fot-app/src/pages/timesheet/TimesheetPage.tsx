@@ -43,6 +43,7 @@ import {
   isPreHolidayForSchedule,
   isScheduleDayOff,
 } from '../../utils/scheduleUtils';
+import { selectVisibleHours, selectVisibleObjectHours } from '../../utils/hoursDisplay';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import {
   getHalfRange,
@@ -822,15 +823,21 @@ export const TimesheetPage: FC = () => {
   }, [excludeModalEmployee, rangeStart, rangeEnd, activeGridDeptId, isDirectReportsMarker, monthStr, panelEmployee?.id, queryClient, toast]);
 
   const modalDefaultHours = useMemo(() => {
+    // Дефолт поля «Часы» в форме корректировки уважает per-role флаг
+    // show_actual_hours: для роли с факт-часами (admin) — берём hours_worked,
+    // для остальных — display_hours_worked. Иначе админ видит в табеле 14ч,
+    // открывает модалку и в форме оказывается 9ч.
     if (modalMode === 'object') {
-      return modalObjectEntry?.display_hours_worked ?? modalObjectEntry?.hours_worked ?? modalObjectEntry?.base_hours_worked ?? 0;
+      const v = selectVisibleObjectHours(modalObjectEntry ?? null, showActualHours);
+      if (v > 0) return v;
+      return modalObjectEntry?.base_hours_worked ?? 0;
     }
-    if (modalEntry?.display_hours_worked != null) return modalEntry.display_hours_worked;
-    if (modalEntry?.hours_worked != null) return modalEntry.hours_worked;
+    const v = selectVisibleHours(modalEntry ?? null, showActualHours);
+    if (v != null) return v;
     if (!modalEmployee) return 8;
     const sched = getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay);
     return getWorkHoursForDay(sched, year, month, modalDay);
-  }, [modalMode, modalObjectEntry, modalEntry, modalEmployee, schedules, dailySchedules, year, month, modalDay]);
+  }, [modalMode, modalObjectEntry, modalEntry, modalEmployee, schedules, dailySchedules, year, month, modalDay, showActualHours]);
 
   // Корректировки могут превышать длительность смены по графику — лимит снят.
   const modalMaxHours = null;
