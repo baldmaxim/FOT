@@ -295,15 +295,15 @@
   table-layout: fixed;
 }
 
-.colCode { width: 8%; }
+.colCode { width: 7%; }
 .colName { width: 18%; }
-.colAdmin { width: 7%; }
-.colHours { width: 8%; }
+.colAdmin { width: 6%; }
+.colHours { width: 7%; }
 .colCabinet { width: 13%; }
-.colWindow { width: 8%; }
-.colFull { width: 8%; }
-.colStatus { width: 10%; }
-.colActions { width: 12%; }
+.colWindow { width: 7%; }
+.colFull { width: 7%; }
+.colStatus { width: 9%; }
+.colActions { width: 19%; }
 
 /* Контролы инлайн-редактирования строки роли: заполняют ячейку,
    держат компактную высоту — строка не растёт, колонки не «прыгают». */
@@ -311,7 +311,7 @@
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  height: 30px;
+  height: 28px;
   padding: 0 8px;
   font-size: 13px;
   border: 1px solid var(--border);
@@ -339,13 +339,26 @@
 }
 
 .table td {
-  padding: 12px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border);
   color: var(--text-primary);
+  vertical-align: middle;
 }
 
 .table tr:last-child td {
   border-bottom: none;
+}
+
+/* Кнопки действий в строке — компактные и по центру, чтобы строка была
+   низкой и не «прыгала» по высоте между обычным и edit-режимом. */
+.actions {
+  align-items: center;
+  row-gap: 6px;
+}
+
+.actions button {
+  padding: 5px 9px;
+  font-size: 12px;
 }
 
 .rowInactive td {
