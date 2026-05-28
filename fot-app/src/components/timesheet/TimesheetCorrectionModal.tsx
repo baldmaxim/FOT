@@ -71,6 +71,9 @@ interface ICorrectionModalProps {
   // Сохранение/удаление корректировки по конкретному объекту.
   onSaveObject?: (target: { object_key: string; object_id: string | null; object_name: string }, hours: number, notes: string) => void;
   onDeleteObject?: (target: { object_key: string; object_id: string | null; object_name: string }) => void;
+  // Явное обнуление дня (status='work', hours=0) — единственная точка входа к day-level
+  // корректировке, когда CorrectionTab скрыт из-за объектных СКУД-записей.
+  onZeroOutDay?: (notes: string) => void;
 }
 
 interface ITypeOption {
@@ -534,6 +537,9 @@ interface IObjectCorrectionsListProps {
   plannedHours?: number | null;
   onSaveObject: (target: { object_key: string; object_id: string | null; object_name: string }, hours: number, notes: string) => void;
   onDeleteObject: (target: { object_key: string; object_id: string | null; object_name: string }) => void;
+  // Когда day-level корректировки нет, но у дня есть объектные СКУД-записи —
+  // даём явный путь «не работал»: создаёт day-level 0ч (бэк снимет manual_object).
+  onZeroOutDay?: (notes: string) => void;
 }
 
 const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
@@ -544,7 +550,10 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   plannedHours,
   onSaveObject,
   onDeleteObject,
+  onZeroOutDay,
 }) => {
+  const [zeroOutOpen, setZeroOutOpen] = useState(false);
+  const [zeroOutNotes, setZeroOutNotes] = useState('');
   const initState = useCallback((): Record<string, IObjectRowState> => {
     const map: Record<string, IObjectRowState> = {};
     for (const entry of objectEntries) {
@@ -677,6 +686,81 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
               <Trash2 size={14} />
             </button>
           </div>
+        </div>
+      )}
+      {!hasDayLevelCorrection && onZeroOutDay && (
+        <div
+          style={{
+            borderBottom: '1px dashed var(--border, #e5e7eb)',
+            paddingBottom: 10,
+            marginBottom: 10,
+            background: 'var(--bg-tertiary, #f5f6f8)',
+            padding: 10,
+            borderRadius: 6,
+          }}
+        >
+          {!zeroOutOpen ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontWeight: 500, flex: 1, minWidth: 0 }}>
+                День не отработан
+                <span style={{ marginLeft: 8, color: 'var(--text-secondary, #5b6573)' }}>
+                  обнулить день целиком (вместо построчного перебора объектов)
+                </span>
+              </div>
+              <button
+                type="button"
+                className="ts-btn"
+                onClick={() => setZeroOutOpen(true)}
+                title="Открыть форму обнуления дня"
+              >
+                Обнулить день…
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontWeight: 500, marginBottom: 6 }}>Обнулить день</div>
+              <input
+                type="text"
+                className="ts-form-input"
+                value={zeroOutNotes}
+                onChange={e => setZeroOutNotes(e.target.value)}
+                placeholder="Причина обнуления (обязательно)…"
+                style={{ marginBottom: 6 }}
+                autoFocus
+              />
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="ts-btn"
+                  onClick={() => {
+                    setZeroOutOpen(false);
+                    setZeroOutNotes('');
+                  }}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  className="ts-btn ts-btn--primary"
+                  disabled={zeroOutNotes.trim().length === 0}
+                  title={zeroOutNotes.trim().length === 0 ? 'Укажите комментарий' : 'Сохранить день 0 ч'}
+                  onClick={() => {
+                    const notes = zeroOutNotes.trim();
+                    if (notes.length === 0) return;
+                    const hasObjAdj = objectEntries.some(e => e.is_correction && e.adjustment_id != null);
+                    if (hasObjAdj && !window.confirm(
+                      'Обнуление дня снимет все корректировки по объектам за этот день. Продолжить?',
+                    )) return;
+                    onZeroOutDay(notes);
+                    setZeroOutOpen(false);
+                    setZeroOutNotes('');
+                  }}
+                >
+                  Подтвердить
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
       {objectEntries.map(entry => {
@@ -856,6 +940,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   hasDayLevelCorrection,
   onSaveObject,
   onDeleteObject,
+  onZeroOutDay,
 }) => {
   const hasObjectsBlock = Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
   const dayHasObjectAdjustments = hasObjectsBlock && objectEntries!.some(entry => entry.is_correction && entry.adjustment_id != null);
@@ -1019,6 +1104,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
               plannedHours={plannedHours ?? null}
               onSaveObject={onSaveObject!}
               onDeleteObject={onDeleteObject!}
+              onZeroOutDay={onZeroOutDay}
             />
           )}
         </>

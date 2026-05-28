@@ -2086,6 +2086,7 @@ export const TimesheetPage: FC = () => {
             )}
             onSaveObject={modalMode === 'day' ? handleSaveObjectByTarget : undefined}
             onDeleteObject={modalMode === 'day' ? handleDeleteObjectByTarget : undefined}
+            onZeroOutDay={modalMode === 'day' ? (notes) => handleSaveCorrection('work', 0, notes) : undefined}
           />
         </Suspense>
       )}
