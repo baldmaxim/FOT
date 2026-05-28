@@ -2179,9 +2179,9 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
               od.name AS department_name
          FROM user_profiles up
          JOIN system_roles sr ON sr.id = up.system_role_id
-         LEFT JOIN user_department_access uda
-                ON uda.user_id = up.id AND uda.is_active = TRUE
-         LEFT JOIN org_departments od ON od.id = uda.department_id
+         LEFT JOIN employee_department_access eda
+                ON eda.employee_id = up.employee_id AND eda.is_active = TRUE
+         LEFT JOIN org_departments od ON od.id = eda.department_id
         WHERE sr.code IN ('manager','manager_obj')
           AND up.is_approved = TRUE
         ORDER BY up.full_name NULLS LAST`,
