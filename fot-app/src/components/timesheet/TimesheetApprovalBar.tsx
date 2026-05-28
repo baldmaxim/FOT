@@ -2,7 +2,7 @@ import { type FC, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Check, X, Send, RotateCcw, AlertCircle,
-  Upload, FileText, ChevronDown, MessageSquare,
+  Upload, FileText, ChevronDown, MessageSquare, HelpCircle,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -69,12 +69,15 @@ interface IActiveCardProps {
   submitDisabledReason: string;
   showMemoToggle: boolean;
   memoOpen: boolean;
+  submitError: string | null;
+  missingDays: IMissingDay[];
   onApprove: () => Promise<void>;
   onReject: () => Promise<void>;
   onSubmit: () => void;
   onRecall: () => void;
   onToggleMemo: () => void;
   onCommentChange: (value: string) => void;
+  onDismissError: () => void;
 }
 
 const ActiveCard: FC<IActiveCardProps> = ({
@@ -90,20 +93,67 @@ const ActiveCard: FC<IActiveCardProps> = ({
   submitDisabledReason,
   showMemoToggle,
   memoOpen,
+  submitError,
+  missingDays,
   onApprove,
   onReject,
   onSubmit,
   onRecall,
   onToggleMemo,
   onCommentChange,
+  onDismissError,
 }) => {
   const status = approval?.status || 'draft';
   const Icon = STATUS_ICONS[status];
   const [showComment, setShowComment] = useState(false);
   const [reviewCommentOpen, setReviewCommentOpen] = useState(false);
+  const [errorOpen, setErrorOpen] = useState(false);
+  const errorPopoverRef = useRef<HTMLDivElement | null>(null);
+  const errorTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const errorCloseTimer = useRef<number | null>(null);
   const submitLabel = status === 'returned' || status === 'rejected' ? 'Переподать' : 'Подать';
   const canShowSubmit = canSubmitDepartment && (status === 'draft' || status === 'rejected' || status === 'returned');
   const reviewComment = approval?.review_comment ?? '';
+  const hasError = !!submitError || missingDays.length > 0;
+
+  const clearErrorCloseTimer = (): void => {
+    if (errorCloseTimer.current !== null) {
+      window.clearTimeout(errorCloseTimer.current);
+      errorCloseTimer.current = null;
+    }
+  };
+  const openErrorPopover = (): void => {
+    clearErrorCloseTimer();
+    setErrorOpen(true);
+  };
+  const scheduleCloseErrorPopover = (): void => {
+    clearErrorCloseTimer();
+    errorCloseTimer.current = window.setTimeout(() => {
+      setErrorOpen(false);
+      errorCloseTimer.current = null;
+    }, 150);
+  };
+
+  useEffect(() => () => clearErrorCloseTimer(), []);
+
+  useEffect(() => {
+    if (!errorOpen) return;
+    const handleKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setErrorOpen(false);
+    };
+    const handlePointer = (e: MouseEvent): void => {
+      const target = e.target as Node | null;
+      if (errorPopoverRef.current?.contains(target as Node)) return;
+      if (errorTriggerRef.current?.contains(target as Node)) return;
+      setErrorOpen(false);
+    };
+    document.addEventListener('keydown', handleKey);
+    document.addEventListener('mousedown', handlePointer);
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      document.removeEventListener('mousedown', handlePointer);
+    };
+  }, [errorOpen]);
 
   return (
     <div className={`ts-approval-card${compact ? ' ts-approval-card--compact' : ''}`}>
@@ -129,6 +179,22 @@ const ActiveCard: FC<IActiveCardProps> = ({
           >
             <Send size={14} /> {submitLabel}
           </button>
+          {hasError && (
+            <button
+              ref={errorTriggerRef}
+              type="button"
+              className={`ts-btn ts-btn-split-toggle ts-approval-submit-error-trigger${errorOpen ? ' ts-btn-split-toggle--open' : ''}`}
+              onClick={() => setErrorOpen(v => !v)}
+              onMouseEnter={openErrorPopover}
+              onMouseLeave={scheduleCloseErrorPopover}
+              onFocus={openErrorPopover}
+              onBlur={scheduleCloseErrorPopover}
+              aria-label="Показать причины, почему подача невозможна"
+              aria-expanded={errorOpen}
+            >
+              <HelpCircle size={14} />
+            </button>
+          )}
           {reviewComment && (
             <button
               type="button"
@@ -158,6 +224,44 @@ const ActiveCard: FC<IActiveCardProps> = ({
       {reviewComment && reviewCommentOpen && (
         <div className="ts-approval-comment-preview" style={{ whiteSpace: 'pre-wrap' }}>
           {reviewComment}
+        </div>
+      )}
+
+      {hasError && errorOpen && (
+        <div
+          ref={errorPopoverRef}
+          className="ts-approval-submit-error-popover"
+          role="dialog"
+          aria-label="Причины, почему подача невозможна"
+          onMouseEnter={openErrorPopover}
+          onMouseLeave={scheduleCloseErrorPopover}
+        >
+          <div className="ts-approval-submit-error-header">
+            <AlertCircle size={14} />
+            <span>{submitError || 'Подача невозможна'}</span>
+            <button
+              type="button"
+              className="ts-approval-submit-error-close"
+              onClick={() => {
+                setErrorOpen(false);
+                onDismissError();
+              }}
+              aria-label="Скрыть"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          {missingDays.length > 0 && (
+            <ul className="ts-approval-submit-error-list">
+              {missingDays.map((day, idx) => (
+                <li key={`${day.employee_id}-${day.date}-${day.kind}-${idx}`}>
+                  <strong>{formatDayLabel(day.date)}</strong>
+                  {day.employee_name ? <span> • {day.employee_name}</span> : null}
+                  <span className="ts-approval-submit-error-reason"> — {day.reason}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -469,6 +573,8 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           submitDisabledReason={submitDisabledReason}
           showMemoToggle={memoSectionAllowed}
           memoOpen={memoOpen}
+          submitError={memoRequired ? null : submitError}
+          missingDays={memoRequired ? [] : missingDays}
           onApprove={handleApprove}
           onReject={handleReject}
           onSubmit={() => {
@@ -481,6 +587,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           onRecall={handleRecall}
           onToggleMemo={() => setMemoOpen(o => !o)}
           onCommentChange={setComment}
+          onDismissError={dismissMissing}
         />
         <TimesheetSubmitConfirmModal
           open={confirmOpen}
@@ -502,33 +609,6 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           />
         )}
       </div>
-      {(submitError || missingDays.length > 0) && !memoRequired && (
-        <div className="ts-approval-submit-error">
-          <div className="ts-approval-submit-error-header">
-            <AlertCircle size={14} />
-            <span>{submitError || 'Подача невозможна'}</span>
-            <button
-              type="button"
-              className="ts-approval-submit-error-close"
-              onClick={dismissMissing}
-              aria-label="Скрыть"
-            >
-              <X size={12} />
-            </button>
-          </div>
-          {missingDays.length > 0 && (
-            <ul className="ts-approval-submit-error-list">
-              {missingDays.map((day, idx) => (
-                <li key={`${day.employee_id}-${day.date}-${day.kind}-${idx}`}>
-                  <strong>{formatDayLabel(day.date)}</strong>
-                  {day.employee_name ? <span> • {day.employee_name}</span> : null}
-                  <span className="ts-approval-submit-error-reason"> — {day.reason}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
     </div>
   );
 };
