@@ -123,6 +123,7 @@ async function main() {
 
   const report = [];
   let migrated = 0;
+  let migratedFromHistory = 0;
   let merged = 0;
   let skipped = 0;
   let errors = 0;
@@ -139,6 +140,7 @@ async function main() {
     };
 
     let picked = null;
+    let pickedSource = 'same_day';
     try {
       const r = await client.query(
         `SELECT sap.object_id::text AS object_id,
@@ -174,20 +176,61 @@ async function main() {
     }
 
     if (!picked) {
+      // Тот же день пустой — пробуем «основной» объект сотрудника по СКУД-истории за 90 дней до даты.
+      try {
+        const r = await client.query(
+          `SELECT sap.object_id::text AS object_id,
+                  so.name AS object_name,
+                  COUNT(*)::int AS event_count
+             FROM skud_events se
+             JOIN skud_object_access_points sap
+                  ON BTRIM(sap.access_point_name) = BTRIM(se.access_point)
+             JOIN skud_objects so
+                  ON so.id = sap.object_id
+                 AND so.is_active = TRUE
+            WHERE se.employee_id = $1
+              AND se.event_date BETWEEN ($2::date - INTERVAL '90 days')::date
+                                    AND ($2::date - INTERVAL '1 day')::date
+              AND se.access_point IS NOT NULL
+            GROUP BY sap.object_id, so.name
+            ORDER BY event_count DESC, so.name ASC
+            LIMIT 1`,
+          [row.employee_id, row.work_date],
+        );
+        if (r.rows.length > 0) {
+          picked = {
+            object_id: r.rows[0].object_id,
+            object_name: r.rows[0].object_name,
+            event_count: Number(r.rows[0].event_count),
+          };
+          pickedSource = 'history_90d';
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[migrate] id=${adjustmentId} history SKUD lookup error: ${msg}`);
+        report.push({ ...base, action: 'error', error: msg });
+        errors += 1;
+        continue;
+      }
+    }
+
+    if (!picked) {
       report.push(base);
       skipped += 1;
       continue;
     }
 
     if (DRY_RUN) {
+      const dryAction = pickedSource === 'history_90d' ? 'migrated_from_history' : 'migrated';
       report.push({
         ...base,
-        action: 'migrated',
+        action: dryAction,
         picked_object_id: picked.object_id,
         picked_object_name: picked.object_name,
         picked_event_count: picked.event_count,
+        picked_source: pickedSource,
       });
-      migrated += 1;
+      if (pickedSource === 'history_90d') migratedFromHistory += 1; else migrated += 1;
       continue;
     }
 
@@ -215,6 +258,7 @@ async function main() {
           object_id: picked.object_id,
           object_name: picked.object_name,
           migrated_from_day_level: true,
+          migrated_source: pickedSource,
           migrated_at: new Date().toISOString(),
         };
         await client.query(
@@ -227,7 +271,7 @@ async function main() {
             WHERE id = $4`,
           [OBJECT_ADJUSTMENT_SOURCE_TYPE, picked.object_id, JSON.stringify(nextMeta), adjustmentId],
         );
-        action = 'migrated';
+        action = pickedSource === 'history_90d' ? 'migrated_from_history' : 'migrated';
       }
       await client.query('COMMIT');
 
@@ -237,8 +281,11 @@ async function main() {
         picked_object_id: picked.object_id,
         picked_object_name: picked.object_name,
         picked_event_count: picked.event_count,
+        picked_source: pickedSource,
       });
-      if (action === 'merged_into_existing') merged += 1; else migrated += 1;
+      if (action === 'merged_into_existing') merged += 1;
+      else if (action === 'migrated_from_history') migratedFromHistory += 1;
+      else migrated += 1;
     } catch (err) {
       try { await client.query('ROLLBACK'); } catch { /* пропуск */ }
       const msg = err instanceof Error ? err.message : String(err);
@@ -258,13 +305,14 @@ async function main() {
     dry_run: DRY_RUN,
     total: candidates.length,
     migrated,
+    migrated_from_history: migratedFromHistory,
     merged_into_existing: merged,
     skipped_no_skud: skipped,
     errors,
     items: report,
   }, null, 2));
 
-  console.log(`[migrate] migrated=${migrated} merged=${merged} skipped=${skipped} errors=${errors}`);
+  console.log(`[migrate] migrated=${migrated} migrated_from_history=${migratedFromHistory} merged=${merged} skipped=${skipped} errors=${errors}`);
   console.log(`[migrate] отчёт: ${REPORT_PATH}`);
   if (DRY_RUN) {
     console.log('[migrate] DRY-RUN: БД не изменялась. Запусти без --dry-run для применения.');

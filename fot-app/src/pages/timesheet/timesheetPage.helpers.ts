@@ -42,9 +42,6 @@ export type TimesheetViewMode = 'employees' | 'objects' | 'corrections' | 'trans
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
-export const UNASSIGNED_OBJECT_KEY = '__timesheet_unassigned__';
-export const UNASSIGNED_OBJECT_NAME = 'Не определён / без объекта';
-
 export const MONTH_NAMES_RU = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 

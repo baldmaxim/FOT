@@ -99,7 +99,6 @@ interface IBulkCellCoord {
 }
 
 const EMPTY_CELL_SELECTION = new Set<string>();
-const UNASSIGNED_OBJECT_NAME = 'Не определён / без объекта';
 
 const getEmployeeBulkRowKey = (employeeId: number): string => `employee:${employeeId}`;
 const getObjectBulkRowKey = (employeeId: number, objectKey: string): string => `object:${employeeId}:${encodeURIComponent(objectKey)}`;
@@ -295,7 +294,7 @@ const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string
 
 const getObjectCellTitle = (entry: TimesheetObjectEntry | null, objectName?: string): string | undefined => {
   if (!entry && !objectName) return undefined;
-  const parts = [`Объект: ${objectName || entry?.object_name || UNASSIGNED_OBJECT_NAME}`];
+  const parts = [`Объект: ${objectName || entry?.object_name || 'не указан'}`];
   if (entry) {
     parts.push(`Часы: ${formatHoursLabel(Math.round(getObjectVisibleHours(entry)))}`);
     if (entry.is_correction) {

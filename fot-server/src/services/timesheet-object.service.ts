@@ -305,6 +305,123 @@ const fetchRawEvents = async ({
   return rows;
 };
 
+interface IHistoricalPrimaryRow {
+  employee_id: number;
+  object_id: string;
+  object_name: string;
+}
+
+const fetchHistoricalPrimaryObjects = async (
+  employeeIds: number[],
+  windowStartDate: string,
+  windowEndDate: string,
+): Promise<Map<number, { object_id: string; object_name: string }>> => {
+  const out = new Map<number, { object_id: string; object_name: string }>();
+  if (employeeIds.length === 0) return out;
+
+  for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
+    const batch = employeeIds.slice(index, index + BATCH_SIZE);
+    let rows: IHistoricalPrimaryRow[] = [];
+    try {
+      rows = await query<IHistoricalPrimaryRow>(
+        `SELECT employee_id, object_id, object_name
+           FROM (
+             SELECT se.employee_id,
+                    sap.object_id::text AS object_id,
+                    so.name             AS object_name,
+                    COUNT(*)::int       AS event_count,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY se.employee_id
+                      ORDER BY COUNT(*) DESC, so.name ASC
+                    ) AS rn
+               FROM skud_events se
+               JOIN skud_object_access_points sap
+                 ON BTRIM(sap.access_point_name) = BTRIM(se.access_point)
+               JOIN skud_objects so
+                 ON so.id = sap.object_id AND so.is_active = TRUE
+              WHERE se.employee_id = ANY($1::int[])
+                AND se.event_date >= $2::date
+                AND se.event_date <= $3::date
+                AND se.access_point IS NOT NULL
+              GROUP BY se.employee_id, sap.object_id, so.name
+           ) ranked
+          WHERE rn = 1`,
+        [batch, windowStartDate, windowEndDate],
+      );
+    } catch (err) {
+      if (isMissingTableError(err)) return out;
+      throw err;
+    }
+    for (const row of rows) {
+      out.set(Number(row.employee_id), { object_id: row.object_id, object_name: row.object_name });
+    }
+  }
+  return out;
+};
+
+export async function resolveDayObjectForAdjustment(params: {
+  employeeId: number;
+  workDate: string;
+}): Promise<{ object_id: string; object_name: string } | null> {
+  const { employeeId, workDate } = params;
+
+  // 1) Объект с максимумом СКУД-событий за этот день.
+  try {
+    const sameDay = await query<{ object_id: string; object_name: string }>(
+      `SELECT sap.object_id::text AS object_id,
+              so.name             AS object_name,
+              COUNT(*)::int       AS event_count
+         FROM skud_events se
+         JOIN skud_object_access_points sap
+           ON BTRIM(sap.access_point_name) = BTRIM(se.access_point)
+         JOIN skud_objects so
+           ON so.id = sap.object_id AND so.is_active = TRUE
+        WHERE se.employee_id = $1
+          AND se.event_date = $2::date
+          AND se.access_point IS NOT NULL
+        GROUP BY sap.object_id, so.name
+        ORDER BY event_count DESC, so.name ASC
+        LIMIT 1`,
+      [employeeId, workDate],
+    );
+    if (sameDay.length > 0) {
+      return { object_id: sameDay[0].object_id, object_name: sameDay[0].object_name };
+    }
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    return null;
+  }
+
+  // 2) Объект с максимумом СКУД-событий за 90 дней до даты.
+  try {
+    const history = await query<{ object_id: string; object_name: string }>(
+      `SELECT sap.object_id::text AS object_id,
+              so.name             AS object_name,
+              COUNT(*)::int       AS event_count
+         FROM skud_events se
+         JOIN skud_object_access_points sap
+           ON BTRIM(sap.access_point_name) = BTRIM(se.access_point)
+         JOIN skud_objects so
+           ON so.id = sap.object_id AND so.is_active = TRUE
+        WHERE se.employee_id = $1
+          AND se.event_date BETWEEN ($2::date - INTERVAL '90 days')::date
+                                AND ($2::date - INTERVAL '1 day')::date
+          AND se.access_point IS NOT NULL
+        GROUP BY sap.object_id, so.name
+        ORDER BY event_count DESC, so.name ASC
+        LIMIT 1`,
+      [employeeId, workDate],
+    );
+    if (history.length > 0) {
+      return { object_id: history[0].object_id, object_name: history[0].object_name };
+    }
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+  }
+
+  return null;
+}
+
 const fetchObjectMappings = async (): Promise<{
   accessPointToObjectId: Map<string, string>;
   objectNameById: Map<string, string>;
@@ -416,6 +533,21 @@ export async function buildObjectAttendanceData(params: {
       ? listObjectIdsForEmployees(employeeIds)
       : Promise.resolve(new Map<number, string[]>()),
   ]);
+
+  // Сотрудники без приписки в employee_skud_object_access — для них day-level
+  // корректировку нужно прицепить к фактическому объекту, иначе попадёт в «Не определён».
+  // Берём 90 дней до endDate включительно: даёт «основной» объект сотрудника по СКУД-истории.
+  const employeesWithoutAssignment = includeObjectDetails
+    ? employeeIds.filter(id => (assignedObjectsByEmployee.get(id) || []).length === 0)
+    : [];
+  const historicalPrimaryByEmployee = includeObjectDetails
+    ? await fetchHistoricalPrimaryObjects(
+        employeesWithoutAssignment,
+        // endDate - 90д … endDate включительно
+        formatDateToISO(new Date(new Date(`${endDate}T00:00:00Z`).getTime() - 90 * 86400_000)),
+        endDate,
+      )
+    : new Map<number, { object_id: string; object_name: string }>();
 
   const rawFallbackSummaries = new Map<number, Map<string, IRawFallbackSummary>>();
   const baseObjectEntries = new Map<string, IAggregatedObjectEntry>();
@@ -561,6 +693,20 @@ export async function buildObjectAttendanceData(params: {
     if (hoursOverride == null || hoursOverride <= 0) continue;
     if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status as TimeStatus)) continue;
 
+    // Снимок СКУД-распределения дня ДО удаления — нужен для fallback'а ниже,
+    // если у сотрудника нет приписки в employee_skud_object_access.
+    let sameDayBest: { object_id: string; object_name: string; minutes: number } | null = null;
+    for (const [entryKey, entry] of baseObjectEntries) {
+      if (!entryKey.startsWith(`${dKey}_`)) continue;
+      if (entry.object_key === UNKNOWN_OBJECT_KEY || !entry.object_id) continue;
+      if (!sameDayBest || entry.base_minutes > sameDayBest.minutes) {
+        sameDayBest = { object_id: entry.object_id, object_name: entry.object_name, minutes: entry.base_minutes };
+      }
+    }
+    const sameDayMajority = sameDayBest
+      ? { object_id: sameDayBest.object_id, object_name: sameDayBest.object_name }
+      : null;
+
     // Корректировка перекрывает фактические СКУД-события дня — иначе двойной счёт.
     for (const entryKey of [...baseObjectEntries.keys()]) {
       if (entryKey.startsWith(`${dKey}_`)) baseObjectEntries.delete(entryKey);
@@ -569,14 +715,23 @@ export async function buildObjectAttendanceData(params: {
 
     const assigned = (assignedObjectsByEmployee.get(adjustment.employee_id) || [])
       .filter(objectId => objectMappings.objectNameById.has(objectId));
-    const targets: Array<{ objectKey: string; objectId: string | null; objectName: string }> =
-      assigned.length > 0
-        ? assigned.map(objectId => ({
-          objectKey: objectId,
-          objectId,
-          objectName: objectMappings.objectNameById.get(objectId) || UNKNOWN_OBJECT_NAME,
-        }))
+    let targets: Array<{ objectKey: string; objectId: string | null; objectName: string }>;
+    if (assigned.length > 0) {
+      targets = assigned.map(objectId => ({
+        objectKey: objectId,
+        objectId,
+        objectName: objectMappings.objectNameById.get(objectId) || UNKNOWN_OBJECT_NAME,
+      }));
+    } else {
+      // Сотрудник без приписки: цепляем правку к фактическому объекту,
+      // 1) если в этот день есть СКУД — к объекту с максимумом минут;
+      // 2) иначе — к основному объекту за 90 дней (historicalPrimaryByEmployee);
+      // 3) совсем нет СКУД-истории — оставляем UNKNOWN (редкий тру-фоллбек).
+      const fallback = sameDayMajority ?? historicalPrimaryByEmployee.get(adjustment.employee_id) ?? null;
+      targets = fallback
+        ? [{ objectKey: fallback.object_id, objectId: fallback.object_id, objectName: fallback.object_name }]
         : [{ objectKey: UNKNOWN_OBJECT_KEY, objectId: null, objectName: UNKNOWN_OBJECT_NAME }];
+    }
 
     // Делим в центичасах (2 знака — домен roundHours), чтобы сумма долей точно
     // равнялась скорректированным часам без копеечных «остатков» в объектном виде.

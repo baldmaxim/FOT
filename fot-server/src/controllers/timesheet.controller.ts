@@ -32,7 +32,7 @@ import {
   upsertAttendanceAdjustment,
 } from '../services/attendance.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
-import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
+import { OBJECT_ADJUSTMENT_SOURCE_TYPE, resolveDayObjectForAdjustment } from '../services/timesheet-object.service.js';
 import {
   isEmployeeAssignedToDepartmentOnDate,
   listEmployeeIdsAssignedToDepartmentPeriod,
@@ -1650,25 +1650,51 @@ export const timesheetController = {
         normalizedHours,
       );
 
-      // День-уровневая корректировка взаимоисключающа с per-object: снимаем все
-      // manual_object строки на тот же (employee, work_date) перед сохранением.
+      // Если день рабочий и часы заданы — пытаемся сразу прицепить корректировку к
+      // конкретному объекту (СКУД-объект дня → исторический primary), чтобы не плодить
+      // day-level записи, попадающие в группу «Не определён» в режиме «По объектам».
+      const resolvedObject = (parsed.status === 'work' && typeof normalizedHours === 'number' && normalizedHours > 0)
+        ? await resolveDayObjectForAdjustment({
+            employeeId: parsed.employee_id,
+            workDate: parsed.work_date,
+          })
+        : null;
+
+      // Мьютекс day-level ↔ per-object: снимаем строки противоположного типа.
       await execute(
         `DELETE FROM attendance_adjustments
            WHERE employee_id = $1 AND work_date = $2 AND source_type = $3`,
-        [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE],
+        [parsed.employee_id, parsed.work_date, resolvedObject ? 'manual' : OBJECT_ADJUSTMENT_SOURCE_TYPE],
       );
 
-	      const raw = await upsertAttendanceAdjustment({
-	        employee_id: parsed.employee_id,
-	        work_date: parsed.work_date,
-	        status: parsed.status,
-	        hours_override: normalizedHours,
-	        source_type: 'manual',
-	        source_id: 'manual',
-	        reason: parsed.notes ?? null,
-	        created_by: req.user.id,
-          approval_status: approvalStatus,
-	      });
+      const raw = resolvedObject
+        ? await upsertAttendanceAdjustment({
+            employee_id: parsed.employee_id,
+            work_date: parsed.work_date,
+            status: 'manual',
+            hours_override: normalizedHours,
+            source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+            source_id: resolvedObject.object_id,
+            reason: parsed.notes ?? null,
+            created_by: req.user.id,
+            approval_status: approvalStatus,
+            metadata: {
+              object_id: resolvedObject.object_id,
+              object_name: resolvedObject.object_name,
+              auto_resolved: true,
+            },
+          })
+        : await upsertAttendanceAdjustment({
+            employee_id: parsed.employee_id,
+            work_date: parsed.work_date,
+            status: parsed.status,
+            hours_override: normalizedHours,
+            source_type: 'manual',
+            source_id: 'manual',
+            reason: parsed.notes ?? null,
+            created_by: req.user.id,
+            approval_status: approvalStatus,
+          });
 
 	      const data = {
 	        id: Number(raw.id),
@@ -1686,13 +1712,16 @@ export const timesheetController = {
 	      const auditFullName = await loadEmployeeFullNameForAudit(parsed.employee_id);
 
 	      await auditService.logFromRequest(req, req.user.id, 'CREATE_TIMESHEET_ENTRY', {
-	        entityType: 'timesheet',
-	        entityId: String(data.id),
+	        entityType: resolvedObject ? 'timesheet_object_entry' : 'timesheet',
+	        entityId: resolvedObject
+            ? `${parsed.employee_id}:${parsed.work_date}:${resolvedObject.object_id}`
+            : String(data.id),
 	        details: {
 	          employee_id: parsed.employee_id,
           employee_full_name: auditFullName,
           work_date: parsed.work_date,
           status: parsed.status,
+          ...(resolvedObject ? { object_id: resolvedObject.object_id, object_name: resolvedObject.object_name, auto_resolved: true } : {}),
         },
       });
 
