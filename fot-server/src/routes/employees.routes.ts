@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
+import { employeeObjectAttributionController } from '../controllers/employee-object-attribution.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
 import { employeeSalaryEnrichController } from '../controllers/employee-enrich-salary.controller.js';
 import { employeeSalaryHistoryController } from '../controllers/employee-enrich-salary-history.controller.js';
@@ -143,6 +144,26 @@ router.delete(
   requireAdmin,
   requireCritical2FA,
   employeesController.deleteHistoryEvent
+);
+
+// Привязка удалёнщика к объекту (employee_object_attribution) — управление из /staff-control.
+// Статический путь объявлен до '/:id', чтобы не быть перехваченным параметром.
+router.get(
+  '/object-attribution/objects',
+  requirePageAccess('/staff-control', 'view'),
+  employeeObjectAttributionController.listObjects
+);
+router.get(
+  '/:id/object-attribution',
+  requirePageAccess('/staff-control', 'view'),
+  employeeObjectAttributionController.get
+);
+router.put(
+  '/:id/object-attribution',
+  // Та же зона прав, что и редактирование графика (кнопка живёт в ячейке графика,
+  // показывается только для remote). На фронте — canEditSch.
+  requirePageAccess('/staff-control/schedule', 'edit'),
+  employeeObjectAttributionController.set
 );
 
 // GET /api/employees/:id - получение одного (worker через /employee, остальные — через /employees)

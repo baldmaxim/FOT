@@ -6,11 +6,11 @@
  * от React state, легко тестируются и переиспользуются.
  */
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import type { IWorkSchedule, IEmployeeScheduleAssignment, PatternType } from '../types/schedule';
+import type { IWorkSchedule, IEmployeeScheduleAssignment, PatternType, ScheduleType } from '../types/schedule';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'schedule';
+export type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'schedule' | 'object_attribution';
 export type StaffStatusFilter = 'active' | 'fired' | 'excluded';
 export type ScheduleSource = 'employee' | 'default';
 
@@ -18,6 +18,8 @@ export interface IEmployeeScheduleView {
   scheduleId: string | null;
   scheduleName: string;
   source: ScheduleSource;
+  /** Режим работы графика — для условного показа привязки к объекту (только remote). */
+  scheduleType?: ScheduleType | null;
   effectiveFrom?: string | null;
   /** anchor_date конкретного назначения (override якоря cycle-паттерна), если задан */
   assignmentAnchorDate?: string | null;

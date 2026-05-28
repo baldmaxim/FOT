@@ -47,6 +47,14 @@ function routeQuery(sql: string): unknown[] {
   if (s.includes('employee_skud_object_access')) {
     return mockedState.tables.employee_skud_object_access;
   }
+  // resolveSchedulesBulk (определение remote-сотрудников) и датированная привязка —
+  // в этих тестах нет remote-сотрудников, отдаём пусто.
+  if (s.includes('employee_schedule_assignments')) {
+    return [];
+  }
+  if (s.includes('employee_object_attribution')) {
+    return [];
+  }
   if (s.includes('skud_object_access_points')) {
     return mockedState.tables.skud_object_access_points;
   }

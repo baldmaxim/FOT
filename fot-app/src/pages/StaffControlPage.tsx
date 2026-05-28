@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, MapPin } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { sigurAdminService } from '../services/sigurAdminService';
@@ -39,6 +39,7 @@ import { filterDepartmentTreeByIds, getTreeFlatDepartments } from '../utils/depa
 import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
+const ObjectAttributionModal = lazy(() => import('../components/staff/ObjectAttributionModal').then(m => ({ default: m.ObjectAttributionModal })));
 const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
 const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
 
@@ -147,6 +148,12 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
           {canEditSch && (
             <button className="sc-inline-btn" title="Назначить график" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'schedule'); }}>
               <Calendar size={12} />
+            </button>
+          )}
+          {/* Привязка к объекту — только для удалёнки (нет СКУД → объект задаётся вручную). */}
+          {canEditSch && scheduleView?.scheduleType === 'remote' && (
+            <button className="sc-inline-btn" title="Привязка к объекту" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'object_attribution'); }}>
+              <MapPin size={12} />
             </button>
           )}
           <span className="sc-schedule-cell">
@@ -772,6 +779,9 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
     );
   }
 
+  // Прочие типы (например object_attribution) рендерятся отдельным компонентом.
+  if (modalType !== 'department') return null;
+
   return (
     <div className="sc-overlay" onClick={onClose}>
       <div className="sc-modal" onClick={e => e.stopPropagation()}>
@@ -1098,6 +1108,11 @@ const MobileCard: FC<{
                 <Calendar size={14} />
               </button>
             )}
+            {canEditSch && scheduleView?.scheduleType === 'remote' && (
+              <button className="sc-btn-icon" title="Привязка к объекту" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'object_attribution'); }}>
+                <MapPin size={14} />
+              </button>
+            )}
             {canEditDept && (
               <button className="sc-btn-icon" title="Сменить отдел" onClick={e => { e.stopPropagation(); onOpenModal(emp, 'department'); }}>
                 <ArrowRightLeft size={14} />
@@ -1348,6 +1363,7 @@ export const StaffControlPage: FC = () => {
         scheduleId: defaultSchedule.id,
         scheduleName: defaultSchedule.name,
         source: 'default',
+        scheduleType: defaultSchedule.schedule_type ?? null,
         effectiveFrom: null,
       });
     }
@@ -1364,6 +1380,7 @@ export const StaffControlPage: FC = () => {
           scheduleId: personalAssignment.work_schedules.id,
           scheduleName: personalAssignment.work_schedules.name,
           source: isSameAsDefault ? 'default' : 'employee',
+          scheduleType: personalAssignment.work_schedules.schedule_type ?? null,
           effectiveFrom: isSameAsDefault ? null : personalAssignment.effective_from,
           assignmentAnchorDate: personalAssignment.anchor_date,
           assignmentId: personalAssignment.id,
@@ -2406,6 +2423,11 @@ export const StaffControlPage: FC = () => {
         onFixAssignment={handleFixAssignment}
         onDeleteAssignmentRow={handleDeleteAssignmentRow}
       />
+      {modalType === 'object_attribution' && modalEmp && (
+        <Suspense fallback={null}>
+          <ObjectAttributionModal employee={modalEmp} onClose={closeModal} />
+        </Suspense>
+      )}
       <BulkScheduleModal
         open={bulkScheduleOpen}
         targetCount={selectedEmployees.length}

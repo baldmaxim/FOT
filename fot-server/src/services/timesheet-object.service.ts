@@ -2,6 +2,13 @@ import { query } from '../config/postgres.js';
 import type { TimeStatus } from '../types/index.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { listObjectIdsForEmployees } from './employee-skud-object-access.service.js';
+import {
+  getAttributionObjectForEmployeeAt,
+  listAttributionRowsForEmployees,
+  resolveAttributionAt,
+  type IAttributionRow,
+} from './employee-object-attribution.service.js';
+import { resolveSchedule, resolveSchedulesBulk } from './schedule.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import {
   getAdjustmentPriority,
@@ -362,6 +369,8 @@ const fetchHistoricalPrimaryObjects = async (
 export async function resolveDayObjectForAdjustment(params: {
   employeeId: number;
   workDate: string;
+  /** Если известен — избегаем лишнего resolveSchedule; иначе резолвим внутри. */
+  scheduleType?: string;
 }): Promise<{ object_id: string; object_name: string } | null> {
   const { employeeId, workDate } = params;
 
@@ -390,6 +399,23 @@ export async function resolveDayObjectForAdjustment(params: {
   } catch (err) {
     if (!isMissingTableError(err)) throw err;
     return null;
+  }
+
+  // 1.5) Удалёнщик без СКУД в этот день: явная датированная привязка к объекту.
+  // Стоит ВЫШЕ 90-дневной истории (человеческое решение приоритетнее устаревших
+  // проходов), но НИЖЕ реального СКУД дня — поэтому реальный объект не маскируется.
+  let isRemote = params.scheduleType === 'remote';
+  if (params.scheduleType === undefined) {
+    try {
+      const sched = await resolveSchedule(employeeId, null, workDate);
+      isRemote = sched.schedule_type === 'remote';
+    } catch {
+      isRemote = false;
+    }
+  }
+  if (isRemote) {
+    const pinned = await getAttributionObjectForEmployeeAt(employeeId, workDate);
+    if (pinned) return pinned;
   }
 
   // 2) Объект с максимумом СКУД-событий за 90 дней до даты.
@@ -548,6 +574,19 @@ export async function buildObjectAttendanceData(params: {
         endDate,
       )
     : new Map<number, { object_id: string; object_name: string }>();
+
+  // Удалёнщики: датированная привязка к объекту — фолбэк для day-level правки в
+  // дни без СКУД (между sameDayMajority и 90-дневной историей). Реальный СКУД дня
+  // остаётся приоритетнее, поэтому при выходе на работу реальный объект не маскируется.
+  const remoteSchedulesByEmployee = includeObjectDetails
+    ? await resolveSchedulesBulk(employeeIds.map(id => ({ id })), endDate)
+    : new Map();
+  const remoteEmployeeIds = includeObjectDetails
+    ? employeeIds.filter(id => remoteSchedulesByEmployee.get(id)?.schedule_type === 'remote')
+    : [];
+  const attributionRowsByEmployee = remoteEmployeeIds.length > 0
+    ? await listAttributionRowsForEmployees(remoteEmployeeIds, startDate, endDate)
+    : new Map<number, IAttributionRow[]>();
 
   const rawFallbackSummaries = new Map<number, Map<string, IRawFallbackSummary>>();
   const baseObjectEntries = new Map<string, IAggregatedObjectEntry>();
@@ -735,10 +774,17 @@ export async function buildObjectAttendanceData(params: {
       }));
     } else {
       // Сотрудник без приписки: цепляем правку к фактическому объекту,
-      // 1) если в этот день есть СКУД — к объекту с максимумом минут;
-      // 2) иначе — к основному объекту за 90 дней (historicalPrimaryByEmployee);
-      // 3) совсем нет СКУД-истории — оставляем UNKNOWN (редкий тру-фоллбек).
-      const fallback = sameDayMajority ?? historicalPrimaryByEmployee.get(adjustment.employee_id) ?? null;
+      // 1) если в этот день есть СКУД — к объекту с максимумом минут (реальный СКУД);
+      // 2) удалёнщик — к датированной привязке (employee_object_attribution);
+      // 3) иначе — к основному объекту за 90 дней (historicalPrimaryByEmployee);
+      // 4) совсем нет данных — оставляем UNKNOWN (редкий тру-фоллбек).
+      const remoteAttribution = attributionRowsByEmployee.size > 0
+        ? resolveAttributionAt(attributionRowsByEmployee.get(adjustment.employee_id), adjustment.work_date)
+        : null;
+      const fallback = sameDayMajority
+        ?? remoteAttribution
+        ?? historicalPrimaryByEmployee.get(adjustment.employee_id)
+        ?? null;
       targets = fallback
         ? [{ objectKey: fallback.object_id, objectId: fallback.object_id, objectName: fallback.object_name }]
         : [{ objectKey: UNKNOWN_OBJECT_KEY, objectId: null, objectName: UNKNOWN_OBJECT_NAME }];
