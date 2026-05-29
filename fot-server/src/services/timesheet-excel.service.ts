@@ -457,6 +457,34 @@ export const buildObjectRowsForOneC = (
     });
 };
 
+const writeOneCRow = (
+  worksheet: ExcelJS.Worksheet,
+  rowNumber: number,
+  index: number,
+  rowData: IOneCExportRow,
+): void => {
+  worksheet.getCell(rowNumber, COL_NUM).value = index + 1;
+  worksheet.getCell(rowNumber, COL_FIO).value = defangCsvCell(rowData.fullName);
+
+  for (const [day, dayValue] of rowData.dayValues) {
+    if (day < 1 || day > ONE_C_MAX_DAY_COLUMNS) continue;
+    const cell = worksheet.getCell(rowNumber, ONE_C_DAY_START_COLUMN + day - 1);
+    if (dayValue.isWeekend && !dayValue.label && !dayValue.hours) {
+      cell.value = null;
+      cell.fill = cloneExcelValue(weekendFill);
+      continue;
+    }
+    cell.value = dayValue.label ?? dayValue.hours;
+    if (!dayValue.label && dayValue.isUnderwork) {
+      cell.fill = cloneExcelValue(underworkFill);
+    }
+  }
+
+  if (rowData.totalHours > 0) {
+    worksheet.getCell(rowNumber, ONE_C_TOTAL_COLUMN).value = rowData.totalHours;
+  }
+};
+
 const fillOneCWorksheet = (
   worksheet: ExcelJS.Worksheet,
   rows: IOneCExportRow[],
@@ -468,29 +496,76 @@ const fillOneCWorksheet = (
   ensureOneCBodyRows(worksheet, lastRow);
 
   rows.forEach((rowData, index) => {
-    const rowNumber = ONE_C_DATA_START_ROW + index;
-    worksheet.getCell(rowNumber, COL_NUM).value = index + 1;
-    worksheet.getCell(rowNumber, COL_FIO).value = defangCsvCell(rowData.fullName);
-
-    for (const [day, dayValue] of rowData.dayValues) {
-      if (day < 1 || day > ONE_C_MAX_DAY_COLUMNS) continue;
-      const cell = worksheet.getCell(rowNumber, ONE_C_DAY_START_COLUMN + day - 1);
-      if (dayValue.isWeekend && !dayValue.label && !dayValue.hours) {
-        cell.value = null;
-        cell.fill = cloneExcelValue(weekendFill);
-        continue;
-      }
-      cell.value = dayValue.label ?? dayValue.hours;
-      if (!dayValue.label && dayValue.isUnderwork) {
-        cell.fill = cloneExcelValue(underworkFill);
-      }
-    }
-
-    if (rowData.totalHours > 0) {
-      worksheet.getCell(rowNumber, ONE_C_TOTAL_COLUMN).value = rowData.totalHours;
-    }
+    writeOneCRow(worksheet, ONE_C_DATA_START_ROW + index, index, rowData);
   });
 };
+
+export interface IUnifiedOneCRow {
+  oneCRow: IOneCExportRow;
+  departmentName: string;
+  objectAddress: string;
+}
+
+const UNIFIED_COL_DEPARTMENT = ONE_C_TOTAL_COLUMN + 1; // 35
+const UNIFIED_COL_OBJECT_ADDRESS = ONE_C_TOTAL_COLUMN + 2; // 36
+const UNIFIED_HEADER_ROW = ONE_C_DATA_START_ROW - 1; // 3 — шапка шаблона
+
+/**
+ * Единый файл для 1С: тот же шаблон, что и одиночный «Как в 1С» (шапка в строке 3,
+ * данные с строки 4, дни 1..31, итог в колонке 34), плюс справа колонки «Отдел» (35) и
+ * «Адрес объекта» (36) — без них строки разных отделов/объектов неразличимы.
+ */
+export async function buildUnified1CWorkbookFromTemplate(
+  sheetName: string,
+  rows: IUnifiedOneCRow[],
+): Promise<ExcelJS.Workbook> {
+  const workbook = await createOneCTemplateWorkbook(sheetName);
+  const worksheet = workbook.getWorksheet(1);
+  if (!worksheet) {
+    throw new Error('1C template worksheet is missing');
+  }
+
+  const lastRow = Math.max(
+    ONE_C_TEMPLATE_DEFAULT_ROW_COUNT,
+    ONE_C_DATA_START_ROW + rows.length - 1,
+  );
+  ensureOneCBodyRows(worksheet, lastRow);
+
+  // Шапка доп. колонок (строка 3) — стиль как у шапки «ч/часы».
+  const headerStyle = worksheet.getCell(UNIFIED_HEADER_ROW, ONE_C_TOTAL_COLUMN).style;
+  const deptHeader = worksheet.getCell(UNIFIED_HEADER_ROW, UNIFIED_COL_DEPARTMENT);
+  deptHeader.style = cloneExcelValue(headerStyle) || {};
+  deptHeader.value = 'Отдел';
+  deptHeader.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  const addressHeader = worksheet.getCell(UNIFIED_HEADER_ROW, UNIFIED_COL_OBJECT_ADDRESS);
+  addressHeader.style = cloneExcelValue(headerStyle) || {};
+  addressHeader.value = 'Адрес объекта';
+  addressHeader.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+
+  // Образец стиля тела — ячейка ФИО строки-образца (левое выравнивание текста).
+  const bodyStyle = worksheet.getRow(ONE_C_TEMPLATE_STYLE_ROW).getCell(COL_FIO).style;
+
+  rows.forEach((row, index) => {
+    const rowNumber = ONE_C_DATA_START_ROW + index;
+    writeOneCRow(worksheet, rowNumber, index, row.oneCRow);
+
+    const deptCell = worksheet.getCell(rowNumber, UNIFIED_COL_DEPARTMENT);
+    deptCell.style = cloneExcelValue(bodyStyle) || {};
+    deptCell.value = row.departmentName;
+    deptCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+
+    const addressCell = worksheet.getCell(rowNumber, UNIFIED_COL_OBJECT_ADDRESS);
+    addressCell.style = cloneExcelValue(bodyStyle) || {};
+    addressCell.value = row.objectAddress;
+    addressCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+  });
+
+  worksheet.getColumn(UNIFIED_COL_DEPARTMENT).width = 26;
+  worksheet.getColumn(UNIFIED_COL_OBJECT_ADDRESS).width = 32;
+
+  applyA4PrintSetup(worksheet, 3);
+  return workbook;
+}
 
 export async function build1CTimesheetWorkbook(
   sheetName: string,
