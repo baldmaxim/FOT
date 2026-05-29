@@ -1,7 +1,7 @@
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { resolveScopedDepartmentId } from '../services/data-scope.service.js';
-import { MANAGER_OBJ_ROLE_CODE } from '../services/timesheet-approval-weekend-check.service.js';
+import { loadRoleRestrictions } from '../services/correction-restrictions.service.js';
 import {
   generateWeekendMemoXlsx,
   getWeekendWorkEntries,
@@ -21,8 +21,9 @@ async function resolveCommonScope(
   res: Response,
   source: 'body' | 'query',
 ): Promise<IResolvedScope | null> {
-  if (req.user.role_code !== MANAGER_OBJ_ROLE_CODE) {
-    res.status(403).json({ success: false, error: 'Доступно только руководителям объектов (manager_obj)' });
+  const { weekend_memo_required } = await loadRoleRestrictions(req.user.system_role_id);
+  if (!weekend_memo_required) {
+    res.status(403).json({ success: false, error: 'Служебка о работе в выходные недоступна для вашей роли' });
     return null;
   }
 

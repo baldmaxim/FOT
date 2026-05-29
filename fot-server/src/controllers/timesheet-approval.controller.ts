@@ -57,6 +57,7 @@ import {
   checkWeekendWorkRequirement,
 } from '../services/timesheet-approval-weekend-check.service.js';
 import { validateCorrectionAttachments } from '../services/timesheet-approval-correction-validation.service.js';
+import { loadRoleRestrictions } from '../services/correction-restrictions.service.js';
 import { getAllowedSubmissionRange, isRangeSubmittable } from '../services/timesheet-period.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import {
@@ -652,8 +653,9 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
+    const { weekend_memo_required } = await loadRoleRestrictions(req.user.system_role_id);
     const memoCheck = await checkManagerObjWeekendMemoRequirement({
-      submitterRoleCode: req.user.role_code,
+      weekendMemoRequired: weekend_memo_required,
       departmentId: deptId,
       startDate: range.startDate,
       endDate: range.endDate,

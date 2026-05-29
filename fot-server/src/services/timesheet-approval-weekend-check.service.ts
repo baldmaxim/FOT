@@ -163,11 +163,11 @@ export async function checkWeekendWorkRequirement(params: {
  * Вынесено отдельно от IO для удобного юнит-тестирования.
  */
 export function evaluateManagerObjMemoRequirement(input: {
-  submitterRoleCode: string;
+  weekendMemoRequired: boolean;
   weekendWorkDates: string[];
   attachmentCount: number;
 }): IManagerObjMemoCheck {
-  if (input.submitterRoleCode !== MANAGER_OBJ_ROLE_CODE) {
+  if (!input.weekendMemoRequired) {
     return { required: false, satisfied: true, weekendWorkDates: [] };
   }
   if (input.weekendWorkDates.length === 0) {
@@ -183,17 +183,17 @@ export function evaluateManagerObjMemoRequirement(input: {
 /**
  * IO-обёртка: грузит выходные дни диапазона и количество вложений,
  * передаёт в чистую evaluateManagerObjMemoRequirement.
- * Если submitter — не manager_obj, IO-запросы пропускаются ради экономии времени.
+ * Если у роли флаг weekend_memo_required выключен, IO-запросы пропускаются ради экономии времени.
  */
 export async function checkManagerObjWeekendMemoRequirement(params: {
-  submitterRoleCode: string;
+  weekendMemoRequired: boolean;
   departmentId: string | null;
   startDate: string;
   endDate: string;
   approvalId: number | null;
   employeeIds?: number[];
 }): Promise<IManagerObjMemoCheck> {
-  if (params.submitterRoleCode !== MANAGER_OBJ_ROLE_CODE) {
+  if (!params.weekendMemoRequired) {
     return { required: false, satisfied: true, weekendWorkDates: [] };
   }
 
@@ -209,7 +209,7 @@ export async function checkManagerObjWeekendMemoRequirement(params: {
     : 0;
 
   return evaluateManagerObjMemoRequirement({
-    submitterRoleCode: params.submitterRoleCode,
+    weekendMemoRequired: params.weekendMemoRequired,
     weekendWorkDates: weekend.weekendWorkDates,
     attachmentCount,
   });

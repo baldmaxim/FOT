@@ -19,6 +19,7 @@ interface ICorrectionRestrictionsForm {
   corrections_disable_bulk: boolean;
   max_corrections_per_month: number | null;
   max_corrections_unlimited: boolean;
+  weekend_memo_required: boolean;
 }
 
 interface INewRoleForm extends ICorrectionRestrictionsForm {
@@ -65,6 +66,7 @@ const DEFAULT_CORRECTION_RESTRICTIONS: ICorrectionRestrictionsForm = {
   corrections_disable_bulk: false,
   max_corrections_per_month: null,
   max_corrections_unlimited: true,
+  weekend_memo_required: false,
 };
 
 const correctionRestrictionsFromRole = (role: SystemRole): ICorrectionRestrictionsForm => ({
@@ -74,6 +76,7 @@ const correctionRestrictionsFromRole = (role: SystemRole): ICorrectionRestrictio
   corrections_disable_bulk: role.corrections_disable_bulk ?? false,
   max_corrections_per_month: role.max_corrections_per_month ?? null,
   max_corrections_unlimited: role.max_corrections_per_month == null,
+  weekend_memo_required: role.weekend_memo_required ?? false,
 });
 
 const correctionRestrictionsToPayload = (form: ICorrectionRestrictionsForm) => ({
@@ -82,6 +85,7 @@ const correctionRestrictionsToPayload = (form: ICorrectionRestrictionsForm) => (
   corrections_allow_zero_short_attendance: form.corrections_anomalies_only && form.corrections_allow_zero_short_attendance,
   corrections_disable_bulk: form.corrections_disable_bulk,
   max_corrections_per_month: form.max_corrections_unlimited ? null : Math.max(0, Math.floor(form.max_corrections_per_month ?? 0)),
+  weekend_memo_required: form.weekend_memo_required,
 });
 
 const TIMESHEET_MONTHS_MIN = 0;
@@ -213,6 +217,14 @@ const CorrectionRestrictionsBlock: FC<ICorrectionRestrictionsBlockProps> = ({ va
           />
           <span>Неограниченно</span>
         </label>
+      </label>
+      <label className={styles.inlineCheckbox} title="Подача табеля с работой в выходные/праздники требует прикреплённой служебки (файл-подтверждение); открывает кнопку «приложить файл» и доступ к xlsx-шаблону служебки.">
+        <input
+          type="checkbox"
+          checked={value.weekend_memo_required}
+          onChange={e => patch({ weekend_memo_required: e.target.checked })}
+        />
+        <span>Требовать служебку о работе в выходные</span>
       </label>
     </fieldset>
   );

@@ -37,6 +37,7 @@ export interface IRoleCorrectionRestrictions {
   corrections_allow_zero_short_attendance: boolean;
   corrections_disable_bulk: boolean;
   max_corrections_per_month: number | null;
+  weekend_memo_required: boolean;
 }
 
 const CACHE_TTL_MS = 60_000;
@@ -52,7 +53,8 @@ export async function loadRoleRestrictions(systemRoleId: string): Promise<IRoleC
             corrections_cap_by_schedule_norm,
             corrections_allow_zero_short_attendance,
             corrections_disable_bulk,
-            max_corrections_per_month
+            max_corrections_per_month,
+            weekend_memo_required
        FROM system_roles
       WHERE id = $1::uuid`,
     [systemRoleId],
@@ -64,6 +66,7 @@ export async function loadRoleRestrictions(systemRoleId: string): Promise<IRoleC
     corrections_allow_zero_short_attendance: false,
     corrections_disable_bulk: false,
     max_corrections_per_month: null,
+    weekend_memo_required: false,
   };
 
   cache.set(systemRoleId, { value, at: Date.now() });

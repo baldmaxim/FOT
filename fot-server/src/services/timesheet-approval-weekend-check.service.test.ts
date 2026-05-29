@@ -28,18 +28,18 @@ vi.mock('./timesheet-approval-attachments.service.js', () => ({
 import { evaluateManagerObjMemoRequirement } from './timesheet-approval-weekend-check.service.js';
 
 describe('evaluateManagerObjMemoRequirement', () => {
-  it('требование не активно для обычного manager даже при работе в выходные', () => {
+  it('флаг роли выключен — служебка не требуется даже при работе в выходные', () => {
     const result = evaluateManagerObjMemoRequirement({
-      submitterRoleCode: 'manager',
+      weekendMemoRequired: false,
       weekendWorkDates: ['2026-05-09', '2026-05-10'],
       attachmentCount: 0,
     });
     expect(result).toEqual({ required: false, satisfied: true, weekendWorkDates: [] });
   });
 
-  it('manager_obj без работы в выходные — служебка не нужна', () => {
+  it('флаг включён, но без работы в выходные — служебка не нужна', () => {
     const result = evaluateManagerObjMemoRequirement({
-      submitterRoleCode: 'manager_obj',
+      weekendMemoRequired: true,
       weekendWorkDates: [],
       attachmentCount: 0,
     });
@@ -47,9 +47,9 @@ describe('evaluateManagerObjMemoRequirement', () => {
     expect(result.satisfied).toBe(true);
   });
 
-  it('manager_obj + работа в выходные + нет вложений — блок', () => {
+  it('флаг включён + работа в выходные + нет вложений — блок', () => {
     const result = evaluateManagerObjMemoRequirement({
-      submitterRoleCode: 'manager_obj',
+      weekendMemoRequired: true,
       weekendWorkDates: ['2026-05-10', '2026-05-09'],
       attachmentCount: 0,
     });
@@ -58,23 +58,13 @@ describe('evaluateManagerObjMemoRequirement', () => {
     expect(result.weekendWorkDates).toEqual(['2026-05-09', '2026-05-10']);
   });
 
-  it('manager_obj + работа в выходные + есть вложение — пропускаем', () => {
+  it('флаг включён + работа в выходные + есть вложение — пропускаем', () => {
     const result = evaluateManagerObjMemoRequirement({
-      submitterRoleCode: 'manager_obj',
+      weekendMemoRequired: true,
       weekendWorkDates: ['2026-05-10'],
       attachmentCount: 1,
     });
     expect(result.required).toBe(true);
-    expect(result.satisfied).toBe(true);
-  });
-
-  it('admin — служебка не требуется', () => {
-    const result = evaluateManagerObjMemoRequirement({
-      submitterRoleCode: 'admin',
-      weekendWorkDates: ['2026-05-10'],
-      attachmentCount: 0,
-    });
-    expect(result.required).toBe(false);
     expect(result.satisfied).toBe(true);
   });
 });

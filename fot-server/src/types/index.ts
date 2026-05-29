@@ -28,6 +28,8 @@ export interface SystemRole {
   corrections_allow_zero_short_attendance: boolean;
   corrections_disable_bulk: boolean;
   max_corrections_per_month: number | null;
+  /** true → подача табеля с работой в выходные требует прикреплённой служебки (см. миграцию 145). Дефолт false. */
+  weekend_memo_required: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +59,7 @@ export interface UserProfileResponse {
   timesheet_months_back: number;
   timesheet_months_forward: number;
   timesheet_show_full_period: boolean;
+  weekend_memo_required: boolean;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];

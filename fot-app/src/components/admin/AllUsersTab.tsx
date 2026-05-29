@@ -673,6 +673,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
         corrections_allow_zero_short_attendance: false,
         corrections_disable_bulk: false,
         max_corrections_per_month: null,
+        weekend_memo_required: false,
         created_at: '',
         updated_at: '',
       });
