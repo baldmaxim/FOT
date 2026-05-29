@@ -27,16 +27,14 @@ export const Toast: React.FC<ToastProps> = ({
 }) => {
   const [closing, setClosing] = useState(false);
   const closingRef = useRef(false);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
 
   // Закрытие с exit-анимацией: проигрываем slideOut, затем убираем из списка.
   const beginClose = useCallback(() => {
     if (closingRef.current) return;
     closingRef.current = true;
     setClosing(true);
-    window.setTimeout(() => onCloseRef.current(id), EXIT_MS);
-  }, [id]);
+    window.setTimeout(() => onClose(id), EXIT_MS);
+  }, [id, onClose]);
 
   useEffect(() => {
     const timer = setTimeout(beginClose, duration);

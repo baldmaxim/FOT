@@ -1,4 +1,4 @@
-import { type FC, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type FC, type ReactNode, useCallback, useEffect, useState } from 'react';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import type { PresenceState } from '../../hooks/useAnimatedPresence';
 import { cx, readCssMs } from '../../utils/motion';
@@ -39,9 +39,6 @@ export const ModalShell: FC<IModalShellProps> = ({
   ...aria
 }) => {
   const [phase, setPhase] = useState<PresenceState>('entering');
-  const closingRef = useRef(false);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
 
   // Вход: после первого кадра переключаемся на 'open' → запускается переход.
   useEffect(() => {
@@ -49,13 +46,15 @@ export const ModalShell: FC<IModalShellProps> = ({
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const requestClose = useCallback(() => {
-    if (closingRef.current) return;
-    closingRef.current = true;
-    setPhase('closing');
+  const requestClose = useCallback(() => setPhase('closing'), []);
+
+  // Выход: проигрываем закрытие, затем зовём onClose (родитель размонтирует).
+  useEffect(() => {
+    if (phase !== 'closing') return;
     const ms = readCssMs('--modal-close-dur', 150);
-    window.setTimeout(() => onCloseRef.current(), ms);
-  }, []);
+    const timer = window.setTimeout(onClose, ms);
+    return () => clearTimeout(timer);
+  }, [phase, onClose]);
 
   useEffect(() => {
     if (!closeOnEscape) return;

@@ -368,6 +368,13 @@ body {
   }
 }
 
+/* ===== transitions.dev: spring pop-in бейджа (появление счётчика/точки) =====
+   Глобальный keyframe; применяется в badge-классах модулей. Только transform. */
+@keyframes t-badge-pop {
+  from { transform: scale(0); }
+  to   { transform: scale(1); }
+}
+
 /* ===== Доступность: уважать системную настройку «меньше движения» =====
    Глобальный гард. Локальные t-* сниппеты тоже содержат свой guard. */
 @media (prefers-reduced-motion: reduce) {

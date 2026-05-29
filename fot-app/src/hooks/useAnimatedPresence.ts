@@ -19,36 +19,36 @@ export interface IAnimatedPresence {
  * Длительность брать из CSS-переменной через `readCssMs` (utils/motion).
  */
 export function useAnimatedPresence(isOpen: boolean, durationMs: number): IAnimatedPresence {
-  const [shouldRender, setShouldRender] = useState(isOpen);
   const [state, setState] = useState<PresenceState>(isOpen ? 'open' : 'closed');
+  const [prevOpen, setPrevOpen] = useState(isOpen);
 
+  // Реакция на смену isOpen во время рендера («корректировка стейта при
+  // изменении пропа») — без синхронного setState внутри эффекта.
+  if (isOpen !== prevOpen) {
+    setPrevOpen(isOpen);
+    setState(isOpen ? 'entering' : 'closing');
+  }
+
+  // entering → open: дать кадр на отрисовку стартового (скрытого) состояния,
+  // затем переключиться — так CSS-переход запускается корректно.
   useEffect(() => {
-    let raf1 = 0;
+    if (state !== 'entering') return;
     let raf2 = 0;
-    let timer = 0;
-
-    if (isOpen) {
-      setShouldRender(true);
-      setState('entering');
-      // Двойной rAF: дать браузеру отрисовать стартовое (скрытое) состояние,
-      // затем переключить на 'open' — так CSS-переход запускается корректно.
-      raf1 = requestAnimationFrame(() => {
-        raf2 = requestAnimationFrame(() => setState('open'));
-      });
-    } else {
-      setState('closing');
-      timer = window.setTimeout(() => {
-        setShouldRender(false);
-        setState('closed');
-      }, durationMs);
-    }
-
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setState('open'));
+    });
     return () => {
-      if (raf1) cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf1);
       if (raf2) cancelAnimationFrame(raf2);
-      if (timer) clearTimeout(timer);
     };
-  }, [isOpen, durationMs]);
+  }, [state]);
 
-  return { shouldRender, state };
+  // closing → closed: подождать exit-анимацию, затем убрать из DOM.
+  useEffect(() => {
+    if (state !== 'closing') return;
+    const timer = window.setTimeout(() => setState('closed'), durationMs);
+    return () => clearTimeout(timer);
+  }, [state, durationMs]);
+
+  return { shouldRender: state !== 'closed', state };
 }
