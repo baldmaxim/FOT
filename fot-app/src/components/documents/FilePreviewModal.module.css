@@ -119,6 +119,8 @@
   text-decoration: none;
   font-size: 13px;
   font-weight: 500;
+  border: none;
+  cursor: pointer;
 }
 
 @media (max-width: 430px) {

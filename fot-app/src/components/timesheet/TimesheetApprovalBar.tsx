@@ -29,8 +29,6 @@ import {
 } from './TimesheetSubmitConfirmModal';
 import { STATUS_COLORS, STATUS_ICONS } from './timesheetApprovalStatus';
 
-const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
-
 interface IProps {
   /**
    * Режим подачи:
@@ -462,8 +460,8 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
           documentId={preview.document_id}
           fileName={preview.file_name}
           mimeType={preview.mime_type}
-          urlLoader={async () => {
-            const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(preview.document_id);
+          urlLoader={async (d) => {
+            const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(preview.document_id, d);
             return download_url;
           }}
           onClose={() => setPreview(null)}
@@ -485,7 +483,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const { hasPermission, canViewPage, profile } = useAuth();
   const canSubmitDepartment = hasPermission('timesheet.workflow.submit');
   const canReviewApproval = allowReview && hasPermission('timesheet.workflow.review');
-  const isManagerObj = profile?.role_code === MANAGER_OBJ_ROLE_CODE;
+  const weekendMemoEnabled = !!profile?.weekend_memo_required;
 
   // Блокировка периода подачи (зеркалит бэкенд). HR/админ обходят.
   const isHrOrAdmin = canViewPage('/timesheet-hr');
@@ -653,7 +651,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   };
 
   const activeApproval = activeStatus.data ?? null;
-  const memoSectionAllowed = isManagerObj && canSubmitDepartment && (
+  const memoSectionAllowed = weekendMemoEnabled && canSubmitDepartment && (
     !activeApproval || activeApproval.status === 'draft' || activeApproval.status === 'rejected' || activeApproval.status === 'returned'
   );
   const memoErrorText = memoRequired ? submitError : null;

@@ -1767,7 +1767,8 @@ const getAttachmentDownloadUrl = async (req: AuthenticatedRequest, res: Response
       return;
     }
 
-    const downloadUrl = await r2Service.generateDownloadUrl(doc.r2_key);
+    const disposition = req.query.disposition === 'inline' ? 'inline' : 'attachment';
+    const downloadUrl = await r2Service.generateDownloadUrl(doc.r2_key, doc.file_name, disposition);
     res.json({ success: true, data: { download_url: downloadUrl, file_name: doc.file_name } });
   } catch (err) {
     console.error('timesheet-approval.getAttachmentDownloadUrl error:', err);

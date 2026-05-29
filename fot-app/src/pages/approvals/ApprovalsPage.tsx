@@ -562,8 +562,8 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
   const attachments = attachmentsQuery.data ?? [];
 
   const loadAttachmentUrl = useCallback(
-    async (documentId: number): Promise<string> => {
-      const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(documentId);
+    async (documentId: number, disposition: 'inline' | 'attachment' = 'attachment'): Promise<string> => {
+      const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(documentId, disposition);
       return download_url;
     },
     [],
@@ -685,7 +685,7 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
           documentId={previewAtt.document_id}
           fileName={previewAtt.file_name}
           mimeType={previewAtt.mime_type}
-          urlLoader={() => loadAttachmentUrl(previewAtt.document_id)}
+          urlLoader={(d) => loadAttachmentUrl(previewAtt.document_id, d)}
           onClose={() => setPreviewAtt(null)}
         />
       )}

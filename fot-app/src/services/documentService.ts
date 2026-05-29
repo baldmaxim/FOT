@@ -51,8 +51,8 @@ export const documentService = {
     return res.data;
   },
 
-  getDownloadUrl: async (id: number) => {
-    const res = await apiClient.get<ApiResponse<{ download_url: string; file_name: string }>>(`/documents/${id}/download`);
+  getDownloadUrl: async (id: number, disposition: 'inline' | 'attachment' = 'attachment') => {
+    const res = await apiClient.get<ApiResponse<{ download_url: string; file_name: string }>>(`/documents/${id}/download?disposition=${disposition}`);
     return res.data;
   },
 

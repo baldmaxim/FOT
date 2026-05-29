@@ -77,6 +77,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       uploaded_at: item.uploaded_at,
       uploader_name: item.uploader_name,
       download_url: await r2Service.generateDownloadUrl(item.r2_key, item.original_name),
+      preview_url: await r2Service.generateDownloadUrl(item.r2_key, item.original_name, 'inline'),
     })));
     res.json({ success: true, data });
   } catch (err) {
@@ -137,6 +138,7 @@ const upload = async (req: MulterRequest, res: Response): Promise<void> => {
     }
 
     const downloadUrl = await r2Service.generateDownloadUrl(attachment.r2_key, attachment.original_name);
+    const previewUrl = await r2Service.generateDownloadUrl(attachment.r2_key, attachment.original_name, 'inline');
     res.json({
       success: true,
       data: {
@@ -148,6 +150,7 @@ const upload = async (req: MulterRequest, res: Response): Promise<void> => {
         uploaded_at: attachment.uploaded_at,
         uploader_name: attachment.uploader_name,
         download_url: downloadUrl,
+        preview_url: previewUrl,
       },
     });
   } catch (err) {

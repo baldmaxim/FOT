@@ -9,6 +9,7 @@ export interface ICorrectionAttachment {
   uploaded_at: string;
   uploader_name: string | null;
   download_url: string;
+  preview_url: string;
 }
 
 interface IApiResponse<T> {

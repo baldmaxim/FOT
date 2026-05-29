@@ -1,8 +1,10 @@
-import { type FC, useEffect, useState } from 'react';
+import { type FC, useCallback, useEffect, useState } from 'react';
 import { X, Download } from 'lucide-react';
 import { documentService } from '../../services/documentService';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import styles from './FilePreviewModal.module.css';
+
+type Disposition = 'inline' | 'attachment';
 
 interface IFilePreviewModalProps {
   documentId?: number;
@@ -12,8 +14,9 @@ interface IFilePreviewModalProps {
   /**
    * Альтернативный источник signed URL. Если задан — используется он;
    * иначе берётся documentService.getDownloadUrl(documentId).
+   * disposition='inline' — для предпросмотра, 'attachment' — для скачивания.
    */
-  urlLoader?: () => Promise<string>;
+  urlLoader?: (disposition: Disposition) => Promise<string>;
 }
 
 export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
@@ -27,18 +30,38 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const loadUrl = useCallback(
+    (disposition: Disposition): Promise<string> => {
+      if (urlLoader) return urlLoader(disposition);
+      if (documentId != null) {
+        return documentService.getDownloadUrl(documentId, disposition).then(r => r.download_url);
+      }
+      return Promise.reject(new Error('Не указан источник файла'));
+    },
+    [documentId, urlLoader],
+  );
+
   useEffect(() => {
     let active = true;
-    const loader = urlLoader
-      ? urlLoader()
-      : documentId != null
-        ? documentService.getDownloadUrl(documentId).then(r => r.download_url)
-        : Promise.reject(new Error('Не указан источник файла'));
-    loader
+    loadUrl('inline')
       .then(u => { if (active) setUrl(u); })
       .catch(() => { if (active) setError('Не удалось получить ссылку на файл'); });
     return () => { active = false; };
-  }, [documentId, urlLoader]);
+  }, [loadUrl]);
+
+  const handleDownload = useCallback(async () => {
+    try {
+      const u = await loadUrl('attachment');
+      const a = document.createElement('a');
+      a.href = u;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch {
+      setError('Не удалось скачать файл');
+    }
+  }, [loadUrl, fileName]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -56,9 +79,9 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
           <span className={styles.title} title={fileName}>{fileName}</span>
           <div className={styles.actions}>
             {url && (
-              <a className={styles.iconBtn} href={url} download={fileName} title="Скачать">
+              <button type="button" className={styles.iconBtn} onClick={handleDownload} title="Скачать">
                 <Download size={16} />
-              </a>
+              </button>
             )}
             <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Закрыть">
               <X size={18} />
@@ -77,9 +100,9 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
           {url && !error && !isImage && !isPdf && (
             <div className={styles.fallback}>
               <div>Предпросмотр недоступен для этого типа файла.</div>
-              <a className={styles.downloadBtn} href={url} download={fileName}>
+              <button type="button" className={styles.downloadBtn} onClick={handleDownload}>
                 <Download size={14} /> Скачать
-              </a>
+              </button>
             </div>
           )}
         </div>

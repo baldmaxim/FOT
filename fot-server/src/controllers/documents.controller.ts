@@ -241,7 +241,8 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
-    const downloadUrl = await r2Service.generateDownloadUrl(doc.r2_key, doc.file_name);
+    const disposition = req.query.disposition === 'inline' ? 'inline' : 'attachment';
+    const downloadUrl = await r2Service.generateDownloadUrl(doc.r2_key, doc.file_name, disposition);
     res.json({ success: true, data: { download_url: downloadUrl, file_name: doc.file_name } });
   } catch (err) {
     console.error('documents.getDownloadUrl error:', err);

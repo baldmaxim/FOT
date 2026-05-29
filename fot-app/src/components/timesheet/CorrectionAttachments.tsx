@@ -167,7 +167,7 @@ export const CorrectionAttachments: FC<IProps> = ({ adjustmentId, variant, canEd
         <FilePreviewModal
           fileName={preview.original_name}
           mimeType={preview.mime_type}
-          urlLoader={async () => preview.download_url}
+          urlLoader={async (d) => (d === 'inline' ? preview.preview_url : preview.download_url)}
           onClose={() => setPreview(null)}
         />
       )}
