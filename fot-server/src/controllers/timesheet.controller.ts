@@ -2273,10 +2273,15 @@ export const timesheetController = {
         const monthAllowed = scope === 'all'
           ? true
           : isDepartmentMonthAllowed(Number(yStr), Number(mStr), monthAccessFromUser(req.user));
+        // Редактируемы/удаляемы из табеля: ручные корректировки (manual) и «согласованный
+        // выход» из заявки (leave_request со статусом work/manual — по сути ручная work-правка).
+        // Отсутствия из заявки (отпуск/больничный/удалёнка/за свой счёт) управляются заявлением.
+        const isManualLike = item.source_type === 'manual'
+          || (item.source_type === 'leave_request' && (item.status === 'work' || item.status === 'manual'));
         const canEdit = scope === 'all'
           ? !(lockInfo && lockInfo.status === 'approved')
-          : !approvalLocked && monthAllowed && item.source_type === 'manual';
-        const canDelete = canEdit && item.source_type === 'manual';
+          : !approvalLocked && monthAllowed && isManualLike;
+        const canDelete = canEdit && isManualLike;
         return {
           id: item.id,
           employee_id: item.employee_id,
@@ -2324,13 +2329,19 @@ export const timesheetController = {
       if (!existing) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
       const sourceType = String(existing.source_type ?? '');
+      const existingStatus = String(existing.status ?? '');
       if (sourceType === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
         return res.status(409).json({
           success: false,
           error: 'Часы за этот день заданы корректировкой по объекту. Удалите часы в детализации по объектам.',
         });
       }
-      if (sourceType !== 'manual') {
+      // Удаляемы: ручные корректировки (manual) и «согласованный выход» из заявки
+      // (leave_request со статусом work/manual — по сути ручная work-правка, управляется и из табеля).
+      // Отсутствия из заявки (отпуск/больничный/удалёнка/за свой счёт) снимаются в самом заявлении.
+      const isDeletableSource = sourceType === 'manual'
+        || (sourceType === 'leave_request' && (existingStatus === 'work' || existingStatus === 'manual'));
+      if (!isDeletableSource) {
         return res.status(409).json({ success: false, error: 'Эта корректировка не удаляется' });
       }
 
