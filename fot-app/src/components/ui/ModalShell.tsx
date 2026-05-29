@@ -1,0 +1,89 @@
+import { type FC, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import type { PresenceState } from '../../hooks/useAnimatedPresence';
+import { cx, readCssMs } from '../../utils/motion';
+import styles from './ModalShell.module.css';
+
+export interface IModalShellApi {
+  /** Закрыть с exit-анимацией: проигрывает закрытие, затем вызывает onClose. */
+  requestClose: () => void;
+}
+
+interface IModalShellProps {
+  /** Реальное размонтирование (родитель перестаёт рендерить модалку). */
+  onClose: () => void;
+  /** Класс backdrop-оверлея модалки (позиционирование/фон/z-index). */
+  overlayClassName?: string;
+  /** Класс контейнера модалки (размеры/фон/радиус). */
+  containerClassName?: string;
+  /** Закрывать по Escape. По умолчанию true. */
+  closeOnEscape?: boolean;
+  'aria-label'?: string;
+  'aria-labelledby'?: string;
+  children: ReactNode | ((api: IModalShellApi) => ReactNode);
+}
+
+/**
+ * Тонкая обёртка анимации модалки (transitions.dev «Modal open / close»).
+ * Добавляет enter/exit scale+fade поверх существующей разметки модалки, не
+ * меняя её вид: классы оверлея/контейнера передаются пропсами и композятся
+ * с анимационными классами. Закрытие через requestClose проигрывает выход
+ * и только затем вызывает onClose (родитель размонтирует).
+ */
+export const ModalShell: FC<IModalShellProps> = ({
+  onClose,
+  overlayClassName,
+  containerClassName,
+  closeOnEscape = true,
+  children,
+  ...aria
+}) => {
+  const [phase, setPhase] = useState<PresenceState>('entering');
+  const closingRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // Вход: после первого кадра переключаемся на 'open' → запускается переход.
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setPhase('open'));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setPhase('closing');
+    const ms = readCssMs('--modal-close-dur', 150);
+    window.setTimeout(() => onCloseRef.current(), ms);
+  }, []);
+
+  useEffect(() => {
+    if (!closeOnEscape) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') requestClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [closeOnEscape, requestClose]);
+
+  const overlayHandlers = useOverlayDismiss(requestClose);
+
+  return (
+    <div
+      className={cx(styles.overlay, overlayClassName)}
+      data-state={phase}
+      {...overlayHandlers}
+    >
+      <div
+        className={cx(styles.modal, containerClassName)}
+        data-state={phase}
+        role="dialog"
+        aria-modal="true"
+        aria-label={aria['aria-label']}
+        aria-labelledby={aria['aria-labelledby']}
+      >
+        {typeof children === 'function' ? children({ requestClose }) : children}
+      </div>
+    </div>
+  );
+};

@@ -1,0 +1,45 @@
+/* transitions.dev «Modal open / close» — анимационный слой поверх существующей
+   разметки модалки. Только transform/opacity (compositor), без layout/paint. */
+
+.overlay {
+  opacity: 0;
+  transition: opacity var(--modal-open-dur) var(--modal-ease);
+}
+.overlay[data-state='open'] {
+  opacity: 1;
+}
+.overlay[data-state='closing'] {
+  opacity: 0;
+  transition: opacity var(--modal-close-dur) var(--modal-ease);
+}
+
+.modal {
+  transform-origin: center;
+  transform: scale(var(--modal-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--modal-open-dur) var(--modal-ease),
+    opacity var(--modal-open-dur) var(--modal-ease);
+  will-change: transform, opacity;
+}
+.modal[data-state='open'] {
+  transform: scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+.modal[data-state='closing'] {
+  transform: scale(var(--modal-scale-close));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--modal-close-dur) var(--modal-ease),
+    opacity var(--modal-close-dur) var(--modal-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .modal {
+    transition: none !important;
+  }
+}

@@ -1,7 +1,10 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './Toast.module.css';
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info';
+
+// Длительность exit-анимации (должна совпадать со slideOut в Toast.module.css).
+const EXIT_MS = 250;
 
 export interface ToastProps {
   id: string;
@@ -22,13 +25,23 @@ export const Toast: React.FC<ToastProps> = ({
   onClick,
   duration = 4000,
 }) => {
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      onClose(id);
-    }, duration);
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
+  // Закрытие с exit-анимацией: проигрываем slideOut, затем убираем из списка.
+  const beginClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    window.setTimeout(() => onCloseRef.current(id), EXIT_MS);
+  }, [id]);
+
+  useEffect(() => {
+    const timer = setTimeout(beginClose, duration);
     return () => clearTimeout(timer);
-  }, [id, duration, onClose]);
+  }, [duration, beginClose]);
 
   const getIcon = () => {
     switch (type) {
@@ -69,15 +82,15 @@ export const Toast: React.FC<ToastProps> = ({
 
   return (
     <div
-      className={`${styles.toast} ${styles[type]} ${onClick ? styles.clickable : ''}`}
-      onClick={onClick ? () => { onClick(); onClose(id); } : undefined}
+      className={`${styles.toast} ${styles[type]} ${onClick ? styles.clickable : ''} ${closing ? styles.closing : ''}`}
+      onClick={onClick ? () => { onClick(); beginClose(); } : undefined}
     >
       <div className={styles.icon}>{getIcon()}</div>
       <div className={styles.body}>
         {title && <div className={styles.title}>{title}</div>}
         <span className={styles.message}>{message}</span>
       </div>
-      <button className={styles.close} onClick={() => onClose(id)}>
+      <button className={styles.close} onClick={() => beginClose()}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <line x1="18" y1="6" x2="6" y2="18"/>
           <line x1="6" y1="6" x2="18" y2="18"/>
