@@ -122,6 +122,44 @@ describe('skud-travel.service', () => {
     });
   });
 
+  it('does not create a travel segment for a short hop between objects (<= 10 min)', async () => {
+    // Короткий переход между соседними объектами (напр. в соседний офис за 5 мин) — это не дорога,
+    // а обычное перемещение/перерыв. Сегмент не создаётся, время не кредитуется.
+    mockedState.tables.skud_events = [
+      { employee_id: 14, event_date: '2026-04-10', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 14, event_date: '2026-04-10', event_time: '10:05:00', access_point: 'КПП B', direction: 'entry' },
+    ];
+
+    const result = await calculateAndSyncTravelSegments({
+      employeeIds: [14],
+      startDate: '2026-04-01',
+      endDate: '2026-04-30',
+    });
+
+    expect(result.segments).toHaveLength(0);
+    expect(result.summaryByDay.get('14_2026-04-10')).toBeUndefined();
+  });
+
+  it('creates a travel segment when the hop is just over the minimum threshold (11 min)', async () => {
+    mockedState.tables.skud_events = [
+      { employee_id: 15, event_date: '2026-04-11', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 15, event_date: '2026-04-11', event_time: '10:11:00', access_point: 'КПП B', direction: 'entry' },
+    ];
+
+    const result = await calculateAndSyncTravelSegments({
+      employeeIds: [15],
+      startDate: '2026-04-01',
+      endDate: '2026-04-30',
+    });
+
+    expect(result.segments).toHaveLength(1);
+    expect(result.segments[0]).toMatchObject({
+      actual_minutes: 11,
+      credited_minutes: 11,
+      status: 'auto_approved',
+    });
+  });
+
   it('returns route limits without applying the legacy 1.5 multiplier', async () => {
     mockedState.tables.skud_objects = [
       { id: 'obj-a', name: 'Объект A', is_active: true, created_at: '2026-04-01T00:00:00Z', updated_at: '2026-04-01T00:00:00Z' },

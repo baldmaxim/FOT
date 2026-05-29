@@ -8,6 +8,10 @@ import { minutesToHours } from './time-calculation/primitives.js';
 const BATCH_SIZE = 500;
 const TRAVEL_SEGMENTS_CACHE_TTL_MS = 60_000;
 const TRAVEL_LIMIT_REQUIRED_MESSAGE = 'Не задан единый лимит передвижения. Сохраните его в настройках СКУД.';
+// Нижний порог «дороги»: переход между объектами короче этого — не дорога, а обычное
+// перемещение/перерыв внутри дня (напр. в соседний офис за 2–3 мин). Такие гэпы не
+// кредитуются как рабочее время и остаются в перерывах. Дорога = длительный промежуток.
+const MIN_TRAVEL_GAP_MINUTES = 10;
 const MAX_TRAVEL_OBJECT_MAP_FILE_SIZE = 10 * 1024 * 1024;
 const TRAVEL_OBJECT_MAP_ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
@@ -713,6 +717,8 @@ const buildTravelSegments = ({
 
       const actualMinutes = timeToMinutes(toEvent.event_time) - timeToMinutes(fromEvent.event_time);
       if (actualMinutes <= 0) continue;
+      // Короткий переход (≤ порога) — не дорога: оставляем гэп обычным перерывом, сегмент не создаём.
+      if (actualMinutes <= MIN_TRAVEL_GAP_MINUTES) continue;
 
       let status: TravelSegmentStatus;
       let normMinutes: number | null = null;

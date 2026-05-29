@@ -10,6 +10,7 @@ import { DayEvents, DaySummaryBadges, formatHM } from '../../components/dashboar
 import type { IDayGroup, IEntryExitPair } from '../../components/dashboard/AttendanceCard';
 import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import { useMyLeaveRequests } from '../../hooks/usePortalData';
+import { selectVisibleHours } from '../../utils/hoursDisplay';
 import {
   CORRECTION_STATUS_LABELS,
   REQUEST_TYPE_LABELS as LR_TYPE_LABELS,
@@ -110,6 +111,7 @@ const buildDayGroup = (
   timesheetEntries: TimesheetEntry[],
   events: SkudEvent[],
   internalPoints: Set<string>,
+  showActualHours: boolean,
 ): IDayGroup => {
   const todayStr = toLocalISO(new Date());
   const entry = timesheetEntries.find(e => e.work_date === dateStr) ?? null;
@@ -123,8 +125,13 @@ const buildDayGroup = (
   const pairs = buildPairs(dayEvents, internalPoints, isToday);
   const rawTotalMinutes = pairs.reduce((sum, pair) => sum + pair.durationMinutes, 0);
   const totalBreakMinutes = pairs.reduce((sum, pair) => sum + (pair.breakMinutesAfter ?? 0), 0);
-  const canonicalMinutes = entry?.hours_worked != null
-    ? Math.max(0, Math.round(entry.hours_worked * 60))
+  // Единый источник часов — тот же, что в табеле/панели/модалке (selectVisibleHours):
+  // show_actual_hours=false → display_hours_worked (без «дороги», урезано под смену),
+  // =true → hours_worked. Раньше тут был сырой entry.hours_worked → ЛК показывал
+  // больше табеля (с зачётом дороги), цифры расходились.
+  const visibleHours = selectVisibleHours(entry, showActualHours);
+  const canonicalMinutes = visibleHours != null
+    ? Math.max(0, Math.round(visibleHours * 60))
     : 0;
   const hasWorkedStatus = entry ? WORKED_STATUSES.has(entry.status) : rawTotalMinutes > 0;
   const totalMinutes = isToday && rawTotalMinutes > 0 && (!entry || hasWorkedStatus)
@@ -159,7 +166,7 @@ const buildDayGroup = (
 
 export const EmployeeDashboardPage: React.FC = () => {
 
-  const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
+  const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward, showActualHours } = useAuth();
   const { showToast } = useToast();
   const [showRequestModal, setShowRequestModal] = useState(false);
 
@@ -243,8 +250,8 @@ export const EmployeeDashboardPage: React.FC = () => {
   const eventsLoading = skudEventsQuery.isLoading;
 
   const activeDayGroup = useMemo(
-    () => buildDayGroup(activeDayIso, timesheetEntries, skudEvents, internalPoints),
-    [activeDayIso, timesheetEntries, skudEvents, internalPoints],
+    () => buildDayGroup(activeDayIso, timesheetEntries, skudEvents, internalPoints, showActualHours),
+    [activeDayIso, timesheetEntries, skudEvents, internalPoints, showActualHours],
   );
 
   const activeCorrection = useMemo<ILeaveRequest | null>(() => {
