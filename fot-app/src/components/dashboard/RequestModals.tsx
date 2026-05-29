@@ -309,7 +309,7 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
 
 const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'remote', label: 'Удалённая работа' },
-  { value: 'work', label: 'Работа' },
+  { value: 'work', label: 'Работа в выходной/праздник' },
   { value: 'vacation', label: 'Отпуск' },
   { value: 'unpaid', label: 'За свой счёт' },
   { value: 'sick_leave', label: 'Больничный' },
@@ -336,7 +336,6 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [correctionDate, setCorrectionDate] = useState('');
-  const [correctionStatus, setCorrectionStatus] = useState('work');
   const [correctionHours, setCorrectionHours] = useState<number>(8);
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
@@ -399,7 +398,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
             end_date: correctionDate,
             reason: reason.trim() || undefined,
             correction_date: correctionDate,
-            correction_status: correctionStatus,
+            correction_status: 'work',
             correction_hours: correctionHours,
           }
         : isRangeType
@@ -533,32 +532,17 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
           )}
 
           {isCorrection && (
-            <div className={styles.formRow}>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Статус <span className={styles.required}>*</span></label>
-                <select
-                  className={styles.formSelect}
-                  value={correctionStatus}
-                  onChange={e => setCorrectionStatus(e.target.value)}
-                >
-                  <option value="work">Присутствие</option>
-                  <option value="remote">Удалёнка</option>
-                  <option value="sick">Больничный</option>
-                  <option value="vacation">Отпуск</option>
-                </select>
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Часы <span className={styles.required}>*</span></label>
-                <input
-                  type="number"
-                  className={styles.formInput}
-                  value={correctionHours}
-                  onChange={e => setCorrectionHours(parseFloat(e.target.value) || 0)}
-                  min={0}
-                  max={24}
-                  step={0.5}
-                />
-              </div>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Часы <span className={styles.required}>*</span></label>
+              <input
+                type="number"
+                className={styles.formInput}
+                value={correctionHours}
+                onChange={e => setCorrectionHours(parseFloat(e.target.value) || 0)}
+                min={0}
+                max={24}
+                step={0.5}
+              />
             </div>
           )}
 

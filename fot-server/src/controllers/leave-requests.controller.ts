@@ -21,7 +21,7 @@ const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
-  work: 'Работа',
+  work: 'Работа в выходной/праздник',
 };
 const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid' | 'work', TimeStatus> = {
   vacation: 'vacation',

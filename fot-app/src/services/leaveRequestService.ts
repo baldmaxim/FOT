@@ -60,7 +60,7 @@ export const REQUEST_TYPE_LABELS: Record<string, string> = {
   certificate: 'Справка',
   time_correction: 'Корректировка табеля',
   unpaid: 'За свой счёт',
-  work: 'Работа',
+  work: 'Работа в выходной/праздник',
 };
 
 export const STATUS_LABELS: Record<LeaveRequestStatus, string> = {
