@@ -377,6 +377,81 @@ describe('attendance.service', () => {
     expect(result.entries[0].hours_worked).toBeGreaterThan(0);
   });
 
+  it('synthesizes a day-level entry for an object-only correction day when synthesizeObjectOnlyDays=true (#3, employees view)', async () => {
+    // Объектная корректировка (manual_object) на выходной без СКУД и без day-level записи.
+    mockedState.isWorkingDay = false;
+    mockedState.summaryRows = [];
+    mockedState.adjustmentRows = [{
+      id: 77,
+      employee_id: 1833,
+      work_date: '2026-05-16',
+      status: 'manual',
+      hours_override: 6,
+      source_type: 'manual_object',
+      source_id: 'obj-1',
+      reason: 'Объектная корректировка',
+      created_by: 'user-1',
+      created_at: '2026-05-16T07:00:00.000Z',
+      updated_at: '2026-05-16T07:05:00.000Z',
+      metadata: { object_id: 'obj-1', object_name: 'Объект' },
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1833, full_name: 'Узун Андрей Иванович' }],
+      startDate: '2026-05-16',
+      endDate: '2026-05-16',
+      dailySchedulesMap: new Map(),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 19 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-05-20',
+      includeObjectDetails: true,
+      synthesizeObjectOnlyDays: true,
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: 77,
+      employee_id: 1833,
+      work_date: '2026-05-16',
+      status: 'work',
+      hours_worked: 6,
+      is_correction: true,
+    });
+  });
+
+  it('does NOT synthesize the object-only correction day on the default path (payroll/export untouched, #3 guard)', async () => {
+    // Тот же день, но без synthesizeObjectOnlyDays (как у payslip/export/dashboard):
+    // дневной записи быть не должно — иначе день начал бы считаться отработанным в зарплате.
+    mockedState.isWorkingDay = false;
+    mockedState.summaryRows = [];
+    mockedState.adjustmentRows = [{
+      id: 77,
+      employee_id: 1833,
+      work_date: '2026-05-16',
+      status: 'manual',
+      hours_override: 6,
+      source_type: 'manual_object',
+      source_id: 'obj-1',
+      reason: 'Объектная корректировка',
+      created_by: 'user-1',
+      created_at: '2026-05-16T07:00:00.000Z',
+      updated_at: '2026-05-16T07:05:00.000Z',
+      metadata: { object_id: 'obj-1', object_name: 'Объект' },
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1833, full_name: 'Узун Андрей Иванович' }],
+      startDate: '2026-05-16',
+      endDate: '2026-05-16',
+      dailySchedulesMap: new Map(),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 19 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-05-20',
+      includeObjectDetails: true,
+      // synthesizeObjectOnlyDays не задан → по умолчанию false
+    });
+
+    expect(result.entries).toEqual([]);
+  });
+
   it('marks a scheduled skud day as absent when both summary and raw events are missing', async () => {
     mockedState.needsSkudCheck = true;
 

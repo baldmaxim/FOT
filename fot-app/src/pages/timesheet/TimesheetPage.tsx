@@ -2059,10 +2059,12 @@ export const TimesheetPage: FC = () => {
             onDelete={
               modalMode === 'object' && modalObjectEntry?.adjustment_id
                 ? handleDeleteObjectCorrection
-                : (modalMode === 'day'
-                    && modalEntry?.is_correction
-                    && modalEntry?.id
+                : (modalEntry?.is_correction
+                    && modalEntry?.id != null
                     && !modalEntry?.has_object_adjustments)
+                  // Дневную корректировку (удалёнка/отпуск/корр. табеля без объектов) можно
+                  // удалить из ЛЮБОГО режима — раньше требовался modalMode==='day', поэтому
+                  // при открытии из «по объектам» была только кнопка-карандаш без корзины (#4).
                   ? handleDeleteDayCorrection
                   : undefined
             }

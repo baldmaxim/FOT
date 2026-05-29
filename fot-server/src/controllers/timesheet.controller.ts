@@ -1316,6 +1316,10 @@ export const timesheetController = {
         todayStr,
         displayMode: effectiveDisplayMode,
         includeObjectDetails,
+        // Интерактивный табель: показываем дни, где есть только объектная корректировка
+        // (без СКУД), в режиме «по сотрудникам» (#3). Расчёт зарплаты/экспорт сервис
+        // вызывают напрямую без этого флага — их числа не меняются.
+        synthesizeObjectOnlyDays: true,
       });
       mark(includeObjectDetails ? 'attendance_with_objects' : 'attendance');
 

@@ -414,11 +414,18 @@ export async function buildAttendanceEntries(params: {
   todayStr?: string;
   displayMode?: 'actual' | 'capped_to_schedule';
   includeObjectDetails?: boolean;
+  // Синтезировать day-level запись для дней, где есть ТОЛЬКО объектная корректировка
+  // (без СКУД и без day-level записи). Включается ЯВНО лишь для интерактивного табеля
+  // (режим «по сотрудникам»), чтобы такие дни были видны (#3). Потребители расчёта
+  // зарплаты / Excel-экспорта / дашборда вызывают сервис напрямую без этого флага и
+  // НЕ должны затрагиваться (иначе object-only день начал бы считаться отработанным).
+  synthesizeObjectOnlyDays?: boolean;
 }): Promise<IAttendanceBuildResult> {
   const { employees, startDate, endDate, dailySchedulesMap, calendarMonth } = params;
   const todayStr = params.todayStr ?? formatDateToISO(new Date());
   const displayMode = params.displayMode ?? 'actual';
   const includeObjectDetails = params.includeObjectDetails ?? true;
+  const synthesizeObjectOnlyDays = params.synthesizeObjectOnlyDays ?? false;
   const nowHMS = formatNowHMS(new Date());
   const employeeIds = employees.map((employee) => employee.id);
 
@@ -442,9 +449,11 @@ export async function buildAttendanceEntries(params: {
       includeObjectDetails,
     })
     : createEmptyObjectAttendanceData();
-  const objectAdjustmentTotals = includeObjectDetails
-    ? new Map<string, { hours: number; count: number; latest: IAttendanceAdjustment }>()
-    : buildObjectAdjustmentTotals(adjustments);
+  // Суммы объектных корректировок по дню нужны в ОБОИХ режимах:
+  //  • !includeObjectDetails — свернуть объекты в дневную запись;
+  //  • includeObjectDetails  — ДОБРАТЬ дни, где есть ТОЛЬКО объектная корректировка
+  //    (без СКУД и без day-level записи), иначе такой день невидим в «по сотрудникам» (#3).
+  const objectAdjustmentTotals = buildObjectAdjustmentTotals(adjustments);
   const dailyAdjustments = adjustments.filter(adjustment => adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE);
   const { userNames, legacyEmployeeNames } = await loadAdjustmentNames(dailyAdjustments);
   const entries: IAttendanceEntry[] = [];
@@ -790,13 +799,19 @@ export async function buildAttendanceEntries(params: {
     entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;
   }
 
-  if (!includeObjectDetails && objectAdjustmentTotals.size > 0) {
+  if (objectAdjustmentTotals.size > 0) {
     for (const [key, total] of objectAdjustmentTotals) {
       const separatorIndex = key.indexOf('_');
       const employeeId = Number(key.slice(0, separatorIndex));
       const workDate = key.slice(separatorIndex + 1);
       const existing = byEmployeeDate.get(employeeId)?.get(workDate);
 
+      // С деталями объектов существующая дневная запись уже агрегирует объектные
+      // корректировки в цикле выше — повторно не патчим. Синтезируем только дни
+      // БЕЗ дневной записи (объектная корректировка без СКУД/day-level), #3.
+      if (existing && includeObjectDetails) {
+        continue;
+      }
       if (existing?.is_correction && existing.id != null) {
         continue;
       }
@@ -822,6 +837,14 @@ export async function buildAttendanceEntries(params: {
 
       if (existing) {
         Object.assign(existing, patch);
+        continue;
+      }
+
+      // Дня нет в byEmployeeDate (объектная корректировка без СКУД/day-level). Синтезируем:
+      //  • !includeObjectDetails — как и раньше (свод для экспортных/расчётных потребителей);
+      //  • includeObjectDetails  — ТОЛЬКО для интерактивного табеля (synthesizeObjectOnlyDays),
+      //    иначе расчёт зарплаты/Excel-экспорт начали бы считать такой день отработанным (#3).
+      if (includeObjectDetails && !synthesizeObjectOnlyDays) {
         continue;
       }
 
