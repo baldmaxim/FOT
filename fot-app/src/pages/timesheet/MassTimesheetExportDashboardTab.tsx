@@ -75,7 +75,7 @@ const includesQuery = (haystack: string, query: string): boolean =>
 
 // Сворачиваемые нижние блоки. По умолчанию свёрнуты; выбор хранится в localStorage.
 const COLLAPSE_STORAGE_KEY = 'timesheet_dashboard_collapsed_v1';
-const COLLAPSIBLE_SECTIONS = ['heatmap', 'not_submitted', 'unassigned'] as const;
+const COLLAPSIBLE_SECTIONS = ['not_submitted', 'unassigned'] as const;
 
 const loadCollapsed = (): Set<string> => {
   try {
@@ -420,6 +420,94 @@ export const MassTimesheetExportDashboardTab: FC = () => {
       )}
 
       <section className="mte-dash__section">
+        <h2 className="mte-dash__h2">Подача табелей</h2>
+        <div className="mte-dash__stats">
+          <StatCard
+            label="Отделы: подано"
+            value={totals?.departments_submitted ?? 0}
+            total={totals?.departments_total ?? 0}
+            tone="neutral"
+            icon={<Building2 size={18} />}
+          />
+          <StatCard
+            label="Отделы: утверждено"
+            value={totals?.departments_approved ?? 0}
+            total={totals?.departments_total ?? 0}
+            tone="good"
+            icon={<CheckCircle2 size={18} />}
+          />
+          <StatCard
+            label="Отделы: возвращено"
+            value={totals?.departments_returned ?? 0}
+            tone="warn"
+            icon={<Clock size={18} />}
+          />
+          <StatCard
+            label="Отделы: не подано"
+            value={totals?.departments_not_submitted ?? 0}
+            tone="bad"
+            icon={<AlertTriangle size={18} />}
+          />
+          <StatCard
+            label="Личные подачи руководителей"
+            value={totals?.managers_personal_submitted ?? 0}
+            total={totals?.managers_personal_total ?? 0}
+            tone="neutral"
+            icon={<Users size={18} />}
+          />
+          <StatCard
+            label="Личные: утверждено"
+            value={totals?.managers_personal_approved ?? 0}
+            total={totals?.managers_personal_total ?? 0}
+            tone="good"
+            icon={<CheckCircle2 size={18} />}
+          />
+        </div>
+      </section>
+
+      <section className="mte-dash__section">
+        <h2 className="mte-dash__h2">
+          Карта отделов · температура подачи
+          <span className="mte-dash__badge">{deptStatusMap.length}</span>
+          {isLoading && <span className="mte-dash__hint"> · загрузка…</span>}
+        </h2>
+        {deptStatusMap.length === 0 ? (
+          <div className="mte-dash__empty">Нет отделов в выбранном фильтре.</div>
+        ) : (
+          <>
+            {deptStatusMap.length > SEARCH_THRESHOLD && (
+              <SearchInput value={searchHeatmap} onValueChange={setSearchHeatmap} placeholder="Поиск отдела…" />
+            )}
+            <div className="mte-dash__heatmap">
+              {heatmapShown.map(d => {
+                const meta = STATUS_META[d.status];
+                const Icon = meta.icon;
+                return (
+                  <div
+                    key={d.department_id}
+                    className={`mte-dash__tile mte-dash__tile--${meta.cls}`}
+                    title={`${d.parent_path || d.name} — ${meta.label}`}
+                  >
+                    <Icon size={13} className="mte-dash__tile-icon" />
+                    <span className="mte-dash__tile-name">{d.name}</span>
+                  </div>
+                );
+              })}
+              {heatmapShown.length === 0 && <div className="mte-dash__empty">Ничего не найдено.</div>}
+            </div>
+            <div className="mte-dash__legend">
+              {STATUS_ORDER.map(s => (
+                <span key={s} className={`mte-dash__legend-item mte-dash__legend-item--${STATUS_META[s].cls}`}>
+                  <span className="mte-dash__legend-dot" aria-hidden="true" />
+                  {STATUS_META[s].label}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="mte-dash__section">
         <h2 className="mte-dash__h2">
           Карта руководителей
           <span className="mte-dash__badge">{managers.length}</span>
@@ -475,100 +563,6 @@ export const MassTimesheetExportDashboardTab: FC = () => {
               </tbody>
             </table>
           </div>
-        )}
-      </section>
-
-      <section className="mte-dash__section">
-        <h2 className="mte-dash__h2">Подача табелей</h2>
-        <div className="mte-dash__stats">
-          <StatCard
-            label="Отделы: подано"
-            value={totals?.departments_submitted ?? 0}
-            total={totals?.departments_total ?? 0}
-            tone="neutral"
-            icon={<Building2 size={18} />}
-          />
-          <StatCard
-            label="Отделы: утверждено"
-            value={totals?.departments_approved ?? 0}
-            total={totals?.departments_total ?? 0}
-            tone="good"
-            icon={<CheckCircle2 size={18} />}
-          />
-          <StatCard
-            label="Отделы: возвращено"
-            value={totals?.departments_returned ?? 0}
-            tone="warn"
-            icon={<Clock size={18} />}
-          />
-          <StatCard
-            label="Отделы: не подано"
-            value={totals?.departments_not_submitted ?? 0}
-            tone="bad"
-            icon={<AlertTriangle size={18} />}
-          />
-          <StatCard
-            label="Личные подачи руководителей"
-            value={totals?.managers_personal_submitted ?? 0}
-            total={totals?.managers_personal_total ?? 0}
-            tone="neutral"
-            icon={<Users size={18} />}
-          />
-          <StatCard
-            label="Личные: утверждено"
-            value={totals?.managers_personal_approved ?? 0}
-            total={totals?.managers_personal_total ?? 0}
-            tone="good"
-            icon={<CheckCircle2 size={18} />}
-          />
-        </div>
-      </section>
-
-      <section className="mte-dash__section">
-        <CollapsibleHeader
-          collapsed={collapsed.has('heatmap')}
-          onToggle={() => toggleSection('heatmap')}
-          title={<>
-            Карта отделов · температура подачи
-            <span className="mte-dash__badge">{deptStatusMap.length}</span>
-            {isLoading && <span className="mte-dash__hint"> · загрузка…</span>}
-          </>}
-        />
-        {!collapsed.has('heatmap') && (
-          deptStatusMap.length === 0 ? (
-            <div className="mte-dash__empty">Нет отделов в выбранном фильтре.</div>
-          ) : (
-            <>
-              {deptStatusMap.length > SEARCH_THRESHOLD && (
-                <SearchInput value={searchHeatmap} onValueChange={setSearchHeatmap} placeholder="Поиск отдела…" />
-              )}
-              <div className="mte-dash__heatmap">
-                {heatmapShown.map(d => {
-                  const meta = STATUS_META[d.status];
-                  const Icon = meta.icon;
-                  return (
-                    <div
-                      key={d.department_id}
-                      className={`mte-dash__tile mte-dash__tile--${meta.cls}`}
-                      title={`${d.parent_path || d.name} — ${meta.label}`}
-                    >
-                      <Icon size={13} className="mte-dash__tile-icon" />
-                      <span className="mte-dash__tile-name">{d.name}</span>
-                    </div>
-                  );
-                })}
-                {heatmapShown.length === 0 && <div className="mte-dash__empty">Ничего не найдено.</div>}
-              </div>
-              <div className="mte-dash__legend">
-                {STATUS_ORDER.map(s => (
-                  <span key={s} className={`mte-dash__legend-item mte-dash__legend-item--${STATUS_META[s].cls}`}>
-                    <span className="mte-dash__legend-dot" aria-hidden="true" />
-                    {STATUS_META[s].label}
-                  </span>
-                ))}
-              </div>
-            </>
-          )
         )}
       </section>
 

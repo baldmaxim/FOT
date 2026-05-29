@@ -2258,6 +2258,7 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
          JOIN system_roles sr ON sr.id = up.system_role_id
          LEFT JOIN employee_department_access eda
                 ON eda.employee_id = up.employee_id AND eda.is_active = TRUE
+               AND eda.source <> 'sigur_sync'
          LEFT JOIN org_departments od ON od.id = eda.department_id
         WHERE sr.code = ANY($1::text[])
           AND up.is_approved = TRUE
@@ -2386,6 +2387,7 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
              JOIN user_profiles up ON up.employee_id = eda.employee_id
              JOIN system_roles sr ON sr.id = up.system_role_id
             WHERE eda.is_active = TRUE
+              AND eda.source <> 'sigur_sync'
               AND up.is_approved = TRUE
               AND sr.code = ANY($1::text[])
          ) s
