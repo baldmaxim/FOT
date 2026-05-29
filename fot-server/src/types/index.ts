@@ -343,6 +343,7 @@ export interface OrgDepartmentEncrypted {
   sort_order: number;
   is_active: boolean;
   kind: OrgDepartmentKind;
+  is_current_activity: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -356,6 +357,7 @@ export interface OrgDepartment {
   sort_order: number;
   is_active: boolean;
   kind: OrgDepartmentKind;
+  is_current_activity: boolean;
   created_at: string;
   updated_at: string;
 }

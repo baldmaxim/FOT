@@ -1,5 +1,6 @@
 import { type FC, useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
+  Activity,
   CheckCircle,
   ChevronDown,
   ChevronRight as ChevronR,
@@ -12,6 +13,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
+import { structureApi } from '../../api/structure';
 import { timesheetService } from '../../services/timesheetService';
 import type { OrgDepartmentNode } from '../../types';
 import { filterDepartmentTree, filterDepartmentTreeByIds, sortDepartmentTree } from '../../utils/departmentUtils';
@@ -74,9 +76,12 @@ interface IDeptTreeNodeProps {
   expandedIds: Set<string>;
   onToggleExpand: (id: string) => void;
   approvedDeptIds: Set<string>;
+  canEditCurrentActivity: boolean;
+  onToggleCurrentActivity: (id: string, next: boolean) => void;
+  togglingCurrentActivityId: string | null;
 }
 
-const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds }) => {
+const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds, canEditCurrentActivity, onToggleCurrentActivity, togglingCurrentActivityId }) => {
   const descendantIds = useMemo(() => collectAllIds([node]), [node]);
   const checkedCount = descendantIds.reduce((acc, id) => acc + (checkedIds.has(id) ? 1 : 0), 0);
   const isAllChecked = checkedCount === descendantIds.length;
@@ -85,6 +90,8 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
   const isExpanded = expandedIds.has(node.id);
   const isBrigade = node.kind === 'brigade';
   const isApproved = approvedDeptIds.has(node.id);
+  const isCurrentActivity = node.is_current_activity;
+  const isTogglingCurrentActivity = togglingCurrentActivityId === node.id;
 
   const handleCheck = () => {
     onToggle(descendantIds, !isAllChecked);
@@ -114,6 +121,25 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
               <CheckCircle size={14} />
             </span>
           )}
+          {canEditCurrentActivity ? (
+            <button
+              type="button"
+              className={`mte-badge-activity ${isCurrentActivity ? 'mte-badge-activity--on' : ''}`}
+              disabled={isTogglingCurrentActivity}
+              title={isCurrentActivity
+                ? 'Текущая деятельность включена: в единой 1С-выгрузке без разбивки по объектам. Нажмите, чтобы выключить'
+                : 'Включить «Текущую деятельность»: в единой 1С-выгрузке без разбивки по объектам'}
+              onClick={(e) => { e.stopPropagation(); onToggleCurrentActivity(node.id, !isCurrentActivity); }}
+            >
+              <Activity size={12} />
+              <span>тек.</span>
+            </button>
+          ) : isCurrentActivity && (
+            <span className="mte-badge-activity mte-badge-activity--on" title="Текущая деятельность: в единой 1С-выгрузке без разбивки по объектам">
+              <Activity size={12} />
+              <span>тек.</span>
+            </span>
+          )}
         </span>
       </div>
       {hasChildren && isExpanded && (
@@ -127,6 +153,9 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
               expandedIds={expandedIds}
               onToggleExpand={onToggleExpand}
               approvedDeptIds={approvedDeptIds}
+              canEditCurrentActivity={canEditCurrentActivity}
+              onToggleCurrentActivity={onToggleCurrentActivity}
+              togglingCurrentActivityId={togglingCurrentActivityId}
             />
           ))}
         </div>
@@ -160,9 +189,28 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
   const [exportingApproved, setExportingApproved] = useState(false);
   const [exportingUnified, setExportingUnified] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [togglingCurrentActivityId, setTogglingCurrentActivityId] = useState<string | null>(null);
 
   const { profile } = useAuth();
   const { data: structure, isLoading, isError, refetch } = useStructureTree();
+  const canEditCurrentActivity = Boolean(profile?.is_admin);
+
+  const handleToggleCurrentActivity = useCallback(async (id: string, next: boolean) => {
+    setTogglingCurrentActivityId(id);
+    setError(null);
+    try {
+      const res = await structureApi.updateDepartment(id, { is_current_activity: next });
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      await refetch();
+    } catch {
+      setError('Не удалось изменить режим «Текущая деятельность».');
+    } finally {
+      setTogglingCurrentActivityId(null);
+    }
+  }, [refetch]);
   const departments = structure?.departments ?? EMPTY_DEPARTMENTS;
   const { data: approvedList } = useTimesheetApprovalReviewList('approved');
   const approvedDeptIds = useMemo(() => {
@@ -454,6 +502,9 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
               expandedIds={expandedIds}
               onToggleExpand={handleToggleExpand}
               approvedDeptIds={aggregatedApprovedIds}
+              canEditCurrentActivity={canEditCurrentActivity}
+              onToggleCurrentActivity={handleToggleCurrentActivity}
+              togglingCurrentActivityId={togglingCurrentActivityId}
             />
           ))
         )}

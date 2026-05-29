@@ -35,6 +35,7 @@ function decryptDepartment(encrypted: OrgDepartmentEncrypted): OrgDepartment {
     sort_order: encrypted.sort_order,
     is_active: encrypted.is_active,
     kind: encrypted.kind ?? 'department',
+    is_current_activity: encrypted.is_current_activity ?? false,
     created_at: encrypted.created_at,
     updated_at: encrypted.updated_at,
   };
@@ -69,7 +70,7 @@ function buildDepartmentTree(
 async function loadAllActiveDepartments(): Promise<OrgDepartment[]> {
   const rows = await query<OrgDepartmentEncrypted>(
     `SELECT id, parent_id, sigur_department_id, name, description, sort_order,
-            is_active, kind, created_at, updated_at
+            is_active, kind, is_current_activity, created_at, updated_at
        FROM org_departments
       WHERE is_active = true
       ORDER BY sort_order`,
@@ -342,7 +343,7 @@ export const structureController = {
           `INSERT INTO org_departments (parent_id, name, description, kind)
            VALUES ($1, $2, $3, $4)
            RETURNING id, parent_id, sigur_department_id, name, description, sort_order,
-                     is_active, kind, created_at, updated_at`,
+                     is_active, kind, is_current_activity, created_at, updated_at`,
           [parentId, name, description, kind],
         );
       } catch (createErr) {
@@ -380,8 +381,9 @@ export const structureController = {
       const hasName = Object.prototype.hasOwnProperty.call(req.body, 'name');
       const hasParent = Object.prototype.hasOwnProperty.call(req.body, 'parent_id');
       const hasKind = Object.prototype.hasOwnProperty.call(req.body, 'kind');
+      const hasCurrentActivity = Object.prototype.hasOwnProperty.call(req.body, 'is_current_activity');
 
-      if (!hasName && !hasParent && !hasKind) {
+      if (!hasName && !hasParent && !hasKind && !hasCurrentActivity) {
         res.status(400).json({ success: false, error: 'Нет данных для обновления отдела' });
         return;
       }
@@ -416,6 +418,11 @@ export const structureController = {
         kind = parsed;
       }
 
+      let isCurrentActivity = current.is_current_activity;
+      if (hasCurrentActivity) {
+        isCurrentActivity = Boolean(req.body.is_current_activity);
+      }
+
       if (!name) {
         res.status(400).json({ success: false, error: 'Название обязательно' });
         return;
@@ -438,6 +445,7 @@ export const structureController = {
       if (name !== current.name) updateData.name = name;
       if (parentId !== current.parent_id) updateData.parent_id = parentId;
       if (kind !== current.kind) updateData.kind = kind;
+      if (isCurrentActivity !== current.is_current_activity) updateData.is_current_activity = isCurrentActivity;
 
       if (Object.keys(updateData).length === 0) {
         res.json({ success: true, data: current });
@@ -454,7 +462,7 @@ export const structureController = {
           `UPDATE org_departments SET ${setSql}
             WHERE id = $${params.length}
             RETURNING id, parent_id, sigur_department_id, name, description, sort_order,
-                      is_active, kind, created_at, updated_at`,
+                      is_active, kind, is_current_activity, created_at, updated_at`,
           params,
         );
       } catch (updErr) {
