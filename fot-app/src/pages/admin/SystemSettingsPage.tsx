@@ -1,5 +1,5 @@
 import { type FC, useEffect, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   settingsService,
   type IR2Status,
@@ -7,15 +7,18 @@ import {
   type ITimesheetReminderSettings,
   type IEmployeeTransferSettings,
 } from '../../services/settingsService';
+import { rolesService } from '../../services/rolesService';
 import {
   getR2StatusQueryKey,
   getSigurMonitorSettingsQueryKey,
   getTimesheetReminderSettingsQueryKey,
   getEmployeeTransferSettingsQueryKey,
+  getDashboardSettingsQueryKey,
   useR2Status,
   useSigurMonitorSettings,
   useTimesheetReminderSettings,
   useEmployeeTransferSettings,
+  useDashboardSettings,
 } from '../../hooks/useSettingsData';
 import { OpenRouterSettingsSection } from '../../components/admin/OpenRouterSettingsSection';
 import styles from './SystemSettingsPage.module.css';
@@ -69,10 +72,20 @@ export const SystemSettingsPage: FC = () => {
   });
   const [employeeTransferSaving, setEmployeeTransferSaving] = useState(false);
   const [employeeTransferResult, setEmployeeTransferResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const dashboardSettingsQuery = useDashboardSettings();
+  const roleLabelsQuery = useQuery({
+    queryKey: ['roles', 'labels'],
+    queryFn: () => rolesService.getLabels(),
+    staleTime: 5 * 60_000,
+  });
+  const [managerRoleCodes, setManagerRoleCodes] = useState<string[]>([]);
+  const [dashboardSaving, setDashboardSaving] = useState(false);
+  const [dashboardResult, setDashboardResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const loading = r2StatusQuery.isLoading
     || monitorSettingsQuery.isLoading
     || reminderSettingsQuery.isLoading
-    || employeeTransferSettingsQuery.isLoading;
+    || employeeTransferSettingsQuery.isLoading
+    || dashboardSettingsQuery.isLoading;
 
   useEffect(() => {
     if (status?.bucket_name) {
@@ -107,6 +120,12 @@ export const SystemSettingsPage: FC = () => {
       setEmployeeTransferSettings(employeeTransferSettingsQuery.data);
     }
   }, [employeeTransferSettingsQuery.data]);
+
+  useEffect(() => {
+    if (dashboardSettingsQuery.data) {
+      setManagerRoleCodes(dashboardSettingsQuery.data.managerRoleCodes);
+    }
+  }, [dashboardSettingsQuery.data]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -225,6 +244,25 @@ export const SystemSettingsPage: FC = () => {
       setEmployeeTransferResult({ ok: false, msg: 'Ошибка сохранения настроек заморозки истории переводов' });
     } finally {
       setEmployeeTransferSaving(false);
+    }
+  };
+
+  const toggleManagerRole = (code: string) => {
+    setManagerRoleCodes(prev => (prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]));
+  };
+
+  const handleSaveDashboardSettings = async () => {
+    setDashboardSaving(true);
+    setDashboardResult(null);
+    try {
+      const next = await settingsService.saveDashboardSettings({ managerRoleCodes });
+      setManagerRoleCodes(next.managerRoleCodes);
+      queryClient.setQueryData(getDashboardSettingsQueryKey(), next);
+      setDashboardResult({ ok: true, msg: 'Роли руководителей сохранены' });
+    } catch {
+      setDashboardResult({ ok: false, msg: 'Ошибка сохранения ролей руководителей' });
+    } finally {
+      setDashboardSaving(false);
     }
   };
 
@@ -619,6 +657,45 @@ export const SystemSettingsPage: FC = () => {
         {employeeTransferResult && (
           <div className={`${styles.testResult} ${employeeTransferResult.ok ? styles.testSuccess : styles.testError}`}>
             {employeeTransferResult.msg}
+          </div>
+        )}
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <h2 className={styles.sectionTitle}>Дашборд HR · роли руководителей</h2>
+          <span className={`${styles.statusBadge} ${managerRoleCodes.length > 0 ? styles.statusConnected : styles.statusDisconnected}`}>
+            Выбрано: {managerRoleCodes.length}
+          </span>
+        </div>
+
+        <p className={styles.description}>
+          Какие роли считаются «руководителями» в «Карте руководителей» дашборда HR-табелей.
+          Влияет и на список «Отделы без ответственного».
+        </p>
+
+        {(roleLabelsQuery.data ?? []).filter(r => !r.is_admin).map(r => (
+          <div className={styles.checkboxRow} key={r.code}>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={managerRoleCodes.includes(r.code)}
+                onChange={() => toggleManagerRole(r.code)}
+              />
+              <span>{r.name} ({r.code})</span>
+            </label>
+          </div>
+        ))}
+
+        <div className={styles.actions}>
+          <button className={styles.btnPrimary} onClick={handleSaveDashboardSettings} disabled={dashboardSaving}>
+            {dashboardSaving ? 'Сохранение...' : 'Сохранить роли'}
+          </button>
+        </div>
+
+        {dashboardResult && (
+          <div className={`${styles.testResult} ${dashboardResult.ok ? styles.testSuccess : styles.testError}`}>
+            {dashboardResult.msg}
           </div>
         )}
       </div>

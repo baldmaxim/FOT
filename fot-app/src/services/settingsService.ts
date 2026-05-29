@@ -45,6 +45,11 @@ export interface IEmployeeTransferSettings {
   freezeHistory: boolean;
 }
 
+export interface IDashboardSettings {
+  /** Коды system_roles, считающихся «руководителями» в Карте руководителей дашборда HR. */
+  managerRoleCodes: string[];
+}
+
 export interface IOpenRouterModelInfo {
   id: string;
   label: string;
@@ -125,6 +130,16 @@ export const settingsService = {
     data: IEmployeeTransferSettings,
   ): Promise<IEmployeeTransferSettings> => {
     const res = await apiClient.put<ApiResponse<IEmployeeTransferSettings>>('/settings/employee-transfer', data);
+    return res.data;
+  },
+
+  getDashboardSettings: async (): Promise<IDashboardSettings> => {
+    const res = await apiClient.get<ApiResponse<IDashboardSettings>>('/settings/dashboard');
+    return res.data;
+  },
+
+  saveDashboardSettings: async (data: IDashboardSettings): Promise<IDashboardSettings> => {
+    const res = await apiClient.put<ApiResponse<IDashboardSettings>>('/settings/dashboard', data);
     return res.data;
   },
 

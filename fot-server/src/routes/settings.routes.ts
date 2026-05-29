@@ -11,6 +11,7 @@ const settingsAllCache = registerCache('settings:all', () => 'settings:all', 15 
 const sigurMonitorCache = registerCache('settings:sigur-monitor', () => 'settings:sigur-monitor', 15 * 60_000);
 const tsRemindersCache = registerCache('settings:ts-reminders', () => 'settings:ts-reminders', 15 * 60_000);
 const employeeTransferCache = registerCache('settings:employee-transfer', () => 'settings:employee-transfer', 15 * 60_000);
+const dashboardCache = registerCache('settings:dashboard', () => 'settings:dashboard', 15 * 60_000);
 const openRouterCache = registerCache('settings:openrouter', () => 'settings:openrouter', 15 * 60_000);
 
 // Write-through invalidation: после любого PUT/POST сбрасываем все settings-кэши.
@@ -23,6 +24,7 @@ router.use((req, res, next) => {
           'settings:sigur-monitor',
           'settings:ts-reminders',
           'settings:employee-transfer',
+          'settings:dashboard',
           'settings:openrouter',
         );
       }
@@ -44,6 +46,8 @@ router.get('/sigur-monitor', requirePageAccess('/admin/settings', 'view'), sigur
 router.get('/timesheet-reminders', requirePageAccess('/admin/settings', 'view'), tsRemindersCache, settingsController.getTimesheetReminderSettings);
 // GET /api/settings/employee-transfer — настройки заморозки истории переводов
 router.get('/employee-transfer', requirePageAccess('/admin/settings', 'view'), employeeTransferCache, settingsController.getEmployeeTransferSettings);
+// GET /api/settings/dashboard — настройки дашборда HR (роли руководителей)
+router.get('/dashboard', requirePageAccess('/admin/settings', 'view'), dashboardCache, settingsController.getDashboardSettings);
 
 // PUT /api/settings/r2 — сохранить R2 настройки
 router.put('/r2', requirePageAccess('/admin/settings', 'edit'), settingsController.saveR2);
@@ -55,6 +59,8 @@ router.put('/sigur-monitor', requirePageAccess('/admin/settings', 'edit'), setti
 router.put('/timesheet-reminders', requirePageAccess('/admin/settings', 'edit'), settingsController.saveTimesheetReminderSettings);
 // PUT /api/settings/employee-transfer — сохранить настройки заморозки истории переводов
 router.put('/employee-transfer', requirePageAccess('/admin/settings', 'edit'), settingsController.saveEmployeeTransferSettings);
+// PUT /api/settings/dashboard — сохранить настройки дашборда HR (роли руководителей)
+router.put('/dashboard', requirePageAccess('/admin/settings', 'edit'), settingsController.saveDashboardSettings);
 
 // POST /api/settings/r2/test — тест подключения R2
 router.post('/r2/test', requirePageAccess('/admin/settings', 'edit'), settingsController.testR2);

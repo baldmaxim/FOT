@@ -42,6 +42,11 @@ export interface IEmployeeTransferSettings {
   freezeHistory: boolean;
 }
 
+export interface IDashboardSettings {
+  /** Коды system_roles, считающихся «руководителями» в Карте руководителей дашборда HR. */
+  managerRoleCodes: string[];
+}
+
 export interface IOpenRouterModelInfo {
   id: string;
   label: string;
@@ -169,6 +174,8 @@ export const DEFAULT_EMPLOYEE_TRANSFER_SETTINGS: IEmployeeTransferSettings = {
   freezeHistory: false,
 };
 
+export const DEFAULT_DASHBOARD_MANAGER_ROLE_CODES = ['manager', 'manager_obj', 'site_supervisor'];
+
 let cache: Map<string, string | null> = new Map();
 let cacheLoadedAt = 0;
 const CACHE_TTL = 60_000; // 60 сек
@@ -202,6 +209,12 @@ const parseHour = (value: string | null | undefined, fallback: number): number =
   if (value == null || value.trim() === '') return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 23 ? parsed : fallback;
+};
+
+const parseCsvCodes = (value: string | null | undefined, fallback: string[]): string[] => {
+  if (value == null) return fallback;
+  const codes = value.split(',').map(c => c.trim()).filter(Boolean);
+  return codes.length > 0 ? codes : fallback;
 };
 const loadCache = async () => {
   if (Date.now() - cacheLoadedAt < CACHE_TTL && cache.size > 0) return;
@@ -691,6 +704,25 @@ export const settingsService = {
 
     this.invalidateCache();
     return this.getEmployeeTransferConfig();
+  },
+
+  async getDashboardConfig(): Promise<IDashboardSettings> {
+    const value = await this.get('dashboard_manager_role_codes');
+    return {
+      managerRoleCodes: parseCsvCodes(value, DEFAULT_DASHBOARD_MANAGER_ROLE_CODES),
+    };
+  },
+
+  async setDashboardConfig(config: { managerRoleCodes: string[] }, userId: string): Promise<IDashboardSettings> {
+    const codes = Array.from(new Set(config.managerRoleCodes.map(c => c.trim()).filter(Boolean)));
+    await this.set(
+      'dashboard_manager_role_codes',
+      codes.join(','),
+      userId,
+      'CSV кодов system_roles, считающихся руководителями в «Карте руководителей» дашборда HR.',
+    );
+    this.invalidateCache();
+    return this.getDashboardConfig();
   },
 
   async getOpenRouterConfig(): Promise<IOpenRouterPublicSettings> {

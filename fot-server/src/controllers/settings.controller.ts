@@ -253,6 +253,34 @@ const saveEmployeeTransferSettings = async (req: AuthenticatedRequest, res: Resp
   }
 };
 
+const getDashboardSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const config = await settingsService.getDashboardConfig();
+    res.json({ success: true, data: config });
+  } catch (err) {
+    console.error('settings.getDashboardSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения настроек дашборда' });
+  }
+};
+
+const saveDashboardSettings = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { managerRoleCodes } = req.body as Record<string, unknown>;
+    if (!Array.isArray(managerRoleCodes) || !managerRoleCodes.every(c => typeof c === 'string')) {
+      res.status(400).json({ success: false, error: 'managerRoleCodes должен быть массивом строк' });
+      return;
+    }
+    const config = await settingsService.setDashboardConfig(
+      { managerRoleCodes: managerRoleCodes as string[] },
+      req.user.id,
+    );
+    res.json({ success: true, data: config });
+  } catch (err) {
+    console.error('settings.saveDashboardSettings error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка сохранения настроек дашборда' });
+  }
+};
+
 /** Получить настройки OpenRouter (API key маскируется) */
 const getOpenRouterSettings = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -310,6 +338,8 @@ export const settingsController = {
   saveTimesheetReminderSettings,
   getEmployeeTransferSettings,
   saveEmployeeTransferSettings,
+  getDashboardSettings,
+  saveDashboardSettings,
   getOpenRouterSettings,
   saveOpenRouterSettings,
   testOpenRouter,

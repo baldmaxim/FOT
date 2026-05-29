@@ -14,22 +14,28 @@ import { useTimesheetApprovalDashboard } from '../../hooks/useTimesheetApprovalD
 import { SearchInput } from '../../components/ui/SearchInput';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import type {
-  ITimesheetDashboardManagerBound,
-  ITimesheetDashboardManagerUnbound,
-  ITimesheetDashboardNotSubmittedDept,
+  ITimesheetDashboardManager,
   ITimesheetDashboardNotSubmittedManager,
   ITimesheetDashboardUnassignedDept,
   ITimesheetDashboardDeptStatus,
   ITimesheetDashboardScopeDept,
   DepartmentSubmissionStatus,
-  ManagerRoleCode,
 } from '../../services/timesheetApprovalService';
 import './MassTimesheetExportDashboardTab.css';
 
-const ROLE_LABEL: Record<ManagerRoleCode, string> = {
+const ROLE_LABEL: Record<string, string> = {
   manager: 'Руководитель',
   manager_obj: 'Руководитель строительства',
   site_supervisor: 'Начальник участка',
+};
+const roleLabel = (code: string): string => ROLE_LABEL[code] ?? code;
+
+const pluralEmployees = (n: number): string => {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'сотрудник';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'сотрудника';
+  return 'сотрудников';
 };
 
 const STATUS_META: Record<DepartmentSubmissionStatus, { label: string; cls: string; icon: LucideIcon }> = {
@@ -66,6 +72,22 @@ const saveStoredDeptFilter = (ids: string[] | undefined): void => {
 
 const includesQuery = (haystack: string, query: string): boolean =>
   haystack.toLowerCase().includes(query.trim().toLowerCase());
+
+// Сворачиваемые нижние блоки. По умолчанию свёрнуты; выбор хранится в localStorage.
+const COLLAPSE_STORAGE_KEY = 'timesheet_dashboard_collapsed_v1';
+const COLLAPSIBLE_SECTIONS = ['heatmap', 'not_submitted', 'unassigned'] as const;
+
+const loadCollapsed = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_STORAGE_KEY);
+    if (raw == null) return new Set(COLLAPSIBLE_SECTIONS);
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return new Set(parsed.filter((v): v is string => typeof v === 'string'));
+  } catch {
+    // ignore
+  }
+  return new Set(COLLAPSIBLE_SECTIONS);
+};
 
 interface IScopeTreeNode {
   id: string;
@@ -191,6 +213,24 @@ const StatCard: FC<IStatCardProps> = ({ label, value, total, tone, icon }) => (
   </div>
 );
 
+interface ICollapsibleHeaderProps {
+  title: React.ReactNode;
+  collapsed: boolean;
+  onToggle: () => void;
+}
+
+const CollapsibleHeader: FC<ICollapsibleHeaderProps> = ({ title, collapsed, onToggle }) => (
+  <button
+    type="button"
+    className="mte-dash__h2 mte-dash__h2--toggle"
+    onClick={onToggle}
+    aria-expanded={!collapsed}
+  >
+    {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+    {title}
+  </button>
+);
+
 export const MassTimesheetExportDashboardTab: FC = () => {
   const now = useMemo(() => new Date(), []);
   const [year, setYear] = useState(now.getFullYear());
@@ -218,29 +258,21 @@ export const MassTimesheetExportDashboardTab: FC = () => {
   const { data, isLoading, isError } = useTimesheetApprovalDashboard(range.startDate, range.endDate, appliedDeptIds);
 
   const totals = data?.approvals.totals;
-  const notSubmittedDepts: ITimesheetDashboardNotSubmittedDept[] = data?.approvals.not_submitted_departments ?? [];
   const notSubmittedManagers: ITimesheetDashboardNotSubmittedManager[] = data?.approvals.not_submitted_managers ?? [];
   const unassignedDepts: ITimesheetDashboardUnassignedDept[] = data?.approvals.unassigned_departments ?? [];
   const deptStatusMap: ITimesheetDashboardDeptStatus[] = data?.approvals.department_status_map ?? [];
-  const registeredBound: ITimesheetDashboardManagerBound[] = data?.managers.registered_bound ?? [];
-  const registeredUnbound: ITimesheetDashboardManagerUnbound[] = data?.managers.registered_unbound ?? [];
+  const managers: ITimesheetDashboardManager[] = data?.managers.list ?? [];
   const scopeDepts: ITimesheetDashboardScopeDept[] = data?.scope_departments ?? [];
 
   // Поиск по блокам.
   const [searchHeatmap, setSearchHeatmap] = useState('');
-  const [searchNsDept, setSearchNsDept] = useState('');
   const [searchNsMgr, setSearchNsMgr] = useState('');
   const [searchUnassigned, setSearchUnassigned] = useState('');
-  const [searchBound, setSearchBound] = useState('');
-  const [searchUnbound, setSearchUnbound] = useState('');
+  const [searchManagers, setSearchManagers] = useState('');
 
   const heatmapShown = useMemo(
     () => deptStatusMap.filter(d => !searchHeatmap || includesQuery(`${d.name} ${d.parent_path}`, searchHeatmap)),
     [deptStatusMap, searchHeatmap],
-  );
-  const nsDeptShown = useMemo(
-    () => notSubmittedDepts.filter(d => !searchNsDept || includesQuery(`${d.department_name} ${d.parent_path} ${d.responsible_name ?? ''}`, searchNsDept)),
-    [notSubmittedDepts, searchNsDept],
   );
   const nsMgrShown = useMemo(
     () => notSubmittedManagers.filter(m => !searchNsMgr || includesQuery(`${m.full_name} ${m.department_path}`, searchNsMgr)),
@@ -250,14 +282,24 @@ export const MassTimesheetExportDashboardTab: FC = () => {
     () => unassignedDepts.filter(d => !searchUnassigned || includesQuery(`${d.department_name} ${d.parent_path}`, searchUnassigned)),
     [unassignedDepts, searchUnassigned],
   );
-  const boundShown = useMemo(
-    () => registeredBound.filter(m => !searchBound || includesQuery(`${m.full_name} ${m.departments.map(d => d.name).join(' ')}`, searchBound)),
-    [registeredBound, searchBound],
+  const managersShown = useMemo(
+    () => managers.filter(m => !searchManagers || includesQuery(
+      `${m.full_name} ${m.departments.map(d => d.name).join(' ')} ${m.assigned_employees.map(e => e.full_name).join(' ')}`,
+      searchManagers,
+    )),
+    [managers, searchManagers],
   );
-  const unboundShown = useMemo(
-    () => registeredUnbound.filter(m => !searchUnbound || includesQuery(m.full_name, searchUnbound)),
-    [registeredUnbound, searchUnbound],
-  );
+
+  // Сворачивание нижних блоков (свёрнуты по умолчанию, состояние в localStorage).
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed());
+  const toggleSection = useCallback((key: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      try { localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   // Дерево отделов для пикера + список countable-id (только уровень ≥ 3 участвует в отборе).
   const scopeTree = useMemo(() => buildScopeTree(scopeDepts), [scopeDepts]);
@@ -378,6 +420,65 @@ export const MassTimesheetExportDashboardTab: FC = () => {
       )}
 
       <section className="mte-dash__section">
+        <h2 className="mte-dash__h2">
+          Карта руководителей
+          <span className="mte-dash__badge">{managers.length}</span>
+          {isLoading && <span className="mte-dash__hint"> · загрузка…</span>}
+        </h2>
+        {managers.length > SEARCH_THRESHOLD && (
+          <SearchInput
+            value={searchManagers}
+            onValueChange={setSearchManagers}
+            placeholder="Поиск по ФИО / отделу / сотруднику…"
+          />
+        )}
+        {managers.length === 0 ? (
+          <div className="mte-dash__empty">Нет руководителей в выбранном фильтре.</div>
+        ) : (
+          <div className="mte-dash__table-wrap">
+            <table className="mte-dash__table">
+              <thead>
+                <tr>
+                  <th>ФИО</th>
+                  <th>Роль</th>
+                  <th>Привязка</th>
+                </tr>
+              </thead>
+              <tbody>
+                {managersShown.map(m => (
+                  <tr key={m.user_id}>
+                    <td className="mte-dash__cell-name">{m.full_name}</td>
+                    <td className="mte-dash__cell-role">{roleLabel(m.role_code)}</td>
+                    <td>
+                      {m.departments.length > 0 ? (
+                        <div className="mte-dash__chips">
+                          {m.departments.map(d => (
+                            <span key={d.id} className="mte-dash__chip">{d.name}</span>
+                          ))}
+                        </div>
+                      ) : m.assigned_employees.length > 0 ? (
+                        <span
+                          className="mte-dash__assigned"
+                          title={m.assigned_employees.map(e => e.full_name).join(', ')}
+                        >
+                          {m.assigned_employees.length} {pluralEmployees(m.assigned_employees.length)}
+                        </span>
+                      ) : (
+                        <span className="mte-dash__no-assign">нет назначений</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {managersShown.length === 0 && (
+                  <tr><td colSpan={3} className="mte-dash__empty">Ничего не найдено.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="mte-dash__section">
         <h2 className="mte-dash__h2">Подача табелей</h2>
         <div className="mte-dash__stats">
           <StatCard
@@ -424,80 +525,64 @@ export const MassTimesheetExportDashboardTab: FC = () => {
       </section>
 
       <section className="mte-dash__section">
-        <h2 className="mte-dash__h2">
-          Карта отделов · температура подачи
-          <span className="mte-dash__badge">{deptStatusMap.length}</span>
-          {isLoading && <span className="mte-dash__hint"> · загрузка…</span>}
-        </h2>
-        {deptStatusMap.length > SEARCH_THRESHOLD && (
-          <SearchInput value={searchHeatmap} onValueChange={setSearchHeatmap} placeholder="Поиск отдела…" />
-        )}
-        {deptStatusMap.length === 0 ? (
-          <div className="mte-dash__empty">Нет отделов в выбранном фильтре.</div>
-        ) : (
-          <>
-            <div className="mte-dash__heatmap">
-              {heatmapShown.map(d => {
-                const meta = STATUS_META[d.status];
-                const Icon = meta.icon;
-                return (
-                  <div
-                    key={d.department_id}
-                    className={`mte-dash__tile mte-dash__tile--${meta.cls}`}
-                    title={`${d.parent_path || d.name} — ${meta.label}`}
-                  >
-                    <Icon size={13} className="mte-dash__tile-icon" />
-                    <span className="mte-dash__tile-name">{d.name}</span>
-                  </div>
-                );
-              })}
-              {heatmapShown.length === 0 && <div className="mte-dash__empty">Ничего не найдено.</div>}
-            </div>
-            <div className="mte-dash__legend">
-              {STATUS_ORDER.map(s => (
-                <span key={s} className={`mte-dash__legend-item mte-dash__legend-item--${STATUS_META[s].cls}`}>
-                  <span className="mte-dash__legend-dot" aria-hidden="true" />
-                  {STATUS_META[s].label}
-                </span>
-              ))}
-            </div>
-          </>
+        <CollapsibleHeader
+          collapsed={collapsed.has('heatmap')}
+          onToggle={() => toggleSection('heatmap')}
+          title={<>
+            Карта отделов · температура подачи
+            <span className="mte-dash__badge">{deptStatusMap.length}</span>
+            {isLoading && <span className="mte-dash__hint"> · загрузка…</span>}
+          </>}
+        />
+        {!collapsed.has('heatmap') && (
+          deptStatusMap.length === 0 ? (
+            <div className="mte-dash__empty">Нет отделов в выбранном фильтре.</div>
+          ) : (
+            <>
+              {deptStatusMap.length > SEARCH_THRESHOLD && (
+                <SearchInput value={searchHeatmap} onValueChange={setSearchHeatmap} placeholder="Поиск отдела…" />
+              )}
+              <div className="mte-dash__heatmap">
+                {heatmapShown.map(d => {
+                  const meta = STATUS_META[d.status];
+                  const Icon = meta.icon;
+                  return (
+                    <div
+                      key={d.department_id}
+                      className={`mte-dash__tile mte-dash__tile--${meta.cls}`}
+                      title={`${d.parent_path || d.name} — ${meta.label}`}
+                    >
+                      <Icon size={13} className="mte-dash__tile-icon" />
+                      <span className="mte-dash__tile-name">{d.name}</span>
+                    </div>
+                  );
+                })}
+                {heatmapShown.length === 0 && <div className="mte-dash__empty">Ничего не найдено.</div>}
+              </div>
+              <div className="mte-dash__legend">
+                {STATUS_ORDER.map(s => (
+                  <span key={s} className={`mte-dash__legend-item mte-dash__legend-item--${STATUS_META[s].cls}`}>
+                    <span className="mte-dash__legend-dot" aria-hidden="true" />
+                    {STATUS_META[s].label}
+                  </span>
+                ))}
+              </div>
+            </>
+          )
         )}
       </section>
 
       <section className="mte-dash__section">
-        <h2 className="mte-dash__h2">Не подали табель</h2>
-        <div className="mte-dash__lists">
+        <CollapsibleHeader
+          collapsed={collapsed.has('not_submitted')}
+          onToggle={() => toggleSection('not_submitted')}
+          title={<>
+            Не подали табель · руководители (личные подачи)
+            <span className="mte-dash__badge mte-dash__badge--bad">{notSubmittedManagers.length}</span>
+          </>}
+        />
+        {!collapsed.has('not_submitted') && (
           <div className="mte-dash__list-block">
-            <h3 className="mte-dash__h3">
-              Отделы <span className="mte-dash__badge mte-dash__badge--bad">{notSubmittedDepts.length}</span>
-            </h3>
-            {notSubmittedDepts.length > SEARCH_THRESHOLD && (
-              <SearchInput value={searchNsDept} onValueChange={setSearchNsDept} placeholder="Поиск отдела…" />
-            )}
-            {notSubmittedDepts.length === 0 ? (
-              <div className="mte-dash__empty">Все отделы подали табель за период.</div>
-            ) : (
-              <ul className="mte-dash__rows">
-                {nsDeptShown.map(d => (
-                  <li key={d.department_id} className="mte-dash__row">
-                    <div className="mte-dash__row-main">{d.parent_path || d.department_name}</div>
-                    <div className="mte-dash__row-sub">
-                      {d.responsible_name
-                        ? `Ответственный: ${d.responsible_name}`
-                        : 'Ответственный не назначен'}
-                    </div>
-                  </li>
-                ))}
-                {nsDeptShown.length === 0 && <li className="mte-dash__empty">Ничего не найдено.</li>}
-              </ul>
-            )}
-          </div>
-
-          <div className="mte-dash__list-block">
-            <h3 className="mte-dash__h3">
-              Руководители (личные подачи) <span className="mte-dash__badge mte-dash__badge--bad">{notSubmittedManagers.length}</span>
-            </h3>
             {notSubmittedManagers.length > SEARCH_THRESHOLD && (
               <SearchInput value={searchNsMgr} onValueChange={setSearchNsMgr} placeholder="Поиск руководителя…" />
             )}
@@ -515,124 +600,41 @@ export const MassTimesheetExportDashboardTab: FC = () => {
               </ul>
             )}
           </div>
-        </div>
+        )}
       </section>
 
       <section className="mte-dash__section">
-        <h2 className="mte-dash__h2">
-          <UserX size={16} className="mte-dash__h3-icon mte-dash__h3-icon--bad" />
-          Отделы без ответственного
-          <span className="mte-dash__badge mte-dash__badge--bad">{unassignedDepts.length}</span>
-        </h2>
-        <div className="mte-dash__list-block">
-          <div className="mte-dash__hint mte-dash__hint--block">
-            Отделу не назначен ни ответственный за табель, ни привязанный руководитель — некому подавать табель.
-          </div>
-          {unassignedDepts.length > SEARCH_THRESHOLD && (
-            <SearchInput value={searchUnassigned} onValueChange={setSearchUnassigned} placeholder="Поиск отдела…" />
-          )}
-          {unassignedDepts.length === 0 ? (
-            <div className="mte-dash__empty">У всех отделов есть ответственный или привязанный руководитель.</div>
-          ) : (
-            <ul className="mte-dash__rows mte-dash__rows--tall">
-              {unassignedShown.map(d => (
-                <li key={d.department_id} className="mte-dash__row">
-                  <div className="mte-dash__row-main">{d.parent_path || d.department_name}</div>
-                </li>
-              ))}
-              {unassignedShown.length === 0 && <li className="mte-dash__empty">Ничего не найдено.</li>}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      <section className="mte-dash__section">
-        <h2 className="mte-dash__h2">Карта руководителей</h2>
-
-        <div className="mte-dash__manager-block">
-          <h3 className="mte-dash__h3">
-            <CheckCircle2 size={16} className="mte-dash__h3-icon mte-dash__h3-icon--good" />
-            Зарегистрированы в ФОТ, привязаны к отделам
-            <span className="mte-dash__badge mte-dash__badge--good">{registeredBound.length}</span>
-          </h3>
-          {registeredBound.length > SEARCH_THRESHOLD && (
-            <SearchInput value={searchBound} onValueChange={setSearchBound} placeholder="Поиск по ФИО / отделу…" />
-          )}
-          {registeredBound.length === 0 ? (
-            <div className="mte-dash__empty">Список пуст.</div>
-          ) : (
-            <div className="mte-dash__table-wrap">
-              <table className="mte-dash__table">
-                <thead>
-                  <tr>
-                    <th>ФИО</th>
-                    <th>Роль</th>
-                    <th>Отделы</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {boundShown.map(m => (
-                    <tr key={m.user_id}>
-                      <td className="mte-dash__cell-name">{m.full_name}</td>
-                      <td className="mte-dash__cell-role">{ROLE_LABEL[m.role_code]}</td>
-                      <td>
-                        <div className="mte-dash__chips">
-                          {m.departments.map(d => (
-                            <span key={d.id} className="mte-dash__chip">{d.name}</span>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {boundShown.length === 0 && (
-                    <tr><td colSpan={3} className="mte-dash__empty">Ничего не найдено.</td></tr>
-                  )}
-                </tbody>
-              </table>
+        <CollapsibleHeader
+          collapsed={collapsed.has('unassigned')}
+          onToggle={() => toggleSection('unassigned')}
+          title={<>
+            <UserX size={16} className="mte-dash__h3-icon mte-dash__h3-icon--bad" />
+            Отделы без ответственного
+            <span className="mte-dash__badge mte-dash__badge--bad">{unassignedDepts.length}</span>
+          </>}
+        />
+        {!collapsed.has('unassigned') && (
+          <div className="mte-dash__list-block">
+            <div className="mte-dash__hint mte-dash__hint--block">
+              Отделу не назначен ни ответственный за табель, ни привязанный руководитель — некому подавать табель.
             </div>
-          )}
-        </div>
-
-        <div className="mte-dash__manager-block">
-          <h3 className="mte-dash__h3">
-            <AlertTriangle size={16} className="mte-dash__h3-icon mte-dash__h3-icon--warn" />
-            Зарегистрированы в ФОТ, без привязки к отделам
-            <span className="mte-dash__badge mte-dash__badge--warn">{registeredUnbound.length}</span>
-          </h3>
-          {registeredUnbound.length === 0 ? (
-            <div className="mte-dash__empty">Все зарегистрированные руководители привязаны к отделам.</div>
-          ) : (
-            <>
-              <div className="mte-dash__hint mte-dash__hint--block">
-                Нужно привязать пользователя к отделам в админке (Доступы → Руководители).
-              </div>
-              {registeredUnbound.length > SEARCH_THRESHOLD && (
-                <SearchInput value={searchUnbound} onValueChange={setSearchUnbound} placeholder="Поиск по ФИО…" />
-              )}
-              <div className="mte-dash__table-wrap">
-                <table className="mte-dash__table">
-                  <thead>
-                    <tr>
-                      <th>ФИО</th>
-                      <th>Роль</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {unboundShown.map(m => (
-                      <tr key={m.user_id}>
-                        <td className="mte-dash__cell-name">{m.full_name}</td>
-                        <td className="mte-dash__cell-role">{ROLE_LABEL[m.role_code]}</td>
-                      </tr>
-                    ))}
-                    {unboundShown.length === 0 && (
-                      <tr><td colSpan={2} className="mte-dash__empty">Ничего не найдено.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </div>
+            {unassignedDepts.length > SEARCH_THRESHOLD && (
+              <SearchInput value={searchUnassigned} onValueChange={setSearchUnassigned} placeholder="Поиск отдела…" />
+            )}
+            {unassignedDepts.length === 0 ? (
+              <div className="mte-dash__empty">У всех отделов есть ответственный или привязанный руководитель.</div>
+            ) : (
+              <ul className="mte-dash__rows mte-dash__rows--tall">
+                {unassignedShown.map(d => (
+                  <li key={d.department_id} className="mte-dash__row">
+                    <div className="mte-dash__row-main">{d.parent_path || d.department_name}</div>
+                  </li>
+                ))}
+                {unassignedShown.length === 0 && <li className="mte-dash__empty">Ничего не найдено.</li>}
+              </ul>
+            )}
+          </div>
+        )}
       </section>
 
       {settingsOpen && (

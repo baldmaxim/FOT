@@ -99,7 +99,7 @@ export interface IApprovalReviewItem extends ITimesheetApproval {
   };
 }
 
-export type ManagerRoleCode = 'manager' | 'manager_obj' | 'site_supervisor';
+export type ManagerRoleCode = 'manager' | 'manager_obj' | 'site_supervisor' | (string & {});
 
 export interface ITimesheetDashboardTotals {
   departments_total: number;
@@ -127,17 +127,15 @@ export interface ITimesheetDashboardNotSubmittedManager {
   department_path: string;
 }
 
-export interface ITimesheetDashboardManagerBound {
+/** Запись карты руководителей: привязка либо отделами, либо назначенными сотрудниками. */
+export interface ITimesheetDashboardManager {
   user_id: string;
   full_name: string;
   role_code: ManagerRoleCode;
+  /** Отделы в текущем скоупе (если есть привязка к отделам). */
   departments: Array<{ id: string; name: string }>;
-}
-
-export interface ITimesheetDashboardManagerUnbound {
-  user_id: string;
-  full_name: string;
-  role_code: ManagerRoleCode;
+  /** Назначенные сотрудники (заполняется, когда отделов нет). */
+  assigned_employees: Array<{ id: number; full_name: string }>;
 }
 
 /** Отдел, которому никто не назначен ответственным (некому подавать табель). */
@@ -178,8 +176,7 @@ export interface ITimesheetDashboard {
     department_status_map: ITimesheetDashboardDeptStatus[];
   };
   managers: {
-    registered_bound: ITimesheetDashboardManagerBound[];
-    registered_unbound: ITimesheetDashboardManagerUnbound[];
+    list: ITimesheetDashboardManager[];
   };
 }
 
