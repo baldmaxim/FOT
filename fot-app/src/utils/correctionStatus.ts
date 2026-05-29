@@ -40,6 +40,6 @@ export const getStatusLabel = (status: TimesheetStatus): string =>
 export const getStatusIcon = (status: TimesheetStatus): string =>
   META_BY_STATUS.get(status)?.icon ?? '✎';
 
-// Статусы, для которых редактируются часы (work/manual — «Корректировка табеля»).
-// remote — авто-полный день по графику, часы не вводятся.
-export const HOURS_EDITABLE_STATUSES = new Set<TimesheetStatus>(['work', 'manual']);
+// Часы вводятся ТОЛЬКО у «Корректировка табеля» (manual). work — время по СКУД
+// (часы не вводятся), remote — авто-полный день по графику, отсутствия — по графику.
+export const HOURS_EDITABLE_STATUSES = new Set<TimesheetStatus>(['manual']);

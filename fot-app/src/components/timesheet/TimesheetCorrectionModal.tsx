@@ -444,6 +444,10 @@ const CorrectionTab: FC<{
           <div className="ts-hours-hint">Для удалёнки автоматически будет проставлен полный день по графику.</div>
         )}
 
+        {selectedStatus === 'work' && (
+          <div className="ts-hours-hint">Время рассчитается автоматически по событиям СКУД.</div>
+        )}
+
         {HOURS_EDITABLE_STATUSES.has(selectedStatus) && (() => {
           const wholeHours = Math.floor(hours);
           const minutes = Math.round((hours - wholeHours) * 60);
@@ -808,9 +812,26 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
         overflowY: 'auto',
       }}
     >
-      {/* Шапка блока: заголовок + кнопка «Добавить корректировку» вверху справа (#4) */}
+      {/* Шапка блока: «Обнулить день» (слева) + «Добавить корректировку» вверху справа (#2/#4) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <div style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>Корректировки по объектам</div>
+        {!adding && !hasDayLevelCorrection && onZeroOutDay && (
+          <button
+            type="button"
+            className="ts-btn"
+            onClick={() => {
+              const notes = window.prompt('Причина обнуления дня (обязательно):')?.trim();
+              if (!notes) return;
+              if (correctedEntries.length > 0 && !window.confirm(
+                'Обнуление дня снимет все корректировки по объектам за этот день. Продолжить?',
+              )) return;
+              onZeroOutDay(notes);
+            }}
+            title="Поставить 0 часов на весь день (снимет корректировки по объектам)"
+          >
+            Обнулить день
+          </button>
+        )}
         {!adding && !hasDayLevelCorrection && (
           <button
             type="button"
@@ -980,6 +1001,10 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
             <div className="ts-hours-hint">Для удалёнки автоматически будет проставлен полный день по графику.</div>
           )}
 
+          {addStatus === 'work' && (
+            <div className="ts-hours-hint">Время рассчитается автоматически по событиям СКУД.</div>
+          )}
+
           {addHoursEditable && (!addIsManual || availableForAdd.length > 0) && (
             <div className="ts-form-group">
               <label className="ts-form-label">Часы</label>
@@ -1011,25 +1036,6 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
             </button>
           </div>
         </div>
-      )}
-
-      {/* «Обнулить день целиком» — отдельная мелкая ссылка (#5: zero-out сохранён) */}
-      {!adding && !hasDayLevelCorrection && onZeroOutDay && (
-        <button
-          type="button"
-          className="ts-btn ts-btn--link"
-          style={{ marginBottom: 10 }}
-          onClick={() => {
-            const notes = window.prompt('Причина обнуления дня (обязательно):')?.trim();
-            if (!notes) return;
-            if (correctedEntries.length > 0 && !window.confirm(
-              'Обнуление дня снимет все корректировки по объектам за этот день. Продолжить?',
-            )) return;
-            onZeroOutDay(notes);
-          }}
-        >
-          Обнулить день целиком
-        </button>
       )}
 
       {planned != null && (
@@ -1156,11 +1162,11 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   // На <1024 CSS схлопывает grid в одну колонку и табы возвращаются.
   const useTwoColumnLayout = Boolean(showEventsTab && showCorrectionTab && employeeId && workDate);
   const adjustmentId = correctionInfo?.adjustment_id ?? null;
-  // Прикреплять файлы в модалке разрешено только при явном edit-режиме
-  // (например, из «✏ Скорректировать» на странице корректировок). При обычном
-  // просмотре существующей корректировки — только список файлов без кнопки
-  // «Прикрепить». Popover из TimesheetCorrectionsList — всегда только просмотр.
-  const attachmentsCanEdit = Boolean(correctionInfo?.is_correction && adjustmentId && initialMode === 'edit');
+  // Прикреплять файлы можно к любой сохранённой корректировке, если пользователь
+  // вообще может редактировать корректировки (т.е. виден таб «Корректировка»).
+  // В табеле (рук./админ) showCorrectionTab=true; в ЛК сотрудника без прав —
+  // false → только просмотр. Popover из TimesheetCorrectionsList — всегда просмотр.
+  const attachmentsCanEdit = Boolean(correctionInfo?.is_correction && adjustmentId && showCorrectionTab);
 
   // Плашка «автор последней корректировки + время» — раньше висела sticky под
   // шапкой модалки. Перенесена в правую колонку, чтобы не сдвигать шапку и

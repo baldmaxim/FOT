@@ -525,16 +525,23 @@ export const TimesheetPage: FC = () => {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       if (modalEntry?.id) {
         await timesheetService.update(modalEntry.id, { status, hours_worked: hours, notes });
+        closeModal();
       } else {
-        await timesheetService.create({
+        const created = await timesheetService.create({
           employee_id: modalEmployee.id,
           work_date: workDate,
           status,
           hours_worked: hours,
           notes,
         });
+        // #1: после ДОБАВЛЕНИЯ не закрываем модалку, а подставляем созданную
+        // корректировку — чтобы сразу появилась панель «Файлы» с кнопкой
+        // «Прикрепить» (файл цепляется к adjustment_id, который есть только теперь).
+        setModalMode('day');
+        setModalObjectEntry(null);
+        setModalObjectTarget(null);
+        setModalEntry(created);
       }
-      closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
@@ -2124,7 +2131,7 @@ export const TimesheetPage: FC = () => {
             )}
             onSaveObject={handleSaveObjectByTarget}
             onDeleteObject={handleDeleteObjectByTarget}
-            onZeroOutDay={(notes) => handleSaveCorrection('work', 0, notes)}
+            onZeroOutDay={(notes) => { void handleSaveCorrection('work', 0, notes).then(() => closeModal()); }}
           />
         </Suspense>
       )}

@@ -8,7 +8,7 @@ import { TimesheetBulkCorrectionModal } from './TimesheetBulkCorrectionModal';
 import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
 import { CorrectionAttachments } from './CorrectionAttachments';
 import { generateDateRange } from '../../utils/calendarUtils';
-import { STATUS_META, getStatusMeta } from '../../utils/correctionStatus';
+import { CREATABLE_STATUS_META, getStatusMeta } from '../../utils/correctionStatus';
 
 interface IProps {
   startDate: string;
@@ -180,7 +180,7 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
           Статус:
           <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as '' | TimesheetStatus)}>
             <option value="">Все</option>
-            {STATUS_META.map(meta => (
+            {CREATABLE_STATUS_META.map(meta => (
               <option key={meta.status} value={meta.status}>{meta.icon} {meta.label}</option>
             ))}
           </select>

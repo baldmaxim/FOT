@@ -32,7 +32,7 @@ const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid'
 };
 
 function isTimeStatus(value: unknown): value is TimeStatus {
-  return ['work', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'].includes(String(value));
+  return ['work', 'manual', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'].includes(String(value));
 }
 
 /** Компактная подпись дат для текста уведомлений: `01.05, 02.05, 11.05.2026` или `01.05.2026 — 16.05.2026`. */
@@ -743,7 +743,13 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
     // Обработка корректировки табеля
     if (request.request_type === 'time_correction' && request.correction_date) {
-      const correctionStatus: TimeStatus = isTimeStatus(request.correction_status) ? request.correction_status : 'work';
+      const rawCorrectionStatus: TimeStatus = isTimeStatus(request.correction_status) ? request.correction_status : 'work';
+      // Явные часы на «рабочий день» = «Корректировка табеля» (manual): время авторитетно
+      // берётся из hours_override, а не из СКУД. Иначе при отсутствии проходов время «терялось»
+      // (status='work' + null часов → 0 по СКУД), и статус расходился со списком корректировок.
+      const correctionStatus: TimeStatus = rawCorrectionStatus === 'work' && (request.correction_hours ?? 0) > 0
+        ? 'manual'
+        : rawCorrectionStatus;
       // Если день — выходной по графику сотрудника И его отдел в whitelist
       // настройки «Согласование выходных дней», корректировка попадает в pending
       // и должна быть дополнительно одобрена админом на /approvals.

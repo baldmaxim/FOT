@@ -74,6 +74,12 @@ export const CorrectionAttachments: FC<IProps> = ({ adjustmentId, variant, canEd
     deleteMutation.mutate(item.id);
   };
 
+  // Пустую панель не показываем тем, кто не может прикреплять (просмотрщик без файлов) —
+  // иначе висел бесполезный заголовок «Файлы корректировки» без содержимого.
+  if (!isLoading && items.length === 0 && !canEdit) {
+    return null;
+  }
+
   return (
     <div className={`ts-corr-attachments ts-corr-attachments--${variant}`}>
       {variant === 'modal' && (
@@ -86,10 +92,6 @@ export const CorrectionAttachments: FC<IProps> = ({ adjustmentId, variant, canEd
       {isLoading && <div className="ts-corr-attachments__empty">Загрузка…</div>}
       {loadError instanceof Error && (
         <div className="ts-corr-attachments__error">{loadError.message}</div>
-      )}
-
-      {!isLoading && items.length === 0 && (
-        <div className="ts-corr-attachments__empty">Файлов нет</div>
       )}
 
       {items.length > 0 && (

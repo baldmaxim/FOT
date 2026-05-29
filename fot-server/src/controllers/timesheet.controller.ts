@@ -70,7 +70,7 @@ import {
   DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
 } from '../utils/timesheet-month-access.js';
 
-const validStatuses = ['work', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
+const validStatuses = ['work', 'manual', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
 function buildCompactDailySchedules(
   dailySchedulesMap: Map<number, Map<string, IResolvedSchedule>>,
