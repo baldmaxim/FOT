@@ -8,6 +8,7 @@ import { TimesheetTeamManagementModal } from '../../components/timesheet/Timeshe
 import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { timesheetService } from '../../services/timesheetService';
+import { correctionAttachmentsService } from '../../services/correctionAttachmentsService';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
@@ -519,7 +520,7 @@ export const TimesheetPage: FC = () => {
   }, [entryMap, year, month]);
 
   // Save correction
-  const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string) => {
+  const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
     if (!modalEmployee) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -534,6 +535,18 @@ export const TimesheetPage: FC = () => {
           hours_worked: hours,
           notes,
         });
+        // Прикреплённые в форме создания файлы грузим на свежий adjustment_id.
+        // Корректировка уже создана — ошибку загрузки показываем, но не откатываем.
+        if (files && files.length > 0 && created.id != null) {
+          const adjustmentId = created.id;
+          try {
+            await Promise.all(files.map(file => correctionAttachmentsService.upload(adjustmentId, file)));
+          } catch (uploadErr) {
+            console.error('Upload correction files error:', uploadErr);
+            toast.error?.(uploadErr instanceof Error ? uploadErr.message : 'Корректировка создана, но файлы не загрузились');
+          }
+          queryClient.invalidateQueries({ queryKey: ['correction-attachments', adjustmentId] });
+        }
         // #1: после ДОБАВЛЕНИЯ не закрываем модалку, а подставляем созданную
         // корректировку — чтобы сразу появилась панель «Файлы» с кнопкой
         // «Прикрепить» (файл цепляется к adjustment_id, который есть только теперь).
@@ -552,11 +565,11 @@ export const TimesheetPage: FC = () => {
     }
   }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
-  const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string) => {
+  const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
     if (!modalEmployee || !modalObjectTarget || hours == null) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
-      await timesheetService.upsertObjectEntry({
+      const saved = await timesheetService.upsertObjectEntry({
         employee_id: modalEmployee.id,
         work_date: workDate,
         object_key: modalObjectTarget.object_key,
@@ -565,6 +578,15 @@ export const TimesheetPage: FC = () => {
         hours_worked: hours,
         notes,
       });
+      if (files && files.length > 0 && saved.adjustment_id != null) {
+        const adjustmentId = saved.adjustment_id;
+        try {
+          await Promise.all(files.map(file => correctionAttachmentsService.upload(adjustmentId, file)));
+        } catch (uploadErr) {
+          console.error('Upload object correction files error:', uploadErr);
+          toast.error?.(uploadErr instanceof Error ? uploadErr.message : 'Корректировка создана, но файлы не загрузились');
+        }
+      }
       closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
@@ -577,11 +599,11 @@ export const TimesheetPage: FC = () => {
   }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   const handleSaveModalCorrection = useCallback(
-    (status: TimesheetStatus, hours: number | null, notes: string) => {
+    (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
       if (modalMode === 'object' && (status === 'work' || status === 'manual')) {
-        return handleSaveObjectCorrection(status, hours, notes);
+        return handleSaveObjectCorrection(status, hours, notes, files);
       }
-      return handleSaveCorrection(status, hours, notes);
+      return handleSaveCorrection(status, hours, notes, files);
     },
     [modalMode, handleSaveCorrection, handleSaveObjectCorrection],
   );
@@ -2056,6 +2078,7 @@ export const TimesheetPage: FC = () => {
             open={modalOpen}
             onClose={closeModal}
             onSave={handleSaveModalCorrection}
+            allowAttachmentsOnCreate
             onDelete={
               modalMode === 'object' && modalObjectEntry?.adjustment_id
                 ? handleDeleteObjectCorrection

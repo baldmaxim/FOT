@@ -7,6 +7,7 @@ import { skudService } from '../../services/skudService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
 import { CorrectionAttachments } from './CorrectionAttachments';
+import { StagedCorrectionAttachments } from './StagedCorrectionAttachments';
 import {
   buildDisplayItems,
   calculateWorkSeconds,
@@ -23,7 +24,7 @@ import { CREATABLE_STATUS_META, getStatusMeta, HOURS_EDITABLE_STATUSES } from '.
 interface ICorrectionModalProps {
   open: boolean;
   onClose: () => void;
-  onSave: (status: TimesheetStatus, hours: number | null, notes: string) => void;
+  onSave: (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => void;
   onDelete?: () => void;
   initialStatus?: TimesheetStatus;
   initialHours?: number | null;
@@ -86,6 +87,10 @@ interface ICorrectionModalProps {
   // открывает форму редактирования; по умолчанию — 'view' для существующих корректировок,
   // 'edit' для новых. Используется из TimesheetCorrectionsList («✏ Скорректировать»).
   initialMode?: 'view' | 'edit';
+  // Разрешить прикреплять файлы прямо в форме СОЗДАНИЯ корректировки (staged →
+  // загрузка после создания). Включает родитель, чей onSave умеет грузить файлы
+  // (табель). По умолчанию false — ЛК/массовая корректировка без picker'а.
+  allowAttachmentsOnCreate?: boolean;
 }
 
 type ModalTab = 'events' | 'correction';
@@ -292,7 +297,7 @@ const EventsTab: FC<{
 
 const CorrectionTab: FC<{
   onClose: () => void;
-  onSave: (status: TimesheetStatus, hours: number | null, notes: string) => void;
+  onSave: (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => void;
   onDelete?: () => void;
   initialStatus: TimesheetStatus;
   initialHours: number;
@@ -313,6 +318,8 @@ const CorrectionTab: FC<{
   initialMode?: 'view' | 'edit';
   // Блок «Файлы корректировки» — рендерится перед футером (#1: «Сохранить» в самом низу).
   attachmentsSlot?: ReactNode;
+  // Разрешить staged-picker файлов в форме создания (файлы уйдут 4-м аргументом onSave).
+  allowAttachmentsOnCreate?: boolean;
 }> = ({
   onClose,
   onSave,
@@ -327,6 +334,7 @@ const CorrectionTab: FC<{
   correctionInfo,
   initialMode,
   attachmentsSlot,
+  allowAttachmentsOnCreate,
 }) => {
   const hasExistingCorrection = Boolean(correctionInfo?.is_correction);
   const [mode, setMode] = useState<'view' | 'edit'>(
@@ -350,7 +358,11 @@ const CorrectionTab: FC<{
   }, [allowedStatuses?.join('|')]);
   const [hours, setHours] = useState<number>(initialHours);
   const [notes, setNotes] = useState(initialNotes || '');
+  const [stagedFiles, setStagedFiles] = useState<File[]>([]);
   const showStatusPicker = statusOptions.length > 1;
+  // Picker файлов — только при создании новой корректировки (у существующей файлы
+  // уже грузятся через attachmentsSlot → реальный CorrectionAttachments).
+  const showStagedPicker = Boolean(allowAttachmentsOnCreate && !hasExistingCorrection);
 
   const trimmedNotes = notes.trim();
   const needsHoursForStatus = HOURS_EDITABLE_STATUSES.has(selectedStatus);
@@ -359,7 +371,7 @@ const CorrectionTab: FC<{
 
   const handleSave = () => {
     if (!canSave) return;
-    onSave(selectedStatus, needsHoursForStatus ? hours : null, trimmedNotes);
+    onSave(selectedStatus, needsHoursForStatus ? hours : null, trimmedNotes, stagedFiles);
   };
 
   if (mode === 'view' && hasExistingCorrection) {
@@ -507,6 +519,11 @@ const CorrectionTab: FC<{
         </div>
       </div>
       {attachmentsSlot}
+      {showStagedPicker && (
+        <div style={{ padding: '12px 20px 0' }}>
+          <StagedCorrectionAttachments files={stagedFiles} onChange={setStagedFiles} />
+        </div>
+      )}
       <div className="ts-modal-footer">
         <button
           className="ts-btn"
@@ -1092,15 +1109,16 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   onZeroOutDay,
   preselectedObjectKey,
   initialMode,
+  allowAttachmentsOnCreate,
 }) => {
   const hasObjectsBlock = Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
   const dayHasObjectAdjustments = hasObjectsBlock && objectEntries!.some(entry => entry.is_correction && entry.adjustment_id != null);
   // Save «День» при наличии объектных корректировок предупреждает: бэк их снимет.
-  const wrappedOnSave: ICorrectionModalProps['onSave'] = (status, hours, notes) => {
+  const wrappedOnSave: ICorrectionModalProps['onSave'] = (status, hours, notes, files) => {
     if (dayHasObjectAdjustments && !window.confirm(
       'Сохранение общей корректировки дня снимет все корректировки по объектам. Продолжить?',
     )) return;
-    onSave(status, hours, notes);
+    onSave(status, hours, notes, files);
   };
   const showEventsTab = !hideSkudTab;
   const showCorrectionTab = !hideCorrectionTab;
@@ -1262,6 +1280,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           correctionInfo={correctionInfo}
           initialMode={initialMode}
           attachmentsSlot={attachmentsNode}
+          allowAttachmentsOnCreate={allowAttachmentsOnCreate}
         />
       )}
       {hasObjectsBlock && (
