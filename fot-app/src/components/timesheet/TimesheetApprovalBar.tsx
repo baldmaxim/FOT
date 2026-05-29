@@ -1,18 +1,22 @@
 import { type FC, useEffect, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check, X, Send, RotateCcw, AlertCircle,
-  Upload, FileText, ChevronDown, MessageSquare, HelpCircle,
+  Upload, FileText, ChevronDown, MessageSquare, HelpCircle, Eye, Trash2,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../../contexts/ToastContext';
 import {
   timesheetApprovalService,
   APPROVAL_STATUS_LABELS,
   type ITimesheetApproval,
+  type IApprovalAttachment,
   type TimesheetSubmissionMode,
 } from '../../services/timesheetApprovalService';
 import { ApiError } from '../../api/client';
 import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
+import { FilePreviewModal } from '../documents/FilePreviewModal';
+import { displayFileName } from '../../utils/fileNameDisplay';
 import {
   formatTimesheetRangeLabel,
   getAllowedSubmissionHalf,
@@ -54,6 +58,12 @@ interface IMissingDay {
 const formatDayLabel = (iso: string): string => {
   const [, m, d] = iso.split('-');
   return `${Number(d)}.${m}`;
+};
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 };
 
 interface IActiveCardProps {
@@ -319,8 +329,12 @@ interface IWeekendMemoPopoverProps {
   uploadDisabled: boolean;
   loading: boolean;
   errorText: string | null;
+  attachments: IApprovalAttachment[];
+  attachmentsLoading: boolean;
+  deletingId: number | null;
   onUploadClick: () => void;
   onFileSelected: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  onDeleteAttachment: (documentId: number) => void;
   onClose: () => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
 }
@@ -329,12 +343,17 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
   uploadDisabled,
   loading,
   errorText,
+  attachments,
+  attachmentsLoading,
+  deletingId,
   onUploadClick,
   onFileSelected,
+  onDeleteAttachment,
   onClose,
   fileInputRef,
 }) => {
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [preview, setPreview] = useState<IApprovalAttachment | null>(null);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent): void => {
@@ -378,6 +397,48 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
         </div>
       )}
 
+      <div className="ts-corr-attachments ts-corr-attachments--popover">
+        {attachmentsLoading && <div className="ts-corr-attachments__empty">Загрузка…</div>}
+        {!attachmentsLoading && attachments.length === 0 && (
+          <div className="ts-corr-attachments__empty">Файлов нет</div>
+        )}
+        {attachments.length > 0 && (
+          <ul className="ts-corr-attachments__list">
+            {attachments.map(att => (
+              <li key={att.document_id} className="ts-corr-attachments__item">
+                <FileText size={14} className="ts-corr-attachments__icon" />
+                <span
+                  className="ts-corr-attachments__name"
+                  title={`${att.file_name} · ${formatFileSize(att.file_size)}`}
+                >
+                  {displayFileName(att.file_name)}
+                </span>
+                <span className="ts-corr-attachments__meta">{formatFileSize(att.file_size)}</span>
+                <button
+                  type="button"
+                  className="ts-corr-attachments__btn"
+                  onClick={() => setPreview(att)}
+                  title="Открыть файл"
+                  aria-label="Открыть файл"
+                >
+                  <Eye size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="ts-corr-attachments__btn ts-corr-attachments__btn--danger"
+                  onClick={() => onDeleteAttachment(att.document_id)}
+                  title="Удалить файл"
+                  aria-label="Удалить файл"
+                  disabled={deletingId === att.document_id}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <div className="ts-memo-popover-actions">
         <button
           type="button"
@@ -395,6 +456,19 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
           onChange={onFileSelected}
         />
       </div>
+
+      {preview && (
+        <FilePreviewModal
+          documentId={preview.document_id}
+          fileName={preview.file_name}
+          mimeType={preview.mime_type}
+          urlLoader={async () => {
+            const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(preview.document_id);
+            return download_url;
+          }}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </div>
   );
 };
@@ -420,6 +494,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const allowedRange = getHalfRange(allowedHalf.year, allowedHalf.month, allowedHalf.half);
   const submitDisabledReason = `Подача доступна только за ${formatTimesheetRangeLabel(allowedRange.startDate, allowedRange.endDate)} — последний завершённый период. За «Весь месяц» подача недоступна.`;
   const queryClient = useQueryClient();
+  const toast = useToast();
   const isPersonal = submissionMode === 'personal';
   const submissionTarget = isPersonal
     ? ({ mode: 'personal' } as const)
@@ -432,7 +507,20 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const [memoRequired, setMemoRequired] = useState(false);
   const [memoOpen, setMemoOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const memoFileInputRef = useRef<HTMLInputElement>(null);
+
+  const attachmentsKey = ['timesheet-approval-attachments', submissionMode, departmentId, startDate, endDate];
+  const attachmentsQuery = useQuery({
+    queryKey: attachmentsKey,
+    queryFn: () => timesheetApprovalService.listAttachments({
+      target: submissionTarget,
+      start_date: startDate,
+      end_date: endDate,
+    }),
+    enabled: memoOpen && (isPersonal || !!departmentId),
+    staleTime: 30_000,
+  });
 
   const invalidate = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] }),
@@ -515,12 +603,28 @@ export const TimesheetApprovalBar: FC<IProps> = ({
         file,
       });
       setMemoRequired(false);
+      await queryClient.invalidateQueries({ queryKey: attachmentsKey });
       await invalidate();
+      toast.success('Файл прикреплён');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Ошибка загрузки служебки';
       setSubmitError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteAttachment = async (documentId: number) => {
+    setDeletingId(documentId);
+    try {
+      await timesheetApprovalService.deleteAttachment(documentId);
+      await queryClient.invalidateQueries({ queryKey: attachmentsKey });
+      toast.success('Файл удалён');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Ошибка удаления файла');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -602,8 +706,12 @@ export const TimesheetApprovalBar: FC<IProps> = ({
             uploadDisabled={!isPersonal && !departmentId}
             loading={loading}
             errorText={memoErrorText}
+            attachments={attachmentsQuery.data ?? []}
+            attachmentsLoading={attachmentsQuery.isLoading}
+            deletingId={deletingId}
             onUploadClick={handleUploadMemoClick}
             onFileSelected={handleMemoFileSelected}
+            onDeleteAttachment={handleDeleteAttachment}
             onClose={() => setMemoOpen(false)}
             fileInputRef={memoFileInputRef}
           />
