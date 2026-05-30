@@ -41,7 +41,7 @@ const toLocalISO = (d: Date): string => {
 
 const DAY_NAMES = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const STATUS_LABELS: Record<TimesheetStatus, string> = {
-  work: 'Работа',
+  work: 'Работа в выходной/праздник',
   manual: 'Работа',
   remote: 'Удалёнка',
   sick: 'Больничный',

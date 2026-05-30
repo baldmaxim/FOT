@@ -50,6 +50,11 @@ export interface TimesheetObjectEntry {
   base_hours_worked: number;
   is_correction: boolean;
   notes?: string | null;
+  // true — «эхо» day-level корректировки, размазанной на объект (модалка дня его прячет, #8).
+  from_day_level?: boolean;
+  // Автор/время объектной корректировки (#9).
+  corrected_by_name?: string | null;
+  corrected_at?: string | null;
 }
 
 export interface TimesheetTeamManagementConfig {

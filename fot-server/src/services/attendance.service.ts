@@ -455,7 +455,23 @@ export async function buildAttendanceEntries(params: {
   //    (без СКУД и без day-level записи), иначе такой день невидим в «по сотрудникам» (#3).
   const objectAdjustmentTotals = buildObjectAdjustmentTotals(adjustments);
   const dailyAdjustments = adjustments.filter(adjustment => adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE);
-  const { userNames, legacyEmployeeNames } = await loadAdjustmentNames(dailyAdjustments);
+  // Имена авторов резолвим по ВСЕМ корректировкам (включая объектные), чтобы показывать
+  // автора и у корректировок «по объекту» (#9), а не только у day-level.
+  const { userNames, legacyEmployeeNames } = await loadAdjustmentNames(adjustments);
+
+  // #9: автор/время объектных корректировок — заполняем по adjustment_id. objectEntries и
+  // objectEntriesByEmployeeDate ссылаются на одни и те же объекты, мутируем один раз.
+  const adjustmentMetaById = new Map<number, { created_by: string | null; updated_at: string }>();
+  for (const adjustment of adjustments) {
+    adjustmentMetaById.set(adjustment.id, { created_by: adjustment.created_by, updated_at: adjustment.updated_at });
+  }
+  for (const objectEntry of objectAttendanceData.objectEntries) {
+    if (objectEntry.adjustment_id == null) continue;
+    const meta = adjustmentMetaById.get(objectEntry.adjustment_id);
+    if (!meta) continue;
+    objectEntry.corrected_by_name = meta.created_by ? userNames.get(meta.created_by) ?? null : null;
+    objectEntry.corrected_at = meta.updated_at;
+  }
   const entries: IAttendanceEntry[] = [];
   const byEmployeeDate = new Map<number, Map<string, IAttendanceEntry>>();
   const skudMap = new Map<number, Map<string, { hours: number; corrected: boolean }>>();
@@ -521,10 +537,27 @@ export async function buildAttendanceEntries(params: {
     } else if (adjustment.hours_override != null) {
       effectiveHours = adjustment.hours_override;
     } else if (adjustment.status === 'work') {
-      // 'work' без явных часов = разрешён/согласован выход, но фактическое время берём из СКУД.
-      // Вышел → часы по СКУД; не вышел (нет summary) → 0. Так согласование «работы» влияет
-      // только на согласование, а не на отображаемое время.
-      effectiveHours = existingSkud ? existingSkud.hours : null;
+      // 'work' без явных часов = заявка на выход. Фактическое время берём из СКУД ТОЛЬКО
+      // если выход согласован. Не согласовано (pending/rejected) → 0 (заявка влияет на
+      // согласование, а не на отображаемое время). Согласовано/auto/legacy(null) → часы по СКУД.
+      const notApproved = adjustment.approval_status === 'pending' || adjustment.approval_status === 'rejected';
+      if (notApproved) {
+        effectiveHours = 0;
+      } else if (existingSkud) {
+        effectiveHours = existingSkud.hours;
+      } else {
+        // skud_daily_summary часто НЕ содержит выходных/праздничных дат (или ещё не пересчитан
+        // для сегодняшних live-событий) — берём часы напрямую из raw-событий СКУД, иначе
+        // согласованный выход в выходной показывал бы 0 при фактическом присутствии (#6).
+        const rawSummary = objectAttendanceData.rawFallbackSummaries
+          .get(adjustment.employee_id)?.get(adjustment.work_date);
+        if (rawSummary) {
+          const lunchMinutes = adjSchedule ? getScheduleForDate(adjSchedule, adjDate).lunch_minutes : 0;
+          effectiveHours = computeSummaryPaidHours(rawSummary, lunchMinutes);
+        } else {
+          effectiveHours = null;
+        }
+      }
     } else if (ABSENCE_STATUSES_AS_WORKED.has(adjustment.status) && adjSchedule) {
       effectiveHours = isAdjWorkingDay ? getScheduleForDate(adjSchedule, adjDate).work_hours : 0;
     } else {
@@ -977,6 +1010,64 @@ export async function buildAttendanceEntries(params: {
 
 export type AdjustmentApprovalStatus = 'auto_approved' | 'pending' | 'approved' | 'rejected';
 
+// Должны совпадать с correction-attachments.service (CORRECTION_ATTACHMENT_ENTITY_TYPE/PURPOSE).
+const CORRECTION_ATTACHMENT_ENTITY_LITERAL = 'attendance_adjustment';
+const CORRECTION_ATTACHMENT_PURPOSE_LITERAL = 'timesheet_correction';
+
+/**
+ * Day-level корректировки разных источников (manual ↔ leave_request) на один
+ * (employee_id, work_date) взаимоисключающие. После записи одной снимаем конфликтующие
+ * day-level записи ДРУГОГО источника, перенося их вложения на выжившую (чтобы файл из
+ * заявки не пропал). manual_object (по-объектные) и записи того же источника не трогаем (#5/#8).
+ */
+async function supersedeConflictingDayLevelAdjustments(survivor: {
+  id: number;
+  employee_id: number;
+  work_date: string;
+  source_type: string;
+}): Promise<void> {
+  const conflicts = await query<{ id: number | string; source_type: string; source_id: string | null }>(
+    `SELECT id, source_type, source_id
+       FROM attendance_adjustments
+      WHERE employee_id = $1 AND work_date = $2
+        AND id <> $3
+        AND source_type <> $4
+        AND source_type <> $5`,
+    [survivor.employee_id, survivor.work_date, survivor.id, survivor.source_type, OBJECT_ADJUSTMENT_SOURCE_TYPE],
+  );
+  for (const conflict of conflicts) {
+    const removedId = Number(conflict.id);
+    // Собственные вложения удаляемой строки → копируем на выжившую (без дублей).
+    await query(
+      `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
+         SELECT document_id, $1, $2, $3 FROM document_links
+          WHERE entity_type = $1 AND entity_id = $4 AND purpose = $3
+       ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
+      [CORRECTION_ATTACHMENT_ENTITY_LITERAL, String(survivor.id), CORRECTION_ATTACHMENT_PURPOSE_LITERAL, String(removedId)],
+    );
+    // Файлы связанной заявки (leave_request) — копируем как собственные ссылки выжившей,
+    // чтобы они остались видимы после удаления leave_request-строки.
+    if (conflict.source_type === 'leave_request' && conflict.source_id) {
+      const lrId = conflict.source_id.split(':')[0];
+      if (/^\d+$/.test(lrId)) {
+        await query(
+          `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
+             SELECT document_id, $1, $2, $3 FROM document_links
+              WHERE entity_type = 'leave_request' AND entity_id = $4
+           ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
+          [CORRECTION_ATTACHMENT_ENTITY_LITERAL, String(survivor.id), CORRECTION_ATTACHMENT_PURPOSE_LITERAL, lrId],
+        );
+      }
+    }
+    // Осиротевшие ссылки удаляемой строки и сама строка.
+    await query(
+      `DELETE FROM document_links WHERE entity_type = $1 AND entity_id = $2`,
+      [CORRECTION_ATTACHMENT_ENTITY_LITERAL, String(removedId)],
+    );
+    await query(`DELETE FROM attendance_adjustments WHERE id = $1`, [removedId]);
+  }
+}
+
 export async function upsertAttendanceAdjustment(input: {
   employee_id: number;
   work_date: string;
@@ -1032,18 +1123,29 @@ export async function upsertAttendanceAdjustment(input: {
          RETURNING *`;
 
   const data = await queryOne<Record<string, unknown>>(sql, values);
-  if (!data) {
+  const survivor = data ?? await queryOne<Record<string, unknown>>(
     // ON CONFLICT DO NOTHING — вернём существующую строку.
-    const existing = await queryOne<Record<string, unknown>>(
-      `SELECT * FROM attendance_adjustments
-         WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
-         LIMIT 1`,
-      [input.employee_id, input.work_date, input.source_type, input.source_id ?? input.source_type],
-    );
-    if (!existing) throw new Error('Failed to upsert attendance adjustment');
-    return existing;
+    `SELECT * FROM attendance_adjustments
+       WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
+       LIMIT 1`,
+    [input.employee_id, input.work_date, input.source_type, input.source_id ?? input.source_type],
+  );
+  if (!survivor) throw new Error('Failed to upsert attendance adjustment');
+
+  // Дедуп day-level дублей другого источника (#5/#8): manual_object не трогаем.
+  if (input.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE) {
+    try {
+      await supersedeConflictingDayLevelAdjustments({
+        id: Number(survivor.id),
+        employee_id: input.employee_id,
+        work_date: input.work_date,
+        source_type: input.source_type,
+      });
+    } catch (error) {
+      console.error('[attendance] supersedeConflictingDayLevelAdjustments error:', error);
+    }
   }
-  return data;
+  return survivor;
 }
 
 export async function deleteAttendanceAdjustmentBySource(input: {

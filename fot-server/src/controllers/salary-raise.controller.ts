@@ -54,7 +54,7 @@ const VALID_TRANSITIONS: Record<string, { action: string; next: SalaryRaiseStatu
 
 const WORKED_STATUSES = new Set(['work', 'manual', 'remote']);
 const TIMESHEET_STATUS_LABELS: Record<string, string> = {
-  work: 'Работа',
+  work: 'Работа в выходной/праздник',
   manual: 'Работа',
   remote: 'Удалёнка',
   sick: 'Больничный',

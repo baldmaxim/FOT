@@ -5,6 +5,7 @@ import { documentService } from '../../services/documentService';
 import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { MyMonthTimesheet } from './MyMonthTimesheet';
 import type { TimesheetEntry } from '../../types';
 import styles from '../../pages/employee/EmployeeDashboard.module.css';
@@ -45,6 +46,7 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const isMobile = useIsMobile();
+  const overlayDismiss = useOverlayDismiss(onClose);
 
   const [startDate, setStartDate] = useState(presetDates?.start || '');
   const [endDate, setEndDate] = useState(presetDates?.end || '');
@@ -146,7 +148,7 @@ export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, emp
   };
 
   return (
-    <div className={styles.modalOverlay} onClick={onClose}>
+    <div className={styles.modalOverlay} {...overlayDismiss}>
       <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div className={styles.modalHeader}>
           <h2 className={styles.modalTitle}>{TITLES[activeModal]}</h2>
@@ -312,11 +314,12 @@ const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'work', label: 'Работа в выходной/праздник' },
   { value: 'vacation', label: 'Отпуск' },
   { value: 'unpaid', label: 'За свой счёт' },
+  { value: 'educational_leave', label: 'Учебный отпуск' },
   { value: 'sick_leave', label: 'Больничный' },
   { value: 'time_correction', label: 'Корректировка табеля' },
 ];
 
-const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'unpaid', 'sick_leave'];
+const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'unpaid', 'sick_leave', 'educational_leave'];
 
 interface IUnifiedRequestModalProps {
   onClose: () => void;
@@ -327,6 +330,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const isMobile = useIsMobile();
+  const overlayDismiss = useOverlayDismiss(onClose);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -336,7 +340,9 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [correctionDate, setCorrectionDate] = useState('');
-  const [correctionHours, setCorrectionHours] = useState<number>(8);
+  // Строковое состояние ввода: при очистке поле остаётся пустым (без принудительного 0,
+  // который давал ведущий ноль «08»). В число парсим только при отправке.
+  const [correctionHours, setCorrectionHours] = useState<string>('8');
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
 
@@ -362,7 +368,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
 
   const handleCorrectionPick = (iso: string, entry: TimesheetEntry | null) => {
     setCorrectionDate(iso);
-    if (entry?.hours_worked != null) setCorrectionHours(entry.hours_worked);
+    if (entry?.hours_worked != null) setCorrectionHours(String(entry.hours_worked));
   };
 
   const sortedDates = useMemo(() => [...selectedDates].sort(), [selectedDates]);
@@ -380,8 +386,12 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
 
   const handleSubmit = async () => {
     if (!employeeId) return showToast('error', 'Не найден ID сотрудника');
+    const parsedCorrectionHours = parseFloat(correctionHours);
     if (isCorrection) {
       if (!correctionDate) return showToast('error', 'Укажите дату корректировки');
+      if (!correctionHours.trim() || !Number.isFinite(parsedCorrectionHours)) {
+        return showToast('error', 'Укажите количество часов');
+      }
     } else if (isRangeType) {
       if (!rangeStart || !rangeEnd) return showToast('error', 'Укажите период (с — по)');
       if (rangeEnd < rangeStart) return showToast('error', 'Дата окончания раньше даты начала');
@@ -399,7 +409,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
             reason: reason.trim() || undefined,
             correction_date: correctionDate,
             correction_status: 'work',
-            correction_hours: correctionHours,
+            correction_hours: parsedCorrectionHours,
           }
         : isRangeType
           ? {
@@ -444,7 +454,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   };
 
   return (
-    <div className={styles.modalOverlay} onClick={onClose}>
+    <div className={styles.modalOverlay} {...overlayDismiss}>
       <div className={`${styles.modal} ${styles.modalWide}`} onClick={e => e.stopPropagation()}>
         <div className={styles.modalHeader}>
           <h2 className={styles.modalTitle}>Подать заявление</h2>
@@ -518,6 +528,13 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
                   allowFuture
                 />
               )}
+              {isCorrection && correctionDate && (
+                <div className={styles.reqCalChips}>
+                  <span className={styles.reqCalChip}>
+                    {new Date(correctionDate + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  </span>
+                </div>
+              )}
               {!isCorrection && selectedDates.size > 0 && (
                 <div className={styles.reqCalChips}>
                   {sortedDates.map(d => (
@@ -536,9 +553,10 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
               <label className={styles.formLabel}>Часы <span className={styles.required}>*</span></label>
               <input
                 type="number"
+                inputMode="decimal"
                 className={styles.formInput}
                 value={correctionHours}
-                onChange={e => setCorrectionHours(parseFloat(e.target.value) || 0)}
+                onChange={e => setCorrectionHours(e.target.value)}
                 min={0}
                 max={24}
                 step={0.5}

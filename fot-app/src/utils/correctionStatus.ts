@@ -13,7 +13,7 @@ export interface IStatusMeta {
 }
 
 export const STATUS_META: IStatusMeta[] = [
-  { status: 'work',              icon: '✔',  label: 'Работа' },
+  { status: 'work',              icon: '✔',  label: 'Работа в выходной/праздник' },
   { status: 'manual',            icon: '📝', label: 'Корректировка табеля' },
   { status: 'remote',            icon: '🏠', label: 'Удалёнка' },
   { status: 'vacation',          icon: '🏖', label: 'Отпуск' },

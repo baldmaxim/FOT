@@ -67,7 +67,7 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const TIMESHEET_STATUS_LABELS: Record<string, string> = {
-  work: 'Работа',
+  work: 'Работа в выходной/праздник',
   manual: 'Работа',
   remote: 'Удалёнка',
   sick: 'Больничный',

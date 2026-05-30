@@ -32,7 +32,7 @@ import s from './EmployeeTimesheetView.module.css';
 const WEEKDAY_SHORT = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
 const STATUS_LABELS: Record<string, string> = {
-  work: 'Работа',
+  work: 'Работа в выходной/праздник',
   manual: 'Работа',
   remote: 'Удалёнка',
   sick: 'Больничный',

@@ -582,6 +582,9 @@ interface IObjectCorrectionsListProps {
   // Из TimesheetCorrectionsList («Скорректировать»): открыть preselected
   // сразу в редактируемом режиме.
   initialMode?: 'view' | 'edit';
+  // Ограничение статусов в форме добавления (#6): на дне с присутствием/работой —
+  // только «Корректировка табеля» (manual).
+  allowedStatuses?: TimesheetStatus[];
 }
 
 // Серая скруглённая карточка для inline-форм (единый стиль с «День целиком»/«Удалёнка»).
@@ -605,7 +608,12 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   onZeroOutDay,
   preselectedObjectKey,
   initialMode,
+  allowedStatuses,
 }) => {
+  const addStatusOptions = useMemo(
+    () => CREATABLE_STATUS_META.filter(meta => !allowedStatuses || allowedStatuses.includes(meta.status)),
+    [allowedStatuses],
+  );
   // Показываем в списке ТОЛЬКО реальные корректировки (запись в
   // attendance_adjustments). «Фактовые» строки по СКУД — отфильтрованы,
   // иначе пустые объекты с 0/часовыми часами выглядели как «фантомы».
@@ -928,6 +936,13 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
               {trimmedNotes && (
                 <div className="ts-correction-view-comment">{trimmedNotes}</div>
               )}
+              {(entry.corrected_by_name || entry.corrected_at) && (
+                <div className="ts-correction-view-author">
+                  ✎ {entry.corrected_by_name}
+                  {entry.corrected_by_name && entry.corrected_at && ', '}
+                  {entry.corrected_at && formatCorrectionDate(entry.corrected_at)}
+                </div>
+              )}
             </div>
           );
         }
@@ -987,7 +1002,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
               value={addStatus}
               onChange={e => changeAddStatus(e.target.value as TimesheetStatus)}
             >
-              {CREATABLE_STATUS_META.map(meta => (
+              {addStatusOptions.map(meta => (
                 <option key={meta.status} value={meta.status}>{meta.icon} {meta.label}</option>
               ))}
             </select>
@@ -1180,22 +1195,28 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   // На <1024 CSS схлопывает grid в одну колонку и табы возвращаются.
   const useTwoColumnLayout = Boolean(showEventsTab && showCorrectionTab && employeeId && workDate);
   const adjustmentId = correctionInfo?.adjustment_id ?? null;
-  // Прикреплять файлы можно к любой сохранённой корректировке, если пользователь
-  // вообще может редактировать корректировки (т.е. виден таб «Корректировка»).
-  // В табеле (рук./админ) showCorrectionTab=true; в ЛК сотрудника без прав —
-  // false → только просмотр. Popover из TimesheetCorrectionsList — всегда просмотр.
-  const attachmentsCanEdit = Boolean(correctionInfo?.is_correction && adjustmentId && showCorrectionTab);
+  // Файлы прикрепляются ТОЛЬКО в форме создания корректировки (staged-picker, #5).
+  // У уже сохранённой корректировки блок лишь отображает вложения — без кнопки
+  // «Прикрепить»; при отсутствии файлов CorrectionAttachments вернёт null (блок скрыт).
+  const attachmentsCanEdit = false;
 
   // Плашка «автор последней корректировки + время» — раньше висела sticky под
   // шапкой модалки. Перенесена в правую колонку, чтобы не сдвигать шапку и
   // быть рядом с самим списком корректировок.
   const correctionAuthorBlock = correctionInfo?.is_correction
     && (correctionInfo.corrected_by_name || correctionInfo.corrected_at) ? (
-      <div className="ts-correction-info ts-correction-info--inline">
-        <span className="ts-correction-info-icon">✎</span>
-        {correctionInfo.corrected_by_name}
-        {correctionInfo.corrected_by_name && correctionInfo.corrected_at && ', '}
-        {correctionInfo.corrected_at && formatCorrectionDate(correctionInfo.corrected_at)}
+      <div className="ts-corr-card__author">
+        <span className="ts-corr-card__author-avatar" aria-hidden>
+          {(correctionInfo.corrected_by_name?.trim()?.[0] ?? '✎').toUpperCase()}
+        </span>
+        <span className="ts-corr-card__author-text">
+          <span className="ts-corr-card__author-name">
+            {correctionInfo.corrected_by_name || 'Корректировка'}
+          </span>
+          {correctionInfo.corrected_at && (
+            <span className="ts-corr-card__author-date">{formatCorrectionDate(correctionInfo.corrected_at)}</span>
+          )}
+        </span>
       </div>
     ) : null;
 
@@ -1263,7 +1284,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   })() : null;
 
   const correctionPanel = showCorrectionTab ? (
-    <>
+    <div className="ts-corr-card">
       {correctionAuthorBlock}
       {!hasObjectsBlock && (
         <CorrectionTab
@@ -1300,11 +1321,12 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           onZeroOutDay={onZeroOutDay}
           preselectedObjectKey={preselectedObjectKey}
           initialMode={initialMode}
+          allowedStatuses={allowedStatuses}
         />
       )}
       {hasObjectsBlock && attachmentsNode}
       {approvalBanner}
-    </>
+    </div>
   ) : null;
 
   return (

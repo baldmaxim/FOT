@@ -1,7 +1,8 @@
-// Ретрофикс одобренных заявок на отсутствие (vacation/sick_leave/unpaid):
-// раньше при approve() выходные дни диапазона пропускались — в табеле они
-// оставались «выходными» вместо «отпуска». Скрипт добавляет в
-// attendance_adjustments недостающие записи на Сб/Вс по уже одобренным заявкам.
+// Ретрофикс одобренных заявок на отсутствие (vacation/sick_leave/unpaid/educational_leave):
+// раньше при approve() выходные дни диапазона пропускались — в табеле они оставались
+// «выходными» вместо «отпуска». Скрипт добавляет в attendance_adjustments ВСЕ недостающие
+// дни диапазона по уже одобренным заявкам (выходные + любые иные пропуски, включая совсем
+// не развёрнутые старые заявки). Для отсутствий все дни идут подряд календарно.
 //
 // Идемпотентен: UNIQUE (employee_id, work_date, source_type, source_id) +
 // ON CONFLICT DO NOTHING. Повторный прогон даёт 0 вставок.
@@ -25,6 +26,7 @@ const LEAVE_TO_TIMESHEET = {
   vacation: 'vacation',
   sick_leave: 'sick',
   unpaid: 'unpaid',
+  educational_leave: 'educational_leave',
 };
 
 function parseEnv(text) {
@@ -77,9 +79,9 @@ const requests = (await client.query(
   [Object.keys(LEAVE_TO_TIMESHEET)],
 )).rows;
 
-console.log(`\nКандидатов (approved vacation/sick_leave/unpaid): ${requests.length}`);
+console.log(`\nКандидатов (approved vacation/sick_leave/unpaid/educational_leave): ${requests.length}`);
 
-let totalWeekendCells = 0;
+let totalRangeDays = 0;
 let totalAlreadyExist = 0;
 let totalInserted = 0;
 let requestsTouched = 0;
@@ -88,12 +90,18 @@ for (const r of requests) {
   const status = LEAVE_TO_TIMESHEET[r.request_type];
   const sourceId = String(r.id);
 
+  const allDays = (await client.query(
+    `SELECT COUNT(*)::int AS n
+       FROM generate_series($1::date, $2::date, INTERVAL '1 day') AS d`,
+    [r.start_date, r.end_date],
+  )).rows[0].n;
+  totalRangeDays += allDays;
+
   if (dryRun) {
     const missing = (await client.query(
       `SELECT d::date::text AS work_date
          FROM generate_series($1::date, $2::date, INTERVAL '1 day') AS d
-        WHERE EXTRACT(DOW FROM d) IN (0, 6)
-          AND NOT EXISTS (
+        WHERE NOT EXISTS (
             SELECT 1 FROM attendance_adjustments
              WHERE employee_id = $3::int
                AND work_date = d::date
@@ -103,15 +111,7 @@ for (const r of requests) {
       [r.start_date, r.end_date, r.employee_id, sourceId],
     )).rows;
 
-    const allWeekends = (await client.query(
-      `SELECT COUNT(*)::int AS n
-         FROM generate_series($1::date, $2::date, INTERVAL '1 day') AS d
-        WHERE EXTRACT(DOW FROM d) IN (0, 6)`,
-      [r.start_date, r.end_date],
-    )).rows[0].n;
-
-    totalWeekendCells += allWeekends;
-    totalAlreadyExist += allWeekends - missing.length;
+    totalAlreadyExist += allDays - missing.length;
     totalInserted += missing.length;
     if (missing.length > 0) {
       requestsTouched += 1;
@@ -134,25 +134,16 @@ for (const r of requests) {
          NULL,
          'leave_request',
          $3::text,
-         'Backfill vacation/sick/unpaid weekends',
+         'Backfill leave-request range days',
          $4::uuid
        FROM generate_series($5::date, $6::date, INTERVAL '1 day') AS d
-       WHERE EXTRACT(DOW FROM d) IN (0, 6)
        ON CONFLICT (employee_id, work_date, source_type, source_id) DO NOTHING
        RETURNING id, work_date::text AS work_date`,
       [r.employee_id, status, sourceId, r.reviewer_id, r.start_date, r.end_date],
     )).rows;
 
-    const allWeekends = (await client.query(
-      `SELECT COUNT(*)::int AS n
-         FROM generate_series($1::date, $2::date, INTERVAL '1 day') AS d
-        WHERE EXTRACT(DOW FROM d) IN (0, 6)`,
-      [r.start_date, r.end_date],
-    )).rows[0].n;
-
-    totalWeekendCells += allWeekends;
     totalInserted += inserted.length;
-    totalAlreadyExist += allWeekends - inserted.length;
+    totalAlreadyExist += allDays - inserted.length;
     if (inserted.length > 0) {
       requestsTouched += 1;
       console.log(
@@ -167,7 +158,7 @@ for (const r of requests) {
 console.log('\n=== ИТОГ ===');
 console.log(`  Заявок-кандидатов:               ${requests.length}`);
 console.log(`  Заявок, к которым нужно дописать: ${requestsTouched}`);
-console.log(`  Выходных дней в диапазонах:      ${totalWeekendCells}`);
+console.log(`  Дней в диапазонах:               ${totalRangeDays}`);
 console.log(`  Уже было в attendance_adj:       ${totalAlreadyExist}`);
 console.log(`  ${dryRun ? 'Будет вставлено' : 'Вставлено'}:                  ${totalInserted}`);
 

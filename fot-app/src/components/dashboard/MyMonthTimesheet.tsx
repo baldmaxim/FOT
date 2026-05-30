@@ -24,12 +24,14 @@ const APPROVED_ABSENCE_TYPES: ReadonlySet<ILeaveRequest['request_type']> = new S
   'vacation',
   'sick_leave',
   'unpaid',
+  'educational_leave',
 ]);
 
 const REQUEST_TYPE_TO_DS: Partial<Record<ILeaveRequest['request_type'], DayStatus>> = {
   vacation: 'vacation',
   sick_leave: 'sick',
   unpaid: 'unpaid',
+  educational_leave: 'educational_leave',
 };
 
 const WEEKDAY_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -55,6 +57,17 @@ const ABSENCE_DAY_STATUSES: ReadonlySet<DayStatus> = new Set([
   'unpaid',
   'educational_leave',
 ]);
+
+// Буквенные коды статусов-отсутствий для ячейки календаря ЛК (без времени).
+// Рабочие дни (present/underwork) показывают числовые часы, не букву.
+const STATUS_LETTER: Partial<Record<DayStatus, string>> = {
+  vacation: 'От',
+  sick: 'Б',
+  remote: 'Уд',
+  unpaid: 'С',
+  educational_leave: 'УО',
+  absent: 'Н',
+};
 
 const STATUS_LABEL: Record<DayStatus, string> = {
   present: 'Работа',
@@ -312,10 +325,10 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
               title={title}
             >
               <span className={styles.cellDay}>{cell.day}</span>
-              {showHours ? (
+              {STATUS_LETTER[effectiveDs] ? (
+                <span className={styles.cellHours}>{STATUS_LETTER[effectiveDs]}</span>
+              ) : showHours ? (
                 <span className={styles.cellHours}>{formatHoursLabel(visibleHours)}</span>
-              ) : effectiveDs === 'vacation' ? (
-                <span className={styles.cellHours}>От</span>
               ) : null}
               {reqInfo && reqInfo.status !== 'cancelled' ? (
                 <span

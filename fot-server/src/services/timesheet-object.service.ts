@@ -47,6 +47,13 @@ export interface IAttendanceObjectEntry {
   base_hours_worked: number;
   is_correction: boolean;
   notes?: string | null;
+  // true — это «эхо» day-level корректировки (manual/leave_request), размазанной на объект,
+  // а не самостоятельная объектная корректировка (source_type='manual_object'). Модалка дня
+  // прячет такие записи (day-level показывается отдельным блоком), чтобы не дублировать (#8).
+  from_day_level?: boolean;
+  // Автор и время объектной корректировки (#9) — заполняет attendance.service по adjustment_id.
+  corrected_by_name?: string | null;
+  corrected_at?: string | null;
 }
 
 export interface IRawFallbackSummary {
@@ -87,6 +94,7 @@ interface IAggregatedObjectEntry {
   effective_minutes: number;
   is_correction: boolean;
   notes?: string | null;
+  from_day_level?: boolean;
 }
 
 const normalizeAccessPoint = (value: string | null | undefined): string | null => {
@@ -516,6 +524,7 @@ const toObjectEntry = (entry: IAggregatedObjectEntry): IAttendanceObjectEntry =>
   base_hours_worked: roundHours(entry.base_minutes / 60),
   is_correction: entry.is_correction,
   notes: entry.notes ?? null,
+  from_day_level: entry.from_day_level ?? false,
 });
 
 export async function buildObjectAttendanceData(params: {
@@ -812,6 +821,8 @@ export async function buildObjectAttendanceData(params: {
           effective_minutes: centihours * 0.6,
           is_correction: true,
           notes: adjustment.reason,
+          // Эхо day-level корректировки (не самостоятельная объектная) — модалка дня его прячет (#8).
+          from_day_level: true,
         },
       );
       dayObjects.add(target.objectKey);

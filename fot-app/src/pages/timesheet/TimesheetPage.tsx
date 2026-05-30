@@ -2092,6 +2092,15 @@ export const TimesheetPage: FC = () => {
                   : undefined
             }
             infoBanner={null}
+            allowedStatuses={
+              // После выхода на работу (день уже = work по СКУД/согласованной правке)
+              // добавочная корректировка недобора возможна только статусом «Корректировка
+              // табеля» (manual) — ничего другого выбрать нельзя (#6). На пустом/выходном
+              // дне набор статусов прежний (можно выбрать «Работа в выходной/праздник»).
+              modalMode !== 'object' && modalEntry?.status === 'work'
+                ? ['manual']
+                : undefined
+            }
             initialStatus={
               modalMode === 'object' && modalObjectEntry?.adjustment_id
                 ? 'manual'
@@ -2114,8 +2123,9 @@ export const TimesheetPage: FC = () => {
               modalMode === 'object' && modalObjectEntry?.adjustment_id
                 ? {
                     is_correction: true,
-                    corrected_at: modalEntry?.corrected_at ?? null,
-                    corrected_by_name: modalEntry?.corrected_by_name ?? null,
+                    // Автор/время — у самой объектной корректировки (#9); фолбэк на day-level.
+                    corrected_at: modalObjectEntry.corrected_at ?? modalEntry?.corrected_at ?? null,
+                    corrected_by_name: modalObjectEntry.corrected_by_name ?? modalEntry?.corrected_by_name ?? null,
                     approved_at: modalEntry?.approved_at ?? null,
                     approved_by_name: modalEntry?.approved_by_name ?? null,
                     adjustment_id: modalObjectEntry.adjustment_id,
@@ -2143,7 +2153,10 @@ export const TimesheetPage: FC = () => {
               };
             })() : undefined}
             objectEntries={modalEmployee
+              // Прячем «эхо» day-level корректировки, размазанное на объект (#8): такая запись
+              // дублирует day-level «Корректировка табеля», которая показывается отдельно.
               ? (objectEntriesByEmployeeDate.get(modalEmployee.id)?.get(modalWorkDate) ?? [])
+                  .filter(e => !e.from_day_level)
               : undefined}
             plannedHours={modalEmployee
               ? getWorkHoursForDay(

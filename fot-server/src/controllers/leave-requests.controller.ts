@@ -17,18 +17,19 @@ import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
 import type { TimeStatus } from '../types/index.js';
 
-const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work'] as const;
+const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave'] as const;
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
-  work: 'Работа в выходной/праздник',
+  work: 'Работа в выходной/праздник', educational_leave: 'Учебный отпуск',
 };
-const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid' | 'work', TimeStatus> = {
+const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid' | 'work' | 'educational_leave', TimeStatus> = {
   vacation: 'vacation',
   sick_leave: 'sick',
   remote: 'remote',
   unpaid: 'unpaid',
   work: 'work',
+  educational_leave: 'educational_leave',
 };
 
 function isTimeStatus(value: unknown): value is TimeStatus {
