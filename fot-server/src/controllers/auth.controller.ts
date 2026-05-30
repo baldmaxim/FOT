@@ -14,6 +14,7 @@ import { getRolePageAccess } from '../services/access-control.service.js';
 import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
 import { listManagedDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
+import { TIMEKEEPER_ROLE_CODE, listTimekeeperAccessibleDepartmentIds, listTimekeeperDirectEmployeeIds } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
   clearSessionCookies,
@@ -87,16 +88,22 @@ async function buildProfileResponse(
     loadCompanyScopeForProfile(profile, role.is_admin),
   ]);
 
-  const managed_department_ids = await listManagedDepartmentIdsForUser(
-    profile.id,
-    null,
-    profile.employee_id,
-  );
+  // Табельщица: «управляемые отделы» = поддерево отделов/бригад, назначенных её
+  // объектам входа (семена + потомки) — чтобы селектор на /timesheet показывал все
+  // дочерние бригады, даже если объект назначен на родительский отдел.
+  // НЕ выдаём ей /staff-control.
+  const managed_department_ids = role.code === TIMEKEEPER_ROLE_CODE
+    ? await listTimekeeperAccessibleDepartmentIds(profile.id)
+    : await listManagedDepartmentIdsForUser(profile.id, null, profile.employee_id);
 
-  const has_direct_reports = profile.employee_id != null
-    && (await listDirectSubordinates(profile.employee_id)).length > 0;
+  // Табельщица: «прямые подчинённые» = сотрудники, назначенные её объектам ЯВНО
+  // (employee_object_assignment). Нужно фронту для рендера direct-reports ячейки,
+  // когда у табельщицы нет отделов, только персональные назначения.
+  const has_direct_reports = role.code === TIMEKEEPER_ROLE_CODE
+    ? (await listTimekeeperDirectEmployeeIds(profile.id)).length > 0
+    : (profile.employee_id != null && (await listDirectSubordinates(profile.employee_id)).length > 0);
 
-  if (!role.is_admin && managed_department_ids.length > 0 && !page_access['/staff-control']?.can_view) {
+  if (!role.is_admin && role.code !== TIMEKEEPER_ROLE_CODE && managed_department_ids.length > 0 && !page_access['/staff-control']?.can_view) {
     page_access['/staff-control'] = { can_view: true, can_edit: true };
   }
 

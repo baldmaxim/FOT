@@ -121,6 +121,13 @@ router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users', 'edi
 // Начальник участка — это роль site_supervisor (миграция 133); прямые назначения сотрудников ниже (миграция 090).
 router.put('/users/:id/employee-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserEmployeeAccess);
 
+// Назначение «объектов входа» сущностям для скоупа табельщицы (миграция 150).
+router.get('/object-assignments', requirePageAccess('/admin/users', 'view'), adminController.getObjectAssignments);
+router.put('/departments/:id/object-assignment', requirePageAccess('/admin/users', 'edit'), adminController.updateDepartmentObjectAssignment);
+router.put('/employees/:id/object-assignment', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeObjectAssignment);
+router.get('/users/:id/timekeeper-objects', requirePageAccess('/admin/users', 'view'), adminController.getUserTimekeeperObjects);
+router.put('/users/:id/timekeeper-objects', requirePageAccess('/admin/users', 'edit'), adminController.updateUserTimekeeperObjects);
+
 // Привязка администраторов к «компаниям» (корневым узлам Sigur). Только системный админ.
 router.get('/companies', requirePageAccess('/admin/users', 'view'), adminController.listCompanies);
 router.get('/users/:id/companies', requirePageAccess('/admin/users', 'view'), adminController.getUserCompanies);

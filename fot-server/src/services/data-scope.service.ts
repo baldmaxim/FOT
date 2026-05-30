@@ -4,6 +4,11 @@ import { query } from '../config/postgres.js';
 import { withDbSlot } from '../config/db-instrumentation.js';
 import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
+import {
+  isTimekeeper,
+  resolveTimekeeperDepartmentSeeds,
+  resolveTimekeeperDirectEmployeeIds,
+} from './timekeeper-scope.service.js';
 import { DEFAULT_TIMESHEET_MONTHS_BACK } from '../utils/timesheet-month-access.js';
 
 export type DataScope = 'self' | 'department' | 'all';
@@ -169,7 +174,11 @@ export async function resolveAccessibleDepartmentIds(
     return ids;
   }
 
-  const assigned = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);
+  // Табельщица: «явные отделы» = отделы/бригады, назначенные её объектам входа
+  // (department_object_assignment), вместо собственных employee_department_access.
+  const assigned = isTimekeeper(req)
+    ? await resolveTimekeeperDepartmentSeeds(req)
+    : await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);
   const explicit = [...new Set(assigned)];
   if (explicit.length === 0) return explicit;
 
@@ -234,6 +243,13 @@ export async function canAccessEmployeeInScope(
       const accessibleSet = new Set(accessible);
       if (targetDepartmentIds.some(id => accessibleSet.has(id))) return true;
     }
+  }
+
+  // Табельщица: сотрудники, назначенные её объектам ЯВНО (employee_object_assignment).
+  // Отделочные сотрудники уже покрыты блоком accessible выше.
+  if (isTimekeeper(req)) {
+    const directEmployees = await resolveTimekeeperDirectEmployeeIds(req);
+    if (directEmployees.has(employeeId)) return true;
   }
 
   // Fallback: руководитель «по людям» (manager_obj и обычный manager без
@@ -312,6 +328,21 @@ export async function resolveManagedDepartmentIds(req: AuthenticatedRequest): Pr
   const accessible = await resolveAccessibleDepartmentIds(req);
   if (accessible === 'all') return [];
   return accessible;
+}
+
+/**
+ * Множество «прямых» сотрудников для скоупа табеля. Для табельщицы — сотрудники,
+ * назначенные её объектам ЯВНО (employee_object_assignment); для остальных —
+ * employee_direct_reports по собственному employee_id. Заменяет прямые вызовы
+ * listDirectSubordinates(req.user.employee_id) в путях табеля, чтобы табельщица
+ * (у которой может не быть employee_id) тоже получала свой набор.
+ */
+export async function resolveEffectiveDirectSubordinates(req: AuthenticatedRequest): Promise<number[]> {
+  if (isTimekeeper(req)) {
+    return [...await resolveTimekeeperDirectEmployeeIds(req)];
+  }
+  if (!req.user.employee_id) return [];
+  return listDirectSubordinates(req.user.employee_id);
 }
 
 /**

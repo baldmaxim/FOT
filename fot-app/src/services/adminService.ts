@@ -265,4 +265,47 @@ export const adminService = {
     const response = await apiClient.get<ApiResponse<{ id: number; full_name: string; org_department_id: string | null }[]>>(`/admin/employees/search?${params}`);
     return response.data || [];
   },
+
+  // ─── Назначение «объектов входа» для скоупа табельщицы (миграция 150) ───
+  async getObjectAssignments(): Promise<{
+    department_objects: Record<string, string[]>;
+    employee_objects: Record<string, string[]>;
+  }> {
+    const response = await apiClient.get<ApiResponse<{
+      department_objects: Record<string, string[]>;
+      employee_objects: Record<string, string[]>;
+    }>>('/admin/object-assignments');
+    return response.data || { department_objects: {}, employee_objects: {} };
+  },
+
+  async updateDepartmentObjectAssignment(departmentId: string, objectIds: string[]): Promise<{ object_ids: string[] }> {
+    const response = await apiClient.put<ApiResponse<{ object_ids: string[] }>>(
+      `/admin/departments/${departmentId}/object-assignment`,
+      { object_ids: objectIds },
+    );
+    return response.data;
+  },
+
+  async updateEmployeeObjectAssignment(employeeId: number, objectIds: string[]): Promise<{ object_ids: string[] }> {
+    const response = await apiClient.put<ApiResponse<{ object_ids: string[] }>>(
+      `/admin/employees/${employeeId}/object-assignment`,
+      { object_ids: objectIds },
+    );
+    return response.data;
+  },
+
+  async getUserTimekeeperObjects(userId: string): Promise<{ object_ids: string[] }> {
+    const response = await apiClient.get<ApiResponse<{ object_ids: string[] }>>(
+      `/admin/users/${userId}/timekeeper-objects`,
+    );
+    return response.data || { object_ids: [] };
+  },
+
+  async updateUserTimekeeperObjects(userId: string, objectIds: string[]): Promise<{ object_ids: string[] }> {
+    const response = await apiClient.put<ApiResponse<{ object_ids: string[] }>>(
+      `/admin/users/${userId}/timekeeper-objects`,
+      { object_ids: objectIds },
+    );
+    return response.data;
+  },
 };

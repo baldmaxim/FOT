@@ -123,6 +123,8 @@ export interface AuthenticatedRequest extends Request {
     __manager_subtree_ids?: string[];
     __direct_subordinates?: Set<number>;
     __skud_object_scope?: { is_unrestricted: boolean; object_ids: string[] };
+    __timekeeper_dept_seeds?: string[];
+    __timekeeper_direct_employees?: Set<number>;
   };
 }
 

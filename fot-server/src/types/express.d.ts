@@ -20,6 +20,8 @@ declare global {
         __company_subtree_ids?: string[];
         __manager_subtree_ids?: string[];
         __direct_subordinates?: Set<number>;
+        __timekeeper_dept_seeds?: string[];
+        __timekeeper_direct_employees?: Set<number>;
       };
     }
   }

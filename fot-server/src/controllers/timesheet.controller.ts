@@ -20,7 +20,9 @@ import {
   resolveAccessibleDepartmentIds,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
+  resolveEffectiveDirectSubordinates,
 } from '../services/data-scope.service.js';
+import { isTimekeeper } from '../services/timekeeper-scope.service.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
 import {
   buildAttendanceEntries,
@@ -324,7 +326,10 @@ export async function resolveAdjustmentApprovalStatus(
   status: TimeStatus,
   hoursOverride: number | null = null,
   excludeAdjustmentId: number | null = null,
+  authorIsTimekeeper: boolean = false,
 ): Promise<'auto_approved' | 'pending'> {
+  // Корректировки табельщицы (полный менеджерский доступ) применяются сразу.
+  if (authorIsTimekeeper) return 'auto_approved';
   // Правка руководителя с 0 часов = «не работал» — не требует согласования админом
   if (hoursOverride !== null && Number(hoursOverride) === 0) return 'auto_approved';
   if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return 'auto_approved';
@@ -675,12 +680,10 @@ async function canAccessEmployeeForTimesheetDate(
     }
   }
 
-  // Прямые подчинённые (employee_direct_reports) — псевдо-ячейка руководителя.
-  if (req.user.employee_id) {
-    const directSubs = await listDirectSubordinates(req.user.employee_id);
-    if (directSubs.includes(employeeId)) {
-      return true;
-    }
+  // Прямые подчинённые (employee_direct_reports) / явные сотрудники табельщицы.
+  const directSubs = await resolveEffectiveDirectSubordinates(req);
+  if (directSubs.includes(employeeId)) {
+    return true;
   }
 
   return false;
@@ -723,12 +726,10 @@ async function canAccessEmployeeForTimesheetPeriod(
     }
   }
 
-  // Прямые подчинённые (employee_direct_reports) — псевдо-ячейка руководителя.
-  if (req.user.employee_id) {
-    const directSubs = await listDirectSubordinates(req.user.employee_id);
-    if (directSubs.includes(employeeId)) {
-      return true;
-    }
+  // Прямые подчинённые (employee_direct_reports) / явные сотрудники табельщицы.
+  const directSubs = await resolveEffectiveDirectSubordinates(req);
+  if (directSubs.includes(employeeId)) {
+    return true;
   }
 
   return false;
@@ -758,15 +759,12 @@ export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<
     }
   }
 
-  // Псевдо-ячейка: у руководителя есть прямые подчинённые в employee_direct_reports —
-  // он ведёт их табель даже без явного доступа к странице /timesheet и без
-  // managed-отделов. getAll и canAccessEmployeeForTimesheet* ограничивают выборку
-  // и редактирование строго его подчинёнными + им самим.
-  if (req.user.employee_id) {
-    const directSubs = await listDirectSubordinates(req.user.employee_id);
-    if (directSubs.length > 0) {
-      return 'department';
-    }
+  // Псевдо-ячейка: прямые подчинённые (employee_direct_reports) или явные сотрудники
+  // табельщицы (employee_object_assignment) — ведёт их табель без managed-отделов.
+  // getAll и canAccessEmployeeForTimesheet* ограничивают выборку строго этим набором.
+  const directSubs = await resolveEffectiveDirectSubordinates(req);
+  if (directSubs.length > 0) {
+    return 'department';
   }
 
   if (req.user.employee_id) {
@@ -1164,14 +1162,18 @@ export const timesheetController = {
       // с direct_reports, ведёт табель без выбора отдела (isDirectReportsOnlyScope).
       let directReportIds: number[] = [];
       let selfTimesheetId: number | null = null;
-      if (scope === 'department' && !hasEmployeeFilter && req.user.employee_id) {
-        directReportIds = await listDirectSubordinates(req.user.employee_id);
-        // Только ручные назначения (employee_department_access с source != 'sigur_sync'),
-        // а не весь scope-подсеть компании: иначе админ компании видит себя «Руководителем»
-        // в любом отделе своего поддерева.
-        const explicitlyManagedDepartmentIds = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id);
-        if (explicitlyManagedDepartmentIds.length > 0 || directReportIds.length > 0) {
-          selfTimesheetId = req.user.employee_id;
+      if (scope === 'department' && !hasEmployeeFilter) {
+        // Прямые подчинённые руководителя ИЛИ явные сотрудники табельщицы.
+        directReportIds = await resolveEffectiveDirectSubordinates(req);
+        // Карточка «Я» — только для руководителя-сотрудника (у табельщицы нет employee_id).
+        if (req.user.employee_id) {
+          // Только ручные назначения (employee_department_access с source != 'sigur_sync'),
+          // а не весь scope-подсеть компании: иначе админ компании видит себя «Руководителем»
+          // в любом отделе своего поддерева.
+          const explicitlyManagedDepartmentIds = await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id);
+          if (explicitlyManagedDepartmentIds.length > 0 || directReportIds.length > 0) {
+            selfTimesheetId = req.user.employee_id;
+          }
         }
       }
       const isDirectReportsOnlyScope =
@@ -1652,6 +1654,8 @@ export const timesheetController = {
         parsed.work_date,
         parsed.status,
         normalizedHours,
+        null,
+        isTimekeeper(req),
       );
 
       // Если день рабочий и часы заданы — пытаемся сразу прицепить корректировку к
@@ -1813,6 +1817,7 @@ export const timesheetController = {
           nextStatus,
           normalizedHours ?? null,
           id,
+          isTimekeeper(req),
         );
 
 	      const updated = await updateAttendanceAdjustmentById(id, {
@@ -1946,6 +1951,8 @@ export const timesheetController = {
           item.work_date,
           parsed.status,
           itemHoursOverride,
+          null,
+          isTimekeeper(req),
         );
         return upsertAttendanceAdjustment({
           employee_id: item.employee_id,

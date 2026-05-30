@@ -14,6 +14,7 @@ import { getTreeFlatDepartments } from '../../utils/departmentUtils';
 import { SearchInput } from '../ui/SearchInput';
 import { UserCompanyAccessSection } from './UserCompanyAccessSection';
 import { ContractorOrgAccessSection } from './ContractorOrgAccessSection';
+import { TimekeeperObjectAccessSection } from './TimekeeperObjectAccessSection';
 import { PasswordResetLinkModal } from './PasswordResetLinkModal';
 import styles from '../../pages/admin/Admin.module.css';
 
@@ -270,6 +271,10 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
           <label>Подрядная организация:</label>
           <ContractorOrgAccessSection userId={user.id} />
         </div>
+      )}
+
+      {userRole?.code === 'timekeeper' && (
+        <TimekeeperObjectAccessSection userId={user.id} />
       )}
 
       <div className={styles.controlActions}>
