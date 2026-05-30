@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, type FC } from 'react';
 import { X, Search, Link2, UserPlus, SkipForward, Check } from 'lucide-react';
 import { sigurService } from '../../services/sigurService';
 import { employeeService } from '../../services/employeeService';
+import { ModalShell } from '../ui/ModalShell';
 import type { Employee } from '../../types';
 import type { IUnmatchedSigurEmployee } from './sigur-settings.types';
 
@@ -107,11 +108,12 @@ export const SigurMatchModal: FC<ISigurMatchModalProps> = ({ unmatched, onClose,
   const pendingCount = unmatched.length - decisions.size;
 
   return (
-    <div className="sigur-match-overlay" onClick={onClose}>
-      <div className="sigur-match-modal" onClick={e => e.stopPropagation()}>
+    <ModalShell onClose={onClose} overlayClassName="sigur-match-overlay" containerClassName="sigur-match-modal">
+      {({ requestClose }) => (
+        <>
         <div className="sigur-match-header">
           <h3>Несопоставленные сотрудники ({unmatched.length})</h3>
-          <button className="sigur-match-close" onClick={onClose}><X size={18} /></button>
+          <button className="sigur-match-close" onClick={requestClose}><X size={18} /></button>
         </div>
 
         <div className="sigur-match-stats">
@@ -215,7 +217,7 @@ export const SigurMatchModal: FC<ISigurMatchModalProps> = ({ unmatched, onClose,
         </div>
 
         <div className="sigur-match-footer">
-          <button className="sigur-btn" onClick={onClose} disabled={saving}>Отмена</button>
+          <button className="sigur-btn" onClick={requestClose} disabled={saving}>Отмена</button>
           <button
             className="sigur-btn sigur-btn-primary"
             onClick={handleSave}
@@ -224,7 +226,8 @@ export const SigurMatchModal: FC<ISigurMatchModalProps> = ({ unmatched, onClose,
             {saving ? 'Сохранение...' : `Сохранить (${linkedCount} привязано, ${createCount} новых)`}
           </button>
         </div>
-      </div>
-    </div>
+        </>
+      )}
+    </ModalShell>
   );
 };
