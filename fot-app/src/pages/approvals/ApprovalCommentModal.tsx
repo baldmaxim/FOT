@@ -1,5 +1,6 @@
 import { type FC, useEffect, useRef, useState } from 'react';
 import { X, RotateCcw } from 'lucide-react';
+import { ModalShell } from '../../components/ui/ModalShell';
 
 interface IProps {
   open: boolean;
@@ -22,15 +23,6 @@ export const ApprovalCommentModal: FC<IProps> = ({ open, title, label, pending, 
     }
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   const trimmed = comment.trim();
@@ -40,47 +32,49 @@ export const ApprovalCommentModal: FC<IProps> = ({ open, title, label, pending, 
   };
 
   return (
-    <div className="approvals-modal-overlay" onClick={onClose}>
-      <div className="approvals-modal" onClick={e => e.stopPropagation()}>
-        <div className="approvals-modal-header">
-          <h3>{title}</h3>
-          <button type="button" className="approvals-modal-close" onClick={onClose} disabled={pending}>
-            <X size={18} />
-          </button>
-        </div>
-        <div className="approvals-modal-body">
-          <label htmlFor="approval-comment" className="approvals-modal-label">{label}</label>
-          <textarea
-            id="approval-comment"
-            ref={textareaRef}
-            className="approvals-modal-textarea"
-            value={comment}
-            onChange={e => setComment(e.target.value)}
-            disabled={pending}
-            rows={4}
-            placeholder="Опишите, что нужно поправить…"
-          />
-        </div>
-        <div className="approvals-modal-footer">
-          <button
-            type="button"
-            className="approvals-modal-cancel"
-            onClick={onClose}
-            disabled={pending}
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            className="approvals-action-btn approvals-action-btn--rework"
-            onClick={handleConfirm}
-            disabled={pending || !trimmed}
-          >
-            <RotateCcw size={16} />
-            {pending ? 'Отправка…' : 'На доработку'}
-          </button>
-        </div>
-      </div>
-    </div>
+    <ModalShell onClose={onClose} overlayClassName="approvals-modal-overlay" containerClassName="approvals-modal">
+      {({ requestClose }) => (
+        <>
+          <div className="approvals-modal-header">
+            <h3>{title}</h3>
+            <button type="button" className="approvals-modal-close" onClick={requestClose} disabled={pending}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="approvals-modal-body">
+            <label htmlFor="approval-comment" className="approvals-modal-label">{label}</label>
+            <textarea
+              id="approval-comment"
+              ref={textareaRef}
+              className="approvals-modal-textarea"
+              value={comment}
+              onChange={e => setComment(e.target.value)}
+              disabled={pending}
+              rows={4}
+              placeholder="Опишите, что нужно поправить…"
+            />
+          </div>
+          <div className="approvals-modal-footer">
+            <button
+              type="button"
+              className="approvals-modal-cancel"
+              onClick={requestClose}
+              disabled={pending}
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              className="approvals-action-btn approvals-action-btn--rework"
+              onClick={handleConfirm}
+              disabled={pending || !trimmed}
+            >
+              <RotateCcw size={16} />
+              {pending ? 'Отправка…' : 'На доработку'}
+            </button>
+          </div>
+        </>
+      )}
+    </ModalShell>
   );
 };
