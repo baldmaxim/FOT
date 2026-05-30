@@ -13,6 +13,7 @@ export const LoginPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
+  const [errorNonce, setErrorNonce] = useState(0);
   const [loading, setLoading] = useState(false);
   const submittingRef = useRef(false);
 
@@ -44,6 +45,7 @@ export const LoginPage: React.FC = () => {
       } else {
         setError('Произошла ошибка при входе');
       }
+      setErrorNonce((n) => n + 1);
       setLoading(false);
       submittingRef.current = false;
     }
@@ -113,7 +115,7 @@ export const LoginPage: React.FC = () => {
           </div>
 
           <form className={styles.authForm} onSubmit={handleSubmit}>
-            {error && <div className={styles.error}>{error}</div>}
+            {error && <div key={errorNonce} className={styles.error}>{error}</div>}
 
             <div className={styles.formGroup}>
               <label className={styles.formLabel}>Логин или email</label>

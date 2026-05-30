@@ -10,6 +10,7 @@ export const TwoFactorPage: React.FC = () => {
 
   const [code, setCode] = useState(['', '', '', '', '', '']);
   const [error, setError] = useState('');
+  const [errorNonce, setErrorNonce] = useState(0);
   const [loading, setLoading] = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -68,6 +69,7 @@ export const TwoFactorPage: React.FC = () => {
 
     if (fullCode.length !== 6) {
       setError('Введите 6-значный код');
+      setErrorNonce((n) => n + 1);
       return;
     }
 
@@ -83,6 +85,7 @@ export const TwoFactorPage: React.FC = () => {
       } else {
         setError('Неверный код. Попробуйте ещё раз.');
       }
+      setErrorNonce((n) => n + 1);
       setCode(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();
     } finally {
@@ -125,7 +128,7 @@ export const TwoFactorPage: React.FC = () => {
           </div>
 
           {error && (
-            <div className={styles.errorMessage}>
+            <div key={errorNonce} className={styles.errorMessage}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10"/>
                 <line x1="12" y1="8" x2="12" y2="12"/>

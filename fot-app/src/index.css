@@ -375,6 +375,15 @@ body {
   to   { transform: scale(1); }
 }
 
+/* transitions.dev «Error state shake» — горизонтальная тряска при ошибке. */
+@keyframes t-error-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(calc(-1 * var(--shake-distance))); }
+  40% { transform: translateX(var(--shake-distance)); }
+  60% { transform: translateX(calc(-1 * var(--shake-overshoot))); }
+  80% { transform: translateX(var(--shake-overshoot)); }
+}
+
 /* ===== Доступность: уважать системную настройку «меньше движения» =====
    Глобальный гард. Локальные t-* сниппеты тоже содержат свой guard. */
 @media (prefers-reduced-motion: reduce) {

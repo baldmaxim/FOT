@@ -502,6 +502,14 @@
   padding: 12px 14px;
   border-radius: 8px;
   font-size: 14px;
+  /* transitions.dev «Error state shake» — тряска при появлении ошибки. */
+  animation: t-error-shake 0.4s var(--shake-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .error {
+    animation: none;
+  }
 }
 
 .success {

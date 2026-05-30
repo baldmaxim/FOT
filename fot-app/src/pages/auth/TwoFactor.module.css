@@ -178,6 +178,14 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  /* transitions.dev «Error state shake» — тряска при появлении ошибки. */
+  animation: t-error-shake 0.4s var(--shake-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .errorMessage {
+    animation: none;
+  }
 }
 
 .errorMessage svg {
