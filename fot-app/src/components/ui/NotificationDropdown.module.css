@@ -31,6 +31,27 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* transitions.dev «Menu dropdown» — origin-aware: вырастает из-под колокольчика. */
+  transform-origin: top right;
+  animation: dropdown-open var(--dropdown-open-dur) var(--dropdown-ease);
+  will-change: transform, opacity;
+}
+
+@keyframes dropdown-open {
+  from {
+    opacity: 0;
+    transform: scale(var(--dropdown-pre-scale));
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dropdown {
+    animation: none;
+  }
 }
 
 .header {
