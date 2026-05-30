@@ -1,4 +1,4 @@
-import { type FC, type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type CSSProperties, type FC, type ReactNode, useCallback, useEffect, useState } from 'react';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import type { PresenceState } from '../../hooks/useAnimatedPresence';
 import { cx, readCssMs } from '../../utils/motion';
@@ -16,6 +16,10 @@ interface IModalShellProps {
   overlayClassName?: string;
   /** Класс контейнера модалки (размеры/фон/радиус). */
   containerClassName?: string;
+  /** Inline-стиль оверлея (для модалок без CSS-класса оверлея). */
+  overlayStyle?: CSSProperties;
+  /** Inline-стиль контейнера (для модалок без CSS-класса контейнера). */
+  containerStyle?: CSSProperties;
   /** Закрывать по Escape. По умолчанию true. */
   closeOnEscape?: boolean;
   'aria-label'?: string;
@@ -34,6 +38,8 @@ export const ModalShell: FC<IModalShellProps> = ({
   onClose,
   overlayClassName,
   containerClassName,
+  overlayStyle,
+  containerStyle,
   closeOnEscape = true,
   children,
   ...aria
@@ -70,11 +76,13 @@ export const ModalShell: FC<IModalShellProps> = ({
   return (
     <div
       className={cx(styles.overlay, overlayClassName)}
+      style={overlayStyle}
       data-state={phase}
       {...overlayHandlers}
     >
       <div
         className={cx(styles.modal, containerClassName)}
+        style={containerStyle}
         data-state={phase}
         role="dialog"
         aria-modal="true"
