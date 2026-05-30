@@ -14,6 +14,7 @@ import { startTimesheetReminderScheduler } from './services/timesheet-reminder.s
 import { startPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { startDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
 import { startDismissalScheduler } from './services/dismissal-scheduler.service.js';
+import { startContractorPassSyncScheduler } from './services/contractor-pass-sync.scheduler.js';
 import { startMtsLocationPoller } from './services/mts-location-poller.service.js';
 import { startMtsGeofenceMonitor } from './services/mts-geofence-monitor.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
@@ -64,6 +65,7 @@ httpServer.listen(PORT, HOST, () => {
   startPatentExpiryReminderScheduler();
   startDailyTasksReminderScheduler();
   startDismissalScheduler();
+  startContractorPassSyncScheduler();
   startMtsLocationPoller();
   startMtsGeofenceMonitor();
   void aiReceiptRecognitionService.resumePendingRecognitions().then(count => {

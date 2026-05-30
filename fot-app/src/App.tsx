@@ -492,7 +492,7 @@ const AppRoutes = () => {
             element={
               <CardReaderAgentProvider>
                 <Layout
-                  title="Пропуск подрядчика"
+                  title="Подрядчики"
                   theme={theme}
                   onToggleTheme={toggleTheme}
                   titleAddon={<CardReaderHeaderBadge />}

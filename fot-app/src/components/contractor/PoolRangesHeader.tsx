@@ -7,7 +7,8 @@ export const PoolRangesHeader: FC = () => {
   const q = useQuery({
     queryKey: ['contractor-pool-ranges'],
     queryFn: () => contractorAdminService.getPoolRanges(),
-    staleTime: 30_000,
+    staleTime: 15_000,
+    refetchInterval: 15_000,
   });
 
   if (q.isLoading) return <div className={styles.statusNote}>Диапазоны: загрузка…</div>;

@@ -363,7 +363,99 @@
   font-weight: 600;
 }
 
+/* Боковое меню ЛК подрядчика (внутри страницы /contractor) */
+.cabinetLayout {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.sideMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 230px;
+  border-right: 1px solid var(--border);
+  padding-right: 12px;
+}
+
+.sideMenuItem {
+  appearance: none;
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sideMenuItem:hover { background: var(--surface-hover); }
+
+.sideMenuItemActive {
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.cabinetContent {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Матрица свободных пропусков (выбор по одному) */
+.matrix {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 6px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.matrixCell {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  padding: 8px 4px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  text-align: center;
+  user-select: none;
+}
+
+.matrixCell:hover { background: var(--surface-hover); }
+
+.matrixCellOn {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .page { padding: 12px; }
   .table th, .table td { padding: 6px 8px; font-size: 13px; }
+  .cabinetLayout { flex-direction: column; }
+  .sideMenu {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+    min-width: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding-right: 0;
+    padding-bottom: 8px;
+  }
 }

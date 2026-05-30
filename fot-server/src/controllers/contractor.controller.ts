@@ -113,7 +113,7 @@ export const contractorController = {
       if (!orgId) return;
       const affected = await execute(
         `UPDATE contractor_roster
-            SET state = 'pending_remove', updated_at = now()
+            SET state = 'pending_remove', removal_requested_at = now(), updated_at = now()
           WHERE id = $1::uuid AND org_department_id = $2::uuid
             AND state = 'active' AND submission_id IS NULL`,
         [req.params.id, orgId],
@@ -147,7 +147,9 @@ export const contractorController = {
         await execute('DELETE FROM contractor_roster WHERE id = $1::uuid', [row.id]);
       } else if (row.state === 'pending_remove') {
         await execute(
-          `UPDATE contractor_roster SET state = 'active', updated_at = now() WHERE id = $1::uuid`,
+          `UPDATE contractor_roster
+              SET state = 'active', removal_requested_at = NULL, updated_at = now()
+            WHERE id = $1::uuid`,
           [row.id],
         );
       } else {

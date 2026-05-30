@@ -14,15 +14,19 @@ import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { resolveCompanyScope } from '../services/data-scope.service.js';
 import {
   addPassesToPool,
+  assignPoolPassesByCount,
   assignPoolPassesToContractor,
+  enqueueRevoke,
+  getFreePasses,
   getFreePoolDepartmentId,
   getPoolRanges,
+  listFailedSyncs,
   listPool,
   PoolNotConfiguredError,
-  revokePassToPool,
+  retryRevokeSync,
   setFreePoolDepartmentId,
-  SigurOperationError,
 } from '../services/contractor-pool.service.js';
+import { kickContractorPassSync } from '../services/contractor-pass-sync.scheduler.js';
 import { sigurService } from '../services/sigur.service.js';
 import { ContractorScopeError } from '../services/contractor-scope.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
@@ -265,7 +269,9 @@ export const contractorPoolController = {
 
   /**
    * POST /admin/contractor/passes/:id/revoke — отозвать пропуск, отправленный
-   * подрядчику, обратно в общий пул. Возвращает в Sigur папку пула + blocked.
+   * подрядчику, обратно в общий пул. Быстрый путь: пропуск МГНОВЕННО возвращается
+   * в пул в БД, ответ 200 сразу; перенос/блокировка профиля в Sigur делается
+   * фоновым шедулером (kickContractorPassSync — немедленный триггер).
    */
   async revokePass(req: AuthenticatedRequest, res: Response): Promise<void> {
     const passId = typeof req.params.id === 'string' ? req.params.id : undefined;
@@ -274,20 +280,8 @@ export const contractorPoolController = {
       const parsedPassId = z.string().uuid().parse(req.params.id);
       let result;
       try {
-        result = await revokePassToPool({ passId: parsedPassId, userId: req.user.id });
+        result = await enqueueRevoke({ passId: parsedPassId, userId: req.user.id });
       } catch (e) {
-        if (e instanceof PoolNotConfiguredError) {
-          sendPoolNotConfigured(res);
-          return;
-        }
-        if (e instanceof SigurOperationError) {
-          Sentry.captureException(e, {
-            tags: { route: 'contractor.revokePass', sigur_op: e.op },
-            extra: { passId: parsedPassId, sigurEmployeeId: e.sigurEmployeeId },
-          });
-          res.status(502).json({ success: false, error: e.message });
-          return;
-        }
         const msg = e instanceof Error ? e.message : String(e);
         if (/не найден|уже в пуле|отозван/i.test(msg)) {
           res.status(400).json({ success: false, error: msg });
@@ -295,6 +289,8 @@ export const contractorPoolController = {
         }
         throw e;
       }
+
+      kickContractorPassSync();
 
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_ADDED, {
         entityType: 'contractor_pass',
@@ -308,23 +304,118 @@ export const contractorPoolController = {
         res.status(400).json({ success: false, error: 'Некорректный id пропуска' });
         return;
       }
-      if (error && typeof error === 'object' && (error as { code?: string }).code === '23505') {
-        Sentry.captureException(error, {
-          tags: { route: 'contractor.revokePass', kind: 'unique_violation' },
-          extra: { passId, userId: req.user?.id },
-        });
-        res.status(409).json({
-          success: false,
-          error: 'В пуле уже есть пропуск с этим номером (дубликат в БД). Обратитесь к администратору для очистки.',
-        });
-        return;
-      }
       Sentry.captureException(error, {
         tags: { route: 'contractor.revokePass' },
         extra: { passId, userId: req.user?.id },
       });
       console.error('Pool revokePass error:', error);
       res.status(500).json({ success: false, error: 'Не удалось отозвать пропуск' });
+    }
+  },
+
+  /**
+   * GET /passes/sync-failed — пропуска с застрявшей досинхронизацией отзыва в Sigur
+   * (sigur_sync_state='failed'): профиль в Sigur мог остаться в чужой папке/под старым
+   * ФИО/разблокированным, хотя в БД пропуск уже «в пуле». Для индикатора в «Мониторинге».
+   */
+  async syncFailed(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const data = await listFailedSyncs();
+      res.json({ success: true, data });
+    } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.syncFailed' } });
+      console.error('Pool syncFailed error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить проблемы синхронизации' });
+    }
+  },
+
+  /** POST /passes/:id/retry-sync — повторить застрявшую досинхронизацию отзыва. */
+  async retrySync(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const passId = z.string().uuid().parse(req.params.id);
+      const ok = await retryRevokeSync(passId);
+      if (!ok) {
+        res.status(409).json({ success: false, error: 'Пропуск не в статусе «ошибка синхронизации»' });
+        return;
+      }
+      kickContractorPassSync();
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_ADDED, {
+        entityType: 'contractor_pass',
+        entityId: passId,
+        details: { action: 'retry_revoke_sync' },
+      });
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный id пропуска' });
+        return;
+      }
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.retrySync' } });
+      console.error('Pool retrySync error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось перезапустить синхронизацию' });
+    }
+  },
+
+  /** GET /pool/free — все свободные пропуска (id+номер) для матрицы выбора. */
+  async free(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const data = await getFreePasses();
+      res.json({ success: true, data });
+    } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.free' } });
+      console.error('Pool free error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить свободные пропуска' });
+    }
+  },
+
+  /**
+   * POST /pool/assign-count — назначить подрядчику первые N свободных пропусков.
+   * Body: { count, org_department_id }.
+   */
+  async assignCount(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const body = z.object({
+        count: z.number().int().positive().max(500),
+        org_department_id: z.string().uuid(),
+      }).parse(req.body);
+
+      let result;
+      try {
+        result = await assignPoolPassesByCount({
+          count: body.count,
+          orgDepartmentId: body.org_department_id,
+          userId: req.user.id,
+        });
+      } catch (e) {
+        if (e instanceof ContractorScopeError) {
+          res.status(e.status).json({ success: false, error: e.message });
+          return;
+        }
+        throw e;
+      }
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_ASSIGNED, {
+        entityType: 'contractor_org',
+        entityId: body.org_department_id,
+        details: { requested: body.count, assigned: result.assigned.length, failed: result.failed.length },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      Sentry.captureException(error, {
+        tags: { route: 'contractor.pool.assignCount' },
+        extra: { userId: req.user?.id },
+      });
+      console.error('Pool assignCount error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось назначить пропуска' });
     }
   },
 

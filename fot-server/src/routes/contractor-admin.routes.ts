@@ -18,6 +18,11 @@ const apprView = requirePageAccess('/admin/contractor-approvals', 'view');
 const apprEdit = requirePageAccess('/admin/contractor-approvals', 'edit');
 
 router.get('/orgs', apprView, contractorAdminController.listOrgs);
+
+// Заявки на удаление сотрудников (подрядчик пометил → админ одобряет = увольнение).
+router.get('/removals', apprView, contractorAdminController.listRemovals);
+router.get('/removals/count', apprView, contractorAdminController.removalsCount);
+router.post('/removals/:rosterId/approve', apprEdit, requireCritical2FA, contractorAdminController.approveRemoval);
 router.get('/objects', apprView, contractorAdminController.listObjects);
 router.get('/objects/access-points', apprView, contractorAdminController.listObjectAccessPoints);
 router.get('/orgs/:orgId/next-pass', apprView, contractorAdminController.getNextPassNumber);
@@ -42,17 +47,21 @@ router.post('/submissions/:id/decide', apprEdit, requireCritical2FA, contractorA
 // Отправленные / мониторинг / история по пропуску.
 router.get('/passes/sent', apprView, contractorAdminController.listSentPasses);
 router.get('/passes/monitor', apprView, contractorAdminController.monitorPasses);
+router.get('/passes/sync-failed', apprView, contractorPoolController.syncFailed);
 router.get('/passes/:id/history', apprView, contractorAdminController.getPassHistoryAdmin);
 router.post('/passes/:id/revoke', apprEdit, requireCritical2FA, contractorPoolController.revokePass);
+router.post('/passes/:id/retry-sync', apprEdit, contractorPoolController.retrySync);
 
 // Общий пул свободных пропусков.
 router.get('/pool/settings', apprView, contractorPoolController.getSettings);
 router.put('/pool/settings', apprEdit, contractorPoolController.setSettings);
 router.get('/sigur-departments', apprView, contractorPoolController.listSigurDepartments);
 router.get('/pool', apprView, contractorPoolController.list);
+router.get('/pool/free', apprView, contractorPoolController.free);
 router.get('/pool/ranges', apprView, contractorPoolController.getRanges);
 router.get('/pool/next-number', apprView, contractorPoolController.getNextNumber);
 router.post('/pool/issue', apprEdit, requireCritical2FA, contractorPoolController.issueToPool);
 router.post('/pool/assign', apprEdit, requireCritical2FA, contractorPoolController.assign);
+router.post('/pool/assign-count', apprEdit, requireCritical2FA, contractorPoolController.assignCount);
 
 export default router;

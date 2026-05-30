@@ -26,6 +26,7 @@ export const SentTab: FC = () => {
     queryKey: ['contractor-sent-passes'],
     queryFn: () => contractorAdminService.listSentPasses(),
     staleTime: 15_000,
+    refetchInterval: 15_000,
   });
 
   const grouped = useMemo(() => {
@@ -48,9 +49,13 @@ export const SentTab: FC = () => {
     setBusyId(r.id);
     try {
       await contractorAdminService.revokePass(r.id);
+      // Оптимистично убираем строку — отзыв в БД уже применён, Sigur досинхронит фон.
+      qc.setQueryData<ISentPassRow[]>(['contractor-sent-passes'], prev =>
+        (prev ?? []).filter(row => row.id !== r.id),
+      );
       toast.success(`Пропуск №${r.pass_number} возвращён в пул`);
       await qc.invalidateQueries({ queryKey: ['contractor-sent-passes'] });
-      await qc.invalidateQueries({ queryKey: ['contractor-pool'] });
+      await qc.invalidateQueries({ queryKey: ['contractor-pool-free'] });
       await qc.invalidateQueries({ queryKey: ['contractor-pool-ranges'] });
       await qc.invalidateQueries({ queryKey: ['contractor-pending-subs'] });
     } catch (e) {

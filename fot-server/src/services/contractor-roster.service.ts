@@ -20,6 +20,7 @@ export interface IContractorRosterRow {
   assigned_pass_id: string | null;
   assigned_pass_number: string | null;
   submission_id: string | null;
+  removal_requested_at: string | null;
 }
 
 export type ContractorPassStatus =
@@ -118,7 +119,8 @@ export const getRoster = async (orgDepartmentId: string): Promise<IContractorRos
             r.state,
             r.assigned_pass_id,
             p.pass_number AS assigned_pass_number,
-            r.submission_id
+            r.submission_id,
+            r.removal_requested_at
        FROM contractor_roster r
        LEFT JOIN contractor_passes p ON p.id = r.assigned_pass_id
       WHERE r.org_department_id = $1::uuid AND r.state <> 'removed'

@@ -1,18 +1,16 @@
 import { useState, useMemo, useEffect, useRef, type FC } from 'react';
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useCardReaderAgent } from '../../contexts/CardReaderAgentContext';
-import { contractorAdminService, type IPoolItem, type ISigurDepartmentNode } from '../../services/contractorService';
+import { contractorAdminService, type IFreePass, type ISigurDepartmentNode } from '../../services/contractorService';
 import { DepartmentTreeSelect } from '../staff/DepartmentTreeSelect';
-import { ContractorPassBatchPanel } from '../skud/ContractorPassBatchPanel';
 import { PoolRangesHeader } from './PoolRangesHeader';
 import type { OrgDepartmentNode } from '../../types/organization';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 const CHUNK = 10;
-const PAGE_SIZE = 50;
 
 interface IScanRow {
   uid: string;
@@ -66,7 +64,6 @@ export const PoolTab: FC = () => {
   const qc = useQueryClient();
   const { connected, lastCard, cardSeq } = useCardReaderAgent();
 
-  const [mode, setMode] = useState<'pool' | 'direct'>('pool');
   const [selectFolderOpen, setSelectFolderOpen] = useState(false);
   const [draftFolderId, setDraftFolderId] = useState<number | null>(null);
   const [fromStr, setFromStr] = useState('');
@@ -76,12 +73,10 @@ export const PoolTab: FC = () => {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignOrgId, setAssignOrgId] = useState<string>('');
-  const [assignOpen, setAssignOpen] = useState(false);
-  const [page, setPage] = useState(1);
+  const [countStr, setCountStr] = useState('');
   const lastSeqRef = useRef(0);
 
   const settingsOverlay = useOverlayDismiss(() => setSelectFolderOpen(false));
-  const assignOverlay = useOverlayDismiss(() => setAssignOpen(false));
 
   const structureQuery = useStructureTree();
   const departments = useMemo<OrgDepartmentNode[]>(
@@ -100,18 +95,30 @@ export const PoolTab: FC = () => {
     enabled: selectFolderOpen,
     staleTime: 5 * 60_000,
   });
-  const poolQuery = useQuery({
-    queryKey: ['contractor-pool', page],
-    queryFn: () => contractorAdminService.listPool({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
-    placeholderData: keepPreviousData,
-    staleTime: 15_000,
+  const freeQuery = useQuery({
+    queryKey: ['contractor-pool-free'],
+    queryFn: contractorAdminService.getFreePasses,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
   });
 
   const folderId = settingsQuery.data?.sigur_department_id ?? null;
   const folderName = settingsQuery.data?.name ?? null;
-  const pool: IPoolItem[] = poolQuery.data?.items ?? [];
-  const poolTotal = poolQuery.data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(poolTotal / PAGE_SIZE));
+  const freePasses: IFreePass[] = useMemo(() => freeQuery.data ?? [], [freeQuery.data]);
+  const freeIds = useMemo(() => new Set(freePasses.map(p => p.id)), [freePasses]);
+
+  // Снимаем из выделения пропуска, которых больше нет среди свободных (после авто-рефетча).
+  useEffect(() => {
+    setSelected(prev => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (freeIds.has(id)) next.add(id); else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [freeIds]);
 
   // Прешник стартового номера при первом открытии (или после выпуска).
   useEffect(() => {
@@ -121,7 +128,7 @@ export const PoolTab: FC = () => {
       .catch(() => { /* пользователь введёт вручную */ });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poolQuery.dataUpdatedAt]);
+  }, [freeQuery.dataUpdatedAt]);
 
   // Считывание карт.
   useEffect(() => {
@@ -155,6 +162,11 @@ export const PoolTab: FC = () => {
     (toNum == null || (Number.isInteger(toNum) && toNum >= fromNum + rows.length - 1)) &&
     !busy;
 
+  const refreshPool = async () => {
+    await qc.invalidateQueries({ queryKey: ['contractor-pool-free'] });
+    await qc.invalidateQueries({ queryKey: ['contractor-pool-ranges'] });
+  };
+
   const handleAddToPool = async () => {
     if (!canAddPool) return;
     setBusy(true);
@@ -183,9 +195,7 @@ export const PoolTab: FC = () => {
       } else {
         toast.error(`Добавлено ${agg.created.length}, ошибок ${agg.failed.length}`);
       }
-      setPage(1);
-      await qc.invalidateQueries({ queryKey: ['contractor-pool'] });
-      await qc.invalidateQueries({ queryKey: ['contractor-pool-ranges'] });
+      await refreshPool();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка добавления');
     } finally {
@@ -215,21 +225,9 @@ export const PoolTab: FC = () => {
       return next;
     });
   };
-  const allOnPageSelected = pool.length > 0 && pool.every(p => selected.has(p.id));
-  const toggleAll = () => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (allOnPageSelected) {
-        for (const p of pool) next.delete(p.id);
-      } else {
-        for (const p of pool) next.add(p.id);
-      }
-      return next;
-    });
-  };
 
-  const handleAssign = async () => {
-    if (!assignOrgId || selected.size === 0) return;
+  const handleAssignSelected = async () => {
+    if (!assignOrgId || selected.size === 0 || busy) return;
     setBusy(true);
     try {
       const res = await contractorAdminService.assignPool(Array.from(selected), assignOrgId);
@@ -239,10 +237,31 @@ export const PoolTab: FC = () => {
         toast.error(`Назначено ${res.assigned.length}, ошибок ${res.failed.length}`);
       }
       setSelected(new Set());
-      setAssignOpen(false);
-      setPage(1);
-      await qc.invalidateQueries({ queryKey: ['contractor-pool'] });
-      await qc.invalidateQueries({ queryKey: ['contractor-pool-ranges'] });
+      await refreshPool();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка назначения');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleAssignCount = async () => {
+    const count = Number(countStr);
+    if (!assignOrgId || !Number.isInteger(count) || count <= 0 || busy) return;
+    if (count > freePasses.length) {
+      toast.error(`Свободно только ${freePasses.length} пропусков`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await contractorAdminService.assignPoolCount(count, assignOrgId);
+      if (res.failed.length === 0) {
+        toast.success(`Назначено пропусков: ${res.assigned.length}`);
+      } else {
+        toast.error(`Назначено ${res.assigned.length}, ошибок ${res.failed.length}`);
+      }
+      setCountStr('');
+      await refreshPool();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка назначения');
     } finally {
@@ -252,224 +271,190 @@ export const PoolTab: FC = () => {
 
   return (
     <div>
-      <div className={styles.toolbar}>
-        <button
-          className={`${styles.tab} ${mode === 'pool' ? styles.tabActive : ''}`}
-          onClick={() => setMode('pool')}
-        >
-          Через пул
-        </button>
-        <button
-          className={`${styles.tab} ${mode === 'direct' ? styles.tabActive : ''}`}
-          onClick={() => setMode('direct')}
-        >
-          Сразу подрядчику
-        </button>
+      <div className={styles.field}>
+        <span className={styles.label}>Папка общего пула в Sigur</span>
+        <div className={styles.poolRow}>
+          <span className={styles.statusNote}>
+            {folderId == null
+              ? 'Папка не настроена. Создайте её в Sigur вручную и выберите здесь.'
+              : `Текущая: ${folderName ?? `#${folderId}`}`}
+          </span>
+          <button
+            className="btn-secondary"
+            disabled={busy}
+            onClick={() => { setDraftFolderId(folderId); setSelectFolderOpen(true); }}
+          >
+            {folderId == null ? 'Выбрать папку' : 'Изменить'}
+          </button>
+        </div>
       </div>
 
-      {mode === 'pool' && (
+      <div className={styles.field}>
+        <span className={styles.label}>Пул пропусков (с — по)</span>
+        <div className={styles.poolRow}>
+          <input
+            className={`${styles.input} ${styles.numInput}`}
+            type="number"
+            min={1}
+            placeholder="с"
+            value={fromStr}
+            onChange={e => setFromStr(e.target.value)}
+            disabled={busy || folderId == null}
+          />
+          <input
+            className={`${styles.input} ${styles.numInput}`}
+            type="number"
+            min={1}
+            placeholder="по"
+            value={toStr}
+            onChange={e => setToStr(e.target.value)}
+            disabled={busy || folderId == null}
+          />
+        </div>
+      </div>
+
+      <div className={styles.statusNote}>
+        {connected
+          ? 'Считыватель готов — прикладывайте карты по порядку.'
+          : 'Агент не запущен — запустите Sigur Reader EH.'}
+      </div>
+
+      {rows.length > 0 && (
         <>
-          <div className={styles.field}>
-            <span className={styles.label}>Папка общего пула в Sigur</span>
-            <div className={styles.poolRow}>
-              <span className={styles.statusNote}>
-                {folderId == null
-                  ? 'Папка не настроена. Создайте её в Sigur вручную и выберите здесь.'
-                  : `Текущая: ${folderName ?? `#${folderId}`}`}
-              </span>
-              <button
-                className="btn-secondary"
-                disabled={busy}
-                onClick={() => { setDraftFolderId(folderId); setSelectFolderOpen(true); }}
-              >
-                {folderId == null ? 'Выбрать папку' : 'Изменить'}
-              </button>
-            </div>
-          </div>
-
-          <div className={styles.field}>
-            <span className={styles.label}>Пул пропусков (с — по)</span>
-            <div className={styles.poolRow}>
-              <input
-                className={`${styles.input} ${styles.numInput}`}
-                type="number"
-                min={1}
-                placeholder="с"
-                value={fromStr}
-                onChange={e => setFromStr(e.target.value)}
-                disabled={busy || folderId == null}
-              />
-              <input
-                className={`${styles.input} ${styles.numInput}`}
-                type="number"
-                min={1}
-                placeholder="по"
-                value={toStr}
-                onChange={e => setToStr(e.target.value)}
-                disabled={busy || folderId == null}
-              />
-            </div>
-          </div>
-
-          <div className={styles.statusNote}>
-            {connected
-              ? 'Считыватель готов — прикладывайте карты по порядку.'
-              : 'Агент не запущен — запустите Sigur Reader EH.'}
-          </div>
-
-          {rows.length > 0 && (
-            <>
-              <div className={styles.scanActions}>
-                <span className={styles.statusNote}>Считано карт: {rows.length}</span>
-                <button
-                  className="btn-secondary"
-                  onClick={() => { setRows([]); lastSeqRef.current = cardSeq; }}
-                  disabled={busy}
-                >
-                  Очистить
-                </button>
-              </div>
-              <table className={styles.table}>
-                <thead><tr><th>№</th><th>UID</th><th></th></tr></thead>
-                <tbody>
-                  {rows.map((r, i) => (
-                    <tr key={r.uid}>
-                      <td>{passNumberAt(i)}</td>
-                      <td>{r.uid}</td>
-                      <td>
-                        <button
-                          className="btn-secondary"
-                          disabled={busy}
-                          onClick={() => setRows(prev => prev.filter((_, j) => j !== i))}
-                        >
-                          Удалить
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
-
-          {progress && (
-            <div className={styles.progressWrap}>
-              <div className={styles.progressTrack}>
-                <div
-                  className={styles.progressFill}
-                  style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }}
-                />
-              </div>
-              <div className={styles.progressLabel}>Добавление: {progress.done} / {progress.total}</div>
-            </div>
-          )}
-
           <div className={styles.scanActions}>
-            <button className="btn-primary" onClick={() => void handleAddToPool()} disabled={!canAddPool}>
-              {busy ? 'Добавляю…' : 'Добавить в пул'}
-            </button>
-          </div>
-
-          <PoolRangesHeader />
-
-          <h3 className={styles.title} style={{ marginTop: 24 }}>Пул свободных пропусков</h3>
-          <div className={styles.toolbar}>
+            <span className={styles.statusNote}>Считано карт: {rows.length}</span>
             <button
-              className="btn-primary"
-              onClick={() => setAssignOpen(true)}
-              disabled={selected.size === 0 || busy}
+              className="btn-secondary"
+              onClick={() => { setRows([]); lastSeqRef.current = cardSeq; }}
+              disabled={busy}
             >
-              Назначить подрядчику ({selected.size})
+              Очистить
             </button>
-            <span className={styles.statusNote} style={{ marginLeft: 'auto' }}>
-              Всего: {poolTotal}
-            </span>
           </div>
-          {poolQuery.isLoading ? (
-            <div className={styles.empty}>Загрузка…</div>
-          ) : pool.length === 0 ? (
-            <div className={styles.empty}>Пул пуст</div>
-          ) : (
-            <>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={{ width: 32 }}>
-                      <input
-                        type="checkbox"
-                        checked={allOnPageSelected}
-                        ref={el => {
-                          if (el) {
-                            const someOnPage = pool.some(p => selected.has(p.id));
-                            el.indeterminate = someOnPage && !allOnPageSelected;
-                          }
-                        }}
-                        onChange={toggleAll}
-                        title="Выделить на странице / снять"
-                      />
-                    </th>
-                    <th>№</th><th>UID</th><th>Sigur ID</th><th>Добавлен</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pool.map(p => (
-                    <tr key={p.id}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={selected.has(p.id)}
-                          onChange={() => toggleSelect(p.id)}
-                        />
-                      </td>
-                      <td>{p.pass_number}</td>
-                      <td>{p.card_uid ?? '—'}</td>
-                      <td>{p.sigur_employee_id ?? '—'}</td>
-                      <td>{new Date(p.created_at).toLocaleString('ru')}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {totalPages > 1 && (
-                <div className={styles.toolbar} style={{ justifyContent: 'center', marginTop: 12 }}>
-                  <button
-                    className="btn-secondary"
-                    onClick={() => setPage(1)}
-                    disabled={page === 1 || poolQuery.isFetching}
-                  >
-                    «
-                  </button>
-                  <button
-                    className="btn-secondary"
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                    disabled={page === 1 || poolQuery.isFetching}
-                  >
-                    ← Назад
-                  </button>
-                  <span className={styles.statusNote} style={{ alignSelf: 'center' }}>
-                    {page} / {totalPages}
-                  </span>
-                  <button
-                    className="btn-secondary"
-                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                    disabled={page >= totalPages || poolQuery.isFetching}
-                  >
-                    Вперёд →
-                  </button>
-                  <button
-                    className="btn-secondary"
-                    onClick={() => setPage(totalPages)}
-                    disabled={page >= totalPages || poolQuery.isFetching}
-                  >
-                    »
-                  </button>
-                </div>
-              )}
-            </>
-          )}
+          <table className={styles.table}>
+            <thead><tr><th>№</th><th>UID</th><th></th></tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.uid}>
+                  <td>{passNumberAt(i)}</td>
+                  <td>{r.uid}</td>
+                  <td>
+                    <button
+                      className="btn-secondary"
+                      disabled={busy}
+                      onClick={() => setRows(prev => prev.filter((_, j) => j !== i))}
+                    >
+                      Удалить
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </>
       )}
 
-      {mode === 'direct' && <ContractorPassBatchPanel />}
+      {progress && (
+        <div className={styles.progressWrap}>
+          <div className={styles.progressTrack}>
+            <div
+              className={styles.progressFill}
+              style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }}
+            />
+          </div>
+          <div className={styles.progressLabel}>Добавление: {progress.done} / {progress.total}</div>
+        </div>
+      )}
+
+      <div className={styles.scanActions}>
+        <button className="btn-primary" onClick={() => void handleAddToPool()} disabled={!canAddPool}>
+          {busy ? 'Добавляю…' : 'Добавить в пул'}
+        </button>
+      </div>
+
+      <PoolRangesHeader />
+
+      <h3 className={styles.title} style={{ marginTop: 24 }}>Назначение пропусков подрядчику</h3>
+      <div className={styles.field}>
+        <span className={styles.label}>Подрядная организация</span>
+        <DepartmentTreeSelect
+          departments={departments}
+          value={assignOrgId}
+          onChange={setAssignOrgId}
+          isLoading={structureQuery.isLoading}
+          isError={structureQuery.isError}
+          onRetry={() => void structureQuery.refetch()}
+          showAllOption={false}
+          placeholder="Поиск папки подрядчика..."
+        />
+      </div>
+
+      <div className={styles.toolbar}>
+        <input
+          className={`${styles.input} ${styles.numInput}`}
+          type="number"
+          min={1}
+          placeholder="Сколько"
+          value={countStr}
+          onChange={e => setCountStr(e.target.value)}
+          disabled={busy}
+        />
+        <button
+          className="btn-primary"
+          onClick={() => void handleAssignCount()}
+          disabled={busy || !assignOrgId || !countStr}
+          title={!assignOrgId ? 'Выберите подрядчика' : ''}
+        >
+          Назначить первые N свободных
+        </button>
+        <span className={styles.statusNote} style={{ marginLeft: 'auto' }}>
+          Свободно: {freePasses.length}
+        </span>
+      </div>
+
+      <div className={styles.toolbar}>
+        <span className={styles.statusNote}>
+          Или выберите конкретные пропуска в матрице ниже:
+        </span>
+        <button
+          className="btn-primary"
+          onClick={() => void handleAssignSelected()}
+          disabled={busy || !assignOrgId || selected.size === 0}
+          style={{ marginLeft: 'auto' }}
+          title={!assignOrgId ? 'Выберите подрядчика' : ''}
+        >
+          Назначить выбранные ({selected.size})
+        </button>
+        {selected.size > 0 && (
+          <button className="btn-secondary" onClick={() => setSelected(new Set())} disabled={busy}>
+            Снять выделение
+          </button>
+        )}
+      </div>
+
+      {freeQuery.isLoading ? (
+        <div className={styles.empty}>Загрузка…</div>
+      ) : freePasses.length === 0 ? (
+        <div className={styles.empty}>Свободных пропусков нет</div>
+      ) : (
+        <div className={styles.matrix}>
+          {freePasses.map(p => {
+            const on = selected.has(p.id);
+            return (
+              <button
+                key={p.id}
+                type="button"
+                className={`${styles.matrixCell} ${on ? styles.matrixCellOn : ''}`}
+                onClick={() => toggleSelect(p.id)}
+                disabled={busy}
+                title={on ? 'Снять' : 'Выбрать'}
+              >
+                {p.pass_number}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {selectFolderOpen && (
         <div
@@ -498,43 +483,6 @@ export const PoolTab: FC = () => {
               <button className="btn-secondary" onClick={() => setSelectFolderOpen(false)} disabled={busy}>Отмена</button>
               <button className="btn-primary" onClick={() => void handleSaveFolder()} disabled={busy || draftFolderId == null}>
                 Сохранить
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {assignOpen && (
-        <div
-          className={styles.overlay}
-          onMouseDown={assignOverlay.onMouseDown}
-          onMouseUp={assignOverlay.onMouseUp}
-          onMouseLeave={assignOverlay.onMouseLeave}
-          onTouchStart={assignOverlay.onTouchStart}
-          onTouchEnd={assignOverlay.onTouchEnd}
-        >
-          <div className={styles.modal}>
-            <h2 className={styles.modalTitle}>Назначить пропуска подрядчику</h2>
-            <div className={styles.statusNote} style={{ marginBottom: 12 }}>
-              Выбрано пропусков: <b>{selected.size}</b>. Они будут перенесены из общей папки в папку подрядчика в Sigur.
-            </div>
-            <div className={styles.field}>
-              <span className={styles.label}>Подрядная организация</span>
-              <DepartmentTreeSelect
-                departments={departments}
-                value={assignOrgId}
-                onChange={setAssignOrgId}
-                isLoading={structureQuery.isLoading}
-                isError={structureQuery.isError}
-                onRetry={() => void structureQuery.refetch()}
-                showAllOption={false}
-                placeholder="Поиск папки подрядчика..."
-              />
-            </div>
-            <div className={styles.modalActions}>
-              <button className="btn-secondary" onClick={() => setAssignOpen(false)} disabled={busy}>Отмена</button>
-              <button className="btn-primary" onClick={() => void handleAssign()} disabled={busy || !assignOrgId}>
-                Назначить
               </button>
             </div>
           </div>

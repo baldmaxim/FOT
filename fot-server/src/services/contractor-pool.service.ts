@@ -327,8 +327,8 @@ export const assignPoolPassesToContractor = async (input: {
     }
   }
 
-  const rows = await query<{ id: string; pass_number: string; sigur_employee_id: number | null; status: string }>(
-    `SELECT id, pass_number, sigur_employee_id, status
+  const rows = await query<{ id: string; pass_number: string; sigur_employee_id: number | null; status: string; sigur_sync_state: string }>(
+    `SELECT id, pass_number, sigur_employee_id, status, sigur_sync_state
        FROM contractor_passes
       WHERE id = ANY($1::uuid[])`,
     [input.passIds],
@@ -351,11 +351,31 @@ export const assignPoolPassesToContractor = async (input: {
     try {
       if (!dryRun && row.sigur_employee_id) {
         await moveSigurEmployee(row.sigur_employee_id, orgSigurDeptId, connection);
+        // Если у пропуска был незавершённый отзыв (pending_revoke/failed), фоновый
+        // воркер ещё не привёл профиль к «чистому» виду пула — он может нести ФИО
+        // прежнего держателя и быть разблокированным. Приводим к инварианту пула
+        // прямо здесь: «Пропуск NNNN» + blocked, до ввода нового ФИО и одобрения.
+        if (row.sigur_sync_state !== 'synced') {
+          try {
+            await updateSigurEmployee(
+              row.sigur_employee_id,
+              { name: `Пропуск ${row.pass_number}`, blocked: true },
+              connection,
+            );
+          } catch (cleanupError) {
+            console.warn('[assignPoolPasses] cleanup rename/block warning', {
+              sigurEmployeeId: row.sigur_employee_id,
+              passNumber: row.pass_number,
+              error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+            });
+          }
+        }
       }
       await execute(
         `UPDATE contractor_passes
             SET org_department_id = $1::uuid,
                 status = 'assigned',
+                sigur_sync_state = 'synced',
                 updated_at = now()
           WHERE id = $2::uuid AND status = 'in_pool'`,
         [input.orgDepartmentId, passId],
@@ -367,6 +387,45 @@ export const assignPoolPassesToContractor = async (input: {
   }
 
   return { assigned, failed };
+};
+
+export interface IFreePass {
+  id: string;
+  pass_number: string;
+}
+
+/** Все свободные пропуска пула (status='in_pool'), только id+номер — для матрицы выбора. */
+export const getFreePasses = async (): Promise<IFreePass[]> =>
+  query<IFreePass>(
+    `SELECT id, pass_number
+       FROM contractor_passes
+      WHERE status = 'in_pool' AND org_department_id IS NULL
+      ORDER BY pass_number::int ASC`,
+  );
+
+/**
+ * Назначить подрядчику первые N свободных пропусков (по возрастанию номера).
+ * Переиспользует assignPoolPassesToContractor.
+ */
+export const assignPoolPassesByCount = async (input: {
+  count: number;
+  orgDepartmentId: string;
+  userId: string;
+}): Promise<IAssignPoolResult> => {
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM contractor_passes
+      WHERE status = 'in_pool' AND org_department_id IS NULL
+      ORDER BY pass_number::int ASC
+      LIMIT $1`,
+    [input.count],
+  );
+  const passIds = rows.map(r => r.id);
+  if (passIds.length === 0) return { assigned: [], failed: [] };
+  return assignPoolPassesToContractor({
+    passIds,
+    orgDepartmentId: input.orgDepartmentId,
+    userId: input.userId,
+  });
 };
 
 export interface IRevokeToPoolResult {
@@ -394,102 +453,35 @@ function isSigurNotFound(error: unknown): boolean {
   return msg.includes('not found') || msg.includes('404');
 }
 
+/** Сколько раз воркер пытается досинхронизировать отзыв в Sigur, прежде чем 'failed'. */
+export const MAX_REVOKE_SYNC_ATTEMPTS = 5;
+
 /**
- * Отозвать отправленный подрядчику пропуск обратно в общий пул.
+ * Быстрый путь отзыва: пропуск МГНОВЕННО возвращается в пул в БД, а перенос/
+ * блокировка профиля в Sigur откладывается на фоновый воркер
+ * (sigur_sync_state='pending_revoke'). UI получает ответ сразу.
  *
  * Покрывает все «занятые» статусы (assigned/submitted/applied/blocked).
- * В Sigur: профиль move обратно в папку пула + переименование в «Пропуск NNNN»
- * + blocked=true. В PG: status='in_pool', org_department_id=NULL, holder_name=NULL,
- * submission_id=NULL, access_point_names=NULL, approval_status='not_submitted';
- * открытая holder-строка закрывается valid_until=now().
+ * sigur_employee_id СОХРАНЯЕМ — он нужен воркеру (processRevokePass).
+ * В dry-run или при отсутствии профиля синхронизировать нечего → сразу 'synced'.
  */
-export const revokePassToPool = async (input: {
+export const enqueueRevoke = async (input: {
   passId: string;
   userId: string;
 }): Promise<IRevokeToPoolResult> => {
-  const dryRun = isContractorSigurDryRun();
-  const connection = dryRun ? undefined : await sigurService.getBackgroundConnectionType();
-
   const pass = await queryOne<{
-    id: string; pass_number: string; status: string;
-    sigur_employee_id: number | null; org_department_id: string | null;
+    id: string; pass_number: string; status: string; sigur_employee_id: number | null;
   }>(
-    `SELECT id, pass_number, status, sigur_employee_id, org_department_id
+    `SELECT id, pass_number, status, sigur_employee_id
        FROM contractor_passes WHERE id = $1::uuid`,
     [input.passId],
   );
   if (!pass) throw new Error('Пропуск не найден');
-  if (pass.status === 'in_pool') {
-    throw new Error('Пропуск уже в пуле');
-  }
-  if (pass.status === 'revoked') {
-    throw new Error('Пропуск отозван и недоступен');
-  }
+  if (pass.status === 'in_pool') throw new Error('Пропуск уже в пуле');
+  if (pass.status === 'revoked') throw new Error('Пропуск отозван и недоступен');
 
-  const poolDeptId = dryRun ? 0 : await requireFreePoolDepartmentId();
-
-  let orphanInSigur = false;
-  if (!dryRun && pass.sigur_employee_id) {
-    // Probe-чтение: Sigur 1.6.3.14 на GET удалённого профиля отвечает 422 (а не
-    // 404), а updateSigurEmployee внутри делает префлайт-getProfile, который на
-    // orphan сразу падает 422. Проверяем существование явно — так разделяем
-    // «профиль удалён» (orphan path) и «реальная ошибка Sigur» (502).
-    try {
-      await sigurService.getEmployeeById(pass.sigur_employee_id, connection);
-    } catch (e) {
-      if (isSigurNotFound(e)) {
-        orphanInSigur = true;
-        console.warn('[revokePassToPool] Sigur profile missing (probe), unbinding', {
-          passId: pass.id,
-          passNumber: pass.pass_number,
-          sigurEmployeeId: pass.sigur_employee_id,
-        });
-      } else {
-        throw new SigurOperationError('move', pass.sigur_employee_id, e);
-      }
-    }
-
-    if (!orphanInSigur) {
-      try {
-        await moveSigurEmployee(pass.sigur_employee_id, poolDeptId, connection);
-      } catch (e) {
-        if (isSigurNotFound(e)) {
-          orphanInSigur = true;
-          console.warn('[revokePassToPool] Sigur profile vanished between probe and move', {
-            passId: pass.id,
-            sigurEmployeeId: pass.sigur_employee_id,
-          });
-        } else {
-          throw new SigurOperationError('move', pass.sigur_employee_id, e);
-        }
-      }
-    }
-
-    if (!orphanInSigur) {
-      try {
-        await updateSigurEmployee(
-          pass.sigur_employee_id,
-          { name: `Пропуск ${pass.pass_number}`, blocked: true },
-          connection,
-        );
-      } catch (e) {
-        if (isSigurNotFound(e)) {
-          orphanInSigur = true;
-          console.warn('[revokePassToPool] Sigur profile vanished mid-revoke', {
-            passId: pass.id,
-            sigurEmployeeId: pass.sigur_employee_id,
-          });
-        } else {
-          // некритично — оставляем как есть, но логируем деградацию
-          console.warn('[revokePassToPool] rename/block warning', {
-            sigurEmployeeId: pass.sigur_employee_id,
-            passNumber: pass.pass_number,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
-    }
-  }
+  const needsSigur = !isContractorSigurDryRun() && pass.sigur_employee_id != null;
+  const syncState = needsSigur ? 'pending_revoke' : 'synced';
 
   await withTransaction(async client => {
     await client.query(
@@ -501,10 +493,13 @@ export const revokePassToPool = async (input: {
               access_point_names = NULL,
               approval_status = 'not_submitted',
               is_active = false,
-              sigur_employee_id = CASE WHEN $2::boolean THEN NULL ELSE sigur_employee_id END,
+              sigur_sync_state = $2,
+              sigur_sync_attempts = 0,
+              sigur_sync_error = NULL,
+              sigur_sync_updated_at = now(),
               updated_at = now()
         WHERE id = $1::uuid`,
-      [pass.id, orphanInSigur],
+      [pass.id, syncState],
     );
     await client.query(
       `UPDATE contractor_pass_holders
@@ -519,8 +514,179 @@ export const revokePassToPool = async (input: {
     pass_id: pass.id,
     pass_number: pass.pass_number,
     status: 'returned_to_pool',
-    ...(orphanInSigur ? { sigur_orphan: true } : {}),
   };
+};
+
+/** Зависший 'revoking' (упавший воркер) переклеймливается через столько мс. */
+export const REVOKING_STALE_MS = 2 * 60_000;
+
+/**
+ * Кластер-безопасно «клеймит» до limit отзывов: одним UPDATE ... FOR UPDATE
+ * SKIP LOCKED переводит pending_revoke (и зависшие revoking) в 'revoking', чтобы
+ * при нескольких инстансах (PM2 cluster -i) один отзыв не обработался дважды.
+ * Возвращает id заклеймленных строк.
+ */
+export const claimRevokeTasks = async (limit = 25): Promise<string[]> => {
+  const rows = await query<{ id: string }>(
+    `UPDATE contractor_passes p
+        SET sigur_sync_state = 'revoking', sigur_sync_updated_at = now()
+      WHERE p.id IN (
+        SELECT id FROM contractor_passes
+         WHERE sigur_sync_attempts < $1
+           AND (
+             sigur_sync_state = 'pending_revoke'
+             OR (sigur_sync_state = 'revoking'
+                 AND sigur_sync_updated_at < now() - ($2::bigint * interval '1 millisecond'))
+           )
+         ORDER BY sigur_sync_updated_at ASC NULLS FIRST
+         LIMIT $3
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING p.id`,
+    [MAX_REVOKE_SYNC_ATTEMPTS, REVOKING_STALE_MS, limit],
+  );
+  return rows.map(r => r.id);
+};
+
+/**
+ * Фоновая досинхронизация отозванного пропуска с Sigur: профиль move обратно в
+ * папку пула + переименование в «Пропуск NNNN» + blocked=true. Вызывается
+ * шедулером для заклеймленных строк (sigur_sync_state='revoking').
+ *
+ * Защита от гонки: если пропуск успели переназначить (status≠'in_pool'),
+ * отзыв отменяется. Финальные UPDATE идут с WHERE sigur_sync_state='revoking',
+ * поэтому параллельный assign (выставляет 'synced') «выигрывает» и не
+ * перетирается. При ошибке Sigur — инкремент попыток; после
+ * MAX_REVOKE_SYNC_ATTEMPTS → 'failed' (+ проброс ошибки наверх для Sentry).
+ */
+export const processRevokePass = async (passId: string): Promise<void> => {
+  const cur = await queryOne<{
+    pass_number: string; status: string; sigur_sync_state: string; sigur_employee_id: number | null;
+  }>(
+    `SELECT pass_number, status, sigur_sync_state, sigur_employee_id
+       FROM contractor_passes WHERE id = $1::uuid`,
+    [passId],
+  );
+  // Обрабатываем только заклеймленные строки.
+  if (!cur || cur.sigur_sync_state !== 'revoking') return;
+
+  // Переназначен между enqueue и обработкой — отзыв отменяем (assign сам почистил Sigur).
+  if (cur.status !== 'in_pool') {
+    await execute(
+      `UPDATE contractor_passes
+          SET sigur_sync_state = 'synced', sigur_sync_error = NULL, sigur_sync_updated_at = now()
+        WHERE id = $1::uuid AND sigur_sync_state = 'revoking'`,
+      [passId],
+    );
+    return;
+  }
+
+  if (isContractorSigurDryRun() || cur.sigur_employee_id == null) {
+    await execute(
+      `UPDATE contractor_passes
+          SET sigur_sync_state = 'synced', sigur_sync_error = NULL, sigur_sync_updated_at = now()
+        WHERE id = $1::uuid AND sigur_sync_state = 'revoking'`,
+      [passId],
+    );
+    return;
+  }
+
+  const sigurEmployeeId = cur.sigur_employee_id;
+  try {
+    const poolDeptId = await requireFreePoolDepartmentId();
+    const connection = await sigurService.getBackgroundConnectionType();
+
+    let orphanInSigur = false;
+    // Probe-чтение: Sigur 1.6.3.14 на GET удалённого профиля отвечает 422 (а не
+    // 404). Так отделяем «профиль удалён» (orphan) от «реальной ошибки Sigur».
+    try {
+      await sigurService.getEmployeeById(sigurEmployeeId, connection);
+    } catch (e) {
+      if (isSigurNotFound(e)) orphanInSigur = true;
+      else throw new SigurOperationError('move', sigurEmployeeId, e);
+    }
+
+    if (!orphanInSigur) {
+      try {
+        await moveSigurEmployee(sigurEmployeeId, poolDeptId, connection);
+      } catch (e) {
+        if (isSigurNotFound(e)) orphanInSigur = true;
+        else throw new SigurOperationError('move', sigurEmployeeId, e);
+      }
+    }
+
+    if (!orphanInSigur) {
+      try {
+        await updateSigurEmployee(
+          sigurEmployeeId,
+          { name: `Пропуск ${cur.pass_number}`, blocked: true },
+          connection,
+        );
+      } catch (e) {
+        if (isSigurNotFound(e)) orphanInSigur = true;
+        else {
+          // некритично — профиль перемещён, оставляем как есть, логируем деградацию
+          console.warn('[processRevokePass] rename/block warning', {
+            sigurEmployeeId, passNumber: cur.pass_number,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+    }
+
+    await execute(
+      `UPDATE contractor_passes
+          SET sigur_sync_state = 'synced',
+              sigur_sync_error = NULL,
+              sigur_sync_updated_at = now(),
+              sigur_employee_id = CASE WHEN $2::boolean THEN NULL ELSE sigur_employee_id END
+        WHERE id = $1::uuid AND sigur_sync_state = 'revoking'`,
+      [passId, orphanInSigur],
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await execute(
+      `UPDATE contractor_passes
+          SET sigur_sync_attempts = sigur_sync_attempts + 1,
+              sigur_sync_error = $2,
+              sigur_sync_state = CASE WHEN sigur_sync_attempts + 1 >= $3 THEN 'failed' ELSE 'pending_revoke' END,
+              sigur_sync_updated_at = now()
+        WHERE id = $1::uuid AND sigur_sync_state = 'revoking'`,
+      [passId, msg, MAX_REVOKE_SYNC_ATTEMPTS],
+    );
+    throw e;
+  }
+};
+
+export interface IFailedSyncPass {
+  id: string;
+  pass_number: string;
+  sigur_sync_error: string | null;
+  sigur_sync_attempts: number;
+  sigur_sync_updated_at: string | null;
+}
+
+/** Пропуска, у которых досинхронизация отзыва в Sigur застряла (sigur_sync_state='failed'). */
+export const listFailedSyncs = async (): Promise<IFailedSyncPass[]> =>
+  query<IFailedSyncPass>(
+    `SELECT id, pass_number, sigur_sync_error, sigur_sync_attempts, sigur_sync_updated_at
+       FROM contractor_passes
+      WHERE sigur_sync_state = 'failed'
+      ORDER BY sigur_sync_updated_at DESC NULLS LAST`,
+  );
+
+/** Сбросить застрявший отзыв на повторную обработку. true — если строка была 'failed'. */
+export const retryRevokeSync = async (passId: string): Promise<boolean> => {
+  const n = await execute(
+    `UPDATE contractor_passes
+        SET sigur_sync_state = 'pending_revoke',
+            sigur_sync_attempts = 0,
+            sigur_sync_error = NULL,
+            sigur_sync_updated_at = now()
+      WHERE id = $1::uuid AND sigur_sync_state = 'failed'`,
+    [passId],
+  );
+  return n > 0;
 };
 
 /** Отозвать пропуск из пула (физически из Sigur не удаляем — оставляем как blocked-инвентарь). */

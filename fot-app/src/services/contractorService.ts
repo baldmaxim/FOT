@@ -19,6 +19,7 @@ export interface IRosterRow {
   assigned_pass_id: string | null;
   assigned_pass_number: string | null;
   submission_id: string | null;
+  removal_requested_at: string | null;
 }
 
 export type ContractorPassStatus =
@@ -203,6 +204,30 @@ export interface IPoolIssueResult {
 export interface IPoolAssignResult {
   assigned: string[];
   failed: Array<{ pass_id: string; error: string }>;
+}
+
+export interface IFreePass {
+  id: string;
+  pass_number: string;
+}
+
+export interface IFailedSyncPass {
+  id: string;
+  pass_number: string;
+  sigur_sync_error: string | null;
+  sigur_sync_attempts: number;
+  sigur_sync_updated_at: string | null;
+}
+
+export interface IRemovalRequest {
+  roster_id: string;
+  org_department_id: string;
+  org_name: string;
+  full_name: string;
+  sigur_employee_id: number | null;
+  removal_requested_at: string | null;
+  employee_id: number | null;
+  employment_status: string | null;
 }
 
 export interface IContractorUser {
@@ -458,6 +483,30 @@ export const contractorAdminService = {
     });
     return r.data;
   },
+  async getFreePasses(): Promise<IFreePass[]> {
+    const r = await apiClient.get<ApiResponse<IFreePass[]>>('/admin/contractor/pool/free');
+    return r.data ?? [];
+  },
+  async assignPoolCount(count: number, orgDepartmentId: string): Promise<IPoolAssignResult> {
+    const r = await apiClient.post<ApiResponse<IPoolAssignResult>>('/admin/contractor/pool/assign-count', {
+      count,
+      org_department_id: orgDepartmentId,
+    });
+    return r.data;
+  },
+
+  // Заявки на удаление сотрудников
+  async listRemovals(): Promise<IRemovalRequest[]> {
+    const r = await apiClient.get<ApiResponse<IRemovalRequest[]>>('/admin/contractor/removals');
+    return r.data ?? [];
+  },
+  async getRemovalsCount(): Promise<{ count: number }> {
+    const r = await apiClient.get<ApiResponse<{ count: number }>>('/admin/contractor/removals/count');
+    return r.data ?? { count: 0 };
+  },
+  async approveRemoval(rosterId: string): Promise<void> {
+    await apiClient.post(`/admin/contractor/removals/${rosterId}/approve`);
+  },
 
   async revokePass(passId: string): Promise<{ pass_id: string; pass_number: string; status: 'returned_to_pool' }> {
     const r = await apiClient.post<ApiResponse<{ pass_id: string; pass_number: string; status: 'returned_to_pool' }>>(
@@ -495,5 +544,14 @@ export const contractorAdminService = {
   async getPassHistoryAdmin(passId: string): Promise<IPassHistory> {
     const r = await apiClient.get<ApiResponse<IPassHistory>>(`/admin/contractor/passes/${passId}/history`);
     return r.data ?? { holders: [], decisions: [] };
+  },
+
+  // Застрявшие отзывы (досинхронизация с Sigur)
+  async listSyncFailed(): Promise<IFailedSyncPass[]> {
+    const r = await apiClient.get<ApiResponse<IFailedSyncPass[]>>('/admin/contractor/passes/sync-failed');
+    return r.data ?? [];
+  },
+  async retrySync(passId: string): Promise<void> {
+    await apiClient.post(`/admin/contractor/passes/${passId}/retry-sync`);
   },
 };

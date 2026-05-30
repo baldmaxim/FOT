@@ -36,6 +36,15 @@ import {
   replaceSigurEmployeeAccessPoints,
 } from '../services/sigur-live-cards.service.js';
 import { resolveAccessPointNamesToIds } from '../services/contractor-access.service.js';
+import {
+  applyDismissalImmediately,
+  insertDismissalHistory,
+  loadEmployeeLifecycleRow,
+  getHttpErrorStatus,
+  getHttpErrorCode,
+  getErrorMessage,
+} from './employee-lifecycle.controller.js';
+import { employeeCache } from '../services/employee-cache.service.js';
 
 /** Только системный админ (как approveUser/replaceUserCompanies). */
 const ensureSystemAdmin = async (
@@ -59,6 +68,146 @@ export const contractorAdminController = {
     } catch (error) {
       console.error('Contractor listOrgs error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить организации' });
+    }
+  },
+
+  /**
+   * GET /removals — заявки подрядчиков на удаление сотрудников
+   * (contractor_roster.state='pending_remove'). Группировку по организациям
+   * делает фронт. employee_id резолвится по sigur_employee_id (нужен для увольнения).
+   */
+  async listRemovals(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const data = await query(
+        `SELECT r.id AS roster_id,
+                r.org_department_id,
+                od.name AS org_name,
+                r.full_name,
+                r.sigur_employee_id,
+                r.removal_requested_at,
+                e.id AS employee_id,
+                e.employment_status
+           FROM contractor_roster r
+           JOIN org_departments od ON od.id = r.org_department_id
+           LEFT JOIN employees e ON e.sigur_employee_id = r.sigur_employee_id
+          WHERE r.state = 'pending_remove'
+          ORDER BY od.name ASC, r.full_name ASC`,
+      );
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Contractor listRemovals error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить заявки на удаление' });
+    }
+  },
+
+  /** GET /removals/count — количество заявок на удаление (для бейджа вкладки). */
+  async removalsCount(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const row = await queryOne<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM contractor_roster WHERE state = 'pending_remove'`,
+      );
+      res.json({ success: true, data: { count: Number(row?.count ?? 0) } });
+    } catch (error) {
+      console.error('Contractor removalsCount error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить счётчик' });
+    }
+  },
+
+  /**
+   * POST /removals/:rosterId/approve — одобрить удаление сотрудника = уволить
+   * его (как кнопка «Уволить» в «Управление кадрами»). Дата увольнения —
+   * автоматически дата, когда подрядчик нажал «Удалить» (removal_requested_at),
+   * без модалки выбора даты. Привязанный пропуск НЕ трогаем.
+   */
+  async approveRemoval(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const rosterId = z.string().uuid().parse(req.params.rosterId);
+
+      const roster = await queryOne<{
+        id: string; state: string; sigur_employee_id: number | null;
+        removal_requested_at: string | null; full_name: string;
+      }>(
+        `SELECT id, state, sigur_employee_id, removal_requested_at, full_name
+           FROM contractor_roster WHERE id = $1::uuid`,
+        [rosterId],
+      );
+      if (!roster || roster.state !== 'pending_remove') {
+        res.status(409).json({ success: false, error: 'Заявка на удаление недоступна' });
+        return;
+      }
+      if (roster.sigur_employee_id == null) {
+        res.status(409).json({ success: false, error: 'У сотрудника нет привязки к Sigur — увольнение невозможно' });
+        return;
+      }
+
+      const emp = await queryOne<{ id: number }>(
+        `SELECT id FROM employees WHERE sigur_employee_id = $1 LIMIT 1`,
+        [roster.sigur_employee_id],
+      );
+      if (!emp) {
+        res.status(409).json({ success: false, error: 'Сотрудник ещё не синхронизирован из Sigur — повторите позже' });
+        return;
+      }
+      const employeeId = Number(emp.id);
+      const existing = await loadEmployeeLifecycleRow(employeeId);
+      if (!existing) {
+        res.status(409).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+
+      // Дата увольнения = дата нажатия подрядчиком; не раньше даты найма.
+      const today = new Date().toISOString().slice(0, 10);
+      let dismissalDate = roster.removal_requested_at
+        ? roster.removal_requested_at.slice(0, 10)
+        : today;
+      if (existing.hire_date && dismissalDate < existing.hire_date) {
+        dismissalDate = today >= existing.hire_date ? today : existing.hire_date;
+      }
+
+      if (existing.employment_status !== 'fired') {
+        await applyDismissalImmediately({
+          employeeId,
+          existing,
+          dismissalDate,
+          userId: req.user.id,
+        });
+        employeeCache.invalidate(employeeId);
+        await insertDismissalHistory(employeeId, dismissalDate, {
+          scheduled: false,
+          createdBy: req.user.id,
+        });
+        await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
+          entityType: 'employee',
+          entityId: String(employeeId),
+          details: { source: 'contractor_removal', dismissal_date: dismissalDate, roster_id: rosterId },
+        });
+      }
+
+      await execute(
+        `UPDATE contractor_roster SET state = 'removed', updated_at = now() WHERE id = $1::uuid`,
+        [rosterId],
+      );
+
+      res.json({ success: true, data: { roster_id: rosterId, employee_id: employeeId, dismissal_date: dismissalDate } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный id заявки' });
+        return;
+      }
+      const httpStatus = getHttpErrorStatus(error);
+      if (httpStatus) {
+        res.status(httpStatus).json({
+          success: false,
+          error: getErrorMessage(error, 'Не удалось уволить сотрудника'),
+          ...(getHttpErrorCode(error) ? { code: getHttpErrorCode(error) } : {}),
+        });
+        return;
+      }
+      console.error('Contractor approveRemoval error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось одобрить удаление' });
     }
   },
 

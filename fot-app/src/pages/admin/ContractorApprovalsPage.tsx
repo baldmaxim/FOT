@@ -14,10 +14,13 @@ import { PoolTab } from '../../components/contractor/PoolTab';
 import { SentTab } from '../../components/contractor/SentTab';
 import { SubmissionsTab } from '../../components/contractor/SubmissionsTab';
 import { MonitorTab } from '../../components/contractor/MonitorTab';
+import { RemovalRequestsTab } from '../../components/contractor/RemovalRequestsTab';
+import { usePendingContractorRemovalsCount } from '../../hooks/usePendingContractorRemovalsCount';
+import { useContractorSyncFailedCount } from '../../hooks/useContractorSyncFailedCount';
 import { contractorAdminService } from '../../services/contractorService';
 import styles from '../contractor/Contractor.module.css';
 
-type Tab = 'pool' | 'sent' | 'submissions' | 'monitor';
+type Tab = 'pool' | 'sent' | 'submissions' | 'monitor' | 'removals';
 
 export const ContractorApprovalsPage: FC = () => {
   const [tab, setTab] = useState<Tab>('pool');
@@ -29,6 +32,8 @@ export const ContractorApprovalsPage: FC = () => {
     refetchInterval: 10_000,
   });
   const pendingCount = pendingSubsQuery.data?.length ?? 0;
+  const removalsCount = usePendingContractorRemovalsCount();
+  const syncFailedCount = useContractorSyncFailedCount();
 
   return (
     <div className={styles.page}>
@@ -57,6 +62,14 @@ export const ContractorApprovalsPage: FC = () => {
           onClick={() => setTab('monitor')}
         >
           Мониторинг
+          {syncFailedCount > 0 && <span className={styles.tabBadge}>{syncFailedCount}</span>}
+        </button>
+        <button
+          className={`${styles.tab} ${tab === 'removals' ? styles.tabActive : ''}`}
+          onClick={() => setTab('removals')}
+        >
+          Заявки на удаление сотрудников
+          {removalsCount > 0 && <span className={styles.tabBadge}>{removalsCount}</span>}
         </button>
       </div>
 
@@ -64,6 +77,7 @@ export const ContractorApprovalsPage: FC = () => {
       {tab === 'sent' && <SentTab />}
       {tab === 'submissions' && <SubmissionsTab />}
       {tab === 'monitor' && <MonitorTab />}
+      {tab === 'removals' && <RemovalRequestsTab />}
     </div>
   );
 };

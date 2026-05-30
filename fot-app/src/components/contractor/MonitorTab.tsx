@@ -1,9 +1,72 @@
 import { useState, type FC } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { contractorAdminService, type IPassHistory } from '../../services/contractorService';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
 import styles from '../../pages/contractor/Contractor.module.css';
+
+/** Застрявшие отзывы: вернулись в пул в БД, но Sigur не подтвердил перенос/блокировку. */
+const SyncFailedPanel: FC = () => {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const q = useQuery({
+    queryKey: ['contractor-sync-failed'],
+    queryFn: contractorAdminService.listSyncFailed,
+    staleTime: 15_000,
+    refetchInterval: 20_000,
+  });
+  const rows = q.data ?? [];
+  if (rows.length === 0) return null;
+
+  const retry = async (id: string) => {
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      await contractorAdminService.retrySync(id);
+      toast.success('Повтор синхронизации запущен');
+      await qc.invalidateQueries({ queryKey: ['contractor-sync-failed'] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className={styles.docsBlock} style={{ borderColor: 'var(--error)', marginBottom: 20 }}>
+      <h3 className={styles.title} style={{ color: 'var(--error)' }}>
+        Проблемы синхронизации отзыва с Sigur ({rows.length})
+      </h3>
+      <div className={styles.statusNote} style={{ margin: '8px 0' }}>
+        Пропуска вернулись в пул в системе, но Sigur не подтвердил перенос/блокировку после
+        нескольких попыток. Профиль в Sigur может остаться в чужой папке, под прежним ФИО или
+        разблокированным — проверьте вручную и нажмите «Повторить».
+      </div>
+      <table className={styles.table}>
+        <thead>
+          <tr><th>№</th><th>Ошибка</th><th>Попыток</th><th>Обновлён</th><th></th></tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.id}>
+              <td>{r.pass_number}</td>
+              <td style={{ maxWidth: 360, overflowWrap: 'anywhere' }}>{r.sigur_sync_error ?? '—'}</td>
+              <td>{r.sigur_sync_attempts}</td>
+              <td>{r.sigur_sync_updated_at ? new Date(r.sigur_sync_updated_at).toLocaleString('ru') : '—'}</td>
+              <td>
+                <button className="btn-secondary" disabled={busyId === r.id} onClick={() => void retry(r.id)}>
+                  {busyId === r.id ? '…' : 'Повторить'}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
 const PassHistoryModal: FC<{ passId: string; onClose: () => void }> = ({ passId, onClose }) => {
   const overlay = useOverlayDismiss(onClose);
@@ -97,6 +160,7 @@ export const MonitorTab: FC = () => {
 
   return (
     <div>
+      <SyncFailedPanel />
       <div className={styles.field}>
         <span className={styles.label}>Подрядчик</span>
         <ContractorOrgSelect
