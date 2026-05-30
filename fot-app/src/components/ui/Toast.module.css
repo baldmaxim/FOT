@@ -23,6 +23,25 @@
   }
 }
 
+/* Exit: slide + blur (transitions.dev). Длительность синхронна с EXIT_MS в Toast.tsx. */
+@keyframes slideOut {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(100%);
+    filter: blur(2px);
+  }
+}
+
+.toast.closing {
+  animation: slideOut 0.25s var(--modal-ease, cubic-bezier(0.22, 1, 0.36, 1)) forwards;
+  pointer-events: none;
+}
+
 .clickable {
   cursor: pointer;
   transition: transform 0.15s, box-shadow 0.15s;

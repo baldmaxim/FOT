@@ -1,7 +1,7 @@
 import { type FC, useCallback, useEffect, useState } from 'react';
 import { X, Download } from 'lucide-react';
 import { documentService } from '../../services/documentService';
-import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import { ModalShell } from '../ui/ModalShell';
 import styles from './FilePreviewModal.module.css';
 
 type Disposition = 'inline' | 'attachment';
@@ -26,7 +26,6 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
   onClose,
   urlLoader,
 }) => {
-  const overlayHandlers = useOverlayDismiss(onClose);
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,50 +62,46 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
     }
   }, [loadUrl, fileName]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const isImage = mimeType?.startsWith('image/');
   const isPdf = mimeType === 'application/pdf';
 
   return (
-    <div className={styles.overlay} {...overlayHandlers}>
-      <div className={styles.container}>
-        <div className={styles.header}>
-          <span className={styles.title} title={fileName}>{fileName}</span>
-          <div className={styles.actions}>
-            {url && (
-              <button type="button" className={styles.iconBtn} onClick={handleDownload} title="Скачать">
-                <Download size={16} />
-              </button>
-            )}
-            <button type="button" className={styles.iconBtn} onClick={onClose} aria-label="Закрыть">
-              <X size={18} />
-            </button>
-          </div>
-        </div>
-        <div className={styles.body}>
-          {error && <div className={styles.error}>{error}</div>}
-          {!error && !url && <div className={styles.loading}>Загрузка…</div>}
-          {url && !error && isImage && (
-            <img src={url} alt={fileName} className={styles.image} />
-          )}
-          {url && !error && isPdf && (
-            <iframe src={url} title={fileName} className={styles.iframe} />
-          )}
-          {url && !error && !isImage && !isPdf && (
-            <div className={styles.fallback}>
-              <div>Предпросмотр недоступен для этого типа файла.</div>
-              <button type="button" className={styles.downloadBtn} onClick={handleDownload}>
-                <Download size={14} /> Скачать
+    <ModalShell onClose={onClose} overlayClassName={styles.overlay} containerClassName={styles.container}>
+      {({ requestClose }) => (
+        <>
+          <div className={styles.header}>
+            <span className={styles.title} title={fileName}>{fileName}</span>
+            <div className={styles.actions}>
+              {url && (
+                <button type="button" className={styles.iconBtn} onClick={handleDownload} title="Скачать">
+                  <Download size={16} />
+                </button>
+              )}
+              <button type="button" className={styles.iconBtn} onClick={requestClose} aria-label="Закрыть">
+                <X size={18} />
               </button>
             </div>
-          )}
-        </div>
-      </div>
-    </div>
+          </div>
+          <div className={styles.body}>
+            {error && <div className={styles.error}>{error}</div>}
+            {!error && !url && <div className={styles.loading}>Загрузка…</div>}
+            {url && !error && isImage && (
+              <img src={url} alt={fileName} className={styles.image} />
+            )}
+            {url && !error && isPdf && (
+              <iframe src={url} title={fileName} className={styles.iframe} />
+            )}
+            {url && !error && !isImage && !isPdf && (
+              <div className={styles.fallback}>
+                <div>Предпросмотр недоступен для этого типа файла.</div>
+                <button type="button" className={styles.downloadBtn} onClick={handleDownload}>
+                  <Download size={14} /> Скачать
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </ModalShell>
   );
 };

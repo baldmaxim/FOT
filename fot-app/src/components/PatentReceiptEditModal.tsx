@@ -8,7 +8,7 @@ import {
   type PaymentMethod,
 } from '../services/patentReceiptService';
 import { settingsService, type IOpenRouterModelInfo } from '../services/settingsService';
-import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
+import { ModalShell } from './ui/ModalShell';
 import styles from './PatentReceiptEditModal.module.css';
 
 interface IProps {
@@ -109,7 +109,6 @@ const parseAmount = (value: string): string => value.replace(/\s+/g, '').replace
 
 export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved }) => {
   const queryClient = useQueryClient();
-  const overlayHandlers = useOverlayDismiss(onClose);
   const { data, isLoading } = useQuery({
     queryKey: ['patent-receipt', receiptId],
     queryFn: () => patentReceiptService.get(receiptId),
@@ -166,8 +165,9 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
   const readOnly = !editing;
 
   return (
-    <div className={styles.overlay} {...overlayHandlers}>
-      <div className={styles.modal}>
+    <ModalShell onClose={onClose} overlayClassName={styles.overlay} containerClassName={styles.modal}>
+      {({ requestClose }) => (
+        <>
         <div className={styles.header}>
           <h3>
             Чек НДФЛ за патент
@@ -178,7 +178,7 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
               <ShieldCheck size={12} /> зашифровано
             </span>
           </h3>
-          <button className={styles.closeBtn} onClick={onClose}>
+          <button className={styles.closeBtn} onClick={requestClose}>
             <X size={18} />
           </button>
         </div>
@@ -314,7 +314,7 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
             </>
           ) : (
             <>
-              <button className={styles.btnSecondary} onClick={onClose}>Закрыть</button>
+              <button className={styles.btnSecondary} onClick={requestClose}>Закрыть</button>
               <button
                 className={styles.btnPrimary}
                 onClick={() => setEditing(true)}
@@ -325,8 +325,9 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
             </>
           )}
         </div>
-      </div>
-    </div>
+        </>
+      )}
+    </ModalShell>
   );
 };
 

@@ -151,6 +151,8 @@
   border-radius: 10px;
   min-width: 18px;
   text-align: center;
+  transform-origin: center;
+  animation: t-badge-pop var(--badge-pop-dur) var(--badge-pop-ease);
 }
 
 .footer {

@@ -89,6 +89,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transform-origin: center;
+  animation: t-badge-pop var(--badge-pop-dur) var(--badge-pop-ease);
 }
 
 .pushBanner {
@@ -465,6 +467,8 @@
   align-items: center;
   justify-content: center;
   padding: 0 4px;
+  transform-origin: center;
+  animation: t-badge-pop var(--badge-pop-dur) var(--badge-pop-ease);
 }
 
 .requestsPane {
