@@ -50,6 +50,14 @@ docs/yandex-postgres-migration/yandex.env
 # Claude Code session artifacts (lock-файлы scheduled tasks и т.п.)
 .claude/scheduled_tasks.lock
 
+# Agent skills (transitions.dev и пр.) — локальные артефакты тулинга:
+# реальные файлы скилла, симлинк в .claude/skills, лок-файл и MCP-конфиг.
+# Не код приложения, на прод не нужны.
+.agents/
+.claude/skills/
+skills-lock.json
+.mcp.json
+
 # Build output
 dist/
 build/
