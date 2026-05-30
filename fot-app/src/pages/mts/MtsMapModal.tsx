@@ -12,7 +12,6 @@ import {
 } from '../../hooks/useMtsData';
 import type { IGeoPoint, IMtsGeofence } from '../../services/mtsService';
 import { ApiError } from '../../api/client';
-import { ModalShell } from '../../components/ui/ModalShell';
 import styles from './MtsMapModal.module.css';
 import pageStyles from './MtsPage.module.css';
 
@@ -328,8 +327,7 @@ export const MtsMapModal: FC<IProps> = ({ target, onClose }) => {
             </MapContainer>
           </div>
         </div>
-        </>
-      )}
-    </ModalShell>
+      </div>
+    </div>
   );
 };
