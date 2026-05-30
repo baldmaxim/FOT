@@ -1,0 +1,30 @@
+/* transitions.dev «Number pop-in» — значение перезаезжает с blur+slide вверх
+   при каждом изменении. Только transform/opacity/filter (compositor). */
+.wrap {
+  display: inline-block;
+}
+
+.value {
+  display: inline-block;
+  animation: t-number-pop var(--digit-dur) var(--digit-ease);
+  will-change: transform, opacity, filter;
+}
+
+@keyframes t-number-pop {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--digit-distance) * var(--digit-dir-y)));
+    filter: blur(var(--digit-blur));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .value {
+    animation: none;
+  }
+}
