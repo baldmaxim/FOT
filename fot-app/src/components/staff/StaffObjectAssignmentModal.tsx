@@ -5,11 +5,12 @@ import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
-  groupObjectsByAddress,
+  groupObjects,
   groupSelectionState,
   objectGroupLabelsForIds,
   type IObjectGroup,
 } from '../../utils/objectGroups';
+import type { IObjectAssignments } from '../../services/adminService';
 import type { Employee } from '../../types';
 
 interface IProps {
@@ -59,7 +60,7 @@ export const StaffObjectAssignmentModal: FC<IProps> = ({ employee, onClose, onSa
   });
 
   const objects = useMemo(() => objectsQuery.data ?? [], [objectsQuery.data]);
-  const groups = useMemo(() => groupObjectsByAddress(objects), [objects]);
+  const groups = useMemo(() => groupObjects(objects), [objects]);
 
   const empObjectIds = useMemo(
     () => assignmentsQuery.data?.employee_objects?.[String(employee.id)] ?? [],
@@ -104,8 +105,14 @@ export const StaffObjectAssignmentModal: FC<IProps> = ({ employee, onClose, onSa
   const handleSave = async () => {
     setSaving(true);
     try {
-      await adminService.updateEmployeeObjectAssignment(employee.id, current);
-      await queryClient.invalidateQueries({ queryKey: ['admin-object-assignments'] });
+      const saved = [...current];
+      await adminService.updateEmployeeObjectAssignment(employee.id, saved);
+      // Оптимистично обновляем кэш назначений — столбец «Объект» обновляется сразу
+      // (глобально refetchOnMount:false, поэтому не полагаемся только на invalidate).
+      queryClient.setQueryData<IObjectAssignments>(['admin-object-assignments'], old => (
+        old ? { ...old, employee_objects: { ...old.employee_objects, [String(employee.id)]: saved } } : old
+      ));
+      queryClient.invalidateQueries({ queryKey: ['admin-object-assignments'] });
       // 1С-выгрузка «текущей деятельности» зависит от назначений — сбрасываем кэш табеля.
       queryClient.invalidateQueries({ queryKey: ['timesheet'] });
       toast.success('Персональные объекты обновлены');

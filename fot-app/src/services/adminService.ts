@@ -64,6 +64,12 @@ export interface EmployeeDepartmentAssignmentFromApi {
   direct_manager_full_name?: string | null;
 }
 
+/** Карты назначений «сущность → объекты входа» (id объектов). */
+export interface IObjectAssignments {
+  department_objects: Record<string, string[]>;
+  employee_objects: Record<string, string[]>;
+}
+
 export const adminService = {
   // User management
   async getPendingUsers(): Promise<PendingUserFromApi[]> {
@@ -267,14 +273,8 @@ export const adminService = {
   },
 
   // ─── Назначение «объектов входа» для скоупа табельщицы (миграция 150) ───
-  async getObjectAssignments(): Promise<{
-    department_objects: Record<string, string[]>;
-    employee_objects: Record<string, string[]>;
-  }> {
-    const response = await apiClient.get<ApiResponse<{
-      department_objects: Record<string, string[]>;
-      employee_objects: Record<string, string[]>;
-    }>>('/admin/object-assignments');
+  async getObjectAssignments(): Promise<IObjectAssignments> {
+    const response = await apiClient.get<ApiResponse<IObjectAssignments>>('/admin/object-assignments');
     return response.data || { department_objects: {}, employee_objects: {} };
   },
 

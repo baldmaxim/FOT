@@ -512,6 +512,42 @@
   height: 16px;
 }
 
+/* Двухколоночная массовая модалка: слева отделы, справа объекты. */
+.sc-obj-cols {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.sc-obj-col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.sc-obj-col-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sc-obj-col .sc-obj-list {
+  max-height: 340px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+@media (max-width: 640px) {
+  .sc-obj-cols {
+    flex-direction: column;
+  }
+  .sc-obj-col {
+    width: 100%;
+  }
+}
+
 .sc-table thead {
   position: sticky;
   top: 0;

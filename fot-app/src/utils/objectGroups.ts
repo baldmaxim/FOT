@@ -1,10 +1,10 @@
 /**
- * Группировка «объектов входа» (skud_objects) по адресу (alt_name).
+ * Подготовка «объектов входа» (skud_objects) для назначения.
  *
- * Несколько объектов с одинаковым адресом (например, 3 офиса с адресом
- * «Текущая деятельность») схлопываются в один выбираемый пункт. Выбор пункта
- * назначает/снимает сразу все объекты этого адреса. Хранение в БД остаётся
- * по object_id — группировка только для UI.
+ * Обычные объекты показываются по наименованию (name) — каждый отдельным пунктом.
+ * Исключение — объекты с адресом (alt_name) «Текущая деятельность»: их несколько,
+ * но они схлопываются в один пункт «Текущая деятельность» (выбор назначает/снимает
+ * сразу все). Хранение в БД остаётся по object_id — группировка только для UI.
  */
 
 export interface IAddressObject {
@@ -14,50 +14,58 @@ export interface IAddressObject {
 }
 
 export interface IObjectGroup {
-  /** Нормализованный ключ (для сравнения/дедупликации). */
+  /** Ключ пункта (id объекта или служебный ключ «текущей деятельности»). */
   key: string;
-  /** Человекочитаемый адрес (alt_name или name). */
+  /** Подпись пункта (наименование объекта или «Текущая деятельность»). */
   label: string;
-  /** id всех объектов с этим адресом. */
+  /** id всех объектов пункта (для обычного — один, для «текущей деятельности» — все). */
   objectIds: string[];
 }
 
 export type GroupSelectionState = 'none' | 'partial' | 'all';
 
-/** Адрес объекта: alt_name, если задан, иначе name. */
-export const objectAddress = (o: IAddressObject): string => {
-  const alt = o.alt_name?.trim();
-  return alt && alt.length > 0 ? alt : o.name;
-};
+export const CURRENT_ACTIVITY_LABEL = 'Текущая деятельность';
+const CURRENT_ACTIVITY_KEY = '__current_activity__';
 
 const normalize = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').trim();
 
-/** Группы объектов по адресу, отсортированы по адресу (ru). */
-export const groupObjectsByAddress = (objects: IAddressObject[]): IObjectGroup[] => {
-  const map = new Map<string, IObjectGroup>();
+const isCurrentActivity = (o: IAddressObject): boolean =>
+  normalize(o.alt_name ?? '') === normalize(CURRENT_ACTIVITY_LABEL);
+
+/**
+ * Пункты для UI: «Текущая деятельность» первой (если есть), далее обычные объекты
+ * по наименованию (сортировка ru).
+ */
+export const groupObjects = (objects: IAddressObject[]): IObjectGroup[] => {
+  const regular: IObjectGroup[] = [];
+  const currentActivityIds: string[] = [];
   for (const o of objects) {
-    const label = objectAddress(o);
-    const key = normalize(label);
-    const existing = map.get(key);
-    if (existing) existing.objectIds.push(o.id);
-    else map.set(key, { key, label, objectIds: [o.id] });
+    if (isCurrentActivity(o)) currentActivityIds.push(o.id);
+    else regular.push({ key: o.id, label: o.name, objectIds: [o.id] });
   }
-  return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ru'));
+  regular.sort((a, b) => a.label.localeCompare(b.label, 'ru'));
+
+  const result: IObjectGroup[] = [];
+  if (currentActivityIds.length > 0) {
+    result.push({ key: CURRENT_ACTIVITY_KEY, label: CURRENT_ACTIVITY_LABEL, objectIds: currentActivityIds });
+  }
+  result.push(...regular);
+  return result;
 };
 
-/** Состояние группы относительно набора назначенных id. */
+/** Состояние пункта относительно набора назначенных id. */
 export const groupSelectionState = (group: IObjectGroup, assigned: Set<string>): GroupSelectionState => {
   const n = group.objectIds.reduce((acc, id) => acc + (assigned.has(id) ? 1 : 0), 0);
   if (n === 0) return 'none';
   return n === group.objectIds.length ? 'all' : 'partial';
 };
 
-/** Адреса (метки групп) для набора назначенных id — для показа в столбце. */
+/** Подписи пунктов для набора назначенных id — для показа в столбце. */
 export const objectGroupLabelsForIds = (objects: IAddressObject[], ids: string[]): string[] => {
   if (ids.length === 0) return [];
   const idSet = new Set(ids);
   const labels: string[] = [];
-  for (const group of groupObjectsByAddress(objects)) {
+  for (const group of groupObjects(objects)) {
     if (group.objectIds.some(id => idSet.has(id))) labels.push(group.label);
   }
   return labels;

@@ -1,9 +1,9 @@
 import { useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { adminService } from '../../services/adminService';
+import { adminService, type IObjectAssignments } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { groupObjectsByAddress, objectGroupLabelsForIds } from '../../utils/objectGroups';
+import { groupObjects, objectGroupLabelsForIds } from '../../utils/objectGroups';
 import type { IFlatDepartmentOption } from '../../utils/departmentUtils';
 
 interface IProps {
@@ -19,9 +19,8 @@ const diff = (a: string[], b: Set<string>): string[] => a.filter(id => !b.has(id
 
 /**
  * Массовое назначение «объектов входа» отделам/бригадам (department_object_assignment).
- * Объекты сгруппированы по адресу (один адрес — один пункт). Выбираем отделы + адреса
- * → «Назначить» (добавить) или «Снять». Объект с адресом «Текущая деятельность» → в
- * 1С-выгрузке без разбивки по объектам.
+ * Две колонки: слева отделы/бригады, справа объекты (по наименованию; «Текущая
+ * деятельность» — один пункт). «Назначить» (добавить) или «Снять» по выбранным.
  */
 export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClose, onAssigned }) => {
   const toast = useToast();
@@ -29,6 +28,7 @@ export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClos
   const dismiss = useOverlayDismiss(onClose);
 
   const [deptSearch, setDeptSearch] = useState('');
+  const [objectSearch, setObjectSearch] = useState('');
   const [selectedDepts, setSelectedDepts] = useState<Set<string>>(new Set());
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -45,7 +45,7 @@ export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClos
   });
 
   const objects = useMemo(() => objectsQuery.data ?? [], [objectsQuery.data]);
-  const groups = useMemo(() => groupObjectsByAddress(objects), [objects]);
+  const groups = useMemo(() => groupObjects(objects), [objects]);
   const deptObjMap = assignmentsQuery.data?.department_objects ?? {};
 
   const filteredDepts = useMemo(() => {
@@ -53,6 +53,12 @@ export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClos
     if (!q) return departments;
     return departments.filter(d => normalize(d.name).includes(q));
   }, [departments, deptSearch]);
+
+  const filteredGroups = useMemo(() => {
+    const q = normalize(objectSearch);
+    if (!q) return groups;
+    return groups.filter(g => normalize(g.label).includes(q));
+  }, [groups, objectSearch]);
 
   const toggleDept = (id: string) => {
     setSelectedDepts(prev => {
@@ -69,7 +75,7 @@ export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClos
     });
   };
 
-  // id всех объектов выбранных адресов.
+  // id всех объектов выбранных пунктов.
   const selectedObjectIds = useMemo(
     () => groups.filter(g => selectedGroups.has(g.key)).flatMap(g => g.objectIds),
     [groups, selectedGroups],
@@ -81,13 +87,23 @@ export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClos
     if (!canApply) return;
     setBusy(true);
     const objSet = new Set(selectedObjectIds);
+    const nextByDept = new Map<string, string[]>();
+    for (const deptId of selectedDepts) {
+      const cur = deptObjMap[deptId] ?? [];
+      nextByDept.set(deptId, mode === 'add' ? union(cur, selectedObjectIds) : diff(cur, objSet));
+    }
     try {
-      for (const deptId of selectedDepts) {
-        const cur = deptObjMap[deptId] ?? [];
-        const next = mode === 'add' ? union(cur, selectedObjectIds) : diff(cur, objSet);
+      for (const [deptId, next] of nextByDept) {
         await adminService.updateDepartmentObjectAssignment(deptId, next);
       }
-      await queryClient.invalidateQueries({ queryKey: ['admin-object-assignments'] });
+      // Оптимистично обновляем кэш — столбец «Объект» обновляется сразу.
+      queryClient.setQueryData<IObjectAssignments>(['admin-object-assignments'], old => {
+        if (!old) return old;
+        const department_objects = { ...old.department_objects };
+        for (const [deptId, next] of nextByDept) department_objects[deptId] = next;
+        return { ...old, department_objects };
+      });
+      queryClient.invalidateQueries({ queryKey: ['admin-object-assignments'] });
       queryClient.invalidateQueries({ queryKey: ['timesheet'] });
       toast.success(
         mode === 'add'
@@ -107,73 +123,86 @@ export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClos
 
   return (
     <div className="sc-overlay" {...dismiss}>
-      <div className="sc-modal" onClick={e => e.stopPropagation()}>
+      <div className="sc-modal sc-modal--wide" onClick={e => e.stopPropagation()}>
         <div className="sc-modal-header">
           <h3>Назначить объект на отделы/бригады</h3>
           <button className="sc-modal-close" onClick={onClose}>&times;</button>
         </div>
         <div className="sc-modal-body">
-          <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
-            Выберите отделы/бригады и объекты (по адресу), затем «Назначить» (или «Снять»). Сотрудники
-            отделов наследуют объект. Адрес «Текущая деятельность» → в единой 1С-выгрузке одна строка
-            на сотрудника без разбивки по объектам.
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
+            Слева — отделы/бригады, справа — объекты. Отметьте нужное и нажмите «Назначить» (или
+            «Снять»). Сотрудники отделов наследуют объект. «Текущая деятельность» → в единой
+            1С-выгрузке одна строка на сотрудника без разбивки по объектам.
           </p>
 
-          <div className="sc-field">
-            <label>Отделы и бригады{selectedDepts.size > 0 ? ` — выбрано ${selectedDepts.size}` : ''}</label>
-            <input
-              type="text"
-              className="sc-obj-search"
-              value={deptSearch}
-              onChange={e => setDeptSearch(e.target.value)}
-              placeholder="Поиск отдела/бригады…"
-            />
-            <div className="sc-obj-list">
-              {filteredDepts.length === 0 ? (
-                <div className="sc-obj-empty">— не найдено —</div>
-              ) : filteredDepts.map(d => {
-                const checked = selectedDepts.has(d.id);
-                const assignedGroups = objectGroupLabelsForIds(objects, deptObjMap[d.id] ?? []).length;
-                return (
-                  <label
-                    key={d.id}
-                    className={`sc-obj-item ${checked ? 'sc-obj-item--on' : ''}`}
-                    style={{ paddingLeft: 10 + d.level * 14 }}
-                  >
-                    <input type="checkbox" checked={checked} onChange={() => toggleDept(d.id)} />
-                    <span>
-                      {d.name}
-                      {d.kind === 'brigade' && <span className="sc-obj-badge">бр.</span>}
-                      {assignedGroups > 0 && <span className="sc-obj-count">{assignedGroups}</span>}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="sc-field">
-            <label>Объекты (по адресу){selectedGroups.size > 0 ? ` — выбрано ${selectedGroups.size}` : ''}</label>
-            {loading ? (
-              <div style={{ fontSize: 14 }}>Загрузка…</div>
-            ) : groups.length === 0 ? (
-              <div style={{ fontSize: 14 }}>Объекты не настроены</div>
-            ) : (
+          <div className="sc-obj-cols">
+            <div className="sc-obj-col">
+              <label className="sc-obj-col-label">Отделы и бригады{selectedDepts.size > 0 ? ` — выбрано ${selectedDepts.size}` : ''}</label>
+              <input
+                type="text"
+                className="sc-obj-search"
+                value={deptSearch}
+                onChange={e => setDeptSearch(e.target.value)}
+                placeholder="Поиск отдела/бригады…"
+              />
               <div className="sc-obj-list">
-                {groups.map(g => {
-                  const checked = selectedGroups.has(g.key);
+                {filteredDepts.length === 0 ? (
+                  <div className="sc-obj-empty">— не найдено —</div>
+                ) : filteredDepts.map(d => {
+                  const checked = selectedDepts.has(d.id);
+                  const assignedCount = objectGroupLabelsForIds(objects, deptObjMap[d.id] ?? []).length;
                   return (
-                    <label key={g.key} className={`sc-obj-item ${checked ? 'sc-obj-item--on' : ''}`}>
-                      <input type="checkbox" checked={checked} onChange={() => toggleGroup(g.key)} />
+                    <label
+                      key={d.id}
+                      className={`sc-obj-item ${checked ? 'sc-obj-item--on' : ''}`}
+                      style={{ paddingLeft: 10 + d.level * 14 }}
+                    >
+                      <input type="checkbox" checked={checked} onChange={() => toggleDept(d.id)} />
                       <span>
-                        {g.label}
-                        {g.objectIds.length > 1 && <span className="sc-obj-count">{g.objectIds.length}</span>}
+                        {d.name}
+                        {d.kind === 'brigade' && <span className="sc-obj-badge">бр.</span>}
+                        {assignedCount > 0 && <span className="sc-obj-count">{assignedCount}</span>}
                       </span>
                     </label>
                   );
                 })}
               </div>
-            )}
+            </div>
+
+            <div className="sc-obj-col">
+              <label className="sc-obj-col-label">Объекты{selectedGroups.size > 0 ? ` — выбрано ${selectedGroups.size}` : ''}</label>
+              {groups.length > 8 && (
+                <input
+                  type="text"
+                  className="sc-obj-search"
+                  value={objectSearch}
+                  onChange={e => setObjectSearch(e.target.value)}
+                  placeholder="Поиск объекта…"
+                />
+              )}
+              {loading ? (
+                <div style={{ fontSize: 14 }}>Загрузка…</div>
+              ) : groups.length === 0 ? (
+                <div style={{ fontSize: 14 }}>Объекты не настроены</div>
+              ) : (
+                <div className="sc-obj-list">
+                  {filteredGroups.length === 0 ? (
+                    <div className="sc-obj-empty">— не найдено —</div>
+                  ) : filteredGroups.map(g => {
+                    const checked = selectedGroups.has(g.key);
+                    return (
+                      <label key={g.key} className={`sc-obj-item ${checked ? 'sc-obj-item--on' : ''}`}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleGroup(g.key)} />
+                        <span>
+                          {g.label}
+                          {g.objectIds.length > 1 && <span className="sc-obj-count">{g.objectIds.length}</span>}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         <div className="sc-modal-footer">
