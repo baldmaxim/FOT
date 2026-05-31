@@ -1226,13 +1226,11 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   // (рендерится перед футером → «Сохранить» в самом низу, #1). Для objects-блока —
   // рендерится отдельно после списка.
   const attachmentsNode = adjustmentId ? (
-    <div style={{ padding: useTwoColumnLayout ? '0' : '12px 20px 0' }}>
-      <CorrectionAttachments
-        adjustmentId={adjustmentId}
-        variant="modal"
-        canEdit={attachmentsCanEdit}
-      />
-    </div>
+    <CorrectionAttachments
+      adjustmentId={adjustmentId}
+      variant="modal"
+      canEdit={attachmentsCanEdit}
+    />
   ) : null;
 
   // Плашка согласования времени внизу модалки (#6).

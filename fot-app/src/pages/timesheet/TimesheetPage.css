@@ -5339,11 +5339,20 @@
 /* Внутренние секции карточки: тонкие разделители, файлы и согласование — отдельными блоками. */
 .ts-corr-card .ts-corr-attachments--modal {
   border-top: 1px solid var(--border);
-  margin-top: 4px;
-  padding-top: 10px;
+  margin-top: 0;
+  padding: 12px 20px; /* собственный padding → border-top на всю ширину карточки */
+}
+.ts-corr-attachments--modal .ts-corr-attachments__item {
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  margin: 0 -8px; /* имя файла выровнено под заголовком, hover с воздухом */
+}
+.ts-corr-attachments--modal .ts-corr-attachments__item:hover {
+  background: var(--bg-tertiary);
 }
 .ts-corr-card > .ts-corr-approval {
-  margin: 0 12px 12px;
+  margin: 0 20px 12px;
 }
 
 @media (max-width: 1023px) {
