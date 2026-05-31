@@ -55,7 +55,9 @@ class WebSocketService {
 
       const nextSocket = io(API_ORIGIN, {
         auth: { token },
-        transports: ['polling', 'websocket'],
+        // websocket первым (nginx проксирует Upgrade): без polling-хендшейка
+        // и без удержания HTTP-коннекта long-polling'ом. polling — только fallback.
+        transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,

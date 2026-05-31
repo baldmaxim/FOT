@@ -35,6 +35,8 @@ const io = new Server(httpServer, {
     origin: corsAllowedOrigins,
     credentials: true,
   },
+  // websocket первым (nginx проксирует Upgrade), polling — fallback.
+  transports: ['websocket', 'polling'],
 });
 
 setIo(io);

@@ -302,8 +302,13 @@ export const TimesheetPage: FC = () => {
     gcTime: 15 * 60_000,
     placeholderData: previousData => previousData,
   });
+  // Тяжёлый пересчёт грида (employeeRows + расписания) при смене отдела блокировал
+  // main-thread (Sentry: long-animation-frame до 12.5с). useDeferredValue делает
+  // пересборку грида прерываемым low-priority рендером — дропдаун/скролл/ввод не
+  // фризятся, грид догоняет следом. Виртуализация срезала объём DOM, это — CPU-пересчёт.
+  const deferredTimesheetData = useDeferredValue(timesheetQuery.data);
   const employees = useMemo<TimesheetEmployee[]>(() => {
-    const raw = timesheetQuery.data?.employees || [];
+    const raw = deferredTimesheetData?.employees || [];
     // Группировка строк табеля: department → direct_report → self.
     // Внутри группы сохраняем порядок ответа (бэк сортирует по full_name).
     const sourceOrder: Record<NonNullable<TimesheetEmployee['source']>, number> = {
@@ -312,20 +317,20 @@ export const TimesheetPage: FC = () => {
       department: 2,
     };
     return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
-  }, [timesheetQuery.data]);
+  }, [deferredTimesheetData]);
   const entries = useMemo<TimesheetEntry[]>(
-    () => timesheetQuery.data?.entries || [],
-    [timesheetQuery.data],
+    () => deferredTimesheetData?.entries || [],
+    [deferredTimesheetData],
   );
   const objectEntries = useMemo<TimesheetObjectEntry[]>(
-    () => timesheetQuery.data?.object_entries || [],
-    [timesheetQuery.data],
+    () => deferredTimesheetData?.object_entries || [],
+    [deferredTimesheetData],
   );
-  const stats = timesheetQuery.data?.stats || DEFAULT_STATS;
-  const employeeStats = timesheetQuery.data?.employee_stats || [];
-  const schedules = timesheetQuery.data?.schedules || EMPTY_SCHEDULES;
-  const dailySchedules = timesheetQuery.data?.daily_schedules || EMPTY_DAILY_SCHEDULES;
-  const calendar = timesheetQuery.data?.calendar || null;
+  const stats = deferredTimesheetData?.stats || DEFAULT_STATS;
+  const employeeStats = deferredTimesheetData?.employee_stats || [];
+  const schedules = deferredTimesheetData?.schedules || EMPTY_SCHEDULES;
+  const dailySchedules = deferredTimesheetData?.daily_schedules || EMPTY_DAILY_SCHEDULES;
+  const calendar = deferredTimesheetData?.calendar || null;
   const loading = (Boolean(effectiveSelectedDeptId) || isDirectReportsOnly) && timesheetQuery.isLoading;
   const deferredTeamSearch = useDeferredValue(teamSearch.trim());
   const teamSearchQuery = useQuery({
