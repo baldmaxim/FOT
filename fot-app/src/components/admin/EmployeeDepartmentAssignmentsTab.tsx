@@ -1,5 +1,6 @@
-import { useMemo, useState, type FC } from 'react';
+import { useMemo, useRef, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   adminService,
   type EmployeeDepartmentAssignmentFromApi,
@@ -93,6 +94,17 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     });
   }, [departmentMap, employees, hideEmployeesWithoutAssignments, linkedUserByEmployeeId, searchQuery]);
 
+  // Виртуализация: рендерим только видимые строки. Без неё список из ~8700
+  // сотрудников = десятки тысяч DOM-узлов → тяжёлый рендер + расширения браузера
+  // сканируют DOM (querySelectorAll) и блокируют main-thread на секунды (INP input delay).
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: filteredEmployees.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 64,
+    overscan: 12,
+  });
+
   if (employeesQuery.isError || structureQuery.isError) {
     return <div className={styles.error}>Не удалось загрузить назначения сотрудников</div>;
   }
@@ -164,52 +176,63 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
             <span></span>
           </div>
 
-          {filteredEmployees.map(employee => {
-            const linkedUser = linkedUserByEmployeeId.get(employee.employee_id) || null;
-            const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids ?? []);
+          <div ref={scrollRef} style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+            <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+              {rowVirtualizer.getVirtualItems().map(virtualRow => {
+                const employee = filteredEmployees[virtualRow.index];
+                const linkedUser = linkedUserByEmployeeId.get(employee.employee_id) || null;
+                const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids ?? []);
 
-            return (
-              <div key={employee.employee_id} className={styles.userRow}>
-                <div
-                  className={styles.userRowHeader}
-                  onClick={() => setSelectedEmployee(employee)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      setSelectedEmployee(employee);
-                    }
-                  }}
-                >
-                  <div className={styles.userRowInfo}>
-                    <div className={styles.userRowName}>
-                      {employee.full_name}
-                    </div>
-                    <div className={styles.userRowEmail}>
-                      {employee.position_name || 'Должность не указана'}
-                      {employee.department_name ? ` · ${employee.department_name}` : ''}
-                      {linkedUser
-                        ? <span className={styles.emailConfirmed} style={{ marginLeft: 8 }}>аккаунт: {linkedUser.full_name || linkedUser.email || linkedUser.id}</span>
-                        : <span className={styles.emailNotConfirmed} style={{ marginLeft: 8 }}>без аккаунта портала</span>
-                      }
+                return (
+                  <div
+                    key={employee.employee_id}
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
+                    className={styles.userRow}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}
+                  >
+                    <div
+                      className={styles.userRowHeader}
+                      onClick={() => setSelectedEmployee(employee)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setSelectedEmployee(employee);
+                        }
+                      }}
+                    >
+                      <div className={styles.userRowInfo}>
+                        <div className={styles.userRowName}>
+                          {employee.full_name}
+                        </div>
+                        <div className={styles.userRowEmail}>
+                          {employee.position_name || 'Должность не указана'}
+                          {employee.department_name ? ` · ${employee.department_name}` : ''}
+                          {linkedUser
+                            ? <span className={styles.emailConfirmed} style={{ marginLeft: 8 }}>аккаунт: {linkedUser.full_name || linkedUser.email || linkedUser.id}</span>
+                            : <span className={styles.emailNotConfirmed} style={{ marginLeft: 8 }}>без аккаунта портала</span>
+                          }
+                        </div>
+                      </div>
+
+                      <div className={styles.userRowMeta}>
+                        <span className={styles.userRowRole}>
+                          {linkedUser ? 'Есть аккаунт' : 'Без аккаунта'}
+                        </span>
+                        <div className={styles.userRowStatusCell}>
+                          <span className={styles.departmentAccessCount}>
+                            {additionalDepartmentIds.length}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-
-                  <div className={styles.userRowMeta}>
-                    <span className={styles.userRowRole}>
-                      {linkedUser ? 'Есть аккаунт' : 'Без аккаунта'}
-                    </span>
-                    <div className={styles.userRowStatusCell}>
-                      <span className={styles.departmentAccessCount}>
-                        {additionalDepartmentIds.length}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
