@@ -531,6 +531,42 @@
   height: 16px;
 }
 
+/* Шеврон сворачивания ветки дерева отделов. */
+.sc-obj-chev {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sc-obj-chev--leaf {
+  cursor: default;
+}
+
+/* Метка «уже назначено» в правой колонке объектов. */
+.sc-obj-assigned {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--success);
+}
+
+.sc-obj-assigned--partial {
+  font-weight: 500;
+  color: var(--text-muted, #94a3b8);
+}
+
 /* Двухколоночная массовая модалка: слева отделы, справа объекты. */
 .sc-obj-cols {
   display: flex;
