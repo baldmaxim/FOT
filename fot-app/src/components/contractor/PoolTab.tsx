@@ -4,9 +4,8 @@ import { useToast } from '../../contexts/ToastContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useCardReaderAgent } from '../../contexts/CardReaderAgentContext';
-import { contractorAdminService, type IFreePass, type ISigurDepartmentNode } from '../../services/contractorService';
+import { contractorAdminService, type IPoolCell, type ISigurDepartmentNode } from '../../services/contractorService';
 import { DepartmentTreeSelect } from '../staff/DepartmentTreeSelect';
-import { PoolRangesHeader } from './PoolRangesHeader';
 import type { OrgDepartmentNode } from '../../types/organization';
 import styles from '../../pages/contractor/Contractor.module.css';
 
@@ -75,6 +74,7 @@ export const PoolTab: FC = () => {
   const [assignOrgId, setAssignOrgId] = useState<string>('');
   const [countStr, setCountStr] = useState('');
   const lastSeqRef = useRef(0);
+  const dragRef = useRef<null | { mode: 'add' | 'remove' }>(null);
 
   const settingsOverlay = useOverlayDismiss(() => setSelectFolderOpen(false));
 
@@ -95,17 +95,19 @@ export const PoolTab: FC = () => {
     enabled: selectFolderOpen,
     staleTime: 5 * 60_000,
   });
-  const freeQuery = useQuery({
-    queryKey: ['contractor-pool-free'],
-    queryFn: contractorAdminService.getFreePasses,
+  const matrixQuery = useQuery({
+    queryKey: ['contractor-pool-matrix'],
+    queryFn: contractorAdminService.getPoolMatrix,
     staleTime: 10_000,
     refetchInterval: 15_000,
   });
 
   const folderId = settingsQuery.data?.sigur_department_id ?? null;
   const folderName = settingsQuery.data?.name ?? null;
-  const freePasses: IFreePass[] = useMemo(() => freeQuery.data ?? [], [freeQuery.data]);
-  const freeIds = useMemo(() => new Set(freePasses.map(p => p.id)), [freePasses]);
+  const cells: IPoolCell[] = useMemo(() => matrixQuery.data?.cells ?? [], [matrixQuery.data]);
+  const totals = matrixQuery.data?.totals ?? { free: 0, occupied: 0 };
+  const freeCells = useMemo(() => cells.filter(c => c.status === 'free' && c.id), [cells]);
+  const freeIds = useMemo(() => new Set(freeCells.map(c => c.id as string)), [freeCells]);
 
   // Снимаем из выделения пропуска, которых больше нет среди свободных (после авто-рефетча).
   useEffect(() => {
@@ -128,7 +130,14 @@ export const PoolTab: FC = () => {
       .catch(() => { /* пользователь введёт вручную */ });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freeQuery.dataUpdatedAt]);
+  }, [matrixQuery.dataUpdatedAt]);
+
+  // Глобальный mouseup завершает протяжку-выделение, даже если курсор ушёл из матрицы.
+  useEffect(() => {
+    const onUp = () => { dragRef.current = null; };
+    window.addEventListener('mouseup', onUp);
+    return () => window.removeEventListener('mouseup', onUp);
+  }, []);
 
   // Считывание карт.
   useEffect(() => {
@@ -163,8 +172,7 @@ export const PoolTab: FC = () => {
     !busy;
 
   const refreshPool = async () => {
-    await qc.invalidateQueries({ queryKey: ['contractor-pool-free'] });
-    await qc.invalidateQueries({ queryKey: ['contractor-pool-ranges'] });
+    await qc.invalidateQueries({ queryKey: ['contractor-pool-matrix'] });
   };
 
   const handleAddToPool = async () => {
@@ -218,12 +226,28 @@ export const PoolTab: FC = () => {
     }
   };
 
-  const toggleSelect = (id: string) => {
+  const applySel = (id: string, mode: 'add' | 'remove') => {
     setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
+      if (mode === 'add') {
+        if (prev.has(id)) return prev;
+        const next = new Set(prev); next.add(id); return next;
+      }
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev); next.delete(id); return next;
     });
+  };
+
+  // Зажатие ЛКМ на свободной ячейке стартует протяжку; режим (add/remove)
+  // определяется состоянием первой ячейки, затем применяется ко всем под курсором.
+  const handleCellMouseDown = (id: string) => {
+    const mode: 'add' | 'remove' = selected.has(id) ? 'remove' : 'add';
+    dragRef.current = { mode };
+    applySel(id, mode);
+  };
+  const handleCellMouseEnter = (id: string, buttons: number) => {
+    if (!dragRef.current) return;
+    if (buttons !== 1) { dragRef.current = null; return; }
+    applySel(id, dragRef.current.mode);
   };
 
   const handleAssignSelected = async () => {
@@ -248,8 +272,8 @@ export const PoolTab: FC = () => {
   const handleAssignCount = async () => {
     const count = Number(countStr);
     if (!assignOrgId || !Number.isInteger(count) || count <= 0 || busy) return;
-    if (count > freePasses.length) {
-      toast.error(`Свободно только ${freePasses.length} пропусков`);
+    if (count > freeCells.length) {
+      toast.error(`Свободно только ${freeCells.length} пропусков`);
       return;
     }
     setBusy(true);
@@ -372,8 +396,6 @@ export const PoolTab: FC = () => {
         </button>
       </div>
 
-      <PoolRangesHeader />
-
       <h3 className={styles.title} style={{ marginTop: 24 }}>Назначение пропусков подрядчику</h3>
       <div className={styles.field}>
         <span className={styles.label}>Подрядная организация</span>
@@ -408,7 +430,7 @@ export const PoolTab: FC = () => {
           Назначить первые N свободных
         </button>
         <span className={styles.statusNote} style={{ marginLeft: 'auto' }}>
-          Свободно: {freePasses.length}
+          Свободно: {totals.free}
         </span>
       </div>
 
@@ -432,24 +454,44 @@ export const PoolTab: FC = () => {
         )}
       </div>
 
-      {freeQuery.isLoading ? (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '12px 0 8px', flexWrap: 'wrap' }}>
+        <span className={styles.title} style={{ fontSize: 14 }}>Матрица пула</span>
+        <span className={styles.statusNote}>
+          Свободно: <b style={{ color: 'var(--success)' }}>{totals.free}</b>
+          {' · '}
+          Занято: <b style={{ color: 'var(--error)' }}>{totals.occupied}</b>
+        </span>
+      </div>
+
+      {matrixQuery.isLoading ? (
         <div className={styles.empty}>Загрузка…</div>
-      ) : freePasses.length === 0 ? (
-        <div className={styles.empty}>Свободных пропусков нет</div>
+      ) : cells.length === 0 ? (
+        <div className={styles.empty}>Пул пуст</div>
       ) : (
         <div className={styles.matrix}>
-          {freePasses.map(p => {
-            const on = selected.has(p.id);
+          {cells.map(c => {
+            const free = c.status === 'free' && c.id != null;
+            const on = free ? selected.has(c.id as string) : false;
+            const cls = `${styles.matrixCell} ${free ? styles.matrixCellFree : styles.matrixCellOccupied} ${on ? styles.matrixCellOn : ''}`;
+            if (!free) {
+              return (
+                <span key={c.pass_number} className={cls} title="Занят" aria-disabled>
+                  {c.pass_number}
+                </span>
+              );
+            }
+            const id = c.id as string;
             return (
               <button
-                key={p.id}
+                key={c.pass_number}
                 type="button"
-                className={`${styles.matrixCell} ${on ? styles.matrixCellOn : ''}`}
-                onClick={() => toggleSelect(p.id)}
+                className={cls}
+                onMouseDown={e => { e.preventDefault(); if (!busy) handleCellMouseDown(id); }}
+                onMouseEnter={e => { if (!busy) handleCellMouseEnter(id, e.buttons); }}
                 disabled={busy}
                 title={on ? 'Снять' : 'Выбрать'}
               >
-                {p.pass_number}
+                {c.pass_number}
               </button>
             );
           })}

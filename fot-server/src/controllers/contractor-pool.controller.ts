@@ -19,6 +19,7 @@ import {
   enqueueRevoke,
   getFreePasses,
   getFreePoolDepartmentId,
+  getPoolMatrix,
   getPoolRanges,
   listFailedSyncs,
   listPool,
@@ -168,6 +169,19 @@ export const contractorPoolController = {
       Sentry.captureException(error, { tags: { route: 'contractor.pool.getRanges' } });
       console.error('Pool getRanges error:', error);
       res.status(500).json({ success: false, error: 'Не удалось получить диапазоны пула' });
+    }
+  },
+
+  /** GET /pool/matrix — все пропуска пула (ячейка на номер) с цветом по статусу. */
+  async matrix(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const data = await getPoolMatrix();
+      res.json({ success: true, data });
+    } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.matrix' } });
+      console.error('Pool matrix error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить матрицу пула' });
     }
   },
 

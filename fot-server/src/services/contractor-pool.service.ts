@@ -204,6 +204,50 @@ export const getPoolRanges = async (): Promise<IPoolRangesResult> => {
   return { ranges, totals: { free: freeCount, occupied: occupiedCount } };
 };
 
+export interface IPoolCell {
+  pass_number: string;
+  status: 'free' | 'occupied';
+  /** id строки in_pool (нужен для назначения); null для занятых. */
+  id: string | null;
+}
+
+export interface IPoolMatrixResult {
+  cells: IPoolCell[];
+  totals: { free: number; occupied: number };
+}
+
+/**
+ * Плоская матрица всего пула для UI: одна ячейка на номер пропуска, с цветом по
+ * статусу. Дедупликация по pass_number та же, что в getPoolRanges:
+ *   free     — ВСЕ строки номера in_pool без org → берём id свободной строки;
+ *   occupied — есть хоть одна занятая строка → id=null.
+ * revoked в выборку не попадает.
+ */
+export const getPoolMatrix = async (): Promise<IPoolMatrixResult> => {
+  const cells = await query<IPoolCell>(
+    `SELECT pass_number,
+            CASE
+              WHEN bool_and(status = 'in_pool' AND org_department_id IS NULL)
+                THEN 'free'
+              ELSE 'occupied'
+            END AS status,
+            (array_agg(id) FILTER (WHERE status = 'in_pool' AND org_department_id IS NULL))[1] AS id
+       FROM contractor_passes
+      WHERE pass_number ~ '^[0-9]+$'
+        AND status <> 'revoked'
+      GROUP BY pass_number
+      ORDER BY pass_number::bigint ASC`,
+  );
+
+  let free = 0;
+  let occupied = 0;
+  for (const c of cells) {
+    if (c.status === 'free') free += 1; else occupied += 1;
+  }
+
+  return { cells, totals: { free, occupied } };
+};
+
 export interface IAddPoolInput {
   from: number;
   to?: number;

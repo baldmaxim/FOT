@@ -408,7 +408,7 @@
   min-width: 0;
 }
 
-/* Матрица свободных пропусков (выбор по одному) */
+/* Матрица всего пула: цвет = статус, выбор протяжкой ЛКМ */
 .matrix {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
@@ -419,6 +419,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
+  user-select: none;
 }
 
 .matrixCell {
@@ -437,7 +438,28 @@
 
 .matrixCell:hover { background: var(--surface-hover); }
 
-.matrixCellOn {
+.matrixCellFree {
+  background: var(--success-muted);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.matrixCellFree:hover {
+  background: var(--success-muted);
+  border-color: var(--success);
+}
+
+.matrixCellOccupied {
+  background: var(--error-muted);
+  border-color: var(--error);
+  color: var(--error);
+  cursor: default;
+}
+
+.matrixCellOccupied:hover { background: var(--error-muted); }
+
+.matrixCellOn,
+.matrixCellOn:hover {
   background: var(--primary);
   border-color: var(--primary);
   color: #fff;

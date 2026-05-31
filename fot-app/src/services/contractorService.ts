@@ -104,6 +104,18 @@ export interface IPoolRangesResult {
   totals: { free: number; occupied: number };
 }
 
+export interface IPoolCell {
+  pass_number: string;
+  status: 'free' | 'occupied';
+  /** id свободной строки (для назначения); null для занятых. */
+  id: string | null;
+}
+
+export interface IPoolMatrixResult {
+  cells: IPoolCell[];
+  totals: { free: number; occupied: number };
+}
+
 export interface ISigurDepartmentNode {
   id: number;
   name: string;
@@ -467,6 +479,10 @@ export const contractorAdminService = {
   async getPoolRanges(): Promise<IPoolRangesResult> {
     const r = await apiClient.get<ApiResponse<IPoolRangesResult>>('/admin/contractor/pool/ranges');
     return r.data ?? { ranges: [], totals: { free: 0, occupied: 0 } };
+  },
+  async getPoolMatrix(): Promise<IPoolMatrixResult> {
+    const r = await apiClient.get<ApiResponse<IPoolMatrixResult>>('/admin/contractor/pool/matrix');
+    return r.data ?? { cells: [], totals: { free: 0, occupied: 0 } };
   },
   async getPoolNextNumber(): Promise<number> {
     const r = await apiClient.get<ApiResponse<{ next: number }>>('/admin/contractor/pool/next-number');
