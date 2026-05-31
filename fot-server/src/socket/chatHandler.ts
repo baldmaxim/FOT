@@ -6,10 +6,12 @@ import { chatService } from '../services/chat.service.js';
 import { isChatError } from '../services/chat.errors.js';
 import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { portalPresence } from '../services/portal-presence.service.js';
 import type { JWTPayload } from '../types/index.js';
 
 interface IAuthenticatedSocket extends Socket {
   userId?: string;
+  employeeId?: number | null;
 }
 
 // Лимит одновременных сокетов на одного пользователя. Несколько вкладок и
@@ -17,7 +19,6 @@ interface IAuthenticatedSocket extends Socket {
 // отключаются — без этого фрагмент скомпрометированного фронта может открыть
 // тысячи коннектов и положить процесс по дескрипторам.
 const MAX_SOCKETS_PER_USER = Number(process.env.SOCKET_IO_MAX_PER_USER) || 10;
-const userSocketCounts = new Map<string, number>();
 
 export const setupChatSocket = (io: Server) => {
   // JWT auth middleware
@@ -33,7 +34,8 @@ export const setupChatSocket = (io: Server) => {
         return next(new Error('Account not approved'));
       }
       socket.userId = decoded.sub;
-      const current = userSocketCounts.get(decoded.sub) ?? 0;
+      socket.employeeId = decoded.employee_id ?? null;
+      const current = portalPresence.getCount(decoded.sub);
       if (current >= MAX_SOCKETS_PER_USER) {
         return next(new Error('Too many connections for this user'));
       }
@@ -45,12 +47,17 @@ export const setupChatSocket = (io: Server) => {
 
   io.on('connection', (socket: IAuthenticatedSocket) => {
     const userId = socket.userId!;
+    const employeeId = socket.employeeId ?? null;
 
-    userSocketCounts.set(userId, (userSocketCounts.get(userId) ?? 0) + 1);
+    // Онлайн-присутствие на портале: эмитим user_online только на переходе 0→1,
+    // user_offline — на 1→0, чтобы несколько вкладок одного юзера не спамили.
+    if (portalPresence.addConnection(userId, employeeId)) {
+      portalPresence.emitOnline(userId, employeeId);
+    }
     socket.on('disconnect', () => {
-      const next = (userSocketCounts.get(userId) ?? 1) - 1;
-      if (next <= 0) userSocketCounts.delete(userId);
-      else userSocketCounts.set(userId, next);
+      if (portalPresence.removeConnection(userId)) {
+        portalPresence.emitOffline(userId, employeeId);
+      }
     });
 
     // Присоединяем к персональной комнате для получения уведомлений

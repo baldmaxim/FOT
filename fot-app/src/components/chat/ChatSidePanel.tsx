@@ -3,9 +3,11 @@ import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useChatContext } from '../../contexts/ChatContext';
 import { useToast } from '../../contexts/ToastContext';
+import { useOnlinePresence } from '../../contexts/OnlinePresenceContext';
 import { chatService, type IChatContactRequest, type IChatUser } from '../../services/chatService';
 import { usePushNotifications, type PushSubscribeResult } from '../../hooks/usePushNotifications';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import { OnlineDot } from '../ui/OnlineDot';
 import styles from './ChatSidePanel.module.css';
 
 const CheckIcon: FC<{ double?: boolean; className?: string }> = ({ double, className }) => (
@@ -32,6 +34,7 @@ const getRequestButtonLabel = (user: IChatUser): string => {
 
 export const ChatSidePanel: FC = () => {
   const { profile, isAuthenticated, isApproved, getRoleLabel } = useAuth();
+  const { isUserOnline } = useOnlinePresence();
   const toast = useToast();
   const {
     isOpen,
@@ -296,6 +299,10 @@ export const ChatSidePanel: FC = () => {
     return other?.full_name || 'Неизвестный';
   };
 
+  const getOtherUserId = (participants: { user_id: string; full_name: string | null }[]) => {
+    return participants.find(participant => participant.user_id !== profile?.id)?.user_id ?? null;
+  };
+
   const getInitials = (name: string) => {
     const parts = name.split(' ').filter(Boolean);
     if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
@@ -464,7 +471,9 @@ export const ChatSidePanel: FC = () => {
                     <div key={user.id} className={styles.searchItem}>
                       <div className={styles.avatarSmall}>{getInitials(user.full_name || '??')}</div>
                       <div className={styles.searchItemInfo}>
-                        <span className={styles.searchItemName}>{user.full_name || 'Без имени'}</span>
+                        <span className={styles.searchItemName}>
+                          <OnlineDot online={isUserOnline(user.id)} /> {user.full_name || 'Без имени'}
+                        </span>
                         <span className={styles.searchItemMeta}>
                           {getRoleLabel(user.position_type)} · {user.availability_reason}
                         </span>
@@ -494,6 +503,7 @@ export const ChatSidePanel: FC = () => {
               ) : (
                 conversations.map(conversation => {
                   const otherName = getOtherName(conversation.participants);
+                  const otherId = getOtherUserId(conversation.participants);
                   return (
                     <div
                       key={conversation.id}
@@ -503,6 +513,7 @@ export const ChatSidePanel: FC = () => {
                       <div className={styles.avatarSmall}>{getInitials(otherName)}</div>
                       <div className={styles.convInfo}>
                         <div className={styles.convNameRow}>
+                          <OnlineDot online={isUserOnline(otherId)} />
                           <div className={styles.convName}>{otherName}</div>
                           {!conversation.is_writable && <span className={styles.lockBadge}>Только чтение</span>}
                         </div>
@@ -547,6 +558,7 @@ export const ChatSidePanel: FC = () => {
                     const counterpartName = requestBox === 'inbox'
                       ? (request.requester_name || 'Без имени')
                       : (request.target_name || 'Без имени');
+                    const counterpartId = requestBox === 'inbox' ? request.requester_id : request.target_user_id;
                     const isPendingInbox = requestBox === 'inbox' && request.status === 'pending';
 
                     return (
@@ -554,7 +566,9 @@ export const ChatSidePanel: FC = () => {
                         <div className={styles.requestCardTop}>
                           <div className={styles.avatarSmall}>{getInitials(counterpartName)}</div>
                           <div className={styles.requestCardInfo}>
-                            <div className={styles.requestCardName}>{counterpartName}</div>
+                            <div className={styles.requestCardName}>
+                              <OnlineDot online={isUserOnline(counterpartId)} /> {counterpartName}
+                            </div>
                             <div className={styles.requestCardMeta}>{formatTime(request.created_at)}</div>
                           </div>
                           <span className={`${styles.requestStatus} ${styles[`status${request.status}`]}`}>
@@ -616,7 +630,8 @@ export const ChatSidePanel: FC = () => {
                 </div>
                 <div className={styles.headerBlock}>
                   <span className={styles.headerName}>
-                    {activeConversation ? getOtherName(activeConversation.participants) : ''}
+                    {activeConversation && <OnlineDot online={isUserOnline(getOtherUserId(activeConversation.participants))} />}
+                    {' '}{activeConversation ? getOtherName(activeConversation.participants) : ''}
                   </span>
                   {!activeConversation?.is_writable && activeConversation?.write_lock_reason && (
                     <span className={styles.headerLock}>{activeConversation.write_lock_reason}</span>

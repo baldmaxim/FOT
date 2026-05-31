@@ -6,6 +6,7 @@ import * as Sentry from '@sentry/react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { ChatProvider } from './contexts/ChatContext';
+import { OnlinePresenceProvider } from './contexts/OnlinePresenceContext';
 import { ProtectedRoute, PublicRoute } from './components/auth/ProtectedRoute';
 import { SigurHeaderBadges } from './components/skud/SigurHeaderBadges';
 import { CardReaderAgentProvider } from './contexts/CardReaderAgentContext';
@@ -658,9 +659,11 @@ const App = () => {
           <AuthProvider>
             <ToastProvider>
               <ChatProvider>
-                <AppRoutes />
-                <StructureRealtimeMount />
-                <ChatPanelMount />
+                <OnlinePresenceProvider>
+                  <AppRoutes />
+                  <StructureRealtimeMount />
+                  <ChatPanelMount />
+                </OnlinePresenceProvider>
               </ChatProvider>
             </ToastProvider>
           </AuthProvider>

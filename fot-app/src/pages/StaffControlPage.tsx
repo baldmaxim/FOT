@@ -24,6 +24,8 @@ import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useOnlinePresence } from '../contexts/OnlinePresenceContext';
+import { OnlineDot } from '../components/ui/OnlineDot';
 import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
 import { useHeaderAddon } from '../components/layout/HeaderAddonContext';
 import {
@@ -71,6 +73,7 @@ import {
 interface IStaffRowProps {
   emp: Employee;
   index: number;
+  isOnline: boolean;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -93,7 +96,7 @@ interface IStaffRowProps {
   onReturn?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, isOnline, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -128,7 +131,7 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
       )}
       <td className="sc-td-num">{index + 1}</td>
       <td className="sc-td-name" title={emp.full_name}>
-        {emp.full_name}
+        <OnlineDot online={isOnline} /> {emp.full_name}
         {/* Бейдж = employees.excluded_from_timesheet. Независим от employment_status='fired'. */}
         {emp.excluded_from_timesheet && (
           <span className="sc-excluded-badge" title={emp.excluded_from_timesheet_at ? `Исключён из табеля: ${new Date(emp.excluded_from_timesheet_at).toLocaleString('ru-RU')}` : 'Исключён из табеля'}>
@@ -896,6 +899,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onCancelDismissal,
   onReturn,
 }) => {
+  const { isEmployeeOnline } = useOnlinePresence();
   const totalCols = 6 + (selectionMode ? 1 : 0) + (canEditObject ? 1 : 0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -956,6 +960,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     key={emp.id}
                     emp={emp}
                     index={vRow.index}
+                    isOnline={isEmployeeOnline(emp.id)}
                     scheduleViews={scheduleViews}
                     selectedIds={selectedIds}
                     selectionMode={selectionMode}
@@ -1024,6 +1029,7 @@ const CARD_ESTIMATE = 220;
 
 const MobileCard: FC<{
   emp: Employee;
+  isOnline: boolean;
   scheduleViews: Map<number, IEmployeeScheduleView>;
   selectedIds: Set<number>;
   selectionMode: boolean;
@@ -1044,7 +1050,7 @@ const MobileCard: FC<{
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+}> = memo(({ emp, isOnline, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -1063,7 +1069,7 @@ const MobileCard: FC<{
     >
       <div className="sc-card-head">
         <div className="sc-card-name">
-          {emp.full_name}
+          <OnlineDot online={isOnline} /> {emp.full_name}
           {emp.excluded_from_timesheet && (
             <span className="sc-excluded-badge" title={emp.excluded_from_timesheet_at ? `Исключён из табеля: ${new Date(emp.excluded_from_timesheet_at).toLocaleString('ru-RU')}` : 'Исключён из табеля'}>
               Исключён
@@ -1171,6 +1177,7 @@ const MobileCard: FC<{
 });
 
 const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+  const { isEmployeeOnline } = useOnlinePresence();
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -1194,6 +1201,7 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
             >
               <MobileCard
                 emp={emp}
+                isOnline={isEmployeeOnline(emp.id)}
                 scheduleViews={scheduleViews}
                 selectedIds={selectedIds}
                 selectionMode={selectionMode}

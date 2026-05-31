@@ -8,6 +8,8 @@ import { useStructureTree } from '../../hooks/useStructure';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { useOnlinePresence } from '../../contexts/OnlinePresenceContext';
+import { OnlineDot } from '../ui/OnlineDot';
 import type { ChatInboundMode, EmployeePositionType, SystemRole, TwoFactorData } from '../../types';
 import type { OrgDepartmentNode } from '../../types/organization';
 import { getTreeFlatDepartments } from '../../utils/departmentUtils';
@@ -327,6 +329,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { getRoleLabel, profile, refreshProfile } = useAuth();
+  const { isUserOnline } = useOnlinePresence();
   // Полный список ролей нужен админу для approval-формы (employee_variant,
   // is_active и т.п.). Endpoint /roles защищён requireAnyPageAccess(/admin/users,
   // /admin/roles), поэтому страница его получит.
@@ -741,7 +744,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
               <div className={styles.userRowHeader} onClick={() => toggleExpand(user.id)}>
                 <div className={styles.userRowInfo}>
                   <div className={styles.userRowName}>
-                    {user.full_name || 'Без имени'}
+                    <OnlineDot online={isUserOnline(user.id)} /> {user.full_name || 'Без имени'}
                   </div>
                   <div className={styles.userRowEmail}>
                     {user.email || ''}
