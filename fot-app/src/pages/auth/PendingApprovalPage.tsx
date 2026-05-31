@@ -18,13 +18,16 @@ export const PendingApprovalPage: React.FC = () => {
 
   // Авто-обновление профиля, пока не одобрено: вкладка/PWA, открытая до
   // одобрения, «отлипает» сама, без ручного «Проверить статус».
+  // Поллим часто (5с): pending-пользователь НЕ подключён к Socket.IO (handshake
+  // отклоняет неодобренных), поэтому realtime-пуш до него не доходит — опрос
+  // /auth/me единственный канал. Запрос лёгкий, pending-пользователей мало.
   // refreshProfile в ref — чтобы интервал не пересоздавался на каждый рендер.
   const refreshRef = useRef(refreshProfile);
   refreshRef.current = refreshProfile;
   useEffect(() => {
     if (isApproved) return;
     const tick = () => { void refreshRef.current(); };
-    const id = window.setInterval(tick, 15_000);
+    const id = window.setInterval(tick, 5_000);
     const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
     window.addEventListener('focus', tick);
     document.addEventListener('visibilitychange', onVisible);

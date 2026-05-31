@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import * as Sentry from '@sentry/react';
 import { useQueryClient } from '@tanstack/react-query';
-import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
+import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken, refreshSession } from '../api/client';
 import {
   dashboardKeys,
   employeesKeys,
@@ -104,6 +104,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const twoFactorVerified = sessionStorage.getItem('2fa_verified') === 'true';
 
       try {
+        // refresh-first: на холодной загрузке access-токена в памяти нет, поэтому
+        // /auth/me ушёл бы без Bearer → 401 → refresh → retry (3 серийных запроса
+        // до первого paint). Делаем refresh ПЕРВЫМ — получаем токен, дальше
+        // /auth/me + loadRoles идут уже с Bearer (2 запроса вместо 3). Нет валидной
+        // сессии → сразу гость, без лишнего /auth/me.
+        if (!getSessionToken()) {
+          const refreshed = await refreshSession();
+          if (!refreshed) {
+            setSessionToken(null);
+            setToken(null);
+            sessionStorage.removeItem('2fa_verified');
+            setState({ ...initialState, loading: false });
+            return;
+          }
+        }
+
         const [response] = await Promise.all([
           apiClient.get<{ user: User; profile: UserProfile; access_token?: string }>('/auth/me'),
           loadRoles(),
