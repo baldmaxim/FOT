@@ -91,15 +91,21 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
   beforeEach(() => {
     queryMock.mockReset();
     queryMock.mockImplementation((sql: string) => {
+      // Отделы в режиме «текущая деятельность» (назначен объект с таким адресом).
+      if (sql.includes('FROM department_object_assignment')) {
+        return Promise.resolve([{ org_department_id: 'dept-cur' }]);
+      }
+      // Персональные назначения объектов сотрудникам (override отдела).
+      if (sql.includes('FROM employee_object_assignment')) {
+        return Promise.resolve([]);
+      }
+      // Карта адресов объектов для обычной разбивки (fetchObjectAddressMap).
       if (sql.includes('FROM skud_objects')) {
         return Promise.resolve([
           { id: 'obj-a', alt_name: null, name: 'ЖК Сад 69' },
           { id: 'obj-b', alt_name: null, name: 'Склад 7' },
           { id: 'obj-c', alt_name: null, name: 'Башня A' },
         ]);
-      }
-      if (sql.includes('is_current_activity')) {
-        return Promise.resolve([{ id: 'dept-cur' }]);
       }
       return Promise.resolve([]);
     });
@@ -147,5 +153,36 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
     expect(ivanRows).toHaveLength(1);
     expect(ivanRows[0].address).toBe('ЖК Сад 69');
     expect(ivanRows[0].day1).toBe(5);
+  });
+
+  it('персональный обычный объект переопределяет «текущую деятельность» отдела → разбивка по объекту', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('FROM department_object_assignment')) {
+        return Promise.resolve([{ org_department_id: 'dept-cur' }]);
+      }
+      if (sql.includes('FROM employee_object_assignment')) {
+        // У Петра персональный обычный объект → override: НЕ «текущая деятельность».
+        return Promise.resolve([{ employee_id: 2, is_current: false }]);
+      }
+      if (sql.includes('FROM skud_objects')) {
+        return Promise.resolve([{ id: 'obj-b', alt_name: null, name: 'Склад 7' }]);
+      }
+      return Promise.resolve([]);
+    });
+
+    const deptCurrent = makeDept('Текущий', 'dept-cur',
+      { id: 2, full_name: 'Петр Петров', org_department_id: 'dept-cur' },
+      8, [{ object_key: 'obj-b', object_id: 'obj-b', object_name: 'Склад 7', hours: 8 }]);
+
+    const wb = await buildUnified1CWorkbook(4, 2026, [deptCurrent]);
+    const ws = wb.getWorksheet(1)!;
+    const addresses: string[] = [];
+    for (let r = ONE_C_DATA_START_ROW; r <= ws.rowCount; r++) {
+      const fio = ws.getCell(r, COL_FIO).value;
+      if (typeof fio !== 'string' || !fio.trim()) continue;
+      addresses.push(String(ws.getCell(r, COL_ADDRESS).value ?? ''));
+    }
+    expect(addresses).toContain('Склад 7');
+    expect(addresses).not.toContain('Текущая деятельность');
   });
 });

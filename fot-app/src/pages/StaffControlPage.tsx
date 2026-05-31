@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, MapPin } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
+import { adminService } from '../services/adminService';
 import { sigurAdminService } from '../services/sigurAdminService';
 import type { SigurEmployeeSummary, SigurDepartmentNode } from '../types';
 import { timesheetService } from '../services/timesheetService';
@@ -32,6 +33,7 @@ import {
   type IBrigadeOption,
 } from '../components/staff/BulkOperationModals';
 import { OverflowMenu, type IOverflowMenuItem } from '../components/staff/OverflowMenu';
+import { StaffObjectCell } from '../components/staff/StaffObjectCell';
 import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
 import { structureApi } from '../api/structure';
 import type { IFlatDepartmentOption } from '../utils/departmentUtils';
@@ -40,6 +42,12 @@ import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
 const ObjectAttributionModal = lazy(() => import('../components/staff/ObjectAttributionModal').then(m => ({ default: m.ObjectAttributionModal })));
+const StaffObjectAssignmentModal = lazy(() => import('../components/staff/StaffObjectAssignmentModal').then(m => ({ default: m.StaffObjectAssignmentModal })));
+
+// Стабильные пустые ссылки — чтобы memo-строки таблицы не ломались при undefined-данных.
+const EMPTY_OBJECTS: Array<{ id: string; name: string }> = [];
+const EMPTY_OBJ_MAP: Record<string, string[]> = {};
+const EMPTY_STR_ARR: string[] = [];
 const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
 const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
 
@@ -70,6 +78,10 @@ interface IStaffRowProps {
   canEditPos: boolean;
   canEditSch: boolean;
   canOpenCard: boolean;
+  canEditObject: boolean;
+  objects: Array<{ id: string; name: string }>;
+  deptObjMap: Record<string, string[]>;
+  empObjMap: Record<string, string[]>;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -80,7 +92,7 @@ interface IStaffRowProps {
   onReturn?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -162,6 +174,16 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, scheduleViews, selected
           </span>
         </span>
       </td>
+      {canEditObject && (
+        <td>
+          <StaffObjectCell
+            objects={objects}
+            deptObjectIds={emp.org_department_id ? (deptObjMap[emp.org_department_id] ?? EMPTY_STR_ARR) : EMPTY_STR_ARR}
+            empObjectIds={empObjMap[String(emp.id)] ?? EMPTY_STR_ARR}
+            onEdit={() => onOpenModal(emp, 'object_assignment')}
+          />
+        </td>
+      )}
       <td className="sc-td-hist" onClick={e => e.stopPropagation()}>
         {onReturn && emp.excluded_from_timesheet ? (
           <button className="sc-btn apply" style={{ fontSize: 11, padding: '2px 8px' }} title="Вернуть сотрудника в табель" onClick={() => onReturn(emp)}>
@@ -836,6 +858,10 @@ interface IVirtualTableProps {
   canEditPos: boolean;
   canEditSch: boolean;
   canOpenCard: boolean;
+  canEditObject: boolean;
+  objects: Array<{ id: string; name: string }>;
+  deptObjMap: Record<string, string[]>;
+  empObjMap: Record<string, string[]>;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onToggleSelectAll: () => void;
@@ -860,6 +886,10 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   canEditPos,
   canEditSch,
   canOpenCard,
+  canEditObject,
+  objects,
+  deptObjMap,
+  empObjMap,
   onNavigate,
   onToggleSelect,
   onToggleSelectAll,
@@ -871,7 +901,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onCancelDismissal,
   onReturn,
 }) => {
-  const totalCols = 6 + (selectionMode ? 1 : 0);
+  const totalCols = 6 + (selectionMode ? 1 : 0) + (canEditObject ? 1 : 0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -890,6 +920,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
           <col className="sc-col-dept" />
           <col className="sc-col-position" />
           <col className="sc-col-schedule" />
+          {canEditObject && <col className="sc-col-object" />}
           <col className="sc-col-actions" />
         </colgroup>
         <thead>
@@ -910,6 +941,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
             <th>Отдел</th>
             <th>Должность</th>
             <th>График</th>
+            {canEditObject && <th>Объект</th>}
             <th className="sc-th-hist"></th>
           </tr>
         </thead>
@@ -937,6 +969,10 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     canEditPos={canEditPos}
                     canEditSch={canEditSch}
                     canOpenCard={canOpenCard}
+                    canEditObject={canEditObject}
+                    objects={objects}
+                    deptObjMap={deptObjMap}
+                    empObjMap={empObjMap}
                     onNavigate={onNavigate}
                     onToggleSelect={onToggleSelect}
                     onOpenModal={onOpenModal}
@@ -975,6 +1011,10 @@ interface IVirtualCardsProps {
   canEditPos: boolean;
   canEditSch: boolean;
   canOpenCard: boolean;
+  canEditObject: boolean;
+  objects: Array<{ id: string; name: string }>;
+  deptObjMap: Record<string, string[]>;
+  empObjMap: Record<string, string[]>;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -997,6 +1037,10 @@ const MobileCard: FC<{
   canEditPos: boolean;
   canEditSch: boolean;
   canOpenCard: boolean;
+  canEditObject: boolean;
+  objects: Array<{ id: string; name: string }>;
+  deptObjMap: Record<string, string[]>;
+  empObjMap: Record<string, string[]>;
   onNavigate: (emp: Employee) => void;
   onToggleSelect: (empId: number) => void;
   onOpenModal: (emp: Employee, type: ModalType) => void;
@@ -1005,7 +1049,7 @@ const MobileCard: FC<{
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+}> = memo(({ emp, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -1058,6 +1102,17 @@ const MobileCard: FC<{
           {scheduleView && <span className={`sc-schedule-badge ${scheduleView.source}`}>{SCHEDULE_SOURCE_LABELS[scheduleView.source]}</span>}
         </span>
       </div>
+      {canEditObject && (
+        <div className="sc-card-row" onClick={e => e.stopPropagation()}>
+          <span className="sc-card-label">Объект</span>
+          <StaffObjectCell
+            objects={objects}
+            deptObjectIds={emp.org_department_id ? (deptObjMap[emp.org_department_id] ?? EMPTY_STR_ARR) : EMPTY_STR_ARR}
+            empObjectIds={empObjMap[String(emp.id)] ?? EMPTY_STR_ARR}
+            onEdit={() => onOpenModal(emp, 'object_assignment')}
+          />
+        </div>
+      )}
       <div className="sc-card-actions">
         {onReturn && emp.excluded_from_timesheet ? (
           <button className="sc-btn apply" style={{ fontSize: 12, padding: '4px 10px' }} onClick={e => { e.stopPropagation(); onReturn(emp); }}>
@@ -1125,7 +1180,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -1157,6 +1212,10 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
                 canEditPos={canEditPos}
                 canEditSch={canEditSch}
                 canOpenCard={canOpenCard}
+                canEditObject={canEditObject}
+                objects={objects}
+                deptObjMap={deptObjMap}
+                empObjMap={empObjMap}
                 onNavigate={onNavigate}
                 onToggleSelect={onToggleSelect}
                 onOpenModal={onOpenModal}
@@ -1264,6 +1323,23 @@ export const StaffControlPage: FC = () => {
   const canEditPos = isAdmin || canEditPage('/staff-control/position');
   const canEditSch = isAdmin || canEditPage('/staff-control/schedule');
   const canOpenCard = isAdmin || canViewPage('/employees');
+  // Назначение «объектов входа» отделам/бригадам и персонально — только админ.
+  const canEditObject = isAdmin;
+  const objectsQuery = useQuery({
+    queryKey: ['admin-skud-objects'],
+    queryFn: () => adminService.listSkudObjectsForAssignment(),
+    enabled: canEditObject,
+    staleTime: 5 * 60_000,
+  });
+  const objectAssignmentsQuery = useQuery({
+    queryKey: ['admin-object-assignments'],
+    queryFn: () => adminService.getObjectAssignments(),
+    enabled: canEditObject,
+    staleTime: 30_000,
+  });
+  const objectOptions = objectsQuery.data ?? EMPTY_OBJECTS;
+  const deptObjMap = objectAssignmentsQuery.data?.department_objects ?? EMPTY_OBJ_MAP;
+  const empObjMap = objectAssignmentsQuery.data?.employee_objects ?? EMPTY_OBJ_MAP;
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
@@ -2349,6 +2425,10 @@ export const StaffControlPage: FC = () => {
           canEditPos={canEditPos}
           canEditSch={canEditSch}
           canOpenCard={canOpenCard}
+          canEditObject={canEditObject}
+          objects={objectOptions}
+          deptObjMap={deptObjMap}
+          empObjMap={empObjMap}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
           onOpenModal={openModal}
@@ -2369,6 +2449,10 @@ export const StaffControlPage: FC = () => {
           canEditPos={canEditPos}
           canEditSch={canEditSch}
           canOpenCard={canOpenCard}
+          canEditObject={canEditObject}
+          objects={objectOptions}
+          deptObjMap={deptObjMap}
+          empObjMap={empObjMap}
           onNavigate={handleNavigate}
           onToggleSelect={toggleSelectEmployee}
           onToggleSelectAll={toggleSelectAllVisible}
@@ -2426,6 +2510,11 @@ export const StaffControlPage: FC = () => {
       {modalType === 'object_attribution' && modalEmp && (
         <Suspense fallback={null}>
           <ObjectAttributionModal employee={modalEmp} onClose={closeModal} />
+        </Suspense>
+      )}
+      {modalType === 'object_assignment' && modalEmp && (
+        <Suspense fallback={null}>
+          <StaffObjectAssignmentModal employee={modalEmp} onClose={closeModal} />
         </Suspense>
       )}
       <BulkScheduleModal

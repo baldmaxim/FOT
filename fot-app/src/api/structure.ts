@@ -46,7 +46,7 @@ export const structureApi = {
 
   async updateDepartment(
     id: string,
-    payload: { name?: string; parent_id?: string | null; kind?: OrgDepartmentKind; is_current_activity?: boolean },
+    payload: { name?: string; parent_id?: string | null; kind?: OrgDepartmentKind },
   ): Promise<ApiResponse<OrgDepartment>> {
     try {
       const res = await apiClient.put<ApiResponse<OrgDepartment>>(`/structure/departments/${id}`, payload);

@@ -20,9 +20,6 @@ export interface OrgDepartment {
   sort_order: number;
   is_active: boolean;
   kind: OrgDepartmentKind;
-  // true → в единой 1С-выгрузке сотрудники отдела не дробятся по объектам:
-  // одна строка на сотрудника, адрес = «Текущая деятельность».
-  is_current_activity: boolean;
   created_at: string;
   updated_at: string;
 }

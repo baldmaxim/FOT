@@ -17,15 +17,50 @@ interface IUnifiedRow extends IUnifiedOneCRow {
   objectNameSort: string;
 }
 
-// Адрес для отделов в режиме «текущая деятельность»: их сотрудники не дробятся
-// по объектам — одна строка на сотрудника с этой меткой вместо адреса объекта.
+// Адрес для отделов/сотрудников в режиме «текущая деятельность»: их строки не
+// дробятся по объектам — одна строка на сотрудника с этой меткой вместо адреса
+// объекта. Режим определяется назначением объекта с этим адресом (alt_name).
 const CURRENT_ACTIVITY_ADDRESS = 'Текущая деятельность';
 
+// Условие «объект-адрес = текущая деятельность» (по alt_name, регистр/пробелы — норм.).
+const CURRENT_ACTIVITY_OBJECT_PREDICATE =
+  `lower(btrim(coalesce(o.alt_name, ''))) = lower($CA$${CURRENT_ACTIVITY_ADDRESS}$CA$)`;
+
+// Отделы/бригады, которым назначен объект с адресом «Текущая деятельность».
 const fetchCurrentActivityDeptIds = async (): Promise<Set<string>> => {
-  const rows = await query<{ id: string }>(
-    'SELECT id FROM org_departments WHERE is_current_activity = true',
+  const rows = await query<{ org_department_id: string }>(
+    `SELECT DISTINCT doa.org_department_id
+       FROM department_object_assignment doa
+       JOIN skud_objects o ON o.id = doa.skud_object_id
+      WHERE doa.is_active = true AND ${CURRENT_ACTIVITY_OBJECT_PREDICATE}`,
   );
-  return new Set(rows.map(row => row.id));
+  return new Set(rows.map(row => row.org_department_id));
+};
+
+// Персональные назначения объектов сотрудникам:
+//   hasPersonal     — сотрудник имеет любое активное назначение (переопределяет отдел);
+//   personalCurrent — среди его объектов есть «Текущая деятельность».
+const fetchCurrentActivityEmployeeSets = async (): Promise<{
+  hasPersonal: Set<number>;
+  personalCurrent: Set<number>;
+}> => {
+  const rows = await query<{ employee_id: number | string; is_current: boolean }>(
+    `SELECT eoa.employee_id,
+            bool_or(${CURRENT_ACTIVITY_OBJECT_PREDICATE}) AS is_current
+       FROM employee_object_assignment eoa
+       JOIN skud_objects o ON o.id = eoa.skud_object_id
+      WHERE eoa.is_active = true
+      GROUP BY eoa.employee_id`,
+  );
+  const hasPersonal = new Set<number>();
+  const personalCurrent = new Set<number>();
+  for (const row of rows) {
+    const id = Number(row.employee_id);
+    if (!Number.isInteger(id)) continue;
+    hasPersonal.add(id);
+    if (row.is_current) personalCurrent.add(id);
+  }
+  return { hasPersonal, personalCurrent };
 };
 
 const collectObjectIds = (departmentsData: IDepartmentTimesheetData[]): string[] => {
@@ -65,18 +100,21 @@ const buildRowsForDepartment = (
   data: IDepartmentTimesheetData,
   objectAddressMap: Map<string, string>,
   currentActivityDeptIds: Set<string>,
+  empSets: { hasPersonal: Set<number>; personalCurrent: Set<number> },
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
 
-  // Сотрудники из отделов в режиме «текущая деятельность» (без наследования на
-  // подотделы). Их строки не дробятся по объектам — одна строка с суммой часов
-  // за день и фиксированным адресом «Текущая деятельность».
+  // Сотрудники в режиме «текущая деятельность». Персональное назначение объекта
+  // полностью переопределяет отдел: есть персональные объекты → смотрим только их;
+  // иначе — назначение его отдела/бригады. Их строки не дробятся по объектам —
+  // одна строка с суммой часов за день и адресом «Текущая деятельность».
+  const isCurrentActivityEmp = (e: { id: number; org_department_id: string | null }): boolean =>
+    empSets.hasPersonal.has(e.id)
+      ? empSets.personalCurrent.has(e.id)
+      : Boolean(e.org_department_id && currentActivityDeptIds.has(e.org_department_id));
+
   const currentActivityEmpIds = new Set<number>(
-    currentActivityDeptIds.size === 0
-      ? []
-      : data.employees
-        .filter(e => e.org_department_id && currentActivityDeptIds.has(e.org_department_id))
-        .map(e => e.id),
+    data.employees.filter(isCurrentActivityEmp).map(e => e.id),
   );
 
   // Данные для обычной разбивки по объектам — исключаем сотрудников «текущей
@@ -153,14 +191,15 @@ export async function buildUnified1CWorkbook(
   _year: number,
   departmentsData: IDepartmentTimesheetData[],
 ): Promise<ExcelJS.Workbook> {
-  const [objectAddressMap, currentActivityDeptIds] = await Promise.all([
+  const [objectAddressMap, currentActivityDeptIds, currentActivityEmpSets] = await Promise.all([
     fetchObjectAddressMap(collectObjectIds(departmentsData)),
     fetchCurrentActivityDeptIds(),
+    fetchCurrentActivityEmployeeSets(),
   ]);
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
-    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds));
+    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds, currentActivityEmpSets));
   }
   rows.sort((a, b) => {
     const byDept = a.departmentNameSort.localeCompare(b.departmentNameSort, 'ru');

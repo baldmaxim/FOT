@@ -64,7 +64,6 @@ const SchedulesPage = lazy(() => import('./pages/admin/SchedulesPage').then(m =>
 const PatentReceiptsPage = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsPage })));
 const PatentReceiptsEncryptionBadge = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsEncryptionBadge })));
 const TimesheetTransfersAdminPage = lazy(() => import('./pages/admin/TimesheetTransfersAdminPage').then(m => ({ default: m.TimesheetTransfersAdminPage })));
-const ObjectAssignmentsPage = lazy(() => import('./pages/admin/ObjectAssignmentsPage').then(m => ({ default: m.ObjectAssignmentsPage })));
 
 // Employees & SKUD
 const EmployeeCardPage = lazy(() => import('./pages/employees/EmployeeCardPage').then(m => ({ default: m.EmployeeCardPage })));
@@ -526,17 +525,6 @@ const AppRoutes = () => {
             element={
               <Layout title="Управление пользователями" theme={theme} onToggleTheme={toggleTheme}>
                 <UserManagementPage />
-              </Layout>
-            }
-          />
-        </Route>
-
-        <Route element={<ProtectedRoute requiredPage="/admin/users" />}>
-          <Route
-            path="/admin/object-assignments"
-            element={
-              <Layout title="Объекты табельщиц" theme={theme} onToggleTheme={toggleTheme}>
-                <ObjectAssignmentsPage />
               </Layout>
             }
           />
