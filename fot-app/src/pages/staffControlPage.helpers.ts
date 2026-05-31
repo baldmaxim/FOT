@@ -10,7 +10,7 @@ import type { IWorkSchedule, IEmployeeScheduleAssignment, PatternType, ScheduleT
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'schedule' | 'object_attribution' | 'object_assignment';
+export type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'schedule' | 'object_assignment';
 export type StaffStatusFilter = 'active' | 'fired' | 'excluded';
 export type ScheduleSource = 'employee' | 'default';
 

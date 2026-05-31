@@ -43,28 +43,6 @@ export interface ICreateEmployeePayload {
   tab_number?: string | null;
 }
 
-/** Датированная привязка удалёнщика к объекту (employee_object_attribution). */
-export interface IObjectAttributionRow {
-  object_id: string;
-  object_name: string;
-  effective_from: string;
-  effective_to: string | null;
-}
-export interface IObjectAttributionHistoryRow extends IObjectAttributionRow {
-  id: string;
-  reason: string | null;
-  created_at: string;
-}
-export interface IObjectAttributionResponse {
-  current: IObjectAttributionRow | null;
-  history: IObjectAttributionHistoryRow[];
-}
-export interface ISetObjectAttributionPayload {
-  skud_object_id: string;
-  effective_from: string;
-  reason?: string | null;
-}
-
 export interface BatchMoveEmployeesResult {
   target_department_id: string;
   moved_count: number;
@@ -152,29 +130,6 @@ export const employeeService = {
   async getHistory(id: number): Promise<EmployeeHistoryEvent[]> {
     const response = await apiClient.get<ApiResponse<EmployeeHistoryEvent[]>>(`/employees/${id}/history`);
     return response.data || [];
-  },
-
-  /** Активные объекты для выбора привязки удалёнщика. */
-  async listAttributionObjects(): Promise<Array<{ id: string; name: string }>> {
-    const response = await apiClient.get<ApiResponse<Array<{ id: string; name: string }>>>(
-      '/employees/object-attribution/objects',
-    );
-    return response.data || [];
-  },
-
-  async getObjectAttribution(id: number): Promise<IObjectAttributionResponse> {
-    const response = await apiClient.get<ApiResponse<IObjectAttributionResponse>>(
-      `/employees/${id}/object-attribution`,
-    );
-    return response.data;
-  },
-
-  async setObjectAttribution(id: number, payload: ISetObjectAttributionPayload): Promise<IObjectAttributionResponse> {
-    const response = await apiClient.put<ApiResponse<IObjectAttributionResponse>>(
-      `/employees/${id}/object-attribution`,
-      payload,
-    );
-    return response.data;
   },
 
   async deleteAll(): Promise<{ deleted: number }> {
