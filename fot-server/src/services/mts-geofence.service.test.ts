@@ -179,6 +179,37 @@ describe('mts-geofence.service setAssignments', () => {
   });
 });
 
+describe('mts-geofence.service listViolations geofenceIds filter', () => {
+  beforeEach(() => {
+    pgExecute.mockReset();
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+  });
+
+  it('пустой geofenceIds → пусто без запроса в БД', async () => {
+    const r = await mtsGeofenceService.listViolations({ employeeIds: [42], geofenceIds: [] });
+    expect(r).toEqual({ data: [], total: 0 });
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('непустой geofenceIds → фильтр v.geofence_id = ANY + массив в args', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    const ids = ['11111111-1111-1111-1111-111111111111'];
+    await mtsGeofenceService.listViolations({ geofenceIds: ids, limit: 20, offset: 0 });
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+    const [sql, args] = pgQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('v.geofence_id = ANY($1::uuid[])');
+    expect(args).toContain(ids);
+  });
+
+  it('без geofenceIds → фильтр по геозонам не добавляется', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    await mtsGeofenceService.listViolations({ employeeIds: [42] });
+    const [sql] = pgQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).not.toContain('geofence_id = ANY');
+  });
+});
+
 describe('mts-geofence.service openViolation', () => {
   beforeEach(() => {
     pgExecute.mockReset();

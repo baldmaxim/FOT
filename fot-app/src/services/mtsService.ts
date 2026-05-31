@@ -150,14 +150,6 @@ export interface IMtsEmployeeLinkedRow {
   lastRecordedAt: string | null;
 }
 
-export interface IMtsTrackPoint {
-  recordedAt: string;
-  lat: number;
-  lng: number;
-  accuracy: number | null;
-  source: string | null;
-}
-
 export interface IMtsGeofence {
   id: string;
   name: string;
@@ -340,9 +332,13 @@ export const mtsService = {
     return { data: res.data, total: res.meta?.total ?? res.data.length };
   },
 
-  getTrackPoints: async (subscriberId: number, dateFrom: string, dateTo: string): Promise<IMtsTrackPoint[]> => {
+  /**
+   * Детальный трек абонента за выбранную дату/диапазон (YYYY-MM-DD): живые GET к МТС —
+   * GPS-точки «Координатора» + сегменты Старт→Финиш. Плотнее, чем track-points (снимки).
+   */
+  getTrackDetail: async (subscriberId: number, dateFrom: string, dateTo: string): Promise<{ gps: IMtsGpsPoint[]; segments: IMtsTrackSegment[] }> => {
     const qs = new URLSearchParams({ subscriberId: String(subscriberId), dateFrom, dateTo });
-    const res = await apiClient.get<ApiResponse<IMtsTrackPoint[]>>(`/mts/track-points?${qs.toString()}`);
+    const res = await apiClient.get<ApiResponse<{ gps: IMtsGpsPoint[]; segments: IMtsTrackSegment[] }>>(`/mts/track-detail?${qs.toString()}`);
     return res.data;
   },
 
@@ -404,13 +400,15 @@ export const mtsService = {
     return res.data;
   },
 
-  listGeofenceViolations: async (params: { employeeId?: number; from?: string; to?: string; page?: number; pageSize?: number } = {}): Promise<{ data: IMtsGeofenceViolation[]; total: number }> => {
+  listGeofenceViolations: async (params: { employeeId?: number; from?: string; to?: string; page?: number; pageSize?: number; geofenceIds?: string[] } = {}): Promise<{ data: IMtsGeofenceViolation[]; total: number }> => {
     const qs = new URLSearchParams();
     if (params.employeeId) qs.set('employeeId', String(params.employeeId));
     if (params.from) qs.set('from', params.from);
     if (params.to) qs.set('to', params.to);
     if (params.page) qs.set('page', String(params.page));
     if (params.pageSize) qs.set('pageSize', String(params.pageSize));
+    // Присутствие параметра включает фильтр по геозонам (пустой → нет привязок → нет нарушений).
+    if (params.geofenceIds) qs.set('geofenceIds', params.geofenceIds.join(','));
     const url = qs.toString() ? `/mts/violations?${qs.toString()}` : '/mts/violations';
     const res = await apiClient.get<ApiResponse<IMtsGeofenceViolation[]>>(url);
     return { data: res.data, total: res.meta?.total ?? res.data.length };

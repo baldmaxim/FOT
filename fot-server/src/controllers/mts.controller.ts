@@ -749,6 +749,69 @@ export const mtsController = {
   },
 
   /**
+   * Детальный трек одного абонента за дату/диапазон: GPS-точки «Координатора» +
+   * сегменты Старт→Финиш. Источник правды — БД (mts_gps_points / mts_track_segments,
+   * наполняет поллер), поэтому трек виден «спустя время» даже если МТС почистил
+   * историю или недоступен. Дополнительно best-effort подмешиваем живой GET за тот
+   * же период (свежие точки до ближайшего тика поллера). Дедуп по locationID/trackID.
+   */
+  async getTrackDetail(req: AuthenticatedRequest, res: Response): Promise<void> {
+    logRequest(req, 'GET /track-detail');
+    try {
+      const subscriberId = Number(req.query.subscriberId);
+      const dateFrom = String(req.query.dateFrom || '');
+      const dateTo = String(req.query.dateTo || '');
+      if (!Number.isFinite(subscriberId) || !dateFrom || !dateTo) {
+        res.status(400).json({ success: false, error: 'Нужны subscriberId, dateFrom, dateTo' });
+        return;
+      }
+      if (!hasFullMtsAccess(req)) {
+        const employeeId = await mtsMappingService.getEmployeeIdBySubscriber(subscriberId);
+        if (!employeeId || !(await canAccessEmployeeInScope(req, employeeId))) {
+          res.status(403).json({ success: false, error: 'Нет доступа к абоненту' });
+          return;
+        }
+      }
+      const range = buildDateRange(dateFrom, dateTo);
+      // БД — источник правды для истории (живёт «спустя время», даже если МТС
+      // почистил или недоступен). Живой GET — best-effort, добавляет свежее за период.
+      const safe = async <T>(p: Promise<T[]>): Promise<T[]> => {
+        try { return await p; } catch { return []; }
+      };
+      const [dbGps, dbSegments, liveGps, liveSegments] = await Promise.all([
+        mtsDataService.getStoredGpsPoints(subscriberId, range.dateFrom, range.dateTo),
+        mtsDataService.getStoredTrackSegments(subscriberId, range.dateFrom, range.dateTo),
+        safe(mtsDataService.getGlobalLocations(range.dateFrom, range.dateTo)),
+        safe(mtsDataService.getTracksRange(range.dateFrom, range.dateTo)),
+      ]);
+
+      // Объединяем БД + живое по бизнес-ключу (locationID / trackID).
+      const gpsMap = new Map<number, typeof dbGps[number]>();
+      for (const p of dbGps) gpsMap.set(p.locationID, p);
+      for (const p of liveGps) {
+        if (p.subscriberID === subscriberId && p.latitude != null && p.longitude != null) gpsMap.set(p.locationID, p);
+      }
+      const gps = [...gpsMap.values()].sort((a, b) => String(a.locationDate ?? '').localeCompare(String(b.locationDate ?? '')));
+
+      const segMap = new Map<number, typeof dbSegments[number]>();
+      for (const s of dbSegments) segMap.set(s.trackID, s);
+      for (const s of liveSegments) {
+        if (s.subscriberID === subscriberId) segMap.set(s.trackID, s);
+      }
+      const segments = [...segMap.values()].sort((a, b) => String(a.startDate ?? '').localeCompare(String(b.startDate ?? '')));
+
+      logSuccess('GET /track-detail', `sub=${subscriberId} gps=${gps.length} seg=${segments.length} range=${range.dateFrom}..${range.dateTo}`);
+      res.json({ success: true, data: { gps, segments } });
+    } catch (error) {
+      if (error instanceof RangeError) {
+        res.status(400).json({ success: false, error: error.message });
+        return;
+      }
+      fail(res, error, 'Ошибка получения трека');
+    }
+  },
+
+  /**
    * Авто-привязка по ФИО: применяет результаты mtsMappingService.suggest()
    * пакетом. Только admin (как и получение подсказок).
    */
@@ -968,6 +1031,9 @@ export const mtsController = {
       const to = req.query.to ? String(req.query.to) : undefined;
       const limit = req.query.pageSize ? Math.min(500, Number(req.query.pageSize)) : 100;
       const offset = req.query.page ? (Math.max(1, Number(req.query.page)) - 1) * limit : 0;
+      // Фильтр по геозонам: присутствие параметра (даже пустого) включает фильтр —
+      // модалка «Карта» шлёт текущие привязки сотрудника; пусто → нарушений нет.
+      const geofenceIds = parseGeofenceIds(req.query.geofenceIds);
 
       const employeeIds: number[] | undefined = Number.isFinite(employeeId) && employeeId
         ? [employeeId as number]
@@ -986,7 +1052,7 @@ export const mtsController = {
         }
       }
 
-      const { data, total } = await mtsGeofenceService.listViolations({ employeeIds, from, to, limit, offset });
+      const { data, total } = await mtsGeofenceService.listViolations({ employeeIds, geofenceIds, from, to, limit, offset });
       res.json({ success: true, data, meta: { total } });
     } catch (error) {
       fail(res, error, 'Ошибка получения нарушений геозон');
@@ -994,15 +1060,49 @@ export const mtsController = {
   },
 };
 
-// Хелпер: окно последних N дней в формате ISO local без TZ (контракт МТС:
-// «нельзя смешивать форматы в одном запросе» → используем одинаковый).
+// ISO без миллисекунд/Z — формат, который ждёт контракт МТС
+// («нельзя смешивать форматы в одном запросе» → везде один и тот же).
+const trimIso = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, '');
+
+// Хелпер: окно последних N дней.
 function parseDaysRange(raw: unknown): { dateFrom: string; dateTo: string } {
   const n = Number(raw ?? 1);
   if (!Number.isFinite(n) || n < 1 || n > 7) {
     throw new RangeError('days должен быть от 1 до 7');
   }
-  const trim = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, '');
   const to = new Date();
   const from = new Date(to.getTime() - n * 86_400_000);
-  return { dateFrom: trim(from), dateTo: trim(to) };
+  return { dateFrom: trimIso(from), dateTo: trimIso(to) };
+}
+
+// Диапазон по выбранным дням (YYYY-MM-DD). Границы — локальные начало/конец суток,
+// затем в ISO-формате контракта МТС. Span ограничен 31 днём (бюджет пагинации МТС).
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+function buildDateRange(rawFrom: unknown, rawTo: unknown): { dateFrom: string; dateTo: string } {
+  const f = String(rawFrom || '');
+  const t = String(rawTo || '');
+  if (!DAY_RE.test(f) || !DAY_RE.test(t)) {
+    throw new RangeError('dateFrom/dateTo должны быть в формате YYYY-MM-DD');
+  }
+  const start = new Date(`${f}T00:00:00`);
+  const end = new Date(`${t}T23:59:59`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    throw new RangeError('Некорректная дата');
+  }
+  if (end.getTime() < start.getTime()) {
+    throw new RangeError('dateTo раньше dateFrom');
+  }
+  if (end.getTime() - start.getTime() > 31 * 86_400_000) {
+    throw new RangeError('Диапазон не более 31 дня');
+  }
+  return { dateFrom: trimIso(start), dateTo: trimIso(end) };
+}
+
+// Парсит geofenceIds из query (CSV или повтор. параметр) → массив валидных UUID.
+// undefined (параметр отсутствует) → фильтр не применять; [] → нет привязок.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function parseGeofenceIds(raw: unknown): string[] | undefined {
+  if (raw == null) return undefined;
+  const arr = Array.isArray(raw) ? raw : String(raw).split(',');
+  return arr.map(v => String(v).trim()).filter(v => UUID_RE.test(v));
 }

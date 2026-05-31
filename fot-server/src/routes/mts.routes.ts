@@ -67,6 +67,7 @@ router.post('/mappings/auto-link', requirePageAccess('/mts', 'edit'), requireCri
 // Сотрудники с MTS-привязкой (для карты и геозон)
 router.get('/employees-linked', requirePageAccess('/mts', 'view'), mtsController.getEmployeesLinked);
 router.get('/track-points', requirePageAccess('/mts', 'view'), mtsController.getTrackPoints);
+router.get('/track-detail', requirePageAccess('/mts', 'view'), mtsController.getTrackDetail);
 
 // Геозоны
 router.get('/geofences', requirePageAccess('/mts', 'view'), mtsController.listGeofences);

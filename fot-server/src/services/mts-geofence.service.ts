@@ -407,11 +407,16 @@ export const mtsGeofenceService = {
 
   async listViolations(opts: {
     employeeIds?: number[];
+    geofenceIds?: string[];
     from?: string;
     to?: string;
     limit?: number;
     offset?: number;
   } = {}): Promise<{ data: IMtsGeofenceViolation[]; total: number }> {
+    // Явно переданный пустой список геозон → фильтровать не по чему (нет привязок).
+    if (opts.geofenceIds && opts.geofenceIds.length === 0) {
+      return { data: [], total: 0 };
+    }
     const limit = Math.min(500, Math.max(1, Number(opts.limit) || 100));
     const offset = Math.max(0, Number(opts.offset) || 0);
 
@@ -421,6 +426,10 @@ export const mtsGeofenceService = {
     if (opts.employeeIds && opts.employeeIds.length > 0) {
       where.push(`v.employee_id = ANY($${idx++}::int[])`);
       args.push(opts.employeeIds);
+    }
+    if (opts.geofenceIds && opts.geofenceIds.length > 0) {
+      where.push(`v.geofence_id = ANY($${idx++}::uuid[])`);
+      args.push(opts.geofenceIds);
     }
     if (opts.from) {
       where.push(`v.started_at >= $${idx++}::timestamptz`);

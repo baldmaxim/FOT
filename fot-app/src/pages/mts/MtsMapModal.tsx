@@ -1,9 +1,9 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
-import { MapContainer, TileLayer, Polyline, Polygon, CircleMarker, useMap } from 'react-leaflet';
+import { type FC, Fragment, useEffect, useMemo, useState } from 'react';
+import { MapContainer, TileLayer, Polyline, Polygon, CircleMarker, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import '@geoman-io/leaflet-geoman-free';
 import {
-  useMtsTrackPoints,
+  useMtsTrackDetail,
   useMtsGeofences,
   useCreateGeofence,
   useDeleteGeofence,
@@ -11,6 +11,7 @@ import {
   useMtsViolations,
 } from '../../hooks/useMtsData';
 import type { IGeoPoint, IMtsGeofence } from '../../services/mtsService';
+import { DateInput } from '../../components/ui/DateInput';
 import { ApiError } from '../../api/client';
 import styles from './MtsMapModal.module.css';
 import pageStyles from './MtsPage.module.css';
@@ -25,15 +26,24 @@ const TILE_URL = (import.meta.env.VITE_MAP_TILE_URL as string | undefined)
   || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
-const localIso = (d: Date): string => {
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
+// Цвета для сегментов треков (циклически).
+const TRACK_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#a855f7', '#f59e0b', '#0891b2'];
 
-const dateRangeForDays = (days: number): { from: string; to: string } => {
-  const to = new Date();
-  const from = new Date(to.getTime() - days * 86_400_000);
-  return { from: localIso(from), to: localIso(to) };
+// HTML-метка «Старт»/«Финиш» для сегментов (как в LocationsMapTab).
+const labelIcon = (text: string, color: string): L.DivIcon =>
+  L.divIcon({
+    className: '',
+    html: `<div style="display:flex;align-items:center;gap:4px;"><div style="width:14px;height:14px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.4);"></div><span style="background:#fff;padding:2px 6px;border-radius:4px;border:1px solid #d1d5db;font-size:11px;font-weight:600;white-space:nowrap;">${text}</span></div>`,
+    iconSize: [80, 18],
+    iconAnchor: [7, 9],
+  });
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+const isoDay = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const shiftDay = (iso: string, delta: number): string => {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + delta);
+  return isoDay(d);
 };
 
 const errText = (e: unknown, fallback: string): string =>
@@ -98,14 +108,24 @@ const FitBounds: FC<IFitProps> = ({ points, polygons }) => {
 };
 
 export const MtsMapModal: FC<IProps> = ({ target, onClose }) => {
-  const [days, setDays] = useState(1);
-  const range = useMemo(() => dateRangeForDays(days), [days]);
-  const dateFromIso = useMemo(() => new Date(range.from).toISOString(), [range.from]);
-  const dateToIso = useMemo(() => new Date(range.to).toISOString(), [range.to]);
+  const [dateFrom, setDateFrom] = useState<string>(() => isoDay(new Date()));
+  const [dateTo, setDateTo] = useState<string>(() => isoDay(new Date()));
 
-  const trackQuery = useMtsTrackPoints(target.subscriberId, dateFromIso, dateToIso, true);
+  const trackQuery = useMtsTrackDetail(target.subscriberId, dateFrom, dateTo, Boolean(dateFrom) && Boolean(dateTo));
   const geofencesQuery = useMtsGeofences(true);
-  const violationsQuery = useMtsViolations({ employeeId: target.employeeId, pageSize: 20 }, true);
+
+  const allGeofences = useMemo(() => geofencesQuery.data ?? [], [geofencesQuery.data]);
+  const assignedGeofences = useMemo(
+    () => allGeofences.filter(g => g.employeeIds.includes(target.employeeId)),
+    [allGeofences, target.employeeId],
+  );
+  const assignedIds = useMemo(() => assignedGeofences.map(g => g.id), [assignedGeofences]);
+
+  // Нарушения — только по геозонам, привязанным к сотруднику сейчас (фильтр на бэке).
+  const violationsQuery = useMtsViolations(
+    { employeeId: target.employeeId, pageSize: 20, geofenceIds: assignedIds },
+    true,
+  );
 
   const createMutation = useCreateGeofence();
   const deleteMutation = useDeleteGeofence();
@@ -116,24 +136,35 @@ export const MtsMapModal: FC<IProps> = ({ target, onClose }) => {
   const [pendingName, setPendingName] = useState('');
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  const trackPoints: IGeoPoint[] = useMemo(
-    () => (trackQuery.data ?? []).map(p => ({ lat: p.lat, lng: p.lng })),
+  // GPS-точки «Координатора» — плотный реальный маршрут (только валидные).
+  const gpsPoints: IGeoPoint[] = useMemo(
+    () => (trackQuery.data?.gps ?? [])
+      .filter(p => p.isValid !== false && p.latitude != null && p.longitude != null)
+      .map(p => ({ lat: p.latitude as number, lng: p.longitude as number })),
     [trackQuery.data],
   );
+  const segments = useMemo(() => trackQuery.data?.segments ?? [], [trackQuery.data]);
 
-  const allGeofences = useMemo(() => geofencesQuery.data ?? [], [geofencesQuery.data]);
-  const assignedGeofences = useMemo(
-    () => allGeofences.filter(g => g.employeeIds.includes(target.employeeId)),
-    [allGeofences, target.employeeId],
-  );
-  const polygonsForFit = useMemo(
-    () => assignedGeofences.map(g => g.geometry),
-    [assignedGeofences],
-  );
+  // Точки сегментов (старт/финиш) — для FitBounds.
+  const segmentPoints: IGeoPoint[] = useMemo(() => {
+    const pts: IGeoPoint[] = [];
+    for (const t of segments) {
+      if (t.startLat != null && t.startLon != null) pts.push({ lat: t.startLat, lng: t.startLon });
+      if (t.finishLat != null && t.finishLon != null) pts.push({ lat: t.finishLat, lng: t.finishLon });
+    }
+    return pts;
+  }, [segments]);
 
-  const center: [number, number] = trackPoints.length > 0
-    ? [trackPoints[0].lat, trackPoints[0].lng]
-    : DEFAULT_CENTER;
+  const fitPoints = useMemo(() => [...gpsPoints, ...segmentPoints], [gpsPoints, segmentPoints]);
+  const polygonsForFit = useMemo(() => assignedGeofences.map(g => g.geometry), [assignedGeofences]);
+
+  const center: [number, number] = gpsPoints.length > 0
+    ? [gpsPoints[0].lat, gpsPoints[0].lng]
+    : segmentPoints.length > 0
+      ? [segmentPoints[0].lat, segmentPoints[0].lng]
+      : DEFAULT_CENTER;
+
+  const hasTrack = gpsPoints.length > 0 || segments.length > 0;
 
   const handlePolygonCreated = (ring: IGeoPoint[]): void => {
     setPendingRing(ring);
@@ -194,22 +225,47 @@ export const MtsMapModal: FC<IProps> = ({ target, onClose }) => {
         <div className={styles.body}>
           <aside className={styles.sidebar}>
             <div className={styles.section}>
-              <label className={pageStyles.label}>Период треков</label>
-              <div className={pageStyles.actions}>
-                {[1, 3, 7].map(d => (
-                  <button
-                    key={d}
-                    className={d === days ? pageStyles.btn : pageStyles.btnSecondary}
-                    onClick={() => setDays(d)}
-                  >
-                    {d} д
-                  </button>
-                ))}
+              <label className={pageStyles.label}>Дата трека</label>
+              <div className={styles.dateNav}>
+                <button
+                  className={pageStyles.btnSm}
+                  onClick={() => { setDateFrom(d => shiftDay(d, -1)); setDateTo(d => shiftDay(d, -1)); }}
+                  title="Предыдущий день"
+                >
+                  ◀
+                </button>
+                <button
+                  className={pageStyles.btnSm}
+                  onClick={() => { const t = isoDay(new Date()); setDateFrom(t); setDateTo(t); }}
+                >
+                  Сегодня
+                </button>
+                <button
+                  className={pageStyles.btnSm}
+                  onClick={() => { setDateFrom(d => shiftDay(d, 1)); setDateTo(d => shiftDay(d, 1)); }}
+                  title="Следующий день"
+                >
+                  ▶
+                </button>
+              </div>
+              <div className={styles.dateRow}>
+                <label className={styles.dateField}>
+                  <span>С</span>
+                  <DateInput value={dateFrom} onChange={setDateFrom} />
+                </label>
+                <label className={styles.dateField}>
+                  <span>По</span>
+                  <DateInput value={dateTo} onChange={setDateTo} />
+                </label>
               </div>
               <p className={pageStyles.hint}>
-                Точек на карте: {trackPoints.length}
+                GPS-точек: {gpsPoints.length} · сегментов: {segments.length}
                 {trackQuery.isFetching && ' · загрузка…'}
               </p>
+              {trackQuery.isError && <p className={pageStyles.err}>Не удалось загрузить трек</p>}
+              {trackQuery.isSuccess && !hasTrack && (
+                <p className={pageStyles.hint}>Нет данных трека за выбранную дату.</p>
+              )}
             </div>
 
             <div className={styles.section}>
@@ -278,18 +334,24 @@ export const MtsMapModal: FC<IProps> = ({ target, onClose }) => {
             </div>
 
             <div className={styles.section}>
-              <h4 className={styles.subTitle}>Нарушения (последние)</h4>
-              {(violationsQuery.data?.data ?? []).slice(0, 10).map(v => (
-                <div key={v.id} className={styles.violation}>
-                  <div><b>{v.geofenceName || '—'}</b></div>
-                  <div className={pageStyles.hint}>
-                    {new Date(v.startedAt).toLocaleString('ru-RU')}
-                    {v.endedAt ? ' → закрыто' : ' · открыто'}
-                  </div>
-                </div>
-              ))}
-              {(violationsQuery.data?.data ?? []).length === 0 && (
-                <p className={pageStyles.hint}>Нарушений нет</p>
+              <h4 className={styles.subTitle}>Нарушения (по привязанным зонам)</h4>
+              {assignedGeofences.length === 0 ? (
+                <p className={pageStyles.hint}>Нет привязанных геозон.</p>
+              ) : (
+                <>
+                  {(violationsQuery.data?.data ?? []).slice(0, 10).map(v => (
+                    <div key={v.id} className={styles.violation}>
+                      <div><b>{v.geofenceName || '—'}</b></div>
+                      <div className={pageStyles.hint}>
+                        {new Date(v.startedAt).toLocaleString('ru-RU')}
+                        {v.endedAt ? ' → закрыто' : ' · открыто'}
+                      </div>
+                    </div>
+                  ))}
+                  {(violationsQuery.data?.data ?? []).length === 0 && (
+                    <p className={pageStyles.hint}>Нарушений нет</p>
+                  )}
+                </>
               )}
             </div>
           </aside>
@@ -298,18 +360,52 @@ export const MtsMapModal: FC<IProps> = ({ target, onClose }) => {
             <MapContainer center={center} zoom={12} className={styles.map} scrollWheelZoom>
               <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} maxZoom={19} />
               <GeomanControls enabled={drawingMode} onPolygonCreated={handlePolygonCreated} />
-              <FitBounds points={trackPoints} polygons={polygonsForFit} />
-              {trackPoints.length >= 2 && (
-                <Polyline positions={trackPoints.map(p => [p.lat, p.lng]) as L.LatLngTuple[]} color="#2563eb" weight={3} opacity={0.8} />
+              <FitBounds points={fitPoints} polygons={polygonsForFit} />
+
+              {/* GPS-маршрут (Координатор) */}
+              {gpsPoints.length >= 2 && (
+                <Polyline positions={gpsPoints.map(p => [p.lat, p.lng]) as L.LatLngTuple[]} color="#2563eb" weight={3} opacity={0.8} />
               )}
-              {trackPoints.map((p, i) => (
+              {gpsPoints.map((p, i) => (
                 <CircleMarker
-                  key={`${p.lat}-${p.lng}-${i}`}
+                  key={`gps-${i}`}
                   center={[p.lat, p.lng]}
                   radius={3}
                   pathOptions={{ color: '#1e40af', fillOpacity: 0.7 }}
                 />
               ))}
+
+              {/* Сегменты Старт→Финиш */}
+              {segments.map((t, idx) => {
+                if (t.startLat == null || t.startLon == null || t.finishLat == null || t.finishLon == null) return null;
+                const color = TRACK_COLORS[idx % TRACK_COLORS.length];
+                const start: L.LatLngTuple = [t.startLat, t.startLon];
+                const finish: L.LatLngTuple = [t.finishLat, t.finishLon];
+                return (
+                  <Fragment key={`seg-${t.trackID}`}>
+                    <Polyline positions={[start, finish]} pathOptions={{ color, weight: 3, opacity: 0.85, dashArray: '6,6' }} />
+                    <Marker position={start} icon={labelIcon('Старт', color)}>
+                      <Popup>
+                        <div style={{ fontSize: 13 }}>
+                          <b>Старт</b>
+                          <div>{t.startDate ? new Date(t.startDate).toLocaleString('ru-RU') : '—'}</div>
+                          {t.startAddress && <div style={{ marginTop: 4 }}>{t.startAddress}</div>}
+                        </div>
+                      </Popup>
+                    </Marker>
+                    <Marker position={finish} icon={labelIcon('Финиш', color)}>
+                      <Popup>
+                        <div style={{ fontSize: 13 }}>
+                          <b>Финиш</b>
+                          <div>{t.finishDate ? new Date(t.finishDate).toLocaleString('ru-RU') : '—'}</div>
+                          {t.finishAddress && <div style={{ marginTop: 4 }}>{t.finishAddress}</div>}
+                        </div>
+                      </Popup>
+                    </Marker>
+                  </Fragment>
+                );
+              })}
+
               {allGeofences.map(g => {
                 const isAssigned = g.employeeIds.includes(target.employeeId);
                 return (

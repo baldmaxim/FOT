@@ -47,6 +47,21 @@ async function tick(owner: string): Promise<void> {
           const locations = await mtsDataService.getLastLocations();
           const saved = await mtsDataService.persistLocationSnapshots(locations);
           console.log(`[mts-poller] tick: fetched=${locations.length} saved=${saved}`);
+
+          // Архив треков для исторического просмотра (GPS «Координатора» + сегменты
+          // Старт→Финиш). Окно — последние 2 суток: перекрытие между часовыми тиками,
+          // дедуп по бизнес-ключу не даёт дублей. Без приложения GPS будет пустым —
+          // тогда копятся только сегменты по LBS.
+          const trim = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, '');
+          const toAt = new Date();
+          const fromAt = new Date(toAt.getTime() - 2 * 86_400_000);
+          const [gps, segments] = await Promise.all([
+            mtsDataService.getGlobalLocations(trim(fromAt), trim(toAt)),
+            mtsDataService.getTracksRange(trim(fromAt), trim(toAt)),
+          ]);
+          const gpsSaved = await mtsDataService.persistGpsPoints(gps);
+          const segSaved = await mtsDataService.persistTrackSegments(segments);
+          console.log(`[mts-poller] archive: gps=${gps.length}/+${gpsSaved} seg=${segments.length}/+${segSaved}`);
         } catch (error) {
           cronStatus = 'error';
           // Тело апстрима МТС НЕ кладём в сообщение — может содержать ПДн.

@@ -139,18 +139,18 @@ export const useMtsEmployeesLinked = (
   });
 };
 
-export const getMtsTrackPointsQueryKey = (subscriberId: number, dateFrom: string, dateTo: string) =>
-  ['mts', 'track-points', subscriberId, dateFrom, dateTo] as const;
+export const getMtsTrackDetailQueryKey = (subscriberId: number, dateFrom: string, dateTo: string) =>
+  ['mts', 'track-detail', subscriberId, dateFrom, dateTo] as const;
 
-export const useMtsTrackPoints = (
+export const useMtsTrackDetail = (
   subscriberId: number | null,
   dateFrom: string,
   dateTo: string,
   enabled: boolean,
 ) =>
   useQuery({
-    queryKey: getMtsTrackPointsQueryKey(subscriberId ?? 0, dateFrom, dateTo),
-    queryFn: () => mtsService.getTrackPoints(subscriberId as number, dateFrom, dateTo),
+    queryKey: getMtsTrackDetailQueryKey(subscriberId ?? 0, dateFrom, dateTo),
+    queryFn: () => mtsService.getTrackDetail(subscriberId as number, dateFrom, dateTo),
     enabled: enabled && subscriberId !== null && Boolean(dateFrom) && Boolean(dateTo),
     staleTime: 30_000,
   });
@@ -255,18 +255,20 @@ export const useMtsRawSubscriberDebug = () => useMutation({
 });
 
 export const useMtsViolations = (
-  params: { employeeId?: number | null; from?: string; to?: string; page?: number; pageSize?: number },
+  params: { employeeId?: number | null; from?: string; to?: string; page?: number; pageSize?: number; geofenceIds?: string[] },
   enabled: boolean,
 ) => {
   const employeeId = params.employeeId ?? undefined;
+  const geofenceKey = params.geofenceIds ? params.geofenceIds.join(',') : 'nofilter';
   return useQuery({
-    queryKey: ['mts', 'violations', employeeId ?? 'all', params.from || '', params.to || '', params.page || 1, params.pageSize || 100] as const,
+    queryKey: ['mts', 'violations', employeeId ?? 'all', params.from || '', params.to || '', params.page || 1, params.pageSize || 100, geofenceKey] as const,
     queryFn: () => mtsService.listGeofenceViolations({
       employeeId: employeeId ?? undefined,
       from: params.from,
       to: params.to,
       page: params.page,
       pageSize: params.pageSize,
+      geofenceIds: params.geofenceIds,
     }),
     enabled,
     staleTime: 20_000,

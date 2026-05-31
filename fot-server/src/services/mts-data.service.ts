@@ -526,6 +526,159 @@ class MtsDataService extends MtsServiceBase {
     }
     return saved;
   }
+
+  /**
+   * Архивирует GPS-точки «Координатора» в mts_gps_points (координаты шифруем).
+   * Дедуп по (subscriber_id, location_id). Точки без даты/координат пропускаем.
+   */
+  async persistGpsPoints(points: IMtsGpsPoint[]): Promise<number> {
+    let saved = 0;
+    for (const p of points) {
+      if (!p.subscriberID || !p.locationID || !p.locationDate) continue;
+      if (p.latitude == null || p.longitude == null) continue;
+      const enc = (v: unknown): string | null =>
+        v === null || v === undefined ? null : encryptionService.encrypt(String(v));
+      const affected = await execute(
+        `INSERT INTO mts_gps_points
+           (subscriber_id, location_id, recorded_at, lat_enc, lon_enc, velocity_enc, angle_enc, is_valid)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (subscriber_id, location_id) DO NOTHING`,
+        [
+          p.subscriberID,
+          p.locationID,
+          p.locationDate,
+          enc(p.latitude),
+          enc(p.longitude),
+          enc(p.velocity),
+          enc(p.angle),
+          p.isValid,
+        ],
+      );
+      saved += affected;
+    }
+    return saved;
+  }
+
+  /**
+   * Архивирует сегменты Старт→Финиш в mts_track_segments (координаты/адреса шифруем,
+   * distance/duration — как есть). Дедуп по (subscriber_id, track_id).
+   */
+  async persistTrackSegments(segments: IMtsTrackSegment[]): Promise<number> {
+    let saved = 0;
+    for (const s of segments) {
+      if (!s.subscriberID || !s.trackID) continue;
+      const enc = (v: unknown): string | null =>
+        v === null || v === undefined ? null : encryptionService.encrypt(String(v));
+      const affected = await execute(
+        `INSERT INTO mts_track_segments
+           (subscriber_id, track_id, start_at, finish_at, start_lat_enc, start_lon_enc,
+            finish_lat_enc, finish_lon_enc, start_address_enc, finish_address_enc, distance_m, duration_s)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         ON CONFLICT (subscriber_id, track_id) DO NOTHING`,
+        [
+          s.subscriberID,
+          s.trackID,
+          s.startDate,
+          s.finishDate,
+          enc(s.startLat),
+          enc(s.startLon),
+          enc(s.finishLat),
+          enc(s.finishLon),
+          enc(s.startAddress),
+          enc(s.finishAddress),
+          s.distance,
+          s.duration,
+        ],
+      );
+      saved += affected;
+    }
+    return saved;
+  }
+
+  /** Архивные GPS-точки абонента за интервал (из БД, расшифровка в памяти). */
+  async getStoredGpsPoints(subscriberId: number, dateFrom: string, dateTo: string, limit = 5000): Promise<IMtsGpsPoint[]> {
+    const rows = await query<{
+      location_id: string;
+      recorded_at: string;
+      lat_enc: string | null;
+      lon_enc: string | null;
+      velocity_enc: string | null;
+      angle_enc: string | null;
+      is_valid: boolean | null;
+    }>(
+      `SELECT location_id, recorded_at, lat_enc, lon_enc, velocity_enc, angle_enc, is_valid
+         FROM mts_gps_points
+        WHERE subscriber_id = $1
+          AND recorded_at >= $2::timestamptz
+          AND recorded_at <= $3::timestamptz
+        ORDER BY recorded_at ASC
+        LIMIT $4`,
+      [subscriberId, dateFrom, dateTo, limit],
+    );
+    const num = (raw: string | null): number | null => {
+      const v = encryptionService.decryptField(raw);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    return rows.map(r => ({
+      locationID: Number(r.location_id),
+      subscriberID: subscriberId,
+      locationDate: r.recorded_at,
+      latitude: num(r.lat_enc),
+      longitude: num(r.lon_enc),
+      angle: num(r.angle_enc),
+      velocity: num(r.velocity_enc),
+      isValid: r.is_valid,
+    }));
+  }
+
+  /** Архивные сегменты Старт→Финиш абонента за интервал (из БД, расшифровка в памяти). */
+  async getStoredTrackSegments(subscriberId: number, dateFrom: string, dateTo: string, limit = 2000): Promise<IMtsTrackSegment[]> {
+    const rows = await query<{
+      track_id: string;
+      start_at: string | null;
+      finish_at: string | null;
+      start_lat_enc: string | null;
+      start_lon_enc: string | null;
+      finish_lat_enc: string | null;
+      finish_lon_enc: string | null;
+      start_address_enc: string | null;
+      finish_address_enc: string | null;
+      distance_m: number | null;
+      duration_s: number | null;
+    }>(
+      `SELECT track_id, start_at, finish_at, start_lat_enc, start_lon_enc,
+              finish_lat_enc, finish_lon_enc, start_address_enc, finish_address_enc, distance_m, duration_s
+         FROM mts_track_segments
+        WHERE subscriber_id = $1
+          AND start_at >= $2::timestamptz
+          AND start_at <= $3::timestamptz
+        ORDER BY start_at ASC
+        LIMIT $4`,
+      [subscriberId, dateFrom, dateTo, limit],
+    );
+    const num = (raw: string | null): number | null => {
+      const v = encryptionService.decryptField(raw);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    return rows.map(r => ({
+      trackID: Number(r.track_id),
+      subscriberID: subscriberId,
+      startDate: r.start_at,
+      finishDate: r.finish_at,
+      startAddress: encryptionService.decryptField(r.start_address_enc),
+      finishAddress: encryptionService.decryptField(r.finish_address_enc),
+      startLat: num(r.start_lat_enc),
+      startLon: num(r.start_lon_enc),
+      finishLat: num(r.finish_lat_enc),
+      finishLon: num(r.finish_lon_enc),
+      distance: r.distance_m,
+      duration: r.duration_s,
+    }));
+  }
 }
 
 export const mtsDataService = new MtsDataService();
