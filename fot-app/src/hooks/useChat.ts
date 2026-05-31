@@ -148,14 +148,6 @@ export const useChat = (ws: typeof wsService | null) => {
     };
   }, [ws, loadConversations]);
 
-  // Initial load. Дальнейшие обновления unread идут через Socket.IO события
-  // 'new_message' / 'message_notification', которые вызывают loadConversations()
-  // и пересчитывают unreadTotal. HTTP-polling раз в минуту удалён для экономии egress.
-  useEffect(() => {
-    void loadConversations().catch(() => undefined);
-    void loadRequests().catch(() => undefined);
-  }, [loadConversations, loadRequests]);
-
   const resetActiveChat = useCallback(() => {
     setActiveConversationId(null);
     setMessages([]);

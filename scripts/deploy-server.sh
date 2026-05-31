@@ -448,6 +448,28 @@ deploy_data_api() {
   fi
 }
 
+wait_http_ok() {
+  local url="$1"
+  local label="$2"
+  local attempts="${3:-45}"
+  local delay="${4:-2}"
+  local i
+  local response
+
+  for ((i = 1; i <= attempts; i++)); do
+    if response="$(curl -fsS "$url" 2>/dev/null)"; then
+      echo "$response"
+      return 0
+    fi
+
+    if (( i == attempts )); then
+      die "$label не ответил после $((attempts * delay))с: $url"
+    fi
+
+    sleep "$delay"
+  done
+}
+
 verify_deploy() {
   if [[ "$SKIP_VERIFY" == "1" ]]; then
     log "SKIP_VERIFY=1: пропускаю проверки"
@@ -459,13 +481,13 @@ verify_deploy() {
   pm2 status
 
   if includes_backend; then
-    curl -fsS http://127.0.0.1:3001/health
-    echo
+    log "Жду backend health..."
+    wait_http_ok http://127.0.0.1:3001/health backend
   fi
 
   if includes_data_api; then
-    curl -fsS http://127.0.0.1:4001/external/v1/health
-    echo
+    log "Жду data-api health..."
+    wait_http_ok http://127.0.0.1:4001/external/v1/health data-api
   fi
 
   if includes_frontend; then

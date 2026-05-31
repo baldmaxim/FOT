@@ -104,13 +104,13 @@ export const ChatProvider: FC<{ children: ReactNode; initialOpen?: boolean }> = 
     return unsub;
   }, [ws, info, conversations, selectConversation]);
 
-  // Re-load conversations when user becomes authenticated (fixes empty list on new device)
+  // Re-load unread counters when user becomes authenticated (fixes empty list on new device).
+  // Requests are loaded lazily when the chat panel opens.
   useEffect(() => {
-    if (isAuthenticated && isApproved) {
+    if (isAuthenticated && isApproved && token) {
       void loadConversations().catch(() => undefined);
-      void loadRequests().catch(() => undefined);
     }
-  }, [isAuthenticated, isApproved, loadConversations, loadRequests]);
+  }, [isAuthenticated, isApproved, token, loadConversations]);
 
   // Открытие переписки по клику на push-уведомление.
   // Захват ?openChat= синхронно на первом рендере: маршрут "/" сразу делает

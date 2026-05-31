@@ -28,6 +28,7 @@ import { setIo } from './socket/io-instance.js';
 
 const PORT = parseInt(env.PORT, 10);
 const HOST = env.HOST;
+const STARTUP_CACHE_WARMUP_DELAY_MS = 120_000;
 
 const httpServer = createServer(app);
 
@@ -83,10 +84,14 @@ httpServer.listen(PORT, HOST, () => {
   void startStructureSyncScheduler();
   void startSigurEventsDailyScheduler();
   startSkudSummaryReconcileScheduler();
-  // Прогрев тяжёлых кэшей, чтобы первое открытие «Сотрудники на объектах»
-  // не ждало холодного ре-фетча справочника Sigur и полного пересчёта.
-  prewarmSigurPresenceResolver();
-  void getPresenceByObject({ allowedObjectIds: 'all' }).catch(() => { /* noop */ });
+  // Прогрев тяжёлых кэшей откладываем: сразу после deploy/restart браузеры
+  // массово переподключаются, и холодный полный обход Sigur конкурировал с ними.
+  const warmupTimer = setTimeout(() => {
+    console.log(`[startup] warming Sigur presence caches after ${Math.round(STARTUP_CACHE_WARMUP_DELAY_MS / 1000)}s`);
+    prewarmSigurPresenceResolver();
+    void getPresenceByObject({ allowedObjectIds: 'all' }).catch(() => { /* noop */ });
+  }, STARTUP_CACHE_WARMUP_DELAY_MS);
+  warmupTimer.unref();
   startTimesheetReminderScheduler();
   startPatentExpiryReminderScheduler();
   startDailyTasksReminderScheduler();
