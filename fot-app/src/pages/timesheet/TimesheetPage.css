@@ -2647,6 +2647,14 @@
   transition: all var(--transition);
 }
 
+.ts-employee-inline-btn--icon {
+  width: 22px;
+  min-width: 22px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+}
+
 .ts-employee-inline-btn:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.10);
   border-color: rgba(239, 68, 68, 0.34);

@@ -391,6 +391,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   }
   const daysCount = getDaysInMonth(year, month);
   const days = visibleDays || Array.from({ length: daysCount }, (_, i) => i + 1);
+  const compactInlineExclude = days.length > 16;
   const employeeStatsMap = useMemo(() => {
     const map = new Map<number, IEmployeeStats>();
     for (const stat of employeeStats) {
@@ -1340,7 +1341,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         {canManageTeam && onExcludeEmployee && (
                           <button
                             type="button"
-                            className="ts-employee-inline-btn"
+                            className={`ts-employee-inline-btn${compactInlineExclude ? ' ts-employee-inline-btn--icon' : ''}`}
                             title="Исключить сотрудника"
                             aria-label="Исключить сотрудника"
                             onClick={(event) => {
@@ -1350,7 +1351,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             disabled={pendingEmployeeId === row.employee.id}
                           >
                             <UserMinus size={12} />
-                            {pendingEmployeeId === row.employee.id ? '...' : 'Искл.'}
+                            {!compactInlineExclude && (pendingEmployeeId === row.employee.id ? '...' : 'Искл.')}
                           </button>
                         )}
                       </div>
