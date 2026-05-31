@@ -140,7 +140,7 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     || path === '/timesheet';
 };
 
-export const refreshSession = async (): Promise<boolean> => {
+const refreshSession = async (): Promise<boolean> => {
   if (refreshPromise) {
     return refreshPromise;
   }
