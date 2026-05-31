@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import * as Sentry from '@sentry/node';
 import { corsAllowedOrigins } from './config/env.js';
 import { apiLimiter } from './middleware/rateLimit.js';
+import { accessLog } from './middleware/accessLog.js';
 
 // Routes
 import authRoutes from './routes/auth.routes.js';
@@ -68,6 +69,9 @@ app.use(cors({
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Диагностический access-log: одна строка на медленный/5xx запрос (см. accessLog.ts).
+app.use('/api', accessLog);
 
 // Rate limiting
 app.use('/api', apiLimiter);

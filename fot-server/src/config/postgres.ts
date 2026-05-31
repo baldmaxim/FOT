@@ -82,6 +82,14 @@ export const createPgPoolConfig = (overrides: Partial<PoolConfig> = {}): PoolCon
     connectionString: env.DATABASE_URL,
     max: parseIntStrict(env.DATABASE_POOL_MAX, 'DATABASE_POOL_MAX'),
     statement_timeout: parseIntStrict(env.DATABASE_STATEMENT_TIMEOUT_MS, 'DATABASE_STATEMENT_TIMEOUT_MS'),
+    // Чекаут из пула при насыщении ждёт свободный коннект НЕ вечно: через 5с
+    // acquire падает ошибкой → быстрый 503 вместо зависшего HTTP-хендлера.
+    // Также ограничивает установку нового коннекта к Odyssey (видели ETIMEDOUT :6432).
+    connectionTimeoutMillis: 5000,
+    // TCP keepalive — чтобы простаивающие коннекты не отваливались молча через
+    // Odyssey/NAT (pg по умолчанию keepAlive=false).
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
     ssl: buildSsl(),
   };
   return { ...base, ...overrides };
@@ -176,8 +184,37 @@ export const checkDbConnection = async (): Promise<boolean> => {
   }
 };
 
+let _telemetryTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Периодическая телеметрия пула. Логирует ТОЛЬКО при контеншне
+ * (waitingCount > 0) — т.е. когда запросы стоят в очереди за коннектом.
+ * Это прямой индикатор «пул мал / БД перегружена». Без контеншна молчит,
+ * чтобы не флудить логи. Интервал — POOL_TELEMETRY_MS (по умолчанию 5000).
+ * Идемпотентна. `unref()` — не держит event-loop при shutdown.
+ */
+export const startPoolTelemetry = (): void => {
+  if (_telemetryTimer) return;
+  const raw = Number.parseInt(process.env.POOL_TELEMETRY_MS ?? '', 10);
+  const intervalMs = Number.isFinite(raw) && raw > 0 ? raw : 5000;
+  const max = Number.parseInt(env.DATABASE_POOL_MAX, 10);
+  _telemetryTimer = setInterval(() => {
+    const p = getPool();
+    if (p.waitingCount > 0) {
+      console.warn(
+        `[pg:pool] waiting=${p.waitingCount} total=${p.totalCount}/${max} idle=${p.idleCount}`,
+      );
+    }
+  }, intervalMs);
+  _telemetryTimer.unref();
+};
+
 /** Закрывает пул. Идемпотентно. Вызывать на graceful shutdown. */
 export const closeDb = async (): Promise<void> => {
+  if (_telemetryTimer) {
+    clearInterval(_telemetryTimer);
+    _telemetryTimer = null;
+  }
   if (!_pool) return;
   const p = _pool;
   _pool = null;

@@ -1,4 +1,5 @@
-import { Fragment, type FC, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, type FC, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronUp, Menu, UserMinus } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee, TimesheetObjectEntry, TimesheetStatus } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
@@ -576,6 +577,17 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     new Map(days.map((day, index) => [day, index]))
   ), [days]);
   const activeSelectedCellKeys = bulkDragPreviewKeys ?? selectedCellKeys;
+
+  // Виртуализация строк desktop-табеля: рендерим только видимые строки, иначе
+  // большой отдел (сотни сотрудников × дни) фризит main-thread при смене отдела.
+  // measureElement на <tbody> учитывает реальную высоту группы (вкл. раскрытые объекты).
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLTableSectionElement>({
+    count: employeeRows.length,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: () => 34,
+    overscan: 12,
+  });
 
   const toggleEmployeeExpanded = (employeeId: number): void => {
     setExpandedEmployeeIds(current => {
@@ -1248,6 +1260,9 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     );
   }
 
+  const desktopColSpan = days.length + 1 + (showDeviationColumn ? 1 : 0);
+  const virtualItems = rowVirtualizer.getVirtualItems();
+
   return (
     <div className="ts-table-container">
       <div className="ts-table-header-bar">
@@ -1255,7 +1270,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         {tableLegend}
       </div>
 
-      <div className="ts-table-scroll">
+      <div className="ts-table-scroll" ref={tableScrollRef}>
         <table className={`ts-table${bulkEditMode ? ' ts-table--bulk-mode' : ''}`}>
           <thead>
             <tr>
@@ -1280,8 +1295,24 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               )}
             </tr>
           </thead>
-          <tbody>
-            {employeeRows.map((row, index) => {
+          {employeeRows.length === 0 ? (
+            <tbody>
+              <tr>
+                <td colSpan={desktopColSpan} className="ts-loading">
+                  Нет сотрудников для отображения
+                </td>
+              </tr>
+            </tbody>
+          ) : (
+            <>
+              {virtualItems[0] && virtualItems[0].start > 0 && (
+                <tbody aria-hidden="true">
+                  <tr><td colSpan={desktopColSpan} style={{ height: virtualItems[0].start, padding: 0, border: 'none' }} /></tr>
+                </tbody>
+              )}
+              {virtualItems.map(virtualRow => {
+              const index = virtualRow.index;
+              const row = employeeRows[index];
               const employeeIndex = index + 1;
               const displayName = formatTimesheetEmployeeName(row.employee.full_name);
               const expanded = activeExpandedEmployeeIds.has(row.employee.id);
@@ -1292,7 +1323,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               const sectionLabel = currentSource !== prevSource ? getSectionLabel(currentSource, departmentName) : null;
 
               return (
-                <Fragment key={row.employee.id}>
+                <tbody key={row.employee.id} data-index={index} ref={rowVirtualizer.measureElement}>
                   {sectionLabel && (
                     <tr className="ts-section-divider-row">
                       <td
@@ -1488,17 +1519,20 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       {showDeviationColumn && <td className="ts-col-deviation-sticky" />}
                     </tr>
                   ))}
-                </Fragment>
+                </tbody>
               );
-            })}
-            {employeeRows.length === 0 && (
-              <tr>
-                <td colSpan={days.length + 1 + (showDeviationColumn ? 1 : 0)} className="ts-loading">
-                  Нет сотрудников для отображения
-                </td>
-              </tr>
-            )}
-          </tbody>
+              })}
+              {(() => {
+                const last = virtualItems[virtualItems.length - 1];
+                const remaining = last ? rowVirtualizer.getTotalSize() - last.end : 0;
+                return remaining > 0 ? (
+                  <tbody aria-hidden="true">
+                    <tr><td colSpan={desktopColSpan} style={{ height: remaining, padding: 0, border: 'none' }} /></tr>
+                  </tbody>
+                ) : null;
+              })()}
+            </>
+          )}
         </table>
       </div>
     </div>

@@ -655,9 +655,10 @@ pm2 save
 Первичный запуск, если процесса нет:
 
 ```bash
-pm2 start /srv/sites/fot.su10.ru/fot-server/dist/index.js \
-  --name fot-server \
-  --cwd /srv/sites/fot.su10.ru/fot-server
+# fot-server — через ecosystem (fork, 1 инстанс, max_memory_restart, kill_timeout
+# под graceful shutdown). НЕ переводить в cluster без предусловий — см. комментарий
+# в fot-server/ecosystem.config.cjs.
+cd /srv/sites/fot.su10.ru/fot-server && pm2 start ecosystem.config.cjs
 
 pm2 start ".venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 4001" \
   --name fot-data-api \
@@ -666,6 +667,9 @@ pm2 start ".venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 4001" \
 
 pm2 save
 ```
+
+> `max_memory_restart` в `ecosystem.config.cjs` — плейсхолдер `1536M`. Подобрать
+> под RAM сервера (~70%) после снятия baseline heap.
 
 ## Nginx И SSL
 
