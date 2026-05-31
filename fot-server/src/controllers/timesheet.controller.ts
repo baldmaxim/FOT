@@ -1954,7 +1954,7 @@ export const timesheetController = {
           null,
           isTimekeeper(req),
         );
-        return upsertAttendanceAdjustment({
+        const saved = await upsertAttendanceAdjustment({
           employee_id: item.employee_id,
           work_date: item.work_date,
           status: parsed.status,
@@ -1965,18 +1965,25 @@ export const timesheetController = {
           created_by: req.user.id,
           approval_status: approvalStatus,
         });
+        return {
+          employee_id: item.employee_id,
+          work_date: item.work_date,
+          adjustment_id: Number(saved.id),
+        };
       };
 
+      // Возвращаем id созданных/обновлённых корректировок — фронт по ним цепляет файлы.
+      const savedItems: Array<{ employee_id: number; work_date: string; adjustment_id: number }> = [];
       if (isWorkOrRemoteBulk) {
         const sortedItems = [...uniqueItems].sort((a, b) => {
           if (a.employee_id !== b.employee_id) return a.employee_id - b.employee_id;
           return a.work_date.localeCompare(b.work_date);
         });
         for (const item of sortedItems) {
-          await buildUpsert(item);
+          savedItems.push(await buildUpsert(item));
         }
       } else {
-        await Promise.all(uniqueItems.map(buildUpsert));
+        savedItems.push(...await Promise.all(uniqueItems.map(buildUpsert)));
       }
 
       const auditNamesMap = await loadEmployeeFullNamesMap(employeeIds);
@@ -2012,6 +2019,7 @@ export const timesheetController = {
         data: {
           processed: uniqueItems.length,
           employees: employeeIds.length,
+          items: savedItems,
         },
       });
     } catch (err) {

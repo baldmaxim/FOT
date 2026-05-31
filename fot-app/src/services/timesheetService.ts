@@ -54,6 +54,7 @@ export interface IWeekendMemoPreview {
 interface BulkTimesheetCorrectionResult {
   processed: number;
   employees: number;
+  items?: Array<{ employee_id: number; work_date: string; adjustment_id: number }>;
 }
 
 function hydrateCompactSchedules(data: TimesheetResponse): TimesheetResponse {

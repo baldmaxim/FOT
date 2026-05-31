@@ -1093,29 +1093,54 @@ export const TimesheetPage: FC = () => {
     setBulkModalOpen(true);
   }, [viewMode, isObjectBulkOperation, bulkObjectTargets.length, bulkTargets.length, toast]);
 
-  const handleSaveBulkCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string) => {
+  const handleSaveBulkCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
+    // Цепляем прикреплённые файлы к каждой созданной/обновлённой корректировке.
+    const uploadFilesTo = async (adjustmentIds: number[]) => {
+      if (!files?.length || adjustmentIds.length === 0) return;
+      try {
+        await Promise.all(adjustmentIds.flatMap(id => files.map(file => correctionAttachmentsService.upload(id, file))));
+      } catch (uploadErr) {
+        console.error('Bulk attachments upload error:', uploadErr);
+        toast.error('Корректировка применена, но часть файлов не загрузилась');
+      }
+    };
+    const invalidate = () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+      queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+    ]);
+
     if (isObjectBulkOperation) {
       if (bulkObjectTargets.length === 0) return;
       try {
-        await Promise.all(bulkObjectTargets.map(target => timesheetService.upsertObjectEntry({
-          employee_id: target.employee.id,
-          work_date: target.workDate,
-          object_key: target.objectTarget.object_key,
-          object_id: target.objectTarget.object_id,
-          object_name: target.objectTarget.object_name,
-          hours_worked: hours ?? 0,
-          notes,
-        })));
+        if (status === 'manual') {
+          // «Корректировка табеля» — почасовая, применяется к каждой объектной ячейке.
+          const saved = await Promise.all(bulkObjectTargets.map(target => timesheetService.upsertObjectEntry({
+            employee_id: target.employee.id,
+            work_date: target.workDate,
+            object_key: target.objectTarget.object_key,
+            object_id: target.objectTarget.object_id,
+            object_name: target.objectTarget.object_name,
+            hours_worked: hours ?? 0,
+            notes,
+          })));
+          await uploadFilesTo(saved.map(s => s.adjustment_id).filter((id): id is number => id != null));
+          toast.success(`Корректировка по объектам применена для ${bulkObjectTargets.length} ячеек`);
+        } else {
+          // Статусы отсутствия (отпуск, удалёнка, больничный…) — дневная корректировка
+          // на весь день: схлопываем объектные ячейки до уникальных сотрудник+дата.
+          const dayItems = [...new Map(
+            bulkObjectTargets.map(t => [`${t.employee.id}_${t.workDate}`, { employee_id: t.employee.id, work_date: t.workDate }]),
+          ).values()];
+          const result = await timesheetService.bulkCorrect({ items: dayItems, status, hours_worked: hours, notes });
+          await uploadFilesTo((result.items ?? []).map(i => i.adjustment_id));
+          toast.success(`Корректировка применена для ${result.processed} дней`);
+        }
 
         clearBulkState();
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        ]);
-        toast.success(`Корректировка по объектам применена для ${bulkObjectTargets.length} ячеек`);
+        await invalidate();
       } catch (error) {
         console.error('Bulk object save correction error:', error);
-        toast.error(error instanceof Error ? error.message : 'Не удалось применить массовую корректировку по объектам');
+        toast.error(error instanceof Error ? error.message : 'Не удалось применить массовую корректировку');
       }
       return;
     }
@@ -1131,11 +1156,9 @@ export const TimesheetPage: FC = () => {
         notes,
       });
 
+      await uploadFilesTo((result.items ?? []).map(i => i.adjustment_id));
       clearBulkState();
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-      ]);
+      await invalidate();
       toast.success(`Корректировка применена для ${result.processed} ячеек`);
     } catch (error) {
       console.error('Bulk save correction error:', error);
@@ -2199,10 +2222,10 @@ export const TimesheetPage: FC = () => {
             initialHours={bulkDefaultHours}
             title={isObjectBulkOperation ? 'Массовая корректировка по объектам' : 'Массовая корректировка'}
             subtitle={bulkSelectionSummary}
-            confirmLabel={isObjectBulkOperation ? 'Применить по объектам' : 'Применить'}
+            confirmLabel="Применить"
             hideSkudTab
             maxHours={bulkMaxHours}
-            allowedStatuses={isObjectBulkOperation ? ['manual'] : undefined}
+            allowAttachmentsOnCreate
           />
         </Suspense>
       )}
