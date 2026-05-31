@@ -1635,12 +1635,14 @@ export const adminUsersController = {
 
   /**
    * GET /api/admin/skud-objects
-   * Плоский список активных объектов для UI назначений (только id + name).
+   * Плоский список активных объектов для UI назначений (id + name + адрес alt_name).
+   * Объекты с одинаковым alt_name объединяются по адресу на фронте.
    */
   async listSkudObjectsForAssignment(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const rows = await query<{ id: string; name: string }>(
-        `SELECT id, name FROM skud_objects WHERE is_active = true ORDER BY name`,
+      const rows = await query<{ id: string; name: string; alt_name: string | null }>(
+        `SELECT id, name, alt_name FROM skud_objects WHERE is_active = true
+          ORDER BY COALESCE(NULLIF(btrim(alt_name), ''), name), name`,
       );
       res.json({ success: true, data: rows });
     } catch (error) {

@@ -34,6 +34,7 @@ import {
 } from '../components/staff/BulkOperationModals';
 import { OverflowMenu, type IOverflowMenuItem } from '../components/staff/OverflowMenu';
 import { StaffObjectCell } from '../components/staff/StaffObjectCell';
+import type { IAddressObject } from '../utils/objectGroups';
 import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
 import { structureApi } from '../api/structure';
 import type { IFlatDepartmentOption } from '../utils/departmentUtils';
@@ -45,7 +46,7 @@ const StaffObjectAssignmentModal = lazy(() => import('../components/staff/StaffO
 const StaffBulkObjectAssignmentModal = lazy(() => import('../components/staff/StaffBulkObjectAssignmentModal').then(m => ({ default: m.StaffBulkObjectAssignmentModal })));
 
 // Стабильные пустые ссылки — чтобы memo-строки таблицы не ломались при undefined-данных.
-const EMPTY_OBJECTS: Array<{ id: string; name: string }> = [];
+const EMPTY_OBJECTS: IAddressObject[] = [];
 const EMPTY_OBJ_MAP: Record<string, string[]> = {};
 const EMPTY_STR_ARR: string[] = [];
 const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
@@ -79,7 +80,7 @@ interface IStaffRowProps {
   canEditSch: boolean;
   canOpenCard: boolean;
   canEditObject: boolean;
-  objects: Array<{ id: string; name: string }>;
+  objects: IAddressObject[];
   deptObjMap: Record<string, string[]>;
   empObjMap: Record<string, string[]>;
   onNavigate: (emp: Employee) => void;
@@ -853,7 +854,7 @@ interface IVirtualTableProps {
   canEditSch: boolean;
   canOpenCard: boolean;
   canEditObject: boolean;
-  objects: Array<{ id: string; name: string }>;
+  objects: IAddressObject[];
   deptObjMap: Record<string, string[]>;
   empObjMap: Record<string, string[]>;
   onNavigate: (emp: Employee) => void;
@@ -1006,7 +1007,7 @@ interface IVirtualCardsProps {
   canEditSch: boolean;
   canOpenCard: boolean;
   canEditObject: boolean;
-  objects: Array<{ id: string; name: string }>;
+  objects: IAddressObject[];
   deptObjMap: Record<string, string[]>;
   empObjMap: Record<string, string[]>;
   onNavigate: (emp: Employee) => void;
@@ -1032,7 +1033,7 @@ const MobileCard: FC<{
   canEditSch: boolean;
   canOpenCard: boolean;
   canEditObject: boolean;
-  objects: Array<{ id: string; name: string }>;
+  objects: IAddressObject[];
   deptObjMap: Record<string, string[]>;
   empObjMap: Record<string, string[]>;
   onNavigate: (emp: Employee) => void;

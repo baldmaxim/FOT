@@ -188,8 +188,8 @@ export const adminService = {
     return response.data;
   },
 
-  async listSkudObjectsForAssignment(): Promise<Array<{ id: string; name: string }>> {
-    const response = await apiClient.get<ApiResponse<Array<{ id: string; name: string }>>>(
+  async listSkudObjectsForAssignment(): Promise<Array<{ id: string; name: string; alt_name: string | null }>> {
+    const response = await apiClient.get<ApiResponse<Array<{ id: string; name: string; alt_name: string | null }>>>(
       '/admin/skud-objects',
     );
     return response.data;

@@ -4,6 +4,12 @@ import { Check } from 'lucide-react';
 import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import {
+  groupObjectsByAddress,
+  groupSelectionState,
+  objectGroupLabelsForIds,
+  type IObjectGroup,
+} from '../../utils/objectGroups';
 import type { Employee } from '../../types';
 
 interface IProps {
@@ -21,11 +27,15 @@ const arraysEqual = (a: string[], b: string[]): boolean => {
 
 const normalize = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').trim();
 
+const setIndeterminate = (el: HTMLInputElement | null, value: boolean): void => {
+  if (el) el.indeterminate = value;
+};
+
 /**
  * Персональное назначение «объектов входа» сотруднику (employee_object_assignment).
- * Переопределяет объекты его отдела/бригады. Сверху — уже назначенные объекты,
- * ниже — доступные. Объект с адресом «Текущая деятельность» → в единой 1С-выгрузке
- * одна строка на сотрудника без разбивки по объектам.
+ * Переопределяет объекты бригады. Объекты сгруппированы по адресу (объекты с одним
+ * адресом — один пункт). Сверху назначенные, ниже доступные. Объект с адресом
+ * «Текущая деятельность» → в единой 1С-выгрузке одна строка без разбивки.
  */
 export const StaffObjectAssignmentModal: FC<IProps> = ({ employee, onClose, onSaved }) => {
   const toast = useToast();
@@ -48,7 +58,9 @@ export const StaffObjectAssignmentModal: FC<IProps> = ({ employee, onClose, onSa
     staleTime: 30_000,
   });
 
-  const objects = objectsQuery.data ?? [];
+  const objects = useMemo(() => objectsQuery.data ?? [], [objectsQuery.data]);
+  const groups = useMemo(() => groupObjectsByAddress(objects), [objects]);
+
   const empObjectIds = useMemo(
     () => assignmentsQuery.data?.employee_objects?.[String(employee.id)] ?? [],
     [assignmentsQuery.data, employee.id],
@@ -62,30 +74,32 @@ export const StaffObjectAssignmentModal: FC<IProps> = ({ employee, onClose, onSa
   useEffect(() => { setDraft(null); }, [empObjectIds]);
 
   const current = draft ?? empObjectIds;
+  const currentSet = useMemo(() => new Set(current), [current]);
   const hasChanges = !arraysEqual(current, empObjectIds);
 
-  const toggle = (id: string) => {
+  const toggleGroup = (group: IObjectGroup) => {
+    const state = groupSelectionState(group, currentSet);
     setDraft(() => {
       const set = new Set(current);
-      if (set.has(id)) set.delete(id);
-      else set.add(id);
+      if (state === 'all') group.objectIds.forEach(id => set.delete(id));
+      else group.objectIds.forEach(id => set.add(id));
       return [...set];
     });
   };
 
-  const filtered = useMemo(() => {
+  const filteredGroups = useMemo(() => {
     const q = normalize(search);
-    if (!q) return objects;
-    return objects.filter(o => normalize(o.name).includes(q));
-  }, [objects, search]);
+    if (!q) return groups;
+    return groups.filter(g => normalize(g.label).includes(q));
+  }, [groups, search]);
 
-  const assigned = filtered.filter(o => current.includes(o.id));
-  const available = filtered.filter(o => !current.includes(o.id));
+  const assignedGroups = filteredGroups.filter(g => groupSelectionState(g, currentSet) !== 'none');
+  const availableGroups = filteredGroups.filter(g => groupSelectionState(g, currentSet) === 'none');
 
-  const inheritedNames = useMemo(() => {
-    const byId = new Map(objects.map(o => [o.id, o.name]));
-    return deptObjectIds.map(id => byId.get(id)).filter((v): v is string => Boolean(v));
-  }, [objects, deptObjectIds]);
+  const inheritedLabels = useMemo(
+    () => objectGroupLabelsForIds(objects, deptObjectIds),
+    [objects, deptObjectIds],
+  );
 
   const handleSave = async () => {
     setSaving(true);
@@ -106,12 +120,20 @@ export const StaffObjectAssignmentModal: FC<IProps> = ({ employee, onClose, onSa
 
   const loading = objectsQuery.isLoading || assignmentsQuery.isLoading;
 
-  const renderItem = (obj: { id: string; name: string }) => {
-    const checked = current.includes(obj.id);
+  const renderGroup = (group: IObjectGroup) => {
+    const state = groupSelectionState(group, currentSet);
     return (
-      <label key={obj.id} className={`sc-obj-item ${checked ? 'sc-obj-item--on' : ''}`}>
-        <input type="checkbox" checked={checked} onChange={() => toggle(obj.id)} />
-        <span>{obj.name}</span>
+      <label key={group.key} className={`sc-obj-item ${state !== 'none' ? 'sc-obj-item--on' : ''}`}>
+        <input
+          type="checkbox"
+          checked={state === 'all'}
+          ref={el => setIndeterminate(el, state === 'partial')}
+          onChange={() => toggleGroup(group)}
+        />
+        <span>
+          {group.label}
+          {group.objectIds.length > 1 && <span className="sc-obj-count">{group.objectIds.length}</span>}
+        </span>
       </label>
     );
   };
@@ -125,15 +147,15 @@ export const StaffObjectAssignmentModal: FC<IProps> = ({ employee, onClose, onSa
         </div>
         <div className="sc-modal-body">
           <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
-            Персональное назначение объектов сотруднику — переопределяет объекты бригады.
-            Объект с адресом «Текущая деятельность» в единой 1С-выгрузке идёт одной строкой
-            без разбивки по объектам. Объекты на отделы/бригады назначаются массово через меню «•••».
+            Персональное назначение объектов сотруднику — переопределяет объекты бригады. Объекты
+            сгруппированы по адресу. «Текущая деятельность» в единой 1С-выгрузке идёт одной строкой
+            без разбивки. Объекты на отделы/бригады назначаются массово через меню «•••».
           </p>
 
-          {inheritedNames.length > 0 && (
+          {inheritedLabels.length > 0 && (
             <div className="sc-field" style={{ fontSize: 13 }}>
               <label>Наследуется от бригады</label>
-              <div style={{ color: 'var(--text-secondary, #64748b)' }}>{inheritedNames.join(', ')}</div>
+              <div style={{ color: 'var(--text-secondary, #64748b)' }}>{inheritedLabels.join(', ')}</div>
             </div>
           )}
 
@@ -143,23 +165,23 @@ export const StaffObjectAssignmentModal: FC<IProps> = ({ employee, onClose, onSa
               className="sc-obj-search"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Поиск объекта…"
+              placeholder="Поиск по адресу…"
             />
           )}
 
           {loading ? (
             <div style={{ fontSize: 14 }}>Загрузка…</div>
-          ) : objects.length === 0 ? (
+          ) : groups.length === 0 ? (
             <div style={{ fontSize: 14 }}>Объекты не настроены</div>
           ) : (
             <div className="sc-obj-list">
-              <div className="sc-obj-group-label">Назначенные{assigned.length > 0 ? ` (${assigned.length})` : ''}</div>
-              {assigned.length > 0
-                ? assigned.map(renderItem)
+              <div className="sc-obj-group-label">Назначенные{assignedGroups.length > 0 ? ` (${assignedGroups.length})` : ''}</div>
+              {assignedGroups.length > 0
+                ? assignedGroups.map(renderGroup)
                 : <div className="sc-obj-empty">— нет персональных объектов —</div>}
               <div className="sc-obj-group-label">Доступные</div>
-              {available.length > 0
-                ? available.map(renderItem)
+              {availableGroups.length > 0
+                ? availableGroups.map(renderGroup)
                 : <div className="sc-obj-empty">— все объекты назначены —</div>}
             </div>
           )}
