@@ -1193,9 +1193,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             .filter(Boolean)
                             .join(' • ')
                           : baseTitle;
-                        // Одиночный клик разрешён и в выходной — для корректировок руководителем.
-                        // Bulk остаётся под !dayOff.
-                        const isBulkClickable = !dayOff;
+                        // Bulk-выделение разрешено и в выходные — как в виде «по сотрудникам».
+                        const isBulkClickable = true;
                         const isBlocked = row.isSynthetic;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
@@ -1456,10 +1455,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             .filter(Boolean)
                             .join(' • ')
                           : baseTitle;
-                        // Одиночный клик разрешён и в выходной — руководитель может внести
-                        // корректировку (например, выход в выходной). Bulk оставляем под !dayOff,
-                        // чтобы случайное протягивание не цепляло выходные.
-                        const isBulkClickable = !dayOff;
+                        // Bulk-выделение разрешено и в выходные — как в виде «по сотрудникам».
+                        const isBulkClickable = true;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
                         return (

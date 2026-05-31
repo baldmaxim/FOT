@@ -410,6 +410,21 @@ export const TimesheetPage: FC = () => {
     setBulkSelectedCellKeys(new Set());
   }, []);
 
+  // Esc выходит из режима корректировок; если открыта модалка — сначала закрывает её.
+  useEffect(() => {
+    if (!bulkModeEnabled) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (bulkModalOpen) {
+        setBulkModalOpen(false);
+        return;
+      }
+      clearBulkState();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [bulkModeEnabled, bulkModalOpen, clearBulkState]);
+
   useEffect(() => {
     if (!isRestrictedManagerView) return;
     if (queryMonth === monthStr) return;

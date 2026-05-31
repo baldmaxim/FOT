@@ -378,7 +378,9 @@ const CorrectionTab: FC<{
     const statusMeta = getStatusMeta(initialStatus);
     const statusLabel = statusMeta?.label ?? initialStatus;
     const statusIcon = statusMeta?.icon ?? '✎';
-    const hoursLabel = HOURS_EDITABLE_STATUSES.has(initialStatus)
+    // У удалёнки часы не редактируются вручную, но проставляются автоматически
+    // (полный день по графику) — показываем их, а не прочерк.
+    const hoursLabel = HOURS_EDITABLE_STATUSES.has(initialStatus) || initialStatus === 'remote'
       ? formatHM(initialHours)
       : '—';
     const approvedLine = correctionInfo?.approved_at

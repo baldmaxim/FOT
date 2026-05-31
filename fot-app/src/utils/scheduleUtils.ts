@@ -1,4 +1,4 @@
-import type { IResolvedSchedule } from '../types/schedule';
+import type { IResolvedSchedule, ICycleDay } from '../types/schedule';
 import type { IProductionCalendarMonth } from '../types/timesheet';
 
 const getISODow = (date: Date): number => {
@@ -10,6 +10,35 @@ const toISODate = (year: number, month: number, day: number): string => {
   const m = String(month).padStart(2, '0');
   const d = String(day).padStart(2, '0');
   return `${year}-${m}-${d}`;
+};
+
+/**
+ * Слот циклического графика для конкретной даты. Зеркалит бэкендовый getCycleSlot
+ * (schedule.service.ts): сдвиг считается в календарных днях между anchor и датой
+ * (UTC-полночь обоих). Возвращает null, если график не циклический или у него нет
+ * валидных cycle_*-полей. anchor_date/assignment_anchor_date приходят строкой
+ * 'YYYY-MM-DD' (pg DATE type-parser), поэтому off-by-one с бэком исключён.
+ */
+const getCycleSlotForDay = (
+  sched: IResolvedSchedule,
+  year: number,
+  month: number,
+  day: number,
+): ICycleDay | null => {
+  if (sched.pattern_type !== 'cycle') return null;
+  const cycleLength = sched.cycle_length;
+  const cycleDays = sched.cycle_days;
+  const anchorRaw = sched.assignment_anchor_date ?? sched.anchor_date;
+  if (!cycleLength || !cycleDays || cycleDays.length !== cycleLength || !anchorRaw) {
+    return null;
+  }
+  const [ay, am, ad] = anchorRaw.slice(0, 10).split('-').map(Number);
+  if (!ay || !am || !ad) return null;
+  const anchorUtc = Date.UTC(ay, am - 1, ad);
+  const targetUtc = Date.UTC(year, month - 1, day);
+  const dayDiff = Math.round((targetUtc - anchorUtc) / 86_400_000);
+  const idx = ((dayDiff % cycleLength) + cycleLength) % cycleLength;
+  return cycleDays[idx] ?? null;
 };
 
 export const getScheduleForTimesheetDay = (
@@ -32,6 +61,8 @@ export const getWorkHoursForDay = (
   day: number,
 ): number => {
   if (!sched) return 8;
+  const slot = getCycleSlotForDay(sched, year, month, day);
+  if (slot) return slot.work_hours;
   if (sched.day_overrides) {
     const dow = String(getISODow(new Date(year, month - 1, day)));
     const override = sched.day_overrides[dow];
@@ -50,7 +81,11 @@ export const getShiftDurationForDay = (
   if (!sched) return 9;
   let workStart = sched.work_start;
   let workEnd = sched.work_end;
-  if (sched.day_overrides) {
+  const slot = getCycleSlotForDay(sched, year, month, day);
+  if (slot) {
+    workStart = slot.work_start ?? sched.work_start;
+    workEnd = slot.work_end ?? sched.work_end;
+  } else if (sched.day_overrides) {
     const dow = String(getISODow(new Date(year, month - 1, day)));
     const override = sched.day_overrides[dow];
     if (override) {
@@ -110,6 +145,10 @@ export const isScheduleDayOff = (
     const dow = new Date(year, month - 1, day).getDay();
     return dow === 0 || dow === 6;
   }
+  // Цикл-графики: рабочий/выходной определяет слот цикла, а не work_days
+  // (редактор для cycle всегда пишет work_days=[1..5], что неверно для 2/2 и т.п.).
+  const slot = getCycleSlotForDay(sched, year, month, day);
+  if (slot) return slot.work_hours <= 0;
   return !sched.work_days.includes(getISODow(new Date(year, month - 1, day)));
 };
 
