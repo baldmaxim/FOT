@@ -259,6 +259,18 @@ export async function getDashboardStats(
 
   console.log('[getDashboardStats] deptIds:', deptIds);
 
+  // Диагностика: загружаем ВСЕ сотрудников отдела (без фильтров), чтобы видеть статус
+  const allDeptEmployees = await query<{ id: number; full_name: string | null; employment_status: string; is_archived: boolean }>(
+    `SELECT id, full_name, employment_status, is_archived FROM employees
+     WHERE org_department_id = ANY($1::uuid[])
+     LIMIT 20`,
+    [deptIds],
+  );
+  console.log('[getDashboardStats] all employees in deptIds (diagnostic)', {
+    totalCount: allDeptEmployees?.length ?? 0,
+    sample: allDeptEmployees?.slice(0, 5),
+  });
+
   const [employees, internalPoints] = await Promise.all([
     query<{ id: number; full_name: string | null; org_department_id: string | null }>(
       `SELECT id, full_name, org_department_id FROM employees
@@ -268,6 +280,11 @@ export async function getDashboardStats(
     ),
     getInternalAccessPoints(),
   ]);
+
+  console.log('[getDashboardStats] employee query result', {
+    employeeCount: employees?.length ?? 0,
+    deptIds,
+  });
 
   if (!employees || employees.length === 0) {
     console.log('[getDashboardStats] No active employees found', {
