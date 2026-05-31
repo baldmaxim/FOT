@@ -17,9 +17,9 @@
   z-index: 1000;
   width: 260px;
   height: 200px;
-  border: 1px solid var(--color-border, #d1d5db);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   overflow: hidden;
   pointer-events: none;
@@ -33,7 +33,7 @@
 
 .diagInline {
   font-size: 0.82rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
@@ -41,12 +41,12 @@
 }
 
 .diagInline b {
-  color: var(--color-text, #111);
+  color: var(--text-primary);
 }
 
 .card {
-  background: var(--color-surface, #fff);
-  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
 }
@@ -55,12 +55,12 @@
   font-size: 1.05rem;
   font-weight: 600;
   margin: 0 0 8px;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
 }
 
 .hint {
   font-size: 0.9rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
   margin: 4px 0 12px;
   overflow-wrap: anywhere;
 }
@@ -74,17 +74,17 @@
 
 .label {
   font-size: 0.85rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .input,
 .inputSm {
   font-size: 16px;
   padding: 10px 12px;
-  border: 1px solid var(--color-border, #d1d5db);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--color-bg, #fff);
-  color: var(--color-text, #111);
+  background: var(--surface);
+  color: var(--text-primary);
   width: 100%;
 }
 
@@ -111,14 +111,14 @@
 }
 
 .btn {
-  background: var(--color-primary, #2563eb);
+  background: var(--primary);
   color: #fff;
 }
 
 .btnSecondary {
   background: transparent;
-  border-color: var(--color-border, #d1d5db);
-  color: var(--color-text, #111);
+  border-color: var(--border);
+  color: var(--text-primary);
 }
 
 .btnSm {
@@ -126,8 +126,8 @@
   padding: 8px 12px;
   font-size: 0.85rem;
   background: transparent;
-  border-color: var(--color-border, #d1d5db);
-  color: var(--color-text, #111);
+  border-color: var(--border);
+  color: var(--text-primary);
 }
 
 .btn:disabled,
@@ -138,19 +138,19 @@
 }
 
 .ok {
-  color: var(--color-success, #16a34a);
+  color: var(--success);
   font-size: 0.9rem;
   margin: 8px 0 0;
 }
 
 .err {
-  color: var(--color-danger, #dc2626);
+  color: var(--error);
   font-size: 0.9rem;
   margin: 8px 0 0;
 }
 
 .link {
-  color: var(--color-primary, #2563eb);
+  color: var(--primary);
   text-decoration: none;
 }
 
@@ -196,7 +196,7 @@
 }
 
 .btnIconDanger {
-  color: var(--color-danger, #dc2626);
+  color: var(--error);
   background: transparent;
   border-color: rgba(220, 38, 38, 0.3);
 }
@@ -241,14 +241,14 @@
 .table td {
   text-align: left;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--color-border, #eee);
-  color: var(--color-text, #111);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
   white-space: nowrap;
 }
 
 .table th {
   font-weight: 600;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .mapCell {
@@ -264,7 +264,7 @@
 
 .btnDanger,
 .btnDangerSm {
-  background: var(--color-danger, #dc2626);
+  background: var(--error);
   color: #fff;
   border: 1px solid transparent;
   cursor: pointer;
@@ -302,7 +302,7 @@
 
 .modal,
 .modalWide {
-  background: var(--color-surface, #fff);
+  background: var(--surface);
   border-radius: 12px;
   padding: 20px;
   width: 100%;
@@ -332,7 +332,7 @@
   font-size: 1.1rem;
   font-weight: 600;
   margin: 0 0 12px;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
 }
 
 .warningBox {
@@ -341,13 +341,13 @@
   border-radius: 10px;
   padding: 12px 14px;
   margin-bottom: 12px;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
 }
 
 .warningText {
   font-size: 0.9rem;
   margin: 6px 0 0;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
@@ -380,7 +380,7 @@
   padding: 2px 8px;
   border-radius: 999px;
   background: rgba(22, 163, 74, 0.12);
-  color: #15803d;
+  color: var(--success);
   border: 1px solid rgba(22, 163, 74, 0.35);
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -392,19 +392,19 @@
   padding: 2px 8px;
   border-radius: 999px;
   background: rgba(220, 38, 38, 0.1);
-  color: #b91c1c;
+  color: var(--error);
   border: 1px solid rgba(220, 38, 38, 0.35);
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
 
 .statusOnline {
-  color: #15803d;
+  color: var(--success);
   font-weight: 600;
 }
 
 .statusOffline {
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 /* Чип-пилюля для геозон и т.д. */
@@ -416,7 +416,7 @@
   border-radius: 999px;
   font-size: 0.78rem;
   background: rgba(37, 99, 235, 0.1);
-  color: var(--color-primary, #2563eb);
+  color: var(--primary);
   border: 1px solid rgba(37, 99, 235, 0.25);
   max-width: 160px;
 }
@@ -449,8 +449,8 @@
   padding: 2px 8px;
   border-radius: 999px;
   background: transparent;
-  border: 1px dashed var(--color-border, #d1d5db);
-  color: var(--color-text-secondary, #6b7280);
+  border: 1px dashed var(--border);
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
@@ -458,8 +458,8 @@
 .popover {
   position: absolute;
   z-index: 1100;
-  background: var(--color-surface, #fff);
-  border: 1px solid var(--color-border, #e2e8f0);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   padding: 6px;
@@ -476,11 +476,11 @@
   border-radius: 6px;
   cursor: pointer;
   font-size: 0.9rem;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
 }
 
 .popoverItem:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--surface-hover);
 }
 
 .popoverItem input {
@@ -500,9 +500,9 @@
   min-height: 36px;
   padding: 8px 14px;
   border-radius: 8px;
-  border: 1px solid var(--color-border, #d1d5db);
+  border: 1px solid var(--border);
   background: transparent;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
   cursor: pointer;
 }
 
@@ -513,24 +513,24 @@
 
 .paginationInfo {
   font-size: 0.9rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .diagBlock {
   margin-top: 12px;
   padding: 12px;
-  border: 1px dashed var(--color-border, #d1d5db);
+  border: 1px dashed var(--border);
   border-radius: 8px;
-  background: var(--color-bg, #fafafa);
+  background: var(--surface);
   font-size: 0.85rem;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-x: auto;
 }
 
 .diagBlock dt {
   font-weight: 600;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
   display: inline-block;
   min-width: 90px;
 }
@@ -544,10 +544,10 @@
 .daysSelect {
   font-size: 16px;
   padding: 8px 10px;
-  border: 1px solid var(--color-border, #d1d5db);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--color-bg, #fff);
-  color: var(--color-text, #111);
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 /* Табы навигации внутри страницы. Горизонтальный скролл на мобилке. */
@@ -555,7 +555,7 @@
   display: flex;
   flex-wrap: nowrap;
   gap: 4px;
-  border-bottom: 1px solid var(--color-border, #e5e7eb);
+  border-bottom: 1px solid var(--border);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   padding-bottom: 0;
@@ -571,15 +571,15 @@
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
   border-radius: 8px 8px 0 0;
 }
 
 .tabBtn:hover:not(:disabled) {
-  color: var(--color-text, #111);
-  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-primary);
+  background: var(--surface-hover);
 }
 
 .tabBtn:disabled {
@@ -588,8 +588,8 @@
 }
 
 .tabActive {
-  color: var(--color-primary, #2563eb);
-  border-bottom-color: var(--color-primary, #2563eb);
+  color: var(--primary);
+  border-bottom-color: var(--primary);
   background: rgba(37, 99, 235, 0.06);
 }
 
@@ -598,15 +598,15 @@
   margin-left: 6px;
   padding: 1px 8px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--surface-hover);
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .tabActive .tabBadge {
   background: rgba(37, 99, 235, 0.15);
-  color: var(--color-primary, #2563eb);
+  color: var(--primary);
 }
 
 /* EmployeeFioPicker — input + dropdown поверх таблицы. */
@@ -620,17 +620,17 @@
   width: 100%;
   font-size: 16px;
   padding: 8px 10px;
-  border: 1px solid var(--color-border, #d1d5db);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--color-bg, #fff);
-  color: var(--color-text, #111);
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
 .fioPickerDropdown {
   position: fixed;
   z-index: 1100;
-  background: var(--color-surface, #fff);
-  border: 1px solid var(--color-border, #e2e8f0);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   max-height: 320px;
@@ -641,9 +641,9 @@
 .fioPickerItem {
   padding: 8px 12px;
   cursor: pointer;
-  border-bottom: 1px solid var(--color-border, #f1f5f9);
+  border-bottom: 1px solid var(--border);
   font-size: 0.9rem;
-  color: var(--color-text, #111);
+  color: var(--text-primary);
   white-space: normal;
 }
 
@@ -658,7 +658,7 @@
 .fioPickerHint {
   padding: 8px 12px;
   font-size: 0.82rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {

@@ -165,7 +165,7 @@ export const LocationsMapTab: FC = () => {
       {mode === 'last' && lastQuery.isError && <p className={pageStyles.err}>Не удалось загрузить позиции</p>}
       {mode === 'tracks' && tracksQuery.isError && <p className={pageStyles.err}>Не удалось загрузить треки</p>}
 
-      <div style={{ height: 'calc(100vh - 320px)', minHeight: 480, borderRadius: 12, overflow: 'hidden', border: '1px solid var(--color-border, #e5e7eb)' }}>
+      <div style={{ height: 'calc(100vh - 320px)', minHeight: 480, borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)' }}>
         <MapContainer center={DEFAULT_CENTER} zoom={10} style={{ width: '100%', height: '100%' }} scrollWheelZoom>
           <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} maxZoom={19} />
           <FitBounds points={mode === 'last' ? lastPoints : trackPoints} />
