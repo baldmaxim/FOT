@@ -104,10 +104,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const twoFactorVerified = sessionStorage.getItem('2fa_verified') === 'true';
 
       try {
-        const [response] = await Promise.all([
-          apiClient.get<{ user: User; profile: UserProfile; access_token?: string }>('/auth/me'),
-          loadRoles(),
-        ]);
+        const response = await apiClient.get<{ user: User; profile: UserProfile; access_token?: string }>('/auth/me');
         const { user, profile } = response;
 
         if (response.access_token) {
@@ -125,6 +122,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           positionType: profile.role_code,
           loading: false,
         });
+        void loadRoles();
       } catch {
         setSessionToken(null);
         setToken(null);
@@ -157,7 +155,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     sessionStorage.setItem('2fa_verified', 'true');
-    await loadRoles();
+    void loadRoles();
     setState({
       user: response.user,
       profile: response.profile,
@@ -181,8 +179,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     sessionStorage.setItem('2fa_verified', 'true');
+    void loadRoles();
     setState(prev => ({ ...prev, isTwoFactorVerified: true, loading: false }));
-  }, []);
+  }, [loadRoles]);
 
   const register = useCallback(async (data: RegisterData): Promise<RegisterResponse | null> => {
     const response = await apiClient.post<RegisterResponse>('/auth/register', data, { skipAuth: true });
