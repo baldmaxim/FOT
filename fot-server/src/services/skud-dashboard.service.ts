@@ -52,24 +52,31 @@ export function invalidateDashboardCache(): void {
  * Вызывается один раз при старте, перед запуском presence-polling.
  */
 export async function initializeSKUDDailySummaryOnStartup(): Promise<void> {
+  console.log('[skud-dashboard] начало инициализации skud_daily_summary...');
   try {
     // Проверяем, пуста ли таблица
-    const [{ count }] = await query<{ count: string }>(
+    const countResult = await query<{ count: string }>(
       'SELECT COUNT(*) as count FROM skud_daily_summary',
-    ) || [{ count: '0' }];
-
+    );
+    const count = countResult?.[0]?.count ?? '0';
     const summaryCount = parseInt(count, 10);
+
+    console.log('[skud-dashboard] текущий размер skud_daily_summary:', summaryCount);
+
     if (summaryCount > 0) {
       console.log(`[skud-dashboard] skud_daily_summary уже заполнена (${summaryCount} записей) — инициализация пропущена`);
       return;
     }
 
     // Если таблица пуста, но есть события — пересчитываем
-    const [{ event_count }] = await query<{ event_count: string }>(
+    const eventCountResult = await query<{ event_count: string }>(
       'SELECT COUNT(*) as event_count FROM skud_events WHERE event_date >= NOW() - INTERVAL \'90 days\'',
-    ) || [{ event_count: '0' }];
-
+    );
+    const event_count = eventCountResult?.[0]?.event_count ?? '0';
     const eventCount = parseInt(event_count, 10);
+
+    console.log('[skud-dashboard] событий в skud_events за 90 дней:', eventCount);
+
     if (eventCount === 0) {
       console.log('[skud-dashboard] skud_daily_summary пуста и нет событий для инициализации');
       return;
@@ -84,6 +91,8 @@ export async function initializeSKUDDailySummaryOnStartup(): Promise<void> {
        ORDER BY date DESC, emp_id ASC`,
     );
 
+    console.log('[skud-dashboard] найдено уникальных (emp_id, date) пар:', pairs?.length ?? 0);
+
     if (!pairs || pairs.length === 0) {
       console.log('[skud-dashboard] Нет привязанных событий для инициализации');
       return;
@@ -91,18 +100,21 @@ export async function initializeSKUDDailySummaryOnStartup(): Promise<void> {
 
     // Пересчитываем батчами
     const BATCH_SIZE = 200;
+    console.log(`[skud-dashboard] начинаю пересчет ${pairs.length} пар батчами по ${BATCH_SIZE}...`);
     for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
       const batch = pairs.slice(i, i + BATCH_SIZE);
+      console.log(`[skud-dashboard] обработка батча ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(pairs.length / BATCH_SIZE)}`);
       await query(
         'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
         [JSON.stringify(batch)],
       );
     }
 
-    console.log(`[skud-dashboard] инициализирована skud_daily_summary: ${pairs.length} пар (emp_id, date) пересчитано батчами по ${BATCH_SIZE}`);
+    console.log(`[skud-dashboard] ✓ инициализирована skud_daily_summary: ${pairs.length} пар пересчитано`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[skud-dashboard] ошибка инициализации skud_daily_summary: ${message}`);
+    console.error(`[skud-dashboard] ✗ ошибка инициализации skud_daily_summary: ${message}`);
+    if (err instanceof Error) console.error(err.stack);
     // Не падаем — это некритичная инициализация
   }
 }
@@ -258,7 +270,13 @@ export async function getDashboardStats(
   ]);
 
   if (!employees || employees.length === 0) {
-    console.log('[getDashboardStats] No active employees found for deptIds:', deptIds, 'employees:', employees);
+    console.log('[getDashboardStats] No active employees found', {
+      deptIds,
+      period,
+      month,
+      employeesLength: employees?.length ?? 0,
+      employeesData: employees,
+    });
     const empty: IDashboardStatsResult = {
       lateToday: 0, lateYesterday: 0,
       punctuality: { onTime: 0, slightlyLate: 0, veryLate: 0, absent: 0 },
@@ -372,6 +390,15 @@ export async function getDashboardStats(
     full_name: (e.full_name as string | null) || null,
   }));
 
+  console.log('[getDashboardStats] loading data', {
+    period,
+    deptIds,
+    empIds,
+    empCount: empIds.length,
+    summaryStartDate,
+    summaryEndDate,
+  });
+
   const [summaries, todayCounts, recentEventsRaw, periodEvents, arrivalEvents, attendanceHoursMap] = await Promise.all([
     fetchSummaryRows(empIds, summaryStartDate, summaryEndDate),
     fetchTodayEventCounts(empIds, todayStr),
@@ -400,6 +427,13 @@ export async function getDashboardStats(
     }),
   ]);
 
+  console.log('[getDashboardStats] data loaded', {
+    summariesCount: summaries?.length ?? 0,
+    todayCounts: { ...todayCounts },
+    recentEventsCount: recentEventsRaw?.length ?? 0,
+    periodEventsCount: periodEvents?.length ?? 0,
+    arrivalEventsCount: arrivalEvents?.length ?? 0,
+  });
 
   const getLateThresholdFor = (empId: number, dateStr: string): string => {
     const sched = schedulesMap.get(empId);
