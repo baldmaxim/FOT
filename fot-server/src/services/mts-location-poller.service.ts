@@ -10,8 +10,8 @@ import {
 import { MtsApiError } from './mts-base.service.js';
 import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
-// Фоновый поллер пассивных lastLocations: раз в час (env MTS_SYNC_INTERVAL_MS)
-// дёргает один bulk-запрос на ВСЕХ абонентов и сохраняет снимки в БД
+// Фоновый поллер пассивных lastLocations: по умолчанию раз в 10 мин
+// (env MTS_SYNC_INTERVAL_MS) дёргает один bulk-запрос на ВСЕХ абонентов и сохраняет снимки в БД
 // зашифрованными (AES-256-GCM). API бесплатный — за объём не платим.
 // Активный subscriberRequests НЕ дёргаем: он платный и идёт только вручную из UI.
 //
@@ -39,6 +39,10 @@ async function tick(owner: string): Promise<void> {
   if (!acq.acquired) return;
 
   let cronStatus: CronRunStatus = 'ok';
+  // Расписание Sentry-монитора берём из реального интервала (env), чтобы при смене
+  // MTS_SYNC_INTERVAL_MS не было ложных «missed». ВНИМАНИЕ: частота ТОЧЕК в БД
+  // ограничена не этим интервалом, а тем, как часто МТС обновляет позицию (LBS ≈ 1/час).
+  const intervalMin = Math.max(1, Math.round((Number.parseInt(env.MTS_SYNC_INTERVAL_MS, 10) || 600_000) / 60_000));
   try {
     await runWithCronMonitor(
       'mts-poller',
@@ -75,9 +79,9 @@ async function tick(owner: string): Promise<void> {
         return cronStatus;
       },
       {
-        schedule: { type: 'interval', value: 1, unit: 'hour' },
-        checkinMargin: 15,
-        maxRuntime: 30,
+        schedule: { type: 'interval', value: intervalMin, unit: 'minute' },
+        checkinMargin: 5,
+        maxRuntime: 8,
       },
     );
   } finally {
@@ -90,7 +94,7 @@ async function tick(owner: string): Promise<void> {
 export function startMtsLocationPoller(): void {
   if (timer) return;
   stopped = false;
-  const intervalMs = Math.max(60_000, Number.parseInt(env.MTS_SYNC_INTERVAL_MS, 10) || 3_600_000);
+  const intervalMs = Math.max(60_000, Number.parseInt(env.MTS_SYNC_INTERVAL_MS, 10) || 600_000);
   const owner = getSigurRuntimeOwner('mts_location_polling');
 
   console.log(`[mts-poller] starting (interval=${Math.round(intervalMs / 1000)}s, owner=${owner})`);
