@@ -48,6 +48,12 @@ export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClos
   const groups = useMemo(() => groupObjects(objects), [objects]);
   const deptObjMap = assignmentsQuery.data?.department_objects ?? {};
 
+  // Нормализуем глубину дерева к 0 (скрытые корни дают постоянный сдвиг).
+  const minLevel = useMemo(
+    () => (departments.length ? Math.min(...departments.map(d => d.level)) : 0),
+    [departments],
+  );
+
   const filteredDepts = useMemo(() => {
     const q = normalize(deptSearch);
     if (!q) return departments;
@@ -151,11 +157,12 @@ export const StaffBulkObjectAssignmentModal: FC<IProps> = ({ departments, onClos
                 ) : filteredDepts.map(d => {
                   const checked = selectedDepts.has(d.id);
                   const assignedCount = objectGroupLabelsForIds(objects, deptObjMap[d.id] ?? []).length;
+                  const indentPx = (d.level - minLevel) * 16;
                   return (
                     <label
                       key={d.id}
                       className={`sc-obj-item ${checked ? 'sc-obj-item--on' : ''}`}
-                      style={{ paddingLeft: 10 + d.level * 14 }}
+                      style={{ paddingLeft: 10 + indentPx, ['--depth-indent' as string]: `${indentPx}px` }}
                     >
                       <input type="checkbox" checked={checked} onChange={() => toggleDept(d.id)} />
                       <span>

@@ -489,6 +489,7 @@
 }
 
 .sc-obj-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -497,6 +498,24 @@
   border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
+}
+
+/* Линии-направляющие дерева отделов. 16px = шаг отступа в StaffBulkObjectAssignmentModal.tsx */
+.sc-obj-item::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 0;
+  bottom: 0;
+  width: var(--depth-indent, 0px);
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--border-subtle) 0,
+    var(--border-subtle) 1px,
+    transparent 1px,
+    transparent 16px
+  );
 }
 
 .sc-obj-item:hover {

@@ -2485,6 +2485,30 @@
   border-color: var(--accent);
 }
 
+/* Линии-направляющие дерева — только внутри drawer. 16px = INDENT_STEP в EmployeeAssignmentPanel.tsx */
+.assignmentPanelList .departmentAccessItem,
+.assignmentPanelList .departmentAccessGroupHeaderToggle {
+  position: relative;
+}
+
+.assignmentPanelList .departmentAccessItem::before,
+.assignmentPanelList .departmentAccessGroupHeaderToggle::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 0;
+  bottom: 0;
+  width: var(--depth-indent, 0px);
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--border-subtle) 0,
+    var(--border-subtle) 1px,
+    transparent 1px,
+    transparent 16px
+  );
+}
+
 /* Заголовок группы корня (например, «(СУ-10) ООО СУ-10») — отделяем от пунктов */
 .assignmentPanelList .departmentAccessGroupHeader {
   margin-top: 8px;

@@ -14,6 +14,7 @@ import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import styles from '../../pages/admin/Admin.module.css';
 
 const AUTO_EXPAND_ALL_THRESHOLD = 40;
+const INDENT_STEP = 16;
 
 interface IEmployeeAssignmentPanelProps {
   isOpen: boolean;
@@ -391,6 +392,13 @@ const DepartmentList: FC<{
 }> = ({ departments, search, selectedIds, onToggle }) => {
   const normalizedSearch = normalizeText(search);
 
+  // Глубина для рендера = level - minLevel: фильтрация по kind / скрытие корней
+  // даёт постоянный сдвиг, нормализуем самый мелкий видимый узел к 0.
+  const minLevel = useMemo(
+    () => (departments.length ? Math.min(...departments.map(d => d.level)) : 0),
+    [departments],
+  );
+
   // child→parent (ближайший предок) по плоскому массиву через стек: предок
   // имеет level < n.level и идёт раньше в обходе.
   const parentMap = useMemo(() => {
@@ -491,22 +499,21 @@ const DepartmentList: FC<{
     }
   }
 
-  const renderLeaf = (dept: IFlatDepartmentOption, keyPrefix: string, indent: number) => {
+  const renderLeaf = (dept: IFlatDepartmentOption, keyPrefix: string, depth: number) => {
     const checked = selectedSet.has(dept.id);
+    const indentPx = depth * INDENT_STEP;
     return (
       <label
         key={`${keyPrefix}-${dept.id}`}
         className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
+        style={{ paddingLeft: `calc(10px + ${indentPx}px)`, ['--depth-indent' as string]: `${indentPx}px` }}
       >
         <input
           type="checkbox"
           checked={checked}
           onChange={() => onToggle(dept.id)}
         />
-        <span
-          className={styles.departmentAccessItemLabel}
-          style={{ paddingLeft: `${indent * 14}px` }}
-        >
+        <span className={styles.departmentAccessItemLabel}>
           {dept.name}
         </span>
       </label>
@@ -524,14 +531,16 @@ const DepartmentList: FC<{
         </>
       )}
       {visibleRestItems.map(dept => {
+        const depth = dept.level - minLevel;
         if (dept.hasChildren) {
           const isExpanded = normalizedSearch ? true : expandedIds.has(dept.id);
+          const indentPx = depth * INDENT_STEP;
           return (
             <button
               key={dept.id}
               type="button"
               className={`${styles.departmentAccessGroupHeader} ${styles.departmentAccessGroupHeaderToggle}`}
-              style={{ paddingLeft: `${dept.level * 14}px` }}
+              style={{ paddingLeft: `calc(10px + ${indentPx}px)`, ['--depth-indent' as string]: `${indentPx}px` }}
               onClick={() => toggleExpanded(dept.id)}
               aria-expanded={isExpanded}
             >
@@ -542,7 +551,7 @@ const DepartmentList: FC<{
             </button>
           );
         }
-        return renderLeaf(dept, 'rest', dept.level);
+        return renderLeaf(dept, 'rest', depth);
       })}
     </div>
   );
