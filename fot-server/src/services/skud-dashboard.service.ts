@@ -315,13 +315,6 @@ export async function getDashboardStats(
   const empListForSched = employees.map(e => ({ id: e.id as number }));
   const schedulesMap = await resolveSchedulesBulk(empListForSched, formatDateToISO(new Date()));
 
-  const remoteEmpIds = new Set<number>();
-  for (const [empId, sched] of schedulesMap) {
-    if (!needsSkudCheck(sched, new Date())) remoteEmpIds.add(empId);
-  }
-
-  const officeEmpIds = empIds.filter(id => !remoteEmpIds.has(id));
-
   const today = new Date();
   const todayStr = formatDateToISO(today);
   const weekEnd = new Date(today);
@@ -382,6 +375,15 @@ export async function getDashboardStats(
     prevPeriodStartStr = yesterdayStr;
     prevPeriodEndStr = yesterdayStr;
   }
+
+  // Для месячной/недельной статистики проверяем СКУД на начало периода, не на сегодня.
+  // Если сегодня выходной, но есть рабочие дни в месяце/неделе — сотрудники не должны быть удаленными.
+  const checkDateForSkud = period === 'today' ? today : new Date(periodStartStr + 'T00:00:00');
+  const remoteEmpIds = new Set<number>();
+  for (const [empId, sched] of schedulesMap) {
+    if (!needsSkudCheck(sched, checkDateForSkud)) remoteEmpIds.add(empId);
+  }
+  const officeEmpIds = empIds.filter(id => !remoteEmpIds.has(id));
 
   const summaryStartDate = period === 'month' ? prevPeriodStartStr : period === 'week' ? prevWeekStartStr : yesterdayStr;
   const summaryEndDate = period === 'month' && !isCurrentMonth ? periodEndStr : todayStr;
