@@ -7,6 +7,7 @@ import { corsAllowedOrigins, env } from './config/env.js';
 import { IS_PRODUCTION } from './config/features.js';
 import { startPoolTelemetry, closeDb } from './config/postgres.js';
 import { startPresencePolling, stopPresencePolling } from './services/presence-polling.service.js';
+import { initializeSKUDDailySummaryOnStartup } from './services/skud-dashboard.service.js';
 import { startSigurMonitor, stopSigurMonitor } from './services/sigur-monitor.service.js';
 import { startStructureSyncScheduler, stopStructureSyncScheduler } from './services/sigur-structure-scheduler.service.js';
 import { startSigurEventsDailyScheduler, stopSigurEventsDailyScheduler } from './services/sigur-events-daily-scheduler.service.js';
@@ -75,7 +76,9 @@ httpServer.listen(PORT, HOST, () => {
     console.warn(`[sigur] не удалось загрузить справочник типов при старте: ${message} — использую fallback`);
     Sentry.captureException(err);
   });
-  void startPresencePolling();
+  void initializeSKUDDailySummaryOnStartup().then(() => {
+    void startPresencePolling();
+  });
   void startSigurMonitor();
   void startStructureSyncScheduler();
   void startSigurEventsDailyScheduler();

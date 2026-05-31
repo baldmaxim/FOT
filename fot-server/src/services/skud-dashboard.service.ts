@@ -46,6 +46,67 @@ export function invalidateDashboardCache(): void {
   dashboardCache.clear();
 }
 
+/**
+ * Инициализация skud_daily_summary при старте сервера.
+ * Если таблица пуста, но есть события в skud_events — заполняет её.
+ * Вызывается один раз при старте, перед запуском presence-polling.
+ */
+export async function initializeSKUDDailySummaryOnStartup(): Promise<void> {
+  try {
+    // Проверяем, пуста ли таблица
+    const [{ count }] = await query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM skud_daily_summary',
+    ) || [{ count: '0' }];
+
+    const summaryCount = parseInt(count, 10);
+    if (summaryCount > 0) {
+      console.log(`[skud-dashboard] skud_daily_summary уже заполнена (${summaryCount} записей) — инициализация пропущена`);
+      return;
+    }
+
+    // Если таблица пуста, но есть события — пересчитываем
+    const [{ event_count }] = await query<{ event_count: string }>(
+      'SELECT COUNT(*) as event_count FROM skud_events WHERE event_date >= NOW() - INTERVAL \'90 days\'',
+    ) || [{ event_count: '0' }];
+
+    const eventCount = parseInt(event_count, 10);
+    if (eventCount === 0) {
+      console.log('[skud-dashboard] skud_daily_summary пуста и нет событий для инициализации');
+      return;
+    }
+
+    // Собираем все уникальные пары (emp_id, date) за 90 дней
+    const pairs = await query<{ emp_id: number; date: string }>(
+      `SELECT DISTINCT employee_id as emp_id, event_date::date as date
+       FROM skud_events
+       WHERE employee_id IS NOT NULL
+         AND event_date >= NOW() - INTERVAL '90 days'
+       ORDER BY date DESC, emp_id ASC`,
+    );
+
+    if (!pairs || pairs.length === 0) {
+      console.log('[skud-dashboard] Нет привязанных событий для инициализации');
+      return;
+    }
+
+    // Пересчитываем батчами
+    const BATCH_SIZE = 200;
+    for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
+      const batch = pairs.slice(i, i + BATCH_SIZE);
+      await query(
+        'SELECT public.batch_recalculate_skud_daily_summary($1::jsonb)',
+        [JSON.stringify(batch)],
+      );
+    }
+
+    console.log(`[skud-dashboard] инициализирована skud_daily_summary: ${pairs.length} пар (emp_id, date) пересчитано батчами по ${BATCH_SIZE}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[skud-dashboard] ошибка инициализации skud_daily_summary: ${message}`);
+    // Не падаем — это некритичная инициализация
+  }
+}
+
 async function loadAttendanceHoursMap(params: {
   employees: IAttendanceEmployee[];
   startDate: string;
@@ -184,6 +245,8 @@ export async function getDashboardStats(
 
   const deptIds = await collectDeptIds(departmentId);
 
+  console.log('[getDashboardStats] deptIds:', deptIds);
+
   const [employees, internalPoints] = await Promise.all([
     query<{ id: number; full_name: string | null; org_department_id: string | null }>(
       `SELECT id, full_name, org_department_id FROM employees
@@ -195,6 +258,7 @@ export async function getDashboardStats(
   ]);
 
   if (!employees || employees.length === 0) {
+    console.log('[getDashboardStats] No active employees found for deptIds:', deptIds, 'employees:', employees);
     const empty: IDashboardStatsResult = {
       lateToday: 0, lateYesterday: 0,
       punctuality: { onTime: 0, slightlyLate: 0, veryLate: 0, absent: 0 },
