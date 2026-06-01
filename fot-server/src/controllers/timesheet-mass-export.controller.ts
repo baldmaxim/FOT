@@ -2,6 +2,7 @@ import { Response } from 'express';
 import ExcelJS from 'exceljs';
 import archiver from 'archiver';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { query } from '../config/postgres.js';
 import { resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import {
   fetchTimesheetDataForDepartment,
@@ -333,7 +334,27 @@ export async function exportTimesheetObjectsUnified(req: AuthenticatedRequest, r
     const workbook = await buildUnified1CWorkbook(mon, year, collected, true);
     const buffer = await writeTimesheetWorkbookBuffer(workbook);
 
-    const fileName = `Единый_1С_по_объектам_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`
+    // Получаем названия объектов для имени файла
+    const objectNames = await (async () => {
+      if (requestedObjectIds.length === 0) return '';
+      try {
+        const rows = await query<{ name: string }>(
+          'SELECT DISTINCT name FROM skud_objects WHERE id = ANY($1::uuid[]) ORDER BY name',
+          [requestedObjectIds],
+        );
+        if (rows.length === 1) {
+          return rows[0].name;
+        } else if (rows.length > 1) {
+          return rows.slice(0, 2).map((r: { name: string }) => r.name).join('_') + (rows.length > 2 ? '_и_др' : '');
+        }
+      } catch {
+        // Если ошибка БД, используем стандартное имя без объектов
+      }
+      return '';
+    })();
+
+    const objectNamePart = objectNames ? `_${objectNames}` : '';
+    const fileName = `Единый_1С_по_объектам${objectNamePart}_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`
       .replace(/[\/\\?%*:|"<>]/g, '_');
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
