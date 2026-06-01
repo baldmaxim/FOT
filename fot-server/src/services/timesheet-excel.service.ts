@@ -436,15 +436,11 @@ export const buildObjectRowsForOneC = (
             isUnderwork: isUnderworkHours(roundedHours, thresholdHours),
           });
           totalHours += roundedHours;
-          continue;
         }
-        // Часов на этом объекте нет — если в этот день у сотрудника статус-отсутствие
-        // (Б/От/Н/В/УУ/С/У), показываем буквенный код, иначе ячейка остаётся пустой.
-        const status = data.dataMap.get(employee.id)?.get(dateStr)?.status;
-        const label = status ? STATUS_LABELS[status] : '';
-        if (label) {
-          dayValues.set(day, { hours: 0, label, isUnderwork: false });
-        } else if (isCalendarWeekend(new Date(data.year, data.mon - 1, day), dateStr, data.calendarMonth)) {
+        // При экспорте по объектам показываем только часы на конкретном объекте.
+        // Статусы не показываем — это общие статусы, не специфичные для этого объекта.
+        // Выходные дни по календарю оставляем серыми.
+        if (!dayValues.has(day) && isCalendarWeekend(new Date(data.year, data.mon - 1, day), dateStr, data.calendarMonth)) {
           dayValues.set(day, { hours: 0, isUnderwork: false, isWeekend: true });
         }
       }
