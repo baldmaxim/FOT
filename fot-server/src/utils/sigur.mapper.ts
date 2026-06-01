@@ -29,6 +29,7 @@ export interface IMappedSigurPassEvent {
   employeeId: number | null;
   blocked: boolean | null;
   department: string | null;
+  rawId: number | null;  // id события из Sigur (raw.id) — ключ дедупа без потери within-minute проходов
 }
 
 export interface IMappedSigurFailureEvent {
@@ -134,6 +135,7 @@ export const mapSigurEvent = (raw: Record<string, unknown>): IMappedSigurEvent |
       employeeId,
       blocked: null,
       department: null,
+      rawId,
     };
   }
 

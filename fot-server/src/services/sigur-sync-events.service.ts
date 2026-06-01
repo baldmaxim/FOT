@@ -266,7 +266,7 @@ export async function syncEventsLogic(
 
       const dedupHash = computeDedupHash(
         personName, mapped.eventDate, mapped.eventTime,
-        mapped.accessPoint, mapped.direction,
+        mapped.accessPoint, mapped.direction, mapped.rawId,
       );
       if (existingSet.has(dedupHash)) { totalSkipped++; continue; }
       existingSet.add(dedupHash);

@@ -602,6 +602,7 @@ export async function pollEventsOnce(now = new Date()): Promise<void> {
         mapped.eventTime,
         mapped.accessPoint,
         mapped.direction,
+        mapped.rawId,
       );
       if (existingSet.has(dedupHash)) continue;
       existingSet.add(dedupHash);

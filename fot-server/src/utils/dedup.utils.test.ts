@@ -17,6 +17,31 @@ describe('computeDedupHash', () => {
     expect(a).not.toBe(b);
     expect(a).not.toBe(c);
   });
+
+  it('Sigur rawId: разные id в одну минуту → разные hash (within-minute проходы не теряются)', () => {
+    // Кейс Вакулиной: 14:22:20 exit и 14:22:22 exit на одной точке — раньше HH:MM
+    // схлопывал в один хэш, второй проход терялся. С rawId — два разных события.
+    const a = computeDedupHash('Иванов', '2026-05-08', '14:22:20', 'Офис', 'exit', 100);
+    const b = computeDedupHash('Иванов', '2026-05-08', '14:22:22', 'Офис', 'exit', 101);
+    expect(a).not.toBe(b);
+  });
+
+  it('Sigur rawId: один id из разных путей/страниц → одинаковый hash (повтор события ловится)', () => {
+    // Одно физическое событие, пришедшее из presence-polling и sigur-sync (или из
+    // двух страниц пагинации) с тем же raw.id — должно дедуплицироваться.
+    const a = computeDedupHash('Иванов', '2026-05-08', '14:22:20', 'Офис', 'exit', 100);
+    const b = computeDedupHash('Иванов', '2026-05-08', '14:22:21', 'Офис', 'exit', 100);
+    expect(a).toBe(b);
+  });
+
+  it('Sigur rawId: одинаковый id, но разная точка/направление → разные hash', () => {
+    // Страховка от переиспользования raw.id Sigur'ом между точками/направлениями.
+    const a = computeDedupHash('Иванов', '2026-05-08', '10:00:00', 'КПП-1', 'entry', 100);
+    const b = computeDedupHash('Иванов', '2026-05-08', '10:00:00', 'КПП-2', 'entry', 100);
+    const c = computeDedupHash('Иванов', '2026-05-08', '10:00:00', 'КПП-1', 'exit', 100);
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(c);
+  });
 });
 
 describe('computeFailureDedupHash', () => {

@@ -309,7 +309,7 @@ export async function syncEmployeeRange(params: {
     for (const m of mapped) {
       const dedupHash = computeDedupHash(
         m.physicalPerson, m.eventDate, m.eventTime,
-        m.accessPoint, m.direction,
+        m.accessPoint, m.direction, m.rawId,
       );
       if (existingSet.has(dedupHash)) {
         totalSkipped++;
@@ -466,7 +466,7 @@ export async function syncEmployee(
     for (const m of mapped) {
       const dedupHash = computeDedupHash(
         m.physicalPerson, m.eventDate, m.eventTime,
-        m.accessPoint, m.direction,
+        m.accessPoint, m.direction, m.rawId,
       );
       if (existingSet.has(dedupHash)) {
         totalSkipped++;
