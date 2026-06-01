@@ -25,6 +25,12 @@ interface ChangeOpts {
   note?: string;
   effectiveDate?: string;
   createdBy?: string | null;
+  /**
+   * Принудительно вести полную историю переводов даже при включённом freeze_history.
+   * Используется в точках увольнения/восстановления/архивации, где история периодов
+   * (реальный отдел → «Уволенные» → восстановление) не должна теряться.
+   */
+  forceHistory?: boolean;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -248,8 +254,9 @@ export const employeeChangesService = {
    */
   async changePosition(employeeId: number, positionId: string, opts: ChangeOpts = {}): Promise<void> {
     const { freezeHistory } = await settingsService.getEmployeeTransferConfig();
+    const effectiveFreeze = freezeHistory && !opts.forceHistory;
 
-    if (freezeHistory) {
+    if (effectiveFreeze) {
       await withTransaction(async (client) => {
         await applyFrozenAssignmentTx(
           client,
@@ -301,8 +308,9 @@ export const employeeChangesService = {
    */
   async changeDepartment(employeeId: number, departmentId: string, opts: ChangeOpts & { lockDepartment?: boolean } = {}): Promise<void> {
     const { freezeHistory } = await settingsService.getEmployeeTransferConfig();
+    const effectiveFreeze = freezeHistory && !opts.forceHistory;
 
-    if (freezeHistory) {
+    if (effectiveFreeze) {
       await withTransaction(async (client) => {
         await applyFrozenAssignmentTx(
           client,

@@ -125,6 +125,8 @@ export interface IDepartmentEmployeeMembership {
   employee_id: number;
   /** Дата (включительно), с которой сотрудник перестал быть в этом отделе из-за перевода в другой; null = ещё в отделе. */
   transferred_out_date: string | null;
+  /** Дата (включительно), С КОТОРОЙ сотрудник в этом отделе (нижняя граница, = effective_from). null = с начала периода. */
+  joined_date: string | null;
 }
 
 export async function listEmployeeIdsAssignedToDepartmentPeriod(
@@ -176,25 +178,55 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
     const empId = Number(row.employee_id);
     if (!Number.isFinite(empId)) continue;
     const effTo = (row.effective_to as string | null) ?? null;
+    const effFrom = (row.effective_from as string | null) ?? null;
     // Дата перевода = первый день, когда сотрудника уже нет в отделе.
     const transferDate = effTo ? formatDateShift(effTo, 1) : null;
     const existing = map.get(empId);
     if (!existing) {
-      map.set(empId, { employee_id: empId, transferred_out_date: transferDate });
-    } else if (effTo == null) {
-      // Открытое назначение всегда побеждает — сотрудник в отделе.
-      existing.transferred_out_date = null;
-    } else if (
-      existing.transferred_out_date != null
-      && transferDate != null
-      && transferDate > existing.transferred_out_date
-    ) {
-      existing.transferred_out_date = transferDate;
+      map.set(empId, { employee_id: empId, transferred_out_date: transferDate, joined_date: effFrom });
+    } else {
+      // joined_date = самая ранняя дата входа среди назначений в этот отдел.
+      if (effFrom && (existing.joined_date == null || effFrom < existing.joined_date)) {
+        existing.joined_date = effFrom;
+      }
+      if (effTo == null) {
+        // Открытое назначение всегда побеждает — сотрудник в отделе.
+        existing.transferred_out_date = null;
+      } else if (
+        existing.transferred_out_date != null
+        && transferDate != null
+        && transferDate > existing.transferred_out_date
+      ) {
+        existing.transferred_out_date = transferDate;
+      }
+    }
+  }
+
+  // Уволенные сотрудники: показываем в их РЕАЛЬНОМ отделе (из which уволены) за период до увольнения.
+  // Источник реального отдела — employee_dismissal_events.from_department_id (заполняется при увольнении
+  // и backfill из eda). Надёжно для 100%, включая тех, у кого нет записи в employee_assignments.
+  const firedFromDept = await query<{ employee_id: number; dismissal_date: string }>(
+    `SELECT DISTINCT ON (de.employee_id) de.employee_id, de.dismissal_date
+       FROM employee_dismissal_events de
+      WHERE de.from_department_id = ANY($1::uuid[])
+        AND de.dismissal_date IS NOT NULL
+        AND de.dismissal_date >= $2::date
+      ORDER BY de.employee_id, de.created_at DESC`,
+    [deptIds, startDate],
+  );
+  for (const row of firedFromDept) {
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    // Виден в реальном отделе с начала периода до дня увольнения включительно (cutoff = dismissal+1).
+    const transferDate = formatDateShift(row.dismissal_date, 1);
+    if (!map.has(empId)) {
+      map.set(empId, { employee_id: empId, transferred_out_date: transferDate, joined_date: null });
     }
   }
 
   // Также включаем тех, у кого employees.org_department_id уже указывает в поддерево
   // (snapshot), но assignment мог не успеть синхронизироваться — добавляем безопасным дефолтом.
+  // Это основной источник членства: 70% активных живут только на snapshot.
   const snapshotEmployees = await query<{ id: number }>(
     'SELECT id FROM employees WHERE org_department_id = ANY($1::uuid[])',
     [deptIds],
@@ -203,7 +235,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
     const empId = Number(row.id);
     if (!Number.isFinite(empId)) continue;
     if (!map.has(empId)) {
-      map.set(empId, { employee_id: empId, transferred_out_date: null });
+      map.set(empId, { employee_id: empId, transferred_out_date: null, joined_date: null });
     } else {
       // Если в snapshot он в этом отделе — точно ещё не переведён.
       const m = map.get(empId)!;

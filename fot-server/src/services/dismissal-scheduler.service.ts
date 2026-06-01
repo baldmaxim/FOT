@@ -37,7 +37,7 @@ async function applyForEmployee(employeeId: number): Promise<void> {
   const dismissalDate = existing.dismissal_date;
 
   try {
-    await applyDismissalImmediately({
+    const { fromDepartmentId } = await applyDismissalImmediately({
       employeeId,
       existing,
       dismissalDate,
@@ -49,6 +49,7 @@ async function applyForEmployee(employeeId: number): Promise<void> {
       scheduled: false,
       appliedFromScheduled: true,
       createdBy: null,
+      fromDepartmentId,
     });
 
     await auditService.log({

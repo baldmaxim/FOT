@@ -168,7 +168,7 @@ export const contractorAdminController = {
       }
 
       if (existing.employment_status !== 'fired') {
-        await applyDismissalImmediately({
+        const { fromDepartmentId } = await applyDismissalImmediately({
           employeeId,
           existing,
           dismissalDate,
@@ -178,6 +178,7 @@ export const contractorAdminController = {
         await insertDismissalHistory(employeeId, dismissalDate, {
           scheduled: false,
           createdBy: req.user.id,
+          fromDepartmentId,
         });
         await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
           entityType: 'employee',

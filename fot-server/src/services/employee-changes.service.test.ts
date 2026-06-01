@@ -168,6 +168,46 @@ describe('employee-changes.service.changeDepartment — overlap regression', () 
     expect(inserts[0].params?.[3]).toBe('2026-05-13');
   });
 
+  it('freezeHistory=true + forceHistory=true: ведёт полную историю (закрывает старую + INSERT новой)', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: true });
+
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2024-01-01', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: 'pos-1', org_department_id: 'real-dept' }] };
+      }
+      return { rows: [] };
+    });
+
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'archive-dept', {
+      reason: 'Увольнение — перевод в папку "Уволенные"',
+      effectiveDate: '2026-05-27',
+      forceHistory: true,
+    });
+
+    // forceHistory обходит freeze: должна сработать non-freeze ветка
+    const closeUpdate = fake.queries.find(q =>
+      /UPDATE employee_assignments\s+SET effective_to = \$1, updated_at = \$2\s+WHERE id = \$3/i.test(q.sql),
+    );
+    expect(closeUpdate).toBeTruthy();
+    expect(closeUpdate?.params?.[0]).toBe('2026-05-26'); // date-1
+    expect(closeUpdate?.params?.[2]).toBe('a-1');
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].params?.[1]).toBe('archive-dept');
+    expect(inserts[0].params?.[3]).toBe('2026-05-27');
+
+    // НЕ должно быть frozen-перезаписи (reopen с effective_to=NULL)
+    const reopen = fake.queries.find(q => /SET org_department_id\s*=\s*\$1,\s+position_id\s*=\s*\$2,\s+effective_to\s*=\s*NULL/i.test(q.sql));
+    expect(reopen).toBeFalsy();
+  });
+
   it('freezeHistory=false: closed[X, today-1] + zero-day [today, today] → UPDATE sameDayAssignment, effective_to=null', async () => {
     mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
 

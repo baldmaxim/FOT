@@ -8,7 +8,6 @@ import { DomainValidationError, employeeChangesService } from '../services/emplo
 import { loadStructureCache, decryptEmployee } from '../services/employee-mapper.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 import {
-  assignEmployeesToArchiveDepartment,
   ensureLocalArchiveDepartment,
   isProtectedArchiveDepartment,
 } from '../services/employee-archive-department.service.js';
@@ -25,6 +24,7 @@ import {
 } from '../services/data-scope.service.js';
 import {
   upsertTechnicalDepartmentAccess,
+  deactivateAllDepartmentAccessForEmployee,
 } from '../services/employee-department-access.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
@@ -151,6 +151,8 @@ interface IInsertDismissalHistoryOpts {
   appliedFromScheduled?: boolean;
   prevDate?: string | null;
   reason?: string | null;
+  /** Отдел, в котором сотрудник работал на момент увольнения (до перевода в «Уволенные»). */
+  fromDepartmentId?: string | null;
 }
 
 export async function insertDismissalHistory(
@@ -160,8 +162,8 @@ export async function insertDismissalHistory(
 ): Promise<void> {
   await execute(
     `INSERT INTO employee_dismissal_events
-       (employee_id, dismissal_date, scheduled, cancelled, rehired, applied_from_scheduled, prev_date, reason, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+       (employee_id, dismissal_date, scheduled, cancelled, rehired, applied_from_scheduled, prev_date, reason, created_by, from_department_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       employeeId,
       dismissalDate,
@@ -172,6 +174,7 @@ export async function insertDismissalHistory(
       opts.prevDate ?? null,
       opts.reason ?? null,
       opts.createdBy,
+      opts.fromDepartmentId ?? null,
     ],
   );
 }
@@ -189,7 +192,7 @@ export async function applyDismissalImmediately(args: {
   dismissalDate: string;
   userId: string | null;
   connection?: 'external' | 'internal';
-}): Promise<EmployeeEncrypted> {
+}): Promise<{ employee: EmployeeEncrypted; fromDepartmentId: string | null }> {
   const { employeeId, existing, dismissalDate, userId, connection } = args;
 
   let targetDepartmentId = existing.org_department_id || null;
@@ -230,24 +233,29 @@ export async function applyDismissalImmediately(args: {
     targetDepartmentId = archive.id;
   }
 
+  // Реальный отдел до увольнения (для связности истории). Если уже архив — null.
+  const fromDepartmentId = (existing.org_department_id && existing.org_department_id !== targetDepartmentId)
+    ? existing.org_department_id
+    : null;
+
+  // День dismissalDate остаётся рабочим — переход в «Уволенные» с D+1.
+  // changeDepartment с forceHistory ведёт полную историю периодов даже при freeze_history=true:
+  // закрывает реальный отдел на dismissalDate, создаёт «Уволенные» [D+1 → null].
+  const exclusionDate = addDaysIso(dismissalDate, 1);
+
   if (targetDepartmentId && existing.org_department_id !== targetDepartmentId) {
     await employeeChangesService.changeDepartment(employeeId, targetDepartmentId, {
       reason: 'Увольнение — перевод в папку "Уволенные"',
       lockDepartment: false,
       createdBy: userId,
-      effectiveDate: dismissalDate,
+      effectiveDate: exclusionDate,
+      forceHistory: true,
     });
   }
 
-  if (targetDepartmentId) {
-    await assignEmployeesToArchiveDepartment([employeeId], userId, {
-      connection,
-      effectiveDate: dismissalDate,
-    });
-  }
-
-  // День dismissalDate сам по себе остаётся рабочим, исключаем с D+1
-  const exclusionDate = addDaysIso(dismissalDate, 1);
+  // Деактивируем доступы к отделам (скоуп руководителя). department_id в eda сохраняется
+  // (is_active=false) — это источник реального отдела для отображения уволенного в табеле.
+  await deactivateAllDepartmentAccessForEmployee(employeeId);
 
   const data = await queryOne<EmployeeEncrypted>(
     `UPDATE employees
@@ -266,14 +274,7 @@ export async function applyDismissalImmediately(args: {
     throw createHttpError(500, 'Failed to update employee status');
   }
 
-  await execute(
-    `UPDATE employee_assignments
-        SET effective_to = $1
-      WHERE employee_id = $2 AND effective_to IS NULL`,
-    [dismissalDate, employeeId],
-  );
-
-  return data;
+  return { employee: data, fromDepartmentId };
 }
 
 export async function loadTargetDepartment(id: string): Promise<ITargetDepartmentRow | null> {
@@ -484,7 +485,7 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
     }
 
     try {
-      const data = await applyDismissalImmediately({
+      const { employee: data, fromDepartmentId } = await applyDismissalImmediately({
         employeeId,
         existing,
         dismissalDate,
@@ -496,6 +497,7 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
       await insertDismissalHistory(employeeId, dismissalDate, {
         scheduled: false,
         createdBy: req.user.id,
+        fromDepartmentId,
       });
 
       await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
@@ -750,6 +752,8 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       }
     }
 
+    // forceHistory: закрыть запись «Уволенные» и создать новый период реального отдела
+    // (полная история, не перезапись), даже при включённом freeze_history.
     await employeeChangesService.changeDepartment(employeeId, targetDepartment.id, {
       reason: sigurDetached
         ? 'Восстановление (отвязка от Sigur — сотрудник удалён в Sigur)'
@@ -757,6 +761,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       lockDepartment: sigurDetached,
       createdBy: req.user.id,
       effectiveDate: today,
+      forceHistory: true,
     });
 
     await upsertTechnicalDepartmentAccess(
