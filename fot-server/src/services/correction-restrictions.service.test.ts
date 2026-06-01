@@ -143,25 +143,25 @@ describe('correction-restrictions.service', () => {
     })).resolves.toBeUndefined();
   });
 
-  it('блокирует hours=0 при факте >= 4ч (short_attendance_not_eligible)', async () => {
+  it('пропускает hours=0 при факте >= 4ч (явное обнуление, ограничение снято)', async () => {
     setupQueryOne({ restrictions: ROLE_SITE_SUPERVISOR, anomalous: false, totalMinutes: 300, monthCount: 0 });
     await expect(assertCorrectionAllowed({
       ...BASE,
       hoursOverride: 0,
       scheduledNormHours: 8,
-    })).rejects.toMatchObject({ code: 'short_attendance_not_eligible' });
+    })).resolves.toBeUndefined();
   });
 
-  it('блокирует hours=0 в выходной по графику', async () => {
+  it('пропускает hours=0 в выходной по графику (явное обнуление, ограничение снято)', async () => {
     setupQueryOne({ restrictions: ROLE_SITE_SUPERVISOR, anomalous: false, totalMinutes: 0, monthCount: 0 });
     await expect(assertCorrectionAllowed({
       ...BASE,
       hoursOverride: 0,
       scheduledNormHours: 0,
-    })).rejects.toMatchObject({ code: 'short_attendance_not_eligible' });
+    })).resolves.toBeUndefined();
   });
 
-  it('блокирует hours=0 при anomalies_only без allow_zero_short_attendance (zero_not_allowed)', async () => {
+  it('пропускает hours=0 при anomalies_only (явное обнуление, ограничение снято)', async () => {
     setupQueryOne({
       restrictions: { ...ROLE_SITE_SUPERVISOR, corrections_allow_zero_short_attendance: false },
       anomalous: false,
@@ -172,7 +172,7 @@ describe('correction-restrictions.service', () => {
       ...BASE,
       hoursOverride: 0,
       scheduledNormHours: 8,
-    })).rejects.toMatchObject({ code: 'zero_not_allowed' });
+    })).resolves.toBeUndefined();
   });
 
   it('обнуление при достигнутом лимите аномалий пропускается (Type B вне лимита)', async () => {

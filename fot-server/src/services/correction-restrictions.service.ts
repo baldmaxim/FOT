@@ -86,17 +86,6 @@ async function isSkudAnomalousDay(employeeId: number, workDate: string, schedule
   return Boolean(row?.anomalous);
 }
 
-async function getActualSkudMinutes(employeeId: number, workDate: string): Promise<number> {
-  const row = await queryOne<{ total_minutes: number | string | null }>(
-    `SELECT total_minutes FROM skud_daily_summary WHERE employee_id = $1::bigint AND date = $2::date`,
-    [employeeId, workDate],
-  );
-  const v = row?.total_minutes;
-  if (v == null) return 0;
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
-}
-
 /** Подсчёт уже поданных корректировок-аномалий (hours > 0) за календарный месяц workDate для (createdBy, employeeId). */
 async function countEmployeeAnomalyCorrections(
   createdBy: string,
@@ -194,29 +183,7 @@ export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInp
     return;
   }
 
-  // hours === 0 (или отрицательное — нормализуем как 0)
-  if (restrictions.corrections_anomalies_only) {
-    if (!restrictions.corrections_allow_zero_short_attendance) {
-      throw new CorrectionRestrictionError(
-        'zero_not_allowed',
-        'Обнуление дня этой ролью не разрешено.',
-      );
-    }
-    if (!isScheduled) {
-      throw new CorrectionRestrictionError(
-        'short_attendance_not_eligible',
-        'Обнулять можно только рабочий по графику день.',
-      );
-    }
-    const minutes = await getActualSkudMinutes(input.employeeId, input.workDate);
-    if (minutes >= 240) {
-      throw new CorrectionRestrictionError(
-        'short_attendance_not_eligible',
-        `Обнулять можно только дни с явкой по СКУД меньше 4 часов (фактически: ${(minutes / 60).toFixed(1)} ч).`,
-        { actualMinutes: minutes },
-      );
-    }
-  }
+  // hours === 0 — явное обнуление дня, разрешено для всех ролей
 }
 
 /** Проверка для bulk-эндпоинта. Кидает 'bulk_disabled' если у роли corrections_disable_bulk=true. */
