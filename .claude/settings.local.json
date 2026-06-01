@@ -94,7 +94,9 @@
       "Bash(Select-Object -Last 5)",
       "Bash(python build_fot_pptx.py)",
       "Bash(python -c \"from pptx import Presentation; p=Presentation\\('Портал ФОТ - возможности руководителей.pptx'\\); print\\('slides:', len\\(p.slides._sldIdLst\\)\\)\")",
-      "Bash(awk 'END{print NR}' fot-app/src/pages/timesheet/TimesheetPage.css)"
+      "Bash(awk 'END{print NR}' fot-app/src/pages/timesheet/TimesheetPage.css)",
+      "Bash(git check-ignore *)",
+      "mcp__sentry__find_projects"
     ],
     "additionalDirectories": [
       "c:\\Users\\Usrr\\VSCode\\Odintsov\\FOT\\.claude\\commands"
