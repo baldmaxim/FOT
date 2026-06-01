@@ -513,6 +513,8 @@ export async function syncEmployeesLogic(
           // Сотрудник fired в БД, но числится в обычном отделе Sigur → реактивируем
           updateFields.employment_status = 'active';
           updateFields.dismissal_date = null; // Сбросить дату, иначе scheduler уволит снова
+          updateFields.excluded_from_timesheet = false;
+          updateFields.excluded_from_timesheet_date = null;
           console.log(`[syncEmployees] reactivate: ${fullName} (sigurId=${sigurEmpId})`);
         }
       }
@@ -578,6 +580,8 @@ export async function syncEmployeesLogic(
         const linkFields: Record<string, unknown> = {
           sigur_employee_id: sigurEmpId,
           department_locked: false,
+          excluded_from_timesheet: false,
+          excluded_from_timesheet_date: null,
         };
         if (orgDepartmentId) linkFields.org_department_id = orgDepartmentId;
         if (positionId) linkFields.position_id = positionId;
