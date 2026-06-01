@@ -227,10 +227,10 @@ async function computePresence(params: IPresenceParams): Promise<IPresenceItem[]
       let entryTime: number | null = null;
       for (const evt of empEvents) {
         if (evt.direction === 'entry') {
-          if (entryTime === null) {
-            const [eh, em, es] = evt.event_time.split(':').map(Number);
-            entryTime = (eh * 3600 + em * 60 + (es || 0)) * 1000;
-          }
+          // Новый вход затирает незакрытый предыдущий (orphan-вход отброшен) —
+          // строгая политика «только полные циклы», паритет с миграцией 161.
+          const [eh, em, es] = evt.event_time.split(':').map(Number);
+          entryTime = (eh * 3600 + em * 60 + (es || 0)) * 1000;
         } else if (evt.direction === 'exit' && entryTime !== null) {
           const [xh, xm, xs] = evt.event_time.split(':').map(Number);
           const exitMs = (xh * 3600 + xm * 60 + (xs || 0)) * 1000;

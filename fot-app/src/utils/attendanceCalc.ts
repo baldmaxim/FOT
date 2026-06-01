@@ -105,11 +105,14 @@ const isWeekend = (year: number, month: number, day: number): boolean => {
 };
 
 /**
- * Оплачиваемое время за день (в секундах) = span − max(lunch_quota, time_outside).
- * span — от первого внешнего entry до последнего exit (или «сейчас», если открытая пара и isToday).
- * time_outside — сумма гэпов между exit и следующим entry.
- * Обед всегда вычитается: либо как полная квота (если человек обедал в офисе или меньше квоты),
- * либо как фактический outside (если он выходил больше квоты — съел из своих часов).
+ * Оплачиваемое время за день (в секундах). Строгая политика «только полные циклы»:
+ * work = Σ длительностей ЗАКРЫТЫХ пар вход→выход. Непарный пробив отбрасывается —
+ * новый вход затирает незакрытый предыдущий (orphan-вход), а выход без открытого
+ * входа (orphan-выход) игнорируется. Паритет с серверной recalculate_skud_daily_summary
+ * (миграция 161) и buildRawFallbackSummary.
+ * time_outside — сумма гэпов МЕЖДУ закрытыми парами. Итог = work − max(0, lunch − outside)
+ * (тождественно прежнему span − max(lunch, outside) на чистых днях, но без раздувания
+ * orphan-выходом в конце дня).
  */
 const calcWorkSeconds = (
   events: SkudEvent[],
@@ -120,37 +123,41 @@ const calcWorkSeconds = (
   const ext = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
   const sorted = [...ext].sort((a, b) => a.event_time.localeCompare(b.event_time));
 
+  let workSec = 0;
   let firstEntrySec: number | null = null;
-  let lastExitSec: number | null = null;
+  let openEntrySec: number | null = null;
+  let prevPairExitSec: number | null = null;
   let outsideSec = 0;
-  let prevExitSec: number | null = null;
 
   for (const ev of sorted) {
     const sec = timeToSeconds(ev.event_time);
     if (ev.direction === 'entry') {
       if (firstEntrySec === null) firstEntrySec = sec;
-      if (prevExitSec !== null) {
-        outsideSec += Math.max(0, sec - prevExitSec);
-        prevExitSec = null;
-      }
-    } else if (ev.direction === 'exit') {
-      lastExitSec = sec;
-      prevExitSec = sec;
+      // Новый вход затирает незакрытый предыдущий — orphan-вход отброшен.
+      openEntrySec = sec;
+    } else if (ev.direction === 'exit' && openEntrySec !== null) {
+      workSec += Math.max(0, sec - openEntrySec);
+      if (prevPairExitSec !== null) outsideSec += Math.max(0, openEntrySec - prevPairExitSec);
+      prevPairExitSec = sec;
+      openEntrySec = null;
     }
+    // exit без открытого входа (orphan) — игнор.
   }
 
   if (firstEntrySec === null) return 0;
 
-  // Открытая смена сегодня — закрываем «сейчас» для расчёта span.
-  if (prevExitSec === null && isToday) {
+  // Открытая смена сегодня — закрываем последнюю пару «сейчас».
+  if (openEntrySec !== null && isToday) {
     const now = new Date();
-    lastExitSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    if (nowSec > openEntrySec) {
+      workSec += nowSec - openEntrySec;
+      if (prevPairExitSec !== null) outsideSec += Math.max(0, openEntrySec - prevPairExitSec);
+    }
   }
-  if (lastExitSec === null) return 0;
 
-  const span = Math.max(0, lastExitSec - firstEntrySec);
   const lunch = Math.max(0, lunchQuotaSeconds);
-  return Math.max(0, span - Math.max(lunch, outsideSec));
+  return Math.max(0, workSec - Math.max(0, lunch - outsideSec));
 };
 
 export const getFirstDayOffset = (year: number, month: number): number => {

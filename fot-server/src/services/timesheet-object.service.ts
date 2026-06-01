@@ -153,10 +153,8 @@ const buildRawFallbackSummary = (
   for (const event of summaryEvents) {
     if (event.direction === 'entry') {
       const seconds = timeToSeconds(event.event_time);
-      // Повторная entry без exit: закрываем предыдущий открытый интервал на момент новой entry.
-      if (openEntrySeconds !== null) {
-        totalSeconds += Math.max(0, seconds - openEntrySeconds);
-      }
+      // Повторная entry без exit: предыдущий открытый вход — orphan, ОТБРАСЫВАЕТСЯ
+      // (строгая политика «только полные циклы», паритет с recalculate_skud_daily_summary, миграция 161).
       openEntrySeconds = seconds;
       continue;
     }
