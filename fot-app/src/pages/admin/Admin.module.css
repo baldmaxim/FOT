@@ -1044,7 +1044,18 @@
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 12px;
-  overflow: hidden;
+}
+
+.userListCompact > .userRow:first-child {
+  border-radius: 11px 11px 0 0;
+}
+
+.userListCompact > .userRow:last-child {
+  border-radius: 0 0 11px 11px;
+}
+
+.userListCompact > .userRow:only-child {
+  border-radius: 11px;
 }
 
 .userRow {
@@ -1482,7 +1493,7 @@
   border-radius: 10px;
   background: var(--bg-elevated);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
-  max-height: 360px;
+  max-height: min(60vh, 540px);
   overflow: hidden;
 }
 
@@ -1490,7 +1501,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 240px;
+  max-height: min(50vh, 420px);
   overflow-y: auto;
   padding-right: 4px;
 }

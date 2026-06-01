@@ -109,9 +109,19 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin }) =>
 
   if (!isUserAdmin) return null;
 
-  const companies = companiesQuery.data || [];
+  const companiesList = companiesQuery.data || [];
   const isSystemAdmin = current.length === 0;
   const isLoading = companiesQuery.isLoading || userCompaniesQuery.isLoading;
+
+  const selectedSet = new Set(initial);
+  const companies = useMemo(() => {
+    return [...companiesList].sort((a, b) => {
+      const aSelected = selectedSet.has(a.id) ? 0 : 1;
+      const bSelected = selectedSet.has(b.id) ? 0 : 1;
+      return aSelected - bSelected;
+    });
+  }, [companiesList, initial]);
+
   const selectedNames = companies
     .filter(company => current.includes(company.id))
     .map(company => company.name);

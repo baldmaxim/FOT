@@ -96,9 +96,14 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
 
   const filtered = useMemo(() => {
     const q = normalize(search);
-    if (!q) return objects;
-    return objects.filter(o => normalize(o.name).includes(q));
-  }, [objects, search]);
+    const list = !q ? objects : objects.filter(o => normalize(o.name).includes(q));
+    const selected = new Set(value);
+    return [...list].sort((a, b) => {
+      const aSelected = selected.has(a.id) ? 0 : 1;
+      const bSelected = selected.has(b.id) ? 0 : 1;
+      return aSelected - bSelected;
+    });
+  }, [objects, search, value]);
 
   return (
     <div className={styles.companyAccessWrap} ref={wrapRef}>
