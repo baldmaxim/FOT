@@ -73,7 +73,10 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
     const escHandler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
-    const scrollHandler = () => {
+    const scrollHandler = (event: Event) => {
+      const target = event.target as Node | null;
+      const popoverNode = popoverRef.current;
+      if (popoverNode && popoverNode.contains(target)) return; // Прокрутка внутри попо́вера — не закрываем
       setOpen(false);
     };
     document.addEventListener('mousedown', handler);

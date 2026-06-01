@@ -1490,7 +1490,7 @@
   background: var(--bg-elevated);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
   max-height: min(60vh, 540px);
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .companyAccessPopoverList {
