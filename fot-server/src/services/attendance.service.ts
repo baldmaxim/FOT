@@ -926,8 +926,6 @@ export async function buildAttendanceEntries(params: {
   for (const entry of entries) {
     if (entry.is_correction && entry.id != null) continue;
 
-    const employeeSchedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
-    const shiftLengthHours = getShiftLengthHoursForScheduleOnDate(employeeSchedule, entry.work_date);
     const dayObjectEntries = objectAttendanceData.objectEntriesByEmployeeDate
       .get(entry.employee_id)
       ?.get(entry.work_date) || [];
@@ -936,11 +934,7 @@ export async function buildAttendanceEntries(params: {
       const totalActualHours = roundHours(
         dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0),
       );
-      entry.display_hours_worked = (shiftLengthHours != null && totalActualHours > shiftLengthHours)
-        ? shiftLengthHours
-        : totalActualHours;
-    } else if (entry.hours_worked != null && shiftLengthHours != null) {
-      entry.display_hours_worked = clampToScheduleHours(entry.hours_worked, shiftLengthHours);
+      entry.display_hours_worked = totalActualHours;
     } else {
       entry.display_hours_worked = entry.hours_worked;
     }
