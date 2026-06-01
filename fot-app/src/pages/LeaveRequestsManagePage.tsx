@@ -300,6 +300,7 @@ export const LeaveRequestsManagePage: FC = () => {
                   value={comment}
                   onChange={e => setComment(e.target.value)}
                   onClick={stop}
+                  onKeyDown={e => e.stopPropagation()}
                 />
                 <div className="lrm-comment-btns">
                   <button
