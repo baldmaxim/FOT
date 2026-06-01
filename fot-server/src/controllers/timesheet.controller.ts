@@ -206,50 +206,6 @@ export const isMandatoryWeekendSlotAvailable = (
   return usedCount < expected;
 };
 
-/** Возвращает [monthStartISO, monthEndISO] для произвольной даты YYYY-MM-DD. */
-const monthBoundsForDate = (workDate: string): { monthStart: string; monthEnd: string } => {
-  const dateObj = new Date(`${workDate}T00:00:00`);
-  const year = dateObj.getFullYear();
-  const month = dateObj.getMonth();
-  const monthStr = String(month + 1).padStart(2, '0');
-  const lastDay = new Date(year, month + 1, 0).getDate();
-  return {
-    monthStart: `${year}-${monthStr}-01`,
-    monthEnd: `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`,
-  };
-};
-
-/**
- * Считает уже зачтённые плановые выходные (Сб/Вс) у сотрудника за месяц workDate.
- * Учитываем только status IN (work,remote) и approval_status IN (auto_approved,approved).
- * pending и rejected не блокируют норму.
- */
-async function countAcceptedMandatoryWeekends(
-  employeeId: number,
-  workDate: string,
-  excludeAdjustmentId: number | null,
-  dow: WeekendDow,
-): Promise<number> {
-  const { monthStart, monthEnd } = monthBoundsForDate(workDate);
-  const data = await query<{ id: number | string; work_date: string }>(
-    `SELECT id, work_date FROM attendance_adjustments
-       WHERE employee_id = $1
-         AND work_date >= $2
-         AND work_date <= $3
-         AND status IN ('work', 'remote')
-         AND approval_status IN ('auto_approved', 'approved')`,
-    [employeeId, monthStart, monthEnd],
-  );
-
-  let count = 0;
-  for (const row of data) {
-    if (excludeAdjustmentId != null && Number(row.id) === excludeAdjustmentId) continue;
-    const d = new Date(`${String(row.work_date)}T00:00:00`);
-    if (d.getDay() === dow) count++;
-  }
-  return count;
-}
-
 /**
  * ISO-даты непраздничных суббот/воскресений месяца year-mon. mandatory_holidays
  * исключаются всегда; обычные holidays — только если respectsHolidays.
@@ -295,6 +251,8 @@ async function loadAcceptedWeekendDaysForMonth(
   const lastDay = new Date(year, mon, 0).getDate();
   const monthStart = `${year}-${monthStr}-01`;
   const monthEnd = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+
+  // Корректировки (work/remote с auto_approved или approved)
   const rows = await query<{ employee_id: number | string; work_date: string }>(
     `SELECT employee_id, work_date FROM attendance_adjustments
        WHERE employee_id = ANY($1::int[])
@@ -317,6 +275,36 @@ async function loadAcceptedWeekendDaysForMonth(
     }
     set.add(iso);
   }
+
+  // СКУД-дни без корректировок (is_present=true, нет запись в attendance_adjustments)
+  const skudRows = await query<{ employee_id: number | string; date: string }>(
+    `SELECT sds.employee_id, sds.date
+       FROM skud_daily_summary sds
+      WHERE sds.employee_id = ANY($1::int[])
+        AND sds.date >= $2
+        AND sds.date <= $3
+        AND sds.is_present = true
+        AND NOT EXISTS (
+          SELECT 1 FROM attendance_adjustments aa
+           WHERE aa.employee_id = sds.employee_id
+             AND aa.work_date = sds.date
+        )`,
+    [employeeIds, monthStart, monthEnd],
+  );
+  for (const row of skudRows) {
+    const iso = String(row.date).slice(0, 10);
+    const dow = new Date(`${iso}T00:00:00`).getDay();
+    if (dow !== 6 && dow !== 0) continue;
+    const empId = Number(row.employee_id);
+    const target = dow === 6 ? saturdays : sundays;
+    let set = target.get(empId);
+    if (!set) {
+      set = new Set<string>();
+      target.set(empId, set);
+    }
+    set.add(iso);
+  }
+
   return { saturdays, sundays };
 }
 
@@ -325,7 +313,6 @@ export async function resolveAdjustmentApprovalStatus(
   workDate: string,
   status: TimeStatus,
   hoursOverride: number | null = null,
-  excludeAdjustmentId: number | null = null,
   authorIsTimekeeper: boolean = false,
 ): Promise<'auto_approved' | 'pending'> {
   // Корректировки табельщицы (полный менеджерский доступ) применяются сразу.
@@ -363,14 +350,6 @@ export async function resolveAdjustmentApprovalStatus(
   const dateObj = new Date(`${workDate}T00:00:00`);
   const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
   if (isWorkingDay(schedule, dateObj, monthCalendar)) return 'auto_approved';
-
-  const dow = dateObj.getDay();
-  if ((dow === 6 || dow === 0) && expectedWeekendCount(schedule, dow) > 0) {
-    const used = await countAcceptedMandatoryWeekends(employeeId, workDate, excludeAdjustmentId, dow);
-    if (isMandatoryWeekendSlotAvailable(schedule, workDate, dateObj, monthCalendar, used, dow)) {
-      return 'auto_approved';
-    }
-  }
 
   return 'pending';
 }
@@ -463,13 +442,6 @@ export async function reapproveAdjustmentsForRange(
         const calendar = await getCalendar(dateObj);
         if (isWorkingDay(schedule, dateObj, calendar)) {
           target = 'auto_approved';
-        } else if (
-          (dateObj.getDay() === 6 && schedule.expected_saturdays_per_month > 0)
-          || (dateObj.getDay() === 0 && schedule.expected_sundays_per_month > 0)
-        ) {
-          // Обязательные выходные считаются помесячно — точный подсчёт через
-          // существующий per-row резолвер (таких строк немного).
-          target = await resolveAdjustmentApprovalStatus(empId, workDate, status, hoursOverride, Number(row.id));
         } else {
           target = 'pending';
         }
@@ -1654,7 +1626,6 @@ export const timesheetController = {
         parsed.work_date,
         parsed.status,
         normalizedHours,
-        null,
         isTimekeeper(req),
       );
 
@@ -1816,7 +1787,6 @@ export const timesheetController = {
           String(existing.work_date),
           nextStatus,
           normalizedHours ?? null,
-          id,
           isTimekeeper(req),
         );
 
@@ -1951,7 +1921,6 @@ export const timesheetController = {
           item.work_date,
           parsed.status,
           itemHoursOverride,
-          null,
           isTimekeeper(req),
         );
         const saved = await upsertAttendanceAdjustment({
