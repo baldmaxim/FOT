@@ -461,9 +461,13 @@ export async function buildAttendanceEntries(params: {
 
   // #9: автор/время объектных корректировок — заполняем по adjustment_id. objectEntries и
   // objectEntriesByEmployeeDate ссылаются на одни и те же объекты, мутируем один раз.
-  const adjustmentMetaById = new Map<number, { created_by: string | null; updated_at: string }>();
+  const adjustmentMetaById = new Map<number, { created_by: string | null; updated_at: string; approval_status: string }>();
   for (const adjustment of adjustments) {
-    adjustmentMetaById.set(adjustment.id, { created_by: adjustment.created_by, updated_at: adjustment.updated_at });
+    adjustmentMetaById.set(adjustment.id, {
+      created_by: adjustment.created_by,
+      updated_at: adjustment.updated_at,
+      approval_status: adjustment.approval_status,
+    });
   }
   for (const objectEntry of objectAttendanceData.objectEntries) {
     if (objectEntry.adjustment_id == null) continue;
@@ -471,6 +475,7 @@ export async function buildAttendanceEntries(params: {
     if (!meta) continue;
     objectEntry.corrected_by_name = meta.created_by ? userNames.get(meta.created_by) ?? null : null;
     objectEntry.corrected_at = meta.updated_at;
+    objectEntry.approval_status = meta.approval_status as 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
   }
   const entries: IAttendanceEntry[] = [];
   const byEmployeeDate = new Map<number, Map<string, IAttendanceEntry>>();

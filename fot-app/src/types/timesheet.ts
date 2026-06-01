@@ -49,6 +49,7 @@ export interface TimesheetObjectEntry {
   display_hours_worked: number;
   base_hours_worked: number;
   is_correction: boolean;
+  approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
   notes?: string | null;
   // true — «эхо» day-level корректировки, размазанной на объект (модалка дня его прячет, #8).
   from_day_level?: boolean;

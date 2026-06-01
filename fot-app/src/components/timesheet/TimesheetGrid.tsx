@@ -1211,10 +1211,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const isBlocked = row.isSynthetic;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
+                        const objectApprovalCls = objectEntry?.approval_status === 'pending' ? ' ts-day--approval-pending'
+                          : objectEntry?.approval_status === 'approved' ? ' ts-day--approval-approved'
+                          : objectEntry?.approval_status === 'rejected' ? ' ts-day--approval-rejected' : '';
                         return (
                           <td
                             key={`${group.object_key}_${row.employee.id}_${day}`}
-                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}`}
+                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
                             onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,
@@ -1491,10 +1494,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const isBulkClickable = true;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
+                        const objectApprovalCls = objectEntry?.approval_status === 'pending' ? ' ts-day--approval-pending'
+                          : objectEntry?.approval_status === 'approved' ? ' ts-day--approval-approved'
+                          : objectEntry?.approval_status === 'rejected' ? ' ts-day--approval-rejected' : '';
                         return (
                           <td
                             key={`${objectRow.object_key}_${day}`}
-                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode ? ' ts-day--bulk-selectable' : ''}`}
+                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
                             onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,

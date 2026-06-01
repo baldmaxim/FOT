@@ -46,6 +46,7 @@ export interface IAttendanceObjectEntry {
   display_hours_worked: number;
   base_hours_worked: number;
   is_correction: boolean;
+  approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
   notes?: string | null;
   // true — это «эхо» day-level корректировки (manual/leave_request), размазанной на объект,
   // а не самостоятельная объектная корректировка (source_type='manual_object'). Модалка дня
