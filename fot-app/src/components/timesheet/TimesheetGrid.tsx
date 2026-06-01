@@ -240,10 +240,19 @@ const getDayCellClass = (
   return classes.join(' ');
 };
 
+// Корректировка, обнуляющая день («Корректировка табеля»/«Обнулить день»/«Неявка» с 0 ч),
+// в табеле = прочерк «—», а не «Н»/«0». Реальный прогул (status absent без корректировки)
+// и буквенные статусы (От/Б/В/С/У) не затрагиваются.
+const isZeroingCorrection = (entry: TimesheetEntry, visibleHours: number | null): boolean =>
+  Boolean(entry.is_correction)
+  && (visibleHours == null || visibleHours <= 0)
+  && (entry.status === 'manual' || entry.status === 'absent');
+
 const getDayCellText = (entry: TimesheetEntry | null, weekend: boolean): string => {
   const visibleHours = getVisibleHours(entry);
   if (weekend && !entry) return '—';
   if (!entry) return '';
+  if (isZeroingCorrection(entry, visibleHours)) return '—';
   const special = STATUS_CELL_TEXT[entry.status];
   if (special) return special;
   if (visibleHours != null) return formatCellHM(visibleHours);
@@ -254,6 +263,7 @@ const getDayCellTextMobile = (entry: TimesheetEntry | null, weekend: boolean): s
   const visibleHours = getVisibleHours(entry);
   if (weekend && !entry) return '—';
   if (!entry) return '';
+  if (isZeroingCorrection(entry, visibleHours)) return '—';
   const special = STATUS_CELL_TEXT[entry.status];
   if (special) return special;
   if (visibleHours != null) return String(Math.round(visibleHours));
@@ -320,6 +330,7 @@ const getObjectCellText = (
   dayOff: boolean,
 ): string => {
   if (dailyEntry) {
+    if (isZeroingCorrection(dailyEntry, getVisibleHours(dailyEntry))) return '—';
     const special = STATUS_CELL_TEXT[dailyEntry.status];
     if (special) return special;
   }

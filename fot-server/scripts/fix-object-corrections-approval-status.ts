@@ -11,11 +11,16 @@ async function fixObjectCorrectionsApprovalStatus() {
     employee_id: number;
     work_date: string;
     source_type: string;
+    hours_override: number | string | null;
   }>(
-    `SELECT id, employee_id, work_date, source_type
+    // hours_override = 0 («0 ч 0 мин») остаётся auto_approved даже в выходной —
+    // зеркалит правило resolveAdjustmentApprovalStatus (timesheet.controller.ts).
+    // Без этого «работа в выходной с 0 ч» ошибочно слетает в согласование.
+    `SELECT id, employee_id, work_date, source_type, hours_override
        FROM attendance_adjustments
       WHERE status = 'work'
         AND approval_status = 'auto_approved'
+        AND (hours_override IS NULL OR hours_override <> 0)
       ORDER BY work_date DESC`
   );
 
