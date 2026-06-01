@@ -114,21 +114,28 @@ export async function fetchTimesheetDataForDepartment(
       employees = await query<Record<string, unknown>>(
         `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
            FROM employees
-           WHERE employment_status = 'active'
+           WHERE (employment_status = 'active'
+                  OR (employment_status = 'fired'
+                      AND dismissal_date IS NOT NULL
+                      AND dismissal_date >= $2::date))
              AND is_archived = false
              AND excluded_from_timesheet = false
              AND id = ANY($1::int[])
            ORDER BY full_name`,
-        [assignedEmployeeIds],
+        [assignedEmployeeIds, startDate],
       );
     } else {
       employees = await query<Record<string, unknown>>(
         `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
            FROM employees
-           WHERE employment_status = 'active'
+           WHERE (employment_status = 'active'
+                  OR (employment_status = 'fired'
+                      AND dismissal_date IS NOT NULL
+                      AND dismissal_date >= $1::date))
              AND is_archived = false
              AND excluded_from_timesheet = false
            ORDER BY full_name`,
+        [startDate],
       );
     }
   }
@@ -253,11 +260,14 @@ export async function fetchTimesheetDataForEmployees(
       `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
          FROM employees
          WHERE id = ANY($1::int[])
-           AND employment_status = 'active'
+           AND (employment_status = 'active'
+                OR (employment_status = 'fired'
+                    AND dismissal_date IS NOT NULL
+                    AND dismissal_date >= $2::date))
            AND is_archived = false
            AND excluded_from_timesheet = false
          ORDER BY full_name`,
-      [uniqueIds],
+      [uniqueIds, startDate],
     );
   }
   const empArr: IExportEmployee[] = employees.map(e => ({

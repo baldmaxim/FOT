@@ -215,6 +215,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   if (candidateIds.length === 0) return [];
 
   // Финальный фильтр: активные, не архивные. Исключённых — оставляем, если дата исключения > startDate.
+  // Уволенные сотрудники с dismissal_date >= startDate попадают в табель, чтобы был виден период до увольнения.
   const activeRows = await query<{
     id: number;
     excluded_from_timesheet: boolean;
@@ -224,8 +225,11 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
        FROM employees
       WHERE id = ANY($1::int[])
         AND is_archived = false
-        AND employment_status = 'active'`,
-    [candidateIds],
+        AND (employment_status = 'active'
+             OR (employment_status = 'fired'
+                 AND dismissal_date IS NOT NULL
+                 AND dismissal_date >= $2::date))`,
+    [candidateIds, startDate],
   );
 
   const result: IDepartmentEmployeeMembership[] = [];
