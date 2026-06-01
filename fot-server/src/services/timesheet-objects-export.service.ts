@@ -33,7 +33,22 @@ export async function fetchEmployeeIdsForObjects(
         FROM attendance_adjustments aa
        WHERE aa.source_type = 'manual_object'
          AND (aa.metadata->>'object_id')::uuid = ANY($1::uuid[])
-         AND aa.work_date BETWEEN $2::date AND $3::date`,
+         AND aa.work_date BETWEEN $2::date AND $3::date
+      UNION
+      SELECT DISTINCT aa.employee_id
+        FROM attendance_adjustments aa
+       WHERE aa.source_type IN ('manual', 'leave_request')
+         AND aa.status IN ('work', 'remote')
+         AND aa.work_date BETWEEN $2::date AND $3::date
+         AND EXISTS (
+           SELECT 1
+             FROM skud_events se
+             JOIN skud_object_access_points sap
+               ON BTRIM(lower(sap.access_point_name)) = BTRIM(lower(se.access_point))
+            WHERE sap.object_id = ANY($1::uuid[])
+              AND se.employee_id = aa.employee_id
+              AND se.event_date BETWEEN date_trunc('month', $2::date)::date AND $3::date
+         )`,
     [objectIds, startDate, endDate],
   );
 

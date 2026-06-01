@@ -60,6 +60,8 @@ export const getDayStatus = (
     case 'work':
     case 'manual': {
       if (incompleteSkud) return 'incomplete_skud';
+      // На плановый выходной любые часы > 0 = выход на работу (нет смысла сравнивать с нормой дня)
+      if (isScheduledDayOff && visibleHours != null && visibleHours > 0) return 'present';
       const hoursOk = visibleHours != null && visibleHours >= fullDayThresholdHours;
       // На выходном/праздничном дне ожидаемой смены нет — span смены не валидируем.
       // Корректировка от руководителя — авторитетна. Для обычных work-записей в рабочий
