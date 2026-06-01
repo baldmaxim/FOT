@@ -724,9 +724,8 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         // 'work' не зашивает часы (время из СКУД); остальные статусы — null здесь,
         // часы по графику проставляет attendance.service (ABSENCE_STATUSES_AS_WORKED).
         const hoursOverride = null;
-        const approvalStatus = isWorkKind
-          ? await resolveAdjustmentApprovalStatus(request.employee_id, iso, timesheetStatus, hoursOverride)
-          : undefined;
+        // Заявление уже одобрено руководителем — дополнительного согласования не требует.
+        const approvalStatus = isWorkKind ? 'auto_approved' : undefined;
 
         await upsertAttendanceAdjustment({
           employee_id: request.employee_id,
