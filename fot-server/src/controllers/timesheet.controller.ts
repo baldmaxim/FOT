@@ -2300,7 +2300,7 @@ export const timesheetController = {
         // Отсутствия из заявки (отпуск/больничный/удалёнка/за свой счёт) управляются заявлением.
         const isManualLike = item.source_type === 'manual'
           || (item.source_type === 'leave_request' && (item.status === 'work' || item.status === 'manual'));
-        const canEdit = scope === 'all'
+        const canEdit = req.user.is_admin || scope === 'all'
           ? !(lockInfo && lockInfo.status === 'approved')
           : !approvalLocked && monthAllowed && isManualLike;
         const canDelete = canEdit && isManualLike;

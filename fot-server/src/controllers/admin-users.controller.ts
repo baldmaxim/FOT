@@ -820,10 +820,11 @@ export const adminUsersController = {
         'approved_by = $2::uuid',
         'approved_at = $3::timestamptz',
         'system_role_id = $4::uuid',
+        'token_version = token_version + 1',
       ];
       const params: unknown[] = [id, req.user.id, new Date().toISOString(), roleAssignment.id];
       if (employee_id) {
-        setClauses.push('employee_id = $5');
+        setClauses.push(`employee_id = $${params.length + 1}`);
         params.push(employee_id);
       }
 
