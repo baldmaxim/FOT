@@ -1,7 +1,11 @@
 // Однократный backfill: переписывает старые day-level корректировки
-// (`attendance_adjustments.source_type='manual'`, status в ('work','manual'))
-// в per-object (`source_type='manual_object'`) по правилу «объект с наибольшим
-// числом СКУД-событий сотрудника в этот день».
+// (`attendance_adjustments.source_type IN ('manual','leave_request')`, status в ('work','manual'),
+// hours_override > 0) в per-object (`source_type='manual_object'`) по правилу «объект с наибольшим
+// числом СКУД-событий сотрудника в этот день» → «основной объект за 90 дней».
+// Так устраняем группу «Не определён»: day-level work-корректировки с часами (внесённые
+// руководителем `manual` или одобренной ЛК-заявкой `leave_request`) привязываются к объекту.
+// С --dry-run работает как диагностика: показывает, что мигрировало бы и какие строки
+// останутся в «Не определён» (skipped_no_skud — нет ни СКУД дня, ни 90-дневной истории).
 //
 // Идемпотентен: после успешного прогона у мигрированных строк source_type='manual_object',
 // повторный запуск их уже не подберёт.
@@ -112,7 +116,7 @@ async function main() {
   const candidatesRes = await client.query(
     `SELECT id, employee_id, work_date::text AS work_date, status, hours_override, reason, metadata
        FROM attendance_adjustments
-      WHERE source_type = 'manual'
+      WHERE source_type IN ('manual', 'leave_request')
         AND status IN ('work', 'manual')
         AND hours_override IS NOT NULL
         AND hours_override > 0

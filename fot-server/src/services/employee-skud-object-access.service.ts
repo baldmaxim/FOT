@@ -80,6 +80,73 @@ export async function listObjectIdsForEmployees(
   }
 }
 
+export interface ISelectableObject {
+  object_id: string;
+  object_name: string;
+}
+
+/**
+ * Объекты, доступные сотруднику для привязки корректировки табеля:
+ *   1) приписка employee_skud_object_access (его «место работы»);
+ *   2) фактические объекты по СКУД-проходам за последние 90 дней;
+ *   3) (удалёнка) датированная привязка employee_object_attribution.
+ * Только активные skud_objects, отсортировано по имени. Каждый источник
+ * отказоустойчив к отсутствию таблицы (42P01) — фича остаётся рабочей частично.
+ */
+export async function listSelectableObjectsForEmployee(
+  employeeId: number,
+): Promise<ISelectableObject[]> {
+  if (!Number.isInteger(employeeId) || employeeId <= 0) return [];
+  const ids = new Set<string>();
+
+  for (const id of await listObjectIdsForEmployee(employeeId)) ids.add(id);
+
+  try {
+    const rows = await query<{ object_id: string }>(
+      `SELECT DISTINCT sap.object_id::text AS object_id
+         FROM skud_events se
+         JOIN skud_object_access_points sap
+           ON BTRIM(sap.access_point_name) = BTRIM(se.access_point)
+        WHERE se.employee_id = $1
+          AND se.event_date >= (CURRENT_DATE - INTERVAL '90 days')
+          AND se.access_point IS NOT NULL`,
+      [employeeId],
+    );
+    for (const row of rows) if (row.object_id) ids.add(row.object_id);
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+  }
+
+  try {
+    const rows = await query<{ object_id: string }>(
+      `SELECT DISTINCT skud_object_id::text AS object_id
+         FROM employee_object_attribution WHERE employee_id = $1`,
+      [employeeId],
+    );
+    for (const row of rows) if (row.object_id) ids.add(row.object_id);
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+  }
+
+  if (ids.size === 0) return [];
+
+  try {
+    return await query<ISelectableObject>(
+      `SELECT id::text AS object_id, name AS object_name
+         FROM skud_objects
+        WHERE id = ANY($1::uuid[]) AND is_active = true
+        ORDER BY name ASC`,
+      [[...ids]],
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      warnMissingTable();
+      return [];
+    }
+    throw err;
+  }
+}
+
 export async function listEmployeesForObject(objectId: string): Promise<number[]> {
   if (!objectId) return [];
   try {

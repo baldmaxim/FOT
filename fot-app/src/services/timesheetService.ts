@@ -228,6 +228,8 @@ export const timesheetService = {
     status: TimesheetStatus;
     hours_worked?: number | null;
     notes?: string | null;
+    // Явный объект корректировки — присылается после ответа OBJECT_REQUIRED.
+    object_id?: string | null;
   }): Promise<TimesheetEntry> {
     const res = await apiClient.post<ApiResponse<TimesheetEntry>>('/timesheet', data);
     if (!res.data) throw new Error(res.error || 'Ошибка создания записи');

@@ -15,6 +15,9 @@ import {
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
+import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
+import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
+import { execute } from '../config/postgres.js';
 import type { TimeStatus } from '../types/index.js';
 
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave'] as const;
@@ -202,7 +205,7 @@ function broadcastPendingChanged(): void {
 /** Создание заявления (worker+) */
 const create = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { request_type, start_date, end_date, reason, correction_date, correction_status, correction_hours, attachments, selected_dates } = req.body;
+    const { request_type, start_date, end_date, reason, correction_date, correction_status, correction_hours, attachments, selected_dates, correction_object_id } = req.body;
     if (!request_type || !start_date || !end_date) {
       res.status(400).json({ success: false, error: 'request_type, start_date, end_date обязательны' });
       return;
@@ -220,9 +223,10 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
-    // Дискретный набор дней (только для типов с календарём: work/remote/certificate/dayoff).
-    // Для непрерывных периодов (vacation/sick_leave/unpaid) и time_correction игнорируется.
-    const DISCRETE_TYPES = new Set(['work', 'remote', 'certificate']);
+    // Дискретный набор дней (типы с выбором дат на календаре: work/remote/certificate/unpaid).
+    // «За свой счёт» (unpaid) теперь подаётся датами, а не непрерывным периодом.
+    // Для непрерывных периодов (vacation/sick_leave/educational_leave) и time_correction игнорируется.
+    const DISCRETE_TYPES = new Set(['work', 'remote', 'certificate', 'unpaid']);
     let normalizedSelectedDates: string[] | null = null;
     if (DISCRETE_TYPES.has(request_type) && Array.isArray(selected_dates) && selected_dates.length > 0) {
       const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -246,6 +250,24 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
+    // Корректировка табеля из ЛК обязательно привязывается к конкретному объекту
+    // (skud_objects) — иначе при одобрении часы повиснут на «Не определён».
+    // Проверяем, что объект доступен сотруднику.
+    let correctionObjectName: string | null = null;
+    if (request_type === 'time_correction') {
+      if (!correction_object_id || typeof correction_object_id !== 'string') {
+        res.status(400).json({ success: false, error: 'Выберите объект для корректировки' });
+        return;
+      }
+      const selectable = await listSelectableObjectsForEmployee(employeeId);
+      const match = selectable.find((o) => o.object_id === correction_object_id);
+      if (!match) {
+        res.status(400).json({ success: false, error: 'Объект недоступен для этого сотрудника' });
+        return;
+      }
+      correctionObjectName = match.object_name;
+    }
+
     if (attachmentIds.length > 0) {
       const docs = await query<{ id: number; employee_id: number | null }>(
         `SELECT id, employee_id FROM documents WHERE id = ANY($1::bigint[])`,
@@ -264,9 +286,9 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
       const insertCasts: string[] = ['', '', '', '', ''];
       if (request_type === 'time_correction') {
-        insertCols.push('correction_date', 'correction_status', 'correction_hours');
-        insertVals.push(correction_date, correction_status, correction_hours ?? null);
-        insertCasts.push('', '', '');
+        insertCols.push('correction_date', 'correction_status', 'correction_hours', 'correction_object_id', 'correction_object_name');
+        insertVals.push(correction_date, correction_status, correction_hours ?? null, correction_object_id, correctionObjectName);
+        insertCasts.push('', '', '', '::uuid', '');
       }
       if (normalizedSelectedDates) {
         insertCols.push('selected_dates');
@@ -391,6 +413,22 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
   } catch (err) {
     console.error('leave-requests.getMy error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения заявлений' });
+  }
+};
+
+/** Объекты, доступные сотруднику для привязки корректировки табеля (worker) */
+const getMyObjects = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const employeeId = req.user.employee_id;
+    if (!employeeId) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+    const data = await listSelectableObjectsForEmployee(employeeId);
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('leave-requests.getMyObjects error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения объектов' });
   }
 };
 
@@ -657,6 +695,9 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       correction_date: string | null;
       correction_status: string | null;
       correction_hours: number | null;
+      correction_object_id: string | null;
+      correction_object_name: string | null;
+      selected_dates: string[] | null;
       reason: string | null;
     }>(
       `SELECT * FROM leave_requests WHERE id = $1`,
@@ -713,14 +754,27 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       // Отсутствие сотрудника (отпуск/больничный/за свой счёт) идёт подряд календарно,
       // включая выходные. Для 'remote' (удалёнка) — это рабочая активность, выходные пропускаем.
       const skipWeekends = request.request_type === 'remote';
-      const startDate = new Date(request.start_date);
-      const endDate = new Date(request.end_date);
 
-      for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-        const dayOfWeek = d.getDay();
-        if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
+      // Дискретные типы (work/remote/certificate/unpaid) подаются конкретными датами —
+      // материализуем ровно их. Непрерывные (отпуск/больничный/учебный) — диапазон start..end.
+      const hasDiscreteDates = Array.isArray(request.selected_dates) && request.selected_dates.length > 0;
+      const isoDates: string[] = [];
+      if (hasDiscreteDates) {
+        for (const raw of request.selected_dates as string[]) {
+          const iso = typeof raw === 'string' ? raw.slice(0, 10) : new Date(raw).toISOString().slice(0, 10);
+          if (iso) isoDates.push(iso);
+        }
+      } else {
+        const startDate = new Date(request.start_date);
+        const endDate = new Date(request.end_date);
+        for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+          const dayOfWeek = d.getDay();
+          if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
+          isoDates.push(d.toISOString().split('T')[0]);
+        }
+      }
 
-        const iso = d.toISOString().split('T')[0];
+      for (const iso of isoDates) {
         // 'work' не зашивает часы (время из СКУД); остальные статусы — null здесь,
         // часы по графику проставляет attendance.service (ABSENCE_STATUSES_AS_WORKED).
         const hoursOverride = null;
@@ -759,17 +813,46 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         correctionStatus,
         request.correction_hours ?? null,
       );
-      await upsertAttendanceAdjustment({
-        employee_id: request.employee_id,
-        work_date: request.correction_date,
-        status: correctionStatus,
-        hours_override: request.correction_hours ?? null,
-        source_type: 'leave_request',
-        source_id: `${request.id}:time_correction`,
-        reason: request.reason ?? null,
-        created_by: authorUserId,
-        approval_status: approvalStatus,
-      });
+      if (request.correction_object_id) {
+        // Корректировка привязана к конкретному объекту → создаём manual_object
+        // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
+        // day-level записи дня (мьютекс day-level ↔ per-object).
+        await execute(
+          `DELETE FROM attendance_adjustments
+             WHERE employee_id = $1 AND work_date = $2
+               AND source_type IN ('manual', 'leave_request')`,
+          [request.employee_id, request.correction_date],
+        );
+        await upsertAttendanceAdjustment({
+          employee_id: request.employee_id,
+          work_date: request.correction_date,
+          status: correctionStatus,
+          hours_override: request.correction_hours ?? null,
+          source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+          source_id: request.correction_object_id,
+          reason: request.reason ?? null,
+          created_by: authorUserId,
+          approval_status: approvalStatus,
+          metadata: {
+            object_id: request.correction_object_id,
+            object_name: request.correction_object_name,
+            auto_resolved: false,
+          },
+        });
+      } else {
+        // Легаси-заявки без объекта (созданные до миграции 158): day-level как раньше.
+        await upsertAttendanceAdjustment({
+          employee_id: request.employee_id,
+          work_date: request.correction_date,
+          status: correctionStatus,
+          hours_override: request.correction_hours ?? null,
+          source_type: 'leave_request',
+          source_id: `${request.id}:time_correction`,
+          reason: request.reason ?? null,
+          created_by: authorUserId,
+          approval_status: approvalStatus,
+        });
+      }
     }
 
     broadcastPendingChanged();
@@ -920,6 +1003,7 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 export const leaveRequestsController = {
   create,
   getMy,
+  getMyObjects,
   getById,
   getDepartment,
   getAll,

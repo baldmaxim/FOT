@@ -17,8 +17,18 @@ import {
   type ILeaveRequest,
   type LeaveRequestStatus,
 } from '../../services/leaveRequestService';
-import type { TimesheetEntry } from '../../types';
+import type { TimesheetEntry, TimesheetObjectEntry } from '../../types';
 import styles from './MyMonthTimesheet.module.css';
+
+// Проблемные статусы дня — для них блок дня показывает просмотр СКУД (#7).
+const PROBLEMATIC_STATUSES: ReadonlySet<DayStatus> = new Set(['underwork', 'incomplete_skud', 'absent']);
+
+export interface IDayFocusPayload {
+  entry: TimesheetEntry | null;
+  objectEntries: TimesheetObjectEntry[];
+  ds: DayStatus;
+  isProblematic: boolean;
+}
 
 const APPROVED_ABSENCE_TYPES: ReadonlySet<ILeaveRequest['request_type']> = new Set([
   'vacation',
@@ -97,6 +107,21 @@ const REQ_STATUS_PRIORITY: Record<LeaveRequestStatus, number> = {
   cancelled: 0,
 };
 
+// Маркер корректировки табеля (из табеля/объектной/одобренной заявки) по approval_status (#9).
+type CorrApproval = 'auto_approved' | 'pending' | 'approved' | 'rejected';
+const CORR_APPROVAL_TO_CSS: Record<CorrApproval, string> = {
+  pending: 'corrPending',
+  approved: 'corrApproved',
+  auto_approved: 'corrApproved',
+  rejected: 'corrRejected',
+};
+const CORR_APPROVAL_LABEL: Record<CorrApproval, string> = {
+  pending: 'корректировка на согласовании',
+  approved: 'корректировка согласована',
+  auto_approved: 'корректировка учтена',
+  rejected: 'корректировка отклонена',
+};
+
 const pad = (n: number) => String(n).padStart(2, '0');
 
 const buildIsoDate = (year: number, month: number, day: number) =>
@@ -128,6 +153,8 @@ interface IMyMonthTimesheetProps {
   onDayActivate?: (date: string, entry: TimesheetEntry | null) => void;
   selectedDates?: Set<string>;
   onDayToggle?: (date: string, entry: TimesheetEntry | null) => void;
+  // Вызывается при каждом клике по дню — отдаёт данные дня для блока деталей/СКУД (#7, #10).
+  onDayFocus?: (date: string, payload: IDayFocusPayload) => void;
   noCard?: boolean;
   allowFuture?: boolean;
 }
@@ -138,6 +165,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
   onDayActivate,
   selectedDates,
   onDayToggle,
+  onDayFocus,
   noCard,
   allowFuture,
 }) => {
@@ -167,6 +195,18 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
       if (e.employee_id !== employeeId) continue;
       const d = new Date(e.work_date + 'T00:00:00');
       map.set(d.getDate(), e);
+    }
+    return map;
+  }, [timesheetQuery.data, employeeId]);
+
+  const objectEntriesByIso = useMemo(() => {
+    const map = new Map<string, TimesheetObjectEntry[]>();
+    const list = timesheetQuery.data?.object_entries || [];
+    for (const oe of list) {
+      if (oe.employee_id !== employeeId) continue;
+      const bucket = map.get(oe.work_date) || [];
+      bucket.push(oe);
+      map.set(oe.work_date, bucket);
     }
     return map;
   }, [timesheetQuery.data, employeeId]);
@@ -233,6 +273,12 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
 
   const handleCellClick = (iso: string, entry: TimesheetEntry | null, ds: DayStatus) => {
     if (ds === 'future' && !allowFuture) return;
+    onDayFocus?.(iso, {
+      entry,
+      objectEntries: objectEntriesByIso.get(iso) ?? [],
+      ds,
+      isProblematic: PROBLEMATIC_STATUSES.has(ds),
+    });
     if (isMultiMode) {
       onDayToggle?.(iso, entry);
     } else {
@@ -334,6 +380,12 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
                 <span
                   className={`${styles.cellRequestBadge} ${reqBadgeCls}`}
                   aria-label={`Заявка: ${STATUS_LABELS[reqInfo.status]}`}
+                />
+              ) : null}
+              {cell.entry?.is_correction ? (
+                <span
+                  className={`${styles.cellCorrectionDot} ${styles[CORR_APPROVAL_TO_CSS[(cell.entry.approval_status ?? 'auto_approved') as CorrApproval]] || ''}`}
+                  aria-label={CORR_APPROVAL_LABEL[(cell.entry.approval_status ?? 'auto_approved') as CorrApproval]}
                 />
               ) : null}
             </button>

@@ -22,6 +22,13 @@ router.get(
   leaveRequestsController.getMy
 );
 
+// GET /api/leave-requests/my-objects — объекты сотрудника для привязки корректировки (worker+)
+router.get(
+  '/my-objects',
+  requirePageAccess('/employee/requests', 'view'),
+  leaveRequestsController.getMyObjects
+);
+
 // GET /api/leave-requests/department — заявления отдела (header)
 router.get(
   '/department',

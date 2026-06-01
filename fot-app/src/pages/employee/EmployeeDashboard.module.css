@@ -129,9 +129,35 @@
 /* Content Grid */
 .contentGrid {
   display: grid;
-  grid-template-columns: 350px minmax(300px, 400px) 1fr;
+  /* Календарь | Блок дня (детали корр. + СКУД) | Форма/подсказка */
+  grid-template-columns: 350px minmax(300px, 360px) minmax(300px, 1fr);
   gap: 20px;
   align-items: start;
+}
+
+/* Средняя колонка — блок выбранного дня (#7, #10). */
+.detailPane {
+  min-width: 0;
+}
+
+.detailHint,
+.formHint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+}
+
+/* Ряд под сеткой — карточка суточных задач на всю ширину. */
+.tasksRow {
+  margin-top: 20px;
 }
 
 /* Card */

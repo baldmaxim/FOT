@@ -24,7 +24,10 @@ export interface ILeaveRequest {
   correction_date: string | null;
   correction_status: string | null;
   correction_hours: number | null;
-  /** Дискретно выбранные дни (work/remote/certificate). NULL для непрерывных периодов. */
+  /** Объект (skud_objects.id), к которому привязана корректировка табеля. NULL для не-корректировок. */
+  correction_object_id?: string | null;
+  correction_object_name?: string | null;
+  /** Дискретно выбранные дни (work/remote/certificate/unpaid). NULL для непрерывных периодов. */
   selected_dates: string[] | null;
   created_at: string;
   updated_at: string;
@@ -71,6 +74,11 @@ export const STATUS_LABELS: Record<LeaveRequestStatus, string> = {
   cancelled: 'Отменено',
 };
 
+export interface ISelectableObject {
+  object_id: string;
+  object_name: string;
+}
+
 interface ApiResponse<T> {
   data: T;
   message?: string;
@@ -85,10 +93,16 @@ export const leaveRequestService = {
     correction_date?: string;
     correction_status?: string;
     correction_hours?: number;
+    correction_object_id?: string;
     attachments?: number[];
     selected_dates?: string[];
   }) => {
     const res = await apiClient.post<ApiResponse<ILeaveRequest>>('/leave-requests', data);
+    return res.data;
+  },
+
+  getMyObjects: async (): Promise<ISelectableObject[]> => {
+    const res = await apiClient.get<ApiResponse<ISelectableObject[]>>('/leave-requests/my-objects');
     return res.data;
   },
 

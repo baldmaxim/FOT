@@ -35,6 +35,7 @@ import {
 } from '../services/attendance.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE, resolveDayObjectForAdjustment } from '../services/timesheet-object.service.js';
+import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
 import {
   isEmployeeAssignedToDepartmentOnDate,
   listEmployeeIdsAssignedToDepartmentPeriod,
@@ -111,6 +112,9 @@ const createEntrySchema = z.object({
   status: z.enum(validStatuses),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
+  // Явный объект корректировки — присылается фронтом после ответа OBJECT_REQUIRED,
+  // когда авто-привязка (resolveDayObjectForAdjustment) не определила объект.
+  object_id: z.string().trim().min(1).max(255).nullable().optional(),
 });
 
 const updateEntrySchema = z.object({
@@ -1209,6 +1213,11 @@ export const timesheetController = {
       const transferredOutByEmployeeId = new Map<number, string | null>(
         departmentMemberships.map(m => [m.employee_id, m.transferred_out_date]),
       );
+      // Нижняя граница периода (дата входа в отдел). Применяется ТОЛЬКО к уволенным (ниже),
+      // чтобы не затронуть майские табеля активных, переведённых внутри месяца.
+      const joinedByEmployeeId = new Map<number, string | null>(
+        departmentMemberships.map(m => [m.employee_id, m.joined_date]),
+      );
 
       if (
         (shouldApplyDeptFilter || isDirectReportsOnlyScope)
@@ -1348,6 +1357,10 @@ export const timesheetController = {
         return dt.toISOString().slice(0, 10);
       };
       const cutoffByEmployeeId = new Map<number, string | null>();
+      // Нижняя граница (дата входа в отдел). Применяется ТОЛЬКО к уволенным — чтобы в папке
+      // «Уволенные» дни ДО увольнения не считались, а активных (переведённых внутри месяца)
+      // не затрагивать (их майские табеля не должны меняться).
+      const joinedCutoffByEmployeeId = new Map<number, string | null>();
       for (const e of (employees || [])) {
         const empId = Number(e.id);
         const excluded = (e.excluded_from_timesheet_date as string | null) ?? null;
@@ -1358,6 +1371,8 @@ export const timesheetController = {
           ? candidates.reduce((min, v) => (v < min ? v : min))
           : null;
         cutoffByEmployeeId.set(empId, cutoff);
+        const isFired = (e.employment_status as string | null) === 'fired';
+        joinedCutoffByEmployeeId.set(empId, isFired ? (joinedByEmployeeId.get(empId) ?? null) : null);
       }
 
       // Индекс «не рабочих» дней (отпуск/больничный/учебный/неоплачиваемый):
@@ -1380,6 +1395,7 @@ export const timesheetController = {
       const employeeStatsMap = new Map<number, { norm_hours: number; fact_hours: number }>();
       for (const empId of employeeIds) {
         const empCutoff = cutoffByEmployeeId.get(empId) ?? null;
+        const empJoined = joinedCutoffByEmployeeId.get(empId) ?? null;
         const nonWorkSet = nonWorkDaysByEmp.get(empId);
         let empWorkDays = 0;
         let empNormHours = 0;
@@ -1388,6 +1404,7 @@ export const timesheetController = {
           const dateStr = `${month}-${String(d).padStart(2, '0')}`;
           if (dateStr > todayStr) continue;
           if (empCutoff && dateStr >= empCutoff) continue;
+          if (empJoined && dateStr < empJoined) continue;
 
           const sched = dailySchedulesMap.get(empId)?.get(dateStr);
           if (!sched) continue;
@@ -1410,6 +1427,8 @@ export const timesheetController = {
         const empId = entry.employee_id as number;
         const empCutoff = cutoffByEmployeeId.get(empId) ?? null;
         if (empCutoff && (entry.work_date as string) >= empCutoff) continue;
+        const empJoinedF = joinedCutoffByEmployeeId.get(empId) ?? null;
+        if (empJoinedF && (entry.work_date as string) < empJoinedF) continue;
 
         if (NON_WORKING_STATUSES.has(entry.status as string)) {
           if (entry.status === 'sick') deviations.sick++;
@@ -1667,15 +1686,41 @@ export const timesheetController = {
         isTimekeeper(req),
       );
 
-      // Если день рабочий и часы заданы — пытаемся сразу прицепить корректировку к
-      // конкретному объекту (СКУД-объект дня → исторический primary), чтобы не плодить
-      // day-level записи, попадающие в группу «Не определён» в режиме «По объектам».
-      const resolvedObject = (parsed.status === 'work' && typeof normalizedHours === 'number' && normalizedHours > 0)
+      // Если день рабочий и часы заданы — корректировка обязана быть привязана к
+      // конкретному объекту, иначе попадёт в группу «Не определён» в режиме «По объектам».
+      // 1) авто-привязка (СКУД-объект дня → исторический primary);
+      // 2) явный object_id от клиента (после ответа OBJECT_REQUIRED);
+      // 3) если не определён и у сотрудника есть объекты — требуем выбор (422).
+      const isWorkHours = parsed.status === 'work' && typeof normalizedHours === 'number' && normalizedHours > 0;
+      let resolvedObject = isWorkHours
         ? await resolveDayObjectForAdjustment({
             employeeId: parsed.employee_id,
             workDate: parsed.work_date,
           })
         : null;
+      if (isWorkHours) {
+        if (parsed.object_id) {
+          const selectable = await listSelectableObjectsForEmployee(parsed.employee_id);
+          const match = selectable.find((o) => o.object_id === parsed.object_id);
+          resolvedObject = {
+            object_id: parsed.object_id,
+            object_name: match?.object_name ?? resolvedObject?.object_name ?? 'Объект',
+          };
+        }
+        if (!resolvedObject) {
+          const candidates = await listSelectableObjectsForEmployee(parsed.employee_id);
+          // Есть из чего выбрать → требуем явный объект. Нет объектов вовсе — редкий
+          // тру-фоллбек: оставляем day-level (ниже), блокировать ввод нечем.
+          if (candidates.length > 0) {
+            return res.status(422).json({
+              success: false,
+              code: 'OBJECT_REQUIRED',
+              error: 'Не удалось определить объект. Выберите объект для корректировки.',
+              candidates,
+            });
+          }
+        }
+      }
 
       // Мьютекс day-level ↔ per-object: снимаем строки противоположного типа.
       await execute(
@@ -1752,6 +1797,25 @@ export const timesheetController = {
       }
       console.error('timesheet.create error:', err);
       res.status(500).json({ success: false, error: 'Ошибка создания записи' });
+    }
+  },
+
+  /** GET /api/timesheet/employees/:employeeId/objects — объекты сотрудника для привязки корректировки */
+  async listEmployeeObjects(req: AuthenticatedRequest, res: Response) {
+    try {
+      const employeeId = Number.parseInt(req.params.employeeId, 10);
+      if (!Number.isInteger(employeeId) || employeeId <= 0) {
+        return res.status(400).json({ success: false, error: 'Некорректный ID сотрудника' });
+      }
+      const todayStr = formatDateToISO(new Date());
+      if (!(await canAccessEmployeeForTimesheetDate(req, employeeId, todayStr))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+      const data = await listSelectableObjectsForEmployee(employeeId);
+      res.json({ success: true, data });
+    } catch (err) {
+      console.error('timesheet.listEmployeeObjects error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка получения объектов' });
     }
   },
 

@@ -9,6 +9,7 @@ import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTrans
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { timesheetService } from '../../services/timesheetService';
 import { correctionAttachmentsService } from '../../services/correctionAttachmentsService';
+import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
@@ -187,6 +188,12 @@ export const TimesheetPage: FC = () => {
   const [modalMode, setModalMode] = useState<'day' | 'object'>('day');
   const [modalObjectEntry, setModalObjectEntry] = useState<TimesheetObjectEntry | null>(null);
   const [modalObjectTarget, setModalObjectTarget] = useState<IObjectModalTarget | null>(null);
+  // Пикер объекта: бэк вернул OBJECT_REQUIRED (авто-привязка не определила объект).
+  const [objectPrompt, setObjectPrompt] = useState<{
+    candidates: Array<{ object_id: string; object_name: string }>;
+    pending: { status: TimesheetStatus; hours: number | null; notes: string; files?: File[] };
+    selected: string;
+  } | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkSelectedCellKeys, setBulkSelectedCellKeys] = useState<Set<string>>(new Set());
@@ -581,10 +588,54 @@ export const TimesheetPage: FC = () => {
         queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
       ]);
     } catch (err) {
+      // Бэк требует явный объект корректировки (авто-привязка не сработала) — показываем пикер.
+      if (err instanceof ApiError && err.code === 'OBJECT_REQUIRED') {
+        const candidates = Array.isArray((err.details as { candidates?: unknown })?.candidates)
+          ? ((err.details as { candidates: Array<{ object_id: string; object_name: string }> }).candidates)
+          : [];
+        setObjectPrompt({ candidates, pending: { status, hours, notes, files }, selected: candidates[0]?.object_id ?? '' });
+        return;
+      }
       console.error('Save correction error:', err);
       toast.error?.(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
     }
   }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+
+  // Повторное сохранение корректировки с явно выбранным объектом (после OBJECT_REQUIRED).
+  const confirmObjectPrompt = useCallback(async () => {
+    if (!objectPrompt || !modalEmployee || !objectPrompt.selected) return;
+    const { pending, selected } = objectPrompt;
+    try {
+      const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+      const created = await timesheetService.create({
+        employee_id: modalEmployee.id,
+        work_date: workDate,
+        status: pending.status,
+        hours_worked: pending.hours,
+        notes: pending.notes,
+        object_id: selected,
+      });
+      if (pending.files && pending.files.length > 0 && created.id != null) {
+        const adjustmentId = created.id;
+        try {
+          await Promise.all(pending.files.map(file => correctionAttachmentsService.upload(adjustmentId, file)));
+        } catch (uploadErr) {
+          console.error('Upload correction files error:', uploadErr);
+          toast.error?.(uploadErr instanceof Error ? uploadErr.message : 'Корректировка создана, но файлы не загрузились');
+        }
+      }
+      setObjectPrompt(null);
+      closeModal();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+      ]);
+    } catch (err) {
+      console.error('Save correction with object error:', err);
+      toast.error?.(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
+    }
+  }, [objectPrompt, modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
     if (!modalEmployee || !modalObjectTarget || hours == null) return;
@@ -2259,6 +2310,35 @@ export const TimesheetPage: FC = () => {
             workDate={travelExceptionTarget.workDate}
           />
         </Suspense>
+      )}
+
+      {/* Пикер объекта: авто-привязка не определила объект (OBJECT_REQUIRED). */}
+      {objectPrompt && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, width: '100%', maxWidth: 420, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <h3 style={{ margin: 0, fontSize: 16, color: 'var(--text-primary)' }}>Выберите объект</h3>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
+              Объект для этого дня не определён автоматически. Укажите, к какому объекту отнести часы.
+            </p>
+            {objectPrompt.candidates.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--error)' }}>У сотрудника нет доступных объектов.</p>
+            ) : (
+              <select
+                value={objectPrompt.selected}
+                onChange={(e) => setObjectPrompt(p => (p ? { ...p, selected: e.target.value } : p))}
+                style={{ width: '100%', padding: '10px 12px', fontSize: 15, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+              >
+                {objectPrompt.candidates.map(c => (
+                  <option key={c.object_id} value={c.object_id}>{c.object_name}</option>
+                ))}
+              </select>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn-secondary" onClick={() => setObjectPrompt(null)}>Отмена</button>
+              <button className="btn-primary" onClick={() => void confirmObjectPrompt()} disabled={!objectPrompt.selected}>Сохранить</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

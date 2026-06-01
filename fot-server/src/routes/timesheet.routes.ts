@@ -157,6 +157,13 @@ router.get(
   tm.listAdminTransfers
 );
 
+// GET /api/timesheet/employees/:employeeId/objects — объекты сотрудника для привязки корректировки
+router.get(
+  '/employees/:employeeId/objects',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'edit'),
+  timesheetController.listEmployeeObjects
+);
+
 router.get(
   '/team-management/transfers',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),

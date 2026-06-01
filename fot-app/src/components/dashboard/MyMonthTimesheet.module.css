@@ -227,6 +227,31 @@
   background: var(--error, #ef4444);
 }
 
+/* Маркер корректировки табеля (#9): цвет = approval_status. Bottom-left, чтобы
+   не сталкиваться с бейджем заявки (bottom-right) и значком ✎ (top-right). */
+.cellCorrectionDot {
+  position: absolute;
+  bottom: 3px;
+  left: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1.5px var(--bg-tertiary);
+  pointer-events: none;
+}
+
+.corrPending {
+  background: var(--warning, #f59e0b);
+}
+
+.corrApproved {
+  background: var(--success, #22c55e);
+}
+
+.corrRejected {
+  background: var(--error, #ef4444);
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;

@@ -4,8 +4,12 @@ import type { TimesheetResponse } from '../types';
 
 const EMPTY_TIMESHEET_RESPONSES: TimesheetResponse[] = [];
 
+// 'with-objects': запрашиваем табель с детализацией по объектам (include_objects=true),
+// чтобы дневной итог совпадал с интерактивным табелем 100% (там include_objects всегда true).
+// Маркер в ключе исключает выдачу кэша старого варианта без объектов. Инвалидации по
+// префиксу ['employee-timesheet-summary', employeeId] продолжают работать.
 export const getEmployeeTimesheetMonthQueryKey = (employeeId: number, monthKey: string) => (
-  ['employee-timesheet-summary', employeeId, monthKey] as const
+  ['employee-timesheet-summary', employeeId, monthKey, 'with-objects'] as const
 );
 
 export const useEmployeeTimesheetMonth = (
@@ -16,7 +20,7 @@ export const useEmployeeTimesheetMonth = (
   queryKey: employeeId && monthKey
     ? getEmployeeTimesheetMonthQueryKey(employeeId, monthKey)
     : ['employee-timesheet-summary', 'disabled'],
-  queryFn: () => timesheetService.getAll({ month: monthKey!, employee_id: employeeId! }),
+  queryFn: () => timesheetService.getAll({ month: monthKey!, employee_id: employeeId!, include_objects: true }),
   enabled: Boolean(employeeId && monthKey && enabled),
   staleTime: 5 * 60_000,
   gcTime: 15 * 60_000,
@@ -31,7 +35,7 @@ export const useEmployeeTimesheetMonths = (
   const results = useQueries({
     queries: monthKeys.map(monthKey => ({
       queryKey: getEmployeeTimesheetMonthQueryKey(employeeId!, monthKey),
-      queryFn: () => timesheetService.getAll({ month: monthKey, employee_id: employeeId! }),
+      queryFn: () => timesheetService.getAll({ month: monthKey, employee_id: employeeId!, include_objects: true }),
       enabled: Boolean(employeeId && enabled),
       staleTime: 5 * 60_000,
   gcTime: 15 * 60_000,
