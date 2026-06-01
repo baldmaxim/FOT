@@ -4,21 +4,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { apiClient } from '../../api/client';
 import { employeeService } from '../../services/employeeService';
-import { skudService } from '../../services/skudService';
-import type { Employee, SkudEvent, IAccessPointSetting, TimesheetEntry, TimesheetStatus } from '../../types';
-import { DayEvents, DaySummaryBadges, formatHM } from '../../components/dashboard/AttendanceCard';
-import type { IDayGroup, IEntryExitPair } from '../../components/dashboard/AttendanceCard';
+import type { Employee } from '../../types';
 import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
-import { useMyLeaveRequests } from '../../hooks/usePortalData';
-import { selectVisibleHours } from '../../utils/hoursDisplay';
-import {
-  CORRECTION_STATUS_LABELS,
-  REQUEST_TYPE_LABELS as LR_TYPE_LABELS,
-  STATUS_LABELS as LR_STATUS_LABELS,
-  type ILeaveRequest,
-  type LeaveRequestStatus,
-  type LeaveRequestType,
-} from '../../services/leaveRequestService';
 import styles from './EmployeeDashboard.module.css';
 
 const EmployeeInfoCards = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCards })));
@@ -27,151 +14,13 @@ const UnifiedRequestModal = lazy(() => import('../../components/dashboard/Reques
 const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
 
-const timeToSeconds = (t: string): number => {
-  const [h, m, s = 0] = t.split(':').map(Number);
-  return h * 3600 + m * 60 + s;
-};
-
-const toLocalISO = (d: Date): string => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-};
-
-const DAY_NAMES = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-const STATUS_LABELS: Record<TimesheetStatus, string> = {
-  work: 'Работа в выходной/праздник',
-  manual: 'Работа',
-  remote: 'Удалёнка',
-  sick: 'Больничный',
-  vacation: 'Отпуск',
-  dayoff: 'Выходной',
-  absent: 'Неявка',
-  unpaid: 'За свой счёт',
-  educational_leave: 'Учебный отпуск',
-};
-const WORKED_STATUSES = new Set<TimesheetStatus>(['work', 'manual', 'remote']);
-
-const REQ_STATUS_PRIORITY: Record<LeaveRequestStatus, number> = {
-  pending: 3,
-  approved: 2,
-  rejected: 1,
-  cancelled: 0,
-};
-
-const ABSENCE_REQUEST_TYPES: ReadonlySet<LeaveRequestType> = new Set([
-  'vacation',
-  'sick_leave',
-  'unpaid',
-]);
-
-const formatRuDate = (iso: string): string =>
-  new Date(iso + 'T00:00:00').toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
 const pad2 = (n: number) => String(n).padStart(2, '0');
-
-const formatActiveDayLabel = (iso: string): string =>
-  new Date(iso + 'T00:00:00').toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
-
-const buildPairs = (events: SkudEvent[], internalPoints: Set<string>, isToday: boolean): IEntryExitPair[] => {
-  const sorted = events.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-  const pairs: IEntryExitPair[] = [];
-  let currentEntry: SkudEvent | null = null;
-
-  for (const ev of sorted) {
-    if (ev.direction === 'entry') {
-      if (currentEntry === null) currentEntry = ev;
-    } else if (ev.direction === 'exit' && currentEntry !== null) {
-      const dur = timeToSeconds(ev.event_time) - timeToSeconds(currentEntry.event_time);
-      pairs.push({ entry: currentEntry, exit: ev, durationMinutes: Math.round(dur / 60), breakMinutesAfter: null });
-      currentEntry = null;
-    }
-  }
-  if (currentEntry && isToday) {
-    const now = new Date();
-    const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-    const dur = nowSec - timeToSeconds(currentEntry.event_time);
-    if (dur > 0) {
-      pairs.push({ entry: currentEntry, exit: null, durationMinutes: Math.round(dur / 60), breakMinutesAfter: null });
-    }
-  }
-  pairs.forEach((pair, i) => {
-    const next = pairs[i + 1];
-    if (pair.exit && next?.entry) {
-      const gap = timeToSeconds(next.entry.event_time) - timeToSeconds(pair.exit.event_time);
-      pair.breakMinutesAfter = gap > 0 ? Math.round(gap / 60) : null;
-    }
-  });
-  return pairs;
-};
-
-const buildDayGroup = (
-  dateStr: string,
-  timesheetEntries: TimesheetEntry[],
-  events: SkudEvent[],
-  internalPoints: Set<string>,
-  showActualHours: boolean,
-): IDayGroup => {
-  const todayStr = toLocalISO(new Date());
-  const entry = timesheetEntries.find(e => e.work_date === dateStr) ?? null;
-  const dayEvents = [...events].sort((a, b) => a.event_time.localeCompare(b.event_time));
-
-  const src = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-  const directionEntries = src.filter(e => e.direction === 'entry');
-  const exits = src.filter(e => e.direction === 'exit');
-
-  const isToday = dateStr === todayStr;
-  const pairs = buildPairs(dayEvents, internalPoints, isToday);
-  const rawTotalMinutes = pairs.reduce((sum, pair) => sum + pair.durationMinutes, 0);
-  const totalBreakMinutes = pairs.reduce((sum, pair) => sum + (pair.breakMinutesAfter ?? 0), 0);
-  // Единый источник часов — тот же, что в табеле/панели/модалке (selectVisibleHours):
-  // show_actual_hours=false → display_hours_worked (без «дороги», урезано под смену),
-  // =true → hours_worked. Раньше тут был сырой entry.hours_worked → ЛК показывал
-  // больше табеля (с зачётом дороги), цифры расходились.
-  const visibleHours = selectVisibleHours(entry, showActualHours);
-  const canonicalMinutes = visibleHours != null
-    ? Math.max(0, Math.round(visibleHours * 60))
-    : 0;
-  const hasWorkedStatus = entry ? WORKED_STATUSES.has(entry.status) : rawTotalMinutes > 0;
-  const totalMinutes = isToday && rawTotalMinutes > 0 && (!entry || hasWorkedStatus)
-    ? Math.max(canonicalMinutes, rawTotalMinutes)
-    : (canonicalMinutes > 0 || entry ? canonicalMinutes : rawTotalMinutes);
-
-  const firstEntry = entry?.first_entry ?? (directionEntries.length > 0 ? directionEntries[0].event_time : null);
-  const lastExit = entry?.last_exit ?? (exits.length > 0 ? exits[exits.length - 1].event_time : null);
-  const d = new Date(dateStr + 'T00:00:00');
-  const dow = d.getDay() === 0 ? 6 : d.getDay() - 1;
-  const status = entry?.status ?? (dayEvents.length > 0 ? 'work' : null);
-
-  return {
-    date: dateStr,
-    dayName: DAY_NAMES[dow],
-    events: dayEvents,
-    firstEntry,
-    lastExit,
-    totalMinutes,
-    totalBreakMinutes,
-    isToday,
-    isWeekend: dow >= 5 && !hasWorkedStatus,
-    isFuture: dateStr > todayStr,
-    pairs,
-    status,
-    statusLabel: status ? STATUS_LABELS[status] : null,
-    isCorrection: Boolean(entry?.is_correction),
-    hasSkudDetails: dayEvents.length > 0,
-    hasCanonicalEntry: Boolean(entry),
-  };
-};
 
 export const EmployeeDashboardPage: React.FC = () => {
 
-  const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward, showActualHours } = useAuth();
+  const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const { showToast } = useToast();
   const [showRequestModal, setShowRequestModal] = useState(false);
-
-  const todayIso = useMemo(() => toLocalISO(new Date()), []);
-  const [activeDayIso, setActiveDayIso] = useState<string>(todayIso);
 
   // 2FA state
   const [show2FASetup, setShow2FASetup] = useState(false);
@@ -206,84 +55,11 @@ export const EmployeeDashboardPage: React.FC = () => {
     staleTime: 60_000,
   });
 
-  const accessPointsQuery = useQuery<IAccessPointSetting[]>({
-    queryKey: ['skud-access-point-settings'],
-    queryFn: () => skudService.getAccessPointSettings().catch(() => [] as IAccessPointSetting[]),
-    enabled: !!employeeId,
-    staleTime: 10 * 60_000,
-  });
-
   const timesheetQuery = useEmployeeTimesheetMonths(employeeId, timesheetMonthKeys, !!employeeId);
-  const leaveRequestsQuery = useMyLeaveRequests();
-
-  const skudEventsQuery = useQuery<SkudEvent[]>({
-    queryKey: ['employee-dashboard-skud-events', employeeId, activeDayIso],
-    enabled: !!employeeId,
-    staleTime: 30_000,
-    queryFn: () => skudService.getEmployeeEvents(
-      employeeId as number,
-      activeDayIso,
-      activeDayIso,
-    ).catch(() => [] as SkudEvent[]),
-  });
 
   const employee = employeeQuery.data ?? null;
 
-  const timesheetEntries = useMemo(() => {
-    const uniqueEntries = new Map<string, TimesheetEntry>();
-    for (const response of timesheetQuery.data) {
-      for (const entry of response.entries || []) {
-        if (entry.employee_id !== employeeId) continue;
-        uniqueEntries.set(entry.work_date, entry);
-      }
-    }
-    return Array.from(uniqueEntries.values()).sort((a, b) => a.work_date.localeCompare(b.work_date));
-  }, [employeeId, timesheetQuery.data]);
-
-  const skudEvents = useMemo(() => skudEventsQuery.data ?? [], [skudEventsQuery.data]);
-  const internalPoints = useMemo(
-    () => new Set((accessPointsQuery.data ?? []).filter(point => point.is_internal).map(point => point.access_point_name)),
-    [accessPointsQuery.data],
-  );
-
-  const loading = employeeQuery.isLoading || timesheetQuery.isLoading || accessPointsQuery.isLoading;
-  const eventsLoading = skudEventsQuery.isLoading;
-
-  const activeDayGroup = useMemo(
-    () => buildDayGroup(activeDayIso, timesheetEntries, skudEvents, internalPoints, showActualHours),
-    [activeDayIso, timesheetEntries, skudEvents, internalPoints, showActualHours],
-  );
-
-  const activeCorrection = useMemo<ILeaveRequest | null>(() => {
-    const list = leaveRequestsQuery.data ?? [];
-    let best: ILeaveRequest | null = null;
-    for (const req of list) {
-      if (req.request_type !== 'time_correction') continue;
-      if (req.status === 'cancelled') continue;
-      if (req.correction_date !== activeDayIso) continue;
-      if (!best || REQ_STATUS_PRIORITY[req.status] > REQ_STATUS_PRIORITY[best.status]) {
-        best = req;
-      }
-    }
-    return best;
-  }, [leaveRequestsQuery.data, activeDayIso]);
-
-  // Если выбранный день попадает в период отпуска / больничного / за-свой-счёт —
-  // показываем сводку «Тип с … по …» с текущим статусом согласования.
-  const activeAbsence = useMemo<ILeaveRequest | null>(() => {
-    const list = leaveRequestsQuery.data ?? [];
-    let best: ILeaveRequest | null = null;
-    for (const req of list) {
-      if (!ABSENCE_REQUEST_TYPES.has(req.request_type)) continue;
-      if (req.status === 'cancelled') continue;
-      if (!req.start_date || !req.end_date) continue;
-      if (activeDayIso < req.start_date || activeDayIso > req.end_date) continue;
-      if (!best || REQ_STATUS_PRIORITY[req.status] > REQ_STATUS_PRIORITY[best.status]) {
-        best = req;
-      }
-    }
-    return best;
-  }, [leaveRequestsQuery.data, activeDayIso]);
+  const loading = employeeQuery.isLoading || timesheetQuery.isLoading;
 
   const handleSetup2FA = async () => {
     try {
@@ -327,8 +103,6 @@ export const EmployeeDashboardPage: React.FC = () => {
     </div>
   );
 
-  const hasEventsData = activeDayGroup.hasSkudDetails || activeDayGroup.hasCanonicalEntry;
-
   return (
     <div className={styles.content}>
       {/* Header with request button (заголовок «Личный кабинет» уже в верхней панели) */}
@@ -341,97 +115,15 @@ export const EmployeeDashboardPage: React.FC = () => {
 
       {/* Content Grid */}
       <div className={styles.contentGrid}>
-        {/* Calendar + Day Events */}
+        {/* Calendar */}
         <div className={styles.calendarEventsBlock}>
-          {/* Left: Calendar */}
           <div className={styles.calendarPane}>
             <Suspense fallback={<div className={styles.emptyState}>Загрузка...</div>}>
               <MyMonthTimesheet
                 employeeId={employeeId}
-                activeDayIso={activeDayIso}
-                onDayActivate={setActiveDayIso}
                 noCard
               />
             </Suspense>
-          </div>
-
-          {/* Right: Day Events */}
-          <div className={styles.eventsPane}>
-            <div className={styles.eventsPaneHeader}>
-              <span className={styles.eventsPaneDate}>{formatActiveDayLabel(activeDayIso)}</span>
-              {hasEventsData && <DaySummaryBadges group={activeDayGroup} hideDuration />}
-            </div>
-            <div className={styles.eventsPaneBody}>
-              {loading || eventsLoading ? (
-                <div className={styles.emptyState}>Загрузка...</div>
-              ) : hasEventsData ? (
-                <DayEvents group={activeDayGroup} />
-              ) : (
-                <div className={styles.emptyState}>
-                  {activeDayGroup.isFuture ? 'Будущая дата' : 'Нет данных за этот день'}
-                </div>
-              )}
-            </div>
-            {activeAbsence && (
-              <div className={styles.correctionInfo}>
-                <div className={styles.correctionInfoHeader}>
-                  <span className={styles.correctionInfoTitle}>
-                    {LR_TYPE_LABELS[activeAbsence.request_type]} с {formatRuDate(activeAbsence.start_date)} по {formatRuDate(activeAbsence.end_date)}
-                  </span>
-                  <span
-                    className={`${styles.correctionInfoStatus} ${styles[`correctionStatus_${activeAbsence.status}`]}`}
-                  >
-                    {LR_STATUS_LABELS[activeAbsence.status]}
-                  </span>
-                </div>
-                {activeAbsence.reason && (
-                  <div className={styles.correctionInfoReason}>{activeAbsence.reason}</div>
-                )}
-              </div>
-            )}
-            {activeCorrection && (
-              <div className={styles.correctionInfo}>
-                <div className={styles.correctionInfoHeader}>
-                  <span className={styles.correctionInfoTitle}>Корректировка</span>
-                  <span
-                    className={`${styles.correctionInfoStatus} ${styles[`correctionStatus_${activeCorrection.status}`]}`}
-                  >
-                    {LR_STATUS_LABELS[activeCorrection.status]}
-                  </span>
-                </div>
-                {(activeCorrection.correction_status || activeCorrection.correction_hours != null) && (
-                  <div className={styles.correctionInfoBody}>
-                    {activeCorrection.correction_status && (
-                      <span>
-                        {CORRECTION_STATUS_LABELS[activeCorrection.correction_status] ?? activeCorrection.correction_status}
-                      </span>
-                    )}
-                    {activeCorrection.correction_hours != null && (
-                      <span> · {activeCorrection.correction_hours}ч</span>
-                    )}
-                  </div>
-                )}
-                {activeCorrection.reason && (
-                  <div className={styles.correctionInfoReason}>{activeCorrection.reason}</div>
-                )}
-              </div>
-            )}
-            {(activeDayGroup.totalMinutes > 0 || activeDayGroup.totalBreakMinutes > 0) && (
-              <div className={styles.eventsPaneFooter}>
-                {activeDayGroup.totalMinutes > 0 && (
-                  <div className={styles.eventsPaneFooterRow}>
-                    <span>Итого за день:</span>
-                    <strong>{formatHM(activeDayGroup.totalMinutes)}</strong>
-                  </div>
-                )}
-                {activeDayGroup.totalBreakMinutes > 0 && (
-                  <div className={styles.eventsPaneFooterRow}>
-                    <span>Перерыв:</span>
-                    <strong>{formatHM(activeDayGroup.totalBreakMinutes)}</strong>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
 
