@@ -129,7 +129,7 @@
 /* Content Grid */
 .contentGrid {
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: 350px 1fr;
   gap: 20px;
   align-items: start;
 }
@@ -1391,7 +1391,24 @@
 }
 
 .calendarPane {
+  padding: 16px;
+}
+
+/* Form pane */
+.formPane {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 14px;
   padding: 20px;
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+}
+
+.formTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 18px 0;
 }
 
 /* Responsive */
@@ -1406,6 +1423,10 @@
 
   .calendarEventsBlock {
     max-width: 100%;
+  }
+
+  .formPane {
+    max-height: none;
   }
 }
 

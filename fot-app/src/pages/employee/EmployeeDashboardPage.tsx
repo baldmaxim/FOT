@@ -1,18 +1,24 @@
-import React, { lazy, Suspense, useState, useEffect, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { apiClient } from '../../api/client';
 import { employeeService } from '../../services/employeeService';
+import { leaveRequestService, type LeaveRequestType } from '../../services/leaveRequestService';
+import { documentService } from '../../services/documentService';
+import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import type { Employee } from '../../types';
 import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import styles from './EmployeeDashboard.module.css';
 
 const EmployeeInfoCards = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCards })));
 const DailyTasksCard = lazy(() => import('../../components/dashboard/DailyTasksCard').then(m => ({ default: m.DailyTasksCard })));
-const UnifiedRequestModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.UnifiedRequestModal })));
 const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
+
+const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'unpaid', 'sick_leave', 'educational_leave'];
+const ALLOWED_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -20,7 +26,19 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const { showToast } = useToast();
-  const [showRequestModal, setShowRequestModal] = useState(false);
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Form state
+  const [requestType, setRequestType] = useState<LeaveRequestType>('remote');
+  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
+  const [reason, setReason] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
+  const [correctionDate, setCorrectionDate] = useState('');
+  const [correctionHours, setCorrectionHours] = useState('8');
 
   // 2FA state
   const [show2FASetup, setShow2FASetup] = useState(false);
@@ -97,6 +115,129 @@ export const EmployeeDashboardPage: React.FC = () => {
     }
   };
 
+  const isCorrection = requestType === 'time_correction';
+  const isRangeType = RANGE_TYPES.includes(requestType);
+
+  const handleTypeChange = (next: LeaveRequestType) => {
+    setRequestType(next);
+    setSelectedDates(new Set());
+    setRangeStart('');
+    setRangeEnd('');
+    setCorrectionDate('');
+  };
+
+  const handleDayToggle = (iso: string) => {
+    setSelectedDates(prev => {
+      const next = new Set(prev);
+      if (next.has(iso)) next.delete(iso);
+      else next.add(iso);
+      return next;
+    });
+  };
+
+  const handleFiles = (incoming: FileList | null) => {
+    if (!incoming) return;
+    const next: File[] = [];
+    for (const file of Array.from(incoming)) {
+      if (!ALLOWED_MIMES.includes(file.type)) {
+        showToast('error', `${file.name}: разрешены только PDF, JPG, PNG`);
+        continue;
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        showToast('error', `${file.name}: превышает 10 МБ`);
+        continue;
+      }
+      next.push(file);
+    }
+    if (next.length > 0) setFiles(prev => [...prev, ...next]);
+  };
+
+  const removeFile = (idx: number) => {
+    setFiles(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSubmit = async () => {
+    if (!employeeId) return showToast('error', 'Не найден ID сотрудника');
+    const parsedCorrectionHours = parseFloat(correctionHours);
+
+    if (isCorrection) {
+      if (!correctionDate) return showToast('error', 'Укажите дату корректировки');
+      if (!correctionHours.trim() || !Number.isFinite(parsedCorrectionHours)) {
+        return showToast('error', 'Укажите количество часов');
+      }
+    } else if (isRangeType) {
+      if (!rangeStart || !rangeEnd) return showToast('error', 'Укажите период (с — по)');
+      if (rangeEnd < rangeStart) return showToast('error', 'Дата окончания раньше даты начала');
+      if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
+    } else {
+      if (selectedDates.size === 0) return showToast('error', 'Выберите хотя бы один день');
+    }
+
+    setSubmitting(true);
+    try {
+      const payload = isCorrection
+        ? {
+            request_type: requestType,
+            start_date: correctionDate,
+            end_date: correctionDate,
+            reason: reason.trim() || undefined,
+            correction_date: correctionDate,
+            correction_status: 'work',
+            correction_hours: parsedCorrectionHours,
+          }
+        : isRangeType
+          ? {
+              request_type: requestType,
+              start_date: rangeStart,
+              end_date: rangeEnd,
+              reason: reason.trim() || undefined,
+            }
+          : {
+              request_type: requestType,
+              start_date: Array.from(selectedDates).sort()[0],
+              end_date: Array.from(selectedDates).sort()[Array.from(selectedDates).length - 1],
+              dates: Array.from(selectedDates),
+              reason: reason.trim() || undefined,
+            };
+
+      const created = await leaveRequestService.create(payload as any);
+
+      if (files.length > 0) {
+        const uploads = await Promise.allSettled(
+          files.map(file => documentService.uploadFile(file, employeeId, 'leave_request_attachment', created.id)),
+        );
+        const failed = uploads.filter(u => u.status === 'rejected').length;
+        if (failed > 0) {
+          showToast('warning', `Заявка создана, но ${failed} файл(ов) не загрузились`);
+        }
+      }
+
+      queryClient.setQueryData<any[] | undefined>(
+        getMyLeaveRequestsQueryKey(),
+        (prev) => (prev ? [created, ...prev.filter(r => r.id !== created.id)] : [created]),
+      );
+      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
+      await queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', employeeId] });
+
+      showToast('success', 'Заявление отправлено');
+
+      // Очищаем форму
+      setRequestType('remote');
+      setSelectedDates(new Set());
+      setReason('');
+      setFiles([]);
+      setRangeStart('');
+      setRangeEnd('');
+      setCorrectionDate('');
+      setCorrectionHours('8');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Ошибка отправки';
+      showToast('error', message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const DashboardCardFallback = (
     <div className={styles.infoCard}>
       <div className={styles.emptyState}>Загрузка...</div>
@@ -105,30 +246,129 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   return (
     <div className={styles.content}>
-      {/* Header with request button (заголовок «Личный кабинет» уже в верхней панели) */}
-      <div className={styles.sectionHeader}>
-        <button className="btn-primary" onClick={() => setShowRequestModal(true)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Подать заявление
-        </button>
-      </div>
-
-      {/* Content Grid */}
+      {/* Content Grid: Calendar | Form */}
       <div className={styles.contentGrid}>
-        {/* Calendar */}
+        {/* Calendar - Left */}
         <div className={styles.calendarEventsBlock}>
           <div className={styles.calendarPane}>
             <Suspense fallback={<div className={styles.emptyState}>Загрузка...</div>}>
               <MyMonthTimesheet
                 employeeId={employeeId}
                 noCard
+                selectedDates={selectedDates}
+                onDayToggle={handleDayToggle}
+                allowFuture
               />
             </Suspense>
           </div>
         </div>
 
-        {/* Right column: Employee Info */}
-        <div className={styles.rightColumn}>
+        {/* Form - Right */}
+        <div className={styles.formPane}>
+          <h2 className={styles.formTitle}>Подать заявление</h2>
+
+          {/* Type select */}
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Тип заявления <span className={styles.required}>*</span></label>
+            <select className={styles.formSelect} value={requestType} onChange={(e) => handleTypeChange(e.target.value as LeaveRequestType)}>
+              <option value="remote">Удалённая работа</option>
+              <option value="work">Работа в выходной/праздник</option>
+              <option value="vacation">Отпуск</option>
+              <option value="sick_leave">Больничный</option>
+              <option value="unpaid">За свой счёт</option>
+              <option value="educational_leave">Учебный отпуск</option>
+              <option value="certificate">Справка</option>
+              <option value="time_correction">Корректировка табеля</option>
+            </select>
+          </div>
+
+          {/* Range inputs for vacation/sick/etc */}
+          {isRangeType && (
+            <div className={styles.formRow}>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Дата начала <span className={styles.required}>*</span></label>
+                <input type="date" className={styles.formInput} value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} />
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Дата окончания <span className={styles.required}>*</span></label>
+                <input type="date" className={styles.formInput} value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} />
+              </div>
+            </div>
+          )}
+
+          {/* Correction mode */}
+          {isCorrection && (
+            <>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Дата корректировки <span className={styles.required}>*</span></label>
+                <input type="date" className={styles.formInput} value={correctionDate} onChange={(e) => setCorrectionDate(e.target.value)} />
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Часов <span className={styles.required}>*</span></label>
+                <input type="number" className={styles.formInput} value={correctionHours} onChange={(e) => setCorrectionHours(e.target.value)} step="0.5" />
+              </div>
+            </>
+          )}
+
+          {/* Selected dates for toggle modes */}
+          {!isRangeType && !isCorrection && selectedDates.size > 0 && (
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Выбрано дней: {selectedDates.size}</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {Array.from(selectedDates).sort().map(date => (
+                  <span key={date} style={{ fontSize: '11px', padding: '3px 8px', background: 'var(--accent-muted)', color: 'var(--accent)', borderRadius: '12px' }}>
+                    {new Date(date + 'T00:00').toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Reason */}
+          {requestType !== 'certificate' && (
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Комментарий</label>
+              <textarea className={styles.formTextarea} placeholder="Причина, примечание..." value={reason} onChange={(e) => setReason(e.target.value)} />
+            </div>
+          )}
+
+          {/* File upload */}
+          {requestType === 'sick_leave' && (
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Приложение <span className={styles.required}>*</span></label>
+              <input type="file" ref={fileInputRef} style={{ display: 'none' }} accept=".pdf,image/*" onChange={(e) => handleFiles(e.target.files)} />
+              <button
+                className="btn-secondary"
+                onClick={() => fileInputRef.current?.click()}
+                style={{ width: '100%' }}
+              >
+                Выбрать файл (PDF, JPG, PNG)
+              </button>
+              {files.length > 0 && (
+                <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                  {files.map((f, idx) => (
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: 'var(--text-secondary)' }}>
+                      <span>{f.name}</span>
+                      <button style={{ background: 'none', border: 'none', color: 'var(--error)', cursor: 'pointer', padding: 0 }} onClick={() => removeFile(idx)}>
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Submit */}
+          <button className="btn-primary" onClick={handleSubmit} disabled={submitting} style={{ width: '100%', marginTop: '12px' }}>
+            {submitting ? 'Отправка...' : 'Подать заявление'}
+          </button>
+        </div>
+      </div>
+
+      {/* Info cards - below */}
+      <div style={{ marginTop: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
           <Suspense fallback={DashboardCardFallback}>
             <DailyTasksCard />
           </Suspense>
@@ -159,14 +399,6 @@ export const EmployeeDashboardPage: React.FC = () => {
         </Suspense>
       )}
 
-      {showRequestModal && (
-        <Suspense fallback={null}>
-          <UnifiedRequestModal
-            employeeId={employeeId}
-            onClose={() => setShowRequestModal(false)}
-          />
-        </Suspense>
-      )}
     </div>
   );
 };
