@@ -1,5 +1,5 @@
 import { sigurService } from './sigur.service.js';
-import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
+import { query, queryOne, withTransaction } from '../config/postgres.js';
 import {
   expandDepartmentIdsToAncestors,
   getDepartmentsRaw,
@@ -198,100 +198,103 @@ export async function syncDepartmentsLogic(
     );
   }
 
-  // Pass 1: Upsert отделов (без parent_id)
+  // Pass 1 + Pass 2: Upsert отделов и проставление parent_id (одна транзакция)
   const sigurToDbMap = new Map<number, string>();
   for (const [sigurId, dbId] of sigurIdToDbId) {
     sigurToDbMap.set(sigurId, dbId);
   }
 
-  for (const dept of departments) {
-    if (!dept.name) { skipped++; continue; }
+  let parentLinksSet = 0;
+  await withTransaction(async (client) => {
+    // Pass 1: Upsert отделов (без parent_id)
+    for (const dept of departments) {
+      if (!dept.name) { skipped++; continue; }
 
-    if (filteredSigurIds.has(dept.id)) {
-      filtered++;
-      continue;
-    }
-
-    if (sigurIdToDbId.has(dept.id)) {
-      const dbId = sigurIdToDbId.get(dept.id)!;
-      try {
-        // is_active=true: «оживляем» бригаду, если она была помечена is_active=false
-        // (например, как фантом на прошлом тике) и снова появилась в Sigur.
-        await execute('UPDATE org_departments SET name = $1, is_active = true WHERE id = $2', [dept.name, dbId]);
-        updated++;
-      } catch (updateError) {
-        errors.push(`update ${dept.name}: ${(updateError as Error).message}`);
-      }
-      sigurToDbMap.set(dept.id, dbId);
-    } else {
-      const reusableKey = normalizeDepartmentLookupName(dept.name);
-      const reusableCandidates = reusableDepartmentsByName.get(reusableKey) || [];
-
-      if (reusableCandidates.length === 1) {
-        const reusableDepartment = reusableCandidates[0];
-        try {
-          await execute(
-            'UPDATE org_departments SET name = $1, sigur_department_id = $2 WHERE id = $3',
-            [dept.name, dept.id, reusableDepartment.id],
-          );
-          updated++;
-          sigurIdToDbId.set(dept.id, reusableDepartment.id);
-          sigurToDbMap.set(dept.id, reusableDepartment.id);
-          reusableDepartmentsByName.delete(reusableKey);
-        } catch (reuseError) {
-          errors.push(`rebind ${dept.name}: ${(reuseError as Error).message}`);
-        }
+      if (filteredSigurIds.has(dept.id)) {
+        filtered++;
         continue;
       }
 
-      try {
-        // ON CONFLICT по партиальному UNIQUE-индексу
-        // uniq_org_departments_sigur (миграция 106): если строка с этим
-        // sigur_department_id уже есть (а в sigurIdToDbId не попала) — не
-        // плодим дубликат, а обновляем имя. Идемпотентность при повторном
-        // синке/смене root, чтобы не появлялись осиротевшие копии.
-        const created = await queryOne<{ id: string }>(
-          `INSERT INTO org_departments (name, sigur_department_id, kind)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (sigur_department_id) WHERE sigur_department_id IS NOT NULL
-           DO UPDATE SET name = EXCLUDED.name, is_active = true
-           RETURNING id`,
-          [dept.name, dept.id, detectDepartmentKindFromName(dept.name)],
-        );
-        if (created) {
-          imported++;
-          sigurIdToDbId.set(dept.id, created.id);
-          sigurToDbMap.set(dept.id, created.id);
+      if (sigurIdToDbId.has(dept.id)) {
+        const dbId = sigurIdToDbId.get(dept.id)!;
+        try {
+          // is_active=true: «оживляем» бригаду, если она была помечена is_active=false
+          // (например, как фантом на прошлом тике) и снова появилась в Sigur.
+          await client.query('UPDATE org_departments SET name = $1, is_active = true WHERE id = $2', [dept.name, dbId]);
+          updated++;
+        } catch (updateError) {
+          errors.push(`update ${dept.name}: ${(updateError as Error).message}`);
         }
-      } catch (insertError) {
-        errors.push(`insert ${dept.name}: ${(insertError as Error).message}`);
+        sigurToDbMap.set(dept.id, dbId);
+      } else {
+        const reusableKey = normalizeDepartmentLookupName(dept.name);
+        const reusableCandidates = reusableDepartmentsByName.get(reusableKey) || [];
+
+        if (reusableCandidates.length === 1) {
+          const reusableDepartment = reusableCandidates[0];
+          try {
+            await client.query(
+              'UPDATE org_departments SET name = $1, sigur_department_id = $2 WHERE id = $3',
+              [dept.name, dept.id, reusableDepartment.id],
+            );
+            updated++;
+            sigurIdToDbId.set(dept.id, reusableDepartment.id);
+            sigurToDbMap.set(dept.id, reusableDepartment.id);
+            reusableDepartmentsByName.delete(reusableKey);
+          } catch (reuseError) {
+            errors.push(`rebind ${dept.name}: ${(reuseError as Error).message}`);
+          }
+          continue;
+        }
+
+        try {
+          // ON CONFLICT по партиальному UNIQUE-индексу
+          // uniq_org_departments_sigur (миграция 106): если строка с этим
+          // sigur_department_id уже есть (а в sigurIdToDbId не попала) — не
+          // плодим дубликат, а обновляем имя. Идемпотентность при повторном
+          // синке/смене root, чтобы не появлялись осиротевшие копии.
+          const created = await client.query(
+            `INSERT INTO org_departments (name, sigur_department_id, kind)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (sigur_department_id) WHERE sigur_department_id IS NOT NULL
+             DO UPDATE SET name = EXCLUDED.name, is_active = true
+             RETURNING id`,
+            [dept.name, dept.id, detectDepartmentKindFromName(dept.name)],
+          );
+          if (created.rows.length > 0) {
+            imported++;
+            sigurIdToDbId.set(dept.id, created.rows[0].id);
+            sigurToDbMap.set(dept.id, created.rows[0].id);
+          }
+        } catch (insertError) {
+          errors.push(`insert ${dept.name}: ${(insertError as Error).message}`);
+        }
       }
     }
-  }
 
-  // Pass 2: Проставляем parent_id связи
-  let parentLinksSet = 0;
-  for (const dept of departments) {
-    if (!sigurToDbMap.has(dept.id)) continue;
-    if (filteredSigurIds.has(dept.id)) continue;
+    // Pass 2: Проставляем parent_id связи (в той же транзакции)
+    for (const dept of departments) {
+      if (!sigurToDbMap.has(dept.id)) continue;
+      if (filteredSigurIds.has(dept.id)) continue;
 
-    const dbId = sigurToDbMap.get(dept.id)!;
-    let parentDbId: string | null;
+      const dbId = sigurToDbMap.get(dept.id)!;
+      let parentDbId: string | null;
 
-    if (!dept.parentId || dept.parentId === 0) {
-      // Корневой отдел в Sigur (parentId=0/null) → привязываем к «Объект»
-      parentDbId = rootDeptId;
-    } else {
-      parentDbId = sigurToDbMap.get(dept.parentId) || null;
+      if (!dept.parentId || dept.parentId === 0) {
+        // Корневой отдел в Sigur (parentId=0/null) → привязываем к «Объект»
+        parentDbId = rootDeptId;
+      } else {
+        parentDbId = sigurToDbMap.get(dept.parentId) || null;
+      }
+
+      try {
+        await client.query('UPDATE org_departments SET parent_id = $1 WHERE id = $2', [parentDbId, dbId]);
+        parentLinksSet++;
+      } catch {
+        // игнорируем ошибки связывания parent_id — суммируем только успешные
+      }
     }
-
-    try {
-      await execute('UPDATE org_departments SET parent_id = $1 WHERE id = $2', [parentDbId, dbId]);
-      parentLinksSet++;
-    } catch {
-      // игнорируем ошибки связывания parent_id — суммируем только успешные
-    }
-  }
+  });
 
   // Reconciliation: org_departments.sigur_department_id, которых нет в свежем
   // currentSigurDepartmentIds, — это удалённые в Sigur «фантомы». Помечаем

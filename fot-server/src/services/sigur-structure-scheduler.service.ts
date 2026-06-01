@@ -15,6 +15,7 @@ import {
 } from './sigur-sync.service.js';
 import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
 import { notifySigurStructureChanged } from './skud-realtime.service.js';
+import { invalidateCache } from '../middleware/cacheResponse.js';
 import type { ISyncContext } from './sigur-sync-shared.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
 import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
@@ -67,6 +68,7 @@ async function runStructureSyncCycle(): Promise<void> {
           // между старыми и новыми именами отделов/должностей, а dept tree
           // и sync filter не отдавали стейл данные.
           invalidateOrgStructureCaches();
+          invalidateCache('structure:tree');  // очистить HTTP-кэш дерева для всех пользователей
           notifySigurStructureChanged({ source: 'scheduler', scope: 'all' });
 
           const durationMs = Date.now() - startedAt;
