@@ -11,13 +11,14 @@ import {
 } from '../../utils/timesheetApprovalPeriod';
 import { MassTimesheetExportDepartmentsTab } from './MassTimesheetExportDepartmentsTab';
 import { MassTimesheetExportAssignedTab } from './MassTimesheetExportAssignedTab';
+import { MassTimesheetExportObjectsTab } from './MassTimesheetExportObjectsTab';
 import { MassTimesheetExportDashboardTab } from './MassTimesheetExportDashboardTab';
 import './MassTimesheetExportPage.css';
 
 type TimesheetGroupingMode = 'employees' | 'objects';
-type ExportTab = 'departments' | 'assigned' | 'dashboard';
+type ExportTab = 'departments' | 'assigned' | 'objects' | 'dashboard';
 
-const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v4';
+const ACTIVE_TAB_STORAGE_KEY = 'timesheet_export_active_tab_v5';
 
 const loadStoredActiveTab = (): ExportTab => {
   try {
@@ -97,9 +98,11 @@ export const MassTimesheetExportPage: FC = () => {
 
   const isDashboardTab = activeTab === 'dashboard';
 
+  const isObjectsTab = activeTab === 'objects';
+
   return (
     <div className="mte-page">
-      {!isDashboardTab && (
+      {!isDashboardTab && !isObjectsTab && (
         <div className="mte-toolbar">
           <div className="mte-month-nav">
             <button className="mte-month-btn" onClick={prevMonth} disabled={!canGoPrev}>
@@ -160,6 +163,42 @@ export const MassTimesheetExportPage: FC = () => {
           </label>
         </div>
       )}
+      {isObjectsTab && (
+        <div className="mte-toolbar">
+          <div className="mte-month-nav">
+            <button className="mte-month-btn" onClick={prevMonth} disabled={!canGoPrev}>
+              <ChevronLeft size={16} />
+            </button>
+            <span className="mte-month-label">{getMonthLabel(year, month)}</span>
+            <button className="mte-month-btn" onClick={nextMonth} disabled={!canGoNext}>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+          <section className="mte-half-toggle" aria-label="Период выгрузки табелей">
+            <button
+              type="button"
+              className={`mte-half-chip ${half === 'H1' ? 'mte-half-chip--active' : ''}`}
+              onClick={() => setHalf('H1')}
+            >
+              {formatHalfLabel(year, month, 'H1')}
+            </button>
+            <button
+              type="button"
+              className={`mte-half-chip ${half === 'H2' ? 'mte-half-chip--active' : ''}`}
+              onClick={() => setHalf('H2')}
+            >
+              {formatHalfLabel(year, month, 'H2')}
+            </button>
+            <button
+              type="button"
+              className={`mte-half-chip ${half === 'FULL' ? 'mte-half-chip--active' : ''}`}
+              onClick={() => setHalf('FULL')}
+            >
+              {formatHalfLabel(year, month, 'FULL')}
+            </button>
+          </section>
+        </div>
+      )}
 
       <div className="mte-tabs" role="tablist">
         <button
@@ -183,6 +222,15 @@ export const MassTimesheetExportPage: FC = () => {
         <button
           type="button"
           role="tab"
+          aria-selected={activeTab === 'objects'}
+          className={`mte-tab-button ${activeTab === 'objects' ? 'mte-tab-button--active' : ''}`}
+          onClick={() => setActiveTab('objects')}
+        >
+          По объектам
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={activeTab === 'assigned'}
           className={`mte-tab-button ${activeTab === 'assigned' ? 'mte-tab-button--active' : ''}`}
           onClick={() => setActiveTab('assigned')}
@@ -200,6 +248,14 @@ export const MassTimesheetExportPage: FC = () => {
             rangeEnd={rangeEnd}
             groupBy={groupBy}
             exportAs1C={exportAs1C}
+          />
+        )}
+        {activeTab === 'objects' && (
+          <MassTimesheetExportObjectsTab
+            year={year}
+            month={month}
+            rangeStart={rangeStart}
+            rangeEnd={rangeEnd}
           />
         )}
         {activeTab === 'assigned' && (

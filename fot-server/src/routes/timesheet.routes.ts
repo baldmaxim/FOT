@@ -1,10 +1,13 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
+import { query as dbQuery } from '../config/postgres.js';
 import { timesheetController } from '../controllers/timesheet.controller.js';
 import { timesheetTeamManagementController as tm } from '../controllers/timesheet-team-management.controller.js';
+import { exportTimesheetObjectsUnified } from '../controllers/timesheet-mass-export.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { cacheWithShortTtlForToday } from '../middleware/skipCacheForToday.js';
 import { serverTiming } from '../middleware/serverTiming.js';
+import type { AuthenticatedRequest } from '../types/index.js';
 import correctionAttachmentsRouter from './correction-attachments.routes.js';
 
 const router = Router();
@@ -203,6 +206,31 @@ router.post(
   '/export-mass-unified',
   requirePageAccess('/timesheet-hr', 'view'),
   timesheetController.exportMassUnified
+);
+
+// GET /api/timesheet/objects — список объектов для выгрузки табелей
+router.get(
+  '/objects',
+  requirePageAccess('/timesheet-hr', 'view'),
+  async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const rows = await dbQuery<{ id: string; name: string; alt_name: string | null }>(
+        `SELECT id, name, alt_name FROM skud_objects WHERE is_active = true
+          ORDER BY COALESCE(NULLIF(btrim(alt_name), ''), name), name`,
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      console.error('List timesheet objects error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить объекты' });
+    }
+  }
+);
+
+// POST /api/timesheet/export-objects-unified — единый файл для 1С по выбранным объектам.
+router.post(
+  '/export-objects-unified',
+  requirePageAccess('/timesheet-hr', 'view'),
+  exportTimesheetObjectsUnified
 );
 
 // POST /api/timesheet/export-assigned

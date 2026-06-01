@@ -461,6 +461,40 @@ export const timesheetService = {
     return response.blob();
   },
 
+  async listObjects(): Promise<Array<{ id: string; name: string; alt_name: string | null }>> {
+    const res = await apiClient.get<{
+      success: boolean;
+      data: Array<{ id: string; name: string; alt_name: string | null }>;
+    }>('/timesheet/objects');
+    if (!res.success || !Array.isArray(res.data)) {
+      throw new Error('Ошибка загрузки объектов');
+    }
+    return res.data;
+  },
+
+  async exportObjectsUnified(filters: {
+    month: string;
+    object_ids: string[];
+    half?: TimesheetExportHalf;
+    from?: string;
+    to?: string;
+  }): Promise<Blob> {
+    const response = await fetch(
+      buildApiUrl('/timesheet/export-objects-unified'),
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildAuthHeaders(),
+        },
+        body: JSON.stringify(filters),
+      }
+    );
+    if (!response.ok) throw new Error('Ошибка экспорта табелей по объектам');
+    return response.blob();
+  },
+
   async exportAssigned(filters: {
     month: string;
     half?: TimesheetExportHalf;
