@@ -1,9 +1,10 @@
 import { type FC, useState, useMemo, useCallback, useEffect } from 'react';
-import { Download, Search, Settings } from 'lucide-react';
+import { Download, Search, Settings, ChevronDown, ChevronRight as ChevronR, CheckSquare, MinusSquare, Square } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { timesheetService } from '../../services/timesheetService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import type { OrgDepartmentNode } from '../../types';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -208,7 +209,8 @@ export const MassTimesheetExportObjectsTab: FC<IMassTimesheetExportObjectsTabPro
                     }} />
                   </button>
                   <span className="mte-tree-name" onClick={() => handleToggle(obj.id, !isChecked)}>
-                    {obj.alt_name?.trim() ? `${obj.name} (${obj.alt_name.trim()})` : obj.name}
+                    <div>{obj.name}</div>
+                    {obj.alt_name?.trim() && <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>{obj.alt_name.trim()}</div>}
                   </span>
                 </div>
               </div>
@@ -256,38 +258,113 @@ interface IDeptFilterModalProps {
   onClose: () => void;
 }
 
+const collectAllIds = (nodes: OrgDepartmentNode[]): string[] => {
+  const ids: string[] = [];
+  for (const n of nodes) {
+    ids.push(n.id);
+    if (n.children?.length) ids.push(...collectAllIds(n.children));
+  }
+  return ids;
+};
+
+interface IDeptNodeProps {
+  node: OrgDepartmentNode;
+  checkedIds: Set<string>;
+  onToggle: (ids: string[], checked: boolean) => void;
+  expandedIds: Set<string>;
+  onToggleExpand: (id: string) => void;
+}
+
+const DeptNode: FC<IDeptNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand }) => {
+  const descendantIds = useMemo(() => collectAllIds([node]), [node]);
+  const checkedCount = descendantIds.reduce((acc, id) => acc + (checkedIds.has(id) ? 1 : 0), 0);
+  const isAllChecked = checkedCount === descendantIds.length;
+  const isPartiallyChecked = checkedCount > 0 && !isAllChecked;
+  const hasChildren = node.children && node.children.length > 0;
+  const isExpanded = expandedIds.has(node.id);
+
+  const handleCheck = () => {
+    onToggle(descendantIds, !isAllChecked);
+  };
+
+  const CheckIcon = isAllChecked ? CheckSquare : isPartiallyChecked ? MinusSquare : Square;
+
+  return (
+    <div style={{ paddingLeft: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 0', minHeight: '28px' }}>
+        {hasChildren ? (
+          <button
+            onClick={() => onToggleExpand(node.id)}
+            style={{ display: 'flex', alignItems: 'center', width: '20px', height: '20px', padding: 0, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
+          >
+            {isExpanded ? <ChevronDown size={16} /> : <ChevronR size={16} />}
+          </button>
+        ) : (
+          <div style={{ width: '20px' }} />
+        )}
+        <button
+          onClick={handleCheck}
+          style={{ display: 'flex', alignItems: 'center', padding: '0', background: 'transparent', border: 'none', cursor: 'pointer' }}
+        >
+          <CheckIcon size={16} color={isAllChecked || isPartiallyChecked ? 'var(--primary)' : 'var(--text-tertiary)'} />
+        </button>
+        <span
+          onClick={handleCheck}
+          style={{ flex: 1, cursor: 'pointer', fontSize: '13px', userSelect: 'none' }}
+        >
+          {node.name}
+        </span>
+      </div>
+      {hasChildren && isExpanded && (
+        <div>
+          {node.children.map(child => (
+            <DeptNode
+              key={child.id}
+              node={child}
+              checkedIds={checkedIds}
+              onToggle={onToggle}
+              expandedIds={expandedIds}
+              onToggleExpand={onToggleExpand}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const DeptFilterModal: FC<IDeptFilterModalProps> = ({ selectedDeptIds, onApply, onClose }) => {
   const { data: treeData } = useStructureTree();
   const tree = treeData?.departments ?? [];
   const [tempDeptIds, setTempDeptIds] = useState<Set<string>>(new Set(selectedDeptIds));
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const overlayRef = useOverlayDismiss(onClose);
 
-  const leafDepts = useMemo(() => {
-    const leaves: Array<{ id: string; name: string }> = [];
-    const collect = (nodes: typeof tree): void => {
-      for (const node of nodes) {
-        if (!node.children || node.children.length === 0) {
-          leaves.push({ id: node.id, name: node.name });
-        } else {
-          collect(node.children);
-        }
-      }
-    };
-    collect(tree);
-    return leaves.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  }, [tree]);
+  const allDeptIds = useMemo(() => collectAllIds(tree), [tree]);
 
-  const handleToggleDept = useCallback((deptId: string, checked: boolean) => {
+  const handleToggleDepts = useCallback((ids: string[], checked: boolean) => {
     setTempDeptIds(prev => {
       const next = new Set(prev);
-      if (checked) next.add(deptId);
-      else next.delete(deptId);
+      if (checked) {
+        for (const id of ids) next.add(id);
+      } else {
+        for (const id of ids) next.delete(id);
+      }
       return next;
     });
   }, []);
 
-  const selectAllDepts = () => setTempDeptIds(new Set(leafDepts.map(d => d.id)));
+  const selectAllDepts = () => setTempDeptIds(new Set(allDeptIds));
   const deselectAllDepts = () => setTempDeptIds(new Set());
+
+  const handleToggleExpand = useCallback((id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   return (
     <div className="mte-modal-overlay" {...overlayRef}>
@@ -320,37 +397,23 @@ const DeptFilterModal: FC<IDeptFilterModalProps> = ({ selectedDeptIds, onApply, 
 
         <div style={{
           padding: '12px 20px',
-          maxHeight: '300px',
+          maxHeight: '350px',
           overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '8px',
         }}>
-          {leafDepts.length === 0 ? (
+          {tree.length === 0 ? (
             <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
               Отделы не загружены
             </div>
           ) : (
-            leafDepts.map(dept => (
-              <label
-                key={dept.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '4px 0',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={tempDeptIds.has(dept.id)}
-                  onChange={e => handleToggleDept(dept.id, e.target.checked)}
-                  style={{ cursor: 'pointer' }}
-                />
-                {dept.name}
-              </label>
+            tree.map(root => (
+              <DeptNode
+                key={root.id}
+                node={root}
+                checkedIds={tempDeptIds}
+                onToggle={handleToggleDepts}
+                expandedIds={expandedIds}
+                onToggleExpand={handleToggleExpand}
+              />
             ))
           )}
         </div>
