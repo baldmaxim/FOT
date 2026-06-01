@@ -534,6 +534,23 @@ export async function buildAttendanceEntries(params: {
     let effectiveHours: number | null;
     if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status) && !isAdjWorkingDay) {
       effectiveHours = 0;
+    } else if (adjustment.status === 'work' && !isAdjWorkingDay && adjustment.hours_override === 0) {
+      // 'work' в выходной с hours_override=0 → не обнулять, взять часы из СКУД (обязательная суббота)
+      const notApproved = adjustment.approval_status === 'pending' || adjustment.approval_status === 'rejected';
+      if (notApproved) {
+        effectiveHours = 0;
+      } else if (existingSkud) {
+        effectiveHours = existingSkud.hours;
+      } else {
+        const rawSummary = objectAttendanceData.rawFallbackSummaries
+          .get(adjustment.employee_id)?.get(adjustment.work_date);
+        if (rawSummary) {
+          const lunchMinutes = adjSchedule ? getScheduleForDate(adjSchedule, adjDate).lunch_minutes : 0;
+          effectiveHours = computeSummaryPaidHours(rawSummary, lunchMinutes);
+        } else {
+          effectiveHours = null;
+        }
+      }
     } else if (adjustment.hours_override != null) {
       effectiveHours = adjustment.hours_override;
     } else if (adjustment.status === 'work') {
