@@ -318,17 +318,6 @@ COMMIT;
 
 NOTIFY pgrst, 'reload schema';
 
--- Бэкфилл — полный пересчёт за последние 6 месяцев. Идемпотентно.
-DO $$
-DECLARE
-  r RECORD;
-BEGIN
-  FOR r IN
-    SELECT DISTINCT employee_id, event_date
-    FROM skud_events
-    WHERE employee_id IS NOT NULL
-      AND event_date >= (CURRENT_DATE - INTERVAL '6 months')
-  LOOP
-    PERFORM public.recalculate_skud_daily_summary(NULL::uuid, r.employee_id, r.event_date);
-  END LOOP;
-END $$;
+-- Полный бэкфилл за последние 6 месяцев намеренно не выполняется внутри
+-- миграции: на живой продовой БД он может конфликтовать с текущими SKUD-записями.
+-- Для исторических дней используйте отдельный batched job в окно низкой нагрузки.
