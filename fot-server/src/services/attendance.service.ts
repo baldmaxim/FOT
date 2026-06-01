@@ -849,6 +849,23 @@ export async function buildAttendanceEntries(params: {
     entry.display_hours_worked = totalHours;
     entry.base_hours_worked = totalBaseHours;
     entry.is_correction = entry.is_correction || dayObjectEntries.some(item => item.is_correction);
+    // Синхронизируем approval_status из последней объектной корректировки в дневную запись.
+    // Без этого "по сотрудникам" всегда показывает оранжевый флажок вместо синего/зелёного,
+    // т.к. дневная запись остаётся от СКУД-данных (нет approval_status).
+    // Применяем только к СКУД-записям (entry.id == null) — у них нет собственного approval_status.
+    if (entry.id == null && entry.is_correction) {
+      const latestCorrObj = dayObjectEntries
+        .filter(item => item.is_correction && !item.from_day_level)
+        .reduce<IAttendanceObjectEntry | null>((latest, item) => {
+          if (!latest) return item;
+          const latestTime = new Date(latest.corrected_at ?? '').getTime();
+          const itemTime = new Date(item.corrected_at ?? '').getTime();
+          return itemTime > latestTime ? item : latest;
+        }, null);
+      if (latestCorrObj?.approval_status) {
+        entry.approval_status = latestCorrObj.approval_status;
+      }
+    }
     entry.object_detail_mode = employeesWithMultiObjects.has(entry.employee_id) ? 'available' : 'none';
     entry.object_detail_message = null;
     entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;
