@@ -169,6 +169,7 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   const canReview = hasPermission('timesheet.workflow.review');
   const queryClient = useQueryClient();
   const toast = useToast();
+  const isMobile = useIsMobile(768);
 
   const [view, setView] = useState<'pending' | 'history'>('pending');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -376,7 +377,10 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
                     disabled={selectedIds.size === 0 || bulkPending}
                   >
                     <Check size={15} />
-                    {selectedIds.size > 0 ? `Утвердить выбранные (${selectedIds.size})` : 'Утвердить выбранные'}
+                    {(() => {
+                      const label = isMobile ? 'Утв. выбр.' : 'Утвердить выбранные';
+                      return selectedIds.size > 0 ? `${label} (${selectedIds.size})` : label;
+                    })()}
                   </button>
                   <button
                     type="button"
@@ -385,7 +389,10 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
                     disabled={selectedIds.size === 0 || bulkPending}
                   >
                     <X size={15} />
-                    {selectedIds.size > 0 ? `Отклонить выбранные (${selectedIds.size})` : 'Отклонить выбранные'}
+                    {(() => {
+                      const label = isMobile ? 'Откл. выбр.' : 'Отклонить выбранные';
+                      return selectedIds.size > 0 ? `${label} (${selectedIds.size})` : label;
+                    })()}
                   </button>
                 </>
               ) : (
@@ -396,7 +403,10 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
                   disabled={selectedIds.size === 0 || bulkPending}
                 >
                   <RotateCcw size={15} />
-                  {selectedIds.size > 0 ? `Вернуть выбранные (${selectedIds.size})` : 'Вернуть выбранные'}
+                  {(() => {
+                    const label = isMobile ? 'Вернуть' : 'Вернуть выбранные';
+                    return selectedIds.size > 0 ? `${label} (${selectedIds.size})` : label;
+                  })()}
                 </button>
               )}
             </div>
