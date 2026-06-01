@@ -574,8 +574,8 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     // Блокировка периода подачи: только последний завершённый полупериод (МСК).
-    // system_admin / HR (доступ к /timesheet-hr) блокировку обходят.
-    const submissionExempt = await resolveEffectivePageAccess(req, '/timesheet-hr', 'view');
+    // system_admin / HR (доступ к /timesheet-hr) или роли с timesheet_show_full_period блокировку обходят.
+    const submissionExempt = req.user.timesheet_show_full_period || (await resolveEffectivePageAccess(req, '/timesheet-hr', 'view'));
     if (!submissionExempt && !isRangeSubmittable(range.startDate, range.endDate)) {
       const allowed = getAllowedSubmissionRange();
       res.status(409).json({

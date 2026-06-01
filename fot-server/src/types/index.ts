@@ -113,6 +113,7 @@ export interface AuthenticatedRequest extends Request {
     show_actual_hours: boolean;
     timesheet_months_back: number;
     timesheet_months_forward: number;
+    timesheet_show_full_period: boolean;
     employee_id: number | null;
     department_id: string | null;
     is_approved: boolean;
@@ -322,6 +323,7 @@ export interface JWTPayload {
   show_actual_hours: boolean;
   timesheet_months_back: number;
   timesheet_months_forward: number;
+  timesheet_show_full_period: boolean;
   employee_id: number | null;
   department_id: string | null;
   is_approved: boolean;

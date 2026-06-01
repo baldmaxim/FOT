@@ -485,9 +485,9 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const canReviewApproval = allowReview && hasPermission('timesheet.workflow.review');
   const weekendMemoEnabled = !!profile?.weekend_memo_required;
 
-  // Блокировка периода подачи (зеркалит бэкенд). HR/админ обходят.
+  // Блокировка периода подачи (зеркалит бэкенд). HR/админ или роли с timesheet_show_full_period обходят.
   const isHrOrAdmin = canViewPage('/timesheet-hr');
-  const periodSubmittable = isHrOrAdmin || isAllowedSubmissionRange({ startDate, endDate });
+  const periodSubmittable = isHrOrAdmin || !!profile?.timesheet_show_full_period || isAllowedSubmissionRange({ startDate, endDate });
   const allowedHalf = getAllowedSubmissionHalf();
   const allowedRange = getHalfRange(allowedHalf.year, allowedHalf.month, allowedHalf.half);
   const submitDisabledReason = `Подача доступна только за ${formatTimesheetRangeLabel(allowedRange.startDate, allowedRange.endDate)} — последний завершённый период. За «Весь месяц» подача недоступна.`;

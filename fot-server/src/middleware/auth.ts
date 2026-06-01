@@ -63,6 +63,7 @@ export const authenticate = async (
       show_actual_hours: !!decoded.show_actual_hours,
       timesheet_months_back: Number.isFinite(decoded.timesheet_months_back) ? decoded.timesheet_months_back : 1,
       timesheet_months_forward: Number.isFinite(decoded.timesheet_months_forward) ? decoded.timesheet_months_forward : 1,
+      timesheet_show_full_period: !!decoded.timesheet_show_full_period,
       employee_id: decoded.employee_id ?? null,
       department_id: decoded.department_id ?? null,
       is_approved: decoded.is_approved,
