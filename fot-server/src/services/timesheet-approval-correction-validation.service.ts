@@ -45,8 +45,20 @@ export type ICorrectionValidationScope =
 
 type WeekendDow = 0 | 6; // 0 = воскресенье, 6 = суббота
 
+/**
+ * Освобождает от требования корректировки первые `expected_{saturdays|sundays}_per_month`
+ * отработанных непраздничных Сб/Вс месяца БЕЗ корректировки. Корректировка — пометка
+ * «лишнего» (сверх нормы) выходного, поэтому на обязательные слоты претендуют только дни
+ * без корректировки; дни с корректировкой не флагуются и слоты не занимают.
+ *
+ * Группировка по (employee, год-месяц, dow). Праздничные Сб/Вс (mandatory_holidays всегда,
+ * holidays при respects_holidays) в кандидаты не попадают — такой день всегда требует
+ * корректировку. Доп. запросов к БД нет: используем уже загруженные weekendSkudRows и
+ * множество корректировок adjustmentByEmployeeDate.
+ */
 async function computeMandatoryExemptions(
   weekendSkudRows: Array<{ employee_id: number; date: string }>,
+  adjustmentByEmployeeDate: Set<string>,
 ): Promise<Set<string>> {
   if (weekendSkudRows.length === 0) return new Set();
 
@@ -60,32 +72,59 @@ async function computeMandatoryExemptions(
     allDates[allDates.length - 1]!,
   );
 
+  // Группируем СКУД-выходные по (employee, год-месяц, dow)
+  const groups = new Map<string, { empId: number; year: number; month: number; dow: WeekendDow; dates: string[] }>();
   for (const row of weekendSkudRows) {
     const { employee_id: empId, date } = row;
-    const dailySchedule = schedules.get(empId)?.get(date);
+    const dateObj = new Date(`${date}T00:00:00`);
+    const dow = dateObj.getDay();
+    if (dow !== 0 && dow !== 6) continue;
+    const year = dateObj.getFullYear();
+    const month = dateObj.getMonth() + 1;
+    const key = `${empId}|${year}-${month}|${dow}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { empId, year, month, dow: dow as WeekendDow, dates: [] };
+      groups.set(key, group);
+    }
+    group.dates.push(date);
+  }
+
+  const calendarCache = new Map<string, Awaited<ReturnType<typeof loadCalendarMonth>>>();
+  const getCalendar = async (year: number, month: number) => {
+    const ckey = `${year}-${month}`;
+    if (!calendarCache.has(ckey)) {
+      calendarCache.set(ckey, await loadCalendarMonth(year, month));
+    }
+    return calendarCache.get(ckey) ?? null;
+  };
+
+  for (const group of groups.values()) {
+    const { empId, year, month, dow, dates } = group;
+    // Любой день группы даёт нужные атрибуты графика (стабильны в пределах месяца)
+    const dailySchedule = schedules.get(empId)?.get(dates[0]!);
     if (!dailySchedule) continue;
 
-    const expected_saturdays = dailySchedule.expected_saturdays_per_month ?? 0;
-    const expected_sundays = dailySchedule.expected_sundays_per_month ?? 0;
-    if (expected_saturdays <= 0 && expected_sundays <= 0) continue;
-
-    const dateObj = new Date(`${date}T00:00:00`);
-    const dow = dateObj.getDay() as WeekendDow;
-    if (dow !== 0 && dow !== 6) continue;
-
-    const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
-    const expected = dow === 6 ? expected_saturdays : expected_sundays;
+    const expected = dow === 6
+      ? (dailySchedule.expected_saturdays_per_month ?? 0)
+      : (dailySchedule.expected_sundays_per_month ?? 0);
     if (expected <= 0) continue;
 
-    const nonHolidayDays = listNonHolidayWeekendDays(
-      dateObj.getFullYear(),
-      dateObj.getMonth() + 1,
+    const monthCalendar = await getCalendar(year, month);
+    const validDays = new Set(listNonHolidayWeekendDays(
+      year,
+      month,
       monthCalendar,
       dailySchedule.respects_holidays ?? true,
       dow,
-    );
+    ));
 
-    if (nonHolidayDays.slice(0, expected).includes(date)) {
+    // Кандидаты на обязательный слот: непраздничные выходные без корректировки
+    const candidates = [...new Set(dates)]
+      .filter(date => validDays.has(date) && !adjustmentByEmployeeDate.has(`${empId}|${date}`))
+      .sort();
+
+    for (const date of candidates.slice(0, expected)) {
       exemptions.add(`${empId}|${date}`);
     }
   }
@@ -188,7 +227,7 @@ export async function validateCorrectionAttachments(
       .filter(row => offByEmployee.get(row.employee_id)?.has(row.date) === true);
   }
 
-  const mandatoryExemptions = await computeMandatoryExemptions(weekendSkudRows);
+  const mandatoryExemptions = await computeMandatoryExemptions(weekendSkudRows, adjustmentByEmployeeDate);
 
   const referencedEmployeeIds = new Set<number>();
   for (const lr of leaves) referencedEmployeeIds.add(lr.employee_id);

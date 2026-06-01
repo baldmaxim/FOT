@@ -81,6 +81,28 @@ function setupMocks(): void {
   mockListNonHolidayWeekendDays.mockReturnValue([]);
 }
 
+type SchedAttrs = {
+  expected_saturdays_per_month?: number;
+  expected_sundays_per_month?: number;
+  respects_holidays?: boolean;
+};
+
+// Мок resolveSchedulesForPeriod: один график на сотрудника для всех переданных дат.
+function makeSchedules(
+  empId: number,
+  dates: string[],
+  sched: SchedAttrs,
+): Map<number, Map<string, SchedAttrs>> {
+  const inner = new Map<string, SchedAttrs>();
+  for (const d of dates) inner.set(d, sched);
+  return new Map([[empId, inner]]);
+}
+
+// Непраздничные субботы мая 2026 (исключена праздничная 09.05).
+const MAY_SATURDAYS = ['2026-05-02', '2026-05-16', '2026-05-23', '2026-05-30'];
+const onlySaturdays = (_y: number, _m: number, _c: unknown, _r: boolean, dow: number): string[] =>
+  dow === 6 ? MAY_SATURDAYS : [];
+
 beforeEach(() => {
   pgQuery.mockReset();
   mockGetOffDatesByEmployee.mockReset();
@@ -262,6 +284,90 @@ describe('validateCorrectionAttachments', () => {
     );
 
     expect(result.ok).toBe(true);
+  });
+
+  it('+1 суббота (Абрамов): 16 (СКУД) и 23 (СКУД+корр), праздничная 09 → ok (16 = обязательная)', async () => {
+    const sats = ['2026-05-16', '2026-05-23'];
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[73, new Set(sats)]]));
+    mockResolveSchedulesForPeriod.mockResolvedValue(
+      makeSchedules(73, sats, { expected_saturdays_per_month: 1, expected_sundays_per_month: 0, respects_holidays: true }),
+    );
+    mockListNonHolidayWeekendDays.mockImplementation(onlySaturdays);
+    setupQueries({
+      adjustments: [{ employee_id: 73, work_date: '2026-05-23' }],
+      skud: [
+        { employee_id: 73, date: '2026-05-16', total_minutes: 399 },
+        { employee_id: 73, date: '2026-05-23', total_minutes: 374 },
+      ],
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [73] }, RANGE);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('+1 суббота: отработаны 3, корректировки на 1-й и 3-й → ok (2-я обязательная)', async () => {
+    const sats = ['2026-05-02', '2026-05-16', '2026-05-23'];
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set(sats)]]));
+    mockResolveSchedulesForPeriod.mockResolvedValue(
+      makeSchedules(1, sats, { expected_saturdays_per_month: 1, respects_holidays: true }),
+    );
+    mockListNonHolidayWeekendDays.mockImplementation(onlySaturdays);
+    setupQueries({
+      adjustments: [
+        { employee_id: 1, work_date: '2026-05-02' },
+        { employee_id: 1, work_date: '2026-05-23' },
+      ],
+      skud: sats.map(d => ({ employee_id: 1, date: d, total_minutes: 400 })),
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1] }, RANGE);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('+1 суббота: отработаны 3, корректировка только на 1-й → блок ровно 1 даты (23)', async () => {
+    const sats = ['2026-05-02', '2026-05-16', '2026-05-23'];
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set(sats)]]));
+    mockResolveSchedulesForPeriod.mockResolvedValue(
+      makeSchedules(1, sats, { expected_saturdays_per_month: 1, respects_holidays: true }),
+    );
+    mockListNonHolidayWeekendDays.mockImplementation(onlySaturdays);
+    setupQueries({
+      adjustments: [{ employee_id: 1, work_date: '2026-05-02' }],
+      skud: sats.map(d => ({ employee_id: 1, date: d, total_minutes: 400 })),
+      employees: [{ id: 1, full_name: 'Тест Т.Т.' }],
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1] }, RANGE);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missing).toHaveLength(1);
+      expect(result.missing[0].date).toBe('2026-05-23');
+      expect(result.missing[0].kind).toBe('weekend_no_correction');
+    }
+  });
+
+  it('+1 суббота: отработаны 2 без корректировок → блок одной (второй по дате)', async () => {
+    const sats = ['2026-05-16', '2026-05-23'];
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set(sats)]]));
+    mockResolveSchedulesForPeriod.mockResolvedValue(
+      makeSchedules(1, sats, { expected_saturdays_per_month: 1, respects_holidays: true }),
+    );
+    mockListNonHolidayWeekendDays.mockImplementation(onlySaturdays);
+    setupQueries({
+      skud: sats.map(d => ({ employee_id: 1, date: d, total_minutes: 400 })),
+      employees: [{ id: 1, full_name: 'Тест Т.Т.' }],
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1] }, RANGE);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missing).toHaveLength(1);
+      expect(result.missing[0].date).toBe('2026-05-23');
+    }
   });
 
   it('пустой список employees → ok без обращений к БД', async () => {
