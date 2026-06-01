@@ -2,6 +2,7 @@ import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lock, Pencil, Trash2, Plus, Paperclip } from 'lucide-react';
 import { timesheetService, type ITimesheetCorrectionRow } from '../../services/timesheetService';
+import { correctionAttachmentsService } from '../../services/correctionAttachmentsService';
 import type { TimesheetStatus, TimesheetEmployee } from '../../types';
 import { TimesheetCorrectionModal } from './TimesheetCorrectionModal';
 import { TimesheetBulkCorrectionModal } from './TimesheetBulkCorrectionModal';
@@ -9,6 +10,7 @@ import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
 import { CorrectionAttachments } from './CorrectionAttachments';
 import { generateDateRange } from '../../utils/calendarUtils';
 import { CREATABLE_STATUS_META, getStatusMeta } from '../../utils/correctionStatus';
+import { useToast } from '../../contexts/ToastContext';
 
 interface IProps {
   startDate: string;
@@ -32,11 +34,13 @@ const formatHours = (hours: number | null): string => {
 
 export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, departmentId, employees }) => {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [filterAuthor, setFilterAuthor] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<'' | TimesheetStatus>('');
   const [filterEmployeeId, setFilterEmployeeId] = useState<string>('');
   const [editingRow, setEditingRow] = useState<ITimesheetCorrectionRow | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkPending, setBulkPending] = useState(false);
   const [attachmentsOpenForId, setAttachmentsOpenForId] = useState<number | null>(null);
   const attachmentsRef = useRef<HTMLDivElement>(null);
 
@@ -63,28 +67,48 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
     queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
   ]);
 
-  const bulkMutation = useMutation({
-    mutationFn: (params: {
-      employeeId: number;
-      dateFrom: string;
-      dateTo: string;
-      status: TimesheetStatus;
-      hours: number | null;
-      notes: string;
-    }) => {
+  const handleBulkConfirm = async (params: {
+    employeeId: number;
+    dateFrom: string;
+    dateTo: string;
+    status: TimesheetStatus;
+    hours: number | null;
+    notes: string;
+    files?: File[];
+  }) => {
+    setBulkPending(true);
+    try {
       const dates = generateDateRange(params.dateFrom, params.dateTo);
-      return timesheetService.bulkCorrect({
+      const result = await timesheetService.bulkCorrect({
         items: dates.map(work_date => ({ employee_id: params.employeeId, work_date })),
         status: params.status,
         hours_worked: params.hours,
         notes: params.notes,
       });
-    },
-    onSuccess: async () => {
+
+      // Загружаем файлы для каждой созданной корректировки
+      if (params.files?.length && result.items?.length) {
+        try {
+          await Promise.all(
+            result.items.flatMap(item =>
+              params.files!.map(file => correctionAttachmentsService.upload(item.adjustment_id, file))
+            )
+          );
+        } catch (uploadErr) {
+          console.error('Bulk attachments upload error:', uploadErr);
+          toast.error('Корректировка применена, но часть файлов не загрузилась');
+        }
+      }
+
       await invalidateAll();
       setBulkOpen(false);
-    },
-  });
+    } catch (error) {
+      console.error('Bulk correction error:', error);
+      toast.error(error instanceof Error ? error.message : 'Не удалось применить массовую корректировку');
+    } finally {
+      setBulkPending(false);
+    }
+  };
 
   const updateMutation = useMutation({
     mutationFn: (payload: { id: number; status: TimesheetStatus; hours: number | null; notes: string }) =>
@@ -313,9 +337,9 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
       <TimesheetBulkCorrectionModal
         open={bulkOpen}
         employees={employees}
-        pending={bulkMutation.isPending}
+        pending={bulkPending}
         onClose={() => setBulkOpen(false)}
-        onConfirm={(params) => bulkMutation.mutate(params)}
+        onConfirm={handleBulkConfirm}
       />
 
       {editingRow && (

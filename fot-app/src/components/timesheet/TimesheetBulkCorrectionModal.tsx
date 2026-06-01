@@ -2,6 +2,7 @@ import { type FC, useState, useMemo } from 'react';
 import { X, Plus } from 'lucide-react';
 import type { TimesheetEmployee, TimesheetStatus } from '../../types';
 import { CREATABLE_STATUS_META } from '../../utils/correctionStatus';
+import { StagedCorrectionAttachments } from './StagedCorrectionAttachments';
 
 interface IProps {
   open: boolean;
@@ -15,6 +16,7 @@ interface IProps {
     status: TimesheetStatus;
     hours: number | null;
     notes: string;
+    files?: File[];
   }) => void;
 }
 
@@ -42,6 +44,7 @@ export const TimesheetBulkCorrectionModal: FC<IProps> = ({ open, employees, pend
   const [status, setStatus] = useState<TimesheetStatus>('vacation');
   const [hours, setHours] = useState<string>('');
   const [notes, setNotes] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
 
   const sortedEmployees = useMemo(
     () => [...employees].sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru')),
@@ -65,6 +68,7 @@ export const TimesheetBulkCorrectionModal: FC<IProps> = ({ open, employees, pend
       status,
       hours: showHours && hours ? Number(hours) : null,
       notes: notes.trim(),
+      files,
     });
   };
 
@@ -75,6 +79,7 @@ export const TimesheetBulkCorrectionModal: FC<IProps> = ({ open, employees, pend
     setStatus('vacation');
     setHours('');
     setNotes('');
+    setFiles([]);
   };
 
   const handleClose = () => {
@@ -174,6 +179,9 @@ export const TimesheetBulkCorrectionModal: FC<IProps> = ({ open, employees, pend
               rows={3}
               placeholder="Например: Переходящий отпуск с прошлого месяца"
             />
+          </div>
+          <div style={{ paddingTop: 12 }}>
+            <StagedCorrectionAttachments files={files} onChange={setFiles} />
           </div>
         </div>
         <div className="ts-bulk-modal-footer">
