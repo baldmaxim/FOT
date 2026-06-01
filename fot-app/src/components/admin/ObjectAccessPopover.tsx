@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, X } from 'lucide-react';
 import styles from '../../pages/admin/Admin.module.css';
 
@@ -35,7 +36,10 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
 
   // Сброс draft при смене внешнего значения (например, после refetch).
   useEffect(() => {
@@ -44,23 +48,43 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
 
   useEffect(() => {
     if (!open) return;
+    const triggerButton = triggerRef.current;
+    if (!triggerButton) return;
+    const rect = triggerButton.getBoundingClientRect();
+    setPopoverStyle({
+      position: 'fixed',
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+      zIndex: 9999,
+    });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     const handler = (event: MouseEvent | TouchEvent) => {
-      const node = wrapRef.current;
-      if (!node) return;
+      const wrapNode = wrapRef.current;
+      const popoverNode = popoverRef.current;
+      if (!wrapNode || !popoverNode) return;
       const target = event.target as Node | null;
-      if (target && node.contains(target)) return;
+      if (target && (wrapNode.contains(target) || popoverNode.contains(target))) return;
       setOpen(false);
     };
     const escHandler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
+    const scrollHandler = () => {
+      setOpen(false);
+    };
     document.addEventListener('mousedown', handler);
     document.addEventListener('touchstart', handler);
     document.addEventListener('keydown', escHandler);
+    document.addEventListener('scroll', scrollHandler, { capture: true });
     return () => {
       document.removeEventListener('mousedown', handler);
       document.removeEventListener('touchstart', handler);
       document.removeEventListener('keydown', escHandler);
+      document.removeEventListener('scroll', scrollHandler, { capture: true });
     };
   }, [open]);
 
@@ -111,6 +135,7 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
         <div className={styles.companyAccessTriggerSlot}>
           <button
             type="button"
+            ref={triggerRef}
             className={`${styles.companyAccessTrigger} ${open ? styles.companyAccessTriggerOpen : ''}`}
             onClick={() => setOpen(prev => !prev)}
             disabled={disabled}
@@ -127,8 +152,8 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
             </svg>
           </button>
 
-          {open && (
-            <div className={styles.companyAccessPopover}>
+          {open && createPortal(
+            <div ref={popoverRef} style={popoverStyle} className={styles.companyAccessPopover}>
               {objects.length > 8 && (
                 <input
                   type="text"
@@ -159,7 +184,8 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
                   })}
                 </div>
               )}
-            </div>
+            </div>,
+            document.body,
           )}
         </div>
 
