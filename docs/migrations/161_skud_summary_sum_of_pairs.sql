@@ -306,7 +306,13 @@ $$;
 COMMENT ON FUNCTION public.is_skud_anomalous_day(BIGINT, DATE, BOOLEAN) IS
   'Предикат «день-аномалия СКУД»: failure / orphan exit / незакрытый вход (в т.ч. два входа подряд) / при p_scheduled=true — пропуск скана в рабочий день. Используется в гарде корректировок для ролей с corrections_anomalies_only=true.';
 
-GRANT EXECUTE ON FUNCTION public.is_skud_anomalous_day(BIGINT, DATE, BOOLEAN) TO authenticated;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        GRANT EXECUTE ON FUNCTION public.is_skud_anomalous_day(BIGINT, DATE, BOOLEAN) TO authenticated;
+    END IF;
+END;
+$$;
 
 COMMIT;
 
