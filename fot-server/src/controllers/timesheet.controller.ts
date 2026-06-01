@@ -243,6 +243,7 @@ async function loadAcceptedWeekendDaysForMonth(
   employeeIds: number[],
   year: number,
   mon: number,
+  schedulesMap: Map<number, IResolvedSchedule>,
 ): Promise<{ saturdays: Map<number, Set<string>>; sundays: Map<number, Set<string>> }> {
   const saturdays = new Map<number, Set<string>>();
   const sundays = new Map<number, Set<string>>();
@@ -277,6 +278,7 @@ async function loadAcceptedWeekendDaysForMonth(
   }
 
   // СКУД-дни без корректировок (is_present=true, нет запись в attendance_adjustments)
+  // Берём только первые N обязательных суббот/воскресений по графику
   const skudRows = await query<{ employee_id: number | string; date: string }>(
     `SELECT sds.employee_id, sds.date
        FROM skud_daily_summary sds
@@ -288,21 +290,57 @@ async function loadAcceptedWeekendDaysForMonth(
           SELECT 1 FROM attendance_adjustments aa
            WHERE aa.employee_id = sds.employee_id
              AND aa.work_date = sds.date
-        )`,
+        )
+       ORDER BY sds.employee_id, sds.date`,
     [employeeIds, monthStart, monthEnd],
   );
+
+  // Группируем СКУД-дни по сотруднику и дню недели
+  const skudByEmpAndDow = new Map<number, { sat: string[]; sun: string[] }>();
   for (const row of skudRows) {
     const iso = String(row.date).slice(0, 10);
     const dow = new Date(`${iso}T00:00:00`).getDay();
     if (dow !== 6 && dow !== 0) continue;
     const empId = Number(row.employee_id);
-    const target = dow === 6 ? saturdays : sundays;
-    let set = target.get(empId);
-    if (!set) {
-      set = new Set<string>();
-      target.set(empId, set);
+    if (!skudByEmpAndDow.has(empId)) {
+      skudByEmpAndDow.set(empId, { sat: [], sun: [] });
     }
-    set.add(iso);
+    const group = skudByEmpAndDow.get(empId)!;
+    if (dow === 6) group.sat.push(iso);
+    else group.sun.push(iso);
+  }
+
+  // Берём только первые N для каждого сотрудника
+  for (const [empId, group] of skudByEmpAndDow.entries()) {
+    const sched = schedulesMap.get(empId);
+    if (!sched) continue;
+
+    const expectedSat = expectedWeekendCount(sched, 6);
+    const expectedSun = expectedWeekendCount(sched, 0);
+
+    // Первые expectedSat суббот
+    if (expectedSat > 0) {
+      for (const iso of group.sat.slice(0, expectedSat)) {
+        let set = saturdays.get(empId);
+        if (!set) {
+          set = new Set<string>();
+          saturdays.set(empId, set);
+        }
+        set.add(iso);
+      }
+    }
+
+    // Первые expectedSun воскресений
+    if (expectedSun > 0) {
+      for (const iso of group.sun.slice(0, expectedSun)) {
+        let set = sundays.get(empId);
+        if (!set) {
+          set = new Set<string>();
+          sundays.set(empId, set);
+        }
+        set.add(iso);
+      }
+    }
   }
 
   return { saturdays, sundays };
@@ -1419,7 +1457,7 @@ export const timesheetController = {
       // (H2 / полный месяц / диапазон до последней нужной даты), и только когда
       // все Сб/Вс месяца прошли. В отдельном виде 1-й половины (1–15) недобор
       // НЕ показываем — он там не определяется.
-      const acceptedWeekends = await loadAcceptedWeekendDaysForMonth(employeeIds, year, mon);
+      const acceptedWeekends = await loadAcceptedWeekendDaysForMonth(employeeIds, year, mon, schedulesMap);
       const applyMandatoryWeekendShortfall = (dow: WeekendDow): void => {
         const acceptedByEmp = dow === 6 ? acceptedWeekends.saturdays : acceptedWeekends.sundays;
         for (const empId of employeeIds) {
