@@ -262,13 +262,15 @@ export async function syncEmployeesLogic(
     last_name: string | null;
     first_name: string | null;
     middle_name: string | null;
+    dismissal_date: string | null;
   }[] = [];
   const EMP_PAGE = 1000;
   let empOffset = 0;
   while (true) {
     const existingEmpsPage = await query<typeof existingEmps[number]>(
       `SELECT id, sigur_employee_id, employment_status, department_locked, name_locked,
-              org_department_id, position_id, tab_number, full_name, last_name, first_name, middle_name
+              org_department_id, position_id, tab_number, full_name, last_name, first_name, middle_name,
+              dismissal_date
        FROM employees
        WHERE sigur_employee_id IS NOT NULL
        LIMIT ${EMP_PAGE} OFFSET ${empOffset}`,
@@ -292,6 +294,7 @@ export async function syncEmployeesLogic(
     department_locked: boolean;
     name_locked: boolean;
     employment_status: string;
+    dismissal_date: string | null;
   }>();
   for (const e of existingEmps || []) {
     if (e.sigur_employee_id != null) {
@@ -309,6 +312,7 @@ export async function syncEmployeesLogic(
         department_locked: e.department_locked,
         name_locked: e.name_locked,
         employment_status: e.employment_status,
+        dismissal_date: e.dismissal_date ?? null,
       });
       if (e.employment_status === 'fired') firedSigurIds.add(e.sigur_employee_id);
     }
@@ -502,9 +506,15 @@ export async function syncEmployeesLogic(
           console.log(`[syncEmployees] fire (dismissal dept): ${fullName} (sigurId=${sigurEmpId})`);
         }
       } else if (sigurEmpId && firedSigurIds.has(sigurEmpId)) {
-        // Сотрудник fired в БД, но числится в обычном отделе Sigur → реактивируем
-        updateFields.employment_status = 'active';
-        console.log(`[syncEmployees] reactivate: ${fullName} (sigurId=${sigurEmpId})`);
+        const pendingDismissalDate = prev?.dismissal_date ?? null;
+        const today = new Date().toISOString().slice(0, 10);
+        // Не реактивировать, если dismissal_date в будущем (запланировано вручную через scheduler)
+        if (!pendingDismissalDate || pendingDismissalDate <= today) {
+          // Сотрудник fired в БД, но числится в обычном отделе Sigur → реактивируем
+          updateFields.employment_status = 'active';
+          updateFields.dismissal_date = null; // Сбросить дату, иначе scheduler уволит снова
+          console.log(`[syncEmployees] reactivate: ${fullName} (sigurId=${sigurEmpId})`);
+        }
       }
 
       if (orgDepartmentId) {
@@ -591,6 +601,7 @@ export async function syncEmployeesLogic(
           department_locked: match.department_locked,
           name_locked: match.name_locked,
           employment_status: 'active',
+          dismissal_date: null,
         });
         sigurIdToDbId.set(sigurEmpId, match.id);
         portalOnlyByName.delete(nameKey);
