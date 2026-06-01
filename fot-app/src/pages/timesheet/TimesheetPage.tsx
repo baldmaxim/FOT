@@ -578,6 +578,7 @@ export const TimesheetPage: FC = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
       ]);
     } catch (err) {
       console.error('Save correction error:', err);
@@ -611,6 +612,7 @@ export const TimesheetPage: FC = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
       ]);
     } catch (error) {
       console.error('Save object correction error:', error);
@@ -629,19 +631,20 @@ export const TimesheetPage: FC = () => {
   );
 
   const handleDeleteDayCorrection = useCallback(async () => {
-    if (!modalEntry?.id) return;
+    if (!modalEntry?.id || !modalEmployee) return;
     try {
       await timesheetService.delete(modalEntry.id);
       closeModal();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
       ]);
     } catch (error) {
       console.error('Delete day correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку');
     }
-  }, [modalEntry?.id, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [modalEntry?.id, modalEmployee, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   const handleDeleteObjectCorrection = useCallback(async () => {
     if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
@@ -656,6 +659,7 @@ export const TimesheetPage: FC = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
       ]);
     } catch (error) {
       console.error('Delete object correction error:', error);
@@ -686,6 +690,7 @@ export const TimesheetPage: FC = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
       ]);
     } catch (error) {
       console.error('Save object correction (by target) error:', error);
@@ -708,6 +713,7 @@ export const TimesheetPage: FC = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
       ]);
     } catch (error) {
       console.error('Delete object correction (by target) error:', error);

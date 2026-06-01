@@ -127,6 +127,10 @@ export const EmployeeDashboardPage: React.FC = () => {
   };
 
   const handleDayToggle = (iso: string) => {
+    if (isCorrection) {
+      setCorrectionDate(prev => prev === iso ? '' : iso);
+      return;
+    }
     setSelectedDates(prev => {
       const next = new Set(prev);
       if (next.has(iso)) next.delete(iso);
@@ -255,7 +259,7 @@ export const EmployeeDashboardPage: React.FC = () => {
               <MyMonthTimesheet
                 employeeId={employeeId}
                 noCard
-                selectedDates={selectedDates}
+                selectedDates={isCorrection ? (correctionDate ? new Set([correctionDate]) : new Set()) : selectedDates}
                 onDayToggle={handleDayToggle}
                 allowFuture
               />
@@ -364,26 +368,26 @@ export const EmployeeDashboardPage: React.FC = () => {
             {submitting ? 'Отправка...' : 'Подать заявление'}
           </button>
         </div>
+
+        {/* Tasks - Right */}
+        <Suspense fallback={DashboardCardFallback}>
+          <DailyTasksCard />
+        </Suspense>
       </div>
 
       {/* Info cards - below */}
       <div style={{ marginTop: '20px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
-          <Suspense fallback={DashboardCardFallback}>
-            <DailyTasksCard />
-          </Suspense>
-          <Suspense fallback={DashboardCardFallback}>
-            <EmployeeInfoCards
-              loading={loading}
-              employee={employee}
-              importedPosition={profile?.imported_position ?? undefined}
-              email={user?.email ?? undefined}
-              isTwoFactorEnabled={isTwoFactorEnabled}
-              onSetup2FA={handleSetup2FA}
-              onDisable2FA={handleDisable2FA}
-            />
-          </Suspense>
-        </div>
+        <Suspense fallback={DashboardCardFallback}>
+          <EmployeeInfoCards
+            loading={loading}
+            employee={employee}
+            importedPosition={profile?.imported_position ?? undefined}
+            email={user?.email ?? undefined}
+            isTwoFactorEnabled={isTwoFactorEnabled}
+            onSetup2FA={handleSetup2FA}
+            onDisable2FA={handleDisable2FA}
+          />
+        </Suspense>
       </div>
 
       {show2FASetup && twoFAData && (

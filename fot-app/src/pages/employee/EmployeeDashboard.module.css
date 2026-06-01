@@ -129,7 +129,7 @@
 /* Content Grid */
 .contentGrid {
   display: grid;
-  grid-template-columns: 350px 1fr;
+  grid-template-columns: 350px minmax(300px, 400px) 1fr;
   gap: 20px;
   align-items: start;
 }
