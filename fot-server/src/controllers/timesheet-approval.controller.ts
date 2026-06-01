@@ -24,6 +24,16 @@ import { timesheetResponsiblesService } from '../services/timesheet-responsibles
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { settingsService } from '../services/settings.service.js';
 import { IS_PRODUCTION } from '../config/features.js';
+import { invalidateCaches } from '../middleware/cacheResponse.js';
+
+/**
+ * Сброс серверных LRU-кэшей табеля после смены статуса согласования.
+ * Эндпоинты согласования живут на роутере /api/timesheet-approvals, поэтому
+ * write-through сброс кэша роутера /api/timesheet их не покрывает — иначе сетка
+ * (с блокировками дней) отдаётся из кэша ещё до 5 минут после отзыва/утверждения.
+ */
+const invalidateTimesheetGridCaches = (): void =>
+  invalidateCaches('timesheet', 'timesheet:today', 'timesheet:overview', 'timesheet:overview:today');
 
 async function emitTimesheetApprovalChanged(params: {
   approvalId: string | number;
@@ -833,6 +843,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
+    invalidateTimesheetGridCaches();
     res.json({ success: true, data: approval });
   } catch (err) {
     console.error('timesheet-approval.submit error:', err);
@@ -942,6 +953,7 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       action: 'recall',
     });
 
+    invalidateTimesheetGridCaches();
     res.json({ success: true, data: approval });
   } catch (err) {
     console.error('timesheet-approval.recall error:', err);
@@ -1201,6 +1213,7 @@ async function changeApprovalReviewState(
       action: input.action,
     });
 
+    invalidateTimesheetGridCaches();
     res.json({ success: true, data: updatedApproval });
   } catch (err) {
     console.error(`timesheet-approval.${input.action} error:`, err);

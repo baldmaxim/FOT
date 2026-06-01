@@ -580,9 +580,21 @@ export const TimesheetApprovalBar: FC<IProps> = ({
       await invalidate();
       return;
     }
-    await runAction(async () => {
+    setLoading(true);
+    try {
       await timesheetApprovalService.recall(submissionTarget, startDate, endDate);
-    });
+    } catch (err) {
+      // 409 = табель уже не в статусе «подан» (отозван/рассмотрен в другой вкладке
+      // или повторный клик). Глотать ошибку нельзя — иначе кнопка «не реагирует».
+      if (err instanceof ApiError && err.status === 409) {
+        toast.error('Табель уже отозван или рассмотрен — статус обновлён');
+      } else {
+        toast.error(err instanceof Error ? err.message : 'Ошибка отзыва табеля');
+      }
+    } finally {
+      await invalidate();
+      setLoading(false);
+    }
   };
 
   const handleUploadMemoClick = () => memoFileInputRef.current?.click();

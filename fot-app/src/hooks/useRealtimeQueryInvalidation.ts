@@ -36,6 +36,9 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
   ],
   'timesheet_approval:changed': () => [
     timesheetKeys.approval(),
+    // Сетка табеля держит блокировки дней из статусов согласования — обновляем и её,
+    // чтобы блокировка/разблокировка приходила в другие вкладки и другим пользователям.
+    timesheetKeys.page(),
     ['approvals-review-list'],
   ],
   'daily_task:changed': (payload) => {
