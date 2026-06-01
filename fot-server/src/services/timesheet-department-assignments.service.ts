@@ -206,6 +206,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
         AND e.is_archived = false
         AND e.dismissal_date IS NOT NULL
         AND e.dismissal_date >= $2::date
+        AND e.dismissal_date <= $3::date
         AND ea.org_department_id = ANY($1::uuid[])
         AND ea.effective_from <= $3
         AND (ea.effective_to IS NULL OR ea.effective_to >= $4)
