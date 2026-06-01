@@ -322,7 +322,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
               type="button"
               className={cellCls}
               onClick={() => handleCellClick(cell.iso, cell.entry, cell.ds)}
-              title={title}
+              data-tooltip={title}
             >
               <span className={styles.cellDay}>{cell.day}</span>
               {STATUS_LETTER[effectiveDs] ? (

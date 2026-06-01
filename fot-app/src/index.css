@@ -160,6 +160,15 @@
   --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --revert-hold: 3000ms;
   --revert-dur: 280ms;
+  /* Tooltip (единый источник дизайна подсказок; surface/тень/радиус — общие токены) */
+  --tooltip-open-dur: 140ms;
+  --tooltip-close-dur: 100ms;
+  --tooltip-pre-scale: 0.94;
+  --tooltip-translate-y: 4px;
+  --tooltip-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --tooltip-delay: 350ms;
+  --tooltip-max-width: 280px;
+  --tooltip-z: 10000;
 }
 
 [data-theme="light"] {

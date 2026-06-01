@@ -1,0 +1,42 @@
+/* Единый тултип. Позиция (top/left) проставляется инлайн из JS (position: fixed). */
+.tooltip {
+  position: fixed;
+  z-index: var(--tooltip-z);
+  max-width: var(--tooltip-max-width);
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.4;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  /* анимация появления (transitions.dev: opacity + scale + translateY) */
+  opacity: 0;
+  transform-origin: center top;
+  transform: translateY(calc(-1 * var(--tooltip-translate-y))) scale(var(--tooltip-pre-scale));
+  transition:
+    opacity var(--tooltip-close-dur) var(--tooltip-ease),
+    transform var(--tooltip-close-dur) var(--tooltip-ease);
+}
+
+/* Когда тултип флипнут наверх — выезжает снизу вверх (зеркально). */
+.tooltip[data-placement='top'] {
+  transform-origin: center bottom;
+  transform: translateY(var(--tooltip-translate-y)) scale(var(--tooltip-pre-scale));
+}
+
+.tooltip[data-state='open'] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition:
+    opacity var(--tooltip-open-dur) var(--tooltip-ease),
+    transform var(--tooltip-open-dur) var(--tooltip-ease);
+}
+
+.tooltip[data-state='closing'] {
+  opacity: 0;
+}

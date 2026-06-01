@@ -15,6 +15,7 @@ import { useTheme } from './hooks/useTheme';
 import { useStructureRealtime } from './hooks/useStructureRealtime';
 import { PageLoader } from './components/ui/PageLoader';
 import { ChatPanelMount } from './components/chat/ChatPanelMount';
+import { TooltipHost } from './components/ui/Tooltip';
 import { ErrorFallback } from './components/ErrorFallback';
 import { clearStaleChunkReloadFlag, tryAutoReloadOnStaleChunk } from './utils/staleChunkReload';
 import './App.css';
@@ -663,6 +664,7 @@ const App = () => {
                   <AppRoutes />
                   <StructureRealtimeMount />
                   <ChatPanelMount />
+                  <TooltipHost />
                 </OnlinePresenceProvider>
               </ChatProvider>
             </ToastProvider>
