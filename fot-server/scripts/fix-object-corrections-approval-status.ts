@@ -4,17 +4,17 @@ import { loadCalendarMonth } from '../src/services/schedule.service.js';
 import { isWorkingDay } from '../src/services/schedule.service.js';
 
 async function fixObjectCorrectionsApprovalStatus() {
-  console.log('🔍 Ищу объектные корректировки со статусом work и auto_approved...');
+  console.log('🔍 Ищу корректировки со статусом work и auto_approved...');
 
   const rows = await query<{
     id: number;
     employee_id: number;
     work_date: string;
+    source_type: string;
   }>(
-    `SELECT id, employee_id, work_date
+    `SELECT id, employee_id, work_date, source_type
        FROM attendance_adjustments
-      WHERE source_type = 'manual_object'
-        AND status = 'work'
+      WHERE status = 'work'
         AND approval_status = 'auto_approved'
       ORDER BY work_date DESC`
   );
@@ -42,23 +42,25 @@ async function fixObjectCorrectionsApprovalStatus() {
     const empId = Number(empIdStr);
     const year = Number(yearStr);
     const month = Number(monthStr);
+    const lastDay = new Date(year, month, 0).getDate();
+    const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
 
     // Загружаем расписание и календарь
     const schedules = await resolveSchedulesForPeriod(
       [{ id: empId }],
-      `${year}-${String(month).padStart(2, '0')}-01`,
-      `${year}-${String(month).padStart(2, '0')}-28`
+      `${monthPrefix}-01`,
+      `${monthPrefix}-${String(lastDay).padStart(2, '0')}`
     );
     const calendar = await loadCalendarMonth(year, month);
-    const schedule = schedules.get(empId)?.get(records[0].work_date);
-
-    if (!schedule) {
-      console.log(`⚠️  Нет расписания для сотрудника ${empId} (${records.length} корректировок)`);
-      continue;
-    }
 
     // Проверяем каждую корректировку
     for (const record of records) {
+      const schedule = schedules.get(empId)?.get(record.work_date);
+      if (!schedule) {
+        console.log(`⚠️  Нет расписания для сотрудника ${empId} на ${record.work_date} (ID ${record.id})`);
+        continue;
+      }
+
       const dateObj = new Date(`${record.work_date}T00:00:00`);
       const isWorking = isWorkingDay(schedule, dateObj, calendar);
 
@@ -69,7 +71,7 @@ async function fixObjectCorrectionsApprovalStatus() {
           [record.id]
         );
         updatedCount++;
-        console.log(`✅ ID ${record.id}: ${record.work_date} → pending`);
+        console.log(`✅ ID ${record.id} (${record.source_type}): ${record.work_date} → pending`);
       }
     }
   }
