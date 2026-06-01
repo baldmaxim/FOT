@@ -1688,7 +1688,7 @@ export const timesheetController = {
         ? await upsertAttendanceAdjustment({
             employee_id: parsed.employee_id,
             work_date: parsed.work_date,
-            status: 'manual',
+            status: parsed.status,
             hours_override: normalizedHours,
             source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
             source_id: resolvedObject.object_id,
