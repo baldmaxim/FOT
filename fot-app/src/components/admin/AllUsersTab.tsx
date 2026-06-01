@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FC } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { adminService } from '../../services/adminService';
 import { rolesService } from '../../services/rolesService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { useAnchoredPopover } from '../../hooks/useAnchoredPopover';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useOnlinePresence } from '../../contexts/OnlinePresenceContext';
@@ -95,6 +97,8 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   const [empSearchResults, setEmpSearchResults] = useState<{ id: number; full_name: string; org_department_id: string | null }[]>([]);
   const empSearchSeqRef = useRef(0);
   const skudSearchWrapRef = useRef<HTMLDivElement | null>(null);
+  const skudResultsRef = useRef<HTMLDivElement | null>(null);
+  const skudResultsStyle = useAnchoredPopover(empSearchResults.length > 0, skudSearchWrapRef);
 
   // Debounce поиска сотрудника СКУД (250 мс) + защита от устаревших ответов
   useEffect(() => {
@@ -130,7 +134,9 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
       const node = skudSearchWrapRef.current;
       if (!node) return;
       const target = event.target as Node | null;
-      if (target && node.contains(target)) return;
+      // Результаты теперь в портале (вне wrap) — игнорируем клик и по ним,
+      // иначе mousedown по пункту закроет список раньше onClick.
+      if (target && (node.contains(target) || skudResultsRef.current?.contains(target))) return;
       setEmpSearchResults([]);
     };
     document.addEventListener('mousedown', handler);
@@ -245,8 +251,8 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
               {empSearchLoading && (
                 <div className={styles.skudSearchLoading}>Поиск...</div>
               )}
-              {empSearchResults.length > 0 && (
-                <div className={styles.skudSearchResults}>
+              {empSearchResults.length > 0 && createPortal(
+                <div ref={skudResultsRef} style={skudResultsStyle} className={styles.skudSearchResults}>
                   {empSearchResults.map(emp => (
                     <div
                       key={emp.id}
@@ -257,7 +263,8 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
                       {emp.full_name}
                     </div>
                   ))}
-                </div>
+                </div>,
+                document.body,
               )}
             </div>
           )}
@@ -550,6 +557,20 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     );
   }, [queryClient]);
 
+  // Оптимистично убрать удалённого пользователя из всех закешированных страниц,
+  // чтобы строка/карточка исчезли мгновенно, не дожидаясь refetch.
+  const removeUserFromPageCaches = useCallback((userId: string) => {
+    queryClient.setQueriesData<{ data: IUserFromApi[]; meta?: unknown } | undefined>(
+      { queryKey: ['admin-users', 'page'] },
+      (prev) => {
+        if (!prev?.data) return prev;
+        const nextData = prev.data.filter(u => u.id !== userId);
+        if (nextData.length === prev.data.length) return prev;
+        return { ...prev, data: nextData };
+      },
+    );
+  }, [queryClient]);
+
   const handleEmpLink = useCallback(async (userId: string, employeeId: number | null, empName?: string) => {
     try {
       await adminService.updateUserEmployee(userId, employeeId);
@@ -601,12 +622,15 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     try {
       await adminService.deleteUser(userId);
       toast.success('Пользователь удалён');
-      // Структура страницы меняется — нужен полный refetch (page + count + slim + pending).
+      // Карточку сворачиваем и строку убираем сразу (оптимистично), затем
+      // refetch согласует count/slim/pending/page.
+      setExpandedUserId(null);
+      removeUserFromPageCaches(userId);
       await onReload();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка удаления пользователя');
     }
-  }, [onReload, toast]);
+  }, [onReload, removeUserFromPageCaches, toast]);
 
   const handleGenerate2FA = useCallback(async (userId: string, userName: string) => {
     setTwoFactorModal({ visible: true, userId, userName, data: null, loading: true });

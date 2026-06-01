@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Check, X } from 'lucide-react';
 import { adminService } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
+import { useAnchoredPopover } from '../../hooks/useAnchoredPopover';
 import styles from '../../pages/admin/Admin.module.css';
 
 interface IProps {
@@ -26,10 +27,10 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin }) =>
   const [draft, setDraft] = useState<string[] | null>(null);
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
-  const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const popoverStyle = useAnchoredPopover(open, triggerRef);
 
   const companiesQuery = useQuery({
     queryKey: ['admin-companies'],
@@ -57,20 +58,6 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin }) =>
     setOpen(false);
   }, [userId]);
 
-  useEffect(() => {
-    if (!open) return;
-    const triggerButton = triggerRef.current;
-    if (!triggerButton) return;
-    const rect = triggerButton.getBoundingClientRect();
-    setPopoverStyle({
-      position: 'fixed',
-      top: rect.bottom + 4,
-      left: rect.left,
-      width: rect.width,
-      zIndex: 9999,
-    });
-  }, [open]);
-
   // Закрытие popover'а по клику/тапу вне (паттерн как в skud-поиске).
   useEffect(() => {
     if (!open) return;
@@ -85,21 +72,14 @@ export const UserCompanyAccessSection: FC<IProps> = ({ userId, isUserAdmin }) =>
     const escHandler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
-    const scrollHandler = (event: Event) => {
-      const target = event.target as Node | null;
-      const popoverNode = popoverRef.current;
-      if (popoverNode && popoverNode.contains(target)) return; // Прокрутка внутри попо́вера — не закрываем
-      setOpen(false);
-    };
+    // Скролл НЕ закрывает попап — позицию обновляет useAnchoredPopover.
     document.addEventListener('mousedown', handler);
     document.addEventListener('touchstart', handler);
     document.addEventListener('keydown', escHandler);
-    document.addEventListener('scroll', scrollHandler, { capture: true });
     return () => {
       document.removeEventListener('mousedown', handler);
       document.removeEventListener('touchstart', handler);
       document.removeEventListener('keydown', escHandler);
-      document.removeEventListener('scroll', scrollHandler, { capture: true });
     };
   }, [open]);
 

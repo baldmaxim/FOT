@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FC, KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
+import { useAnchoredPopover } from '../../hooks/useAnchoredPopover';
 import styles from '../../pages/admin/Admin.module.css';
 
 export interface IRoleOption {
@@ -19,13 +21,17 @@ interface IRoleSelectProps {
 export const RoleSelect: FC<IRoleSelectProps> = ({ value, options, onChange, placeholder = 'Выберите роль' }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelStyle = useAnchoredPopover(open, rootRef);
 
   useEffect(() => {
     if (!open) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      // Панель в портале (вне rootRef) — клик по опции не должен закрывать её
+      // на mousedown раньше onClick.
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -55,8 +61,8 @@ export const RoleSelect: FC<IRoleSelectProps> = ({ value, options, onChange, pla
         <ChevronDown size={16} className={open ? styles.roleSelectChevronOpen : styles.roleSelectChevron} />
       </button>
 
-      {open && (
-        <div className={styles.roleSelectPanel} role="listbox">
+      {open && createPortal(
+        <div ref={panelRef} style={panelStyle} className={styles.roleSelectPanel} role="listbox">
           {options.map(opt => {
             const isActive = opt.code === value;
             return (
@@ -76,7 +82,8 @@ export const RoleSelect: FC<IRoleSelectProps> = ({ value, options, onChange, pla
               </button>
             );
           })}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

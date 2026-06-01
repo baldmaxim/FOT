@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FC } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, X } from 'lucide-react';
+import { useAnchoredPopover } from '../../hooks/useAnchoredPopover';
 import styles from '../../pages/admin/Admin.module.css';
 
 interface IObjectOption {
@@ -36,29 +37,15 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  const popoverStyle = useAnchoredPopover(open, triggerRef);
 
   // Сброс draft при смене внешнего значения (например, после refetch).
   useEffect(() => {
     setDraft(null);
   }, [value]);
-
-  useEffect(() => {
-    if (!open) return;
-    const triggerButton = triggerRef.current;
-    if (!triggerButton) return;
-    const rect = triggerButton.getBoundingClientRect();
-    setPopoverStyle({
-      position: 'fixed',
-      top: rect.bottom + 4,
-      left: rect.left,
-      width: rect.width,
-      zIndex: 9999,
-    });
-  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -73,21 +60,15 @@ export const ObjectAccessPopover: FC<IProps> = ({ objects, value, onSave, loadin
     const escHandler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
-    const scrollHandler = (event: Event) => {
-      const target = event.target as Node | null;
-      const popoverNode = popoverRef.current;
-      if (popoverNode && popoverNode.contains(target)) return; // Прокрутка внутри попо́вера — не закрываем
-      setOpen(false);
-    };
+    // Скролл НЕ закрывает попап (раньше autoFocus-инпут скроллил себя в видимость
+    // и ложно закрывал список) — позицию обновляет useAnchoredPopover.
     document.addEventListener('mousedown', handler);
     document.addEventListener('touchstart', handler);
     document.addEventListener('keydown', escHandler);
-    document.addEventListener('scroll', scrollHandler, { capture: true });
     return () => {
       document.removeEventListener('mousedown', handler);
       document.removeEventListener('touchstart', handler);
       document.removeEventListener('keydown', escHandler);
-      document.removeEventListener('scroll', scrollHandler, { capture: true });
     };
   }, [open]);
 
