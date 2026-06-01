@@ -32,11 +32,13 @@ SCOPE="${1:-both}"
 MODE="run"
 BEFORE=""
 AFTER=""
+MIGRATE_ARGS=()
 
 usage() {
   cat <<'EOF'
 Usage:
   bash scripts/deploy-server.sh [frontend|backend|data-api|both|all] [--check]
+  bash scripts/deploy-server.sh migrate [--dry-run|--baseline|--init]
 
 Run this script on the production server from the build context (/opt/fot-build).
 Git/source live in BUILD_DIR; only built artefacts are published into SITE_DIR.
@@ -47,6 +49,9 @@ Scopes:
   data-api   Sync code, publish app/, update venv if needed, restart fot-data-api.
   both       Deploy backend + frontend. Default.
   all        Deploy backend + frontend + data-api.
+  migrate    Sync code, run pending SQL migrations from docs/migrations/.
+             БД-деплой отдельный: backend/both/all БД не трогают.
+             Флаги (только с migrate): --dry-run, --baseline, --init.
 
 Environment:
   BUILD_DIR=/opt/fot-build
@@ -90,7 +95,7 @@ case "$SCOPE" in
     usage
     exit 0
     ;;
-  frontend|backend|data-api|both|all)
+  frontend|backend|data-api|both|all|migrate)
     shift || true
     ;;
   *)
@@ -103,6 +108,10 @@ while (($#)); do
   case "$1" in
     --check)
       MODE="check"
+      ;;
+    --dry-run|--baseline|--init)
+      [[ "$SCOPE" == "migrate" ]] || die "$1 допустим только со scope migrate"
+      MIGRATE_ARGS+=("$1")
       ;;
     -h|--help)
       usage
@@ -448,6 +457,17 @@ deploy_data_api() {
   fi
 }
 
+run_migrations() {
+  local runner="$BUILD_DIR/fot-server/scripts/run-migrations.mjs"
+  test -f "$runner" || die "не найден раннер миграций: $runner"
+  log "Применяю миграции БД..."
+  node "$runner" \
+    --dir "$BUILD_DIR/docs/migrations" \
+    --env "$SITE_DIR/fot-server/.env" \
+    --ca "$SITE_DIR/.migration/yandex-ca.pem" \
+    "${MIGRATE_ARGS[@]}"
+}
+
 wait_http_ok() {
   local url="$1"
   local label="$2"
@@ -522,6 +542,12 @@ main() {
   fi
 
   update_code
+
+  if [[ "$SCOPE" == "migrate" ]]; then
+    run_migrations
+    echo "✓ Миграции завершены"
+    exit 0
+  fi
 
   if includes_backend; then
     deploy_backend

@@ -18,6 +18,7 @@ FOT_BRANCH="${FOT_BRANCH:-main}"
 
 SCOPE="${1:-both}"
 MODE_ARG=""
+EXTRA_ARGS=()
 
 usage() {
   cat <<'EOF'
@@ -40,6 +41,8 @@ Scopes:
   data-api   Deploy fot-data-api/app and restart fot-data-api.
   both       Deploy backend + frontend. Default.
   all        Deploy backend + frontend + data-api.
+  migrate    Run pending SQL migrations on the server (no build/restart).
+             Flags (migrate only): --dry-run, --baseline, --init.
 
 Environment:
   FOT_SSH=root@45.80.128.254
@@ -86,7 +89,7 @@ case "$SCOPE" in
     usage
     exit 0
     ;;
-  frontend|backend|data-api|both|all)
+  frontend|backend|data-api|both|all|migrate)
     shift || true
     ;;
   *)
@@ -99,6 +102,10 @@ while (($#)); do
   case "$1" in
     --check)
       MODE_ARG="--check"
+      ;;
+    --dry-run|--baseline|--init)
+      [[ "$SCOPE" == "migrate" ]] || die "$1 is allowed only with scope migrate"
+      EXTRA_ARGS+=("$1")
       ;;
     -h|--help)
       usage
@@ -123,6 +130,7 @@ remote_env=(
   "FOT_BRANCH=$(shell_quote "$FOT_BRANCH")"
   "DEPLOY_SCOPE=$(shell_quote "$SCOPE")"
   "DEPLOY_MODE_ARG=$(shell_quote "$MODE_ARG")"
+  "DEPLOY_EXTRA_ARGS=$(shell_quote "${EXTRA_ARGS[*]}")"
 )
 
 forward_if_set() {
@@ -180,6 +188,10 @@ fi
 args=("$DEPLOY_SCOPE")
 if [[ -n "$DEPLOY_MODE_ARG" ]]; then
   args+=("$DEPLOY_MODE_ARG")
+fi
+if [[ -n "${DEPLOY_EXTRA_ARGS:-}" ]]; then
+  read -ra extra <<< "$DEPLOY_EXTRA_ARGS"
+  args+=("${extra[@]}")
 fi
 
 echo "-> Running server deploy from $BUILD_DIR"

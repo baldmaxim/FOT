@@ -507,8 +507,56 @@ DEFAULT_RATE_LIMIT_PER_MINUTE=60
 
 ## Миграции БД
 
-SQL-миграции из `docs/migrations/` применяются вручную через `psql`.
-Автоматического запуска миграций в деплой-скриптах нет.
+SQL-миграции из `docs/migrations/` применяются **отдельной командой** (не в составе
+обычного деплоя — `backend`/`both`/`all` БД не трогают). Есть раннер, который учитывает
+уже применённые миграции в таблице `public.schema_migrations`, накатывает только новые и
+печатает отчёт (старых / новых / результат каждой). При 0 новых — рапортует и ничего не
+запускает.
+
+### Раннер (рекомендуемый путь)
+
+```bash
+# с локальной машины (через SSH-лаунчер):
+bash scripts/deploy-production.sh migrate            # накатить новые
+bash scripts/deploy-production.sh migrate --dry-run  # только отчёт (read-only)
+
+# на самом сервере из build-контекста:
+cd /opt/fot-build
+bash scripts/deploy-server.sh migrate
+```
+
+Раннер: подтягивает свежий `personal/main` в `/opt/fot-build`, затем
+`fot-server/scripts/run-migrations.mjs` (`DATABASE_URL` из `.env` сайта, CA из
+`.migration/yandex-ca.pem`). Каждый файл с собственным `BEGIN/COMMIT` выполняется как есть;
+без транзакции — оборачивается в `BEGIN…COMMIT`. При первой ошибке — стоп (как
+`ON_ERROR_STOP=1`), exit 1, последующие миграции не трогаются.
+
+**Однократный bootstrap** (БД уже накатана вручную — таблицы учёта ещё нет). Первый запуск
+раннера строго read-only и сам подскажет это. Пометить все текущие файлы применёнными
+**без выполнения**:
+
+```bash
+# на сервере:
+node /opt/fot-build/fot-server/scripts/run-migrations.mjs --baseline \
+  --dir /opt/fot-build/docs/migrations \
+  --env /srv/sites/fot.su10.ru/fot-server/.env \
+  --ca  /srv/sites/fot.su10.ru/.migration/yandex-ca.pem
+```
+
+Для пустой/новой БД вместо `--baseline` используется `--init` (реально накатить всё).
+
+**Порядок:** сначала `migrate`, затем (если backend зависит от схемы) деплой кода:
+
+```bash
+bash scripts/deploy-production.sh migrate
+bash scripts/deploy-production.sh both
+```
+
+> Миграцию, накатанную вручную через `psql` (см. ниже), раннер не видит в
+> `schema_migrations` и при следующем `migrate` накатит повторно — это безопасно
+> (миграции идемпотентны: `IF NOT EXISTS` / `ON CONFLICT`), после чего запишет её.
+
+### Ручное применение через `psql` (для миграций с блоком `КОНТРОЛЬ`)
 
 SQL-файлы лежат в build-контексте (`/opt/fot-build/docs/migrations/`).
 `DATABASE_URL` берётся из `.env` папки сайта.
