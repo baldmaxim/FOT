@@ -53,10 +53,11 @@ async function computeMandatoryExemptions(
   const employeeIds = [...new Set(weekendSkudRows.map(r => r.employee_id))];
   const exemptions = new Set<string>();
 
+  const allDates = weekendSkudRows.map(r => r.date).sort();
   const schedules = await resolveSchedulesForPeriod(
     employeeIds.map(id => ({ id })),
-    weekendSkudRows[0]!.date,
-    weekendSkudRows[weekendSkudRows.length - 1]!.date,
+    allDates[0]!,
+    allDates[allDates.length - 1]!,
   );
 
   for (const row of weekendSkudRows) {
@@ -175,7 +176,8 @@ export async function validateCorrectionAttachments(
         WHERE employee_id = ANY($1::int[])
           AND date >= $2::date
           AND date <= $3::date
-          AND total_minutes > 0`,
+          AND total_minutes > 0
+        ORDER BY date ASC`,
       [employeeIds, range.startDate, range.endDate],
     );
     weekendSkudRows = skudRows
