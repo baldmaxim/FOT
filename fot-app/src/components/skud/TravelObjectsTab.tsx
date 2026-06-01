@@ -331,6 +331,7 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
                     onChange={event => setDraftName(event.target.value)}
                     onKeyDown={handleRenameObjectKeyDown}
                     disabled={!canEdit || saving}
+                    maxLength={500}
                   />
                   <input
                     type="text"
@@ -340,6 +341,7 @@ export const TravelObjectsTab: FC<ITravelObjectsTabProps> = ({ canEdit, selected
                     onChange={event => setDraftAltName(event.target.value)}
                     onKeyDown={handleRenameObjectKeyDown}
                     disabled={!canEdit || saving}
+                    maxLength={500}
                   />
                   <button
                     className="sigur-btn"

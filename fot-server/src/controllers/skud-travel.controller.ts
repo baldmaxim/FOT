@@ -33,12 +33,12 @@ import { resolveAccessibleDepartmentIds, resolveScopedDepartmentId } from '../se
 const monthRegex = /^\d{4}-\d{2}$/;
 
 const createObjectSchema = z.object({
-  name: z.string().trim().min(2).max(120),
+  name: z.string().trim().min(2).max(500),
 });
 
 const updateObjectSchema = z.object({
-  name: z.string().trim().min(2).max(120),
-  alt_name: z.string().trim().max(120).nullable().optional(),
+  name: z.string().trim().min(2).max(500),
+  alt_name: z.string().trim().max(500).nullable().optional(),
   access_points: z.array(z.string().trim().min(1).max(255)).max(500).default([]),
 });
 
