@@ -744,7 +744,10 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       if (correctedEntries.length > 0 && !window.confirm(
         'Дневная корректировка снимет все корректировки по объектам за этот день. Продолжить?',
       )) return;
-      onSaveDayLevel(addStatus, addHoursEditable ? addHours : null, notes);
+      const hoursForLevel = addStatus === 'work'
+        ? (addHours > 0 ? addHours : null)
+        : (addHoursEditable ? addHours : null);
+      onSaveDayLevel(addStatus, hoursForLevel, notes);
     }
     cancelAdd();
   };
@@ -1036,12 +1039,12 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
           )}
 
           {addStatus === 'work' && (
-            <div className="ts-hours-hint">Время рассчитается автоматически по событиям СКУД.</div>
+            <div className="ts-hours-hint">Время рассчитается автоматически по событиям СКУД, или укажите часы вручную (0 = авто).</div>
           )}
 
-          {addHoursEditable && (!addIsManual || availableForAdd.length > 0) && (
+          {(addHoursEditable || addStatus === 'work') && (!addIsManual || availableForAdd.length > 0) && (
             <div className="ts-form-group">
-              <label className="ts-form-label">Часы</label>
+              <label className="ts-form-label">Часы {addStatus !== 'work' && <span className="ts-form-required">*</span>}</label>
               {renderHoursInputs(addHours, setAddHours)}
             </div>
           )}
