@@ -154,25 +154,25 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
 ): Promise<IDepartmentEmployeeMembership[]> {
   const deptIds = await collectDeptIds(departmentId);
 
-  // Все назначения активных сотрудников, чей период пересекается с [startDate, endDate]:
-  const activeAssignments = await query<{
+  // Все назначения, чей период пересекается с [startDate, endDate]:
+  // effective_from <= endDate AND (effective_to IS NULL OR effective_to >= startDate).
+  const assignments = await query<{
     employee_id: number;
     effective_from: string;
     effective_to: string | null;
+    org_department_id: string | null;
   }>(
-    `SELECT employee_id, effective_from, effective_to
+    `SELECT employee_id, effective_from, effective_to, org_department_id
        FROM employee_assignments
       WHERE org_department_id = ANY($1::uuid[])
         AND effective_from <= $2
-        AND (effective_to IS NULL OR effective_to >= $3)
-        AND employee_id IN (
-          SELECT id FROM employees WHERE employment_status = 'active' AND is_archived = false
-        )`,
+        AND (effective_to IS NULL OR effective_to >= $3)`,
     [deptIds, endDate, startDate],
   );
 
+  // Группируем: для каждого employee_id определяем, есть ли открытое назначение.
   const map = new Map<number, IDepartmentEmployeeMembership>();
-  for (const row of activeAssignments) {
+  for (const row of assignments) {
     const empId = Number(row.employee_id);
     if (!Number.isFinite(empId)) continue;
     const effTo = (row.effective_to as string | null) ?? null;
@@ -193,54 +193,47 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
     }
   }
 
-  // Уволенные сотрудники: включать в табель если были уволены в период табеля
-  // Берем всех, у которых назначение пересекается с периодом И началось ДО увольнения
-  const firedEmployees = await query<{
-    employee_id: number;
-    dismissal_date: string;
-  }>(
-    `SELECT DISTINCT e.id as employee_id, e.dismissal_date
-       FROM employees e
-       INNER JOIN employee_assignments ea ON e.id = ea.employee_id
-      WHERE e.employment_status = 'fired'
-        AND e.is_archived = false
-        AND e.dismissal_date IS NOT NULL
-        AND e.dismissal_date >= $2::date
-        AND e.dismissal_date <= $3::date
-        AND ea.org_department_id = ANY($1::uuid[])
-        AND ea.effective_from <= $3
-        AND (ea.effective_to IS NULL OR ea.effective_to >= $4)
-        AND ea.effective_from < e.dismissal_date`,
-    [deptIds, startDate, endDate, startDate],
+  // Также включаем тех, у кого employees.org_department_id уже указывает в поддерево
+  // (snapshot), но assignment мог не успеть синхронизироваться — добавляем безопасным дефолтом.
+  const snapshotEmployees = await query<{ id: number }>(
+    'SELECT id FROM employees WHERE org_department_id = ANY($1::uuid[])',
+    [deptIds],
   );
-
-  for (const row of firedEmployees) {
-    const empId = Number(row.employee_id);
+  for (const row of snapshotEmployees) {
+    const empId = Number(row.id);
     if (!Number.isFinite(empId)) continue;
     if (!map.has(empId)) {
-      // Уволенный: transferred_out_date = null (расчёт идёт от dismissal_date в контроллере).
-      // Он остался в отделе до дня увольнения, а не был переведён.
       map.set(empId, { employee_id: empId, transferred_out_date: null });
+    } else {
+      // Если в snapshot он в этом отделе — точно ещё не переведён.
+      const m = map.get(empId)!;
+      m.transferred_out_date = null;
     }
   }
 
   const candidateIds = [...map.keys()];
   if (candidateIds.length === 0) return [];
 
-  // Финальный фильтр: исключённые из табеля — оставляем, если дата исключения > startDate.
-  const excludedInfo = await query<{
+  // Финальный фильтр: активные, не архивные. Исключённых — оставляем, если дата исключения > startDate.
+  // Уволенные сотрудники с dismissal_date >= startDate попадают в табель, чтобы был виден период до увольнения.
+  const activeRows = await query<{
     id: number;
     excluded_from_timesheet: boolean;
     excluded_from_timesheet_date: string | null;
   }>(
     `SELECT id, excluded_from_timesheet, excluded_from_timesheet_date
        FROM employees
-      WHERE id = ANY($1::int[])`,
-    [candidateIds],
+      WHERE id = ANY($1::int[])
+        AND is_archived = false
+        AND (employment_status = 'active'
+             OR (employment_status = 'fired'
+                 AND dismissal_date IS NOT NULL
+                 AND dismissal_date >= $2::date))`,
+    [candidateIds, startDate],
   );
 
   const result: IDepartmentEmployeeMembership[] = [];
-  for (const row of excludedInfo) {
+  for (const row of activeRows) {
     const empId = Number(row.id);
     const m = map.get(empId);
     if (!m) continue;
@@ -248,6 +241,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
     const excludedDate = row.excluded_from_timesheet_date ?? null;
     if (excluded) {
       // Если дата исключения известна и она ПОСЛЕ начала периода — оставляем.
+      // Иначе (дата неизвестна или раньше начала) — отбрасываем.
       if (!excludedDate || excludedDate <= startDate) continue;
     }
     result.push(m);
