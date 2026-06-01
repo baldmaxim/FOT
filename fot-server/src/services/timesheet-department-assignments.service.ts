@@ -215,9 +215,9 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
     const empId = Number(row.employee_id);
     if (!Number.isFinite(empId)) continue;
     if (!map.has(empId)) {
-      // Уволенный отображается до дня увольнения (включая день увольнения)
-      const dismissalDay = row.dismissal_date;
-      map.set(empId, { employee_id: empId, transferred_out_date: dismissalDay });
+      // Уволенный: transferred_out_date = null (расчёт идёт от dismissal_date в контроллере).
+      // Он остался в отделе до дня увольнения, а не был переведён.
+      map.set(empId, { employee_id: empId, transferred_out_date: null });
     }
   }
 
