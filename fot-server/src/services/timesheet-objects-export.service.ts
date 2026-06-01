@@ -90,6 +90,7 @@ export async function fetchTimesheetDataForObjectIds(
   month: string,
   objectIds: string[],
   rangeArg: TimesheetExportRangeArg = 'FULL',
+  departmentIdFilter?: string[],
 ): Promise<IDepartmentTimesheetData[]> {
   if (objectIds.length === 0) return [];
 
@@ -108,7 +109,20 @@ export async function fetchTimesheetDataForObjectIds(
     return [];
   }
 
-  const deptGroups = await fetchDeptGroupsForEmployees(employeeIds);
+  let deptGroups = await fetchDeptGroupsForEmployees(employeeIds);
+
+  // Фильтруем отделы если задан фильтр
+  if (departmentIdFilter && departmentIdFilter.length > 0) {
+    const allowedDeptIds = new Set(departmentIdFilter);
+    const filtered = new Map<string, IDeptGroup>();
+    for (const [key, group] of deptGroups) {
+      if (allowedDeptIds.has(key)) {
+        filtered.set(key, group);
+      }
+    }
+    deptGroups = filtered;
+  }
+
   const results: IDepartmentTimesheetData[] = [];
 
   for (const [, group] of deptGroups) {

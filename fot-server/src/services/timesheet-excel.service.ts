@@ -504,10 +504,12 @@ export interface IUnifiedOneCRow {
   oneCRow: IOneCExportRow;
   departmentName: string;
   objectAddress: string;
+  managerName?: string;
 }
 
 const UNIFIED_COL_DEPARTMENT = ONE_C_TOTAL_COLUMN + 1; // 35
 const UNIFIED_COL_OBJECT_ADDRESS = ONE_C_TOTAL_COLUMN + 2; // 36
+const UNIFIED_COL_MANAGER = ONE_C_TOTAL_COLUMN + 3; // 37
 const UNIFIED_HEADER_ROW = ONE_C_DATA_START_ROW - 1; // 3 — шапка шаблона
 
 /**
@@ -545,6 +547,12 @@ export async function buildUnified1CWorkbookFromTemplate(
   // Образец стиля тела — ячейка ФИО строки-образца (левое выравнивание текста).
   const bodyStyle = worksheet.getRow(ONE_C_TEMPLATE_STYLE_ROW).getCell(COL_FIO).style;
 
+  // Шапка доп. колонок — стиль как у шапки
+  const managerHeader = worksheet.getCell(UNIFIED_HEADER_ROW, UNIFIED_COL_MANAGER);
+  managerHeader.style = cloneExcelValue(headerStyle) || {};
+  managerHeader.value = 'Руководитель';
+  managerHeader.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+
   rows.forEach((row, index) => {
     const rowNumber = ONE_C_DATA_START_ROW + index;
     writeOneCRow(worksheet, rowNumber, index, row.oneCRow);
@@ -558,10 +566,16 @@ export async function buildUnified1CWorkbookFromTemplate(
     addressCell.style = cloneExcelValue(bodyStyle) || {};
     addressCell.value = row.objectAddress;
     addressCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+
+    const managerCell = worksheet.getCell(rowNumber, UNIFIED_COL_MANAGER);
+    managerCell.style = cloneExcelValue(bodyStyle) || {};
+    managerCell.value = row.managerName ?? '';
+    managerCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
   });
 
   worksheet.getColumn(UNIFIED_COL_DEPARTMENT).width = 26;
   worksheet.getColumn(UNIFIED_COL_OBJECT_ADDRESS).width = 32;
+  worksheet.getColumn(UNIFIED_COL_MANAGER).width = 26;
 
   applyA4PrintSetup(worksheet, 3);
   return workbook;

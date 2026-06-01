@@ -274,10 +274,10 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
   }
 }
 
-/** POST /api/timesheet/export-objects-unified  body: { month, object_ids, half?|from?/to? } */
+/** POST /api/timesheet/export-objects-unified  body: { month, object_ids, half?|from?/to?, department_ids? } */
 export async function exportTimesheetObjectsUnified(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, object_ids, half, from, to } = req.body;
+    const { month, object_ids, half, from, to, department_ids } = req.body;
 
     if (!month || typeof month !== 'string') {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен' });
@@ -324,7 +324,11 @@ export async function exportTimesheetObjectsUnified(req: AuthenticatedRequest, r
       segmentSuffix = `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
     }
 
-    const collected = await fetchTimesheetDataForObjectIds(month, requestedObjectIds, rangeArg);
+    const deptIdFilter = Array.isArray(department_ids) && department_ids.length > 0
+      ? [...new Set(department_ids.filter((v): v is string => typeof v === 'string'))]
+      : undefined;
+
+    const collected = await fetchTimesheetDataForObjectIds(month, requestedObjectIds, rangeArg, deptIdFilter);
 
     const workbook = await buildUnified1CWorkbook(mon, year, collected);
     const buffer = await writeTimesheetWorkbookBuffer(workbook);

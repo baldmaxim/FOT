@@ -478,6 +478,7 @@ export const timesheetService = {
     half?: TimesheetExportHalf;
     from?: string;
     to?: string;
+    department_ids?: string[];
   }): Promise<Blob> {
     const response = await fetch(
       buildApiUrl('/timesheet/export-objects-unified'),

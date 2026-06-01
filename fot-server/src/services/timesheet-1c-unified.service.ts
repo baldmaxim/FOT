@@ -1,5 +1,6 @@
 import type ExcelJS from 'exceljs';
 import { query } from '../config/postgres.js';
+import { getActiveDirectManagersFor } from './employee-direct-reports.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import {
   buildEmployeeRowsForOneC,
@@ -16,6 +17,16 @@ interface IUnifiedRow extends IUnifiedOneCRow {
   fullNameSort: string;
   objectNameSort: string;
 }
+
+const collectAllEmployeeIds = (departmentsData: IDepartmentTimesheetData[]): number[] => {
+  const ids = new Set<number>();
+  for (const data of departmentsData) {
+    for (const employee of data.employees) {
+      ids.add(employee.id);
+    }
+  }
+  return [...ids];
+};
 
 // Адрес для отделов/сотрудников в режиме «текущая деятельность»: их строки не
 // дробятся по объектам — одна строка на сотрудника с этой меткой вместо адреса
@@ -101,6 +112,7 @@ const buildRowsForDepartment = (
   objectAddressMap: Map<string, string>,
   currentActivityDeptIds: Set<string>,
   empSets: { hasPersonal: Set<number>; personalCurrent: Set<number> },
+  managerNameMap: Map<number, string>,
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
 
@@ -127,6 +139,7 @@ const buildRowsForDepartment = (
       objectEntries: data.objectEntries.filter(e => !currentActivityEmpIds.has(e.employee_id)),
     };
 
+  const nameToId = new Map<string, number>(data.employees.map(e => [e.full_name, e.id]));
   const targets = listObjectExportTargets(splitData);
   const seenFullNames = new Set<string>();
 
@@ -137,6 +150,8 @@ const buildRowsForDepartment = (
       : '';
     for (const oneCRow of objectRows) {
       seenFullNames.add(oneCRow.fullName);
+      const empId = nameToId.get(oneCRow.fullName);
+      const managerName = empId != null ? (managerNameMap.get(empId) ?? '') : '';
       rows.push({
         departmentNameSort: data.departmentName,
         fullNameSort: oneCRow.fullName,
@@ -144,6 +159,7 @@ const buildRowsForDepartment = (
         oneCRow,
         departmentName: data.departmentName,
         objectAddress,
+        managerName,
       });
     }
   }
@@ -153,6 +169,8 @@ const buildRowsForDepartment = (
   for (const employeeRow of buildEmployeeRowsForOneC(splitData)) {
     if (seenFullNames.has(employeeRow.fullName)) continue;
     if (isOneCRowEmpty(employeeRow)) continue;
+    const empId = nameToId.get(employeeRow.fullName);
+    const managerName = empId != null ? (managerNameMap.get(empId) ?? '') : '';
     rows.push({
       departmentNameSort: data.departmentName,
       fullNameSort: employeeRow.fullName,
@@ -160,6 +178,7 @@ const buildRowsForDepartment = (
       oneCRow: employeeRow,
       departmentName: data.departmentName,
       objectAddress: '',
+      managerName,
     });
   }
 
@@ -172,6 +191,8 @@ const buildRowsForDepartment = (
     };
     for (const employeeRow of buildEmployeeRowsForOneC(currentActivityData)) {
       if (isOneCRowEmpty(employeeRow)) continue;
+      const empId = nameToId.get(employeeRow.fullName);
+      const managerName = empId != null ? (managerNameMap.get(empId) ?? '') : '';
       rows.push({
         departmentNameSort: data.departmentName,
         fullNameSort: employeeRow.fullName,
@@ -179,6 +200,7 @@ const buildRowsForDepartment = (
         oneCRow: employeeRow,
         departmentName: data.departmentName,
         objectAddress: CURRENT_ACTIVITY_ADDRESS,
+        managerName,
       });
     }
   }
@@ -191,15 +213,22 @@ export async function buildUnified1CWorkbook(
   _year: number,
   departmentsData: IDepartmentTimesheetData[],
 ): Promise<ExcelJS.Workbook> {
-  const [objectAddressMap, currentActivityDeptIds, currentActivityEmpSets] = await Promise.all([
+  const [objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerInfoMap] = await Promise.all([
     fetchObjectAddressMap(collectObjectIds(departmentsData)),
     fetchCurrentActivityDeptIds(),
     fetchCurrentActivityEmployeeSets(),
+    getActiveDirectManagersFor(collectAllEmployeeIds(departmentsData)),
   ]);
+
+  const managerNameMap = new Map<number, string>(
+    [...managerInfoMap.entries()]
+      .filter(([, v]) => v.managerFullName)
+      .map(([k, v]) => [k, v.managerFullName!]),
+  );
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
-    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds, currentActivityEmpSets));
+    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerNameMap));
   }
   rows.sort((a, b) => {
     const byDept = a.departmentNameSort.localeCompare(b.departmentNameSort, 'ru');
