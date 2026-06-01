@@ -3,7 +3,7 @@ import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-departmen
 import { getOffDatesByEmployee } from './timesheet-approval-weekend-check.service.js';
 import type { ITimesheetDateRange } from './timesheet-range.service.js';
 
-const ATTACHMENT_REQUIRED_LEAVE_TYPES = ['remote', 'vacation'] as const;
+const ATTACHMENT_REQUIRED_LEAVE_TYPES = ['vacation'] as const;
 
 export type MissingDayKind = 'leave_request' | 'weekend_no_correction';
 
@@ -20,7 +20,6 @@ export type ICorrectionValidationResult =
   | { ok: false; missing: IMissingDay[] };
 
 const LEAVE_TYPE_LABELS_RU: Record<string, string> = {
-  remote: 'Удалёнка',
   vacation: 'Отпуск',
 };
 
