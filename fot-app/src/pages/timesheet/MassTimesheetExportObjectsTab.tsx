@@ -367,7 +367,14 @@ const DeptFilterModal: FC<IDeptFilterModalProps> = ({ selectedDeptIds, onApply, 
   }, []);
 
   return (
-    <div className="mte-modal-overlay" {...overlayRef}>
+    <div
+      className="mte-modal-overlay"
+      onMouseDown={overlayRef.onMouseDown}
+      onMouseUp={overlayRef.onMouseUp}
+      onMouseLeave={overlayRef.onMouseLeave}
+      onTouchStart={overlayRef.onTouchStart}
+      onTouchEnd={overlayRef.onTouchEnd}
+    >
       <div className="mte-modal" style={{ maxWidth: '500px' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
           <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: 600 }}>
