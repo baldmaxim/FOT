@@ -13,7 +13,6 @@ import pageStyles from './MtsPage.module.css';
 
 const TILE_URL = (import.meta.env.VITE_MAP_TILE_URL as string | undefined)
   || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 const DEFAULT_CENTER: [number, number] = [55.7558, 37.6173];
 
 // Цвета для треков (циклически).
@@ -166,8 +165,8 @@ export const LocationsMapTab: FC = () => {
       {mode === 'tracks' && tracksQuery.isError && <p className={pageStyles.err}>Не удалось загрузить треки</p>}
 
       <div style={{ height: 'calc(100vh - 320px)', minHeight: 480, borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border)' }}>
-        <MapContainer center={DEFAULT_CENTER} zoom={10} style={{ width: '100%', height: '100%' }} scrollWheelZoom>
-          <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} maxZoom={19} />
+        <MapContainer center={DEFAULT_CENTER} zoom={10} style={{ width: '100%', height: '100%' }} scrollWheelZoom attributionControl={false}>
+          <TileLayer url={TILE_URL} maxZoom={19} />
           <FitBounds points={mode === 'last' ? lastPoints : trackPoints} />
 
           {mode === 'last' && (lastQuery.data ?? []).map(l => {

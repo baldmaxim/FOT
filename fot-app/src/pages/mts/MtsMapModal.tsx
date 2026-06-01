@@ -24,7 +24,6 @@ interface IProps {
 const DEFAULT_CENTER: [number, number] = [55.7558, 37.6173];
 const TILE_URL = (import.meta.env.VITE_MAP_TILE_URL as string | undefined)
   || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
 // Цвета для сегментов треков (циклически).
 const TRACK_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#a855f7', '#f59e0b', '#0891b2'];
@@ -357,8 +356,8 @@ export const MtsMapModal: FC<IProps> = ({ target, onClose }) => {
           </aside>
 
           <div className={styles.mapWrap}>
-            <MapContainer center={center} zoom={12} className={styles.map} scrollWheelZoom>
-              <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} maxZoom={19} />
+            <MapContainer center={center} zoom={12} className={styles.map} scrollWheelZoom attributionControl={false}>
+              <TileLayer url={TILE_URL} maxZoom={19} />
               <GeomanControls enabled={drawingMode} onPolygonCreated={handlePolygonCreated} />
               <FitBounds points={fitPoints} polygons={polygonsForFit} />
 

@@ -20,7 +20,6 @@ import styles from './GeofencesTab.module.css';
 const DEFAULT_CENTER: [number, number] = [55.7558, 37.6173];
 const TILE_URL = (import.meta.env.VITE_MAP_TILE_URL as string | undefined)
   || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
 const errText = (e: unknown, fallback: string): string =>
   e instanceof ApiError ? e.message : fallback;
@@ -444,8 +443,8 @@ export const GeofencesTab: FC = () => {
         </div>
 
         <div className={styles.mapWrap}>
-          <MapContainer center={DEFAULT_CENTER} zoom={11} style={{ width: '100%', height: '100%' }} scrollWheelZoom>
-            <TileLayer url={TILE_URL} attribution={TILE_ATTRIBUTION} maxZoom={19} />
+          <MapContainer center={DEFAULT_CENTER} zoom={11} style={{ width: '100%', height: '100%' }} scrollWheelZoom attributionControl={false}>
+            <TileLayer url={TILE_URL} maxZoom={19} />
             <GeomanControls enabled={drawing} onPolygonCreated={handlePolygonCreated} />
             <FitBounds polygons={polygonsForFit} />
             {all.map(g => (
