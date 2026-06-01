@@ -739,6 +739,12 @@ export async function buildObjectAttendanceData(params: {
     const isNonWork = NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status as TimeStatus);
     const hoursOverride = adjustment.hours_override;
 
+    // status='work' + hoursOverride=null = работал в выходной, часы из СКУД.
+    // СКУД-записи уже корректны по объектам — оставляем как есть.
+    if (adjustment.status === 'work' && hoursOverride == null) {
+      continue;
+    }
+
     // Авторитетная корректировка дня НЕ даёт отработанных часов
     // (обнулённый рабочий день: status=work + hours_override<=0; либо отсутствие:
     // отпуск/больничный/прогул/удалёнка). Снимаем СКУД-распределение дня, иначе
