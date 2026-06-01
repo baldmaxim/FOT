@@ -1101,12 +1101,18 @@ export const TimesheetPage: FC = () => {
   const handleSaveBulkCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
     // Цепляем прикреплённые файлы к каждой созданной/обновлённой корректировке.
     const uploadFilesTo = async (adjustmentIds: number[]) => {
-      if (!files?.length || adjustmentIds.length === 0) return;
-      try {
-        await Promise.all(adjustmentIds.flatMap(id => files.map(file => correctionAttachmentsService.upload(id, file))));
-      } catch (uploadErr) {
-        console.error('Bulk attachments upload error:', uploadErr);
-        toast.error('Корректировка применена, но часть файлов не загрузилась');
+      if (!files?.length) return;
+      if (adjustmentIds.length === 0) {
+        toast.error('Файлы не прикреплены: сервер не вернул ID корректировок');
+        return;
+      }
+      const uploadResults = await Promise.allSettled(
+        adjustmentIds.flatMap(id => files.map(file => correctionAttachmentsService.upload(id, file)))
+      );
+      const failed = uploadResults.filter(r => r.status === 'rejected').length;
+      if (failed > 0) {
+        console.error('Bulk attachments upload error: failed uploads =', failed);
+        toast.error(`Корректировка применена, но ${failed} файл(ов) не загрузилось`);
       }
     };
     const invalidate = () => Promise.all([

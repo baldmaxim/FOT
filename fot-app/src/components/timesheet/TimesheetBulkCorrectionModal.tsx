@@ -2,6 +2,7 @@ import { type FC, useState, useMemo } from 'react';
 import { X, Plus } from 'lucide-react';
 import type { TimesheetEmployee, TimesheetStatus } from '../../types';
 import { CREATABLE_STATUS_META } from '../../utils/correctionStatus';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { StagedCorrectionAttachments } from './StagedCorrectionAttachments';
 
 interface IProps {
@@ -46,6 +47,11 @@ export const TimesheetBulkCorrectionModal: FC<IProps> = ({ open, employees, pend
   const [notes, setNotes] = useState('');
   const [files, setFiles] = useState<File[]>([]);
 
+  const overlayHandlers = useOverlayDismiss(() => {
+    reset();
+    onClose();
+  });
+
   const sortedEmployees = useMemo(
     () => [...employees].sort((a, b) => a.full_name.localeCompare(b.full_name, 'ru')),
     [employees],
@@ -82,17 +88,12 @@ export const TimesheetBulkCorrectionModal: FC<IProps> = ({ open, employees, pend
     setFiles([]);
   };
 
-  const handleClose = () => {
-    reset();
-    onClose();
-  };
-
   return (
-    <div className="ts-bulk-modal-overlay" onClick={handleClose}>
+    <div className="ts-bulk-modal-overlay" {...overlayHandlers}>
       <div className="ts-bulk-modal" onClick={e => e.stopPropagation()}>
         <div className="ts-bulk-modal-header">
           <h3>Массовая корректировка</h3>
-          <button type="button" className="ts-bulk-modal-close" onClick={handleClose} disabled={pending}>
+          <button type="button" className="ts-bulk-modal-close" onClick={() => { reset(); onClose(); }} disabled={pending}>
             <X size={18} />
           </button>
         </div>
@@ -185,7 +186,7 @@ export const TimesheetBulkCorrectionModal: FC<IProps> = ({ open, employees, pend
           </div>
         </div>
         <div className="ts-bulk-modal-footer">
-          <button type="button" className="ts-bulk-modal-cancel" onClick={handleClose} disabled={pending}>
+          <button type="button" className="ts-bulk-modal-cancel" onClick={() => { reset(); onClose(); }} disabled={pending}>
             Отмена
           </button>
           <button type="button" className="ts-bulk-modal-confirm" onClick={handleSubmit} disabled={!canSubmit}>

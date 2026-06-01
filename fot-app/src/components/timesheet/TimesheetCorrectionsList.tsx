@@ -87,16 +87,20 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
       });
 
       // Загружаем файлы для каждой созданной корректировки
-      if (params.files?.length && result.items?.length) {
-        try {
-          await Promise.all(
+      if (params.files?.length) {
+        if (!result.items?.length) {
+          toast.error('Файлы не прикреплены: сервер не вернул ID корректировок');
+        } else {
+          const uploadResults = await Promise.allSettled(
             result.items.flatMap(item =>
               params.files!.map(file => correctionAttachmentsService.upload(item.adjustment_id, file))
             )
           );
-        } catch (uploadErr) {
-          console.error('Bulk attachments upload error:', uploadErr);
-          toast.error('Корректировка применена, но часть файлов не загрузилась');
+          const failed = uploadResults.filter(r => r.status === 'rejected').length;
+          if (failed > 0) {
+            console.error('Bulk attachments upload error: failed uploads =', failed);
+            toast.error(`Корректировка применена, но ${failed} файл(ов) не загрузилось`);
+          }
         }
       }
 
