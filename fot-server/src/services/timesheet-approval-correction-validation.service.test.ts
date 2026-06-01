@@ -14,15 +14,29 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: pgTx,
 }));
 
-const { mockGetOffDatesByEmployee } = vi.hoisted(() => ({
+const { mockGetOffDatesByEmployee, mockResolveSchedulesForPeriod, mockLoadCalendarMonth } = vi.hoisted(() => ({
   mockGetOffDatesByEmployee: vi.fn(),
+  mockResolveSchedulesForPeriod: vi.fn(),
+  mockLoadCalendarMonth: vi.fn(),
 }));
 vi.mock('./timesheet-approval-weekend-check.service.js', () => ({
   getOffDatesByEmployee: mockGetOffDatesByEmployee,
 }));
 
+vi.mock('./schedule.service.js', () => ({
+  resolveSchedulesForPeriod: mockResolveSchedulesForPeriod,
+  loadCalendarMonth: mockLoadCalendarMonth,
+}));
+
 vi.mock('./timesheet-department-assignments.service.js', () => ({
   listEmployeeIdsAssignedToDepartmentPeriod: vi.fn(),
+}));
+
+const { mockListNonHolidayWeekendDays } = vi.hoisted(() => ({
+  mockListNonHolidayWeekendDays: vi.fn(),
+}));
+vi.mock('../controllers/timesheet.controller.js', () => ({
+  listNonHolidayWeekendDays: mockListNonHolidayWeekendDays,
 }));
 
 import { validateCorrectionAttachments } from './timesheet-approval-correction-validation.service.js';
@@ -61,9 +75,19 @@ function setupQueries(fx: IFixture): void {
   });
 }
 
+function setupMocks(): void {
+  mockResolveSchedulesForPeriod.mockResolvedValue(new Map());
+  mockLoadCalendarMonth.mockResolvedValue(null);
+  mockListNonHolidayWeekendDays.mockReturnValue([]);
+}
+
 beforeEach(() => {
   pgQuery.mockReset();
   mockGetOffDatesByEmployee.mockReset();
+  mockResolveSchedulesForPeriod.mockReset();
+  mockLoadCalendarMonth.mockReset();
+  mockListNonHolidayWeekendDays.mockReset();
+  setupMocks();
 });
 
 describe('validateCorrectionAttachments', () => {
@@ -191,13 +215,13 @@ describe('validateCorrectionAttachments', () => {
     }
   });
 
-  it('leave_request remote без вложения → блок (ортогональная ветка сохранена)', async () => {
+  it('leave_request vacation без вложения → блок (ортогональная ветка сохранена)', async () => {
     mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set<string>()]]));
     setupQueries({
       leaves: [{
         id: 555,
         employee_id: 1,
-        request_type: 'remote',
+        request_type: 'vacation',
         start_date: '2026-05-10',
         end_date: '2026-05-10',
         correction_date: null,
@@ -214,7 +238,7 @@ describe('validateCorrectionAttachments', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.missing[0].kind).toBe('leave_request');
-      expect(result.missing[0].reason).toContain('Удалёнка');
+      expect(result.missing[0].reason).toContain('Отпуск');
     }
   });
 

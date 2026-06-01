@@ -210,7 +210,7 @@ export const isMandatoryWeekendSlotAvailable = (
  * ISO-даты непраздничных суббот/воскресений месяца year-mon. mandatory_holidays
  * исключаются всегда; обычные holidays — только если respectsHolidays.
  */
-const listNonHolidayWeekendDays = (
+export const listNonHolidayWeekendDays = (
   year: number,
   mon: number,
   calendar: { holidays?: string[]; mandatory_holidays?: string[] } | null,

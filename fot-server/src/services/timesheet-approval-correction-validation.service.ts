@@ -1,6 +1,8 @@
 import { query } from '../config/postgres.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { getOffDatesByEmployee } from './timesheet-approval-weekend-check.service.js';
+import { resolveSchedulesForPeriod, loadCalendarMonth } from './schedule.service.js';
+import { listNonHolidayWeekendDays } from '../controllers/timesheet.controller.js';
 import type { ITimesheetDateRange } from './timesheet-range.service.js';
 
 const ATTACHMENT_REQUIRED_LEAVE_TYPES = ['vacation'] as const;
@@ -41,6 +43,55 @@ export type ICorrectionValidationScope =
   | { kind: 'department'; departmentId: string }
   | { kind: 'personal'; employeeIds: number[] };
 
+type WeekendDow = 0 | 6; // 0 = воскресенье, 6 = суббота
+
+async function computeMandatoryExemptions(
+  weekendSkudRows: Array<{ employee_id: number; date: string }>,
+): Promise<Set<string>> {
+  if (weekendSkudRows.length === 0) return new Set();
+
+  const employeeIds = [...new Set(weekendSkudRows.map(r => r.employee_id))];
+  const exemptions = new Set<string>();
+
+  const schedules = await resolveSchedulesForPeriod(
+    employeeIds.map(id => ({ id })),
+    weekendSkudRows[0]!.date,
+    weekendSkudRows[weekendSkudRows.length - 1]!.date,
+  );
+
+  for (const row of weekendSkudRows) {
+    const { employee_id: empId, date } = row;
+    const dailySchedule = schedules.get(empId)?.get(date);
+    if (!dailySchedule) continue;
+
+    const expected_saturdays = dailySchedule.expected_saturdays_per_month ?? 0;
+    const expected_sundays = dailySchedule.expected_sundays_per_month ?? 0;
+    if (expected_saturdays <= 0 && expected_sundays <= 0) continue;
+
+    const dateObj = new Date(`${date}T00:00:00`);
+    const dow = dateObj.getDay() as WeekendDow;
+    if (dow !== 0 && dow !== 6) continue;
+
+    const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
+    const expected = dow === 6 ? expected_saturdays : expected_sundays;
+    if (expected <= 0) continue;
+
+    const nonHolidayDays = listNonHolidayWeekendDays(
+      dateObj.getFullYear(),
+      dateObj.getMonth() + 1,
+      monthCalendar,
+      dailySchedule.respects_holidays ?? true,
+      dow,
+    );
+
+    if (nonHolidayDays.slice(0, expected).includes(date)) {
+      exemptions.add(`${empId}|${date}`);
+    }
+  }
+
+  return exemptions;
+}
+
 /**
  * Подача табеля блокируется в двух случаях:
  * 1) есть approved leave_requests типа remote/vacation без файла-подтверждения;
@@ -49,6 +100,10 @@ export type ICorrectionValidationScope =
  * Pending-корректировки выходных подачу НЕ блокируют — они отображаются
  * на странице «Табели на согласовании» как несогласованные (синий ярлык),
  * а блокировку даёт уже шаг утверждения табеля админом.
+ *
+ * Исключение: СКУД-активность в первые N обязательных суббот/воскресений
+ * (expected_saturdays_per_month / expected_sundays_per_month) без корректировки
+ * НЕ блокирует подачу.
  */
 export async function validateCorrectionAttachments(
   scope: ICorrectionValidationScope,
@@ -131,6 +186,8 @@ export async function validateCorrectionAttachments(
       .filter(row => offByEmployee.get(row.employee_id)?.has(row.date) === true);
   }
 
+  const mandatoryExemptions = await computeMandatoryExemptions(weekendSkudRows);
+
   const referencedEmployeeIds = new Set<number>();
   for (const lr of leaves) referencedEmployeeIds.add(lr.employee_id);
   for (const row of weekendSkudRows) referencedEmployeeIds.add(row.employee_id);
@@ -161,6 +218,7 @@ export async function validateCorrectionAttachments(
 
   for (const row of weekendSkudRows) {
     if (adjustmentByEmployeeDate.has(`${row.employee_id}|${row.date}`)) continue;
+    if (mandatoryExemptions.has(`${row.employee_id}|${row.date}`)) continue;
     missing.push({
       date: row.date,
       employee_id: row.employee_id,

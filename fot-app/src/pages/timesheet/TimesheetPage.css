@@ -2235,7 +2235,7 @@
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 60;
+  z-index: 100;
   width: 360px;
   max-width: calc(100vw - 24px);
   max-height: 50vh;
