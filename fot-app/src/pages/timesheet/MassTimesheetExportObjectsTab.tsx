@@ -144,8 +144,8 @@ export const MassTimesheetExportObjectsTab: FC<IMassTimesheetExportObjectsTabPro
           <div className="mte-empty">Объекты не найдены</div>
         ) : (
           filteredObjects.map(obj => {
-            const label = obj.alt_name?.trim() || obj.name;
             const isChecked = checkedIds.has(obj.id);
+            const hasAltName = obj.alt_name?.trim();
             return (
               <div key={obj.id} className="mte-tree-node">
                 <div className={`mte-tree-row ${isChecked ? 'mte-tree-row--checked' : ''}`}>
@@ -164,13 +164,15 @@ export const MassTimesheetExportObjectsTab: FC<IMassTimesheetExportObjectsTabPro
                       display: 'block',
                       width: '18px',
                       height: '18px',
-                      border: '2px solid currentColor',
+                      border: '2px solid var(--text-tertiary)',
                       borderRadius: '3px',
-                      backgroundColor: isChecked ? 'currentColor' : 'transparent',
+                      backgroundColor: isChecked ? 'var(--primary)' : 'transparent',
                     }} />
                   </button>
                   <span className="mte-tree-name" onClick={() => handleToggle(obj.id, !isChecked)}>
-                    {label}
+                    {hasAltName && <div>{hasAltName}</div>}
+                    {hasAltName && <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>{obj.name}</div>}
+                    {!hasAltName && obj.name}
                   </span>
                 </div>
               </div>

@@ -341,6 +341,15 @@
   cursor: pointer;
   padding: 0;
   flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.mte-tree-row:hover .mte-tree-check {
+  color: var(--text-secondary);
+}
+
+.mte-tree-row--checked .mte-tree-check {
+  color: var(--primary);
 }
 
 .mte-check-active {
@@ -349,6 +358,15 @@
 
 .mte-check-inactive {
   color: var(--text-tertiary);
+}
+
+[data-theme="dark"] .mte-tree-check span {
+  border-color: var(--border-light);
+}
+
+[data-theme="dark"] .mte-tree-row--checked .mte-tree-check span {
+  background-color: var(--primary) !important;
+  border-color: var(--primary);
 }
 
 .mte-tree-name {
