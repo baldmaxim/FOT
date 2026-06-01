@@ -330,7 +330,7 @@ export async function exportTimesheetObjectsUnified(req: AuthenticatedRequest, r
 
     const collected = await fetchTimesheetDataForObjectIds(month, requestedObjectIds, rangeArg, deptIdFilter);
 
-    const workbook = await buildUnified1CWorkbook(mon, year, collected);
+    const workbook = await buildUnified1CWorkbook(mon, year, collected, true);
     const buffer = await writeTimesheetWorkbookBuffer(workbook);
 
     const fileName = `Единый_1С_по_объектам_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`

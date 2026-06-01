@@ -113,6 +113,7 @@ const buildRowsForDepartment = (
   currentActivityDeptIds: Set<string>,
   empSets: { hasPersonal: Set<number>; personalCurrent: Set<number> },
   managerNameMap: Map<number, string>,
+  excludeCurrentActivity: boolean = false,
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
 
@@ -184,7 +185,8 @@ const buildRowsForDepartment = (
 
   // «Текущая деятельность»: одна строка на сотрудника, часы за день суммированы
   // по всем объектам (buildEmployeeRowsForOneC уже агрегирует и учитывает статусы).
-  if (currentActivityEmpIds.size > 0) {
+  // Исключаем при экспорте по конкретным объектам — там должны быть только реальные события.
+  if (!excludeCurrentActivity && currentActivityEmpIds.size > 0) {
     const currentActivityData: IDepartmentTimesheetData = {
       ...data,
       employees: data.employees.filter(e => currentActivityEmpIds.has(e.id)),
@@ -212,6 +214,7 @@ export async function buildUnified1CWorkbook(
   _month: number,
   _year: number,
   departmentsData: IDepartmentTimesheetData[],
+  excludeCurrentActivity: boolean = false,
 ): Promise<ExcelJS.Workbook> {
   const [objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerInfoMap] = await Promise.all([
     fetchObjectAddressMap(collectObjectIds(departmentsData)),
@@ -228,7 +231,7 @@ export async function buildUnified1CWorkbook(
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
-    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerNameMap));
+    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerNameMap, excludeCurrentActivity));
   }
   rows.sort((a, b) => {
     const byDept = a.departmentNameSort.localeCompare(b.departmentNameSort, 'ru');
