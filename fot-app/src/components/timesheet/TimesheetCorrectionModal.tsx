@@ -845,7 +845,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       {/* Шапка блока: «Обнулить день» (слева) + «Добавить корректировку» вверху справа (#2/#4) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <div style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>Корректировки по объектам</div>
-        {!adding && !hasDayLevelCorrection && onZeroOutDay && (
+        {!adding && !hasDayLevelCorrection && expanded.size === 0 && onZeroOutDay && (
           <button
             type="button"
             className="ts-btn"
@@ -862,7 +862,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
             Обнулить день
           </button>
         )}
-        {!adding && !hasDayLevelCorrection && (
+        {!adding && !hasDayLevelCorrection && expanded.size === 0 && (
           <button
             type="button"
             className="ts-btn ts-btn--primary"
