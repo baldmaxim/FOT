@@ -809,3 +809,50 @@
   letter-spacing: 0.5px;
 }
 
+.closeButton {
+  background: transparent;
+  border: none;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.closeButton:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.cloneModalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cloneFormRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cloneFormRow > .input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.cloneFormCheckboxRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+

@@ -1089,101 +1089,134 @@ export const RoleManagementPage: FC = () => {
                   </div>
                 </div>
 
-                {showCloneForm && (
-                  <div className={styles.inlineForm}>
-                    <input
-                      className={styles.input}
-                      placeholder="Новый код роли"
-                      value={cloneForm.code}
-                      onChange={e => setCloneForm(s => ({ ...s, code: toRoleCode(e.target.value) }))}
-                    />
-                    <input
-                      className={styles.input}
-                      placeholder="Новое название"
-                      value={cloneForm.name}
-                      onChange={e => setCloneForm(s => ({ ...s, name: e.target.value }))}
-                    />
-                    <label className={styles.inlineCheckbox}>
-                      <input
-                        type="checkbox"
-                        checked={cloneForm.is_admin}
-                        onChange={e => setCloneForm(s => ({ ...s, is_admin: e.target.checked }))}
-                      />
-                      <span>Админ</span>
-                    </label>
-                    <HoursToggle
-                      checked={cloneForm.show_actual_hours}
-                      onChange={v => setCloneForm(s => ({ ...s, show_actual_hours: v }))}
-                      title="Показывать часы по СКУД без обрезки до плановой нормы дня"
-                    />
-                    <label className={styles.inlineCheckbox} title="Скрыть боковое меню у пользователей этой роли (для админа игнорируется)">
-                      <input
-                        type="checkbox"
-                        checked={cloneForm.hide_sidebar}
-                        onChange={e => setCloneForm(s => ({ ...s, hide_sidebar: e.target.checked }))}
-                      />
-                      <span>Скрыть меню</span>
-                    </label>
-                    <select
-                      className={styles.input}
-                      value={cloneForm.employee_variant}
-                      onChange={e => setCloneForm(s => ({ ...s, employee_variant: e.target.value as EmployeeVariant | '' }))}
-                    >
-                      <option value="">Без кабинета</option>
-                      <option value="office">Офис</option>
-                      <option value="object">Рабочий (объект)</option>
-                      <option value="contractor">Подрядчик</option>
-                    </select>
-                    <input
-                      className={styles.input}
-                      placeholder="Описание (необязательно)"
-                      value={cloneForm.description}
-                      onChange={e => setCloneForm(s => ({ ...s, description: e.target.value }))}
-                    />
-                    <label className={styles.inlineCheckbox} title="Сколько месяцев назад от текущего доступно для табеля. Для админов окно не применяется.">
-                      <span>Окно назад, мес.</span>
-                      <input
-                        type="number"
-                        min={TIMESHEET_MONTHS_MIN}
-                        max={TIMESHEET_MONTHS_MAX}
-                        className={styles.inputInline}
-                        value={cloneForm.timesheet_months_back}
-                        onChange={e => setCloneForm(s => ({ ...s, timesheet_months_back: clampTimesheetMonths(e.target.value) }))}
-                      />
-                    </label>
-                    <label className={styles.inlineCheckbox} title="Сколько месяцев вперёд от текущего доступно для табеля. Для админов окно не применяется.">
-                      <span>Окно вперёд, мес.</span>
-                      <input
-                        type="number"
-                        min={TIMESHEET_MONTHS_MIN}
-                        max={TIMESHEET_MONTHS_MAX}
-                        className={styles.inputInline}
-                        value={cloneForm.timesheet_months_forward}
-                        onChange={e => setCloneForm(s => ({ ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) }))}
-                      />
-                    </label>
-                    <label className={styles.inlineCheckbox} title="Показывать кнопку «Весь месяц» в переключателе периода табеля. Если выключено — только полумесячные периоды (1–15 и 16–N).">
-                      <input
-                        type="checkbox"
-                        checked={cloneForm.timesheet_show_full_period}
-                        onChange={e => setCloneForm(s => ({ ...s, timesheet_show_full_period: e.target.checked }))}
-                      />
-                      <span>Показывать «Весь месяц» в табеле</span>
-                    </label>
-                    <CorrectionRestrictionsBlock
-                      value={cloneForm}
-                      onChange={next => setCloneForm(s => ({ ...s, ...next }))}
-                    />
-                    <div className={styles.formActions}>
-                      <button className={styles.successButton} onClick={handleCloneRole} disabled={savingRole}>
-                        Создать копию
-                      </button>
-                      <button className={styles.secondaryButton} onClick={() => setShowCloneForm(false)}>
-                        Отмена
-                      </button>
+                {showCloneForm && selectedRole && (() => {
+                  const cloneOverlayHandlers = useOverlayDismiss(() => setShowCloneForm(false));
+                  return (
+                    <div className={styles.modalOverlay} {...cloneOverlayHandlers}>
+                      <div className={styles.modal} onClick={e => e.stopPropagation()}>
+                        <div className={styles.modalHeader}>
+                          <h2 className={styles.modalTitle}>
+                            Копия роли «{selectedRole.name}»
+                          </h2>
+                          <button
+                            className={styles.closeButton}
+                            onClick={() => setShowCloneForm(false)}
+                            aria-label="Закрыть"
+                          >
+                            ×
+                          </button>
+                        </div>
+
+                        <div className={styles.cloneModalBody}>
+                          <div className={styles.cloneFormRow}>
+                            <input
+                              className={styles.input}
+                              placeholder="Новый код роли"
+                              value={cloneForm.code}
+                              onChange={e => setCloneForm(s => ({ ...s, code: toRoleCode(e.target.value) }))}
+                            />
+                            <input
+                              className={styles.input}
+                              placeholder="Новое название"
+                              value={cloneForm.name}
+                              onChange={e => setCloneForm(s => ({ ...s, name: e.target.value }))}
+                            />
+                          </div>
+
+                          <div className={styles.cloneFormRow}>
+                            <select
+                              className={styles.input}
+                              value={cloneForm.employee_variant}
+                              onChange={e => setCloneForm(s => ({ ...s, employee_variant: e.target.value as EmployeeVariant | '' }))}
+                            >
+                              <option value="">Без кабинета</option>
+                              <option value="office">Офис</option>
+                              <option value="object">Рабочий (объект)</option>
+                              <option value="contractor">Подрядчик</option>
+                            </select>
+                            <input
+                              className={styles.input}
+                              placeholder="Описание (необязательно)"
+                              value={cloneForm.description}
+                              onChange={e => setCloneForm(s => ({ ...s, description: e.target.value }))}
+                            />
+                          </div>
+
+                          <div className={styles.cloneFormCheckboxRow}>
+                            <label className={styles.inlineCheckbox}>
+                              <input
+                                type="checkbox"
+                                checked={cloneForm.is_admin}
+                                onChange={e => setCloneForm(s => ({ ...s, is_admin: e.target.checked }))}
+                              />
+                              <span>Админ</span>
+                            </label>
+                            <HoursToggle
+                              checked={cloneForm.show_actual_hours}
+                              onChange={v => setCloneForm(s => ({ ...s, show_actual_hours: v }))}
+                              title="Показывать часы по СКУД без обрезки до плановой нормы дня"
+                            />
+                            <label className={styles.inlineCheckbox} title="Скрыть боковое меню у пользователей этой роли (для админа игнорируется)">
+                              <input
+                                type="checkbox"
+                                checked={cloneForm.hide_sidebar}
+                                onChange={e => setCloneForm(s => ({ ...s, hide_sidebar: e.target.checked }))}
+                              />
+                              <span>Скрыть меню</span>
+                            </label>
+                          </div>
+
+                          <div className={styles.cloneFormCheckboxRow}>
+                            <label className={styles.inlineCheckbox} title="Сколько месяцев назад от текущего доступно для табеля. Для админов окно не применяется.">
+                              <span>Окно назад, мес.</span>
+                              <input
+                                type="number"
+                                min={TIMESHEET_MONTHS_MIN}
+                                max={TIMESHEET_MONTHS_MAX}
+                                className={styles.inputInline}
+                                value={cloneForm.timesheet_months_back}
+                                onChange={e => setCloneForm(s => ({ ...s, timesheet_months_back: clampTimesheetMonths(e.target.value) }))}
+                              />
+                            </label>
+                            <label className={styles.inlineCheckbox} title="Сколько месяцев вперёд от текущего доступно для табеля. Для админов окно не применяется.">
+                              <span>Окно вперёд, мес.</span>
+                              <input
+                                type="number"
+                                min={TIMESHEET_MONTHS_MIN}
+                                max={TIMESHEET_MONTHS_MAX}
+                                className={styles.inputInline}
+                                value={cloneForm.timesheet_months_forward}
+                                onChange={e => setCloneForm(s => ({ ...s, timesheet_months_forward: clampTimesheetMonths(e.target.value) }))}
+                              />
+                            </label>
+                            <label className={styles.inlineCheckbox} title="Показывать кнопку «Весь месяц» в переключателе периода табеля. Если выключено — только полумесячные периоды (1–15 и 16–N).">
+                              <input
+                                type="checkbox"
+                                checked={cloneForm.timesheet_show_full_period}
+                                onChange={e => setCloneForm(s => ({ ...s, timesheet_show_full_period: e.target.checked }))}
+                              />
+                              <span>Показывать «Весь месяц» в табеле</span>
+                            </label>
+                          </div>
+
+                          <CorrectionRestrictionsBlock
+                            value={cloneForm}
+                            onChange={next => setCloneForm(s => ({ ...s, ...next }))}
+                          />
+                        </div>
+
+                        <div className={styles.formActions}>
+                          <button className={styles.successButton} onClick={handleCloneRole} disabled={savingRole}>
+                            Создать копию
+                          </button>
+                          <button className={styles.secondaryButton} onClick={() => setShowCloneForm(false)}>
+                            Отмена
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 <div className={styles.summaryBar}>
                   <div className={styles.summaryCard}>
