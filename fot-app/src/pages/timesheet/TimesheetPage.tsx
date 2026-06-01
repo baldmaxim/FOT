@@ -2212,7 +2212,7 @@ export const TimesheetPage: FC = () => {
             )}
             onSaveObject={handleSaveObjectByTarget}
             onDeleteObject={handleDeleteObjectByTarget}
-            onZeroOutDay={(notes) => { void handleSaveCorrection('work', 0, notes).then(() => closeModal()); }}
+            onZeroOutDay={(notes) => { void handleSaveCorrection('manual', 0, notes).then(() => closeModal()); }}
           />
         </Suspense>
       )}

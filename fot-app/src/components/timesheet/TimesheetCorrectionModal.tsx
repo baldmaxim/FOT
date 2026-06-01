@@ -80,7 +80,7 @@ interface ICorrectionModalProps {
   // Сохранение/удаление корректировки по конкретному объекту.
   onSaveObject?: (target: { object_key: string; object_id: string | null; object_name: string }, hours: number, notes: string) => void;
   onDeleteObject?: (target: { object_key: string; object_id: string | null; object_name: string }) => void;
-  // Явное обнуление дня (status='work', hours=0) — единственная точка входа к day-level
+  // Явное обнуление дня (status='manual', hours=0) — единственная точка входа к day-level
   // корректировке, когда CorrectionTab скрыт из-за объектных СКУД-записей.
   onZeroOutDay?: (notes: string) => void;
   // Стартовый режим внутреннего CorrectionTab/ObjectCorrectionsList. 'edit' принудительно
