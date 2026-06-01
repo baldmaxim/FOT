@@ -1315,7 +1315,7 @@ export const timesheetController = {
 
       const effectiveDisplayMode: 'actual' | 'capped_to_schedule' = req.user.show_actual_hours
         ? 'actual'
-        : (scope === 'department' ? 'capped_to_schedule' : 'actual');
+        : 'actual';
       const { entries, objectEntries } = await buildAttendanceEntries({
         employees: employees.map(employee => ({
           id: Number(employee.id),
