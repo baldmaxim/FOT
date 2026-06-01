@@ -194,7 +194,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   }
 
   // Уволенные сотрудники: включать в табель если были уволены в период табеля
-  // Берем их ПОСЛЕДНЕЕ назначение в отдел (может быть уже закрыто, если человека перевели потом)
+  // Берем всех, у которых назначение пересекается с периодом И началось ДО увольнения
   const firedEmployees = await query<{
     employee_id: number;
     dismissal_date: string;
@@ -207,8 +207,10 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
         AND e.dismissal_date IS NOT NULL
         AND e.dismissal_date >= $2::date
         AND ea.org_department_id = ANY($1::uuid[])
-        AND ea.effective_from <= $3`,
-    [deptIds, startDate, endDate],
+        AND ea.effective_from <= $3
+        AND (ea.effective_to IS NULL OR ea.effective_to >= $4)
+        AND ea.effective_from < e.dismissal_date`,
+    [deptIds, startDate, endDate, startDate],
   );
 
   for (const row of firedEmployees) {
