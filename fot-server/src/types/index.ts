@@ -126,6 +126,7 @@ export interface AuthenticatedRequest extends Request {
     __skud_object_scope?: { is_unrestricted: boolean; object_ids: string[] };
     __timekeeper_dept_seeds?: string[];
     __timekeeper_direct_employees?: Set<number>;
+    __accessible_employee_ids?: Set<number>;
   };
 }
 

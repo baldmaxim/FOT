@@ -78,6 +78,8 @@ export interface IPresenceByObjectResponse {
   is_unrestricted: boolean;
   /** Список skud_object_id, к которым приписан текущий пользователь (пустой если is_unrestricted или нет приписок). */
   assigned_object_ids: string[];
+  /** Режим выдачи: all — все объекты; object — по приписке объектов; employee — свои сотрудники на объектах. */
+  scope_mode: 'all' | 'object' | 'employee';
 }
 
 export interface SkudDailySummary {

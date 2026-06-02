@@ -48,6 +48,43 @@ export interface IPresenceByObjectResponse {
   generated_at: string;
   total_online: number;
   buckets: IPresenceObjectBucket[];
+  /** Режим выдачи: all — все объекты; object — по приписке объектов; employee — по своим сотрудникам. */
+  scope_mode?: 'all' | 'object' | 'employee';
+}
+
+/**
+ * Пост-фильтрация снимка присутствия по множеству employee_id (режим «свои
+ * сотрудники» для руководителя без приписанных объектов). Оставляет только
+ * synced-сотрудников из набора, выкидывает пустые компании и объекты, пересчитывает
+ * счётчики. Чистая функция: клонирует структуру, не мутирует исходный (кэшированный)
+ * ответ.
+ */
+export function filterPresenceByEmployeeIds(
+  resp: IPresenceByObjectResponse,
+  allowed: Set<number>,
+): IPresenceByObjectResponse {
+  const buckets: IPresenceObjectBucket[] = [];
+  let totalOnline = 0;
+
+  for (const bucket of resp.buckets) {
+    const companies: IPresenceObjectCompany[] = [];
+    let bucketTotal = 0;
+
+    for (const company of bucket.companies) {
+      const employees = company.employees.filter(
+        emp => !emp.is_unsynced && allowed.has(emp.employee_id),
+      );
+      if (employees.length === 0) continue;
+      companies.push({ ...company, online_count: employees.length, employees });
+      bucketTotal += employees.length;
+    }
+
+    if (bucketTotal === 0) continue;
+    buckets.push({ ...bucket, companies, online_count: bucketTotal });
+    totalOnline += bucketTotal;
+  }
+
+  return { ...resp, total_online: totalOnline, buckets, scope_mode: 'employee' };
 }
 
 const CACHE_TTL_MS = 30_000;

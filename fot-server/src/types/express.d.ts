@@ -23,6 +23,7 @@ declare global {
         __direct_subordinates?: Set<number>;
         __timekeeper_dept_seeds?: string[];
         __timekeeper_direct_employees?: Set<number>;
+        __accessible_employee_ids?: Set<number>;
       };
     }
   }

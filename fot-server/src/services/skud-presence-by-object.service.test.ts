@@ -37,9 +37,11 @@ vi.mock('./sigur-presence-resolver.service.js', () => ({
 
 import {
   getPresenceByObject,
+  filterPresenceByEmployeeIds,
   invalidatePresenceByObjectCache,
   NO_COMPANY_ID,
   SIGUR_COMPANY_ID_PREFIX,
+  type IPresenceByObjectResponse,
 } from './skud-presence-by-object.service.js';
 
 function makePresenceItem(overrides: Partial<{
@@ -557,5 +559,87 @@ describe('getPresenceByObject', () => {
     invalidatePresenceByObjectCache();
     await getPresenceByObject();
     expect(travelMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('filterPresenceByEmployeeIds', () => {
+  function makeEmployee(id: number, unsynced = false) {
+    return {
+      employee_id: id,
+      full_name: `Сотрудник ${id}`,
+      position_name: null,
+      department_name: null,
+      first_entry: '09:00:00',
+      last_access_point: 'Турникет-1',
+      since: '09:00:00',
+      is_unsynced: unsynced,
+    };
+  }
+
+  function makeSnapshot(): IPresenceByObjectResponse {
+    return {
+      generated_at: '2026-06-02T09:00:00Z',
+      total_online: 4,
+      scope_mode: 'all',
+      buckets: [
+        {
+          object_id: 'obj-1',
+          object_name: 'Склад',
+          has_map: false,
+          online_count: 3,
+          companies: [
+            { company_id: 'c-1', company_name: 'Альфа', online_count: 2, employees: [makeEmployee(1), makeEmployee(2)] },
+            { company_id: 'c-2', company_name: 'Бета', online_count: 1, employees: [makeEmployee(3)] },
+          ],
+        },
+        {
+          object_id: 'obj-2',
+          object_name: 'Офис',
+          has_map: false,
+          online_count: 1,
+          companies: [
+            { company_id: 'c-3', company_name: 'Гамма', online_count: 1, employees: [makeEmployee(99)] },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('keeps only allowed employees, drops empty companies/buckets, recounts', () => {
+    const snapshot = makeSnapshot();
+    const result = filterPresenceByEmployeeIds(snapshot, new Set([1, 3]));
+
+    expect(result.scope_mode).toBe('employee');
+    expect(result.total_online).toBe(2);
+    expect(result.buckets).toHaveLength(1);
+    const sklad = result.buckets[0];
+    expect(sklad.object_id).toBe('obj-1');
+    expect(sklad.online_count).toBe(2);
+    expect(sklad.companies).toHaveLength(2);
+    expect(sklad.companies.find(c => c.company_id === 'c-1')!.employees.map(e => e.employee_id)).toEqual([1]);
+    expect(sklad.companies.find(c => c.company_id === 'c-1')!.online_count).toBe(1);
+    expect(sklad.companies.find(c => c.company_id === 'c-2')!.employees.map(e => e.employee_id)).toEqual([3]);
+  });
+
+  it('excludes unsynced employees even if id collides with allowed set', () => {
+    const snapshot: IPresenceByObjectResponse = {
+      generated_at: 'x',
+      total_online: 1,
+      buckets: [{
+        object_id: 'obj-1', object_name: 'Склад', has_map: false, online_count: 1,
+        companies: [{ company_id: 'c-1', company_name: 'Альфа', online_count: 1, employees: [makeEmployee(5, true)] }],
+      }],
+    };
+    const result = filterPresenceByEmployeeIds(snapshot, new Set([5]));
+    expect(result.total_online).toBe(0);
+    expect(result.buckets).toHaveLength(0);
+  });
+
+  it('does not mutate the source snapshot', () => {
+    const snapshot = makeSnapshot();
+    filterPresenceByEmployeeIds(snapshot, new Set([1]));
+    expect(snapshot.total_online).toBe(4);
+    expect(snapshot.buckets).toHaveLength(2);
+    expect(snapshot.buckets[0].companies[0].employees).toHaveLength(2);
   });
 });

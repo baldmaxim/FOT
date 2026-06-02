@@ -269,6 +269,50 @@ export async function canAccessEmployeeInScope(
   return false;
 }
 
+/**
+ * Множество employee_id, доступных пользователю в его скоупе. Батч-аналог
+ * canAccessEmployeeInScope: те же источники доступа, но одним набором.
+ *  - is_admin без company-scope → 'all' (фильтрация не нужна);
+ *  - сотрудники доступных отделов (employee_department_access по поддереву);
+ *  - табельщица — сотрудники её объектов;
+ *  - прямые подчинённые (employee_direct_reports);
+ *  - собственный employee_id.
+ * Кешируется в req.user.__accessible_employee_ids на время запроса.
+ */
+export async function resolveAccessibleEmployeeIds(
+  req: AuthenticatedRequest,
+): Promise<Set<number> | 'all'> {
+  if (req.user.__accessible_employee_ids) return req.user.__accessible_employee_ids;
+
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  if (accessible === 'all') return 'all';
+
+  const ids = new Set<number>();
+
+  if (accessible.length > 0) {
+    const rows = await query<{ employee_id: number | string }>(
+      `SELECT DISTINCT employee_id FROM employee_department_access
+        WHERE department_id = ANY($1::uuid[]) AND is_active = true`,
+      [accessible],
+    );
+    for (const row of rows) {
+      const id = Number(row.employee_id);
+      if (Number.isInteger(id)) ids.add(id);
+    }
+  }
+
+  if (isTimekeeper(req)) {
+    for (const id of await resolveTimekeeperDirectEmployeeIds(req)) ids.add(id);
+  }
+
+  for (const id of await resolveEffectiveDirectSubordinates(req)) ids.add(id);
+
+  if (req.user.employee_id != null) ids.add(req.user.employee_id);
+
+  req.user.__accessible_employee_ids = ids;
+  return ids;
+}
+
 export async function canAccessDepartmentInScope(
   req: AuthenticatedRequest,
   departmentId: string | null | undefined,
