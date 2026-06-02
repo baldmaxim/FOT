@@ -149,19 +149,25 @@ const buildRawFallbackSummary = (
 
   let totalSeconds = 0;
   let openEntrySeconds: number | null = null;
+  let openEntryPoint: string | null = null;
 
   for (const event of summaryEvents) {
     if (event.direction === 'entry') {
-      const seconds = timeToSeconds(event.event_time);
-      // Повторная entry без exit: предыдущий открытый вход — orphan, ОТБРАСЫВАЕТСЯ
-      // (строгая политика «только полные циклы», паритет с recalculate_skud_daily_summary, миграция 161).
-      openEntrySeconds = seconds;
+      // Открытый вход затирается только при совпадении точки (повторный пробив того же
+      // турникета); вход по другой точке открытый вход НЕ сбрасывает.
+      // Строгая политика «только полные циклы», паритет с recalculate_skud_daily_summary (миграция 163).
+      const point = normalizeAccessPoint(event.access_point);
+      if (openEntrySeconds === null || point === openEntryPoint) {
+        openEntrySeconds = timeToSeconds(event.event_time);
+        openEntryPoint = point;
+      }
       continue;
     }
 
     if (event.direction === 'exit' && openEntrySeconds !== null) {
       totalSeconds += Math.max(0, timeToSeconds(event.event_time) - openEntrySeconds);
       openEntrySeconds = null;
+      openEntryPoint = null;
     }
   }
 
@@ -248,10 +254,14 @@ const buildObjectIntervals = ({
 
   for (const event of summaryEvents) {
     if (event.direction === 'entry') {
-      // Строгая политика «только полные циклы»: повторный вход затирает незакрытый
-      // предыдущий (orphan отбрасывается). Гэп вход→вход НЕ считается отработанным.
-      // Паритет с buildRawFallbackSummary и recalculate_skud_daily_summary (миграция 161).
-      openEntry = event;
+      // Открытый вход затирается только при совпадении точки (повторный пробив того же
+      // турникета); вход по другой точке открытый вход НЕ сбрасывает. Гэп вход→вход НЕ
+      // считается отработанным. Паритет с buildRawFallbackSummary и
+      // recalculate_skud_daily_summary (миграция 163).
+      if (openEntry === null
+          || normalizeAccessPoint(event.access_point) === normalizeAccessPoint(openEntry.access_point)) {
+        openEntry = event;
+      }
       continue;
     }
 

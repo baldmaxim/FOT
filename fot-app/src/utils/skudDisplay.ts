@@ -51,7 +51,9 @@ export const buildDisplayItems = (
         lastExitTimeSec = null;
       }
       items.push({ kind: 'event', event: ev, pairDurationSeconds: null, isInternal: internal });
-      if (!internal && pendingEntry === null) {
+      // Открытый вход затирается только при совпадении точки (повторный пробив того же
+      // турникета); вход по другой точке открытый вход НЕ сбрасывает (миграция 163).
+      if (!internal && (pendingEntry === null || ev.access_point === pendingEntry.access_point)) {
         pendingEntry = ev;
       }
     } else {
@@ -85,13 +87,20 @@ export const calculateWorkSeconds = (
   const sorted = [...filtered].sort((a, b) => a.event_time.localeCompare(b.event_time));
   let total = 0;
   let entryTime: number | null = null;
+  let entryPoint: string | null = null;
 
   for (const ev of sorted) {
     if (ev.direction === 'entry') {
-      if (entryTime === null) entryTime = timeToSeconds(ev.event_time);
+      // Открытый вход затирается только при совпадении точки (повторный пробив того же
+      // турникета); вход по другой точке открытый вход НЕ сбрасывает (миграция 163).
+      if (entryTime === null || ev.access_point === entryPoint) {
+        entryTime = timeToSeconds(ev.event_time);
+        entryPoint = ev.access_point;
+      }
     } else if (ev.direction === 'exit' && entryTime !== null) {
       total += timeToSeconds(ev.event_time) - entryTime;
       entryTime = null;
+      entryPoint = null;
     }
   }
 

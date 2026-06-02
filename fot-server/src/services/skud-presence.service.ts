@@ -225,17 +225,23 @@ async function computePresence(params: IPresenceParams): Promise<IPresenceItem[]
     if (!totalHours || totalHours === 0) {
       let pairMs = 0;
       let entryTime: number | null = null;
+      let entryPoint: string | null = null;
       for (const evt of empEvents) {
         if (evt.direction === 'entry') {
-          // Новый вход затирает незакрытый предыдущий (orphan-вход отброшен) —
-          // строгая политика «только полные циклы», паритет с миграцией 161.
-          const [eh, em, es] = evt.event_time.split(':').map(Number);
-          entryTime = (eh * 3600 + em * 60 + (es || 0)) * 1000;
+          // Открытый вход сбрасывается только при совпадении точки (повторный пробив
+          // того же турникета); вход по другой точке открытый вход НЕ сбрасывает —
+          // строгая политика «только полные циклы», паритет с миграцией 163.
+          if (entryTime === null || evt.access_point === entryPoint) {
+            const [eh, em, es] = evt.event_time.split(':').map(Number);
+            entryTime = (eh * 3600 + em * 60 + (es || 0)) * 1000;
+            entryPoint = evt.access_point;
+          }
         } else if (evt.direction === 'exit' && entryTime !== null) {
           const [xh, xm, xs] = evt.event_time.split(':').map(Number);
           const exitMs = (xh * 3600 + xm * 60 + (xs || 0)) * 1000;
           pairMs += exitMs - entryTime;
           entryTime = null;
+          entryPoint = null;
         }
       }
       if (entryTime !== null && status === 'online') {

@@ -102,19 +102,25 @@ function calculateWorkedSeconds(events: EmployeeSkudExportEvent[], internalPoint
 
   let totalSeconds = 0;
   let entryTime: number | null = null;
+  let entryPoint: string | null = null;
 
   for (const event of sorted) {
     if (event.direction === 'entry') {
-      // Строгая политика «только полные циклы»: повторный вход затирает незакрытый
-      // предыдущий (orphan отбрасывается). Паритет с buildRawFallbackSummary и
-      // recalculate_skud_daily_summary (миграция 161).
-      entryTime = timeToSeconds(event.event_time);
+      // Строгая политика «только полные циклы»: открытый вход затирается только при
+      // совпадении точки (повторный пробив того же турникета); вход по другой точке
+      // открытый вход НЕ сбрасывает. Паритет с buildRawFallbackSummary и
+      // recalculate_skud_daily_summary (миграция 163).
+      if (entryTime === null || event.access_point === entryPoint) {
+        entryTime = timeToSeconds(event.event_time);
+        entryPoint = event.access_point;
+      }
       continue;
     }
 
     if (event.direction === 'exit' && entryTime !== null) {
       totalSeconds += timeToSeconds(event.event_time) - entryTime;
       entryTime = null;
+      entryPoint = null;
     }
   }
 

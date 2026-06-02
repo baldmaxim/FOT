@@ -159,6 +159,60 @@ describe('timesheet-object.service', () => {
     ]);
   });
 
+  it('keeps the open external entry when later entries are at a different point (does not reset)', async () => {
+    // Кейс Биркиной без классификации: внешний вход @КПП A, далее входы по ДРУГОЙ точке
+    // @КПП B (неразмеченная внутренняя дверь), выход @КПП A. Открытый вход @A НЕ
+    // сбрасывается входами @B → пара 09:00→16:00 = 7ч на объекте A. До фикса «последний
+    // вход побеждает» брал @B 09:05 → пара 09:05→16:00 на чужом объекте. Миграция 163.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-14', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-14', event_time: '09:05:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-14', event_time: '11:30:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-14', event_time: '16:00:00', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-14',
+      endDate: '2026-04-14',
+      todayStr: '2026-04-14',
+      adjustments: [],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        employee_id: 1,
+        work_date: '2026-04-14',
+        object_id: 'obj-a',
+        object_name: 'Объект A',
+        hours_worked: 7,
+      }),
+    ]);
+    expect(result.objectEntries).toHaveLength(1);
+  });
+
+  it('resets the open entry on repeated swipe of the SAME point (keeps last, parity with 161)', async () => {
+    // Повторный пробив ТОЙ ЖЕ точки КПП A: открытый вход затирается поздним → пара
+    // 13:00→17:00 = 4ч (вход 09:00 отброшен). Поведение строгой политики 161 сохранено.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-14', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-14', event_time: '13:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-14', event_time: '17:00:00', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-14',
+      endDate: '2026-04-14',
+      todayStr: '2026-04-14',
+      adjustments: [],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({ object_id: 'obj-a', hours_worked: 4 }),
+    ]);
+  });
+
   it('marks unknown access points as synthetic object and keeps open current interval', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 3, 11, 11, 30, 0));

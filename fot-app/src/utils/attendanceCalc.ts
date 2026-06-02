@@ -126,6 +126,7 @@ const calcWorkSeconds = (
   let workSec = 0;
   let firstEntrySec: number | null = null;
   let openEntrySec: number | null = null;
+  let openEntryPoint: string | null = null;
   let prevPairExitSec: number | null = null;
   let outsideSec = 0;
 
@@ -133,13 +134,19 @@ const calcWorkSeconds = (
     const sec = timeToSeconds(ev.event_time);
     if (ev.direction === 'entry') {
       if (firstEntrySec === null) firstEntrySec = sec;
-      // Новый вход затирает незакрытый предыдущий — orphan-вход отброшен.
-      openEntrySec = sec;
+      // Открытый вход затирается только при совпадении точки (повторный пробив того же
+      // турникета); вход по другой точке открытый вход НЕ сбрасывает (миграция 163).
+      const point = ev.access_point ?? null;
+      if (openEntrySec === null || point === openEntryPoint) {
+        openEntrySec = sec;
+        openEntryPoint = point;
+      }
     } else if (ev.direction === 'exit' && openEntrySec !== null) {
       workSec += Math.max(0, sec - openEntrySec);
       if (prevPairExitSec !== null) outsideSec += Math.max(0, openEntrySec - prevPairExitSec);
       prevPairExitSec = sec;
       openEntrySec = null;
+      openEntryPoint = null;
     }
     // exit без открытого входа (orphan) — игнор.
   }
