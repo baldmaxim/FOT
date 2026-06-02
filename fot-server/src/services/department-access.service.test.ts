@@ -21,13 +21,19 @@ const mockedState = vi.hoisted(() => ({
     is_active: boolean;
     source: string;
   }>,
+  userProfiles: [] as Array<{ id: string; employee_id: number; is_approved: boolean }>,
 }));
 
-import { listManagedDepartmentIdsForUser, loadManagedDepartmentMap } from './department-access.service.js';
+import {
+  listManagedDepartmentIdsForUser,
+  listUserIdsAssignedToDepartment,
+  loadManagedDepartmentMap,
+} from './department-access.service.js';
 
 describe('department-access.service', () => {
   beforeEach(() => {
     mockedState.employeeDepartmentAccess = [];
+    mockedState.userProfiles = [];
     pgQuery.mockReset();
     pgQueryOne.mockReset();
     pgExecute.mockReset();
@@ -37,6 +43,18 @@ describe('department-access.service', () => {
     //  - WHERE employee_id = $1 AND is_active = true [AND source <> $N]
     //  - WHERE is_active = true [AND source <> $N] [AND employee_id = ANY($N::int[])]
     pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      // Чтения из user_profiles (listUserIdsAssignedToDepartment, второй запрос)
+      if (/user_profiles/i.test(sql)) {
+        const employeeAnyMatch = /employee_id\s*=\s*ANY\(\$(\d+)/i.exec(sql);
+        let profiles = mockedState.userProfiles.filter(p => p.is_approved);
+        if (employeeAnyMatch) {
+          const arr = (params[Number(employeeAnyMatch[1]) - 1] as number[]) || [];
+          const set = new Set(arr);
+          profiles = profiles.filter(p => set.has(p.employee_id));
+        }
+        return profiles.map(p => ({ id: p.id }));
+      }
+
       if (!/employee_department_access/i.test(sql)) {
         throw new Error(`Unexpected query SQL: ${sql}`);
       }
@@ -46,7 +64,9 @@ describe('department-access.service', () => {
       // Извлекаем фильтры по позиционным параметрам через регексп с захватом номера
       const employeeIdMatch = /employee_id\s*=\s*\$(\d+)/.exec(sql);
       const employeeAnyMatch = /employee_id\s*=\s*ANY\(\$(\d+)/i.exec(sql);
-      const excludeSourceMatch = /source\s*<>\s*\$(\d+)/.exec(sql);
+      const departmentIdMatch = /department_id\s*=\s*\$(\d+)/.exec(sql);
+      const excludeSourceParamMatch = /source\s*<>\s*\$(\d+)/.exec(sql);
+      const excludeSourceLiteralMatch = /source\s*<>\s*'([^']+)'/.exec(sql);
 
       if (employeeIdMatch) {
         const idx = Number(employeeIdMatch[1]) - 1;
@@ -59,9 +79,18 @@ describe('department-access.service', () => {
         const set = new Set(arr);
         rows = rows.filter(row => set.has(row.employee_id));
       }
-      if (excludeSourceMatch) {
-        const idx = Number(excludeSourceMatch[1]) - 1;
+      if (departmentIdMatch) {
+        const idx = Number(departmentIdMatch[1]) - 1;
         const val = params[idx];
+        rows = rows.filter(row => row.department_id === val);
+      }
+      if (excludeSourceParamMatch) {
+        const idx = Number(excludeSourceParamMatch[1]) - 1;
+        const val = params[idx];
+        rows = rows.filter(row => row.source !== val);
+      }
+      if (excludeSourceLiteralMatch) {
+        const val = excludeSourceLiteralMatch[1];
         rows = rows.filter(row => row.source !== val);
       }
 
@@ -70,6 +99,9 @@ describe('department-access.service', () => {
       }
       if (/SELECT\s+employee_id\s*,\s*department_id/i.test(sql)) {
         return rows.map(row => ({ employee_id: row.employee_id, department_id: row.department_id }));
+      }
+      if (/SELECT\s+employee_id\s/i.test(sql)) {
+        return rows.map(row => ({ employee_id: row.employee_id }));
       }
       return rows;
     });
@@ -135,5 +167,20 @@ describe('department-access.service', () => {
     expect(result.get('user-1')?.managed_department_ids).toEqual(['dept-a']);
     expect(result.get('user-2')?.managed_department_ids?.sort()).toEqual(['dept-b', 'dept-c']);
     expect(result.get('user-3')?.managed_department_ids).toEqual([]);
+  });
+
+  it('listUserIdsAssignedToDepartment: только руководители, без членства sigur_sync', async () => {
+    mockedState.employeeDepartmentAccess = [
+      { employee_id: 10, department_id: 'dept-a', is_active: true, source: 'manual_admin_ui' },
+      { employee_id: 20, department_id: 'dept-a', is_active: true, source: 'sigur_sync' },
+    ];
+    mockedState.userProfiles = [
+      { id: 'user-mgr', employee_id: 10, is_approved: true },
+      { id: 'user-member', employee_id: 20, is_approved: true },
+    ];
+
+    const result = await listUserIdsAssignedToDepartment('dept-a');
+
+    expect(result).toEqual(['user-mgr']);
   });
 });

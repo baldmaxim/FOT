@@ -146,8 +146,11 @@ export async function listUserIdsAssignedToDepartment(departmentId: string): Pro
 
   let accessRows: Array<{ employee_id: number | null }>;
   try {
+    // Только руководительские назначения. Membership-строки (source='sigur_sync' —
+    // «сотрудник числится в отделе») исключаем: рядовые члены отдела не должны
+    // получать напоминания о подаче табеля.
     accessRows = await query<{ employee_id: number | null }>(
-      'SELECT employee_id FROM employee_department_access WHERE department_id = $1 AND is_active = true',
+      "SELECT employee_id FROM employee_department_access WHERE department_id = $1 AND is_active = true AND source <> 'sigur_sync'",
       [departmentId],
     );
   } catch (err) {
