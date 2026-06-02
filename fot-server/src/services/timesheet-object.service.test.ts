@@ -507,6 +507,96 @@ describe('timesheet-object.service', () => {
     expect(result.objectEntries).toHaveLength(1);
   });
 
+  it('treats a migrated day-level correction as authoritative day total (clears multi-object skud, no double count)', async () => {
+    // Регрессия (Примавера К13/К14): СКУД распределён на ДВА объекта, плюс мигрированная
+    // из day-level правка на obj-a. Без фикса obj-b СКУД (3ч) оставался и складывался с
+    // правкой (8ч) → 11ч задвоения. Ожидаем единый итог = правка, СКУД дня очищен.
+    // Приписка сотрудника (obj-b) ≠ объект миграции (obj-a) — как у Бабышева; перераспределение
+    // day-level идёт на приписанный объект.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-14', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-14', event_time: '12:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-04-14', event_time: '12:30:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-14', event_time: '15:30:00', access_point: 'КПП B', direction: 'exit' },
+    ];
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-b' }];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-14',
+      endDate: '2026-04-14',
+      todayStr: '2026-04-14',
+      adjustments: [
+        {
+          id: 90,
+          employee_id: 1,
+          work_date: '2026-04-14',
+          hours_override: 8,
+          source_type: 'manual_object',
+          source_id: 'obj-a',
+          status: 'manual',
+          reason: 'контроль работ за пределами скуд',
+          updated_at: '2026-04-14T10:00:00.000Z',
+          metadata: {
+            object_id: 'obj-a',
+            object_name: 'Объект A',
+            migrated_from_day_level: true,
+          },
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        adjustment_id: 90,
+        object_id: 'obj-b',
+        object_name: 'Объект B',
+        hours_worked: 8,
+        is_correction: true,
+      }),
+    ]);
+    expect(result.objectEntries).toHaveLength(1);
+  });
+
+  it('keeps a migrated day-level correction on its migrated object when employee has no assignment/skud', async () => {
+    // Сотрудник без приписки и без СКУД в этот день: мигрированная правка остаётся на
+    // объекте, выбранном миграцией (metadata.object_id), а не уходит в «Не определён».
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-14',
+      endDate: '2026-04-14',
+      todayStr: '2026-04-14',
+      adjustments: [
+        {
+          id: 91,
+          employee_id: 1,
+          work_date: '2026-04-14',
+          hours_override: 8,
+          source_type: 'manual_object',
+          source_id: 'obj-b',
+          status: 'manual',
+          reason: 'работа за пределами скуд',
+          updated_at: '2026-04-14T10:00:00.000Z',
+          metadata: {
+            object_id: 'obj-b',
+            object_name: 'Объект B',
+            migrated_from_day_level: true,
+          },
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        adjustment_id: 91,
+        object_id: 'obj-b',
+        object_name: 'Объект B',
+        hours_worked: 8,
+        is_correction: true,
+      }),
+    ]);
+  });
+
   it('does not generate object entries for a non-work correction without worked hours', async () => {
     mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
 

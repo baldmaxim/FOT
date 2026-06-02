@@ -35,6 +35,7 @@ import {
 } from './time-calculation/primitives.js';
 import {
   buildObjectAttendanceData,
+  isMigratedDayLevelAdjustment,
   OBJECT_ADJUSTMENT_SOURCE_TYPE,
   type IAttendanceObjectEntry,
 } from './timesheet-object.service.js';
@@ -481,7 +482,12 @@ export async function buildAttendanceEntries(params: {
   //  • includeObjectDetails  — ДОБРАТЬ дни, где есть ТОЛЬКО объектная корректировка
   //    (без СКУД и без day-level записи), иначе такой день невидим в «по сотрудникам» (#3).
   const objectAdjustmentTotals = buildObjectAdjustmentTotals(adjustments);
-  const dailyAdjustments = adjustments.filter(adjustment => adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE);
+  // Мигрированные из day-level правки трактуем как day-level (авторитетный итог дня),
+  // а не как объектные — иначе в режиме без детализации объектов (зарплата) они вовсе
+  // игнорировались, а в объектном — задваивали день с СКУД на других объектах.
+  const dailyAdjustments = adjustments.filter(adjustment =>
+    adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE
+    || isMigratedDayLevelAdjustment(adjustment));
   // Имена авторов резолвим по ВСЕМ корректировкам (включая объектные), чтобы показывать
   // автора и у корректировок «по объекту» (#9), а не только у day-level.
   const { userNames, legacyEmployeeNames } = await loadAdjustmentNames(adjustments);

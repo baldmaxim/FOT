@@ -81,6 +81,9 @@ vi.mock('./skud-shared.service.js', () => ({
 vi.mock('./timesheet-object.service.js', () => ({
   OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object',
   buildObjectAttendanceData: vi.fn(async () => mockedState.objectAttendanceData),
+  isMigratedDayLevelAdjustment: (adjustment: { source_type: string; metadata?: Record<string, unknown> | null }) =>
+    adjustment.source_type === 'manual_object'
+    && adjustment.metadata?.migrated_from_day_level === true,
 }));
 
 import {

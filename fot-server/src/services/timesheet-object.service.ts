@@ -22,6 +22,18 @@ export const OBJECT_ADJUSTMENT_SOURCE_TYPE = 'manual_object';
 export const UNKNOWN_OBJECT_KEY = '__unknown_object__';
 export const UNKNOWN_OBJECT_NAME = 'Не определён';
 
+// Корректировка, мигрированная из day-level скриптом migrate-day-level-to-object-corrections.mjs:
+// формально source_type='manual_object', но семантически это АВТОРИТЕТНЫЙ ИТОГ ДНЯ (исходно
+// 'manual'/'leave_request'). Её надо обрабатывать как day-level — чистить СКУД дня, а не
+// перекрывать лишь свой объект. Иначе СКУД на ДРУГИХ объектах того же дня складывается сверху
+// и день задваивается (напр. К14 10ч корр. + К13 8ч35 СКУД = 18ч34 вместо 10ч).
+export const isMigratedDayLevelAdjustment = (adjustment: {
+  source_type: string;
+  metadata?: Record<string, unknown> | null;
+}): boolean =>
+  adjustment.source_type === OBJECT_ADJUSTMENT_SOURCE_TYPE
+  && adjustment.metadata?.migrated_from_day_level === true;
+
 export interface IObjectAdjustmentSource {
   id: number;
   employee_id: number;
@@ -742,10 +754,16 @@ export async function buildObjectAttendanceData(params: {
     };
   }
 
+  // Мигрированные из day-level корректировки идут в dailyAdjustments (чистят СКУД дня,
+  // авторитетный итог), а не в объектные (которые лишь перекрывают свой объект) — иначе
+  // СКУД на других объектах дня задваивается.
   const objectAdjustments = adjustments
-    .filter(adjustment => adjustment.source_type === OBJECT_ADJUSTMENT_SOURCE_TYPE)
+    .filter(adjustment => adjustment.source_type === OBJECT_ADJUSTMENT_SOURCE_TYPE
+      && !isMigratedDayLevelAdjustment(adjustment))
     .sort((left, right) => new Date(left.updated_at).getTime() - new Date(right.updated_at).getTime());
-  const dailyAdjustments = adjustments.filter(adjustment => adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE);
+  const dailyAdjustments = adjustments.filter(adjustment =>
+    adjustment.source_type !== OBJECT_ADJUSTMENT_SOURCE_TYPE
+    || isMigratedDayLevelAdjustment(adjustment));
 
   for (const adjustment of objectAdjustments) {
     const metadata = readAdjustmentObjectMetadata(adjustment.metadata);
@@ -860,13 +878,22 @@ export async function buildObjectAttendanceData(params: {
       // 1) если в этот день есть СКУД — к объекту с максимумом минут (реальный СКУД);
       // 2) удалёнщик — к датированной привязке (employee_object_attribution);
       // 3) иначе — к основному объекту за 90 дней (historicalPrimaryByEmployee);
-      // 4) совсем нет данных — оставляем UNKNOWN (редкий тру-фоллбек).
+      // 4) для мигрированной правки — к объекту, выбранному миграцией (metadata.object_id),
+      //    чтобы не вернулась группа «Не определён» у тех, ради кого делалась миграция;
+      // 5) совсем нет данных — оставляем UNKNOWN (редкий тру-фоллбек).
       const remoteAttribution = attributionRowsByEmployee.size > 0
         ? resolveAttributionAt(attributionRowsByEmployee.get(adjustment.employee_id), adjustment.work_date)
+        : null;
+      const migratedMeta = isMigratedDayLevelAdjustment(adjustment)
+        ? readAdjustmentObjectMetadata(adjustment.metadata)
+        : null;
+      const migratedFallback = migratedMeta?.object_id
+        ? { object_id: migratedMeta.object_id, object_name: migratedMeta.object_name }
         : null;
       const fallback = sameDayMajority
         ?? remoteAttribution
         ?? historicalPrimaryByEmployee.get(adjustment.employee_id)
+        ?? migratedFallback
         ?? null;
       targets = fallback
         ? [{ objectKey: fallback.object_id, objectId: fallback.object_id, objectName: fallback.object_name }]
