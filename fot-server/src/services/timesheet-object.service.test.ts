@@ -130,6 +130,63 @@ describe('timesheet-object.service', () => {
     expect(result.employeeDistinctObjectKeys.get(1)).toEqual(new Set(['obj-a', 'obj-b']));
   });
 
+  it('pairs a night shift across midnight and attributes it to the shift start day', async () => {
+    // Ночная смена: вход 19:00 (день N) → выход 06:00 (день N+1), один объект. Окно смены
+    // 32ч (миграция 161) парит через полночь; до фикса пара 22:30→06:00 терялась (закрытие
+    // лежало в бакете следующего дня) и день показывал только 3ч вместо 10.5ч.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-10', event_time: '19:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '22:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '22:30:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-11', event_time: '06:00:00', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-10',
+      endDate: '2026-04-10',
+      todayStr: '2026-04-15',
+      adjustments: [],
+    });
+
+    // (22:00−19:00) + (06:00+1д−22:30) = 3ч + 7.5ч = 10.5ч, привязано к дню начала 10-го.
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        employee_id: 1,
+        work_date: '2026-04-10',
+        object_id: 'obj-a',
+        hours_worked: 10.5,
+      }),
+    ]);
+  });
+
+  it('splits a multi-object night shift across midnight onto the start day', async () => {
+    // Вход A вечером → выход A → вход B → выход B утром следующего дня. Часы разносятся
+    // по объектам, оба интервала привязаны к дню начала смены; утренний выход-только день
+    // (без входа) собственной записи не порождает.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-10', event_time: '20:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '23:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '23:30:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-11', event_time: '05:30:00', access_point: 'КПП B', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-10',
+      endDate: '2026-04-11',
+      todayStr: '2026-04-15',
+      adjustments: [],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({ work_date: '2026-04-10', object_id: 'obj-a', hours_worked: 3 }),
+      expect.objectContaining({ work_date: '2026-04-10', object_id: 'obj-b', hours_worked: 6 }),
+    ]);
+    expect(result.objectEntries.some(entry => entry.work_date === '2026-04-11')).toBe(false);
+    expect(result.employeeDistinctObjectKeys.get(1)).toEqual(new Set(['obj-a', 'obj-b']));
+  });
+
   it('discards orphan entry on repeated entry without exit (strict closed-pairs policy)', async () => {
     // Повторный вход без промежуточного выхода: гэп 09:00→13:00 НЕ считается, орфан 09:00
     // затирается, учитывается только закрытая пара 13:00→17:00 = 4ч. До фикса считалось 8ч

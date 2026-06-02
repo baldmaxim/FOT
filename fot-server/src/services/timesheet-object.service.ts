@@ -113,6 +113,19 @@ const formatTimeValue = (date: Date): string => (
   `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
 );
 
+const NIGHT_WINDOW_SECONDS = 32 * 3600;
+
+// Метка времени события как epoch-секунды (дата 'YYYY-MM-DD' + время суток). Нужна для
+// парности через полночь: сравнение по времени суток ломается на ночных сменах.
+const dateStrToEpochDay = (value: string): number => {
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+  return Date.UTC(year, month - 1, day) / 86_400_000;
+};
+const eventEpochSeconds = (event: IRawEventRow): number =>
+  dateStrToEpochDay(String(event.event_date)) * 86_400 + timeToSeconds(event.event_time);
+const nowEpochSeconds = (dateStr: string): number =>
+  dateStrToEpochDay(dateStr) * 86_400 + timeToSeconds(formatTimeValue(new Date()));
+
 const dayKey = (employeeId: number, workDate: string): string => `${employeeId}_${workDate}`;
 const objectEntryKey = (employeeId: number, workDate: string, objectKey: string): string => `${employeeId}_${workDate}_${objectKey}`;
 
@@ -130,57 +143,97 @@ const isMissingTableError = (error: unknown): boolean => {
     || candidate.details?.includes('does not exist') === true;
 };
 
-const getSummaryEventStream = (events: IRawEventRow[], internalPoints: Set<string>): IRawEventRow[] => {
-  const externalEvents = events.filter(event => {
+// Внешний поток событий сотрудника в хронологическом порядке (по epoch, не по времени суток —
+// иначе ночные смены сортируются неверно). Внутренние точки исключаются из парного расчёта.
+const getExternalStreamChrono = (events: IRawEventRow[], internalPoints: Set<string>): IRawEventRow[] => {
+  const external = events.filter(event => {
     const point = normalizeAccessPoint(event.access_point);
     return !point || !internalPoints.has(point);
   });
-  return [...externalEvents].sort((left, right) => left.event_time.localeCompare(right.event_time));
+  return external.sort((left, right) => eventEpochSeconds(left) - eventEpochSeconds(right));
 };
 
+// Дни-начала смены = календарные даты с ≥1 внешним входом, попадающие в [startDate, endDate].
+// Утренний выход ночной смены (день без входа) началом не считается — он потребляется
+// окном предыдущего дня (см. sliceShiftWindow).
+const collectShiftStartDays = (stream: IRawEventRow[], startDate: string, endDate: string): string[] => {
+  const days = new Set<string>();
+  for (const event of stream) {
+    if (event.direction !== 'entry') continue;
+    const day = String(event.event_date).slice(0, 10);
+    if (day >= startDate && day <= endDate) days.add(day);
+  }
+  return [...days].sort();
+};
+
+// Окно смены [первый вход дня; начало следующей смены | +32ч). Калька
+// recalculate_skud_daily_summary (миграция 161): возвращает внешние события окна,
+// которые могут пересекать полночь.
+const sliceShiftWindow = (stream: IRawEventRow[], startDay: string): IRawEventRow[] => {
+  const firstEntry = stream.find(
+    event => event.direction === 'entry' && String(event.event_date).slice(0, 10) === startDay,
+  );
+  if (!firstEntry) return [];
+  const startTs = eventEpochSeconds(firstEntry);
+  let windowEndTs = startTs + NIGHT_WINDOW_SECONDS;
+  // Поток отсортирован по ts → первый вход на более поздней дате и есть начало следующей смены.
+  for (const event of stream) {
+    if (event.direction !== 'entry') continue;
+    if (String(event.event_date).slice(0, 10) <= startDay) continue;
+    const ts = eventEpochSeconds(event);
+    if (ts > startTs) {
+      windowEndTs = Math.min(windowEndTs, ts);
+      break;
+    }
+  }
+  return stream.filter(event => {
+    const ts = eventEpochSeconds(event);
+    return ts >= startTs && ts < windowEndTs;
+  });
+};
+
+// windowEvents — внешние события окна смены (sliceShiftWindow), отсортированы по epoch,
+// могут пересекать полночь. workDate — день начала смены.
 const buildRawFallbackSummary = (
-  events: IRawEventRow[],
-  internalPoints: Set<string>,
+  windowEvents: IRawEventRow[],
   workDate: string,
   todayStr: string,
 ): IRawFallbackSummary | null => {
-  const summaryEvents = getSummaryEventStream(events, internalPoints);
-  if (summaryEvents.length === 0) return null;
+  if (windowEvents.length === 0) return null;
 
   let totalSeconds = 0;
-  let openEntrySeconds: number | null = null;
+  let openEntryEpoch: number | null = null;
   let openEntryPoint: string | null = null;
 
-  for (const event of summaryEvents) {
+  for (const event of windowEvents) {
     if (event.direction === 'entry') {
       // Открытый вход затирается только при совпадении точки (повторный пробив того же
       // турникета); вход по другой точке открытый вход НЕ сбрасывает.
       // Строгая политика «только полные циклы», паритет с recalculate_skud_daily_summary (миграция 163).
       const point = normalizeAccessPoint(event.access_point);
-      if (openEntrySeconds === null || point === openEntryPoint) {
-        openEntrySeconds = timeToSeconds(event.event_time);
+      if (openEntryEpoch === null || point === openEntryPoint) {
+        openEntryEpoch = eventEpochSeconds(event);
         openEntryPoint = point;
       }
       continue;
     }
 
-    if (event.direction === 'exit' && openEntrySeconds !== null) {
-      totalSeconds += Math.max(0, timeToSeconds(event.event_time) - openEntrySeconds);
-      openEntrySeconds = null;
+    if (event.direction === 'exit' && openEntryEpoch !== null) {
+      totalSeconds += Math.max(0, eventEpochSeconds(event) - openEntryEpoch);
+      openEntryEpoch = null;
       openEntryPoint = null;
     }
   }
 
-  if (openEntrySeconds !== null && workDate === todayStr) {
-    const now = new Date();
-    const nowSeconds = timeToSeconds(formatTimeValue(now));
-    if (nowSeconds > openEntrySeconds) {
-      totalSeconds += nowSeconds - openEntrySeconds;
+  if (openEntryEpoch !== null && workDate === todayStr) {
+    const now = nowEpochSeconds(todayStr);
+    if (now > openEntryEpoch) {
+      totalSeconds += now - openEntryEpoch;
     }
   }
 
-  const firstEntry = summaryEvents.find(event => event.direction === 'entry')?.event_time ?? null;
-  const exitEvents = summaryEvents.filter(event => event.direction === 'exit');
+  const firstEntry = windowEvents.find(event => event.direction === 'entry')?.event_time ?? null;
+  const exitEvents = windowEvents.filter(event => event.direction === 'exit');
   const lastExit = exitEvents.length > 0 ? exitEvents[exitEvents.length - 1].event_time : null;
   const totalMinutes = Math.round(totalSeconds / 60);
 
@@ -189,7 +242,7 @@ const buildRawFallbackSummary = (
   }
 
   return {
-    employee_id: Number(summaryEvents[0].employee_id || 0),
+    employee_id: Number(windowEvents[0].employee_id || 0),
     date: workDate,
     first_entry: firstEntry,
     last_exit: lastExit,
@@ -198,16 +251,16 @@ const buildRawFallbackSummary = (
   };
 };
 
+// events — внешние события окна смены (sliceShiftWindow), отсортированы по epoch,
+// могут пересекать полночь. workDate — день начала смены.
 const buildObjectIntervals = ({
   events,
-  internalPoints,
   accessPointToObjectId,
   objectNameById,
   workDate,
   todayStr,
 }: {
   events: IRawEventRow[];
-  internalPoints: Set<string>;
   accessPointToObjectId: Map<string, string>;
   objectNameById: Map<string, string>;
   workDate: string;
@@ -218,8 +271,7 @@ const buildObjectIntervals = ({
   object_name: string;
   minutes: number;
 }> => {
-  const summaryEvents = getSummaryEventStream(events, internalPoints);
-  if (summaryEvents.length === 0) return [];
+  if (events.length === 0) return [];
 
   const intervals: Array<{
     object_key: string;
@@ -229,9 +281,9 @@ const buildObjectIntervals = ({
   }> = [];
   let openEntry: IRawEventRow | null = null;
 
-  const pushInterval = (entryEvent: IRawEventRow, exitEvent: IRawEventRow | null, exitTime: string): void => {
-    const startSeconds = timeToSeconds(entryEvent.event_time);
-    const endSeconds = timeToSeconds(exitTime);
+  const pushInterval = (entryEvent: IRawEventRow, exitEvent: IRawEventRow | null, exitEpoch: number): void => {
+    const startSeconds = eventEpochSeconds(entryEvent);
+    const endSeconds = exitEpoch;
     if (endSeconds <= startSeconds) return;
 
     const entryPoint = normalizeAccessPoint(entryEvent.access_point);
@@ -252,7 +304,7 @@ const buildObjectIntervals = ({
     });
   };
 
-  for (const event of summaryEvents) {
+  for (const event of events) {
     if (event.direction === 'entry') {
       // Открытый вход затирается только при совпадении точки (повторный пробив того же
       // турникета); вход по другой точке открытый вход НЕ сбрасывает. Гэп вход→вход НЕ
@@ -266,14 +318,14 @@ const buildObjectIntervals = ({
     }
 
     if (event.direction === 'exit' && openEntry) {
-      pushInterval(openEntry, event, event.event_time);
+      pushInterval(openEntry, event, eventEpochSeconds(event));
       openEntry = null;
     }
   }
 
   if (openEntry) {
     if (workDate === todayStr) {
-      pushInterval(openEntry, null, formatTimeValue(new Date()));
+      pushInterval(openEntry, null, nowEpochSeconds(todayStr));
     } else {
       // Прошлый день с entry без exit — фактических часов посчитать нельзя, но запись с
       // привязкой к объекту нужна: иначе сотрудник пропадает из режима «по объектам» и
@@ -554,6 +606,11 @@ export async function buildObjectAttendanceData(params: {
   const { employeeIds, startDate, endDate, adjustments } = params;
   const todayStr = params.todayStr ?? formatDateToISO(new Date());
   const includeObjectDetails = params.includeObjectDetails ?? true;
+  // Тянем события на 2 дня вперёд за пределы периода: утреннее закрытие ночной смены
+  // последних дней периода приходит уже следующей датой (см. sliceShiftWindow / миграция 161).
+  const rawEventsEndDate = formatDateToISO(
+    new Date(new Date(`${endDate}T00:00:00Z`).getTime() + 2 * 86400_000),
+  );
   if (employeeIds.length === 0) {
     return {
       objectEntries: [],
@@ -569,7 +626,7 @@ export async function buildObjectAttendanceData(params: {
     includeObjectDetails
       ? fetchObjectMappings()
       : Promise.resolve({ accessPointToObjectId: new Map<string, string>(), objectNameById: new Map<string, string>() }),
-    fetchRawEvents({ employeeIds, startDate, endDate }),
+    fetchRawEvents({ employeeIds, startDate, endDate: rawEventsEndDate }),
     includeObjectDetails
       ? listObjectIdsForEmployees(employeeIds)
       : Promise.resolve(new Map<number, string[]>()),
@@ -606,67 +663,72 @@ export async function buildObjectAttendanceData(params: {
   const rawFallbackSummaries = new Map<number, Map<string, IRawFallbackSummary>>();
   const baseObjectEntries = new Map<string, IAggregatedObjectEntry>();
   const baseDistinctObjectKeys = new Map<string, Set<string>>();
-  const eventsByEmployeeDate = new Map<string, IRawEventRow[]>();
 
+  // Группируем по сотруднику (не по календарному дню): парность смены считается в 32ч-окне,
+  // которое может пересекать полночь. Результат привязывается к дню НАЧАЛА смены.
+  const eventsByEmployee = new Map<number, IRawEventRow[]>();
   for (const event of rawEvents) {
     if (!event.employee_id) continue;
-    const key = dayKey(event.employee_id, event.event_date);
-    const bucket = eventsByEmployeeDate.get(key) || [];
+    const bucket = eventsByEmployee.get(event.employee_id) || [];
     bucket.push(event);
-    eventsByEmployeeDate.set(key, bucket);
+    eventsByEmployee.set(event.employee_id, bucket);
   }
 
-  for (const [key, events] of eventsByEmployeeDate) {
-    const separatorIndex = key.indexOf('_');
-    const employeeId = Number(key.slice(0, separatorIndex));
-    const workDate = key.slice(separatorIndex + 1);
-    const rawSummary = buildRawFallbackSummary(events, internalPoints, workDate, todayStr);
+  for (const [employeeId, employeeEvents] of eventsByEmployee) {
+    const externalStream = getExternalStreamChrono(employeeEvents, internalPoints);
+    if (externalStream.length === 0) continue;
 
-    if (rawSummary) {
-      if (!rawFallbackSummaries.has(employeeId)) {
-        rawFallbackSummaries.set(employeeId, new Map());
-      }
-      rawFallbackSummaries.get(employeeId)!.set(workDate, rawSummary);
-    }
+    for (const startDay of collectShiftStartDays(externalStream, startDate, endDate)) {
+      const windowEvents = sliceShiftWindow(externalStream, startDay);
+      if (windowEvents.length === 0) continue;
 
-    if (!includeObjectDetails) continue;
-
-    const intervals = buildObjectIntervals({
-      events,
-      internalPoints,
-      accessPointToObjectId: objectMappings.accessPointToObjectId,
-      objectNameById: objectMappings.objectNameById,
-      workDate,
-      todayStr,
-    });
-
-    if (intervals.length === 0) continue;
-
-    const dayObjects = baseDistinctObjectKeys.get(key) || new Set<string>();
-    for (const interval of intervals) {
-      dayObjects.add(interval.object_key);
-      const intervalKey = objectEntryKey(employeeId, workDate, interval.object_key);
-      const existing = baseObjectEntries.get(intervalKey);
-      if (existing) {
-        existing.base_minutes += interval.minutes;
-        existing.effective_minutes += interval.minutes;
-        continue;
+      const rawSummary = buildRawFallbackSummary(windowEvents, startDay, todayStr);
+      if (rawSummary) {
+        if (!rawFallbackSummaries.has(employeeId)) {
+          rawFallbackSummaries.set(employeeId, new Map());
+        }
+        rawFallbackSummaries.get(employeeId)!.set(startDay, rawSummary);
       }
 
-      baseObjectEntries.set(intervalKey, {
-        adjustment_id: null,
-        employee_id: employeeId,
-        work_date: workDate,
-        object_key: interval.object_key,
-        object_id: interval.object_id,
-        object_name: interval.object_name,
-        base_minutes: interval.minutes,
-        effective_minutes: interval.minutes,
-        is_correction: false,
-        notes: null,
+      if (!includeObjectDetails) continue;
+
+      const intervals = buildObjectIntervals({
+        events: windowEvents,
+        accessPointToObjectId: objectMappings.accessPointToObjectId,
+        objectNameById: objectMappings.objectNameById,
+        workDate: startDay,
+        todayStr,
       });
+
+      if (intervals.length === 0) continue;
+
+      const splitKey = dayKey(employeeId, startDay);
+      const dayObjects = baseDistinctObjectKeys.get(splitKey) || new Set<string>();
+      for (const interval of intervals) {
+        dayObjects.add(interval.object_key);
+        const intervalKey = objectEntryKey(employeeId, startDay, interval.object_key);
+        const existing = baseObjectEntries.get(intervalKey);
+        if (existing) {
+          existing.base_minutes += interval.minutes;
+          existing.effective_minutes += interval.minutes;
+          continue;
+        }
+
+        baseObjectEntries.set(intervalKey, {
+          adjustment_id: null,
+          employee_id: employeeId,
+          work_date: startDay,
+          object_key: interval.object_key,
+          object_id: interval.object_id,
+          object_name: interval.object_name,
+          base_minutes: interval.minutes,
+          effective_minutes: interval.minutes,
+          is_correction: false,
+          notes: null,
+        });
+      }
+      baseDistinctObjectKeys.set(splitKey, dayObjects);
     }
-    baseDistinctObjectKeys.set(key, dayObjects);
   }
 
   if (!includeObjectDetails) {
