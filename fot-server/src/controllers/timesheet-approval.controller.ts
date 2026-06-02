@@ -67,6 +67,7 @@ import {
   checkWeekendWorkRequirement,
 } from '../services/timesheet-approval-weekend-check.service.js';
 import { validateCorrectionAttachments } from '../services/timesheet-approval-correction-validation.service.js';
+import { resolveOverlapSubmission } from '../services/timesheet-approval-overlap.service.js';
 import { loadRoleRestrictions } from '../services/correction-restrictions.service.js';
 import { getAllowedSubmissionRange, isRangeSubmittable } from '../services/timesheet-period.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
@@ -79,6 +80,7 @@ import {
 import { r2Service } from '../services/r2.service.js';
 import {
   listApprovalEmployees,
+  resolveManagerPersonalSnapshotIds,
   snapshotApprovalEmployees,
 } from '../services/timesheet-approval-employees-snapshot.service.js';
 import {
@@ -257,16 +259,18 @@ async function resolvePersonalSubmissionContext(req: AuthenticatedRequest): Prom
 }
 
 /**
- * Гарантирует, что у руководителя «по людям» за указанный диапазон есть persona-подача,
- * включающая его самого. Используется после успешной полной подачи отдела:
- * если руководитель сидит вне подаваемой бригады, его собственный табель иначе
- * не попадёт ни в одну подачу. Идемпотентно — повторные вызовы для того же диапазона
- * не создают дублей, partial EXCLUDE на manager_employee_id это поддерживает.
+ * Гарантирует, что у руководителя за указанный диапазон есть persona-подача,
+ * включающая его самого + его активных прямых подчинённых (employee_direct_reports),
+ * за вычетом тех, кто уже покрыт department-подачей за этот период. Используется
+ * после успешной полной подачи отдела: подчинённые, назначенные руководителю лично
+ * (и сидящие вне подаваемых бригад), иначе не попадут ни в одну подачу и будут не
+ * видны HR на странице согласования. Идемпотентно — повторные вызовы для того же
+ * диапазона не создают дублей, partial EXCLUDE на manager_employee_id это поддерживает.
  *
  * Возвращает:
- *  - null, если подача не нужна (нет employee_id, нет direct reports, руководитель
- *    уже включён в snapshot какой-то существующей department-подачи за этот период,
- *    либо persona-подача уже в submitted/approved).
+ *  - null, если подача не нужна (нет employee_id, итоговый набор пуст — нет активных
+ *    direct reports и сам руководитель уже покрыт department-подачей; либо persona
+ *    уже актуальна и состав лишь дополнен idempotent-upsert'ом).
  *  - { approval, transitioned: true } — если подача создана или переведена в submitted
  *    (нужно отправить notify HR + событие в историю).
  */
@@ -277,23 +281,12 @@ async function ensureManagerSelfApprovalForRange(
   const managerEmpId = req.user.employee_id;
   if (!managerEmpId) return null;
 
-  const subordinates = await listDirectSubordinates(managerEmpId);
-  if (subordinates.length === 0) return null;
-
-  // Если руководитель уже сидит в snapshot какой-то submitted/approved/returned
-  // department-подачи за этот период (т.е. он реально в этой бригаде) — отдельная
-  // persona-подача не нужна, табель и так согласуется.
-  const selfInDeptSnapshot = await queryOne<{ approval_id: number }>(
-    `SELECT a.id AS approval_id
-       FROM timesheet_approvals a
-       JOIN timesheet_approval_employees s ON s.approval_id = a.id AND s.employee_id = $1
-       WHERE a.start_date = $2 AND a.end_date = $3
-         AND a.manager_employee_id IS NULL
-         AND a.status IN ('submitted','approved','returned')
-       LIMIT 1`,
-    [managerEmpId, range.startDate, range.endDate],
-  );
-  if (selfInDeptSnapshot) return null;
+  // Состав persona-подачи: сам руководитель + активные прямые подчинённые, за вычетом
+  // уже покрытых department-подачами за этот период (дедуп против двойного показа).
+  // Если набор пуст (нет подчинённых вне бригад и сам руководитель в бригаде) —
+  // persona-подача не нужна.
+  const snapshotIds = await resolveManagerPersonalSnapshotIds(managerEmpId, range.startDate, range.endDate);
+  if (snapshotIds.length === 0) return null;
 
   const now = new Date().toISOString();
 
@@ -305,20 +298,17 @@ async function ensureManagerSelfApprovalForRange(
   );
 
   if (existing) {
-    // Если уже submitted/approved — подача актуальна, не трогаем. Гарантируем только,
-    // что сам руководитель есть в snapshot (idempotent upsert на одной строке).
+    // Если уже submitted/approved — статус не трогаем, но перезаписываем состав полным
+    // набором (self + активные direct reports минус покрытые dept-подачами), чтобы
+    // назначенные сотрудники попали в snapshot. snapshotApprovalEmployees делает
+    // DELETE+INSERT — передаём полный набор, не дельту.
     if (existing.status === 'submitted' || existing.status === 'approved') {
       await withTransaction(async client => {
-        await client.query(
-          `INSERT INTO timesheet_approval_employees (approval_id, employee_id, full_name)
-           SELECT $1, e.id, e.full_name FROM employees e WHERE e.id = $2
-           ON CONFLICT (approval_id, employee_id) DO UPDATE SET full_name = EXCLUDED.full_name`,
-          [existing.id, managerEmpId],
-        );
+        await snapshotApprovalEmployees(client, existing.id, snapshotIds);
       });
       return null;
     }
-    // draft / returned / rejected → переводим в submitted и добавляем себя в snapshot.
+    // draft / returned / rejected → переводим в submitted и пишем полный snapshot.
     const updated = await withTransaction(async client => {
       const r = await client.query<TimesheetApproval>(
         `UPDATE timesheet_approvals
@@ -329,12 +319,7 @@ async function ensureManagerSelfApprovalForRange(
            RETURNING *`,
         [req.user.id, now, now, existing.id],
       );
-      await client.query(
-        `INSERT INTO timesheet_approval_employees (approval_id, employee_id, full_name)
-         SELECT $1, e.id, e.full_name FROM employees e WHERE e.id = $2
-         ON CONFLICT (approval_id, employee_id) DO UPDATE SET full_name = EXCLUDED.full_name`,
-        [existing.id, managerEmpId],
-      );
+      await snapshotApprovalEmployees(client, existing.id, snapshotIds);
       return r.rows[0] ?? null;
     });
     return updated ? { approval: updated, transitioned: true } : null;
@@ -351,7 +336,7 @@ async function ensureManagerSelfApprovalForRange(
         [managerEmpId, range.startDate, range.endDate, req.user.id, now, now],
       );
       const row = r.rows[0] ?? null;
-      if (row) await snapshotApprovalEmployees(client, row.id, [managerEmpId]);
+      if (row) await snapshotApprovalEmployees(client, row.id, snapshotIds);
       return row;
     });
     return created ? { approval: created, transitioned: true } : null;
@@ -634,20 +619,29 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       deptId = resolvedDeptId;
     }
 
-    const existing = personal
-      ? await queryOne<TimesheetApproval>(
+    // Все пересекающиеся подачи того же скоупа. Зеркалит EXCLUDE-констрейнты
+    // миграции 122 (daterange && daterange), а не точное совпадение дат: иначе
+    // смена диапазона (полупериод → месяц) поверх уже поданного табеля не
+    // находила строку и падала в INSERT → 23P01 → невнятный 409.
+    const overlaps = personal
+      ? await query<TimesheetApproval>(
           `SELECT * FROM timesheet_approvals
-             WHERE manager_employee_id = $1 AND start_date = $2 AND end_date = $3
-             LIMIT 1`,
+             WHERE manager_employee_id = $1
+               AND daterange(start_date, end_date, '[]') && daterange($2::date, $3::date, '[]')
+             ORDER BY id`,
           [managerEmployeeId, range.startDate, range.endDate],
         )
-      : await queryOne<TimesheetApproval>(
+      : await query<TimesheetApproval>(
           `SELECT * FROM timesheet_approvals
-             WHERE department_id = $1 AND start_date = $2 AND end_date = $3
-               AND manager_employee_id IS NULL
-             LIMIT 1`,
+             WHERE department_id = $1 AND manager_employee_id IS NULL
+               AND daterange(start_date, end_date, '[]') && daterange($2::date, $3::date, '[]')
+             ORDER BY id`,
           [deptId, range.startDate, range.endDate],
         );
+
+    // Политика «вытеснять»: переиспользуем активную/точную строку, прочие
+    // пересекающиеся НЕутверждённые подачи удаляем. approved — блокирует.
+    const { approvedOverlap, exactSame, reuseRow, toDeleteIds } = resolveOverlapSubmission(overlaps, range);
 
     const correctionScope = personal
       ? { kind: 'personal' as const, employeeIds }
@@ -669,7 +663,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       departmentId: deptId,
       startDate: range.startDate,
       endDate: range.endDate,
-      approvalId: existing?.id ?? null,
+      approvalId: reuseRow?.id ?? null,
       employeeIds: personal ? employeeIds : undefined,
     });
     if (memoCheck.required && !memoCheck.satisfied) {
@@ -682,16 +676,17 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    if (existing?.status === 'approved') {
+    if (approvedOverlap) {
       res.status(409).json({
         success: false,
-        error: 'Утверждённый табель нельзя переподать напрямую. Сначала верните его на доработку через HR.',
+        error: `Утверждённый табель за ${formatTimesheetRangeLabel(approvedOverlap.start_date, approvedOverlap.end_date)} нельзя переподать напрямую. Сначала верните его на доработку через HR.`,
       });
       return;
     }
 
-    if (existing?.status === 'submitted') {
-      res.json({ success: true, data: existing });
+    // Тот же диапазон уже подан и не рассмотрен — идемпотентно возвращаем его.
+    if (exactSame?.status === 'submitted') {
+      res.json({ success: true, data: exactSame });
       return;
     }
 
@@ -701,19 +696,23 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     try {
       approval = await withTransaction(async client => {
         let row: TimesheetApproval | null;
-        if (existing) {
+        if (reuseRow) {
+          // Переиспользуем существующую строку, перезаписывая диапазон под новый
+          // (история событий остаётся привязана к этому approval_id).
           const result = await client.query<TimesheetApproval>(
             `UPDATE timesheet_approvals
-               SET status = 'submitted',
-                   submitted_by = $1,
-                   submitted_at = $2,
+               SET start_date = $1,
+                   end_date = $2,
+                   status = 'submitted',
+                   submitted_by = $3,
+                   submitted_at = $4,
                    reviewed_by = NULL,
                    reviewed_at = NULL,
                    review_comment = NULL,
-                   updated_at = $3
-               WHERE id = $4
+                   updated_at = $4
+               WHERE id = $5
                RETURNING *`,
-            [req.user.id, now, now, existing.id],
+            [range.startDate, range.endDate, req.user.id, now, reuseRow.id],
           );
           row = result.rows[0] ?? null;
         } else {
@@ -726,6 +725,14 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
             [deptId, managerEmployeeId, range.startDate, range.endDate, req.user.id, now, now],
           );
           row = result.rows[0] ?? null;
+        }
+        // Вытеснение: удаляем прочие пересекающиеся НЕутверждённые подачи того же
+        // скоупа (draft/rejected-дубли). approved сюда не попадает — отсечён выше.
+        if (toDeleteIds.length > 0) {
+          await client.query(
+            `DELETE FROM timesheet_approvals WHERE id = ANY($1::bigint[])`,
+            [toDeleteIds],
+          );
         }
         if (row) {
           const snapshotIds = personal
@@ -743,8 +750,8 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         res.status(409).json({
           success: false,
           error: personal
-            ? 'У вас уже есть персональная подача за этот период.'
-            : 'Выбранный диапазон пересекается с уже поданным или утверждённым табелем этого отдела.',
+            ? 'Этот период пересекается с другой вашей персональной подачей. Отзовите её и подайте заново.'
+            : 'Этот диапазон пересекается с другой подачей табеля этого отдела. Отзовите её и подайте заново.',
         });
         return;
       }
@@ -760,7 +767,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       approvalId: approval.id,
       departmentId: deptId,
       range,
-      fromStatus: existing?.status ?? null,
+      fromStatus: reuseRow?.status ?? null,
       toStatus: 'submitted',
       action: 'submitted',
       actorUserId: req.user.id,
@@ -771,7 +778,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       manager_employee_id: managerEmployeeId,
       start_date: range.startDate,
       end_date: range.endDate,
-      from_status: existing?.status ?? null,
+      from_status: reuseRow?.status ?? null,
       to_status: 'submitted',
     });
 
@@ -827,11 +834,12 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
             to_status: 'submitted',
             auto_self_personal: true,
           });
+          const selfEmployeeCount = (await listApprovalEmployees(selfResult.approval.id)).length;
           void notifyHrAboutSubmittedApproval({
             departmentId: null,
             managerEmployeeId: req.user.employee_id,
             affectedDepartmentIds: selfAffectedDepartmentIds,
-            employeeCount: 1,
+            employeeCount: selfEmployeeCount,
             range,
           }).catch(notifyError => {
             console.error('timesheet-approval.submit self-personal notify error:', notifyError);
