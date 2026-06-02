@@ -45,7 +45,7 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
   focusKey,
 }) => {
   const { showActualHours } = useAuth();
-  const { entry, objectEntries, ds } = payload;
+  const { entry, objectEntries, ds, isProblematic } = payload;
 
   const visibleHours = selectVisibleHours(entry, showActualHours);
   const dateLabel = new Date(focusedDay + 'T00:00').toLocaleDateString('ru-RU', {
@@ -136,20 +136,22 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
         <div className={styles.empty}>Нет данных по этому дню</div>
       ) : null}
 
-      {/* Просмотр СКУД-проходов за выбранный день (для любого дня, #7) */}
-      <div className={styles.skudSection}>
-        <div className={styles.sectionTitle}>Проходы СКУД</div>
-        <Suspense fallback={<div className={styles.muted}>Загрузка событий…</div>}>
-          <EmployeeSkudSection
-            employeeId={employeeId}
-            employeeName={employeeName}
-            focusDate={focusedDay}
-            focusKey={focusKey}
-            externalViewMode="day"
-            externalViewDate={focusedDay}
-          />
-        </Suspense>
-      </div>
+      {/* Проходы СКУД — только для проблемных («жёлтых») дней (#7) */}
+      {isProblematic ? (
+        <div className={styles.skudSection}>
+          <div className={styles.sectionTitle}>Проходы СКУД</div>
+          <Suspense fallback={<div className={styles.muted}>Загрузка событий…</div>}>
+            <EmployeeSkudSection
+              employeeId={employeeId}
+              employeeName={employeeName}
+              focusDate={focusedDay}
+              focusKey={focusKey}
+              externalViewMode="day"
+              externalViewDate={focusedDay}
+            />
+          </Suspense>
+        </div>
+      ) : null}
     </div>
   );
 };
