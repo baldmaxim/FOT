@@ -4,6 +4,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { ApiError } from '../../api/client';
 import styles from './Register.module.css';
 
+// ФИО — только кириллица, пробел, дефис (двойные фамилии)
+const CYRILLIC_NAME_RE = /[^а-яёА-ЯЁ\s-]/g;
+
 export const RegisterPage: React.FC = () => {
   const { register } = useAuth();
 
@@ -25,7 +28,7 @@ export const RegisterPage: React.FC = () => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }, [email]);
 
-  const isFullNameValid = fullName.trim().length >= 2;
+  const isFullNameValid = /^[а-яёА-ЯЁ\s-]{2,}$/.test(fullName.trim());
   const passwordsMatch = password === confirmPassword;
   const isFormValid = isFullNameValid && isEmailValid && password.length >= 8 && passwordsMatch;
 
@@ -51,7 +54,7 @@ export const RegisterPage: React.FC = () => {
 
     if (!isFormValid) {
       if (!isFullNameValid) {
-        setError('Введите ФИО (минимум 2 символа)');
+        setError('Введите ФИО кириллицей (минимум 2 символа)');
       } else if (!isEmailValid) {
         setError('Введите корректный email');
       } else if (password.length < 8) {
@@ -168,7 +171,7 @@ export const RegisterPage: React.FC = () => {
                   className={`${styles.formInput} ${fullName && (isFullNameValid ? styles.success : styles.error)}`}
                   placeholder="Иванов Иван Иванович"
                   value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
+                  onChange={(e) => setFullName(e.target.value.replace(CYRILLIC_NAME_RE, ''))}
                   required
                   disabled={loading}
                   autoFocus
