@@ -13,14 +13,31 @@ import {
   listDepartmentObjectAssignments,
   listEmployeeObjectAssignments,
   listTimekeeperObjectAccess,
+  listTimekeeperFolderAccess,
   replaceDepartmentObjectAssignment,
   replaceEmployeeObjectAssignment,
   replaceTimekeeperObjectAccess,
+  replaceTimekeeperFolderAccess,
 } from '../services/object-assignment.service.js';
 
 const objectIdsSchema = z.object({
   object_ids: z.array(z.string().uuid()).default([]),
 });
+
+const folderIdsSchema = z.object({
+  department_ids: z.array(z.string().uuid()).default([]),
+});
+
+/** Возвращает список несуществующих org_department_id (для 400). */
+async function findMissingDepartmentIds(departmentIds: string[]): Promise<string[]> {
+  if (departmentIds.length === 0) return [];
+  const existing = await query<{ id: string }>(
+    'SELECT id FROM org_departments WHERE id = ANY($1::uuid[])',
+    [departmentIds],
+  );
+  const found = new Set(existing.map(r => r.id));
+  return departmentIds.filter(id => !found.has(id));
+}
 
 /** Возвращает список несуществующих skud_object_id (для 400). */
 async function findMissingObjectIds(objectIds: string[]): Promise<string[]> {
@@ -259,6 +276,74 @@ export const objectAssignmentController = {
       }
       console.error('Update timekeeper-objects error:', error);
       res.status(500).json({ success: false, error: 'Не удалось обновить объекты табельщицы' });
+    }
+  },
+
+  /**
+   * GET /api/admin/users/:id/timekeeper-folders
+   * Папки (отделы оргструктуры), сужающие скоуп табельщицы.
+   */
+  async getUserTimekeeperFolders(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const userId = z.string().uuid().parse(req.params.id);
+      const departmentIds = await listTimekeeperFolderAccess(userId);
+      res.json({ success: true, data: { department_ids: departmentIds } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Get timekeeper-folders error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить папки табельщицы' });
+    }
+  },
+
+  /**
+   * PUT /api/admin/users/:id/timekeeper-folders
+   * Полная замена папок табельщицы.
+   */
+  async updateUserTimekeeperFolders(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const userId = z.string().uuid().parse(req.params.id);
+      const { department_ids } = folderIdsSchema.parse(req.body);
+
+      const profile = await queryOne<{ id: string; full_name: string | null }>(
+        'SELECT id, full_name FROM user_profiles WHERE id = $1::uuid',
+        [userId],
+      );
+      if (!profile) {
+        res.status(404).json({ success: false, error: 'Пользователь не найден' });
+        return;
+      }
+
+      const missing = await findMissingDepartmentIds(department_ids);
+      if (missing.length > 0) {
+        res.status(400).json({ success: false, error: 'Некоторые отделы не найдены', details: { missing_department_ids: missing } });
+        return;
+      }
+
+      const saved = await replaceTimekeeperFolderAccess({
+        timekeeperUserId: userId,
+        departmentIds: department_ids,
+        actorUserId: req.user.id,
+      });
+
+      await auditService.logFromRequest(req, req.user.id, 'USER_TIMEKEEPER_FOLDER_ACCESS_CHANGED', {
+        entityType: 'user',
+        entityId: userId,
+        details: { user_id: userId, user_full_name: profile.full_name, assigned_department_ids: saved },
+      });
+
+      emitAccessChanged(userId);
+
+      res.json({ success: true, data: { department_ids: saved } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Update timekeeper-folders error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось обновить папки табельщицы' });
     }
   },
 };

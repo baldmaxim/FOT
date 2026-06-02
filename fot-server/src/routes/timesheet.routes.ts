@@ -248,9 +248,11 @@ router.post(
 );
 
 // GET /api/timesheet/assigned-employees
+// Список начальников участка для assigned-режима. Доступен и табельщице (/timesheet):
+// collectAssignedEmployees ограничивает выборку её accessible-бригадами (объекты ∩ папки).
 router.get(
   '/assigned-employees',
-  requirePageAccess('/timesheet-hr', 'view'),
+  requireAnyPageAccess(['/timesheet-hr', '/timesheet'], 'view'),
   timesheetController.listAssignedEmployees
 );
 

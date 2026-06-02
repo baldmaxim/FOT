@@ -101,9 +101,6 @@ import {
 // активирует timesheet-запрос без department_id; бэк сам резолвит direct_reports по токену.
 const DIRECT_REPORTS_DEPT = '__direct_reports__';
 
-// Ключ-заглушка для сотрудников без отдела в фильтре по отделу (табельщица).
-const NO_DEPT_KEY = '__no_dept__';
-
 export const TimesheetPage: FC = () => {
   const { hasPermission, profile, canEditPage, canViewPage, showActualHours } = useAuth();
   const toast = useToast();
@@ -135,8 +132,15 @@ export const TimesheetPage: FC = () => {
   const queryMode = searchParams.get('mode');
   const queryAssignee = searchParams.get('assignee');
   const queryAssignedDept = searchParams.get('dept');
-  const canUseAssignedMode = !isTimesheetDepartmentScope && (hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review'));
-  const timesheetMode: 'department' | 'assigned' = (queryMode === 'assigned' && canUseAssignedMode) ? 'assigned' : 'department';
+  // Табельщица работает в «назначенном» режиме (начальник участка → бригады → люди),
+  // заскоупленном на её объекты ∩ папки; обычные HR/админ — по permission.
+  const isTimekeeperRole = profile?.role_code === 'timekeeper';
+  const canUseAssignedMode = isTimekeeperRole
+    || (!isTimesheetDepartmentScope && (hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review')));
+  const timesheetMode: 'department' | 'assigned' =
+    (canUseAssignedMode && (queryMode === 'assigned' || (isTimekeeperRole && queryMode !== 'department')))
+      ? 'assigned'
+      : 'department';
   const selectedAssigneeId = useMemo(() => {
     if (timesheetMode !== 'assigned') return null;
     const parsed = Number.parseInt(queryAssignee || '', 10);
@@ -167,8 +171,6 @@ export const TimesheetPage: FC = () => {
 
   // Department selector
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
-  // Фильтр по отделу для табельщицы (direct-reports) — только клиентский, не влияет на API.
-  const [directReportDeptFilter, setDirectReportDeptFilter] = useState<string | null>(null);
 
   // Assignee selector (assigned-mode)
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -330,32 +332,6 @@ export const TimesheetPage: FC = () => {
     };
     return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
   }, [deferredTimesheetData]);
-
-  // Отделы для фильтра табельщицы: делим уже загруженный набор сотрудников по отделу
-  // на клиенте. department_id в API НЕ уходит — иначе бэк подтянул бы весь отдел целиком.
-  const directReportDeptOptions = useMemo<{ id: string; name: string }[]>(() => {
-    const byId = new Map<string, string>();
-    for (const e of employees) {
-      if (e.source && e.source !== 'direct_report') continue;
-      const id = e.org_department_id ?? NO_DEPT_KEY;
-      if (!byId.has(id)) byId.set(id, e.department_name ?? 'Без отдела');
-    }
-    return [...byId.entries()]
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  }, [employees]);
-
-  const displayedEmployees = useMemo<TimesheetEmployee[]>(() => {
-    if (!isDirectReportsOnly || !directReportDeptFilter) return employees;
-    return employees.filter(e => (e.org_department_id ?? NO_DEPT_KEY) === directReportDeptFilter);
-  }, [employees, isDirectReportsOnly, directReportDeptFilter]);
-
-  // Сброс фильтра, если выбранного отдела больше нет в наборе (смена месяца/данных).
-  useEffect(() => {
-    if (directReportDeptFilter && !directReportDeptOptions.some(o => o.id === directReportDeptFilter)) {
-      setDirectReportDeptFilter(null);
-    }
-  }, [directReportDeptOptions, directReportDeptFilter]);
   const entries = useMemo<TimesheetEntry[]>(
     () => deferredTimesheetData?.entries || [],
     [deferredTimesheetData],
@@ -1513,22 +1489,10 @@ export const TimesheetPage: FC = () => {
 
   const departmentControl = (
     <div className="ts-dept-wrap">
-      {isSingleDeptManager ? (
+      {(isSingleDeptManager || isDirectReportsOnly) ? (
         <button type="button" className="ts-dept-btn" style={{ cursor: 'default', opacity: 0.8 }}>
           {selectedDeptName}
         </button>
-      ) : isDirectReportsOnly ? (
-        <select
-          className="ts-dept-btn"
-          value={directReportDeptFilter ?? ''}
-          onChange={e => setDirectReportDeptFilter(e.target.value || null)}
-          aria-label="Фильтр по отделу"
-        >
-          <option value="">Все отделы</option>
-          {directReportDeptOptions.map(o => (
-            <option key={o.id} value={o.id}>{o.name}</option>
-          ))}
-        </select>
       ) : (
         <DepartmentTreeSelect
           departments={deptTree}
@@ -2153,7 +2117,7 @@ export const TimesheetPage: FC = () => {
         </div>
       ) : (
         <TimesheetGrid
-          employees={displayedEmployees}
+          employees={employees}
           entries={entries}
           objectEntries={objectEntries}
           employeeStats={employeeStats}

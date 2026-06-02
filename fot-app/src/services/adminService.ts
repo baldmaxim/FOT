@@ -308,4 +308,19 @@ export const adminService = {
     );
     return response.data;
   },
+
+  async getUserTimekeeperFolders(userId: string): Promise<{ department_ids: string[] }> {
+    const response = await apiClient.get<ApiResponse<{ department_ids: string[] }>>(
+      `/admin/users/${userId}/timekeeper-folders`,
+    );
+    return response.data || { department_ids: [] };
+  },
+
+  async updateUserTimekeeperFolders(userId: string, departmentIds: string[]): Promise<{ department_ids: string[] }> {
+    const response = await apiClient.put<ApiResponse<{ department_ids: string[] }>>(
+      `/admin/users/${userId}/timekeeper-folders`,
+      { department_ids: departmentIds },
+    );
+    return response.data;
+  },
 };

@@ -4,15 +4,12 @@ import { query } from '../config/postgres.js';
 /**
  * Скоуп роли «Табельщица» (timekeeper).
  *
- * Табельщице назначаются «объекты входа» (skud_objects) через timekeeper_object_access.
- * Её зона доступа складывается из источников, которые ложатся на существующие
- * примитивы скоупа (см. data-scope.service.ts):
- *   - department_object_assignment: отделы/бригады, назначенные её объектам →
- *     «явные отделы» (далее subtree-расширение в resolveAccessibleDepartmentIds);
- *   - employee_object_assignment: сотрудники, назначенные её объектам явно (мультиобъектные);
- *   - employee_skud_object_access: сотрудники, у которых её объекты указаны как место
- *     работы СКУД (миграция 092) — основной источник, заполняется автоматически.
- * Последние два дают множество «прямых» сотрудников (путь listDirectSubordinates).
+ * Табельщице назначаются «объекты входа» (timekeeper_object_access) и «папки»
+ * оргструктуры (timekeeper_folder_access). Её «явные отделы» (seeds скоупа) =
+ * ПЕРЕСЕЧЕНИЕ: бригады, где есть работники с её объектов (employee_skud_object_access),
+ * И входящие в поддерево выбранных папок. Эти бригады питают resolveAccessibleDepartmentIds,
+ * managed_department_ids и «назначенный режим» (collectAssignedEmployees → начальники участка).
+ * См. listTimekeeperDepartmentSeeds. Папки не выбраны → seeds пусто (строго).
  */
 
 export const TIMEKEEPER_ROLE_CODE = 'timekeeper';
@@ -33,20 +30,43 @@ export async function resolveTimekeeperObjectIds(timekeeperUserId: string): Prom
 }
 
 /**
- * «Явные отделы» табельщицы = отделы/бригады, назначенные её объектам
- * (department_object_assignment ∩ её объекты). По user_id, без req-кэша —
- * для использования вне запроса (buildProfileResponse).
+ * Видимые табельщице бригады = ПЕРЕСЕЧЕНИЕ:
+ *   - «присутствуют на её объектах»: бригады, где есть работники с её объектов
+ *     (timekeeper_object_access → employee_skud_object_access → employee_department_access, kind='brigade');
+ *   - «входят в выбранные папки»: поддерево timekeeper_folder_access (get_descendant_department_ids).
+ * Папки не выбраны → пусто (строго): табельщица не видит никого.
+ *
+ * Эти бригады — seeds скоупа: их получают resolveAccessibleDepartmentIds (доступ грида),
+ * managed_department_ids профиля и collectAssignedEmployees (managedIds → начальники участка).
+ * Бригады-листья, поэтому subtree-расширение их не размножает.
  */
 export async function listTimekeeperDepartmentSeeds(timekeeperUserId: string): Promise<string[]> {
-  const rows = await query<{ org_department_id: string }>(
-    `SELECT DISTINCT doa.org_department_id
-       FROM timekeeper_object_access toa
-       JOIN department_object_assignment doa
-         ON doa.skud_object_id = toa.skud_object_id AND doa.is_active = true
-      WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true`,
+  const folders = await query<{ department_id: string }>(
+    `SELECT department_id FROM timekeeper_folder_access
+      WHERE timekeeper_user_id = $1::uuid AND is_active = true`,
     [timekeeperUserId],
   );
-  return [...new Set(rows.map(r => r.org_department_id))];
+  if (folders.length === 0) return [];
+  const folderIds = [...new Set(folders.map(r => r.department_id))];
+
+  const rows = await query<{ id: string }>(
+    `WITH folder_desc AS (
+       SELECT id FROM public.get_descendant_department_ids($2::uuid[])
+     ),
+     present AS (
+       SELECT DISTINCT eda.department_id AS id
+         FROM timekeeper_object_access toa
+         JOIN employee_skud_object_access esoa
+           ON esoa.skud_object_id = toa.skud_object_id AND esoa.is_active = true
+         JOIN employee_department_access eda
+           ON eda.employee_id = esoa.employee_id AND eda.is_active = true
+         JOIN org_departments d ON d.id = eda.department_id AND d.kind = 'brigade'
+        WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
+     )
+     SELECT p.id FROM present p WHERE p.id IN (SELECT id FROM folder_desc)`,
+    [timekeeperUserId, folderIds],
+  );
+  return [...new Set(rows.map(r => r.id))];
 }
 
 /**

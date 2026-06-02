@@ -19,6 +19,7 @@ import { SearchInput } from '../ui/SearchInput';
 import { UserCompanyAccessSection } from './UserCompanyAccessSection';
 import { ContractorOrgAccessSection } from './ContractorOrgAccessSection';
 import { TimekeeperObjectAccessSection } from './TimekeeperObjectAccessSection';
+import { TimekeeperFolderAccessSection } from './TimekeeperFolderAccessSection';
 import { PasswordResetLinkModal } from './PasswordResetLinkModal';
 import styles from '../../pages/admin/Admin.module.css';
 
@@ -284,6 +285,10 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
 
       {userRole?.code === 'timekeeper' && (
         <TimekeeperObjectAccessSection userId={user.id} />
+      )}
+
+      {userRole?.code === 'timekeeper' && (
+        <TimekeeperFolderAccessSection userId={user.id} />
       )}
 
       <div className={styles.controlActions}>

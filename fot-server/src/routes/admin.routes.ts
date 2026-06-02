@@ -127,6 +127,8 @@ router.put('/departments/:id/object-assignment', requirePageAccess('/admin/users
 router.put('/employees/:id/object-assignment', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeObjectAssignment);
 router.get('/users/:id/timekeeper-objects', requirePageAccess('/admin/users', 'view'), adminController.getUserTimekeeperObjects);
 router.put('/users/:id/timekeeper-objects', requirePageAccess('/admin/users', 'edit'), adminController.updateUserTimekeeperObjects);
+router.get('/users/:id/timekeeper-folders', requirePageAccess('/admin/users', 'view'), adminController.getUserTimekeeperFolders);
+router.put('/users/:id/timekeeper-folders', requirePageAccess('/admin/users', 'edit'), adminController.updateUserTimekeeperFolders);
 
 // Привязка администраторов к «компаниям» (корневым узлам Sigur). Только системный админ.
 router.get('/companies', requirePageAccess('/admin/users', 'view'), adminController.listCompanies);

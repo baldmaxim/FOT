@@ -166,3 +166,51 @@ export async function replaceTimekeeperObjectAccess(params: {
   }
   return next;
 }
+
+// ---- Timekeeper → folders (org_departments) ----------------------------------
+// Папки сужают скоуп табельщицы: видимые участки/бригады = присутствие на объектах
+// ∩ поддерево выбранных папок (см. timekeeper-scope.service.ts).
+
+export async function listTimekeeperFolderAccess(timekeeperUserId: string): Promise<string[]> {
+  const rows = await query<{ department_id: string }>(
+    `SELECT department_id FROM timekeeper_folder_access
+      WHERE timekeeper_user_id = $1::uuid AND is_active = true`,
+    [timekeeperUserId],
+  );
+  return [...new Set(rows.map(r => r.department_id))];
+}
+
+export async function replaceTimekeeperFolderAccess(params: {
+  timekeeperUserId: string;
+  departmentIds: string[];
+  actorUserId: string;
+}): Promise<string[]> {
+  const next = normalizeObjectIds(params.departmentIds);
+  const existing = await query<{ department_id: string; is_active: boolean }>(
+    'SELECT department_id, is_active FROM timekeeper_folder_access WHERE timekeeper_user_id = $1::uuid',
+    [params.timekeeperUserId],
+  );
+  const nextSet = new Set(next);
+  const toDeactivate = existing.filter(r => r.is_active).map(r => r.department_id).filter(id => !nextSet.has(id));
+  const now = nowIso();
+
+  if (next.length > 0) {
+    await execute(
+      `INSERT INTO timekeeper_folder_access (timekeeper_user_id, department_id, is_active, created_by, updated_at)
+       SELECT $1::uuid, dep_id, true, $2::uuid, $3::timestamptz FROM unnest($4::uuid[]) AS dep_id
+       ON CONFLICT (timekeeper_user_id, department_id)
+       DO UPDATE SET is_active = true,
+         created_by = COALESCE(timekeeper_folder_access.created_by, EXCLUDED.created_by),
+         updated_at = EXCLUDED.updated_at`,
+      [params.timekeeperUserId, params.actorUserId, now, next],
+    );
+  }
+  if (toDeactivate.length > 0) {
+    await execute(
+      `UPDATE timekeeper_folder_access SET is_active = false, updated_at = $1::timestamptz
+        WHERE timekeeper_user_id = $2::uuid AND department_id = ANY($3::uuid[])`,
+      [now, params.timekeeperUserId, toDeactivate],
+    );
+  }
+  return next;
+}

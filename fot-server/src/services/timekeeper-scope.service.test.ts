@@ -51,16 +51,22 @@ describe('isTimekeeper', () => {
 });
 
 describe('listTimekeeperDepartmentSeeds', () => {
-  it('возвращает уникальные org_department_id', async () => {
-    pgQuery.mockResolvedValue([
-      { org_department_id: 'dept-A' },
-      { org_department_id: 'dept-B' },
-    ]);
+  it('пустые папки → пусто (строгое пересечение), один запрос', async () => {
+    pgQuery.mockResolvedValueOnce([]); // folders
     const seeds = await listTimekeeperDepartmentSeeds('tk-1');
-    expect(seeds).toEqual(['dept-A', 'dept-B']);
+    expect(seeds).toEqual([]);
     expect(pgQuery).toHaveBeenCalledTimes(1);
-    const [, params] = pgQuery.mock.calls[0];
-    expect(params).toEqual(['tk-1']);
+  });
+
+  it('пересечение present ∩ папки → уникальные видимые бригады', async () => {
+    pgQuery
+      .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
+      .mockResolvedValueOnce([{ id: 'br-A' }, { id: 'br-B' }, { id: 'br-A' }]); // present ∩ folder_desc
+    const seeds = await listTimekeeperDepartmentSeeds('tk-1');
+    expect(seeds).toEqual(['br-A', 'br-B']);
+    expect(pgQuery).toHaveBeenCalledTimes(2);
+    const [, params] = pgQuery.mock.calls[1];
+    expect(params).toEqual(['tk-1', ['folder-1']]);
   });
 });
 
@@ -95,14 +101,16 @@ describe('resolveTimekeeperObjectIds', () => {
 
 describe('resolveTimekeeperDepartmentSeeds (кэш на req)', () => {
   it('второй вызов не дёргает БД', async () => {
-    pgQuery.mockResolvedValue([{ org_department_id: 'dept-A' }]);
+    pgQuery
+      .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
+      .mockResolvedValueOnce([{ id: 'br-A' }]); // present ∩ folder_desc
     const req = buildReq();
     const first = await resolveTimekeeperDepartmentSeeds(req);
     const second = await resolveTimekeeperDepartmentSeeds(req);
-    expect(first).toEqual(['dept-A']);
-    expect(second).toEqual(['dept-A']);
-    expect(req.user.__timekeeper_dept_seeds).toEqual(['dept-A']);
-    expect(pgQuery).toHaveBeenCalledTimes(1);
+    expect(first).toEqual(['br-A']);
+    expect(second).toEqual(['br-A']);
+    expect(req.user.__timekeeper_dept_seeds).toEqual(['br-A']);
+    expect(pgQuery).toHaveBeenCalledTimes(2); // folders + intersection, далее из кэша
   });
 });
 
