@@ -331,16 +331,16 @@ export async function resolveManagedDepartmentIds(req: AuthenticatedRequest): Pr
 }
 
 /**
- * Множество «прямых» сотрудников для скоупа табеля. Для табельщицы — сотрудники её
- * объектов (employee_object_assignment + место работы СКУД employee_skud_object_access);
- * для остальных — employee_direct_reports по собственному employee_id. Заменяет прямые вызовы
- * listDirectSubordinates(req.user.employee_id) в путях табеля, чтобы табельщица
- * (у которой может не быть employee_id) тоже получала свой набор.
+ * Множество «прямых» сотрудников для скоупа табеля (employee_direct_reports по
+ * собственному employee_id). Заменяет прямые вызовы listDirectSubordinates в путях табеля.
+ *
+ * Табельщица — БЕЗ employee-level прямых: её скоуп бригадный (assigned-режим, начальник
+ * участка → бригады → полный состав через department-membership). Возврат object-workers
+ * здесь подмешивал константный набор в каждый просмотр бригады (один и тот же список) —
+ * поэтому для табельщицы возвращаем [].
  */
 export async function resolveEffectiveDirectSubordinates(req: AuthenticatedRequest): Promise<number[]> {
-  if (isTimekeeper(req)) {
-    return [...await resolveTimekeeperDirectEmployeeIds(req)];
-  }
+  if (isTimekeeper(req)) return [];
   if (!req.user.employee_id) return [];
   return listDirectSubordinates(req.user.employee_id);
 }

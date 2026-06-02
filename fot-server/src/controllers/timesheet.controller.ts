@@ -1177,10 +1177,11 @@ export const timesheetController = {
       let directReportIds: number[] = [];
       let selfTimesheetId: number | null = null;
       if (scope === 'department' && !hasEmployeeFilter) {
-        // Прямые подчинённые руководителя ИЛИ явные сотрудники табельщицы.
+        // Прямые подчинённые руководителя.
         directReportIds = await resolveEffectiveDirectSubordinates(req);
-        // Карточка «Я» — только для руководителя-сотрудника (у табельщицы нет employee_id).
-        if (req.user.employee_id) {
+        // Карточка «Я» — только для руководителя-сотрудника. Табельщица не руководитель:
+        // её саму в табель не выводим (нет секции «Руководитель» и её строки).
+        if (req.user.employee_id && !isTimekeeper(req)) {
           // Только ручные назначения (employee_department_access с source != 'sigur_sync'),
           // а не весь scope-подсеть компании: иначе админ компании видит себя «Руководителем»
           // в любом отделе своего поддерева.
