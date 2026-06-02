@@ -1322,6 +1322,19 @@ export const timesheetController = {
       }
       mark('positions');
 
+      // Имя отдела/бригады сотрудника — фронт делит строки по отделу в выпадающем
+      // фильтре (особенно у табельщицы: её сотрудники приходят как direct_report).
+      const deptIds = [...new Set(employees.map(e => e.org_department_id).filter((v): v is string => !!v))];
+      const deptNameMap = new Map<string, string>();
+      if (deptIds.length > 0) {
+        const depts = await query<{ id: string; name: string }>(
+          `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+          [deptIds],
+        );
+        depts.forEach((d) => deptNameMap.set(d.id, d.name));
+      }
+      mark('departments');
+
       const effectiveDisplayMode: 'actual' | 'capped_to_schedule' = req.user.show_actual_hours
         ? 'actual'
         : 'actual';
@@ -1534,6 +1547,7 @@ export const timesheetController = {
         return {
           ...e,
           position_name: e.position_id ? posMap.get(e.position_id) || null : null,
+          department_name: e.org_department_id ? deptNameMap.get(e.org_department_id) ?? null : null,
           transferred_out_date: transferredOutByEmployeeId.get(empId) ?? null,
           excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
           source,

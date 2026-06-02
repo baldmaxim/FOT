@@ -115,6 +115,8 @@ export interface TimesheetEmployee {
   position_id: string | null;
   position_name: string | null;
   org_department_id: string | null;
+  /** Имя отдела/бригады сотрудника — для деления строк по отделу в фильтре табеля. */
+  department_name?: string | null;
   employment_status: 'active' | 'fired';
   /** Дата (включительно), с которой сотрудник скрыт по «Исключить» — после неё дни рендерятся как inactive. */
   excluded_from_timesheet_date?: string | null;
