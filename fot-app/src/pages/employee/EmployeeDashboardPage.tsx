@@ -206,6 +206,18 @@ export const EmployeeDashboardPage: React.FC = () => {
     setFocusKey(k => k + 1);
   };
 
+  // Открытие формы: засеиваем выбор текущим фокус-днём (по умолчанию — сегодня).
+  const handleOpenForm = () => {
+    setSelectedDates(focusedDay ? new Set([focusedDay]) : new Set());
+    setFormOpen(true);
+  };
+
+  // Отмена: закрываем форму и очищаем выбор (вне формы мультивыбор не нужен).
+  const handleCloseForm = () => {
+    setFormOpen(false);
+    setSelectedDates(new Set());
+  };
+
   const handleFiles = (incoming: FileList | null) => {
     if (!incoming) return;
     const next: File[] = [];
@@ -362,8 +374,9 @@ export const EmployeeDashboardPage: React.FC = () => {
                 <MyMonthTimesheet
                   employeeId={employeeId}
                   noCard
-                  selectedDates={selectedDates}
-                  onDayToggle={handleDayToggle}
+                  activeDayIso={focusedDay ?? undefined}
+                  selectedDates={formOpen ? selectedDates : undefined}
+                  onDayToggle={formOpen ? handleDayToggle : undefined}
                   onDayFocus={handleDayFocus}
                   allowFuture
                 />
@@ -375,7 +388,7 @@ export const EmployeeDashboardPage: React.FC = () => {
           <div className={styles.formPane}>
             {!formOpen ? (
               <>
-                <button className="btn-primary" onClick={() => setFormOpen(true)} style={{ width: '100%', marginBottom: '14px' }}>
+                <button className="btn-primary" onClick={handleOpenForm} style={{ width: '100%', marginBottom: '14px' }}>
                   Подать заявление
                 </button>
                 {recentRequests.length === 0 ? (
@@ -397,7 +410,7 @@ export const EmployeeDashboardPage: React.FC = () => {
             <>
               <div className={styles.formHeader}>
                 <h2 className={styles.formTitle}>Подать заявление</h2>
-                <button className="btn-secondary" onClick={() => setFormOpen(false)}>Отмена</button>
+                <button className="btn-secondary" onClick={handleCloseForm}>Отмена</button>
               </div>
 
               {/* Type select */}
