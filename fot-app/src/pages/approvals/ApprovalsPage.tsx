@@ -50,7 +50,7 @@ const TIMESHEET_STATUS_TABS: Array<{ code: TimesheetApprovalStatus; label: strin
 // manual (work, прицепленная к СКУД-объекту в POST /api/timesheet). Все они по
 // смыслу = «Работа» или «Удалёнка», поэтому manual/work показываем как «Работа».
 const STATUS_LABELS: Record<string, string> = {
-  work: 'Работа в выходной/праздник',
+  work: 'Дополнительная плата',
   remote: 'Удалёнка',
   sick: 'Больничный',
   vacation: 'Отпуск',
