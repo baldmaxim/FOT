@@ -127,6 +127,13 @@ export interface IDepartmentEmployeeMembership {
   transferred_out_date: string | null;
   /** Дата (включительно), С КОТОРОЙ сотрудник в этом отделе (нижняя граница, = effective_from). null = с начала периода. */
   joined_date: string | null;
+  /**
+   * true, если вход в отдел (joined_date) — следствие НАСТОЯЩЕГО перевода: ему встык предшествует
+   * закрытый период в другом отделе (effective_to = joined_date − 1). Отличает реальный перевод
+   * от артефакта (единственное назначение с поздним effective_from = датой записи). Нижняя граница
+   * применяется к АКТИВНЫМ только при true — иначе сотни табелей с «грязным» effective_from обрезались бы.
+   */
+  joined_via_transfer?: boolean;
 }
 
 export async function listEmployeeIdsAssignedToDepartmentPeriod(
@@ -246,6 +253,27 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   const candidateIds = [...map.keys()];
   if (candidateIds.length === 0) return [];
 
+  // Настоящий перевод ВНУТРЬ отдела: вход (effective_from) встык после закрытого периода в другом
+  // отделе. Только такие даты входа достоверны как нижняя граница для активных. Артефакты freeze
+  // (единственное назначение с поздним effective_from) сюда не попадают — у них нет prev-стыка.
+  const transferJoins = await query<{ employee_id: number; effective_from: string }>(
+    `SELECT DISTINCT cur.employee_id, cur.effective_from::text AS effective_from
+       FROM employee_assignments cur
+       JOIN employee_assignments prev
+         ON prev.employee_id = cur.employee_id
+        AND prev.effective_to = cur.effective_from - 1
+        AND prev.org_department_id IS DISTINCT FROM cur.org_department_id
+      WHERE cur.org_department_id = ANY($1::uuid[])
+        AND cur.employee_id = ANY($2::int[])`,
+    [deptIds, candidateIds],
+  );
+  const transferJoinByEmp = new Map<number, string>();
+  for (const row of transferJoins) {
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    transferJoinByEmp.set(empId, String(row.effective_from));
+  }
+
   // Финальный фильтр: активные, не архивные. Исключённых — оставляем, если дата исключения > startDate.
   // Уволенные сотрудники с dismissal_date >= startDate попадают в табель, чтобы был виден период до увольнения.
   const activeRows = await query<{
@@ -276,7 +304,8 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
       // Иначе (дата неизвестна или раньше начала) — отбрасываем.
       if (!excludedDate || excludedDate <= startDate) continue;
     }
-    result.push(m);
+    const joinedViaTransfer = m.joined_date != null && transferJoinByEmp.get(empId) === m.joined_date;
+    result.push({ ...m, joined_via_transfer: joinedViaTransfer });
   }
   return result;
 }

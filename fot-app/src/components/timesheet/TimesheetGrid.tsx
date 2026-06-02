@@ -170,10 +170,14 @@ const getInactiveFromDate = (employee: TimesheetEmployee): string | null => {
 };
 
 const isDayInactiveForEmployee = (employee: TimesheetEmployee, year: number, month: number, day: number): boolean => {
-  const cutoff = getInactiveFromDate(employee);
-  if (!cutoff) return false;
   const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  return dateStr >= cutoff;
+  // Верхняя граница: дни после перевода/исключения.
+  const cutoff = getInactiveFromDate(employee);
+  if (cutoff && dateStr >= cutoff) return true;
+  // Нижняя граница: дни до прихода в отдел (бэк проставляет joined_date только для настоящих переводов/уволенных).
+  const joined = employee.joined_date ?? null;
+  if (joined && dateStr < joined) return true;
+  return false;
 };
 
 const getDeviationCellClass = (deviation: number): string => {

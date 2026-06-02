@@ -122,6 +122,8 @@ export interface TimesheetEmployee {
   excluded_from_timesheet_date?: string | null;
   /** Дата (включительно), с которой сотрудник переведён в другой отдел — после неё дни рендерятся как inactive с бейджем «Переведён». */
   transferred_out_date?: string | null;
+  /** Дата (включительно), С КОТОРОЙ сотрудник пришёл в отдел (нижняя граница при настоящем переводе/увольнении) — дни ДО неё рендерятся как inactive. */
+  joined_date?: string | null;
   /** Источник появления в табеле: membership выбранного отдела, прямой подчинённый, либо сам руководитель. */
   source?: TimesheetEmployeeSource;
 }

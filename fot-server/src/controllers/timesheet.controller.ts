@@ -1213,10 +1213,14 @@ export const timesheetController = {
       const transferredOutByEmployeeId = new Map<number, string | null>(
         departmentMemberships.map(m => [m.employee_id, m.transferred_out_date]),
       );
-      // Нижняя граница периода (дата входа в отдел). Применяется ТОЛЬКО к уволенным (ниже),
-      // чтобы не затронуть майские табеля активных, переведённых внутри месяца.
+      // Нижняя граница периода (дата входа в отдел). Применяется к уволенным, а у активных —
+      // только при НАСТОЯЩЕМ переводе (joined_via_transfer), иначе «грязный» effective_from
+      // от freeze-режима обрезал бы сотни табелей. См. joined_via_transfer в membership-сервисе.
       const joinedByEmployeeId = new Map<number, string | null>(
         departmentMemberships.map(m => [m.employee_id, m.joined_date]),
+      );
+      const joinedViaTransferByEmployeeId = new Map<number, boolean>(
+        departmentMemberships.map(m => [m.employee_id, m.joined_via_transfer ?? false]),
       );
 
       if (
@@ -1384,8 +1388,11 @@ export const timesheetController = {
           ? candidates.reduce((min, v) => (v < min ? v : min))
           : null;
         cutoffByEmployeeId.set(empId, cutoff);
+        // Нижняя граница: у уволенных — всегда (период до увольнения в реальном отделе),
+        // у активных — только при настоящем переводе внутрь месяца (не артефакт freeze).
         const isFired = (e.employment_status as string | null) === 'fired';
-        joinedCutoffByEmployeeId.set(empId, isFired ? (joinedByEmployeeId.get(empId) ?? null) : null);
+        const applyJoined = isFired || (joinedViaTransferByEmployeeId.get(empId) ?? false);
+        joinedCutoffByEmployeeId.set(empId, applyJoined ? (joinedByEmployeeId.get(empId) ?? null) : null);
       }
 
       // Индекс «не рабочих» дней (отпуск/больничный/учебный/неоплачиваемый):
@@ -1549,6 +1556,8 @@ export const timesheetController = {
           position_name: e.position_id ? posMap.get(e.position_id) || null : null,
           department_name: e.org_department_id ? deptNameMap.get(e.org_department_id) ?? null : null,
           transferred_out_date: transferredOutByEmployeeId.get(empId) ?? null,
+          // Нижняя граница: уже отфильтрована (null для артефактов freeze, дата — для реальных переводов/уволенных).
+          joined_date: joinedCutoffByEmployeeId.get(empId) ?? null,
           excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
           source,
         };
