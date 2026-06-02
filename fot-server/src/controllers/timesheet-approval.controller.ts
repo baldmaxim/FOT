@@ -524,6 +524,68 @@ async function notifyDepartmentAboutReview(input: {
   );
 }
 
+/**
+ * Уведомление об отзыве УЖЕ утверждённого табеля руководителем (переподача без HR).
+ * Получатели: прежний проверяющий (reviewed_by) + проверяющие/мониторящие отдела.
+ * Инициатора (actorUserId) не уведомляем.
+ */
+async function notifyApprovalRecalledFromApproved(input: {
+  previousReviewerId: string | null;
+  departmentId: string | null;
+  managerEmployeeId: number | null;
+  range: ITimesheetDateRange;
+  actorUserId: string;
+}): Promise<void> {
+  const { previousReviewerId, departmentId, managerEmployeeId, range, actorUserId } = input;
+
+  const recipients = new Set<string>();
+  if (previousReviewerId) recipients.add(previousReviewerId);
+  const reviewDepts = departmentId
+    ? [departmentId]
+    : (managerEmployeeId != null ? await listDirectReportDepartmentIds(managerEmployeeId) : []);
+  for (const dept of reviewDepts) {
+    const ids = await listTimesheetWorkflowRecipientIds(dept, ['review', 'monitor']);
+    for (const uid of ids) recipients.add(uid);
+  }
+  recipients.delete(actorUserId);
+  if (recipients.size === 0) return;
+
+  const rangeLabel = formatTimesheetRangeLabel(range.startDate, range.endDate);
+  const subjectName = managerEmployeeId != null
+    ? `Персональная подача (${(await loadEmployeeFullName(managerEmployeeId)) ?? 'руководитель'})`
+    : departmentId
+      ? `Отдел ${await loadDepartmentName(departmentId)}`
+      : 'Табель';
+  const path = departmentId
+    ? buildRangeRedirectPath('/timesheet', range, departmentId)
+    : buildRangeRedirectPath('/timesheet', range);
+
+  const title = 'Утверждённый табель отозван';
+  const body = `${subjectName}: руководитель отозвал утверждённый табель за ${rangeLabel} для переподачи.`;
+  const recipientIds = [...recipients];
+
+  await notificationService.createMany(recipientIds.map(userId => ({
+    userId,
+    type: 'timesheet_approval_recalled',
+    title,
+    body,
+    metadata: {
+      departmentId,
+      managerEmployeeId,
+      start_date: range.startDate,
+      end_date: range.endDate,
+      status: 'draft',
+      path,
+    },
+  })));
+  await pushService.sendGenericNotification(
+    recipientIds,
+    title,
+    body,
+    { path, start_date: range.startDate, end_date: range.endDate },
+  );
+}
+
 async function persistApprovalTransition(input: {
   approvalId: number;
   departmentId: string | null;
@@ -916,13 +978,17 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           [deptId, range.startDate, range.endDate],
         );
 
-    if (!existing || existing.status !== 'submitted') {
+    // Отозвать можно поданный (submitted) или уже утверждённый (approved) табель.
+    // Отзыв утверждённого = руководитель сам возвращает его на доработку для переподачи,
+    // не дожидаясь HR (раньше это умел только HR через return-to-rework).
+    if (!existing || (existing.status !== 'submitted' && existing.status !== 'approved')) {
       res.status(409).json({
         success: false,
-        error: 'Отозвать можно только поданный, ещё не рассмотренный табель',
+        error: 'Отозвать можно только поданный или утверждённый табель',
       });
       return;
     }
+    const wasApproved = existing.status === 'approved';
 
     const now = new Date().toISOString();
     const approval = await queryOne<TimesheetApproval>(
@@ -957,9 +1023,23 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       approvalId: approval.id,
       departmentId: deptId,
       submittedBy: existing.submitted_by ?? req.user.id,
-      reviewerUserId: req.user.id,
+      reviewerUserId: existing.reviewed_by ?? req.user.id,
       action: 'recall',
     });
+
+    // Отзыв утверждённого табеля снимает решение HR — уведомляем прежнего проверяющего
+    // и проверяющих отдела, что период вернулся в работу для переподачи.
+    if (wasApproved) {
+      void notifyApprovalRecalledFromApproved({
+        previousReviewerId: existing.reviewed_by,
+        departmentId: deptId,
+        managerEmployeeId,
+        range,
+        actorUserId: req.user.id,
+      }).catch(notifyError => {
+        console.error('timesheet-approval.recall notify error:', notifyError);
+      });
+    }
 
     invalidateTimesheetGridCaches();
     res.json({ success: true, data: approval });

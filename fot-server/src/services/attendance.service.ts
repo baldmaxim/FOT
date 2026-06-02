@@ -961,13 +961,15 @@ export async function buildAttendanceEntries(params: {
     }
   }
 
-  // Безусловно заполняем display_hours_worked = clamp(hours_worked, plannedDayHours)
-  // для всех entries — независимо от displayMode. Это даёт фронту оба значения
-  // (entry.hours_worked = факт, entry.display_hours_worked = урезанное под график)
-  // и позволяет per-role show_actual_hours переключать показ в обе стороны:
+  // Безусловно заполняем display_hours_worked = clamp(факт, длина смены) для всех entries
+  // (и для объектных item) — независимо от displayMode. Это даёт фронту оба значения
+  // (entry.hours_worked = факт, entry.display_hours_worked = урезанное под график) и
+  // позволяет per-role show_actual_hours переключать показ в обе стороны:
   // selectVisibleHours(entry, true) → hours_worked, (entry, false) → display_hours_worked.
-  // Раньше при displayMode='actual' display_hours_worked оставался undefined для не-объектных
-  // кейсов → переключение факт→урезано на фронте не работало (фолбэк давал тот же hours_worked).
+  // ВАЖНО: здесь, в отличие от блока capped_to_schedule ниже, мы НЕ трогаем hours_worked,
+  // base_hours_worked, first_entry, last_exit (у entry и item) — факт и времена входа/выхода
+  // сохранены (нужны для опозданий и дневной модалки). Раньше блок не резал под смену, и
+  // «урезано»-роль в интерактивном табеле видела факт.
   for (const entry of entries) {
     if (entry.is_correction && entry.id != null) continue;
 
@@ -975,13 +977,36 @@ export async function buildAttendanceEntries(params: {
       .get(entry.employee_id)
       ?.get(entry.work_date) || [];
 
+    const employeeSchedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
+    const shiftLengthHours = getShiftLengthHoursForScheduleOnDate(employeeSchedule, entry.work_date);
+
     if (dayObjectEntries.length > 0) {
       const totalActualHours = roundHours(
         dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0),
       );
-      entry.display_hours_worked = totalActualHours;
+      if (shiftLengthHours != null && totalActualHours > shiftLengthHours) {
+        // Распределяем урезанную сумму по объектам пропорционально факту (только display).
+        const scale = shiftLengthHours / totalActualHours;
+        let allocated = 0;
+        dayObjectEntries.forEach((item, idx) => {
+          const isLast = idx === dayObjectEntries.length - 1;
+          const share = isLast
+            ? roundHours(shiftLengthHours - allocated)
+            : roundHours(item.hours_worked * scale);
+          item.display_hours_worked = share;
+          allocated = roundHours(allocated + share);
+        });
+        entry.display_hours_worked = shiftLengthHours;
+      } else {
+        for (const item of dayObjectEntries) {
+          item.display_hours_worked = item.hours_worked;
+        }
+        entry.display_hours_worked = totalActualHours;
+      }
     } else {
-      entry.display_hours_worked = entry.hours_worked;
+      entry.display_hours_worked = entry.hours_worked == null || shiftLengthHours == null
+        ? entry.hours_worked
+        : clampToScheduleHours(entry.hours_worked, shiftLengthHours);
     }
   }
 

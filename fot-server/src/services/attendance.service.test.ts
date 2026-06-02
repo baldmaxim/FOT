@@ -887,6 +887,117 @@ describe('attendance.service', () => {
     });
   });
 
+  it('actual mode: display_hours_worked урезан под смену, факт и времена входа/выхода сохранены (без объектов)', async () => {
+    // «Урезано»-роль (show_actual_hours=false) видит display_hours_worked. В режиме 'actual'
+    // (интерактивный табель) он должен быть урезан под длину смены, а факт (hours_worked) и
+    // времена входа/выхода — сохранены (нужны для опозданий и дневной модалки).
+    mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '08:00:00',
+      last_exit: '18:00:00',
+      total_hours: 10,
+      total_minutes: 600,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', {} as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+      // displayMode не задан → 'actual'
+    });
+
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-04-01',
+      hours_worked: 10,
+      display_hours_worked: 9,
+      first_entry: '08:00:00',
+      last_exit: '18:00:00',
+    });
+  });
+
+  it('actual mode: объектный день урезан под смену (display), факт по объектам и времена сохранены', async () => {
+    mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
+
+    const objectEntryA = {
+      adjustment_id: 1,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      object_key: 'obj-a',
+      object_id: 'obj-a',
+      object_name: 'Объект A',
+      hours_worked: 6,
+      display_hours_worked: 6,
+      base_hours_worked: 6,
+      is_correction: false,
+    };
+    const objectEntryB = {
+      adjustment_id: 2,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      object_key: 'obj-b',
+      object_id: 'obj-b',
+      object_name: 'Объект B',
+      hours_worked: 5,
+      display_hours_worked: 5,
+      base_hours_worked: 5,
+      is_correction: false,
+    };
+
+    mockedState.objectAttendanceData = {
+      objectEntries: [objectEntryA, objectEntryB],
+      objectEntriesByEmployeeDate: new Map([
+        [1, new Map([['2026-04-01', [objectEntryA, objectEntryB]]])],
+      ]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a', 'obj-b'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '09:00:00',
+      last_exit: '20:00:00',
+      total_hours: 11,
+      total_minutes: 660,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', {} as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+      // displayMode не задан → 'actual'
+    });
+
+    expect(result.entries[0]).toMatchObject({
+      employee_id: 1,
+      work_date: '2026-04-01',
+      hours_worked: 11,
+      display_hours_worked: 9,
+      first_entry: '09:00:00',
+      last_exit: '20:00:00',
+    });
+
+    const objA = result.objectEntries.find(entry => entry.object_key === 'obj-a')!;
+    const objB = result.objectEntries.find(entry => entry.object_key === 'obj-b')!;
+    // Факт по объектам сохранён, урезано только в display.
+    expect(objA.hours_worked).toBe(6);
+    expect(objB.hours_worked).toBe(5);
+    expect(objA.display_hours_worked).toBeCloseTo(6 * 9 / 11, 2);
+    expect(objA.display_hours_worked + objB.display_hours_worked).toBeCloseTo(9, 2);
+  });
+
   describe('presence_covers_shift', () => {
     const setSummary = (summary: Record<string, unknown> | null): void => {
       mockedState.summaryRows = summary ? [summary as unknown as typeof mockedState.summaryRows[number]] : [];

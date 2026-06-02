@@ -15,6 +15,7 @@ import {
 } from '../../services/timesheetApprovalService';
 import { ApiError } from '../../api/client';
 import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { FilePreviewModal } from '../documents/FilePreviewModal';
 import { displayFileName } from '../../utils/fileNameDisplay';
 import {
@@ -83,6 +84,7 @@ interface IActiveCardProps {
   onReject: () => Promise<void>;
   onSubmit: () => void;
   onRecall: () => void;
+  onRecallApproved: () => void;
   onToggleMemo: () => void;
   onCommentChange: (value: string) => void;
   onDismissError: () => void;
@@ -107,6 +109,7 @@ const ActiveCard: FC<IActiveCardProps> = ({
   onReject,
   onSubmit,
   onRecall,
+  onRecallApproved,
   onToggleMemo,
   onCommentChange,
   onDismissError,
@@ -282,6 +285,18 @@ const ActiveCard: FC<IActiveCardProps> = ({
           title="Отозвать поданный табель на доработку"
         >
           <RotateCcw size={14} /> Отозвать
+        </button>
+      )}
+
+      {canSubmitDepartment && status === 'approved' && (
+        <button
+          className="ts-btn"
+          onClick={onRecallApproved}
+          disabled={loading}
+          type="button"
+          title="Вернуть утверждённый табель на доработку для переподачи"
+        >
+          <RotateCcw size={14} /> Вернуть и переподать
         </button>
       )}
 
@@ -505,6 +520,8 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const [memoRequired, setMemoRequired] = useState(false);
   const [memoOpen, setMemoOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [recallApprovedConfirmOpen, setRecallApprovedConfirmOpen] = useState(false);
+  const recallApprovedOverlayHandlers = useOverlayDismiss(() => setRecallApprovedConfirmOpen(false));
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const memoFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -572,10 +589,11 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     setMissingDays([]);
     setMemoRequired(false);
     // Guard от race condition: кнопка Recall могла остаться видна из устаревшего
-    // кэша, пока статус на бэке уже approved/rejected. Не дёргаем API впустую —
-    // показываем ошибку и инвалидируем, чтобы кнопка пропала.
+    // кэша, пока статус на бэке уже rejected/returned. Не дёргаем API впустую —
+    // показываем ошибку и инвалидируем, чтобы кнопка пропала. Отзыв разрешён из
+    // submitted (обычный) и approved (руководитель возвращает на переподачу).
     const currentStatus = activeStatus.data?.status;
-    if (currentStatus && currentStatus !== 'submitted') {
+    if (currentStatus && currentStatus !== 'submitted' && currentStatus !== 'approved') {
       setSubmitError('Табель уже рассмотрен — обновляем статус.');
       await invalidate();
       return;
@@ -699,6 +717,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
             setConfirmOpen(true);
           }}
           onRecall={handleRecall}
+          onRecallApproved={() => setRecallApprovedConfirmOpen(true)}
           onToggleMemo={() => setMemoOpen(o => !o)}
           onCommentChange={setComment}
           onDismissError={dismissMissing}
@@ -711,6 +730,51 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           onConfirm={handleSubmit}
           onClose={() => setConfirmOpen(false)}
         />
+        {recallApprovedConfirmOpen && (
+          <div className="ts-exclude-modal-overlay" {...recallApprovedOverlayHandlers}>
+            <div className="ts-exclude-modal" onClick={e => e.stopPropagation()}>
+              <div className="ts-exclude-modal-header">
+                <h3>Вернуть утверждённый табель?</h3>
+                <button
+                  type="button"
+                  className="ts-exclude-modal-close"
+                  onClick={() => setRecallApprovedConfirmOpen(false)}
+                  disabled={loading}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="ts-exclude-modal-body">
+                <p>
+                  Табель за {formatTimesheetRangeLabel(startDate, endDate)} уже утверждён.
+                  Возврат снимет утверждение и вернёт его в черновик для переподачи.
+                  Проверяющий получит уведомление.
+                </p>
+              </div>
+              <div className="ts-exclude-modal-footer">
+                <button
+                  type="button"
+                  className="ts-exclude-modal-cancel"
+                  onClick={() => setRecallApprovedConfirmOpen(false)}
+                  disabled={loading}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  className="ts-exclude-modal-confirm"
+                  onClick={async () => {
+                    setRecallApprovedConfirmOpen(false);
+                    await handleRecall();
+                  }}
+                  disabled={loading}
+                >
+                  <RotateCcw size={14} /> Вернуть и переподать
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {memoOpen && memoSectionAllowed && (
           <WeekendMemoPopover
             uploadDisabled={!isPersonal && !departmentId}
