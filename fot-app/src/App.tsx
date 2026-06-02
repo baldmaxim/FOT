@@ -665,7 +665,9 @@ const App = () => {
                   <AppRoutes />
                   <StructureRealtimeMount />
                   <ChatPanelMount />
-                  <TooltipHost />
+                  <Sentry.ErrorBoundary fallback={<></>} showDialog={false}>
+                    <TooltipHost />
+                  </Sentry.ErrorBoundary>
                   <AppUpdateBanner />
                 </OnlinePresenceProvider>
               </ChatProvider>
