@@ -697,6 +697,9 @@ export const TimesheetPage: FC = () => {
         queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
         queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        // День мог быть из заявления (удалёнка/отпуск/…) — оно синхронно изменилось на бэке.
+        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
       ]);
     } catch (error) {
       console.error('Delete day correction error:', error);

@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { query, execute } from '../config/postgres.js';
+import { query, execute, withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import type {
   AuthenticatedRequest,
@@ -26,7 +26,6 @@ import { isTimekeeper } from '../services/timekeeper-scope.service.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
 import {
   buildAttendanceEntries,
-  deleteAttendanceAdjustmentById,
   deleteAttendanceAdjustmentBySource,
   getAttendanceAdjustmentById,
   loadAttendanceAdjustmentsWithAuthors,
@@ -66,6 +65,10 @@ import {
   purgeCorrectionAttachments,
 } from '../services/correction-attachments.service.js';
 import { r2Service } from '../services/r2.service.js';
+import { syncLeaveRequestOnDayRemoval } from '../services/leave-request-sync.service.js';
+import { getIo } from '../socket/io-instance.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { getLeaveRequestRecipients } from '../services/recipients.service.js';
 import {
   isDepartmentMonthAllowed,
   isTimesheetWindowExempt,
@@ -2383,15 +2386,19 @@ export const timesheetController = {
         const monthAllowed = scope === 'all'
           ? true
           : isDepartmentMonthAllowed(Number(yStr), Number(mStr), monthAccessFromUser(req.user));
-        // Редактируемы/удаляемы из табеля: ручные корректировки (manual) и «согласованный
-        // выход» из заявки (leave_request со статусом work/manual — по сути ручная work-правка).
-        // Отсутствия из заявки (отпуск/больничный/удалёнка/за свой счёт) управляются заявлением.
+        // Редактируемы: ручные корректировки (manual) и «согласованный выход» из заявки
+        // (leave_request со статусом work/manual — по сути ручная work-правка).
         const isManualLike = item.source_type === 'manual'
           || (item.source_type === 'leave_request' && (item.status === 'work' || item.status === 'manual'));
         const canEdit = req.user.is_admin || scope === 'all'
           ? !(lockInfo && lockInfo.status === 'approved')
           : !approvalLocked && monthAllowed && isManualLike;
-        const canDelete = canEdit && isManualLike;
+        // Удаляемы: manual и ЛЮБЫЕ материализации заявления (включая отсутствия —
+        // день синхронно убирается из заявления, см. deleteEntry).
+        const isDeletableSource = item.source_type === 'manual' || item.source_type === 'leave_request';
+        const canDelete = req.user.is_admin || scope === 'all'
+          ? !(lockInfo && lockInfo.status === 'approved') && isDeletableSource
+          : !approvalLocked && monthAllowed && isDeletableSource;
         return {
           id: item.id,
           employee_id: item.employee_id,
@@ -2439,18 +2446,16 @@ export const timesheetController = {
       if (!existing) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
       const sourceType = String(existing.source_type ?? '');
-      const existingStatus = String(existing.status ?? '');
       if (sourceType === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
         return res.status(409).json({
           success: false,
           error: 'Часы за этот день заданы корректировкой по объекту. Удалите часы в детализации по объектам.',
         });
       }
-      // Удаляемы: ручные корректировки (manual) и «согласованный выход» из заявки
-      // (leave_request со статусом work/manual — по сути ручная work-правка, управляется и из табеля).
-      // Отсутствия из заявки (отпуск/больничный/удалёнка/за свой счёт) снимаются в самом заявлении.
-      const isDeletableSource = sourceType === 'manual'
-        || (sourceType === 'leave_request' && (existingStatus === 'work' || existingStatus === 'manual'));
+      // Удаляемы: ручные корректировки (manual) и любые материализации заявления
+      // (leave_request — включая отсутствия отпуск/больничный/удалёнка/за свой счёт).
+      // Для leave_request день синхронно убирается из самого заявления (см. ниже).
+      const isDeletableSource = sourceType === 'manual' || sourceType === 'leave_request';
       if (!isDeletableSource) {
         return res.status(409).json({ success: false, error: 'Эта корректировка не удаляется' });
       }
@@ -2483,8 +2488,26 @@ export const timesheetController = {
         });
       }
 
-      const ok = await deleteAttendanceAdjustmentById(id);
-      if (!ok) return res.status(404).json({ success: false, error: 'Запись не найдена' });
+      // Числовой source_id у leave_request — это материализация отсутствия/выхода ('work').
+      // Легаси-форму "<id>:time_correction" не синхронизируем с заявлением.
+      const sourceId = String(existing.source_id ?? '');
+      const leaveRequestId = sourceType === 'leave_request' && /^\d+$/.test(sourceId)
+        ? Number(sourceId)
+        : null;
+
+      // Удаление строки + синхронизация заявления — атомарно (как откат approve в cancel()).
+      const txResult = await withTransaction(async (client) => {
+        const del = await client.query<{ id: number }>(
+          `DELETE FROM attendance_adjustments WHERE id = $1 RETURNING id`,
+          [id],
+        );
+        if (del.rows.length === 0) return { deleted: false as const, sync: null };
+        const sync = leaveRequestId !== null
+          ? await syncLeaveRequestOnDayRemoval(client, leaveRequestId)
+          : null;
+        return { deleted: true as const, sync };
+      });
+      if (!txResult.deleted) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
       try {
         const orphanedR2Keys = await purgeCorrectionAttachments(id);
@@ -2505,6 +2528,23 @@ export const timesheetController = {
           work_date: String(existing.work_date),
         },
       });
+
+      // Realtime: заявление изменилось (день убран / заявление отменено) —
+      // синхронизируем счётчик pending и ЛК автора/проверяющих (как в leave-requests.cancel).
+      if (leaveRequestId !== null && txResult.sync) {
+        const io = getIo();
+        if (io) io.emit('leave_request_pending_changed');
+        const employeeId = txResult.sync.employeeId;
+        getLeaveRequestRecipients(employeeId, req.user.id)
+          .then((recipients) => {
+            emitDomainChange({
+              event: 'leave_request:changed',
+              targetUserIds: recipients,
+              payload: { entityId: leaveRequestId, employeeId, action: 'cancel' },
+            });
+          })
+          .catch((e) => console.error('[timesheet.deleteEntry] emit leave_request realtime error:', e));
+      }
 
       res.json({ success: true });
     } catch (err) {
