@@ -282,20 +282,68 @@ export const employeeChangesService = {
       );
       const emp = empRes.rows[0] ?? null;
 
-      await client.query(
-        `INSERT INTO employee_assignments
-           (employee_id, org_department_id, position_id, effective_from,
-            is_primary, assignment_type, change_reason, created_by)
-         VALUES ($1, $2, $3, $4, true, 'main', $5, $6)`,
-        [
-          employeeId,
-          emp?.org_department_id || null,
-          positionId,
-          date,
-          opts.reason || 'Смена должности',
-          opts.createdBy || null,
-        ],
-      );
+      // Симметрично changeDepartment: закрываем текущее назначение и открываем новое с новой
+      // должностью (отдел сохраняем). Без закрытия два открытых периода пересеклись бы и
+      // триггер ensure_no_overlapping_employee_assignments отклонил бы вставку.
+      const assignments = await getEmployeeAssignments(employeeId);
+      const previousDay = formatDateShift(date, -1);
+      const nextAssignment = assignments.find(assignment => assignment.effective_from > date) || null;
+      const sameDayAssignment = assignments.find(assignment => assignment.effective_from === date) || null;
+      const activeAssignment = assignments.find(assignment => isAssignmentActiveOnDateInclusive(
+        assignment.effective_from,
+        assignment.effective_to,
+        date,
+      )) || null;
+
+      if (activeAssignment && activeAssignment.id !== sameDayAssignment?.id) {
+        await client.query(
+          `UPDATE employee_assignments
+              SET effective_to = $1, updated_at = $2
+            WHERE id = $3 AND employee_id = $4`,
+          [previousDay, new Date().toISOString(), activeAssignment.id, employeeId],
+        );
+      }
+
+      const nextEffectiveTo = nextAssignment ? formatDateShift(nextAssignment.effective_from, -1) : null;
+
+      if (sameDayAssignment) {
+        await client.query(
+          `UPDATE employee_assignments
+              SET position_id = $1,
+                  effective_to = $2,
+                  is_primary = true,
+                  assignment_type = 'main',
+                  change_reason = $3,
+                  created_by = $4,
+                  updated_at = $5
+            WHERE id = $6 AND employee_id = $7`,
+          [
+            positionId,
+            nextEffectiveTo,
+            opts.reason || 'Смена должности',
+            opts.createdBy || null,
+            new Date().toISOString(),
+            sameDayAssignment.id,
+            employeeId,
+          ],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO employee_assignments
+             (employee_id, org_department_id, position_id, effective_from,
+              effective_to, is_primary, assignment_type, change_reason, created_by)
+           VALUES ($1, $2, $3, $4, $5, true, 'main', $6, $7)`,
+          [
+            employeeId,
+            emp?.org_department_id || null,
+            positionId,
+            date,
+            nextEffectiveTo,
+            opts.reason || 'Смена должности',
+            opts.createdBy || null,
+          ],
+        );
+      }
 
       await syncEmployeeAssignmentSnapshotTx(client, employeeId);
     });
