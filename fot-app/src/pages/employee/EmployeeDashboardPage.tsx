@@ -93,6 +93,24 @@ export const EmployeeDashboardPage: React.FC = () => {
   });
   const myObjects = objectsQuery.data ?? [];
 
+  // Объекты выбранного дня (реальные СКУД/manual_object с object_id), дедуп по object_id.
+  const dayObjects = useMemo(() => {
+    const src = (focusedPayload?.objectEntries ?? []).filter(o => !o.from_day_level && o.object_id);
+    const seen = new Map<string, { object_id: string; object_name: string }>();
+    for (const o of src) {
+      if (!seen.has(o.object_id!)) seen.set(o.object_id!, { object_id: o.object_id!, object_name: o.object_name });
+    }
+    return [...seen.values()];
+  }, [focusedPayload]);
+
+  // Опции выпадашки: объекты дня; если их нет (прогул/отсутствие) — полный закреплённый список.
+  const objectOptions = dayObjects.length > 0 ? dayObjects : myObjects;
+
+  // Автовыбор единственного объекта дня; иначе сброс — пусть выбирает вручную.
+  useEffect(() => {
+    setCorrectionObjectId(dayObjects.length === 1 ? dayObjects[0].object_id : '');
+  }, [focusedDay, dayObjects]);
+
   const employee = employeeQuery.data ?? null;
 
   const loading = employeeQuery.isLoading || timesheetQuery.isLoading;
@@ -397,10 +415,10 @@ export const EmployeeDashboardPage: React.FC = () => {
                       className={styles.formSelect}
                       value={correctionObjectId}
                       onChange={(e) => setCorrectionObjectId(e.target.value)}
-                      disabled={myObjects.length === 0}
+                      disabled={objectOptions.length === 0}
                     >
-                      <option value="">{myObjects.length === 0 ? 'Нет доступных объектов' : '— выберите объект —'}</option>
-                      {myObjects.map(o => (
+                      <option value="">{objectOptions.length === 0 ? 'Нет доступных объектов' : '— выберите объект —'}</option>
+                      {objectOptions.map(o => (
                         <option key={o.object_id} value={o.object_id}>{o.object_name}</option>
                       ))}
                     </select>

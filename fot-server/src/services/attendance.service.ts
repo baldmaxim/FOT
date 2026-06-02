@@ -108,6 +108,9 @@ export interface IAttendanceEntry {
   object_detail_message?: string | null;
   object_detail_count?: number;
   presence_covers_shift?: boolean;
+  // Перерыв за день (сумма гэпов между парами вход→выход) из skud_daily_summary. Для дней
+  // без summary не задаётся — ЛК показывает строку «Перерыв» только при > 0.
+  break_minutes?: number | null;
   // true, если за день у сотрудника в attendance_adjustments есть хотя бы одна
   // запись с source_type='manual_object'. Такие записи нельзя удалить через
   // DELETE /api/timesheet/:id (контроллер вернёт 409) — фронт по этому флагу
@@ -678,6 +681,7 @@ export async function buildAttendanceEntries(params: {
       first_entry: summary.first_entry,
       last_exit: summary.last_exit,
       presence_covers_shift: presenceCoversShift,
+      break_minutes: getSummaryBreakMinutes(summary),
     });
   }
 

@@ -58,6 +58,18 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
   const realObjects = objectEntries.filter((o) => !o.from_day_level);
   const dayLevelCorrection = entry?.is_correction ? entry : null;
 
+  // Заголовок «Корректировки» — только если есть реальная корректировка; иначе это просто
+  // разбивка факта из СКУД по объекту → «Часы по объектам».
+  const hasRealCorrection = realObjects.some((o) => o.is_correction);
+  // Скрываем избыточную разбивку: один СКУД-объект, чьи часы совпадают с часами дня.
+  const redundantSingleSkud =
+    !hasRealCorrection &&
+    realObjects.length === 1 &&
+    Math.abs(realObjects[0].hours_worked - (visibleHours ?? 0)) < 0.01;
+  const showObjects = realObjects.length > 0 && !redundantSingleSkud;
+  const objectsTitle = hasRealCorrection ? 'Корректировки по объектам' : 'Часы по объектам';
+  const breakMinutes = entry?.break_minutes ?? 0;
+
   return (
     <div className={styles.root}>
       <div className={styles.header}>
@@ -72,10 +84,17 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
         </div>
       ) : null}
 
-      {/* Корректировки из табеля по объектам (#10) */}
-      {realObjects.length > 0 ? (
+      {breakMinutes > 0 ? (
+        <div className={styles.hoursRow}>
+          <span className={styles.hoursLabel}>Перерыв</span>
+          <span className={styles.hoursValue}>{formatHoursLabel(breakMinutes / 60)}</span>
+        </div>
+      ) : null}
+
+      {/* Корректировки/часы из табеля по объектам (#10) */}
+      {showObjects ? (
         <div className={styles.section}>
-          <div className={styles.sectionTitle}>Корректировки по объектам</div>
+          <div className={styles.sectionTitle}>{objectsTitle}</div>
           <ul className={styles.objectList}>
             {realObjects.map((o) => (
               <li key={o.object_key} className={styles.objectItem}>

@@ -105,7 +105,10 @@ function calculateWorkedSeconds(events: EmployeeSkudExportEvent[], internalPoint
 
   for (const event of sorted) {
     if (event.direction === 'entry') {
-      if (entryTime === null) entryTime = timeToSeconds(event.event_time);
+      // Строгая политика «только полные циклы»: повторный вход затирает незакрытый
+      // предыдущий (orphan отбрасывается). Паритет с buildRawFallbackSummary и
+      // recalculate_skud_daily_summary (миграция 161).
+      entryTime = timeToSeconds(event.event_time);
       continue;
     }
 

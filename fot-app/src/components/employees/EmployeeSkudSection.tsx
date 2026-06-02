@@ -20,6 +20,7 @@ import {
   toLocalISO,
 } from '../../utils/skudDisplay';
 import { formatFailureType } from '../../utils/skudFailureTypes';
+import '../../styles/EmployeeCardPage.css';
 
 interface IEmployeeSkudSectionProps {
   employeeId: number;
@@ -304,20 +305,19 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
       });
   }, [employeeId, effStart, effEnd, viewMode]);
 
-  // Перезагрузка при смене internalPoints (не сбрасывая диапазон)
+  // Перегруппировка при смене internalPoints — БЕЗ повторного запроса: внутренние точки
+  // влияют только на расчёт (groupByDay), а события уже загружены. Экономит round-trip.
   const internalPointsLoaded = useRef(false);
   useEffect(() => {
     if (!internalPointsLoaded.current) {
       internalPointsLoaded.current = true;
       return; // skip initial
     }
-    const currentReqId = ++requestIdRef.current;
-    skudService.getEmployeeEventsWithFailures(employeeId, effStart, effEnd)
-      .then(({ events, failures }) => {
-        if (requestIdRef.current !== currentReqId) return;
-        setGroups(groupByDay(events, failures, internalPointsRef.current));
-      })
-      .catch(() => {});
+    setGroups(prev => groupByDay(
+      prev.flatMap(g => g.events),
+      prev.flatMap(g => g.failures),
+      internalPointsRef.current,
+    ));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [internalPoints]);
 

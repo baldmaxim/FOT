@@ -248,12 +248,9 @@ const buildObjectIntervals = ({
 
   for (const event of summaryEvents) {
     if (event.direction === 'entry') {
-      // Если уже есть открытая entry без exit — закрываем её на момент новой entry,
-      // иначе третья+ точка теряется (последовательность entry1-entry2-exit3 раньше отдавала
-      // только пару entry1-exit3, а entry2 игнорировалась).
-      if (openEntry) {
-        pushInterval(openEntry, event, event.event_time);
-      }
+      // Строгая политика «только полные циклы»: повторный вход затирает незакрытый
+      // предыдущий (orphan отбрасывается). Гэп вход→вход НЕ считается отработанным.
+      // Паритет с buildRawFallbackSummary и recalculate_skud_daily_summary (миграция 161).
       openEntry = event;
       continue;
     }

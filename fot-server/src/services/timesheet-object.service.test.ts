@@ -130,6 +130,35 @@ describe('timesheet-object.service', () => {
     expect(result.employeeDistinctObjectKeys.get(1)).toEqual(new Set(['obj-a', 'obj-b']));
   });
 
+  it('discards orphan entry on repeated entry without exit (strict closed-pairs policy)', async () => {
+    // Повторный вход без промежуточного выхода: гэп 09:00→13:00 НЕ считается, орфан 09:00
+    // затирается, учитывается только закрытая пара 13:00→17:00 = 4ч. До фикса считалось 8ч
+    // (09:00→13:00 + 13:00→17:00). Паритет с buildRawFallbackSummary (миграция 161).
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-10', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '13:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '17:00:00', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-10',
+      endDate: '2026-04-10',
+      todayStr: '2026-04-10',
+      adjustments: [],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        employee_id: 1,
+        work_date: '2026-04-10',
+        object_id: 'obj-a',
+        object_name: 'Объект A',
+        hours_worked: 4,
+      }),
+    ]);
+  });
+
   it('marks unknown access points as synthetic object and keeps open current interval', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 3, 11, 11, 30, 0));

@@ -21,6 +21,7 @@ export interface TimesheetEntry {
   approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
   first_entry?: string | null;
   last_exit?: string | null;
+  break_minutes?: number | null;
   corrected_by?: number | null;
   corrected_at?: string | null;
   corrected_by_name?: string | null;
