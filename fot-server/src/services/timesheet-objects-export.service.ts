@@ -8,6 +8,14 @@ interface IDeptGroup {
   ids: number[];
 }
 
+const SYNTHETIC_NO_DEPARTMENT_ID = '00000000-0000-0000-0000-000000000000';
+
+function isMissingTableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = 'code' in error ? String((error as { code?: unknown }).code || '') : '';
+  return code === '42P01';
+}
+
 function isExportRange(value: TimesheetExportRangeArg): value is { startDate: string; endDate: string } {
   return typeof value === 'object' && value !== null
     && typeof (value as any).startDate === 'string' && typeof (value as any).endDate === 'string';
@@ -86,6 +94,85 @@ export async function fetchDeptGroupsForEmployees(
   return map;
 }
 
+/**
+ * Руководители отделов/бригад, появившихся на объекте. Руководитель определяется
+ * назначением в employee_department_access (source != 'sigur_sync', is_active=true)
+ * на сам появившийся отдел ИЛИ на любого его предка по дереву org_departments —
+ * рабочие лежат в бригадах (kind='brigade'), а начальник часто назначен на
+ * родительский отдел (kind='department'). Ключ карты = id появившегося
+ * отдела/бригады (appearing_id), значение = employee_id руководителей.
+ */
+export async function fetchManagerIdsForDepartments(
+  departmentIds: string[],
+): Promise<Map<string, number[]>> {
+  const result = new Map<string, number[]>();
+  if (departmentIds.length === 0) return result;
+
+  try {
+    const rows = await query<{ department_id: string; employee_ids: number[] }>(
+      `WITH RECURSIVE ancestry(appearing_id, dept_id, parent_id) AS (
+         SELECT a.dept_id, d.id, d.parent_id
+           FROM unnest($1::uuid[]) AS a(dept_id)
+           JOIN org_departments d ON d.id = a.dept_id
+         UNION ALL
+         SELECT an.appearing_id, p.id, p.parent_id
+           FROM ancestry an
+           JOIN org_departments p ON p.id = an.parent_id
+       )
+       SELECT an.appearing_id AS department_id,
+              array_agg(DISTINCT eda.employee_id) AS employee_ids
+         FROM ancestry an
+         JOIN employee_department_access eda
+           ON eda.department_id = an.dept_id
+          AND eda.is_active = true
+          AND eda.source <> 'sigur_sync'
+         JOIN employees e
+           ON e.id = eda.employee_id
+          AND e.is_archived = false
+          AND e.excluded_from_timesheet = false
+        GROUP BY an.appearing_id`,
+      [departmentIds],
+    );
+
+    for (const row of rows) {
+      result.set(row.department_id, row.employee_ids);
+    }
+    return result;
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      console.warn(
+        '[timesheet-objects-export] table public.employee_department_access not found; managers are not added to object export.',
+      );
+      return result;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Добавляет руководителей в группы соответствующих отделов/бригад.
+ * Дедуп внутри группы (руководитель уже мог пробить СКУД) и между группами
+ * (руководитель отдела D, под которым появились бригады B1 и B2, попадает только
+ * в первую по сортировке ключей) — одна строка статуса на руководителя.
+ */
+export function mergeManagerIdsIntoGroups(
+  deptGroups: Map<string, IDeptGroup>,
+  managerMap: Map<string, number[]>,
+): void {
+  const placed = new Set<number>();
+  for (const key of [...deptGroups.keys()].sort()) {
+    const managerIds = managerMap.get(key);
+    if (!managerIds || managerIds.length === 0) continue;
+    const group = deptGroups.get(key);
+    if (!group) continue;
+
+    const fresh = managerIds.filter(id => !placed.has(id));
+    if (fresh.length === 0) continue;
+    fresh.forEach(id => placed.add(id));
+    group.ids = [...new Set([...group.ids, ...fresh])];
+  }
+}
+
 export async function fetchTimesheetDataForObjectIds(
   month: string,
   objectIds: string[],
@@ -110,6 +197,13 @@ export async function fetchTimesheetDataForObjectIds(
   }
 
   let deptGroups = await fetchDeptGroupsForEmployees(employeeIds);
+
+  // Добавляем руководителей появившихся отделов/бригад (они не пробивают СКУД).
+  const appearingDeptIds = [...deptGroups.keys()].filter(
+    key => key !== SYNTHETIC_NO_DEPARTMENT_ID && key !== '__unknown__',
+  );
+  const managerMap = await fetchManagerIdsForDepartments(appearingDeptIds);
+  mergeManagerIdsIntoGroups(deptGroups, managerMap);
 
   // Фильтруем отделы если задан фильтр
   if (departmentIdFilter && departmentIdFilter.length > 0) {
