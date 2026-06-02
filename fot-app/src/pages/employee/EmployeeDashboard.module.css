@@ -129,17 +129,19 @@
 /* Content Grid: левая зона (Проходы | Календарь | Заявления) + узкая правая колонка. */
 .contentGrid {
   display: grid;
-  grid-template-columns: 5fr 1fr;
+  grid-template-columns: 6fr 1fr;
   gap: 20px;
   align-items: start;
 }
 
-/* Верхний ряд: Проходы(1) | Календарь(2) | Заявления(2). Равная высота — align-items: stretch. */
+/* Верхний ряд: Проходы | Календарь | Заявления — три равные колонки.
+   align-items: start — блоки по натуральной высоте; Проходы могут быть выше календаря,
+   не растягивая его. */
 .topRow {
   display: grid;
-  grid-template-columns: 1fr 2fr 2fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 20px;
-  align-items: stretch;
+  align-items: start;
   min-width: 0;
 }
 
