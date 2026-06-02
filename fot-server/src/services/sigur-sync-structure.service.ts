@@ -24,6 +24,8 @@ export interface ISyncDepartmentsResult {
   total: number;
   parentLinksSet: number;
   deactivated: number;
+  /** Отделы-фантомы, НЕ погашенные, т.к. в них остались активные сотрудники/членства. */
+  protectedFromDeactivation: number;
   errors: string[];
 }
 
@@ -86,6 +88,46 @@ function buildReusableDepartmentNameMap(
   return byName;
 }
 
+/**
+ * Множество отделов, которые НЕЛЬЗЯ деактивировать: населённые (`populatedIds` —
+ * в них есть активные сотрудники/членства) И все их предки среди `candidateIds`.
+ * Защита предков нужна, чтобы не погасить родителя живой ветки (иначе дети-с-
+ * людьми «осиротеют» в дереве — повтор инцидента «Центральный секретариат»).
+ * Ограничение глубины обхода — защита от циклов в parent_id.
+ */
+export function computeProtectedDepartments(
+  candidateIds: string[],
+  populatedIds: Set<string>,
+  parentById: Map<string, string | null>,
+): Set<string> {
+  const candidateSet = new Set(candidateIds);
+  const protectedSet = new Set<string>();
+  for (const id of candidateIds) {
+    if (!populatedIds.has(id)) continue;
+    protectedSet.add(id);
+    let cursor = parentById.get(id) ?? null;
+    for (let depth = 0; depth < 64 && cursor; depth++) {
+      if (candidateSet.has(cursor)) protectedSet.add(cursor);
+      cursor = parentById.get(cursor) ?? null;
+    }
+  }
+  return protectedSet;
+}
+
+/**
+ * Делит фантом-кандидатов на тех, кого можно деактивировать, и защищённых
+ * (`protectedIds` — см. computeProtectedDepartments). Исчезновение населённого
+ * отдела из ответа Sigur — почти всегда частичный ответ/смена sigur-id, а не
+ * реальное удаление, поэтому такие отделы и их предков НЕ гасим.
+ */
+export function selectPhantomsToDeactivate<T extends { id: string }>(
+  phantomCandidates: T[],
+  protectedIds: Set<string>,
+): { toDeactivate: T[]; protectedFromDeactivation: number } {
+  const toDeactivate = phantomCandidates.filter(d => !protectedIds.has(d.id));
+  return { toDeactivate, protectedFromDeactivation: phantomCandidates.length - toDeactivate.length };
+}
+
 // ─── Чистые функции синхронизации ───
 
 export async function syncDepartmentsLogic(
@@ -96,7 +138,7 @@ export async function syncDepartmentsLogic(
 
   const rawDepartments = await getDepartmentsRaw(connection, context);
   if (!rawDepartments || rawDepartments.length === 0) {
-    return { imported: 0, updated: 0, skipped: 0, filtered: 0, total: 0, parentLinksSet: 0, deactivated: 0, errors: [] };
+    return { imported: 0, updated: 0, skipped: 0, filtered: 0, total: 0, parentLinksSet: 0, deactivated: 0, protectedFromDeactivation: 0, errors: [] };
   }
 
   console.log(`[syncDepartments] got ${rawDepartments.length} departments from Sigur`);
@@ -311,6 +353,7 @@ export async function syncDepartmentsLogic(
   ).length;
 
   let deactivated = 0;
+  let protectedFromDeactivation = 0;
   const safety = evaluateOrphanDepartmentDeactivationSafety(
     activeWithSigur,
     departments.length,
@@ -321,26 +364,76 @@ export async function syncDepartmentsLogic(
       console.error(`[syncDepartments] ${safety.reason}`);
       errors.push(safety.reason!);
     } else {
-      const ids = phantomCandidates.map(d => d.id);
+      // Защита от ложной деактивации: исчезновение НАСЕЛЁННОГО отдела из ответа
+      // Sigur почти всегда означает частичный ответ API или пересоздание с новыми
+      // sigur-id, а не реальное удаление. Гасим только реально пустые отделы;
+      // в которых остались активные сотрудники (org_department_id) или активные
+      // членства (employee_department_access) — НЕ трогаем, иначе люди «осиротеют»
+      // и employee-синк уведёт их в корень компании.
+      const candidateIds = phantomCandidates.map(d => d.id);
+      let populated = new Set<string>();
+      const parentById = new Map<string, string | null>();
       try {
-        await withTransaction(async (client) => {
-          const res = await client.query(
-            'UPDATE org_departments SET is_active = false WHERE id = ANY($1::uuid[])',
-            [ids],
-          );
-          deactivated = res.rowCount ?? 0;
-        });
-        console.log(
-          `[syncDepartments] deactivated ${deactivated} departments missing from Sigur`
-          + ` (sigur returned ${departments.length}, db active w/ sigur-id ${activeWithSigur})`,
+        const populatedRows = await query<{ id: string }>(
+          `SELECT id FROM (
+             SELECT org_department_id AS id FROM employees
+              WHERE org_department_id = ANY($1::uuid[])
+                AND is_archived = false AND employment_status <> 'fired'
+             UNION
+             SELECT department_id AS id FROM employee_department_access
+              WHERE department_id = ANY($1::uuid[]) AND is_active = true
+           ) s`,
+          [candidateIds],
         );
-      } catch (deactivateError) {
-        errors.push(`deactivate phantoms: ${(deactivateError as Error).message}`);
+        populated = new Set((populatedRows || []).map(r => r.id));
+        const parentRows = await query<{ id: string; parent_id: string | null }>(
+          'SELECT id, parent_id FROM org_departments',
+        );
+        for (const r of parentRows || []) parentById.set(r.id, r.parent_id);
+      } catch (populatedError) {
+        // Если не смогли проверить населённость — безопаснее НЕ гасить вовсе.
+        errors.push(`deactivate phantoms (populated check): ${(populatedError as Error).message}`);
+        populated = new Set(candidateIds);
+      }
+
+      // Защищаем населённые + их предков-кандидатов: иначе погасим родителя живой
+      // ветки и дети-с-людьми «осиротеют» в дереве (повтор инцидента секретариата).
+      const protectedIds = computeProtectedDepartments(candidateIds, populated, parentById);
+      const split = selectPhantomsToDeactivate(phantomCandidates, protectedIds);
+      const toDeactivate = split.toDeactivate;
+      protectedFromDeactivation = split.protectedFromDeactivation;
+      if (protectedFromDeactivation > 0) {
+        const protectedNames = phantomCandidates
+          .filter(d => protectedIds.has(d.id))
+          .map(d => d.name || d.id)
+          .join(', ');
+        console.warn(
+          `[syncDepartments] protected ${protectedFromDeactivation} populated/ancestor departments from deactivation: ${protectedNames}`,
+        );
+      }
+
+      if (toDeactivate.length > 0) {
+        const ids = toDeactivate.map(d => d.id);
+        try {
+          await withTransaction(async (client) => {
+            const res = await client.query(
+              'UPDATE org_departments SET is_active = false WHERE id = ANY($1::uuid[])',
+              [ids],
+            );
+            deactivated = res.rowCount ?? 0;
+          });
+          console.log(
+            `[syncDepartments] deactivated ${deactivated} departments missing from Sigur`
+            + ` (sigur returned ${departments.length}, db active w/ sigur-id ${activeWithSigur})`,
+          );
+        } catch (deactivateError) {
+          errors.push(`deactivate phantoms: ${(deactivateError as Error).message}`);
+        }
       }
     }
   }
 
-  console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links, ${deactivated} deactivated`);
+  console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links, ${deactivated} deactivated, ${protectedFromDeactivation} protected`);
 
   // Sigur при пересоздании компании выдаёт НОВЫЕ sigur-id, whitelist гасит
   // старое поддерево → осиротевшие is_active=false дубликаты с застрявшими
@@ -360,7 +453,7 @@ export async function syncDepartmentsLogic(
   // Sync структуры из Sigur меняет и имена (employee-mapper), и иерархию
   // (dept tree), и whitelist sync-фильтра — инвалидируем все три согласованно.
   invalidateOrgStructureCaches();
-  return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, deactivated, errors };
+  return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, deactivated, protectedFromDeactivation, errors };
 }
 
 export interface IConsolidateResult {

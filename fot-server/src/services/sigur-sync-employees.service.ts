@@ -16,6 +16,28 @@ import { batchMoveSigurEmployees } from './sigur-live-employees-crud.service.js'
 import { settingsService } from './settings.service.js';
 import { upsertTechnicalDepartmentAccess } from './employee-department-access.service.js';
 
+// ─── Хелперы защиты от «осиротения» (B′) ───
+
+/**
+ * true, если `newDeptId` является ПРЕДКОМ `currentDeptId` в дереве отделов
+ * (т.е. перенос — это подъём к корню/родителю). Такой перенос из Sigur почти
+ * всегда артефакт удаления/пересоздания папки, а не настоящий перевод.
+ * Защита от циклов в parent_id — ограничение глубины обхода.
+ */
+export function isAncestorDepartment(
+  newDeptId: string,
+  currentDeptId: string | null | undefined,
+  parentById: Map<string, string | null>,
+): boolean {
+  if (!currentDeptId || newDeptId === currentDeptId) return false;
+  let cursor = parentById.get(currentDeptId) ?? null;
+  for (let depth = 0; depth < 64 && cursor; depth++) {
+    if (cursor === newDeptId) return true;
+    cursor = parentById.get(cursor) ?? null;
+  }
+  return false;
+}
+
 // ─── Типы результатов ───
 
 export interface ISeedPositionsResult {
@@ -380,6 +402,21 @@ export async function syncEmployeesLogic(
     : null;
   const syncTodayIso = new Date().toISOString().slice(0, 10);
 
+  // Карта parent_id отделов — для защиты от «осиротения» (B′): если Sigur вернул
+  // сотруднику отдел-ПРЕДОК его текущего (подъём к корню/родителю — типичный
+  // артефакт удаления/пересоздания папки в Sigur), перенос НЕ применяем.
+  const deptParentById = new Map<string, string | null>();
+  try {
+    const deptRows = await query<{ id: string; parent_id: string | null }>(
+      'SELECT id, parent_id FROM org_departments',
+    );
+    for (const d of deptRows || []) deptParentById.set(d.id, d.parent_id);
+  } catch (deptTreeError) {
+    console.warn('[syncEmployees] failed to load dept tree for ancestor guard:', (deptTreeError as Error).message);
+  }
+  const isAncestorOfCurrent = (newDeptId: string, currentDeptId: string | null | undefined): boolean =>
+    isAncestorDepartment(newDeptId, currentDeptId, deptParentById);
+
   const dbPositions = await query<{ id: string; sigur_position_id: number | null }>(
     'SELECT id, sigur_position_id FROM positions WHERE sigur_position_id IS NOT NULL',
   );
@@ -531,7 +568,20 @@ export async function syncEmployeesLogic(
       }
 
       if (orgDepartmentId) {
-        updateFields.org_department_id = orgDepartmentId;
+        const deptChanging = orgDepartmentId !== prev?.org_department_id;
+        if (deptChanging && prev?.department_locked) {
+          // Ручной override: отдел залочен — Sigur не меняет привязку (флаг не сбрасываем).
+          console.warn(`[syncEmployees] skip dept change (locked): ${fullName} (sigurId=${sigurEmpId})`);
+        } else if (deptChanging && isAncestorOfCurrent(orgDepartmentId, prev?.org_department_id)) {
+          // B′: Sigur вернул отдел-предок текущего → осиротение (папка удалена/заменена,
+          // человек всплыл к корню/родителю). Не переносим — это почти всегда артефакт.
+          console.warn(
+            `[syncEmployees] skip ancestor-demotion: ${fullName} (sigurId=${sigurEmpId}) `
+            + `${prev?.org_department_id} → ${orgDepartmentId}${sigurDeptName ? ` (${sigurDeptName})` : ''}`,
+          );
+        } else {
+          updateFields.org_department_id = orgDepartmentId;
+        }
       }
       if (positionId) {
         updateFields.position_id = positionId;
@@ -556,9 +606,8 @@ export async function syncEmployeesLogic(
       if ((prev?.tab_number || null) !== tabNumber) {
         updateFields.tab_number = tabNumber;
       }
-      if (prev?.department_locked) {
-        updateFields.department_locked = false;
-      }
+      // department_locked НЕ сбрасываем при синке: это ручной override «Sigur не
+      // меняет отдел» (см. skip dept change (locked) выше). Снимается только вручную.
 
       if (Object.keys(updateFields).length > 0) {
         updates.push({ id: dbId, fields: updateFields, name: fullName });

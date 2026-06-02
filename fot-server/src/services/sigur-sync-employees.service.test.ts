@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { evaluateAutoFireSafety } from './sigur-sync-employees.service.js';
+import { evaluateAutoFireSafety, isAncestorDepartment } from './sigur-sync-employees.service.js';
 
 describe('evaluateAutoFireSafety', () => {
   it('пропускает обычный fire ниже лимита', () => {
@@ -66,5 +66,45 @@ describe('evaluateAutoFireSafety', () => {
     const r = evaluateAutoFireSafety(2400, 2400, 130);
     expect(r.shouldSkip).toBe(true);
     expect(r.limit).toBe(120);
+  });
+});
+
+describe('isAncestorDepartment (guard B′: защита от подъёма к отделу-предку)', () => {
+  // Дерево инцидента: su10 → central → {sekr, sekrobj, courier}; other → su10.
+  const tree = new Map<string, string | null>([
+    ['su10', null],
+    ['central', 'su10'],
+    ['sekr', 'central'],
+    ['sekrobj', 'central'],
+    ['courier', 'central'],
+    ['other', 'su10'],
+  ]);
+
+  it('подъём к корню компании = предок → блокируется (кейс секретариата)', () => {
+    expect(isAncestorDepartment('su10', 'sekr', tree)).toBe(true);
+    expect(isAncestorDepartment('su10', 'courier', tree)).toBe(true);
+  });
+
+  it('подъём к промежуточному родителю = предок → блокируется', () => {
+    expect(isAncestorDepartment('central', 'sekr', tree)).toBe(true);
+  });
+
+  it('перевод к соседнему отделу (sibling) → разрешён', () => {
+    expect(isAncestorDepartment('sekrobj', 'sekr', tree)).toBe(false);
+  });
+
+  it('перевод вниз к потомку → разрешён', () => {
+    expect(isAncestorDepartment('sekr', 'central', tree)).toBe(false);
+  });
+
+  it('тот же отдел / нет текущего → не предок', () => {
+    expect(isAncestorDepartment('sekr', 'sekr', tree)).toBe(false);
+    expect(isAncestorDepartment('sekr', null, tree)).toBe(false);
+    expect(isAncestorDepartment('sekr', undefined, tree)).toBe(false);
+  });
+
+  it('цикл в parent_id не зацикливает обход', () => {
+    const cyclic = new Map<string, string | null>([['a', 'b'], ['b', 'a']]);
+    expect(isAncestorDepartment('x', 'a', cyclic)).toBe(false);
   });
 });
