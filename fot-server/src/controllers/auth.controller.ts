@@ -96,9 +96,9 @@ async function buildProfileResponse(
     ? await listTimekeeperAccessibleDepartmentIds(profile.id)
     : await listManagedDepartmentIdsForUser(profile.id, null, profile.employee_id);
 
-  // Табельщица: «прямые подчинённые» = сотрудники, назначенные её объектам ЯВНО
-  // (employee_object_assignment). Нужно фронту для рендера direct-reports ячейки,
-  // когда у табельщицы нет отделов, только персональные назначения.
+  // Табельщица: «прямые подчинённые» = сотрудники её объектов (employee_object_assignment
+  // + место работы СКУД employee_skud_object_access). Нужно фронту для рендера direct-reports
+  // ячейки, когда у табельщицы нет отделов, только сотрудники объектов.
   const has_direct_reports = role.code === TIMEKEEPER_ROLE_CODE
     ? (await listTimekeeperDirectEmployeeIds(profile.id)).length > 0
     : (profile.employee_id != null && (await listDirectSubordinates(profile.employee_id)).length > 0);

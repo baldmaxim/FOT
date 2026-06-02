@@ -245,8 +245,8 @@ export async function canAccessEmployeeInScope(
     }
   }
 
-  // Табельщица: сотрудники, назначенные её объектам ЯВНО (employee_object_assignment).
-  // Отделочные сотрудники уже покрыты блоком accessible выше.
+  // Табельщица: сотрудники её объектов (employee_object_assignment + место работы СКУД
+  // employee_skud_object_access). Отделочные сотрудники уже покрыты блоком accessible выше.
   if (isTimekeeper(req)) {
     const directEmployees = await resolveTimekeeperDirectEmployeeIds(req);
     if (directEmployees.has(employeeId)) return true;
@@ -331,9 +331,9 @@ export async function resolveManagedDepartmentIds(req: AuthenticatedRequest): Pr
 }
 
 /**
- * Множество «прямых» сотрудников для скоупа табеля. Для табельщицы — сотрудники,
- * назначенные её объектам ЯВНО (employee_object_assignment); для остальных —
- * employee_direct_reports по собственному employee_id. Заменяет прямые вызовы
+ * Множество «прямых» сотрудников для скоупа табеля. Для табельщицы — сотрудники её
+ * объектов (employee_object_assignment + место работы СКУД employee_skud_object_access);
+ * для остальных — employee_direct_reports по собственному employee_id. Заменяет прямые вызовы
  * listDirectSubordinates(req.user.employee_id) в путях табеля, чтобы табельщица
  * (у которой может не быть employee_id) тоже получала свой набор.
  */

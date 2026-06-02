@@ -43,7 +43,7 @@ export const TimekeeperObjectAccessSection: FC<IProps> = ({ userId }) => {
     <div>
       <div className={styles.companyAccessLabel}>Объекты табельщицы</div>
       <div className={styles.companyAccessHint}>
-        Табельщица видит табель сотрудников этих объектов входа: бригады/отделы, назначенные объекту, их начальники участков, а также сотрудники, назначенные объекту явно.
+        Табельщица видит табель сотрудников этих объектов входа: бригады/отделы, назначенные объекту, их начальники участков, сотрудники, назначенные объекту явно, а также те, у кого эти объекты указаны как место работы (СКУД).
       </div>
       <ObjectAccessPopover
         objects={objectsQuery.data || []}

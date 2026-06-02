@@ -74,6 +74,16 @@ describe('listTimekeeperDirectEmployeeIds', () => {
     const ids = await listTimekeeperDirectEmployeeIds('tk-1');
     expect(ids).toEqual([10, 20]);
   });
+
+  it('берёт сотрудников из обоих источников: явных назначений и места работы СКУД', async () => {
+    pgQuery.mockResolvedValue([{ employee_id: 5 }]);
+    await listTimekeeperDirectEmployeeIds('tk-1');
+    const [sql, params] = pgQuery.mock.calls[0];
+    expect(sql).toContain('employee_object_assignment');
+    expect(sql).toContain('employee_skud_object_access');
+    expect(sql).toContain('UNION');
+    expect(params).toEqual(['tk-1']);
+  });
 });
 
 describe('resolveTimekeeperObjectIds', () => {

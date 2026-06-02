@@ -5,14 +5,14 @@ import { query } from '../config/postgres.js';
  * Скоуп роли «Табельщица» (timekeeper).
  *
  * Табельщице назначаются «объекты входа» (skud_objects) через timekeeper_object_access.
- * Её зона доступа складывается из двух источников, которые ложатся на существующие
+ * Её зона доступа складывается из источников, которые ложатся на существующие
  * примитивы скоупа (см. data-scope.service.ts):
  *   - department_object_assignment: отделы/бригады, назначенные её объектам →
  *     «явные отделы» (далее subtree-расширение в resolveAccessibleDepartmentIds);
- *   - employee_object_assignment: сотрудники, назначенные её объектам явно (мультиобъектные)
- *     → множество «прямых» сотрудников (путь listDirectSubordinates).
- *
- * Таблицы развязаны с 1С-выгрузкой и employee_skud_object_access — читаются только здесь.
+ *   - employee_object_assignment: сотрудники, назначенные её объектам явно (мультиобъектные);
+ *   - employee_skud_object_access: сотрудники, у которых её объекты указаны как место
+ *     работы СКУД (миграция 092) — основной источник, заполняется автоматически.
+ * Последние два дают множество «прямых» сотрудников (путь listDirectSubordinates).
  */
 
 export const TIMEKEEPER_ROLE_CODE = 'timekeeper';
@@ -77,16 +77,25 @@ export async function listTimekeeperAccessibleDepartmentIds(timekeeperUserId: st
 }
 
 /**
- * Сотрудники, назначенные объектам табельщицы ЯВНО (employee_object_assignment).
+ * Сотрудники объектов табельщицы: назначенные ЯВНО (employee_object_assignment)
+ * + те, у кого её объекты указаны как место работы СКУД (employee_skud_object_access).
  * По user_id, без req-кэша — для использования вне запроса (buildProfileResponse).
  */
 export async function listTimekeeperDirectEmployeeIds(timekeeperUserId: string): Promise<number[]> {
   const rows = await query<{ employee_id: number | string }>(
-    `SELECT DISTINCT eoa.employee_id
-       FROM timekeeper_object_access toa
-       JOIN employee_object_assignment eoa
-         ON eoa.skud_object_id = toa.skud_object_id AND eoa.is_active = true
-      WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true`,
+    `SELECT DISTINCT u.employee_id FROM (
+       SELECT eoa.employee_id
+         FROM timekeeper_object_access toa
+         JOIN employee_object_assignment eoa
+           ON eoa.skud_object_id = toa.skud_object_id AND eoa.is_active = true
+        WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
+       UNION
+       SELECT esoa.employee_id
+         FROM timekeeper_object_access toa
+         JOIN employee_skud_object_access esoa
+           ON esoa.skud_object_id = toa.skud_object_id AND esoa.is_active = true
+        WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
+     ) u`,
     [timekeeperUserId],
   );
   return [...new Set(
