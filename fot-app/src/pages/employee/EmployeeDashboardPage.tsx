@@ -24,6 +24,15 @@ const DayDetailPanel = lazy(() => import('../../components/dashboard/DayDetailPa
 
 const todayLocalIso = (): string => new Date().toLocaleDateString('en-CA');
 
+// «Последнее 1 заявление» / «Последние 3 заявления» / «Последние 5 заявлений».
+const recentRequestsHeading = (n: number): string => {
+  const d = n % 10;
+  const dd = n % 100;
+  const noun = dd >= 11 && dd <= 14 ? 'заявлений' : d === 1 ? 'заявление' : d >= 2 && d <= 4 ? 'заявления' : 'заявлений';
+  const adj = n === 1 ? 'Последнее' : 'Последние';
+  return `${adj} ${n} ${noun}:`;
+};
+
 // «За свой счёт» (unpaid) теперь подаётся датами на календаре, а не периодом.
 const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'sick_leave', 'educational_leave'];
 const ALLOWED_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
@@ -395,6 +404,7 @@ export const EmployeeDashboardPage: React.FC = () => {
                   <div className={styles.emptyState}>Заявлений пока нет</div>
                 ) : (
                   <div className={styles.recentRequests}>
+                    <div className={styles.recentRequestsTitle}>{recentRequestsHeading(recentRequests.length)}</div>
                     {recentRequests.map(r => (
                       <LeaveRequestRow
                         key={r.id}

@@ -129,17 +129,18 @@
 /* Content Grid: левая зона (Проходы | Календарь | Заявления) + узкая правая колонка. */
 .contentGrid {
   display: grid;
-  grid-template-columns: 6fr 1fr;
+  grid-template-columns: 4fr 1fr;
   gap: 20px;
   align-items: start;
 }
 
-/* Верхний ряд: Проходы | Календарь | Заявления — три равные колонки.
+/* Верхний ряд: Проходы(2) | Календарь(3) | Заявления(3) — Проходы вдвое-на-треть уже
+   (2/3 от Календаря/Заявлений). Правая колонка Информация = 1fr ≈ 2/3 Календаря.
    align-items: start — блоки по натуральной высоте; Проходы могут быть выше календаря,
    не растягивая его. */
 .topRow {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 2fr 3fr 3fr;
   gap: 20px;
   align-items: start;
   min-width: 0;
@@ -176,6 +177,13 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.recentRequestsTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
 }
 
 /* Форма в широкой (2/3) ячейке: поля не растягиваем на всю ширину карточки. */
