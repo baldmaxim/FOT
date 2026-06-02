@@ -1221,18 +1221,21 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             .filter(Boolean)
                             .join(' • ')
                           : baseTitle;
-                        // Bulk-выделение разрешено и в выходные — как в виде «по сотрудникам».
-                        const isBulkClickable = true;
-                        const isBlocked = row.isSynthetic;
+                        // Дни вне периода работы сотрудника в отделе (до прихода / после перевода/исключения).
+                        const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
+                        // Bulk-выделение разрешено и в выходные — как в виде «по сотрудникам», но не для inactive-дней.
+                        const isBulkClickable = !inactive;
+                        const isBlocked = row.isSynthetic || inactive;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
+                        const inactiveCls = inactive ? ' ts-day--inactive' : '';
                         const objectApprovalCls = objectEntry?.approval_status === 'pending' ? ' ts-day--approval-pending'
                           : objectEntry?.approval_status === 'approved' ? ' ts-day--approval-approved'
                           : objectEntry?.approval_status === 'rejected' ? ' ts-day--approval-rejected' : '';
                         return (
                           <td
                             key={`${group.object_key}_${row.employee.id}_${day}`}
-                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}`}
+                            className={`${baseCls}${inactiveCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !isBlocked ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
                             onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,
@@ -1244,7 +1247,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                               getObjectBulkRowKey(row.employee.id, row.object_key),
                               day,
                             ) : undefined}
-                            onClick={!bulkEditMode ? () => {
+                            onClick={!bulkEditMode && !inactive ? () => {
                               if (row.isSynthetic) {
                                 onDayClick(row.employee, day, row.dailyEntries.get(day) || null);
                                 return;
@@ -1256,7 +1259,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                               }, objectEntry);
                             } : undefined}
                           >
-                            {text}
+                            {inactive ? '' : text}
                           </td>
                         );
                       })}
