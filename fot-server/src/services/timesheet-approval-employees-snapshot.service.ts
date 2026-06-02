@@ -1,9 +1,51 @@
 import type { PoolClient } from 'pg';
 import { query } from '../config/postgres.js';
+import { listDirectSubordinates } from './employee-direct-reports.service.js';
 
 export interface IApprovalEmployeeSnapshot {
   employee_id: number;
   full_name: string;
+}
+
+/**
+ * Состав персональной подачи руководителя за период: он сам + его активные прямые
+ * подчинённые (employee_direct_reports), за вычетом тех, кто уже покрыт
+ * submitted/approved/returned подачей отдела (manager_employee_id IS NULL) за этот же
+ * период. Дедуп снимает двойной показ сотрудника в dept-карточке и persona-карточке HR.
+ *
+ * Возвращает отсортированный массив employee_id (может быть пустым).
+ */
+export async function resolveManagerPersonalSnapshotIds(
+  managerEmployeeId: number,
+  startDate: string,
+  endDate: string,
+): Promise<number[]> {
+  const subordinateIds = await listDirectSubordinates(managerEmployeeId);
+  const candidateIds = [...new Set([managerEmployeeId, ...subordinateIds])];
+
+  const activeRows = await query<{ id: number }>(
+    `SELECT id FROM employees
+       WHERE id = ANY($1::int[])
+         AND (is_archived IS NULL OR is_archived = false)
+         AND (employment_status IS NULL OR employment_status = 'active')`,
+    [candidateIds],
+  );
+  const ids = new Set(activeRows.map(r => Number(r.id)).filter(id => Number.isInteger(id) && id > 0));
+  if (ids.size === 0) return [];
+
+  const coveredRows = await query<{ employee_id: number }>(
+    `SELECT DISTINCT s.employee_id
+       FROM timesheet_approval_employees s
+       JOIN timesheet_approvals a ON a.id = s.approval_id
+      WHERE a.start_date = $1 AND a.end_date = $2
+        AND a.manager_employee_id IS NULL
+        AND a.status IN ('submitted','approved','returned')
+        AND s.employee_id = ANY($3::int[])`,
+    [startDate, endDate, [...ids]],
+  );
+  for (const r of coveredRows) ids.delete(Number(r.employee_id));
+
+  return [...ids].sort((a, b) => a - b);
 }
 
 /**
