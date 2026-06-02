@@ -63,6 +63,7 @@ export const TooltipHost: FC = () => {
   const storedRef = useRef<WeakMap<Element, string>>(new WeakMap());
   const showTimer = useRef<number | null>(null);
   const closeTimer = useRef<number | null>(null);
+  const positionedRef = useRef(false);
 
   useEffect(() => {
     if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
@@ -99,6 +100,7 @@ export const TooltipHost: FC = () => {
       if (closeTimer.current != null) { window.clearTimeout(closeTimer.current); closeTimer.current = null; }
       activeRef.current = el;
       rectRef.current = el.getBoundingClientRect();
+      positionedRef.current = false;
       setTip({ text, top: -9999, left: -9999, placement: 'bottom' });
       setOpen(false);
     };
@@ -179,9 +181,12 @@ export const TooltipHost: FC = () => {
   // Две фазы: измеряем размер скрытого тултипа → ставим финальную позицию → открываем.
   useLayoutEffect(() => {
     if (!tip || open || !nodeRef.current || !rectRef.current) return;
-    const r = nodeRef.current.getBoundingClientRect();
-    const pos = place(rectRef.current, r.width, r.height);
-    if (pos.top !== tip.top || pos.left !== tip.left || pos.placement !== tip.placement) {
+    if (!positionedRef.current) {
+      // offsetWidth/Height — целые, без scale-трансформа (= размер открытого тултипа):
+      // снимает субпиксельную петлю «измерил→переставил→переизмерил».
+      const node = nodeRef.current;
+      const pos = place(rectRef.current, node.offsetWidth, node.offsetHeight);
+      positionedRef.current = true;
       setTip({ ...tip, ...pos });
       return;
     }
