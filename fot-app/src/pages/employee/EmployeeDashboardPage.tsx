@@ -468,28 +468,28 @@ export const EmployeeDashboardPage: React.FC = () => {
             </>
           )}
         </div>
-      </div>
 
-      {/* Tasks - full-width row под сеткой */}
-      <div className={styles.tasksRow}>
-        <Suspense fallback={DashboardCardFallback}>
-          <DailyTasksCard />
-        </Suspense>
-      </div>
+        {/* Задачи — нижняя средняя ячейка сетки */}
+        <div className={styles.tasksArea}>
+          <Suspense fallback={DashboardCardFallback}>
+            <DailyTasksCard />
+          </Suspense>
+        </div>
 
-      {/* Info cards - below */}
-      <div style={{ marginTop: '20px' }}>
-        <Suspense fallback={DashboardCardFallback}>
-          <EmployeeInfoCards
-            loading={loading}
-            employee={employee}
-            importedPosition={profile?.imported_position ?? undefined}
-            email={user?.email ?? undefined}
-            isTwoFactorEnabled={isTwoFactorEnabled}
-            onSetup2FA={handleSetup2FA}
-            onDisable2FA={handleDisable2FA}
-          />
-        </Suspense>
+        {/* Информация — нижняя правая ячейка сетки */}
+        <div className={styles.infoArea}>
+          <Suspense fallback={DashboardCardFallback}>
+            <EmployeeInfoCards
+              loading={loading}
+              employee={employee}
+              importedPosition={profile?.imported_position ?? undefined}
+              email={user?.email ?? undefined}
+              isTwoFactorEnabled={isTwoFactorEnabled}
+              onSetup2FA={handleSetup2FA}
+              onDisable2FA={handleDisable2FA}
+            />
+          </Suspense>
+        </div>
       </div>
 
       {show2FASetup && twoFAData && (

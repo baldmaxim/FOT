@@ -129,15 +129,33 @@
 /* Content Grid */
 .contentGrid {
   display: grid;
-  /* Календарь | Блок дня (детали корр. + СКУД) | Форма/подсказка */
-  grid-template-columns: 350px minmax(300px, 360px) minmax(300px, 1fr);
+  /* Левая колонка: календарь над «Проходами дня». Верх-право — форма заявления (2/3).
+     Низ: «Проходы | Задачи | Информация» в три равные трети. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    "calendar form  form"
+    "skud     tasks info";
   gap: 20px;
   align-items: start;
 }
 
-/* Средняя колонка — блок выбранного дня (#7, #10). */
+.calendarEventsBlock { grid-area: calendar; }
+.formPane { grid-area: form; }
+.tasksArea { grid-area: tasks; min-width: 0; }
+.infoArea { grid-area: info; min-width: 0; }
+
+/* Левая нижняя ячейка — блок выбранного дня (проходы СКУД, #7, #10). */
 .detailPane {
+  grid-area: skud;
   min-width: 0;
+}
+
+/* Форма в широкой (2/3) ячейке: поля не растягиваем на всю ширину карточки. */
+.formPane > .formTitle,
+.formPane > .formGroup,
+.formPane > .formRow,
+.formPane > button {
+  max-width: 560px;
 }
 
 .detailHint,
@@ -153,11 +171,6 @@
   background: var(--bg-secondary);
   border: 1px dashed var(--border);
   border-radius: 14px;
-}
-
-/* Ряд под сеткой — карточка суточных задач на всю ширину. */
-.tasksRow {
-  margin-top: 20px;
 }
 
 /* Card */
@@ -1445,6 +1458,12 @@
 
   .contentGrid {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "calendar"
+      "skud"
+      "form"
+      "tasks"
+      "info";
   }
 
   .calendarEventsBlock {

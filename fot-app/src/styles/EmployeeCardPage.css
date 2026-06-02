@@ -655,7 +655,21 @@
   height: 14px;
 }
 
+.skud-table-event,
+.skud-col-point {
+  min-width: 0;
+}
+
+.skud-col-point {
+  overflow: hidden;
+}
+
 .skud-table-point {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-secondary);
   font-size: 13px;
 }
