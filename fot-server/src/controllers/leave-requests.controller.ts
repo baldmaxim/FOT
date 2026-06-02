@@ -17,7 +17,6 @@ import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
-import { execute } from '../config/postgres.js';
 import type { TimeStatus } from '../types/index.js';
 
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave'] as const;
@@ -728,132 +727,144 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     const authorUserId = author?.id ?? req.user.id;
 
     const nowIso = new Date().toISOString();
-    const data = await queryOne(
-      `UPDATE leave_requests SET
-         status = 'approved',
-         reviewer_id = $1,
-         reviewed_at = $2,
-         review_comment = $3,
-         updated_at = $2
-       WHERE id = $4
-       RETURNING *`,
-      [req.user.id, nowIso, comment || null, id],
-    );
 
-    // Создаём attendance adjustments как канонический источник ручных статусов
-    const timesheetStatus = Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, request.request_type)
-      ? LEAVE_TO_TIMESHEET[request.request_type as keyof typeof LEAVE_TO_TIMESHEET]
-      : undefined;
-    if (timesheetStatus) {
-      const isWorkKind = request.request_type === 'work';
-      // Для kind='work' разрешаем выход на смену в любой день, включая выходные/праздники.
-      // Часы НЕ зашиваем: 'work' — это только разрешение/согласование выхода, фактическое
-      // время берётся из СКУД (см. attendance.service.ts: status==='work' && hours_override===null
-      // → часы из skud_daily_summary, 0 если не вышел). Иначе при отсутствии человека в табеле
-      // ошибочно появлялись бы 8ч.
-      // Отсутствие сотрудника (отпуск/больничный/за свой счёт) идёт подряд календарно,
-      // включая выходные. Для 'remote' (удалёнка) — это рабочая активность, выходные пропускаем.
-      const skipWeekends = request.request_type === 'remote';
+    // Атомарность: смена статуса и материализация корректировок в одной транзакции.
+    // Раньше status='approved' проставлялся ДО создания adjustment'ов и вне транзакции —
+    // при сбое вставки заявка оставалась одобренной без строк в табеле (осиротевшие
+    // approved-заявки). Теперь падение отката → заявка остаётся pending, запрос ретраится.
+    const data = await withTransaction(async (client) => {
+      const updated = (await client.query(
+        `UPDATE leave_requests SET
+           status = 'approved',
+           reviewer_id = $1,
+           reviewed_at = $2,
+           review_comment = $3,
+           updated_at = $2
+         WHERE id = $4
+         RETURNING *`,
+        [req.user.id, nowIso, comment || null, id],
+      )).rows[0] ?? null;
 
-      // Дискретные типы (work/remote/certificate/unpaid) подаются конкретными датами —
-      // материализуем ровно их. Непрерывные (отпуск/больничный/учебный) — диапазон start..end.
-      const hasDiscreteDates = Array.isArray(request.selected_dates) && request.selected_dates.length > 0;
-      const isoDates: string[] = [];
-      if (hasDiscreteDates) {
-        for (const raw of request.selected_dates as string[]) {
-          const iso = typeof raw === 'string' ? raw.slice(0, 10) : new Date(raw).toISOString().slice(0, 10);
-          if (iso) isoDates.push(iso);
+      // Создаём attendance adjustments как канонический источник ручных статусов
+      const timesheetStatus = Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, request.request_type)
+        ? LEAVE_TO_TIMESHEET[request.request_type as keyof typeof LEAVE_TO_TIMESHEET]
+        : undefined;
+      if (timesheetStatus) {
+        const isWorkKind = request.request_type === 'work';
+        // Для kind='work' разрешаем выход на смену в любой день, включая выходные/праздники.
+        // Часы НЕ зашиваем: 'work' — это только разрешение/согласование выхода, фактическое
+        // время берётся из СКУД (см. attendance.service.ts: status==='work' && hours_override===null
+        // → часы из skud_daily_summary, 0 если не вышел). Иначе при отсутствии человека в табеле
+        // ошибочно появлялись бы 8ч.
+        // Отсутствие сотрудника (отпуск/больничный/за свой счёт) идёт подряд календарно,
+        // включая выходные. Для 'remote' (удалёнка) — это рабочая активность, выходные пропускаем.
+        // НО: одиночную заявку (start_date===end_date) на выходной материализуем всегда —
+        // это явный выбор сотрудника, его нельзя молча терять.
+        const isSingleDayRange = request.start_date === request.end_date;
+        const skipWeekends = request.request_type === 'remote' && !isSingleDayRange;
+
+        // Дискретные типы (work/remote/certificate/unpaid) подаются конкретными датами —
+        // материализуем ровно их. Непрерывные (отпуск/больничный/учебный) — диапазон start..end.
+        const hasDiscreteDates = Array.isArray(request.selected_dates) && request.selected_dates.length > 0;
+        const isoDates: string[] = [];
+        if (hasDiscreteDates) {
+          for (const raw of request.selected_dates as string[]) {
+            const iso = typeof raw === 'string' ? raw.slice(0, 10) : new Date(raw).toISOString().slice(0, 10);
+            if (iso) isoDates.push(iso);
+          }
+        } else {
+          const startDate = new Date(request.start_date);
+          const endDate = new Date(request.end_date);
+          for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+            const dayOfWeek = d.getDay();
+            if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
+            isoDates.push(d.toISOString().split('T')[0]);
+          }
         }
-      } else {
-        const startDate = new Date(request.start_date);
-        const endDate = new Date(request.end_date);
-        for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-          const dayOfWeek = d.getDay();
-          if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
-          isoDates.push(d.toISOString().split('T')[0]);
+
+        for (const iso of isoDates) {
+          // 'work' не зашивает часы (время из СКУД); остальные статусы — null здесь,
+          // часы по графику проставляет attendance.service (ABSENCE_STATUSES_AS_WORKED).
+          const hoursOverride = null;
+          // Заявление уже одобрено руководителем — дополнительного согласования не требует.
+          const approvalStatus = isWorkKind ? 'auto_approved' : undefined;
+
+          await upsertAttendanceAdjustment({
+            employee_id: request.employee_id,
+            work_date: iso,
+            status: timesheetStatus,
+            hours_override: hoursOverride,
+            source_type: 'leave_request',
+            source_id: String(request.id),
+            reason: request.reason ?? null,
+            created_by: authorUserId,
+            ...(approvalStatus ? { approval_status: approvalStatus } : {}),
+          }, client);
         }
       }
 
-      for (const iso of isoDates) {
-        // 'work' не зашивает часы (время из СКУД); остальные статусы — null здесь,
-        // часы по графику проставляет attendance.service (ABSENCE_STATUSES_AS_WORKED).
-        const hoursOverride = null;
-        // Заявление уже одобрено руководителем — дополнительного согласования не требует.
-        const approvalStatus = isWorkKind ? 'auto_approved' : undefined;
-
-        await upsertAttendanceAdjustment({
-          employee_id: request.employee_id,
-          work_date: iso,
-          status: timesheetStatus,
-          hours_override: hoursOverride,
-          source_type: 'leave_request',
-          source_id: String(request.id),
-          reason: request.reason ?? null,
-          created_by: authorUserId,
-          ...(approvalStatus ? { approval_status: approvalStatus } : {}),
-        });
-      }
-    }
-
-    // Обработка корректировки табеля
-    if (request.request_type === 'time_correction' && request.correction_date) {
-      const rawCorrectionStatus: TimeStatus = isTimeStatus(request.correction_status) ? request.correction_status : 'work';
-      // Явные часы на «рабочий день» = «Корректировка табеля» (manual): время авторитетно
-      // берётся из hours_override, а не из СКУД. Иначе при отсутствии проходов время «терялось»
-      // (status='work' + null часов → 0 по СКУД), и статус расходился со списком корректировок.
-      const correctionStatus: TimeStatus = rawCorrectionStatus === 'work' && (request.correction_hours ?? 0) > 0
-        ? 'manual'
-        : rawCorrectionStatus;
-      // Если день — выходной по графику сотрудника И его отдел в whitelist
-      // настройки «Согласование выходных дней», корректировка попадает в pending
-      // и должна быть дополнительно одобрена админом на /approvals.
-      const approvalStatus = await resolveAdjustmentApprovalStatus(
-        request.employee_id,
-        request.correction_date,
-        correctionStatus,
-        request.correction_hours ?? null,
-      );
-      if (request.correction_object_id) {
-        // Корректировка привязана к конкретному объекту → создаём manual_object
-        // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
-        // day-level записи дня (мьютекс day-level ↔ per-object).
-        await execute(
-          `DELETE FROM attendance_adjustments
-             WHERE employee_id = $1 AND work_date = $2
-               AND source_type IN ('manual', 'leave_request')`,
-          [request.employee_id, request.correction_date],
+      // Обработка корректировки табеля
+      if (request.request_type === 'time_correction' && request.correction_date) {
+        const rawCorrectionStatus: TimeStatus = isTimeStatus(request.correction_status) ? request.correction_status : 'work';
+        // Явные часы на «рабочий день» = «Корректировка табеля» (manual): время авторитетно
+        // берётся из hours_override, а не из СКУД. Иначе при отсутствии проходов время «терялось»
+        // (status='work' + null часов → 0 по СКУД), и статус расходился со списком корректировок.
+        const correctionStatus: TimeStatus = rawCorrectionStatus === 'work' && (request.correction_hours ?? 0) > 0
+          ? 'manual'
+          : rawCorrectionStatus;
+        // Если день — выходной по графику сотрудника И его отдел в whitelist
+        // настройки «Согласование выходных дней», корректировка попадает в pending
+        // и должна быть дополнительно одобрена админом на /approvals.
+        const approvalStatus = await resolveAdjustmentApprovalStatus(
+          request.employee_id,
+          request.correction_date,
+          correctionStatus,
+          request.correction_hours ?? null,
         );
-        await upsertAttendanceAdjustment({
-          employee_id: request.employee_id,
-          work_date: request.correction_date,
-          status: correctionStatus,
-          hours_override: request.correction_hours ?? null,
-          source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-          source_id: request.correction_object_id,
-          reason: request.reason ?? null,
-          created_by: authorUserId,
-          approval_status: approvalStatus,
-          metadata: {
-            object_id: request.correction_object_id,
-            object_name: request.correction_object_name,
-            auto_resolved: false,
-          },
-        });
-      } else {
-        // Легаси-заявки без объекта (созданные до миграции 158): day-level как раньше.
-        await upsertAttendanceAdjustment({
-          employee_id: request.employee_id,
-          work_date: request.correction_date,
-          status: correctionStatus,
-          hours_override: request.correction_hours ?? null,
-          source_type: 'leave_request',
-          source_id: `${request.id}:time_correction`,
-          reason: request.reason ?? null,
-          created_by: authorUserId,
-          approval_status: approvalStatus,
-        });
+        if (request.correction_object_id) {
+          // Корректировка привязана к конкретному объекту → создаём manual_object
+          // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
+          // day-level записи дня (мьютекс day-level ↔ per-object).
+          await client.query(
+            `DELETE FROM attendance_adjustments
+               WHERE employee_id = $1 AND work_date = $2
+                 AND source_type IN ('manual', 'leave_request')`,
+            [request.employee_id, request.correction_date],
+          );
+          await upsertAttendanceAdjustment({
+            employee_id: request.employee_id,
+            work_date: request.correction_date,
+            status: correctionStatus,
+            hours_override: request.correction_hours ?? null,
+            source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+            source_id: request.correction_object_id,
+            reason: request.reason ?? null,
+            created_by: authorUserId,
+            approval_status: approvalStatus,
+            metadata: {
+              object_id: request.correction_object_id,
+              object_name: request.correction_object_name,
+              auto_resolved: false,
+            },
+          }, client);
+        } else {
+          // Легаси-заявки без объекта (созданные до миграции 158): day-level как раньше.
+          await upsertAttendanceAdjustment({
+            employee_id: request.employee_id,
+            work_date: request.correction_date,
+            status: correctionStatus,
+            hours_override: request.correction_hours ?? null,
+            source_type: 'leave_request',
+            source_id: `${request.id}:time_correction`,
+            reason: request.reason ?? null,
+            created_by: authorUserId,
+            approval_status: approvalStatus,
+          }, client);
+        }
       }
-    }
+
+      return updated;
+    });
 
     broadcastPendingChanged();
 

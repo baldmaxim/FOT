@@ -1,0 +1,137 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Response } from 'express';
+import type { AuthenticatedRequest } from '../types/index.js';
+
+const { pgQuery, pgQueryOne, pgExecute, pgTx, txClient } = vi.hoisted(() => {
+  const txClient = { query: vi.fn() };
+  return {
+    pgQuery: vi.fn(),
+    pgQueryOne: vi.fn(),
+    pgExecute: vi.fn(),
+    // withTransaction исполняет переданный колбэк с tx-клиентом и пробрасывает ошибки
+    // (как настоящая реализация делает ROLLBACK и rethrow).
+    pgTx: vi.fn(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient)),
+    txClient,
+  };
+});
+
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  execute: pgExecute,
+  withTransaction: pgTx,
+}));
+
+const { upsertSpy } = vi.hoisted(() => ({ upsertSpy: vi.fn(async (..._args: unknown[]) => ({ id: 1 })) }));
+vi.mock('../services/attendance.service.js', () => ({
+  upsertAttendanceAdjustment: upsertSpy,
+}));
+
+vi.mock('../services/data-scope.service.js', () => ({
+  canAccessEmployeeInScope: vi.fn(async () => true),
+  resolveAccessibleDepartmentIds: vi.fn(async () => []),
+  resolveManagedDepartmentIds: vi.fn(async () => []),
+  resolveScopedDepartmentId: vi.fn(async () => null),
+}));
+
+vi.mock('./timesheet.controller.js', () => ({
+  resolveAdjustmentApprovalStatus: vi.fn(async () => 'auto_approved'),
+}));
+
+vi.mock('../services/push.service.js', () => ({ pushService: { sendToUser: vi.fn() } }));
+vi.mock('../services/notification.service.js', () => ({ notificationService: { create: vi.fn() } }));
+vi.mock('../socket/io-instance.js', () => ({ getIo: vi.fn(() => null) }));
+vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
+vi.mock('../services/recipients.service.js', () => ({ getLeaveRequestRecipients: vi.fn(async () => []) }));
+vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: vi.fn(async () => []) }));
+vi.mock('../services/employee-skud-object-access.service.js', () => ({ listSelectableObjectsForEmployee: vi.fn(async () => []) }));
+vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object' }));
+
+import { leaveRequestsController } from './leave-requests.controller.js';
+
+function makeReq(overrides: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest {
+  return {
+    params: { id: '708' },
+    query: {},
+    body: {},
+    user: {
+      id: 'reviewer-uuid',
+      email: 'mgr@example.com',
+      position_type: 'header',
+      employee_id: 7,
+      department_id: 'dep-1',
+      is_approved: true,
+      two_factor_enabled: false,
+      two_factor_verified: true,
+    },
+    ...overrides,
+  } as unknown as AuthenticatedRequest;
+}
+
+function makeRes(): Response & { _status: number; _json: unknown } {
+  const res = {
+    _status: 200,
+    _json: undefined as unknown,
+    status(code: number) { this._status = code; return this; },
+    json(payload: unknown) { this._json = payload; return this; },
+  };
+  return res as unknown as Response & { _status: number; _json: unknown };
+}
+
+function mockRequestRow(over: Record<string, unknown>) {
+  // 1-й queryOne → строка leave_requests; 2-й → автор (user_profiles).
+  pgQueryOne
+    .mockResolvedValueOnce({
+      id: 708, employee_id: 247, status: 'pending', request_type: 'remote',
+      start_date: '2026-05-30', end_date: '2026-05-30', selected_dates: null,
+      correction_date: null, correction_status: null, correction_hours: null,
+      correction_object_id: null, correction_object_name: null, reason: null,
+      ...over,
+    })
+    .mockResolvedValueOnce({ id: 'author-uuid' });
+}
+
+describe('leaveRequestsController.approve', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    txClient.query.mockResolvedValue({ rows: [{ id: 708, status: 'approved' }], rowCount: 1 });
+  });
+
+  it('одиночная remote-заявка на субботу материализует корректировку (не теряется)', async () => {
+    mockRequestRow({ start_date: '2026-05-30', end_date: '2026-05-30' }); // 2026-05-30 = суббота
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    const [payload, exec] = upsertSpy.mock.calls[0];
+    expect(payload).toMatchObject({ employee_id: 247, work_date: '2026-05-30', status: 'remote', source_type: 'leave_request', source_id: '708' });
+    expect(exec).toBe(txClient); // вставка идёт в той же транзакции
+  });
+
+  it('многодневный remote-диапазон по-прежнему пропускает выходные', async () => {
+    mockRequestRow({ start_date: '2026-05-29', end_date: '2026-06-01' }); // Пт..Пн (30 Сб, 31 Вс)
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    const dates = upsertSpy.mock.calls.map(c => (c[0] as { work_date: string }).work_date).sort();
+    expect(dates).toEqual(['2026-05-29', '2026-06-01']);
+  });
+
+  it('сбой создания корректировки откатывает одобрение (атомарность)', async () => {
+    mockRequestRow({ start_date: '2026-05-30', end_date: '2026-05-30' });
+    upsertSpy.mockRejectedValueOnce(new Error('insert failed'));
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    // Ошибка не проглочена «успехом»: 500, а смена статуса шла внутри транзакции (откатится).
+    expect(res._status).toBe(500);
+    expect(pgTx).toHaveBeenCalledTimes(1);
+    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall).toBeDefined();
+  });
+});

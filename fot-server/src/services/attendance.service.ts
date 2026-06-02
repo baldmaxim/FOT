@@ -1,5 +1,29 @@
 import { query, queryOne } from '../config/postgres.js';
+import type { Pool, PoolClient } from 'pg';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
+
+/**
+ * Исполнитель SQL: клиент транзакции (withTransaction). Если не передан —
+ * upsert/supersede ходят через module-level query/queryOne (пул). Позволяет
+ * вызывать их как самостоятельно, так и внутри транзакции вызывающего кода.
+ */
+export type DbExecutor = Pool | PoolClient;
+
+/** SELECT-many: через tx-клиент, если передан, иначе через пул (mockable query). */
+async function sqlRows<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[])).rows;
+  return query<T>(sql, params);
+}
+
+/** SELECT-one: первая строка или null (см. sqlRows). */
+async function sqlOne<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params: readonly unknown[],
+): Promise<T | null> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[])).rows[0] ?? null;
+  return queryOne<T>(sql, params);
+}
 import { getTravelHoursSummaryForRange } from './skud-travel.service.js';
 import { getScheduleForDate, getShiftDurationHours, isPreHoliday, isWorkingDay, needsSkudCheck } from './schedule.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
@@ -1062,8 +1086,9 @@ async function supersedeConflictingDayLevelAdjustments(survivor: {
   employee_id: number;
   work_date: string;
   source_type: string;
-}): Promise<void> {
-  const conflicts = await query<{ id: number | string; source_type: string; source_id: string | null }>(
+}, exec?: DbExecutor): Promise<void> {
+  const conflicts = await sqlRows<{ id: number | string; source_type: string; source_id: string | null }>(
+    exec,
     `SELECT id, source_type, source_id
        FROM attendance_adjustments
       WHERE employee_id = $1 AND work_date = $2
@@ -1075,7 +1100,7 @@ async function supersedeConflictingDayLevelAdjustments(survivor: {
   for (const conflict of conflicts) {
     const removedId = Number(conflict.id);
     // Собственные вложения удаляемой строки → копируем на выжившую (без дублей).
-    await query(
+    await sqlRows(exec,
       `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
          SELECT document_id, $1, $2, $3 FROM document_links
           WHERE entity_type = $1 AND entity_id = $4 AND purpose = $3
@@ -1087,7 +1112,7 @@ async function supersedeConflictingDayLevelAdjustments(survivor: {
     if (conflict.source_type === 'leave_request' && conflict.source_id) {
       const lrId = conflict.source_id.split(':')[0];
       if (/^\d+$/.test(lrId)) {
-        await query(
+        await sqlRows(exec,
           `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
              SELECT document_id, $1, $2, $3 FROM document_links
               WHERE entity_type = 'leave_request' AND entity_id = $4
@@ -1097,11 +1122,11 @@ async function supersedeConflictingDayLevelAdjustments(survivor: {
       }
     }
     // Осиротевшие ссылки удаляемой строки и сама строка.
-    await query(
+    await sqlRows(exec,
       `DELETE FROM document_links WHERE entity_type = $1 AND entity_id = $2`,
       [CORRECTION_ATTACHMENT_ENTITY_LITERAL, String(removedId)],
     );
-    await query(`DELETE FROM attendance_adjustments WHERE id = $1`, [removedId]);
+    await sqlRows(exec, `DELETE FROM attendance_adjustments WHERE id = $1`, [removedId]);
   }
 }
 
@@ -1117,7 +1142,7 @@ export async function upsertAttendanceAdjustment(input: {
   updated_by?: string | null;
   metadata?: Record<string, unknown>;
   approval_status?: AdjustmentApprovalStatus;
-}): Promise<Record<string, unknown>> {
+}, exec?: DbExecutor): Promise<Record<string, unknown>> {
   const payload: Record<string, unknown> = {
     employee_id: input.employee_id,
     work_date: input.work_date,
@@ -1159,8 +1184,9 @@ export async function upsertAttendanceAdjustment(input: {
          ON CONFLICT (employee_id, work_date, source_type, source_id) DO NOTHING
          RETURNING *`;
 
-  const data = await queryOne<Record<string, unknown>>(sql, values);
-  const survivor = data ?? await queryOne<Record<string, unknown>>(
+  const data = await sqlOne<Record<string, unknown>>(exec, sql, values);
+  const survivor = data ?? await sqlOne<Record<string, unknown>>(
+    exec,
     // ON CONFLICT DO NOTHING — вернём существующую строку.
     `SELECT * FROM attendance_adjustments
        WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
@@ -1177,7 +1203,7 @@ export async function upsertAttendanceAdjustment(input: {
         employee_id: input.employee_id,
         work_date: input.work_date,
         source_type: input.source_type,
-      });
+      }, exec);
     } catch (error) {
       console.error('[attendance] supersedeConflictingDayLevelAdjustments error:', error);
     }
