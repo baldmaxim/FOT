@@ -13,6 +13,7 @@ import type {
 import { WEEKDAY_LABELS } from '../../types/schedule';
 import type { ITravelObject } from '../../types/travel';
 import { parseHMToMinutes, minutesToHM } from '../../utils/scheduleUtils';
+import { formatRhythmSummary } from '../../utils/scheduleRhythm';
 import { NumberInput } from '../../components/ui/NumberInput';
 import styles from './SchedulesPage.module.css';
 
@@ -383,22 +384,6 @@ const tplToFormState = (tpl: IWorkSchedule, today: string): IFormState => {
   };
 };
 
-/** Краткое описание ритма для таблицы шаблонов. */
-const formatRhythmSummary = (tpl: IWorkSchedule): string => {
-  if (tpl.pattern_type === 'cycle' && tpl.cycle_length && tpl.cycle_days) {
-    const work = tpl.cycle_days.filter(s => s.work_hours > 0).length;
-    const off = tpl.cycle_length - work;
-    // Префиксная раскладка: первые work — рабочие, остальные — выходные.
-    let prefixWork = 0;
-    while (prefixWork < tpl.cycle_days.length && tpl.cycle_days[prefixWork].work_hours > 0) prefixWork++;
-    const isPrefix = tpl.cycle_days.slice(prefixWork).every(d => d.work_hours <= 0);
-    return isPrefix ? `${work}/${off}` : `${work}/${off} (произв., ${tpl.cycle_length}д)`;
-  }
-  if (tpl.pattern_type === '5+0') return '5/2';
-  if (tpl.pattern_type === '5+2') return '5/2 + субботы';
-  if (tpl.pattern_type === '6+0') return '6/1';
-  return tpl.pattern_type;
-};
 const EMPTY_TEMPLATES: IWorkSchedule[] = [];
 const EMPTY_OBJECT_ASSIGNMENTS: IObjectScheduleAssignment[] = [];
 const EMPTY_TRAVEL_OBJECTS: ITravelObject[] = [];

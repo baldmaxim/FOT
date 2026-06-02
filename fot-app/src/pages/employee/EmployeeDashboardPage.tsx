@@ -1,23 +1,28 @@
 import React, { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { apiClient } from '../../api/client';
 import { employeeService } from '../../services/employeeService';
 import { leaveRequestService, type LeaveRequestType } from '../../services/leaveRequestService';
 import { documentService } from '../../services/documentService';
-import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
+import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
 import type { Employee } from '../../types';
 import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import styles from './EmployeeDashboard.module.css';
 
 import type { IDayFocusPayload } from '../../components/dashboard/MyMonthTimesheet';
+import { LeaveRequestRow } from '../../components/dashboard/LeaveRequestRow';
 
-const EmployeeInfoCards = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCards })));
+const EmployeeInfoCard = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCard })));
+const SecurityCard = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.SecurityCard })));
 const DailyTasksCard = lazy(() => import('../../components/dashboard/DailyTasksCard').then(m => ({ default: m.DailyTasksCard })));
 const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
 const DayDetailPanel = lazy(() => import('../../components/dashboard/DayDetailPanel').then(m => ({ default: m.DayDetailPanel })));
+
+const todayLocalIso = (): string => new Date().toLocaleDateString('en-CA');
 
 // «За свой счёт» (unpaid) теперь подаётся датами на календаре, а не периодом.
 const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'sick_leave', 'educational_leave'];
@@ -31,7 +36,11 @@ export const EmployeeDashboardPage: React.FC = () => {
   const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Блок заявлений: по умолчанию список последних заявлений; по кнопке — форма подачи.
+  const [formOpen, setFormOpen] = useState(false);
 
   // Form state. По умолчанию — корректировка табеля (открывается по клику на день).
   const [requestType, setRequestType] = useState<LeaveRequestType>('time_correction');
@@ -112,6 +121,25 @@ export const EmployeeDashboardPage: React.FC = () => {
   }, [focusedDay, dayObjects]);
 
   const employee = employeeQuery.data ?? null;
+  // Расписание сотрудника берём из первого месяца окна, где оно присутствует (для ритма графика).
+  const schedule = useMemo(() => {
+    if (!employeeId) return undefined;
+    for (const m of timesheetQuery.data ?? []) {
+      const s = m.schedules?.[employeeId];
+      if (s) return s;
+    }
+    return undefined;
+  }, [timesheetQuery.data, employeeId]);
+
+  // Последние заявления для блока списка (свежие сверху, максимум 5).
+  const leaveRequestsQuery = useMyLeaveRequests();
+  const recentRequests = useMemo(() => {
+    const list = leaveRequestsQuery.data ?? [];
+    return [...list]
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+      .slice(0, 5);
+  }, [leaveRequestsQuery.data]);
+  const todayIso = todayLocalIso();
 
   const loading = employeeQuery.isLoading || timesheetQuery.isLoading;
 
@@ -153,8 +181,6 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   const isCorrection = requestType === 'time_correction';
   const isRangeType = RANGE_TYPES.includes(requestType);
-  // Форма появляется только после выбора дня в календаре (#1).
-  const showForm = focusedDay != null || selectedDates.size > 0;
 
   const handleTypeChange = (next: LeaveRequestType) => {
     setRequestType(next);
@@ -291,8 +317,7 @@ export const EmployeeDashboardPage: React.FC = () => {
       setRangeEnd('');
       setCorrectionHours('8');
       setCorrectionObjectId('');
-      setFocusedDay(null);
-      setFocusedPayload(null);
+      setFormOpen(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Ошибка отправки';
       showToast('error', message);
@@ -311,46 +336,69 @@ export const EmployeeDashboardPage: React.FC = () => {
     <div className={styles.content}>
       {/* Content Grid: Calendar | Day detail | Form */}
       <div className={styles.contentGrid}>
-        {/* Calendar - Left */}
-        <div className={styles.calendarEventsBlock}>
-          <div className={styles.calendarPane}>
-            <Suspense fallback={<div className={styles.emptyState}>Загрузка...</div>}>
-              <MyMonthTimesheet
-                employeeId={employeeId}
-                noCard
-                selectedDates={selectedDates}
-                onDayToggle={handleDayToggle}
-                onDayFocus={handleDayFocus}
-                allowFuture
-              />
-            </Suspense>
+        {/* Верхний ряд: Проходы | Календарь | Заявления */}
+        <div className={styles.topRow}>
+          {/* Проходы за выбранный день (по умолчанию — сегодня, #7, #10) */}
+          <div className={styles.detailPane}>
+            {focusedDay && focusedPayload && employeeId ? (
+              <Suspense fallback={<div className={styles.detailHint}>Загрузка...</div>}>
+                <DayDetailPanel
+                  employeeId={employeeId}
+                  employeeName={employee?.full_name ?? ''}
+                  focusedDay={focusedDay}
+                  payload={focusedPayload}
+                  focusKey={focusKey}
+                />
+              </Suspense>
+            ) : (
+              <div className={styles.detailHint}>Загрузка проходов…</div>
+            )}
           </div>
-        </div>
 
-        {/* Day detail / SKUD - Middle (#7, #10) */}
-        <div className={styles.detailPane}>
-          {focusedDay && focusedPayload && employeeId ? (
-            <Suspense fallback={<div className={styles.detailHint}>Загрузка...</div>}>
-              <DayDetailPanel
-                employeeId={employeeId}
-                employeeName={employee?.full_name ?? ''}
-                focusedDay={focusedDay}
-                payload={focusedPayload}
-                focusKey={focusKey}
-              />
-            </Suspense>
-          ) : (
-            <div className={styles.detailHint}>Выберите день в календаре, чтобы увидеть детали и проходы СКУД</div>
-          )}
-        </div>
+          {/* Календарь */}
+          <div className={styles.calendarEventsBlock}>
+            <div className={styles.calendarPane}>
+              <Suspense fallback={<div className={styles.emptyState}>Загрузка...</div>}>
+                <MyMonthTimesheet
+                  employeeId={employeeId}
+                  noCard
+                  selectedDates={selectedDates}
+                  onDayToggle={handleDayToggle}
+                  onDayFocus={handleDayFocus}
+                  allowFuture
+                />
+              </Suspense>
+            </div>
+          </div>
 
-        {/* Form / hint - Right */}
-        <div className={styles.formPane}>
-          {!showForm ? (
-            <div className={styles.formHint}>Выберите день в календаре, чтобы подать заявление</div>
-          ) : (
+          {/* Заявления: список последних + кнопка / форма подачи */}
+          <div className={styles.formPane}>
+            {!formOpen ? (
+              <>
+                <button className="btn-primary" onClick={() => setFormOpen(true)} style={{ width: '100%', marginBottom: '14px' }}>
+                  Подать заявление
+                </button>
+                {recentRequests.length === 0 ? (
+                  <div className={styles.emptyState}>Заявлений пока нет</div>
+                ) : (
+                  <div className={styles.recentRequests}>
+                    {recentRequests.map(r => (
+                      <LeaveRequestRow
+                        key={r.id}
+                        request={r}
+                        today={todayIso}
+                        onClick={() => navigate(`/employee/requests/${r.id}`)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
             <>
-              <h2 className={styles.formTitle}>Подать заявление</h2>
+              <div className={styles.formHeader}>
+                <h2 className={styles.formTitle}>Подать заявление</h2>
+                <button className="btn-secondary" onClick={() => setFormOpen(false)}>Отмена</button>
+              </div>
 
               {/* Type select */}
               <div className={styles.formGroup}>
@@ -466,23 +514,25 @@ export const EmployeeDashboardPage: React.FC = () => {
                 {submitting ? 'Отправка...' : 'Подать заявление'}
               </button>
             </>
-          )}
+            )}
+          </div>
         </div>
 
-        {/* Задачи — нижняя средняя ячейка сетки */}
-        <div className={styles.tasksArea}>
+        {/* Правая узкая колонка: Информация → Задачи → Безопасность */}
+        <div className={styles.rightCol}>
           <Suspense fallback={DashboardCardFallback}>
-            <DailyTasksCard />
-          </Suspense>
-        </div>
-
-        {/* Информация — нижняя правая ячейка сетки */}
-        <div className={styles.infoArea}>
-          <Suspense fallback={DashboardCardFallback}>
-            <EmployeeInfoCards
+            <EmployeeInfoCard
               loading={loading}
               employee={employee}
               importedPosition={profile?.imported_position ?? undefined}
+              schedule={schedule}
+            />
+          </Suspense>
+          <Suspense fallback={DashboardCardFallback}>
+            <DailyTasksCard />
+          </Suspense>
+          <Suspense fallback={DashboardCardFallback}>
+            <SecurityCard
               email={user?.email ?? undefined}
               isTwoFactorEnabled={isTwoFactorEnabled}
               onSetup2FA={handleSetup2FA}

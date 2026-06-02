@@ -126,28 +126,54 @@
   gap: 16px;
 }
 
-/* Content Grid */
+/* Content Grid: левая зона (Проходы | Календарь | Заявления) + узкая правая колонка. */
 .contentGrid {
   display: grid;
-  /* Левая колонка: календарь над «Проходами дня». Верх-право — форма заявления (2/3).
-     Низ: «Проходы | Задачи | Информация» в три равные трети. */
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-areas:
-    "calendar form  form"
-    "skud     tasks info";
+  grid-template-columns: 5fr 1fr;
   gap: 20px;
   align-items: start;
 }
 
-.calendarEventsBlock { grid-area: calendar; }
-.formPane { grid-area: form; }
-.tasksArea { grid-area: tasks; min-width: 0; }
-.infoArea { grid-area: info; min-width: 0; }
-
-/* Левая нижняя ячейка — блок выбранного дня (проходы СКУД, #7, #10). */
-.detailPane {
-  grid-area: skud;
+/* Верхний ряд: Проходы(1) | Календарь(2) | Заявления(2). Равная высота — align-items: stretch. */
+.topRow {
+  display: grid;
+  grid-template-columns: 1fr 2fr 2fr;
+  gap: 20px;
+  align-items: stretch;
   min-width: 0;
+}
+
+/* Узкая правая колонка: Информация → Задачи → Безопасность. */
+.rightCol {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Блок выбранного дня (проходы СКУД, #7, #10). */
+.detailPane {
+  min-width: 0;
+}
+
+/* Заголовок формы заявления с кнопкой «Отмена». */
+.formHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.formHeader > .formTitle {
+  margin: 0;
+}
+
+/* Список последних заявлений в блоке «Заявления». */
+.recentRequests {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* Форма в широкой (2/3) ячейке: поля не растягиваем на всю ширину карточки. */
@@ -1458,12 +1484,10 @@
 
   .contentGrid {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "calendar"
-      "skud"
-      "form"
-      "tasks"
-      "info";
+  }
+
+  .topRow {
+    grid-template-columns: 1fr;
   }
 
   .calendarEventsBlock {

@@ -1,5 +1,17 @@
 import type { ILeaveRequest } from '../services/leaveRequestService';
 
+/**
+ * Заявление в архиве: обработано и все его даты в прошлом.
+ * На рассмотрении (pending) — всегда «Активные», даже если даты прошли.
+ */
+export const isLeaveRequestArchived = (r: ILeaveRequest, today: string): boolean => {
+  if (r.status === 'pending') return false;
+  if (r.request_type === 'time_correction') {
+    return !!r.correction_date && r.correction_date < today;
+  }
+  return r.end_date < today;
+};
+
 const fmtFull = (iso: string): string => {
   const [y, m, d] = iso.split('-');
   return `${d}.${m}.${y}`;

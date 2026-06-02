@@ -1,53 +1,26 @@
 import { type FC, lazy, Suspense, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Plus, Clock, CheckCircle, XCircle, Ban, ChevronRight } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import {
   leaveRequestService,
-  REQUEST_TYPE_LABELS,
-  STATUS_LABELS,
   type ILeaveRequest,
-  type LeaveRequestStatus,
 } from '../../services/leaveRequestService';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
-import { formatLeaveRequestDatesCompact } from '../../utils/leaveRequestDates';
-import { formatFioShort } from '../../utils/formatFio';
+import { LeaveRequestRow } from '../../components/dashboard/LeaveRequestRow';
+import { isLeaveRequestArchived } from '../../utils/leaveRequestDates';
 import './LeaveRequestsPage.css';
 
 const UnifiedRequestModal = lazy(() =>
   import('../../components/dashboard/RequestModals').then(m => ({ default: m.UnifiedRequestModal })),
 );
 
-const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
-  pending: Clock,
-  approved: CheckCircle,
-  rejected: XCircle,
-  cancelled: Ban,
-};
-
-const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
-  pending: '#f59e0b',
-  approved: '#22c55e',
-  rejected: '#ef4444',
-  cancelled: '#6b7280',
-};
-
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
 
 type TabKey = 'active' | 'archive';
 
 const todayIso = (): string => new Date().toLocaleDateString('en-CA');
-
-const isArchived = (r: ILeaveRequest, today: string): boolean => {
-  // На рассмотрении — всегда «Активные», даже если все даты уже прошли:
-  // руководитель ещё не отреагировал, сотрудник должен видеть заявку.
-  if (r.status === 'pending') return false;
-  if (r.request_type === 'time_correction') {
-    return !!r.correction_date && r.correction_date < today;
-  }
-  return r.end_date < today;
-};
 
 export const LeaveRequestsPage: FC = () => {
   const queryClient = useQueryClient();
@@ -61,7 +34,7 @@ export const LeaveRequestsPage: FC = () => {
 
   const today = todayIso();
   const visible = requests.filter(r =>
-    tab === 'archive' ? isArchived(r, today) : !isArchived(r, today),
+    tab === 'archive' ? isLeaveRequestArchived(r, today) : !isLeaveRequestArchived(r, today),
   );
 
   const handleCancel = async (id: number, status: ILeaveRequest['status']) => {
@@ -84,9 +57,6 @@ export const LeaveRequestsPage: FC = () => {
       await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
     }
   };
-
-  const formatDate = (date: string) =>
-    new Date(date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
   const emptyText = tab === 'archive' ? 'Архив пуст' : 'Нет активных заявлений';
 
@@ -124,61 +94,15 @@ export const LeaveRequestsPage: FC = () => {
         <div className="lr-empty">{emptyText}</div>
       ) : (
         <div className="lr-list">
-          {visible.map(r => {
-            const Icon = STATUS_ICONS[r.status];
-            const awaitingAdmin = r.request_type === 'time_correction'
-              && r.status === 'approved'
-              && r.correction_approval_status === 'pending';
-            const canCancel =
-              (r.status === 'pending' || r.status === 'approved') && !isArchived(r, today);
-            const handleCardClick = (e: React.MouseEvent) => {
-              if ((e.target as HTMLElement).closest('button')) return;
-              navigate(`/employee/requests/${r.id}`);
-            };
-            return (
-              <div
-                key={r.id}
-                className="lr-card lr-card-clickable"
-                onClick={handleCardClick}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="lr-card-left">
-                  <div className="lr-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>
-                  {r.request_type === 'time_correction' && r.correction_date ? (
-                    <div className="lr-card-dates">Дата: {formatDate(r.correction_date)} · Статус: {r.correction_status} · {r.correction_hours != null ? `${r.correction_hours}ч` : ''}</div>
-                  ) : (
-                    <div className="lr-card-dates">{formatLeaveRequestDatesCompact(r)}</div>
-                  )}
-                  {r.reason && <div className="lr-card-reason">{r.reason}</div>}
-                  {awaitingAdmin && (
-                    <div className="lr-card-pending-admin" style={{ color: '#f59e0b' }}>
-                      <Clock size={12} /> <strong>Ожидает доп. согласования администратором</strong>
-                    </div>
-                  )}
-                  {r.review_comment && <div className="lr-card-comment">Комментарий: {r.review_comment}</div>}
-                </div>
-                <div className="lr-card-right">
-                  <div className="lr-status-wrap">
-                    <span className="lr-status" style={{ color: STATUS_COLORS[r.status] }}>
-                      <Icon size={16} /> {STATUS_LABELS[r.status]}
-                    </span>
-                    {(r.status === 'approved' || r.status === 'rejected') && (r.reviewer || r.reviewed_at) && (
-                      <div className="lr-status-meta">
-                        {formatFioShort(r.reviewer?.full_name)}
-                        {r.reviewer?.full_name && r.reviewed_at ? ' · ' : ''}
-                        {r.reviewed_at ? formatDate(r.reviewed_at) : ''}
-                      </div>
-                    )}
-                  </div>
-                  {canCancel && (
-                    <button className="btn-secondary lr-cancel-btn" onClick={() => handleCancel(r.id, r.status)}>Отменить</button>
-                  )}
-                  <ChevronRight size={18} className="lr-card-chevron" />
-                </div>
-              </div>
-            );
-          })}
+          {visible.map(r => (
+            <LeaveRequestRow
+              key={r.id}
+              request={r}
+              today={today}
+              onClick={() => navigate(`/employee/requests/${r.id}`)}
+              onCancel={handleCancel}
+            />
+          ))}
         </div>
       )}
 

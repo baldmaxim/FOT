@@ -3,11 +3,13 @@ import { useCallback, useEffect, useState } from 'react';
 const STORAGE_KEY = 'fot:sidebar-collapsed';
 
 const readInitial = (): boolean => {
-  if (typeof window === 'undefined') return false;
+  if (typeof window === 'undefined') return true;
   try {
-    return window.localStorage.getItem(STORAGE_KEY) === '1';
+    // По умолчанию (нет сохранённого выбора) — свёрнуто; иначе уважаем выбор пользователя.
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    return stored === null ? true : stored === '1';
   } catch {
-    return false;
+    return true;
   }
 };
 

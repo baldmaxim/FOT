@@ -1,4 +1,4 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useEmployeeTimesheetMonth } from '../../hooks/useEmployeeTimesheet';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTimesheetMonthAccess } from '../../hooks/useTimesheetMonthAccess';
@@ -177,7 +177,10 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
   const todayIso = useMemo(() => buildIsoDate(currentYear, currentMonth, today.getDate()), [currentYear, currentMonth, today]);
 
   const [monthOffset, setMonthOffset] = useState<number>(0);
-  const offset = Math.min(maxOffset, Math.max(minOffset, monthOffset));
+  // Навигация в пределах 5 месяцев: текущий ±2 (в рамках доступного по ролям окна).
+  const effMin = Math.max(minOffset, -2);
+  const effMax = Math.min(maxOffset, 2);
+  const offset = Math.min(effMax, Math.max(effMin, monthOffset));
 
   const { year, month } = useMemo(() => {
     const d = new Date(currentYear, currentMonth - 1 + offset, 1);
@@ -233,6 +236,24 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
 
   const employeeSchedule = employeeId ? timesheetQuery.data?.schedules?.[employeeId] : undefined;
   const calendar = timesheetQuery.data?.calendar ?? null;
+
+  // Авто-фокус текущего дня при первом рендере: блок «Проходы» сразу показывает сегодня.
+  const didAutoFocusRef = useRef(false);
+  useEffect(() => {
+    if (didAutoFocusRef.current || !onDayFocus || offset !== 0 || timesheetQuery.isLoading) return;
+    const day = today.getDate();
+    const entry = entriesByDay.get(day) || null;
+    const isScheduledDayOff = isScheduleDayOff(employeeSchedule, calendar, currentYear, currentMonth, day);
+    const fullDayThresholdHours = getFullDayThresholdHoursForDay(employeeSchedule, calendar, currentYear, currentMonth, day);
+    const ds = getDayStatus(entry, { showActualHours, fullDayThresholdHours, isScheduledDayOff, isFuture: false });
+    onDayFocus(todayIso, {
+      entry,
+      objectEntries: objectEntriesByIso.get(todayIso) ?? [],
+      ds,
+      isProblematic: PROBLEMATIC_STATUSES.has(ds),
+    });
+    didAutoFocusRef.current = true;
+  }, [timesheetQuery.isLoading, offset, onDayFocus, entriesByDay, objectEntriesByIso, employeeSchedule, calendar, currentYear, currentMonth, todayIso, today, showActualHours]);
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const firstDow = (() => {
@@ -292,8 +313,8 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
         <button
           type="button"
           className={styles.monthBtn}
-          onClick={() => setMonthOffset(o => Math.max(minOffset, Math.min(maxOffset, o) - 1))}
-          disabled={offset <= minOffset}
+          onClick={() => setMonthOffset(o => Math.max(effMin, Math.min(effMax, o) - 1))}
+          disabled={offset <= effMin}
           aria-label="Предыдущий месяц"
         >
           ◀
@@ -302,8 +323,8 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
         <button
           type="button"
           className={styles.monthBtn}
-          onClick={() => setMonthOffset(o => Math.min(maxOffset, Math.max(minOffset, o) + 1))}
-          disabled={offset >= maxOffset}
+          onClick={() => setMonthOffset(o => Math.min(effMax, Math.max(effMin, o) + 1))}
+          disabled={offset >= effMax}
           aria-label="Следующий месяц"
         >
           ▶
