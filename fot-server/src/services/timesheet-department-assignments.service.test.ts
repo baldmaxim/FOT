@@ -13,9 +13,14 @@ vi.mock('../config/postgres.js', () => ({
   execute: pgExecute,
   withTransaction: pgTx,
 }));
+
+const { collectDeptIdsMock } = vi.hoisted(() => ({ collectDeptIdsMock: vi.fn() }));
+vi.mock('./skud-shared.service.js', () => ({ collectDeptIds: collectDeptIdsMock }));
+
 import {
   formatDateShift,
   isAssignmentActiveOnDateInclusive,
+  isEmployeeAssignedToDepartmentOnDate,
   resolveTimesheetPeriodRange,
 } from './timesheet-department-assignments.service.js';
 
@@ -56,5 +61,30 @@ describe('timesheet-department-assignments.service', () => {
   it('shifts dates across month boundaries', () => {
     expect(formatDateShift('2026-04-01', -1)).toBe('2026-03-31');
     expect(formatDateShift('2026-04-30', 1)).toBe('2026-05-01');
+  });
+
+  describe('isEmployeeAssignedToDepartmentOnDate — уволенный с затёртым отделом', () => {
+    const BRIGADE = 'b9a752a5-4565-4b27-87a7-5cd6db81d0a9';
+    const FIRED = 'ba4f7fb1-d24c-4e7f-9c75-4b27300ef6cc'; // «Уволенные»
+
+    it('даёт доступ через employee_dismissal_events, когда assignment/snapshot указывают на «Уволенные»', async () => {
+      collectDeptIdsMock.mockResolvedValue([BRIGADE]);
+      pgQueryOne
+        .mockResolvedValueOnce(null) // employee_assignments — нет открытого назначения в бригаду
+        .mockResolvedValueOnce({ org_department_id: FIRED }) // snapshot → «Уволенные», не совпадает
+        .mockResolvedValueOnce({ exists: true }); // dismissal_events.from_department_id = бригада
+
+      await expect(isEmployeeAssignedToDepartmentOnDate(8730, BRIGADE, '2026-05-21')).resolves.toBe(true);
+    });
+
+    it('отказывает, если dismissal-события для бригады нет', async () => {
+      collectDeptIdsMock.mockResolvedValue([BRIGADE]);
+      pgQueryOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ org_department_id: FIRED })
+        .mockResolvedValueOnce(null); // dismissal events не нашлись (например дата > dismissal_date)
+
+      await expect(isEmployeeAssignedToDepartmentOnDate(8730, BRIGADE, '2026-06-01')).resolves.toBe(false);
+    });
   });
 });

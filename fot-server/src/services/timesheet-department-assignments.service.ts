@@ -313,7 +313,24 @@ export async function isEmployeeAssignedToDepartmentOnDate(
       [employeeId],
     );
     const empDept = String(employee?.org_department_id || '');
-    return empDept.length > 0 && deptIds.includes(empDept);
+    if (empDept.length > 0 && deptIds.includes(empDept)) {
+      return true;
+    }
+
+    // Уволенный: реальный отдел затёрт на «Уволенные» в org_department_id/employee_assignments,
+    // но сохранён в employee_dismissal_events.from_department_id. Зеркалит ветку firedFromDept
+    // в listEmployeeMembershipsForDepartmentPeriod — доступ до даты увольнения включительно.
+    const dismissed = await queryOne<{ exists: boolean }>(
+      `SELECT 1 AS exists
+         FROM employee_dismissal_events
+        WHERE employee_id = $1
+          AND from_department_id = ANY($2::uuid[])
+          AND dismissal_date IS NOT NULL
+          AND $3::date <= dismissal_date
+        LIMIT 1`,
+      [employeeId, deptIds, date],
+    );
+    return !!dismissed;
   }
 
   return isAssignmentActiveOnDateInclusive(
