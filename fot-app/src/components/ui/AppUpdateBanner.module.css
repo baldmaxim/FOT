@@ -1,0 +1,84 @@
+.banner {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  max-width: calc(100vw - 24px);
+  animation: bannerIn 0.3s ease;
+}
+
+@keyframes bannerIn {
+  from { opacity: 0; transform: translate(-50%, 16px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.text {
+  font-size: 14px;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.reload,
+.later {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.reload {
+  background: var(--accent);
+  color: #fff;
+}
+
+.reload:hover {
+  filter: brightness(1.05);
+}
+
+.later {
+  background: transparent;
+  border-color: var(--border-light);
+  color: var(--text-secondary);
+}
+
+.later:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+@media (max-width: 430px) {
+  .banner {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    /* На мобиле баннер тянется по ширине (без центрирующего translateX),
+       поэтому slide-анимацию с translate(-50%) не используем. */
+    animation: none;
+  }
+
+  .actions {
+    justify-content: flex-end;
+  }
+}

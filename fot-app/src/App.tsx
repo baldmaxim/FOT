@@ -16,6 +16,7 @@ import { useStructureRealtime } from './hooks/useStructureRealtime';
 import { PageLoader } from './components/ui/PageLoader';
 import { ChatPanelMount } from './components/chat/ChatPanelMount';
 import { TooltipHost } from './components/ui/Tooltip';
+import { AppUpdateBanner } from './components/ui/AppUpdateBanner';
 import { ErrorFallback } from './components/ErrorFallback';
 import { clearStaleChunkReloadFlag, tryAutoReloadOnStaleChunk } from './utils/staleChunkReload';
 import './App.css';
@@ -665,6 +666,7 @@ const App = () => {
                   <StructureRealtimeMount />
                   <ChatPanelMount />
                   <TooltipHost />
+                  <AppUpdateBanner />
                 </OnlinePresenceProvider>
               </ChatProvider>
             </ToastProvider>
