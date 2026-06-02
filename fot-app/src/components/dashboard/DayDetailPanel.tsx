@@ -61,12 +61,8 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
   // Заголовок «Корректировки» — только если есть реальная корректировка; иначе это просто
   // разбивка факта из СКУД по объекту → «Часы по объектам».
   const hasRealCorrection = realObjects.some((o) => o.is_correction);
-  // Скрываем избыточную разбивку: один СКУД-объект, чьи часы совпадают с часами дня.
-  const redundantSingleSkud =
-    !hasRealCorrection &&
-    realObjects.length === 1 &&
-    Math.abs(realObjects[0].hours_worked - (visibleHours ?? 0)) < 0.01;
-  const showObjects = realObjects.length > 0 && !redundantSingleSkud;
+  // Показываем объект всегда, даже если он за день один (без подавления «избыточной» разбивки).
+  const showObjects = realObjects.length > 0;
   const objectsTitle = hasRealCorrection ? 'Корректировки по объектам' : 'Часы по объектам';
   const breakMinutes = entry?.break_minutes ?? 0;
 
