@@ -119,6 +119,7 @@ describe('timesheet-object.service', () => {
     mockedState.tables.skud_objects = [
       { id: 'obj-a', name: 'Объект A' },
       { id: 'obj-b', name: 'Объект B' },
+      { id: 'obj-c', name: 'Объект C' },
     ];
     mockedState.tables.skud_events = [];
     mockedState.tables.employee_skud_object_access = [];
@@ -635,6 +636,89 @@ describe('timesheet-object.service', () => {
         is_correction: true,
       }),
     ]);
+  });
+
+  it('routes a day correction to the single real-skud object, not across all assignments (Кулагин)', async () => {
+    // Руководитель приписан к 3 ЖК (доступ), но физически отметился только на obj-a.
+    // Мигрированная day-level правка должна лечь целиком на реальный объект дня (obj-a),
+    // а не размазаться по 3 приписке (фантомные строки на obj-b/obj-c).
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-15', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-15', event_time: '12:00:00', access_point: 'КПП A', direction: 'exit' },
+    ];
+    mockedState.tables.employee_skud_object_access = [
+      { employee_id: 1, skud_object_id: 'obj-a' },
+      { employee_id: 1, skud_object_id: 'obj-b' },
+      { employee_id: 1, skud_object_id: 'obj-c' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-15',
+      endDate: '2026-04-15',
+      todayStr: '2026-04-15',
+      adjustments: [
+        {
+          id: 92,
+          employee_id: 1,
+          work_date: '2026-04-15',
+          hours_override: 10,
+          source_type: 'manual_object',
+          source_id: 'obj-a',
+          status: 'work',
+          reason: 'контроль работ',
+          updated_at: '2026-04-15T10:00:00.000Z',
+          metadata: { object_id: 'obj-a', object_name: 'Объект A', migrated_from_day_level: true },
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({ adjustment_id: 92, object_id: 'obj-a', hours_worked: 10, is_correction: true }),
+    ]);
+    expect(result.objectEntries).toHaveLength(1);
+  });
+
+  it('splits a day correction across the real-skud objects proportionally to minutes (Жабунин)', async () => {
+    // Сотрудник реально ходил на 2 объекта (obj-a 3ч, obj-b 1ч) и приписан к ним же.
+    // Мигрированная day-level правка (8ч) делится пропорц. минутам присутствия: 6ч/2ч.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-16', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-16', event_time: '12:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-04-16', event_time: '13:00:00', access_point: 'КПП B', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-16', event_time: '14:00:00', access_point: 'КПП B', direction: 'exit' },
+    ];
+    mockedState.tables.employee_skud_object_access = [
+      { employee_id: 1, skud_object_id: 'obj-a' },
+      { employee_id: 1, skud_object_id: 'obj-b' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-16',
+      endDate: '2026-04-16',
+      todayStr: '2026-04-16',
+      adjustments: [
+        {
+          id: 93,
+          employee_id: 1,
+          work_date: '2026-04-16',
+          hours_override: 8,
+          source_type: 'manual_object',
+          source_id: 'obj-a',
+          status: 'work',
+          reason: 'контроль работ',
+          updated_at: '2026-04-16T10:00:00.000Z',
+          metadata: { object_id: 'obj-a', object_name: 'Объект A', migrated_from_day_level: true },
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toHaveLength(2);
+    expect(result.objectEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ object_id: 'obj-a', hours_worked: 6, is_correction: true }),
+      expect.objectContaining({ object_id: 'obj-b', hours_worked: 2, is_correction: true }),
+    ]));
   });
 
   it('does not generate object entries for a non-work correction without worked hours', async () => {

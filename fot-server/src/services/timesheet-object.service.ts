@@ -667,7 +667,7 @@ export async function buildObjectAttendanceData(params: {
     : new Map<number, { object_id: string; object_name: string }>();
 
   // Удалёнщики: датированная привязка к объекту — фолбэк для day-level правки в
-  // дни без СКУД (между sameDayMajority и 90-дневной историей). Реальный СКУД дня
+  // дни без СКУД (между реальным СКУД дня и 90-дневной историей). Реальный СКУД дня
   // остаётся приоритетнее, поэтому при выходе на работу реальный объект не маскируется.
   const remoteSchedulesByEmployee = includeObjectDetails
     ? await resolveSchedulesBulk(employeeIds.map(id => ({ id })), endDate)
@@ -863,19 +863,20 @@ export async function buildObjectAttendanceData(params: {
       continue;
     }
 
-    // Снимок СКУД-распределения дня ДО удаления — нужен для fallback'а ниже,
-    // если у сотрудника нет приписки в employee_skud_object_access.
-    let sameDayBest: { object_id: string; object_name: string; minutes: number } | null = null;
+    // Снимок реальных объектов дня ДО удаления СКУД-записей: объекты, где сотрудник
+    // фактически отметился, с минутами присутствия. Это авторитетный сигнал «где был»,
+    // важнее списка приписки (руководитель приписан к нескольким ЖК ради доступа,
+    // а ходит на один — иначе скорректированные часы фантомно размазываются по приписке).
+    const dayObjectMinutes = new Map<string, { object_name: string; minutes: number }>();
     for (const [entryKey, entry] of baseObjectEntries) {
       if (!entryKey.startsWith(`${dKey}_`)) continue;
       if (entry.object_key === UNKNOWN_OBJECT_KEY || !entry.object_id) continue;
-      if (!sameDayBest || entry.base_minutes > sameDayBest.minutes) {
-        sameDayBest = { object_id: entry.object_id, object_name: entry.object_name, minutes: entry.base_minutes };
-      }
+      const prev = dayObjectMinutes.get(entry.object_id);
+      dayObjectMinutes.set(entry.object_id, {
+        object_name: entry.object_name,
+        minutes: (prev?.minutes || 0) + Math.max(0, entry.base_minutes),
+      });
     }
-    const sameDayMajority = sameDayBest
-      ? { object_id: sameDayBest.object_id, object_name: sameDayBest.object_name }
-      : null;
 
     // Корректировка перекрывает фактические СКУД-события дня — иначе двойной счёт.
     for (const entryKey of [...baseObjectEntries.keys()]) {
@@ -885,21 +886,36 @@ export async function buildObjectAttendanceData(params: {
 
     const assigned = (assignedObjectsByEmployee.get(adjustment.employee_id) || [])
       .filter(objectId => objectMappings.objectNameById.has(objectId));
-    let targets: Array<{ objectKey: string; objectId: string | null; objectName: string }>;
-    if (assigned.length > 0) {
-      targets = assigned.map(objectId => ({
+
+    // Получатели скорректированных часов и веса распределения. Приоритет:
+    // 1) единственная приписка — однозначный «домашний» объект; день-правка
+    //    перекрывает случайные проходы по др. объектам (Бабышев: obj-b, не СКУД-obj-a);
+    // 2) несколько приписок (или ноль) + реальный СКУД дня — распределяем по объектам
+    //    фактического присутствия пропорц. минутам (приписка ≠ «где работал»: руководитель
+    //    приписан к нескольким ЖК ради доступа, а ходит на один — Кулагин/Рыбалко);
+    // 3) объект, выбранный миграцией day-level→object (metadata.object_id);
+    // 4) удалёнщик — датированная привязка (employee_object_attribution);
+    // 5) основной объект за 90 дней (historicalPrimaryByEmployee);
+    // 6) нет сигнала — поровну по приписке (≥2 объектов);
+    // 7) совсем ничего — UNKNOWN (редкий тру-фоллбек).
+    let targets: Array<{ objectKey: string; objectId: string | null; objectName: string; weight: number }>;
+    if (assigned.length === 1) {
+      const objectId = assigned[0];
+      targets = [{
         objectKey: objectId,
         objectId,
         objectName: objectMappings.objectNameById.get(objectId) || UNKNOWN_OBJECT_NAME,
+        weight: 1,
+      }];
+    } else if (dayObjectMinutes.size > 0) {
+      const anyMinutes = [...dayObjectMinutes.values()].some(value => value.minutes > 0);
+      targets = [...dayObjectMinutes.entries()].map(([objectId, value]) => ({
+        objectKey: objectId,
+        objectId,
+        objectName: value.object_name,
+        weight: anyMinutes ? value.minutes : 1,
       }));
     } else {
-      // Сотрудник без приписки: цепляем правку к фактическому объекту,
-      // 1) если в этот день есть СКУД — к объекту с максимумом минут (реальный СКУД);
-      // 2) удалёнщик — к датированной привязке (employee_object_attribution);
-      // 3) иначе — к основному объекту за 90 дней (historicalPrimaryByEmployee);
-      // 4) для мигрированной правки — к объекту, выбранному миграцией (metadata.object_id),
-      //    чтобы не вернулась группа «Не определён» у тех, ради кого делалась миграция;
-      // 5) совсем нет данных — оставляем UNKNOWN (редкий тру-фоллбек).
       const remoteAttribution = attributionRowsByEmployee.size > 0
         ? resolveAttributionAt(attributionRowsByEmployee.get(adjustment.employee_id), adjustment.work_date)
         : null;
@@ -909,24 +925,41 @@ export async function buildObjectAttendanceData(params: {
       const migratedFallback = migratedMeta?.object_id
         ? { object_id: migratedMeta.object_id, object_name: migratedMeta.object_name }
         : null;
-      const fallback = sameDayMajority
+      const single = migratedFallback
         ?? remoteAttribution
         ?? historicalPrimaryByEmployee.get(adjustment.employee_id)
-        ?? migratedFallback
         ?? null;
-      targets = fallback
-        ? [{ objectKey: fallback.object_id, objectId: fallback.object_id, objectName: fallback.object_name }]
-        : [{ objectKey: UNKNOWN_OBJECT_KEY, objectId: null, objectName: UNKNOWN_OBJECT_NAME }];
+      if (single) {
+        targets = [{ objectKey: single.object_id, objectId: single.object_id, objectName: single.object_name, weight: 1 }];
+      } else {
+        targets = assigned.length > 0
+          ? assigned.map(objectId => ({
+            objectKey: objectId,
+            objectId,
+            objectName: objectMappings.objectNameById.get(objectId) || UNKNOWN_OBJECT_NAME,
+            weight: 1,
+          }))
+          : [{ objectKey: UNKNOWN_OBJECT_KEY, objectId: null, objectName: UNKNOWN_OBJECT_NAME, weight: 1 }];
+      }
     }
 
-    // Делим в центичасах (2 знака — домен roundHours), чтобы сумма долей точно
-    // равнялась скорректированным часам без копеечных «остатков» в объектном виде.
+    // Делим в центичасах (2 знака — домен roundHours) пропорционально весам.
+    // Метод наибольшего остатка — сумма долей точно равна скорректированным часам.
     const totalCentihours = Math.max(0, Math.round(hoursOverride * 100));
-    const perTarget = Math.floor(totalCentihours / targets.length);
-    const remainder = totalCentihours - perTarget * targets.length;
+    const sumWeight = targets.reduce((sum, target) => sum + target.weight, 0);
+    const exactShares = targets.map(target => (sumWeight > 0 ? (totalCentihours * target.weight) / sumWeight : 0));
+    const centihoursByTarget = exactShares.map(value => Math.floor(value));
+    let distributed = centihoursByTarget.reduce((sum, value) => sum + value, 0);
+    const byFractionDesc = exactShares
+      .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+      .sort((left, right) => right.frac - left.frac);
+    for (let k = 0; distributed < totalCentihours && targets.length > 0; k += 1) {
+      centihoursByTarget[byFractionDesc[k % targets.length].index] += 1;
+      distributed += 1;
+    }
     const dayObjects = baseDistinctObjectKeys.get(dKey) || new Set<string>();
     targets.forEach((target, index) => {
-      const centihours = perTarget + (index < remainder ? 1 : 0);
+      const centihours = centihoursByTarget[index];
       baseObjectEntries.set(
         objectEntryKey(adjustment.employee_id, adjustment.work_date, target.objectKey),
         {
