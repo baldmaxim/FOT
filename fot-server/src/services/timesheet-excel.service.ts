@@ -419,6 +419,16 @@ export const buildObjectRowsForOneC = (
 
       for (const day of data.exportDays) {
         const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
+
+        // Приоритет — статус из утверждённого табеля: если за день стоит буква
+        // (Н/Б/УУ/От/С/У/В), показываем её вместо объектных часов.
+        const statusEntry = data.dataMap.get(employee.id)?.get(dateStr);
+        const label = statusEntry ? STATUS_LABELS[statusEntry.status] : undefined;
+        if (label) {
+          dayValues.set(day, { hours: 0, label, isUnderwork: false });
+          continue;
+        }
+
         const hours = employeeDays.get(dateStr) ?? 0;
         if (hasPositiveHours(hours)) {
           const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
@@ -437,8 +447,8 @@ export const buildObjectRowsForOneC = (
           });
           totalHours += roundedHours;
         }
-        // При экспорте по объектам показываем только часы на конкретном объекте.
-        // Статусы не показываем — это общие статусы, не специфичные для этого объекта.
+        // В рабочие дни показываем часы на конкретном объекте; буквенные статусы
+        // невыхода уже проставлены выше из утверждённого табеля.
         // Выходные дни по календарю оставляем серыми.
         if (!dayValues.has(day) && isCalendarWeekend(new Date(data.year, data.mon - 1, day), dateStr, data.calendarMonth)) {
           dayValues.set(day, { hours: 0, isUnderwork: false, isWeekend: true });
