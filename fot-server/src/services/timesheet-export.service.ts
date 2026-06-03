@@ -50,6 +50,10 @@ export interface IDepartmentTimesheetData {
   // и Excel-представлениях; false → текущее поведение (display_hours_worked,
   // т.е. часы, обрезанные под плановую норму дня).
   showActualHours: boolean;
+  // Дата (включительно), С КОТОРОЙ дни сотрудника НЕ считаются (не идут в норму/факт/ячейку).
+  // Заполняется ТОЛЬКО для уволенных (employment_status='fired'): min(excluded_from_timesheet_date,
+  // dismissal_date+1). Для активных не задаётся → их выгрузка не меняется. Аналог cutoff онлайн-табеля.
+  cutoffByEmployeeId?: Map<number, string | null>;
 }
 
 export const resolveTimesheetExportDays = (
@@ -112,28 +116,28 @@ export async function fetchTimesheetDataForDepartment(
   if (!departmentId || assignedEmployeeIds.length > 0) {
     if (departmentId) {
       employees = await query<Record<string, unknown>>(
-        `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
+        `SELECT id, full_name, position_id, org_department_id, sigur_employee_id,
+                employment_status, dismissal_date, excluded_from_timesheet_date
            FROM employees
            WHERE (employment_status = 'active'
                   OR (employment_status = 'fired'
                       AND dismissal_date IS NOT NULL
                       AND dismissal_date >= $2::date))
              AND is_archived = false
-             AND excluded_from_timesheet = false
              AND id = ANY($1::int[])
            ORDER BY full_name`,
         [assignedEmployeeIds, startDate],
       );
     } else {
       employees = await query<Record<string, unknown>>(
-        `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
+        `SELECT id, full_name, position_id, org_department_id, sigur_employee_id,
+                employment_status, dismissal_date, excluded_from_timesheet_date
            FROM employees
            WHERE (employment_status = 'active'
                   OR (employment_status = 'fired'
                       AND dismissal_date IS NOT NULL
                       AND dismissal_date >= $1::date))
              AND is_archived = false
-             AND excluded_from_timesheet = false
            ORDER BY full_name`,
         [startDate],
       );
@@ -146,6 +150,9 @@ export async function fetchTimesheetDataForDepartment(
     org_department_id: (e.org_department_id as string | null),
     sigur_employee_id: (e.sigur_employee_id as number | null),
   }));
+  // Дата выхода (cutoff) ТОЛЬКО для уволенных: дни >= cutoff не считаются в Excel
+  // (норма/факт/ячейка), как в онлайн-табеле. Активных не трогаем.
+  const cutoffByEmployeeId = buildFiredCutoffMap(employees, startDate);
   // Графики
   const empList = empArr.map(e => ({ id: e.id }));
   const [dailySchedulesMap, calendarMonth] = await Promise.all([
@@ -221,7 +228,46 @@ export async function fetchTimesheetDataForDepartment(
     exportHalf,
     exportDays,
     showActualHours,
+    cutoffByEmployeeId,
   };
+}
+
+/**
+ * Строит cutoff-карту ТОЛЬКО для уволенных: дата (включительно), с которой дни
+ * не считаются. cutoff = min(excluded_from_timesheet_date [если > startDate], dismissal_date+1).
+ * Активные в карту не попадают → их выгрузка не меняется.
+ */
+function buildFiredCutoffMap(
+  rows: Array<Record<string, unknown>>,
+  startDate: string,
+): Map<number, string | null> {
+  const addOneIso = (iso: string): string => {
+    const [y, m, d] = iso.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + 1);
+    return dt.toISOString().slice(0, 10);
+  };
+  const toIsoDate = (v: unknown): string | null => {
+    if (!v) return null;
+    if (typeof v === 'string') return v.slice(0, 10);
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    return null;
+  };
+  const map = new Map<number, string | null>();
+  for (const e of rows) {
+    if ((e.employment_status as string | null) !== 'fired') continue;
+    const empId = Number(e.id);
+    if (!Number.isFinite(empId)) continue;
+    const excluded = toIsoDate(e.excluded_from_timesheet_date);
+    const dismissal = toIsoDate(e.dismissal_date);
+    const dismissalCutoff = dismissal ? addOneIso(dismissal) : null;
+    // excluded учитываем только если оно ПОСЛЕ начала периода (иначе не ограничивает наш период).
+    const excludedEff = excluded && excluded > startDate ? excluded : null;
+    const candidates = [excludedEff, dismissalCutoff].filter((v): v is string => !!v);
+    if (candidates.length === 0) continue;
+    map.set(empId, candidates.reduce((min, v) => (v < min ? v : min)));
+  }
+  return map;
 }
 
 /**
@@ -257,7 +303,8 @@ export async function fetchTimesheetDataForEmployees(
   let employees: Array<Record<string, unknown>> = [];
   if (uniqueIds.length > 0) {
     employees = await query<Record<string, unknown>>(
-      `SELECT id, full_name, position_id, org_department_id, sigur_employee_id
+      `SELECT id, full_name, position_id, org_department_id, sigur_employee_id,
+              employment_status, dismissal_date, excluded_from_timesheet_date
          FROM employees
          WHERE id = ANY($1::int[])
            AND (employment_status = 'active'
@@ -265,7 +312,6 @@ export async function fetchTimesheetDataForEmployees(
                     AND dismissal_date IS NOT NULL
                     AND dismissal_date >= $2::date))
            AND is_archived = false
-           AND excluded_from_timesheet = false
          ORDER BY full_name`,
       [uniqueIds, startDate],
     );
@@ -277,6 +323,7 @@ export async function fetchTimesheetDataForEmployees(
     org_department_id: (e.org_department_id as string | null),
     sigur_employee_id: (e.sigur_employee_id as number | null),
   }));
+  const cutoffByEmployeeId = buildFiredCutoffMap(employees, startDate);
 
   const empList = empArr.map(e => ({ id: e.id }));
   const [dailySchedulesMap, calendarMonth] = await Promise.all([
@@ -349,5 +396,6 @@ export async function fetchTimesheetDataForEmployees(
     exportHalf,
     exportDays,
     showActualHours,
+    cutoffByEmployeeId,
   };
 }

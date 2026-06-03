@@ -344,11 +344,14 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
   return data.employees.map(employee => {
     const schedule = data.schedulesMap.get(employee.id);
     const employeeDays = data.dataMap.get(employee.id);
+    const cutoff = data.cutoffByEmployeeId?.get(employee.id) ?? null;
     const dayValues = new Map<number, IOneCDisplayDayValue>();
     let totalHours = 0;
 
     for (const day of data.exportDays) {
       const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
+      // Уволенный: дни >= cutoff (dismissal+1) не считаются — пустая ячейка, без нормы/факта.
+      if (cutoff && dateStr >= cutoff) continue;
       const dateObj = new Date(data.year, data.mon - 1, day);
       const markWeekend = (): void => {
         if (isCalendarWeekend(dateObj, dateStr, data.calendarMonth)) {
@@ -414,11 +417,14 @@ export const buildObjectRowsForOneC = (
     .map(employee => {
       const schedule = data.schedulesMap.get(employee.id);
       const employeeDays = grouped.get(employee.id) || new Map();
+      const cutoff = data.cutoffByEmployeeId?.get(employee.id) ?? null;
       const dayValues = new Map<number, IOneCDisplayDayValue>();
       let totalHours = 0;
 
       for (const day of data.exportDays) {
         const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
+        // Уволенный: дни >= cutoff не считаются.
+        if (cutoff && dateStr >= cutoff) continue;
 
         // Приоритет — статус из утверждённого табеля: если за день стоит буква
         // (Н/Б/УУ/От/С/У/В), показываем её вместо объектных часов.
@@ -785,6 +791,7 @@ export function buildTimesheetSheet(
   employees.forEach((emp, idx) => {
     const sched = schedulesMap.get(emp.id);
     const empData = dataMap.get(emp.id);
+    const empCutoff = data.cutoffByEmployeeId?.get(emp.id) ?? null;
     const objectRows = objectRowsByEmployee.get(emp.id) || [];
 
     const rowDefinitions = [
@@ -833,6 +840,12 @@ export function buildTimesheetSheet(
         const cell = ws.getCell(rowNumber, col);
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.font = { size: 8 };
+
+        // Уволенный: дни >= cutoff (dismissal+1) не считаются — пустая ячейка, без дней/часов.
+        if (empCutoff && dateStr >= empCutoff) {
+          cell.fill = docRowFill;
+          return;
+        }
 
         const thresholdHours = getThresholdHoursForDate(data, emp.id, dateStr, sched);
         // Данные дня имеют приоритет над выходным: работа/согласование в выходной
@@ -1110,6 +1123,7 @@ export function buildObjectTimesheetSheet(
     const row = ws.getRow(rowNumber);
     const employeeDayMap = objectEntriesByEmployeeDate.get(employee.id) || new Map();
     const schedule = schedulesMap.get(employee.id);
+    const empCutoff = data.cutoffByEmployeeId?.get(employee.id) ?? null;
 
     row.getCell(COL_NUM).value = index + 1;
     row.getCell(COL_NUM).alignment = centerAlign;
@@ -1133,6 +1147,13 @@ export function buildObjectTimesheetSheet(
       const cell = ws.getCell(rowNumber, col);
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
       cell.font = { size: 8 };
+
+      // Уволенный: дни >= cutoff не считаются — пустая ячейка.
+      if (empCutoff && dateStr >= empCutoff) {
+        cell.fill = docRowFill;
+        cell.value = '';
+        return;
+      }
 
       const isWeekend = isCalendarWeekend(dateObj, dateStr, calendarMonth);
       const entry = employeeDayMap.get(dateStr);
