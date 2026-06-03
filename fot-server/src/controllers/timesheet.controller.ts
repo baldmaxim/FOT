@@ -1582,6 +1582,16 @@ export const timesheetController = {
       // редактируемы. Фронт по флагу editable прячет правку дня/кнопки.
       const editableEmpsForList = await resolveEditableEmployeeIds(req);
       const isListEmpEditable = (id: number): boolean => editableEmpsForList === 'all' || editableEmpsForList.has(id);
+      // Уволенные/переведённые члены отдела попадают в грид через dismissal_events
+      // и закрытые assignments (listEmployeeMembershipsForDepartmentPeriod), но их строка
+      // employee_department_access уже is_active=false, поэтому resolveEditableEmployeeIds
+      // их не видит. Если отображаемый отдел в editable-скоупе (миграция 167: full, не view) —
+      // все его члены за период редактируемы. Дни после увольнения/перевода всё равно
+      // отсекаются: фронт рисует их inactive, а create() — через isEmployeeAssignedToDepartmentOnDate.
+      const editableDeptIds = await resolveEditableDepartmentIds(req);
+      const displayedDeptEditable = shouldApplyDeptFilter
+        && department_id != null
+        && (editableDeptIds === 'all' || editableDeptIds.includes(department_id as string));
       const employeesWithNames = (employees || []).map(e => {
         const empId = Number(e.id);
         // self > department > direct_report. Если человек одновременно в выбранном
@@ -1603,7 +1613,7 @@ export const timesheetController = {
           joined_date: joinedCutoffByEmployeeId.get(empId) ?? null,
           excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
           source,
-          editable: isListEmpEditable(empId),
+          editable: isListEmpEditable(empId) || (departmentMembershipSet.has(empId) && displayedDeptEditable),
         };
       });
 
@@ -2387,15 +2397,26 @@ export const timesheetController = {
 
       const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
       let employeeIds: number[] = [];
+      // Члены editable-отделов за период: уволенные/переведённые видны через
+      // dismissal_events / закрытые assignments, но их строка employee_department_access
+      // уже is_active=false — resolveEditableEmployeeIds их не покрывает. Зеркалит
+      // editable-логику грида (getAll), переиспользуя цикл по отделам ниже.
+      const periodEditableMemberIds = new Set<number>();
       if (scope === 'department') {
         const managedIds = await resolveManagedDepartmentIds(req);
         const departmentIds = requestedDepartmentId && managedIds.includes(requestedDepartmentId)
           ? [requestedDepartmentId]
           : managedIds;
+        const editableDeptIds = await resolveEditableDepartmentIds(req);
+        const isDeptEditable = (id: string): boolean => editableDeptIds === 'all' || editableDeptIds.includes(id);
         const ids = new Set<number>();
         for (const deptId of departmentIds) {
           const list = await listEmployeeIdsAssignedToDepartmentPeriod(deptId, startDate, endDate);
-          for (const id of list) ids.add(id);
+          const deptEditable = isDeptEditable(deptId);
+          for (const id of list) {
+            ids.add(id);
+            if (deptEditable) periodEditableMemberIds.add(id);
+          }
         }
         employeeIds = [...ids];
       } else if (requestedDepartmentId) {
@@ -2420,7 +2441,8 @@ export const timesheetController = {
       // View-отделы (миграция 167): сотрудники вне editable-скоупа не редактируемы,
       // даже если видимы. Для admin/scope='all' — не ограничиваем.
       const editableEmps = await resolveEditableEmployeeIds(req);
-      const isEmpEditable = (id: number): boolean => editableEmps === 'all' || editableEmps.has(id);
+      const isEmpEditable = (id: number): boolean =>
+        editableEmps === 'all' || editableEmps.has(id) || periodEditableMemberIds.has(id);
       const rows = await Promise.all(adjustments.map(async (item) => {
         const lockInfo = scope === 'department'
           ? await ensureNotLockedForScope(req, 'department', item.employee_id, item.work_date)

@@ -1,6 +1,6 @@
 import { query } from '../config/postgres.js';
 import { loadCalendarMonth, resolveSchedulesForPeriod, isWorkingDay } from './schedule.service.js';
-import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
+import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { countApprovalAttachments } from './timesheet-approval-attachments.service.js';
 
 export const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
@@ -99,14 +99,37 @@ export async function checkWeekendWorkRequirement(params: {
 }): Promise<IWeekendWorkCheck> {
   const { departmentId, startDate, endDate } = params;
 
-  const employeeIds = params.employeeIds
-    ? [...new Set(params.employeeIds)].filter((id): id is number => Number.isInteger(id) && id > 0)
-    : departmentId
-      ? await listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate)
-      : [];
+  // Окно членства в отделе по сотруднику: уволенный/переведённый числится в отделе
+  // только с joined_date (вкл.) до transferred_out_date (искл.). Его «работа в выходной»
+  // ПОСЛЕ выхода (СКУД уже на другом объекте) не должна требовать служебку в этом отделе.
+  const membershipWindow = new Map<number, { joined: string | null; transferredOut: string | null }>();
+  let employeeIds: number[];
+  if (params.employeeIds) {
+    employeeIds = [...new Set(params.employeeIds)].filter((id): id is number => Number.isInteger(id) && id > 0);
+  } else if (departmentId) {
+    const memberships = await listEmployeeMembershipsForDepartmentPeriod(departmentId, startDate, endDate);
+    employeeIds = memberships.map(m => m.employee_id);
+    for (const m of memberships) {
+      membershipWindow.set(m.employee_id, {
+        joined: m.joined_date ?? null,
+        transferredOut: m.transferred_out_date ?? null,
+      });
+    }
+  } else {
+    employeeIds = [];
+  }
   if (employeeIds.length === 0) {
     return { requires: false, weekendDates: [], weekendWorkDates: [] };
   }
+
+  // Путь по employeeIds (подача «по людям») окна не имеет — там фильтр не применяем.
+  const isWithinMembership = (empId: number, iso: string): boolean => {
+    const window = membershipWindow.get(empId);
+    if (!window) return true;
+    if (window.transferredOut && iso >= window.transferredOut) return false;
+    if (window.joined && iso < window.joined) return false;
+    return true;
+  };
 
   const offByEmployee = await getOffDatesByEmployee(employeeIds, startDate, endDate);
   const allOffDates = new Set<string>();
@@ -132,7 +155,7 @@ export async function checkWeekendWorkRequirement(params: {
   for (const row of adjRows) {
     const empId = Number(row.employee_id);
     const iso = String(row.work_date).slice(0, 10);
-    if (offByEmployee.get(empId)?.has(iso)) weekendWorkDates.add(iso);
+    if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) weekendWorkDates.add(iso);
   }
 
   const skudRows = await query<{ employee_id: number; date: string; total_minutes: number }>(
@@ -146,7 +169,7 @@ export async function checkWeekendWorkRequirement(params: {
   for (const row of skudRows) {
     const empId = Number(row.employee_id);
     const iso = String(row.date).slice(0, 10);
-    if (offByEmployee.get(empId)?.has(iso)) weekendWorkDates.add(iso);
+    if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) weekendWorkDates.add(iso);
   }
 
   const sortedWeekendWork = [...weekendWorkDates].sort();
