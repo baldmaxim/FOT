@@ -62,6 +62,8 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const [activeTab, setActiveTab] = useState<Tab>('department');
   const [searchQuery, setSearchQuery] = useState('');
   const [draftDepartmentIds, setDraftDepartmentIds] = useState<string[]>([]);
+  // Подмножество draftDepartmentIds, помеченное «только просмотр» (миграция 167).
+  const [draftViewOnlyIds, setDraftViewOnlyIds] = useState<string[]>([]);
   const [draftDirectIds, setDraftDirectIds] = useState<number[]>([]);
   const [draftObjectIds, setDraftObjectIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -95,6 +97,10 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     () => [...new Set(employee?.assigned_department_ids || [])],
     [employee],
   );
+  const initialViewOnlyIds = useMemo(
+    () => [...new Set(employee?.view_only_department_ids || [])],
+    [employee],
+  );
   const initialDirectIds = useMemo(
     () => (directReportsQuery.data || []).map(r => r.subordinate_employee_id),
     [directReportsQuery.data],
@@ -108,10 +114,11 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   useEffect(() => {
     if (isOpen && employee) {
       setDraftDepartmentIds(initialDepartmentIds);
+      setDraftViewOnlyIds(initialViewOnlyIds);
       setSearchQuery('');
       setActiveTab('department');
     }
-  }, [isOpen, employee, initialDepartmentIds]);
+  }, [isOpen, employee, initialDepartmentIds, initialViewOnlyIds]);
 
   useEffect(() => {
     if (isOpen) {
@@ -158,9 +165,10 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   }, [employee, allEmployees, searchQuery, initialDirectIds, draftDirectIds]);
 
   const hasDepartmentChanges = !arraysEqual(draftDepartmentIds, initialDepartmentIds);
+  const hasViewOnlyChanges = !arraysEqual(draftViewOnlyIds, initialViewOnlyIds);
   const hasDirectChanges = !numbersEqual(draftDirectIds, initialDirectIds);
   const hasObjectChanges = !arraysEqual(draftObjectIds, initialObjectIds);
-  const hasChanges = hasDepartmentChanges || hasDirectChanges || hasObjectChanges;
+  const hasChanges = hasDepartmentChanges || hasViewOnlyChanges || hasDirectChanges || hasObjectChanges;
 
   const handleRequestClose = useCallback(() => {
     if (hasChanges) {
@@ -174,6 +182,16 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
 
   const toggleDepartment = (departmentId: string) => {
     setDraftDepartmentIds(prev => (prev.includes(departmentId)
+      ? prev.filter(id => id !== departmentId)
+      : [...prev, departmentId]));
+    // Снятие отдела убирает его и из view-only.
+    setDraftViewOnlyIds(prev => (prev.includes(departmentId)
+      ? prev.filter(id => id !== departmentId)
+      : prev));
+  };
+
+  const toggleViewOnly = (departmentId: string) => {
+    setDraftViewOnlyIds(prev => (prev.includes(departmentId)
       ? prev.filter(id => id !== departmentId)
       : [...prev, departmentId]));
   };
@@ -192,6 +210,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
 
   const handleReset = () => {
     setDraftDepartmentIds(initialDepartmentIds);
+    setDraftViewOnlyIds(initialViewOnlyIds);
     setDraftDirectIds(initialDirectIds);
     setDraftObjectIds(initialObjectIds);
     setSearchQuery('');
@@ -201,9 +220,13 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     if (!employee || !hasChanges) return;
     setSaving(true);
     try {
-      // 1) Отделы и бригады — единым массивом через существующий endpoint.
-      if (hasDepartmentChanges) {
-        await adminService.updateEmployeeDepartmentAccess(employee.employee_id, draftDepartmentIds);
+      // 1) Отделы и бригады — единым массивом + подмножество «только просмотр».
+      if (hasDepartmentChanges || hasViewOnlyChanges) {
+        await adminService.updateEmployeeDepartmentAccess(
+          employee.employee_id,
+          draftDepartmentIds,
+          draftViewOnlyIds,
+        );
       }
       // 2) Прямые подчинённые — diff: добавляемые → POST, убираемые → DELETE.
       if (hasDirectChanges) {
@@ -328,7 +351,9 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               departments={departmentsByKind.departments}
               search={searchQuery}
               selectedIds={draftDepartmentIds}
+              viewOnlyIds={draftViewOnlyIds}
               onToggle={toggleDepartment}
+              onToggleViewOnly={toggleViewOnly}
             />
           )}
 
@@ -337,7 +362,9 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               departments={departmentsByKind.brigades}
               search={searchQuery}
               selectedIds={draftDepartmentIds}
+              viewOnlyIds={draftViewOnlyIds}
               onToggle={toggleDepartment}
+              onToggleViewOnly={toggleViewOnly}
             />
           )}
 
@@ -388,8 +415,10 @@ const DepartmentList: FC<{
   departments: IFlatDepartmentOption[];
   search: string;
   selectedIds: string[];
+  viewOnlyIds: string[];
   onToggle: (id: string) => void;
-}> = ({ departments, search, selectedIds, onToggle }) => {
+  onToggleViewOnly: (id: string) => void;
+}> = ({ departments, search, selectedIds, viewOnlyIds, onToggle, onToggleViewOnly }) => {
   const normalizedSearch = normalizeText(search);
 
   // Глубина для рендера = level - minLevel: фильтрация по kind / скрытие корней
@@ -453,6 +482,7 @@ const DepartmentList: FC<{
 
   const filtered = departments.filter(d => !normalizedSearch || normalizeText(d.name).includes(normalizedSearch));
   const selectedSet = new Set(selectedIds);
+  const viewOnlySet = new Set(viewOnlyIds);
 
   if (filtered.length === 0) {
     return (
@@ -501,22 +531,35 @@ const DepartmentList: FC<{
 
   const renderLeaf = (dept: IFlatDepartmentOption, keyPrefix: string, depth: number) => {
     const checked = selectedSet.has(dept.id);
+    const viewOnly = viewOnlySet.has(dept.id);
     const indentPx = depth * INDENT_STEP;
     return (
-      <label
+      <div
         key={`${keyPrefix}-${dept.id}`}
-        className={`${styles.departmentAccessItem} ${checked ? styles.departmentAccessItemChecked : ''}`}
+        className={`${styles.departmentAccessItem} ${styles.departmentAccessItemRow} ${checked ? styles.departmentAccessItemChecked : ''}`}
         style={{ paddingLeft: `calc(10px + ${indentPx}px)`, ['--depth-indent' as string]: `${indentPx}px` }}
       >
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={() => onToggle(dept.id)}
-        />
-        <span className={styles.departmentAccessItemLabel}>
-          {dept.name}
-        </span>
-      </label>
+        <label className={styles.departmentAccessItemMain}>
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={() => onToggle(dept.id)}
+          />
+          <span className={styles.departmentAccessItemLabel}>
+            {dept.name}
+          </span>
+        </label>
+        {checked && (
+          <button
+            type="button"
+            className={`${styles.viewOnlyToggle} ${viewOnly ? styles.viewOnlyToggleActive : ''}`}
+            onClick={() => onToggleViewOnly(dept.id)}
+            title="Только просмотр: руководитель видит сотрудников отдела, но не редактирует табель и не согласует"
+          >
+            {viewOnly ? 'Только просмотр' : 'Редактирование'}
+          </button>
+        )}
+      </div>
     );
   };
 

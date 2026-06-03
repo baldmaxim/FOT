@@ -36,6 +36,7 @@ import {
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
   resolveScopedDepartmentId,
+  hasObjectViewScope,
 } from '../services/data-scope.service.js';
 import type { IAccessPointOption, IDisciplineResult } from '../types/skud.types.js';
 
@@ -375,8 +376,17 @@ async function getScopedDisciplineData(
     };
   }
 
+  // Объектный view-скоуп (миграция 167 + объекты): дополнительно сужаем до видимого
+  // набора (full-отделы + view∩объекты), иначе показались бы все члены view-отделов.
+  const objectViewScope = await hasObjectViewScope(req);
+  const accessibleEmployeeIds = objectViewScope ? await resolveAccessibleEmployeeIds(req) : null;
+
   const filteredEmployeeIds = Object.entries(data.employees)
-    .filter(([, employee]) => employee.department_id != null && managedDepartmentIds.includes(employee.department_id))
+    .filter(([employeeId, employee]) => {
+      if (employee.department_id == null || !managedDepartmentIds.includes(employee.department_id)) return false;
+      if (accessibleEmployeeIds && accessibleEmployeeIds !== 'all') return accessibleEmployeeIds.has(Number(employeeId));
+      return true;
+    })
     .map(([employeeId]) => Number(employeeId));
   const employeeIdSet = new Set(filteredEmployeeIds);
 
@@ -492,12 +502,20 @@ const skudReadController = {
         return;
       }
 
+      // Объектный view-скоуп: сужаем сотрудников отдела до видимого набора (отделы ∩ объекты).
+      let allowedEmployeeIds: Set<number> | undefined;
+      if (await hasObjectViewScope(req)) {
+        const acc = await resolveAccessibleEmployeeIds(req);
+        if (acc !== 'all') allowedEmployeeIds = acc;
+      }
+
       const data = await getDashboardStats({
         departmentId,
         period,
         month,
         showActualHours: !!req.user.show_actual_hours,
         force: !!force,
+        allowedEmployeeIds,
       });
       res.json({ success: true, data });
     } catch (error) {
@@ -1106,6 +1124,12 @@ const skudReadController = {
         scopeMode = 'all';
       } else if (scope.object_ids.length > 0) {
         data = await getPresenceByObject({ allowedObjectIds: scope.object_ids });
+        // Объектный view-скоуп: на его объектах показываем только сотрудников его
+        // view-отделов (отделы ∩ объекты), а не всех присутствующих на объекте.
+        if (await hasObjectViewScope(req)) {
+          const empIds = await resolveAccessibleEmployeeIds(req);
+          if (empIds !== 'all') data = filterPresenceByEmployeeIds(data, empIds);
+        }
         scopeMode = 'object';
       } else {
         const empIds = await resolveAccessibleEmployeeIds(req);

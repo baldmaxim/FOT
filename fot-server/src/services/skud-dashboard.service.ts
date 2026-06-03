@@ -245,9 +245,14 @@ async function fetchTodayEventCounts(
 export async function getDashboardStats(
   params: IDashboardStatsParams,
 ): Promise<IDashboardStatsResult> {
-  const { departmentId, period, month, showActualHours, force } = params;
+  const { departmentId, period, month, showActualHours, force, allowedEmployeeIds } = params;
 
-  const cacheKey = `${departmentId ?? 'all'}|${period ?? 'default'}|${month ?? 'current'}|${showActualHours ? 'actual' : 'capped'}`;
+  // Ключ кэша учитывает объектный фильтр (иначе два руководителя с одним отделом,
+  // но разными объектами получили бы общий закэшированный результат).
+  const allowedKey = allowedEmployeeIds && allowedEmployeeIds.size > 0
+    ? `emp:${[...allowedEmployeeIds].sort((a, b) => a - b).join(',')}`
+    : 'all-emp';
+  const cacheKey = `${departmentId ?? 'all'}|${period ?? 'default'}|${month ?? 'current'}|${showActualHours ? 'actual' : 'capped'}|${allowedKey}`;
   if (!force) {
     const cached = dashboardCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
@@ -271,7 +276,7 @@ export async function getDashboardStats(
     sample: allDeptEmployees?.slice(0, 5),
   });
 
-  const [employees, internalPoints] = await Promise.all([
+  const [employeesRaw, internalPoints] = await Promise.all([
     query<{ id: number; full_name: string | null; org_department_id: string | null }>(
       `SELECT id, full_name, org_department_id FROM employees
        WHERE is_archived = false AND employment_status = 'active'
@@ -280,6 +285,11 @@ export async function getDashboardStats(
     ),
     getInternalAccessPoints(),
   ]);
+
+  // Объектный view-скоуп: оставляем только сотрудников из видимого набора.
+  const employees = (allowedEmployeeIds && allowedEmployeeIds.size > 0)
+    ? employeesRaw.filter(e => allowedEmployeeIds.has(Number(e.id)))
+    : employeesRaw;
 
   console.log('[getDashboardStats] employee query result', {
     employeeCount: employees?.length ?? 0,

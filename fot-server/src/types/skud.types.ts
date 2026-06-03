@@ -33,6 +33,9 @@ export interface IDashboardStatsParams {
   showActualHours: boolean;
   // Bypass server-side dashboardCache при ручном refresh с фронта.
   force?: boolean;
+  // Объектный view-скоуп (миграция 167 + объекты): если задан, сотрудники отдела
+  // дополнительно сужаются до этого набора (отделы ∩ объекты руководителя).
+  allowedEmployeeIds?: Set<number>;
 }
 
 export interface IDashboardRecentEvent {

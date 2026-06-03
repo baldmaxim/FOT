@@ -127,6 +127,10 @@ export interface AuthenticatedRequest extends Request {
     __timekeeper_dept_seeds?: string[];
     __timekeeper_direct_employees?: Set<number>;
     __accessible_employee_ids?: Set<number>;
+    __editable_subtree_ids?: string[];
+    __editable_employee_ids?: Set<number>;
+    __manager_object_ids?: string[];
+    __manager_object_employee_ids?: Set<number>;
   };
 }
 

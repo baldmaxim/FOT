@@ -33,7 +33,7 @@ function uniqueDepartmentIds(values: Array<string | null | undefined>): string[]
 
 async function listEmployeeAccessDepartmentIds(
   employeeId: number,
-  options: { excludeSource?: string } = {},
+  options: { excludeSource?: string; onlyFullAccess?: boolean } = {},
 ): Promise<string[]> {
   try {
     const params: unknown[] = [employeeId];
@@ -41,6 +41,9 @@ async function listEmployeeAccessDepartmentIds(
     if (options.excludeSource) {
       params.push(options.excludeSource);
       sql += ` AND source <> $${params.length}`;
+    }
+    if (options.onlyFullAccess) {
+      sql += " AND access_level = 'full'";
     }
 
     const rows = await query<{ department_id: string | null }>(sql, params);
@@ -194,6 +197,50 @@ export async function listExplicitDepartmentIdsForUser(
 ): Promise<string[]> {
   if (employeeId == null) return [];
   return listEmployeeAccessDepartmentIds(employeeId, { excludeSource: 'sigur_sync' });
+}
+
+/**
+ * Как listExplicitDepartmentIdsForUser, но только отделы с уровнем доступа 'full'
+ * (редактирование/согласование). View-отделы (access_level='view', миграция 167)
+ * исключаются — они дают только просмотр. Используется write/approve-гейтами.
+ */
+export async function listEditableDepartmentIdsForUser(
+  _userId: string,
+  employeeId?: number | null,
+): Promise<string[]> {
+  if (employeeId == null) return [];
+  return listEmployeeAccessDepartmentIds(employeeId, { excludeSource: 'sigur_sync', onlyFullAccess: true });
+}
+
+/**
+ * Ручные назначения сотрудника с уровнем доступа. Membership-строки (sigur_sync)
+ * исключены. Для админ-экрана «Назначенные отделы» (галка «только просмотр»).
+ */
+export async function listManagerAssignmentsWithLevel(
+  employeeId: number,
+): Promise<Array<{ department_id: string; access_level: 'full' | 'view' }>> {
+  try {
+    const rows = await query<{ department_id: string | null; access_level: string | null }>(
+      `SELECT department_id, access_level FROM employee_department_access
+        WHERE employee_id = $1 AND is_active = true AND source <> 'sigur_sync'`,
+      [employeeId],
+    );
+    const seen = new Set<string>();
+    const result: Array<{ department_id: string; access_level: 'full' | 'view' }> = [];
+    for (const row of rows) {
+      const id = typeof row.department_id === 'string' ? row.department_id.trim() : '';
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      result.push({ department_id: id, access_level: row.access_level === 'view' ? 'view' : 'full' });
+    }
+    return result;
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      warnMissingEmployeeDepartmentAccessTable();
+      return [];
+    }
+    throw err;
+  }
 }
 
 export async function listManagedDepartmentIdsForUser(

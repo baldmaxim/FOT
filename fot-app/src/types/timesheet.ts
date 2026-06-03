@@ -126,6 +126,8 @@ export interface TimesheetEmployee {
   joined_date?: string | null;
   /** Источник появления в табеле: membership выбранного отдела, прямой подчинённый, либо сам руководитель. */
   source?: TimesheetEmployeeSource;
+  /** false → сотрудник виден, но не редактируем (view-отдел, миграция 167). По умолчанию true. */
+  editable?: boolean;
 }
 
 export interface IProductionCalendarMonth {

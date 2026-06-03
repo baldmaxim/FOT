@@ -69,6 +69,8 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveScopedDepartmentId: vi.fn(async () => null),
   resolveRequestDataScope: vi.fn(async () => 'all'),
   resolveManagedDepartmentIds: vi.fn(async () => []),
+  resolveAccessibleEmployeeIds: vi.fn(async () => 'all'),
+  hasObjectViewScope: vi.fn(async () => false),
 }));
 
 vi.mock('./skud-write.controller.js', () => ({

@@ -1367,6 +1367,45 @@
   color: var(--text-primary);
 }
 
+/* Лист с галкой «только просмотр»: чекбокс+имя слева, переключатель уровня справа. */
+.departmentAccessItemRow {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.departmentAccessItemMain {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.viewOnlyToggle {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.viewOnlyToggle:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.viewOnlyToggleActive {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
 .departmentAccessGroupHeader {
   padding: 4px 0;
   font-size: 11px;

@@ -51,7 +51,22 @@ const approveUserSchema = z.object({
 
 const updateDepartmentAccessSchema = z.object({
   department_ids: z.array(z.string().uuid()).default([]),
+  // Подмножество department_ids, назначенное «только для просмотра» (миграция 167).
+  // Остальные отделы — уровень 'full' (видит и редактирует/согласует).
+  view_only_department_ids: z.array(z.string().uuid()).default([]),
 });
+
+/** Строит assignments (отдел + уровень) из списка отделов и подмножества view-only. */
+function buildDepartmentAssignments(
+  departmentIds: string[],
+  viewOnlyDepartmentIds: string[],
+): Array<{ department_id: string; access_level: 'full' | 'view' }> {
+  const viewSet = new Set(viewOnlyDepartmentIds.map(v => v.trim()));
+  return departmentIds.map(id => ({
+    department_id: id,
+    access_level: viewSet.has(id) ? 'view' : 'full',
+  }));
+}
 
 const updateEmployeeAccessSchema = z.object({
   employee_ids: z.array(z.number().int().positive()).default([]),
@@ -181,11 +196,20 @@ const MEMBERSHIP_SOURCE = 'sigur_sync';
 
 async function replaceExplicitDepartmentAccess(params: {
   employeeId: number;
-  departmentIds: string[];
+  /** Отделы с уровнем доступа: 'full' (видит+редактирует) или 'view' (только просмотр, миграция 167). */
+  assignments: Array<{ department_id: string; access_level: 'full' | 'view' }>;
   actorUserId: string;
   source: string;
 }): Promise<string[]> {
-  const explicitDepartmentIds = uniqueStringValues(params.departmentIds);
+  // Дедуп по отделу (последний уровень выигрывает).
+  const levelByDept = new Map<string, 'full' | 'view'>();
+  for (const a of params.assignments) {
+    const id = typeof a.department_id === 'string' ? a.department_id.trim() : '';
+    if (!id) continue;
+    levelByDept.set(id, a.access_level === 'view' ? 'view' : 'full');
+  }
+  const explicitDepartmentIds = [...levelByDept.keys()];
+  const accessLevels = explicitDepartmentIds.map(id => levelByDept.get(id) as string);
 
   const existingAccessRows = await query<{ department_id: string; is_active: boolean; source: string }>(
     `SELECT department_id, is_active, source
@@ -205,19 +229,20 @@ async function replaceExplicitDepartmentAccess(params: {
   const now = new Date().toISOString();
 
   if (explicitDepartmentIds.length > 0) {
-    // Bulk UPSERT через unnest — каждый ряд из массива параметров.
+    // Bulk UPSERT через unnest — каждый ряд из пары (dept_id, access_level).
     await execute(
       `INSERT INTO employee_department_access
-         (employee_id, department_id, source, is_active, created_by, updated_at)
-       SELECT $1::int, dept_id, $2::text, true, $3::uuid, $4::timestamptz
-         FROM unnest($5::uuid[]) AS dept_id
+         (employee_id, department_id, source, is_active, created_by, updated_at, access_level)
+       SELECT $1::int, t.dept_id, $2::text, true, $3::uuid, $4::timestamptz, t.lvl
+         FROM unnest($5::uuid[], $6::text[]) AS t(dept_id, lvl)
        ON CONFLICT (employee_id, department_id)
        DO UPDATE SET
          source = EXCLUDED.source,
          is_active = true,
          created_by = EXCLUDED.created_by,
-         updated_at = EXCLUDED.updated_at`,
-      [params.employeeId, params.source, params.actorUserId, now, explicitDepartmentIds],
+         updated_at = EXCLUDED.updated_at,
+         access_level = EXCLUDED.access_level`,
+      [params.employeeId, params.source, params.actorUserId, now, explicitDepartmentIds, accessLevels],
     );
   }
 
@@ -646,6 +671,24 @@ export const adminUsersController = {
         getActiveDirectManagersFor(employeeIds),
       ]);
 
+      // Карта отделов уровня 'view' (только просмотр, миграция 167) — для галки в UI.
+      const viewOnlyMap = new Map<number, string[]>();
+      if (employeeIds.length > 0) {
+        const viewRows = await query<{ employee_id: number | string; department_id: string }>(
+          `SELECT employee_id, department_id FROM employee_department_access
+            WHERE employee_id = ANY($1::int[]) AND is_active = true
+              AND source <> 'sigur_sync' AND access_level = 'view'`,
+          [employeeIds],
+        );
+        for (const r of viewRows) {
+          const empId = Number(r.employee_id);
+          if (!Number.isInteger(empId)) continue;
+          const list = viewOnlyMap.get(empId) ?? [];
+          list.push(r.department_id);
+          viewOnlyMap.set(empId, list);
+        }
+      }
+
       const positionIds = [...new Set(employees
         .map(e => e.position_id)
         .filter((id): id is string | number => id != null))];
@@ -681,6 +724,7 @@ export const adminUsersController = {
           employee_id: employee.id,
           full_name: employee.full_name,
           assigned_department_ids: explicitDepartmentMap.get(employee.id) || [],
+          view_only_department_ids: viewOnlyMap.get(employee.id) || [],
           position_name: employee.position_id != null
             ? (positionMap.get(String(employee.position_id)) ?? null)
             : null,
@@ -1362,7 +1406,7 @@ export const adminUsersController = {
   async updateUserDepartmentAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { department_ids } = updateDepartmentAccessSchema.parse(req.body);
+      const { department_ids, view_only_department_ids } = updateDepartmentAccessSchema.parse(req.body);
       const normalizedDepartmentIds = [...new Set(department_ids.map(value => value.trim()))];
 
       const profile = await queryOne<{ employee_id: number | null }>(
@@ -1412,7 +1456,7 @@ export const adminUsersController = {
 
       const explicitDepartmentIds = await replaceExplicitDepartmentAccess({
         employeeId: profile.employee_id,
-        departmentIds: normalizedDepartmentIds,
+        assignments: buildDepartmentAssignments(normalizedDepartmentIds, view_only_department_ids),
         actorUserId: req.user.id,
         source: 'manual_admin_ui',
       });
@@ -1547,7 +1591,7 @@ export const adminUsersController = {
   async updateEmployeeDepartmentAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const employeeId = z.coerce.number().int().positive().parse(req.params.id);
-      const { department_ids } = updateDepartmentAccessSchema.parse(req.body);
+      const { department_ids, view_only_department_ids } = updateDepartmentAccessSchema.parse(req.body);
       const normalizedDepartmentIds = uniqueStringValues(department_ids);
 
       const employee = await queryOne<{ id: number; full_name: string | null }>(
@@ -1588,7 +1632,7 @@ export const adminUsersController = {
 
       const explicitDepartmentIds = await replaceExplicitDepartmentAccess({
         employeeId,
-        departmentIds: normalizedDepartmentIds,
+        assignments: buildDepartmentAssignments(normalizedDepartmentIds, view_only_department_ids),
         actorUserId: req.user.id,
         source: 'manual_admin_ui',
       });

@@ -505,6 +505,11 @@ export const TimesheetPage: FC = () => {
   // Day click -> modal
   const handleDayClick = (emp: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => {
     if (bulkModeEnabled && viewMode === 'employees') return;
+    // View-отдел (миграция 167): сотрудник виден, но не редактируем — редактор не открываем.
+    if (emp.editable === false) {
+      toast.info?.('Сотрудник доступен только для просмотра');
+      return;
+    }
     const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     // Если в дне есть нерешённое превышение лимита передвижения или непривязанная точка —
     // приоритетно открываем модалку approve/reject (а не общую корректировку дня).
@@ -539,6 +544,10 @@ export const TimesheetPage: FC = () => {
     target: IObjectModalTarget,
     objectEntry: TimesheetObjectEntry | null,
   ) => {
+    if (emp.editable === false) {
+      toast.info?.('Сотрудник доступен только для просмотра');
+      return;
+    }
     const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     if (isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
       toast.info?.(lockMessage(lockedDateSet.get(workDate)));

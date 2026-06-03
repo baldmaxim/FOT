@@ -21,7 +21,12 @@ vi.mock('../config/db-instrumentation.js', () => ({
 // Также мокаем department-access.service: в тестах нам нужен только admin-путь.
 vi.mock('./department-access.service.js', () => ({
   listExplicitDepartmentIdsForUser: vi.fn().mockResolvedValue([]),
+  listEditableDepartmentIdsForUser: vi.fn().mockResolvedValue([]),
   loadEmployeeAccessMap: vi.fn().mockResolvedValue(new Map()),
+}));
+
+vi.mock('./employee-skud-object-access.service.js', () => ({
+  listObjectIdsForEmployee: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('./employee-direct-reports.service.js', () => ({
@@ -36,7 +41,7 @@ const mockState = vi.hoisted(() => ({
 }));
 
 import { canAccessEmployeeInScope, getSelfHistoryLimitForUser, invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
-import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
+import { listExplicitDepartmentIdsForUser, listEditableDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -68,6 +73,10 @@ beforeEach(() => {
   pgExecute.mockReset();
   pgTx.mockReset();
   vi.mocked(listExplicitDepartmentIdsForUser).mockReset().mockResolvedValue([]);
+  // Editable-отделы зеркалят явные назначения (в этих тестах нет view-отделов).
+  vi.mocked(listEditableDepartmentIdsForUser).mockReset().mockImplementation(
+    (...args) => vi.mocked(listExplicitDepartmentIdsForUser)(...args),
+  );
   vi.mocked(loadEmployeeAccessMap).mockReset().mockResolvedValue(new Map());
   vi.mocked(listDirectSubordinates).mockReset().mockResolvedValue([]);
 

@@ -18,9 +18,13 @@ import {
   getSelfHistoryLimitForUser,
   isSelfEmployeeRequest,
   resolveAccessibleDepartmentIds,
+  resolveAccessibleEmployeeIds,
   resolveManagedDepartmentIds,
+  resolveEditableDepartmentIds,
+  resolveEditableEmployeeIds,
   resolveScopedDepartmentId,
   resolveEffectiveDirectSubordinates,
+  hasObjectViewScope,
 } from '../services/data-scope.service.js';
 import { isTimekeeper } from '../services/timekeeper-scope.service.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
@@ -665,6 +669,7 @@ async function canAccessEmployeeForTimesheetDate(
   req: AuthenticatedRequest,
   employeeId: number | null | undefined,
   workDate: string,
+  requireEdit = false,
 ): Promise<boolean> {
   if (!employeeId) {
     return false;
@@ -687,8 +692,20 @@ async function canAccessEmployeeForTimesheetDate(
     return true;
   }
 
-  const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-  if (managedDepartmentIds.length > 0) {
+  // Объектный view-скоуп (отделы ∩ объекты): для ПРОСМОТРА авторитетен видимый
+  // набор сотрудников. Для записи (requireEdit) идём по editable-ветке ниже —
+  // view-сотрудники туда не попадают (read-only сохранён).
+  if (!requireEdit && await hasObjectViewScope(req)) {
+    const acc = await resolveAccessibleEmployeeIds(req);
+    return acc === 'all' || acc.has(employeeId);
+  }
+
+  // Для записи/согласования используем «редактируемый» подскоуп (исключает
+  // view-отделы, миграция 167); для просмотра — полный видимый скоуп.
+  const managedDepartmentIds = requireEdit
+    ? await resolveEditableDepartmentIds(req)
+    : await resolveManagedDepartmentIds(req);
+  if (managedDepartmentIds !== 'all' && managedDepartmentIds.length > 0) {
     const matches = await Promise.all(
       managedDepartmentIds.map(departmentId => isEmployeeAssignedToDepartmentOnDate(employeeId, departmentId, workDate)),
     );
@@ -711,6 +728,7 @@ async function canAccessEmployeeForTimesheetPeriod(
   employeeId: number | null | undefined,
   startDate: string,
   endDate: string,
+  requireEdit = false,
 ): Promise<boolean> {
   if (!employeeId) {
     return false;
@@ -733,8 +751,16 @@ async function canAccessEmployeeForTimesheetPeriod(
     return true;
   }
 
-  const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-  if (managedDepartmentIds.length > 0) {
+  // Объектный view-скоуп (отделы ∩ объекты): для ПРОСМОТРА авторитетен видимый набор.
+  if (!requireEdit && await hasObjectViewScope(req)) {
+    const acc = await resolveAccessibleEmployeeIds(req);
+    return acc === 'all' || acc.has(employeeId);
+  }
+
+  const managedDepartmentIds = requireEdit
+    ? await resolveEditableDepartmentIds(req)
+    : await resolveManagedDepartmentIds(req);
+  if (managedDepartmentIds !== 'all' && managedDepartmentIds.length > 0) {
     const employeeIdsByDepartment = await Promise.all(
       managedDepartmentIds.map(departmentId => listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate)),
     );
@@ -1284,7 +1310,7 @@ export const timesheetController = {
         empWhere.push(`id = $${empParams.length}`);
       }
 
-      const employees = await query<{
+      let employees = await query<{
         id: number | string;
         full_name: string | null;
         position_id: string | null;
@@ -1302,6 +1328,13 @@ export const timesheetController = {
         empParams,
       );
       mark('employees');
+
+      // Объектный view-скоуп: оставляем только видимый набор (full-отделы + view∩объекты).
+      // Сужает членов view-отделов до сотрудников объектов руководителя (миграция 167).
+      if (await hasObjectViewScope(req)) {
+        const acc = await resolveAccessibleEmployeeIds(req);
+        if (acc !== 'all') employees = employees.filter(e => acc.has(Number(e.id)));
+      }
 
       const employeeIds = employees.map(e => Number(e.id)).filter(Number.isFinite);
 
@@ -1343,9 +1376,11 @@ export const timesheetController = {
       }
       mark('departments');
 
-      const effectiveDisplayMode: 'actual' | 'capped_to_schedule' = req.user.show_actual_hours
-        ? 'actual'
-        : 'actual';
+      // Интерактивный табель строится в режиме 'actual': buildAttendanceEntries безусловно
+      // заполняет и факт (hours_worked), и урезанное под график (display_hours_worked).
+      // Переключение факт/урезано выполняет фронт по per-role show_actual_hours
+      // (selectVisibleHours). Путь 'capped_to_schedule' нужен только экспорту/зарплате.
+      const effectiveDisplayMode: 'actual' | 'capped_to_schedule' = 'actual';
       const { entries, objectEntries } = await buildAttendanceEntries({
         employees: employees.map(employee => ({
           id: Number(employee.id),
@@ -1543,6 +1578,10 @@ export const timesheetController = {
 
       const departmentMembershipSet = new Set<number>(departmentEmployeeIds);
       const directReportSet = new Set<number>(directReportIds);
+      // Редактируемость per-employee: view-отделы (миграция 167) видны, но не
+      // редактируемы. Фронт по флагу editable прячет правку дня/кнопки.
+      const editableEmpsForList = await resolveEditableEmployeeIds(req);
+      const isListEmpEditable = (id: number): boolean => editableEmpsForList === 'all' || editableEmpsForList.has(id);
       const employeesWithNames = (employees || []).map(e => {
         const empId = Number(e.id);
         // self > department > direct_report. Если человек одновременно в выбранном
@@ -1564,6 +1603,7 @@ export const timesheetController = {
           joined_date: joinedCutoffByEmployeeId.get(empId) ?? null,
           excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
           source,
+          editable: isListEmpEditable(empId),
         };
       });
 
@@ -1674,7 +1714,7 @@ export const timesheetController = {
           return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
         }
       }
-      if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
+      if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date, true))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
       const approvalLock = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
@@ -1871,7 +1911,7 @@ export const timesheetController = {
 	          return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
 	        }
 	      }
-	      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
+	      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date), true))) {
 	        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
 	      }
 	      const approvalLockUpdate = await ensureNotLockedForScope(
@@ -2005,7 +2045,7 @@ export const timesheetController = {
         uniqueItems.map(async item => ({
           employeeId: item.employee_id,
           workDate: item.work_date,
-          allowed: await canAccessEmployeeForTimesheetDate(req, item.employee_id, item.work_date),
+          allowed: await canAccessEmployeeForTimesheetDate(req, item.employee_id, item.work_date, true),
         })),
       );
       const denied = accessResults.find(result => !result.allowed);
@@ -2144,7 +2184,7 @@ export const timesheetController = {
           return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
         }
       }
-      if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
+      if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date, true))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
       const approvalLockObj = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
@@ -2282,7 +2322,7 @@ export const timesheetController = {
           return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
         }
       }
-      if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date))) {
+      if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date, true))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
       const approvalLockDel = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
@@ -2377,6 +2417,10 @@ export const timesheetController = {
           source_id: item.source_id ?? null,
         })),
       );
+      // View-отделы (миграция 167): сотрудники вне editable-скоупа не редактируемы,
+      // даже если видимы. Для admin/scope='all' — не ограничиваем.
+      const editableEmps = await resolveEditableEmployeeIds(req);
+      const isEmpEditable = (id: number): boolean => editableEmps === 'all' || editableEmps.has(id);
       const rows = await Promise.all(adjustments.map(async (item) => {
         const lockInfo = scope === 'department'
           ? await ensureNotLockedForScope(req, 'department', item.employee_id, item.work_date)
@@ -2392,13 +2436,13 @@ export const timesheetController = {
           || (item.source_type === 'leave_request' && (item.status === 'work' || item.status === 'manual'));
         const canEdit = req.user.is_admin || scope === 'all'
           ? !(lockInfo && lockInfo.status === 'approved')
-          : !approvalLocked && monthAllowed && isManualLike;
+          : !approvalLocked && monthAllowed && isManualLike && isEmpEditable(item.employee_id);
         // Удаляемы: manual и ЛЮБЫЕ материализации заявления (включая отсутствия —
         // день синхронно убирается из заявления, см. deleteEntry).
         const isDeletableSource = item.source_type === 'manual' || item.source_type === 'leave_request';
         const canDelete = req.user.is_admin || scope === 'all'
           ? !(lockInfo && lockInfo.status === 'approved') && isDeletableSource
-          : !approvalLocked && monthAllowed && isDeletableSource;
+          : !approvalLocked && monthAllowed && isDeletableSource && isEmpEditable(item.employee_id);
         return {
           id: item.id,
           employee_id: item.employee_id,
@@ -2471,7 +2515,7 @@ export const timesheetController = {
         }
       }
 
-      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date)))) {
+      if (!(await canAccessEmployeeForTimesheetDate(req, Number(existing.employee_id), String(existing.work_date), true))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
 
@@ -2775,7 +2819,7 @@ export const timesheetController = {
 
       const allowed: number[] = [];
       for (const id of employeeIds) {
-        if (await canAccessEmployeeForTimesheetDate(req, id, start)) allowed.push(id);
+        if (await canAccessEmployeeForTimesheetDate(req, id, start, true)) allowed.push(id);
       }
 
       const dates: string[] = [];

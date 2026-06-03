@@ -58,6 +58,8 @@ export interface EmployeeDepartmentAssignmentFromApi {
   employee_id: number;
   full_name: string;
   assigned_department_ids: string[];
+  /** Подмножество assigned_department_ids с уровнем «только просмотр» (миграция 167). */
+  view_only_department_ids?: string[];
   position_name?: string | null;
   department_name?: string | null;
   direct_manager_employee_id?: number | null;
@@ -178,18 +180,26 @@ export const adminService = {
     await apiClient.patch(`/admin/users/${userId}/employee`, { employee_id: employeeId });
   },
 
-  async updateUserDepartmentAccess(userId: string, departmentIds: string[]): Promise<{ assigned_department_ids: string[] }> {
+  async updateUserDepartmentAccess(
+    userId: string,
+    departmentIds: string[],
+    viewOnlyDepartmentIds: string[] = [],
+  ): Promise<{ assigned_department_ids: string[] }> {
     const response = await apiClient.put<ApiResponse<{ assigned_department_ids: string[] }>>(
       `/admin/users/${userId}/department-access`,
-      { department_ids: departmentIds },
+      { department_ids: departmentIds, view_only_department_ids: viewOnlyDepartmentIds },
     );
     return response.data;
   },
 
-  async updateEmployeeDepartmentAccess(employeeId: number, departmentIds: string[]): Promise<{ assigned_department_ids: string[] }> {
+  async updateEmployeeDepartmentAccess(
+    employeeId: number,
+    departmentIds: string[],
+    viewOnlyDepartmentIds: string[] = [],
+  ): Promise<{ assigned_department_ids: string[] }> {
     const response = await apiClient.put<ApiResponse<{ assigned_department_ids: string[] }>>(
       `/admin/employees/${employeeId}/department-access`,
-      { department_ids: departmentIds },
+      { department_ids: departmentIds, view_only_department_ids: viewOnlyDepartmentIds },
     );
     return response.data;
   },

@@ -8,6 +8,7 @@ import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients } from '../services/recipients.service.js';
 import {
   canAccessEmployeeInScope,
+  canEditEmployeeInScope,
   resolveAccessibleDepartmentIds,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
@@ -713,7 +714,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       return;
     }
 
-    if (!(await canAccessEmployeeInScope(req, request.employee_id))) {
+    if (!(await canEditEmployeeInScope(req, request.employee_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
       return;
     }
@@ -907,7 +908,7 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    if (!(await canAccessEmployeeInScope(req, request.employee_id))) {
+    if (!(await canEditEmployeeInScope(req, request.employee_id))) {
       res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
       return;
     }

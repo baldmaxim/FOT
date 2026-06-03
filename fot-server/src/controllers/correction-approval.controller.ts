@@ -3,6 +3,7 @@ import { query, queryOne } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   resolveAccessibleDepartmentIds,
+  resolveEditableDepartmentIds,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
@@ -256,7 +257,9 @@ async function ensureAdjustmentDepartmentAccess(
   req: AuthenticatedRequest,
   employeeId: number,
 ): Promise<boolean> {
-  const accessible = await resolveAccessibleDepartmentIds(req);
+  // Согласование — write-операция: используем editable-подскоуп (исключает
+  // view-отделы, миграция 167).
+  const accessible = await resolveEditableDepartmentIds(req);
   if (accessible === 'all') return true;
   const data = await queryOne<{ org_department_id: string | null }>(
     `SELECT org_department_id FROM employees WHERE id = $1`,
@@ -406,7 +409,7 @@ async function bulkChangeByIds(
     return;
   }
 
-  const accessible = await resolveAccessibleDepartmentIds(req);
+  const accessible = await resolveEditableDepartmentIds(req);
   let allowedIds: number[] = pending.map(a => Number(a.id));
   let skippedNoAccess = 0;
 
@@ -552,7 +555,7 @@ async function bulkRevertByIdsImpl(
     return;
   }
 
-  const accessible = await resolveAccessibleDepartmentIds(req);
+  const accessible = await resolveEditableDepartmentIds(req);
   let allowedIds: number[] = revertable.map(a => Number(a.id));
   let skippedNoAccess = 0;
 
@@ -659,6 +662,12 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
     }
     const deptId = await resolveScopedDepartmentId(req, requestedDeptId);
     if (!deptId) {
+      res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
+      return;
+    }
+    // Согласование — write: view-отдел (миграция 167) виден, но согласовывать нельзя.
+    const editableForBulk = await resolveEditableDepartmentIds(req);
+    if (editableForBulk !== 'all' && !editableForBulk.includes(deptId)) {
       res.status(403).json({ success: false, error: 'Нет доступа к отделу' });
       return;
     }

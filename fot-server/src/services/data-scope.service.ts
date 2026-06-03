@@ -2,7 +2,8 @@ import * as Sentry from '@sentry/node';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { query } from '../config/postgres.js';
 import { withDbSlot } from '../config/db-instrumentation.js';
-import { listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
+import { listEditableDepartmentIdsForUser, listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
+import { listObjectIdsForEmployee } from './employee-skud-object-access.service.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
 import {
   isTimekeeper,
@@ -240,8 +241,18 @@ export async function canAccessEmployeeInScope(
     const targetAccessMap = await loadEmployeeAccessMap([employeeId]);
     const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
     if (targetDepartmentIds.length > 0) {
+      const editable = await resolveEditableDepartmentIds(req);
+      const fullSet = editable === 'all' ? new Set(accessible) : new Set(editable);
+      // Через full-отдел (редактируемый) — без ограничений.
+      if (targetDepartmentIds.some(id => fullSet.has(id))) return true;
+      // Через view-отдел (миграция 167) — только если сотрудник на объектах
+      // руководителя (объектное пересечение). Фолбэк: объектов нет → view виден целиком.
       const accessibleSet = new Set(accessible);
-      if (targetDepartmentIds.some(id => accessibleSet.has(id))) return true;
+      const viaViewDept = targetDepartmentIds.some(id => accessibleSet.has(id) && !fullSet.has(id));
+      if (viaViewDept) {
+        const objectEmployees = await resolveManagerObjectEmployeeIds(req);
+        if (objectEmployees.size === 0 || objectEmployees.has(employeeId)) return true;
+      }
     }
   }
 
@@ -270,10 +281,65 @@ export async function canAccessEmployeeInScope(
 }
 
 /**
+ * Объекты СКУД, назначенные пользователю как «курируемые» — берём из его
+ * employee_skud_object_access (вкладка «Объекты» в настройках). Для руководителя
+ * это объекты, сотрудников которых он контролирует (read-only). Кэш на req.
+ */
+export async function resolveManagerObjectIds(req: AuthenticatedRequest): Promise<string[]> {
+  if (req.user.__manager_object_ids) return req.user.__manager_object_ids;
+  const ids = (req.user.is_admin || req.user.employee_id == null)
+    ? []
+    : await listObjectIdsForEmployee(req.user.employee_id);
+  req.user.__manager_object_ids = ids;
+  return ids;
+}
+
+/**
+ * Множество employee_id, привязанных к объектам руководителя (его «место работы»
+ * = один из его объектов). Это набор для пересечения с view-отделами. Кэш на req.
+ */
+export async function resolveManagerObjectEmployeeIds(req: AuthenticatedRequest): Promise<Set<number>> {
+  if (req.user.__manager_object_employee_ids) return req.user.__manager_object_employee_ids;
+  const objectIds = await resolveManagerObjectIds(req);
+  const set = new Set<number>();
+  if (objectIds.length > 0) {
+    const rows = await query<{ employee_id: number | string }>(
+      `SELECT DISTINCT employee_id FROM employee_skud_object_access
+        WHERE skud_object_id = ANY($1::uuid[]) AND is_active = true`,
+      [objectIds],
+    );
+    for (const row of rows) {
+      const id = Number(row.employee_id);
+      if (Number.isInteger(id)) set.add(id);
+    }
+  }
+  req.user.__manager_object_employee_ids = set;
+  return set;
+}
+
+/**
+ * true, если у пользователя действует «объектный view-скоуп»: не админ/табельщица,
+ * есть назначенные объекты И есть view-отделы (access_level='view'). Тогда видимость
+ * по view-отделам сужается до сотрудников его объектов (отделы ∩ объекты).
+ */
+export async function hasObjectViewScope(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.is_admin || isTimekeeper(req)) return false;
+  const objects = await resolveManagerObjectIds(req);
+  if (objects.length === 0) return false;
+  const accessible = await resolveAccessibleDepartmentIds(req);
+  if (accessible === 'all' || accessible.length === 0) return false;
+  const editable = await resolveEditableDepartmentIds(req);
+  const fullSet = editable === 'all' ? new Set(accessible) : new Set(editable);
+  return accessible.some(id => !fullSet.has(id));
+}
+
+/**
  * Множество employee_id, доступных пользователю в его скоупе. Батч-аналог
  * canAccessEmployeeInScope: те же источники доступа, но одним набором.
  *  - is_admin без company-scope → 'all' (фильтрация не нужна);
- *  - сотрудники доступных отделов (employee_department_access по поддереву);
+ *  - сотрудники full-отделов (редактируемых) — все;
+ *  - сотрудники view-отделов (миграция 167) ∩ сотрудники объектов руководителя
+ *    (если объекты назначены; иначе view-отделы видны целиком — фолбэк);
  *  - табельщица — сотрудники её объектов;
  *  - прямые подчинённые (employee_direct_reports);
  *  - собственный employee_id.
@@ -290,10 +356,126 @@ export async function resolveAccessibleEmployeeIds(
   const ids = new Set<number>();
 
   if (accessible.length > 0) {
+    // Разделяем full-отделы (редактируемые) и view-отделы (только просмотр).
+    const editable = await resolveEditableDepartmentIds(req);
+    const fullSet = editable === 'all' ? new Set<string>(accessible) : new Set<string>(editable);
+    const viewDeptIds = accessible.filter(id => !fullSet.has(id));
+    const fullDeptIds = accessible.filter(id => fullSet.has(id));
+
+    // Объектное пересечение применяем только если есть view-отделы И объекты руководителя.
+    const objectEmployees = viewDeptIds.length > 0
+      ? await resolveManagerObjectEmployeeIds(req)
+      : new Set<number>();
+    const applyObjectFilter = viewDeptIds.length > 0 && objectEmployees.size > 0;
+
+    if (fullDeptIds.length > 0) {
+      const rows = await query<{ employee_id: number | string }>(
+        `SELECT DISTINCT employee_id FROM employee_department_access
+          WHERE department_id = ANY($1::uuid[]) AND is_active = true`,
+        [fullDeptIds],
+      );
+      for (const row of rows) {
+        const id = Number(row.employee_id);
+        if (Number.isInteger(id)) ids.add(id);
+      }
+    }
+
+    if (viewDeptIds.length > 0) {
+      const rows = await query<{ employee_id: number | string }>(
+        `SELECT DISTINCT employee_id FROM employee_department_access
+          WHERE department_id = ANY($1::uuid[]) AND is_active = true`,
+        [viewDeptIds],
+      );
+      for (const row of rows) {
+        const id = Number(row.employee_id);
+        if (!Number.isInteger(id)) continue;
+        if (!applyObjectFilter || objectEmployees.has(id)) ids.add(id);
+      }
+    }
+  }
+
+  if (isTimekeeper(req)) {
+    for (const id of await resolveTimekeeperDirectEmployeeIds(req)) ids.add(id);
+  }
+
+  for (const id of await resolveEffectiveDirectSubordinates(req)) ids.add(id);
+
+  if (req.user.employee_id != null) ids.add(req.user.employee_id);
+
+  req.user.__accessible_employee_ids = ids;
+  return ids;
+}
+
+/**
+ * «Редактируемый» подскоуп отделов — отделы, в которых пользователь может ПРАВИТЬ
+ * табель и СОГЛАСОВЫВАТЬ (access_level='full', миграция 167). Отличается от
+ * resolveAccessibleDepartmentIds («видимый» скоуп) тем, что исключает view-отделы.
+ *  - admin / табельщица — редактируют весь свой видимый скоуп (как раньше);
+ *  - руководитель — только отделы с full-назначением + их поддерево.
+ * Кэш req.user.__editable_subtree_ids.
+ */
+export async function resolveEditableDepartmentIds(
+  req: AuthenticatedRequest,
+): Promise<string[] | 'all'> {
+  if (req.user.is_admin || isTimekeeper(req)) {
+    return resolveAccessibleDepartmentIds(req);
+  }
+
+  if (req.user.__editable_subtree_ids) return req.user.__editable_subtree_ids;
+
+  const explicit = [...new Set(
+    await listEditableDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null),
+  )];
+  if (explicit.length === 0) {
+    req.user.__editable_subtree_ids = [];
+    return [];
+  }
+
+  let subtreeIds: string[] = [];
+  try {
+    const rows = await withDbSlot('get_descendant_department_ids', async () => (
+      query<{ id: string }>(
+        'SELECT id FROM public.get_descendant_department_ids($1::uuid[])',
+        [explicit],
+      )
+    ));
+    subtreeIds = rows.map(r => r.id);
+  } catch (error) {
+    Sentry.captureMessage('editable_subtree_rpc_failed', {
+      level: 'warning',
+      tags: { rpc: 'get_descendant_department_ids' },
+      extra: { error: error instanceof Error ? error.message : String(error), explicit },
+    });
+    // Падение RPC не отрубает руководителя от его явных full-отделов.
+    req.user.__editable_subtree_ids = explicit;
+    return explicit;
+  }
+
+  const merged = subtreeIds.length > 0 ? [...new Set([...explicit, ...subtreeIds])] : explicit;
+  req.user.__editable_subtree_ids = merged;
+  return merged;
+}
+
+/**
+ * Множество employee_id, которых пользователь может РЕДАКТИРОВАТЬ (батч-аналог
+ * canEditEmployeeInScope): сотрудники editable-отделов + прямые подчинённые + self.
+ * Табельщица — её прямые сотрудники (роль = полный доступ). Кэш на req.
+ */
+export async function resolveEditableEmployeeIds(
+  req: AuthenticatedRequest,
+): Promise<Set<number> | 'all'> {
+  if (req.user.__editable_employee_ids) return req.user.__editable_employee_ids;
+
+  const editable = await resolveEditableDepartmentIds(req);
+  if (editable === 'all') return 'all';
+
+  const ids = new Set<number>();
+
+  if (editable.length > 0) {
     const rows = await query<{ employee_id: number | string }>(
       `SELECT DISTINCT employee_id FROM employee_department_access
         WHERE department_id = ANY($1::uuid[]) AND is_active = true`,
-      [accessible],
+      [editable],
     );
     for (const row of rows) {
       const id = Number(row.employee_id);
@@ -309,8 +491,49 @@ export async function resolveAccessibleEmployeeIds(
 
   if (req.user.employee_id != null) ids.add(req.user.employee_id);
 
-  req.user.__accessible_employee_ids = ids;
+  req.user.__editable_employee_ids = ids;
   return ids;
+}
+
+/**
+ * Может ли пользователь РЕДАКТИРОВАТЬ/СОГЛАСОВЫВАТЬ данные сотрудника. Зеркало
+ * canAccessEmployeeInScope, но на editable-отделах: view-отделы (только просмотр)
+ * сюда не входят. Прямые подчинённые и сам пользователь — всегда editable.
+ */
+export async function canEditEmployeeInScope(
+  req: AuthenticatedRequest,
+  employeeId: number | null | undefined,
+): Promise<boolean> {
+  if (!employeeId) return false;
+  if (req.user.employee_id === employeeId) return true;
+
+  const editable = await resolveEditableDepartmentIds(req);
+  if (editable === 'all') return true;
+
+  if (editable.length > 0) {
+    const targetAccessMap = await loadEmployeeAccessMap([employeeId]);
+    const targetDepartmentIds = targetAccessMap.get(employeeId) || [];
+    if (targetDepartmentIds.length > 0) {
+      const editableSet = new Set(editable);
+      if (targetDepartmentIds.some(id => editableSet.has(id))) return true;
+    }
+  }
+
+  if (isTimekeeper(req)) {
+    const directEmployees = await resolveTimekeeperDirectEmployeeIds(req);
+    if (directEmployees.has(employeeId)) return true;
+  }
+
+  if (req.user.employee_id) {
+    if (req.user.__direct_subordinates === undefined) {
+      req.user.__direct_subordinates = new Set(
+        await listDirectSubordinates(req.user.employee_id),
+      );
+    }
+    if (req.user.__direct_subordinates.has(employeeId)) return true;
+  }
+
+  return false;
 }
 
 export async function canAccessDepartmentInScope(

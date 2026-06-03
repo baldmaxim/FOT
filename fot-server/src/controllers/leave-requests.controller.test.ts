@@ -29,7 +29,9 @@ vi.mock('../services/attendance.service.js', () => ({
 
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: vi.fn(async () => true),
+  canEditEmployeeInScope: vi.fn(async () => true),
   resolveAccessibleDepartmentIds: vi.fn(async () => []),
+  resolveEditableDepartmentIds: vi.fn(async () => []),
   resolveManagedDepartmentIds: vi.fn(async () => []),
   resolveScopedDepartmentId: vi.fn(async () => null),
 }));
