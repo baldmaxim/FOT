@@ -65,6 +65,13 @@ const formatFileSize = (bytes: number): string => {
   return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 };
 
+/** 'YYYY-MM-DD' → 'DD.MM' для подписи файла корректировки. */
+const formatMemoDay = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const parts = iso.split('-');
+  return parts.length === 3 ? `${parts[2]}.${parts[1]}` : iso;
+};
+
 interface IActiveCardProps {
   approval: ITimesheetApproval | null;
   canSubmitDepartment: boolean;
@@ -232,6 +239,19 @@ const ActiveCard: FC<IActiveCardProps> = ({
           )}
         </div>
       )}
+      {/* Просмотр файлов после подачи (submitted/approved): сплит-группа скрыта, нужен отдельный тоггл. */}
+      {showMemoToggle && !canShowSubmit && (
+        <button
+          className={`ts-btn${memoOpen ? ' ts-btn-split-toggle--open' : ''}`}
+          onClick={onToggleMemo}
+          type="button"
+          aria-label="Показать файлы табеля"
+          aria-expanded={memoOpen}
+          title="Файлы, приложенные к табелю и корректировкам"
+        >
+          <FileText size={14} /> Файлы табеля
+        </button>
+      )}
       {reviewComment && reviewCommentOpen && (
         <div className="ts-approval-comment-preview" style={{ whiteSpace: 'pre-wrap' }}>
           {reviewComment}
@@ -341,6 +361,8 @@ const ActiveCard: FC<IActiveCardProps> = ({
 interface IWeekendMemoPopoverProps {
   uploadDisabled: boolean;
   loading: boolean;
+  /** Только просмотр (после подачи): скрыть загрузку/удаление, оставить превью. */
+  readOnly: boolean;
   errorText: string | null;
   attachments: IApprovalAttachment[];
   attachmentsLoading: boolean;
@@ -355,6 +377,7 @@ interface IWeekendMemoPopoverProps {
 const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
   uploadDisabled,
   loading,
+  readOnly,
   errorText,
   attachments,
   attachmentsLoading,
@@ -392,7 +415,7 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
     <div className="ts-memo-popover" role="dialog" aria-label="Прикрепить файл к табелю" ref={popoverRef}>
       <div className="ts-memo-popover-header">
         <div className="ts-memo-popover-title">
-          <FileText size={14} /> Прикрепить файл к табелю
+          <FileText size={14} /> {readOnly ? 'Файлы табеля' : 'Прикрепить файл к табелю'}
         </div>
         <button type="button" className="ts-memo-popover-close" onClick={onClose} aria-label="Закрыть">
           <X size={14} />
@@ -400,8 +423,9 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
       </div>
 
       <div className="ts-memo-popover-hint">
-        В выбранном периоде есть работа в выходные/праздники. Приложите файл-подтверждение,
-        чтобы подать табель.
+        {readOnly
+          ? 'Файлы, приложенные к табелю и корректировкам за период.'
+          : 'В выбранном периоде есть работа в выходные/праздники. Приложите файл-подтверждение, чтобы подать табель.'}
       </div>
 
       {errorText && (
@@ -417,58 +441,71 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
         )}
         {attachments.length > 0 && (
           <ul className="ts-corr-attachments__list">
-            {attachments.map(att => (
-              <li key={att.document_id} className="ts-corr-attachments__item">
-                <FileText size={14} className="ts-corr-attachments__icon" />
-                <span
-                  className="ts-corr-attachments__name"
-                  title={`${att.file_name} · ${formatFileSize(att.file_size)}`}
-                >
-                  {displayFileName(att.file_name)}
-                </span>
-                <span className="ts-corr-attachments__meta">{formatFileSize(att.file_size)}</span>
-                <button
-                  type="button"
-                  className="ts-corr-attachments__btn"
-                  onClick={() => setPreview(att)}
-                  title="Открыть файл"
-                  aria-label="Открыть файл"
-                >
-                  <Eye size={14} />
-                </button>
-                <button
-                  type="button"
-                  className="ts-corr-attachments__btn ts-corr-attachments__btn--danger"
-                  onClick={() => onDeleteAttachment(att.document_id)}
-                  title="Удалить файл"
-                  aria-label="Удалить файл"
-                  disabled={deletingId === att.document_id}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </li>
-            ))}
+            {attachments.map(att => {
+              const corrMeta = att.kind === 'correction'
+                ? [att.employee_name, formatMemoDay(att.work_date)].filter(Boolean).join(' · ')
+                : '';
+              // Удаление — только для своей служебки в редактируемом окне. Файлы корректировок
+              // управляются в списке корректировок, здесь они read-only.
+              const canDelete = !readOnly && att.kind !== 'correction';
+              return (
+                <li key={att.document_id} className="ts-corr-attachments__item">
+                  <FileText size={14} className="ts-corr-attachments__icon" />
+                  <span
+                    className="ts-corr-attachments__name"
+                    title={`${att.file_name} · ${formatFileSize(att.file_size)}${corrMeta ? ` · ${corrMeta}` : ''}`}
+                  >
+                    {displayFileName(att.file_name)}
+                    {corrMeta && <span className="ts-corr-attachments__tag">{corrMeta}</span>}
+                  </span>
+                  <span className="ts-corr-attachments__meta">{formatFileSize(att.file_size)}</span>
+                  <button
+                    type="button"
+                    className="ts-corr-attachments__btn"
+                    onClick={() => setPreview(att)}
+                    title="Открыть файл"
+                    aria-label="Открыть файл"
+                  >
+                    <Eye size={14} />
+                  </button>
+                  {canDelete && (
+                    <button
+                      type="button"
+                      className="ts-corr-attachments__btn ts-corr-attachments__btn--danger"
+                      onClick={() => onDeleteAttachment(att.document_id)}
+                      title="Удалить файл"
+                      aria-label="Удалить файл"
+                      disabled={deletingId === att.document_id}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
 
-      <div className="ts-memo-popover-actions">
-        <button
-          type="button"
-          className="ts-btn"
-          onClick={onUploadClick}
-          disabled={loading || uploadDisabled}
-        >
-          <Upload size={14} /> Прикрепить файл
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,.png,.jpg,.jpeg,.xlsx"
-          style={{ display: 'none' }}
-          onChange={onFileSelected}
-        />
-      </div>
+      {!readOnly && (
+        <div className="ts-memo-popover-actions">
+          <button
+            type="button"
+            className="ts-btn"
+            onClick={onUploadClick}
+            disabled={loading || uploadDisabled}
+          >
+            <Upload size={14} /> Прикрепить файл
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.xlsx"
+            style={{ display: 'none' }}
+            onChange={onFileSelected}
+          />
+        </div>
+      )}
 
       {preview && (
         <FilePreviewModal
@@ -476,6 +513,10 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
           fileName={preview.file_name}
           mimeType={preview.mime_type}
           urlLoader={async (d) => {
+            // Агрегатор отдаёт подписанные URL сразу; getAttachmentDownloadUrl на файлах
+            // корректировок вернёт 404, поэтому fallback — только при отсутствии прямого URL.
+            const direct = d === 'inline' ? preview.preview_url : preview.download_url;
+            if (direct) return direct;
             const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(preview.document_id, d);
             return download_url;
           }}
@@ -681,9 +722,12 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   };
 
   const activeApproval = activeStatus.data ?? null;
+  // Редактирование (загрузка/удаление служебки) — только в редактируемом окне.
   const memoSectionAllowed = weekendMemoEnabled && canSubmitDepartment && (
     !activeApproval || activeApproval.status === 'draft' || activeApproval.status === 'rejected' || activeApproval.status === 'returned'
   );
+  // Просмотр файлов (служебка + файлы корректировок) — на любом статусе для роли с доступом.
+  const memoViewAllowed = weekendMemoEnabled && canSubmitDepartment;
   const memoErrorText = memoRequired ? submitError : null;
 
   return (
@@ -703,7 +747,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           loading={loading}
           periodSubmittable={periodSubmittable}
           submitDisabledReason={submitDisabledReason}
-          showMemoToggle={memoSectionAllowed}
+          showMemoToggle={memoViewAllowed}
           memoOpen={memoOpen}
           submitError={memoRequired ? null : submitError}
           missingDays={memoRequired ? [] : missingDays}
@@ -775,10 +819,11 @@ export const TimesheetApprovalBar: FC<IProps> = ({
             </div>
           </div>
         )}
-        {memoOpen && memoSectionAllowed && (
+        {memoOpen && memoViewAllowed && (
           <WeekendMemoPopover
             uploadDisabled={!isPersonal && !departmentId}
             loading={loading}
+            readOnly={!memoSectionAllowed}
             errorText={memoErrorText}
             attachments={attachmentsQuery.data ?? []}
             attachmentsLoading={attachmentsQuery.isLoading}

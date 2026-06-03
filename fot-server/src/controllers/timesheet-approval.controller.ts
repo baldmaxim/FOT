@@ -75,7 +75,7 @@ import {
   createAttachmentRecord,
   deleteAttachmentRecord,
   findOrCreateDraftApproval,
-  listApprovalAttachments,
+  listApprovalPeriodAttachments,
 } from '../services/timesheet-approval-attachments.service.js';
 import { r2Service } from '../services/r2.service.js';
 import {
@@ -1763,7 +1763,7 @@ const listAttachments = async (req: AuthenticatedRequest, res: Response): Promis
       return;
     }
 
-    const data = await listApprovalAttachments(approvalId);
+    const data = await listApprovalPeriodAttachments(approvalId);
     res.json({ success: true, data });
   } catch (err) {
     console.error('timesheet-approval.listAttachments error:', err);

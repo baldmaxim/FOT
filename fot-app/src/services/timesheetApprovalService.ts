@@ -76,6 +76,14 @@ export interface IApprovalAttachment {
   uploaded_by: string;
   uploaded_by_name: string | null;
   created_at: string;
+  /** Тип вложения: служебка о выходных или файл корректировки (заполняет агрегатор). */
+  kind?: 'weekend_memo' | 'correction';
+  /** Для корректировок — ФИО сотрудника и дата дня. */
+  employee_name?: string | null;
+  work_date?: string | null;
+  /** Подписанные URL из агрегатора (превью без отдельного getAttachmentDownloadUrl). */
+  download_url?: string;
+  preview_url?: string;
 }
 
 export interface IApprovalReviewItem extends ITimesheetApproval {

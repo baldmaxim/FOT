@@ -414,6 +414,10 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+.approvals-attachment-meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
 .approvals-export {
   display: flex;
   gap: 10px;

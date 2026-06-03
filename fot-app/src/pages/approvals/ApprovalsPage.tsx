@@ -542,6 +542,13 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
 
 const sanitizeFilePart = (value: string): string => value.replace(/[\\/:*?"<>|]+/g, '_');
 
+/** 'YYYY-MM-DD' → 'DD.MM' для подписи файла корректировки. */
+const formatDayShort = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const parts = iso.split('-');
+  return parts.length === 3 ? `${parts[2]}.${parts[1]}` : iso;
+};
+
 interface IApprovalCardExtrasProps {
   row: IApprovalReviewItem;
   employees: TimesheetEmployee[];
@@ -572,8 +579,13 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
   const attachments = attachmentsQuery.data ?? [];
 
   const loadAttachmentUrl = useCallback(
-    async (documentId: number, disposition: 'inline' | 'attachment' = 'attachment'): Promise<string> => {
-      const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(documentId, disposition);
+    async (att: IApprovalAttachment, disposition: 'inline' | 'attachment' = 'attachment'): Promise<string> => {
+      // Агрегатор отдаёт подписанные URL сразу — у файлов корректировок свой авторизационный
+      // путь, и getAttachmentDownloadUrl на них вернёт 404. Fallback на эндпоинт — только если
+      // прямого URL нет (напр. R2 выключен или legacy-ответ без URL).
+      const direct = disposition === 'inline' ? att.preview_url : att.download_url;
+      if (direct) return direct;
+      const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(att.document_id, disposition);
       return download_url;
     },
     [],
@@ -678,16 +690,22 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
       {attachments.length > 0 && (
         <div className="approvals-attachments">
           <span className="approvals-attachments-title">Вложения:</span>
-          {attachments.map(att => (
-            <button
-              key={att.document_id}
-              type="button"
-              className="approvals-attachment-btn"
-              onClick={() => setPreviewAtt(att)}
-            >
-              <FileText size={14} /> {att.file_name}
-            </button>
-          ))}
+          {attachments.map(att => {
+            const meta = att.kind === 'correction'
+              ? [att.employee_name, formatDayShort(att.work_date)].filter(Boolean).join(' · ')
+              : '';
+            return (
+              <button
+                key={att.document_id}
+                type="button"
+                className="approvals-attachment-btn"
+                onClick={() => setPreviewAtt(att)}
+              >
+                <FileText size={14} /> {att.file_name}
+                {meta && <span className="approvals-attachment-meta">{meta}</span>}
+              </button>
+            );
+          })}
         </div>
       )}
       {previewAtt && (
@@ -695,7 +713,7 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
           documentId={previewAtt.document_id}
           fileName={previewAtt.file_name}
           mimeType={previewAtt.mime_type}
-          urlLoader={(d) => loadAttachmentUrl(previewAtt.document_id, d)}
+          urlLoader={(d) => loadAttachmentUrl(previewAtt, d)}
           onClose={() => setPreviewAtt(null)}
         />
       )}
