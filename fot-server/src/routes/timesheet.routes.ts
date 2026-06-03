@@ -241,9 +241,12 @@ router.post(
 );
 
 // POST /api/timesheet/export-assigned
+// Одиночный экспорт по участку. Доступен всем ролям со страницей табеля
+// (/timesheet или /timesheet-hr): табельщица, начальник участка, руководитель, админ.
+// Выборка скоупится внутри collectAssignedEmployees (см. /assigned-employees).
 router.post(
   '/export-assigned',
-  requirePageAccess('/timesheet-hr', 'view'),
+  requireAnyPageAccess(['/timesheet-hr', '/timesheet'], 'view'),
   timesheetController.exportAssigned
 );
 
