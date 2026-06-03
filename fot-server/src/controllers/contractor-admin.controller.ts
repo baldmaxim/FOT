@@ -5,6 +5,7 @@
  * к Sigur (не транзакционно — алгоритм в approveSubmission).
  */
 import type { Response } from 'express';
+import * as Sentry from '@sentry/node';
 import { z } from 'zod';
 import ExcelJS from 'exceljs';
 import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
@@ -130,7 +131,9 @@ export const contractorAdminController = {
         id: string; state: string; sigur_employee_id: number | null;
         removal_requested_at: string | null; full_name: string;
       }>(
-        `SELECT id, state, sigur_employee_id, removal_requested_at, full_name
+        `SELECT id, state, sigur_employee_id,
+                to_char(removal_requested_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS removal_requested_at,
+                full_name
            FROM contractor_roster WHERE id = $1::uuid`,
         [rosterId],
       );
@@ -207,7 +210,21 @@ export const contractorAdminController = {
         });
         return;
       }
+      // Пересечение периодов назначений — data-condition, как в fire(): 409, не шумим в Sentry.
+      if (getErrorMessage(error, '').includes('Overlapping employee_assignments period')) {
+        console.warn('[approveRemoval] overlapping assignment periods', { rosterId: req.params.rosterId });
+        res.status(409).json({
+          success: false,
+          error: 'У сотрудника пересекаются периоды назначений (employee_assignments). Исправьте историю назначений и повторите увольнение.',
+          code: 'ASSIGNMENT_OVERLAP',
+        });
+        return;
+      }
       console.error('Contractor approveRemoval error:', error);
+      Sentry.captureException(error, {
+        tags: { route: 'contractor.approveRemoval' },
+        extra: { rosterId: req.params.rosterId },
+      });
       res.status(500).json({ success: false, error: 'Не удалось одобрить удаление' });
     }
   },
