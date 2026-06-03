@@ -174,6 +174,18 @@ export const isOfficeDay = (schedule: IResolvedSchedule, date: Date): boolean =>
   return schedule.office_days.includes(getISODow(date));
 };
 
+/** Ночная ли смена в этот день: work_end ≤ work_start (пересекает полночь).
+ *  Тот же критерий, что SQL-helper is_night_shift_for (миграция 168) и getShiftDurationHours.
+ *  Используется ночным гейтом окна в timesheet-object.service (sliceShiftWindow). */
+export const isNightShiftDay = (schedule: IResolvedSchedule, date: Date): boolean => {
+  const day = getScheduleForDate(schedule, date);
+  const parse = (value: string): number => {
+    const [h = 0, m = 0] = value.split(':').map(Number);
+    return h * 60 + m;
+  };
+  return parse(day.work_end) <= parse(day.work_start);
+};
+
 /** Длительность смены = work_end − work_start (без вычета обеда). Учитывает ночные смены. */
 export const getShiftDurationHours = (daySchedule: IDayScheduleParams): number => {
   const parse = (value: string): number => {

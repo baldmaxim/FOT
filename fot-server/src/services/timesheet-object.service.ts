@@ -8,7 +8,7 @@ import {
   resolveAttributionAt,
   type IAttributionRow,
 } from './employee-object-attribution.service.js';
-import { resolveSchedule, resolveSchedulesBulk } from './schedule.service.js';
+import { resolveSchedule, resolveSchedulesBulk, resolveSchedulesForPeriod, isNightShiftDay } from './schedule.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import {
   getAdjustmentPriority,
@@ -179,9 +179,11 @@ const collectShiftStartDays = (stream: IRawEventRow[], startDate: string, endDat
 };
 
 // Окно смены [первый вход дня; начало следующей смены | +32ч). Калька
-// recalculate_skud_daily_summary (миграция 161): возвращает внешние события окна,
-// которые могут пересекать полночь.
-const sliceShiftWindow = (stream: IRawEventRow[], startDay: string): IRawEventRow[] => {
+// recalculate_skud_daily_summary (миграция 161/163): возвращает внешние события окна,
+// которые могут пересекать полночь. isNight — ночной гейт (миграция 168): у дневной смены
+// окно обрезается концом суток startDay, чтобы фантомный вечерний вход не закрывался
+// выходом следующего утра (см. кейс Улмасов 1836, 15.05.2026).
+const sliceShiftWindow = (stream: IRawEventRow[], startDay: string, isNight: boolean): IRawEventRow[] => {
   const firstEntry = stream.find(
     event => event.direction === 'entry' && String(event.event_date).slice(0, 10) === startDay,
   );
@@ -197,6 +199,11 @@ const sliceShiftWindow = (stream: IRawEventRow[], startDay: string): IRawEventRo
       windowEndTs = Math.min(windowEndTs, ts);
       break;
     }
+  }
+  // Дневная смена: окно не пересекает полночь — обрезаем по 00:00 следующего дня (строго <).
+  if (!isNight) {
+    const endOfDayTs = (dateStrToEpochDay(startDay) + 1) * 86_400;
+    windowEndTs = Math.min(windowEndTs, endOfDayTs);
   }
   return stream.filter(event => {
     const ts = eventEpochSeconds(event);
@@ -672,6 +679,14 @@ export async function buildObjectAttendanceData(params: {
     ? await listAttributionRowsForEmployees(remoteEmployeeIds, startDate, endDate)
     : new Map<number, IAttributionRow[]>();
 
+  // Графики по дням периода — для ночного гейта окна (миграция 168): у дневной смены пара
+  // вход→выход не пересекает полночь. Резолвим на весь период один раз.
+  const schedulesByEmployeeDate = await resolveSchedulesForPeriod(
+    employeeIds.map(id => ({ id })),
+    startDate,
+    endDate,
+  );
+
   const rawFallbackSummaries = new Map<number, Map<string, IRawFallbackSummary>>();
   const baseObjectEntries = new Map<string, IAggregatedObjectEntry>();
   const baseDistinctObjectKeys = new Map<string, Set<string>>();
@@ -691,7 +706,11 @@ export async function buildObjectAttendanceData(params: {
     if (externalStream.length === 0) continue;
 
     for (const startDay of collectShiftStartDays(externalStream, startDate, endDate)) {
-      const windowEvents = sliceShiftWindow(externalStream, startDay);
+      const daySchedule = schedulesByEmployeeDate.get(employeeId)?.get(startDay);
+      const isNight = daySchedule
+        ? isNightShiftDay(daySchedule, new Date(`${startDay}T00:00:00`))
+        : false;
+      const windowEvents = sliceShiftWindow(externalStream, startDay, isNight);
       if (windowEvents.length === 0) continue;
 
       const rawSummary = buildRawFallbackSummary(windowEvents, startDay, todayStr);

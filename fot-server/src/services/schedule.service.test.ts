@@ -21,6 +21,7 @@ import {
   getDayNormHours,
   getFullDayThresholdHoursForDate,
   getScheduleForDate,
+  isNightShiftDay,
   isWorkingDay,
   needsSkudCheck,
   NON_WORKING_STATUSES,
@@ -456,6 +457,30 @@ describe('schedule.service cycle patterns', () => {
     const day = getScheduleForDate(night, new Date(2026, 4, 4));
     expect(day.work_start).toBe('20:00:00');
     expect(day.work_end).toBe('08:00:00');
+  });
+
+  it('isNightShiftDay: work_end<=work_start → true (ночной гейт 168), иначе false', () => {
+    const night: IResolvedSchedule = {
+      ...buildCycle22(),
+      cycle_length: 2,
+      cycle_days: [
+        { work_hours: 12, work_start: '20:00:00', work_end: '08:00:00' },
+        { work_hours: 0 },
+      ],
+      work_start: '20:00:00',
+      work_end: '08:00:00',
+    };
+    // рабочий день цикла (2026-05-04) — ночной слот
+    expect(isNightShiftDay(night, new Date(2026, 4, 4))).toBe(true);
+    // дневной график 09:00–18:00
+    expect(isNightShiftDay(buildCycle22({
+      cycle_days: [
+        { work_hours: 11, work_start: '09:00:00', work_end: '18:00:00' },
+        { work_hours: 11, work_start: '09:00:00', work_end: '18:00:00' },
+      ],
+      work_start: '09:00:00',
+      work_end: '18:00:00',
+    }), new Date(2026, 4, 4))).toBe(false);
   });
 
   it('needsSkudCheck: в рабочий день цикла = true, в выходной = false', () => {

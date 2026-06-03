@@ -16,6 +16,9 @@ vi.mock('../config/postgres.js', () => ({
 
 const mockedState = vi.hoisted(() => ({
   internalPoints: new Set<string>(),
+  // Ночной гейт окна (миграция 168): резолв графика мокается ниже. true → у сотрудника
+  // ночная смена (пара может пересекать полночь); false → дневная (окно режется полночью).
+  isNightShift: false,
   tables: {
     skud_object_access_points: [] as Array<{ object_id: string; access_point_name: string }>,
     skud_objects: [] as Array<{ id: string; name: string }>,
@@ -33,6 +36,39 @@ const mockedState = vi.hoisted(() => ({
 vi.mock('./skud-shared.service.js', () => ({
   getInternalAccessPoints: vi.fn(async () => mockedState.internalPoints),
 }));
+
+// Ночной гейт окна (миграция 168) резолвит график на дату. Мокаем только
+// resolveSchedulesForPeriod, отдавая дневной/ночной график по флагу mockedState.isNightShift;
+// isNightShiftDay (реальный из actual) применяется в сервисе к этому графику.
+vi.mock('./schedule.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./schedule.service.js')>();
+  const daySched = { pattern_type: 'custom', cycle_days: null, day_overrides: null,
+    work_start: '09:00:00', work_end: '18:00:00', work_hours: 8, lunch_minutes: 0 };
+  const nightSched = { ...daySched, work_start: '20:00:00', work_end: '08:00:00' };
+  return {
+    ...actual,
+    resolveSchedulesForPeriod: vi.fn(async (
+      employees: { id: number }[],
+      startDate: string,
+      endDate: string,
+    ) => {
+      const sched = (mockedState.isNightShift ? nightSched : daySched) as unknown as
+        ReturnType<typeof actual.resolveSchedule> extends Promise<infer R> ? R : never;
+      const result = new Map<number, Map<string, typeof sched>>();
+      for (const e of employees) {
+        const dayMap = new Map<string, typeof sched>();
+        let ts = Date.parse(`${startDate}T00:00:00Z`);
+        const endTs = Date.parse(`${endDate}T00:00:00Z`);
+        while (ts <= endTs) {
+          dayMap.set(new Date(ts).toISOString().slice(0, 10), sched);
+          ts += 86_400_000;
+        }
+        result.set(e.id, dayMap);
+      }
+      return result;
+    }),
+  };
+});
 
 import {
   buildObjectAttendanceData,
@@ -75,6 +111,7 @@ describe('timesheet-object.service', () => {
     pgTx.mockReset();
 
     mockedState.internalPoints = new Set();
+    mockedState.isNightShift = false;
     mockedState.tables.skud_object_access_points = [
       { object_id: 'obj-a', access_point_name: 'КПП A' },
       { object_id: 'obj-b', access_point_name: 'КПП B' },
@@ -134,6 +171,8 @@ describe('timesheet-object.service', () => {
     // Ночная смена: вход 19:00 (день N) → выход 06:00 (день N+1), один объект. Окно смены
     // 32ч (миграция 161) парит через полночь; до фикса пара 22:30→06:00 терялась (закрытие
     // лежало в бакете следующего дня) и день показывал только 3ч вместо 10.5ч.
+    // Ночной гейт (168) пропускает overnight только при ночном графике.
+    mockedState.isNightShift = true;
     mockedState.tables.skud_events = [
       { employee_id: 1, event_date: '2026-04-10', event_time: '19:00:00', access_point: 'КПП A', direction: 'entry' },
       { employee_id: 1, event_date: '2026-04-10', event_time: '22:00:00', access_point: 'КПП A', direction: 'exit' },
@@ -163,7 +202,8 @@ describe('timesheet-object.service', () => {
   it('splits a multi-object night shift across midnight onto the start day', async () => {
     // Вход A вечером → выход A → вход B → выход B утром следующего дня. Часы разносятся
     // по объектам, оба интервала привязаны к дню начала смены; утренний выход-только день
-    // (без входа) собственной записи не порождает.
+    // (без входа) собственной записи не порождает. Ночной гейт (168): ночной график.
+    mockedState.isNightShift = true;
     mockedState.tables.skud_events = [
       { employee_id: 1, event_date: '2026-04-10', event_time: '20:00:00', access_point: 'КПП A', direction: 'entry' },
       { employee_id: 1, event_date: '2026-04-10', event_time: '23:00:00', access_point: 'КПП A', direction: 'exit' },
@@ -685,5 +725,58 @@ describe('timesheet-object.service', () => {
     });
 
     expect(result.objectEntries).toEqual([]);
+  });
+
+  it('day shift: discards a phantom evening entry closed by next-morning exit (night gate, 168)', async () => {
+    // Кейс Улмасов 1836 / 15.05.2026 (дневной график). Днём нормальная смена 09:00→18:00
+    // (пары 3ч + 4ч = 7ч). Затем фантомный повторный вход 18:01 без выхода в тот же день,
+    // закрывается выходом СЛЕДУЮЩЕГО утра 07:00. До фикса окно +32ч ловило 07:00 → пара
+    // 18:01→07:00 ≈ 13ч прибавлялась (итог ~20ч). Ночной гейт режет окно полночью →
+    // вечерний вход остаётся orphan, день = 7ч.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-10', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '12:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '14:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '18:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '18:01:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-11', event_time: '07:00:00', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-10',
+      endDate: '2026-04-10',
+      todayStr: '2026-04-15',
+      adjustments: [],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({ work_date: '2026-04-10', object_id: 'obj-a', hours_worked: 7 }),
+    ]);
+    expect(result.objectEntries.some(e => e.work_date === '2026-04-11')).toBe(false);
+  });
+
+  it('day shift: exit at exactly 00:00 next day is excluded by the window boundary (strict <)', async () => {
+    // Граница: дневная смена 09:00→17:00 (8ч) + фантомный вход 23:00, закрытие ровно в 00:00
+    // следующего дня. Окно режется по 00:00 (строгое <) → выход 00:00 исключён, вход 23:00
+    // orphan. День = 8ч, без переноса через полночь.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-04-10', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '17:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-04-10', event_time: '23:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-04-11', event_time: '00:00:00', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-10',
+      endDate: '2026-04-10',
+      todayStr: '2026-04-15',
+      adjustments: [],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({ work_date: '2026-04-10', object_id: 'obj-a', hours_worked: 8 }),
+    ]);
   });
 });
