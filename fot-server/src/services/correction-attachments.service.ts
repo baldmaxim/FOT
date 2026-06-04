@@ -91,9 +91,54 @@ async function fetchUploaderNames(uploadedByIds: Array<string | null>): Promise<
 }
 
 /**
+ * Идентификаторы approved/pending time_correction-заявок сотрудника на конкретный день.
+ * Служебка о работе в выходной сотрудник прикрепляет именно к такой заявке, при этом
+ * сама дневная/объектная корректировка может быть source_type='manual'/'manual_object'
+ * (без привязки source → leave_request). Поэтому файлы заявки этого дня подмешиваем
+ * к корректировке по паре (employee, date).
+ */
+async function timeCorrectionLeaveIdsForDay(employeeId: number, workDate: string): Promise<number[]> {
+  const rows = await query<{ id: number | string }>(
+    `SELECT id FROM leave_requests
+       WHERE employee_id = $1
+         AND request_type = 'time_correction'
+         AND status <> 'rejected'
+         AND COALESCE(correction_date, start_date) = $2::date`,
+    [employeeId, workDate],
+  );
+  return rows.map(r => Number(r.id)).filter(id => Number.isFinite(id) && id > 0);
+}
+
+/** Doc-id, привязанные к заданным leave_request (document_links + legacy documents.leave_request_id). */
+async function leaveRequestDocIds(leaveRequestIds: number[]): Promise<Set<number>> {
+  const out = new Set<number>();
+  const ids = [...new Set(leaveRequestIds)].filter(id => Number.isFinite(id) && id > 0);
+  if (ids.length === 0) return out;
+  const links = await query<{ document_id: number | string }>(
+    `SELECT document_id FROM document_links
+       WHERE entity_type = 'leave_request' AND entity_id = ANY($1::text[])`,
+    [ids.map(String)],
+  );
+  for (const link of links) {
+    const id = Number(link.document_id);
+    if (Number.isFinite(id)) out.add(id);
+  }
+  const legacy = await query<{ id: number | string }>(
+    `SELECT id FROM documents WHERE leave_request_id = ANY($1::int[])`,
+    [ids],
+  );
+  for (const row of legacy) {
+    const id = Number(row.id);
+    if (Number.isFinite(id)) out.add(id);
+  }
+  return out;
+}
+
+/**
  * Список файлов корректировки:
  *   1) собственные (entity_type='attendance_adjustment')
- *   2) подмешанные из связанной leave_request (read-only)
+ *   2) подмешанные из связанной leave_request (source_type='leave_request', read-only)
+ *   3) подмешанные из time_correction-заявок этого дня (служебка о выходных, read-only)
  */
 export async function listCorrectionAttachments(adj: ICorrectionAdjustmentMeta): Promise<ICorrectionAttachment[]> {
   const ownLinks = await query<{ document_id: number | string }>(
@@ -103,26 +148,18 @@ export async function listCorrectionAttachments(adj: ICorrectionAdjustmentMeta):
   );
   const ownIds = new Set(ownLinks.map(link => Number(link.document_id)));
 
-  const leaveRequestId = leaveRequestIdFromAdjustment(adj);
+  // Кандидаты-заявки: привязанная по source + time_correction-заявки этого дня.
+  const candidateLeaveIds = new Set<number>();
+  const sourceLeaveId = leaveRequestIdFromAdjustment(adj);
+  if (sourceLeaveId != null) candidateLeaveIds.add(sourceLeaveId);
+  for (const id of await timeCorrectionLeaveIdsForDay(adj.employee_id, adj.work_date)) {
+    candidateLeaveIds.add(id);
+  }
+
   const relatedIds = new Set<number>();
-  if (leaveRequestId != null) {
-    const relatedLinks = await query<{ document_id: number | string }>(
-      `SELECT document_id FROM document_links
-         WHERE entity_type = 'leave_request' AND entity_id = $1`,
-      [String(leaveRequestId)],
-    );
-    for (const link of relatedLinks) {
-      const id = Number(link.document_id);
-      if (Number.isFinite(id) && !ownIds.has(id)) relatedIds.add(id);
-    }
-    // Legacy: documents.leave_request_id без записи в document_links
-    const legacy = await query<{ id: number | string }>(
-      `SELECT id FROM documents WHERE leave_request_id = $1`,
-      [leaveRequestId],
-    );
-    for (const row of legacy) {
-      const id = Number(row.id);
-      if (Number.isFinite(id) && !ownIds.has(id)) relatedIds.add(id);
+  if (candidateLeaveIds.size > 0) {
+    for (const id of await leaveRequestDocIds([...candidateLeaveIds])) {
+      if (!ownIds.has(id)) relatedIds.add(id);
     }
   }
 
@@ -200,6 +237,39 @@ export async function countCorrectionAttachments(
   }
 
   return counts;
+}
+
+/**
+ * Для пар (employee, date): множество ключей `emp|date`, у которых есть прикреплённый
+ * файл к time_correction-заявке этого дня (служебка о работе в выходной). Используется
+ * проверкой служебки при подаче табеля — файл на заявке покрывает день, даже если на
+ * самой корректировке файла нет.
+ */
+export async function listDaysWithTimeCorrectionMemo(
+  employeeIds: number[],
+  dates: string[],
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  const emps = [...new Set(employeeIds)].filter(id => Number.isInteger(id) && id > 0);
+  const days = [...new Set(dates)];
+  if (emps.length === 0 || days.length === 0) return out;
+
+  const rows = await query<{ employee_id: number | string; d: string }>(
+    `SELECT lr.employee_id, COALESCE(lr.correction_date, lr.start_date)::text AS d
+       FROM leave_requests lr
+      WHERE lr.employee_id = ANY($1::int[])
+        AND lr.request_type = 'time_correction'
+        AND lr.status <> 'rejected'
+        AND COALESCE(lr.correction_date, lr.start_date) = ANY($2::date[])
+        AND (
+          EXISTS (SELECT 1 FROM document_links dl
+                   WHERE dl.entity_type = 'leave_request' AND dl.entity_id = lr.id::text)
+          OR EXISTS (SELECT 1 FROM documents d WHERE d.leave_request_id = lr.id)
+        )`,
+    [emps, days],
+  );
+  for (const r of rows) out.add(`${Number(r.employee_id)}|${String(r.d).slice(0, 10)}`);
+  return out;
 }
 
 export async function createCorrectionAttachment(params: {

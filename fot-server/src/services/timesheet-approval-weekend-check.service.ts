@@ -2,6 +2,8 @@ import { query } from '../config/postgres.js';
 import { loadCalendarMonth, resolveSchedulesForPeriod, isWorkingDay } from './schedule.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { countApprovalAttachmentsForApprovals } from './timesheet-approval-attachments.service.js';
+import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
+import { countCorrectionAttachments, listDaysWithTimeCorrectionMemo } from './correction-attachments.service.js';
 
 export const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
 
@@ -9,6 +11,8 @@ export interface IWeekendWorkCheck {
   requires: boolean;
   weekendDates: string[];
   weekendWorkDates: string[];
+  /** Пары (сотрудник, дата) работы в выходной — для пер-дневной проверки служебок. */
+  weekendWorkPairs: Array<{ employee_id: number; date: string }>;
 }
 
 export interface IManagerObjMemoCheck {
@@ -119,7 +123,7 @@ export async function checkWeekendWorkRequirement(params: {
     employeeIds = [];
   }
   if (employeeIds.length === 0) {
-    return { requires: false, weekendDates: [], weekendWorkDates: [] };
+    return { requires: false, weekendDates: [], weekendWorkDates: [], weekendWorkPairs: [] };
   }
 
   // Путь по employeeIds (подача «по людям») окна не имеет — там фильтр не применяем.
@@ -139,11 +143,12 @@ export async function checkWeekendWorkRequirement(params: {
 
   const weekendDates = [...allOffDates].sort();
   if (weekendDates.length === 0) {
-    return { requires: false, weekendDates: [], weekendWorkDates: [] };
+    return { requires: false, weekendDates: [], weekendWorkDates: [], weekendWorkPairs: [] };
   }
 
-  const weekendWorkDates = new Set<string>();
-
+  // Корректировки status='work' в выходной — это явно добавленный руководителем выход;
+  // он не претендует на плановый слот и всегда требует служебку.
+  const adjPairs = new Set<string>();
   const adjRows = await query<{ employee_id: number; work_date: string; status: string }>(
     `SELECT employee_id, work_date::text AS work_date, status
        FROM attendance_adjustments
@@ -155,9 +160,13 @@ export async function checkWeekendWorkRequirement(params: {
   for (const row of adjRows) {
     const empId = Number(row.employee_id);
     const iso = String(row.work_date).slice(0, 10);
-    if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) weekendWorkDates.add(iso);
+    if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) {
+      adjPairs.add(`${empId}|${iso}`);
+    }
   }
 
+  // Присутствие СКУД в выходной — кандидат на освобождение плановыми Сб/Вс графика.
+  const skudPairs: Array<{ employee_id: number; date: string }> = [];
   const skudRows = await query<{ employee_id: number; date: string; total_minutes: number }>(
     `SELECT employee_id, date::text AS date, total_minutes
        FROM skud_daily_summary
@@ -169,14 +178,39 @@ export async function checkWeekendWorkRequirement(params: {
   for (const row of skudRows) {
     const empId = Number(row.employee_id);
     const iso = String(row.date).slice(0, 10);
-    if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) weekendWorkDates.add(iso);
+    if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) {
+      skudPairs.push({ employee_id: empId, date: iso });
+    }
   }
+
+  // Освобождаем первые expected_{saturdays|sundays}_per_month плановых выходных —
+  // они входят в норму графика (например «5+2 (Линия С/О)» = 2 субботы/мес) и
+  // служебки не требуют. Дни с work-корректировкой слот не занимают.
+  const exemptions = await computeMandatoryExemptions(skudPairs, adjPairs);
+
+  const weekendWorkDates = new Set<string>();
+  const pairKeys = new Set<string>();
+  for (const { employee_id, date } of skudPairs) {
+    if (exemptions.has(`${employee_id}|${date}`)) continue;
+    weekendWorkDates.add(date);
+    pairKeys.add(`${employee_id}|${date}`);
+  }
+  for (const key of adjPairs) {
+    weekendWorkDates.add(key.split('|')[1]!);
+    pairKeys.add(key);
+  }
+
+  const weekendWorkPairs = [...pairKeys].map(key => {
+    const [emp, date] = key.split('|');
+    return { employee_id: Number(emp), date: date! };
+  });
 
   const sortedWeekendWork = [...weekendWorkDates].sort();
   return {
     requires: sortedWeekendWork.length > 0,
     weekendDates,
     weekendWorkDates: sortedWeekendWork,
+    weekendWorkPairs,
   };
 }
 
@@ -204,9 +238,66 @@ export function evaluateManagerObjMemoRequirement(input: {
 }
 
 /**
- * IO-обёртка: грузит выходные дни диапазона и количество вложений,
- * передаёт в чистую evaluateManagerObjMemoRequirement.
- * Если у роли флаг weekend_memo_required выключен, IO-запросы пропускаются ради экономии времени.
+ * Возвращает даты работы в выходной, у которых НЕТ приложенной служебки. День считается
+ * покрытым, если хотя бы у одной его корректировки есть вложение (own-файл или файл из
+ * связанной заявки) ЛИБО к time_correction-заявке этого дня прикреплён файл.
+ */
+async function listWeekendDaysWithoutCorrectionMemo(
+  pairs: Array<{ employee_id: number; date: string }>,
+): Promise<string[]> {
+  if (pairs.length === 0) return [];
+  const empIds = [...new Set(pairs.map(p => p.employee_id))];
+  const dates = [...new Set(pairs.map(p => p.date))];
+
+  const adjRows = await query<{
+    id: number | string;
+    employee_id: number | string;
+    work_date: string;
+    source_type: string;
+    source_id: string | null;
+  }>(
+    `SELECT id, employee_id, work_date::text AS work_date, source_type, source_id
+       FROM attendance_adjustments
+      WHERE employee_id = ANY($1::int[]) AND work_date = ANY($2::date[])`,
+    [empIds, dates],
+  );
+  const adjustments = adjRows.map(r => ({
+    id: Number(r.id),
+    employee_id: Number(r.employee_id),
+    work_date: String(r.work_date).slice(0, 10),
+    source_type: String(r.source_type),
+    source_id: r.source_id ?? null,
+  }));
+
+  const counts = await countCorrectionAttachments(
+    adjustments.map(a => ({ id: a.id, source_type: a.source_type, source_id: a.source_id })),
+  );
+
+  const coveredKeys = new Set<string>();
+  for (const a of adjustments) {
+    if ((counts.get(a.id) ?? 0) > 0) coveredKeys.add(`${a.employee_id}|${a.work_date}`);
+  }
+  // Файл на time_correction-заявке дня покрывает день, даже если у самой корректировки
+  // (manual/manual_object) файла нет — служебку сотрудник прикрепляет к заявке.
+  for (const key of await listDaysWithTimeCorrectionMemo(empIds, dates)) {
+    coveredKeys.add(key);
+  }
+
+  const uncovered = new Set<string>();
+  for (const p of pairs) {
+    if (!coveredKeys.has(`${p.employee_id}|${p.date}`)) uncovered.add(p.date);
+  }
+  return [...uncovered].sort();
+}
+
+/**
+ * IO-обёртка проверки служебки о работе в выходные.
+ * Служебка считается приложенной, если:
+ *   1) есть blanket-вложение на уровне подачи (entity='timesheet_approval') — покрывает
+ *      весь период (как раньше, руководитель прикрепил служебку при подаче); ЛИБО
+ *   2) у КАЖДОГО дня работы в выходной есть файл на самой корректировке дня
+ *      (служебка, приложенная сотрудником/руководителем к корректировке).
+ * Если флаг роли weekend_memo_required выключен — IO-запросы пропускаются.
  */
 export async function checkManagerObjWeekendMemoRequirement(params: {
   weekendMemoRequired: boolean;
@@ -231,11 +322,21 @@ export async function checkManagerObjWeekendMemoRequirement(params: {
     employeeIds: params.employeeIds,
   });
 
-  const attachmentCount = await countApprovalAttachmentsForApprovals(params.approvalIds);
+  if (weekend.weekendWorkPairs.length === 0) {
+    return { required: false, satisfied: true, weekendWorkDates: [] };
+  }
 
-  return evaluateManagerObjMemoRequirement({
-    weekendMemoRequired: params.weekendMemoRequired,
-    weekendWorkDates: weekend.weekendWorkDates,
-    attachmentCount,
-  });
+  // Blanket-служебка на уровне подачи покрывает весь период.
+  const approvalMemoCount = await countApprovalAttachmentsForApprovals(params.approvalIds);
+  if (approvalMemoCount > 0) {
+    return { required: true, satisfied: true, weekendWorkDates: weekend.weekendWorkDates };
+  }
+
+  // Иначе требуем служебку на корректировке каждого дня работы в выходной.
+  const uncoveredDates = await listWeekendDaysWithoutCorrectionMemo(weekend.weekendWorkPairs);
+  return {
+    required: true,
+    satisfied: uncoveredDates.length === 0,
+    weekendWorkDates: uncoveredDates.length === 0 ? weekend.weekendWorkDates : uncoveredDates,
+  };
 }
