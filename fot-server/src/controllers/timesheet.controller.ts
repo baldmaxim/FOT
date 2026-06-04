@@ -11,7 +11,7 @@ import type {
 import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass, exportTimesheetMassUnified } from './timesheet-mass-export.controller.js';
-import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned } from './timesheet-assigned-export.controller.js';
+import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned, getDepartmentSupervisor } from './timesheet-assigned-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
 import { resolveSchedulesForPeriod, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
@@ -2796,6 +2796,9 @@ export const timesheetController = {
 
   /** GET /api/timesheet/assigned-employees */
   listAssignedEmployees,
+
+  /** GET /api/timesheet/department-supervisor */
+  getDepartmentSupervisor,
 
   /** POST /api/timesheet/email-assigned */
   emailAssigned: emailTimesheetAssigned,

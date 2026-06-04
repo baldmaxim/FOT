@@ -401,6 +401,64 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
   }
 }
 
+/**
+ * GET /api/timesheet/department-supervisor?department_id=UUID
+ * Начальник участка (site_supervisor), за которым закреплена бригада через
+ * employee_department_access. Возвращает kind отдела и supervisor (или null).
+ * Для не-бригад supervisor всегда null — поле на фронте скрывается по kind.
+ */
+export async function getDepartmentSupervisor(req: AuthenticatedRequest, res: Response) {
+  try {
+    const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id.trim() : '';
+    if (!departmentId) {
+      return res.status(400).json({ success: false, error: 'Не указан department_id' });
+    }
+
+    const dept = await query<{ kind: string | null }>(
+      `SELECT kind FROM org_departments WHERE id = $1`,
+      [departmentId],
+    );
+    if (dept.length === 0) {
+      return res.status(404).json({ success: false, error: 'Отдел не найден' });
+    }
+    const kind = dept[0].kind ?? 'department';
+
+    let supervisor: { id: number; full_name: string } | null = null;
+    if (kind === 'brigade') {
+      const rows = await query<{ id: number; full_name: string | null }>(
+        `SELECT e.id, e.full_name
+           FROM employee_department_access eda
+           INNER JOIN employees e        ON e.id = eda.employee_id
+           INNER JOIN org_departments od ON od.id = eda.department_id
+           INNER JOIN user_profiles up   ON up.employee_id = e.id
+           INNER JOIN system_roles sr    ON sr.id = up.system_role_id
+          WHERE eda.department_id = $1
+            AND eda.is_active = true
+            AND eda.source <> 'sigur_sync'
+            AND e.employment_status = 'active'
+            AND e.is_archived = false
+            AND od.is_active = true
+            AND sr.code = 'site_supervisor'
+          ORDER BY e.full_name
+          LIMIT 1`,
+        [departmentId],
+      );
+      const row = rows[0];
+      if (row && Number.isFinite(Number(row.id))) {
+        supervisor = { id: Number(row.id), full_name: String(row.full_name ?? '').trim() };
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: { department_id: departmentId, kind, supervisor },
+    });
+  } catch (err) {
+    console.error('timesheet.getDepartmentSupervisor error:', err);
+    return res.status(500).json({ success: false, error: 'Ошибка загрузки начальника участка' });
+  }
+}
+
 /** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c, employee_ids? } */
 export async function exportTimesheetAssigned(req: AuthenticatedRequest, res: Response) {
   try {

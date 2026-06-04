@@ -259,6 +259,15 @@ router.get(
   timesheetController.listAssignedEmployees
 );
 
+// GET /api/timesheet/department-supervisor?department_id=UUID
+// Начальник участка (site_supervisor), закреплённый за бригадой. Read-only,
+// доступен всем ролям со страницей табеля.
+router.get(
+  '/department-supervisor',
+  requireAnyPageAccess(['/timesheet-hr', '/timesheet'], 'view'),
+  timesheetController.getDepartmentSupervisor
+);
+
 // POST /api/timesheet/email-assigned
 router.post(
   '/email-assigned',

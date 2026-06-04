@@ -1,6 +1,7 @@
 import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 import type {
   IAssignedEmployeeSummary,
+  IDepartmentSupervisor,
   ManagedDepartmentTimesheetSummary,
   TimesheetEntry,
   TimesheetObjectEntry,
@@ -527,6 +528,14 @@ export const timesheetService = {
   async listAssignedEmployees(): Promise<IAssignedEmployeeSummary[]> {
     const res = await apiClient.get<ApiResponse<IAssignedEmployeeSummary[]>>('/timesheet/assigned-employees');
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки назначенных сотрудников');
+    return res.data;
+  },
+
+  async getDepartmentSupervisor(departmentId: string): Promise<IDepartmentSupervisor> {
+    const res = await apiClient.get<ApiResponse<IDepartmentSupervisor>>(
+      `/timesheet/department-supervisor?department_id=${encodeURIComponent(departmentId)}`,
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки начальника участка');
     return res.data;
   },
 

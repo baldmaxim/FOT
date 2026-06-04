@@ -175,3 +175,9 @@ export interface IAssignedEmployeeSummary {
   email: string | null;
   departments?: IAssignedEmployeeDepartment[];
 }
+
+export interface IDepartmentSupervisor {
+  department_id: string;
+  kind: string;
+  supervisor: { id: number; full_name: string } | null;
+}
