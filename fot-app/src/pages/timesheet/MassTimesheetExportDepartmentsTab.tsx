@@ -9,10 +9,12 @@ import {
   MinusSquare,
   Square,
 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
 import { timesheetService } from '../../services/timesheetService';
+import { timesheetReviewService } from '../../services/timesheetReviewService';
 import type { OrgDepartmentNode } from '../../types';
 import { filterDepartmentTree, filterDepartmentTreeByIds, sortDepartmentTree } from '../../utils/departmentUtils';
 
@@ -74,9 +76,10 @@ interface IDeptTreeNodeProps {
   expandedIds: Set<string>;
   onToggleExpand: (id: string) => void;
   approvedDeptIds: Set<string>;
+  timekeeperCheckedIds: Set<string>;
 }
 
-const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds }) => {
+const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds, timekeeperCheckedIds }) => {
   const descendantIds = useMemo(() => collectAllIds([node]), [node]);
   const checkedCount = descendantIds.reduce((acc, id) => acc + (checkedIds.has(id) ? 1 : 0), 0);
   const isAllChecked = checkedCount === descendantIds.length;
@@ -109,6 +112,11 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
         <span className="mte-tree-name" onClick={handleCheck}>
           {node.name}
           {isBrigade && <span className="mte-badge-brigade">бр.</span>}
+          {isBrigade && (
+            <span className={`mte-badge-tk${timekeeperCheckedIds.has(node.id) ? ' mte-badge-tk--checked' : ''}`}>
+              (табельщица: {timekeeperCheckedIds.has(node.id) ? 'Проверено' : 'Не проверено'})
+            </span>
+          )}
           {isApproved && (
             <span className="mte-approved-icon" title="Табель утверждён">
               <CheckCircle size={14} />
@@ -127,6 +135,7 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
               expandedIds={expandedIds}
               onToggleExpand={onToggleExpand}
               approvedDeptIds={approvedDeptIds}
+              timekeeperCheckedIds={timekeeperCheckedIds}
             />
           ))}
         </div>
@@ -176,6 +185,18 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     }
     return ids;
   }, [approvedList, rangeStart, rangeEnd]);
+
+  // Отметки табельщицы «Проверено» по бригадам за выбранный период (без агрегации по дереву).
+  const { data: reviewedDepartments } = useQuery({
+    queryKey: ['timesheet-reviewed-departments', rangeStart, rangeEnd],
+    queryFn: () => timesheetReviewService.listReviewedDepartments(rangeStart, rangeEnd),
+    enabled: !!rangeStart && !!rangeEnd,
+    staleTime: 30_000,
+  });
+  const timekeeperCheckedIds = useMemo(
+    () => new Set((reviewedDepartments ?? []).map(d => d.department_id)),
+    [reviewedDepartments],
+  );
 
   const aggregatedApprovedIds = useMemo(() => {
     const set = new Set<string>(approvedDeptIds);
@@ -455,6 +476,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
               expandedIds={expandedIds}
               onToggleExpand={handleToggleExpand}
               approvedDeptIds={aggregatedApprovedIds}
+              timekeeperCheckedIds={timekeeperCheckedIds}
             />
           ))
         )}

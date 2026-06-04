@@ -1133,6 +1133,14 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
                       <span className="approvals-card-range">{formatDate(row.start_date)} — {formatDate(row.end_date)}</span>
                     </div>
                     <span className="approvals-card-status">{APPROVAL_STATUS_LABELS[row.status]}</span>
+                    {row.department_id && (
+                      <span
+                        className={`approvals-card-timekeeper${row.timekeeper_checked ? ' approvals-card-timekeeper--checked' : ''}`}
+                        title={row.timekeeper_checked_by_name ? `Табельщица: ${row.timekeeper_checked_by_name}` : undefined}
+                      >
+                        Табельщица: {row.timekeeper_checked ? 'Проверено' : 'Не проверено'}
+                      </span>
+                    )}
                     {row.status === 'approved' && canReview && (
                       <span
                         className="approvals-card-return-hint"

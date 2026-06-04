@@ -215,6 +215,19 @@
   color: var(--text-tertiary);
   white-space: nowrap;
 }
+.approvals-card-timekeeper {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  white-space: nowrap;
+}
+.approvals-card-timekeeper--checked {
+  color: #fff;
+  background: var(--success);
+}
 .approvals-card-return-hint {
   display: inline-flex;
   align-items: center;

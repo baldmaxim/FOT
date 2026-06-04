@@ -533,6 +533,37 @@
   border-color: var(--text-muted));
 }
 
+/* Неактивное поле «Начальник участка» — только для бригад. */
+.ts-supervisor-field {
+  cursor: default;
+  background: var(--surface-2, var(--surface));
+  color: var(--text-secondary, var(--text-primary));
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ts-supervisor-field:hover {
+  border-color: var(--border);
+}
+
+.ts-supervisor-label {
+  color: var(--text-muted);
+}
+
+.ts-supervisor-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+  .ts-supervisor-field {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
 .ts-dept-dropdown {
   position: absolute;
   top: calc(100% + 4px);
@@ -5563,5 +5594,33 @@
 
 .ts-corrections-attach-cell {
   position: relative;
+}
+
+/* Отметка табельщицы «Проверено» */
+.ts-review-toggle {
+  white-space: nowrap;
+}
+
+.ts-review-toggle--checked,
+.ts-review-toggle--checked:hover {
+  background: #22c55e;
+  border-color: #22c55e;
+  color: #fff;
+}
+
+.ts-review-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+}
+
+.ts-review-badge--checked {
+  color: #fff;
+  background: #22c55e;
 }
 

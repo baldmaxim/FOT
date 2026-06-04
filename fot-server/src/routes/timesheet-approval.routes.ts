@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
-import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { timesheetReviewController } from '../controllers/timesheet-review.controller.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -21,6 +22,13 @@ router.post('/submit', requirePageAccess('/timesheet', 'edit'), timesheetApprova
 
 // Отозвать поданный табель назад в draft (только из 'submitted') — edit на /timesheet.
 router.post('/recall', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.recall);
+
+// Отметка табельщицы «Проверено» по табелю бригады за период.
+// Чтение — любой со страницей табеля; запись — внутри контроллера только табельщица/админ.
+router.get('/review', requirePageAccess('/timesheet', 'view'), timesheetReviewController.getReviewStatus);
+router.post('/review', requirePageAccess('/timesheet', 'edit'), timesheetReviewController.setReviewStatus);
+// Список проверенных бригад за период — для дерева «Табели HR → По отделам».
+router.get('/reviewed-departments', requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'), timesheetReviewController.listReviewedDepartments);
 
 router.get('/status', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.getStatus);
 router.get('/department', requirePageAccess('/timesheet', 'view'), timesheetApprovalController.listDepartmentApprovals);

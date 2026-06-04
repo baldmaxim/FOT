@@ -1998,6 +1998,26 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         : Promise.resolve([] as Array<{ id: number; full_name: string | null }>),
     ]);
 
+    // Отметки табельщицы «Проверено» по (department_id, start_date, end_date) этих подач.
+    const reviewRows = deptIds.length > 0
+      ? await query<{ department_id: string; start_date: string; end_date: string; checked_at: string; checked_by_name: string | null }>(
+        `SELECT r.department_id,
+                to_char(r.start_date,'YYYY-MM-DD') AS start_date,
+                to_char(r.end_date,'YYYY-MM-DD')   AS end_date,
+                r.checked_at,
+                up.full_name AS checked_by_name
+           FROM timesheet_timekeeper_review r
+           LEFT JOIN user_profiles up ON up.id = r.checked_by
+          WHERE r.department_id = ANY($1::uuid[])`,
+        [deptIds],
+      )
+      : [];
+    const reviewKey = (dept: string, start: string, end: string): string =>
+      `${dept}|${String(start).slice(0, 10)}|${String(end).slice(0, 10)}`;
+    const reviewMap = new Map(
+      reviewRows.map(r => [reviewKey(r.department_id, r.start_date, r.end_date), r]),
+    );
+
     const deptNames = new Map(deptRows.map((row) => [String(row.id), String(row.name ?? '')]));
     const userNames = new Map(userRows.map((row) => [String(row.id), String(row.full_name ?? '')]));
     const supervisorFlag = new Map(userRows.map(row => [String(row.id), row.role_code === 'site_supervisor']));
@@ -2127,8 +2147,15 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         groupKey: row.department_id ? `parent:${row.department_id}` : `approval:${row.id}`,
       };
 
+      const review = row.department_id
+        ? reviewMap.get(reviewKey(row.department_id, row.start_date, row.end_date)) ?? null
+        : null;
+
       return {
         ...row,
+        timekeeper_checked: review != null,
+        timekeeper_checked_by_name: review?.checked_by_name ?? null,
+        timekeeper_checked_at: review?.checked_at ?? null,
         department_name: row.department_id ? deptNames.get(row.department_id) ?? null : null,
         manager_employee_name: row.manager_employee_id != null ? managerNames.get(row.manager_employee_id) ?? null : null,
         submitted_by_name: row.submitted_by ? userNames.get(row.submitted_by) ?? null : null,

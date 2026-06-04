@@ -96,6 +96,10 @@ export interface IApprovalReviewItem extends ITimesheetApproval {
   parent_department_name: string | null;
   /** Ключ группировки в UI: `parent:<id>` для общего участка, `manager:<id>` если у personal-подачи нет общего участка. */
   group_key: string;
+  /** Отметка табельщицы «Проверено» по этой бригаде за период подачи. */
+  timekeeper_checked: boolean;
+  timekeeper_checked_by_name?: string | null;
+  timekeeper_checked_at?: string | null;
   weekend_work_dates: string[];
   pending_weekend_dates: string[];
   approved_weekend_dates: string[];

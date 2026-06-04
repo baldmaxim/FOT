@@ -13,6 +13,7 @@ import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
+import { useDepartmentSupervisor } from '../../hooks/useDepartmentSupervisor';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { getMonthLabel, formatDateRu, getDaysInMonth } from '../../utils/calendarUtils';
 import { useTimesheetMonthAccess } from '../../hooks/useTimesheetMonthAccess';
@@ -27,6 +28,7 @@ import type {
 import type { TimesheetResponse, ITimesheetDepartmentApprovalSummary } from '../../types/timesheet';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
+import { TimesheetReviewControl } from '../../components/timesheet/TimesheetReviewControl';
 import { STATUS_COLORS, STATUS_ICONS } from '../../components/timesheet/timesheetApprovalStatus';
 import type {
   ISubmitProblemEmployee,
@@ -294,6 +296,10 @@ export const TimesheetPage: FC = () => {
     ? assignedExpandedDeptId
     : (effectiveSelectedDeptId || (isDirectReportsOnly && !selectedDeptId ? DIRECT_REPORTS_DEPT : null));
   const isDirectReportsMarker = activeGridDeptId === DIRECT_REPORTS_DEPT;
+  // Начальник участка для выбранной бригады (read-only поле в шапке, только для бригад).
+  const supervisorQuery = useDepartmentSupervisor(
+    activeGridDeptId && !isDirectReportsMarker ? activeGridDeptId : null,
+  );
   // Режим подачи: руководитель «по людям» подаёт персонально (своих подчинённых,
   // department_id=null); остальные — по отделу сетки.
   const approvalSubmissionMode: 'department' | 'personal' = isDirectReportsMarker ? 'personal' : 'department';
@@ -1595,6 +1601,20 @@ export const TimesheetPage: FC = () => {
     </div>
   ) : null;
 
+  const supervisorData = supervisorQuery.data;
+  const supervisorControl = supervisorData?.kind === 'brigade' ? (
+    <div className="ts-dept-wrap ts-supervisor-wrap">
+      <div className="ts-dept-btn ts-supervisor-field" aria-readonly="true">
+        <span className="ts-supervisor-label">Начальник участка:</span>{' '}
+        <span className="ts-supervisor-name">
+          {supervisorData.supervisor
+            ? formatTimesheetEmployeeName(supervisorData.supervisor.full_name)
+            : 'не назначен'}
+        </span>
+      </div>
+    </div>
+  ) : null;
+
   const modeControl = canUseAssignedMode ? (
     <section className="ts-mode-switch">
       <button
@@ -1872,6 +1892,13 @@ export const TimesheetPage: FC = () => {
               {monthNavigation}
               {selectorControl}
               {isAssignedMode && brigadeControl}
+              {supervisorControl}
+              <TimesheetReviewControl
+                departmentId={approvalBarDeptId}
+                startDate={rangeStart}
+                endDate={rangeEnd}
+                canToggle={isTimekeeperRole}
+              />
             </div>
             {modeControl}
             {mobileApprovalVisible && !isAssignedMode && (
@@ -1895,12 +1922,19 @@ export const TimesheetPage: FC = () => {
                 {modeControl}
                 {selectorControl}
                 {isAssignedMode && brigadeControl}
+                {supervisorControl}
               </div>
               <div className="ts-header-cell ts-header-cell--center">
                 {monthNavigation}
                 {segmentControl}
               </div>
               <div className="ts-header-cell ts-header-cell--right">
+                <TimesheetReviewControl
+                  departmentId={approvalBarDeptId}
+                  startDate={rangeStart}
+                  endDate={rangeEnd}
+                  canToggle={isTimekeeperRole}
+                />
                 <TimesheetApprovalBar
                   submissionMode={approvalSubmissionMode}
                   departmentId={approvalBarDeptId}
