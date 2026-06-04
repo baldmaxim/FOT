@@ -51,13 +51,14 @@ export const TimesheetReviewControl: FC<IProps> = ({ departmentId, startDate, en
   if (!departmentId) return null;
 
   if (!canToggle) {
-    if (!checked) return null;
     return (
       <span
-        className="ts-review-badge ts-review-badge--checked"
-        title={checkedByName ? `Проверено: ${checkedByName}` : 'Табель проверен табельщицей'}
+        className={`ts-review-badge${checked ? ' ts-review-badge--checked' : ''}`}
+        title={checked
+          ? (checkedByName ? `Проверено: ${checkedByName}` : 'Табель проверен табельщицей')
+          : 'Табель ещё не проверен табельщицей'}
       >
-        <CheckCircle2 size={14} /> Проверено
+        {checked && <CheckCircle2 size={14} />} Табельщица: {checked ? 'Проверено' : 'Не проверено'}
       </span>
     );
   }

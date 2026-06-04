@@ -5617,6 +5617,8 @@
   white-space: nowrap;
   padding: 4px 10px;
   border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
 }
 
 .ts-review-badge--checked {

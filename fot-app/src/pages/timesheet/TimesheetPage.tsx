@@ -1602,6 +1602,8 @@ export const TimesheetPage: FC = () => {
   ) : null;
 
   const supervisorData = supervisorQuery.data;
+  // Отметка «Проверено» актуальна только для бригад (табель начальника участка).
+  const isBrigadeScope = supervisorData?.kind === 'brigade';
   const supervisorControl = supervisorData?.kind === 'brigade' ? (
     <div className="ts-dept-wrap ts-supervisor-wrap">
       <div className="ts-dept-btn ts-supervisor-field" aria-readonly="true">
@@ -1893,12 +1895,14 @@ export const TimesheetPage: FC = () => {
               {selectorControl}
               {isAssignedMode && brigadeControl}
               {supervisorControl}
-              <TimesheetReviewControl
-                departmentId={approvalBarDeptId}
-                startDate={rangeStart}
-                endDate={rangeEnd}
-                canToggle={isTimekeeperRole}
-              />
+              {isBrigadeScope && (
+                <TimesheetReviewControl
+                  departmentId={approvalBarDeptId}
+                  startDate={rangeStart}
+                  endDate={rangeEnd}
+                  canToggle={isTimekeeperRole}
+                />
+              )}
             </div>
             {modeControl}
             {mobileApprovalVisible && !isAssignedMode && (
@@ -1929,12 +1933,14 @@ export const TimesheetPage: FC = () => {
                 {segmentControl}
               </div>
               <div className="ts-header-cell ts-header-cell--right">
-                <TimesheetReviewControl
-                  departmentId={approvalBarDeptId}
-                  startDate={rangeStart}
-                  endDate={rangeEnd}
-                  canToggle={isTimekeeperRole}
-                />
+                {isBrigadeScope && (
+                  <TimesheetReviewControl
+                    departmentId={approvalBarDeptId}
+                    startDate={rangeStart}
+                    endDate={rangeEnd}
+                    canToggle={isTimekeeperRole}
+                  />
+                )}
                 <TimesheetApprovalBar
                   submissionMode={approvalSubmissionMode}
                   departmentId={approvalBarDeptId}
