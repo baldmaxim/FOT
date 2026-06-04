@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { r2Service } from '../services/r2.service.js';
 import { aiReceiptRecognitionService } from '../services/ai-receipt-recognition.service.js';
 import { trimWhiteBorders } from '../services/image-trim.service.js';
+import { ensureBrowserFriendlyImage } from '../services/image-normalize.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import type { PatentPaymentReceiptPatch } from '../types/patent-receipt.types.js';
@@ -457,7 +458,15 @@ const uploadMy = async (req: MulterRequest, res: Response): Promise<void> => {
     let buffer = file.buffer;
     let mimeType = file.mimetype || 'application/octet-stream';
     let fileSize = file.size;
-    const safeFileName = sanitizeFileName(decodeMulterFilename(file.originalname));
+    let safeFileName = sanitizeFileName(decodeMulterFilename(file.originalname));
+
+    // HEIC/HEIF → JPEG до записи в R2: иначе чек скачивается вместо превью и
+    // не распознаётся vision-моделью.
+    const normalized = await ensureBrowserFriendlyImage(buffer, mimeType, safeFileName);
+    buffer = normalized.buffer;
+    mimeType = normalized.mimeType;
+    fileSize = normalized.size;
+    safeFileName = normalized.fileName;
 
     const trimmed = await trimWhiteBorders(buffer, mimeType);
     buffer = trimmed.buffer;

@@ -377,7 +377,7 @@ const UploadReceiptFormModal: FC<IUploadFormModalProps> = ({ onClose, onSubmit }
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*,application/pdf"
+            accept="image/*,.heic,.heif,application/pdf"
             style={{ display: 'none' }}
             onChange={handleFileChange}
           />
