@@ -1,7 +1,7 @@
 import { query } from '../config/postgres.js';
 import { loadCalendarMonth, resolveSchedulesForPeriod, isWorkingDay } from './schedule.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-department-assignments.service.js';
-import { countApprovalAttachments } from './timesheet-approval-attachments.service.js';
+import { countApprovalAttachmentsForApprovals } from './timesheet-approval-attachments.service.js';
 
 export const MANAGER_OBJ_ROLE_CODE = 'manager_obj';
 
@@ -213,7 +213,11 @@ export async function checkManagerObjWeekendMemoRequirement(params: {
   departmentId: string | null;
   startDate: string;
   endDate: string;
-  approvalId: number | null;
+  /**
+   * Все строки подачи, консолидируемые этим сабмитом (reuseRow + точный черновик
+   * диапазона + вытесняемые toDeleteIds): служебка могла быть загружена на любую из них.
+   */
+  approvalIds: number[];
   employeeIds?: number[];
 }): Promise<IManagerObjMemoCheck> {
   if (!params.weekendMemoRequired) {
@@ -227,9 +231,7 @@ export async function checkManagerObjWeekendMemoRequirement(params: {
     employeeIds: params.employeeIds,
   });
 
-  const attachmentCount = params.approvalId
-    ? await countApprovalAttachments(params.approvalId)
-    : 0;
+  const attachmentCount = await countApprovalAttachmentsForApprovals(params.approvalIds);
 
   return evaluateManagerObjMemoRequirement({
     weekendMemoRequired: params.weekendMemoRequired,

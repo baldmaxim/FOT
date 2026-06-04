@@ -22,7 +22,7 @@ vi.mock('./timesheet-department-assignments.service.js', () => ({
   listEmployeeMembershipsForDepartmentPeriod: vi.fn(),
 }));
 vi.mock('./timesheet-approval-attachments.service.js', () => ({
-  countApprovalAttachments: vi.fn(),
+  countApprovalAttachmentsForApprovals: vi.fn(),
 }));
 
 import {

@@ -76,6 +76,7 @@ import {
   deleteAttachmentRecord,
   findOrCreateDraftApproval,
   listApprovalPeriodAttachments,
+  relinkApprovalAttachments,
 } from '../services/timesheet-approval-attachments.service.js';
 import { r2Service } from '../services/r2.service.js';
 import {
@@ -719,13 +720,19 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
+    // Все строки, консолидируемые этим сабмитом: файл служебки мог быть загружен
+    // на точный черновик диапазона (exactSame), который при вытеснении уходит в
+    // toDeleteIds, тогда как reuseRow — другая пересекающаяся строка.
+    const consolidatedApprovalIds = [reuseRow?.id, exactSame?.id, ...toDeleteIds]
+      .filter((id): id is number => typeof id === 'number');
+
     const { weekend_memo_required } = await loadRoleRestrictions(req.user.system_role_id);
     const memoCheck = await checkManagerObjWeekendMemoRequirement({
       weekendMemoRequired: weekend_memo_required,
       departmentId: deptId,
       startDate: range.startDate,
       endDate: range.endDate,
-      approvalId: reuseRow?.id ?? null,
+      approvalIds: consolidatedApprovalIds,
       employeeIds: personal ? employeeIds : undefined,
     });
     if (memoCheck.required && !memoCheck.satisfied) {
@@ -790,7 +797,10 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         }
         // Вытеснение: удаляем прочие пересекающиеся НЕутверждённые подачи того же
         // скоупа (draft/rejected-дубли). approved сюда не попадает — отсечён выше.
-        if (toDeleteIds.length > 0) {
+        if (toDeleteIds.length > 0 && row) {
+          // Сначала перевешиваем служебки с вытесняемых строк на выжившую, иначе
+          // document_links осиротеют и файл-подтверждение потеряется.
+          await relinkApprovalAttachments(client, toDeleteIds, row.id);
           await client.query(
             `DELETE FROM timesheet_approvals WHERE id = ANY($1::bigint[])`,
             [toDeleteIds],

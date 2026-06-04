@@ -245,6 +245,44 @@ export async function countApprovalAttachments(approvalId: number): Promise<numb
   return row ? Number(row.count) : 0;
 }
 
+/**
+ * Количество служебок, привязанных к любой из строк подачи (entity_id хранится как text).
+ * При сабмите файл мог быть загружен на точный черновик диапазона, а консолидируется
+ * на другую пересекающуюся строку — считаем по всем кандидатам.
+ */
+export async function countApprovalAttachmentsForApprovals(approvalIds: number[]): Promise<number> {
+  const ids = [...new Set(approvalIds)].filter(id => Number.isInteger(id) && id > 0).map(String);
+  if (ids.length === 0) return 0;
+  const row = await queryOne<{ count: number | string }>(
+    `SELECT COUNT(*)::int AS count FROM document_links
+       WHERE entity_type = $1 AND purpose = $2 AND entity_id = ANY($3::text[])`,
+    [APPROVAL_ATTACHMENT_ENTITY_TYPE, APPROVAL_ATTACHMENT_PURPOSE, ids],
+  );
+  return row ? Number(row.count) : 0;
+}
+
+/**
+ * Перевешивает ссылки на служебки с вытесняемых строк подачи на выжившую.
+ * Вызывается ВНУТРИ транзакции сабмита перед удалением toDeleteIds, иначе
+ * document_links осиротеют и файл потеряется. Работает на переданном client.
+ */
+export async function relinkApprovalAttachments(
+  client: { query: (sql: string, params: unknown[]) => Promise<unknown> },
+  fromApprovalIds: number[],
+  toApprovalId: number,
+): Promise<void> {
+  const fromIds = [...new Set(fromApprovalIds)]
+    .filter(id => Number.isInteger(id) && id > 0 && id !== toApprovalId)
+    .map(String);
+  if (fromIds.length === 0) return;
+  await client.query(
+    `UPDATE document_links
+        SET entity_id = $1
+      WHERE entity_type = $2 AND purpose = $3 AND entity_id = ANY($4::text[])`,
+    [String(toApprovalId), APPROVAL_ATTACHMENT_ENTITY_TYPE, APPROVAL_ATTACHMENT_PURPOSE, fromIds],
+  );
+}
+
 export async function createAttachmentRecord(params: {
   approvalId: number;
   fileName: string;
