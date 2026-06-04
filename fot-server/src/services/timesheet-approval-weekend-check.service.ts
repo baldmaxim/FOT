@@ -148,20 +148,31 @@ export async function checkWeekendWorkRequirement(params: {
 
   // Корректировки status='work' в выходной — это явно добавленный руководителем выход;
   // он не претендует на плановый слот и всегда требует служебку.
+  // Day-level «Обнулить день» (source_type='manual', hours_override=0) — наоборот,
+  // руководитель явно отверг СКУД-присутствие: такой день не считается работой в выходной.
   const adjPairs = new Set<string>();
+  const zeroOffPairs = new Set<string>();
   const adjRows = await query<{ employee_id: number; work_date: string; status: string }>(
-    `SELECT employee_id, work_date::text AS work_date, status
+    `SELECT employee_id, work_date::text AS work_date, status, hours_override, source_type
        FROM attendance_adjustments
       WHERE employee_id = ANY($1::int[])
         AND work_date >= $2::date AND work_date <= $3::date
-        AND status = 'work'`,
+        AND (
+          status = 'work'
+          OR (source_type = 'manual' AND COALESCE(hours_override, 0) = 0 AND status <> 'work')
+        )`,
     [employeeIds, startDate, endDate],
   );
   for (const row of adjRows) {
     const empId = Number(row.employee_id);
     const iso = String(row.work_date).slice(0, 10);
-    if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) {
-      adjPairs.add(`${empId}|${iso}`);
+    if (row.status === 'work') {
+      if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) {
+        adjPairs.add(`${empId}|${iso}`);
+      }
+    } else {
+      // Обнулённый день — вычитаем из СКУД-присутствия (off/membership-фильтр не нужен).
+      zeroOffPairs.add(`${empId}|${iso}`);
     }
   }
 
@@ -178,6 +189,7 @@ export async function checkWeekendWorkRequirement(params: {
   for (const row of skudRows) {
     const empId = Number(row.employee_id);
     const iso = String(row.date).slice(0, 10);
+    if (zeroOffPairs.has(`${empId}|${iso}`)) continue;
     if (offByEmployee.get(empId)?.has(iso) && isWithinMembership(empId, iso)) {
       skudPairs.push({ employee_id: empId, date: iso });
     }
