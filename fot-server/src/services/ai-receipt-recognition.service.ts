@@ -341,14 +341,22 @@ export const aiReceiptRecognitionService = {
             json_schema: { name: 'patent_receipt', strict: true, schema: RECEIPT_JSON_SCHEMA },
           },
           temperature: 0,
-          max_tokens: 1500,
+          // 1500 не хватало на чеки с длинным payment_purpose (кириллица = больше
+          // токенов) → ответ обрезался и JSON.parse падал (FOT-SERVER-1Y).
+          max_tokens: 3000,
         },
         { modelOverride: opts?.modelOverride },
       );
 
-      const content = completion.choices?.[0]?.message?.content;
+      const choice = completion.choices?.[0];
+      const content = choice?.message?.content;
       rawLlmContent = content ?? null;
       if (!content) throw new Error('LLM вернул пустой ответ');
+      // Усечение по лимиту токенов → JSON заведомо неполный; явная ошибка вместо
+      // невнятного «не-JSON», чтобы причина была видна в Sentry.
+      if (choice?.finish_reason === 'length') {
+        throw new Error('Ответ LLM обрезан по лимиту токенов (finish_reason=length) — увеличьте max_tokens');
+      }
 
       let parsed: unknown;
       try {

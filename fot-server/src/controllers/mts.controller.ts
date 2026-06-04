@@ -741,7 +741,9 @@ export const mtsController = {
           accuracy: s.accuracy,
           source: s.source,
         }))
-        .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+        // recordedAt может прийти как Date (а не string) → localeCompare падал
+        // (FOT-SERVER-1G). Сортируем по таймстампу — устойчиво к Date/string/number.
+        .sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime());
       res.json({ success: true, data: points });
     } catch (error) {
       fail(res, error, 'Ошибка получения точек трека');
