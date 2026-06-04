@@ -271,9 +271,12 @@ const compute1CDayHours = (
   dayNormHours: number,
   isPreHoliday: boolean,
   isStudent: boolean,
+  // Явная ручная правка часов (табельщица проставила N) — авторитетна, НЕ режется под
+  // норму дня: экспортируем как есть. Обычная СКУД-переработка (false) — режется под норму.
+  isExplicitOverride = false,
 ): number => {
   if (!hasPositiveHours(factHours)) return 0;
-  if (dayNormHours > 0 && factHours + 0.001 >= dayNormHours) {
+  if (!isExplicitOverride && dayNormHours > 0 && factHours + 0.001 >= dayNormHours) {
     if (isStudent) {
       return isPreHoliday
         ? ONE_C_STUDENT_PRE_HOLIDAY_FULL_DAY_HOURS
@@ -373,6 +376,7 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
         dayNormHours,
         isPreHolidayDate(data, dateStr),
         isStudentSchedule(effectiveSchedule),
+        Boolean(entry.hoursOverridden),
       );
       if (!roundedHours) { markWeekend(); continue; }
       const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
@@ -444,6 +448,7 @@ export const buildObjectRowsForOneC = (
             dayNormHours,
             isPreHolidayDate(data, dateStr),
             isStudentSchedule(effectiveSchedule),
+            Boolean(statusEntry?.hoursOverridden),
           );
           if (!roundedHours) continue;
           const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);

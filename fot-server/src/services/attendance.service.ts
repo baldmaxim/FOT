@@ -141,6 +141,12 @@ export interface IAttendanceEntry {
   // DELETE /api/timesheet/:id (контроллер вернёт 409) — фронт по этому флагу
   // прячет кнопку «Снять корректировку» в режиме «По сотрудникам».
   has_object_adjustments?: boolean;
+  // true, если часы дня заданы ЯВНОЙ ручной правкой (hours_override > 0 у day-level,
+  // либо объектная корректировка manual_object). Отличает «табельщица проставила N часов»
+  // от СКУД-факта/согласованного выхода. 1С-экспорт по этому флагу НЕ режет день под норму
+  // графика (обычная СКУД-переработка — режется). Не выставляется для hours_override=0
+  // (обнулённый день / обязательная суббота с часами из СКУД).
+  hours_overridden?: boolean;
 }
 
 export interface IAttendanceBuildResult {
@@ -635,6 +641,8 @@ export async function buildAttendanceEntries(params: {
       travel_segments_count: travelSummary?.segmentsCount || 0,
       travel_problematic_segments: travelSummary?.problematicSegmentsCount || 0,
       is_correction: true,
+      // Явная правка часов (положительный override) — авторитетна для 1С (не режется под норму).
+      hours_overridden: adjustment.hours_override != null && adjustment.hours_override > 0,
       reason: adjustment.reason,
       notes: adjustment.reason,
       approval_status: adjustment.approval_status,
@@ -883,6 +891,8 @@ export async function buildAttendanceEntries(params: {
     entry.display_hours_worked = totalHours;
     entry.base_hours_worked = totalBaseHours;
     entry.is_correction = entry.is_correction || dayObjectEntries.some(item => item.is_correction);
+    // Объектная правка = явная корректировка часов → для 1С не режем под норму.
+    entry.hours_overridden = entry.hours_overridden || dayObjectEntries.some(item => item.is_correction);
     // Синхронизируем approval_status из последней объектной корректировки в дневную запись.
     // Без этого "по сотрудникам" всегда показывает оранжевый флажок вместо синего/зелёного,
     // т.к. дневная запись остаётся от СКУД-данных (нет approval_status).
@@ -930,6 +940,8 @@ export async function buildAttendanceEntries(params: {
         display_hours_worked: hours,
         base_hours_worked: hours,
         is_correction: true,
+        // Синтезированный день из объектной корректировки — явная правка часов.
+        hours_overridden: hours > 0,
         reason: total.latest.reason,
         notes: total.latest.reason,
         approval_status: total.latest.approval_status,

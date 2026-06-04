@@ -37,7 +37,7 @@ export interface IDepartmentTimesheetData {
   dailySchedulesMap: Map<number, Map<string, IResolvedSchedule>>;
   calendarMonth: IProductionCalendarMonth | null;
   entries: IAttendanceEntry[];
-  dataMap: Map<number, Map<string, { status: string; hours: number; corrected?: boolean }>>;
+  dataMap: Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>;
   objectEntries: IAttendanceObjectEntry[];
   skudMap: Map<number, Map<string, { hours: number; corrected: boolean }>>;
   posMap: Map<string, string>;
@@ -179,7 +179,7 @@ export async function fetchTimesheetDataForDepartment(
     displayMode: effectiveDisplayMode,
   });
 
-  const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean }>>();
+  const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
   for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
     dataMap.set(employeeId, new Map());
     for (const [date, entry] of dateMap) {
@@ -192,6 +192,7 @@ export async function fetchTimesheetDataForDepartment(
         status: entry.status,
         hours: visibleHours,
         corrected: entry.is_correction,
+        hoursOverridden: entry.hours_overridden ?? false,
       });
     }
   }
@@ -350,7 +351,7 @@ export async function fetchTimesheetDataForEmployees(
     displayMode: effectiveDisplayMode,
   });
 
-  const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean }>>();
+  const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
   for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
     dataMap.set(employeeId, new Map());
     for (const [date, entry] of dateMap) {
@@ -363,6 +364,7 @@ export async function fetchTimesheetDataForEmployees(
         status: entry.status,
         hours: visibleHours,
         corrected: entry.is_correction,
+        hoursOverridden: entry.hours_overridden ?? false,
       });
     }
   }

@@ -5,6 +5,7 @@ import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import {
   build1CObjectTimesheetWorkbook,
   build1CTimesheetWorkbook,
+  buildEmployeeRowsForOneC,
   buildObjectTimesheetSheet,
   buildTimesheetSheet,
   listObjectExportTargets,
@@ -165,6 +166,32 @@ const makeBaseData = (): IDepartmentTimesheetData => {
     showActualHours: false,
   };
 };
+
+describe('timesheet-excel.service — 1С: явная правка часов не режется под норму', () => {
+  // График 12ч; день 2026-04-01 (ср) — рабочий, норма 12.
+  const makeData = (hours: number, hoursOverridden: boolean): IDepartmentTimesheetData => {
+    const schedule = { ...makeSchedule(), work_hours: 12 };
+    return {
+      ...makeBaseData(),
+      employees: [{ id: 1, full_name: 'Тошев А.Х.', position_id: null, org_department_id: 'dept-1', sigur_employee_id: 101 }],
+      schedulesMap: new Map([[1, schedule]]),
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
+      dataMap: new Map([[1, new Map([['2026-04-01', { status: 'work', hours, corrected: hoursOverridden, hoursOverridden }]])]]),
+      objectEntries: [],
+    };
+  };
+
+  it('явная правка 13ч на графике 12ч → в 1С остаётся 13', () => {
+    const rows = buildEmployeeRowsForOneC(makeData(13, true));
+    expect(rows[0].dayValues.get(1)?.hours).toBe(13);
+    expect(rows[0].totalHours).toBe(13);
+  });
+
+  it('контроль: СКУД 13ч без правки → режется под норму 12', () => {
+    const rows = buildEmployeeRowsForOneC(makeData(13, false));
+    expect(rows[0].dayValues.get(1)?.hours).toBe(12);
+  });
+});
 
 describe('timesheet-excel.service', () => {
   it('highlights underwork hours in employee export', () => {
