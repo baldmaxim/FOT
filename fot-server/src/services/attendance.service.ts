@@ -983,6 +983,22 @@ export async function buildAttendanceEntries(params: {
       .get(entry.employee_id)
       ?.get(entry.work_date) || [];
 
+    // Явная объектная правка (manual_object с hours_override) авторитетна, как day-level:
+    // НЕ режем под смену. Начальник участка («урезано»-роль) видит скорректированную
+    // переработку (напр. 13ч), но обычные СКУД-часы сверх графика остаются урезанными
+    // (ветка ниже). day-level правки уже освобождены через entry.id != null на входе цикла,
+    // но СКУД-день с объектной правкой имеет entry.id == null (см. сборку выше, ~стр. 882),
+    // поэтому здесь нужен отдельный признак — все объектные записи дня is_correction.
+    if (dayObjectEntries.length > 0 && dayObjectEntries.every(item => item.is_correction)) {
+      let total = 0;
+      for (const item of dayObjectEntries) {
+        item.display_hours_worked = item.hours_worked;
+        total = roundHours(total + item.hours_worked);
+      }
+      entry.display_hours_worked = total;
+      continue;
+    }
+
     const employeeSchedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
     const shiftLengthHours = getShiftLengthHoursForScheduleOnDate(employeeSchedule, entry.work_date);
 
@@ -1026,6 +1042,20 @@ export async function buildAttendanceEntries(params: {
       const dayObjectEntries = objectAttendanceData.objectEntriesByEmployeeDate
         .get(entry.employee_id)
         ?.get(entry.work_date) || [];
+
+      // Явная объектная правка авторитетна и в расчёте зарплаты/экспорта: оставляем факт
+      // (напр. 13ч), не режем под смену — зеркало освобождения day-level правок (entry.id != null)
+      // и блока 'actual' выше. entry.hours_worked/base_hours_worked уже равны сумме факта.
+      if (dayObjectEntries.length > 0 && dayObjectEntries.every(item => item.is_correction)) {
+        let total = 0;
+        for (const item of dayObjectEntries) {
+          item.display_hours_worked = item.hours_worked;
+          item.base_hours_worked = item.hours_worked;
+          total = roundHours(total + item.hours_worked);
+        }
+        entry.display_hours_worked = total;
+        continue;
+      }
 
       const employeeSchedule = dailySchedulesMap.get(entry.employee_id)?.get(entry.work_date);
       const shiftLengthHours = getShiftLengthHoursForScheduleOnDate(employeeSchedule, entry.work_date);

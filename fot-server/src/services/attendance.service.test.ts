@@ -854,6 +854,115 @@ describe('attendance.service', () => {
     expect(objB.display_hours_worked).toBe(4);
   });
 
+  it('явная объектная правка-переработка авторитетна: не режется под смену (actual и capped)', async () => {
+    // Кейс Тошева: график 12ч, табельщица проставила 13ч объектной правкой (manual_object,
+    // is_correction). Начальник участка («урезано»-роль) должен видеть 13ч (display), и в
+    // зарплате (capped_to_schedule) тоже 13ч — как у day-level правок.
+    mockedState.scheduleWorkHours = 12;
+    mockedState.scheduleShiftHours = 12;
+
+    const correctionObject = {
+      adjustment_id: 99,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      object_key: 'obj-a',
+      object_id: 'obj-a',
+      object_name: 'ЖК Alia',
+      hours_worked: 13,
+      display_hours_worked: 13,
+      base_hours_worked: 13,
+      is_correction: true,
+    };
+
+    const makeObjectData = () => ({
+      objectEntries: [{ ...correctionObject }],
+      objectEntriesByEmployeeDate: new Map([
+        [1, new Map([['2026-04-01', [{ ...correctionObject }]]])],
+      ]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    });
+    const summary = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '07:00:00',
+      last_exit: '20:00:00',
+      total_hours: 12,
+      total_minutes: 720,
+    }];
+
+    const baseParams = {
+      employees: [{ id: 1, full_name: 'Тошев А.Х.' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', {} as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+    };
+
+    // actual (интерактивный табель): факт и display = 13.
+    mockedState.objectAttendanceData = makeObjectData();
+    mockedState.summaryRows = summary;
+    const actual = await buildAttendanceEntries({ ...baseParams });
+    expect(actual.entries[0]).toMatchObject({ hours_worked: 13, display_hours_worked: 13 });
+
+    // capped_to_schedule (зарплата/экспорт): тоже 13, без обрезки под 12.
+    mockedState.objectAttendanceData = makeObjectData();
+    mockedState.summaryRows = summary;
+    const capped = await buildAttendanceEntries({ ...baseParams, displayMode: 'capped_to_schedule' });
+    expect(capped.entries[0]).toMatchObject({ hours_worked: 13, display_hours_worked: 13 });
+  });
+
+  it('контроль: сырые СКУД-часы сверх графика по-прежнему режутся под смену', async () => {
+    // Без правки (is_correction=false) переработка по СКУД остаётся урезанной для «урезано»-роли.
+    mockedState.scheduleWorkHours = 12;
+    mockedState.scheduleShiftHours = 12;
+
+    const skudObject = {
+      adjustment_id: 1,
+      employee_id: 1,
+      work_date: '2026-04-01',
+      object_key: 'obj-a',
+      object_id: 'obj-a',
+      object_name: 'ЖК Alia',
+      hours_worked: 13,
+      display_hours_worked: 13,
+      base_hours_worked: 13,
+      is_correction: false,
+    };
+
+    mockedState.objectAttendanceData = {
+      objectEntries: [skudObject],
+      objectEntriesByEmployeeDate: new Map([
+        [1, new Map([['2026-04-01', [skudObject]]])],
+      ]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+    mockedState.summaryRows = [{
+      employee_id: 1,
+      date: '2026-04-01',
+      first_entry: '07:00:00',
+      last_exit: '20:00:00',
+      total_hours: 13,
+      total_minutes: 780,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', {} as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+      // actual: факт сохранён, display урезан под 12.
+    });
+
+    expect(result.entries[0]).toMatchObject({ hours_worked: 13, display_hours_worked: 12 });
+  });
+
   it('caps and masks actual fields when the day has no object breakdown', async () => {
     mockedState.scheduleWorkHours = 8;
     mockedState.scheduleShiftHours = 9;
