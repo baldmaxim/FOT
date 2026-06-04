@@ -28,14 +28,17 @@ vi.mock('./schedule.service.js', () => ({
   loadCalendarMonth: mockLoadCalendarMonth,
 }));
 
+const { mockListMemberships } = vi.hoisted(() => ({
+  mockListMemberships: vi.fn(),
+}));
 vi.mock('./timesheet-department-assignments.service.js', () => ({
-  listEmployeeIdsAssignedToDepartmentPeriod: vi.fn(),
+  listEmployeeMembershipsForDepartmentPeriod: mockListMemberships,
 }));
 
 const { mockListNonHolidayWeekendDays } = vi.hoisted(() => ({
   mockListNonHolidayWeekendDays: vi.fn(),
 }));
-vi.mock('../controllers/timesheet.controller.js', () => ({
+vi.mock('./timesheet-weekend-days.util.js', () => ({
   listNonHolidayWeekendDays: mockListNonHolidayWeekendDays,
 }));
 
@@ -109,6 +112,7 @@ beforeEach(() => {
   mockResolveSchedulesForPeriod.mockReset();
   mockLoadCalendarMonth.mockReset();
   mockListNonHolidayWeekendDays.mockReset();
+  mockListMemberships.mockReset();
   setupMocks();
 });
 
@@ -379,5 +383,47 @@ describe('validateCorrectionAttachments', () => {
     expect(result.ok).toBe(true);
     expect(pgQuery).not.toHaveBeenCalled();
     expect(mockGetOffDatesByEmployee).not.toHaveBeenCalled();
+  });
+
+  // department-scope: окно членства при переводе в середине месяца
+  it('переведённый: СКУД-выход в выходной после transferred_out_date → ok (не блок)', async () => {
+    mockListMemberships.mockResolvedValue([
+      { employee_id: 1856, joined_date: null, transferred_out_date: '2026-05-13' },
+    ]);
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1856, new Set(['2026-05-30'])]]));
+    setupQueries({
+      skud: [{ employee_id: 1856, date: '2026-05-30', total_minutes: 480 }],
+      employees: [{ id: 1856, full_name: 'Уринов Р.М.' }],
+    });
+
+    const result = await validateCorrectionAttachments(
+      { kind: 'department', departmentId: 'dept-hodzhakulov' },
+      RANGE,
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('переведённый: СКУД-выход в выходной ДО перевода без корректировки → блок', async () => {
+    mockListMemberships.mockResolvedValue([
+      { employee_id: 1856, joined_date: null, transferred_out_date: '2026-05-13' },
+    ]);
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1856, new Set(['2026-05-10'])]]));
+    setupQueries({
+      skud: [{ employee_id: 1856, date: '2026-05-10', total_minutes: 480 }],
+      employees: [{ id: 1856, full_name: 'Уринов Р.М.' }],
+    });
+
+    const result = await validateCorrectionAttachments(
+      { kind: 'department', departmentId: 'dept-hodzhakulov' },
+      RANGE,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missing).toHaveLength(1);
+      expect(result.missing[0].date).toBe('2026-05-10');
+      expect(result.missing[0].kind).toBe('weekend_no_correction');
+    }
   });
 });
