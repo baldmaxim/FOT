@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { computeProtectedDepartments, evaluateOrphanDepartmentDeactivationSafety, selectPhantomsToDeactivate } from './sigur-sync-structure.service.js';
+import { computeAliveDepartmentSet, evaluateOrphanDepartmentDeactivationSafety } from './sigur-sync-structure.service.js';
 
 describe('evaluateOrphanDepartmentDeactivationSafety', () => {
   const ORIGINAL_ENV = process.env.SIGUR_DEPT_DEACTIVATE_MAX;
@@ -76,71 +76,64 @@ describe('evaluateOrphanDepartmentDeactivationSafety', () => {
   });
 });
 
-describe('selectPhantomsToDeactivate (guard A: не гасить населённые отделы)', () => {
-  const phantoms = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-
-  it('гасит все фантомы, если ни в одном нет активных привязок', () => {
-    const r = selectPhantomsToDeactivate(phantoms, new Set<string>());
-    expect(r.toDeactivate.map(d => d.id)).toEqual(['a', 'b', 'c']);
-    expect(r.protectedFromDeactivation).toBe(0);
-  });
-
-  it('защищает населённые, гасит только пустые', () => {
-    const r = selectPhantomsToDeactivate(phantoms, new Set(['b']));
-    expect(r.toDeactivate.map(d => d.id)).toEqual(['a', 'c']);
-    expect(r.protectedFromDeactivation).toBe(1);
-  });
-
-  it('кейс секретариата: все фантомы населены → ни один не гасится', () => {
-    const r = selectPhantomsToDeactivate(phantoms, new Set(['a', 'b', 'c']));
-    expect(r.toDeactivate).toEqual([]);
-    expect(r.protectedFromDeactivation).toBe(3);
-  });
-
-  it('пустой список кандидатов безопасен', () => {
-    const r = selectPhantomsToDeactivate([] as { id: string }[], new Set(['a']));
-    expect(r.toDeactivate).toEqual([]);
-    expect(r.protectedFromDeactivation).toBe(0);
-  });
-});
-
-describe('computeProtectedDepartments (guard A: населённые + их предки)', () => {
-  // Ветка инцидента: central → {sekr(люди), sekrobj, courier(люди)}; central — родитель без прямых людей.
+describe('computeAliveDepartmentSet (Шаг 4: union фид ∪ ссылки сотрудников + предки)', () => {
+  // Дерево FOT: su10 → central → {sekr, sekrobj, courier}.
   const parent = new Map<string, string | null>([
+    ['su10', null],
     ['central', 'su10'],
     ['sekr', 'central'],
     ['sekrobj', 'central'],
     ['courier', 'central'],
-    ['su10', null],
   ]);
+  // FOT-строки с их sigur_department_id.
+  const existing = [
+    { id: 'su10', sigur_department_id: 100 },
+    { id: 'central', sigur_department_id: 200 },
+    { id: 'sekr', sigur_department_id: 201 },
+    { id: 'sekrobj', sigur_department_id: 202 },
+    { id: 'courier', sigur_department_id: 203 },
+  ];
 
-  it('защищает населённый отдел и его предка-кандидата (родитель ветки не гаснет)', () => {
-    const candidates = ['central', 'sekr', 'sekrobj', 'courier'];
-    const populated = new Set(['sekr', 'courier']); // прямые люди только в листьях
-    const prot = computeProtectedDepartments(candidates, populated, parent);
-    expect(prot.has('sekr')).toBe(true);
-    expect(prot.has('courier')).toBe(true);
-    expect(prot.has('central')).toBe(true); // предок населённых листьев — тоже защищён
-    expect(prot.has('sekrobj')).toBe(false); // пустой лист гасим
+  it('отдел в фиде → kept', () => {
+    const kept = computeAliveDepartmentSet(existing, new Set([100, 201]), parent);
+    expect(kept.has('sekr')).toBe(true);
+    expect(kept.has('su10')).toBe(true);
   });
 
-  it('не защищает предка, если он НЕ кандидат (su10 активен и не в списке)', () => {
-    const candidates = ['sekr'];
-    const prot = computeProtectedDepartments(candidates, new Set(['sekr']), parent);
-    expect(prot.has('sekr')).toBe(true);
-    expect(prot.has('su10')).toBe(false);
-    expect(prot.has('central')).toBe(false);
+  it('отдел только по ссылке сотрудника (нет в фиде) → kept, плюс его предки', () => {
+    // aliveSigurIds содержит 203 (courier) — пришёл из ссылок сотрудников.
+    const kept = computeAliveDepartmentSet(existing, new Set([203]), parent);
+    expect(kept.has('courier')).toBe(true);
+    expect(kept.has('central')).toBe(true); // предок-контейнер
+    expect(kept.has('su10')).toBe(true);
+    expect(kept.has('sekr')).toBe(false); // соседний лист без ссылок — не kept
   });
 
-  it('ничего не защищает, если нет населённых', () => {
-    const prot = computeProtectedDepartments(['central', 'sekr'], new Set<string>(), parent);
-    expect(prot.size).toBe(0);
+  it('предок населённого листа защищён, даже если сам без прямых людей', () => {
+    const kept = computeAliveDepartmentSet(existing, new Set([201, 202]), parent);
+    expect(kept.has('central')).toBe(true);
+    expect(kept.has('courier')).toBe(false); // курьер не в alive
+  });
+
+  it('кейс инцидента: секретариат удалён в Sigur (нет ни в фиде, ни в ссылках) → НЕ kept', () => {
+    // alive = только корень компании su10 (100); секретариатская ветка отсутствует.
+    const kept = computeAliveDepartmentSet(existing, new Set([100]), parent);
+    expect(kept.has('su10')).toBe(true);
+    expect(kept.has('central')).toBe(false);
+    expect(kept.has('sekr')).toBe(false);
+    expect(kept.has('sekrobj')).toBe(false);
+    // → эти строки попадут в phantomCandidates и будут честно деактивированы (зеркало удаления).
+  });
+
+  it('пустой alive → пусто', () => {
+    expect(computeAliveDepartmentSet(existing, new Set<number>(), parent).size).toBe(0);
   });
 
   it('цикл в parent_id не зацикливает', () => {
     const cyclic = new Map<string, string | null>([['a', 'b'], ['b', 'a']]);
-    const prot = computeProtectedDepartments(['a', 'b'], new Set(['a']), cyclic);
-    expect(prot.has('a')).toBe(true);
-    expect(prot.has('b')).toBe(true);
+    const ex = [{ id: 'a', sigur_department_id: 1 }, { id: 'b', sigur_department_id: 2 }];
+    const kept = computeAliveDepartmentSet(ex, new Set([1]), cyclic);
+    expect(kept.has('a')).toBe(true);
+    expect(kept.has('b')).toBe(true);
   });
 });

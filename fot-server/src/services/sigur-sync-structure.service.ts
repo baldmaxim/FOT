@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import {
@@ -8,6 +9,7 @@ import {
   logSampleAndWarn,
   normalizeDepartment,
   normalizeDepartmentLookupName,
+  normalizeEmployee,
   type ISyncContext,
 } from './sigur-sync-shared.js';
 import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
@@ -24,8 +26,8 @@ export interface ISyncDepartmentsResult {
   total: number;
   parentLinksSet: number;
   deactivated: number;
-  /** Отделы-фантомы, НЕ погашенные, т.к. в них остались активные сотрудники/членства. */
-  protectedFromDeactivation: number;
+  /** Фид-фантомы, оставленные живыми благодаря ссылкам сотрудников Sigur / предкам (Шаг 4). */
+  keptByEmployeeRefs: number;
   errors: string[];
 }
 
@@ -34,6 +36,7 @@ interface IExistingDepartmentRow {
   sigur_department_id: number | null;
   name: string | null;
   is_active: boolean | null;
+  parent_id: string | null;
 }
 
 /**
@@ -89,43 +92,36 @@ function buildReusableDepartmentNameMap(
 }
 
 /**
- * Множество отделов, которые НЕЛЬЗЯ деактивировать: населённые (`populatedIds` —
- * в них есть активные сотрудники/членства) И все их предки среди `candidateIds`.
- * Защита предков нужна, чтобы не погасить родителя живой ветки (иначе дети-с-
- * людьми «осиротеют» в дереве — повтор инцидента «Центральный секретариат»).
- * Ограничение глубины обхода — защита от циклов в parent_id.
+ * «Живой» набор отделов FOT по правилу объединения (Шаг 4): FOT-строки, чей
+ * `sigur_department_id` присутствует в `aliveSigurIds` (= фид `/departments` ∪
+ * отделы по ссылкам сотрудников `/employees`), ПЛЮС все их предки по дереву FOT
+ * (чтобы не погасить родителя-контейнер живой ветки, напр. «Центральный
+ * секретариат» с 0 прямых людей). Возвращает множество FOT-id (uuid). Источник
+ * истины — два среза самого Sigur, а не данные FOT (это и был корень маскировки).
+ * Лимит глубины обхода — защита от циклов в parent_id.
  */
-export function computeProtectedDepartments(
-  candidateIds: string[],
-  populatedIds: Set<string>,
+export function computeAliveDepartmentSet(
+  existing: Array<{ id: string; sigur_department_id: number | null }>,
+  aliveSigurIds: Set<number>,
   parentById: Map<string, string | null>,
 ): Set<string> {
-  const candidateSet = new Set(candidateIds);
-  const protectedSet = new Set<string>();
-  for (const id of candidateIds) {
-    if (!populatedIds.has(id)) continue;
-    protectedSet.add(id);
+  const kept = new Set<string>();
+  const seeds: string[] = [];
+  for (const d of existing) {
+    if (d.sigur_department_id != null && aliveSigurIds.has(d.sigur_department_id)) {
+      kept.add(d.id);
+      seeds.push(d.id);
+    }
+  }
+  for (const id of seeds) {
     let cursor = parentById.get(id) ?? null;
     for (let depth = 0; depth < 64 && cursor; depth++) {
-      if (candidateSet.has(cursor)) protectedSet.add(cursor);
+      if (kept.has(cursor)) break; // предки уже добавлены ранее
+      kept.add(cursor);
       cursor = parentById.get(cursor) ?? null;
     }
   }
-  return protectedSet;
-}
-
-/**
- * Делит фантом-кандидатов на тех, кого можно деактивировать, и защищённых
- * (`protectedIds` — см. computeProtectedDepartments). Исчезновение населённого
- * отдела из ответа Sigur — почти всегда частичный ответ/смена sigur-id, а не
- * реальное удаление, поэтому такие отделы и их предков НЕ гасим.
- */
-export function selectPhantomsToDeactivate<T extends { id: string }>(
-  phantomCandidates: T[],
-  protectedIds: Set<string>,
-): { toDeactivate: T[]; protectedFromDeactivation: number } {
-  const toDeactivate = phantomCandidates.filter(d => !protectedIds.has(d.id));
-  return { toDeactivate, protectedFromDeactivation: phantomCandidates.length - toDeactivate.length };
+  return kept;
 }
 
 // ─── Чистые функции синхронизации ───
@@ -138,7 +134,7 @@ export async function syncDepartmentsLogic(
 
   const rawDepartments = await getDepartmentsRaw(connection, context);
   if (!rawDepartments || rawDepartments.length === 0) {
-    return { imported: 0, updated: 0, skipped: 0, filtered: 0, total: 0, parentLinksSet: 0, deactivated: 0, protectedFromDeactivation: 0, errors: [] };
+    return { imported: 0, updated: 0, skipped: 0, filtered: 0, total: 0, parentLinksSet: 0, deactivated: 0, keptByEmployeeRefs: 0, errors: [] };
   }
 
   console.log(`[syncDepartments] got ${rawDepartments.length} departments from Sigur`);
@@ -151,7 +147,7 @@ export async function syncDepartmentsLogic(
   const ROOT_DEPT_NAME = 'Объект';
 
   const existingDepts = await query<IExistingDepartmentRow>(
-    'SELECT id, sigur_department_id, name, is_active FROM org_departments',
+    'SELECT id, sigur_department_id, name, is_active, parent_id FROM org_departments',
   );
 
   const typedExistingDepts = existingDepts;
@@ -338,102 +334,100 @@ export async function syncDepartmentsLogic(
     }
   });
 
-  // Reconciliation: org_departments.sigur_department_id, которых нет в свежем
-  // currentSigurDepartmentIds, — это удалённые в Sigur «фантомы». Помечаем
-  // is_active=false. Whitelist на reconciliation НЕ влияет: источник правды —
-  // полный rawDepartments (стр. 80), до whitelist-фильтра. Safety guard
-  // защищает от частичного ответа Sigur API.
+  // Reconciliation (Шаг 4 — правило объединения вместо гард-угадайки):
+  // «живой» отдел определяем из ДВУХ срезов САМОГО Sigur (источник истины):
+  //   aliveSigurIds = фид /departments ∪ отделы по ссылкам сотрудников /employees.
+  // FOT-строка деактивируется, только если её sigur-id нет ни в одном срезе и она
+  // не является предком живого отдела. Раньше тут смотрели на данные FOT (гард A),
+  // что МАСКИРОВАЛО реальные удаления в Sigur (инцидент «Центральный секретариат»).
+
+  // Второй срез: отделы, на которые ссылаются сотрудники Sigur.
+  const referencedSigurDeptIds = new Set<number>();
+  let employeesFetchOk = false;
+  try {
+    const rawEmps = await sigurService.getEmployeesCached(connection);
+    for (const raw of rawEmps || []) {
+      const depId = normalizeEmployee(raw).departmentId;
+      if (typeof depId === 'number' && depId > 0) referencedSigurDeptIds.add(depId);
+    }
+    employeesFetchOk = (rawEmps?.length ?? 0) > 0;
+  } catch (empErr) {
+    errors.push(`union: fetch employees failed: ${(empErr as Error).message}`);
+  }
+
+  const aliveSigurIds = new Set<number>(currentSigurDepartmentIds);
+  for (const id of referencedSigurDeptIds) aliveSigurIds.add(id);
+
+  // «surface, don't mask»: отделы, на которые ссылаются сотрудники, но которых нет
+  // в списке /departments, — несогласованность ИСТОЧНИКА. Их оставляем живыми
+  // (через union), но сигналим в Sentry, чтобы починили в Sigur.
+  const referencedButNotListed = [...referencedSigurDeptIds].filter(id => !currentSigurDepartmentIds.has(id));
+  if (referencedButNotListed.length > 0) {
+    console.warn(`[syncDepartments] referenced-but-not-listed: ${referencedButNotListed.length} отделов есть у сотрудников Sigur, но нет в /departments`);
+    Sentry.captureMessage(
+      `[structure-sync] ${referencedButNotListed.length} Sigur-отделов есть у сотрудников, но отсутствуют в /departments`,
+      { level: 'warning', tags: { service: 'structure-sync' }, extra: { departmentIds: referencedButNotListed.slice(0, 100) } },
+    );
+  }
+
+  const parentById = new Map<string, string | null>();
+  for (const d of typedExistingDepts) parentById.set(d.id, d.parent_id ?? null);
+  const keptFotIds = computeAliveDepartmentSet(typedExistingDepts, aliveSigurIds, parentById);
+
   const phantomCandidates = typedExistingDepts.filter(d =>
     d.sigur_department_id != null
     && d.is_active !== false
-    && !currentSigurDepartmentIds.has(d.sigur_department_id),
+    && !keptFotIds.has(d.id),
   );
   const activeWithSigur = typedExistingDepts.filter(d =>
     d.sigur_department_id != null && d.is_active !== false,
   ).length;
+  // Сколько фид-фантомов оставили живыми благодаря ссылкам сотрудников / предкам.
+  const keptByEmployeeRefs = typedExistingDepts.filter(d =>
+    d.sigur_department_id != null
+    && d.is_active !== false
+    && !currentSigurDepartmentIds.has(d.sigur_department_id)
+    && keptFotIds.has(d.id),
+  ).length;
 
   let deactivated = 0;
-  let protectedFromDeactivation = 0;
   const safety = evaluateOrphanDepartmentDeactivationSafety(
     activeWithSigur,
     departments.length,
     phantomCandidates.length,
   );
   if (phantomCandidates.length > 0) {
-    if (safety.shouldSkip) {
+    if (!employeesFetchOk) {
+      // Fail-safe: без второго среза все населённые отделы выглядели бы фантомами —
+      // НЕ деактивируем вовсе, сигналим.
+      const msg = `[syncDepartments] employees fetch empty/failed — пропускаю деактивацию ${phantomCandidates.length} кандидатов (нет второго среза Sigur)`;
+      console.error(msg);
+      errors.push(msg);
+      Sentry.captureMessage(msg, { level: 'warning', tags: { service: 'structure-sync' } });
+    } else if (safety.shouldSkip) {
       console.error(`[syncDepartments] ${safety.reason}`);
       errors.push(safety.reason!);
     } else {
-      // Защита от ложной деактивации: исчезновение НАСЕЛЁННОГО отдела из ответа
-      // Sigur почти всегда означает частичный ответ API или пересоздание с новыми
-      // sigur-id, а не реальное удаление. Гасим только реально пустые отделы;
-      // в которых остались активные сотрудники (org_department_id) или активные
-      // членства (employee_department_access) — НЕ трогаем, иначе люди «осиротеют»
-      // и employee-синк уведёт их в корень компании.
-      const candidateIds = phantomCandidates.map(d => d.id);
-      let populated = new Set<string>();
-      const parentById = new Map<string, string | null>();
+      const ids = phantomCandidates.map(d => d.id);
       try {
-        const populatedRows = await query<{ id: string }>(
-          `SELECT id FROM (
-             SELECT org_department_id AS id FROM employees
-              WHERE org_department_id = ANY($1::uuid[])
-                AND is_archived = false AND employment_status <> 'fired'
-             UNION
-             SELECT department_id AS id FROM employee_department_access
-              WHERE department_id = ANY($1::uuid[]) AND is_active = true
-           ) s`,
-          [candidateIds],
-        );
-        populated = new Set((populatedRows || []).map(r => r.id));
-        const parentRows = await query<{ id: string; parent_id: string | null }>(
-          'SELECT id, parent_id FROM org_departments',
-        );
-        for (const r of parentRows || []) parentById.set(r.id, r.parent_id);
-      } catch (populatedError) {
-        // Если не смогли проверить населённость — безопаснее НЕ гасить вовсе.
-        errors.push(`deactivate phantoms (populated check): ${(populatedError as Error).message}`);
-        populated = new Set(candidateIds);
-      }
-
-      // Защищаем населённые + их предков-кандидатов: иначе погасим родителя живой
-      // ветки и дети-с-людьми «осиротеют» в дереве (повтор инцидента секретариата).
-      const protectedIds = computeProtectedDepartments(candidateIds, populated, parentById);
-      const split = selectPhantomsToDeactivate(phantomCandidates, protectedIds);
-      const toDeactivate = split.toDeactivate;
-      protectedFromDeactivation = split.protectedFromDeactivation;
-      if (protectedFromDeactivation > 0) {
-        const protectedNames = phantomCandidates
-          .filter(d => protectedIds.has(d.id))
-          .map(d => d.name || d.id)
-          .join(', ');
-        console.warn(
-          `[syncDepartments] protected ${protectedFromDeactivation} populated/ancestor departments from deactivation: ${protectedNames}`,
-        );
-      }
-
-      if (toDeactivate.length > 0) {
-        const ids = toDeactivate.map(d => d.id);
-        try {
-          await withTransaction(async (client) => {
-            const res = await client.query(
-              'UPDATE org_departments SET is_active = false WHERE id = ANY($1::uuid[])',
-              [ids],
-            );
-            deactivated = res.rowCount ?? 0;
-          });
-          console.log(
-            `[syncDepartments] deactivated ${deactivated} departments missing from Sigur`
-            + ` (sigur returned ${departments.length}, db active w/ sigur-id ${activeWithSigur})`,
+        await withTransaction(async (client) => {
+          const res = await client.query(
+            'UPDATE org_departments SET is_active = false WHERE id = ANY($1::uuid[])',
+            [ids],
           );
-        } catch (deactivateError) {
-          errors.push(`deactivate phantoms: ${(deactivateError as Error).message}`);
-        }
+          deactivated = res.rowCount ?? 0;
+        });
+        console.log(
+          `[syncDepartments] deactivated ${deactivated} departments deleted in Sigur`
+          + ` (нет ни в /departments, ни в ссылках сотрудников; alive=${aliveSigurIds.size})`,
+        );
+      } catch (deactivateError) {
+        errors.push(`deactivate phantoms: ${(deactivateError as Error).message}`);
       }
     }
   }
 
-  console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links, ${deactivated} deactivated, ${protectedFromDeactivation} protected`);
+  console.log(`[syncDepartments] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links, ${deactivated} deactivated, kept ${keptByEmployeeRefs} by-refs/ancestors, alerted ${referencedButNotListed.length}`);
 
   // Sigur при пересоздании компании выдаёт НОВЫЕ sigur-id, whitelist гасит
   // старое поддерево → осиротевшие is_active=false дубликаты с застрявшими
@@ -453,7 +447,7 @@ export async function syncDepartmentsLogic(
   // Sync структуры из Sigur меняет и имена (employee-mapper), и иерархию
   // (dept tree), и whitelist sync-фильтра — инвалидируем все три согласованно.
   invalidateOrgStructureCaches();
-  return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, deactivated, protectedFromDeactivation, errors };
+  return { imported, updated, skipped, filtered, total: departments.length, parentLinksSet, deactivated, keptByEmployeeRefs, errors };
 }
 
 export interface IConsolidateResult {
