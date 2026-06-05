@@ -1,8 +1,9 @@
 import { lazy, useMemo, type FC } from 'react';
-import { Users, Shield, ClipboardCheck, Settings, History, KeyRound, Activity } from 'lucide-react';
+import { Users, Shield, ClipboardCheck, Settings, History, KeyRound, Activity, HardHat } from 'lucide-react';
 import { HubShell, type IHubTab } from '../../components/hub/HubShell';
 
 const UserManagementPage = lazy(() => import('../admin/UserManagementPage').then(m => ({ default: m.UserManagementPage })));
+const BrigadeAssignmentsTab = lazy(() => import('../../components/admin/BrigadeAssignmentsTab').then(m => ({ default: m.BrigadeAssignmentsTab })));
 const RoleManagementPage = lazy(() => import('../admin/RoleManagementPage').then(m => ({ default: m.RoleManagementPage })));
 const DataAuditPage = lazy(() => import('../admin/DataAuditPage').then(m => ({ default: m.DataAuditPage })));
 const ActionHistoryPage = lazy(() => import('../admin/ActionHistoryPage').then(m => ({ default: m.ActionHistoryPage })));
@@ -18,6 +19,13 @@ export const SystemAdminPage: FC = () => {
       accessPath: '/admin/users',
       icon: Users,
       render: () => <UserManagementPage />,
+    },
+    {
+      key: 'brigades',
+      label: 'Бригады',
+      accessPath: '/admin/users',
+      icon: HardHat,
+      render: () => <BrigadeAssignmentsTab />,
     },
     {
       key: 'roles',

@@ -100,6 +100,8 @@ router.get(
   adminController.getPasswordResetRequests,
 );
 router.get('/employees/department-access', requirePageAccess('/admin/users', 'view'), adminController.getEmployeeDepartmentAssignments);
+// Обратное представление: по бригаде/отделу — назначенные на неё сотрудники с должностями.
+router.get('/departments/:id/assigned-employees', requirePageAccess('/admin/users', 'view'), adminController.getDepartmentAssignedEmployees);
 router.post('/users/:id/approve', requirePageAccess('/admin/users', 'edit'), adminController.approveUser);
 router.post('/users/:id/reject', requirePageAccess('/admin/users', 'edit'), adminController.rejectUser);
 router.delete('/users/:id', requirePageAccess('/admin/users', 'edit'), adminController.deleteUser);

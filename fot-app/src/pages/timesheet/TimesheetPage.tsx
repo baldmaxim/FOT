@@ -1604,18 +1604,6 @@ export const TimesheetPage: FC = () => {
   const supervisorData = supervisorQuery.data;
   // Отметка «Проверено» актуальна только для бригад (табель начальника участка).
   const isBrigadeScope = supervisorData?.kind === 'brigade';
-  const supervisorControl = supervisorData?.kind === 'brigade' ? (
-    <div className="ts-dept-wrap ts-supervisor-wrap">
-      <div className="ts-dept-btn ts-supervisor-field" aria-readonly="true">
-        <span className="ts-supervisor-label">Начальник участка:</span>{' '}
-        <span className="ts-supervisor-name">
-          {supervisorData.supervisor
-            ? formatTimesheetEmployeeName(supervisorData.supervisor.full_name)
-            : 'не назначен'}
-        </span>
-      </div>
-    </div>
-  ) : null;
 
   const modeControl = canUseAssignedMode ? (
     <section className="ts-mode-switch">
@@ -1894,7 +1882,6 @@ export const TimesheetPage: FC = () => {
               {monthNavigation}
               {selectorControl}
               {isAssignedMode && brigadeControl}
-              {supervisorControl}
               {isBrigadeScope && (
                 <TimesheetReviewControl
                   departmentId={approvalBarDeptId}
@@ -1926,7 +1913,6 @@ export const TimesheetPage: FC = () => {
                 {modeControl}
                 {selectorControl}
                 {isAssignedMode && brigadeControl}
-                {supervisorControl}
               </div>
               <div className="ts-header-cell ts-header-cell--center">
                 {monthNavigation}

@@ -66,6 +66,16 @@ export interface EmployeeDepartmentAssignmentFromApi {
   direct_manager_full_name?: string | null;
 }
 
+/** Сотрудник, назначенный на бригаду/отдел (обратное представление назначений). */
+export interface IBrigadeAssignedEmployee {
+  employee_id: number;
+  full_name: string;
+  position_name: string | null;
+  employment_status: string;
+  excluded_from_timesheet: boolean;
+  access_level: 'full' | 'view';
+}
+
 /** Карты назначений «сущность → объекты входа» (id объектов). */
 export interface IObjectAssignments {
   department_objects: Record<string, string[]>;
@@ -116,6 +126,13 @@ export const adminService = {
 
   async getEmployeeDepartmentAssignments(): Promise<EmployeeDepartmentAssignmentFromApi[]> {
     const response = await apiClient.get<ApiResponse<EmployeeDepartmentAssignmentFromApi[]>>('/admin/employees/department-access');
+    return response.data || [];
+  },
+
+  async getDepartmentAssignedEmployees(departmentId: string): Promise<IBrigadeAssignedEmployee[]> {
+    const response = await apiClient.get<ApiResponse<IBrigadeAssignedEmployee[]>>(
+      `/admin/departments/${encodeURIComponent(departmentId)}/assigned-employees`,
+    );
     return response.data || [];
   },
 

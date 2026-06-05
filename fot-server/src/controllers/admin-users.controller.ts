@@ -743,6 +743,74 @@ export const adminUsersController = {
     }
   },
 
+  // Обратное представление: по бригаде/отделу — все назначенные на неё сотрудники
+  // (начальники участка и т.п.) с должностями. Только ручные назначения
+  // (source <> 'sigur_sync'), включая уволенных/исключённых — со статусом.
+  async getDepartmentAssignedEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const departmentId = typeof req.params.id === 'string' ? req.params.id.trim() : '';
+      if (!departmentId) {
+        res.status(400).json({ success: false, error: 'Не указан отдел' });
+        return;
+      }
+
+      const accessible = await resolveAccessibleDepartmentIds(req);
+      if (accessible !== 'all' && !accessible.includes(departmentId)) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+
+      type AssignedRow = {
+        id: number;
+        full_name: string;
+        position_id: string | number | null;
+        employment_status: string;
+        excluded_from_timesheet: boolean;
+        access_level: 'full' | 'view';
+      };
+      const rows = await query<AssignedRow>(
+        `SELECT e.id, e.full_name, e.position_id,
+                e.employment_status, e.excluded_from_timesheet,
+                eda.access_level
+           FROM employee_department_access eda
+           JOIN employees e ON e.id = eda.employee_id
+          WHERE eda.department_id = $1
+            AND eda.is_active = true
+            AND eda.source <> 'sigur_sync'
+          ORDER BY e.full_name ASC`,
+        [departmentId],
+      );
+
+      const positionIds = [...new Set(rows
+        .map(r => r.position_id)
+        .filter((id): id is string | number => id != null)
+        .map(v => String(v)))];
+      const positionRows = positionIds.length > 0
+        ? await query<{ id: string | number; name: string }>(
+            'SELECT id, name FROM positions WHERE id::text = ANY($1::text[])',
+            [positionIds],
+          )
+        : [];
+      const positionMap = new Map<string, string>(positionRows.map(p => [String(p.id), p.name]));
+
+      const payload = rows.map(r => ({
+        employee_id: r.id,
+        full_name: r.full_name,
+        position_name: r.position_id != null
+          ? (positionMap.get(String(r.position_id)) ?? null)
+          : null,
+        employment_status: r.employment_status,
+        excluded_from_timesheet: r.excluded_from_timesheet,
+        access_level: r.access_level,
+      }));
+
+      res.json({ success: true, data: payload });
+    } catch (error) {
+      logSupabaseError('GetDepartmentAssignedEmployees', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить назначенных сотрудников' });
+    }
+  },
+
   async getPendingUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       let users: UserProfile[];
