@@ -68,9 +68,14 @@ interface IFixture {
 }
 
 function setupQueries(fx: IFixture): void {
-  pgQuery.mockImplementation(async (sql: string) => {
+  pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => {
     if (sql.includes('FROM attendance_adjustments')) return fx.adjustments ?? [];
-    if (sql.includes('FROM leave_requests')) return fx.leaves ?? [];
+    if (sql.includes('FROM leave_requests')) {
+      // Зеркалим SQL-фильтр request_type = ANY($2): если тип не в списке
+      // требующих файл, строка в выборку не попадает.
+      const allowed = (params?.[1] as string[] | undefined) ?? [];
+      return (fx.leaves ?? []).filter(l => allowed.includes(l.request_type));
+    }
     if (sql.includes('FROM document_links')) return fx.docLinks ?? [];
     if (sql.includes('FROM skud_daily_summary')) return fx.skud ?? [];
     if (sql.includes('FROM employees')) return fx.employees ?? [];
@@ -241,7 +246,7 @@ describe('validateCorrectionAttachments', () => {
     }
   });
 
-  it('leave_request vacation без вложения → блок (ортогональная ветка сохранена)', async () => {
+  it('leave_request vacation без вложения → ok (отпуск файл не требует, подачу не блокирует)', async () => {
     mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set<string>()]]));
     setupQueries({
       leaves: [{
@@ -261,25 +266,21 @@ describe('validateCorrectionAttachments', () => {
       RANGE,
     );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.missing[0].kind).toBe('leave_request');
-      expect(result.missing[0].reason).toContain('Отпуск');
-    }
+    expect(result.ok).toBe(true);
   });
 
-  it('leave_request remote с вложением → ok', async () => {
+  it('leave_request unpaid без вложения → ok (за свой счёт файл не требует)', async () => {
     mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set<string>()]]));
     setupQueries({
       leaves: [{
-        id: 555,
+        id: 556,
         employee_id: 1,
-        request_type: 'remote',
+        request_type: 'unpaid',
         start_date: '2026-05-10',
         end_date: '2026-05-10',
         correction_date: null,
       }],
-      docLinks: [{ entity_id: '555' }],
+      docLinks: [],
     });
 
     const result = await validateCorrectionAttachments(

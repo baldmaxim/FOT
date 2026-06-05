@@ -4,7 +4,10 @@ import { getOffDatesByEmployee } from './timesheet-approval-weekend-check.servic
 import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
 import type { ITimesheetDateRange } from './timesheet-range.service.js';
 
-const ATTACHMENT_REQUIRED_LEAVE_TYPES = ['vacation'] as const;
+// Заявления на отпуск/за свой счёт файл-подтверждение не требуют и подачу табеля
+// не блокируют. Список пуст — leave-ветка проверки фактически отключена (остаётся
+// только проверка работы в выходной без корректировки).
+const ATTACHMENT_REQUIRED_LEAVE_TYPES = [] as const;
 
 export type MissingDayKind = 'leave_request' | 'weekend_no_correction';
 
