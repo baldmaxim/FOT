@@ -223,6 +223,47 @@ function computeSummaryPaidHours(summary: ISummaryRow, lunchMinutes: number): nu
   return roundHours(computeSummaryPaidMinutes(summary, lunchMinutes) / 60);
 }
 
+/**
+ * Распределяет дневной НЕТТО-итог часов (обед уже вычтен в computeSummaryPaidHours)
+ * по объектным записям пропорционально их сырым минутам присутствия. Сумма долей точно
+ * равна netHours (метод наибольшего остатка в центичасах). Пишет hours_worked/display/base.
+ * Нужно, т.к. объектные интервалы — сырое присутствие БЕЗ обеда: задавать ими дневной итог
+ * нельзя (обед теряется), но разбивку по объектам надо привести к итогу с обедом.
+ */
+function distributeNetHoursAcrossObjects(
+  objectEntries: IAttendanceObjectEntry[],
+  netHours: number,
+): void {
+  if (objectEntries.length === 0) return;
+  const totalCentihours = Math.max(0, Math.round((netHours || 0) * 100));
+  const weights = objectEntries.map(item => Math.max(0, item.hours_worked));
+  const sumWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  if (sumWeight <= 0 || totalCentihours === 0) {
+    for (const item of objectEntries) {
+      item.hours_worked = 0;
+      item.display_hours_worked = 0;
+      item.base_hours_worked = 0;
+    }
+    return;
+  }
+  const exactShares = weights.map(weight => (totalCentihours * weight) / sumWeight);
+  const centihours = exactShares.map(value => Math.floor(value));
+  let distributed = centihours.reduce((sum, value) => sum + value, 0);
+  const byFractionDesc = exactShares
+    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+    .sort((left, right) => right.frac - left.frac);
+  for (let k = 0; distributed < totalCentihours; k += 1) {
+    centihours[byFractionDesc[k % centihours.length].index] += 1;
+    distributed += 1;
+  }
+  objectEntries.forEach((item, index) => {
+    const hours = roundHours(centihours[index] / 100);
+    item.hours_worked = hours;
+    item.display_hours_worked = hours;
+    item.base_hours_worked = hours;
+  });
+}
+
 function createEmptyObjectAttendanceData(): IObjectAttendanceData {
   return {
     objectEntries: [],
@@ -519,6 +560,10 @@ export async function buildAttendanceEntries(params: {
   const entries: IAttendanceEntry[] = [];
   const byEmployeeDate = new Map<number, Map<string, IAttendanceEntry>>();
   const skudMap = new Map<number, Map<string, { hours: number; corrected: boolean }>>();
+  // Обеденная квота к вычету за день (в часах), по `${employee_id}_${date}`. Считается из
+  // того же графика, что и summary-итог: max(0, lunch − outside). Объектная агрегация
+  // вычитает её из сырой объектной суммы, иначе обед терялся (объекты — сырое присутствие).
+  const lunchCutByKey = new Map<string, number>();
 
   const pushEntry = (entry: IAttendanceEntry): void => {
     entries.push(entry);
@@ -666,6 +711,7 @@ export async function buildAttendanceEntries(params: {
     const dateObject = new Date(yearPart, monthPart - 1, dayPart);
     const effectiveLunchMinutes = schedule ? getScheduleForDate(schedule, dateObject).lunch_minutes : 0;
     const baseHours = computeSummaryPaidHours(summary, effectiveLunchMinutes);
+    lunchCutByKey.set(key, roundHours(Math.max(0, effectiveLunchMinutes - getSummaryBreakMinutes(summary)) / 60));
     const travelCreditedMinutes = travelSummary?.creditedMinutes || 0;
     const travelCreditedHours = roundHours(travelCreditedMinutes / 60);
     const hoursWorked = roundHours(baseHours + travelCreditedHours);
@@ -754,6 +800,7 @@ export async function buildAttendanceEntries(params: {
           const plannedHours = dayParams.work_hours;
           const effectiveLunchMinutes = dayParams.lunch_minutes;
           const baseHours = computeSummaryPaidHours(rawSummary, effectiveLunchMinutes);
+          lunchCutByKey.set(key, roundHours(Math.max(0, effectiveLunchMinutes - getSummaryBreakMinutes(rawSummary)) / 60));
           const hoursWorked = roundHours(Math.min(baseHours + travelCreditedHours, plannedHours));
           const isPresent = baseHours > 0 || rawSummary.first_entry !== null;
 
@@ -884,12 +931,32 @@ export async function buildAttendanceEntries(params: {
       continue;
     }
 
-    const totalHours = roundHours(dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0));
-    const totalBaseHours = roundHours(dayObjectEntries.reduce((sum, item) => sum + item.base_hours_worked, 0));
-    entry.status = totalHours > 0 || entry.first_entry ? 'work' : entry.status;
-    entry.hours_worked = totalHours;
-    entry.display_hours_worked = totalHours;
-    entry.base_hours_worked = totalBaseHours;
+    const hasObjectCorrection = dayObjectEntries.some(item => item.is_correction);
+    if (hasObjectCorrection) {
+      // Объектная правка авторитетна (явные часы) — обед НЕ применяется поверх ручной
+      // корректировки (зеркало исключений every(is_correction) ниже). Берём сырую сумму.
+      const totalHours = roundHours(dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0));
+      const totalBaseHours = roundHours(dayObjectEntries.reduce((sum, item) => sum + item.base_hours_worked, 0));
+      entry.status = totalHours > 0 || entry.first_entry ? 'work' : entry.status;
+      entry.hours_worked = totalHours;
+      entry.display_hours_worked = totalHours;
+      entry.base_hours_worked = totalBaseHours;
+    } else {
+      // Чистые СКУД-объекты: объектная сумма — сырое присутствие БЕЗ обеда. Раньше дневной
+      // итог перезаписывался ею и обед терялся. Теперь вычитаем дневную обеденную квоту
+      // (max(0, lunch − outside), та же, что в summary-итоге) из сырой объектной суммы и
+      // распределяем нетто по объектам пропорц. сырым минутам. Объекты остаются авторитетны
+      // для брутто-присутствия; travel прибавляем к дневному итогу как в summary-ветке.
+      const objectGross = roundHours(dayObjectEntries.reduce((sum, item) => sum + item.hours_worked, 0));
+      const lunchCut = lunchCutByKey.get(`${entry.employee_id}_${entry.work_date}`) ?? 0;
+      const objectNet = roundHours(Math.max(0, objectGross - lunchCut));
+      const totalWithTravel = roundHours(objectNet + (entry.travel_hours_credited || 0));
+      distributeNetHoursAcrossObjects(dayObjectEntries, objectNet);
+      entry.status = totalWithTravel > 0 || entry.first_entry ? 'work' : entry.status;
+      entry.hours_worked = totalWithTravel;
+      entry.display_hours_worked = totalWithTravel;
+      entry.base_hours_worked = objectNet;
+    }
     entry.is_correction = entry.is_correction || dayObjectEntries.some(item => item.is_correction);
     // Объектная правка = явная корректировка часов → для 1С не режем под норму.
     entry.hours_overridden = entry.hours_overridden || dayObjectEntries.some(item => item.is_correction);

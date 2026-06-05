@@ -854,6 +854,170 @@ describe('attendance.service', () => {
     expect(objB.display_hours_worked).toBe(4);
   });
 
+  it('вычитает обед из дневного итога по объектам (полный день: 9ч присутствия − обед = 8ч, не 9ч)', async () => {
+    // Регресс: раньше дневной итог перезаписывался сырой суммой объектов (без обеда) → 9ч.
+    // Теперь итог = lunch-adjusted summary (8ч), объекты лишь распределяют его пропорц. сырью.
+    mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
+
+    const objectEntryA = {
+      adjustment_id: 1, employee_id: 1, work_date: '2026-04-01',
+      object_key: 'obj-a', object_id: 'obj-a', object_name: 'ЖК A',
+      hours_worked: 5, display_hours_worked: 5, base_hours_worked: 5, is_correction: false,
+    };
+    const objectEntryB = {
+      adjustment_id: 2, employee_id: 1, work_date: '2026-04-01',
+      object_key: 'obj-b', object_id: 'obj-b', object_name: 'ЖК B',
+      hours_worked: 4, display_hours_worked: 4, base_hours_worked: 4, is_correction: false,
+    };
+    mockedState.objectAttendanceData = {
+      objectEntries: [objectEntryA, objectEntryB],
+      objectEntriesByEmployeeDate: new Map([[1, new Map([['2026-04-01', [objectEntryA, objectEntryB]]])]]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a', 'obj-b'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+    mockedState.summaryRows = [{
+      employee_id: 1, date: '2026-04-01',
+      first_entry: '09:00:00', last_exit: '18:00:00',
+      total_hours: 9, total_minutes: 540,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-04-01', endDate: '2026-04-01',
+      // график с обедом 60 мин → нетто 8ч
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', { lunch_minutes: 60, work_hours: 8 } as unknown as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+    });
+
+    // Дневной итог — с обедом (8ч), НЕ сырые 9ч.
+    expect(result.entries[0].hours_worked).toBeCloseTo(8, 2);
+    expect(result.entries[0].base_hours_worked).toBeCloseTo(8, 2);
+    expect(result.entries[0].display_hours_worked).toBeCloseTo(8, 2);
+
+    // Инвариант: сумма по объектам == дневному итогу.
+    const objA = result.objectEntries.find(entry => entry.object_key === 'obj-a')!;
+    const objB = result.objectEntries.find(entry => entry.object_key === 'obj-b')!;
+    expect(objA.display_hours_worked + objB.display_hours_worked).toBeCloseTo(8, 2);
+    // Пропорция сырья сохранена: A(5) > B(4).
+    expect(objA.display_hours_worked).toBeGreaterThan(objB.display_hours_worked);
+  });
+
+  it('паритет: «по объектам» и «по сотрудникам» дают одинаковый дневной итог с обедом', async () => {
+    mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
+    const summary = [{
+      employee_id: 1, date: '2026-04-01',
+      first_entry: '09:00:00', last_exit: '18:00:00',
+      total_hours: 9, total_minutes: 540,
+    }];
+    const baseParams = {
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-04-01', endDate: '2026-04-01',
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', { lunch_minutes: 60, work_hours: 8 } as unknown as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+    };
+
+    // «по сотрудникам»: нет объектной разбивки.
+    mockedState.summaryRows = summary;
+    const byEmployees = await buildAttendanceEntries({ ...baseParams });
+
+    // «по объектам»: один объект на весь день.
+    const objectEntry = {
+      adjustment_id: 1, employee_id: 1, work_date: '2026-04-01',
+      object_key: 'obj-a', object_id: 'obj-a', object_name: 'ЖК A',
+      hours_worked: 9, display_hours_worked: 9, base_hours_worked: 9, is_correction: false,
+    };
+    mockedState.objectAttendanceData = {
+      objectEntries: [objectEntry],
+      objectEntriesByEmployeeDate: new Map([[1, new Map([['2026-04-01', [objectEntry]]])]]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+    mockedState.summaryRows = summary;
+    const byObjects = await buildAttendanceEntries({ ...baseParams });
+
+    expect(byObjects.entries[0].hours_worked).toBeCloseTo(byEmployees.entries[0].hours_worked!, 2);
+    expect(byEmployees.entries[0].hours_worked).toBeCloseTo(8, 2);
+  });
+
+  it('переработка с обедом всё ещё режется под смену (факт 10ч с обедом, display 9ч)', async () => {
+    mockedState.scheduleWorkHours = 8;
+    mockedState.scheduleShiftHours = 9;
+    const objectEntryA = {
+      adjustment_id: 1, employee_id: 1, work_date: '2026-04-01',
+      object_key: 'obj-a', object_id: 'obj-a', object_name: 'ЖК A',
+      hours_worked: 6, display_hours_worked: 6, base_hours_worked: 6, is_correction: false,
+    };
+    const objectEntryB = {
+      adjustment_id: 2, employee_id: 1, work_date: '2026-04-01',
+      object_key: 'obj-b', object_id: 'obj-b', object_name: 'ЖК B',
+      hours_worked: 5, display_hours_worked: 5, base_hours_worked: 5, is_correction: false,
+    };
+    mockedState.objectAttendanceData = {
+      objectEntries: [objectEntryA, objectEntryB],
+      objectEntriesByEmployeeDate: new Map([[1, new Map([['2026-04-01', [objectEntryA, objectEntryB]]])]]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a', 'obj-b'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+    mockedState.summaryRows = [{
+      employee_id: 1, date: '2026-04-01',
+      first_entry: '08:00:00', last_exit: '19:00:00',
+      total_hours: 11, total_minutes: 660,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Иван Иванов' }],
+      startDate: '2026-04-01', endDate: '2026-04-01',
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', { lunch_minutes: 60, work_hours: 8 } as unknown as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+      // actual: факт = нетто 10ч (11 − обед 60м), display урезан под смену 9ч.
+    });
+
+    // Факт = 10ч (обед вычтен из 11ч), НЕ 11ч; display урезан до 9ч.
+    expect(result.entries[0].hours_worked).toBeCloseTo(10, 2);
+    expect(result.entries[0].display_hours_worked).toBeCloseTo(9, 2);
+  });
+
+  it('график без обеда (lunch_minutes=0) не сокращается: итог == сырое присутствие', async () => {
+    mockedState.scheduleWorkHours = 9;
+    mockedState.scheduleShiftHours = 9;
+    const objectEntry = {
+      adjustment_id: 1, employee_id: 1, work_date: '2026-04-01',
+      object_key: 'obj-a', object_id: 'obj-a', object_name: 'Объект ночь',
+      hours_worked: 9, display_hours_worked: 9, base_hours_worked: 9, is_correction: false,
+    };
+    mockedState.objectAttendanceData = {
+      objectEntries: [objectEntry],
+      objectEntriesByEmployeeDate: new Map([[1, new Map([['2026-04-01', [objectEntry]]])]]),
+      employeeDistinctObjectKeys: new Map([[1, new Set(['obj-a'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    };
+    mockedState.summaryRows = [{
+      employee_id: 1, date: '2026-04-01',
+      first_entry: '09:00:00', last_exit: '18:00:00',
+      total_hours: 9, total_minutes: 540,
+    }];
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 1, full_name: 'Студент' }],
+      startDate: '2026-04-01', endDate: '2026-04-01',
+      dailySchedulesMap: new Map([[1, new Map([['2026-04-01', { lunch_minutes: 0, work_hours: 9 } as unknown as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-04-01',
+    });
+
+    expect(result.entries[0].hours_worked).toBeCloseTo(9, 2);
+    expect(result.entries[0].display_hours_worked).toBeCloseTo(9, 2);
+  });
+
   it('явная объектная правка-переработка авторитетна: не режется под смену (actual и capped)', async () => {
     // Кейс Тошева: график 12ч, табельщица проставила 13ч объектной правкой (manual_object,
     // is_correction). Начальник участка («урезано»-роль) должен видеть 13ч (display), и в
