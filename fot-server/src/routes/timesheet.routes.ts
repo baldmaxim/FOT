@@ -201,10 +201,13 @@ router.get(
   timesheetController.export
 );
 
-// POST /api/timesheet/export-mass — доступ к очереди табелей HR.
+// POST /api/timesheet/export-mass — экспорт табелей по отделам/объектам.
+// Доступен начальнику участка (/timesheet): контроллер скоупит выборку по
+// назначенным бригадам (resolveScopedDepartmentIds → 403 на чужой отдел) и
+// проверяет доступ месяца. Презентация (сокращённые часы) задаётся на фронте.
 router.post(
   '/export-mass',
-  requirePageAccess('/timesheet-hr', 'view'),
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
   timesheetController.exportMass
 );
 
