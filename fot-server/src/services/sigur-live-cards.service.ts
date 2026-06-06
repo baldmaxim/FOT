@@ -22,6 +22,9 @@ import {
   type IAccessPointBinding,
 } from './sigur-live-admin.service.js';
 import { resolveField } from './sigur-sync-shared.js';
+import { deriveCardW26 } from './sigur-card-w26.util.js';
+
+export { deriveCardW26, type ICardW26 } from './sigur-card-w26.util.js';
 
 interface ISigurCardSummary {
   cardId: number;
@@ -172,13 +175,17 @@ export async function replaceSigurEmployeeAccessPoints(
  * Привязать карту к sigur-сотруднику по UID кандидатам (Sigur card / W26 / HEX / DEC).
  * Если карта уже у того же сотрудника — продлевает срок (PATCH).
  * Если карта у другого — снимает с него (DELETE) и создаёт привязку (POST).
- * Бросает ошибку с понятным текстом, если карта не найдена в Sigur.
+ *
+ * Если карта не найдена в Sigur:
+ *  - при `createIfMissing=true` — создаёт её из UID/W26 (POST /cards, format W26) и привязывает;
+ *  - иначе — бросает ошибку с понятным текстом.
  */
 export async function assignSigurEmployeeCardBinding(
   sigurEmployeeId: number,
   candidates: string[],
   expirationDate?: string,
   connection?: ConnectionType,
+  createIfMissing = false,
 ): Promise<{ card: ISigurCardSummary; previousSigurEmployeeId: number | null; reassigned: boolean }> {
   if (candidates.length === 0) {
     throw new Error('UID карты обязателен');
@@ -186,10 +193,36 @@ export async function assignSigurEmployeeCardBinding(
 
   const { matches } = await sigurService.findCardByCandidates(candidates, connection);
   const cards = matches.map(toCardSummary).filter((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
-  if (cards.length === 0) {
-    throw new Error('Карта не найдена в Sigur. Создайте карту в Sigur Manager перед привязкой.');
+  let card: NonNullable<ReturnType<typeof toCardSummary>> | undefined = cards[0];
+
+  if (!card) {
+    if (!createIfMissing) {
+      throw new Error('Карта не найдена в Sigur. Создайте карту в Sigur Manager перед привязкой.');
+    }
+    // Вывести value из первого кандидата, который удаётся декодировать (UID или W26).
+    let decoded: ReturnType<typeof deriveCardW26> | null = null;
+    for (const candidate of candidates) {
+      try {
+        decoded = deriveCardW26(candidate);
+        break;
+      } catch {
+        /* пробуем следующий кандидат */
+      }
+    }
+    if (!decoded) {
+      throw new Error(`Не удалось вывести значение карты из UID/W26: ${candidates.join(', ')}`);
+    }
+    const createdRaw = await sigurService.createCard(decoded.value, 'W26', connection);
+    card = toCardSummary(createdRaw) ?? undefined;
+    if (!card) {
+      // Ответ POST /cards без распознаваемого id — перечитываем по value.
+      const refetched = await sigurService.findCardByCandidates([decoded.value], connection);
+      card = refetched.matches.map(toCardSummary).find((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
+    }
+    if (!card) {
+      throw new Error(`Карта создана, но не найдена в Sigur: value ${decoded.value}`);
+    }
   }
-  const card = cards[0];
 
   const startIso = new Date().toISOString();
   let expiresIso: string;

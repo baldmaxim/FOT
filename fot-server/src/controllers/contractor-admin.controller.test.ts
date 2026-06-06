@@ -107,7 +107,7 @@ describe('contractorAdminController.approveSubmission', () => {
     h.query.mockResolvedValueOnce([{ id: 'r-rm', sigur_employee_id: 100 }]);
     // toRename
     h.query.mockResolvedValueOnce([
-      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'Иванов И.', access_point_names: null },
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'Иванов И.', access_point_names: null, card_uid: '168,15956' },
     ]);
     const res = makeRes();
     await contractorAdminController.approveSubmission(makeReq(), res as never);
@@ -125,8 +125,8 @@ describe('contractorAdminController.approveSubmission', () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
     h.query.mockResolvedValueOnce([]); // нет удалений
     h.query.mockResolvedValueOnce([
-      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: null },
-      { pass_id: 'p2', pass_status: 'assigned', pass_sigur_id: 12, holder_name: 'B', access_point_names: null },
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: null, card_uid: '168,15956' },
+      { pass_id: 'p2', pass_status: 'assigned', pass_sigur_id: 12, holder_name: 'B', access_point_names: null, card_uid: '168,15956' },
     ]);
     h.updEmp.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Sigur 500'));
     const res = makeRes();
@@ -147,8 +147,8 @@ describe('contractorAdminController.approveSubmission', () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'partially_applied' });
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
-      { pass_id: 'p1', pass_status: 'applied', pass_sigur_id: 11, holder_name: 'A', access_point_names: null },
-      { pass_id: 'p2', pass_status: 'assigned', pass_sigur_id: 12, holder_name: 'B', access_point_names: null },
+      { pass_id: 'p1', pass_status: 'applied', pass_sigur_id: 11, holder_name: 'A', access_point_names: null, card_uid: '168,15956' },
+      { pass_id: 'p2', pass_status: 'assigned', pass_sigur_id: 12, holder_name: 'B', access_point_names: null, card_uid: '168,15956' },
     ]);
     const res = makeRes();
     await contractorAdminController.approveSubmission(makeReq(), res as never);
@@ -176,7 +176,7 @@ describe('contractorAdminController.approveSubmission', () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
-      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: ['КПП 1', 'КПП X'] },
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: ['КПП 1', 'КПП X'], card_uid: '168,15956' },
     ]);
     h.resolveAP.mockResolvedValue({ accessPointIds: [7, 8], unmatchedNames: ['КПП X'] });
     const res = makeRes();
@@ -194,7 +194,7 @@ describe('contractorAdminController.approveSubmission', () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
-      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: ['КПП 1'] },
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: ['КПП 1'], card_uid: '168,15956' },
     ]);
     h.resolveAP.mockResolvedValue({ accessPointIds: [7], unmatchedNames: [] });
     h.replaceAP.mockRejectedValueOnce(new Error('Sigur AP 500'));
@@ -205,5 +205,40 @@ describe('contractorAdminController.approveSubmission', () => {
     expect(body.data.status).toBe('partially_applied');
     expect(body.data.failed).toBe(1);
     expect(body.data.errors[0]).toContain('p1');
+  });
+
+  it('гейт по карте: провал привязки → pass не applied, updateSigurEmployee не зовётся', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: null, card_uid: '168,15956' },
+    ]);
+    h.assignCard.mockRejectedValueOnce(new Error('Sigur card 400'));
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    // привязка карты — раньше переименования, и при провале переименование не выполняется
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], undefined, 'external', true);
+    expect(h.updEmp).not.toHaveBeenCalled();
+    const body = res.body as { data: { status: string; failed: number; errors: string[] } };
+    expect(body.data.status).toBe('partially_applied');
+    expect(body.data.failed).toBe(1);
+    expect(body.data.errors[0]).toContain('p1');
+  });
+
+  it('гейт по карте: нет card_uid → pass не applied', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]);
+    h.query.mockResolvedValueOnce([
+      { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: null, card_uid: null },
+    ]);
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReq(), res as never);
+
+    expect(h.assignCard).not.toHaveBeenCalled();
+    expect(h.updEmp).not.toHaveBeenCalled();
+    const body = res.body as { data: { status: string; failed: number } };
+    expect(body.data.status).toBe('partially_applied');
+    expect(body.data.failed).toBe(1);
   });
 });

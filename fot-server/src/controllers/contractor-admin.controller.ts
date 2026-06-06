@@ -336,10 +336,19 @@ export const contractorAdminController = {
             }, connection);
             sigurEmployeeId = profile.sigurEmployeeId;
             try {
-              await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], expIso, connection);
+              // Карта обязательна: при отсутствии в Sigur — создаём из UID/W26.
+              await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], expIso, connection, true);
             } catch (cardError) {
               const m = cardError instanceof Error ? cardError.message : String(cardError);
-              warnings.push(`${passNumber} карта: ${m}`);
+              // Провал привязки карты => пропуск бесполезен. В БД не пишем,
+              // подчищаем только что созданный Sigur-профиль (best-effort).
+              try {
+                await sigurService.deleteEmployee(sigurEmployeeId, connection);
+              } catch (cleanupError) {
+                warnings.push(`${passNumber} очистка профиля: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+              }
+              failed.push({ pass_number: passNumber, error: `карта: ${m}` });
+              continue;
             }
             try {
               await replaceSigurEmployeeAccessPoints(sigurEmployeeId, resolvedPoints.accessPointIds, connection);
@@ -819,11 +828,11 @@ export const contractorAdminController = {
       // или 'blocked' (после change-holder) с заполненным ФИО.
       const toRename = await query<{
         pass_id: string; pass_status: string; pass_sigur_id: number | null;
-        holder_name: string; access_point_names: string[] | null;
+        holder_name: string; access_point_names: string[] | null; card_uid: string | null;
       }>(
         `SELECT p.id AS pass_id, p.status AS pass_status,
                 p.sigur_employee_id AS pass_sigur_id,
-                p.holder_name, p.access_point_names
+                p.holder_name, p.access_point_names, p.card_uid
            FROM contractor_passes p
           WHERE p.submission_id = $1::uuid
             AND p.status IN ('submitted', 'blocked')
@@ -838,6 +847,12 @@ export const contractorAdminController = {
         }
         try {
           if (!dryRun) {
+            // Карта обязана быть привязана: иначе пропуск нельзя активировать.
+            if (!row.card_uid) {
+              throw new Error('нет UID карты');
+            }
+            await assignSigurEmployeeCardBinding(row.pass_sigur_id, [row.card_uid], undefined, connection, true);
+
             await updateSigurEmployee(
               row.pass_sigur_id,
               { name: row.holder_name, blocked: false },
@@ -1081,8 +1096,10 @@ export const contractorAdminController = {
         id: string; status: string; sigur_employee_id: number | null;
         holder_name: string | null; submission_id: string | null;
         access_point_names: string[] | null;
+        card_uid: string | null;
       }>(
-        `SELECT id, status, sigur_employee_id, holder_name, submission_id, access_point_names
+        `SELECT id, status, sigur_employee_id, holder_name, submission_id, access_point_names,
+                card_uid
            FROM contractor_passes
           WHERE submission_id = $1::uuid AND id = ANY($2::uuid[])`,
         [submissionId, body.decisions.map(d => d.pass_id)],
@@ -1127,6 +1144,13 @@ export const contractorAdminController = {
             }
 
             if (!dryRun) {
+              // Карта обязана быть привязана: иначе пропуск нельзя активировать.
+              // Идемпотентно: создаст карту из UID/W26 при отсутствии, иначе продлит/перепривяжет.
+              if (!pass.card_uid) {
+                throw new Error('нет UID карты');
+              }
+              await assignSigurEmployeeCardBinding(pass.sigur_employee_id, [pass.card_uid], undefined, connection, true);
+
               await updateSigurEmployee(
                 pass.sigur_employee_id,
                 { name: pass.holder_name, blocked: false },

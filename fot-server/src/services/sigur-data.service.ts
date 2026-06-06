@@ -1244,6 +1244,27 @@ export class SigurDataService extends SigurServiceBase {
     await this.mutate<void>('delete', `/api/v1/employees/${id}`, undefined, undefined, connection);
   }
 
+  /**
+   * Создать карту в Sigur. `value` — 3-байтовый hex, `format` обычно 'W26'.
+   * Sigur сам вычисляет formattedValue. Возвращает сырую запись созданной карты
+   * (содержит `id`). Инвалидирует кэш списка карт.
+   */
+  async createCard(
+    value: string,
+    format: string,
+    connection?: ConnectionType,
+  ): Promise<Record<string, unknown>> {
+    const created = await this.mutate<Record<string, unknown>>(
+      'post',
+      '/api/v1/cards',
+      { value, format },
+      undefined,
+      connection,
+    );
+    this.invalidateCardListCache();
+    return created ?? {};
+  }
+
   async blockEmployee(id: number, connection?: ConnectionType): Promise<void> {
     await this.mutate<void>('put', `/api/v1/employees/${id}/block`, undefined, undefined, connection);
   }

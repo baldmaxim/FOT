@@ -143,7 +143,9 @@ export const PoolTab: FC = () => {
   useEffect(() => {
     if (cardSeq === 0 || cardSeq === lastSeqRef.current) return;
     lastSeqRef.current = cardSeq;
-    const uid = lastCard?.sigurCard?.trim();
+    // W26 (facility,number) надёжнее сырого UID для создания карты в Sigur —
+    // отдаём его приоритетно, с откатом на UID, если ридер W26 не прислал.
+    const uid = lastCard?.w26?.trim() || lastCard?.sigurCard?.trim();
     if (!uid) return;
     setRows(prev => {
       if (prev.some(r => r.uid === uid)) {

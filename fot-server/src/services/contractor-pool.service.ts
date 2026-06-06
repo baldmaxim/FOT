@@ -315,10 +315,19 @@ export const addPassesToPool = async (input: IAddPoolInput): Promise<IAddPoolRes
         }, connection);
         sigurEmployeeId = profile.sigurEmployeeId;
         try {
-          await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], undefined, connection);
+          // Карта обязательна: при отсутствии в Sigur — создаём из UID/W26.
+          await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], undefined, connection, true);
         } catch (cardError) {
           const m = cardError instanceof Error ? cardError.message : String(cardError);
-          warnings.push(`${passNumber} карта: ${m}`);
+          // Провал привязки карты => пропуск в пул не попадает. В БД не пишем,
+          // подчищаем только что созданный Sigur-профиль (best-effort).
+          try {
+            await sigurService.deleteEmployee(sigurEmployeeId, connection);
+          } catch (cleanupError) {
+            warnings.push(`${passNumber} очистка профиля: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+          }
+          failed.push({ pass_number: passNumber, error: `карта: ${m}` });
+          continue;
         }
       }
 
