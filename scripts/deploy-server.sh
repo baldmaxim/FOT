@@ -333,6 +333,13 @@ site_deps_stale() {
   return 1
 }
 
+# Коммит, из которого СОБРАН опубликованный backend-dist. Источник истины для
+# гейта вместо движения git в BUILD_DIR: git-синк и сборка backend развязаны
+# (scope `migrate` двигает HEAD, но backend не собирает), поэтому сравнивать
+# BEFORE/AFTER одного запуска нельзя — dist может быть собран из более старого
+# коммита, чем текущий HEAD. Метка лежит внутри dist и живёт вместе с артефактом.
+BACKEND_MARKER_REL="dist/.deployed_commit"
+
 # True когда backend нужно пересобрать и перезапустить. False — когда нового
 # кода нет (типичный ежечасный no-op деплой): пропуск избегает лишнего рестарта
 # единственного fork-процесса PM2 и связанного с ним окна 502.
@@ -340,10 +347,17 @@ backend_changed() {
   [[ "$FORCE_BACKEND" == "1" ]] && return 0
   pm2 describe fot-server >/dev/null 2>&1 || return 0          # процесс не запущен → деплоим
   test -f "$SITE_DIR/fot-server/dist/index.js" || return 0      # билд не опубликован → деплоим
-  [[ -z "$BEFORE" || -z "$AFTER" ]] && return 0                 # отпечаток неизвестен → деплоим
-  [[ "$BEFORE" == "$AFTER" ]] && return 1                       # коммит не двигался → пропуск
-  # Коммит сменился: деплоим только если затронут backend (вкл. ecosystem.config.cjs).
-  git -C "$BUILD_DIR" diff --name-only "$BEFORE" "$AFTER" -- fot-server | grep -q . && return 0
+  [[ -z "$AFTER" ]] && return 0                                 # целевой коммит неизвестен → деплоим
+
+  local marker="$SITE_DIR/fot-server/$BACKEND_MARKER_REL"
+  local deployed=""
+  [[ -f "$marker" ]] && deployed="$(cat "$marker" 2>/dev/null)"
+  [[ -z "$deployed" ]] && return 0                              # чем собран dist — неизвестно → деплоим
+  [[ "$deployed" == "$AFTER" ]] && return 1                     # dist уже из целевого коммита → пропуск
+  # dist собран из другого коммита: деплоим только если с тех пор затронут backend.
+  git -C "$BUILD_DIR" diff --name-only "$deployed" "$AFTER" -- fot-server 2>/dev/null | grep -q . && return 0
+  # diff не вычислился (метка не из git / неизвестный коммит) — на всякий случай деплоим.
+  git -C "$BUILD_DIR" cat-file -e "${deployed}^{commit}" 2>/dev/null || return 0
   return 1
 }
 
@@ -392,6 +406,9 @@ deploy_backend() {
   fi
 
   publish_dir "$app_dir/dist" "$site_dir/dist"
+  # Метка фактически опубликованного коммита — источник истины для backend_changed.
+  # Пишем ПОСЛЕ свопа dist (publish_dir переносит свежий dist без метки).
+  printf '%s\n' "$AFTER" > "$site_dir/$BACKEND_MARKER_REL"
 
   # Рестарт через ecosystem-файл: startOrReload перечитывает конфиг и применяет
   # wait_ready/listen_timeout (обычный pm2 restart их не подхватывает). Первичную
