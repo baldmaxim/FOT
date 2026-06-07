@@ -26,4 +26,11 @@ router.get(
   feedbackController.listTasks,
 );
 
+router.delete(
+  '/:id',
+  requirePageAccess('/feedback-review', 'edit'),
+  feedbackController.remove,
+);
+
 export default router;
+

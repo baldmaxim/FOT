@@ -85,6 +85,63 @@
   color: var(--accent);
 }
 
+/* Дерево-селектор отдела в фильтре: ограничиваем ширину как у select. */
+.deptSelect {
+  min-width: 220px;
+  flex: 1 1 220px;
+  max-width: 360px;
+}
+
+/* Сводная таблица отделов СУ-10 (5 столбцов). */
+.statTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.statTable th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.statTable td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.statTable td:nth-child(3),
+.statTable td:nth-child(5) {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.statTable td:first-child {
+  color: var(--text-tertiary);
+  width: 36px;
+}
+
+.deleteBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.deleteBtn:hover {
+  border-color: var(--error, #d9534f);
+  color: var(--error, #d9534f);
+}
+
 .stats {
   display: flex;
   flex-wrap: wrap;
@@ -151,10 +208,15 @@
 }
 
 @media (max-width: 640px) {
-  .table {
+  .table,
+  .statTable {
     display: block;
     overflow-x: auto;
     white-space: nowrap;
+  }
+
+  .deptSelect {
+    max-width: none;
   }
 
   .textCell {

@@ -1,9 +1,9 @@
 import type { Response } from 'express';
 import { z } from 'zod';
-import { query, queryOne } from '../config/postgres.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 import { escapeLike } from '../utils/search.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { resolveAccessibleEmployeeIds } from '../services/data-scope.service.js';
+import { canAccessEmployeeInScope, resolveAccessibleEmployeeIds } from '../services/data-scope.service.js';
 
 const MAX_CONTENT_LENGTH = 5000;
 
@@ -249,9 +249,39 @@ async function buildDepartmentStats(
   );
 }
 
+// ============================ Админ: удаление обращения ============================
+
+const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ success: false, error: 'Некорректный id' });
+      return;
+    }
+    const msg = await queryOne<{ employee_id: number }>(
+      'SELECT employee_id FROM feedback_messages WHERE id = $1',
+      [id],
+    );
+    if (!msg) {
+      res.status(404).json({ success: false, error: 'Обращение не найдено' });
+      return;
+    }
+    if (!(await canAccessEmployeeInScope(req, msg.employee_id))) {
+      res.status(403).json({ success: false, error: 'Нет доступа' });
+      return;
+    }
+    await execute('DELETE FROM feedback_messages WHERE id = $1', [id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('feedback.remove error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка удаления обращения' });
+  }
+};
+
 export const feedbackController = {
   submit,
   listMessages,
   listTasks,
+  remove,
   buildDepartmentStats,
 };

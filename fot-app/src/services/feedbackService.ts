@@ -66,4 +66,8 @@ export const feedbackService = {
     );
     return res.data;
   },
+
+  remove: async (id: number): Promise<void> => {
+    await apiClient.delete(`/feedback/${id}`);
+  },
 };
