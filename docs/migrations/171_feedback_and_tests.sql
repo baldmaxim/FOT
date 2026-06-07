@@ -139,11 +139,12 @@ ON CONFLICT (role_code, page_path) DO UPDATE
 SET can_view = role_page_access.can_view OR EXCLUDED.can_view,
     can_edit = role_page_access.can_edit OR EXCLUDED.can_edit;
 
--- Просмотр/управление — только администраторы.
+-- Просмотр/управление — только администраторы (роль admin: системные = без
+-- записей в user_company_access, компанийные = со скоупом). Роль super_admin
+-- удалена миграцией 044 (переименована в admin), поэтому здесь не сидируется.
 INSERT INTO role_page_access (role_code, page_path, can_view, can_edit)
 VALUES
-  ('admin',       '/feedback-review', true, true),
-  ('super_admin', '/feedback-review', true, true)
+  ('admin', '/feedback-review', true, true)
 ON CONFLICT (role_code, page_path) DO UPDATE
 SET can_view = role_page_access.can_view OR EXCLUDED.can_view,
     can_edit = role_page_access.can_edit OR EXCLUDED.can_edit;
