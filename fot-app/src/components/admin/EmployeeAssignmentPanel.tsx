@@ -8,6 +8,12 @@ import {
 import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
 import { directReportsService, type IDirectReport } from '../../services/directReportsService';
+import {
+  weekendApprovalService,
+  type IWeekendEligibleEmployee,
+  type IWeekendResponsibleData,
+} from '../../services/weekendApprovalService';
+import { correctionApprovalService } from '../../services/correctionApprovalService';
 import { ApiError } from '../../api/client';
 import { getTreeFlatDepartments, type IFlatDepartmentOption } from '../../utils/departmentUtils';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
@@ -24,7 +30,7 @@ interface IEmployeeAssignmentPanelProps {
   onSaved: () => void;
 }
 
-type Tab = 'department' | 'brigade' | 'person' | 'object';
+type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend';
 
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
@@ -66,6 +72,11 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const [draftViewOnlyIds, setDraftViewOnlyIds] = useState<string[]>([]);
   const [draftDirectIds, setDraftDirectIds] = useState<number[]>([]);
   const [draftObjectIds, setDraftObjectIds] = useState<string[]>([]);
+  // Вкладка «Выходные»: ответственность за согласование работы в выходной.
+  const [draftWeekendDeptIds, setDraftWeekendDeptIds] = useState<string[]>([]);
+  const [draftWeekendEmpIds, setDraftWeekendEmpIds] = useState<number[]>([]);
+  const [weekendMode, setWeekendMode] = useState<'department' | 'employee'>('department');
+  const [weekendShowFree, setWeekendShowFree] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const directReportsQueryKey = ['admin-direct-reports', employee?.employee_id ?? 0];
@@ -93,6 +104,29 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     staleTime: 30_000,
   });
 
+  // Вкладка «Выходные»: whitelist-отделы, назначения ответственного, кандидаты-сотрудники.
+  const whitelistQuery = useQuery<string[]>({
+    queryKey: ['correction-approval-whitelist'],
+    queryFn: () => correctionApprovalService.getSettings().then(s => s.requiredDepartmentIds),
+    enabled: isOpen,
+    staleTime: 5 * 60_000,
+  });
+  const weekendQueryKey = ['admin-weekend-approvals', employee?.employee_id ?? 0];
+  const weekendQuery = useQuery<IWeekendResponsibleData>({
+    queryKey: weekendQueryKey,
+    queryFn: () => (employee
+      ? weekendApprovalService.getByResponsible(employee.employee_id)
+      : Promise.resolve({ department_ids: [], employee_ids: [], assignments: { departments: {}, employees: {} } })),
+    enabled: !!employee && isOpen,
+    staleTime: 30_000,
+  });
+  const weekendEligibleQuery = useQuery<IWeekendEligibleEmployee[]>({
+    queryKey: ['admin-weekend-eligible'],
+    queryFn: () => weekendApprovalService.listEligible(false),
+    enabled: isOpen,
+    staleTime: 60_000,
+  });
+
   const initialDepartmentIds = useMemo(
     () => [...new Set(employee?.assigned_department_ids || [])],
     [employee],
@@ -109,6 +143,14 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     () => [...(employeeObjectsQuery.data?.object_ids || [])],
     [employeeObjectsQuery.data?.object_ids],
   );
+  const initialWeekendDeptIds = useMemo(
+    () => [...(weekendQuery.data?.department_ids || [])],
+    [weekendQuery.data?.department_ids],
+  );
+  const initialWeekendEmpIds = useMemo(
+    () => [...(weekendQuery.data?.employee_ids || [])],
+    [weekendQuery.data?.employee_ids],
+  );
 
   // Сброс drafts при открытии новой панели/обновлении источников.
   useEffect(() => {
@@ -117,6 +159,8 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
       setDraftViewOnlyIds(initialViewOnlyIds);
       setSearchQuery('');
       setActiveTab('department');
+      setWeekendMode('department');
+      setWeekendShowFree(false);
     }
   }, [isOpen, employee, initialDepartmentIds, initialViewOnlyIds]);
 
@@ -131,6 +175,13 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
       setDraftObjectIds(initialObjectIds);
     }
   }, [isOpen, initialObjectIds]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setDraftWeekendDeptIds(initialWeekendDeptIds);
+      setDraftWeekendEmpIds(initialWeekendEmpIds);
+    }
+  }, [isOpen, initialWeekendDeptIds, initialWeekendEmpIds]);
 
   const flatDepts = useMemo<IFlatDepartmentOption[]>(
     () => getTreeFlatDepartments(structureQuery.data?.departments || []),
@@ -164,11 +215,50 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     return [...pinned, ...rest.slice(0, 60)];
   }, [employee, allEmployees, searchQuery, initialDirectIds, draftDirectIds]);
 
+  // === Вкладка «Выходные»: производные данные ===
+  const whitelistSet = useMemo(
+    () => new Set(whitelistQuery.data || []),
+    [whitelistQuery.data],
+  );
+  // Отделы-кандидаты = whitelist-отделы (обычные отделы, не бригады).
+  const weekendDeptCandidates = useMemo(() => {
+    const search = normalizeText(searchQuery);
+    return departmentsByKind.departments
+      .filter(d => whitelistSet.has(d.id))
+      .filter(d => !search || normalizeText(d.name).includes(search));
+  }, [departmentsByKind.departments, whitelistSet, searchQuery]);
+  // Карта «отдел/сотрудник → ответственный (employee_id)» из всех назначений.
+  const weekendAssignDeptMap = weekendQuery.data?.assignments.departments ?? {};
+  const weekendAssignEmpMap = weekendQuery.data?.assignments.employees ?? {};
+  const eligibleById = useMemo(
+    () => new Map((weekendEligibleQuery.data || []).map(e => [e.employee_id, e])),
+    [weekendEligibleQuery.data],
+  );
+  const weekendEmpCandidates = useMemo(() => {
+    if (!employee) return [];
+    const search = normalizeText(searchQuery);
+    let list = weekendEligibleQuery.data || [];
+    if (weekendShowFree) list = list.filter(e => e.responsible_employee_id == null);
+    return list.filter(e => !search
+      || normalizeText(e.full_name || '').includes(search)
+      || normalizeText(e.position_name || '').includes(search)
+      || normalizeText(e.department_name || '').includes(search));
+  }, [employee, weekendEligibleQuery.data, weekendShowFree, searchQuery]);
+  // ФИО ответственного по employee_id (для подсказок «занят: X»).
+  const responsibleName = useCallback((empId: number): string => (
+    employeeMap.get(empId)?.full_name
+    || eligibleById.get(empId)?.full_name
+    || `ID ${empId}`
+  ), [employeeMap, eligibleById]);
+
   const hasDepartmentChanges = !arraysEqual(draftDepartmentIds, initialDepartmentIds);
   const hasViewOnlyChanges = !arraysEqual(draftViewOnlyIds, initialViewOnlyIds);
   const hasDirectChanges = !numbersEqual(draftDirectIds, initialDirectIds);
   const hasObjectChanges = !arraysEqual(draftObjectIds, initialObjectIds);
-  const hasChanges = hasDepartmentChanges || hasViewOnlyChanges || hasDirectChanges || hasObjectChanges;
+  const hasWeekendChanges = !arraysEqual(draftWeekendDeptIds, initialWeekendDeptIds)
+    || !numbersEqual(draftWeekendEmpIds, initialWeekendEmpIds);
+  const hasChanges = hasDepartmentChanges || hasViewOnlyChanges || hasDirectChanges
+    || hasObjectChanges || hasWeekendChanges;
 
   const handleRequestClose = useCallback(() => {
     if (hasChanges) {
@@ -208,11 +298,25 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
       : [...prev, objectId]));
   };
 
+  const toggleWeekendDept = (departmentId: string) => {
+    setDraftWeekendDeptIds(prev => (prev.includes(departmentId)
+      ? prev.filter(id => id !== departmentId)
+      : [...prev, departmentId]));
+  };
+
+  const toggleWeekendEmp = (employeeId: number) => {
+    setDraftWeekendEmpIds(prev => (prev.includes(employeeId)
+      ? prev.filter(id => id !== employeeId)
+      : [...prev, employeeId]));
+  };
+
   const handleReset = () => {
     setDraftDepartmentIds(initialDepartmentIds);
     setDraftViewOnlyIds(initialViewOnlyIds);
     setDraftDirectIds(initialDirectIds);
     setDraftObjectIds(initialObjectIds);
+    setDraftWeekendDeptIds(initialWeekendDeptIds);
+    setDraftWeekendEmpIds(initialWeekendEmpIds);
     setSearchQuery('');
   };
 
@@ -264,11 +368,23 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
       if (hasObjectChanges) {
         await adminService.updateEmployeeSkudObjectAccess(employee.employee_id, draftObjectIds);
       }
+      // 4) Ответственность за выходные — полная замена таргетов.
+      if (hasWeekendChanges) {
+        const { conflicts } = await weekendApprovalService.setByResponsible(employee.employee_id, {
+          departmentIds: draftWeekendDeptIds,
+          employeeIds: draftWeekendEmpIds,
+        });
+        if (conflicts.length > 0) {
+          toast.error(`Часть назначений уже закреплена за другим ответственным (${conflicts.length}) — пропущены`);
+        }
+      }
       toast.success('Назначения сохранены');
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
         queryClient.invalidateQueries({ queryKey: directReportsQueryKey }),
         queryClient.invalidateQueries({ queryKey: employeeObjectsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: weekendQueryKey }),
+        queryClient.invalidateQueries({ queryKey: ['admin-weekend-eligible'] }),
       ]);
       onSaved();
       onClose();
@@ -335,12 +451,51 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
           >
             Объекты ({draftObjectIds.length})
           </button>
+          <button
+            type="button"
+            className={`${styles.assignmentPanelTab} ${activeTab === 'weekend' ? styles.assignmentPanelTabActive : ''}`}
+            onClick={() => { setActiveTab('weekend'); setSearchQuery(''); }}
+          >
+            Выходные ({draftWeekendDeptIds.length + draftWeekendEmpIds.length})
+          </button>
         </nav>
 
         <div className={styles.assignmentPanelBody}>
+          {activeTab === 'weekend' && (
+            <div className={styles.weekendToolbar}>
+              <div className={styles.weekendModeToggle} role="tablist" aria-label="Режим назначения выходных">
+                <button
+                  type="button"
+                  className={`${styles.weekendModeBtn} ${weekendMode === 'department' ? styles.weekendModeBtnActive : ''}`}
+                  onClick={() => { setWeekendMode('department'); setWeekendShowFree(false); setSearchQuery(''); }}
+                >
+                  Отделы
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.weekendModeBtn} ${weekendMode === 'employee' ? styles.weekendModeBtnActive : ''}`}
+                  onClick={() => { setWeekendMode('employee'); setSearchQuery(''); }}
+                >
+                  Сотрудники
+                </button>
+              </div>
+              {weekendMode === 'employee' && (
+                <button
+                  type="button"
+                  className={`${styles.weekendFreeBtn} ${weekendShowFree ? styles.weekendFreeBtnActive : ''}`}
+                  onClick={() => setWeekendShowFree(v => !v)}
+                  title="Сотрудники без назначенного ответственного"
+                >
+                  Свободные
+                </button>
+              )}
+            </div>
+          )}
           <input
             type="text"
-            placeholder={activeTab === 'person' ? 'Поиск по ФИО, должности, отделу...' : 'Поиск...'}
+            placeholder={activeTab === 'person' || (activeTab === 'weekend' && weekendMode === 'employee')
+              ? 'Поиск по ФИО, должности, отделу...'
+              : 'Поиск...'}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className={styles.assignmentPanelSearch}
@@ -384,6 +539,31 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               selectedIds={draftObjectIds}
               onToggle={toggleObject}
               loading={skudObjectsQuery.isLoading || employeeObjectsQuery.isLoading}
+            />
+          )}
+
+          {activeTab === 'weekend' && weekendMode === 'department' && (
+            <WeekendDepartmentList
+              departments={weekendDeptCandidates}
+              selectedIds={draftWeekendDeptIds}
+              assignmentMap={weekendAssignDeptMap}
+              currentResponsibleId={employee.employee_id}
+              responsibleName={responsibleName}
+              onToggle={toggleWeekendDept}
+              loading={whitelistQuery.isLoading || structureQuery.isLoading}
+            />
+          )}
+
+          {activeTab === 'weekend' && weekendMode === 'employee' && (
+            <WeekendPersonList
+              candidates={weekendEmpCandidates}
+              selectedIds={draftWeekendEmpIds}
+              assignmentMap={weekendAssignEmpMap}
+              currentResponsibleId={employee.employee_id}
+              responsibleName={responsibleName}
+              onToggle={toggleWeekendEmp}
+              loading={weekendEligibleQuery.isLoading}
+              showFree={weekendShowFree}
             />
           )}
         </div>
@@ -714,6 +894,140 @@ const ObjectList: FC<{
         </>
       )}
       {rest.map(o => renderItem(o, 'rest'))}
+    </div>
+  );
+};
+
+const WeekendDepartmentList: FC<{
+  departments: IFlatDepartmentOption[];
+  selectedIds: string[];
+  assignmentMap: Record<string, number>;
+  currentResponsibleId: number;
+  responsibleName: (employeeId: number) => string;
+  onToggle: (id: string) => void;
+  loading: boolean;
+}> = ({ departments, selectedIds, assignmentMap, currentResponsibleId, responsibleName, onToggle, loading }) => {
+  if (loading) {
+    return <div className={styles.departmentAccessEmpty}>Загрузка...</div>;
+  }
+  if (departments.length === 0) {
+    return (
+      <div className={styles.departmentAccessEmpty}>
+        Нет отделов с согласованием выходных (см. настройку «Согласование по отделам»)
+      </div>
+    );
+  }
+  const selectedSet = new Set(selectedIds);
+  const selected = departments.filter(d => selectedSet.has(d.id));
+  const rest = departments.filter(d => !selectedSet.has(d.id));
+
+  const renderItem = (dept: IFlatDepartmentOption, keyPrefix: string) => {
+    const checked = selectedSet.has(dept.id);
+    const ownerId = assignmentMap[dept.id] ?? null;
+    const ownedByOther = ownerId != null && ownerId !== currentResponsibleId;
+    const disabled = ownedByOther && !checked;
+    return (
+      <label
+        key={`${keyPrefix}-${dept.id}`}
+        className={`${styles.assignmentPanelPerson} ${checked ? styles.departmentAccessItemChecked : ''}`}
+        aria-disabled={disabled || undefined}
+      >
+        <input type="checkbox" checked={checked} disabled={disabled} onChange={() => onToggle(dept.id)} />
+        <div className={styles.assignmentPanelPersonInfo}>
+          <div className={styles.assignmentPanelPersonName}>{dept.name}</div>
+          {ownedByOther && (
+            <div className={styles.assignmentPanelPersonAssigned}>
+              Закреплён: {responsibleName(ownerId!)}
+            </div>
+          )}
+        </div>
+      </label>
+    );
+  };
+
+  return (
+    <div className={styles.assignmentPanelList}>
+      {selected.length > 0 && (
+        <>
+          <div className={styles.departmentAccessGroupHeader}>Назначенные ({selected.length})</div>
+          {selected.map(d => renderItem(d, 'selected'))}
+        </>
+      )}
+      {rest.map(d => renderItem(d, 'rest'))}
+    </div>
+  );
+};
+
+const WeekendPersonList: FC<{
+  candidates: IWeekendEligibleEmployee[];
+  selectedIds: number[];
+  assignmentMap: Record<string, number>;
+  currentResponsibleId: number;
+  responsibleName: (employeeId: number) => string;
+  onToggle: (id: number) => void;
+  loading: boolean;
+  showFree: boolean;
+}> = ({ candidates, selectedIds, assignmentMap, currentResponsibleId, responsibleName, onToggle, loading, showFree }) => {
+  if (loading) {
+    return <div className={styles.departmentAccessEmpty}>Загрузка...</div>;
+  }
+  if (candidates.length === 0) {
+    return (
+      <div className={styles.departmentAccessEmpty}>
+        {showFree ? 'Свободных сотрудников нет' : 'Сотрудники не найдены'}
+      </div>
+    );
+  }
+  const selectedSet = new Set(selectedIds);
+  const selected = candidates.filter(c => selectedSet.has(c.employee_id));
+  const rest = candidates.filter(c => !selectedSet.has(c.employee_id));
+
+  const renderItem = (c: IWeekendEligibleEmployee, keyPrefix: string) => {
+    const checked = selectedSet.has(c.employee_id);
+    const explicitOwner = assignmentMap[String(c.employee_id)] ?? null;
+    const ownedByOther = explicitOwner != null && explicitOwner !== currentResponsibleId;
+    const disabled = ownedByOther && !checked;
+    // Покрыт через отдел (не явным назначением сотрудника) — информативно.
+    const coveredByDept = explicitOwner == null
+      && c.responsible_employee_id != null
+      && c.responsible_employee_id !== currentResponsibleId;
+    return (
+      <label
+        key={`${keyPrefix}-${c.employee_id}`}
+        className={`${styles.assignmentPanelPerson} ${checked ? styles.departmentAccessItemChecked : ''}`}
+        aria-disabled={disabled || undefined}
+      >
+        <input type="checkbox" checked={checked} disabled={disabled} onChange={() => onToggle(c.employee_id)} />
+        <div className={styles.assignmentPanelPersonInfo}>
+          <div className={styles.assignmentPanelPersonName}>{c.full_name || `ID ${c.employee_id}`}</div>
+          <div className={styles.assignmentPanelPersonMeta}>
+            {c.position_name || 'Должность не указана'}
+            {c.department_name ? ` · ${c.department_name}` : ''}
+          </div>
+          {ownedByOther && (
+            <div className={styles.assignmentPanelPersonAssigned}>
+              Закреплён: {responsibleName(explicitOwner!)}
+            </div>
+          )}
+          {coveredByDept && (
+            <div className={styles.assignmentPanelPersonAssigned}>
+              Покрыт отделом: {responsibleName(c.responsible_employee_id!)}
+            </div>
+          )}
+        </div>
+      </label>
+    );
+  };
+
+  return (
+    <div className={styles.assignmentPanelList}>
+      {selected.length > 0 && (
+        <>
+          <div className={styles.departmentAccessGroupHeader}>Назначенные ({selected.length})</div>
+          {selected.map(c => renderItem(c, 'selected'))}
+        </>
+      )}
+      {rest.map(c => renderItem(c, 'rest'))}
     </div>
   );
 };

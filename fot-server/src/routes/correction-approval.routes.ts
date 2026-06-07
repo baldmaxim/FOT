@@ -1,11 +1,31 @@
 import { Router } from 'express';
+import type { Response, NextFunction } from 'express';
 import { correctionApprovalController } from '../controllers/correction-approval.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
+import type { AuthenticatedRequest } from '../types/index.js';
 
 const router = Router();
 
 router.use(authenticate);
+
+// Доступ к очереди согласований: обычное право /timesheet-hr ЛИБО «по назначению» —
+// сотрудник, назначенный ответственным за выходные (decision 10). Контроллер далее
+// режет видимость/действия до его строк.
+const requireQueueAccess = (action: 'view' | 'edit') => (
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (await resolveEffectivePageAccess(req, '/timesheet-hr', action)) return next();
+      if (req.user?.employee_id && await isActiveWeekendResponsible(req.user.employee_id)) return next();
+      res.status(403).json({ success: false, error: 'Insufficient permissions' });
+    } catch (err) {
+      console.error('requireQueueAccess error:', err);
+      res.status(500).json({ success: false, error: 'Authorization check failed' });
+    }
+  }
+);
 
 // Любой успешный write на /api/correction-approvals/* меняет состояние корректировок
 // табеля → сбрасываем связанные timesheet-LRU, иначе после approve/reject/revert
@@ -41,55 +61,55 @@ router.put(
 
 router.get(
   '/pending-by-department',
-  requirePageAccess('/timesheet-hr', 'view'),
+  requireQueueAccess('view'),
   correctionApprovalController.getPendingByDepartment,
 );
 
 router.get(
   '/history-by-department',
-  requirePageAccess('/timesheet-hr', 'view'),
+  requireQueueAccess('view'),
   correctionApprovalController.getHistoryByDepartment,
 );
 
 router.post(
   '/:id/approve',
-  requirePageAccess('/timesheet-hr', 'edit'),
+  requireQueueAccess('edit'),
   correctionApprovalController.approveOne,
 );
 
 router.post(
   '/:id/reject',
-  requirePageAccess('/timesheet-hr', 'edit'),
+  requireQueueAccess('edit'),
   correctionApprovalController.rejectOne,
 );
 
 router.post(
   '/:id/revert',
-  requirePageAccess('/timesheet-hr', 'edit'),
+  requireQueueAccess('edit'),
   correctionApprovalController.revertOne,
 );
 
 router.post(
   '/bulk-approve',
-  requirePageAccess('/timesheet-hr', 'edit'),
+  requireQueueAccess('edit'),
   correctionApprovalController.bulkApprove,
 );
 
 router.post(
   '/bulk-approve-by-ids',
-  requirePageAccess('/timesheet-hr', 'edit'),
+  requireQueueAccess('edit'),
   correctionApprovalController.bulkApproveByIds,
 );
 
 router.post(
   '/bulk-reject-by-ids',
-  requirePageAccess('/timesheet-hr', 'edit'),
+  requireQueueAccess('edit'),
   correctionApprovalController.bulkRejectByIds,
 );
 
 router.post(
   '/bulk-revert-by-ids',
-  requirePageAccess('/timesheet-hr', 'edit'),
+  requireQueueAccess('edit'),
   correctionApprovalController.bulkRevertByIds,
 );
 

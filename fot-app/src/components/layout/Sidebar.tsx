@@ -205,6 +205,8 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
               // ЛК подрядчика виден только если у роли тип кабинета = contractor
               // (админ обходит page-access, поэтому не по canViewPage).
               if (item.personalCabinet === 'contractor') return employeeVariant === 'contractor';
+              // «Согласования» доступны и назначенным ответственным за выходные (decision 10).
+              if (item.id === 'approvals' && profile?.is_weekend_responsible === true) return true;
               const pages = item.requiredPage ?? item.path;
               const pageList = Array.isArray(pages) ? pages : [pages];
               return pageList.some(page => canViewPage(page));

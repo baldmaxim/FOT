@@ -2508,6 +2508,60 @@
   color: var(--text-primary);
 }
 
+/* Тулбар вкладки «Выходные»: переключатель Отделы/Сотрудники + кнопка «Свободные» */
+.weekendToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.weekendModeToggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.weekendModeBtn {
+  padding: 6px 14px;
+  font-size: 13px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: none;
+  cursor: pointer;
+}
+
+.weekendModeBtn + .weekendModeBtn {
+  border-left: 1px solid var(--border);
+}
+
+.weekendModeBtnActive {
+  background: var(--accent);
+  color: #fff;
+}
+
+.weekendFreeBtn {
+  padding: 6px 14px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.weekendFreeBtn:hover {
+  background: var(--bg-elevated);
+}
+
+.weekendFreeBtnActive {
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .assignmentPanelList {
   display: flex;
   flex-direction: column;

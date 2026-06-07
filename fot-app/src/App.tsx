@@ -382,6 +382,10 @@ const AppRoutes = () => {
               </Layout>
             }
           />
+        </Route>
+
+        {/* «Согласования» доступны и назначенным ответственным за выходные (без /timesheet-hr). */}
+        <Route element={<ProtectedRoute requiredPage="/timesheet-hr" allowIfWeekendResponsible />}>
           <Route
             path="/approvals"
             element={

@@ -14,6 +14,7 @@ import { getRolePageAccess } from '../services/access-control.service.js';
 import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
 import { listManagedDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
+import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { TIMEKEEPER_ROLE_CODE, listTimekeeperAccessibleDepartmentIds, listTimekeeperDirectEmployeeIds } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
@@ -103,6 +104,12 @@ async function buildProfileResponse(
     ? (await listTimekeeperDirectEmployeeIds(profile.id)).length > 0
     : (profile.employee_id != null && (await listDirectSubordinates(profile.employee_id)).length > 0);
 
+  // Назначен ли ответственным за согласование выходных — для доступа к «Согласованиям»
+  // без общего права /timesheet-hr (decision 10).
+  const is_weekend_responsible = profile.employee_id != null
+    ? await isActiveWeekendResponsible(profile.employee_id)
+    : false;
+
   if (!role.is_admin && role.code !== TIMEKEEPER_ROLE_CODE && managed_department_ids.length > 0 && !page_access['/staff-control']?.can_view) {
     page_access['/staff-control'] = { can_view: true, can_edit: true };
   }
@@ -133,6 +140,7 @@ async function buildProfileResponse(
     department_id: departmentId,
     managed_department_ids,
     has_direct_reports,
+    is_weekend_responsible,
     supervisor_id: profile.supervisor_id,
     chat_inbound_mode: profile.chat_inbound_mode || 'open',
     imported_position: profile.imported_position,

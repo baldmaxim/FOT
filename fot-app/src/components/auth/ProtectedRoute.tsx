@@ -4,11 +4,14 @@ import { useAuth } from '../../contexts/AuthContext';
 
 interface ProtectedRouteProps {
   requiredPage?: string | string[];
+  /** Дополнительно пускать назначенного ответственного за выходные (decision 10). */
+  allowIfWeekendResponsible?: boolean;
   children?: React.ReactNode;
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   requiredPage,
+  allowIfWeekendResponsible,
   children,
 }) => {
   const {
@@ -20,6 +23,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     loading,
     employeeVariant,
     isAdmin,
+    profile,
   } = useAuth();
   const location = useLocation();
 
@@ -67,8 +71,9 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   }
 
   if (requiredPage) {
+    const weekendOk = allowIfWeekendResponsible && profile?.is_weekend_responsible === true;
     const pageList = Array.isArray(requiredPage) ? requiredPage : [requiredPage];
-    if (!pageList.some(page => canViewPage(page))) {
+    if (!weekendOk && !pageList.some(page => canViewPage(page))) {
       if (location.pathname.startsWith('/employee') && canViewPage('/employee')) {
         return <Navigate to="/employee" replace />;
       }
