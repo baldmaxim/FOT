@@ -23,6 +23,20 @@ describe('deriveCardW26', () => {
     expect(r.w26).toBe('122,57654');
   });
 
+  it('значимый байт оканчивается нулём — НЕ стрипать по полубайтам (1827549000000000)', () => {
+    const r = deriveCardW26('1827549000000000');
+    expect(r.value).toBe('275490');
+    expect(r.facility).toBe(0x27); // 39
+    expect(r.number).toBe(0x5490); // 21648
+    expect(r.w26).toBe('39,21648');
+  });
+
+  it('значимый байт оканчивается нулём (1823735000000000)', () => {
+    const r = deriveCardW26('1823735000000000');
+    expect(r.value).toBe('237350');
+    expect(r.w26).toBe('35,29520');
+  });
+
   it('готовый W26 (facility,number) парсится обратно в тот же value', () => {
     const r = deriveCardW26('168,15956');
     expect(r.value).toBe('A83E54');
@@ -44,7 +58,11 @@ describe('deriveCardW26', () => {
   });
 
   it('мусор без hex-символов → ошибка', () => {
-    expect(() => deriveCardW26('zzz')).toThrow(/Некорректный UID/);
+    expect(() => deriveCardW26('zzz')).toThrow(/Слишком короткий UID/);
+  });
+
+  it('слишком короткий UID → ошибка', () => {
+    expect(() => deriveCardW26('1827')).toThrow(/Слишком короткий UID/);
   });
 
   it('W26 с facility вне диапазона → ошибка', () => {

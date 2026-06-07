@@ -44,16 +44,14 @@ export function deriveCardW26(input: string): ICardW26 {
     return { value, facility, number, w26: `${facility},${number}` };
   }
 
-  // Сырой UID (hex).
+  // Сырой UID (hex). Ридер кадрирует как ведущий байт (0x18) + 3 байта value +
+  // хвостовые нулевые байты. value = байты 1..3 первых четырёх = hex[2..8].
+  // ВАЖНО: нельзя «стрипать хвостовые нули» по полубайтам — если значимый байт
+  // оканчивается нулём (напр. ...5490), это съест значащий ноль и сдвинет value.
   const hex = trimmed.toUpperCase().replace(/[^0-9A-F]/g, '');
-  if (!hex) {
-    throw new Error(`Некорректный UID: ${input}`);
+  if (hex.length < 8) {
+    throw new Error(`Слишком короткий UID (нужно ≥8 hex): ${input}`);
   }
-  const significant = hex.replace(/0+$/g, '');
-  const hex8 = significant.padStart(8, '0').slice(-8);
-  const value = hex8.slice(2); // отбросить ведущий байт (0x18)
-  if (value.length !== 6) {
-    throw new Error(`Не удалось вывести value из UID: ${input}`);
-  }
+  const value = hex.slice(2, 8); // отбросить ведущий байт, взять 3 байта value
   return valueToW26(value);
 }
