@@ -56,10 +56,31 @@ const parseEnvLastWins = (text: string): Record<string, string> => {
   return out;
 };
 
-const envFile = parseEnvLastWins(fs.readFileSync(path.resolve(__dirname, '../.env'), 'utf8'));
+// .env и CA на проде лежат в папке САЙТА (/srv/sites/...), а не в build-контексте
+// (/opt/fot-build). Локально — наоборот. Берём первый существующий путь; можно
+// переопределить флагами --env / --ca.
+const SITE_DIR = '/srv/sites/fot.su10.ru';
+const firstExisting = (paths: Array<string | null>): string | null => {
+  for (const p of paths) {
+    if (p && fs.existsSync(p)) return p;
+  }
+  return null;
+};
+
+const envPath = firstExisting([
+  flagValue('--env'),
+  path.resolve(__dirname, '../.env'),
+  path.join(SITE_DIR, 'fot-server/.env'),
+]);
+if (!envPath) {
+  console.error('Не найден .env (искал ../.env и папку сайта). Укажите --env <путь>.');
+  process.exit(1);
+}
+
+const envFile = parseEnvLastWins(fs.readFileSync(envPath, 'utf8'));
 const rawUrl = envFile.DATABASE_URL;
 if (!rawUrl) {
-  console.error('DATABASE_URL не найден в fot-server/.env');
+  console.error(`DATABASE_URL не найден в ${envPath}`);
   process.exit(1);
 }
 try {
@@ -70,7 +91,19 @@ try {
   process.env.DATABASE_URL = rawUrl;
 }
 process.env.DATABASE_SSL = 'true';
-process.env.DATABASE_SSL_CA_PATH = path.resolve(__dirname, '../../.migration/yandex-ca.pem');
+
+const caPath = firstExisting([
+  flagValue('--ca'),
+  envFile.DATABASE_SSL_CA_PATH || null,
+  path.resolve(__dirname, '../../.migration/yandex-ca.pem'),
+  path.join(SITE_DIR, '.migration/yandex-ca.pem'),
+]);
+if (!caPath) {
+  console.error('Не найден CA-сертификат (yandex-ca.pem). Укажите --ca <путь>.');
+  process.exit(1);
+}
+process.env.DATABASE_SSL_CA_PATH = caPath;
+console.error(`[debug] env: ${envPath}\n[debug] ca:  ${caPath}`);
 
 interface IPassRow {
   id: string;
