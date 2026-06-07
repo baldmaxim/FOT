@@ -447,10 +447,14 @@ export const contractorAdminService = {
   async rejectSubmission(id: string, comment?: string): Promise<void> {
     await apiClient.post(`/admin/contractor/submissions/${id}/reject`, { comment });
   },
-  async decideSubmissionItems(id: string, decisions: IDecideItem[]): Promise<IDecideResult> {
+  async decideSubmissionItems(
+    id: string,
+    decisions: IDecideItem[],
+    expiresAt?: string,
+  ): Promise<IDecideResult> {
     const r = await apiClient.post<ApiResponse<IDecideResult>>(
       `/admin/contractor/submissions/${id}/decide`,
-      { decisions },
+      { decisions, expires_at: expiresAt },
     );
     return r.data;
   },

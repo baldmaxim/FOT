@@ -17,6 +17,14 @@ const fmtSize = (bytes: number): string => {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 };
 
+/** Локальная YYYY-MM-DD (без сдвига по UTC). */
+const toYmd = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 interface IProps {
   submissionId: string;
   orgName: string;
@@ -75,6 +83,17 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   const [points, setPoints] = useState<Map<string, string[]>>(new Map());
   const [expandedPass, setExpandedPass] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Дата окончания пропуска (пишется в Sigur). Дефолт — сегодня +1 год, админ меняет.
+  const [expiresAt, setExpiresAt] = useState<string>(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 1);
+    return toYmd(d);
+  });
+  const minDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return toYmd(d);
+  }, []);
   // По умолчанию все pending-пропуска выбраны (если родитель не передал initialSelected).
   const [selectedPasses, setSelectedPasses] = useState<Set<string>>(initialSelected ?? new Set());
 
@@ -133,6 +152,10 @@ export const ApproveSubmissionModal: FC<IProps> = ({
       toast.error('Выберите пропуска для одобрения');
       return;
     }
+    if (!expiresAt || expiresAt < minDate) {
+      toast.error('Укажите дату окончания пропуска (в будущем)');
+      return;
+    }
     const decisions: IDecideItem[] = targets.map(r => ({
       pass_id: r.id,
       decision: 'approved',
@@ -140,7 +163,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
     }));
     setBusy(true);
     try {
-      const res = await contractorAdminService.decideSubmissionItems(submissionId, decisions);
+      const res = await contractorAdminService.decideSubmissionItems(submissionId, decisions, expiresAt);
       if (res.failed === 0) {
         toast.success(`Открыто пропусков: ${res.applied}`);
       } else {
@@ -290,6 +313,23 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {!loading && pendingRows.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+            <label htmlFor="pass-expires" style={{ color: 'var(--text-primary)' }}>
+              Срок действия пропуска до:
+            </label>
+            <input
+              id="pass-expires"
+              type="date"
+              value={expiresAt}
+              min={minDate}
+              onChange={e => setExpiresAt(e.target.value)}
+              disabled={busy}
+              style={{ padding: '4px 8px', fontSize: 16 }}
+            />
           </div>
         )}
 

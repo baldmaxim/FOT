@@ -1074,7 +1074,14 @@ export const contractorAdminController = {
           reason: z.string().trim().max(1000).optional(),
           access_point_names: z.array(z.string().trim().min(1)).optional(),
         })).min(1).max(500),
+        // Дата окончания пропуска (выбирает админ). Пишется в Sigur (срок привязки карты)
+        // и в contractor_passes.expires_at. Если не передана — дефолт привязки (+5 лет).
+        expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       }).parse(req.body);
+
+      const expIso = body.expires_at
+        ? new Date(`${body.expires_at}T23:59:59`).toISOString()
+        : undefined;
 
       const sub = await queryOne<{ id: string; status: string; org_department_id: string }>(
         'SELECT id, status, org_department_id FROM contractor_submissions WHERE id = $1::uuid',
@@ -1149,7 +1156,7 @@ export const contractorAdminController = {
               if (!pass.card_uid) {
                 throw new Error('нет UID карты');
               }
-              await assignSigurEmployeeCardBinding(pass.sigur_employee_id, [pass.card_uid], undefined, connection, true);
+              await assignSigurEmployeeCardBinding(pass.sigur_employee_id, [pass.card_uid], expIso, connection, true);
 
               await updateSigurEmployee(
                 pass.sigur_employee_id,
@@ -1168,9 +1175,10 @@ export const contractorAdminController = {
                         approval_status = 'approved',
                         is_active = true,
                         access_point_names = $1::text[],
+                        expires_at = COALESCE($3::date, expires_at),
                         updated_at = now()
                   WHERE id = $2::uuid`,
-                [names.length ? names : null, pass.id],
+                [names.length ? names : null, pass.id, body.expires_at ?? null],
               );
               // Привязываем одобрение к открытой строке владельца.
               await client.query(

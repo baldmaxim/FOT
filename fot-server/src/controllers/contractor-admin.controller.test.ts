@@ -242,3 +242,78 @@ describe('contractorAdminController.approveSubmission', () => {
     expect(body.data.failed).toBe(1);
   });
 });
+
+describe('contractorAdminController.decideSubmission — срок действия', () => {
+  const PASS_ID = '11111111-1111-1111-1111-111111111111';
+  const makeDecideReq = (bodyObj: unknown) => ({
+    user: { id: 'admin-1', company_scope: { roots: 'all' } },
+    params: { id: 'sub-1' },
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+    body: bodyObj,
+  }) as never;
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.bgConn.mockResolvedValue('external');
+    h.isDryRun.mockReturnValue(false);
+    h.execute.mockResolvedValue(1);
+    h.logFromRequest.mockResolvedValue(undefined);
+    h.resolveAP.mockResolvedValue({ accessPointIds: [], unmatchedNames: [] });
+    h.withTransaction.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) =>
+      fn({ query: vi.fn().mockResolvedValue({ rows: [] }) }),
+    );
+  });
+
+  it('expires_at прокидывается в привязку карты (ISO) и в UPDATE пропуска', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' }) // submission
+      .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' }); // counts
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+    ]);
+
+    let txCalls: unknown[][] = [];
+    h.withTransaction.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      const q = vi.fn().mockResolvedValue({ rows: [] });
+      const r = await fn({ query: q });
+      txCalls = txCalls.concat(q.mock.calls);
+      return r;
+    });
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved' }], expires_at: '2027-01-15' }),
+      res as never,
+    );
+
+    const expIso = new Date('2027-01-15T23:59:59').toISOString();
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true);
+
+    const passUpd = txCalls.find(c => String(c[0]).includes('UPDATE contractor_passes'));
+    expect(passUpd).toBeTruthy();
+    expect(String(passUpd?.[0])).toContain('expires_at = COALESCE');
+    expect((passUpd?.[1] as unknown[])).toContain('2027-01-15');
+  });
+
+  it('без expires_at — привязка с undefined (дефолт +5 лет), expires_at не перетирается', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
+      .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+    ]);
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved' }] }),
+      res as never,
+    );
+
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], undefined, 'external', true);
+  });
+});
