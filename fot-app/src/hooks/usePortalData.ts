@@ -5,6 +5,7 @@ import { paymentService } from '../services/paymentService';
 import { payslipService } from '../services/payslipService';
 import { employeeService } from '../services/employeeService';
 import { dailyTaskService } from '../services/dailyTaskService';
+import { testsService } from '../services/testsService';
 
 export const getMyPayslipsQueryKey = () => ['my-payslips'] as const;
 export const getMyPaymentsQueryKey = () => ['my-payments'] as const;
@@ -14,6 +15,7 @@ export const getLeaveRequestsManageQueryKey = (scope: 'department' | 'all', filt
 export const getEmployeeHistoryQueryKey = (employeeId: number | null) => ['employee-history', employeeId] as const;
 export const getMyDailyTasksQueryKey = () => ['my-daily-tasks'] as const;
 export const getTodayDailyTaskQueryKey = () => ['today-daily-task'] as const;
+export const getAvailableTestsQueryKey = () => ['available-tests'] as const;
 
 export const useMyPayslips = () => useQuery({
   queryKey: getMyPayslipsQueryKey(),
@@ -67,6 +69,12 @@ export const useTodayDailyTask = () => useQuery({
   queryKey: getTodayDailyTaskQueryKey(),
   queryFn: () => dailyTaskService.getToday(),
   staleTime: 30_000,
+});
+
+export const useAvailableTests = () => useQuery({
+  queryKey: getAvailableTestsQueryKey(),
+  queryFn: () => testsService.getAvailable(),
+  staleTime: 60_000,
 });
 
 export const useEmployeeHistory = (employeeId: number | null, enabled = true) => useQuery({

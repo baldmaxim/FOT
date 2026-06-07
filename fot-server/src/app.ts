@@ -39,6 +39,8 @@ import contractorRoutes from './routes/contractor.routes.js';
 import contractorAdminRoutes from './routes/contractor-admin.routes.js';
 import mtsRoutes from './routes/mts.routes.js';
 import presenceRoutes from './routes/presence.routes.js';
+import feedbackRoutes from './routes/feedback.routes.js';
+import testsRoutes from './routes/tests.routes.js';
 
 const app = express();
 
@@ -126,6 +128,8 @@ app.use('/api/contractor', contractorRoutes);
 app.use('/api/admin/contractor', contractorAdminRoutes);
 app.use('/api/mts', mtsRoutes);
 app.use('/api/presence', presenceRoutes);
+app.use('/api/feedback', feedbackRoutes);
+app.use('/api/tests', testsRoutes);
 
 // 404 handler
 app.use((_req, res) => {

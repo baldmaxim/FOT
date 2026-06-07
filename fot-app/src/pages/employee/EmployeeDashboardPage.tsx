@@ -18,6 +18,8 @@ import { LeaveRequestRow } from '../../components/dashboard/LeaveRequestRow';
 const EmployeeInfoCard = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCard })));
 const SecurityCard = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.SecurityCard })));
 const DailyTasksCard = lazy(() => import('../../components/dashboard/DailyTasksCard').then(m => ({ default: m.DailyTasksCard })));
+const FeedbackCard = lazy(() => import('../../components/dashboard/FeedbackCard').then(m => ({ default: m.FeedbackCard })));
+const TestPromptCard = lazy(() => import('../../components/dashboard/TestPromptCard').then(m => ({ default: m.TestPromptCard })));
 const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
 const DayDetailPanel = lazy(() => import('../../components/dashboard/DayDetailPanel').then(m => ({ default: m.DayDetailPanel })));
@@ -541,7 +543,7 @@ export const EmployeeDashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Правая узкая колонка: Информация → Задачи → Безопасность */}
+        {/* Правая узкая колонка: Информация → Тест → Задачи → Обратная связь → Безопасность */}
         <div className={styles.rightCol}>
           <Suspense fallback={DashboardCardFallback}>
             <EmployeeInfoCard
@@ -551,8 +553,14 @@ export const EmployeeDashboardPage: React.FC = () => {
               schedule={schedule}
             />
           </Suspense>
+          <Suspense fallback={null}>
+            <TestPromptCard />
+          </Suspense>
           <Suspense fallback={DashboardCardFallback}>
             <DailyTasksCard />
+          </Suspense>
+          <Suspense fallback={DashboardCardFallback}>
+            <FeedbackCard />
           </Suspense>
           <Suspense fallback={DashboardCardFallback}>
             <SecurityCard

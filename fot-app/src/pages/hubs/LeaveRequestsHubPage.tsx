@@ -1,9 +1,10 @@
 import { lazy, useMemo, type FC } from 'react';
-import { ClipboardCheck, DollarSign } from 'lucide-react';
+import { ClipboardCheck, MessageSquare } from 'lucide-react';
 import { HubShell, type IHubTab } from '../../components/hub/HubShell';
 
 const LeaveRequestsManagePage = lazy(() => import('../LeaveRequestsManagePage').then(m => ({ default: m.LeaveRequestsManagePage })));
-const SalaryRaiseReviewPage = lazy(() => import('../SalaryRaiseReviewPage').then(m => ({ default: m.SalaryRaiseReviewPage })));
+const FeedbackReviewPage = lazy(() => import('../FeedbackReviewPage').then(m => ({ default: m.FeedbackReviewPage })));
+// Вкладка «Повышение оклада» скрыта (SalaryRaiseReviewPage сохранён, маршрут /salary-raise-review активен).
 
 export const LeaveRequestsHubPage: FC = () => {
   const tabs = useMemo<IHubTab[]>(() => [
@@ -15,11 +16,11 @@ export const LeaveRequestsHubPage: FC = () => {
       render: () => <LeaveRequestsManagePage />,
     },
     {
-      key: 'salary-raise',
-      label: 'Повышение оклада',
-      accessPath: '/salary-raise-review',
-      icon: DollarSign,
-      render: () => <SalaryRaiseReviewPage />,
+      key: 'feedback',
+      label: 'Обратная связь',
+      accessPath: '/feedback-review',
+      icon: MessageSquare,
+      render: () => <FeedbackReviewPage />,
     },
   ], []);
 
