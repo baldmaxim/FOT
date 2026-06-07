@@ -24,6 +24,7 @@ BUILD_CLEAN_HARD="${BUILD_CLEAN_HARD:-0}"
 FRONTEND_NPM_CI="${FRONTEND_NPM_CI:-auto}"
 BACKEND_NPM_CI="${BACKEND_NPM_CI:-auto}"
 BACKEND_SOURCEMAPS="${BACKEND_SOURCEMAPS:-0}"
+FORCE_BACKEND="${FORCE_BACKEND:-0}"
 DATA_API_PIP_INSTALL="${DATA_API_PIP_INSTALL:-auto}"
 
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
@@ -65,6 +66,7 @@ Environment:
   FRONTEND_NPM_CI=auto|1|0
   BACKEND_NPM_CI=auto|1|0
   BACKEND_SOURCEMAPS=1
+  FORCE_BACKEND=1              # пересобрать+рестартить backend даже без изменений fot-server/
   DATA_API_PIP_INSTALL=auto|1|0
   SKIP_VERIFY=1
 
@@ -331,7 +333,26 @@ site_deps_stale() {
   return 1
 }
 
+# True когда backend нужно пересобрать и перезапустить. False — когда нового
+# кода нет (типичный ежечасный no-op деплой): пропуск избегает лишнего рестарта
+# единственного fork-процесса PM2 и связанного с ним окна 502.
+backend_changed() {
+  [[ "$FORCE_BACKEND" == "1" ]] && return 0
+  pm2 describe fot-server >/dev/null 2>&1 || return 0          # процесс не запущен → деплоим
+  test -f "$SITE_DIR/fot-server/dist/index.js" || return 0      # билд не опубликован → деплоим
+  [[ -z "$BEFORE" || -z "$AFTER" ]] && return 0                 # отпечаток неизвестен → деплоим
+  [[ "$BEFORE" == "$AFTER" ]] && return 1                       # коммит не двигался → пропуск
+  # Коммит сменился: деплоим только если затронут backend (вкл. ecosystem.config.cjs).
+  git -C "$BUILD_DIR" diff --name-only "$BEFORE" "$AFTER" -- fot-server | grep -q . && return 0
+  return 1
+}
+
 deploy_backend() {
+  if ! backend_changed; then
+    log "Backend без изменений (${BEFORE:-none} -> ${AFTER:-none}) — пропускаю пересборку/рестарт."
+    return 0
+  fi
+
   local app_dir="$BUILD_DIR/fot-server"
   local site_dir="$SITE_DIR/fot-server"
   log "Собираю backend в BUILD_DIR..."
@@ -361,6 +382,9 @@ deploy_backend() {
   log "Публикую backend в SITE_DIR..."
   cp "$app_dir/package.json" "$site_dir/package.json"
   cp "$app_dir/package-lock.json" "$site_dir/package-lock.json"
+  # ecosystem публикуем в SITE_DIR: иначе wait_ready/listen_timeout/kill_timeout
+  # не попадут в рантайм PM2. __dirname внутри файла → site_dir/fot-server.
+  cp "$app_dir/ecosystem.config.cjs" "$site_dir/ecosystem.config.cjs"
 
   if site_deps_stale "$site_dir/node_modules" "$BACKEND_NPM_CI" fot-server/package-lock.json; then
     log "Обновляю prod-зависимости backend в SITE_DIR..."
@@ -369,11 +393,10 @@ deploy_backend() {
 
   publish_dir "$app_dir/dist" "$site_dir/dist"
 
-  if pm2 describe fot-server >/dev/null 2>&1; then
-    pm2 restart fot-server --update-env
-  else
-    pm2 start "$site_dir/dist/index.js" --name fot-server --cwd "$site_dir"
-  fi
+  # Рестарт через ecosystem-файл: startOrReload перечитывает конфиг и применяет
+  # wait_ready/listen_timeout (обычный pm2 restart их не подхватывает). Первичную
+  # чистую активацию параметров делаем разово вручную: pm2 delete + pm2 start.
+  pm2 startOrReload "$site_dir/ecosystem.config.cjs" --update-env
 }
 
 deploy_frontend() {

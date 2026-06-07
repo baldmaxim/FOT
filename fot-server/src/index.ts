@@ -67,6 +67,9 @@ httpServer.listen(PORT, HOST, () => {
   console.log(`FOT Server running on ${HOST}:${PORT}`);
   console.log(`Environment: ${env.NODE_ENV} (IS_PRODUCTION=${IS_PRODUCTION})`);
   console.log(`CORS Origin: ${corsAllowedOrigins.join(', ')}`);
+  // Сигнал PM2 (wait_ready): апстрим начал слушать порт — можно слать трафик.
+  // Вне PM2 process.send undefined → no-op.
+  process.send?.('ready');
   console.log('Socket.IO enabled');
   startPoolTelemetry();
   if (!IS_PRODUCTION && env.NODE_ENV !== 'test') {

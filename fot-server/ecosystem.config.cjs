@@ -35,6 +35,12 @@ module.exports = {
       // PM2 шлёт SIGINT и ждёт kill_timeout перед SIGKILL.
       kill_timeout: 12000,
 
+      // PM2 считает процесс готовым только после process.send('ready')
+      // (см. index.ts после httpServer.listen), а не сразу при старте —
+      // апстрим помечается online лишь когда реально слушает порт.
+      wait_ready: true,
+      listen_timeout: 10000,
+
       // NODE_ENV намеренно НЕ задаём здесь — берётся из .env (как сейчас).
       // Если решите фиксировать в PM2 — добавьте env: { NODE_ENV: 'production' }.
     },
