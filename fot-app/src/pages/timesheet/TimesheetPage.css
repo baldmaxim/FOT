@@ -2396,7 +2396,8 @@
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 50;
+  /* Выше sticky-шапки таблицы (объекты 80/90, сотрудники 40), но ниже модалок (1100+). */
+  z-index: 200;
   width: 340px;
   max-width: calc(100vw - 24px);
   padding: 12px;
@@ -2516,7 +2517,7 @@
     max-width: none;
     border-radius: 16px 16px 0 0;
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.25);
-    z-index: 100;
+    z-index: 200;
     max-height: 75vh;
     overflow-y: auto;
   }
