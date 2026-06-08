@@ -366,6 +366,24 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
+    // Вложения заявления редактируются только пока заявка не согласована —
+    // после approve/reject/cancel файлы менять нельзя (защита от правки автором).
+    const leaveLink = await queryOne<{ entity_id: string | null }>(
+      `SELECT entity_id FROM document_links
+        WHERE document_id = $1 AND entity_type = 'leave_request' LIMIT 1`,
+      [id],
+    );
+    if (leaveLink?.entity_id) {
+      const lr = await queryOne<{ status: string }>(
+        `SELECT status FROM leave_requests WHERE id = $1`,
+        [leaveLink.entity_id],
+      );
+      if (lr && lr.status !== 'pending') {
+        res.status(409).json({ success: false, error: 'Нельзя изменять вложения обработанной заявки' });
+        return;
+      }
+    }
+
     if (await r2Service.isEnabledAsync()) {
       try {
         await r2Service.deleteObject(doc.r2_key);

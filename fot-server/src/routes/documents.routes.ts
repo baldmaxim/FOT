@@ -44,14 +44,14 @@ router.get(
 // GET /api/documents/:id/download — скачать
 router.get(
   '/:id/download',
-  requireAnyPageAccess(['/employee/documents', '/staff-control'], 'view'),
+  requireAnyPageAccess(['/employee/documents', '/employee/requests', '/staff-control', '/leave-requests'], 'view'),
   documentsController.getDownloadUrl
 );
 
 // DELETE /api/documents/:id — удалить
 router.delete(
   '/:id',
-  requireAnyPageAccess(['/employee/documents', '/staff-control'], 'edit'),
+  requireAnyPageAccess(['/employee/documents', '/employee/requests', '/staff-control'], 'edit'),
   documentsController.remove
 );
 

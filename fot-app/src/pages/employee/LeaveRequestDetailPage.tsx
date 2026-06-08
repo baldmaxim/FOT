@@ -1,7 +1,7 @@
-import { type FC, useState } from 'react';
+import { type FC, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Download, Clock, CheckCircle, XCircle, Ban, FileText, Image as ImageIcon } from 'lucide-react';
+import { ArrowLeft, Download, Clock, CheckCircle, XCircle, Ban, FileText, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
@@ -43,6 +43,10 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / 1024 / 1024).toFixed(2)} МБ`;
 };
 
+const ALLOWED_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 МБ
+const ACCEPT_ATTR = '.pdf,application/pdf,image/jpeg,image/png';
+
 export const LeaveRequestDetailPage: FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -65,6 +69,46 @@ export const LeaveRequestDetailPage: FC = () => {
   const request = requestQuery.data;
   const attachments = attachmentsQuery.data ?? [];
   const [previewDoc, setPreviewDoc] = useState<IDocument | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const canEditAttachments = !!request && request.status === 'pending';
+
+  const handleAddFiles = async (incoming: FileList | null) => {
+    if (!incoming || !request) return;
+    const valid: File[] = [];
+    for (const file of Array.from(incoming)) {
+      if (!ALLOWED_MIMES.includes(file.type)) { showToast('error', `${file.name}: разрешены только PDF, JPG, PNG`); continue; }
+      if (file.size > MAX_FILE_SIZE) { showToast('error', `${file.name}: превышает 10 МБ`); continue; }
+      valid.push(file);
+    }
+    if (valid.length === 0) return;
+    setUploading(true);
+    try {
+      const results = await Promise.allSettled(
+        valid.map(file => documentService.uploadFile(file, request.employee_id, 'leave_request_attachment', request.id)),
+      );
+      const failed = results.filter(r => r.status === 'rejected').length;
+      await queryClient.invalidateQueries({ queryKey: ['leave-request-attachments', requestId] });
+      if (failed > 0) showToast('warning', `${failed} файл(ов) не загрузились`);
+      else showToast('success', 'Файл добавлен');
+    } catch {
+      showToast('error', 'Не удалось загрузить файл');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDelete = async (doc: IDocument) => {
+    if (!confirm(`Удалить файл «${displayFileName(doc.file_name)}»?`)) return;
+    try {
+      await documentService.remove(doc.id);
+      await queryClient.invalidateQueries({ queryKey: ['leave-request-attachments', requestId] });
+      showToast('success', 'Файл удалён');
+    } catch {
+      showToast('error', 'Не удалось удалить файл');
+    }
+  };
 
   const today = new Date().toLocaleDateString('en-CA');
   const isPast = request
@@ -232,10 +276,39 @@ export const LeaveRequestDetailPage: FC = () => {
                     >
                       <Download size={16} />
                     </button>
+                    {canEditAttachments && (
+                      <button
+                        className="lr-attachment-download"
+                        onClick={e => { e.stopPropagation(); handleDelete(doc); }}
+                        aria-label="Удалить"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </div>
                 );
               })}
             </div>
+          )}
+          {canEditAttachments && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ACCEPT_ATTR}
+                style={{ display: 'none' }}
+                onChange={e => { handleAddFiles(e.target.files); e.target.value = ''; }}
+              />
+              <button
+                type="button"
+                className="lr-attachment-add"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+              >
+                <Plus size={16} /> {uploading ? 'Загрузка...' : 'Добавить файл'}
+              </button>
+            </>
           )}
         </section>
 

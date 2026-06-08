@@ -201,6 +201,7 @@
   gap: 16px;
   margin-bottom: 20px;
   flex-wrap: wrap;
+  max-width: 640px;
 }
 
 .lr-detail-dates {
@@ -364,10 +365,36 @@
   color: var(--text-primary);
 }
 
+.lr-attachment-add {
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  min-height: 40px;
+  border: 1px dashed var(--border-color, var(--border, #d0d0d0));
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lr-attachment-add:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.lr-attachment-add:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .lr-detail-actions {
   display: flex;
   gap: 12px;
   justify-content: flex-end;
+  max-width: 640px;
 }
 
 @media (max-width: 600px) {
