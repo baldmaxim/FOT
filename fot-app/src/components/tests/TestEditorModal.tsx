@@ -1,8 +1,10 @@
-import { type FC, useEffect, useState } from 'react';
+import { type FC, useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, X } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { useManagedDepartments } from '../../hooks/useManagedDepartments';
+import { useStructureTree } from '../../hooks/useStructure';
+import { buildSu10DepartmentTree } from '../../utils/departmentUtils';
+import { DepartmentTreeMultiSelect } from '../staff/DepartmentTreeMultiSelect';
 import { testsService, type QuestionType } from '../../services/testsService';
 import styles from './TestManagement.module.css';
 
@@ -36,7 +38,11 @@ const localToIso = (local: string): string | null => (local ? new Date(local).to
 
 export const TestEditorModal: FC<IProps> = ({ testId, onClose, onSaved }) => {
   const { showToast } = useToast();
-  const { managedDepartments } = useManagedDepartments();
+  const structure = useStructureTree();
+  const su10Tree = useMemo(
+    () => buildSu10DepartmentTree(structure.data?.departments ?? []),
+    [structure.data],
+  );
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -78,12 +84,6 @@ export const TestEditorModal: FC<IProps> = ({ testId, onClose, onSaved }) => {
 
   const patchQuestion = (i: number, patch: Partial<IQuestionDraft>) =>
     setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, ...patch } : q));
-
-  const toggleDept = (id: string) => setDepartmentIds(prev => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
 
   const handleSave = async () => {
     if (!title.trim()) { showToast('error', 'Укажите название теста'); return; }
@@ -162,15 +162,13 @@ export const TestEditorModal: FC<IProps> = ({ testId, onClose, onSaved }) => {
 
             <div className={styles.field}>
               <span className={styles.label}>Назначить отделам</span>
-              <div className={styles.deptList}>
-                {managedDepartments.map(d => (
-                  <label key={d.id} className={styles.deptItem}>
-                    <input type="checkbox" checked={departmentIds.has(d.id)} onChange={() => toggleDept(d.id)} />
-                    <span>{d.name}</span>
-                  </label>
-                ))}
-                {!managedDepartments.length && <span className={styles.empty}>Нет доступных отделов</span>}
-              </div>
+              <DepartmentTreeMultiSelect
+                nodes={su10Tree}
+                value={[...departmentIds]}
+                onChange={ids => setDepartmentIds(new Set(ids))}
+                isLoading={structure.isPending}
+                placeholder="Выберите отделы (можно «ООО СУ-10» целиком)…"
+              />
             </div>
 
             <div className={styles.questions}>

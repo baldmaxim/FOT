@@ -64,37 +64,40 @@
 
 .body {
   display: flex;
+  flex-direction: column;
   gap: 16px;
   padding: 20px;
   overflow: auto;
   flex: 1;
 }
 
+/* Навигация по вопросам — горизонтальной лентой над вопросом. */
 .nav {
-  flex-shrink: 0;
-  width: 110px;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
 }
 
 .counter {
   font-size: 14px;
   font-weight: 700;
   color: var(--accent);
-  text-align: center;
+  flex-shrink: 0;
 }
 
+/* Кнопки вопросов: при нехватке ширины переносятся во 2-й (и далее) ряд. */
 .navList {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .navItem {
-  position: relative;
-  aspect-ratio: 1;
-  min-height: 36px;
+  width: 38px;
+  height: 38px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--bg-primary);
@@ -107,21 +110,18 @@
   justify-content: center;
 }
 
+/* Отвеченные — зелёные с контуром, без галочки. */
+.navDone {
+  background: transparent;
+  border-color: var(--success, #2e9e54);
+  color: var(--success, #2e9e54);
+}
+
+/* Активный вопрос — акцентный контур (имеет приоритет над .navDone). */
 .navActive {
   border-color: var(--accent);
+  color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent) inset;
-}
-
-.navDone {
-  background: var(--accent-muted);
-  border-color: var(--accent);
-}
-
-.navCheck {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  color: var(--success, #2e9e54);
 }
 
 .main {
@@ -345,29 +345,8 @@
 }
 
 @media (max-width: 640px) {
-  .body {
-    flex-direction: column;
-  }
-
-  .nav {
-    width: 100%;
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .counter {
-    flex-shrink: 0;
-  }
-
-  .navList {
-    display: flex;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    grid-template-columns: none;
-  }
-
   .navItem {
-    min-width: 38px;
+    width: 34px;
+    height: 34px;
   }
 }

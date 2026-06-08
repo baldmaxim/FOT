@@ -257,7 +257,7 @@ export const TestTakingModal: FC<IProps> = ({ testId, onClose }) => {
             </div>
 
             <div className={styles.body}>
-              <aside className={styles.nav}>
+              <div className={styles.nav}>
                 <div className={styles.counter}>{answeredCount}/{total}</div>
                 <div className={styles.navList}>
                   {test.questions.map((qq, i) => {
@@ -269,13 +269,12 @@ export const TestTakingModal: FC<IProps> = ({ testId, onClose }) => {
                         className={`${styles.navItem} ${i === current ? styles.navActive : ''} ${done ? styles.navDone : ''}`}
                         onClick={() => setCurrent(i)}
                       >
-                        <span>{i + 1}</span>
-                        {done && <Check size={12} className={styles.navCheck} />}
+                        {i + 1}
                       </button>
                     );
                   })}
                 </div>
-              </aside>
+              </div>
 
               <section className={styles.main}>
                 {q && renderQuestion(q)}

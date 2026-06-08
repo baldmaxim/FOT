@@ -1,11 +1,12 @@
-import { type FC, lazy, Suspense, useMemo, useState } from 'react';
+import { type FC, lazy, type ReactNode, Suspense, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Settings, Trash2 } from 'lucide-react';
+import { Settings, Trash2, X } from 'lucide-react';
 import { feedbackService, type FeedbackKind, type IDepartmentStat } from '../services/feedbackService';
-import { testsService } from '../services/testsService';
+import { testsService, type ITestResponseRow } from '../services/testsService';
 import { useStructureTree } from '../hooks/useStructure';
 import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
-import { findDepartmentName } from '../utils/departmentUtils';
+import { findSu10CompanyNode, collectDepartmentIds } from '../utils/departmentUtils';
+import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
 import { useToast } from '../contexts/ToastContext';
 import type { OrgDepartmentNode } from '../types/organization';
 import styles from './FeedbackReviewPage.module.css';
@@ -28,68 +29,54 @@ const fmtDate = (iso: string | null): string =>
 
 const fmtDay = (d: string): string => new Date(d).toLocaleDateString('ru-RU');
 
-// Узел компании «(СУ-10) ООО СУ-10» в дереве: прямой потомок синтетического
-// корня (kind='object') с именем, содержащим «СУ-10». Возвращает узел или null.
-const SU10_RE = /су-?10/i;
-const findSu10Node = (nodes: OrgDepartmentNode[]): OrgDepartmentNode | null => {
-  for (const n of nodes) {
-    if (n.kind !== 'object' && SU10_RE.test(n.name)) return n;
-    if (n.children?.length) {
-      const found = findSu10Node(n.children);
-      if (found) return found;
-    }
-  }
-  return null;
-};
+// id отделов (kind='department') внутри «(СУ-10) ООО СУ-10».
+const useSu10DeptIds = (tree?: OrgDepartmentNode[]): Set<string> => useMemo(() => {
+  if (!tree) return new Set<string>();
+  const node = findSu10CompanyNode(tree);
+  return node ? new Set(collectDepartmentIds(node)) : new Set<string>();
+}, [tree]);
 
-// Все id потомков-отделов (kind='department') узла компании, без бригад/объектов
-// и без самого узла компании.
-const collectDeptIds = (node: OrgDepartmentNode, out: Set<string>): void => {
-  node.children?.forEach(c => {
-    if (c.kind === 'department') out.add(c.id);
-    collectDeptIds(c, out);
-  });
-};
-
-// Панель статистики по отделам (для выбранного отдела / вкладки Тесты).
-const StatsPanel: FC<{ stats: IDepartmentStat[]; verb: string }> = ({ stats, verb }) => {
-  if (!stats.length) return null;
+// ---- Общая модалка детализации по отделу ----
+const DeptDetailModal: FC<{ title: string; onClose: () => void; children: ReactNode }> = ({ title, onClose, children }) => {
+  const overlay = useOverlayDismiss(onClose);
   return (
-    <div className={styles.stats}>
-      {stats.map(s => (
-        <div key={s.department_id ?? s.department_name} className={styles.statItem}>
-          <span className={styles.statDept}>{s.department_name}</span>
-          <span className={styles.statValue}>{s.filled}/{s.total} {verb}</span>
+    <div className={styles.overlay}
+      onMouseDown={overlay.onMouseDown} onMouseUp={overlay.onMouseUp} onMouseLeave={overlay.onMouseLeave}
+      onTouchStart={overlay.onTouchStart} onTouchEnd={overlay.onTouchEnd}>
+      <div className={styles.modal} role="dialog" aria-modal="true">
+        <div className={styles.modalHead}>
+          <h3 className={styles.modalTitle}>{title}</h3>
+          <button className={styles.modalClose} onClick={onClose} aria-label="Закрыть"><X size={20} /></button>
         </div>
-      ))}
+        <div className={styles.modalBody}>{children}</div>
+      </div>
     </div>
   );
 };
 
-// Сводка по отделам СУ-10 в 5 столбцов (по 2 отдела в строке).
-const Su10StatsTable: FC<{ rows: IDepartmentStat[] }> = ({ rows }) => {
+// ---- Сводка отделов СУ-10 (5 столбцов), отделы кликабельны ----
+const Su10StatsTable: FC<{ rows: IDepartmentStat[]; verb: string; onSelect: (s: IDepartmentStat) => void }> = ({ rows, verb, onSelect }) => {
   const pairs = useMemo(() => {
     const out: Array<[IDepartmentStat, IDepartmentStat | null]> = [];
     for (let i = 0; i < rows.length; i += 2) out.push([rows[i], rows[i + 1] ?? null]);
     return out;
   }, [rows]);
 
-  if (!rows.length) return null;
+  if (!rows.length) return <div className={styles.empty}>Нет отделов</div>;
   return (
     <table className={styles.statTable}>
       <thead>
-        <tr>
-          <th>№</th><th>Отдел</th><th>Заполнили</th><th>Отдел</th><th>Заполнили</th>
-        </tr>
+        <tr><th>№</th><th>Отдел</th><th>{verb}</th><th>Отдел</th><th>{verb}</th></tr>
       </thead>
       <tbody>
         {pairs.map(([a, b], i) => (
           <tr key={a.department_id ?? i}>
             <td>{i + 1}</td>
-            <td>{a.department_name}</td>
+            <td className={styles.deptCell} onClick={() => onSelect(a)}>{a.department_name}</td>
             <td>{a.filled}/{a.total}</td>
-            <td>{b?.department_name ?? ''}</td>
-            <td>{b ? `${b.filled}/${b.total}` : ''}</td>
+            {b
+              ? <><td className={styles.deptCell} onClick={() => onSelect(b)}>{b.department_name}</td><td>{b.filled}/{b.total}</td></>
+              : <><td></td><td></td></>}
           </tr>
         ))}
       </tbody>
@@ -97,30 +84,22 @@ const Su10StatsTable: FC<{ rows: IDepartmentStat[] }> = ({ rows }) => {
   );
 };
 
+// ---- Панель фильтров (дерево отдела + даты, опц. поиск ФИО) ----
 interface IFilterBarProps {
-  q: string; onQ: (v: string) => void;
   from: string; onFrom: (v: string) => void;
   to: string; onTo: (v: string) => void;
-  // Дерево отделов для фильтра (если передано — рендерим DepartmentTreeSelect).
-  tree?: OrgDepartmentNode[];
-  treeLoading?: boolean;
-  treeError?: boolean;
+  q?: string; onQ?: (v: string) => void;
+  tree?: OrgDepartmentNode[]; treeLoading?: boolean; treeError?: boolean;
   department?: string; onDepartment?: (v: string) => void;
 }
 
-const FilterBar: FC<IFilterBarProps> = ({ q, onQ, from, onFrom, to, onTo, tree, treeLoading, treeError, department, onDepartment }) => (
+const FilterBar: FC<IFilterBarProps> = ({ from, onFrom, to, onTo, q, onQ, tree, treeLoading, treeError, department, onDepartment }) => (
   <div className={styles.filters}>
-    <input className={styles.search} placeholder="Поиск по ФИО" value={q} onChange={e => onQ(e.target.value)} />
+    {onQ && <input className={styles.search} placeholder="Поиск по ФИО" value={q ?? ''} onChange={e => onQ(e.target.value)} />}
     {tree && onDepartment && (
       <div className={styles.deptSelect}>
-        <DepartmentTreeSelect
-          departments={tree}
-          value={department ?? ''}
-          onChange={onDepartment}
-          isLoading={treeLoading}
-          isError={treeError}
-          showAllOption
-        />
+        <DepartmentTreeSelect departments={tree} value={department ?? ''} onChange={onDepartment}
+          isLoading={treeLoading} isError={treeError} showAllOption />
       </div>
     )}
     <input className={styles.date} type="date" value={from} onChange={e => onFrom(e.target.value)} />
@@ -130,64 +109,70 @@ const FilterBar: FC<IFilterBarProps> = ({ q, onQ, from, onFrom, to, onTo, tree, 
 
 // ---- Вкладка «Задачи» ----
 const TasksTab: FC = () => {
-  const [q, setQ] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [department, setDepartment] = useState('');
+  const [modalDept, setModalDept] = useState<{ id: string; name: string } | null>(null);
 
   const structure = useStructureTree();
   const tree = structure.data?.departments;
+  const su10Ids = useSu10DeptIds(tree);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['fb-tasks', q, from, to, department],
-    queryFn: () => feedbackService.listTasks({ q, from, to, department }),
+  const { data } = useQuery({
+    queryKey: ['fb-tasks-stats', from, to, department],
+    queryFn: () => feedbackService.listTasks({ from, to, department }),
     staleTime: 30_000,
   });
 
-  // Отделы внутри «(СУ-10) ООО СУ-10», без бригад — для сводной таблицы.
-  const su10Rows = useMemo(() => {
-    if (!tree) return [];
-    const node = findSu10Node(tree);
-    if (!node) return [];
-    const ids = new Set<string>();
-    collectDeptIds(node, ids);
-    return (data?.stats ?? [])
-      .filter(s => s.department_id && ids.has(s.department_id))
-      .sort((a, b) => a.department_name.localeCompare(b.department_name, 'ru'));
-  }, [tree, data]);
-
-  const selectedStat = useMemo(
-    () => (department ? (data?.stats ?? []).filter(s => s.department_id === department) : []),
-    [department, data],
-  );
+  const rows = useMemo(() => (data?.stats ?? [])
+    .filter(s => s.department_id && su10Ids.has(s.department_id))
+    .filter(s => !department || s.department_id === department)
+    .sort((a, b) => a.department_name.localeCompare(b.department_name, 'ru')),
+  [data, su10Ids, department]);
 
   return (
     <div className={styles.tabBody}>
-      <FilterBar q={q} onQ={setQ} from={from} onFrom={setFrom} to={to} onTo={setTo}
+      <FilterBar from={from} onFrom={setFrom} to={to} onTo={setTo}
         tree={tree} treeLoading={structure.isPending} treeError={structure.isError}
         department={department} onDepartment={setDepartment} />
+      <Su10StatsTable rows={rows} verb="Заполнили" onSelect={s => s.department_id && setModalDept({ id: s.department_id, name: s.department_name })} />
 
-      {department === ''
-        ? <Su10StatsTable rows={su10Rows} />
-        : <StatsPanel stats={selectedStat} verb="заполнили" />}
+      {modalDept && (
+        <DeptDetailModal title={modalDept.name} onClose={() => setModalDept(null)}>
+          <DeptTasksContent departmentId={modalDept.id} from={from} to={to} />
+        </DeptDetailModal>
+      )}
+    </div>
+  );
+};
 
+// Содержимое модалки «Задачи отдела» — серверная выборка с поиском по ФИО.
+const DeptTasksContent: FC<{ departmentId: string; from: string; to: string }> = ({ departmentId, from, to }) => {
+  const [q, setQ] = useState('');
+  const { data, isLoading } = useQuery({
+    queryKey: ['fb-tasks-dept', departmentId, from, to, q],
+    queryFn: () => feedbackService.listTasks({ department: departmentId, from, to, q }),
+    staleTime: 30_000,
+  });
+  return (
+    <>
+      <input className={styles.search} placeholder="Поиск по ФИО" value={q} onChange={e => setQ(e.target.value)} />
       {isLoading ? <div className={styles.empty}>Загрузка…</div> : (
         <table className={styles.table}>
-          <thead><tr><th>Сотрудник</th><th>Отдел</th><th>Задача</th><th>Дата</th></tr></thead>
+          <thead><tr><th>Сотрудник</th><th>Задача</th><th>Дата</th></tr></thead>
           <tbody>
             {(data?.rows ?? []).map(r => (
               <tr key={r.id}>
                 <td>{r.full_name ?? '—'}</td>
-                <td>{r.department_name ?? '—'}</td>
                 <td className={styles.textCell}>{r.content}</td>
                 <td>{fmtDay(r.task_date)}</td>
               </tr>
             ))}
-            {!data?.rows.length && <tr><td colSpan={4} className={styles.empty}>Нет данных</td></tr>}
+            {!data?.rows.length && <tr><td colSpan={3} className={styles.empty}>Нет данных</td></tr>}
           </tbody>
         </table>
       )}
-    </div>
+    </>
   );
 };
 
@@ -199,9 +184,8 @@ const MessagesTab: FC<{ kind: FeedbackKind }> = ({ kind }) => {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
-  const queryKey = ['fb-messages', kind, q, from, to];
   const { data, isLoading } = useQuery({
-    queryKey,
+    queryKey: ['fb-messages', kind, q, from, to],
     queryFn: () => feedbackService.listMessages(kind, { q, from, to }),
     staleTime: 30_000,
   });
@@ -220,7 +204,7 @@ const MessagesTab: FC<{ kind: FeedbackKind }> = ({ kind }) => {
 
   return (
     <div className={styles.tabBody}>
-      <FilterBar q={q} onQ={setQ} from={from} onFrom={setFrom} to={to} onTo={setTo} />
+      <FilterBar from={from} onFrom={setFrom} to={to} onTo={setTo} q={q} onQ={setQ} />
       {isLoading ? <div className={styles.empty}>Загрузка…</div> : (
         <table className={styles.table}>
           <thead><tr><th>Автор</th><th>Сообщение</th><th>Время</th><th></th></tr></thead>
@@ -248,21 +232,21 @@ const MessagesTab: FC<{ kind: FeedbackKind }> = ({ kind }) => {
 // ---- Вкладка «Тесты» ----
 const TestsTab: FC = () => {
   const [selectedTest, setSelectedTest] = useState<string>('');
-  const [q, setQ] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [department, setDepartment] = useState('');
   const [managerOpen, setManagerOpen] = useState(false);
+  const [modalDept, setModalDept] = useState<string | null>(null);
 
   const structure = useStructureTree();
   const tree = structure.data?.departments;
+  const su10Ids = useSu10DeptIds(tree);
 
   const { data: tests } = useQuery({
     queryKey: ['tests-manage-list'],
     queryFn: () => testsService.list(),
     staleTime: 30_000,
   });
-
   const effectiveTest = selectedTest || tests?.[0]?.id || '';
 
   const { data: stats } = useQuery({
@@ -271,7 +255,6 @@ const TestsTab: FC = () => {
     enabled: !!effectiveTest,
     staleTime: 30_000,
   });
-
   const { data: responses } = useQuery({
     queryKey: ['test-responses', effectiveTest],
     queryFn: () => testsService.listResponses(effectiveTest),
@@ -279,20 +262,11 @@ const TestsTab: FC = () => {
     staleTime: 30_000,
   });
 
-  // Имя выбранного в дереве отдела — для клиентского фильтра прохождений.
-  const selectedDeptName = useMemo(
-    () => (department && tree ? findDepartmentName(tree, department) : null),
-    [department, tree],
-  );
-
-  const filtered = useMemo(() => (responses ?? []).filter(r => {
-    if (r.status !== 'submitted') return false;
-    if (q && !(r.full_name ?? '').toLowerCase().includes(q.toLowerCase())) return false;
-    if (selectedDeptName && r.department_name !== selectedDeptName) return false;
-    if (from && (!r.submitted_at || r.submitted_at < from)) return false;
-    if (to && (!r.submitted_at || r.submitted_at > `${to}T23:59:59`)) return false;
-    return true;
-  }), [responses, q, selectedDeptName, from, to]);
+  const rows = useMemo(() => (stats ?? [])
+    .filter(s => s.department_id && su10Ids.has(s.department_id))
+    .filter(s => !department || s.department_id === department)
+    .sort((a, b) => a.department_name.localeCompare(b.department_name, 'ru')),
+  [stats, su10Ids, department]);
 
   return (
     <div className={styles.tabBody}>
@@ -308,25 +282,16 @@ const TestsTab: FC = () => {
         </button>
       </div>
 
-      <FilterBar q={q} onQ={setQ} from={from} onFrom={setFrom} to={to} onTo={setTo}
+      <FilterBar from={from} onFrom={setFrom} to={to} onTo={setTo}
         tree={tree} treeLoading={structure.isPending} treeError={structure.isError}
         department={department} onDepartment={setDepartment} />
-      <StatsPanel stats={stats ?? []} verb="прошли" />
+      <Su10StatsTable rows={rows} verb="Прошли" onSelect={s => setModalDept(s.department_name)} />
 
-      <table className={styles.table}>
-        <thead><tr><th>Сотрудник</th><th>Отдел</th><th>Статус</th><th>Время</th></tr></thead>
-        <tbody>
-          {filtered.map(r => (
-            <tr key={r.id}>
-              <td>{r.full_name ?? '—'}</td>
-              <td>{r.department_name ?? '—'}</td>
-              <td>Пройден</td>
-              <td>{fmtDate(r.submitted_at)}</td>
-            </tr>
-          ))}
-          {!filtered.length && <tr><td colSpan={4} className={styles.empty}>Нет прохождений</td></tr>}
-        </tbody>
-      </table>
+      {modalDept && (
+        <DeptDetailModal title={modalDept} onClose={() => setModalDept(null)}>
+          <DeptTakersContent responses={responses ?? []} departmentName={modalDept} />
+        </DeptDetailModal>
+      )}
 
       {managerOpen && (
         <Suspense fallback={null}>
@@ -334,6 +299,35 @@ const TestsTab: FC = () => {
         </Suspense>
       )}
     </div>
+  );
+};
+
+// Содержимое модалки «Прохождения отдела» — клиентский фильтр по уже загруженным.
+const DeptTakersContent: FC<{ responses: ITestResponseRow[]; departmentName: string }> = ({ responses, departmentName }) => {
+  const [q, setQ] = useState('');
+  const filtered = useMemo(() => responses.filter(r =>
+    r.status === 'submitted'
+    && r.department_name === departmentName
+    && (!q || (r.full_name ?? '').toLowerCase().includes(q.toLowerCase())),
+  ), [responses, departmentName, q]);
+
+  return (
+    <>
+      <input className={styles.search} placeholder="Поиск по ФИО" value={q} onChange={e => setQ(e.target.value)} />
+      <table className={styles.table}>
+        <thead><tr><th>Сотрудник</th><th>Статус</th><th>Время</th></tr></thead>
+        <tbody>
+          {filtered.map(r => (
+            <tr key={r.id}>
+              <td>{r.full_name ?? '—'}</td>
+              <td>Пройден</td>
+              <td>{fmtDate(r.submitted_at)}</td>
+            </tr>
+          ))}
+          {!filtered.length && <tr><td colSpan={3} className={styles.empty}>Нет прохождений</td></tr>}
+        </tbody>
+      </table>
+    </>
   );
 };
 

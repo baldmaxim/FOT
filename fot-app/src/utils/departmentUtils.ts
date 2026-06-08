@@ -175,6 +175,52 @@ export const findDepartmentName = (nodes: OrgDepartmentNode[], id: string): stri
   return null;
 };
 
+// ---- Папка компании «(СУ-10) ООО СУ-10» --------------------------------------
+
+const SU10_NAME_RE = /су-?10/i;
+
+// Узел компании «(СУ-10) ООО СУ-10»: не синтетический корень (kind!='object'),
+// имя содержит «СУ-10». Ищем сверху вниз — компания встречается раньше своих
+// вложенных отделов (напр. «Бухгалтерия СУ-10»), т.к. она прямой потомок корня.
+export const findSu10CompanyNode = (nodes: OrgDepartmentNode[]): OrgDepartmentNode | null => {
+  for (const node of nodes) {
+    if (node.kind !== 'object' && SU10_NAME_RE.test(node.name)) return node;
+    if (node.children?.length) {
+      const found = findSu10CompanyNode(node.children);
+      if (found) return found;
+    }
+  }
+  return null;
+};
+
+// Поддерево компании СУ-10, где оставлены только узлы kind='department'
+// (бригады/объекты убраны). Возвращает [companyNode] с отфильтрованными детьми —
+// сам корень-компания остаётся кликабельным для каскадного выбора.
+const keepDepartmentsOnly = (node: OrgDepartmentNode): OrgDepartmentNode => ({
+  ...node,
+  children: (node.children ?? [])
+    .filter(c => c.kind === 'department')
+    .map(keepDepartmentsOnly),
+});
+
+export const buildSu10DepartmentTree = (nodes: OrgDepartmentNode[]): OrgDepartmentNode[] => {
+  const company = findSu10CompanyNode(nodes);
+  return company ? [keepDepartmentsOnly(company)] : [];
+};
+
+// id всех потомков-отделов (kind='department') узла, без самого узла.
+export const collectDepartmentIds = (node: OrgDepartmentNode): string[] => {
+  const out: string[] = [];
+  const walk = (n: OrgDepartmentNode): void => {
+    n.children?.forEach(c => {
+      if (c.kind === 'department') out.push(c.id);
+      walk(c);
+    });
+  };
+  walk(node);
+  return out;
+};
+
 export const filterDepartmentTree = (nodes: OrgDepartmentNode[], query: string): OrgDepartmentNode[] => {
   const sortedNodes = sortDepartmentTree(nodes);
   const normalizedQuery = query.trim().toLowerCase();
