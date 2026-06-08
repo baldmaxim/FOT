@@ -23,6 +23,10 @@ import { CorrectionApprovalSettingsModal } from './CorrectionApprovalSettingsMod
 const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
   default: module.TimesheetCorrectionModal,
 })));
+import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
+import { useStructureTree } from '../../hooks/useStructure';
+import { collectDescendantIds } from '../../utils/departmentUtils';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -176,6 +180,16 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
+  const [deptId, setDeptId] = useState('');
+  const [nameQuery, setNameQuery] = useState('');
+  const debouncedName = useDebouncedValue(nameQuery, 200);
+
+  const structureTree = useStructureTree();
+  const departments = useMemo(() => structureTree.data?.departments ?? [], [structureTree.data]);
+  const allowedDeptIds = useMemo(
+    () => (deptId ? collectDescendantIds(departments, new Set([deptId])) : null),
+    [deptId, departments],
+  );
 
   const toggleNotes = (id: number) => {
     setExpandedNotes(prev => {
@@ -252,7 +266,17 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка массового отката'),
   });
 
-  const groups: ICorrectionDepartmentGroup[] = useMemo(() => query.data ?? [], [query.data]);
+  const allGroups: ICorrectionDepartmentGroup[] = useMemo(() => query.data ?? [], [query.data]);
+  const groups: ICorrectionDepartmentGroup[] = useMemo(() => {
+    let gs = allowedDeptIds ? allGroups.filter(g => allowedDeptIds.has(g.department_id)) : allGroups;
+    const q = debouncedName.trim().toLowerCase();
+    if (q) {
+      gs = gs
+        .map(g => ({ ...g, items: g.items.filter(it => (it.employee_name ?? '').toLowerCase().includes(q)) }))
+        .filter(g => g.items.length > 0);
+    }
+    return gs;
+  }, [allGroups, allowedDeptIds, debouncedName]);
 
   const toggleId = (id: number) => {
     setSelectedIds(prev => {
@@ -351,6 +375,27 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
               <Settings size={16} />
             </button>
           )}
+        </div>
+
+        <div className="cor-filters">
+          <div className="cor-filter-dept">
+            <DepartmentTreeSelect
+              departments={departments}
+              value={deptId}
+              onChange={setDeptId}
+              isLoading={structureTree.isPending}
+              isError={structureTree.isError}
+              onRetry={() => { void structureTree.refetch(); }}
+            />
+          </div>
+          <input
+            type="search"
+            className="cor-filter-name"
+            value={nameQuery}
+            onChange={(e) => setNameQuery(e.target.value)}
+            placeholder="Поиск по ФИО…"
+            aria-label="Поиск по ФИО"
+          />
         </div>
 
         {canSelect && groups.length > 0 && (
@@ -1011,6 +1056,14 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
   const [status, setStatus] = useState<TimesheetApprovalStatus>('submitted');
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [commentModal, setCommentModal] = useState<{ row: IApprovalReviewItem; mode: 'rework' | 'return' } | null>(null);
+  const [deptId, setDeptId] = useState('');
+
+  const structureTree = useStructureTree();
+  const departments = useMemo(() => structureTree.data?.departments ?? [], [structureTree.data]);
+  const allowedDeptIds = useMemo(
+    () => (deptId ? collectDescendantIds(departments, new Set([deptId])) : null),
+    [deptId, departments],
+  );
 
   // Сброс раскрытой строки при смене периода — паттерн «состояние из
   // прошлого рендера» вместо setState-в-effect (react.dev «You Might Not
@@ -1058,7 +1111,13 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
     onError: (err) => toast.error?.(err instanceof Error ? err.message : 'Ошибка возврата'),
   });
 
-  const rows: IApprovalReviewItem[] = useMemo(() => query.data ?? [], [query.data]);
+  const allRows: IApprovalReviewItem[] = useMemo(() => query.data ?? [], [query.data]);
+  const rows: IApprovalReviewItem[] = useMemo(
+    () => (allowedDeptIds
+      ? allRows.filter(r => r.department_id != null && allowedDeptIds.has(r.department_id))
+      : allRows),
+    [allRows, allowedDeptIds],
+  );
 
   // Группировка карточек по «участку» (общему parent_department_id) — см. group_key с бэка.
   // Группы с одной подачей отрисовываются как раньше (без обёртки), чтобы не плодить шум.
@@ -1092,6 +1151,17 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
 
   return (
     <>
+      <div className="ts-filter-dept">
+        <DepartmentTreeSelect
+          departments={departments}
+          value={deptId}
+          onChange={setDeptId}
+          isLoading={structureTree.isPending}
+          isError={structureTree.isError}
+          onRetry={() => { void structureTree.refetch(); }}
+        />
+      </div>
+
       <div className="approvals-tabs">
         {TIMESHEET_STATUS_TABS.map(tab => (
           <button
