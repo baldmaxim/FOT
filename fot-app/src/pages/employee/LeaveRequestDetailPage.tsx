@@ -184,11 +184,10 @@ export const LeaveRequestDetailPage: FC = () => {
         </span>
       </div>
 
-      {request.request_type === 'time_correction'
-        && request.status === 'approved'
+      {(request.request_type === 'time_correction' || request.request_type === 'work')
         && request.correction_approval_status === 'pending' && (
           <div className="lr-card-pending-admin" style={{ color: '#f59e0b', marginTop: 12 }}>
-            <Clock size={14} /> <strong>Ожидает доп. согласования администратором</strong>
+            <Clock size={14} /> <strong>Ожидает согласования</strong>
           </div>
         )}
 

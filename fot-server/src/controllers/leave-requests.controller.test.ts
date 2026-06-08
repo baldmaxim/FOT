@@ -36,12 +36,15 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveScopedDepartmentId: vi.fn(async () => null),
 }));
 
+const { resolveApprovalMock } = vi.hoisted(() => ({
+  resolveApprovalMock: vi.fn(async () => 'auto_approved'),
+}));
 vi.mock('./timesheet.controller.js', () => ({
-  resolveAdjustmentApprovalStatus: vi.fn(async () => 'auto_approved'),
+  resolveAdjustmentApprovalStatus: resolveApprovalMock,
 }));
 
-vi.mock('../services/push.service.js', () => ({ pushService: { sendToUser: vi.fn() } }));
-vi.mock('../services/notification.service.js', () => ({ notificationService: { create: vi.fn() } }));
+vi.mock('../services/push.service.js', () => ({ pushService: { sendToUser: vi.fn(), sendLeaveRequestNotification: vi.fn(async () => []) } }));
+vi.mock('../services/notification.service.js', () => ({ notificationService: { create: vi.fn(), createMany: vi.fn(async () => undefined) } }));
 vi.mock('../socket/io-instance.js', () => ({ getIo: vi.fn(() => null) }));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
 vi.mock('../services/recipients.service.js', () => ({ getLeaveRequestRecipients: vi.fn(async () => []) }));
@@ -96,6 +99,7 @@ function mockRequestRow(over: Record<string, unknown>) {
 describe('leaveRequestsController.approve', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveApprovalMock.mockResolvedValue('auto_approved');
     pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
     txClient.query.mockResolvedValue({ rows: [{ id: 708, status: 'approved' }], rowCount: 1 });
   });
@@ -135,5 +139,102 @@ describe('leaveRequestsController.approve', () => {
     expect(pgTx).toHaveBeenCalledTimes(1);
     const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
     expect(updateCall).toBeDefined();
+  });
+
+  it('legacy work-заявка при одобрении использует резолвер выходных', async () => {
+    resolveApprovalMock.mockResolvedValueOnce('pending');
+    mockRequestRow({
+      request_type: 'work',
+      start_date: '2026-06-06',
+      end_date: '2026-06-06',
+      selected_dates: ['2026-06-06'],
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    expect(upsertSpy.mock.calls[0][0]).toMatchObject({
+      employee_id: 247,
+      work_date: '2026-06-06',
+      status: 'work',
+      approval_status: 'pending',
+    });
+  });
+});
+
+describe('leaveRequestsController.create', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveApprovalMock.mockResolvedValue('auto_approved');
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+  });
+
+  it('work-заявка сразу создаёт pending-корректировку для раздела согласования', async () => {
+    resolveApprovalMock.mockResolvedValueOnce('pending');
+    txClient.query.mockResolvedValueOnce({
+      rows: [{
+        id: 900,
+        employee_id: 247,
+        request_type: 'work',
+        status: 'pending',
+        start_date: '2026-06-06',
+        end_date: '2026-06-06',
+        selected_dates: ['2026-06-06'],
+        reason: 'работа в выходной',
+      }],
+      rowCount: 1,
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeReq({
+      body: {
+        request_type: 'work',
+        start_date: '2026-06-06',
+        end_date: '2026-06-06',
+        selected_dates: ['2026-06-06'],
+        reason: 'работа в выходной',
+      },
+      user: { ...makeReq().user, employee_id: 247 },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    expect(upsertSpy.mock.calls[0][0]).toMatchObject({
+      employee_id: 247,
+      work_date: '2026-06-06',
+      status: 'work',
+      source_type: 'leave_request',
+      source_id: '900',
+      approval_status: 'pending',
+    });
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes("status = 'approved'"))).toBe(false);
+  });
+});
+
+describe('leaveRequestsController.getAll', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('скрывает pending work-заявление, если оно уже маршрутизировано в approvals', async () => {
+    pgQuery
+      .mockResolvedValueOnce([
+        { id: 1, employee_id: 101, request_type: 'work', status: 'pending', reviewer_id: null },
+        { id: 2, employee_id: 102, request_type: 'vacation', status: 'pending', reviewer_id: null },
+      ])
+      .mockResolvedValueOnce([
+        { id: 101, full_name: 'Работа В.', org_department_id: 'dep-1', department_name: 'ЦТ', position_name: null },
+        { id: 102, full_name: 'Отпуск О.', org_department_id: 'dep-1', department_name: 'ЦТ', position_name: null },
+      ])
+      .mockResolvedValueOnce([{ source_id: '1' }])
+      .mockResolvedValueOnce([]);
+    const res = makeRes();
+
+    await leaveRequestsController.getAll(makeReq({ query: { status: 'pending' } }), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: Array<{ id: number }> }).data.map(r => r.id)).toEqual([2]);
   });
 });

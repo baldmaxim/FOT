@@ -12,7 +12,7 @@ import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { correctionApprovalSettingsService } from '../services/correction-approval-settings.service.js';
 import { reapproveAdjustmentsForRange } from './timesheet.controller.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
-import { getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+import { getLeaveRequestRecipients, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 
 async function emitCorrectionChanged(params: {
   employeeIds: number[];
@@ -68,6 +68,79 @@ function isIsoDate(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
+async function syncWorkLeaveRequestsForAdjustmentIds(
+  adjustmentIds: number[],
+  reviewerUserId: string,
+  reviewComment: string | null = null,
+): Promise<void> {
+  const ids = [...new Set(adjustmentIds.filter(id => Number.isInteger(id) && id > 0))];
+  if (ids.length === 0) return;
+
+  const changed = await query<{ id: number; employee_id: number; status: string }>(
+    `WITH target_requests AS (
+       SELECT DISTINCT lr.id
+         FROM attendance_adjustments aa
+         JOIN leave_requests lr
+           ON lr.id::text = aa.source_id
+          AND lr.request_type = 'work'
+        WHERE aa.id = ANY($1::bigint[])
+          AND aa.source_type = 'leave_request'
+          AND aa.source_id ~ '^[0-9]+$'
+     ),
+     request_state AS (
+       SELECT tr.id,
+              BOOL_OR(aa.approval_status = 'rejected') AS has_rejected,
+              BOOL_OR(aa.approval_status = 'pending') AS has_pending,
+              BOOL_OR(aa.approval_status IN ('approved', 'auto_approved')) AS has_accepted
+         FROM target_requests tr
+         JOIN attendance_adjustments aa
+           ON aa.source_type = 'leave_request'
+          AND aa.source_id = tr.id::text
+        GROUP BY tr.id
+     ),
+     next_state AS (
+       SELECT id,
+              CASE
+                WHEN has_rejected THEN 'rejected'
+                WHEN has_pending THEN 'pending'
+                WHEN has_accepted THEN 'approved'
+                ELSE 'pending'
+              END AS status
+         FROM request_state
+     )
+     UPDATE leave_requests lr
+        SET status = ns.status,
+            reviewer_id = CASE WHEN ns.status IN ('approved', 'rejected') THEN $2::uuid ELSE NULL END,
+            reviewed_at = CASE WHEN ns.status IN ('approved', 'rejected') THEN now() ELSE NULL END,
+            review_comment = CASE WHEN ns.status = 'rejected' THEN $3::text ELSE NULL END,
+            updated_at = now()
+       FROM next_state ns
+      WHERE lr.id = ns.id
+        AND (
+          lr.status IS DISTINCT FROM ns.status
+          OR lr.review_comment IS DISTINCT FROM CASE WHEN ns.status = 'rejected' THEN $3::text ELSE NULL END
+        )
+      RETURNING lr.id, lr.employee_id, lr.status`,
+    [ids, reviewerUserId, reviewComment],
+  );
+
+  for (const row of changed) {
+    getLeaveRequestRecipients(Number(row.employee_id), reviewerUserId)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'leave_request:changed',
+          targetUserIds: recipients,
+          payload: {
+            entityId: Number(row.id),
+            employeeId: Number(row.employee_id),
+            action: row.status === 'approved' ? 'approve' : row.status === 'rejected' ? 'reject' : 'revert',
+          },
+        });
+      })
+      .catch((e) => console.error('[correction-approval] emit leave_request sync error:', e));
+  }
+}
+
 /** Возвращает pending корректировки, сгруппированные по отделам сотрудников. */
 const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -83,8 +156,9 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
       ? await listDirectSubordinates(req.user.employee_id)
       : [];
     const directReportsSet = new Set(directReportIds);
+    const viewerEmployeeId = req.user.employee_id ?? null;
 
-    if (accessible !== 'all' && accessible.length === 0 && directReportIds.length === 0) {
+    if (accessible !== 'all' && accessible.length === 0 && directReportIds.length === 0 && viewerEmployeeId == null) {
       res.json({ success: true, data: [] });
       return;
     }
@@ -147,18 +221,17 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
         org_department_id: empInfoMap.get(Number(a.employee_id))!.department_id,
       }));
     const responsiblesMap = await resolveResponsibleEmployeeIdsForRows(routableRows);
-    const viewerEmployeeId = req.user.employee_id ?? null;
 
-    // Видимость строки: админ (all-scope) видит всё; назначенный ответственный —
-    // только свои строки; нерутированные строки (нет ответственного) — по текущей
-    // scope-логике (отдел в поддереве / прямой подчинённый), «как раньше».
+    // Видимость строки: если есть назначенный ответственный, строку видит только он.
+    // Admin/all видит только нерутированные строки, чтобы адресная маршрутизация
+    // выходных не раскрывала очередь всем администраторам.
     const decide = (adjId: number, empId: number, deptId: string | null): { visible: boolean; directOnly: boolean } => {
-      if (isAllScope) return { visible: true, directOnly: false };
       const responsibles = responsiblesMap.get(adjId) ?? [];
       if (responsibles.length > 0) {
         const visible = viewerEmployeeId != null && responsibles.includes(viewerEmployeeId);
         return { visible, directOnly: false };
       }
+      if (isAllScope) return { visible: true, directOnly: false };
       const inDeptSubtree = deptId !== null && !!allowedDeptIds && allowedDeptIds.has(deptId);
       const isDirectReport = directReportsSet.has(empId);
       return { visible: inDeptSubtree || isDirectReport, directOnly: !inDeptSubtree && isDirectReport };
@@ -279,8 +352,8 @@ async function loadAdjustmentForApproval(adjustmentId: number): Promise<{
  * Из набора pending/обрабатываемых строк возвращает id, которые текущий
  * пользователь вправе согласовать/отклонить/откатить — с учётом адресной
  * маршрутизации (decision 10):
- *  - полный доступ (editable='all', т.е. админ) — все;
  *  - назначенный ответственный — свои строки (даже вне editable-скоупа);
+ *  - полный доступ (editable='all', т.е. админ) — только нерутированные строки;
  *  - нерутированные строки — по editable-скоупу/прямому подчинению («как раньше»).
  */
 async function filterApprovableIds(
@@ -289,7 +362,6 @@ async function filterApprovableIds(
 ): Promise<Set<number>> {
   if (rows.length === 0) return new Set();
   const accessible = await resolveEditableDepartmentIds(req);
-  if (accessible === 'all') return new Set(rows.map(r => Number(r.id)));
 
   const empIds = [...new Set(rows.map(r => Number(r.employee_id)))];
   const empRows = await query<{ id: number; org_department_id: string | null }>(
@@ -299,7 +371,8 @@ async function filterApprovableIds(
   const deptByEmp = new Map<number, string | null>(
     empRows.map(e => [Number(e.id), e.org_department_id ? String(e.org_department_id) : null]),
   );
-  const allowedDeptSet = new Set(accessible);
+  const isAllScope = accessible === 'all';
+  const allowedDeptSet = isAllScope ? null : new Set(accessible);
   const directReports = req.user.employee_id
     ? new Set(await listDirectSubordinates(req.user.employee_id))
     : new Set<number>();
@@ -317,12 +390,16 @@ async function filterApprovableIds(
   for (const r of rows) {
     const responsibles = responsiblesMap.get(Number(r.id)) ?? [];
     if (responsibles.length > 0) {
-      // Маршрутизированная строка — только её ответственному (админ покрыт ветвью 'all').
+      // Маршрутизированная строка — только её ответственному.
       if (viewerEmployeeId != null && responsibles.includes(viewerEmployeeId)) allowed.add(Number(r.id));
       continue;
     }
+    if (isAllScope) {
+      allowed.add(Number(r.id));
+      continue;
+    }
     const dept = deptByEmp.get(Number(r.employee_id)) ?? null;
-    const inDept = dept !== null && allowedDeptSet.has(dept);
+    const inDept = dept !== null && !!allowedDeptSet && allowedDeptSet.has(dept);
     if (inDept || directReports.has(Number(r.employee_id))) allowed.add(Number(r.id));
   }
   return allowed;
@@ -372,6 +449,8 @@ async function changeAdjustmentApproval(
     });
     return;
   }
+
+  await syncWorkLeaveRequestsForAdjustmentIds([adjustmentId], req.user.id, nextStatus === 'rejected' ? comment : null);
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
     entityType: 'attendance_adjustment',
@@ -494,6 +573,11 @@ async function bulkChangeByIds(
   );
 
   const processedCount = updated.length;
+  const processedIds = updated.map((r) => Number(r.id));
+
+  if (processedIds.length > 0) {
+    await syncWorkLeaveRequestsForAdjustmentIds(processedIds, req.user.id, nextStatus === 'rejected' ? comment : null);
+  }
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
     entityType: 'attendance_adjustment',
@@ -507,7 +591,7 @@ async function bulkChangeByIds(
   });
 
   if (processedCount > 0) {
-    const processedSet = new Set(updated.map((r) => Number(r.id)));
+    const processedSet = new Set(processedIds);
     const affectedEmployeeIds = [...new Set(
       pending.filter((a) => processedSet.has(Number(a.id))).map((a) => Number(a.employee_id)),
     )];
@@ -618,6 +702,11 @@ async function bulkRevertByIdsImpl(
   );
 
   const processedCount = updated.length;
+  const processedIds = updated.map((r) => Number(r.id));
+
+  if (processedIds.length > 0) {
+    await syncWorkLeaveRequestsForAdjustmentIds(processedIds, req.user.id, null);
+  }
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
     entityType: 'attendance_adjustment',
@@ -632,7 +721,7 @@ async function bulkRevertByIdsImpl(
   });
 
   if (processedCount > 0) {
-    const processedSet = new Set(updated.map((r) => Number(r.id)));
+    const processedSet = new Set(processedIds);
     const affectedEmployeeIds = [...new Set(
       revertable.filter((a) => processedSet.has(Number(a.id))).map((a) => Number(a.employee_id)),
     )];
@@ -693,20 +782,40 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
       return;
     }
 
-    const now = new Date().toISOString();
-    const updated = await query<{ id: number }>(
-      `UPDATE attendance_adjustments SET
-         approval_status = 'approved',
-         approved_by = $1,
-         approved_at = $2,
-         approval_comment = NULL
-       WHERE approval_status = 'pending'
-         AND employee_id = ANY($3::bigint[])
-         AND work_date >= $4::date
-         AND work_date <= $5::date
-       RETURNING id`,
-      [req.user.id, now, employeeIds, startDate, endDate],
+    const candidates = await query<{ id: number; employee_id: number; work_date: string }>(
+      `SELECT id, employee_id, work_date::text AS work_date
+         FROM attendance_adjustments
+        WHERE approval_status = 'pending'
+          AND employee_id = ANY($1::bigint[])
+          AND work_date >= $2::date
+          AND work_date <= $3::date`,
+      [employeeIds, startDate, endDate],
     );
+    const allowedSet = await filterApprovableIds(
+      req,
+      candidates.map(a => ({ id: Number(a.id), employee_id: Number(a.employee_id), work_date: String(a.work_date) })),
+    );
+    const allowedIds = candidates.filter(a => allowedSet.has(Number(a.id))).map(a => Number(a.id));
+
+    const now = new Date().toISOString();
+    const updated = allowedIds.length > 0
+      ? await query<{ id: number }>(
+        `UPDATE attendance_adjustments SET
+           approval_status = 'approved',
+           approved_by = $1,
+           approved_at = $2,
+           approval_comment = NULL
+         WHERE id = ANY($3::bigint[])
+           AND approval_status = 'pending'
+         RETURNING id`,
+        [req.user.id, now, allowedIds],
+      )
+      : [];
+
+    const approvedIds = updated.map((r) => Number(r.id));
+    if (approvedIds.length > 0) {
+      await syncWorkLeaveRequestsForAdjustmentIds(approvedIds, req.user.id, null);
+    }
 
     const approvedCount = updated.length;
 
@@ -723,8 +832,12 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
     });
 
     if (approvedCount > 0) {
+      const approvedSet = new Set(approvedIds);
+      const affectedEmployeeIds = [...new Set(
+        candidates.filter((a) => approvedSet.has(Number(a.id))).map((a) => Number(a.employee_id)),
+      )];
       void emitCorrectionChanged({
-        employeeIds,
+        employeeIds: affectedEmployeeIds,
         reviewerUserId: req.user.id,
         action: 'bulk_approve',
       });
@@ -758,8 +871,9 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
       ? await listDirectSubordinates(req.user.employee_id)
       : [];
     const directReportsSet = new Set(directReportIds);
+    const viewerEmployeeId = req.user.employee_id ?? null;
 
-    if (accessible !== 'all' && accessible.length === 0 && directReportIds.length === 0) {
+    if (accessible !== 'all' && accessible.length === 0 && directReportIds.length === 0 && viewerEmployeeId == null) {
       res.json({ success: true, data: [] });
       return;
     }
@@ -801,36 +915,64 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
       [employeeIds],
     );
 
-    const allowedDeptIds = accessible === 'all' ? null : new Set(accessible);
+    const isAllScope = accessible === 'all';
+    const allowedDeptIds = isAllScope ? null : new Set(accessible);
     const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
-    const filteredEmployees = employees.filter(e => {
-      // История согласований — только по отделам из настройки (whitelist).
+
+    // История согласований — только по отделам из настройки (whitelist).
+    const empInfoMap = new Map<number, { full_name: string | null; department_id: string | null }>();
+    for (const e of employees) {
       const deptId = e.org_department_id ? String(e.org_department_id) : null;
-      if (!deptId || !requiredDepartments.has(deptId)) return false;
-      if (!allowedDeptIds) return true;
-      const inDeptSubtree = allowedDeptIds.has(deptId);
-      const isDirectReport = directReportsSet.has(Number(e.id));
-      return inDeptSubtree || isDirectReport;
-    });
-    if (filteredEmployees.length === 0) {
+      if (!deptId || !requiredDepartments.has(deptId)) continue;
+      empInfoMap.set(Number(e.id), { full_name: e.full_name ?? null, department_id: deptId });
+    }
+    if (empInfoMap.size === 0) {
       res.json({ success: true, data: [] });
       return;
     }
 
-    const employeeMap = new Map(filteredEmployees.map(e => {
-      const deptId = e.org_department_id ? String(e.org_department_id) : null;
-      const inDeptSubtree = !allowedDeptIds || (deptId !== null && allowedDeptIds.has(deptId));
-      const isDirectOnly = !inDeptSubtree && directReportsSet.has(Number(e.id));
-      return [Number(e.id), {
-        full_name: e.full_name ?? null,
-        department_id: deptId,
-        is_direct_only: isDirectOnly,
-      }];
-    }));
+    const routableRows = adjustments
+      .filter(a => empInfoMap.has(Number(a.employee_id)))
+      .map(a => ({
+        id: Number(a.id),
+        employee_id: Number(a.employee_id),
+        work_date: String(a.work_date),
+        org_department_id: empInfoMap.get(Number(a.employee_id))!.department_id,
+      }));
+    const responsiblesMap = await resolveResponsibleEmployeeIdsForRows(routableRows);
 
-    const deptIds = [...new Set([...employeeMap.values()]
-      .filter(e => !e.is_direct_only)
-      .map(e => e.department_id)
+    const decisions = new Map<number, { directOnly: boolean }>();
+    for (const adj of adjustments) {
+      const empInfo = empInfoMap.get(Number(adj.employee_id));
+      if (!empInfo) continue;
+      const responsibles = responsiblesMap.get(Number(adj.id)) ?? [];
+      if (responsibles.length > 0) {
+        if (viewerEmployeeId != null && responsibles.includes(viewerEmployeeId)) {
+          decisions.set(Number(adj.id), { directOnly: false });
+        }
+        continue;
+      }
+      if (isAllScope) {
+        decisions.set(Number(adj.id), { directOnly: false });
+        continue;
+      }
+      const inDeptSubtree = empInfo.department_id !== null && !!allowedDeptIds && allowedDeptIds.has(empInfo.department_id);
+      const isDirectReport = directReportsSet.has(Number(adj.employee_id));
+      if (inDeptSubtree || isDirectReport) {
+        decisions.set(Number(adj.id), { directOnly: !inDeptSubtree && isDirectReport });
+      }
+    }
+    if (decisions.size === 0) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const deptIds = [...new Set([...decisions.entries()]
+      .filter(([, d]) => !d.directOnly)
+      .map(([adjId]) => {
+        const adj = adjustments.find(a => Number(a.id) === adjId);
+        return adj ? empInfoMap.get(Number(adj.employee_id))?.department_id ?? null : null;
+      })
       .filter((id): id is string => id !== null))];
     const deptNamesMap = new Map<string, string>();
     if (deptIds.length > 0) {
@@ -860,9 +1002,11 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
 
     const groups = new Map<string, IDepartmentGroup>();
     for (const adj of adjustments) {
-      const empInfo = employeeMap.get(Number(adj.employee_id));
+      const decision = decisions.get(Number(adj.id));
+      if (!decision) continue;
+      const empInfo = empInfoMap.get(Number(adj.employee_id));
       if (!empInfo) continue;
-      const isDirectOnly = empInfo.is_direct_only === true;
+      const isDirectOnly = decision.directOnly;
       const deptId = isDirectOnly ? DIRECT_REPORTS_GROUP_ID : empInfo.department_id;
       if (!deptId) continue;
       let group = groups.get(deptId);

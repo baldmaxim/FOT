@@ -202,8 +202,7 @@ export const LeaveRequestsManagePage: FC = () => {
       isCorrection &&
       eventsPanel.employeeId === r.employee_id &&
       eventsPanel.date === r.correction_date;
-    const awaitingAdmin = isCorrection
-      && r.status === 'approved'
+    const awaitingApproval = (isCorrection || r.request_type === 'work')
       && r.correction_approval_status === 'pending';
     return (
       <div
@@ -244,9 +243,9 @@ export const LeaveRequestsManagePage: FC = () => {
               )}
             </div>
           </div>
-          {awaitingAdmin && (
+          {awaitingApproval && (
             <div className="lrm-card-pending-admin" style={{ color: '#f59e0b' }}>
-              <Clock size={12} /> <strong>Ожидает доп. согласования администратором</strong>
+              <Clock size={12} /> <strong>Ожидает согласования</strong>
             </div>
           )}
           <div className="lrm-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>

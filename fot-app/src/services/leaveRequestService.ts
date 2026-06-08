@@ -39,9 +39,8 @@ export interface ILeaveRequest {
   attachments?: ILeaveRequestAttachment[];
   reviewer?: { id: string; full_name: string | null } | null;
   /**
-   * Для time_correction заявок в статусе approved — текущий approval_status
-   * связанной attendance_adjustment. 'pending' = ждёт дополнительного
-   * согласования администратором на странице /approvals (выходной в whitelist-отделе).
+   * Для time_correction/work заявок — текущий approval_status связанной
+   * attendance_adjustment. 'pending' = ждёт согласования на странице /approvals.
    */
   correction_approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
 }

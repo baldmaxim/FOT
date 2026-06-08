@@ -14,7 +14,7 @@ import {
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
-import { upsertAttendanceAdjustment } from '../services/attendance.service.js';
+import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
@@ -173,15 +173,15 @@ async function loadAttachmentsByLeaveRequestIds(
 
 /**
  * Для уже approved заявок time_correction поднимаем текущий approval_status
- * связанной attendance_adjustments — фронт показывает «Ожидает доп. согласования
- * администратором», если корректировка в статусе 'pending' (выходной в whitelist-отделе).
+ * связанной attendance_adjustments — фронт показывает «Ожидает согласования»,
+ * если корректировка в статусе 'pending' (выходной в whitelist-отделе).
  */
 async function loadCorrectionApprovalStatusByRequestIds(
   requestIds: number[],
 ): Promise<Map<number, string>> {
   const result = new Map<number, string>();
   if (requestIds.length === 0) return result;
-  const sourceIds = requestIds.map(id => `${id}:time_correction`);
+  const sourceIds = requestIds.flatMap(id => [String(id), `${id}:time_correction`]);
   const rows = await query<{ source_id: string; approval_status: string }>(
     `SELECT source_id, approval_status
        FROM attendance_adjustments
@@ -189,12 +189,125 @@ async function loadCorrectionApprovalStatusByRequestIds(
         AND source_id = ANY($1::text[])`,
     [sourceIds],
   );
+  const priority = new Map<string, number>([
+    ['pending', 4],
+    ['rejected', 3],
+    ['approved', 2],
+    ['auto_approved', 1],
+  ]);
   for (const row of rows) {
     const reqIdStr = String(row.source_id).split(':')[0];
     const reqId = Number(reqIdStr);
-    if (Number.isFinite(reqId)) result.set(reqId, row.approval_status);
+    if (!Number.isFinite(reqId)) continue;
+    const prev = result.get(reqId);
+    if (!prev || (priority.get(row.approval_status) ?? 0) > (priority.get(prev) ?? 0)) {
+      result.set(reqId, row.approval_status);
+    }
   }
   return result;
+}
+
+function shouldLoadCorrectionApprovalStatus(request: { request_type: string; status: string }): boolean {
+  return request.request_type === 'work'
+    || (request.request_type === 'time_correction' && request.status === 'approved');
+}
+
+async function loadWorkRequestIdsPendingInApprovals(requestIds: number[]): Promise<Set<number>> {
+  const ids = requestIds.filter(id => Number.isFinite(id));
+  if (ids.length === 0) return new Set();
+  const rows = await query<{ source_id: string }>(
+    `SELECT DISTINCT source_id
+       FROM attendance_adjustments
+      WHERE source_type = 'leave_request'
+        AND source_id = ANY($1::text[])
+        AND approval_status = 'pending'`,
+    [ids.map(String)],
+  );
+  return new Set(rows.map(r => Number(r.source_id)).filter(Number.isFinite));
+}
+
+function isPendingWorkRoutedToApprovals(
+  request: { id: number; request_type: string; status: string },
+  pendingWorkRequestIds: Set<number>,
+): boolean {
+  return request.request_type === 'work'
+    && request.status === 'pending'
+    && pendingWorkRequestIds.has(Number(request.id));
+}
+
+function collectMaterializedLeaveDates(request: {
+  request_type: string;
+  start_date: string;
+  end_date: string;
+  selected_dates: string[] | null;
+}): string[] {
+  const isSingleDayRange = request.start_date === request.end_date;
+  const skipWeekends = request.request_type === 'remote' && !isSingleDayRange;
+  const hasDiscreteDates = Array.isArray(request.selected_dates) && request.selected_dates.length > 0;
+  const isoDates: string[] = [];
+
+  if (hasDiscreteDates) {
+    for (const raw of request.selected_dates as string[]) {
+      const iso = typeof raw === 'string' ? raw.slice(0, 10) : new Date(raw).toISOString().slice(0, 10);
+      if (iso) isoDates.push(iso);
+    }
+  } else {
+    const startDate = new Date(request.start_date);
+    const endDate = new Date(request.end_date);
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const dayOfWeek = d.getDay();
+      if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
+      isoDates.push(d.toISOString().split('T')[0]);
+    }
+  }
+
+  return [...new Set(isoDates)].sort();
+}
+
+async function materializeLeaveRequestAdjustments(
+  request: {
+    id: number;
+    employee_id: number;
+    request_type: string;
+    start_date: string;
+    end_date: string;
+    selected_dates: string[] | null;
+    reason: string | null;
+  },
+  authorUserId: string,
+  client: DbExecutor,
+): Promise<{ dates: string[]; hasPending: boolean }> {
+  const timesheetStatus = Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, request.request_type)
+    ? LEAVE_TO_TIMESHEET[request.request_type as keyof typeof LEAVE_TO_TIMESHEET]
+    : undefined;
+  if (!timesheetStatus) return { dates: [], hasPending: false };
+
+  const isoDates = collectMaterializedLeaveDates(request);
+  let hasPending = false;
+
+  for (const iso of isoDates) {
+    const approvalStatus = await resolveAdjustmentApprovalStatus(
+      request.employee_id,
+      iso,
+      timesheetStatus,
+      null,
+    );
+    if (approvalStatus === 'pending') hasPending = true;
+
+    await upsertAttendanceAdjustment({
+      employee_id: request.employee_id,
+      work_date: iso,
+      status: timesheetStatus,
+      hours_override: null,
+      source_type: 'leave_request',
+      source_id: String(request.id),
+      reason: request.reason ?? null,
+      created_by: authorUserId,
+      approval_status: approvalStatus,
+    }, client);
+  }
+
+  return { dates: isoDates, hasPending };
 }
 
 function broadcastPendingChanged(): void {
@@ -281,6 +394,8 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     // Многошаговая операция: insert заявления + связь с документами в одной TX.
+    // Для work-заявок сразу создаём attendance_adjustments: именно они являются
+    // очередью адресного согласования выходных на /approvals.
     const data = await withTransaction(async (client) => {
       const insertCols: string[] = ['employee_id', 'request_type', 'start_date', 'end_date', 'reason'];
       const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
@@ -326,6 +441,32 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
             WHERE id = ANY($2::bigint[]) AND leave_request_id IS NULL`,
           [row.id, docIds],
         );
+      }
+
+      if (request_type === 'work') {
+        const materialized = await materializeLeaveRequestAdjustments({
+          id: Number(row.id),
+          employee_id: employeeId,
+          request_type,
+          start_date,
+          end_date,
+          selected_dates: normalizedSelectedDates,
+          reason: reason || null,
+        }, req.user.id, client);
+
+        if (materialized.dates.length > 0 && !materialized.hasPending) {
+          const nowIso = new Date().toISOString();
+          const approved = (await client.query(
+            `UPDATE leave_requests SET
+               status = 'approved',
+               reviewed_at = $1,
+               updated_at = $1
+             WHERE id = $2
+             RETURNING *`,
+            [nowIso, row.id],
+          )).rows[0] ?? null;
+          return approved ?? row;
+        }
       }
 
       return row;
@@ -398,7 +539,7 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       [employeeId],
     );
     const correctionRequestIds = data
-      .filter(r => r.request_type === 'time_correction' && r.status === 'approved')
+      .filter(shouldLoadCorrectionApprovalStatus)
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
@@ -460,18 +601,25 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
     );
 
     const metaMap = await loadEmployeeMeta(empIds);
-    const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
+    const pendingWorkRequestIds = await loadWorkRequestIdsPendingInApprovals(
+      data
+        .filter(r => r.request_type === 'work' && r.status === 'pending')
+        .map(r => Number(r.id))
+        .filter(Number.isFinite),
+    );
+    const visibleData = data.filter(r => !isPendingWorkRoutedToApprovals(r, pendingWorkRequestIds));
+    const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
-    const correctionRequestIds = data
-      .filter(r => r.request_type === 'time_correction' && r.status === 'approved')
+    const correctionRequestIds = visibleData
+      .filter(shouldLoadCorrectionApprovalStatus)
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
-    const reviewerIds = [...new Set(data.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
+    const reviewerIds = [...new Set(visibleData.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
     const reviewerMap = await loadReviewerProfiles(reviewerIds);
     const directOnlySet = new Set(directOnlyIds);
 
-    const enriched = data.map(r => {
+    const enriched = visibleData.map(r => {
       const meta = metaMap.get(r.employee_id);
       return {
         ...r,
@@ -543,17 +691,24 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const empIds = [...new Set(data.map(r => r.employee_id))];
     const metaMap = await loadEmployeeMeta(empIds);
-    const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
+    const pendingWorkRequestIds = await loadWorkRequestIdsPendingInApprovals(
+      data
+        .filter(r => r.request_type === 'work' && r.status === 'pending')
+        .map(r => Number(r.id))
+        .filter(Number.isFinite),
+    );
+    const visibleData = data.filter(r => !isPendingWorkRoutedToApprovals(r, pendingWorkRequestIds));
+    const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
-    const correctionRequestIds = data
-      .filter(r => r.request_type === 'time_correction' && r.status === 'approved')
+    const correctionRequestIds = visibleData
+      .filter(shouldLoadCorrectionApprovalStatus)
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
-    const reviewerIds = [...new Set(data.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
+    const reviewerIds = [...new Set(visibleData.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
     const reviewerMap = await loadReviewerProfiles(reviewerIds);
 
-    const enriched = data.map(r => {
+    const enriched = visibleData.map(r => {
       const meta = metaMap.get(r.employee_id);
       return {
         ...r,
@@ -580,7 +735,19 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
 
     if (accessible === 'all') {
       const row = await queryOne<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM leave_requests WHERE status = 'pending'`,
+        `SELECT COUNT(*)::text AS count
+           FROM leave_requests lr
+          WHERE lr.status = 'pending'
+            AND NOT (
+              lr.request_type = 'work'
+              AND EXISTS (
+                SELECT 1
+                  FROM attendance_adjustments aa
+                 WHERE aa.source_type = 'leave_request'
+                   AND aa.source_id = lr.id::text
+                   AND aa.approval_status = 'pending'
+              )
+            )`,
       );
       res.json({ success: true, data: { count: Number(row?.count ?? 0) } });
       return;
@@ -600,6 +767,16 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
          FROM leave_requests lr
          JOIN employees e ON e.id = lr.employee_id
         WHERE lr.status = 'pending'
+          AND NOT (
+            lr.request_type = 'work'
+            AND EXISTS (
+              SELECT 1
+                FROM attendance_adjustments aa
+               WHERE aa.source_type = 'leave_request'
+                 AND aa.source_id = lr.id::text
+                 AND aa.approval_status = 'pending'
+            )
+          )
           AND (
                 e.org_department_id = ANY($1::uuid[])
              OR lr.employee_id      = ANY($2::bigint[])
@@ -658,7 +835,7 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     }
 
     let correctionApprovalStatus: string | null = null;
-    if (request.request_type === 'time_correction' && request.status === 'approved') {
+    if (shouldLoadCorrectionApprovalStatus(request)) {
       const statusMap = await loadCorrectionApprovalStatusByRequestIds([Number(id)]);
       correctionApprovalStatus = statusMap.get(Number(id)) ?? null;
     }
@@ -746,63 +923,9 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         [req.user.id, nowIso, comment || null, id],
       )).rows[0] ?? null;
 
-      // Создаём attendance adjustments как канонический источник ручных статусов
-      const timesheetStatus = Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, request.request_type)
-        ? LEAVE_TO_TIMESHEET[request.request_type as keyof typeof LEAVE_TO_TIMESHEET]
-        : undefined;
-      if (timesheetStatus) {
-        const isWorkKind = request.request_type === 'work';
-        // Для kind='work' разрешаем выход на смену в любой день, включая выходные/праздники.
-        // Часы НЕ зашиваем: 'work' — это только разрешение/согласование выхода, фактическое
-        // время берётся из СКУД (см. attendance.service.ts: status==='work' && hours_override===null
-        // → часы из skud_daily_summary, 0 если не вышел). Иначе при отсутствии человека в табеле
-        // ошибочно появлялись бы 8ч.
-        // Отсутствие сотрудника (отпуск/больничный/за свой счёт) идёт подряд календарно,
-        // включая выходные. Для 'remote' (удалёнка) — это рабочая активность, выходные пропускаем.
-        // НО: одиночную заявку (start_date===end_date) на выходной материализуем всегда —
-        // это явный выбор сотрудника, его нельзя молча терять.
-        const isSingleDayRange = request.start_date === request.end_date;
-        const skipWeekends = request.request_type === 'remote' && !isSingleDayRange;
-
-        // Дискретные типы (work/remote/certificate/unpaid) подаются конкретными датами —
-        // материализуем ровно их. Непрерывные (отпуск/больничный/учебный) — диапазон start..end.
-        const hasDiscreteDates = Array.isArray(request.selected_dates) && request.selected_dates.length > 0;
-        const isoDates: string[] = [];
-        if (hasDiscreteDates) {
-          for (const raw of request.selected_dates as string[]) {
-            const iso = typeof raw === 'string' ? raw.slice(0, 10) : new Date(raw).toISOString().slice(0, 10);
-            if (iso) isoDates.push(iso);
-          }
-        } else {
-          const startDate = new Date(request.start_date);
-          const endDate = new Date(request.end_date);
-          for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-            const dayOfWeek = d.getDay();
-            if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
-            isoDates.push(d.toISOString().split('T')[0]);
-          }
-        }
-
-        for (const iso of isoDates) {
-          // 'work' не зашивает часы (время из СКУД); остальные статусы — null здесь,
-          // часы по графику проставляет attendance.service (ABSENCE_STATUSES_AS_WORKED).
-          const hoursOverride = null;
-          // Заявление уже одобрено руководителем — дополнительного согласования не требует.
-          const approvalStatus = isWorkKind ? 'auto_approved' : undefined;
-
-          await upsertAttendanceAdjustment({
-            employee_id: request.employee_id,
-            work_date: iso,
-            status: timesheetStatus,
-            hours_override: hoursOverride,
-            source_type: 'leave_request',
-            source_id: String(request.id),
-            reason: request.reason ?? null,
-            created_by: authorUserId,
-            ...(approvalStatus ? { approval_status: approvalStatus } : {}),
-          }, client);
-        }
-      }
+      // Создаём attendance adjustments как канонический источник ручных статусов.
+      // Для work/remote в выходной approval_status считает единый резолвер.
+      await materializeLeaveRequestAdjustments(request, authorUserId, client);
 
       // Обработка корректировки табеля
       if (request.request_type === 'time_correction' && request.correction_date) {

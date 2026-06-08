@@ -36,8 +36,7 @@ interface ILeaveRequestRowProps {
 
 export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({ request: r, today, onClick, onCancel }) => {
   const Icon = STATUS_ICONS[r.status];
-  const awaitingAdmin = r.request_type === 'time_correction'
-    && r.status === 'approved'
+  const awaitingApproval = (r.request_type === 'time_correction' || r.request_type === 'work')
     && r.correction_approval_status === 'pending';
   const canCancel =
     !!onCancel && (r.status === 'pending' || r.status === 'approved') && !isLeaveRequestArchived(r, today);
@@ -62,9 +61,9 @@ export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({ request: r, today, 
           <div className="lr-card-dates">{formatLeaveRequestDatesCompact(r)}</div>
         )}
         {r.reason && <div className="lr-card-reason">{r.reason}</div>}
-        {awaitingAdmin && (
+        {awaitingApproval && (
           <div className="lr-card-pending-admin" style={{ color: '#f59e0b' }}>
-            <Clock size={12} /> <strong>Ожидает доп. согласования администратором</strong>
+            <Clock size={12} /> <strong>Ожидает согласования</strong>
           </div>
         )}
         {r.review_comment && <div className="lr-card-comment">Комментарий: {r.review_comment}</div>}
