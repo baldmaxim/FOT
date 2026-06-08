@@ -14,6 +14,9 @@ import styles from './FeedbackReviewPage.module.css';
 const TestManagementModal = lazy(() =>
   import('../components/tests/TestManagementModal').then(m => ({ default: m.TestManagementModal })),
 );
+const TestResponseViewModal = lazy(() =>
+  import('../components/tests/TestResponseViewModal').then(m => ({ default: m.TestResponseViewModal })),
+);
 
 type SubTab = 'tasks' | 'suggestions' | 'complaints' | 'tests';
 
@@ -289,7 +292,7 @@ const TestsTab: FC = () => {
 
       {modalDept && (
         <DeptDetailModal title={modalDept} onClose={() => setModalDept(null)}>
-          <DeptTakersContent responses={responses ?? []} departmentName={modalDept} />
+          <DeptTakersContent testId={effectiveTest} responses={responses ?? []} departmentName={modalDept} />
         </DeptDetailModal>
       )}
 
@@ -303,30 +306,60 @@ const TestsTab: FC = () => {
 };
 
 // Содержимое модалки «Прохождения отдела» — клиентский фильтр по уже загруженным.
-const DeptTakersContent: FC<{ responses: ITestResponseRow[]; departmentName: string }> = ({ responses, departmentName }) => {
+const DeptTakersContent: FC<{ testId: string; responses: ITestResponseRow[]; departmentName: string }> = ({ testId, responses, departmentName }) => {
   const [q, setQ] = useState('');
+  const [viewResponseId, setViewResponseId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+
   const filtered = useMemo(() => responses.filter(r =>
     r.status === 'submitted'
     && r.department_name === departmentName
     && (!q || (r.full_name ?? '').toLowerCase().includes(q.toLowerCase())),
   ), [responses, departmentName, q]);
 
+  const handleDelete = async (responseId: string) => {
+    if (!window.confirm('Удалить прохождение? Сотрудник сможет пройти тест заново.')) return;
+    try {
+      await testsService.deleteResponse(testId, responseId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['test-responses', testId] }),
+        queryClient.invalidateQueries({ queryKey: ['test-stats', testId] }),
+      ]);
+      showToast('success', 'Прохождение удалено');
+    } catch (err) {
+      console.error('test response delete error:', err);
+      showToast('error', 'Не удалось удалить прохождение');
+    }
+  };
+
   return (
     <>
       <input className={styles.search} placeholder="Поиск по ФИО" value={q} onChange={e => setQ(e.target.value)} />
       <table className={styles.table}>
-        <thead><tr><th>Сотрудник</th><th>Статус</th><th>Время</th></tr></thead>
+        <thead><tr><th>Сотрудник</th><th>Статус</th><th>Время</th><th></th></tr></thead>
         <tbody>
           {filtered.map(r => (
             <tr key={r.id}>
-              <td>{r.full_name ?? '—'}</td>
+              <td className={styles.deptCell} onClick={() => setViewResponseId(r.id)}>{r.full_name ?? '—'}</td>
               <td>Пройден</td>
               <td>{fmtDate(r.submitted_at)}</td>
+              <td>
+                <button className={styles.deleteBtn} onClick={() => handleDelete(r.id)} title="Удалить прохождение">
+                  <Trash2 size={15} />
+                </button>
+              </td>
             </tr>
           ))}
-          {!filtered.length && <tr><td colSpan={3} className={styles.empty}>Нет прохождений</td></tr>}
+          {!filtered.length && <tr><td colSpan={4} className={styles.empty}>Нет прохождений</td></tr>}
         </tbody>
       </table>
+
+      {viewResponseId && (
+        <Suspense fallback={null}>
+          <TestResponseViewModal testId={testId} responseId={viewResponseId} onClose={() => setViewResponseId(null)} />
+        </Suspense>
+      )}
     </>
   );
 };

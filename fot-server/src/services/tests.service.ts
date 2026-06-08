@@ -208,6 +208,28 @@ export async function loadMyResponse(testId: string, employeeId: number): Promis
   return { status: resp.status, answers };
 }
 
+// ---- Прохождение конкретного сотрудника (для просмотра администратором) ----
+export async function loadResponseDetail(testId: string, responseId: string): Promise<{
+  full_name: string | null;
+  status: string;
+  submitted_at: string | null;
+  answers: Array<{ question_id: string; selected_option_ids: string[]; custom_text: string | null }>;
+} | null> {
+  const resp = await queryOne<{ full_name: string | null; status: string; submitted_at: string | null }>(
+    `SELECT e.full_name, r.status, r.submitted_at
+       FROM test_responses r
+       JOIN employees e ON e.id = r.employee_id
+      WHERE r.id = $1::uuid AND r.test_id = $2::uuid`,
+    [responseId, testId],
+  );
+  if (!resp) return null;
+  const answers = await query<{ question_id: string; selected_option_ids: string[]; custom_text: string | null }>(
+    `SELECT question_id, selected_option_ids, custom_text FROM test_answers WHERE response_id = $1::uuid`,
+    [responseId],
+  );
+  return { ...resp, answers };
+}
+
 export interface IAnswerInput {
   question_id: string;
   selected_option_ids?: string[];

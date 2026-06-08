@@ -24,6 +24,8 @@ router.post('/:id/response', requirePageAccess(EMPLOYEE, 'edit'), testsControlle
 
 // ---- Администратор: конкретный тест ----
 router.get('/:id/responses', requirePageAccess(ADMIN, 'view'), testsController.listResponses);
+router.get('/:id/responses/:responseId', requirePageAccess(ADMIN, 'view'), testsController.getResponseDetail);
+router.delete('/:id/responses/:responseId', requirePageAccess(ADMIN, 'edit'), testsController.deleteResponse);
 router.put('/:id/assignments', requirePageAccess(ADMIN, 'edit'), testsController.setAssignments);
 router.get('/:id', requirePageAccess(ADMIN, 'view'), testsController.getTestFull);
 router.put('/:id', requirePageAccess(ADMIN, 'edit'), testsController.update);

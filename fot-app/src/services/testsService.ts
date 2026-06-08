@@ -77,6 +77,16 @@ export interface ITestResponseRow {
   department_name: string | null;
 }
 
+export interface ITestResponseDetail {
+  test: ITestFull;
+  response: {
+    full_name: string | null;
+    status: ResponseStatus;
+    submitted_at: string | null;
+    answers: Array<{ question_id: string; selected_option_ids: string[]; custom_text: string | null }>;
+  };
+}
+
 // ---- ввод конструктора теста ----
 export interface ITestQuestionInput {
   text: string;
@@ -140,5 +150,12 @@ export const testsService = {
   getStats: async (testId: string): Promise<IDepartmentStat[]> => {
     const res = await apiClient.get<ApiResponse<IDepartmentStat[]>>(`/tests/stats?test_id=${testId}`);
     return res.data;
+  },
+  getResponseDetail: async (testId: string, responseId: string): Promise<ITestResponseDetail> => {
+    const res = await apiClient.get<ApiResponse<ITestResponseDetail>>(`/tests/${testId}/responses/${responseId}`);
+    return res.data;
+  },
+  deleteResponse: async (testId: string, responseId: string): Promise<void> => {
+    await apiClient.delete(`/tests/${testId}/responses/${responseId}`);
   },
 };

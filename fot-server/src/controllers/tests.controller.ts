@@ -14,6 +14,7 @@ import {
   listAvailableTests,
   isTestAssignedToDepartmentChain,
   loadMyResponse,
+  loadResponseDetail,
   saveResponse,
 } from '../services/tests.service.js';
 
@@ -325,6 +326,39 @@ const listResponses = async (req: AuthenticatedRequest, res: Response): Promise<
   }
 };
 
+// Детали прохождения конкретного сотрудника (вопросы + его ответы).
+const getResponseDetail = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const testId = req.params.id;
+    const responseId = req.params.responseId;
+    if (!isUuid(testId) || !isUuid(responseId)) { res.status(400).json({ success: false, error: 'Некорректный id' }); return; }
+    if (!(await canManageTest(req, testId))) { res.status(403).json({ success: false, error: 'Нет доступа' }); return; }
+    const test = await loadTestFull(testId);
+    if (!test) { res.status(404).json({ success: false, error: 'Тест не найден' }); return; }
+    const response = await loadResponseDetail(testId, responseId);
+    if (!response) { res.status(404).json({ success: false, error: 'Прохождение не найдено' }); return; }
+    res.json({ success: true, data: { test, response } });
+  } catch (err) {
+    console.error('tests.getResponseDetail error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения прохождения' });
+  }
+};
+
+// Удаление прохождения сотрудника (CASCADE снимет ответы).
+const deleteResponse = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const testId = req.params.id;
+    const responseId = req.params.responseId;
+    if (!isUuid(testId) || !isUuid(responseId)) { res.status(400).json({ success: false, error: 'Некорректный id' }); return; }
+    if (!(await canManageTest(req, testId))) { res.status(403).json({ success: false, error: 'Нет доступа' }); return; }
+    await execute('DELETE FROM test_responses WHERE id = $1::uuid AND test_id = $2::uuid', [responseId, testId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('tests.deleteResponse error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка удаления прохождения' });
+  }
+};
+
 // Статистика прохождения по отделам (выполнили / всего) в скоупе.
 const getStats = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -363,5 +397,7 @@ export const testsController = {
   deactivate,
   setAssignments,
   listResponses,
+  getResponseDetail,
+  deleteResponse,
   getStats,
 };
