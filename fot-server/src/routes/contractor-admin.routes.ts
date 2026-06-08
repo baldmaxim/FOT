@@ -43,6 +43,8 @@ router.get('/submissions/:id', apprView, contractorAdminController.getSubmission
 router.post('/submissions/:id/approve', apprEdit, requireCritical2FA, contractorAdminController.approveSubmission);
 router.post('/submissions/:id/reject', apprEdit, contractorAdminController.rejectSubmission);
 router.post('/submissions/:id/decide', apprEdit, requireCritical2FA, contractorAdminController.decideSubmission);
+// Блокировка старого дубля-однофамильца только что активированного (по batch_id).
+router.post('/duplicates/block', apprEdit, requireCritical2FA, contractorAdminController.blockDuplicate);
 
 // Отправленные / мониторинг / история по пропуску.
 router.get('/passes/sent', apprView, contractorAdminController.listSentPasses);

@@ -190,6 +190,21 @@ export interface IDecideItem {
   decision: 'approved' | 'rejected';
   reason?: string;
   access_point_names?: string[];
+  /** Срок действия конкретного пропуска (режим «не для всех»). */
+  expires_at?: string;
+}
+
+/** Дубль-однофамилец только что активированного (подрядный пропуск или штатный сотрудник). */
+export interface IDuplicateRow {
+  source: 'contractor_pass' | 'employee';
+  sigur_employee_id: number;
+  employee_id: number | null;
+  pass_id: string | null;
+  full_name: string;
+  place_name: string | null;
+  pass_number: string | null;
+  card_uid: string | null;
+  access_point_names: string[] | null;
 }
 
 export interface IDecideResult {
@@ -199,6 +214,16 @@ export interface IDecideResult {
   failed: number;
   errors: string[];
   warnings: string[];
+  /** Батч активации для последующей блокировки дублей (null — дублей нет). */
+  batch_id: string | null;
+  duplicates: IDuplicateRow[];
+}
+
+export type IBlockDuplicateAction = 'returned_to_pool' | 'deleted' | 'dismissed';
+
+export interface IBlockDuplicateResult {
+  action: IBlockDuplicateAction;
+  dry_run?: boolean;
 }
 
 export interface IPoolIssueInput {
@@ -455,6 +480,13 @@ export const contractorAdminService = {
     const r = await apiClient.post<ApiResponse<IDecideResult>>(
       `/admin/contractor/submissions/${id}/decide`,
       { decisions, expires_at: expiresAt },
+    );
+    return r.data;
+  },
+  async blockDuplicate(batchId: string, sigurEmployeeId: number): Promise<IBlockDuplicateResult> {
+    const r = await apiClient.post<ApiResponse<IBlockDuplicateResult>>(
+      '/admin/contractor/duplicates/block',
+      { batch_id: batchId, sigur_employee_id: sigurEmployeeId },
     );
     return r.data;
   },

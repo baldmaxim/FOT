@@ -37,6 +37,7 @@ import {
   replaceSigurEmployeeAccessPoints,
 } from '../services/sigur-live-cards.service.js';
 import { resolveAccessPointNamesToIds } from '../services/contractor-access.service.js';
+import { enqueueRevoke } from '../services/contractor-pool.service.js';
 import {
   applyDismissalImmediately,
   insertDismissalHistory,
@@ -59,6 +60,100 @@ const ensureSystemAdmin = async (
   }
   return true;
 };
+
+/** Строка дубля-однофамильца (подрядный пропуск или штатный сотрудник). */
+interface IDuplicateRow {
+  source: 'contractor_pass' | 'employee';
+  sigur_employee_id: number;
+  employee_id: number | null;
+  pass_id: string | null;
+  full_name: string;
+  place_name: string | null;
+  pass_number: string | null;
+  card_uid: string | null;
+  access_point_names: string[] | null;
+}
+
+/**
+ * Полные однофамильцы (точное совпадение ФИО) среди активных подрядных пропусков и штатных
+ * сотрудников, исключая переданные sigur_employee_id (только что активированные). Дедуп по
+ * sigur_employee_id с приоритетом подрядного пропуска (у него есть номер пропуска).
+ */
+async function findDuplicatesForNames(
+  names: string[],
+  excludeSigurIds: number[],
+): Promise<IDuplicateRow[]> {
+  const uniqueNames = [...new Set(names.map(n => (n ?? '').trim()).filter(Boolean))];
+  if (uniqueNames.length === 0) return [];
+
+  const passRows = await query<{
+    pass_id: string; sigur_employee_id: number; full_name: string;
+    pass_number: string | null; access_point_names: string[] | null;
+    card_uid: string | null; place_name: string | null; employee_id: number | null;
+  }>(
+    `SELECT p.id AS pass_id, p.sigur_employee_id,
+            COALESCE(h.holder_name, p.holder_name) AS full_name,
+            p.pass_number, p.access_point_names, p.card_uid,
+            d.name AS place_name, e.id AS employee_id
+       FROM contractor_passes p
+       JOIN org_departments d ON d.id = p.org_department_id
+       LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
+       LEFT JOIN employees e ON e.sigur_employee_id = p.sigur_employee_id
+      WHERE COALESCE(h.holder_name, p.holder_name) = ANY($1::text[])
+        AND (p.status = 'applied' OR p.is_active = true)
+        AND p.sigur_employee_id IS NOT NULL
+        AND p.sigur_employee_id <> ALL($2::bigint[])`,
+    [uniqueNames, excludeSigurIds],
+  );
+
+  const empRows = await query<{
+    employee_id: number; sigur_employee_id: number; full_name: string; place_name: string | null;
+  }>(
+    `SELECT e.id AS employee_id, e.sigur_employee_id, e.full_name, od.name AS place_name
+       FROM employees e
+       LEFT JOIN org_departments od ON od.id = e.org_department_id
+      WHERE e.full_name = ANY($1::text[])
+        AND COALESCE(e.employment_status, 'active') <> 'fired'
+        AND COALESCE(e.is_archived, false) = false
+        AND e.sigur_employee_id IS NOT NULL
+        AND e.sigur_employee_id <> ALL($2::bigint[])`,
+    [uniqueNames, excludeSigurIds],
+  );
+
+  // bigint-колонки приходят строкой из pg — приводим sigur_employee_id к number.
+  const byId = new Map<number, IDuplicateRow>();
+  for (const r of passRows) {
+    const sid = Number(r.sigur_employee_id);
+    if (!Number.isFinite(sid) || byId.has(sid)) continue;
+    byId.set(sid, {
+      source: 'contractor_pass',
+      sigur_employee_id: sid,
+      employee_id: r.employee_id ?? null,
+      pass_id: r.pass_id,
+      full_name: r.full_name,
+      place_name: r.place_name ?? null,
+      pass_number: r.pass_number ?? null,
+      card_uid: r.card_uid ?? null,
+      access_point_names: r.access_point_names ?? null,
+    });
+  }
+  for (const r of empRows) {
+    const sid = Number(r.sigur_employee_id);
+    if (!Number.isFinite(sid) || byId.has(sid)) continue;
+    byId.set(sid, {
+      source: 'employee',
+      sigur_employee_id: sid,
+      employee_id: r.employee_id ?? null,
+      pass_id: null,
+      full_name: r.full_name,
+      place_name: r.place_name ?? null,
+      pass_number: null,
+      card_uid: null,
+      access_point_names: null,
+    });
+  }
+  return [...byId.values()];
+}
 
 export const contractorAdminController = {
   /** GET /orgs — список подрядных организаций. */
@@ -1073,15 +1168,18 @@ export const contractorAdminController = {
           decision: z.enum(['approved', 'rejected']),
           reason: z.string().trim().max(1000).optional(),
           access_point_names: z.array(z.string().trim().min(1)).optional(),
+          // Срок действия конкретного пропуска (режим «не для всех»). Приоритетнее общего expires_at.
+          expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         })).min(1).max(500),
-        // Дата окончания пропуска (выбирает админ). Пишется в Sigur (срок привязки карты)
-        // и в contractor_passes.expires_at. Если не передана — дефолт привязки (+5 лет).
+        // Общий срок действия (режим «Для всех»). Пишется в Sigur (срок привязки карты)
+        // и в contractor_passes.expires_at. Перебивается per-item expires_at.
         expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       }).parse(req.body);
 
-      const expIso = body.expires_at
-        ? new Date(`${body.expires_at}T23:59:59`).toISOString()
-        : undefined;
+      // Дефолт срока — 31.12 текущего года, но не раньше завтрашней даты (без молчаливого ухода в +5 лет).
+      const minDate = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+      const endOfYear = `${new Date().getFullYear()}-12-31`;
+      const defaultExp = endOfYear >= minDate ? endOfYear : minDate;
 
       const sub = await queryOne<{ id: string; status: string; org_department_id: string }>(
         'SELECT id, status, org_department_id FROM contractor_submissions WHERE id = $1::uuid',
@@ -1117,6 +1215,9 @@ export const contractorAdminController = {
       const rejected: string[] = [];
       const failures: string[] = [];
       const warnings: string[] = [];
+      // Реально активированные в этом запросе (для поиска дублей-однофамильцев и защиты от их блокировки).
+      const activatedSigurIds: number[] = [];
+      const activatedNames: string[] = [];
 
       for (const dec of body.decisions) {
         const pass = byId.get(dec.pass_id);
@@ -1138,6 +1239,13 @@ export const contractorAdminController = {
             failures.push(`pass ${pass.id}: профиль не создан в Sigur`);
             continue;
           }
+          // Срок действия: per-item приоритетнее общего, иначе дефолт (31.12, не раньше завтра).
+          const itemExp = dec.expires_at ?? body.expires_at ?? defaultExp;
+          if (itemExp < minDate) {
+            failures.push(`pass ${pass.id}: срок действия раньше завтрашней даты`);
+            continue;
+          }
+          const itemExpIso = new Date(`${itemExp}T23:59:59`).toISOString();
           try {
             // Резолв точек доступа (приоритет — из decision, иначе из пропуска).
             const names = dec.access_point_names ?? pass.access_point_names ?? [];
@@ -1156,7 +1264,7 @@ export const contractorAdminController = {
               if (!pass.card_uid) {
                 throw new Error('нет UID карты');
               }
-              await assignSigurEmployeeCardBinding(pass.sigur_employee_id, [pass.card_uid], expIso, connection, true);
+              await assignSigurEmployeeCardBinding(pass.sigur_employee_id, [pass.card_uid], itemExpIso, connection, true);
 
               await updateSigurEmployee(
                 pass.sigur_employee_id,
@@ -1178,7 +1286,7 @@ export const contractorAdminController = {
                         expires_at = COALESCE($3::date, expires_at),
                         updated_at = now()
                   WHERE id = $2::uuid`,
-                [names.length ? names : null, pass.id, body.expires_at ?? null],
+                [names.length ? names : null, pass.id, itemExp],
               );
               // Привязываем одобрение к открытой строке владельца.
               await client.query(
@@ -1195,6 +1303,8 @@ export const contractorAdminController = {
               );
             });
             applied.push(pass.id);
+            if (pass.sigur_employee_id != null) activatedSigurIds.push(Number(pass.sigur_employee_id));
+            if (pass.holder_name) activatedNames.push(pass.holder_name);
           } catch (e) {
             failures.push(`pass ${pass.id}: ${e instanceof Error ? e.message : String(e)}`);
           }
@@ -1275,6 +1385,37 @@ export const contractorAdminController = {
       );
 
       void total;
+
+      // Поиск дублей-однофамильцев только что активированных. Набор активированных и список
+      // кандидатов — серверно-авторитетные: сохраняем батч, клиент сможет лишь блокировать
+      // строку из allow-list (candidates), но не активированных (activated_sigur_ids).
+      let batchId: string | null = null;
+      let duplicates: IDuplicateRow[] = [];
+      if (activatedNames.length > 0) {
+        try {
+          duplicates = await findDuplicatesForNames(activatedNames, activatedSigurIds);
+          if (duplicates.length > 0) {
+            // Оппортунистическая TTL-очистка старых батчей (сутки).
+            await execute(
+              `DELETE FROM contractor_activation_batches WHERE created_at < now() - interval '1 day'`,
+            );
+            const row = await queryOne<{ id: string }>(
+              `INSERT INTO contractor_activation_batches
+                 (submission_id, created_by, activated_sigur_ids, candidates)
+               VALUES ($1::uuid, $2::uuid, $3::bigint[], $4::jsonb)
+               RETURNING id`,
+              [submissionId, req.user.id, activatedSigurIds, JSON.stringify(duplicates)],
+            );
+            batchId = row?.id ?? null;
+          }
+        } catch (dupError) {
+          // Поиск дублей не должен ломать основной результат активации.
+          console.error('Contractor decideSubmission duplicates error:', dupError);
+          duplicates = [];
+          batchId = null;
+        }
+      }
+
       res.json({
         success: true,
         data: {
@@ -1284,6 +1425,8 @@ export const contractorAdminController = {
           failed: failures.length,
           errors: failures,
           warnings,
+          batch_id: batchId,
+          duplicates,
         },
       });
     } catch (error) {
@@ -1293,6 +1436,170 @@ export const contractorAdminController = {
       }
       console.error('Contractor decideSubmission error:', error);
       res.status(500).json({ success: false, error: 'Не удалось обработать решения' });
+    }
+  },
+
+  /**
+   * POST /duplicates/block — блокировка старого дубля-однофамильца только что активированного.
+   * Body: { batch_id, sigur_employee_id }. Цель берётся ТОЛЬКО из серверного allow-list батча
+   * (candidates) и не может совпадать с активированными (activated_sigur_ids).
+   * - подрядный пропуск: номерная карта → возврат в пул (enqueueRevoke, воркер блокирует в Sigur);
+   *   без карты → удаление профиля в Sigur + status='revoked';
+   * - штатный сотрудник: увольнение (блок в Sigur + перенос в «Уволенные»).
+   */
+  async blockDuplicate(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const { batch_id, sigur_employee_id } = z.object({
+        batch_id: z.string().uuid(),
+        sigur_employee_id: z.number().int(),
+      }).parse(req.body);
+
+      const batch = await queryOne<{
+        id: string; created_by: string; created_at: string;
+        activated_sigur_ids: Array<number | string>; candidates: IDuplicateRow[];
+      }>(
+        `SELECT id, created_by, created_at, activated_sigur_ids, candidates
+           FROM contractor_activation_batches WHERE id = $1::uuid`,
+        [batch_id],
+      );
+      if (!batch || batch.created_by !== req.user.id) {
+        res.status(404).json({ success: false, error: 'Батч активации не найден' });
+        return;
+      }
+      if (new Date(batch.created_at).getTime() < Date.now() - 24 * 60 * 60 * 1000) {
+        res.status(410).json({ success: false, error: 'Батч активации устарел — откройте пропуска заново' });
+        return;
+      }
+      // Защита: только что активированного сотрудника блокировать нельзя.
+      if ((batch.activated_sigur_ids ?? []).map(Number).includes(sigur_employee_id)) {
+        res.status(409).json({ success: false, error: 'Нельзя заблокировать только что активированного сотрудника' });
+        return;
+      }
+      const candidate = (batch.candidates ?? []).find(c => Number(c.sigur_employee_id) === sigur_employee_id);
+      if (!candidate) {
+        res.status(409).json({ success: false, error: 'Цель не является подтверждённым дублем' });
+        return;
+      }
+
+      const dryRun = isContractorSigurDryRun();
+      const connection = await sigurService.getBackgroundConnectionType();
+
+      if (candidate.source === 'contractor_pass') {
+        if (!candidate.pass_id) {
+          res.status(409).json({ success: false, error: 'У дубля нет пропуска' });
+          return;
+        }
+        // Live-recheck: пропуск всё ещё активен и тот же профиль Sigur.
+        const pass = await queryOne<{
+          status: string; is_active: boolean; card_uid: string | null; sigur_employee_id: number | string | null;
+        }>(
+          `SELECT status, is_active, card_uid, sigur_employee_id
+             FROM contractor_passes WHERE id = $1::uuid`,
+          [candidate.pass_id],
+        );
+        if (!pass || Number(pass.sigur_employee_id) !== sigur_employee_id
+            || (pass.status !== 'applied' && !pass.is_active)) {
+          res.status(409).json({ success: false, error: 'Состояние пропуска изменилось — обновите список' });
+          return;
+        }
+
+        let action: 'returned_to_pool' | 'deleted';
+        if (pass.card_uid) {
+          // Номерная карта — возврат в пул; фоновый воркер заблокирует и перенесёт профиль в Sigur.
+          await enqueueRevoke({ passId: candidate.pass_id, userId: req.user.id });
+          action = 'returned_to_pool';
+        } else {
+          // Без карты — удалить профиль в Sigur и списать пропуск.
+          if (!dryRun) {
+            try {
+              await deleteSigurEmployee(sigur_employee_id, connection);
+            } catch (delError) {
+              const m = delError instanceof Error ? delError.message : String(delError);
+              if (!/not found|не найден|404/i.test(m)) throw delError;
+            }
+          }
+          await withTransaction(async client => {
+            await client.query(
+              `UPDATE contractor_passes
+                  SET status = 'revoked', is_active = false, updated_at = now()
+                WHERE id = $1::uuid AND sigur_employee_id = $2
+                  AND (status = 'applied' OR is_active = true)`,
+              [candidate.pass_id, sigur_employee_id],
+            );
+            await client.query(
+              `UPDATE contractor_pass_holders SET valid_until = current_date
+                WHERE pass_id = $1::uuid AND valid_until IS NULL`,
+              [candidate.pass_id],
+            );
+          });
+          action = 'deleted';
+        }
+
+        await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+          entityType: 'contractor_pass',
+          entityId: candidate.pass_id,
+          details: { action: 'duplicate_block', mode: action, sigur_employee_id },
+        });
+        res.json({ success: true, data: { action, dry_run: dryRun } });
+        return;
+      }
+
+      // source === 'employee' — увольнение штатного дубля (блок в Sigur + перенос в «Уволенные»).
+      const emp = await queryOne<{ id: number }>(
+        `SELECT id FROM employees WHERE sigur_employee_id = $1 LIMIT 1`,
+        [sigur_employee_id],
+      );
+      if (!emp) {
+        res.status(409).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+      const employeeId = Number(emp.id);
+      const existing = await loadEmployeeLifecycleRow(employeeId);
+      if (!existing || existing.employment_status === 'fired') {
+        res.status(409).json({ success: false, error: 'Сотрудник уже уволен или недоступен' });
+        return;
+      }
+      if (dryRun) {
+        res.json({ success: true, data: { action: 'dismissed', dry_run: true } });
+        return;
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const dismissalDate = existing.hire_date && today < existing.hire_date ? existing.hire_date : today;
+      const { fromDepartmentId } = await applyDismissalImmediately({
+        employeeId,
+        existing,
+        dismissalDate,
+        userId: req.user.id,
+      });
+      employeeCache.invalidate(employeeId);
+      await insertDismissalHistory(employeeId, dismissalDate, {
+        scheduled: false,
+        createdBy: req.user.id,
+        fromDepartmentId,
+      });
+      await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
+        entityType: 'employee',
+        entityId: String(employeeId),
+        details: { source: 'contractor_duplicate_block', dismissal_date: dismissalDate, sigur_employee_id },
+      });
+      res.json({ success: true, data: { action: 'dismissed', dry_run: false } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      const httpStatus = getHttpErrorStatus(error);
+      if (httpStatus) {
+        res.status(httpStatus).json({
+          success: false,
+          error: getErrorMessage(error, 'Не удалось заблокировать дубль'),
+        });
+        return;
+      }
+      console.error('Contractor blockDuplicate error:', error);
+      Sentry.captureException(error, { tags: { route: 'contractor.blockDuplicate' } });
+      res.status(500).json({ success: false, error: 'Не удалось заблокировать дубль' });
     }
   },
 

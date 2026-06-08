@@ -15,6 +15,11 @@ const h = vi.hoisted(() => ({
   assignCard: vi.fn(),
   replaceAP: vi.fn(),
   resolveAP: vi.fn(),
+  enqueueRevoke: vi.fn(),
+  applyDismissal: vi.fn(),
+  insertDismissalHistory: vi.fn(),
+  loadLifecycle: vi.fn(),
+  empCacheInvalidate: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -59,6 +64,18 @@ vi.mock('../services/notification.service.js', () => ({
 }));
 vi.mock('../services/push.service.js', () => ({
   pushService: { sendGenericNotification: vi.fn().mockResolvedValue([]) },
+}));
+vi.mock('../services/contractor-pool.service.js', () => ({ enqueueRevoke: h.enqueueRevoke }));
+vi.mock('./employee-lifecycle.controller.js', () => ({
+  applyDismissalImmediately: h.applyDismissal,
+  insertDismissalHistory: h.insertDismissalHistory,
+  loadEmployeeLifecycleRow: h.loadLifecycle,
+  getHttpErrorStatus: () => undefined,
+  getHttpErrorCode: () => undefined,
+  getErrorMessage: (_e: unknown, fallback: string) => fallback,
+}));
+vi.mock('../services/employee-cache.service.js', () => ({
+  employeeCache: { invalidate: h.empCacheInvalidate },
 }));
 
 import { contractorAdminController } from './contractor-admin.controller.js';
@@ -262,6 +279,8 @@ describe('contractorAdminController.decideSubmission — срок действи
     h.execute.mockResolvedValue(1);
     h.logFromRequest.mockResolvedValue(undefined);
     h.resolveAP.mockResolvedValue({ accessPointIds: [], unmatchedNames: [] });
+    // Поиск дублей (findDuplicatesForNames) делает доп. query() — по умолчанию пусто.
+    h.query.mockResolvedValue([]);
     h.withTransaction.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) =>
       fn({ query: vi.fn().mockResolvedValue({ rows: [] }) }),
     );
@@ -299,7 +318,7 @@ describe('contractorAdminController.decideSubmission — срок действи
     expect((passUpd?.[1] as unknown[])).toContain('2027-01-15');
   });
 
-  it('без expires_at — привязка с undefined (дефолт +5 лет), expires_at не перетирается', async () => {
+  it('без expires_at — серверный дефолт 31.12 текущего года (не раньше завтра)', async () => {
     h.queryOne
       .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
       .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
@@ -314,6 +333,245 @@ describe('contractorAdminController.decideSubmission — срок действи
       res as never,
     );
 
-    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], undefined, 'external', true);
+    const minDate = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+    const eoy = `${new Date().getFullYear()}-12-31`;
+    const def = eoy >= minDate ? eoy : minDate;
+    const expIso = new Date(`${def}T23:59:59`).toISOString();
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true);
+  });
+
+  it('per-item expires_at приоритетнее общего', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
+      .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+    ]);
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({
+        decisions: [{ pass_id: PASS_ID, decision: 'approved', expires_at: '2028-03-03' }],
+        expires_at: '2027-01-15',
+      }),
+      res as never,
+    );
+
+    const expIso = new Date('2028-03-03T23:59:59').toISOString();
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true);
+  });
+
+  it('срок раньше завтрашней даты → пропуск не активируется (failed)', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
+      .mockResolvedValueOnce({ total: '1', pending: '1', approved: '0', rejected: '0' });
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+    ]);
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved', expires_at: '2000-01-01' }] }),
+      res as never,
+    );
+
+    expect(h.assignCard).not.toHaveBeenCalled();
+    const body = res.body as { data: { applied: number; failed: number } };
+    expect(body.data.applied).toBe(0);
+    expect(body.data.failed).toBe(1);
+  });
+
+  it('после активации возвращает batch_id и дубли; activated_sigur_ids сохранены', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' }) // submission
+      .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' })       // counts
+      .mockResolvedValueOnce({ id: 'batch-1' });                                               // INSERT batch RETURNING
+    h.query
+      .mockResolvedValueOnce([ // passes заявки
+        { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+          submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+      ])
+      .mockResolvedValueOnce([ // findDuplicatesForNames: подрядный дубль (bigint строкой)
+        { pass_id: 'p-old', sigur_employee_id: '22', full_name: 'A', pass_number: '0050',
+          access_point_names: ['КПП 1'], card_uid: '1,2', place_name: 'ООО Рога', employee_id: 500 },
+      ])
+      .mockResolvedValueOnce([]); // empRows
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved', expires_at: '2027-01-15' }] }),
+      res as never,
+    );
+
+    const body = res.body as { data: { batch_id: string; duplicates: Array<{ source: string; sigur_employee_id: number }> } };
+    expect(body.data.batch_id).toBe('batch-1');
+    expect(body.data.duplicates).toHaveLength(1);
+    expect(body.data.duplicates[0].source).toBe('contractor_pass');
+    expect(body.data.duplicates[0].sigur_employee_id).toBe(22);
+    // INSERT батча получил activated_sigur_ids = [11]
+    const insertCall = h.queryOne.mock.calls.find(c => String(c[0]).includes('contractor_activation_batches'));
+    expect(insertCall?.[1]?.[2]).toEqual([11]);
+  });
+});
+
+describe('contractorAdminController.blockDuplicate', () => {
+  const makeBlockReq = (bodyObj: unknown) => ({
+    user: { id: 'admin-1', company_scope: { roots: 'all' } },
+    params: {},
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+    body: bodyObj,
+  }) as never;
+
+  const BATCH = '22222222-2222-2222-2222-222222222222';
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.bgConn.mockResolvedValue('external');
+    h.isDryRun.mockReturnValue(false);
+    h.execute.mockResolvedValue(1);
+    h.logFromRequest.mockResolvedValue(undefined);
+    h.withTransaction.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) =>
+      fn({ query: vi.fn().mockResolvedValue({ rows: [] }) }),
+    );
+  });
+
+  const freshBatch = (over: Record<string, unknown>) => ({
+    id: BATCH, created_by: 'admin-1', created_at: new Date().toISOString(),
+    activated_sigur_ids: [11], candidates: [], ...over,
+  });
+
+  it('батч не найден → 404', async () => {
+    h.queryOne.mockResolvedValueOnce(null);
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('чужой батч → 404', async () => {
+    h.queryOne.mockResolvedValueOnce(freshBatch({ created_by: 'other' }));
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('просроченный батч → 410', async () => {
+    h.queryOne.mockResolvedValueOnce(freshBatch({
+      created_at: new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString(),
+    }));
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+    expect(res.statusCode).toBe(410);
+  });
+
+  it('цель = только что активированный → 409', async () => {
+    h.queryOne.mockResolvedValueOnce(freshBatch({ activated_sigur_ids: [22] }));
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+    expect(res.statusCode).toBe(409);
+    expect(h.enqueueRevoke).not.toHaveBeenCalled();
+  });
+
+  it('цель не из allow-list → 409', async () => {
+    h.queryOne.mockResolvedValueOnce(freshBatch({ candidates: [] }));
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('подрядный дубль с картой → возврат в пул (enqueueRevoke)', async () => {
+    h.queryOne
+      .mockResolvedValueOnce(freshBatch({
+        candidates: [{ source: 'contractor_pass', sigur_employee_id: 22, pass_id: 'p1', card_uid: '1,2', employee_id: null }],
+      }))
+      .mockResolvedValueOnce({ status: 'applied', is_active: true, card_uid: '1,2', sigur_employee_id: '22' });
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+
+    expect(h.enqueueRevoke).toHaveBeenCalledWith({ passId: 'p1', userId: 'admin-1' });
+    expect(h.delEmp).not.toHaveBeenCalled();
+    const body = res.body as { data: { action: string } };
+    expect(body.data.action).toBe('returned_to_pool');
+  });
+
+  it('подрядный дубль без карты → удаление профиля + revoked', async () => {
+    h.queryOne
+      .mockResolvedValueOnce(freshBatch({
+        candidates: [{ source: 'contractor_pass', sigur_employee_id: 22, pass_id: 'p1', card_uid: null, employee_id: null }],
+      }))
+      .mockResolvedValueOnce({ status: 'applied', is_active: true, card_uid: null, sigur_employee_id: '22' });
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+
+    expect(h.delEmp).toHaveBeenCalledWith(22, 'external');
+    expect(h.enqueueRevoke).not.toHaveBeenCalled();
+    const body = res.body as { data: { action: string } };
+    expect(body.data.action).toBe('deleted');
+  });
+
+  it('устаревшее состояние пропуска → 409, ничего не трогаем', async () => {
+    h.queryOne
+      .mockResolvedValueOnce(freshBatch({
+        candidates: [{ source: 'contractor_pass', sigur_employee_id: 22, pass_id: 'p1', card_uid: '1,2', employee_id: null }],
+      }))
+      .mockResolvedValueOnce({ status: 'revoked', is_active: false, card_uid: '1,2', sigur_employee_id: '22' });
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.enqueueRevoke).not.toHaveBeenCalled();
+    expect(h.delEmp).not.toHaveBeenCalled();
+  });
+
+  it('штатный дубль → увольнение (applyDismissalImmediately)', async () => {
+    h.queryOne
+      .mockResolvedValueOnce(freshBatch({
+        candidates: [{ source: 'employee', sigur_employee_id: 22, pass_id: null, card_uid: null, employee_id: 500 }],
+      }))
+      .mockResolvedValueOnce({ id: 500 }); // employees by sigur_employee_id
+    h.loadLifecycle.mockResolvedValueOnce({ employment_status: 'active', hire_date: '2020-01-01' });
+    h.applyDismissal.mockResolvedValueOnce({ fromDepartmentId: 'dep-1' });
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+
+    expect(h.applyDismissal).toHaveBeenCalled();
+    expect(h.insertDismissalHistory).toHaveBeenCalled();
+    const body = res.body as { data: { action: string } };
+    expect(body.data.action).toBe('dismissed');
+  });
+
+  it('штатный дубль уже уволен → 409', async () => {
+    h.queryOne
+      .mockResolvedValueOnce(freshBatch({
+        candidates: [{ source: 'employee', sigur_employee_id: 22, pass_id: null, card_uid: null, employee_id: 500 }],
+      }))
+      .mockResolvedValueOnce({ id: 500 });
+    h.loadLifecycle.mockResolvedValueOnce({ employment_status: 'fired', hire_date: '2020-01-01' });
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.applyDismissal).not.toHaveBeenCalled();
+  });
+
+  it('dry-run: штатный дубль не вызывает Sigur/увольнение', async () => {
+    h.isDryRun.mockReturnValue(true);
+    h.queryOne
+      .mockResolvedValueOnce(freshBatch({
+        candidates: [{ source: 'employee', sigur_employee_id: 22, pass_id: null, card_uid: null, employee_id: 500 }],
+      }))
+      .mockResolvedValueOnce({ id: 500 });
+    h.loadLifecycle.mockResolvedValueOnce({ employment_status: 'active', hire_date: '2020-01-01' });
+    const res = makeRes();
+    await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
+
+    expect(h.applyDismissal).not.toHaveBeenCalled();
+    const body = res.body as { data: { action: string; dry_run: boolean } };
+    expect(body.data.action).toBe('dismissed');
+    expect(body.data.dry_run).toBe(true);
   });
 });
