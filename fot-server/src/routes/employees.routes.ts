@@ -167,6 +167,14 @@ router.put(
   employeeObjectAttributionController.set
 );
 
+// GET /api/employees/work-object-options - список объектов строительства для выбора поля «Объект».
+// Статический путь объявлен до '/:id', чтобы не быть перехваченным параметром.
+router.get(
+  '/work-object-options',
+  requirePageAccess('/staff-control', 'view'),
+  employeesController.listWorkObjectOptions
+);
+
 // GET /api/employees/:id - получение одного (worker через /employee, остальные — через /employees)
 router.get(
   '/:id',

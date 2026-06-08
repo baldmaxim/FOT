@@ -201,7 +201,8 @@
 }
 
 .form-group input[type="text"],
-.form-group input[type="date"] {
+.form-group input[type="date"],
+.form-group select {
   padding: 8px 12px;
   font-size: 14px;
   border: 1px solid var(--border);
@@ -210,9 +211,11 @@
   color: var(--text-primary);
   outline: none;
   transition: border-color 0.15s ease;
+  max-width: 100%;
 }
 
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
   border-color: var(--primary);
 }
 

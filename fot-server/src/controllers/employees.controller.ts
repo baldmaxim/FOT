@@ -77,7 +77,7 @@ const fullEmployeeSchema = z.object({
   registration_cat1: z.string().max(255).nullable().optional(),
   registration_cat4: z.string().max(255).nullable().optional(),
   doc_receipt_date: z.string().regex(ISO_DATE_REGEX).nullable().optional(),
-  work_object: z.string().max(255).nullable().optional(),
+  work_object: z.string().max(500).nullable().optional(),
   org_department_id: z.string().uuid().nullable().optional(),
   position_id: z.string().uuid().nullable().optional(),
 });
@@ -101,6 +101,24 @@ async function resolveDepartmentFilterIds(departmentId: string | undefined | nul
 }
 
 export const employeesController = {
+  /**
+   * GET /api/employees/work-object-options
+   * Плоский список активных объектов строительства (skud_objects) для выбора
+   * поля «Объект» в карточке сотрудника. Доступ по праву /staff-control view.
+   */
+  async listWorkObjectOptions(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const rows = await query<{ id: string; name: string; alt_name: string | null }>(
+        `SELECT id, name, alt_name FROM skud_objects WHERE is_active = true
+          ORDER BY COALESCE(NULLIF(btrim(alt_name), ''), name), name`,
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      console.error('List work-object options error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить объекты' });
+    }
+  },
+
   /**
    * GET /api/employees
    * Поддерживает два режима:

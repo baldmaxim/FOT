@@ -1,12 +1,14 @@
 import { type FC } from 'react';
 import { X, Check } from 'lucide-react';
 import type { Employee, EmployeeInput } from '../../types';
+import type { IWorkObjectOption } from '../../services/employeeService';
 
 interface IEmployeeInfoSectionProps {
   employee: Employee;
   isEditing: boolean;
   isSigurLinked: boolean;
   editData: Partial<EmployeeInput>;
+  workObjectOptions: IWorkObjectOption[];
   onEditDataChange: (data: Partial<EmployeeInput>) => void;
   onSave: () => void;
   onCancel: () => void;
@@ -45,11 +47,14 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
   isEditing,
   isSigurLinked,
   editData,
+  workObjectOptions,
   onEditDataChange,
   onSave,
   onCancel,
 }) => {
   if (isEditing) {
+    const currentObject = editData.work_object ?? '';
+    const currentObjectInList = !currentObject || workObjectOptions.some(o => o.name === currentObject);
     return (
       <div className="card-edit-form">
         <div className="edit-grid">
@@ -65,10 +70,25 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
             <label>Должность</label>
             <span className="form-readonly">{employee.position_name || '—'}</span>
           </div>
+          <div className="form-group">
+            <label>Объект</label>
+            <select
+              value={currentObject}
+              onChange={e => onEditDataChange({ ...editData, work_object: e.target.value || null })}
+            >
+              <option value="">—</option>
+              {!currentObjectInList && (
+                <option value={currentObject}>{currentObject}</option>
+              )}
+              {workObjectOptions.map(o => (
+                <option key={o.id} value={o.name}>{o.name}</option>
+              ))}
+            </select>
+          </div>
           {isSigurLinked ? (
             <div className="form-group">
               <label>Режим редактирования</label>
-              <span className="form-readonly">Для связанных с Sigur сотрудников в этой версии можно менять только ФИО.</span>
+              <span className="form-readonly">Для связанных с Sigur сотрудников в этой версии можно менять ФИО и Объект.</span>
             </div>
           ) : (
             <div className="form-group">

@@ -35,6 +35,12 @@ export interface PaginatedResponse {
   meta: PaginatedMeta;
 }
 
+export interface IWorkObjectOption {
+  id: string;
+  name: string;
+  alt_name: string | null;
+}
+
 export interface ICreateEmployeePayload {
   full_name: string;
   hire_date: string;
@@ -125,6 +131,11 @@ export const employeeService = {
   async update(id: number, data: Partial<EmployeeInput>): Promise<Employee> {
     const response = await apiClient.put<ApiResponse<Employee>>(`/employees/${id}`, data);
     return response.data;
+  },
+
+  async listWorkObjectOptions(): Promise<IWorkObjectOption[]> {
+    const response = await apiClient.get<ApiResponse<IWorkObjectOption[]>>('/employees/work-object-options');
+    return response.data || [];
   },
 
   async getHistory(id: number): Promise<EmployeeHistoryEvent[]> {
