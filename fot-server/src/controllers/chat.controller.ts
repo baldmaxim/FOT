@@ -1,8 +1,14 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { chatService } from '../services/chat.service.js';
+import { chatService, type IChatAttachment } from '../services/chat.service.js';
+import { dispatchChatMessage } from '../services/chat-delivery.service.js';
 import { isChatError } from '../services/chat.errors.js';
+import { r2Service } from '../services/r2.service.js';
+import { sanitizeFileName } from '../utils/file-validation.utils.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+
+type MulterRequest = AuthenticatedRequest & { file?: Express.Multer.File };
 
 const createConversationSchema = z.object({
   participantId: z.string().uuid(),
@@ -87,14 +93,49 @@ export const chatController = {
 
   /**
    * POST /api/chat/conversations/:id/messages
-   * Body: { content: string }
+   * Текст: JSON { content }. С файлом: multipart (file + опц. content).
+   * Сообщения с файлом всегда идут через REST; emit делаем здесь же.
    */
-  async sendMessage(req: AuthenticatedRequest, res: Response): Promise<void> {
+  async sendMessage(req: MulterRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const { content } = sendMessageSchema.parse(req.body);
+      const file = req.file;
 
-      const message = await chatService.sendMessage(id, req.user.id, content);
+      // Без файла — прежний контракт (валидация content 1..5000).
+      if (!file) {
+        const { content } = sendMessageSchema.parse(req.body);
+        const message = await chatService.sendMessage(id, req.user.id, content);
+        res.json({ success: true, data: message });
+        return;
+      }
+
+      // С файлом: content опционален (0..5000).
+      const content = typeof req.body.content === 'string' ? req.body.content : '';
+      if (content.length > 5000) {
+        res.status(400).json({ success: false, error: 'Сообщение слишком длинное' });
+        return;
+      }
+      if (!(await r2Service.isEnabledAsync())) {
+        res.status(503).json({ success: false, error: 'Файловое хранилище не настроено' });
+        return;
+      }
+
+      const safeName = sanitizeFileName(decodeMulterFilename(file.originalname));
+      const mime = file.mimetype || 'application/octet-stream';
+      const key = r2Service.generateChatKey(id, safeName);
+      await r2Service.uploadObject(key, file.buffer, mime);
+
+      const attachment: IChatAttachment = { key, name: safeName, size: file.size, mime };
+
+      let message;
+      try {
+        message = await chatService.sendMessage(id, req.user.id, content, attachment);
+      } catch (err) {
+        try { await r2Service.deleteObject(key); } catch { /* best-effort */ }
+        throw err;
+      }
+
+      await dispatchChatMessage(message, req.user.id);
       res.json({ success: true, data: message });
     } catch (error) {
       respondWithChatError(res, error, 'Failed to send message');

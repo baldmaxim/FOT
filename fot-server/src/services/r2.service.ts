@@ -85,6 +85,11 @@ export const r2Service = {
     return `documents/${employeeId}/${randomUUID()}${ext}`;
   },
 
+  generateChatKey: (conversationId: string, fileName: string): string => {
+    const ext = path.extname(fileName) || '.bin';
+    return `chat/${conversationId}/${randomUUID()}${ext}`;
+  },
+
   generateUploadUrl: async (key: string, contentType: string): Promise<{ url: string; headers: Record<string, string> }> => {
     const { client, bucket, kmsKeyId } = await getR2();
     if (!client) throw new Error('R2 не настроен');

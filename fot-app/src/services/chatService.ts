@@ -9,12 +9,20 @@ interface ApiResponse<T> {
 export type ChatAvailability = 'direct' | 'request' | 'forbidden';
 export type ChatRequestStatus = 'incoming_pending' | 'outgoing_pending' | null;
 
+export interface IChatAttachment {
+  key: string;
+  name: string;
+  size: number;
+  mime: string;
+  url?: string;
+}
+
 export interface IChatConversation {
   id: string;
   created_at: string;
   updated_at: string;
   participants: { user_id: string; full_name: string | null }[];
-  last_message: { content: string; sender_id: string; created_at: string } | null;
+  last_message: { content: string; sender_id: string; created_at: string; has_attachment?: boolean } | null;
   unread_count: number;
   is_writable: boolean;
   write_lock_reason: string | null;
@@ -27,6 +35,7 @@ export interface IChatMessage {
   content: string;
   is_read: boolean;
   created_at: string;
+  attachment?: IChatAttachment | null;
 }
 
 export interface IChatUser {
@@ -84,6 +93,17 @@ export const chatService = {
     const response = await apiClient.post<ApiResponse<IChatMessage>>(
       `/chat/conversations/${conversationId}/messages`,
       { content },
+    );
+    return response.data;
+  },
+
+  async sendMessageWithFile(conversationId: string, content: string, file: File): Promise<IChatMessage> {
+    const form = new FormData();
+    form.append('content', content);
+    form.append('file', file);
+    const response = await apiClient.post<ApiResponse<IChatMessage>>(
+      `/chat/conversations/${conversationId}/messages`,
+      form,
     );
     return response.data;
   },

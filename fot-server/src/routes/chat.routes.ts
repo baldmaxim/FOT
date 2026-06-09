@@ -1,8 +1,16 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { chatController } from '../controllers/chat.controller.js';
 import { authenticate, requireAnyPageAccess } from '../middleware/auth.js';
 
 const router = Router();
+
+// Вложения в сообщениях: memoryStorage, до 20 МБ, один файл.
+// multer пропускает не-multipart запросы (JSON-текст) дальше без изменений.
+const uploadChatFile = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
 
 router.use(authenticate);
 // Чат доступен любому пользователю, у которого есть «осмысленная» страница
@@ -13,7 +21,7 @@ router.use(requireAnyPageAccess(['/employee', '/dashboard'], 'view'));
 router.get('/conversations', chatController.getConversations);
 router.post('/conversations', chatController.createConversation);
 router.get('/conversations/:id/messages', chatController.getMessages);
-router.post('/conversations/:id/messages', chatController.sendMessage);
+router.post('/conversations/:id/messages', uploadChatFile.single('file'), chatController.sendMessage);
 router.patch('/conversations/:id/read', chatController.markAsRead);
 router.get('/requests', chatController.getRequests);
 router.post('/requests', chatController.createRequest);

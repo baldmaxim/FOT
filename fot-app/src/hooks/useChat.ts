@@ -67,9 +67,17 @@ export const useChat = (ws: typeof wsService | null) => {
     await loadConversations(); // refresh unread counts
   }, [ws, loadMessages, loadConversations]);
 
-  // Send message via socket (fallback to REST)
-  const sendMessage = useCallback(async (content: string) => {
-    if (!activeConvRef.current || !content.trim()) return;
+  // Send message via socket (fallback to REST). С файлом — всегда REST (multipart).
+  const sendMessage = useCallback(async (content: string, file?: File) => {
+    if (!activeConvRef.current) return;
+    if (!file && !content.trim()) return;
+
+    if (file) {
+      const message = await chatService.sendMessageWithFile(activeConvRef.current, content.trim(), file);
+      setMessages(prev => (prev.some(m => m.id === message.id) ? prev : [...prev, message]));
+      await loadConversations();
+      return;
+    }
 
     if (ws?.connected) {
       await new Promise<void>((resolve, reject) => {

@@ -94,6 +94,9 @@ export const ChatSidePanel: FC = () => {
   const [activeTab, setActiveTab] = useState<PanelTab>('chats');
   const [requestBox, setRequestBox] = useState<RequestBox>('inbox');
   const [inputValue, setInputValue] = useState('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [sending, setSending] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<IChatUser[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -119,6 +122,7 @@ export const ChatSidePanel: FC = () => {
       setMobileShowChat(false);
       setActiveTab('chats');
       setRequestBox('inbox');
+      setPendingFile(null);
     }
 
     document.body.style.overflow = isOpen ? 'hidden' : '';
@@ -197,17 +201,45 @@ export const ChatSidePanel: FC = () => {
     if (deltaX > 80) closeChat();
   };
 
+  const MAX_FILE_SIZE = 20 * 1024 * 1024;
+
   const handleSend = async () => {
-    if (!inputValue.trim() || !activeConversation?.is_writable) return;
+    if (sending || !activeConversation?.is_writable) return;
+    if (!inputValue.trim() && !pendingFile) return;
     const text = inputValue;
+    const file = pendingFile;
     setInputValue('');
+    setPendingFile(null);
+    setSending(true);
     try {
-      await sendMessage(text);
+      await sendMessage(text, file ?? undefined);
     } catch (error) {
       setInputValue(text);
+      setPendingFile(file);
       toast.error(error instanceof Error ? error.message : 'Не удалось отправить сообщение');
+    } finally {
+      setSending(false);
     }
   };
+
+  const handlePickFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error('Файл больше 20 МБ');
+      return;
+    }
+    setPendingFile(file);
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} Б`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+  };
+
+  const isImageAttachment = (mime: string): boolean => mime.startsWith('image/');
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -266,6 +298,7 @@ export const ChatSidePanel: FC = () => {
 
   const handleSelectConversation = async (conversationId: string) => {
     try {
+      setPendingFile(null);
       await selectConversation(conversationId);
       setMobileShowChat(true);
     } catch (error) {
@@ -518,7 +551,8 @@ export const ChatSidePanel: FC = () => {
                           {!conversation.is_writable && <span className={styles.lockBadge}>Только чтение</span>}
                         </div>
                         <div className={styles.convPreview}>
-                          {conversation.last_message?.content?.slice(0, 30) || 'Нет сообщений'}
+                          {conversation.last_message?.content?.slice(0, 30)
+                            || (conversation.last_message?.has_attachment ? '📎 Файл' : 'Нет сообщений')}
                         </div>
                       </div>
                       <div className={styles.convMeta}>
@@ -665,7 +699,41 @@ export const ChatSidePanel: FC = () => {
                         )}
                         <div className={`${styles.message} ${isMine ? styles.mine : styles.theirs}`}>
                           <div className={styles.messageBubble}>
-                            <div className={styles.messageText}>{message.content}</div>
+                            <div className={styles.messageContent}>
+                              {message.attachment && (
+                                isImageAttachment(message.attachment.mime) && message.attachment.url ? (
+                                  <a
+                                    href={message.attachment.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={styles.attachmentImageLink}
+                                  >
+                                    <img
+                                      src={message.attachment.url}
+                                      alt={message.attachment.name}
+                                      className={styles.attachmentImage}
+                                    />
+                                  </a>
+                                ) : (
+                                  <a
+                                    href={message.attachment.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={styles.attachmentFile}
+                                  >
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
+                                      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                                      <polyline points="13 2 13 9 20 9" />
+                                    </svg>
+                                    <span className={styles.attachmentMeta}>
+                                      <span className={styles.attachmentName}>{message.attachment.name}</span>
+                                      <span className={styles.attachmentSize}>{formatFileSize(message.attachment.size)}</span>
+                                    </span>
+                                  </a>
+                                )
+                              )}
+                              {message.content && <div className={styles.messageText}>{message.content}</div>}
+                            </div>
                             <span className={styles.messageTime}>
                               {new Date(message.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
                               {isMine && (
@@ -687,7 +755,43 @@ export const ChatSidePanel: FC = () => {
                 </div>
               )}
 
+              {pendingFile && (
+                <div className={styles.filePreview}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                    <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                    <polyline points="13 2 13 9 20 9" />
+                  </svg>
+                  <span className={styles.filePreviewName}>{pendingFile.name}</span>
+                  <span className={styles.filePreviewSize}>{formatFileSize(pendingFile.size)}</span>
+                  <button
+                    className={styles.filePreviewRemove}
+                    onClick={() => setPendingFile(null)}
+                    aria-label="Убрать файл"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                      <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+
               <div className={styles.inputArea}>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  hidden
+                  onChange={handlePickFile}
+                />
+                <button
+                  className={styles.attachBtn}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!activeConversation?.is_writable || sending}
+                  aria-label="Прикрепить файл"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="20" height="20">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
                 <textarea
                   className={styles.messageInput}
                   placeholder={activeConversation?.is_writable ? 'Сообщение...' : 'Отправка недоступна'}
@@ -700,7 +804,7 @@ export const ChatSidePanel: FC = () => {
                 <button
                   className={styles.sendBtn}
                   onClick={() => void handleSend()}
-                  disabled={!inputValue.trim() || !activeConversation?.is_writable}
+                  disabled={(!inputValue.trim() && !pendingFile) || !activeConversation?.is_writable || sending}
                 >
                   <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />

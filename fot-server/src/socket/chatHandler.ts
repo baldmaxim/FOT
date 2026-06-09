@@ -4,8 +4,7 @@ import * as Sentry from '@sentry/node';
 import { env } from '../config/env.js';
 import { chatService } from '../services/chat.service.js';
 import { isChatError } from '../services/chat.errors.js';
-import { pushService } from '../services/push.service.js';
-import { notificationService } from '../services/notification.service.js';
+import { dispatchChatMessage } from '../services/chat-delivery.service.js';
 import { portalPresence } from '../services/portal-presence.service.js';
 import type { JWTPayload } from '../types/index.js';
 
@@ -96,40 +95,8 @@ export const setupChatSocket = (io: Server) => {
       try {
         const message = await chatService.sendMessage(data.conversationId, userId, data.content);
 
-        // Отправляем всем в комнате диалога
-        io.to(`conv:${data.conversationId}`).emit('new_message', message);
-
-        // Уведомляем участников, которые не в комнате
-        const conversations = await chatService.getConversations(userId);
-        const conv = conversations.find(c => c.id === data.conversationId);
-        if (conv) {
-          const senderName = conv.participants.find(p => p.user_id === userId)?.full_name || 'Сообщение';
-          const messagePreview = message.content.slice(0, 100);
-
-          for (const p of conv.participants) {
-            if (p.user_id !== userId) {
-              io.to(`user:${p.user_id}`).emit('message_notification', {
-                conversationId: data.conversationId,
-                message,
-              });
-              // Web Push — доставит уведомление даже если вкладка закрыта
-              pushService.sendChatNotification(p.user_id, {
-                senderName,
-                messagePreview,
-                conversationId: data.conversationId,
-              }).catch(() => undefined);
-
-              // Сохраняем в БД
-              notificationService.createMany([{
-                userId: p.user_id,
-                type: 'chat_message',
-                title: senderName,
-                body: messagePreview,
-                metadata: { conversationId: data.conversationId },
-              }]).catch(() => undefined);
-            }
-          }
-        }
+        // Emit в комнату диалога + персональные уведомления (общий код с REST-путём)
+        await dispatchChatMessage(message, userId);
 
         if (callback) callback({ success: true, data: message });
       } catch (error) {

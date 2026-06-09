@@ -9,13 +9,22 @@ import {
 } from './chat-policy.service.js';
 import { ChatError } from './chat.errors.js';
 import { notificationService } from './notification.service.js';
+import { r2Service } from './r2.service.js';
+
+export interface IChatAttachment {
+  key: string;
+  name: string;
+  size: number;
+  mime: string;
+  url?: string;
+}
 
 export interface IChatConversation {
   id: string;
   created_at: string;
   updated_at: string;
   participants: { user_id: string; full_name: string | null }[];
-  last_message: { content: string; sender_id: string; created_at: string } | null;
+  last_message: { content: string; sender_id: string; created_at: string; has_attachment?: boolean } | null;
   unread_count: number;
   is_writable: boolean;
   write_lock_reason: string | null;
@@ -28,7 +37,21 @@ export interface IChatMessage {
   content: string;
   is_read: boolean;
   created_at: string;
+  attachment?: IChatAttachment | null;
 }
+
+// Подписываем короткоживущий URL для вложения при отдаче клиенту (в БД хранится
+// только key). Для картинок — inline (предпросмотр в <img>), для прочего — attachment.
+const withAttachmentUrl = async (attachment: IChatAttachment | null): Promise<IChatAttachment | null> => {
+  if (!attachment?.key) return attachment ?? null;
+  try {
+    const disposition = attachment.mime?.startsWith('image/') ? 'inline' : 'attachment';
+    const url = await r2Service.generateDownloadUrl(attachment.key, attachment.name, disposition);
+    return { ...attachment, url };
+  } catch {
+    return attachment;
+  }
+};
 
 export interface IChatUser {
   id: string;
@@ -254,14 +277,26 @@ export const chatService = {
     };
   },
 
-  async sendMessage(conversationId: string, senderId: string, content: string): Promise<IChatMessage> {
+  async sendMessage(
+    conversationId: string,
+    senderId: string,
+    content: string,
+    attachment?: IChatAttachment | null,
+  ): Promise<IChatMessage> {
     const access = await this.getConversationAccess(conversationId, senderId);
     if (!access.is_writable) {
       throw new ChatError(access.write_lock_reason || 'Отправка сообщений недоступна', 403, 'CHAT_WRITE_FORBIDDEN');
     }
 
     const plainContent = content.trim();
+    if (!plainContent && !attachment) {
+      throw new ChatError('Сообщение пустое', 400, 'CHAT_EMPTY_MESSAGE');
+    }
     const encryptedContent = encryptionService.encrypt(plainContent);
+    // В БД храним только метаданные без подписанного URL — он короткоживущий.
+    const attachmentForDb = attachment
+      ? { key: attachment.key, name: attachment.name, size: attachment.size, mime: attachment.mime }
+      : null;
 
     // Многошаговая операция (insert + touch conversation + last_read) — в TX.
     const message = await withTransaction(async (client) => {
@@ -271,11 +306,12 @@ export const chatService = {
         sender_id: string;
         content: string;
         created_at: string;
+        attachment: IChatAttachment | null;
       }>(
-        `INSERT INTO chat_messages (conversation_id, sender_id, content)
-         VALUES ($1, $2, $3)
-         RETURNING id, conversation_id, sender_id, content, created_at`,
-        [conversationId, senderId, encryptedContent],
+        `INSERT INTO chat_messages (conversation_id, sender_id, content, attachment)
+         VALUES ($1, $2, $3, $4::jsonb)
+         RETURNING id, conversation_id, sender_id, content, created_at, attachment`,
+        [conversationId, senderId, encryptedContent, attachmentForDb ? JSON.stringify(attachmentForDb) : null],
       );
       const m = insRes.rows[0];
       if (!m) throw new Error('Failed to send message');
@@ -294,7 +330,12 @@ export const chatService = {
       return m;
     });
 
-    return { ...message, content: plainContent, is_read: false } as IChatMessage;
+    return {
+      ...message,
+      content: plainContent,
+      is_read: false,
+      attachment: await withAttachmentUrl(message.attachment),
+    } as IChatMessage;
   },
 
   async getMessages(conversationId: string, userId: string, limit = 50, offset = 0): Promise<IChatMessage[]> {
@@ -306,10 +347,11 @@ export const chatService = {
       sender_id: string;
       content: string;
       created_at: string;
+      attachment: IChatAttachment | null;
     }>;
     try {
       data = await query(
-        `SELECT id, conversation_id, sender_id, content, created_at
+        `SELECT id, conversation_id, sender_id, content, created_at, attachment
            FROM chat_messages
           WHERE conversation_id = $1
           ORDER BY created_at DESC
@@ -337,13 +379,14 @@ export const chatService = {
     const otherLastReadAt = otherParticipant?.last_read_at ?? null;
     const currentLastReadAt = currentParticipant?.last_read_at ?? null;
 
-    return data.map(message => ({
+    return Promise.all(data.map(async message => ({
       ...message,
       content: decryptOrPassthrough(message.content),
       is_read: message.sender_id === userId
         ? wasReadByTimestamp(otherLastReadAt, message.created_at)
         : wasReadByTimestamp(currentLastReadAt, message.created_at),
-    })) as IChatMessage[];
+      attachment: await withAttachmentUrl(message.attachment),
+    }))) as Promise<IChatMessage[]>;
   },
 
   async getConversations(userId: string): Promise<IChatConversation[]> {
@@ -421,10 +464,11 @@ export const chatService = {
       content: string;
       sender_id: string;
       created_at: string;
+      attachment: IChatAttachment | null;
     }>;
     try {
       allMessages = await query(
-        `SELECT conversation_id, content, sender_id, created_at
+        `SELECT conversation_id, content, sender_id, created_at, attachment
            FROM chat_messages
           WHERE conversation_id = ANY($1::uuid[])
           ORDER BY created_at DESC
@@ -435,7 +479,7 @@ export const chatService = {
       throw new Error('Failed to load conversation messages');
     }
 
-    const lastMessageByConversation = new Map<string, { content: string; sender_id: string; created_at: string }>();
+    const lastMessageByConversation = new Map<string, { content: string; sender_id: string; created_at: string; has_attachment: boolean }>();
     const unreadByConversation = new Map<string, number>();
 
     allMessages.forEach(message => {
@@ -444,6 +488,7 @@ export const chatService = {
           content: message.content,
           sender_id: message.sender_id,
           created_at: message.created_at,
+          has_attachment: !!message.attachment,
         });
       }
 
@@ -483,6 +528,7 @@ export const chatService = {
           content: decryptOrPassthrough(lastMessage.content),
           sender_id: lastMessage.sender_id,
           created_at: lastMessage.created_at,
+          has_attachment: lastMessage.has_attachment,
         } : null,
         unread_count: unreadByConversation.get(conversation.id) || 0,
         is_writable: writeState.is_writable,

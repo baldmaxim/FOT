@@ -19,7 +19,7 @@ interface IChatContextType {
   loading: boolean;
   unreadTotal: number;
   selectConversation: (id: string) => Promise<void>;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, file?: File) => Promise<void>;
   startConversation: (participantId: string) => Promise<string>;
   createRequest: (targetUserId: string, message?: string) => Promise<IChatContactRequest>;
   approveRequest: (requestId: string) => Promise<{ request: IChatContactRequest; conversation_id: string }>;
