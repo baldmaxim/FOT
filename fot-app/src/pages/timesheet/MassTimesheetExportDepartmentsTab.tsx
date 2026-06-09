@@ -168,6 +168,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
   const [exporting, setExporting] = useState(false);
   const [exportingApproved, setExportingApproved] = useState(false);
   const [exportingUnified, setExportingUnified] = useState(false);
+  const [unifiedAll, setUnifiedAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { profile } = useAuth();
@@ -352,8 +353,9 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     }
   };
 
-  const handleExportUnified = async () => {
+  const handleExportUnified = async (includeEmpty = false) => {
     if (selectedDeptIds.length === 0) return;
+    setUnifiedAll(includeEmpty);
     setExportingUnified(true);
     setError(null);
     try {
@@ -363,13 +365,16 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
         department_ids: selectedDeptIds,
         from: rangeStart,
         to: rangeEnd,
+        include_empty: includeEmpty,
       });
       const daysInMonth = new Date(year, month, 0).getDate();
       const startDay = Number.parseInt(rangeStart.slice(-2), 10);
       const endDay = Number.parseInt(rangeEnd.slice(-2), 10);
       const isFullMonth = startDay === 1 && endDay === daysInMonth;
       const segmentSuffix = isFullMonth ? '' : `_${startDay}-${endDay}`;
-      const filename = `Единый_1С_${MONTH_NAMES[month]}_${year}${segmentSuffix}.xlsx`;
+      const filename = includeEmpty
+        ? `Сверка_1С_${MONTH_NAMES[month]}_${year}${segmentSuffix}.xlsx`
+        : `Единый_1С_${MONTH_NAMES[month]}_${year}${segmentSuffix}.xlsx`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -378,7 +383,9 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Mass export unified error:', err);
-      setError('Ошибка единого экспорта для 1С. Попробуйте ещё раз.');
+      setError(includeEmpty
+        ? 'Ошибка экспорта сверки для 1С. Попробуйте ещё раз.'
+        : 'Ошибка единого экспорта для 1С. Попробуйте ещё раз.');
     } finally {
       setExportingUnified(false);
     }
@@ -487,7 +494,9 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
           <div className="mte-spinner" />
           <span>
             {exportingUnified
-              ? `Сборка единого файла для 1С (${checkedIds.size} отд.)... Это может занять некоторое время`
+              ? (unifiedAll
+                ? `Сборка файла сверки для 1С (${checkedIds.size} отд.)... Это может занять некоторое время`
+                : `Сборка единого файла для 1С (${checkedIds.size} отд.)... Это может занять некоторое время`)
               : `Генерация табелей (${checkedIds.size} отд.)... Это может занять некоторое время`}
           </span>
         </div>
@@ -533,14 +542,25 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
         )}
         <button
           className="mte-export-btn mte-export-btn--secondary"
-          onClick={handleExportUnified}
+          onClick={() => handleExportUnified(false)}
           disabled={exporting || exportingApproved || exportingUnified || checkedIds.size === 0}
           title="Один Excel-файл по выбранным отделам, с разбивкой по объектам и колонками «Отдел» и «Адрес объекта»"
         >
           <Download size={16} />
-          {exportingUnified
+          {exportingUnified && !unifiedAll
             ? 'Сборка единого файла…'
             : `Единый файл для 1С (${checkedIds.size})`}
+        </button>
+        <button
+          className="mte-export-btn mte-export-btn--secondary"
+          onClick={() => handleExportUnified(true)}
+          disabled={exporting || exportingApproved || exportingUnified || checkedIds.size === 0}
+          title="Файл сверки для 1С: один лист со ВСЕМИ сотрудниками выбранных отделов, включая тех, у кого нет часов/событий"
+        >
+          <Download size={16} />
+          {exportingUnified && unifiedAll
+            ? 'Сборка файла сверки…'
+            : `Единый 1С — сверка (${checkedIds.size})`}
         </button>
       </div>
     </>

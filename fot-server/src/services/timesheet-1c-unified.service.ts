@@ -114,6 +114,7 @@ const buildRowsForDepartment = (
   empSets: { hasPersonal: Set<number>; personalCurrent: Set<number> },
   managerNameMap: Map<number, string>,
   excludeCurrentActivity: boolean = false,
+  includeEmpty: boolean = false,
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
 
@@ -169,7 +170,7 @@ const buildRowsForDepartment = (
   // Если у сотрудника есть строки по объектам, его «общая» статус-строка не нужна.
   for (const employeeRow of buildEmployeeRowsForOneC(splitData)) {
     if (seenFullNames.has(employeeRow.fullName)) continue;
-    if (isOneCRowEmpty(employeeRow)) continue;
+    if (!includeEmpty && isOneCRowEmpty(employeeRow)) continue;
     const empId = nameToId.get(employeeRow.fullName);
     const managerName = empId != null ? (managerNameMap.get(empId) ?? '') : '';
     rows.push({
@@ -192,7 +193,7 @@ const buildRowsForDepartment = (
       employees: data.employees.filter(e => currentActivityEmpIds.has(e.id)),
     };
     for (const employeeRow of buildEmployeeRowsForOneC(currentActivityData)) {
-      if (isOneCRowEmpty(employeeRow)) continue;
+      if (!includeEmpty && isOneCRowEmpty(employeeRow)) continue;
       const empId = nameToId.get(employeeRow.fullName);
       const managerName = empId != null ? (managerNameMap.get(empId) ?? '') : '';
       rows.push({
@@ -215,6 +216,7 @@ export async function buildUnified1CWorkbook(
   _year: number,
   departmentsData: IDepartmentTimesheetData[],
   excludeCurrentActivity: boolean = false,
+  includeEmpty: boolean = false,
 ): Promise<ExcelJS.Workbook> {
   const [objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerInfoMap] = await Promise.all([
     fetchObjectAddressMap(collectObjectIds(departmentsData)),
@@ -231,7 +233,7 @@ export async function buildUnified1CWorkbook(
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
-    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerNameMap, excludeCurrentActivity));
+    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerNameMap, excludeCurrentActivity, includeEmpty));
   }
   rows.sort((a, b) => {
     const byDept = a.departmentNameSort.localeCompare(b.departmentNameSort, 'ru');

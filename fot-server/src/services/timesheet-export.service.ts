@@ -401,3 +401,43 @@ export async function fetchTimesheetDataForEmployees(
     cutoffByEmployeeId,
   };
 }
+
+/**
+ * Нарезает результат одного bulk-прогона `fetchTimesheetDataForEmployees` обратно
+ * в «поотдельские» `IDepartmentTimesheetData` по списку сотрудников отдела.
+ * Тяжёлые выборки (attendance/skud) делаются один раз на всех — нарезка чисто
+ * in-memory: фильтрация массивов/Map по множеству employee_id. Общие поля
+ * (calendarMonth, posMap, year/mon/exportDays, showActualHours) копируются по ссылке.
+ */
+export function sliceTimesheetDataByEmployees(
+  bulk: IDepartmentTimesheetData,
+  employeeIds: number[],
+  departmentName: string,
+  departmentId: string | null,
+): IDepartmentTimesheetData {
+  const ids = new Set(employeeIds);
+  const filterByEmployeeMap = <V>(map: Map<number, V>): Map<number, V> => {
+    const next = new Map<number, V>();
+    for (const [employeeId, value] of map) {
+      if (ids.has(employeeId)) next.set(employeeId, value);
+    }
+    return next;
+  };
+
+  return {
+    ...bulk,
+    departmentName,
+    departmentId,
+    isBrigade: departmentName.toLowerCase().startsWith('бр.'),
+    employees: bulk.employees.filter(e => ids.has(e.id)),
+    schedulesMap: filterByEmployeeMap(bulk.schedulesMap),
+    dailySchedulesMap: filterByEmployeeMap(bulk.dailySchedulesMap),
+    entries: bulk.entries.filter(entry => ids.has(entry.employee_id)),
+    dataMap: filterByEmployeeMap(bulk.dataMap),
+    objectEntries: bulk.objectEntries.filter(entry => ids.has(entry.employee_id)),
+    skudMap: filterByEmployeeMap(bulk.skudMap),
+    cutoffByEmployeeId: bulk.cutoffByEmployeeId
+      ? filterByEmployeeMap(bulk.cutoffByEmployeeId)
+      : undefined,
+  };
+}

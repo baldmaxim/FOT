@@ -6,12 +6,19 @@ import { query } from '../config/postgres.js';
 import { resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import {
   fetchTimesheetDataForDepartment,
+  fetchTimesheetDataForEmployees,
+  sliceTimesheetDataByEmployees,
   type IDepartmentTimesheetData,
   type TimesheetExportGrouping,
   type TimesheetExportHalf,
   type TimesheetExportPresentation,
   type TimesheetExportRangeArg,
 } from '../services/timesheet-export.service.js';
+import {
+  listEmployeeIdsAssignedToDepartmentPeriod,
+  resolveTimesheetDateRange,
+  resolveTimesheetPeriodRange,
+} from '../services/timesheet-department-assignments.service.js';
 import {
   build1CObjectTimesheetWorkbook,
   build1CTimesheetWorkbook,
@@ -191,10 +198,11 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
   }
 }
 
-/** POST /api/timesheet/export-mass-unified  body: { month, department_ids, half?|from?/to? } */
+/** POST /api/timesheet/export-mass-unified  body: { month, department_ids, half?|from?/to?, include_empty? } */
 export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res: Response) {
   try {
-    const { month, department_ids, half, from, to } = req.body;
+    const { month, department_ids, half, from, to, include_empty } = req.body;
+    const includeEmpty = normalizeBoolean(include_empty);
 
     if (!month || typeof month !== 'string') {
       return res.status(400).json({ success: false, error: 'Параметр month обязателен' });
@@ -244,19 +252,54 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
       segmentSuffix = `_${exportHalf === 'H1' ? '1-15' : `16-${daysInMonth}`}`;
     }
 
-    const CONCURRENCY = 5;
-    const collected: IDepartmentTimesheetData[] = [];
-    for (let i = 0; i < scopedDepartmentIds.length; i += CONCURRENCY) {
-      const batch = scopedDepartmentIds.slice(i, i + CONCURRENCY);
+    // Период (тот же расчёт, что внутри fetchTimesheetDataForEmployees) — нужен для
+    // выборки членства по отделам.
+    const periodRange = hasRange
+      ? resolveTimesheetDateRange(month, from as string, to as string)
+      : resolveTimesheetPeriodRange(month, exportHalf);
+    if (!periodRange) {
+      return res.status(400).json({ success: false, error: 'Некорректный период экспорта' });
+    }
+    const { startDate, endDate } = periodRange;
+
+    // Названия отделов одним запросом.
+    const deptNameRows = scopedDepartmentIds.length > 0
+      ? await query<{ id: string; name: string }>(
+        'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+        [scopedDepartmentIds],
+      )
+      : [];
+    const deptNameById = new Map(deptNameRows.map(r => [r.id, r.name]));
+
+    // Членство по периоду на каждый отдел — дешёвые запросы, батчами.
+    // Тяжёлая выборка посещаемости делается ОДИН раз ниже (bulk), а не на отдел.
+    const MEMBERSHIP_CONCURRENCY = 10;
+    const departmentMembers: Array<{ id: string; name: string; memberIds: number[] }> = [];
+    for (let i = 0; i < scopedDepartmentIds.length; i += MEMBERSHIP_CONCURRENCY) {
+      const batch = scopedDepartmentIds.slice(i, i + MEMBERSHIP_CONCURRENCY);
       const batchResults = await Promise.all(
-        batch.map((deptId: string) => fetchTimesheetDataForDepartment(
-          month, deptId, rangeArg, 'actual', true,
-        )),
+        batch.map(async (deptId: string) => ({
+          id: deptId,
+          name: deptNameById.get(deptId) ?? 'Без названия',
+          memberIds: await listEmployeeIdsAssignedToDepartmentPeriod(deptId, startDate, endDate),
+        })),
       );
-      collected.push(...batchResults);
+      departmentMembers.push(...batchResults);
     }
 
-    const workbook = await buildUnified1CWorkbook(mon, year, collected);
+    const allEmployeeIds = [...new Set(departmentMembers.flatMap(d => d.memberIds))];
+
+    // Один bulk-прогон на всех сотрудников выбранных отделов (один attendance/skud-скан).
+    const bulk = await fetchTimesheetDataForEmployees(
+      month, allEmployeeIds, 'Сводный 1С', rangeArg, 'actual', true,
+    );
+
+    // Нарезаем bulk обратно в поотдельские данные — формат итогового файла не меняется.
+    const collected: IDepartmentTimesheetData[] = departmentMembers
+      .filter(d => d.memberIds.length > 0)
+      .map(d => sliceTimesheetDataByEmployees(bulk, d.memberIds, d.name, d.id));
+
+    const workbook = await buildUnified1CWorkbook(mon, year, collected, false, includeEmpty);
     const buffer = await writeTimesheetWorkbookBuffer(workbook);
 
     const fileName = `Единый_1С_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`

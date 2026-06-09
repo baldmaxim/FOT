@@ -447,6 +447,7 @@ export const timesheetService = {
     half?: TimesheetExportHalf;
     from?: string;
     to?: string;
+    include_empty?: boolean;
   }): Promise<Blob> {
     const response = await fetch(
       buildApiUrl('/timesheet/export-mass-unified'),
