@@ -2,6 +2,7 @@ import { useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { contractorAdminService, type ISentPassRow } from '../../services/contractorService';
+import { ContractorOrgSelect } from './ContractorOrgSelect';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 const passLabel: Record<string, { cls: string; label: string }> = {
@@ -21,12 +22,19 @@ export const SentTab: FC = () => {
   const toast = useToast();
   const qc = useQueryClient();
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [orgId, setOrgId] = useState('');
 
   const query = useQuery({
     queryKey: ['contractor-sent-passes'],
     queryFn: () => contractorAdminService.listSentPasses(),
     staleTime: 15_000,
     refetchInterval: 15_000,
+  });
+
+  const orgsQuery = useQuery({
+    queryKey: ['contractor-orgs'],
+    queryFn: contractorAdminService.listOrgs,
+    staleTime: 5 * 60_000,
   });
 
   const grouped = useMemo(() => {
@@ -39,6 +47,8 @@ export const SentTab: FC = () => {
     }
     return Array.from(map.entries()).map(([id, v]) => ({ id, ...v }));
   }, [query.data]);
+
+  const visible = orgId ? grouped.filter(g => g.id === orgId) : grouped;
 
   const handleRevoke = async (r: ISentPassRow) => {
     if (busyId) return;
@@ -65,12 +75,29 @@ export const SentTab: FC = () => {
     }
   };
 
-  if (query.isLoading) return <div className={styles.empty}>Загрузка…</div>;
-  if (grouped.length === 0) return <div className={styles.empty}>Нет отправленных пропусков</div>;
-
   return (
     <div>
-      {grouped.map(g => (
+      <div className={styles.field}>
+        <span className={styles.label}>Подрядчик</span>
+        <ContractorOrgSelect
+          orgs={orgsQuery.data ?? []}
+          value={orgId}
+          onChange={setOrgId}
+          emptyOptionLabel="— все подрядчики —"
+          searchPlaceholder="Поиск подрядчика…"
+          loading={orgsQuery.isLoading}
+        />
+      </div>
+
+      {query.isLoading && <div className={styles.empty}>Загрузка…</div>}
+      {!query.isLoading && grouped.length === 0 && (
+        <div className={styles.empty}>Нет отправленных пропусков</div>
+      )}
+      {!query.isLoading && grouped.length > 0 && visible.length === 0 && (
+        <div className={styles.empty}>У подрядчика нет отправленных пропусков</div>
+      )}
+
+      {visible.map(g => (
         <div key={g.id} style={{ marginBottom: 24 }}>
           <h3 className={styles.title}>{g.org_name}</h3>
           <table className={styles.table}>
