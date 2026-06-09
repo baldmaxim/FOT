@@ -1732,7 +1732,6 @@
   font-weight: 600;
   white-space: nowrap;
   min-width: 64px;
-  box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
 }
 .ts-table thead th.ts-col-deviation-sticky {
   z-index: 55;
@@ -1740,6 +1739,35 @@
 }
 .ts-table tbody tr:hover td.ts-col-deviation-sticky {
   background: var(--surface-hover));
+}
+
+/* Sticky sum column. В виде «по сотрудникам» стоит слева от «Откл.» (right: 64px),
+   в объектной таблице — единственная закреплённая справа (override right: 0). */
+.ts-table th.ts-col-sum-sticky,
+.ts-table td.ts-col-sum-sticky {
+  position: sticky;
+  right: 64px;
+  z-index: 15;
+  background: var(--surface);
+  text-align: center;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 64px;
+  box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
+}
+.ts-table thead th.ts-col-sum-sticky {
+  z-index: 55;
+  background: var(--bg-secondary);
+}
+.ts-table tbody tr:hover td.ts-col-sum-sticky {
+  background: var(--surface-hover));
+}
+.ts-table--objects th.ts-col-sum-sticky,
+.ts-table--objects td.ts-col-sum-sticky {
+  right: 0;
+}
+.ts-table--objects thead th.ts-col-sum-sticky {
+  z-index: 85;
 }
 .ts-day--deviation-undertime {
   color: var(--error);
@@ -1764,6 +1792,16 @@
   .ts-table td.ts-col-deviation-sticky {
     min-width: 52px;
     font-size: 11px;
+  }
+  .ts-table th.ts-col-sum-sticky,
+  .ts-table td.ts-col-sum-sticky {
+    right: 52px;
+    min-width: 52px;
+    font-size: 11px;
+  }
+  .ts-table--objects th.ts-col-sum-sticky,
+  .ts-table--objects td.ts-col-sum-sticky {
+    right: 0;
   }
 }
 

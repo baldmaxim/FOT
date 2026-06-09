@@ -92,6 +92,7 @@ interface IObjectViewGroup {
   object_name: string;
   rows: IObjectViewRow[];
   isSynthetic: boolean;
+  totalHours: number;
 }
 
 interface IBulkCellCoord {
@@ -263,6 +264,19 @@ const getDayCellText = (entry: TimesheetEntry | null, weekend: boolean): string 
   return '';
 };
 
+// Числовой вклад дневной ячейки в сумму по строке. ЗЕРКАЛИТ getDayCellText:
+// возвращает то самое округлённое число, что видно в ячейке, иначе 0
+// (прочерк/пусто/обнуляющая корректировка/буквенный статус). Держать в синхроне
+// с getDayCellText, чтобы итог совпадал с суммой видимых цифр.
+const getDayCellHours = (entry: TimesheetEntry | null): number => {
+  const visibleHours = getVisibleHours(entry);
+  if (!entry) return 0;
+  if (isZeroingCorrection(entry, visibleHours)) return 0;
+  if (STATUS_CELL_TEXT[entry.status]) return 0;
+  if (visibleHours != null) return Math.round(visibleHours);
+  return 0;
+};
+
 const getDayCellTextMobile = (entry: TimesheetEntry | null, weekend: boolean): string => {
   const visibleHours = getVisibleHours(entry);
   if (weekend && !entry) return '—';
@@ -343,6 +357,20 @@ const getObjectCellText = (
   return '';
 };
 
+// Числовой вклад объектной ячейки в сумму. ЗЕРКАЛИТ getObjectCellText: 0 при
+// обнуляющей корректировке/буквенном статусе дня, иначе округлённые часы объекта.
+const getObjectCellHours = (
+  dailyEntry: TimesheetEntry | null,
+  objectEntry: TimesheetObjectEntry | null,
+): number => {
+  if (dailyEntry) {
+    if (isZeroingCorrection(dailyEntry, getVisibleHours(dailyEntry))) return 0;
+    if (STATUS_CELL_TEXT[dailyEntry.status]) return 0;
+  }
+  if (objectEntry) return Math.round(getObjectVisibleHours(objectEntry));
+  return 0;
+};
+
 const getObjectCellTitleWithStatus = (
   dailyEntry: TimesheetEntry | null,
   objectEntry: TimesheetObjectEntry | null,
@@ -416,6 +444,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     return map;
   }, [employeeStats]);
   const showDeviationColumn = viewMode === 'employees';
+  const showSumColumn = viewMode === 'employees';
   const [expandedEmployeeIds, setExpandedEmployeeIds] = useState<Set<number>>(new Set());
   const [bulkDragAnchor, setBulkDragAnchor] = useState<IBulkCellCoord | null>(null);
   const [bulkDragBaseKeys, setBulkDragBaseKeys] = useState<Set<string>>(new Set());
@@ -501,6 +530,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         object_name: objectName,
         rows: [],
         isSynthetic,
+        totalHours: 0,
       };
       groups.set(objectKey, next);
       return next;
@@ -551,12 +581,20 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     }
 
     return [...groups.values()]
-      .map(group => ({
-        ...group,
-        rows: [...group.rows].sort((left, right) => compareEmployeeNames(left.employee, right.employee)),
-      }))
+      .map(group => {
+        const rows = [...group.rows].sort((left, right) => compareEmployeeNames(left.employee, right.employee));
+        let totalHours = 0;
+        for (const row of rows) {
+          for (const day of days) {
+            if (isDayInactiveForEmployee(row.employee, year, month, day)) continue;
+            totalHours += getObjectCellHours(row.dailyEntries.get(day) || null, row.days.get(day) || null);
+          }
+        }
+        return { ...group, rows, totalHours };
+      })
       .sort((left, right) => left.object_name.localeCompare(right.object_name, 'ru'));
-  }, [days, employees, employeeRows, objectEntries, year, month]);
+    // showActualHours влияет на getObjectVisibleHours внутри getObjectCellHours.
+  }, [days, employees, employeeRows, objectEntries, year, month, showActualHours]);
 
   const activeExpandedEmployeeIds = useMemo(() => (
     new Set(
@@ -1184,18 +1222,29 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     </th>
                   );
                 })}
+                <th className="ts-col-sum-sticky" title="Сумма показываемых часов по сотруднику на объекте">
+                  Часы
+                </th>
               </tr>
             </thead>
             <tbody>
               {objectViewGroups.map(group => (
                 <Fragment key={group.object_key}>
                   <tr className="ts-object-group-row">
-                    <td className="ts-col-sticky ts-object-group-cell" colSpan={days.length + 1}>
+                    <td className="ts-col-sticky ts-object-group-cell" colSpan={days.length + 2}>
                       <span className="ts-object-group-name">{group.object_name}</span>
-                      <span className="ts-object-group-meta">{group.rows.length} чел.</span>
+                      <span className="ts-object-group-meta">
+                        {group.rows.length} чел.{group.totalHours > 0 ? ` (${Math.round(group.totalHours)} ч.)` : ''}
+                      </span>
                     </td>
                   </tr>
-                  {group.rows.map(row => (
+                  {group.rows.map(row => {
+                    const objRowSum = days.reduce((acc, day) => (
+                      isDayInactiveForEmployee(row.employee, year, month, day)
+                        ? acc
+                        : acc + getObjectCellHours(row.dailyEntries.get(day) || null, row.days.get(day) || null)
+                    ), 0);
+                    return (
                     <tr key={`${group.object_key}_${row.employee.id}`}>
                       <td
                         className="ts-col-sticky ts-object-employee-cell"
@@ -1263,13 +1312,17 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </td>
                         );
                       })}
+                      <td className="ts-col-sum-sticky">
+                        {objRowSum > 0 ? formatHoursLabel(objRowSum) : '—'}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </Fragment>
               ))}
               {objectViewGroups.length === 0 && (
                 <tr>
-                  <td colSpan={days.length + 1} className="ts-loading">
+                  <td colSpan={days.length + 2} className="ts-loading">
                     Нет объектов для отображения
                   </td>
                 </tr>
@@ -1281,7 +1334,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     );
   }
 
-  const desktopColSpan = days.length + 1 + (showDeviationColumn ? 1 : 0);
+  const desktopColSpan = days.length + 1 + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0);
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
@@ -1309,6 +1362,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   </th>
                 );
               })}
+              {showSumColumn && (
+                <th className="ts-col-sum-sticky" title="Сумма показываемых часов за месяц">
+                  Часы
+                </th>
+              )}
               {showDeviationColumn && (
                 <th className="ts-col-deviation-sticky" title="План минус факт. Положительное — недоработка, отрицательное — переработка.">
                   Откл.
@@ -1342,6 +1400,14 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 ? (employeeRows[index - 1].employee.source ?? 'department')
                 : null;
               const sectionLabel = currentSource !== prevSource ? getSectionLabel(currentSource, departmentName) : null;
+              // Сумма показываемых часов по строке — повтор логики ячейки, см. getDayCellHours.
+              const rowSum = showSumColumn
+                ? days.reduce((acc, day) => (
+                  isDayInactiveForEmployee(row.employee, year, month, day)
+                    ? acc
+                    : acc + getDayCellHours(row.days.get(day) || null)
+                ), 0)
+                : 0;
 
               return (
                 <tbody key={row.employee.id} data-index={index} ref={rowVirtualizer.measureElement}>
@@ -1349,7 +1415,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     <tr className="ts-section-divider-row">
                       <td
                         className="ts-col-sticky ts-section-divider-cell"
-                        colSpan={days.length + 1 + (showDeviationColumn ? 1 : 0)}
+                        colSpan={days.length + 1 + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0)}
                       >
                         {sectionLabel}
                       </td>
@@ -1468,6 +1534,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         </td>
                       );
                     })}
+                    {showSumColumn && (
+                      <td className="ts-col-sum-sticky" title="Сумма показываемых часов за месяц">
+                        {rowSum > 0 ? formatHoursLabel(rowSum) : '—'}
+                      </td>
+                    )}
                     {showDeviationColumn && (() => {
                       const stat = employeeStatsMap.get(row.employee.id);
                       if (!stat) {
@@ -1540,6 +1611,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </td>
                         );
                       })}
+                      {showSumColumn && <td className="ts-col-sum-sticky" />}
                       {showDeviationColumn && <td className="ts-col-deviation-sticky" />}
                     </tr>
                   ))}
