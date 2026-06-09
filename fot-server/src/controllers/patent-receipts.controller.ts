@@ -51,6 +51,7 @@ const RECEIPT_COLUMNS = `
   r.payer_bank_name, r.payer_bank_bic, r.payer_account, r.payment_method,
   r.source_type, r.raw_response, r.confidence, r.recognition_model, r.prompt_tokens, r.completion_tokens, r.cost_usd,
   r.needs_review, r.reviewed_by, r.reviewed_at, r.manually_edited,
+  r.is_verified, r.verified_by, r.verified_at,
   r.period_start, r.period_end,
   r.created_at, r.updated_at
 `;
@@ -175,6 +176,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
           confidence: (receipt?.confidence as string | null | undefined) ?? null,
           needs_review: Boolean(receipt?.needs_review),
           manually_edited: Boolean(receipt?.manually_edited),
+          is_verified: Boolean(receipt?.is_verified),
           recognition_model: (receipt?.recognition_model as string | null | undefined) ?? null,
           cost_usd: (receipt?.cost_usd as string | null | undefined) ?? null,
           period_start: (receipt?.period_start as string | null | undefined) ?? null,
@@ -634,6 +636,40 @@ const recognize = async (req: AuthenticatedRequest, res: Response): Promise<void
   }
 };
 
+const setVerified = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ success: false, error: 'Некорректный id' });
+      return;
+    }
+
+    const verified = Boolean((req.body as { verified?: unknown } | undefined)?.verified);
+
+    const data = await queryOne<Record<string, unknown>>(
+      `UPDATE patent_payment_receipts AS r SET
+         is_verified = $1,
+         verified_by = CASE WHEN $1 THEN $2::uuid ELSE NULL END,
+         verified_at = CASE WHEN $1 THEN now() ELSE NULL END,
+         updated_at = now()
+        WHERE r.id = $3
+        RETURNING ${RECEIPT_COLUMNS}`,
+      [verified, req.user.id, id],
+    );
+
+    if (!data) {
+      res.status(404).json({ success: false, error: 'Чек не найден' });
+      return;
+    }
+
+    res.json({ success: true, data: decryptReceiptRow(data) });
+  } catch (err) {
+    console.error('patent-receipts.setVerified error:', err);
+    Sentry.captureException(err, { tags: { route: 'PATCH /api/patent-receipts/:id/verify' } });
+    res.status(500).json({ success: false, error: 'Ошибка обновления отметки проверки' });
+  }
+};
+
 export const patentReceiptsController = {
   list,
   getOne,
@@ -642,4 +678,5 @@ export const patentReceiptsController = {
   update,
   recognize,
   remove,
+  setVerified,
 };

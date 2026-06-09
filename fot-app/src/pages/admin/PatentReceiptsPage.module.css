@@ -140,6 +140,10 @@
   background: rgba(245, 158, 11, 0.08);
 }
 
+.rowVerified {
+  background: rgba(22, 163, 74, 0.08);
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -204,6 +208,28 @@
 }
 
 .iconBtn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.iconBtnVerified {
+  background: transparent;
+  border: 1px solid #16a34a;
+  color: #16a34a;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.iconBtnVerified:hover:not(:disabled) {
+  background: rgba(22, 163, 74, 0.12);
+}
+
+.iconBtnVerified:disabled {
   opacity: 0.5;
   cursor: progress;
 }

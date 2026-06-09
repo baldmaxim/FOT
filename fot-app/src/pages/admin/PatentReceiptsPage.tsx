@@ -1,6 +1,6 @@
 import { type FC, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp, FileText } from 'lucide-react';
+import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp, FileText, Check } from 'lucide-react';
 
 export const PatentReceiptsEncryptionBadge: FC = () => (
   <span
@@ -79,6 +79,7 @@ export const PatentReceiptsPage: FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [recognizingDocId, setRecognizingDocId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [verifyingId, setVerifyingId] = useState<number | null>(null);
 
   const employeesQuery = useQuery({
     queryKey: ['employees-list-for-filter'],
@@ -112,6 +113,25 @@ export const PatentReceiptsPage: FC = () => {
     },
     onSettled: () => setDeletingId(null),
   });
+
+  const verifyMutation = useMutation({
+    mutationFn: ({ id, verified }: { id: number; verified: boolean }) =>
+      patentReceiptService.setVerified(id, verified),
+    onSuccess: (_data, vars) => {
+      toast.success(vars.verified ? 'Чек помечен проверенным' : 'Отметка проверки снята');
+      void queryClient.invalidateQueries({ queryKey: ['patent-receipts'] });
+    },
+    onError: err => {
+      const detail = err instanceof ApiError ? err.message : null;
+      toast.error(detail ? `Ошибка: ${detail}` : 'Не удалось изменить отметку');
+    },
+    onSettled: () => setVerifyingId(null),
+  });
+
+  const handleToggleVerified = (id: number, current: boolean) => {
+    setVerifyingId(id);
+    verifyMutation.mutate({ id, verified: !current });
+  };
 
   const handleDelete = (documentId: number) => {
     if (!window.confirm('Удалить чек безвозвратно? Файл будет удалён из хранилища.')) return;
@@ -221,7 +241,10 @@ export const PatentReceiptsPage: FC = () => {
                 const canRecognize = status === 'failed' || status === null;
                 const isRecognizing = recognizingDocId === r.document_id;
                 return (
-                  <tr key={r.document_id} className={r.needs_review ? styles.rowNeedsReview : undefined}>
+                  <tr
+                    key={r.document_id}
+                    className={r.is_verified ? styles.rowVerified : r.needs_review ? styles.rowNeedsReview : undefined}
+                  >
                     <td>{formatDate(r.payment_date)}</td>
                     <td>{formatPeriod(r.period_start, r.period_end)}</td>
                     <td className={styles.colWide}>{r.employees?.full_name || '—'}</td>
@@ -268,6 +291,16 @@ export const PatentReceiptsPage: FC = () => {
                         {r.id !== null && (
                           <button className={styles.iconBtn} onClick={() => setEditingId(r.id!)} title="Открыть">
                             <Eye size={14} />
+                          </button>
+                        )}
+                        {r.id !== null && (
+                          <button
+                            className={r.is_verified ? styles.iconBtnVerified : styles.iconBtn}
+                            onClick={() => handleToggleVerified(r.id!, r.is_verified)}
+                            disabled={verifyingId === r.id}
+                            title={r.is_verified ? 'Снять отметку проверки' : 'Отметить проверенным'}
+                          >
+                            <Check size={14} className={verifyingId === r.id ? styles.spin : undefined} />
                           </button>
                         )}
                         {canRecognize && (

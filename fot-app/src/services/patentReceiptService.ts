@@ -20,6 +20,7 @@ export interface IPatentReceiptListRow {
   confidence: string | null;
   needs_review: boolean;
   manually_edited: boolean;
+  is_verified: boolean;
   recognition_model: string | null;
   cost_usd: string | null;
   period_start: string | null;
@@ -53,6 +54,8 @@ export interface IPatentReceiptDetail extends IPatentReceiptListRow {
   completion_tokens: number | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
+  verified_by: string | null;
+  verified_at: string | null;
   updated_at: string;
   download_url: string | null;
   documents: (IPatentReceiptListRow['documents'] & { r2_key?: string | null }) | null;
@@ -147,6 +150,11 @@ export const patentReceiptService = {
 
   update: async (id: number, patch: IPatentReceiptPatch): Promise<IPatentReceiptDetail> => {
     const res = await apiClient.patch<ApiResponse<IPatentReceiptDetail>>(`/patent-receipts/${id}`, patch);
+    return res.data;
+  },
+
+  setVerified: async (id: number, verified: boolean): Promise<IPatentReceiptDetail> => {
+    const res = await apiClient.patch<ApiResponse<IPatentReceiptDetail>>(`/patent-receipts/${id}/verify`, { verified });
     return res.data;
   },
 

@@ -104,6 +104,10 @@ export interface IPatentPaymentReceipt {
   reviewed_at: string | null;
   manually_edited: boolean;
 
+  is_verified: boolean;
+  verified_by: string | null;
+  verified_at: string | null;
+
   period_start: string | null;
   period_end: string | null;
 
