@@ -21,6 +21,7 @@ import {
   formatDateShift,
   isAssignmentActiveOnDateInclusive,
   isEmployeeAssignedToDepartmentOnDate,
+  listScopedMembersByDepartment,
   resolveTimesheetPeriodRange,
 } from './timesheet-department-assignments.service.js';
 
@@ -85,6 +86,28 @@ describe('timesheet-department-assignments.service', () => {
         .mockResolvedValueOnce(null); // dismissal events не нашлись (например дата > dismissal_date)
 
       await expect(isEmployeeAssignedToDepartmentOnDate(8730, BRIGADE, '2026-06-01')).resolves.toBe(false);
+    });
+  });
+
+  describe('listScopedMembersByDepartment — bulk-членство', () => {
+    it('пустой scope → пустая карта, без обращения к БД', async () => {
+      pgQuery.mockClear();
+      const res = await listScopedMembersByDepartment([], '2026-05-01', '2026-05-31');
+      expect(res.size).toBe(0);
+      expect(pgQuery).not.toHaveBeenCalled();
+    });
+
+    it('строит карту employee_id → один отдел и передаёт параметры [scope, start, end]', async () => {
+      pgQuery.mockClear();
+      pgQuery.mockResolvedValueOnce([
+        { employee_id: 10, dept_id: 'd1' },
+        { employee_id: 11, dept_id: 'd1' },
+        { employee_id: 12, dept_id: 'd2' },
+      ]);
+      const res = await listScopedMembersByDepartment(['d1', 'd2'], '2026-05-01', '2026-05-31');
+      expect(pgQuery).toHaveBeenCalledTimes(1);
+      expect(pgQuery.mock.calls[0][1]).toEqual([['d1', 'd2'], '2026-05-01', '2026-05-31']);
+      expect([...res.entries()]).toEqual([[10, 'd1'], [11, 'd1'], [12, 'd2']]);
     });
   });
 });
