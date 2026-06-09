@@ -104,6 +104,16 @@ export function verifyRefreshToken(token: string): RefreshTokenPayload {
   return jwt.verify(token, refreshSecret, { algorithms: ['HS256'] }) as unknown as RefreshTokenPayload;
 }
 
+/**
+ * Семантика третьего аргумента:
+ *   undefined → refresh-cookie НЕ трогаем (например, /auth/me переставляет только access);
+ *   null      → явно очищаем refresh-cookie (временный 2FA-login);
+ *   строка    → ставим/обновляем refresh-cookie.
+ *
+ * Раньше `undefined` уходил в ту же ветку, что и `null`, и /auth/me затирал
+ * refresh-cookie — после смены прав (token_version++) refresh уже не было,
+ * и /auth/refresh падал в 401 → разлогин.
+ */
 export function setSessionCookies(
   res: Response,
   accessToken: string,
@@ -115,15 +125,18 @@ export function setSessionCookies(
     buildCookieOptions(parseDurationToMs(env.JWT_EXPIRES_IN)),
   );
 
-  if (refreshToken) {
-    res.cookie(
-      REFRESH_TOKEN_COOKIE_NAME,
-      refreshToken,
-      buildCookieOptions(parseDurationToMs(env.JWT_REFRESH_EXPIRES_IN)),
-    );
-  } else {
+  if (refreshToken === undefined) return;
+
+  if (refreshToken === null) {
     res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, buildCookieOptions(undefined));
+    return;
   }
+
+  res.cookie(
+    REFRESH_TOKEN_COOKIE_NAME,
+    refreshToken,
+    buildCookieOptions(parseDurationToMs(env.JWT_REFRESH_EXPIRES_IN)),
+  );
 }
 
 export function clearSessionCookies(res: Response): void {
