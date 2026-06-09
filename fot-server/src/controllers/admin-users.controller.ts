@@ -2066,6 +2066,25 @@ export const adminUsersController = {
         return;
       }
 
+      // Запрещаем привязку к неактивным/несуществующим узлам: иначе после реорга
+      // Sigur (узел → is_active=false) скоуп схлопывается «в пустоту», и админ
+      // теряет доступ ко всему. Пустой список (системный админ) сюда не попадает.
+      if (desired.length > 0) {
+        const valid = await query<{ id: string }>(
+          'SELECT id FROM org_departments WHERE id = ANY($1::uuid[]) AND is_active = true',
+          [desired],
+        );
+        const validSet = new Set(valid.map(r => r.id));
+        const invalid = desired.filter(rootId => !validSet.has(rootId));
+        if (invalid.length > 0) {
+          res.status(400).json({
+            success: false,
+            error: 'Нельзя привязать к неактивным или несуществующим компаниям',
+          });
+          return;
+        }
+      }
+
       let existing: Array<{ company_root_id: string }>;
       try {
         existing = await query<{ company_root_id: string }>(
