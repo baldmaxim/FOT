@@ -1,6 +1,6 @@
 import type ExcelJS from 'exceljs';
 import { query } from '../config/postgres.js';
-import { getActiveDirectManagersFor } from './employee-direct-reports.service.js';
+import { resolveResponsibleEmployeeIdsByEmployee } from './approval-routing.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import {
   buildEmployeeRowsForOneC,
@@ -18,14 +18,41 @@ interface IUnifiedRow extends IUnifiedOneCRow {
   objectNameSort: string;
 }
 
-const collectAllEmployeeIds = (departmentsData: IDepartmentTimesheetData[]): number[] => {
-  const ids = new Set<number>();
+// Пары «сотрудник → отдел» для адресной маршрутизации руководителя.
+const collectEmployeeDeptPairs = (
+  departmentsData: IDepartmentTimesheetData[],
+): Array<{ employee_id: number; org_department_id: string | null }> => {
+  const seen = new Set<number>();
+  const pairs: Array<{ employee_id: number; org_department_id: string | null }> = [];
   for (const data of departmentsData) {
     for (const employee of data.employees) {
-      ids.add(employee.id);
+      if (seen.has(employee.id)) continue;
+      seen.add(employee.id);
+      pairs.push({ employee_id: employee.id, org_department_id: employee.org_department_id });
     }
   }
-  return [...ids];
+  return pairs;
+};
+
+// ФИО сотрудников по id (для раскрытия id руководителей).
+const fetchEmployeeNames = async (ids: number[]): Promise<Map<number, string>> => {
+  const map = new Map<number, string>();
+  const uniqueIds = [...new Set(ids.filter(id => Number.isInteger(id) && id > 0))];
+  if (uniqueIds.length === 0) return map;
+  const rows = await query<{ id: number; full_name: string | null }>(
+    'SELECT id, full_name FROM employees WHERE id = ANY($1::int[])',
+    [uniqueIds],
+  );
+  for (const row of rows) {
+    map.set(Number(row.id), (row.full_name ?? '').trim());
+  }
+  return map;
+};
+
+// Тестовых начальников (ФИО содержит «тест»/«test») в выгрузку не пускаем.
+const isTestManagerName = (fullName: string): boolean => {
+  const lower = fullName.toLowerCase();
+  return lower.includes('тест') || lower.includes('test');
 };
 
 // Адрес для отделов/сотрудников в режиме «текущая деятельность»: их строки не
@@ -216,18 +243,27 @@ export async function buildUnified1CWorkbook(
   departmentsData: IDepartmentTimesheetData[],
   excludeCurrentActivity: boolean = false,
 ): Promise<ExcelJS.Workbook> {
-  const [objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerInfoMap] = await Promise.all([
+  const [objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, responsibleIdsMap] = await Promise.all([
     fetchObjectAddressMap(collectObjectIds(departmentsData)),
     fetchCurrentActivityDeptIds(),
     fetchCurrentActivityEmployeeSets(),
-    getActiveDirectManagersFor(collectAllEmployeeIds(departmentsData)),
+    // Приоритет: назначенный ответственный (employee_direct_reports) → иначе
+    // начальник(и) отдела/участка с full-доступом по org_department_id.
+    resolveResponsibleEmployeeIdsByEmployee(collectEmployeeDeptPairs(departmentsData)),
   ]);
 
-  const managerNameMap = new Map<number, string>(
-    [...managerInfoMap.entries()]
-      .filter(([, v]) => v.managerFullName)
-      .map(([k, v]) => [k, v.managerFullName!]),
+  // Раскрываем id руководителей в ФИО, отбрасываем тестовых, объединяем через запятую.
+  const managerNames = await fetchEmployeeNames(
+    [...new Set([...responsibleIdsMap.values()].flat())],
   );
+  const managerNameMap = new Map<number, string>();
+  for (const [empId, managerIds] of responsibleIdsMap) {
+    const names = managerIds
+      .map(id => managerNames.get(id) ?? '')
+      .filter(name => name.length > 0 && !isTestManagerName(name))
+      .sort((a, b) => a.localeCompare(b, 'ru'));
+    if (names.length > 0) managerNameMap.set(empId, names.join(', '));
+  }
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
