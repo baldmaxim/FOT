@@ -931,7 +931,8 @@ export const calculateAndSyncTravelSegments = async ({
   employeeIds,
   startDate,
   endDate,
-}: IRebuildTravelParams): Promise<{
+  persist = true,
+}: IRebuildTravelParams & { persist?: boolean }): Promise<{
   segments: ICalculatedTravelSegment[];
   summaryByDay: Map<string, ITravelDaySummary>;
   syncedAt: string;
@@ -964,7 +965,12 @@ export const calculateAndSyncTravelSegments = async ({
 
   mergeDecidedIntoSegments(segments, decidedSegments);
 
-  const syncedAt = await syncSegmentsToDatabase({ employeeIds, startDate, endDate, segments });
+  // Сводка считается из segments в памяти; запись в skud_travel_segments — побочный
+  // эффект (кэш для модуля «Дорога»). Для read-only экспортов persist=false: пропускаем
+  // тяжёлый DELETE+INSERT по тысячам сегментов (на больших выборках это и был таймаут).
+  const syncedAt = persist
+    ? await syncSegmentsToDatabase({ employeeIds, startDate, endDate, segments })
+    : new Date().toISOString();
 
   return {
     segments,
@@ -1587,9 +1593,10 @@ export const getTravelHoursSummaryForRange = async ({
   employeeIds,
   startDate,
   endDate,
-}: IRebuildTravelParams): Promise<Map<string, ITravelDaySummary>> => {
+  persist = true,
+}: IRebuildTravelParams & { persist?: boolean }): Promise<Map<string, ITravelDaySummary>> => {
   try {
-    const { summaryByDay } = await calculateAndSyncTravelSegments({ employeeIds, startDate, endDate });
+    const { summaryByDay } = await calculateAndSyncTravelSegments({ employeeIds, startDate, endDate, persist });
     return summaryByDay;
   } catch (error) {
     if (isMissingTableError(error)) {

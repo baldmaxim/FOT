@@ -826,6 +826,49 @@ export async function buildObjectAttendanceData(params: {
     objectAdjustments.map(adjustment => dayKey(adjustment.employee_id, adjustment.work_date)),
   );
 
+  // Явная объектная правка с положительными часами авторитетна для дня: снимаем
+  // НЕоткорректированные СКУД-объекты этого дня. Иначе их часы продолжают добавляться
+  // к скорректированному объекту и дневной итог завышается — день с отметками на двух
+  // точках одного ЖК (К13 + К14): правка только К13 не «срабатывала», итог = К13(правка)
+  // + К14(СКУД) ≈ норма графика, и выгрузка «Как в 1С» схлопывала её в график.
+  // Откорректированные объекты дня сохраняем; обнулённые/absence-правки (hours_override<=0)
+  // чужие объекты не трогают — они гасят свой объект через ветку dailyAdjustments ниже.
+  const authoritativeObjectDays = new Set(
+    objectAdjustments
+      .filter(adjustment => (adjustment.hours_override ?? 0) > 0)
+      .map(adjustment => dayKey(adjustment.employee_id, adjustment.work_date)),
+  );
+
+  // Индекс entryKey по дню (employee_id_date): операции «все объект-записи дня» становятся
+  // O(записей дня) вместо O(всех записей). Без индекса циклы ниже (тысячи day-level правок ×
+  // десятки тысяч записей) деградировали в O(n²) и упирались в таймаут на больших выгрузках.
+  const entriesByDay = new Map<string, Set<string>>();
+  for (const [entryKey, entry] of baseObjectEntries) {
+    const dKey = dayKey(entry.employee_id, entry.work_date);
+    let daySet = entriesByDay.get(dKey);
+    if (!daySet) { daySet = new Set(); entriesByDay.set(dKey, daySet); }
+    daySet.add(entryKey);
+  }
+  // Удалить ВСЕ объект-записи дня (с поддержкой индекса).
+  const deleteDayEntries = (dKey: string): void => {
+    const daySet = entriesByDay.get(dKey);
+    if (!daySet) return;
+    for (const entryKey of daySet) baseObjectEntries.delete(entryKey);
+    entriesByDay.delete(dKey);
+  };
+
+  for (const dKey of authoritativeObjectDays) {
+    const daySet = entriesByDay.get(dKey);
+    if (!daySet) continue;
+    for (const entryKey of [...daySet]) {
+      const entry = baseObjectEntries.get(entryKey);
+      if (!entry || entry.is_correction) continue;
+      baseObjectEntries.delete(entryKey);
+      daySet.delete(entryKey);
+      baseDistinctObjectKeys.get(dKey)?.delete(entry.object_key);
+    }
+  }
+
   const sortedDailyAdjustments = [...dailyAdjustments].sort((left, right) => {
     const diff = getAdjustmentPriority(right.source_type) - getAdjustmentPriority(left.source_type);
     if (diff !== 0) return diff;
@@ -856,9 +899,7 @@ export async function buildObjectAttendanceData(params: {
     // остаточный интервал переживёт корректировку и «по объектам» покажет
     // фантомные часы, расходясь с «по сотрудникам» (там day-level entry держит 0ч/статус).
     if (isNonWork || hoursOverride == null || hoursOverride <= 0) {
-      for (const entryKey of [...baseObjectEntries.keys()]) {
-        if (entryKey.startsWith(`${dKey}_`)) baseObjectEntries.delete(entryKey);
-      }
+      deleteDayEntries(dKey);
       baseDistinctObjectKeys.delete(dKey);
       continue;
     }
@@ -868,8 +909,9 @@ export async function buildObjectAttendanceData(params: {
     // важнее списка приписки (руководитель приписан к нескольким ЖК ради доступа,
     // а ходит на один — иначе скорректированные часы фантомно размазываются по приписке).
     const dayObjectMinutes = new Map<string, { object_name: string; minutes: number }>();
-    for (const [entryKey, entry] of baseObjectEntries) {
-      if (!entryKey.startsWith(`${dKey}_`)) continue;
+    for (const entryKey of entriesByDay.get(dKey) ?? []) {
+      const entry = baseObjectEntries.get(entryKey);
+      if (!entry) continue;
       if (entry.object_key === UNKNOWN_OBJECT_KEY || !entry.object_id) continue;
       const prev = dayObjectMinutes.get(entry.object_id);
       dayObjectMinutes.set(entry.object_id, {
@@ -879,9 +921,7 @@ export async function buildObjectAttendanceData(params: {
     }
 
     // Корректировка перекрывает фактические СКУД-события дня — иначе двойной счёт.
-    for (const entryKey of [...baseObjectEntries.keys()]) {
-      if (entryKey.startsWith(`${dKey}_`)) baseObjectEntries.delete(entryKey);
-    }
+    deleteDayEntries(dKey);
     baseDistinctObjectKeys.delete(dKey);
 
     const assigned = (assignedObjectsByEmployee.get(adjustment.employee_id) || [])
@@ -958,26 +998,27 @@ export async function buildObjectAttendanceData(params: {
       distributed += 1;
     }
     const dayObjects = baseDistinctObjectKeys.get(dKey) || new Set<string>();
+    const daySet = entriesByDay.get(dKey) ?? new Set<string>();
+    entriesByDay.set(dKey, daySet);
     targets.forEach((target, index) => {
       const centihours = centihoursByTarget[index];
-      baseObjectEntries.set(
-        objectEntryKey(adjustment.employee_id, adjustment.work_date, target.objectKey),
-        {
-          adjustment_id: adjustment.id,
-          employee_id: adjustment.employee_id,
-          work_date: adjustment.work_date,
-          object_key: target.objectKey,
-          object_id: target.objectId,
-          object_name: target.objectName,
-          base_minutes: 0,
-          // центичасы → минуты: roundHours(effective_minutes/60) даст ровно centihours/100.
-          effective_minutes: centihours * 0.6,
-          is_correction: true,
-          notes: adjustment.reason,
-          // Эхо day-level корректировки (не самостоятельная объектная) — модалка дня его прячет (#8).
-          from_day_level: true,
-        },
-      );
+      const newKey = objectEntryKey(adjustment.employee_id, adjustment.work_date, target.objectKey);
+      baseObjectEntries.set(newKey, {
+        adjustment_id: adjustment.id,
+        employee_id: adjustment.employee_id,
+        work_date: adjustment.work_date,
+        object_key: target.objectKey,
+        object_id: target.objectId,
+        object_name: target.objectName,
+        base_minutes: 0,
+        // центичасы → минуты: roundHours(effective_minutes/60) даст ровно centihours/100.
+        effective_minutes: centihours * 0.6,
+        is_correction: true,
+        notes: adjustment.reason,
+        // Эхо day-level корректировки (не самостоятельная объектная) — модалка дня его прячет (#8).
+        from_day_level: true,
+      });
+      daySet.add(newKey);
       dayObjects.add(target.objectKey);
     });
     baseDistinctObjectKeys.set(dKey, dayObjects);

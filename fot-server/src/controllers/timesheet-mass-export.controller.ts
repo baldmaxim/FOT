@@ -273,6 +273,7 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
     // Членство по ВСЕМ выбранным отделам — ОДНИМ bulk-запросом (employee_id → один отдел).
     // Снимает O(числа отделов) N+1 (прежде ~5 запросов на отдел) и дубли строк
     // (сотрудник под каждым предком). Тяжёлая посещаемость — тоже один раз ниже.
+    const tMembers = Date.now();
     const memberByEmp = await listScopedMembersByDepartment(scopedDepartmentIds, startDate, endDate);
     const empIdsByDept = new Map<string, number[]>();
     for (const [empId, deptId] of memberByEmp) {
@@ -283,11 +284,13 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
     const allEmployeeIds = [...memberByEmp.keys()];
 
     // Один bulk-прогон на всех сотрудников выбранных отделов (один attendance/skud-скан).
+    const tFetch = Date.now();
     const bulk = await fetchTimesheetDataForEmployees(
       month, allEmployeeIds, 'Сводный 1С', rangeArg, 'actual', true,
     );
 
     // Нарезаем bulk обратно в поотдельские данные — формат итогового файла не меняется.
+    const tBuild = Date.now();
     const collected: IDepartmentTimesheetData[] = [...empIdsByDept]
       .map(([deptId, empIds]) => sliceTimesheetDataByEmployees(
         bulk, empIds, deptNameById.get(deptId) ?? 'Без названия', deptId,
@@ -295,6 +298,7 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
 
     const workbook = await buildUnified1CWorkbook(mon, year, collected);
     const buffer = await writeTimesheetWorkbookBuffer(workbook);
+    console.log(`[export-mass-unified] depts=${scopedDepartmentIds.length} emp=${allEmployeeIds.length} bytes=${buffer.length} | members=${tFetch - tMembers}ms attendance=${tBuild - tFetch}ms build+write=${Date.now() - tBuild}ms total=${Date.now() - tMembers}ms`);
 
     const fileName = `Единый_1С_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`
       .replace(/[\/\\?%*:|"<>]/g, '_');

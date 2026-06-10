@@ -495,19 +495,24 @@ export async function buildAttendanceEntries(params: {
   // зарплаты / Excel-экспорта / дашборда вызывают сервис напрямую без этого флага и
   // НЕ должны затрагиваться (иначе object-only день начал бы считаться отработанным).
   synthesizeObjectOnlyDays?: boolean;
+  // Персистить пересчитанные сегменты «Дороги» в skud_travel_segments. По умолчанию true
+  // (интерактивный табель/дашборд обновляют кэш). Read-only экспорты ставят false —
+  // сводка считается в памяти, а тяжёлый DELETE+INSERT не выполняется.
+  persistTravelSegments?: boolean;
 }): Promise<IAttendanceBuildResult> {
   const { employees, startDate, endDate, dailySchedulesMap, calendarMonth } = params;
   const todayStr = params.todayStr ?? formatDateToISO(new Date());
   const displayMode = params.displayMode ?? 'actual';
   const includeObjectDetails = params.includeObjectDetails ?? true;
   const synthesizeObjectOnlyDays = params.synthesizeObjectOnlyDays ?? false;
+  const persistTravelSegments = params.persistTravelSegments ?? true;
   const nowHMS = formatNowHMS(new Date());
   const employeeIds = employees.map((employee) => employee.id);
 
   const [summaries, adjustments, travelSummaries] = await Promise.all([
     loadDailySummaries(employeeIds, startDate, endDate),
     loadAttendanceAdjustments(employeeIds, startDate, endDate),
-    getTravelHoursSummaryForRange({ employeeIds, startDate, endDate }),
+    getTravelHoursSummaryForRange({ employeeIds, startDate, endDate, persist: persistTravelSegments }),
   ]);
 
   // Всегда строим rawFallbackSummaries — они нужны fallback-пути для дней без skud_daily_summary

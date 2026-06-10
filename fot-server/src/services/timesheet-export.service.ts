@@ -177,6 +177,8 @@ export async function fetchTimesheetDataForDepartment(
     calendarMonth,
     todayStr,
     displayMode: effectiveDisplayMode,
+    // Экспорт — read-only: не переписывать skud_travel_segments (тяжёлый write на больших выборках).
+    persistTravelSegments: false,
   });
 
   const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
@@ -349,6 +351,8 @@ export async function fetchTimesheetDataForEmployees(
     calendarMonth,
     todayStr,
     displayMode: effectiveDisplayMode,
+    // Экспорт — read-only: не переписывать skud_travel_segments (тяжёлый write на больших выборках).
+    persistTravelSegments: false,
   });
 
   const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
