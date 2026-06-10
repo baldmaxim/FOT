@@ -477,9 +477,12 @@ export const contractorAdminService = {
     decisions: IDecideItem[],
     expiresAt?: string,
   ): Promise<IDecideResult> {
+    // Массовая привязка в Sigur (карты/точки) на десятки сотрудников дольше дефолтных 30с —
+    // даём 120с, иначе фронт обрывал запрос таймаутом до показа модалки однофамильцев.
     const r = await apiClient.post<ApiResponse<IDecideResult>>(
       `/admin/contractor/submissions/${id}/decide`,
       { decisions, expires_at: expiresAt },
+      { timeoutMs: 120_000 },
     );
     return r.data;
   },

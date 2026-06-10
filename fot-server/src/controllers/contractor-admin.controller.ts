@@ -48,6 +48,33 @@ import {
 } from './employee-lifecycle.controller.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 
+/** Максимум сотрудников в одной активации (защита от таймаута массовой привязки в Sigur). */
+const MAX_ACTIVATION_BATCH = 50;
+/**
+ * Параллельность обработки решений активации. HTTP к Sigur дополнительно троттлится глобальным
+ * семафором SIGUR_MAX_CONCURRENCY (по умолчанию 3), а число одновременных DB-транзакций ограничено
+ * этим значением — пул PG не исчерпывается.
+ */
+const ACTIVATION_CONCURRENCY = 5;
+
+/** Обработать элементы с ограниченной параллельностью, сохраняя порядок результатов. */
+async function runWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  const workers = Array.from({ length: workerCount }, async () => {
+    for (let i = cursor++; i < items.length; i = cursor++) {
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 /** Только системный админ (как approveUser/replaceUserCompanies). */
 const ensureSystemAdmin = async (
   req: AuthenticatedRequest,
@@ -1170,7 +1197,9 @@ export const contractorAdminController = {
           access_point_names: z.array(z.string().trim().min(1)).optional(),
           // Срок действия конкретного пропуска (режим «не для всех»). Приоритетнее общего expires_at.
           expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-        })).min(1).max(500),
+        })).min(1).max(MAX_ACTIVATION_BATCH, {
+          message: `За один раз можно активировать не более ${MAX_ACTIVATION_BATCH} сотрудников`,
+        }),
         // Общий срок действия (режим «Для всех»). Пишется в Sigur (срок привязки карты)
         // и в contractor_passes.expires_at. Перебивается per-item expires_at.
         expires_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -1219,42 +1248,60 @@ export const contractorAdminController = {
       const activatedSigurIds: number[] = [];
       const activatedNames: string[] = [];
 
-      for (const dec of body.decisions) {
+      type DecisionOutcome =
+        | { kind: 'applied'; passId: string; sigurId: number | null; name: string | null; warnings: string[] }
+        | { kind: 'rejected'; passId: string; warnings: string[] }
+        | { kind: 'failed'; message: string; warnings: string[] }
+        | { kind: 'skipped' };
+
+      // Аудит факта решения по пропуску (и для успеха, и для пойманной ошибки попытки).
+      const logDecisionAudit = async (passId: string, decision: 'approved' | 'rejected'): Promise<void> => {
+        try {
+          await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_SUBMISSION_PASS_DECIDED, {
+            entityType: 'contractor_pass',
+            entityId: passId,
+            details: { decision, submission_id: submissionId },
+          });
+        } catch (auditError) {
+          console.error('Contractor decideSubmission audit error:', auditError);
+        }
+      };
+
+      // Обработка одного решения. Никогда не бросает — всегда возвращает исход (для параллельного прогона).
+      const processDecision = async (dec: (typeof body.decisions)[number]): Promise<DecisionOutcome> => {
         const pass = byId.get(dec.pass_id);
         if (!pass) {
-          failures.push(`pass ${dec.pass_id}: не принадлежит заявке`);
-          continue;
+          return { kind: 'failed', message: `pass ${dec.pass_id}: не принадлежит заявке`, warnings: [] };
         }
         // Идемпотентность: уже обработанные пропуска пропускаем.
         if (pass.status === 'applied' || (pass.status === 'blocked' && (pass.submission_id !== submissionId))) {
-          continue;
+          return { kind: 'skipped' };
         }
+
+        const localWarnings: string[] = [];
 
         if (dec.decision === 'approved') {
           if (!pass.holder_name) {
-            failures.push(`pass ${pass.id}: нет ФИО`);
-            continue;
+            return { kind: 'failed', message: `pass ${pass.id}: нет ФИО`, warnings: localWarnings };
           }
           if (pass.sigur_employee_id == null) {
-            failures.push(`pass ${pass.id}: профиль не создан в Sigur`);
-            continue;
+            return { kind: 'failed', message: `pass ${pass.id}: профиль не создан в Sigur`, warnings: localWarnings };
           }
           // Срок действия: per-item приоритетнее общего, иначе дефолт (31.12, не раньше завтра).
           const itemExp = dec.expires_at ?? body.expires_at ?? defaultExp;
           if (itemExp < minDate) {
-            failures.push(`pass ${pass.id}: срок действия раньше завтрашней даты`);
-            continue;
+            return { kind: 'failed', message: `pass ${pass.id}: срок действия раньше завтрашней даты`, warnings: localWarnings };
           }
           const itemExpIso = new Date(`${itemExp}T23:59:59`).toISOString();
+          // Резолв точек доступа (приоритет — из decision, иначе из пропуска).
+          const names = dec.access_point_names ?? pass.access_point_names ?? [];
           try {
-            // Резолв точек доступа (приоритет — из decision, иначе из пропуска).
-            const names = dec.access_point_names ?? pass.access_point_names ?? [];
             let resolvedIds: number[] = [];
             if (!dryRun && names.length > 0) {
               const resolved = await resolveAccessPointNamesToIds(names, connection);
               resolvedIds = resolved.accessPointIds;
               if (resolved.unmatchedNames.length > 0) {
-                warnings.push(`pass ${pass.id}: точки не сопоставлены: ${resolved.unmatchedNames.join(', ')}`);
+                localWarnings.push(`pass ${pass.id}: точки не сопоставлены: ${resolved.unmatchedNames.join(', ')}`);
               }
             }
 
@@ -1302,50 +1349,74 @@ export const contractorAdminController = {
                 [submissionId, pass.id, req.user.id, dec.reason ?? null, names.length ? names : null],
               );
             });
-            applied.push(pass.id);
-            if (pass.sigur_employee_id != null) activatedSigurIds.push(Number(pass.sigur_employee_id));
-            if (pass.holder_name) activatedNames.push(pass.holder_name);
+            await logDecisionAudit(pass.id, 'approved');
+            return {
+              kind: 'applied',
+              passId: pass.id,
+              sigurId: pass.sigur_employee_id != null ? Number(pass.sigur_employee_id) : null,
+              name: pass.holder_name ?? null,
+              warnings: localWarnings,
+            };
           } catch (e) {
-            failures.push(`pass ${pass.id}: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        } else {
-          // rejected
-          try {
-            if (!dryRun && pass.sigur_employee_id != null) {
-              try {
-                await updateSigurEmployee(pass.sigur_employee_id, { blocked: true }, connection);
-              } catch (sigurError) {
-                warnings.push(`pass ${pass.id} block: ${sigurError instanceof Error ? sigurError.message : String(sigurError)}`);
-              }
-            }
-            await withTransaction(async client => {
-              await client.query(
-                `UPDATE contractor_passes
-                    SET status = 'blocked',
-                        approval_status = 'rejected',
-                        is_active = false,
-                        updated_at = now()
-                  WHERE id = $1::uuid`,
-                [pass.id],
-              );
-              await client.query(
-                `INSERT INTO contractor_submission_decisions
-                   (submission_id, pass_id, decision, decided_by, reason)
-                 VALUES ($1::uuid, $2::uuid, 'rejected', $3::uuid, $4)`,
-                [submissionId, pass.id, req.user.id, dec.reason ?? null],
-              );
-            });
-            rejected.push(pass.id);
-          } catch (e) {
-            failures.push(`pass ${pass.id}: ${e instanceof Error ? e.message : String(e)}`);
+            await logDecisionAudit(pass.id, 'approved');
+            return { kind: 'failed', message: `pass ${pass.id}: ${e instanceof Error ? e.message : String(e)}`, warnings: localWarnings };
           }
         }
 
-        await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_SUBMISSION_PASS_DECIDED, {
-          entityType: 'contractor_pass',
-          entityId: pass.id,
-          details: { decision: dec.decision, submission_id: submissionId },
-        });
+        // rejected
+        try {
+          if (!dryRun && pass.sigur_employee_id != null) {
+            try {
+              await updateSigurEmployee(pass.sigur_employee_id, { blocked: true }, connection);
+            } catch (sigurError) {
+              localWarnings.push(`pass ${pass.id} block: ${sigurError instanceof Error ? sigurError.message : String(sigurError)}`);
+            }
+          }
+          await withTransaction(async client => {
+            await client.query(
+              `UPDATE contractor_passes
+                  SET status = 'blocked',
+                      approval_status = 'rejected',
+                      is_active = false,
+                      updated_at = now()
+                WHERE id = $1::uuid`,
+              [pass.id],
+            );
+            await client.query(
+              `INSERT INTO contractor_submission_decisions
+                 (submission_id, pass_id, decision, decided_by, reason)
+               VALUES ($1::uuid, $2::uuid, 'rejected', $3::uuid, $4)`,
+              [submissionId, pass.id, req.user.id, dec.reason ?? null],
+            );
+          });
+          await logDecisionAudit(pass.id, 'rejected');
+          return { kind: 'rejected', passId: pass.id, warnings: localWarnings };
+        } catch (e) {
+          await logDecisionAudit(pass.id, 'rejected');
+          return { kind: 'failed', message: `pass ${pass.id}: ${e instanceof Error ? e.message : String(e)}`, warnings: localWarnings };
+        }
+      };
+
+      // Параллельная обработка с ограничением: Sigur-HTTP троттлится глобальным семафором,
+      // порядок исходов сохранён. Снимает таймаут массовой активации (был серийный for…of).
+      const outcomes = await runWithConcurrency(body.decisions, ACTIVATION_CONCURRENCY, processDecision);
+      for (const outcome of outcomes) {
+        if ('warnings' in outcome && outcome.warnings.length) warnings.push(...outcome.warnings);
+        switch (outcome.kind) {
+          case 'applied':
+            applied.push(outcome.passId);
+            if (outcome.sigurId != null) activatedSigurIds.push(outcome.sigurId);
+            if (outcome.name) activatedNames.push(outcome.name);
+            break;
+          case 'rejected':
+            rejected.push(outcome.passId);
+            break;
+          case 'failed':
+            failures.push(outcome.message);
+            break;
+          case 'skipped':
+            break;
+        }
       }
 
       // Переоценка агрегатного статуса заявки.

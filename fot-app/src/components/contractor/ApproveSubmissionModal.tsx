@@ -26,6 +26,9 @@ const toYmd = (d: Date): string => {
   return `${y}-${m}-${day}`;
 };
 
+/** Максимум сотрудников за одну активацию (синхронно с бэком). */
+const MAX_ACTIVATION_BATCH = 50;
+
 interface IProps {
   submissionId: string;
   orgName: string;
@@ -100,6 +103,10 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   // «Для всех» включён по умолчанию. При снятии — срок на каждого сотрудника.
   const [forAll, setForAll] = useState(true);
   const [perPassExpires, setPerPassExpires] = useState<Map<string, string>>(new Map());
+  // «Точки доступа — для всех»: чекбокс активен, общий список пуст. При активации точки
+  // распространяются на всех; при снятии чекбокса — перезаписываются в каждый пропуск.
+  const [apForAll, setApForAll] = useState(true);
+  const [apForAllPoints, setApForAllPoints] = useState<string[]>([]);
   // По умолчанию все pending-пропуска выбраны (если родитель не передал initialSelected).
   const [selectedPasses, setSelectedPasses] = useState<Set<string>>(initialSelected ?? new Set());
 
@@ -178,10 +185,33 @@ export const ApproveSubmissionModal: FC<IProps> = ({
     });
   };
 
+  const toggleSharedPoint = (name: string) => {
+    setApForAllPoints(prev =>
+      prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+  };
+
+  // При снятии «Для всех» переносим общий список точек во ВСЕ пропуска (перезапись),
+  // после чего доступно индивидуальное редактирование в колонке.
+  const handleApForAllToggle = (checked: boolean) => {
+    if (!checked) {
+      setPoints(prev => {
+        const next = new Map(prev);
+        for (const r of pendingRows) next.set(r.id, [...apForAllPoints]);
+        return next;
+      });
+      setExpandedPass(null);
+    }
+    setApForAll(checked);
+  };
+
   const handleApply = async () => {
     const targets = pendingRows.filter(r => selectedPasses.has(r.id));
     if (targets.length === 0) {
       toast.error('Выберите пропуска для одобрения');
+      return;
+    }
+    if (targets.length > MAX_ACTIVATION_BATCH) {
+      toast.error(`За один раз можно активировать не более ${MAX_ACTIVATION_BATCH} сотрудников. Разбейте на партии.`);
       return;
     }
     if (forAll) {
@@ -202,7 +232,9 @@ export const ApproveSubmissionModal: FC<IProps> = ({
     const decisions: IDecideItem[] = targets.map(r => ({
       pass_id: r.id,
       decision: 'approved',
-      access_point_names: points.get(r.id) ?? r.access_point_names ?? [],
+      access_point_names: apForAll
+        ? apForAllPoints
+        : (points.get(r.id) ?? r.access_point_names ?? []),
       expires_at: forAll ? undefined : perPassExpires.get(r.id),
     }));
     setBusy(true);
@@ -362,42 +394,52 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                           <td>{r.pass_number}</td>
                           <td>{r.holder_name ?? '—'}</td>
                           <td>
-                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                              <div style={{ flex: 1, color: 'var(--text-primary)' }}>
-                                {selected.length > 0 ? selected.join(', ') : <span style={{ color: 'var(--text-tertiary)' }}>не выбрано</span>}
+                            {apForAll ? (
+                              <div style={{ color: 'var(--text-primary)' }}>
+                                {apForAllPoints.length > 0
+                                  ? apForAllPoints.join(', ')
+                                  : <span style={{ color: 'var(--text-tertiary)' }}>не выбрано</span>}
                               </div>
-                              <button
-                                type="button"
-                                className="btn-secondary"
-                                onClick={() => setExpandedPass(isOpen ? null : r.id)}
-                                disabled={busy}
-                              >
-                                {isOpen ? 'Свернуть' : 'Изменить'}
-                              </button>
-                            </div>
-                            {isOpen && (
-                              <div className={styles.checkList} style={{ marginTop: 8 }}>
-                                {allOptions.length === 0 && (
-                                  <span className={styles.statusNote}>Список точек Sigur пуст</span>
+                            ) : (
+                              <>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                                  <div style={{ flex: 1, color: 'var(--text-primary)' }}>
+                                    {selected.length > 0 ? selected.join(', ') : <span style={{ color: 'var(--text-tertiary)' }}>не выбрано</span>}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setExpandedPass(isOpen ? null : r.id)}
+                                    disabled={busy}
+                                  >
+                                    {isOpen ? 'Свернуть' : 'Изменить'}
+                                  </button>
+                                </div>
+                                {isOpen && (
+                                  <div className={styles.checkList} style={{ marginTop: 8 }}>
+                                    {allOptions.length === 0 && (
+                                      <span className={styles.statusNote}>Список точек Sigur пуст</span>
+                                    )}
+                                    {allOptions.map(opt => {
+                                      const on = selected.includes(opt.name);
+                                      return (
+                                        <label
+                                          key={opt.id}
+                                          className={`${styles.checkItem} ${on ? styles.checkItemOn : ''}`}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={on}
+                                            onChange={() => togglePoint(r.id, opt.name)}
+                                            disabled={busy}
+                                          />
+                                          {opt.name}
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
                                 )}
-                                {allOptions.map(opt => {
-                                  const on = selected.includes(opt.name);
-                                  return (
-                                    <label
-                                      key={opt.id}
-                                      className={`${styles.checkItem} ${on ? styles.checkItemOn : ''}`}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={on}
-                                        onChange={() => togglePoint(r.id, opt.name)}
-                                        disabled={busy}
-                                      />
-                                      {opt.name}
-                                    </label>
-                                  );
-                                })}
-                              </div>
+                              </>
                             )}
                           </td>
                           {!forAll && (
@@ -453,6 +495,54 @@ export const ApproveSubmissionModal: FC<IProps> = ({
               </div>
             )}
 
+            {!loading && pendingRows.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-primary)' }}>
+                  <input
+                    type="checkbox"
+                    checked={apForAll}
+                    onChange={e => handleApForAllToggle(e.target.checked)}
+                    disabled={busy}
+                  />
+                  Точки доступа — для всех
+                </label>
+                {apForAll ? (
+                  <div className={styles.checkList} style={{ marginTop: 8 }}>
+                    {allOptions.length === 0 && (
+                      <span className={styles.statusNote}>Список точек Sigur пуст</span>
+                    )}
+                    {allOptions.map(opt => {
+                      const on = apForAllPoints.includes(opt.name);
+                      return (
+                        <label
+                          key={opt.id}
+                          className={`${styles.checkItem} ${on ? styles.checkItemOn : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => toggleSharedPoint(opt.name)}
+                            disabled={busy}
+                          />
+                          {opt.name}
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <span className={styles.statusNote} style={{ display: 'block', marginTop: 6 }}>
+                    Точки задаются в колонке «Точки доступа» для каждого сотрудника
+                  </span>
+                )}
+              </div>
+            )}
+
+            {!loading && selectedPasses.size > MAX_ACTIVATION_BATCH && (
+              <div className={styles.statusNote} style={{ marginTop: 8, color: 'var(--danger, #c0392b)' }}>
+                Выбрано {selectedPasses.size} — за раз не более {MAX_ACTIVATION_BATCH}, разбейте на партии.
+              </div>
+            )}
+
             <div className={styles.modalActions}>
               <button className="btn-secondary" onClick={onClose} disabled={busy}>
                 Отмена
@@ -460,7 +550,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
               <button
                 className="btn-primary"
                 onClick={() => void handleApply()}
-                disabled={busy || loading || selectedPasses.size === 0}
+                disabled={busy || loading || selectedPasses.size === 0 || selectedPasses.size > MAX_ACTIVATION_BATCH}
               >
                 Открыть пропуска ({selectedPasses.size})
               </button>
