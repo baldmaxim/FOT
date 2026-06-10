@@ -107,6 +107,8 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   // распространяются на всех; при снятии чекбокса — перезаписываются в каждый пропуск.
   const [apForAll, setApForAll] = useState(true);
   const [apForAllPoints, setApForAllPoints] = useState<string[]>([]);
+  // Сетка точек доступа разворачивается/сворачивается, чтобы освободить место под таблицу.
+  const [apExpanded, setApExpanded] = useState(true);
   // По умолчанию все pending-пропуска выбраны (если родитель не передал initialSelected).
   const [selectedPasses, setSelectedPasses] = useState<Set<string>>(initialSelected ?? new Set());
 
@@ -313,12 +315,12 @@ export const ApproveSubmissionModal: FC<IProps> = ({
       onTouchStart={overlay.onTouchStart}
       onTouchEnd={overlay.onTouchEnd}
     >
-      <div className={styles.modal} style={{ maxWidth: 760 }}>
+      <div className={`${styles.modal} ${styles.modalScroll}`} style={{ maxWidth: 760 }}>
         {view === 'apply' && (
-          <>
-            <h2 className={styles.modalTitle}>Открыть пропуска — {orgName}</h2>
+          <div className={styles.applyBody}>
+            <h2 className={styles.modalTitle} style={{ flexShrink: 0 }}>Открыть пропуска — {orgName}</h2>
 
-            <div style={{ marginBottom: 12 }}>
+            <div style={{ marginBottom: 12, flexShrink: 0 }}>
               <div className={styles.statusNote} style={{ marginBottom: 6 }}>
                 Документы организации:
               </div>
@@ -354,7 +356,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
             )}
 
             {!loading && pendingRows.length > 0 && (
-              <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
+              <div style={{ flex: 1, minHeight: 120, overflow: 'auto' }}>
                 <table className={styles.table}>
                   <thead>
                     <tr>
@@ -463,7 +465,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
             )}
 
             {!loading && pendingRows.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap', flexShrink: 0 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-primary)' }}>
                   <input
                     type="checkbox"
@@ -496,39 +498,61 @@ export const ApproveSubmissionModal: FC<IProps> = ({
             )}
 
             {!loading && pendingRows.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-primary)' }}>
-                  <input
-                    type="checkbox"
-                    checked={apForAll}
-                    onChange={e => handleApForAllToggle(e.target.checked)}
-                    disabled={busy}
-                  />
-                  Точки доступа — для всех
-                </label>
+              <div style={{ marginTop: 12, flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-primary)' }}>
+                    <input
+                      type="checkbox"
+                      checked={apForAll}
+                      onChange={e => handleApForAllToggle(e.target.checked)}
+                      disabled={busy}
+                    />
+                    Точки доступа — для всех
+                  </label>
+                  {apForAll && (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ padding: '2px 8px', fontSize: 13 }}
+                      onClick={() => setApExpanded(v => !v)}
+                      disabled={busy}
+                    >
+                      {apExpanded ? 'Свернуть' : `Развернуть (${apForAllPoints.length})`}
+                    </button>
+                  )}
+                </div>
                 {apForAll ? (
-                  <div className={styles.checkList} style={{ marginTop: 8 }}>
-                    {allOptions.length === 0 && (
-                      <span className={styles.statusNote}>Список точек Sigur пуст</span>
-                    )}
-                    {allOptions.map(opt => {
-                      const on = apForAllPoints.includes(opt.name);
-                      return (
-                        <label
-                          key={opt.id}
-                          className={`${styles.checkItem} ${on ? styles.checkItemOn : ''}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={on}
-                            onChange={() => toggleSharedPoint(opt.name)}
-                            disabled={busy}
-                          />
-                          {opt.name}
-                        </label>
-                      );
-                    })}
-                  </div>
+                  apExpanded ? (
+                    <div className={styles.checkList} style={{ marginTop: 8 }}>
+                      {allOptions.length === 0 && (
+                        <span className={styles.statusNote}>Список точек Sigur пуст</span>
+                      )}
+                      {allOptions.map(opt => {
+                        const on = apForAllPoints.includes(opt.name);
+                        return (
+                          <label
+                            key={opt.id}
+                            className={`${styles.checkItem} ${on ? styles.checkItemOn : ''}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={() => toggleSharedPoint(opt.name)}
+                              disabled={busy}
+                            />
+                            {opt.name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div
+                      className={styles.statusNote}
+                      style={{ marginTop: 6, color: apForAllPoints.length ? 'var(--text-primary)' : 'var(--text-tertiary)' }}
+                    >
+                      {apForAllPoints.length ? apForAllPoints.join(', ') : 'не выбрано'}
+                    </div>
+                  )
                 ) : (
                   <span className={styles.statusNote} style={{ display: 'block', marginTop: 6 }}>
                     Точки задаются в колонке «Точки доступа» для каждого сотрудника
@@ -538,12 +562,12 @@ export const ApproveSubmissionModal: FC<IProps> = ({
             )}
 
             {!loading && selectedPasses.size > MAX_ACTIVATION_BATCH && (
-              <div className={styles.statusNote} style={{ marginTop: 8, color: 'var(--danger, #c0392b)' }}>
+              <div className={styles.statusNote} style={{ marginTop: 8, color: 'var(--danger, #c0392b)', flexShrink: 0 }}>
                 Выбрано {selectedPasses.size} — за раз не более {MAX_ACTIVATION_BATCH}, разбейте на партии.
               </div>
             )}
 
-            <div className={styles.modalActions}>
+            <div className={styles.modalActions} style={{ flexShrink: 0 }}>
               <button className="btn-secondary" onClick={onClose} disabled={busy}>
                 Отмена
               </button>
@@ -555,16 +579,17 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                 Открыть пропуска ({selectedPasses.size})
               </button>
             </div>
-          </>
+          </div>
         )}
 
         {view === 'duplicates' && (
-          <>
-            <h2 className={styles.modalTitle}>Найдены однофамильцы</h2>
-            <div className={styles.statusNote} style={{ marginBottom: 12 }}>
+          <div className={styles.applyBody}>
+            <h2 className={styles.modalTitle} style={{ flexShrink: 0 }}>Найдены однофамильцы</h2>
+            <div className={styles.statusNote} style={{ marginBottom: 12, flexShrink: 0 }}>
               Это ранее созданные сотрудники с тем же ФИО. Заблокируйте старые пропуска, если это один и тот же человек.
             </div>
 
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
             {duplicates.length === 0 && (
               <div className={styles.empty}>Все дубли обработаны</div>
             )}
@@ -641,12 +666,14 @@ export const ApproveSubmissionModal: FC<IProps> = ({
               </div>
             )}
 
-            <div className={styles.modalActions}>
+            </div>
+
+            <div className={styles.modalActions} style={{ flexShrink: 0 }}>
               <button className="btn-primary" onClick={onApplied} disabled={blockingKey !== null}>
                 Готово
               </button>
             </div>
-          </>
+          </div>
         )}
 
         {staffConfirm && (

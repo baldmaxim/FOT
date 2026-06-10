@@ -175,6 +175,16 @@
   white-space: pre-wrap;
 }
 
+.warnNote {
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
 .overlay {
   position: fixed;
   inset: 0;
@@ -193,6 +203,22 @@
   padding: 20px;
   width: 100%;
   max-width: 420px;
+}
+
+/* Высокая модалка: всегда помещается в окно, содержимое — flex-колонка со скроллом внутри. */
+.modalScroll {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 32px); /* overlay padding 16px × 2 */
+  overflow: hidden;
+}
+
+/* Тело вкладки: занимает доступную высоту, дочерние блоки делят её через flex. */
+.applyBody {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .modalTitle {
