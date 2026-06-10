@@ -55,8 +55,8 @@ export const ContractorPage: FC = () => {
 
   const orgQuery = useQuery({ queryKey: ['contractor-org'], queryFn: contractorService.getMyOrg, staleTime: 5 * 60_000 });
   const rosterQuery = useQuery({ queryKey: ['contractor-roster'], queryFn: contractorService.getRoster, staleTime: 30_000 });
-  const passesQuery = useQuery({ queryKey: ['contractor-passes'], queryFn: contractorService.getPasses, staleTime: 30_000 });
-  const subsQuery = useQuery({ queryKey: ['contractor-subs'], queryFn: contractorService.getSubmissions, staleTime: 30_000 });
+  const passesQuery = useQuery({ queryKey: ['contractor-passes'], queryFn: contractorService.getPasses, staleTime: 30_000, refetchInterval: 60_000, refetchOnWindowFocus: true });
+  const subsQuery = useQuery({ queryKey: ['contractor-subs'], queryFn: contractorService.getSubmissions, staleTime: 30_000, refetchInterval: 60_000, refetchOnWindowFocus: true });
 
   const roster = rosterQuery.data ?? [];
   const passes = passesQuery.data ?? [];
@@ -64,6 +64,8 @@ export const ContractorPage: FC = () => {
   const latest = subs[0];
   const hasPending = subs.some(s => s.status === 'pending');
   const filledCount = passes.filter(p => p.status === 'assigned' && !p.submission_id && (edited[p.id] ?? p.holder_name ?? '').trim().length >= 2).length;
+  // Сохранённые, но ещё не отправленные на согласование пропуска (по данным сервера, без черновиков).
+  const unsentCount = passes.filter(p => p.status === 'assigned' && !p.submission_id && (p.holder_name ?? '').trim().length >= 2).length;
   const removals = roster.filter(r => r.state === 'pending_remove');
 
   const refresh = async () => {
@@ -105,7 +107,7 @@ export const ContractorPage: FC = () => {
   };
 
   const menu: Array<{ id: Tab; label: string; badge?: number }> = [
-    { id: 'passes', label: 'Заявки на пропуска' },
+    { id: 'passes', label: 'Заявки на пропуска', badge: unsentCount },
     { id: 'roster', label: 'Сотрудники' },
     { id: 'removals', label: 'Заявки на удаление', badge: removals.length },
   ];
@@ -253,6 +255,13 @@ export const ContractorPage: FC = () => {
                   Отправить на согласование ({filledCount})
                 </button>
               </div>
+              {hasPending && filledCount > 0 && (
+                <div className={styles.warnNote}>
+                  Пропуска с вписанным ФИО ({filledCount}) ещё <b>не отправлены</b>: они уйдут на
+                  согласование только после одобрения текущей заявки. Как только её одобрят —
+                  вернитесь сюда и нажмите «Отправить на согласование» ещё раз.
+                </div>
+              )}
               {passesQuery.isLoading ? (
                 <div className={styles.empty}>Загрузка…</div>
               ) : passes.length === 0 ? (
