@@ -123,3 +123,38 @@ export async function resolveResponsibleEmployeeIdsForRows(
   }
   return result;
 }
+
+/**
+ * Адресная маршрутизация по сотруднику (без привязки к дате) — для заявлений
+ * (отпуск/больничный/за свой счёт). Приоритет: непосредственный руководитель
+ * (employee_direct_reports), иначе начальник(и) отдела с full-доступом
+ * (ручное назначение, source<>'sigur_sync'). Пусто = ответственного нет.
+ */
+export async function resolveResponsibleEmployeeIdsByEmployee(
+  employees: Array<{ employee_id: number; org_department_id: string | null }>,
+): Promise<Map<number, number[]>> {
+  const result = new Map<number, number[]>();
+  if (employees.length === 0) return result;
+
+  const empIds = [...new Set(employees.map(e => Number(e.employee_id)))];
+  const [directMgrs, deptManagers] = await Promise.all([
+    getActiveDirectManagersFor(empIds),
+    listFullManagersForDepartments(
+      [...new Set(employees
+        .map(e => e.org_department_id)
+        .filter((v): v is string => typeof v === 'string' && v.length > 0))],
+    ),
+  ]);
+
+  for (const e of employees) {
+    const empId = Number(e.employee_id);
+    const dm = directMgrs.get(empId);
+    if (dm) {
+      result.set(empId, [dm.managerId]);
+      continue;
+    }
+    const heads = e.org_department_id ? (deptManagers.get(String(e.org_department_id)) ?? []) : [];
+    result.set(empId, heads);
+  }
+  return result;
+}

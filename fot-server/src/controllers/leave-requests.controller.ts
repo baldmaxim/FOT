@@ -14,6 +14,7 @@ import {
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
+import { resolveResponsibleEmployeeIdsByEmployee } from '../services/approval-routing.service.js';
 import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
@@ -21,6 +22,9 @@ import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.serv
 import type { TimeStatus } from '../types/index.js';
 
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave'] as const;
+// Типы заявлений с адресной маршрутизацией: назначенный ответственный
+// (employee_direct_reports) → иначе начальник отдела. Админ (scope=all) видит всё.
+const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid']);
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
@@ -573,6 +577,58 @@ const getMyObjects = async (req: AuthenticatedRequest, res: Response): Promise<v
   }
 };
 
+/**
+ * Адресная маршрутизация для списков: оставляет routed-заявки (отпуск/больничный/
+ * за свой счёт) только тем, кто их ответственный (назначенный руководитель → иначе
+ * начальник отдела). Не-routed типы не трогает. Вызывается только в не-`all` скоупе.
+ */
+async function filterRoutedVisibility<T extends { employee_id: number; request_type: string }>(
+  rows: T[],
+  deptByEmp: Map<number, string | null>,
+  viewerEmployeeId: number | null,
+): Promise<T[]> {
+  const routableEmps = [...new Set(
+    rows
+      .filter(r => ROUTED_LEAVE_TYPES.has(String(r.request_type)))
+      .map(r => Number(r.employee_id)),
+  )].map(id => ({ employee_id: id, org_department_id: deptByEmp.get(id) ?? null }));
+  if (routableEmps.length === 0) return rows;
+  const responsibles = await resolveResponsibleEmployeeIdsByEmployee(routableEmps);
+  return rows.filter(r => {
+    if (!ROUTED_LEAVE_TYPES.has(String(r.request_type))) return true;
+    const resp = responsibles.get(Number(r.employee_id)) ?? [];
+    return viewerEmployeeId != null && resp.includes(viewerEmployeeId);
+  });
+}
+
+/**
+ * Может ли текущий пользователь действовать над заявкой сотрудника.
+ * Админ (scope=all) — всегда. Для routed-типов — только назначенный ответственный
+ * (или начальник отдела при отсутствии назначенного). Прочие типы — обычный
+ * scope-доступ (`fallback`: 'edit' для approve/reject, 'view' для просмотра).
+ */
+async function canManageLeaveRequest(
+  req: AuthenticatedRequest,
+  employeeId: number,
+  requestType: string,
+  fallback: 'view' | 'edit',
+): Promise<boolean> {
+  if ((await resolveAccessibleDepartmentIds(req)) === 'all') return true;
+  if (ROUTED_LEAVE_TYPES.has(requestType)) {
+    const emp = await queryOne<{ org_department_id: string | null }>(
+      `SELECT org_department_id FROM employees WHERE id = $1`,
+      [employeeId],
+    );
+    const resp = (await resolveResponsibleEmployeeIdsByEmployee(
+      [{ employee_id: employeeId, org_department_id: emp?.org_department_id ?? null }],
+    )).get(employeeId) ?? [];
+    return req.user.employee_id != null && resp.includes(req.user.employee_id);
+  }
+  return fallback === 'edit'
+    ? canEditEmployeeInScope(req, employeeId)
+    : canAccessEmployeeInScope(req, employeeId);
+}
+
 /** Заявления отдела (header) */
 const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -607,7 +663,16 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
         .map(r => Number(r.id))
         .filter(Number.isFinite),
     );
-    const visibleData = data.filter(r => !isPendingWorkRoutedToApprovals(r, pendingWorkRequestIds));
+    const workFiltered = data.filter(r => !isPendingWorkRoutedToApprovals(r, pendingWorkRequestIds));
+    // Адресная маршрутизация routed-типов: видит только ответственный.
+    const deptByEmp = new Map<number, string | null>(
+      [...metaMap.entries()].map(([id, m]) => [id, m.org_department_id]),
+    );
+    const visibleData = await filterRoutedVisibility(
+      workFiltered,
+      deptByEmp,
+      req.user.employee_id ?? null,
+    );
     const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
     const correctionRequestIds = visibleData
@@ -642,6 +707,7 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
 /** Все заявления организации (hr/admin) */
 const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
+    const isAllScope = (await resolveAccessibleDepartmentIds(req)) === 'all';
     const scopedDepartmentId = await resolveScopedDepartmentId(req, null);
     const managedDepartmentIds = await resolveManagedDepartmentIds(req);
     const directReportIds = req.user.employee_id
@@ -697,7 +763,15 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         .map(r => Number(r.id))
         .filter(Number.isFinite),
     );
-    const visibleData = data.filter(r => !isPendingWorkRoutedToApprovals(r, pendingWorkRequestIds));
+    const workFiltered = data.filter(r => !isPendingWorkRoutedToApprovals(r, pendingWorkRequestIds));
+    // Админ (scope=all) видит всё; ограниченный скоуп — адресная маршрутизация routed-типов.
+    const visibleData = isAllScope
+      ? workFiltered
+      : await filterRoutedVisibility(
+          workFiltered,
+          new Map([...metaMap.entries()].map(([id, m]) => [id, m.org_department_id])),
+          req.user.employee_id ?? null,
+        );
     const requestIds = visibleData.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
     const correctionRequestIds = visibleData
@@ -762,8 +836,8 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
       return;
     }
 
-    const row = await queryOne<{ count: string }>(
-      `SELECT COUNT(*)::text AS count
+    const rows = await query<{ id: number; employee_id: number; request_type: string; org_department_id: string | null }>(
+      `SELECT lr.id, lr.employee_id, lr.request_type, e.org_department_id
          FROM leave_requests lr
          JOIN employees e ON e.id = lr.employee_id
         WHERE lr.status = 'pending'
@@ -783,7 +857,12 @@ const pendingCount = async (req: AuthenticatedRequest, res: Response): Promise<v
               )`,
       [accessible, directReportIds],
     );
-    res.json({ success: true, data: { count: Number(row?.count ?? 0) } });
+    // Бейдж совпадает с видимым в getDepartment: адресная маршрутизация routed-типов.
+    const deptByEmp = new Map<number, string | null>(
+      rows.map(r => [Number(r.employee_id), r.org_department_id]),
+    );
+    const visible = await filterRoutedVisibility(rows, deptByEmp, req.user.employee_id ?? null);
+    res.json({ success: true, data: { count: visible.length } });
   } catch (err) {
     console.error('leave-requests.pendingCount error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения счётчика заявлений' });
@@ -812,7 +891,7 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     }
 
     const isOwner = request.employee_id === req.user.employee_id;
-    const canReviewOthers = await canAccessEmployeeInScope(req, request.employee_id);
+    const canReviewOthers = await canManageLeaveRequest(req, request.employee_id, request.request_type, 'view');
     if (!isOwner && !canReviewOthers) {
       res.status(403).json({ success: false, error: 'Нет доступа к заявке' });
       return;
@@ -891,7 +970,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       return;
     }
 
-    if (!(await canEditEmployeeInScope(req, request.employee_id))) {
+    if (!(await canManageLeaveRequest(req, request.employee_id, request.request_type, 'edit'))) {
       res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
       return;
     }
@@ -1016,7 +1095,7 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const { id } = req.params;
     const { comment } = req.body;
 
-    const request = await queryOne<{ id: number; employee_id: number; status: string }>(
+    const request = await queryOne<{ id: number; employee_id: number; status: string; request_type: string }>(
       `SELECT * FROM leave_requests WHERE id = $1`,
       [id],
     );
@@ -1031,7 +1110,7 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    if (!(await canEditEmployeeInScope(req, request.employee_id))) {
+    if (!(await canManageLeaveRequest(req, request.employee_id, request.request_type, 'edit'))) {
       res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
       return;
     }

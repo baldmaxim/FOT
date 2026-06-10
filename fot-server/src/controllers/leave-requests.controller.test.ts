@@ -36,6 +36,13 @@ vi.mock('../services/data-scope.service.js', () => ({
   resolveScopedDepartmentId: vi.fn(async () => null),
 }));
 
+const { responsiblesByEmpMock } = vi.hoisted(() => ({
+  responsiblesByEmpMock: vi.fn(async () => new Map<number, number[]>()),
+}));
+vi.mock('../services/approval-routing.service.js', () => ({
+  resolveResponsibleEmployeeIdsByEmployee: responsiblesByEmpMock,
+}));
+
 const { resolveApprovalMock } = vi.hoisted(() => ({
   resolveApprovalMock: vi.fn(async () => 'auto_approved'),
 }));
@@ -49,6 +56,7 @@ vi.mock('../socket/io-instance.js', () => ({ getIo: vi.fn(() => null) }));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
 vi.mock('../services/recipients.service.js', () => ({ getLeaveRequestRecipients: vi.fn(async () => []) }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: vi.fn(async () => []) }));
+import { resolveAccessibleDepartmentIds, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
 vi.mock('../services/employee-skud-object-access.service.js', () => ({ listSelectableObjectsForEmployee: vi.fn(async () => []) }));
 vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object' }));
 
@@ -216,9 +224,13 @@ describe('leaveRequestsController.create', () => {
 describe('leaveRequestsController.getAll', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
+    responsiblesByEmpMock.mockResolvedValue(new Map());
   });
 
-  it('скрывает pending work-заявление, если оно уже маршрутизировано в approvals', async () => {
+  it('админ (scope=all) видит все заявления, скрывая лишь work, ушедшее в approvals', async () => {
+    // Админ: адресная маршрутизация не применяется — vacation остаётся видимой.
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue('all');
     pgQuery
       .mockResolvedValueOnce([
         { id: 1, employee_id: 101, request_type: 'work', status: 'pending', reviewer_id: null },
@@ -236,5 +248,78 @@ describe('leaveRequestsController.getAll', () => {
 
     expect(res._status).toBe(200);
     expect((res._json as { data: Array<{ id: number }> }).data.map(r => r.id)).toEqual([2]);
+    expect(responsiblesByEmpMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('leaveRequestsController.getDepartment (адресная маршрутизация)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
+    vi.mocked(resolveManagedDepartmentIds).mockResolvedValue(['dep-1']);
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+  });
+
+  const mockDeptQueries = () => {
+    pgQuery
+      // loadEmployeeIdsByDepartments
+      .mockResolvedValueOnce([{ id: 102, full_name: 'Отпуск О.', org_department_id: 'dep-1' }])
+      // data: leave_requests
+      .mockResolvedValueOnce([{ id: 2, employee_id: 102, request_type: 'vacation', status: 'pending', reviewer_id: null }])
+      // loadEmployeeMeta
+      .mockResolvedValueOnce([{ id: 102, full_name: 'Отпуск О.', org_department_id: 'dep-1', department_name: 'ЦТ', position_name: null }])
+      // loadAttachmentsByLeaveRequestIds
+      .mockResolvedValueOnce([]);
+  };
+
+  it('ответственный (зритель) видит routed-заявку отпуска', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[102, [7]]])); // viewer employee_id = 7
+    mockDeptQueries();
+    const res = makeRes();
+
+    await leaveRequestsController.getDepartment(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: Array<{ id: number }> }).data.map(r => r.id)).toEqual([2]);
+  });
+
+  it('другой руководитель отдела (не ответственный) не видит routed-заявку', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[102, [999]]])); // ответственный — не зритель
+    mockDeptQueries();
+    const res = makeRes();
+
+    await leaveRequestsController.getDepartment(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: Array<{ id: number }> }).data).toEqual([]);
+  });
+});
+
+describe('leaveRequestsController.approve (маршрутизация прав)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    txClient.query.mockResolvedValue({ rows: [{ id: 708, status: 'approved' }], rowCount: 1 });
+  });
+
+  it('не-ответственный получает 403 на одобрение routed-заявки (vacation)', async () => {
+    // 1-й queryOne → строка заявки; внутри canManageLeaveRequest queryOne → org_department_id сотрудника.
+    pgQueryOne
+      .mockResolvedValueOnce({
+        id: 708, employee_id: 247, status: 'pending', request_type: 'vacation',
+        start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
+        correction_date: null, correction_status: null, correction_hours: null,
+        correction_object_id: null, correction_object_name: null, reason: null,
+      })
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' });
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [999]]])); // ответственный ≠ зритель (7)
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(403);
+    expect(upsertSpy).not.toHaveBeenCalled();
   });
 });

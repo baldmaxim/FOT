@@ -25,7 +25,10 @@ vi.mock('./employee-direct-reports.service.js', () => ({
   getActiveDirectManagersFor: directMgrsMock,
 }));
 
-import { resolveResponsibleEmployeeIdsForRows } from './approval-routing.service.js';
+import {
+  resolveResponsibleEmployeeIdsForRows,
+  resolveResponsibleEmployeeIdsByEmployee,
+} from './approval-routing.service.js';
 
 const WEEKEND = '2026-06-06'; // суббота
 const WEEKDAY = '2026-06-08'; // понедельник
@@ -139,5 +142,37 @@ describe('resolveResponsibleEmployeeIdsForRows', () => {
       { id: 55, employee_id: 5, work_date: WEEKDAY, org_department_id: 'D5' },
     ]);
     expect(res.get(55)).toEqual([]);
+  });
+});
+
+describe('resolveResponsibleEmployeeIdsByEmployee (заявления, без даты)', () => {
+  it('есть непосредственный руководитель → он, начальник отдела игнорируется', async () => {
+    pgQuery.mockImplementation(async (sql: string) =>
+      sql.includes('employee_department_access') ? [{ employee_id: 999, department_id: 'D1' }] : [],
+    );
+    directMgrsMock.mockResolvedValue(new Map([[1, { managerId: 300, managerFullName: 'M' }]]));
+
+    const res = await resolveResponsibleEmployeeIdsByEmployee([{ employee_id: 1, org_department_id: 'D1' }]);
+    expect(res.get(1)).toEqual([300]);
+  });
+
+  it('нет руководителя → начальники отдела (full), их может быть несколько', async () => {
+    pgQuery.mockImplementation(async (sql: string) =>
+      sql.includes('employee_department_access')
+        ? [{ employee_id: 400, department_id: 'D4' }, { employee_id: 401, department_id: 'D4' }]
+        : [],
+    );
+    directMgrsMock.mockResolvedValue(new Map());
+
+    const res = await resolveResponsibleEmployeeIdsByEmployee([{ employee_id: 4, org_department_id: 'D4' }]);
+    expect(res.get(4)).toEqual([400, 401]);
+  });
+
+  it('нет ни руководителя, ни начальников → пусто', async () => {
+    pgQuery.mockImplementation(async () => []);
+    directMgrsMock.mockResolvedValue(new Map());
+
+    const res = await resolveResponsibleEmployeeIdsByEmployee([{ employee_id: 5, org_department_id: 'D5' }]);
+    expect(res.get(5)).toEqual([]);
   });
 });
