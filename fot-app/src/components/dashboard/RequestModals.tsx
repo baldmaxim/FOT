@@ -1,29 +1,13 @@
 import { type FC, useEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { leaveRequestService, type ILeaveRequest, type LeaveRequestType } from '../../services/leaveRequestService';
 import { documentService } from '../../services/documentService';
 import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { MyMonthTimesheet } from './MyMonthTimesheet';
-import type { TimesheetEntry } from '../../types';
+import { MyMonthTimesheet, type IDayFocusPayload } from './MyMonthTimesheet';
 import styles from '../../pages/employee/EmployeeDashboard.module.css';
-
-type RequestType = 'vacation' | 'sick' | 'remote' | 'docs';
-
-const TYPE_TO_LEAVE: Record<Exclude<RequestType, 'docs'>, LeaveRequestType> = {
-  vacation: 'vacation',
-  sick: 'sick_leave',
-  remote: 'remote',
-};
-
-const TITLES: Record<RequestType, string> = {
-  vacation: 'Заявление на отпуск',
-  sick: 'Больничный лист',
-  remote: 'Удалённая работа',
-  docs: 'Запрос справки',
-};
 
 const ALLOWED_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 МБ
@@ -35,298 +19,29 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / 1024 / 1024).toFixed(2)} МБ`;
 };
 
-interface IRequestModalProps {
-  activeModal: RequestType;
-  onClose: () => void;
-  employeeId: number | null;
-  presetDates?: { start: string; end: string } | null;
-}
-
-export const RequestModal: FC<IRequestModalProps> = ({ activeModal, onClose, employeeId, presetDates }) => {
-  const queryClient = useQueryClient();
-  const { showToast } = useToast();
-  const isMobile = useIsMobile();
-  const overlayDismiss = useOverlayDismiss(onClose);
-
-  const [startDate, setStartDate] = useState(presetDates?.start || '');
-  const [endDate, setEndDate] = useState(presetDates?.end || '');
-  const [reason, setReason] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
-  const [submitting, setSubmitting] = useState(false);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (presetDates) {
-      setStartDate(presetDates.start);
-      setEndDate(presetDates.end);
-    }
-  }, [presetDates]);
-
-  const isLeaveType = activeModal !== 'docs';
-
-  const handleFiles = (incoming: FileList | null) => {
-    if (!incoming) return;
-    const next: File[] = [];
-    for (const file of Array.from(incoming)) {
-      if (!ALLOWED_MIMES.includes(file.type)) {
-        showToast('error', `${file.name}: разрешены только PDF, JPG, PNG`);
-        continue;
-      }
-      if (file.size > MAX_FILE_SIZE) {
-        showToast('error', `${file.name}: превышает 10 МБ`);
-        continue;
-      }
-      next.push(file);
-    }
-    if (next.length > 0) setFiles(prev => [...prev, ...next]);
-  };
-
-  const removeFile = (idx: number) => {
-    setFiles(prev => prev.filter((_, i) => i !== idx));
-  };
-
-  const handleSubmit = async () => {
-    if (activeModal === 'docs') {
-      showToast('info', 'Запрос справки пока не реализован');
-      return;
-    }
-    if (!isLeaveType) return;
-    if (!employeeId) {
-      showToast('error', 'Не найден ID сотрудника');
-      return;
-    }
-    if (!startDate || !endDate) {
-      showToast('error', 'Укажите даты');
-      return;
-    }
-    if (activeModal === 'sick' && files.length === 0) {
-      showToast('error', 'Для больничного приложите файл (PDF или фото)');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const created = await leaveRequestService.create({
-        request_type: TYPE_TO_LEAVE[activeModal as Exclude<RequestType, 'docs'>],
-        start_date: startDate,
-        end_date: endDate,
-        reason: reason.trim() || undefined,
-      });
-
-      if (files.length > 0) {
-        const uploads = await Promise.allSettled(
-          files.map(file => documentService.uploadFile(file, employeeId, 'leave_request_attachment', created.id)),
-        );
-        const failed = uploads.filter(u => u.status === 'rejected').length;
-        if (failed > 0) {
-          showToast('warning', `Заявка создана, но ${failed} файл(ов) не загрузились`);
-        }
-      }
-
-      // Оптимистично добавляем созданное заявление в начало списка, чтобы оно
-      // появилось на странице «Мои заявления» сразу при закрытии модалки —
-      // не ждём пока refetch завершится.
-      queryClient.setQueryData<ILeaveRequest[] | undefined>(
-        getMyLeaveRequestsQueryKey(),
-        (prev) => (prev ? [created, ...prev.filter(r => r.id !== created.id)] : [created]),
-      );
-      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
-      // Календарь личного кабинета (MyMonthTimesheet) читает табель по ключу
-      // ['employee-timesheet-summary', employeeId, monthKey] — без этой
-      // инвалидации часы/бейдж заявки не появлялись до перезагрузки.
-      await queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', employeeId] });
-      showToast('success', 'Заявление отправлено');
-      onClose();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Ошибка отправки';
-      showToast('error', message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className={styles.modalOverlay} {...overlayDismiss}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <div className={styles.modalHeader}>
-          <h2 className={styles.modalTitle}>{TITLES[activeModal]}</h2>
-          <button className={styles.modalClose} onClick={onClose}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div className={styles.modalBody}>
-          {activeModal === 'docs' ? (
-            <>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Тип справки <span className={styles.required}>*</span></label>
-                <select className={styles.formSelect}>
-                  <option>2-НДФЛ</option>
-                  <option>Справка с места работы</option>
-                  <option>Копия трудовой книжки</option>
-                  <option>Справка о доходах</option>
-                </select>
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>Комментарий</label>
-                <textarea
-                  className={styles.formTextarea}
-                  placeholder="Для чего нужна справка..."
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              <div className={styles.formRow}>
-                <div className={styles.formGroup}>
-                  <label className={styles.formLabel}>Дата начала <span className={styles.required}>*</span></label>
-                  <input
-                    type="date"
-                    className={styles.formInput}
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                  />
-                </div>
-                <div className={styles.formGroup}>
-                  <label className={styles.formLabel}>Дата окончания <span className={styles.required}>*</span></label>
-                  <input
-                    type="date"
-                    className={styles.formInput}
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>
-                  {activeModal === 'sick' ? 'Комментарий / номер ЭЛН' : 'Комментарий / причина'}
-                </label>
-                <textarea
-                  className={styles.formTextarea}
-                  placeholder={activeModal === 'remote' ? 'Укажите причину работы из дома...' : 'Дополнительная информация...'}
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                />
-              </div>
-
-              <div className={styles.formGroup}>
-                <label className={styles.formLabel}>
-                  Прикреплённые файлы {activeModal === 'sick' && <span className={styles.required}>*</span>}
-                  <span style={{ fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 6, fontSize: 12 }}>
-                    (PDF, JPG, PNG до 10 МБ)
-                  </span>
-                </label>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    Выбрать файлы
-                  </button>
-                  {isMobile && (
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => cameraInputRef.current?.click()}
-                    >
-                      Сделать фото
-                    </button>
-                  )}
-                </div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept={ACCEPT_ATTR}
-                  style={{ display: 'none' }}
-                  onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }}
-                />
-                <input
-                  ref={cameraInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  style={{ display: 'none' }}
-                  onChange={(e) => { handleFiles(e.target.files); e.target.value = ''; }}
-                />
-                {files.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {files.map((file, idx) => (
-                      <div
-                        key={`${file.name}-${idx}`}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '8px 12px',
-                          background: 'var(--bg-tertiary)',
-                          borderRadius: 8,
-                          fontSize: 13,
-                        }}
-                      >
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                          {file.name}
-                          <span style={{ color: 'var(--text-tertiary)', marginLeft: 8 }}>{formatBytes(file.size)}</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => removeFile(idx)}
-                          style={{
-                            background: 'transparent',
-                            border: 0,
-                            color: 'var(--text-tertiary)',
-                            cursor: 'pointer',
-                            fontSize: 18,
-                            lineHeight: 1,
-                            padding: '0 4px',
-                          }}
-                          aria-label="Удалить файл"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-        <div className={styles.modalFooter}>
-          <button className="btn-secondary" onClick={onClose} disabled={submitting}>
-            Отмена
-          </button>
-          <button className="btn-primary" onClick={handleSubmit} disabled={submitting}>
-            {submitting ? 'Отправка...' : 'Отправить'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
+// Порядок и состав типов — как в эталонной форме главной (EmployeeDashboardPage).
 const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
+  { value: 'time_correction', label: 'Корректировка табеля' },
   { value: 'remote', label: 'Удалённая работа' },
   { value: 'work', label: 'Работа в выходной/праздник' },
   { value: 'vacation', label: 'Отпуск' },
+  { value: 'sick_leave', label: 'Больничный' },
   { value: 'unpaid', label: 'За свой счёт' },
   { value: 'educational_leave', label: 'Учебный отпуск' },
-  { value: 'sick_leave', label: 'Больничный' },
-  { value: 'time_correction', label: 'Корректировка табеля' },
+  { value: 'certificate', label: 'Справка' },
 ];
 
-const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'unpaid', 'sick_leave', 'educational_leave'];
+// «За свой счёт» (unpaid) подаётся датами на календаре, а не периодом (как на главной).
+const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'sick_leave', 'educational_leave'];
 
 interface IUnifiedRequestModalProps {
   onClose: () => void;
   employeeId: number | null;
+  /** Предвыбранный день (например, сфокусированный день календаря на главной). */
+  presetDate?: string | null;
 }
 
-export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, employeeId }) => {
+export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, employeeId, presetDate }) => {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const isMobile = useIsMobile();
@@ -334,27 +49,57 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const [requestType, setRequestType] = useState<LeaveRequestType>('remote');
-  const [selectedDates, setSelectedDates] = useState<Set<string>>(new Set());
+  const [requestType, setRequestType] = useState<LeaveRequestType>('time_correction');
+  const [selectedDates, setSelectedDates] = useState<Set<string>>(presetDate ? new Set([presetDate]) : new Set());
   const [reason, setReason] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
-  const [correctionDate, setCorrectionDate] = useState('');
-  // Строковое состояние ввода: при очистке поле остаётся пустым (без принудительного 0,
-  // который давал ведущий ноль «08»). В число парсим только при отправке.
+  // Строковое состояние ввода часов: целое число (как на главной). В число парсим при отправке.
   const [correctionHours, setCorrectionHours] = useState<string>('8');
+  const [correctionObjectId, setCorrectionObjectId] = useState('');
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
 
+  // Фокус дня — для выбора объекта корректировки по СКУД-объектам конкретного дня.
+  const [focusedDay, setFocusedDay] = useState<string | null>(presetDate ?? null);
+  const [focusedPayload, setFocusedPayload] = useState<IDayFocusPayload | null>(null);
+
   const isCorrection = requestType === 'time_correction';
   const isRangeType = RANGE_TYPES.includes(requestType);
+
+  // Объекты сотрудника для привязки корректировки табеля (выбор обязателен).
+  const objectsQuery = useQuery({
+    queryKey: ['my-correction-objects', employeeId],
+    queryFn: () => leaveRequestService.getMyObjects(),
+    enabled: !!employeeId,
+    staleTime: 5 * 60_000,
+  });
+  const myObjects = objectsQuery.data ?? [];
+
+  // Объекты выбранного дня (реальные СКУД/manual_object с object_id), дедуп по object_id.
+  const dayObjects = useMemo(() => {
+    const src = (focusedPayload?.objectEntries ?? []).filter(o => !o.from_day_level && o.object_id);
+    const seen = new Map<string, { object_id: string; object_name: string }>();
+    for (const o of src) {
+      if (!seen.has(o.object_id!)) seen.set(o.object_id!, { object_id: o.object_id!, object_name: o.object_name });
+    }
+    return [...seen.values()];
+  }, [focusedPayload]);
+
+  // Опции выпадашки: объекты дня; если их нет — полный закреплённый список.
+  const objectOptions = dayObjects.length > 0 ? dayObjects : myObjects;
+
+  // Автовыбор единственного объекта дня; иначе сброс — пусть выбирает вручную.
+  useEffect(() => {
+    setCorrectionObjectId(dayObjects.length === 1 ? dayObjects[0].object_id : '');
+  }, [focusedDay, dayObjects]);
 
   const handleTypeChange = (next: LeaveRequestType) => {
     setRequestType(next);
     setSelectedDates(new Set());
     setRangeStart('');
     setRangeEnd('');
-    setCorrectionDate('');
+    setCorrectionObjectId('');
   };
 
   const toggleDay = (iso: string) => {
@@ -366,9 +111,9 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
     });
   };
 
-  const handleCorrectionPick = (iso: string, entry: TimesheetEntry | null) => {
-    setCorrectionDate(iso);
-    if (entry?.hours_worked != null) setCorrectionHours(String(entry.hours_worked));
+  const handleDayFocus = (iso: string, payload: IDayFocusPayload) => {
+    setFocusedDay(iso);
+    setFocusedPayload(payload);
   };
 
   const sortedDates = useMemo(() => [...selectedDates].sort(), [selectedDates]);
@@ -387,31 +132,61 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const handleSubmit = async () => {
     if (!employeeId) return showToast('error', 'Не найден ID сотрудника');
     const parsedCorrectionHours = parseFloat(correctionHours);
+    const days = sortedDates;
+
     if (isCorrection) {
-      if (!correctionDate) return showToast('error', 'Укажите дату корректировки');
-      if (!correctionHours.trim() || !Number.isFinite(parsedCorrectionHours)) {
-        return showToast('error', 'Укажите количество часов');
+      if (days.length === 0) return showToast('error', 'Выберите день(дни) на календаре');
+      if (!correctionHours.trim() || !Number.isInteger(parsedCorrectionHours) || parsedCorrectionHours < 0) {
+        return showToast('error', 'Часы — только целым числом (8, 9, 10…)');
       }
+      if (!correctionObjectId) return showToast('error', 'Выберите объект для корректировки');
     } else if (isRangeType) {
       if (!rangeStart || !rangeEnd) return showToast('error', 'Укажите период (с — по)');
       if (rangeEnd < rangeStart) return showToast('error', 'Дата окончания раньше даты начала');
       if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
     } else {
-      if (selectedDates.size === 0) return showToast('error', 'Выберите хотя бы один день');
+      if (days.length === 0) return showToast('error', 'Выберите хотя бы один день');
     }
+
     setSubmitting(true);
     try {
-      const payload = isCorrection
-        ? {
-            request_type: requestType,
-            start_date: correctionDate,
-            end_date: correctionDate,
+      const uploadFilesTo = async (requestId: number): Promise<number> => {
+        if (files.length === 0) return 0;
+        const uploads = await Promise.allSettled(
+          files.map(file => documentService.uploadFile(file, employeeId, 'leave_request_attachment', requestId)),
+        );
+        return uploads.filter(u => u.status === 'rejected').length;
+      };
+
+      let failedFiles = 0;
+      let firstCreated: ILeaveRequest | null = null;
+
+      if (isCorrection) {
+        // По одному заявлению на каждый выбранный день — одинаковые часы/объект/причина.
+        const results = await Promise.allSettled(
+          days.map(day => leaveRequestService.create({
+            request_type: 'time_correction',
+            start_date: day,
+            end_date: day,
             reason: reason.trim() || undefined,
-            correction_date: correctionDate,
+            correction_date: day,
             correction_status: 'work',
             correction_hours: parsedCorrectionHours,
-          }
-        : isRangeType
+            correction_object_id: correctionObjectId,
+          })),
+        );
+        const created = results.flatMap(r => (r.status === 'fulfilled' ? [r.value] : []));
+        if (created.length === 0) {
+          const firstErr = results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
+          throw new Error(firstErr?.reason instanceof Error ? firstErr.reason.message : 'Не удалось создать корректировку');
+        }
+        firstCreated = created[0];
+        failedFiles = await uploadFilesTo(created[0].id);
+        if (created.length < days.length) {
+          showToast('warning', `Создано ${created.length} из ${days.length} корректировок`);
+        }
+      } else {
+        const payload = isRangeType
           ? {
               request_type: requestType,
               start_date: rangeStart,
@@ -420,29 +195,31 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
             }
           : {
               request_type: requestType,
-              start_date: sortedDates[0],
-              end_date: sortedDates[sortedDates.length - 1],
+              start_date: days[0],
+              end_date: days[days.length - 1],
+              selected_dates: days,
               reason: reason.trim() || undefined,
-              selected_dates: sortedDates,
             };
-      const created = await leaveRequestService.create(payload);
-      if (files.length > 0) {
-        const uploads = await Promise.allSettled(
-          files.map(file => documentService.uploadFile(file, employeeId, 'leave_request_attachment', created.id)),
-        );
-        const failed = uploads.filter(u => u.status === 'rejected').length;
-        if (failed > 0) showToast('warning', `Заявка создана, но ${failed} файл(ов) не загрузились`);
+        const created = await leaveRequestService.create(payload);
+        firstCreated = created;
+        failedFiles = await uploadFilesTo(created.id);
       }
+
+      if (failedFiles > 0) showToast('warning', `${failedFiles} файл(ов) не загрузились`);
+
       // Оптимистично добавляем созданное заявление в кэш — чтобы оно появилось
-      // на странице «Мои заявления» сразу при закрытии модалки.
-      queryClient.setQueryData<ILeaveRequest[] | undefined>(
-        getMyLeaveRequestsQueryKey(),
-        (prev) => (prev ? [created, ...prev.filter(r => r.id !== created.id)] : [created]),
-      );
+      // в списке сразу при закрытии модалки (не ждём refetch).
+      if (firstCreated) {
+        const created = firstCreated;
+        queryClient.setQueryData<ILeaveRequest[] | undefined>(
+          getMyLeaveRequestsQueryKey(),
+          (prev) => (prev ? [created, ...prev.filter(r => r.id !== created.id)] : [created]),
+        );
+      }
       await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
       // Календарь личного кабинета (MyMonthTimesheet) читает табель по ключу
       // ['employee-timesheet-summary', employeeId, monthKey] — без этой
-      // инвалидации часы/бейдж корректировки не появлялись до reload.
+      // инвалидации часы/бейдж заявки не появлялись до перезагрузки.
       await queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', employeeId] });
       showToast('success', 'Заявление отправлено');
       onClose();
@@ -499,43 +276,23 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
               </div>
             </div>
           ) : (
-            /* Calendar (с часами и статусами заявок) */
+            /* Calendar (мультивыбор дней, с часами и статусами заявок) */
             <div className={styles.formGroup}>
               <label className={styles.formLabel}>
-                {isCorrection ? (
-                  <>Выберите день <span className={styles.required}>*</span></>
-                ) : (
-                  <>Выберите дни <span className={styles.required}>*</span></>
-                )}
-                {!isCorrection && selectedDates.size > 0 && (
+                {isCorrection ? <>Выберите день(дни) <span className={styles.required}>*</span></> : <>Выберите дни <span className={styles.required}>*</span></>}
+                {selectedDates.size > 0 && (
                   <span className={styles.reqCalSelectedCount}> — выбрано: {selectedDates.size} дн.</span>
                 )}
               </label>
-              {isCorrection ? (
-                <MyMonthTimesheet
-                  employeeId={employeeId}
-                  activeDayIso={correctionDate || null}
-                  onDayActivate={handleCorrectionPick}
-                  noCard
-                  allowFuture
-                />
-              ) : (
-                <MyMonthTimesheet
-                  employeeId={employeeId}
-                  selectedDates={selectedDates}
-                  onDayToggle={iso => toggleDay(iso)}
-                  noCard
-                  allowFuture
-                />
-              )}
-              {isCorrection && correctionDate && (
-                <div className={styles.reqCalChips}>
-                  <span className={styles.reqCalChip}>
-                    {new Date(correctionDate + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
-                  </span>
-                </div>
-              )}
-              {!isCorrection && selectedDates.size > 0 && (
+              <MyMonthTimesheet
+                employeeId={employeeId}
+                selectedDates={selectedDates}
+                onDayToggle={iso => toggleDay(iso)}
+                onDayFocus={handleDayFocus}
+                noCard
+                allowFuture
+              />
+              {selectedDates.size > 0 && (
                 <div className={styles.reqCalChips}>
                   {sortedDates.map(d => (
                     <span key={d} className={styles.reqCalChip}>
@@ -548,34 +305,51 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
             </div>
           )}
 
+          {/* Correction: целые часы + обязательный объект */}
           {isCorrection && (
+            <>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Часы <span className={styles.required}>*</span></label>
+                <input
+                  type="number"
+                  className={styles.formInput}
+                  value={correctionHours}
+                  onChange={e => setCorrectionHours(e.target.value)}
+                  step={1}
+                  min={0}
+                />
+              </div>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Объект <span className={styles.required}>*</span></label>
+                <select
+                  className={styles.formSelect}
+                  value={correctionObjectId}
+                  onChange={e => setCorrectionObjectId(e.target.value)}
+                  disabled={objectOptions.length === 0}
+                >
+                  <option value="">{objectOptions.length === 0 ? 'Нет доступных объектов' : '— выберите объект —'}</option>
+                  {objectOptions.map(o => (
+                    <option key={o.object_id} value={o.object_id}>{o.object_name}</option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
+
+          {/* Comment (скрыт для справки — как на главной) */}
+          {requestType !== 'certificate' && (
             <div className={styles.formGroup}>
-              <label className={styles.formLabel}>Часы <span className={styles.required}>*</span></label>
-              <input
-                type="number"
-                inputMode="decimal"
-                className={styles.formInput}
-                value={correctionHours}
-                onChange={e => setCorrectionHours(e.target.value)}
-                min={0}
-                max={24}
-                step={0.5}
+              <label className={styles.formLabel}>
+                {requestType === 'sick_leave' ? 'Комментарий / номер ЭЛН' : 'Комментарий'}
+              </label>
+              <textarea
+                className={styles.formTextarea}
+                placeholder={requestType === 'remote' ? 'Причина работы из дома...' : 'Дополнительная информация...'}
+                value={reason}
+                onChange={e => setReason(e.target.value)}
               />
             </div>
           )}
-
-          {/* Comment */}
-          <div className={styles.formGroup}>
-            <label className={styles.formLabel}>
-              {requestType === 'sick_leave' ? 'Комментарий / номер ЭЛН' : 'Комментарий'}
-            </label>
-            <textarea
-              className={styles.formTextarea}
-              placeholder={requestType === 'remote' ? 'Причина работы из дома...' : 'Дополнительная информация...'}
-              value={reason}
-              onChange={e => setReason(e.target.value)}
-            />
-          </div>
 
           {/* Files */}
           <div className={styles.formGroup}>
