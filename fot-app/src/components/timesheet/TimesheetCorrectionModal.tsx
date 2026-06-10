@@ -1342,46 +1342,10 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
     </div>
   ) : null;
 
-  return (
-    <div className={`ts-modal${useTwoColumnLayout ? ' ts-modal--two-col' : ''}`} onClick={e => e.stopPropagation()}>
-      <div className="ts-modal-header">
-        <h3 className="ts-modal-title">
-          {headerTitle}
-          {statusChip}
-          <CorrectionApprovalBadge
-            approvedAt={correctionInfo?.approved_at ?? null}
-            approverName={correctionInfo?.approved_by_name ?? null}
-            approvalComment={correctionInfo?.approval_comment ?? null}
-          />
-          {headerSubtitle && <div className="ts-modal-subtitle">{headerSubtitle}</div>}
-        </h3>
-        <button className="ts-panel-close" onClick={onClose}>
-          <X size={18} />
-        </button>
-      </div>
-
-      {showTravelTab && (
-        <div className="ts-modal-tabs">
-          <button
-            className={`ts-modal-tab ${topTab === 'travel' ? 'ts-modal-tab--active' : ''}`}
-            onClick={() => setTopTab('travel')}
-          >
-            Передвижения
-          </button>
-          <button
-            className={`ts-modal-tab ${topTab === 'correction' ? 'ts-modal-tab--active' : ''}`}
-            onClick={() => setTopTab('correction')}
-          >
-            Корректировки
-          </button>
-        </div>
-      )}
-
-      {showTravelTab && topTab === 'travel' ? (
-        <div className="ts-modal-body ts-modal-body--travel">
-          <TravelSegmentsPanel employeeId={employeeId ?? null} workDate={workDate ?? null} />
-        </div>
-      ) : (
+  // Содержимое вкладки «Корректировки» — обычное тело модалки (плашка + две колонки
+  // либо под-вкладки События/Корректировка). Вынесено в переменную, чтобы при
+  // showTravelTab рендерить ОБЕ панели одновременно (см. ts-modal-pane-stack).
+  const correctionContent = (
       <>
       {infoBanner && (
         <div className="ts-correction-info ts-correction-info--notice">
@@ -1440,7 +1404,58 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         </>
       )}
       </>
+  );
+
+  return (
+    <div className={`ts-modal${useTwoColumnLayout ? ' ts-modal--two-col' : ''}`} onClick={e => e.stopPropagation()}>
+      <div className="ts-modal-header">
+        <h3 className="ts-modal-title">
+          {headerTitle}
+          {statusChip}
+          <CorrectionApprovalBadge
+            approvedAt={correctionInfo?.approved_at ?? null}
+            approverName={correctionInfo?.approved_by_name ?? null}
+            approvalComment={correctionInfo?.approval_comment ?? null}
+          />
+          {headerSubtitle && <div className="ts-modal-subtitle">{headerSubtitle}</div>}
+        </h3>
+        <button className="ts-panel-close" onClick={onClose}>
+          <X size={18} />
+        </button>
+      </div>
+
+      {showTravelTab && (
+        <div className="ts-modal-tabs">
+          <button
+            className={`ts-modal-tab ${topTab === 'travel' ? 'ts-modal-tab--active' : ''}`}
+            onClick={() => setTopTab('travel')}
+          >
+            Передвижения
+          </button>
+          <button
+            className={`ts-modal-tab ${topTab === 'correction' ? 'ts-modal-tab--active' : ''}`}
+            onClick={() => setTopTab('correction')}
+          >
+            Корректировки
+          </button>
+        </div>
       )}
+
+      {showTravelTab ? (
+        // Обе панели смонтированы в одной grid-ячейке: контейнер держит высоту большей,
+        // неактивная скрыта visibility (без ремоунта). Переключение вкладок не меняет
+        // размер модалки и не промаргивает контент.
+        <div className="ts-modal-pane-stack">
+          <div className={`ts-modal-pane${topTab === 'travel' ? '' : ' ts-modal-pane--hidden'}`}>
+            <div className="ts-modal-body ts-modal-body--travel">
+              <TravelSegmentsPanel employeeId={employeeId ?? null} workDate={workDate ?? null} />
+            </div>
+          </div>
+          <div className={`ts-modal-pane${topTab === 'correction' ? '' : ' ts-modal-pane--hidden'}`}>
+            {correctionContent}
+          </div>
+        </div>
+      ) : correctionContent}
     </div>
   );
 };
