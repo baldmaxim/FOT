@@ -6,6 +6,7 @@ import { useAccessPointMapViewer } from '../../hooks/useAccessPointMapViewer';
 import { skudService } from '../../services/skudService';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 import { CorrectionApprovalBadge } from './CorrectionApprovalBadge';
+import { TravelSegmentsPanel } from './TravelSegmentsPanel';
 import { CorrectionAttachments } from './CorrectionAttachments';
 import { StagedCorrectionAttachments } from './StagedCorrectionAttachments';
 import {
@@ -91,6 +92,10 @@ interface ICorrectionModalProps {
   // загрузка после создания). Включает родитель, чей onSave умеет грузить файлы
   // (табель). По умолчанию false — ЛК/массовая корректировка без picker'а.
   allowAttachmentsOnCreate?: boolean;
+  // Показать верхнюю вкладку «Передвижения» (есть превышение лимита/непривязанная точка).
+  // Если true — модалка открывается на вкладке «Передвижения», рядом вкладка «Корректировки»
+  // с обычным содержимым. Размер модалки при переключении не меняется.
+  showTravelTab?: boolean;
 }
 
 type ModalTab = 'events' | 'correction';
@@ -1130,6 +1135,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   preselectedObjectKey,
   initialMode,
   allowAttachmentsOnCreate,
+  showTravelTab,
 }) => {
   const hasObjectsBlock = Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
   const dayHasObjectAdjustments = hasObjectsBlock && objectEntries!.some(entry => entry.is_correction && entry.adjustment_id != null);
@@ -1147,6 +1153,10 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
     if (showCorrectionTab && correctionInfo?.is_correction) return 'correction';
     return 'events';
   });
+  // Верхний уровень вкладок: «Передвижения» (если есть проблемы) ⇄ «Корректировки».
+  // По умолчанию открываем «Передвижения». Контейнер модалки от topTab не зависит,
+  // поэтому размер при переключении не меняется.
+  const [topTab, setTopTab] = useState<'travel' | 'correction'>(showTravelTab ? 'travel' : 'correction');
   const shortName = employeeName ? formatTimesheetEmployeeName(employeeName) : null;
   const headerTitle = title || dayLabel || 'День';
   const headerSubtitle = subtitle || shortName;
@@ -1350,6 +1360,29 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         </button>
       </div>
 
+      {showTravelTab && (
+        <div className="ts-modal-tabs">
+          <button
+            className={`ts-modal-tab ${topTab === 'travel' ? 'ts-modal-tab--active' : ''}`}
+            onClick={() => setTopTab('travel')}
+          >
+            Передвижения
+          </button>
+          <button
+            className={`ts-modal-tab ${topTab === 'correction' ? 'ts-modal-tab--active' : ''}`}
+            onClick={() => setTopTab('correction')}
+          >
+            Корректировки
+          </button>
+        </div>
+      )}
+
+      {showTravelTab && topTab === 'travel' ? (
+        <div className="ts-modal-body ts-modal-body--travel">
+          <TravelSegmentsPanel employeeId={employeeId ?? null} workDate={workDate ?? null} />
+        </div>
+      ) : (
+      <>
       {infoBanner && (
         <div className="ts-correction-info ts-correction-info--notice">
           <span className="ts-correction-info-icon">ℹ</span>
@@ -1405,6 +1438,8 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
             </div>
           ) : correctionPanel}
         </>
+      )}
+      </>
       )}
     </div>
   );

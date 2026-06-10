@@ -4219,6 +4219,14 @@
   max-height: 60vh;
 }
 
+/* Тело вкладки «Передвижения» внутри единой модалки. max-height совпадает с областью
+   прокрутки grid-тела (.ts-modal-body--grid), min-height удерживает высоту, чтобы при
+   переключении вкладок «Передвижения»↔«Корректировки» модалка не меняла размер. */
+.ts-modal-body--travel {
+  max-height: 70vh;
+  min-height: 320px;
+}
+
 .ts-modal-footer {
   display: flex;
   justify-content: flex-end;

@@ -69,9 +69,6 @@ const TimesheetSidePanel = lazy(() => import('../../components/timesheet/Timeshe
 const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
   default: module.TimesheetCorrectionModal,
 })));
-const TravelExceptionModal = lazy(() => import('../../components/timesheet/TravelExceptionModal').then(module => ({
-  default: module.TravelExceptionModal,
-})));
 
 const DEFAULT_STATS: ITimesheetStats = {
   employeeCount: 0,
@@ -209,11 +206,6 @@ export const TimesheetPage: FC = () => {
   const [teamManagementOpen, setTeamManagementOpen] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
-  const [travelExceptionTarget, setTravelExceptionTarget] = useState<{
-    employeeId: number;
-    employeeName: string;
-    workDate: string;
-  } | null>(null);
   const [refreshState, setRefreshState] = useState<{
     phase: 'idle' | 'syncing' | 'invalidating' | 'error';
     message: string;
@@ -517,17 +509,11 @@ export const TimesheetPage: FC = () => {
       return;
     }
     const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    // Если в дне есть нерешённое превышение лимита передвижения или непривязанная точка —
-    // приоритетно открываем модалку approve/reject (а не общую корректировку дня).
-    if (entry && (entry.travel_problematic_segments || 0) > 0) {
-      setTravelExceptionTarget({
-        employeeId: emp.id,
-        employeeName: emp.full_name,
-        workDate,
-      });
-      return;
-    }
-    if (isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
+    // Проблема с передвижением (превышение лимита или непривязанная точка): модалка
+    // открывается на вкладке «Передвижения». Замок периода её не блокирует — решение
+    // по передвижению должно быть доступно и в закрытом периоде (как было раньше).
+    const hasTravel = (entry?.travel_problematic_segments || 0) > 0 || (entry?.travel_delay_minutes || 0) > 0;
+    if (!hasTravel && isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
       toast.info?.(lockMessage(lockedDateSet.get(workDate)));
       return;
     }
@@ -2267,6 +2253,7 @@ export const TimesheetPage: FC = () => {
             employeeName={modalMode === 'object' ? undefined : modalEmployee?.full_name}
             employeeId={modalEmployee?.id}
             workDate={modalWorkDate}
+            showTravelTab={(modalEntry?.travel_problematic_segments || 0) > 0 || (modalEntry?.travel_delay_minutes || 0) > 0}
             allowAccessPointMap={canViewPage('/skud-settings')}
             hideSkudTab={!canViewPage('/timesheet/events')}
             deleteLabel={modalMode === 'object' ? 'Снять корректировку' : undefined}
@@ -2341,18 +2328,6 @@ export const TimesheetPage: FC = () => {
             hideSkudTab
             maxHours={bulkMaxHours}
             allowAttachmentsOnCreate
-          />
-        </Suspense>
-      )}
-
-      {travelExceptionTarget && (
-        <Suspense fallback={null}>
-          <TravelExceptionModal
-            open={!!travelExceptionTarget}
-            onClose={() => setTravelExceptionTarget(null)}
-            employeeId={travelExceptionTarget.employeeId}
-            employeeName={travelExceptionTarget.employeeName}
-            workDate={travelExceptionTarget.workDate}
           />
         </Suspense>
       )}

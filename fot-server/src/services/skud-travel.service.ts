@@ -1746,8 +1746,9 @@ export const approveTravelSegment = async ({
 }): Promise<ITravelSegmentListItem> => {
   const existing = await fetchSegmentRowById(segmentId);
   if (!existing) throw new Error('Сегмент передвижения не найден');
-  if (existing.status !== 'pending') {
-    throw new Error('Решение по сегменту уже принято');
+  // Допускаем пересмотр решения: pending → решить, approved/rejected → переключить.
+  if (!['pending', 'approved', 'rejected'].includes(existing.status)) {
+    throw new Error('По этому сегменту решение не требуется');
   }
 
   const now = new Date().toISOString();
@@ -1785,8 +1786,9 @@ export const rejectTravelSegment = async ({
 }): Promise<ITravelSegmentListItem> => {
   const existing = await fetchSegmentRowById(segmentId);
   if (!existing) throw new Error('Сегмент передвижения не найден');
-  if (existing.status !== 'pending') {
-    throw new Error('Решение по сегменту уже принято');
+  // Допускаем пересмотр решения: pending → решить, approved/rejected → переключить.
+  if (!['pending', 'approved', 'rejected'].includes(existing.status)) {
+    throw new Error('По этому сегменту решение не требуется');
   }
 
   const now = new Date().toISOString();
