@@ -112,13 +112,19 @@ async function syncWorkLeaveRequestsForAdjustmentIds(
         SET status = ns.status,
             reviewer_id = CASE WHEN ns.status IN ('approved', 'rejected') THEN $2::uuid ELSE NULL END,
             reviewed_at = CASE WHEN ns.status IN ('approved', 'rejected') THEN now() ELSE NULL END,
-            review_comment = CASE WHEN ns.status = 'rejected' THEN $3::text ELSE NULL END,
+            -- На approved комментарий не трогаем: заявка могла быть одобрена
+            -- на 1-м этапе в «Заявлениях» — его комментарий сохраняем.
+            review_comment = CASE
+              WHEN ns.status = 'rejected' THEN $3::text
+              WHEN ns.status = 'pending' THEN NULL
+              ELSE lr.review_comment
+            END,
             updated_at = now()
        FROM next_state ns
       WHERE lr.id = ns.id
         AND (
           lr.status IS DISTINCT FROM ns.status
-          OR lr.review_comment IS DISTINCT FROM CASE WHEN ns.status = 'rejected' THEN $3::text ELSE NULL END
+          OR (ns.status = 'rejected' AND lr.review_comment IS DISTINCT FROM $3::text)
         )
       RETURNING lr.id, lr.employee_id, lr.status`,
     [ids, reviewerUserId, reviewComment],

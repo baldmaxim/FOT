@@ -24,7 +24,7 @@ import type { TimeStatus } from '../types/index.js';
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave'] as const;
 // Типы заявлений с адресной маршрутизацией: назначенный ответственный
 // (employee_direct_reports) → иначе начальник отдела. Админ (scope=all) видит всё.
-const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid']);
+const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid', 'work']);
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
@@ -398,8 +398,8 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     // Многошаговая операция: insert заявления + связь с документами в одной TX.
-    // Для work-заявок сразу создаём attendance_adjustments: именно они являются
-    // очередью адресного согласования выходных на /approvals.
+    // Корректировки (attendance_adjustments) НЕ создаются здесь: work-заявка сначала
+    // проходит согласование в «Заявлениях», материализация — в approve().
     const data = await withTransaction(async (client) => {
       const insertCols: string[] = ['employee_id', 'request_type', 'start_date', 'end_date', 'reason'];
       const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
@@ -445,32 +445,6 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
             WHERE id = ANY($2::bigint[]) AND leave_request_id IS NULL`,
           [row.id, docIds],
         );
-      }
-
-      if (request_type === 'work') {
-        const materialized = await materializeLeaveRequestAdjustments({
-          id: Number(row.id),
-          employee_id: employeeId,
-          request_type,
-          start_date,
-          end_date,
-          selected_dates: normalizedSelectedDates,
-          reason: reason || null,
-        }, req.user.id, client);
-
-        if (materialized.dates.length > 0 && !materialized.hasPending) {
-          const nowIso = new Date().toISOString();
-          const approved = (await client.query(
-            `UPDATE leave_requests SET
-               status = 'approved',
-               reviewed_at = $1,
-               updated_at = $1
-             WHERE id = $2
-             RETURNING *`,
-            [nowIso, row.id],
-          )).rows[0] ?? null;
-          return approved ?? row;
-        }
       }
 
       return row;
@@ -1148,9 +1122,8 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
-/** Отмена заявления автором (статусы pending или approved). Для approved
- *  откатываем побочный эффект approve(): удаляем созданные строки
- *  attendance_adjustments в той же транзакции. */
+/** Отмена заявления автором (статусы pending или approved). Откатываем
+ *  материализованные строки attendance_adjustments в той же транзакции. */
 const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
@@ -1183,14 +1156,15 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           RETURNING *`,
         [nowIso, id],
       );
-      if (request.status === 'approved') {
-        await client.query(
-          `DELETE FROM attendance_adjustments
-             WHERE source_type = 'leave_request'
-               AND source_id = ANY($1::text[])`,
-          [[String(id), `${id}:time_correction`]],
-        );
-      }
+      // Чистим корректировки и для pending-заявок: легаси work-заявки могли
+      // материализовать pending-строки ещё при создании — без удаления они
+      // остались бы сиротами в очереди /approvals.
+      await client.query(
+        `DELETE FROM attendance_adjustments
+           WHERE source_type = 'leave_request'
+             AND source_id = ANY($1::text[])`,
+        [[String(id), `${id}:time_correction`]],
+      );
       return updated.rows[0] ?? null;
     });
 

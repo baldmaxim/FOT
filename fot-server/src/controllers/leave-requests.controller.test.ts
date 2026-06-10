@@ -149,14 +149,19 @@ describe('leaveRequestsController.approve', () => {
     expect(updateCall).toBeDefined();
   });
 
-  it('legacy work-заявка при одобрении использует резолвер выходных', async () => {
+  it('work-заявка при одобрении (1-й этап) материализует корректировку через резолвер выходных', async () => {
     resolveApprovalMock.mockResolvedValueOnce('pending');
-    mockRequestRow({
-      request_type: 'work',
-      start_date: '2026-06-06',
-      end_date: '2026-06-06',
-      selected_dates: ['2026-06-06'],
-    });
+    // work — routed-тип: canManageLeaveRequest резолвит ответственного (зритель 7).
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
+    pgQueryOne
+      .mockResolvedValueOnce({
+        id: 708, employee_id: 247, status: 'pending', request_type: 'work',
+        start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
+        correction_date: null, correction_status: null, correction_hours: null,
+        correction_object_id: null, correction_object_name: null, reason: null,
+      })
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' }) // canManageLeaveRequest
+      .mockResolvedValueOnce({ id: 'author-uuid' }); // автор корректировки
     const res = makeRes();
 
     await leaveRequestsController.approve(makeReq(), res);
@@ -179,8 +184,7 @@ describe('leaveRequestsController.create', () => {
     pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
   });
 
-  it('work-заявка сразу создаёт pending-корректировку для раздела согласования', async () => {
-    resolveApprovalMock.mockResolvedValueOnce('pending');
+  it('work-заявка при создании НЕ материализует корректировки — сначала «Заявления»', async () => {
     txClient.query.mockResolvedValueOnce({
       rows: [{
         id: 900,
@@ -208,16 +212,12 @@ describe('leaveRequestsController.create', () => {
     } as Partial<AuthenticatedRequest>), res);
 
     expect(res._status).toBe(200);
-    expect(upsertSpy).toHaveBeenCalledTimes(1);
-    expect(upsertSpy.mock.calls[0][0]).toMatchObject({
-      employee_id: 247,
-      work_date: '2026-06-06',
-      status: 'work',
-      source_type: 'leave_request',
-      source_id: '900',
-      approval_status: 'pending',
-    });
+    // Корректировки появятся только при одобрении в «Заявлениях» (approve) —
+    // до этого заявка не должна попадать в очередь /approvals.
+    expect(upsertSpy).not.toHaveBeenCalled();
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
     expect(txClient.query.mock.calls.some(c => String(c[0]).includes("status = 'approved'"))).toBe(false);
+    expect((res._json as { data: { status: string } }).data.status).toBe('pending');
   });
 });
 
@@ -255,6 +255,9 @@ describe('leaveRequestsController.getAll', () => {
 describe('leaveRequestsController.getDepartment (адресная маршрутизация)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks не чистит once-очередь: неиспользованные mockResolvedValueOnce
+    // из теста с пустой выдачей утекали бы в следующий тест.
+    pgQuery.mockReset();
     vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
     vi.mocked(resolveManagedDepartmentIds).mockResolvedValue(['dep-1']);
     responsiblesByEmpMock.mockResolvedValue(new Map());
@@ -293,6 +296,42 @@ describe('leaveRequestsController.getDepartment (адресная маршрут
     expect(res._status).toBe(200);
     expect((res._json as { data: Array<{ id: number }> }).data).toEqual([]);
   });
+
+  const mockWorkDeptQueries = () => {
+    pgQuery
+      // loadEmployeeIdsByDepartments
+      .mockResolvedValueOnce([{ id: 102, full_name: 'Работник Р.', org_department_id: 'dep-1' }])
+      // data: leave_requests
+      .mockResolvedValueOnce([{ id: 3, employee_id: 102, request_type: 'work', status: 'pending', reviewer_id: null }])
+      // loadEmployeeMeta
+      .mockResolvedValueOnce([{ id: 102, full_name: 'Работник Р.', org_department_id: 'dep-1', department_name: 'ЦТ', position_name: null }])
+      // loadWorkRequestIdsPendingInApprovals: pending-корректировок нет (новый флоу)
+      .mockResolvedValueOnce([])
+      // хвост: attachments / correction status
+      .mockResolvedValue([]);
+  };
+
+  it('ответственный видит pending work-заявку в «Заявлениях» (1-й этап)', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[102, [7]]])); // viewer employee_id = 7
+    mockWorkDeptQueries();
+    const res = makeRes();
+
+    await leaveRequestsController.getDepartment(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: Array<{ id: number }> }).data.map(r => r.id)).toEqual([3]);
+  });
+
+  it('не-ответственный не видит pending work-заявку', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[102, [999]]]));
+    mockWorkDeptQueries();
+    const res = makeRes();
+
+    await leaveRequestsController.getDepartment(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: Array<{ id: number }> }).data).toEqual([]);
+  });
 });
 
 describe('leaveRequestsController.approve (маршрутизация прав)', () => {
@@ -310,6 +349,24 @@ describe('leaveRequestsController.approve (маршрутизация прав)'
       .mockResolvedValueOnce({
         id: 708, employee_id: 247, status: 'pending', request_type: 'vacation',
         start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
+        correction_date: null, correction_status: null, correction_hours: null,
+        correction_object_id: null, correction_object_name: null, reason: null,
+      })
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' });
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [999]]])); // ответственный ≠ зритель (7)
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(403);
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('не-ответственный получает 403 на одобрение work-заявки', async () => {
+    pgQueryOne
+      .mockResolvedValueOnce({
+        id: 708, employee_id: 247, status: 'pending', request_type: 'work',
+        start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
         correction_date: null, correction_status: null, correction_hours: null,
         correction_object_id: null, correction_object_name: null, reason: null,
       })
