@@ -1373,12 +1373,14 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           {showEventsTab && showCorrectionTab && (
             <div className="ts-modal-tabs">
               <button
+                type="button"
                 className={`ts-modal-tab ${tab === 'events' ? 'ts-modal-tab--active' : ''}`}
                 onClick={() => setTab('events')}
               >
                 События СКУД
               </button>
               <button
+                type="button"
                 className={`ts-modal-tab ${tab === 'correction' ? 'ts-modal-tab--active' : ''}`}
                 onClick={() => setTab('correction')}
               >
@@ -1427,12 +1429,14 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
       {showTravelTab && (
         <div className="ts-modal-tabs">
           <button
+            type="button"
             className={`ts-modal-tab ${topTab === 'travel' ? 'ts-modal-tab--active' : ''}`}
             onClick={() => setTopTab('travel')}
           >
             Передвижения
           </button>
           <button
+            type="button"
             className={`ts-modal-tab ${topTab === 'correction' ? 'ts-modal-tab--active' : ''}`}
             onClick={() => setTopTab('correction')}
           >
@@ -1465,7 +1469,7 @@ export const TimesheetCorrectionModal: FC<ICorrectionModalProps> = ({ open, ...r
   if (!open) return null;
   return (
     <div
-      className="ts-modal-overlay ts-modal-overlay--open"
+      className={`ts-modal-overlay ts-modal-overlay--open${rest.showTravelTab ? ' ts-modal-overlay--top' : ''}`}
       onMouseDown={e => {
         overlayMouseDownRef.current = e.target === e.currentTarget;
       }}

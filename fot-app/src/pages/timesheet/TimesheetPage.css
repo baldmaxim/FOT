@@ -4231,6 +4231,7 @@
    размер модалки (нет сдвига от flex-центрирования оверлея) и не промаргивает. */
 .ts-modal-pane-stack {
   display: grid;
+  overflow: hidden;
 }
 .ts-modal-pane-stack > .ts-modal-pane {
   grid-area: 1 / 1;
@@ -5477,6 +5478,35 @@
     top: 0;
     background: var(--surface);
     z-index: 2;
+  }
+}
+
+/* Desktop: стек вкладок «Передвижения»/«Корректировки» имеет фиксированную высоту
+   с первого кадра — габариты модалки не зависят от контента и догрузки данных
+   (события СКУД, сегменты). Тела панелей растягиваются на всю высоту и скроллятся
+   внутри. Блок размещён после правил .ts-modal--two-col, чтобы перебить max-height. */
+@media (min-width: 1024px) {
+  .ts-modal-pane-stack {
+    height: min(70vh, calc(100vh - 180px)); /* 180px ≈ шапка + таб-бар + отступы */
+  }
+  .ts-modal-pane-stack > .ts-modal-pane {
+    height: 100%;
+    min-height: 0;
+  }
+  .ts-modal-pane-stack .ts-modal-body--travel,
+  .ts-modal-pane-stack .ts-modal-body--grid {
+    height: 100%;
+    max-height: none;
+  }
+}
+
+/* Верх модалки с вкладками «Передвижения»/«Корректировки» зафиксирован — позиция
+   не зависит от высоты контента (страховка от любых изменений высоты). Мобильные
+   режимы (фуллскрин/bottom-sheet) не затрагиваются гейтом min-width. */
+@media (min-width: 768px) {
+  .ts-modal-overlay--top {
+    align-items: flex-start;
+    padding-top: 7vh; /* ≈ позиция центрированной модалки высотой ~85vh */
   }
 }
 
