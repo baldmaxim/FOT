@@ -2,6 +2,7 @@ import { useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { contractorAdminService, type IPassHistory } from '../../services/contractorService';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
 import styles from '../../pages/contractor/Contractor.module.css';
@@ -141,7 +142,11 @@ const PassHistoryModal: FC<{ passId: string; onClose: () => void }> = ({ passId,
 
 export const MonitorTab: FC = () => {
   const [orgId, setOrgId] = useState('');
+  const [search, setSearch] = useState('');
   const [historyPassId, setHistoryPassId] = useState<string | null>(null);
+
+  const debouncedSearch = useDebouncedValue(search.trim(), 300);
+  const searchActive = debouncedSearch.length >= 1;
 
   const orgsQuery = useQuery({
     queryKey: ['contractor-orgs'],
@@ -151,40 +156,64 @@ export const MonitorTab: FC = () => {
   const passesQuery = useQuery({
     queryKey: ['contractor-monitor', orgId],
     queryFn: () => contractorAdminService.listMonitor(orgId),
-    enabled: !!orgId,
+    enabled: !!orgId && !searchActive,
+    staleTime: 15_000,
+  });
+  const searchQuery = useQuery({
+    queryKey: ['contractor-monitor-search', debouncedSearch],
+    queryFn: () => contractorAdminService.searchMonitor(debouncedSearch),
+    enabled: searchActive,
     staleTime: 15_000,
   });
 
   const orgs = orgsQuery.data ?? [];
-  const passes = passesQuery.data ?? [];
+  const activeQuery = searchActive ? searchQuery : passesQuery;
+  const passes = (searchActive ? searchQuery.data : passesQuery.data) ?? [];
 
   return (
     <div>
       <SyncFailedPanel />
+
       <div className={styles.field}>
-        <span className={styles.label}>Подрядчик</span>
-        <ContractorOrgSelect
-          orgs={orgs}
-          value={orgId}
-          onChange={setOrgId}
-          emptyOptionLabel="— выбрать —"
-          loading={orgsQuery.isLoading}
+        <span className={styles.label}>Поиск по номеру пропуска или ФИО (по всем подрядчикам)</span>
+        <input
+          className={styles.input}
+          type="search"
+          inputMode="search"
+          placeholder="Например: 1650"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
         />
       </div>
 
-      {!orgId && <div className={styles.empty}>Выберите подрядчика</div>}
-
-      {orgId && passesQuery.isLoading && <div className={styles.empty}>Загрузка…</div>}
-
-      {orgId && !passesQuery.isLoading && passes.length === 0 && (
-        <div className={styles.empty}>Нет пропусков</div>
+      {!searchActive && (
+        <div className={styles.field}>
+          <span className={styles.label}>Подрядчик</span>
+          <ContractorOrgSelect
+            orgs={orgs}
+            value={orgId}
+            onChange={setOrgId}
+            emptyOptionLabel="— выбрать —"
+            loading={orgsQuery.isLoading}
+          />
+        </div>
       )}
 
-      {orgId && passes.length > 0 && (
+      {!searchActive && !orgId && <div className={styles.empty}>Выберите подрядчика или введите номер пропуска</div>}
+
+      {(searchActive || orgId) && activeQuery.isLoading && <div className={styles.empty}>Загрузка…</div>}
+
+      {(searchActive || orgId) && !activeQuery.isLoading && passes.length === 0 && (
+        <div className={styles.empty}>{searchActive ? 'Ничего не найдено' : 'Нет пропусков'}</div>
+      )}
+
+      {(searchActive || orgId) && passes.length > 0 && (
         <table className={styles.table}>
           <thead>
             <tr>
-              <th>№</th><th>UID</th><th>ФИО</th><th>Статус</th><th>Согласование</th>
+              <th>№</th>
+              {searchActive && <th>Подрядчик</th>}
+              <th>UID</th><th>ФИО</th><th>Статус</th><th>Согласование</th>
               <th>Активен</th><th>Объекты</th><th>Точки</th><th>Срок</th><th></th>
             </tr>
           </thead>
@@ -192,6 +221,7 @@ export const MonitorTab: FC = () => {
             {passes.map(p => (
               <tr key={p.id}>
                 <td>{p.pass_number}</td>
+                {searchActive && <td>{p.org_name ?? '—'}</td>}
                 <td>{p.card_uid ?? '—'}</td>
                 <td>{p.holder_name ?? '—'}</td>
                 <td>{p.status}</td>

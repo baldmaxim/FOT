@@ -22,6 +22,7 @@ import {
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
+import { escapeLike } from '../utils/search.utils.js';
 import { sigurService } from '../services/sigur.service.js';
 import {
   createSigurEmployee,
@@ -1096,42 +1097,66 @@ export const contractorAdminController = {
   },
 
   /**
-   * GET /passes/monitor?org_department_id=? — все пропуска подрядчика (включая
-   * applied/blocked) с текущим ФИО для экрана мониторинга. revoked исключаются.
+   * GET /passes/monitor?org_department_id=?  — все пропуска подрядчика, либо
+   * GET /passes/monitor?q=?                  — глобальный поиск по номеру/ФИО
+   * по всем подрядчикам (revoked исключаются). Нужен либо org_department_id,
+   * либо непустой q.
    */
   async monitorPasses(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureSystemAdmin(req, res))) return;
-      const orgId = z.string().uuid().parse(req.query.org_department_id);
 
-      const rows = await query(
-        `SELECT p.id,
-                p.pass_number,
-                p.status,
-                p.approval_status,
-                p.is_active,
-                p.sigur_employee_id,
-                p.card_uid,
-                COALESCE(h.holder_name, p.holder_name) AS holder_name,
-                p.expires_at,
-                p.access_point_names,
-                p.submission_id,
-                p.updated_at,
-                COALESCE(
-                  (SELECT string_agg(o.name, ', ' ORDER BY o.name)
-                     FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
-                  '') AS object_label
-           FROM contractor_passes p
-           LEFT JOIN contractor_pass_holders h
-             ON h.pass_id = p.id AND h.valid_until IS NULL
-          WHERE p.org_department_id = $1::uuid AND p.status <> 'revoked'
-          ORDER BY p.pass_number::int ASC`,
-        [orgId],
-      );
+      const orgIdRaw = typeof req.query.org_department_id === 'string'
+        ? req.query.org_department_id.trim() : '';
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+      const baseSelect = `
+        SELECT p.id,
+               p.pass_number,
+               p.status,
+               p.approval_status,
+               p.is_active,
+               p.sigur_employee_id,
+               p.card_uid,
+               COALESCE(h.holder_name, p.holder_name) AS holder_name,
+               od.name AS org_name,
+               p.expires_at,
+               p.access_point_names,
+               p.submission_id,
+               p.updated_at,
+               COALESCE(
+                 (SELECT string_agg(o.name, ', ' ORDER BY o.name)
+                    FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
+                 '') AS object_label
+          FROM contractor_passes p
+          LEFT JOIN contractor_pass_holders h
+            ON h.pass_id = p.id AND h.valid_until IS NULL
+          LEFT JOIN org_departments od ON od.id = p.org_department_id`;
+
+      let rows;
+      if (q) {
+        const pattern = `%${escapeLike(q)}%`;
+        rows = await query(
+          `${baseSelect}
+            WHERE p.status <> 'revoked'
+              AND (p.pass_number ILIKE $1 OR COALESCE(h.holder_name, p.holder_name) ILIKE $1)
+            ORDER BY p.pass_number::int ASC
+            LIMIT 100`,
+          [pattern],
+        );
+      } else {
+        const orgId = z.string().uuid().parse(orgIdRaw);
+        rows = await query(
+          `${baseSelect}
+            WHERE p.org_department_id = $1::uuid AND p.status <> 'revoked'
+            ORDER BY p.pass_number::int ASC`,
+          [orgId],
+        );
+      }
       res.json({ success: true, data: rows });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        res.status(400).json({ success: false, error: 'Не указана организация' });
+        res.status(400).json({ success: false, error: 'Не указана организация или строка поиска' });
         return;
       }
       console.error('Contractor monitorPasses error:', error);

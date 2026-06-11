@@ -152,6 +152,7 @@ export interface IMonitorPassRow {
   sigur_employee_id: number | null;
   card_uid: string | null;
   holder_name: string | null;
+  org_name?: string | null;
   expires_at: string | null;
   access_point_names: string[] | null;
   submission_id: string | null;
@@ -593,6 +594,12 @@ export const contractorAdminService = {
   async listMonitor(orgDepartmentId: string): Promise<IMonitorPassRow[]> {
     const r = await apiClient.get<ApiResponse<IMonitorPassRow[]>>(
       `/admin/contractor/passes/monitor?org_department_id=${encodeURIComponent(orgDepartmentId)}`,
+    );
+    return r.data ?? [];
+  },
+  async searchMonitor(q: string): Promise<IMonitorPassRow[]> {
+    const r = await apiClient.get<ApiResponse<IMonitorPassRow[]>>(
+      `/admin/contractor/passes/monitor?q=${encodeURIComponent(q)}`,
     );
     return r.data ?? [];
   },
