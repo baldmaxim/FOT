@@ -14,7 +14,7 @@ import type { ConnectionType } from './sigur-base.service.js';
 import {
   loadAccessPointObjectMetaMap,
 } from './sigur-access-point-meta.service.js';
-import { replaceEmployeeAccessPointBindings } from './sigur-linked-employees.service.js';
+import { replaceEmployeeAccessPointBindings, type ICardConflict } from './sigur-linked-employees.service.js';
 import {
   enrichAccessPointBinding,
   toAccessRuleBinding,
@@ -160,6 +160,8 @@ export async function replaceSigurEmployeeAccessPoints(
   addedIds: number[];
   removedIds: number[];
   bindings: IAccessPointBinding[];
+  restoredCardIds: number[];
+  cardConflicts: ICardConflict[];
 }> {
   const accessPointObjectMeta = await loadAccessPointObjectMetaMap();
   const result = await replaceEmployeeAccessPointBindings(sigurEmployeeId, accessPointIds, connection);
@@ -168,6 +170,8 @@ export async function replaceSigurEmployeeAccessPoints(
     addedIds: result.addedIds,
     removedIds: result.removedIds,
     bindings: result.bindings.map(binding => enrichAccessPointBinding(binding, accessPointObjectMeta)),
+    restoredCardIds: result.restoredCardIds,
+    cardConflicts: result.cardConflicts,
   };
 }
 

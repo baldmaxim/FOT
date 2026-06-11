@@ -386,6 +386,60 @@ export function invalidateEmployeeAccessPointBindingsCache(employeeId: number): 
   }
 }
 
+interface ICardBindingSnapshot {
+  cardId: number;
+  startDate: string | null;
+  expirationDate: string | null;
+  format: string | null;
+}
+
+export interface ICardConflict {
+  cardId: number;
+  boundToEmployeeId: number | null;
+  reason: 'bound_to_other' | 'missing_dates';
+}
+
+const normalizeCardInt = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+const readCardId = (raw: Record<string, unknown>): number | null =>
+  normalizeCardInt(resolveField(raw, 'cardId', 'card_id', 'cardID', 'cardid', 'id', 'ID', 'Id'));
+
+const toCardBindingSnapshot = (raw: Record<string, unknown>): ICardBindingSnapshot | null => {
+  const cardId = readCardId(raw);
+  if (!cardId) return null;
+  return {
+    cardId,
+    startDate: String(resolveField<string>(raw, 'startDate', 'start_date', 'validFrom', 'startAt') || '').trim() || null,
+    expirationDate: String(
+      resolveField<string>(raw, 'expirationDate', 'expiration_date', 'expiresAt', 'expiryDate', 'validTo') || '',
+    ).trim() || null,
+    format: String(resolveField<string>(raw, 'format', 'Format', 'cardFormat') || '').trim() || null,
+  };
+};
+
+// employeeId владельца привязки карты (учёт holder-обёртки, как в sigur-live-cards).
+const readCardBindingEmployeeId = (raw: Record<string, unknown>): number | null => {
+  const direct = normalizeCardInt(resolveField(raw, 'employeeId', 'employee_id'));
+  if (direct) return direct;
+  const holder = raw.holder;
+  if (holder && typeof holder === 'object') {
+    const holderObj = holder as Record<string, unknown>;
+    const type = typeof holderObj.type === 'string' ? holderObj.type.toUpperCase() : '';
+    if (!type || type === 'EMP' || type === 'EMPLOYEE') {
+      const holderId = normalizeCardInt(resolveField(holderObj, 'holderId', 'holder_id', 'id'));
+      if (holderId) return holderId;
+    }
+  }
+  return null;
+};
+
 export async function replaceEmployeeAccessPointBindings(
   employeeId: number,
   accessPointIds: number[],
@@ -394,6 +448,8 @@ export async function replaceEmployeeAccessPointBindings(
   addedIds: number[];
   removedIds: number[];
   bindings: Array<{ accessPointId: number; accessPointName: string | null }>;
+  restoredCardIds: number[];
+  cardConflicts: ICardConflict[];
 }> {
   // refresh=true: читаем актуальное состояние Sigur, не из 5-мин кэша. Иначе при устаревшем
   // кэше POST add может уйти на уже существующую привязку (Sigur → 400 invalid.request),
@@ -406,12 +462,70 @@ export async function replaceEmployeeAccessPointBindings(
   const addedIds = [...nextIds].filter(id => !currentIds.has(id)).sort((a, b) => a - b);
   const removedIds = [...currentIds].filter(id => !nextIds.has(id)).sort((a, b) => a - b);
 
+  // Sigur 1.6.3.14: POST /bindings/employees-accesspoints как побочный эффект сбрасывает
+  // привязку карты сотрудника. Снимаем снапшот карт ДО мутации и восстанавливаем пропавшие
+  // ПОСЛЕ — точными датами/форматом. Логика стоит на общем чокпоинте, поэтому покрывает
+  // ВСЕ пути сохранения точек (админский, контрагентский, прямой sigur.controller).
+  const cardsBefore = (await sigurService.getCardBindings({ employeeId }, connection) as Record<string, unknown>[])
+    .map(toCardBindingSnapshot)
+    .filter((card): card is ICardBindingSnapshot => !!card);
+
   if (removedIds.length > 0) {
     await sigurService.deleteEmployeeAccessPointBindings([employeeId], removedIds, connection);
   }
 
   if (addedIds.length > 0) {
     await sigurService.createEmployeeAccessPointBindings([employeeId], addedIds, connection);
+  }
+
+  const restoredCardIds: number[] = [];
+  const cardConflicts: ICardConflict[] = [];
+
+  if (cardsBefore.length > 0) {
+    const cardsAfterRaw = await sigurService.getCardBindings({ employeeId }, connection) as Record<string, unknown>[];
+    const cardIdsAfter = new Set(
+      cardsAfterRaw.map(readCardId).filter((id): id is number => !!id),
+    );
+    const lostCards = cardsBefore.filter(card => !cardIdsAfter.has(card.cardId));
+
+    for (const card of lostCards) {
+      // Защита от гонки/чужой привязки: карта могла за это время уехать к другому сотруднику.
+      const cardOwners = await sigurService.getCardBindings({ cardId: card.cardId }, connection) as Record<string, unknown>[];
+      const owner = cardOwners.map(readCardBindingEmployeeId).find((id): id is number => !!id) ?? null;
+      if (owner && owner !== employeeId) {
+        console.error(
+          `[access-points] карта ${card.cardId} после правки точек оказалась у сотрудника ${owner}; не восстанавливаем (целевой ${employeeId})`,
+        );
+        cardConflicts.push({ cardId: card.cardId, boundToEmployeeId: owner, reason: 'bound_to_other' });
+        continue;
+      }
+      if (!card.startDate || !card.expirationDate) {
+        console.error(
+          `[access-points] карта ${card.cardId} слетела у ${employeeId}, но в снапшоте нет дат — авто-восстановление пропущено`,
+        );
+        cardConflicts.push({ cardId: card.cardId, boundToEmployeeId: null, reason: 'missing_dates' });
+        continue;
+      }
+      await sigurService.createEmployeeCardBinding(
+        employeeId,
+        card.cardId,
+        card.startDate,
+        card.expirationDate,
+        connection,
+        card.format ?? undefined,
+      );
+      restoredCardIds.push(card.cardId);
+      console.warn(
+        `[access-points] восстановлена привязка карты ${card.cardId} сотруднику ${employeeId} после правки точек доступа`,
+      );
+    }
+
+    if (restoredCardIds.length > 0) {
+      sigurService.invalidateCardListCache();
+      // Ленивый импорт: исключает статический цикл sigur-linked-employees ↔ sigur-live-admin.
+      const { invalidateSigurDirectoryCaches } = await import('./sigur-live-admin.service.js');
+      invalidateSigurDirectoryCaches();
+    }
   }
 
   invalidateEmployeeAccessPointBindingsCache(employeeId);
@@ -421,5 +535,7 @@ export async function replaceEmployeeAccessPointBindings(
     addedIds,
     removedIds,
     bindings,
+    restoredCardIds,
+    cardConflicts,
   };
 }

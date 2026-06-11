@@ -794,8 +794,17 @@ export const sigurAdminController = {
           accessPointIds,
           addedIds: data.addedIds,
           removedIds: data.removedIds,
+          restoredCardIds: data.restoredCardIds,
+          cardConflicts: data.cardConflicts,
         },
       });
+
+      if (data.cardConflicts.length > 0) {
+        console.error(
+          `[Sigur access-points] конфликт восстановления карт у ${sigurEmployeeId}:`,
+          JSON.stringify(data.cardConflicts),
+        );
+      }
 
       res.json({ success: true, data });
     } catch (error) {
