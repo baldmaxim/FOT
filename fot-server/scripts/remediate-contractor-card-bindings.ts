@@ -30,8 +30,6 @@ import path from 'path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-process.env.NODE_ENV = 'test';
-
 const parseEnvLastWins = (text: string): Record<string, string> => {
   const out: Record<string, string> = {};
   for (const line of text.split(/\r?\n/)) {
@@ -44,21 +42,28 @@ const parseEnvLastWins = (text: string): Record<string, string> => {
   return out;
 };
 
-const envFile = parseEnvLastWins(fs.readFileSync(path.resolve(__dirname, '../.env'), 'utf8'));
-const rawUrl = envFile.DATABASE_URL;
-if (!rawUrl) {
-  console.error('DATABASE_URL не найден в fot-server/.env');
-  process.exit(1);
+// Локальный прогон против прод-БД: приём из [[reference_prod_db_local_diagnostics]] — чистим
+// ssl-параметры DATABASE_URL и подставляем локальный CA. На сервере (/opt/fot-build) этого CA
+// нет — там полагаемся на .env сайта, который штатно загрузит env.ts (ничего не трогаем).
+const LOCAL_CA = path.resolve(__dirname, '../../.migration/yandex-ca.pem');
+if (fs.existsSync(LOCAL_CA)) {
+  process.env.NODE_ENV = 'test';
+  const envFile = parseEnvLastWins(fs.readFileSync(path.resolve(__dirname, '../.env'), 'utf8'));
+  const rawUrl = envFile.DATABASE_URL;
+  if (!rawUrl) {
+    console.error('DATABASE_URL не найден в fot-server/.env');
+    process.exit(1);
+  }
+  try {
+    const u = new URL(rawUrl);
+    for (const k of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'ssl']) u.searchParams.delete(k);
+    process.env.DATABASE_URL = u.toString();
+  } catch {
+    process.env.DATABASE_URL = rawUrl;
+  }
+  process.env.DATABASE_SSL = 'true';
+  process.env.DATABASE_SSL_CA_PATH = LOCAL_CA;
 }
-try {
-  const u = new URL(rawUrl);
-  for (const k of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'ssl']) u.searchParams.delete(k);
-  process.env.DATABASE_URL = u.toString();
-} catch {
-  process.env.DATABASE_URL = rawUrl;
-}
-process.env.DATABASE_SSL = 'true';
-process.env.DATABASE_SSL_CA_PATH = path.resolve(__dirname, '../../.migration/yandex-ca.pem');
 
 const DRY_RUN = process.env.REMEDIATE !== '1';
 const PASS_NUMBERS = (process.env.PASS_NUMBERS ?? '1628,1636,1644,1642')
