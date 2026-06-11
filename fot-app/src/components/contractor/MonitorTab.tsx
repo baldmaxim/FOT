@@ -130,6 +130,26 @@ const PassHistoryModal: FC<{ passId: string; onClose: () => void }> = ({ passId,
                 {data.decisions.length === 0 && <tr><td colSpan={5}>—</td></tr>}
               </tbody>
             </table>
+            {(data.accessPointEvents?.length ?? 0) > 0 && (
+              <>
+                <h3 className={styles.title} style={{ marginTop: 16 }}>Изменения точек доступа</h3>
+                <table className={styles.table}>
+                  <thead>
+                    <tr><th>Когда</th><th>Кто</th><th>Добавлены</th><th>Итог</th></tr>
+                  </thead>
+                  <tbody>
+                    {data.accessPointEvents!.map(e => (
+                      <tr key={e.id}>
+                        <td>{new Date(e.created_at).toLocaleString('ru')}</td>
+                        <td>{e.changed_by_name ?? '—'}</td>
+                        <td>{(e.details?.added_names ?? []).join(', ') || '—'}</td>
+                        <td>{(e.details?.total_names ?? []).join(', ') || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
           </>
         )}
         <div className={styles.modalActions}>

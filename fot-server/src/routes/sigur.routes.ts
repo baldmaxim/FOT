@@ -24,7 +24,7 @@ const sigurAdminDeptsCache = registerCache(
 );
 const sigurAdminDeptsTreeCache = registerCache(
   'sigur:admin:departments-tree',
-  () => 'sigur:admin:departments-tree',
+  (req) => `sigur:admin:departments-tree:${req.query.source === 'sigur' ? 'sigur' : 'org'}`,
   2 * 60_000,
 );
 const sigurAdminDeptsCountsCache = registerCache(
@@ -214,6 +214,12 @@ router.post(
   requirePageAccess('/skud-settings', 'edit'),
   requireCritical2FA,
   sigurAdminController.batchMoveEmployeesStream,
+);
+router.post(
+  '/admin/employees/bulk-access-points-stream',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  sigurAdminController.bulkAddEmployeeAccessPointsStream,
 );
 router.put(
   '/admin/employees/:sigurEmployeeId/access-points',

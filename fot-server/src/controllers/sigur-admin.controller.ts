@@ -7,6 +7,7 @@ import {
   listSigurAccessPointOptions,
   listSigurDepartmentCounts,
   listSigurDepartmentsTree,
+  listOrgDepartmentsAsSigurTree,
   listSigurEmployees,
 } from '../services/sigur-live-admin.service.js';
 import {
@@ -39,6 +40,7 @@ import {
   updateSigurEmployeeCardExpiration,
 } from '../services/sigur-live-cards.service.js';
 import { sigurService } from '../services/sigur.service.js';
+import { bulkAddEmployeeAccessPointsStreaming } from '../services/sigur-bulk-access.service.js';
 import {
   seedPositionsLogic,
 } from '../services/sigur-sync.service.js';
@@ -57,6 +59,9 @@ function parseInteger(value: unknown): number | null {
   }
   return null;
 }
+
+/** Лимит сотрудников в одной пачке массового добавления точек доступа. */
+const MAX_BULK_ACCESS_POINTS_EMPLOYEES = 50;
 
 function parseBooleanQuery(value: unknown): boolean | null | undefined {
   if (value === undefined) return undefined;
@@ -116,7 +121,11 @@ export const sigurAdminController = {
   async listDepartmentsTree(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const connection = parseConnection(req.query.connection);
-      const data = await listSigurDepartmentsTree(connection);
+      // Единый источник показа отделов — структура FOT (org_departments). Живое дерево Sigur
+      // отдаётся только по явному ?source=sigur (редактор структуры Sigur).
+      const data = req.query.source === 'sigur'
+        ? await listSigurDepartmentsTree(connection)
+        : await listOrgDepartmentsAsSigurTree(connection);
       res.json({ success: true, data });
     } catch (error) {
       console.error('Sigur admin listDepartmentsTree error:', error);
@@ -762,6 +771,96 @@ export const sigurAdminController = {
       send({
         type: 'error',
         error: getErrorMessage(error, 'Ошибка массового перемещения сотрудников Sigur'),
+      });
+    } finally {
+      clearInterval(keepAliveTimer);
+      res.end();
+    }
+  },
+
+  /**
+   * POST /admin/employees/bulk-access-points-stream — массовое ДОБАВЛЕНИЕ точек
+   * доступа выбранным сотрудникам (merge). SSE-прогресс. Дополнительно
+   * синхронизирует связанные contractor_passes и пишет историю в audit_logs.
+   * Body: { employeeIds:number[], accessPointIds:number[], connection? }
+   */
+  async bulkAddEmployeeAccessPointsStream(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const { employeeIds, accessPointIds } = req.body as {
+      employeeIds?: unknown;
+      accessPointIds?: unknown;
+    };
+    if (!Array.isArray(employeeIds) || !Array.isArray(accessPointIds)) {
+      res.status(400).json({ success: false, error: 'employeeIds и accessPointIds должны быть массивами' });
+      return;
+    }
+
+    const parsedEmployeeIds = employeeIds
+      .map(value => parseInteger(value))
+      .filter((value): value is number => !!value);
+    const parsedAccessPointIds = accessPointIds
+      .map(value => parseInteger(value))
+      .filter((value): value is number => !!value);
+
+    if (parsedEmployeeIds.length === 0) {
+      res.status(400).json({ success: false, error: 'Не выбрано ни одного сотрудника' });
+      return;
+    }
+    if (parsedEmployeeIds.length > MAX_BULK_ACCESS_POINTS_EMPLOYEES) {
+      res.status(400).json({
+        success: false,
+        error: `За один раз можно обработать не более ${MAX_BULK_ACCESS_POINTS_EMPLOYEES} сотрудников`,
+      });
+      return;
+    }
+    if (parsedAccessPointIds.length === 0) {
+      res.status(400).json({ success: false, error: 'Не выбрано ни одной точки доступа' });
+      return;
+    }
+
+    const connection = parseConnection(req.body.connection);
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const keepAliveTimer = setInterval(() => {
+      res.write(': keepalive\n\n');
+    }, 15_000);
+    res.on('close', () => clearInterval(keepAliveTimer));
+
+    const send = (data: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const result = await bulkAddEmployeeAccessPointsStreaming(
+        parsedEmployeeIds,
+        parsedAccessPointIds,
+        connection,
+        req.user.id,
+        send,
+      );
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'sigur_employee',
+        entityId: parsedEmployeeIds.join(','),
+        details: {
+          action: 'bulk_add_access_points',
+          accessPointIds: parsedAccessPointIds,
+          requested: result.requested,
+          updated: result.updated,
+          syncedPasses: result.syncedPasses,
+          failedIds: result.failedIds,
+        },
+      });
+
+      send({ type: 'done', ...result });
+    } catch (error) {
+      console.error('Sigur admin bulkAddEmployeeAccessPointsStream error:', error);
+      send({
+        type: 'error',
+        error: getErrorMessage(error, 'Ошибка массового добавления точек доступа'),
       });
     } finally {
       clearInterval(keepAliveTimer);

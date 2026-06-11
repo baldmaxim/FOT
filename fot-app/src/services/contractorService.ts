@@ -181,9 +181,21 @@ export interface ISubmissionDecisionRow {
   decided_by_name: string | null;
 }
 
+export interface IAccessPointEventRow {
+  id: string;
+  created_at: string;
+  changed_by_name: string | null;
+  details: {
+    added_names?: string[];
+    total_names?: string[];
+    source?: string;
+  } | null;
+}
+
 export interface IPassHistory {
   holders: IHolderHistoryRow[];
   decisions: ISubmissionDecisionRow[];
+  accessPointEvents?: IAccessPointEventRow[];
 }
 
 export interface IDecideItem {

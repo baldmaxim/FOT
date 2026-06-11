@@ -1193,7 +1193,18 @@ export const contractorAdminController = {
           ORDER BY d.decided_at DESC`,
         [passId],
       );
-      res.json({ success: true, data: { holders, decisions } });
+      // Изменения точек доступа (массовое добавление со страницы SIGUR) — из audit_logs.
+      const accessPointEvents = await query(
+        `SELECT a.id, a.created_at, a.details, up.full_name AS changed_by_name
+           FROM audit_logs a
+           LEFT JOIN user_profiles up ON up.id = a.user_id
+          WHERE a.entity_type = 'contractor_pass'
+            AND a.entity_id = $1
+            AND a.action = 'CONTRACTOR_PASS_ACCESS_POINTS_ADDED'
+          ORDER BY a.created_at DESC`,
+        [passId],
+      );
+      res.json({ success: true, data: { holders, decisions, accessPointEvents } });
     } catch (error) {
       console.error('Contractor getPassHistoryAdmin error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить историю' });

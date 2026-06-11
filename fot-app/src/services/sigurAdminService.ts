@@ -25,6 +25,34 @@ export type BatchMoveProgressEvent =
       ok: boolean;
     };
 
+export interface BulkAccessPointsCardConflict {
+  cardId: number;
+  boundToEmployeeId: number | null;
+  reason: 'bound_to_other' | 'missing_dates';
+}
+
+export type BulkAccessPointsProgressEvent =
+  | { type: 'start'; total: number }
+  | {
+      type: 'progress';
+      processed: number;
+      total: number;
+      employeeId: number;
+      ok: boolean;
+      addedIds: number[];
+      restoredCardIds: number[];
+      cardConflicts: BulkAccessPointsCardConflict[];
+      syncedPasses: number;
+    };
+
+export interface BulkAccessPointsResult {
+  requested: number;
+  updated: number;
+  syncedPasses: number;
+  failedIds: number[];
+  warnings: string[];
+}
+
 interface ApiResponse<T> {
   data: T;
   message?: string;
@@ -84,9 +112,17 @@ export interface SigurDepartmentUpsertInput {
 }
 
 export const sigurAdminService = {
-  async getDepartmentsTree(connection?: SigurConnectionScope): Promise<SigurDepartmentNode[]> {
-    const params = connection ? `?connection=${connection}` : '';
-    const response = await apiClient.get<ApiResponse<SigurDepartmentNode[]>>(`/sigur/admin/departments/tree${params}`);
+  async getDepartmentsTree(
+    connection?: SigurConnectionScope,
+    source: 'org' | 'sigur' = 'org',
+  ): Promise<SigurDepartmentNode[]> {
+    const search = new URLSearchParams();
+    if (connection) search.set('connection', connection);
+    if (source === 'sigur') search.set('source', 'sigur');
+    const query = search.toString();
+    const response = await apiClient.get<ApiResponse<SigurDepartmentNode[]>>(
+      `/sigur/admin/departments/tree${query ? `?${query}` : ''}`,
+    );
     return response.data || [];
   },
 
@@ -347,6 +383,54 @@ export const sigurAdminService = {
       }
       if (data.type === 'error') {
         streamError = typeof data.error === 'string' ? data.error : 'Ошибка массового перемещения сотрудников Sigur';
+      }
+    });
+
+    if (streamError) {
+      throw new Error(streamError);
+    }
+    if (!result) {
+      throw new Error('Стрим завершился без результата');
+    }
+    return result;
+  },
+
+  async bulkAddAccessPointsStream(
+    employeeIds: number[],
+    accessPointIds: number[],
+    onProgress: (event: BulkAccessPointsProgressEvent) => void,
+    connection?: SigurConnectionScope,
+  ): Promise<BulkAccessPointsResult> {
+    const response = await fetch(buildApiUrl('/sigur/admin/employees/bulk-access-points-stream'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildAuthHeaders(),
+      },
+      body: JSON.stringify({ employeeIds, accessPointIds, connection }),
+    });
+
+    let result: BulkAccessPointsResult | null = null;
+    let streamError: string | null = null;
+
+    await readSseResponse(response, data => {
+      if (data.type === 'start' || data.type === 'progress') {
+        onProgress(data as BulkAccessPointsProgressEvent);
+        return;
+      }
+      if (data.type === 'done') {
+        result = {
+          requested: Number(data.requested ?? 0),
+          updated: Number(data.updated ?? 0),
+          syncedPasses: Number(data.syncedPasses ?? 0),
+          failedIds: Array.isArray(data.failedIds) ? (data.failedIds as number[]) : [],
+          warnings: Array.isArray(data.warnings) ? (data.warnings as string[]) : [],
+        };
+        return;
+      }
+      if (data.type === 'error') {
+        streamError = typeof data.error === 'string' ? data.error : 'Ошибка массового добавления точек доступа';
       }
     });
 

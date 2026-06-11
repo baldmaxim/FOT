@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  DoorOpen,
   Folder,
   FolderPlus,
   Pencil,
@@ -28,6 +29,7 @@ import {
   DepartmentDialog,
   EmployeeMoveDialog,
 } from './SigurEmployeeDialogs';
+import { BulkAccessPointsModal } from './BulkAccessPointsModal';
 import {
   buildDepartmentNodeMap,
   collectDepartmentIds,
@@ -129,6 +131,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const [departmentContextMenu, setDepartmentContextMenu] = useState<DepartmentContextMenuState>(null);
   const [employeeDialog, setEmployeeDialog] = useState<EmployeeDialogState>(null);
   const [employeeMoveDialog, setEmployeeMoveDialog] = useState<EmployeeMoveDialogState>(null);
+  const [bulkAccessPointsEmployeeIds, setBulkAccessPointsEmployeeIds] = useState<number[] | null>(null);
   const [newEmployeePositionName, setNewEmployeePositionName] = useState('');
   const [employeeNameSuggestionsQuery, setEmployeeNameSuggestionsQuery] = useState('');
   const [loadingSelectedSuggestion, setLoadingSelectedSuggestion] = useState(false);
@@ -156,8 +159,8 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   }, [employeeDialog]);
 
   const departmentsQuery = useQuery({
-    queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'departments-tree'],
-    queryFn: () => sigurAdminService.getDepartmentsTree(),
+    queryKey: [...SIGUR_ADMIN_QUERY_KEY, 'departments-tree', 'sigur'],
+    queryFn: () => sigurAdminService.getDepartmentsTree(undefined, 'sigur'),
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000,
   });
@@ -1021,6 +1024,12 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <span>Переместить</span>
               </button>
             )}
+            {canEdit && selectedEmployeeIds.size > 0 && (
+              <button className="ep-toolbar-btn secondary" onClick={() => setBulkAccessPointsEmployeeIds([...selectedEmployeeIds])}>
+                <DoorOpen size={16} />
+                <span>Точки доступа</span>
+              </button>
+            )}
             {canEdit && (
               <button className="ep-toolbar-btn primary" onClick={openCreateEmployeeDialog}>
                 <UserPlus size={16} />
@@ -1553,6 +1562,16 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
           onSave={() => void handleSaveEmployeeMove()}
           departmentOptions={departmentOptions}
           progress={moveProgress}
+        />
+      )}
+      {bulkAccessPointsEmployeeIds && (
+        <BulkAccessPointsModal
+          employeeIds={bulkAccessPointsEmployeeIds}
+          onClose={() => setBulkAccessPointsEmployeeIds(null)}
+          onApplied={() => {
+            setSelectedEmployeeIds(new Set());
+            void refreshData();
+          }}
         />
       )}
     </div>
