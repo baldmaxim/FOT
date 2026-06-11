@@ -27,6 +27,8 @@ export interface SystemRole {
   corrections_cap_by_schedule_norm: boolean;
   corrections_allow_zero_short_attendance: boolean;
   corrections_disable_bulk: boolean;
+  /** true → роль не может вносить/менять/удалять корректировки «По объектам» (см. миграцию 179). Дефолт false. */
+  corrections_disable_object_entries: boolean;
   max_corrections_per_month: number | null;
   /** true → подача табеля с работой в выходные требует прикреплённой служебки (см. миграцию 145). Дефолт false. */
   weekend_memo_required: boolean;
@@ -60,6 +62,8 @@ export interface UserProfileResponse {
   timesheet_months_forward: number;
   timesheet_show_full_period: boolean;
   weekend_memo_required: boolean;
+  /** true → роль не может вносить корректировки «По объектам» (см. миграцию 179). */
+  corrections_disable_object_entries: boolean;
   employee_id: number | null;
   department_id: string | null;
   managed_department_ids: string[];

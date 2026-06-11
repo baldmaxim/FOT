@@ -110,6 +110,10 @@ export const TimesheetPage: FC = () => {
   const showFullPeriod = profile?.timesheet_show_full_period !== false;
   const canEditTimesheet = canEditPage('/timesheet') || canEditPage('/timesheet-hr');
   const canViewManagedTimesheet = canEditTimesheet || canViewPage('/timesheet') || canViewPage('/timesheet-hr');
+  // Флаг роли: запрет корректировок «По объектам» (см. миграцию 179). Просмотр режима остаётся,
+  // блокируются только записи (внесение/изменение/удаление объектных правок во всех точках входа).
+  const objectEntriesDisabled = profile?.corrections_disable_object_entries === true;
+  const OBJECT_ENTRIES_DISABLED_MESSAGE = 'Корректировки по объектам недоступны для вашей роли. Используйте режим «По сотрудникам».';
   const canEditTeamManagement = isAdmin || canEditPage('timesheet-team-management');
   const canManageAllDepartments = isAdmin || hasPermission('data.scope.all');
   const {
@@ -536,6 +540,10 @@ export const TimesheetPage: FC = () => {
     target: IObjectModalTarget,
     objectEntry: TimesheetObjectEntry | null,
   ) => {
+    if (objectEntriesDisabled) {
+      toast.info?.(OBJECT_ENTRIES_DISABLED_MESSAGE);
+      return;
+    }
     if (emp.editable === false) {
       toast.info?.('Сотрудник доступен только для просмотра');
       return;
@@ -709,6 +717,10 @@ export const TimesheetPage: FC = () => {
   }, [modalEntry?.id, modalEmployee, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   const handleDeleteObjectCorrection = useCallback(async () => {
+    if (objectEntriesDisabled) {
+      toast.error(OBJECT_ENTRIES_DISABLED_MESSAGE);
+      return;
+    }
     if (!modalEmployee || !modalObjectTarget || !modalObjectEntry?.adjustment_id) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -736,6 +748,10 @@ export const TimesheetPage: FC = () => {
     hours: number,
     notes: string,
   ) => {
+    if (objectEntriesDisabled) {
+      toast.error(OBJECT_ENTRIES_DISABLED_MESSAGE);
+      return;
+    }
     if (!modalEmployee) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -763,6 +779,10 @@ export const TimesheetPage: FC = () => {
   const handleDeleteObjectByTarget = useCallback(async (
     target: { object_key: string; object_id: string | null; object_name: string },
   ) => {
+    if (objectEntriesDisabled) {
+      toast.error(OBJECT_ENTRIES_DISABLED_MESSAGE);
+      return;
+    }
     if (!modalEmployee) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
@@ -1189,6 +1209,10 @@ export const TimesheetPage: FC = () => {
     ]);
 
     if (isObjectBulkOperation) {
+      if (objectEntriesDisabled) {
+        toast.error(OBJECT_ENTRIES_DISABLED_MESSAGE);
+        return;
+      }
       if (bulkObjectTargets.length === 0) return;
       try {
         if (status === 'manual') {

@@ -54,6 +54,7 @@ import { correctionApprovalSettingsService } from '../services/correction-approv
 import {
   assertCorrectionAllowed,
   assertBulkAllowed,
+  assertObjectCorrectionsAllowed,
   CorrectionRestrictionError,
   computeCorrectionEligibility,
   loadRoleRestrictions,
@@ -2187,6 +2188,8 @@ export const timesheetController = {
   async upsertObjectEntry(req: AuthenticatedRequest, res: Response) {
     try {
       const parsed = upsertObjectEntrySchema.parse(req.body);
+      // Гард роли: объектные корректировки могут быть запрещены (флаг роли).
+      await assertObjectCorrectionsAllowed(req.user.system_role_id);
       const scope = await resolveTimesheetScope(req);
       if (!isTimesheetWindowExempt(req.user, scope)) {
         const [yearStr, monthStr] = parsed.work_date.split('-');
@@ -2315,6 +2318,10 @@ export const timesheetController = {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
+      if (err instanceof CorrectionRestrictionError) {
+        const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
+        return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
+      }
       console.error('timesheet.upsertObjectEntry error:', err);
       res.status(500).json({ success: false, error: 'Ошибка сохранения корректировки по объекту' });
     }
@@ -2325,6 +2332,8 @@ export const timesheetController = {
   async deleteObjectEntry(req: AuthenticatedRequest, res: Response) {
     try {
       const parsed = deleteObjectEntrySchema.parse(req.body);
+      // Гард роли: объектные корректировки могут быть запрещены (флаг роли).
+      await assertObjectCorrectionsAllowed(req.user.system_role_id);
       const scope = await resolveTimesheetScope(req);
       if (!isTimesheetWindowExempt(req.user, scope)) {
         const [yearStr, monthStr] = parsed.work_date.split('-');
@@ -2376,6 +2385,10 @@ export const timesheetController = {
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
+      }
+      if (err instanceof CorrectionRestrictionError) {
+        const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
+        return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
       console.error('timesheet.deleteObjectEntry error:', err);
       res.status(500).json({ success: false, error: 'Ошибка удаления корректировки по объекту' });

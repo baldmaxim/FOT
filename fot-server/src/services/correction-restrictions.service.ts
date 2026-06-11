@@ -17,7 +17,8 @@ export type CorrectionRestrictionCode =
   | 'monthly_limit'
   | 'zero_not_allowed'
   | 'short_attendance_not_eligible'
-  | 'bulk_disabled';
+  | 'bulk_disabled'
+  | 'object_entries_disabled';
 
 export class CorrectionRestrictionError extends Error {
   public readonly code: CorrectionRestrictionCode;
@@ -36,6 +37,7 @@ export interface IRoleCorrectionRestrictions {
   corrections_cap_by_schedule_norm: boolean;
   corrections_allow_zero_short_attendance: boolean;
   corrections_disable_bulk: boolean;
+  corrections_disable_object_entries: boolean;
   max_corrections_per_month: number | null;
   weekend_memo_required: boolean;
 }
@@ -53,6 +55,7 @@ export async function loadRoleRestrictions(systemRoleId: string): Promise<IRoleC
             corrections_cap_by_schedule_norm,
             corrections_allow_zero_short_attendance,
             corrections_disable_bulk,
+            corrections_disable_object_entries,
             max_corrections_per_month,
             weekend_memo_required
        FROM system_roles
@@ -65,6 +68,7 @@ export async function loadRoleRestrictions(systemRoleId: string): Promise<IRoleC
     corrections_cap_by_schedule_norm: false,
     corrections_allow_zero_short_attendance: false,
     corrections_disable_bulk: false,
+    corrections_disable_object_entries: false,
     max_corrections_per_month: null,
     weekend_memo_required: false,
   };
@@ -193,6 +197,22 @@ export async function assertBulkAllowed(systemRoleId: string): Promise<void> {
     throw new CorrectionRestrictionError(
       'bulk_disabled',
       'Массовое редактирование табеля недоступно для вашей роли.',
+    );
+  }
+}
+
+/**
+ * Проверка для объектных корректировок (вкладка «По объектам»). Кидает
+ * 'object_entries_disabled', если у роли corrections_disable_object_entries=true.
+ * Вызывается в начале PUT/DELETE /api/timesheet/object-entry — закрывает все
+ * UI-входы объектных правок (вкладка, объектный bulk, дневная модалка).
+ */
+export async function assertObjectCorrectionsAllowed(systemRoleId: string): Promise<void> {
+  const r = await loadRoleRestrictions(systemRoleId);
+  if (r.corrections_disable_object_entries) {
+    throw new CorrectionRestrictionError(
+      'object_entries_disabled',
+      'Корректировки по объектам недоступны для вашей роли. Используйте режим «По сотрудникам».',
     );
   }
 }

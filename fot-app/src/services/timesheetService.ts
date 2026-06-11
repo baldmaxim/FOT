@@ -168,6 +168,7 @@ export interface ICorrectionEligibilityRestrictions {
   corrections_cap_by_schedule_norm: boolean;
   corrections_allow_zero_short_attendance: boolean;
   corrections_disable_bulk: boolean;
+  corrections_disable_object_entries: boolean;
   max_corrections_per_month: number | null;
 }
 

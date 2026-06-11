@@ -15,6 +15,7 @@ vi.mock('../config/postgres.js', () => ({
 import {
   assertCorrectionAllowed,
   assertBulkAllowed,
+  assertObjectCorrectionsAllowed,
   CorrectionRestrictionError,
   invalidateCorrectionRestrictionsCache,
 } from './correction-restrictions.service.js';
@@ -24,6 +25,7 @@ interface IRoleRow {
   corrections_cap_by_schedule_norm: boolean;
   corrections_allow_zero_short_attendance: boolean;
   corrections_disable_bulk: boolean;
+  corrections_disable_object_entries: boolean;
   max_corrections_per_month: number | null;
 }
 
@@ -32,6 +34,7 @@ const ROLE_OFF: IRoleRow = {
   corrections_cap_by_schedule_norm: false,
   corrections_allow_zero_short_attendance: false,
   corrections_disable_bulk: false,
+  corrections_disable_object_entries: false,
   max_corrections_per_month: null,
 };
 
@@ -40,6 +43,7 @@ const ROLE_SITE_SUPERVISOR: IRoleRow = {
   corrections_cap_by_schedule_norm: true,
   corrections_allow_zero_short_attendance: true,
   corrections_disable_bulk: true,
+  corrections_disable_object_entries: true,
   max_corrections_per_month: null,
 };
 
@@ -216,5 +220,15 @@ describe('correction-restrictions.service', () => {
   it('assertBulkAllowed: пропускает при disable_bulk=false', async () => {
     setupQueryOne({ restrictions: ROLE_OFF, anomalous: false, totalMinutes: 0, monthCount: 0 });
     await expect(assertBulkAllowed(BASE.systemRoleId)).resolves.toBeUndefined();
+  });
+
+  it('assertObjectCorrectionsAllowed: блок при disable_object_entries=true', async () => {
+    setupQueryOne({ restrictions: ROLE_SITE_SUPERVISOR, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertObjectCorrectionsAllowed(BASE.systemRoleId)).rejects.toMatchObject({ code: 'object_entries_disabled' });
+  });
+
+  it('assertObjectCorrectionsAllowed: пропускает при disable_object_entries=false', async () => {
+    setupQueryOne({ restrictions: ROLE_OFF, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertObjectCorrectionsAllowed(BASE.systemRoleId)).resolves.toBeUndefined();
   });
 });

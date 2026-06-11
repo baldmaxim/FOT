@@ -17,6 +17,7 @@ interface ICorrectionRestrictionsForm {
   corrections_cap_by_schedule_norm: boolean;
   corrections_allow_zero_short_attendance: boolean;
   corrections_disable_bulk: boolean;
+  corrections_disable_object_entries: boolean;
   max_corrections_per_month: number | null;
   max_corrections_unlimited: boolean;
   weekend_memo_required: boolean;
@@ -64,6 +65,7 @@ const DEFAULT_CORRECTION_RESTRICTIONS: ICorrectionRestrictionsForm = {
   corrections_cap_by_schedule_norm: false,
   corrections_allow_zero_short_attendance: false,
   corrections_disable_bulk: false,
+  corrections_disable_object_entries: false,
   max_corrections_per_month: null,
   max_corrections_unlimited: true,
   weekend_memo_required: false,
@@ -74,6 +76,7 @@ const correctionRestrictionsFromRole = (role: SystemRole): ICorrectionRestrictio
   corrections_cap_by_schedule_norm: role.corrections_cap_by_schedule_norm ?? false,
   corrections_allow_zero_short_attendance: role.corrections_allow_zero_short_attendance ?? false,
   corrections_disable_bulk: role.corrections_disable_bulk ?? false,
+  corrections_disable_object_entries: role.corrections_disable_object_entries ?? false,
   max_corrections_per_month: role.max_corrections_per_month ?? null,
   max_corrections_unlimited: role.max_corrections_per_month == null,
   weekend_memo_required: role.weekend_memo_required ?? false,
@@ -84,6 +87,7 @@ const correctionRestrictionsToPayload = (form: ICorrectionRestrictionsForm) => (
   corrections_cap_by_schedule_norm: form.corrections_cap_by_schedule_norm,
   corrections_allow_zero_short_attendance: form.corrections_anomalies_only && form.corrections_allow_zero_short_attendance,
   corrections_disable_bulk: form.corrections_disable_bulk,
+  corrections_disable_object_entries: form.corrections_disable_object_entries,
   max_corrections_per_month: form.max_corrections_unlimited ? null : Math.max(0, Math.floor(form.max_corrections_per_month ?? 0)),
   weekend_memo_required: form.weekend_memo_required,
 });
@@ -189,6 +193,14 @@ const CorrectionRestrictionsBlock: FC<ICorrectionRestrictionsBlockProps> = ({ va
           onChange={e => patch({ corrections_disable_bulk: e.target.checked })}
         />
         <span>Запретить массовое редактирование</span>
+      </label>
+      <label className={styles.inlineCheckbox} title="Запрещает корректировки на вкладке «По объектам» (внесение/изменение/удаление). Вкладка «По сотрудникам» не затрагивается.">
+        <input
+          type="checkbox"
+          checked={value.corrections_disable_object_entries}
+          onChange={e => patch({ corrections_disable_object_entries: e.target.checked })}
+        />
+        <span>Запретить корректировки по объектам</span>
       </label>
       <label className={styles.inlineCheckbox} title="Лимит корректировок аномалий per (создатель, сотрудник, календарный месяц). Имеет смысл только при «Только аномалии».">
         <span>Лимит аномалий/мес</span>

@@ -57,6 +57,7 @@ const createRoleSchema = z.object({
   corrections_cap_by_schedule_norm: z.boolean().optional().default(false),
   corrections_allow_zero_short_attendance: z.boolean().optional().default(false),
   corrections_disable_bulk: z.boolean().optional().default(false),
+  corrections_disable_object_entries: z.boolean().optional().default(false),
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional().default(false),
 });
@@ -76,6 +77,7 @@ const updateRoleSchema = z.object({
   corrections_cap_by_schedule_norm: z.boolean().optional(),
   corrections_allow_zero_short_attendance: z.boolean().optional(),
   corrections_disable_bulk: z.boolean().optional(),
+  corrections_disable_object_entries: z.boolean().optional(),
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional(),
 });
@@ -100,6 +102,7 @@ const cloneRoleSchema = z.object({
   corrections_cap_by_schedule_norm: z.boolean().optional(),
   corrections_allow_zero_short_attendance: z.boolean().optional(),
   corrections_disable_bulk: z.boolean().optional(),
+  corrections_disable_object_entries: z.boolean().optional(),
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional(),
 });
@@ -294,6 +297,7 @@ export const rolesController = {
       corrections_cap_by_schedule_norm,
       corrections_allow_zero_short_attendance,
       corrections_disable_bulk,
+      corrections_disable_object_entries,
       max_corrections_per_month,
       weekend_memo_required,
     } = parsed.data;
@@ -306,8 +310,9 @@ export const rolesController = {
             timesheet_months_back, timesheet_months_forward, timesheet_show_full_period,
             corrections_anomalies_only, corrections_cap_by_schedule_norm,
             corrections_allow_zero_short_attendance, corrections_disable_bulk,
-            max_corrections_per_month, weekend_memo_required, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, true)
+            max_corrections_per_month, weekend_memo_required,
+            corrections_disable_object_entries, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, true)
          RETURNING *`,
         [
           code,
@@ -326,6 +331,7 @@ export const rolesController = {
           !!corrections_disable_bulk,
           max_corrections_per_month ?? null,
           !!weekend_memo_required,
+          !!corrections_disable_object_entries,
         ],
       );
     } catch (error) {
@@ -381,8 +387,9 @@ export const rolesController = {
               timesheet_months_back, timesheet_months_forward, timesheet_show_full_period,
               corrections_anomalies_only, corrections_cap_by_schedule_norm,
               corrections_allow_zero_short_attendance, corrections_disable_bulk,
-              max_corrections_per_month, weekend_memo_required, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+              max_corrections_per_month, weekend_memo_required, is_active,
+              corrections_disable_object_entries)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
            RETURNING *`,
           [
             targetCode,
@@ -406,6 +413,7 @@ export const rolesController = {
               : (sourceRole.max_corrections_per_month ?? null),
             parsed.data.weekend_memo_required ?? sourceRole.weekend_memo_required ?? false,
             parsed.data.is_active ?? true,
+            parsed.data.corrections_disable_object_entries ?? sourceRole.corrections_disable_object_entries ?? false,
           ],
         );
       } catch (createError) {
@@ -487,6 +495,7 @@ export const rolesController = {
     if (parsed.data.corrections_cap_by_schedule_norm !== undefined) setClauses.push(`corrections_cap_by_schedule_norm = ${addParam(parsed.data.corrections_cap_by_schedule_norm)}`);
     if (parsed.data.corrections_allow_zero_short_attendance !== undefined) setClauses.push(`corrections_allow_zero_short_attendance = ${addParam(parsed.data.corrections_allow_zero_short_attendance)}`);
     if (parsed.data.corrections_disable_bulk !== undefined) setClauses.push(`corrections_disable_bulk = ${addParam(parsed.data.corrections_disable_bulk)}`);
+    if (parsed.data.corrections_disable_object_entries !== undefined) setClauses.push(`corrections_disable_object_entries = ${addParam(parsed.data.corrections_disable_object_entries)}`);
     if (parsed.data.max_corrections_per_month !== undefined) setClauses.push(`max_corrections_per_month = ${addParam(parsed.data.max_corrections_per_month)}`);
     if (parsed.data.weekend_memo_required !== undefined) setClauses.push(`weekend_memo_required = ${addParam(parsed.data.weekend_memo_required)}`);
 
