@@ -50,6 +50,13 @@ vi.mock('./timesheet.controller.js', () => ({
   resolveAdjustmentApprovalStatus: resolveApprovalMock,
 }));
 
+const { weekendResponsibleMock } = vi.hoisted(() => ({
+  weekendResponsibleMock: vi.fn(async (): Promise<number | null> => null),
+}));
+vi.mock('../services/weekend-approval-assignments.service.js', () => ({
+  resolveResponsibleEmployeeForTarget: weekendResponsibleMock,
+}));
+
 vi.mock('../services/push.service.js', () => ({ pushService: { sendToUser: vi.fn(), sendLeaveRequestNotification: vi.fn(async () => []) } }));
 vi.mock('../services/notification.service.js', () => ({ notificationService: { create: vi.fn(), createMany: vi.fn(async () => undefined) } }));
 vi.mock('../socket/io-instance.js', () => ({ getIo: vi.fn(() => null) }));
@@ -173,6 +180,34 @@ describe('leaveRequestsController.approve', () => {
       work_date: '2026-06-06',
       status: 'work',
       approval_status: 'pending',
+    });
+  });
+
+  it('одобряющий — ответственный за выходные: 2-й этап схлопывается в approved', async () => {
+    resolveApprovalMock.mockResolvedValueOnce('pending');
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
+    weekendResponsibleMock.mockResolvedValueOnce(7); // ответственный = одобряющий (employee_id 7)
+    pgQueryOne
+      .mockResolvedValueOnce({
+        id: 708, employee_id: 247, status: 'pending', request_type: 'work',
+        start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
+        correction_date: null, correction_status: null, correction_hours: null,
+        correction_object_id: null, correction_object_name: null, reason: null,
+      })
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' }) // canManageLeaveRequest
+      .mockResolvedValueOnce({ id: 'author-uuid' }) // автор корректировки
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' }); // отдел для схлопывания
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    expect(upsertSpy.mock.calls[0][0]).toMatchObject({
+      employee_id: 247,
+      work_date: '2026-06-06',
+      approval_status: 'approved',
+      approved_by: 'reviewer-uuid',
     });
   });
 });

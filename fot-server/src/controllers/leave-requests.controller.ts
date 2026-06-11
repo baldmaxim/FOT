@@ -15,6 +15,7 @@ import {
 } from '../services/data-scope.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { resolveResponsibleEmployeeIdsByEmployee } from '../services/approval-routing.service.js';
+import { resolveResponsibleEmployeeForTarget } from '../services/weekend-approval-assignments.service.js';
 import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
@@ -280,6 +281,9 @@ async function materializeLeaveRequestAdjustments(
   },
   authorUserId: string,
   client: DbExecutor,
+  // user_profiles.id одобряющего, если он сам — ответственный за выходные
+  // сотрудника: pending-дни схлопываются в approved без второго этапа.
+  weekendCollapseApproverUserId: string | null = null,
 ): Promise<{ dates: string[]; hasPending: boolean }> {
   const timesheetStatus = Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, request.request_type)
     ? LEAVE_TO_TIMESHEET[request.request_type as keyof typeof LEAVE_TO_TIMESHEET]
@@ -290,12 +294,14 @@ async function materializeLeaveRequestAdjustments(
   let hasPending = false;
 
   for (const iso of isoDates) {
-    const approvalStatus = await resolveAdjustmentApprovalStatus(
+    const resolvedStatus = await resolveAdjustmentApprovalStatus(
       request.employee_id,
       iso,
       timesheetStatus,
       null,
     );
+    const collapsed = resolvedStatus === 'pending' && weekendCollapseApproverUserId != null;
+    const approvalStatus = collapsed ? ('approved' as const) : resolvedStatus;
     if (approvalStatus === 'pending') hasPending = true;
 
     await upsertAttendanceAdjustment({
@@ -308,6 +314,7 @@ async function materializeLeaveRequestAdjustments(
       reason: request.reason ?? null,
       created_by: authorUserId,
       approval_status: approvalStatus,
+      approved_by: collapsed ? weekendCollapseApproverUserId : undefined,
     }, client);
   }
 
@@ -957,6 +964,25 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     );
     const authorUserId = author?.id ?? req.user.id;
 
+    // Автосхлопывание 2-го этапа: если одобряющий сам является ответственным
+    // за выходные этого сотрудника («Назначение сотрудников» → «Выходные»),
+    // его одобрение закрывает оба этапа — корректировки выходных создаются
+    // сразу approved и не попадают в очередь /approvals.
+    let weekendCollapseApproverUserId: string | null = null;
+    if (req.user.employee_id != null) {
+      const empDept = await queryOne<{ org_department_id: string | null }>(
+        `SELECT org_department_id FROM employees WHERE id = $1`,
+        [request.employee_id],
+      );
+      const weekendResponsible = await resolveResponsibleEmployeeForTarget(
+        request.employee_id,
+        empDept?.org_department_id ?? null,
+      );
+      if (weekendResponsible != null && weekendResponsible === req.user.employee_id) {
+        weekendCollapseApproverUserId = req.user.id;
+      }
+    }
+
     const nowIso = new Date().toISOString();
 
     // Атомарность: смена статуса и материализация корректировок в одной транзакции.
@@ -978,7 +1004,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
       // Создаём attendance adjustments как канонический источник ручных статусов.
       // Для work/remote в выходной approval_status считает единый резолвер.
-      await materializeLeaveRequestAdjustments(request, authorUserId, client);
+      await materializeLeaveRequestAdjustments(request, authorUserId, client, weekendCollapseApproverUserId);
 
       // Обработка корректировки табеля
       if (request.request_type === 'time_correction' && request.correction_date) {
@@ -992,12 +1018,16 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         // Если день — выходной по графику сотрудника И его отдел в whitelist
         // настройки «Согласование выходных дней», корректировка попадает в pending
         // и должна быть дополнительно одобрена админом на /approvals.
-        const approvalStatus = await resolveAdjustmentApprovalStatus(
+        // Исключение — схлопывание: одобряющий сам ответственный за выходные.
+        const resolvedApproval = await resolveAdjustmentApprovalStatus(
           request.employee_id,
           request.correction_date,
           correctionStatus,
           request.correction_hours ?? null,
         );
+        const collapsed = resolvedApproval === 'pending' && weekendCollapseApproverUserId != null;
+        const approvalStatus = collapsed ? ('approved' as const) : resolvedApproval;
+        const approvedBy = collapsed ? weekendCollapseApproverUserId : undefined;
         if (request.correction_object_id) {
           // Корректировка привязана к конкретному объекту → создаём manual_object
           // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
@@ -1018,6 +1048,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
             reason: request.reason ?? null,
             created_by: authorUserId,
             approval_status: approvalStatus,
+            approved_by: approvedBy,
             metadata: {
               object_id: request.correction_object_id,
               object_name: request.correction_object_name,
@@ -1036,6 +1067,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
             reason: request.reason ?? null,
             created_by: authorUserId,
             approval_status: approvalStatus,
+            approved_by: approvedBy,
           }, client);
         }
       }

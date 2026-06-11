@@ -1287,6 +1287,8 @@ export async function upsertAttendanceAdjustment(input: {
   updated_by?: string | null;
   metadata?: Record<string, unknown>;
   approval_status?: AdjustmentApprovalStatus;
+  approved_by?: string | null;
+  approved_at?: string | null;
 }, exec?: DbExecutor): Promise<Record<string, unknown>> {
   const payload: Record<string, unknown> = {
     employee_id: input.employee_id,
@@ -1307,6 +1309,11 @@ export async function upsertAttendanceAdjustment(input: {
       payload.approved_by = null;
       payload.approved_at = null;
       payload.approval_comment = null;
+    } else if (input.approved_by != null) {
+      // Статус approved/rejected проставлен сразу при создании (схлопывание
+      // этапов): фиксируем согласующего, чтобы он был виден в истории.
+      payload.approved_by = input.approved_by;
+      payload.approved_at = input.approved_at ?? new Date().toISOString();
     }
   }
 
