@@ -1,4 +1,5 @@
 import { createCache } from '../utils/cache.js';
+import { query } from '../config/postgres.js';
 import { sigurService } from './sigur.service.js';
 import { getEmployeeAccessPointBindings } from './sigur-linked-employees.service.js';
 import {
@@ -657,6 +658,50 @@ export async function listSigurDepartmentsTree(connection?: ConnectionType): Pro
     getNormalizedDepartments(connection),
     getDirectDepartmentCounts(connection),
   ]);
+  return buildSigurDepartmentTreeWithCounts(departments, directCounts, true);
+}
+
+/**
+ * Дерево отделов из локальной структуры FOT (org_departments) в форме ISigurDepartmentNode.
+ * Единый источник показа отделов: id узла = sigur_department_id (для Sigur-операций),
+ * parentId = sigur_department_id ближайшего предка, у которого он есть (синтетический
+ * корень «Объект» без sigur_department_id прозрачно пропускается). Счётчики сотрудников
+ * берём живые из Sigur по тем же sigur_department_id.
+ */
+export async function listOrgDepartmentsAsSigurTree(connection?: ConnectionType): Promise<ISigurDepartmentNode[]> {
+  const [rows, directCounts] = await Promise.all([
+    query<{ id: string; parent_id: string | null; sigur_department_id: number | null; name: string }>(
+      `SELECT id, parent_id, sigur_department_id, name
+         FROM org_departments
+        WHERE is_active = true`,
+    ),
+    getDirectDepartmentCounts(connection),
+  ]);
+
+  const byUuid = new Map(rows.map(row => [row.id, row]));
+
+  // sigur_department_id ближайшего предка (вверх по parent_id), у которого он задан.
+  const resolveSigurParentId = (row: { parent_id: string | null }): number | null => {
+    let current = row.parent_id ? byUuid.get(row.parent_id) : undefined;
+    const guard = new Set<string>();
+    while (current) {
+      if (current.sigur_department_id != null) return current.sigur_department_id;
+      if (guard.has(current.id)) break; // защита от циклов
+      guard.add(current.id);
+      current = current.parent_id ? byUuid.get(current.parent_id) : undefined;
+    }
+    return null;
+  };
+
+  const departments = rows
+    .filter(row => row.sigur_department_id != null && !!row.name)
+    .map(row => ({
+      id: row.sigur_department_id as number,
+      parentId: resolveSigurParentId(row),
+      name: row.name,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+
   return buildSigurDepartmentTreeWithCounts(departments, directCounts, true);
 }
 
