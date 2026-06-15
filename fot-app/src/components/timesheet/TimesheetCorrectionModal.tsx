@@ -463,7 +463,7 @@ const CorrectionTab: FC<{
         )}
 
         {selectedStatus === 'remote' && (
-          <div className="ts-hours-hint">Для удалёнки автоматически будет проставлен полный день по графику.</div>
+          <div className="ts-hours-hint">По умолчанию полный день по графику — при необходимости измените часы.</div>
         )}
 
         {selectedStatus === 'work' && (
@@ -724,13 +724,17 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       const key = addObjectKey || availableForAdd[0]?.object_key || '';
       setAddObjectKey(key);
       setAddHours(key ? baseHoursForObject(key) : 0);
+    } else if (status === 'remote') {
+      // Удалёнка: дефолт — полный день по графику (в выходной plannedHours=0 → 8).
+      setAddHours((plannedHours ?? 0) || 8);
     }
   };
 
   const addIsManual = addStatus === 'manual';
   const addHoursEditable = HOURS_EDITABLE_STATUSES.has(addStatus);
   const addCanSave = addNotes.trim().length > 0
-    && (!addIsManual || (Boolean(addObjectKey) && addHours > 0));
+    && (!addIsManual || (Boolean(addObjectKey) && addHours > 0))
+    && (addStatus !== 'remote' || addHours > 0);
 
   const saveAdd = () => {
     const notes = addNotes.trim();
@@ -1043,7 +1047,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
           )}
 
           {addStatus === 'remote' && (
-            <div className="ts-hours-hint">Для удалёнки автоматически будет проставлен полный день по графику.</div>
+            <div className="ts-hours-hint">По умолчанию полный день по графику — при необходимости измените часы.</div>
           )}
 
           {addStatus === 'work' && (

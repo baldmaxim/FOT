@@ -258,6 +258,110 @@ describe('attendance.service', () => {
     });
   });
 
+  it('зачитывает remote-корректировку с часами в выходной, если она согласована (удалённый выход)', async () => {
+    mockedState.isWorkingDay = false; // суббота
+    mockedState.adjustmentRows = [{
+      id: 5000,
+      employee_id: 700,
+      work_date: '2026-06-06',
+      status: 'remote',
+      hours_override: 8,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Удалённая работа в выходной',
+      created_by: 'user-1',
+      approval_status: 'approved',
+      created_at: '2026-06-06T07:00:00.000Z',
+      updated_at: '2026-06-06T07:05:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [700, new Map([['2026-06-06', { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 700, full_name: 'Постоев Евгений' }],
+      startDate: '2026-06-06',
+      endDate: '2026-06-06',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-06-08',
+    });
+
+    expect(result.entries[0]).toMatchObject({
+      id: 5000,
+      status: 'remote',
+      hours_worked: 8,
+      display_hours_worked: 8,
+    });
+  });
+
+  it('не зачитывает remote-корректировку в выходной, пока она на согласовании (pending → 0)', async () => {
+    mockedState.isWorkingDay = false;
+    mockedState.adjustmentRows = [{
+      id: 5001,
+      employee_id: 700,
+      work_date: '2026-06-06',
+      status: 'remote',
+      hours_override: 8,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Удалённая работа в выходной',
+      created_by: 'user-1',
+      approval_status: 'pending',
+      created_at: '2026-06-06T07:00:00.000Z',
+      updated_at: '2026-06-06T07:05:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [700, new Map([['2026-06-06', { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 700, full_name: 'Постоев Евгений' }],
+      startDate: '2026-06-06',
+      endDate: '2026-06-06',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-06-08',
+    });
+
+    expect(result.entries[0]).toMatchObject({ id: 5001, status: 'remote', hours_worked: 0 });
+  });
+
+  it('заявка remote без явных часов (hours_override=null) в выходной по-прежнему даёт 0', async () => {
+    mockedState.isWorkingDay = false;
+    mockedState.adjustmentRows = [{
+      id: 5002,
+      employee_id: 700,
+      work_date: '2026-06-06',
+      status: 'remote',
+      hours_override: null,
+      source_type: 'leave_request',
+      source_id: '999',
+      reason: null,
+      created_by: 'user-1',
+      approval_status: 'auto_approved',
+      created_at: '2026-06-06T07:00:00.000Z',
+      updated_at: '2026-06-06T07:05:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [700, new Map([['2026-06-06', { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 700, full_name: 'Постоев Евгений' }],
+      startDate: '2026-06-06',
+      endDate: '2026-06-06',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-06-08',
+    });
+
+    expect(result.entries[0]).toMatchObject({ id: 5002, status: 'remote', hours_worked: 0 });
+  });
+
   it('adds credited travel minutes (within limit) to summary hours and exposes delay metadata', async () => {
     mockedState.travelSummary = new Map([
       ['1_2026-04-01', {

@@ -45,6 +45,7 @@ export interface IObjectAdjustmentSource {
   reason: string | null;
   updated_at: string;
   metadata: Record<string, unknown>;
+  approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
 }
 
 export interface IAttendanceObjectEntry {
@@ -884,8 +885,16 @@ export async function buildObjectAttendanceData(params: {
     seenSplitDays.add(dKey);
     if (objectAdjustedDays.has(dKey)) continue;
 
-    const isNonWork = NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status as TimeStatus);
     const hoursOverride = adjustment.hours_override;
+    // Корректировка «удалённая работа» с явными часами и согласованием — это
+    // отработанный день (зеркалит attendance.service): часы распределяются по
+    // объектам (attribution/historical/приписка), иначе объектная сумма ≠ дневной.
+    const remoteNotApproved = adjustment.approval_status === 'pending'
+      || adjustment.approval_status === 'rejected';
+    const isRemoteWithHours = adjustment.status === 'remote'
+      && hoursOverride != null && Number(hoursOverride) > 0 && !remoteNotApproved;
+    const isNonWork = NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status as TimeStatus)
+      && !isRemoteWithHours;
 
     // status='work' + hoursOverride=null = работал в выходной, часы из СКУД.
     // СКУД-записи уже корректны по объектам — оставляем как есть.

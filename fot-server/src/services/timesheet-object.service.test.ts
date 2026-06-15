@@ -863,4 +863,72 @@ describe('timesheet-object.service', () => {
       expect.objectContaining({ work_date: '2026-04-10', object_id: 'obj-a', hours_worked: 8 }),
     ]);
   });
+
+  it('паритет: согласованная remote-корректировка с часами распределяется по приписке (== день-уровень)', async () => {
+    // Удалённый выход в выходной без СКУД: корректировка remote с явными часами и
+    // согласованием должна дать те же часы в разрезе «по объектам», что и день-уровень.
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
+    mockedState.tables.skud_events = [];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-06-06',
+      endDate: '2026-06-06',
+      todayStr: '2026-06-08',
+      adjustments: [
+        {
+          id: 90,
+          employee_id: 1,
+          work_date: '2026-06-06',
+          hours_override: 8,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'remote',
+          reason: 'Удалённая работа в выходной',
+          updated_at: '2026-06-06T10:00:00.000Z',
+          approval_status: 'approved',
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({
+        adjustment_id: 90,
+        work_date: '2026-06-06',
+        object_id: 'obj-a',
+        hours_worked: 8,
+        is_correction: true,
+      }),
+    ]);
+  });
+
+  it('remote-корректировка на согласовании (pending) не даёт объектных часов', async () => {
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
+    mockedState.tables.skud_events = [];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-06-06',
+      endDate: '2026-06-06',
+      todayStr: '2026-06-08',
+      adjustments: [
+        {
+          id: 91,
+          employee_id: 1,
+          work_date: '2026-06-06',
+          hours_override: 8,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'remote',
+          reason: 'Удалённая работа в выходной',
+          updated_at: '2026-06-06T10:00:00.000Z',
+          approval_status: 'pending',
+          metadata: {},
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([]);
+  });
 });

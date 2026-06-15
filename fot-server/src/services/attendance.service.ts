@@ -625,8 +625,15 @@ export async function buildAttendanceEntries(params: {
 
     // Не-присутствие (отпуск/больничный/отгул/удалёнка/обучение/неоплачиваемый/прогул) в выходной
     // или праздник не должно давать часов: иначе при норме 0 любые часы превращаются в переработку.
+    // ИСКЛЮЧЕНИЕ — ручная корректировка «удалённая работа» в выходной с явными часами и
+    // согласованием: начальник отдела отмечает удалённый выход поверх согласованной заявки
+    // «работа в выходной». Такие часы зачитываются (проваливаются в ветку hours_override ниже).
+    const adjNotApproved = adjustment.approval_status === 'pending' || adjustment.approval_status === 'rejected';
+    const isRemoteWithHours = adjustment.status === 'remote'
+      && adjustment.hours_override != null && Number(adjustment.hours_override) > 0
+      && !adjNotApproved;
     let effectiveHours: number | null;
-    if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status) && !isAdjWorkingDay) {
+    if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status) && !isAdjWorkingDay && !isRemoteWithHours) {
       effectiveHours = 0;
     } else if (adjustment.status === 'work' && !isAdjWorkingDay && adjustment.hours_override === 0) {
       // 'work' в выходной с hours_override=0 → не обнулять, взять часы из СКУД (обязательная суббота)

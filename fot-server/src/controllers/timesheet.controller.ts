@@ -401,6 +401,20 @@ export async function resolveAdjustmentApprovalStatus(
   const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
   if (isWorkingDay(schedule, dateObj, monthCalendar)) return 'auto_approved';
 
+  // Корректировка «удалённая работа» поверх уже согласованного выхода в выходной:
+  // если за этот день есть одобренная заявка «работа в выходной» (ответственный
+  // согласовал выход), отдельного согласования удалёнки не требуется — зачитываем сразу.
+  if (status === 'remote') {
+    const approvedWork = await query<{ id: number | string }>(
+      `SELECT id FROM attendance_adjustments
+        WHERE employee_id = $1 AND work_date = $2 AND status = 'work'
+          AND approval_status IN ('approved', 'auto_approved')
+        LIMIT 1`,
+      [employeeId, workDate],
+    ).then(rows => rows[0] ?? null);
+    if (approvedWork) return 'auto_approved';
+  }
+
   return 'pending';
 }
 
@@ -1737,10 +1751,11 @@ export const timesheetController = {
       }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
-      // Для выходного дня график возвращает work_hours = 0, поэтому `|| 8`, а не `??`:
-      // иначе удалёнка в выходной сохраняется с 0 ч и авто-одобряется (минует согласование).
+      // Удалёнка: начальник отдела вводит фактические часы вручную (в т.ч. в выходной
+      // поверх согласованного выхода). Если часы не заданы — полный день по графику
+      // (для выходного work_hours=0, поэтому `|| 8`, а не `??`).
       const normalizedHours = parsed.status === 'remote'
-        ? (plannedHours || 8)
+        ? (parsed.hours_worked ?? (plannedHours || 8))
         : (parsed.hours_worked ?? null);
 
       // Гарды роли: «только аномалии», «не больше плана», «лимит за месяц».
@@ -1943,7 +1958,7 @@ export const timesheetController = {
           work_date: String(existing.work_date),
         }])).get(`${Number(existing.employee_id)}_${String(existing.work_date)}`) ?? null;
         const normalizedHours = nextStatus === 'remote'
-          ? (plannedHours || 8)
+          ? (parsed.hours_worked ?? (plannedHours || 8))
           : parsed.hours_worked;
 
         if (nextStatus === 'work' || nextStatus === 'remote') {
