@@ -57,6 +57,8 @@ export interface IPasswordResetRequest {
 export interface EmployeeDepartmentAssignmentFromApi {
   employee_id: number;
   full_name: string;
+  /** Основной отдел/бригада сотрудника (для фильтра по компании). */
+  org_department_id?: string | null;
   assigned_department_ids: string[];
   /** Подмножество assigned_department_ids с уровнем «только просмотр» (миграция 167). */
   view_only_department_ids?: string[];

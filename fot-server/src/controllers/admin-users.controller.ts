@@ -729,6 +729,7 @@ export const adminUsersController = {
         return {
           employee_id: employee.id,
           full_name: employee.full_name,
+          org_department_id: employee.org_department_id ?? null,
           assigned_department_ids: explicitDepartmentMap.get(employee.id) || [],
           view_only_department_ids: viewOnlyMap.get(employee.id) || [],
           position_name: employee.position_id != null

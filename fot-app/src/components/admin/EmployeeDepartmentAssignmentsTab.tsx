@@ -8,7 +8,7 @@ import {
 } from '../../services/adminService';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useToast } from '../../contexts/ToastContext';
-import { getTreeFlatDepartments } from '../../utils/departmentUtils';
+import { getTreeFlatDepartments, findSu10CompanyNode, collectDescendantIds } from '../../utils/departmentUtils';
 import { EmployeeAssignmentPanel } from './EmployeeAssignmentPanel';
 import styles from '../../pages/admin/Admin.module.css';
 
@@ -55,6 +55,13 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     () => new Map(flatDepts.map(department => [department.id, department])),
     [flatDepts],
   );
+  // Набор id отделов/бригад внутри компании «ООО СУ-10» — фильтр «без ответственного»
+  // показывает только сотрудников из этой папки.
+  const su10DepartmentIds = useMemo(() => {
+    const nodes = structureQuery.data?.departments || [];
+    const company = findSu10CompanyNode(nodes);
+    return company ? collectDescendantIds(nodes, new Set([company.id])) : new Set<string>();
+  }, [structureQuery.data?.departments]);
   const linkedUserByEmployeeId = useMemo(() => (
     new Map(
       allUsers
@@ -69,8 +76,12 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     [employees],
   );
   const employeesWithoutResponsibleCount = useMemo(
-    () => employees.filter(employee => employee.has_responsible === false).length,
-    [employees],
+    () => employees.filter(employee => (
+      employee.has_responsible === false
+      && !!employee.org_department_id
+      && su10DepartmentIds.has(employee.org_department_id)
+    )).length,
+    [employees, su10DepartmentIds],
   );
 
   const filteredEmployees = useMemo(() => {
@@ -82,8 +93,14 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
       }
 
       // Флаг приходит из API; при отсутствии (старый кэш) трактуем как «есть», чтобы не прятать.
-      if (showWithoutResponsible && employee.has_responsible !== false) {
-        return false;
+      // Дополнительно ограничиваем выборку папкой «ООО СУ-10».
+      if (showWithoutResponsible) {
+        if (employee.has_responsible !== false) {
+          return false;
+        }
+        if (!employee.org_department_id || !su10DepartmentIds.has(employee.org_department_id)) {
+          return false;
+        }
       }
 
       if (!normalizedSearch) {
@@ -102,7 +119,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
       return searchableParts.some(part => normalizeText(part).includes(normalizedSearch));
     });
-  }, [departmentMap, employees, hideEmployeesWithoutAssignments, showWithoutResponsible, linkedUserByEmployeeId, searchQuery]);
+  }, [departmentMap, employees, hideEmployeesWithoutAssignments, showWithoutResponsible, su10DepartmentIds, linkedUserByEmployeeId, searchQuery]);
 
   // Виртуализация: рендерим только видимые строки. Без неё список из ~8700
   // сотрудников = десятки тысяч DOM-узлов → тяжёлый рендер + расширения браузера
@@ -167,7 +184,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
             checked={showWithoutResponsible}
             onChange={(event) => setShowWithoutResponsible(event.target.checked)}
           />
-          Показать сотрудников без ответственного
+          Показать сотрудников без ответственного (ООО СУ-10)
         </label>
       </div>
 
