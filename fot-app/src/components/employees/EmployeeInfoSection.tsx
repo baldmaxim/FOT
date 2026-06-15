@@ -85,10 +85,18 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
               ))}
             </select>
           </div>
+          <div className="form-group">
+            <label>Дата найма</label>
+            <input
+              type="date"
+              value={(editData.hire_date || '').slice(0, 10)}
+              onChange={e => onEditDataChange({ ...editData, hire_date: e.target.value || undefined })}
+            />
+          </div>
           {isSigurLinked ? (
             <div className="form-group">
               <label>Режим редактирования</label>
-              <span className="form-readonly">Для связанных с Sigur сотрудников в этой версии можно менять ФИО и Объект.</span>
+              <span className="form-readonly">Для связанных с Sigur сотрудников в этой версии можно менять ФИО, Объект и Дату найма.</span>
             </div>
           ) : (
             <div className="form-group">

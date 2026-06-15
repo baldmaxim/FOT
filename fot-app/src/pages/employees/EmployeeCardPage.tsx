@@ -381,7 +381,7 @@ export const EmployeeCardPage: FC = () => {
     if (!employee) return;
     try {
       const payload = employee.sigur_employee_id != null
-        ? { full_name: editData.full_name || '', work_object: editData.work_object ?? null }
+        ? { full_name: editData.full_name || '', work_object: editData.work_object ?? null, hire_date: editData.hire_date }
         : editData;
       await employeeService.update(employee.id, payload);
       setIsEditing(false);
