@@ -2322,6 +2322,9 @@ export const TimesheetPage: FC = () => {
               ? (objectEntriesByEmployeeDate.get(modalEmployee.id)?.get(modalWorkDate) ?? [])
                   .filter(e => !e.from_day_level)
               : undefined}
+            // Роль без объектных правок: «По сотрудникам» показываем дневную форму, а не
+            // объектный список (иначе единственный путь правки упирается в запрет).
+            disableObjectEntries={objectEntriesDisabled}
             plannedHours={modalEmployee
               ? getWorkHoursForDay(
                   getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay),

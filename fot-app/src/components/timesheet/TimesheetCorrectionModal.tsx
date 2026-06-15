@@ -73,6 +73,9 @@ interface ICorrectionModalProps {
   // Список объектов дня (из СКУД + per-object корректировки). Передаётся только в day-mode;
   // если непуст, под формой «День» рендерится список блоков по объектам.
   objectEntries?: TimesheetObjectEntry[];
+  // Роль с запретом объектных правок (corrections_disable_object_entries, миграция 179):
+  // в режиме «По сотрудникам» прячем объектный список и рендерим дневную форму CorrectionTab.
+  disableObjectEntries?: boolean;
   // План часов дня по графику — для суммирующего чипа (Σ корректировок / план).
   plannedHours?: number | null;
   // Есть ли активная day-level корректировка — используется для confirm-диалога:
@@ -1127,6 +1130,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   dayStatusContext,
   infoBanner,
   objectEntries,
+  disableObjectEntries,
   plannedHours,
   hasDayLevelCorrection,
   onSaveObject,
@@ -1137,7 +1141,8 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   allowAttachmentsOnCreate,
   showTravelTab,
 }) => {
-  const hasObjectsBlock = Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
+  const hasObjectsBlock = !disableObjectEntries
+    && Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
   const dayHasObjectAdjustments = hasObjectsBlock && objectEntries!.some(entry => entry.is_correction && entry.adjustment_id != null);
   // Save «День» при наличии объектных корректировок предупреждает: бэк их снимет.
   const wrappedOnSave: ICorrectionModalProps['onSave'] = (status, hours, notes, files) => {
