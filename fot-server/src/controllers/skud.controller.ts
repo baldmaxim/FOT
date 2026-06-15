@@ -402,25 +402,42 @@ async function getScopedDisciplineData(
 function buildDisciplineEmployeeSummaries(data: IDisciplineResult): DisciplineExportEmployeeSummary[] {
   const map: Record<number, DisciplineExportEmployeeSummary> = {};
 
+  // Базовые строки по ВСЕМ сотрудникам в скоупе (а не только нарушителям),
+  // чтобы «Часов отработано/по графику» имели смысл за весь период.
+  for (const [idStr, employee] of Object.entries(data.employees)) {
+    const id = Number(idStr);
+    map[id] = {
+      employee_id: id,
+      name: employee.full_name || `#${id}`,
+      position: employee.position || '—',
+      department: employee.department_id ? (data.departments[employee.department_id] || '—') : '—',
+      departmentId: employee.department_id,
+      late: 0,
+      underwork: 0,
+      early: 0,
+      absence: 0,
+      total: 0,
+      worked_hours: employee.worked_hours ?? 0,
+      norm_hours: employee.norm_hours ?? 0,
+      violations: [],
+    };
+  }
+
   for (const violation of data.violations) {
     if (!map[violation.employee_id]) {
-      const employee = data.employees[violation.employee_id] || {
-        full_name: `#${violation.employee_id}`,
-        position: null,
-        department_id: null,
-      };
-
       map[violation.employee_id] = {
         employee_id: violation.employee_id,
-        name: employee.full_name,
-        position: employee.position || '—',
-        department: employee.department_id ? (data.departments[employee.department_id] || '—') : '—',
-        departmentId: employee.department_id,
+        name: `#${violation.employee_id}`,
+        position: '—',
+        department: '—',
+        departmentId: null,
         late: 0,
         underwork: 0,
         early: 0,
         absence: 0,
         total: 0,
+        worked_hours: 0,
+        norm_hours: 0,
         violations: [],
       };
     }
@@ -434,26 +451,34 @@ function buildDisciplineEmployeeSummaries(data: IDisciplineResult): DisciplineEx
     });
   }
 
-  return Object.values(map).sort((left, right) => right.total - left.total);
+  return Object.values(map).sort((left, right) =>
+    left.department.localeCompare(right.department, 'ru') || left.name.localeCompare(right.name, 'ru'),
+  );
 }
 
 function filterDisciplineEmployeeSummaries(
   employees: DisciplineExportEmployeeSummary[],
   filters: {
-    departmentId: string;
+    departmentIds: string[];
     searchQuery: string;
     activeTab: DisciplineTab;
+    onlyViolations: boolean;
   },
 ): DisciplineExportEmployeeSummary[] {
   let filtered = employees;
 
-  if (filters.departmentId) {
-    filtered = filtered.filter(employee => employee.departmentId === filters.departmentId);
+  if (filters.departmentIds.length > 0) {
+    const set = new Set(filters.departmentIds);
+    filtered = filtered.filter(employee => employee.departmentId !== null && set.has(employee.departmentId));
   }
 
   if (filters.searchQuery.trim()) {
     const normalizedQuery = filters.searchQuery.trim().toLowerCase();
     filtered = filtered.filter(employee => employee.name.toLowerCase().includes(normalizedQuery));
+  }
+
+  if (filters.onlyViolations) {
+    filtered = filtered.filter(employee => employee.total > 0);
   }
 
   if (filters.activeTab !== 'all') {
@@ -1048,16 +1073,19 @@ const skudReadController = {
         return;
       }
 
-      const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : '';
+      const departmentIdsRaw = typeof req.query.department_ids === 'string' ? req.query.department_ids
+        : typeof req.query.department_id === 'string' ? req.query.department_id : '';
+      const departmentIds = departmentIdsRaw.split(',').map(s => s.trim()).filter(Boolean);
       const searchQuery = typeof req.query.search === 'string' ? req.query.search : '';
+      const onlyViolations = req.query.only_violations === '1' || req.query.only_violations === 'true';
       const data = await getScopedDisciplineData(req, startMonth, endMonth);
       const employees = buildDisciplineEmployeeSummaries(data);
-      const filtered = filterDisciplineEmployeeSummaries(employees, {
-        departmentId,
+      const source = filterDisciplineEmployeeSummaries(employees, {
+        departmentIds,
         searchQuery,
         activeTab: tab as DisciplineTab,
+        onlyViolations,
       });
-      const source = filtered.length > 0 ? filtered : employees;
       const workbook = buildDisciplineWorkbook({ employees: source });
       const buffer = await workbook.xlsx.writeBuffer();
       const fileName = sanitizeExportFileName(

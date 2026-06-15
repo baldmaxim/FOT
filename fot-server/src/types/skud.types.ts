@@ -127,7 +127,7 @@ export interface IDisciplineViolation {
 
 export interface IDisciplineResult {
   violations: IDisciplineViolation[];
-  employees: Record<number, { full_name: string; position: string | null; department_id: string | null }>;
+  employees: Record<number, { full_name: string; position: string | null; department_id: string | null; worked_hours: number; norm_hours: number }>;
   departments: Record<string, string>;
 }
 

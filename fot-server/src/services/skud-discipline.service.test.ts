@@ -24,6 +24,8 @@ vi.mock('./schedule.service.js', () => ({
   getEffectiveLateThreshold: vi.fn(() => '09:00:00'),
   getScheduleForDate: vi.fn(() => ({ work_start: '09:00:00', work_end: '18:00:00', work_hours: 8 })),
   needsSkudCheck: vi.fn(() => true),
+  loadCalendarMonth: vi.fn(async () => null),
+  countNormHoursForSchedule: vi.fn(() => 0),
 }));
 
 type EmployeeRow = {
@@ -75,6 +77,16 @@ function resolveQuery(sql: string, params: unknown[]): unknown[] {
   if (/FROM\s+skud_daily_summary\b/i.test(sql)) {
     const start = params[0] as string;
     const end = params[1] as string;
+    // Агрегатный запрос фактических часов (SUM ... GROUP BY) — без violation-прекоарса.
+    if (/SUM\(total_hours\)/i.test(sql)) {
+      const empIds = new Set((params[2] as number[]) ?? []);
+      const byEmp = new Map<number, number>();
+      for (const s of mockedState.summaries) {
+        if (!s.is_present || s.date < start || s.date > end || !empIds.has(s.employee_id)) continue;
+        byEmp.set(s.employee_id, (byEmp.get(s.employee_id) ?? 0) + (s.total_hours ?? 0));
+      }
+      return [...byEmp.entries()].map(([employee_id, worked]) => ({ employee_id, worked }));
+    }
     const hasEmpFilter = /employee_id\s*=\s*ANY/i.test(sql);
     const empIds = hasEmpFilter ? new Set((params[4] as number[]) ?? []) : null;
 
@@ -155,8 +167,8 @@ describe('skud-discipline.service (parity / характеризующий)', ()
     ]);
 
     expect(res.employees).toEqual({
-      1: { full_name: 'Иванов', position: 'Менеджер', department_id: 'd1' },
-      2: { full_name: 'Петров', position: null, department_id: 'd1' },
+      1: { full_name: 'Иванов', position: 'Менеджер', department_id: 'd1', worked_hours: 8, norm_hours: 0 },
+      2: { full_name: 'Петров', position: null, department_id: 'd1', worked_hours: 11, norm_hours: 0 },
     });
     expect(res.departments).toEqual({ d1: 'Отдел 1' });
   });

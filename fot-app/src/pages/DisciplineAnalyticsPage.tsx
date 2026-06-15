@@ -4,8 +4,9 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { DisciplineTable } from '../components/discipline/DisciplineTable';
 import { DisciplineDetailPanel } from '../components/discipline/DisciplineDetailPanel';
+import { DepartmentTreeMultiSelect } from '../components/staff/DepartmentTreeMultiSelect';
 import { triggerBlobDownload } from '../utils/download';
-import { sortDepartmentOptions } from '../utils/departmentUtils';
+import { getVisibleRootNodes, filterDepartmentTreeByIds, collectDescendantIds } from '../utils/departmentUtils';
 import '../styles/DisciplineAnalyticsPage.css';
 
 type ViolationType = 'late' | 'underwork' | 'early' | 'absence';
@@ -38,6 +39,8 @@ interface IEmployeeSummary {
   early: number;
   absence: number;
   total: number;
+  worked_hours: number;
+  norm_hours: number;
   violations: IViolationMapped[];
 }
 
@@ -108,7 +111,7 @@ const getSummary = (v: IViolationRaw): string => {
 };
 
 export const DisciplineAnalyticsPage: FC = () => {
-  const { isDepartmentScope, managedDepartmentIds, managedDepartments, primaryDepartmentId, mode } = useManagedDepartments();
+  const { isDepartmentScope, managedDepartmentIds, structureQuery } = useManagedDepartments();
   const isMobile = useIsMobile(430);
 
   const now = new Date();
@@ -117,7 +120,7 @@ export const DisciplineAnalyticsPage: FC = () => {
   const [startMonth, setStartMonth] = useState(initialMonth);
   const [endMonth, setEndMonth] = useState(initialMonth);
   const [rawViolations, setRawViolations] = useState<IViolationMapped[]>([]);
-  const [empData, setEmpData] = useState<Record<number, { full_name: string; position: string | null; department_id: string | null }>>({});
+  const [empData, setEmpData] = useState<Record<number, { full_name: string; position: string | null; department_id: string | null; worked_hours: number; norm_hours: number }>>({});
   const [deptData, setDeptData] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -125,7 +128,8 @@ export const DisciplineAnalyticsPage: FC = () => {
   const [activeTab, setActiveTab] = useState('all');
   const [panelEmpId, setPanelEmpId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedDept, setSelectedDept] = useState<string>('');
+  const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([]);
+  const [viewMode, setViewMode] = useState<'all' | 'violations'>('all');
 
   const normalizedPeriod = useMemo(() => {
     if (startMonth <= endMonth) return { startMonth, endMonth };
@@ -146,16 +150,30 @@ export const DisciplineAnalyticsPage: FC = () => {
 
   const buildMonthValue = useCallback((year: number, month: number) => `${year}-${String(month).padStart(2, '0')}`, []);
 
+  // Дерево отделов: для скоупа начальника участка ограничиваем его поддеревьями.
+  const allTreeNodes = useMemo(
+    () => getVisibleRootNodes(structureQuery.data?.departments || []),
+    [structureQuery.data],
+  );
+  const scopeTreeNodes = useMemo(() => {
+    if (!isDepartmentScope) return allTreeNodes;
+    const scopeIds = collectDescendantIds(allTreeNodes, new Set(managedDepartmentIds));
+    return filterDepartmentTreeByIds(allTreeNodes, scopeIds);
+  }, [allTreeNodes, isDepartmentScope, managedDepartmentIds]);
+
+  // Раскрытый набор id (выбранные узлы + все их потомки) — для фильтра сотрудников и экспорта.
+  const effectiveDeptIds = useMemo(
+    () => collectDescendantIds(allTreeNodes, new Set(selectedDeptIds)),
+    [allTreeNodes, selectedDeptIds],
+  );
+
+  // По умолчанию начальнику участка выбираем его управляемые отделы.
   useEffect(() => {
-    if (!isDepartmentScope) return;
-    if (mode === 'single' && primaryDepartmentId) {
-      setSelectedDept(primaryDepartmentId);
-      return;
+    if (isDepartmentScope && managedDepartmentIds.length > 0) {
+      setSelectedDeptIds(prev => (prev.length === 0 ? managedDepartmentIds : prev));
     }
-    if (selectedDept && !managedDepartmentIds.includes(selectedDept)) {
-      setSelectedDept('');
-    }
-  }, [isDepartmentScope, mode, primaryDepartmentId, managedDepartmentIds, selectedDept]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDepartmentScope, managedDepartmentIds]);
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -188,76 +206,81 @@ export const DisciplineAnalyticsPage: FC = () => {
     return () => controller.abort();
   }, [fetchData]);
 
-  const departmentOptions = useMemo(() => {
-    const entries: Array<{ id: string; name: string }> = isDepartmentScope
-      ? managedDepartments.map(d => ({ id: d.id, name: deptData[d.id] || d.name }))
-      : Object.entries(deptData).map(([id, name]) => ({ id, name }));
-    return sortDepartmentOptions(entries).map(({ id, name }) => [id, name] as const);
-  }, [isDepartmentScope, managedDepartments, deptData]);
-
+  // Строки по ВСЕМ сотрудникам в скоупе (empData), статистика нарушений — overlay из rawViolations.
   const employees = useMemo<IEmployeeSummary[]>(() => {
     const map: Record<number, IEmployeeSummary> = {};
-    for (const v of rawViolations) {
-      if (!map[v.employee_id]) {
-        const emp = empData[v.employee_id] || { full_name: `#${v.employee_id}`, position: null, department_id: null };
-        const dept = emp.department_id ? (deptData[emp.department_id] || '—') : '—';
-        map[v.employee_id] = {
-          employee_id: v.employee_id,
-          name: emp.full_name,
-          position: emp.position || '—',
-          department: dept,
-          departmentId: emp.department_id,
-          initials: getInitials(emp.full_name),
-          late: 0, underwork: 0, early: 0, absence: 0, total: 0,
-          violations: [],
-        };
-      }
-      map[v.employee_id][v.type]++;
-      map[v.employee_id].total++;
-      map[v.employee_id].violations.push(v);
+    for (const [idStr, emp] of Object.entries(empData)) {
+      const id = Number(idStr);
+      const dept = emp.department_id ? (deptData[emp.department_id] || '—') : '—';
+      map[id] = {
+        employee_id: id,
+        name: emp.full_name || `#${id}`,
+        position: emp.position || '—',
+        department: dept,
+        departmentId: emp.department_id,
+        initials: getInitials(emp.full_name || ''),
+        late: 0, underwork: 0, early: 0, absence: 0, total: 0,
+        worked_hours: emp.worked_hours ?? 0,
+        norm_hours: emp.norm_hours ?? 0,
+        violations: [],
+      };
     }
-    return Object.values(map).sort((a, b) => b.total - a.total);
+    for (const v of rawViolations) {
+      const row = map[v.employee_id];
+      if (!row) continue;
+      row[v.type]++;
+      row.total++;
+      row.violations.push(v);
+    }
+    return Object.values(map).sort(
+      (a, b) => a.department.localeCompare(b.department, 'ru') || a.name.localeCompare(b.name, 'ru'),
+    );
   }, [rawViolations, empData, deptData]);
 
-  const filtered = useMemo(() => {
+  const deptFilteredBase = useMemo(() => {
     let list = employees;
-    if (selectedDept) {
-      list = list.filter(e => e.departmentId === selectedDept);
+    if (selectedDeptIds.length > 0) {
+      list = list.filter(e => e.departmentId !== null && effectiveDeptIds.has(e.departmentId));
     }
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       list = list.filter(e => e.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [employees, selectedDeptIds, effectiveDeptIds, searchQuery]);
+
+  const filtered = useMemo(() => {
+    let list = deptFilteredBase;
+    if (viewMode === 'violations') {
+      list = list.filter(e => e.total > 0);
     }
     if (activeTab !== 'all') {
       const key = activeTab as ViolationType;
       list = list.filter(e => e[key] > 0).sort((a, b) => b[key] - a[key]);
     }
     return list;
-  }, [employees, activeTab, selectedDept, searchQuery]);
+  }, [deptFilteredBase, viewMode, activeTab]);
 
   const peopleCounts = useMemo(() => {
-    let base = employees;
-    if (selectedDept) base = base.filter(e => e.departmentId === selectedDept);
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      base = base.filter(e => e.name.toLowerCase().includes(q));
-    }
-    const c: Record<string, number> = { all: base.length, late: 0, underwork: 0, early: 0, absence: 0 };
-    for (const e of base) {
+    const c: Record<string, number> = { all: deptFilteredBase.length, late: 0, underwork: 0, early: 0, absence: 0 };
+    for (const e of deptFilteredBase) {
       if (e.late > 0) c.late++;
       if (e.underwork > 0) c.underwork++;
       if (e.early > 0) c.early++;
       if (e.absence > 0) c.absence++;
     }
     return c;
-  }, [employees, selectedDept, searchQuery]);
+  }, [deptFilteredBase]);
+
+  // Гейт от перегруза: в режиме «Все» без выбора отделов и поиска не рендерим таблицу.
+  const needsDeptSelection = viewMode === 'all' && selectedDeptIds.length === 0 && !searchQuery.trim();
 
   const panelEmployee = panelEmpId !== null ? employees.find(e => e.employee_id === panelEmpId) ?? null : null;
 
-  const hasFilters = (isDepartmentScope ? false : selectedDept !== '') || searchQuery !== '';
+  const hasFilters = (isDepartmentScope ? false : selectedDeptIds.length > 0) || searchQuery !== '';
 
   const clearFilters = () => {
-    if (!isDepartmentScope) setSelectedDept('');
+    if (!isDepartmentScope) setSelectedDeptIds([]);
     setSearchQuery('');
   };
 
@@ -268,7 +291,8 @@ export const DisciplineAnalyticsPage: FC = () => {
         startMonth: normalizedPeriod.startMonth,
         endMonth: normalizedPeriod.endMonth,
         tab: activeTab as 'all' | ViolationType,
-        departmentId: selectedDept || undefined,
+        departmentIds: [...effectiveDeptIds],
+        onlyViolations: viewMode === 'violations',
         search: searchQuery,
       });
       triggerBlobDownload(blob, filename);
@@ -350,6 +374,22 @@ export const DisciplineAnalyticsPage: FC = () => {
             </select>
           </label>
         </div>
+        <div className="da-viewmode" role="tablist" aria-label="Кого показывать">
+          <button
+            type="button"
+            className={`da-viewmode-btn ${viewMode === 'all' ? 'active' : ''}`}
+            onClick={() => setViewMode('all')}
+          >
+            Все
+          </button>
+          <button
+            type="button"
+            className={`da-viewmode-btn ${viewMode === 'violations' ? 'active' : ''}`}
+            onClick={() => setViewMode('violations')}
+          >
+            С нарушениями
+          </button>
+        </div>
         <div className="da-header-spacer" />
         <button className="da-btn da-btn-export" onClick={() => { void exportToExcel(); }} disabled={isExporting}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -412,19 +452,15 @@ export const DisciplineAnalyticsPage: FC = () => {
                   <button className="da-search-clear" onClick={() => setSearchQuery('')}>&times;</button>
                 )}
               </div>
-              <select
-                className="da-dept-select"
-                value={selectedDept}
-                onChange={e => setSelectedDept(e.target.value)}
-                disabled={isDepartmentScope && mode === 'single'}
-              >
-                {!(isDepartmentScope && mode === 'single') && (
-                  <option value="">{isDepartmentScope ? 'Все мои отделы' : 'Все отделы'}</option>
-                )}
-                {departmentOptions.map(([id, name]) => (
-                  <option key={id} value={id}>{name}</option>
-                ))}
-              </select>
+              <div className="da-dept-tree">
+                <DepartmentTreeMultiSelect
+                  nodes={scopeTreeNodes}
+                  value={selectedDeptIds}
+                  onChange={setSelectedDeptIds}
+                  isLoading={structureQuery.isLoading}
+                  placeholder="Выберите отделы…"
+                />
+              </div>
               {hasFilters && (
                 <button className="da-btn da-btn-reset" onClick={clearFilters}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -434,11 +470,19 @@ export const DisciplineAnalyticsPage: FC = () => {
             </div>
           </div>
 
-          <DisciplineTable
-            filtered={filtered}
-            isMobile={isMobile}
-            onSelectEmployee={setPanelEmpId}
-          />
+          {needsDeptSelection ? (
+            <div className="da-table-wrap">
+              <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
+                Выберите отделы в фильтре, чтобы увидеть сотрудников и часы за период.
+              </div>
+            </div>
+          ) : (
+            <DisciplineTable
+              filtered={filtered}
+              isMobile={isMobile}
+              onSelectEmployee={setPanelEmpId}
+            />
+          )}
         </>
       )}
 

@@ -4,7 +4,7 @@
 import { query } from '../config/postgres.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import type { IDisciplineParams, IDisciplineResult, IDisciplineViolation, IDailySummaryRow } from '../types/skud.types.js';
-import { resolveSchedulesBulk, getEffectiveLateThreshold, getScheduleForDate, needsSkudCheck } from './schedule.service.js';
+import { resolveSchedulesBulk, getEffectiveLateThreshold, getScheduleForDate, needsSkudCheck, countNormHoursForSchedule, loadCalendarMonth } from './schedule.service.js';
 
 const LATE_THRESHOLD_DEFAULT = '09:00:00';
 const WORK_NORM_HOURS_DEFAULT = 9;
@@ -81,12 +81,56 @@ export async function getDisciplineViolations(
     for (const p of positions || []) posMap.set(p.id, p.name);
   }
 
-  const empMap: Record<number, { full_name: string; position: string | null; department_id: string | null }> = {};
+  // Фактически отработанные часы за период (все present-дни, без violation-фильтра).
+  const workedRows = await query<{ employee_id: number; worked: number | string | null }>(
+    `SELECT employee_id, SUM(total_hours)::float AS worked
+       FROM skud_daily_summary
+      WHERE is_present = true AND date >= $1 AND date <= $2 AND employee_id = ANY($3::bigint[])
+      GROUP BY employee_id`,
+    [rangeStart, rangeEnd, activeEmpIds],
+  );
+  const workedMap = new Map<number, number>();
+  for (const r of workedRows || []) workedMap.set(r.employee_id, Number(r.worked) || 0);
+
+  const empListForSched = employees.map(e => ({ id: e.id as number }));
+  const schedulesMap = await resolveSchedulesBulk(empListForSched, normalizedStartMonth + '-01');
+
+  // Норма часов за период по графику сотрудника (схема резолвится на начало периода).
+  const calendarsByKey = new Map<string, Awaited<ReturnType<typeof loadCalendarMonth>>>();
+  const monthKeys: Array<{ year: number; month: number }> = [];
+  {
+    const [sy, sm] = normalizedStartMonth.split('-').map(Number);
+    const [ey, em] = normalizedEndMonth.split('-').map(Number);
+    let y = sy;
+    let m = sm;
+    while (y < ey || (y === ey && m <= em)) {
+      monthKeys.push({ year: y, month: m });
+      m += 1;
+      if (m > 12) { m = 1; y += 1; }
+    }
+  }
+  await Promise.all(monthKeys.map(async ({ year, month }) => {
+    calendarsByKey.set(`${year}-${month}`, await loadCalendarMonth(year, month));
+  }));
+  const normMap = new Map<number, number>();
+  for (const e of employees) {
+    const sched = schedulesMap.get(e.id);
+    if (!sched) continue;
+    let total = 0;
+    for (const { year, month } of monthKeys) {
+      total += countNormHoursForSchedule(year, month, sched, calendarsByKey.get(`${year}-${month}`) ?? null);
+    }
+    normMap.set(e.id, total);
+  }
+
+  const empMap: Record<number, { full_name: string; position: string | null; department_id: string | null; worked_hours: number; norm_hours: number }> = {};
   for (const e of employees) {
     empMap[e.id] = {
       full_name: e.full_name || '',
       position: e.position_id ? posMap.get(e.position_id) || null : null,
       department_id: e.org_department_id || null,
+      worked_hours: workedMap.get(e.id) ?? 0,
+      norm_hours: normMap.get(e.id) ?? 0,
     };
   }
 
@@ -94,9 +138,6 @@ export async function getDisciplineViolations(
   for (const d of departments || []) {
     deptMap[d.id] = d.name;
   }
-
-  const empListForSched = employees.map(e => ({ id: e.id as number }));
-  const schedulesMap = await resolveSchedulesBulk(empListForSched, normalizedStartMonth + '-01');
 
   const violations: IDisciplineViolation[] = [];
   const todayISO = formatDateToISO(new Date());

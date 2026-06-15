@@ -74,6 +74,46 @@
   flex: 1;
 }
 
+/* Переключатель «Все / С нарушениями» */
+.da-viewmode {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.da-viewmode-btn {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: calc(var(--radius-md) - 3px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.da-viewmode-btn:hover {
+  color: var(--text-primary);
+}
+
+.da-viewmode-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* Обёртка дерева отделов в панели фильтров */
+.da-dept-tree {
+  min-width: 240px;
+}
+
 [data-theme="dark"] .da-period-select {
   color-scheme: dark;
 }
@@ -610,10 +650,17 @@
 }
 
 .da-mobile-card-total {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--text-primary);
   flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.da-mobile-card-norm {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 .da-mobile-card-badges {

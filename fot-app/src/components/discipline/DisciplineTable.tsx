@@ -13,7 +13,16 @@ interface IEmployeeSummary {
   early: number;
   absence: number;
   total: number;
+  worked_hours: number;
+  norm_hours: number;
 }
+
+const formatHours = (h: number | null | undefined): string => {
+  if (h === null || h === undefined || h <= 0) return '0ч';
+  const hrs = Math.floor(h);
+  const mins = Math.round((h - hrs) * 60);
+  return mins > 0 ? `${hrs}ч ${mins}м` : `${hrs}ч`;
+};
 
 const TYPE_COLORS: Record<ViolationType, string> = {
   late: 'var(--warning)', underwork: '#8b5cf6', early: 'var(--primary)', absence: 'var(--error)',
@@ -41,7 +50,7 @@ export const DisciplineTable: FC<IDisciplineTableProps> = ({ filtered, isMobile,
   if (filtered.length === 0) {
     return (
       <div className="da-table-wrap">
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Нарушений не найдено</div>
+        <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>Сотрудников не найдено</div>
       </div>
     );
   }
@@ -56,9 +65,12 @@ export const DisciplineTable: FC<IDisciplineTableProps> = ({ filtered, isMobile,
                 <div className="da-emp-avatar">{emp.initials}</div>
                 <div className="da-mobile-card-info">
                   <div className="da-emp-name">{emp.name}</div>
-                  <div className="da-emp-meta">{emp.position}</div>
+                  <div className="da-emp-meta">{emp.position} · {emp.department}</div>
                 </div>
-                <div className="da-mobile-card-total">{emp.total}</div>
+                <div className="da-mobile-card-total">
+                  {formatHours(emp.worked_hours)}
+                  <span className="da-mobile-card-norm"> / {formatHours(emp.norm_hours)}</span>
+                </div>
               </div>
               <div className="da-mobile-card-badges">
                 {emp.late > 0 && <CountBadge count={emp.late} type="late" />}
@@ -78,23 +90,26 @@ export const DisciplineTable: FC<IDisciplineTableProps> = ({ filtered, isMobile,
       <table className="da-table">
         <thead>
           <tr>
+            <th>Отдел</th>
             <th>Сотрудник</th>
             <th style={{ textAlign: 'center' }}>Опоздания</th>
             <th style={{ textAlign: 'center' }}>Недоработки</th>
             <th style={{ textAlign: 'center' }}>Ранние уходы</th>
             <th style={{ textAlign: 'center' }}>Отсутствия</th>
-            <th style={{ textAlign: 'center' }}>Всего</th>
+            <th style={{ textAlign: 'center' }}>Часов отработано</th>
+            <th style={{ textAlign: 'center' }}>Часов по графику</th>
           </tr>
         </thead>
         <tbody>
           {filtered.map(emp => (
             <tr key={emp.employee_id} onClick={() => onSelectEmployee(emp.employee_id)}>
+              <td>{emp.department}</td>
               <td>
                 <div className="da-emp-cell">
                   <div className="da-emp-avatar">{emp.initials}</div>
                   <div>
                     <div className="da-emp-name">{emp.name}</div>
-                    <div className="da-emp-meta">{emp.position} · {emp.department}</div>
+                    <div className="da-emp-meta">{emp.position}</div>
                   </div>
                 </div>
               </td>
@@ -102,7 +117,8 @@ export const DisciplineTable: FC<IDisciplineTableProps> = ({ filtered, isMobile,
               <td style={{ textAlign: 'center' }}><CountBadge count={emp.underwork} type="underwork" /></td>
               <td style={{ textAlign: 'center' }}><CountBadge count={emp.early} type="early" /></td>
               <td style={{ textAlign: 'center' }}><CountBadge count={emp.absence} type="absence" /></td>
-              <td style={{ textAlign: 'center', fontWeight: 600, fontSize: 14 }}>{emp.total}</td>
+              <td style={{ textAlign: 'center', fontWeight: 600, fontSize: 14 }}>{formatHours(emp.worked_hours)}</td>
+              <td style={{ textAlign: 'center', fontSize: 14, color: 'var(--text-secondary)' }}>{formatHours(emp.norm_hours)}</td>
             </tr>
           ))}
         </tbody>

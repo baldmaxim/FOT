@@ -366,7 +366,7 @@ export const skudService = {
       total_hours: number | null;
       deviation: string;
     }>;
-    employees: Record<number, { full_name: string; position: string | null; department_id: string | null }>;
+    employees: Record<number, { full_name: string; position: string | null; department_id: string | null; worked_hours: number; norm_hours: number }>;
     departments: Record<string, string>;
   }> {
     const params = new URLSearchParams({ startMonth: period.startMonth });
@@ -388,13 +388,15 @@ export const skudService = {
     startMonth: string;
     endMonth?: string;
     tab?: 'all' | 'late' | 'underwork' | 'early' | 'absence';
-    departmentId?: string;
+    departmentIds?: string[];
+    onlyViolations?: boolean;
     search?: string;
   }): Promise<DownloadFileResult> {
     const params = new URLSearchParams({ startMonth: filters.startMonth });
     if (filters.endMonth) params.append('endMonth', filters.endMonth);
     if (filters.tab && filters.tab !== 'all') params.append('tab', filters.tab);
-    if (filters.departmentId) params.append('department_id', filters.departmentId);
+    if (filters.departmentIds && filters.departmentIds.length > 0) params.append('department_ids', filters.departmentIds.join(','));
+    if (filters.onlyViolations) params.append('only_violations', '1');
     if (filters.search?.trim()) params.append('search', filters.search.trim());
 
     return fetchExportFile(

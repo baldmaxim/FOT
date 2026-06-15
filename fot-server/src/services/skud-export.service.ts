@@ -25,6 +25,8 @@ export interface DisciplineExportEmployeeSummary {
   early: number;
   absence: number;
   total: number;
+  worked_hours: number;
+  norm_hours: number;
   violations: DisciplineExportViolation[];
 }
 
@@ -293,11 +295,68 @@ export function buildEmployeeSkudWorkbook(params: {
   return workbook;
 }
 
+function formatExportHours(hours: number): string {
+  if (!hours || hours <= 0) return '0ч';
+  const hrs = Math.floor(hours);
+  const mins = Math.round((hours - hrs) * 60);
+  return mins > 0 ? `${hrs}ч ${mins}м` : `${hrs}ч`;
+}
+
 export function buildDisciplineWorkbook(params: {
   employees: DisciplineExportEmployeeSummary[];
 }): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
   const { employees } = params;
+
+  // Лист «Сводка» — повторяет таблицу на странице (отдел, ФИО, статистика, часы).
+  const summarySheet = workbook.addWorksheet('Сводка');
+  summarySheet.columns = [
+    { header: '№', key: 'num', width: 5 },
+    { header: 'Отдел', key: 'department', width: 28 },
+    { header: 'ФИО', key: 'name', width: 35 },
+    { header: 'Должность', key: 'position', width: 22 },
+    { header: 'Опоздания', key: 'late', width: 12 },
+    { header: 'Недоработки', key: 'underwork', width: 13 },
+    { header: 'Ранние уходы', key: 'early', width: 13 },
+    { header: 'Отсутствия', key: 'absence', width: 12 },
+    { header: 'Часов отработано', key: 'worked', width: 17 },
+    { header: 'Часов по графику', key: 'norm', width: 17 },
+  ];
+  const summaryHeader = summarySheet.getRow(1);
+  summaryHeader.height = 28;
+  for (let col = 1; col <= 10; col += 1) {
+    const cell = summaryHeader.getCell(col);
+    cell.font = { bold: true, size: 11, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    cell.border = thinBorder;
+  }
+  employees.forEach((employee, index) => {
+    const row = summarySheet.addRow({
+      num: index + 1,
+      department: defangCsvCell(employee.department),
+      name: defangCsvCell(employee.name),
+      position: defangCsvCell(employee.position),
+      late: employee.late || '—',
+      underwork: employee.underwork || '—',
+      early: employee.early || '—',
+      absence: employee.absence || '—',
+      worked: formatExportHours(employee.worked_hours),
+      norm: formatExportHours(employee.norm_hours),
+    });
+    row.getCell('num').alignment = { horizontal: 'center', vertical: 'middle' };
+    (['late', 'underwork', 'early', 'absence', 'worked', 'norm'] as const).forEach(key => {
+      row.getCell(key).alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+    if (index % 2 === 1) {
+      row.eachCell(cell => {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+      });
+    }
+    row.eachCell(cell => {
+      cell.border = thinBorder;
+    });
+  });
 
   const detailStyles: Record<DisciplineViolationType, { font: string; bg: string }> = {
     late: { font: 'FFDC2626', bg: 'FFFFF7ED' },
