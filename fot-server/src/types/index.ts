@@ -242,7 +242,7 @@ export interface SalaryHistory {
   created_at: string;
 }
 
-export type TimeStatus = 'work' | 'vacation' | 'dayoff' | 'remote' | 'unpaid' | 'absent' | 'sick' | 'manual' | 'educational_leave';
+export type TimeStatus = 'work' | 'vacation' | 'dayoff' | 'remote' | 'unpaid' | 'absent' | 'sick' | 'manual' | 'educational_leave' | 'sick_worked';
 
 export interface TimeEntry {
   id: number;
@@ -387,7 +387,7 @@ export interface OrgStructureTree {
   departments: OrgDepartmentNode[];
 }
 
-export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid' | 'work';
+export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid' | 'work' | 'educational_leave' | 'sick_worked';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 export interface LeaveRequest {

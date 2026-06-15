@@ -42,6 +42,7 @@ const REQUEST_TYPE_TO_DS: Partial<Record<ILeaveRequest['request_type'], DayStatu
   sick_leave: 'sick',
   unpaid: 'unpaid',
   educational_leave: 'educational_leave',
+  sick_worked: 'sick_worked',
 };
 
 const WEEKDAY_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -56,6 +57,7 @@ const STATUS_TO_CSS: Record<DayStatus, string> = {
   remote: 'cellRemote',
   unpaid: 'cellAbsent',
   educational_leave: 'cellVacation',
+  sick_worked: 'cellRemote',
   weekend: 'cellWeekend',
   future: 'cellEmpty',
   empty: 'cellEmpty',
@@ -76,6 +78,7 @@ const STATUS_LETTER: Partial<Record<DayStatus, string>> = {
   remote: 'Уд',
   unpaid: 'С',
   educational_leave: 'УО',
+  sick_worked: 'РБ',
   absent: 'Н',
 };
 
@@ -89,6 +92,7 @@ const STATUS_LABEL: Record<DayStatus, string> = {
   remote: 'Удалёнка',
   unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
+  sick_worked: 'Работал на больничном',
   weekend: 'Выходной',
   future: 'Будущий день',
   empty: '—',

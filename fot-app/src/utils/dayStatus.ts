@@ -15,6 +15,7 @@ export type DayStatus =
   | 'remote'            // удалёнка (светло-зелёный)
   | 'unpaid'            // за свой счёт (жёлтый)
   | 'educational_leave' // учебный отпуск (фиолетовый)
+  | 'sick_worked'       // работал на больничном — полный день по графику (бирюзовый)
   | 'weekend'           // плановый выходной без entry (серый)
   | 'future'            // будущий день
   | 'empty';            // прошлый день без entry и без СКУД-сигналов (нейтрально)
@@ -88,6 +89,8 @@ export const getDayStatus = (
       return 'unpaid';
     case 'educational_leave':
       return 'educational_leave';
+    case 'sick_worked':
+      return 'sick_worked';
     default:
       return isScheduledDayOff ? 'weekend' : 'absent';
   }
@@ -104,6 +107,7 @@ export const STATUS_TO_GRID_CLASS: Record<DayStatus, string> = {
   remote: 'ts-day--remote',
   unpaid: 'ts-day--unpaid',
   educational_leave: 'ts-day--educational',
+  sick_worked: 'ts-day--sick-worked',
   weekend: 'ts-day--weekend',
   future: 'ts-day--empty',
   empty: 'ts-day--empty',
@@ -120,6 +124,7 @@ export const STATUS_TO_DETAIL_HOURS_CLASS: Record<DayStatus, string> = {
   remote: 'ts-day-detail-hours--remote',
   unpaid: 'ts-day-detail-hours--unpaid',
   educational_leave: 'ts-day-detail-hours--educational',
+  sick_worked: 'ts-day-detail-hours--sick-worked',
   weekend: 'ts-day-detail-hours--weekend',
   future: 'ts-day-detail-hours--empty',
   empty: 'ts-day-detail-hours--empty',
@@ -137,6 +142,7 @@ export const STATUS_TO_CALENDAR_CLASS: Record<DayStatus, string> = {
   remote: 'ec-cal-day--remote',
   unpaid: 'ec-cal-day--unpaid',
   educational_leave: 'ec-cal-day--educational',
+  sick_worked: 'ec-cal-day--sick-worked',
   weekend: 'ec-cal-day--weekend',
   future: 'ec-cal-day--empty',
   empty: 'ec-cal-day--empty',
@@ -153,6 +159,7 @@ export const STATUS_LABEL_RU: Record<DayStatus, string> = {
   remote: 'Удалёнка',
   unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
+  sick_worked: 'Работал на больничном',
   weekend: 'Выходной',
   future: 'Будущий день',
   empty: '—',

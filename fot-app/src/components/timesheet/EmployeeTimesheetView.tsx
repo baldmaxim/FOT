@@ -41,6 +41,7 @@ const STATUS_LABELS: Record<string, string> = {
   absent: 'Неявка',
   unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
+  sick_worked: 'Работа на больничном',
 };
 
 const STATUS_CSS: Record<string, string> = {
@@ -53,6 +54,7 @@ const STATUS_CSS: Record<string, string> = {
   absent: 'statusAbsent',
   unpaid: 'statusUnpaid',
   educational_leave: 'statusVacation',
+  sick_worked: 'statusSickWorked',
 };
 
 const WORKED_STATUSES = new Set(['work', 'manual', 'remote']);

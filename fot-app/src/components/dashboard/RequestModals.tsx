@@ -28,6 +28,7 @@ const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'sick_leave', label: 'Больничный' },
   { value: 'unpaid', label: 'За свой счёт' },
   { value: 'educational_leave', label: 'Учебный отпуск' },
+  { value: 'sick_worked', label: 'Работа на больничном' },
   { value: 'certificate', label: 'Справка' },
 ];
 

@@ -22,26 +22,28 @@ import { listSelectableObjectsForEmployee } from '../services/employee-skud-obje
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
 import type { TimeStatus } from '../types/index.js';
 
-const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave'] as const;
+const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave', 'sick_worked'] as const;
 // Типы заявлений с адресной маршрутизацией: назначенный ответственный
 // (employee_direct_reports) → иначе начальник отдела. Админ (scope=all) видит всё.
-const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid', 'work']);
+const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid', 'work', 'sick_worked']);
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
   work: 'Работа в выходной/праздник', educational_leave: 'Учебный отпуск',
+  sick_worked: 'Работа на больничном',
 };
-const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid' | 'work' | 'educational_leave', TimeStatus> = {
+const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid' | 'work' | 'educational_leave' | 'sick_worked', TimeStatus> = {
   vacation: 'vacation',
   sick_leave: 'sick',
   remote: 'remote',
   unpaid: 'unpaid',
   work: 'work',
   educational_leave: 'educational_leave',
+  sick_worked: 'sick_worked',
 };
 
 function isTimeStatus(value: unknown): value is TimeStatus {
-  return ['work', 'manual', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave'].includes(String(value));
+  return ['work', 'manual', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave', 'sick_worked'].includes(String(value));
 }
 
 /** Компактная подпись дат для текста уведомлений: `01.05, 02.05, 11.05.2026` или `01.05.2026 — 16.05.2026`. */
@@ -347,10 +349,11 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
-    // Дискретный набор дней (типы с выбором дат на календаре: work/remote/certificate/unpaid).
+    // Дискретный набор дней (типы с выбором дат на календаре: work/remote/certificate/unpaid/sick_worked).
     // «За свой счёт» (unpaid) теперь подаётся датами, а не непрерывным периодом.
+    // «Работа на больничном» (sick_worked) — конкретные дни, когда человек работал.
     // Для непрерывных периодов (vacation/sick_leave/educational_leave) и time_correction игнорируется.
-    const DISCRETE_TYPES = new Set(['work', 'remote', 'certificate', 'unpaid']);
+    const DISCRETE_TYPES = new Set(['work', 'remote', 'certificate', 'unpaid', 'sick_worked']);
     let normalizedSelectedDates: string[] | null = null;
     if (DISCRETE_TYPES.has(request_type) && Array.isArray(selected_dates) && selected_dates.length > 0) {
       const dateRe = /^\d{4}-\d{2}-\d{2}$/;

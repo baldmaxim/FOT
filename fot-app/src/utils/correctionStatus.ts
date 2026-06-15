@@ -20,6 +20,7 @@ export const STATUS_META: IStatusMeta[] = [
   { status: 'sick',              icon: '🏥', label: 'Больничный' },
   { status: 'unpaid',            icon: '💸', label: 'За свой счёт' },
   { status: 'educational_leave', icon: '🎓', label: 'Учебный отпуск' },
+  { status: 'sick_worked',       icon: '🩺', label: 'Работа на больничном' },
   { status: 'dayoff',            icon: '📅', label: 'Отгул', creatable: false },
   { status: 'absent',            icon: '❌', label: 'Неявка' },
 ];

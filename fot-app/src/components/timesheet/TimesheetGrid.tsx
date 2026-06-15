@@ -207,6 +207,7 @@ const STATUS_CELL_TEXT: Record<TimesheetStatus, string> = {
   remote: 'УУ',
   unpaid: 'С',
   educational_leave: 'У',
+  sick_worked: 'РБ',
   manual: '',
 };
 
@@ -854,7 +855,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         <span className="ts-legend-dot ts-legend-dot--vacation">О</span>Отпуск
       </div>
       <div className="ts-legend-item">
-        <span className="ts-legend-dot ts-legend-dot--remote">У</span>Удалёнка
+        <span className="ts-legend-dot ts-legend-dot--educational">У</span>Учебный отпуск
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--remote">УУ</span>Удалёнка
+      </div>
+      <div className="ts-legend-item">
+        <span className="ts-legend-dot ts-legend-dot--sick-worked">РБ</span>Работал на больничном
       </div>
       <div className="ts-legend-item">
         <span className="ts-legend-dot ts-legend-dot--absent">Н</span>Неявка
