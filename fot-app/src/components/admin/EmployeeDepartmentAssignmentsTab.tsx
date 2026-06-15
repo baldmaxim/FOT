@@ -38,6 +38,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   const structureQuery = useStructureTree();
   const [searchQuery, setSearchQuery] = useState('');
   const [hideEmployeesWithoutAssignments, setHideEmployeesWithoutAssignments] = useState(false);
+  const [showWithoutResponsible, setShowWithoutResponsible] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeDepartmentAssignmentFromApi | null>(null);
 
   const employeesQuery = useQuery<EmployeeDepartmentAssignmentFromApi[]>({
@@ -67,12 +68,21 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
     () => employees.filter(employee => employee.assigned_department_ids.length > 0).length,
     [employees],
   );
+  const employeesWithoutResponsibleCount = useMemo(
+    () => employees.filter(employee => employee.has_responsible === false).length,
+    [employees],
+  );
 
   const filteredEmployees = useMemo(() => {
     const normalizedSearch = normalizeText(searchQuery);
     return employees.filter(employee => {
       const additionalDepartmentIds = normalizeAdditionalDepartmentIds(employee.assigned_department_ids || []);
       if (hideEmployeesWithoutAssignments && additionalDepartmentIds.length === 0) {
+        return false;
+      }
+
+      // Флаг приходит из API; при отсутствии (старый кэш) трактуем как «есть», чтобы не прятать.
+      if (showWithoutResponsible && employee.has_responsible !== false) {
         return false;
       }
 
@@ -92,7 +102,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
       return searchableParts.some(part => normalizeText(part).includes(normalizedSearch));
     });
-  }, [departmentMap, employees, hideEmployeesWithoutAssignments, linkedUserByEmployeeId, searchQuery]);
+  }, [departmentMap, employees, hideEmployeesWithoutAssignments, showWithoutResponsible, linkedUserByEmployeeId, searchQuery]);
 
   // Виртуализация: рендерим только видимые строки. Без неё список из ~8700
   // сотрудников = десятки тысяч DOM-узлов → тяжёлый рендер + расширения браузера
@@ -151,11 +161,20 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
           />
           Скрыть сотрудников без назначений
         </label>
+        <label className={styles.assignmentToggle}>
+          <input
+            type="checkbox"
+            checked={showWithoutResponsible}
+            onChange={(event) => setShowWithoutResponsible(event.target.checked)}
+          />
+          Показать сотрудников без ответственного
+        </label>
       </div>
 
       <div className={styles.importSummary}>
         <div>Всего сотрудников: <strong>{isLoadingList && employees.length === 0 ? '…' : employees.length}</strong></div>
         <div>С назначениями: <strong>{isLoadingList && employees.length === 0 ? '…' : employeesWithAssignmentsCount}</strong></div>
+        <div>Без ответственного: <strong>{isLoadingList && employees.length === 0 ? '…' : employeesWithoutResponsibleCount}</strong></div>
         <div>В текущем списке: <strong>{isLoadingList && employees.length === 0 ? '…' : filteredEmployees.length}</strong></div>
       </div>
 

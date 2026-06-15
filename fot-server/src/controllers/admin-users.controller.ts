@@ -30,6 +30,7 @@ import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { getActiveDirectManagersFor } from '../services/employee-direct-reports.service.js';
+import { listFullManagersForDepartments } from '../services/approval-routing.service.js';
 import { getIo } from '../socket/io-instance.js';
 
 function emitDepartmentAccessChanged(targetUserId: string | null | undefined): void {
@@ -718,6 +719,11 @@ export const adminUsersController = {
         departmentRows.map(d => [String(d.id), d.name]),
       );
 
+      // Начальники отделов (ручной full-доступ, не sigur_sync) — чтобы вычислить,
+      // есть ли у сотрудника ответственный по отделу/бригаде. Та же выборка, что
+      // и в resolveResponsibleEmployeeIdsByEmployee (маршрутизация заявлений).
+      const deptManagers = await listFullManagersForDepartments(departmentIds);
+
       const payload = employees.map(employee => {
         const managerInfo = directManagerMap.get(employee.id) ?? null;
         return {
@@ -733,6 +739,11 @@ export const adminUsersController = {
             : null,
           direct_manager_employee_id: managerInfo?.managerId ?? null,
           direct_manager_full_name: managerInfo?.managerFullName ?? null,
+          // «Есть ответственный» = индивидуальный руководитель ИЛИ начальник отдела.
+          has_responsible:
+            directManagerMap.has(employee.id) ||
+            (!!employee.org_department_id
+              && (deptManagers.get(String(employee.org_department_id))?.length ?? 0) > 0),
         };
       });
 

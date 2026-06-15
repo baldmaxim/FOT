@@ -64,6 +64,8 @@ export interface EmployeeDepartmentAssignmentFromApi {
   department_name?: string | null;
   direct_manager_employee_id?: number | null;
   direct_manager_full_name?: string | null;
+  /** Есть ли над сотрудником ответственный: индивидуальный руководитель или начальник его отдела. */
+  has_responsible?: boolean;
 }
 
 /** Сотрудник, назначенный на бригаду/отдел (обратное представление назначений). */
