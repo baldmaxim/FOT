@@ -54,6 +54,7 @@ export interface ISigurEmployeeSummary {
   positionName: string | null;
   tabId: string | null;
   blocked: boolean | null;
+  passNumber: string | null;
 }
 
 export type SigurEmployeeCardAccessState =
@@ -382,7 +383,25 @@ export function normalizeSigurEmployeeSummary(
     positionName: normalized.position || null,
     tabId: normalized.tabId || null,
     blocked: normalizeBoolean(resolveField(raw, 'isBlocked', 'blocked', 'IsBlocked')),
+    passNumber: null,
   };
+}
+
+async function attachContractorPassNumbers(items: ISigurEmployeeSummary[]): Promise<void> {
+  const ids = items.map(item => item.id);
+  if (ids.length === 0) return;
+  const rows = await query<{ sigur_employee_id: string; pass_number: string }>(
+    `SELECT sigur_employee_id, pass_number
+       FROM contractor_passes
+      WHERE sigur_employee_id = ANY($1::bigint[])
+        AND pass_number IS NOT NULL
+        AND status <> 'revoked'`,
+    [ids],
+  );
+  const map = new Map(rows.map(row => [Number(row.sigur_employee_id), row.pass_number]));
+  for (const item of items) {
+    item.passNumber = map.get(item.id) ?? null;
+  }
 }
 
 export function buildSigurDepartmentTree(
@@ -645,6 +664,7 @@ async function searchEmployeesDirectly(
   const total = variants.length > 1
     ? items.length
     : (normalizeSigurEmployeesCount(countRaw) ?? items.length);
+  await attachContractorPassNumbers(items);
   return {
     items,
     total,
@@ -768,6 +788,7 @@ export async function listSigurEmployees(
         ? sumDirectEmployeeCounts(await getDirectDepartmentCounts(connection))
         : items.length;
     }
+    await attachContractorPassNumbers(items);
     return {
       items,
       total,
@@ -817,6 +838,7 @@ export async function listSigurEmployees(
     .filter((employee): employee is ISigurEmployeeSummary => !!employee)
     .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
 
+  await attachContractorPassNumbers(items);
   return {
     items,
     total: blocked == null

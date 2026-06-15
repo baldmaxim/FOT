@@ -213,6 +213,7 @@ export interface SigurEmployeeSummary {
   positionName: string | null;
   tabId: string | null;
   blocked: boolean | null;
+  passNumber: string | null;
 }
 
 export type SigurEmployeeCardAccessState =

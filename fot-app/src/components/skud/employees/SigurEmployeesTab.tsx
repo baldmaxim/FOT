@@ -900,6 +900,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 {!isMobile && <th>Отдел</th>}
                 {!isMobile && <th>Должность</th>}
                 {!isMobile && <th>Таб. №</th>}
+                {!isMobile && <th>№ пропуска</th>}
                 <th>Статус</th>
               </tr>
             </thead>
@@ -953,6 +954,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                     {!isMobile && <td className="ep-cell-muted">{employeeItem.departmentName || '—'}</td>}
                     {!isMobile && <td className="ep-cell-muted">{employeeItem.positionName || '—'}</td>}
                     {!isMobile && <td className="ep-cell-muted">{employeeItem.tabId || '—'}</td>}
+                    {!isMobile && <td className="ep-cell-muted">{employeeItem.passNumber || '—'}</td>}
                     <td>
                       <span className={`sigur-live-status ${statusPresentation.tone}`}>
                         {statusPresentation.text}
