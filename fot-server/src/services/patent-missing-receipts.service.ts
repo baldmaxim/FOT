@@ -1,4 +1,5 @@
 import { query } from '../config/postgres.js';
+import { resolveResponsibleEmployeeIdsByEmployee } from './approval-routing.service.js';
 
 /** Стоимость патента за один месяц (₽). Порог «достаточной» суммы чеков. */
 export const MONTHLY_PATENT_AMOUNT = 10000;
@@ -42,7 +43,7 @@ interface IRawRow {
   full_name: string | null;
   position_name: string | null;
   department_name: string | null;
-  manager_full_name: string | null;
+  org_department_id: string | null;
   paid_sum: string | number | null;
 }
 
@@ -81,14 +82,12 @@ export async function getMissingPatentReceipts(from: string, to: string): Promis
             e.full_name,
             p.name  AS position_name,
             od.name AS department_name,
-            m.full_name AS manager_full_name,
+            e.org_department_id,
             COALESCE(pd.paid_sum, 0) AS paid_sum
      FROM worked w
      JOIN employees e ON e.id = w.employee_id
      LEFT JOIN positions p ON p.id = e.position_id
      LEFT JOIN org_departments od ON od.id = e.org_department_id
-     LEFT JOIN employee_direct_reports dr ON dr.subordinate_employee_id = e.id AND dr.is_active = true
-     LEFT JOIN employees m ON m.id = dr.manager_employee_id
      LEFT JOIN paid pd ON pd.employee_id = e.id
      WHERE e.is_archived = false AND e.employment_status = 'active'
        AND e.org_department_id IN (
@@ -103,16 +102,36 @@ export async function getMissingPatentReceipts(from: string, to: string): Promis
     [from, to, requiredSum, SU10_ROOT_ID, PATENT_COUNTRY_PREFIXES],
   );
 
-  return rows.map(r => ({
-    employee_id: Number(r.employee_id),
-    full_name: r.full_name,
-    position_name: r.position_name,
-    department_name: r.department_name,
-    manager_full_name: r.manager_full_name,
-    paid_sum: Number(r.paid_sum) || 0,
-    required_sum: requiredSum,
-    months_count: monthsCount,
-  }));
+  // Руководитель: прямой (employee_direct_reports), иначе начальник участка/отдела
+  // (employee_department_access, full-доступ) — тот же приоритет, что в согласованиях.
+  const mgrMap = await resolveResponsibleEmployeeIdsByEmployee(
+    rows.map(r => ({ employee_id: Number(r.employee_id), org_department_id: r.org_department_id })),
+  );
+  const mgrIds = [...new Set([...mgrMap.values()].flat())];
+  const names = new Map<number, string>();
+  if (mgrIds.length > 0) {
+    const nameRows = await query<{ id: number; full_name: string | null }>(
+      `SELECT id, full_name FROM employees WHERE id = ANY($1::bigint[])`,
+      [mgrIds],
+    );
+    nameRows.forEach(n => names.set(Number(n.id), n.full_name ?? ''));
+  }
+
+  return rows.map(r => {
+    const managers = (mgrMap.get(Number(r.employee_id)) ?? [])
+      .map(id => names.get(id))
+      .filter((n): n is string => Boolean(n));
+    return {
+      employee_id: Number(r.employee_id),
+      full_name: r.full_name,
+      position_name: r.position_name,
+      department_name: r.department_name,
+      manager_full_name: managers.length > 0 ? managers.join(', ') : null,
+      paid_sum: Number(r.paid_sum) || 0,
+      required_sum: requiredSum,
+      months_count: monthsCount,
+    };
+  });
 }
 
 export interface ISu10Department {
