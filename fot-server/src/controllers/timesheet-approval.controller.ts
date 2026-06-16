@@ -23,6 +23,7 @@ import {
 import { timesheetResponsiblesService } from '../services/timesheet-responsibles.service.js';
 import {
   listEmployeeMembershipsForDepartmentPeriod,
+  listScopedMembersByDepartment,
   buildMembershipWindowMap,
   isWithinMembershipWindow,
   type IMembershipWindow,
@@ -2311,6 +2312,15 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
     const isCountable = (id: string): boolean => !nonCountableSet.has(id);
     const deptRows = fullScopeDeptRows.filter(d => inEffective(d.id) && isCountable(d.id));
 
+    // Контейнерные узлы без прямых сотрудников (напр. «Департамент строительства») —
+    // не единица подачи табеля, скрываем с дашборда. Членство = та же популяция, что в
+    // табеле: каждый сотрудник резолвится в СВОЙ отдел, контейнеры в values() не попадают.
+    const membersByDept = await listScopedMembersByDepartment(
+      deptRows.map(d => d.id), range.startDate, range.endDate,
+    );
+    const populatedSet = new Set<string>(membersByDept.values());
+    const populatedDeptRows = deptRows.filter(d => populatedSet.has(d.id));
+
     // 2. Пул личных менеджеров (есть активные direct_reports). Нужен заранее — для фильтрации
     //    личных подач по эффективному скоупу (по org_department_id руководителя).
     type PersonalManagerRow = {
@@ -2382,7 +2392,7 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
     }
 
     // 4. Отделы без подачи (в эффективном скоупе) + ответственные.
-    const notSubmittedDeptIds = deptRows
+    const notSubmittedDeptIds = populatedDeptRows
       .map(d => d.id)
       .filter(id => !departmentsSubmitted.has(id));
 
@@ -2575,7 +2585,7 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
       [managerRoleCodes],
     );
     const assignedSet = new Set(assignedRows.map(r => r.department_id));
-    const unassigned_departments = deptRows
+    const unassigned_departments = populatedDeptRows
       .filter(d => !assignedSet.has(d.id))
       .map(d => ({
         department_id: d.id,
@@ -2590,7 +2600,7 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
       if (departmentsReturned.has(id)) return 'returned';
       return 'not_submitted';
     };
-    const department_status_map = deptRows
+    const department_status_map = populatedDeptRows
       .map(d => ({
         department_id: d.id,
         name: d.name ?? d.id,
@@ -2622,10 +2632,10 @@ const getDashboard = async (req: AuthenticatedRequest, res: Response): Promise<v
       }))
       .sort((a, b) => a.parent_path.localeCompare(b.parent_path, 'ru'));
 
-    const departments_total = deptRows.length;
-    const departments_submitted = departmentsSubmitted.size;
-    const departments_approved = departmentsApproved.size;
-    const departments_returned = departmentsReturned.size;
+    const departments_total = populatedDeptRows.length;
+    const departments_submitted = [...departmentsSubmitted].filter(id => populatedSet.has(id)).length;
+    const departments_approved = [...departmentsApproved].filter(id => populatedSet.has(id)).length;
+    const departments_returned = [...departmentsReturned].filter(id => populatedSet.has(id)).length;
     const departments_not_submitted = Math.max(0, departments_total - departments_submitted);
 
     res.json({
