@@ -9,7 +9,7 @@ import {
   type IApprovalReviewItem,
   type IApprovalAttachment,
 } from '../../services/timesheetApprovalService';
-import { FilePreviewModal } from '../../components/documents/FilePreviewModal';
+import { ApprovalAttachmentsModal } from '../../components/timesheet/ApprovalAttachmentsModal';
 import {
   correctionApprovalService,
   type ICorrectionDepartmentGroup,
@@ -623,13 +623,6 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
 
 const sanitizeFilePart = (value: string): string => value.replace(/[\\/:*?"<>|]+/g, '_');
 
-/** 'YYYY-MM-DD' → 'DD.MM' для подписи файла корректировки. */
-const formatDayShort = (iso: string | null | undefined): string => {
-  if (!iso) return '';
-  const parts = iso.split('-');
-  return parts.length === 3 ? `${parts[2]}.${parts[1]}` : iso;
-};
-
 interface IApprovalCardExtrasProps {
   row: IApprovalReviewItem;
   employees: TimesheetEmployee[];
@@ -637,7 +630,7 @@ interface IApprovalCardExtrasProps {
 
 const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) => {
   const toast = useToast();
-  const [previewAtt, setPreviewAtt] = useState<IApprovalAttachment | null>(null);
+  const [attModalOpen, setAttModalOpen] = useState(false);
   const [exporting, setExporting] = useState<'fact' | '1c' | 'employee' | 'employee_1c' | null>(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | ''>('');
 
@@ -770,32 +763,21 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
     <>
       {attachments.length > 0 && (
         <div className="approvals-attachments">
-          <span className="approvals-attachments-title">Вложения:</span>
-          {attachments.map(att => {
-            const meta = att.kind === 'correction'
-              ? [att.employee_name, formatDayShort(att.work_date)].filter(Boolean).join(' · ')
-              : '';
-            return (
-              <button
-                key={att.document_id}
-                type="button"
-                className="approvals-attachment-btn"
-                onClick={() => setPreviewAtt(att)}
-              >
-                <FileText size={14} /> {att.file_name}
-                {meta && <span className="approvals-attachment-meta">{meta}</span>}
-              </button>
-            );
-          })}
+          <button
+            type="button"
+            className="approvals-attachment-btn"
+            onClick={() => setAttModalOpen(true)}
+          >
+            <FileText size={14} /> Вложения ({attachments.length})
+          </button>
         </div>
       )}
-      {previewAtt && (
-        <FilePreviewModal
-          documentId={previewAtt.document_id}
-          fileName={previewAtt.file_name}
-          mimeType={previewAtt.mime_type}
-          urlLoader={(d) => loadAttachmentUrl(previewAtt, d)}
-          onClose={() => setPreviewAtt(null)}
+      {attModalOpen && (
+        <ApprovalAttachmentsModal
+          attachments={attachments}
+          loading={attachmentsQuery.isLoading}
+          urlLoader={loadAttachmentUrl}
+          onClose={() => setAttModalOpen(false)}
         />
       )}
       {!isPersonal && (

@@ -67,6 +67,12 @@ interface ApiResponse<T> {
   message?: string;
 }
 
+export interface IApprovalAttachmentEmployee {
+  employee_id: number;
+  employee_name: string | null;
+  employee_position: string | null;
+}
+
 export interface IApprovalAttachment {
   document_id: number;
   file_name: string;
@@ -75,12 +81,26 @@ export interface IApprovalAttachment {
   r2_key: string;
   uploaded_by: string;
   uploaded_by_name: string | null;
+  /** Должность загрузившего (резолв user_profiles.employee_id → positions). */
+  uploader_position?: string | null;
   created_at: string;
-  /** Тип вложения: служебка о выходных или файл корректировки (заполняет агрегатор). */
-  kind?: 'weekend_memo' | 'correction';
-  /** Для корректировок — ФИО сотрудника и дата дня. */
+  /** Основной тип вложения (по приоритету weekend_memo > correction > leave_request). */
+  kind?: 'weekend_memo' | 'correction' | 'leave_request';
+  /** Все источники документа (один файл может быть и корректировкой, и заявлением). */
+  sources?: Array<'correction' | 'leave_request'>;
+  /** Причина появления: «Корректировка» | «Заявление» | «Корректировка, заявление» | «Служебка (выходные)». */
+  reason_label?: string;
+  /** Субъект (к кому относится файл) — первый сотрудник, для обратной совместимости. */
+  employee_id?: number | null;
   employee_name?: string | null;
+  employee_position?: string | null;
+  /** Все сотрудники документа (при дедупе один файл теоретически относится к нескольким). */
+  employees?: IApprovalAttachmentEmployee[];
+  /** Первая дата (обратная совместимость) + все дни файла. */
   work_date?: string | null;
+  work_dates?: string[];
+  /** Файл загружен подавшим табель (uploaded_by === submitted_by). НЕ «гарантированно руководитель». */
+  is_submitter_file?: boolean;
   /** Подписанные URL из агрегатора (превью без отдельного getAttachmentDownloadUrl). */
   download_url?: string;
   preview_url?: string;

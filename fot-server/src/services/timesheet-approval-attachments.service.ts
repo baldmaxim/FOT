@@ -10,6 +10,12 @@ export const APPROVAL_ATTACHMENT_CATEGORY = 'timesheet_weekend_confirmation';
 const CORRECTION_ATTACHMENT_ENTITY_TYPE = 'attendance_adjustment';
 const CORRECTION_ATTACHMENT_PURPOSE = 'timesheet_correction';
 
+export interface IApprovalAttachmentEmployee {
+  employee_id: number;
+  employee_name: string | null;
+  employee_position: string | null;
+}
+
 export interface IApprovalAttachment {
   document_id: number;
   file_name: string;
@@ -18,12 +24,26 @@ export interface IApprovalAttachment {
   r2_key: string;
   uploaded_by: string;
   uploaded_by_name: string | null;
+  /** Должность загрузившего (резолв user_profiles.employee_id → positions). */
+  uploader_position?: string | null;
   created_at: string;
-  /** Тип вложения: служебка о выходных или файл корректировки. Заполняется агрегатором. */
-  kind?: 'weekend_memo' | 'correction';
-  /** Для корректировок — ФИО сотрудника и дата дня (контекст в едином списке). */
+  /** Основной тип вложения (по приоритету weekend_memo > correction > leave_request). */
+  kind?: 'weekend_memo' | 'correction' | 'leave_request';
+  /** Все источники документа (один файл может быть и корректировкой, и заявлением). */
+  sources?: Array<'correction' | 'leave_request'>;
+  /** Человекочитаемая причина появления: «Корректировка» | «Заявление» | «Корректировка, заявление» | «Служебка (выходные)». */
+  reason_label?: string;
+  /** Субъект (к кому относится файл) — первый сотрудник, для обратной совместимости. */
+  employee_id?: number | null;
   employee_name?: string | null;
+  employee_position?: string | null;
+  /** Все сотрудники документа (при дедупе один файл теоретически относится к нескольким). */
+  employees?: IApprovalAttachmentEmployee[];
+  /** Первая дата (обратная совместимость) + все дни файла. */
   work_date?: string | null;
+  work_dates?: string[];
+  /** Файл загружен тем, кто подал табель (uploaded_by === submitted_by). НЕ «гарантированно руководитель». */
+  is_submitter_file?: boolean;
   /** Подписанные URL (агрегатор отдаёт их сразу — у корректировок свой авторизационный путь). */
   download_url?: string;
   preview_url?: string;
@@ -124,10 +144,15 @@ export async function listApprovalAttachments(approvalId: number): Promise<IAppr
 }
 
 /**
- * Единый список вложений периода подачи: служебка о выходных (weekend-memo, привязка к
- * approval) + файлы корректировок всех сотрудников снимка за период (привязка к
- * attendance_adjustment). Отдаёт подписанные URL прямо в ответе — у файлов корректировок
- * свой авторизационный путь, отдельный getAttachmentDownloadUrl на них не работает.
+ * Единый список вложений периода подачи для ВСЕХ ролей (одинаковый набор):
+ *   - служебка о выходных (weekend-memo, привязка к approval);
+ *   - файлы корректировок (attendance_adjustment / timesheet_correction);
+ *   - файлы заявлений (leave_request: по source_id корректировки + time_correction-заявки дня;
+ *     document_links entity_type='leave_request' + legacy documents.leave_request_id).
+ * Всё batch-запросами (число запросов фиксировано, не зависит от кол-ва дней/сотрудников).
+ * Дедуп по document_id с сохранением всех дат/сотрудников/источников. Отдаёт подписанные
+ * URL прямо в ответе — у файлов корректировок/заявлений свой авторизационный путь,
+ * отдельный getAttachmentDownloadUrl на них не работает.
  */
 export async function listApprovalPeriodAttachments(approvalId: number): Promise<IApprovalAttachment[]> {
   const r2Enabled = await r2Service.isEnabledAsync();
@@ -140,100 +165,279 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
     };
   };
 
-  // 1. Служебка о выходных (как раньше).
-  const weekendDocs = await listApprovalAttachments(approvalId);
-  const weekendItems = await Promise.all(
-    weekendDocs.map(doc => signUrls({ ...doc, kind: 'weekend_memo', employee_name: null, work_date: null })),
-  );
-
-  // 2. Период подачи + состав сотрудников из снимка.
-  const approval = await queryOne<{ start_date: string; end_date: string }>(
-    `SELECT start_date, end_date FROM timesheet_approvals WHERE id = $1 LIMIT 1`,
+  const approval = await queryOne<{ start_date: string; end_date: string; submitted_by: string | null }>(
+    `SELECT start_date, end_date, submitted_by FROM timesheet_approvals WHERE id = $1 LIMIT 1`,
     [approvalId],
   );
-  if (!approval) return weekendItems;
+  const submittedBy = approval?.submitted_by ? String(approval.submitted_by) : null;
+  const startDate = approval?.start_date;
+  const endDate = approval?.end_date;
 
-  const snapshot = await listApprovalEmployees(approvalId);
+  // --- 1. Служебки о выходных (привязка к approval; без подписи URL — подпишем в конце). ---
+  const weekendDocs = await listApprovalAttachments(approvalId);
+
+  // --- 2. Снимок состава + корректировки периода. ---
+  const snapshot = approval ? await listApprovalEmployees(approvalId) : [];
   const employeeIds = snapshot.map(s => Number(s.employee_id)).filter(id => Number.isInteger(id) && id > 0);
-  if (employeeIds.length === 0) return weekendItems;
   const nameById = new Map<number, string | null>(snapshot.map(s => [Number(s.employee_id), s.full_name ?? null] as const));
 
-  // 3. Корректировки периода (id → сотрудник, дата).
-  const adjustments = await query<{ id: number | string; employee_id: number | string; work_date: string }>(
-    `SELECT id, employee_id, work_date
-       FROM attendance_adjustments
-      WHERE employee_id = ANY($1::int[])
-        AND work_date >= $2 AND work_date <= $3`,
-    [employeeIds, approval.start_date, approval.end_date],
-  );
-  if (adjustments.length === 0) return weekendItems;
-  const adjMeta = new Map<string, { employeeId: number; workDate: string }>();
-  for (const a of adjustments) {
-    adjMeta.set(String(a.id), { employeeId: Number(a.employee_id), workDate: String(a.work_date) });
-  }
-
-  // 4. Ссылки на файлы корректировок этих adjustment.
-  const links = await query<{ entity_id: string; document_id: number | string }>(
-    `SELECT entity_id, document_id FROM document_links
-      WHERE entity_type = $1 AND purpose = $2 AND entity_id = ANY($3::text[])`,
-    [CORRECTION_ATTACHMENT_ENTITY_TYPE, CORRECTION_ATTACHMENT_PURPOSE, [...adjMeta.keys()]],
-  );
-  if (links.length === 0) return weekendItems;
-  const docIdToAdj = new Map<number, string>();
-  for (const l of links) docIdToAdj.set(Number(l.document_id), String(l.entity_id));
-  const docIds = [...new Set(links.map(l => Number(l.document_id)))];
-
-  const docs = await query<{
-    id: number | string;
-    file_name: string;
-    file_size: number | string;
-    mime_type: string;
-    r2_key: string;
-    uploaded_by: string | null;
-    created_at: string;
-  }>(
-    `SELECT id, file_name, file_size, mime_type, r2_key, uploaded_by, created_at
-       FROM documents WHERE id = ANY($1::int[])`,
-    [docIds],
-  );
-
-  const uploaderIds = [...new Set(docs.map(d => String(d.uploaded_by)).filter(Boolean))];
-  const uploaderNames = new Map<string, string | null>();
-  if (uploaderIds.length > 0) {
-    const profiles = await query<{ id: string; full_name: string | null }>(
-      `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
-      [uploaderIds],
+  type AdjRow = { id: number; employee_id: number; work_date: string; source_type: string | null; source_id: string | null };
+  let adjustments: AdjRow[] = [];
+  if (approval && employeeIds.length > 0) {
+    const rows = await query<{ id: number | string; employee_id: number | string; work_date: string; source_type: string | null; source_id: string | null }>(
+      `SELECT id, employee_id, work_date, source_type, source_id
+         FROM attendance_adjustments
+        WHERE employee_id = ANY($1::int[]) AND work_date >= $2 AND work_date <= $3`,
+      [employeeIds, startDate, endDate],
     );
-    for (const p of profiles) uploaderNames.set(String(p.id), p.full_name ?? null);
+    adjustments = rows.map(r => ({
+      id: Number(r.id),
+      employee_id: Number(r.employee_id),
+      work_date: String(r.work_date),
+      source_type: r.source_type ? String(r.source_type) : null,
+      source_id: r.source_id ? String(r.source_id) : null,
+    }));
   }
 
-  const correctionItems = await Promise.all(
-    docs.map(doc => {
-      const adjId = docIdToAdj.get(Number(doc.id));
-      const meta = adjId ? adjMeta.get(adjId) : undefined;
-      return signUrls({
-        document_id: Number(doc.id),
-        file_name: String(doc.file_name),
-        file_size: Number(doc.file_size),
-        mime_type: String(doc.mime_type),
-        r2_key: String(doc.r2_key),
-        uploaded_by: doc.uploaded_by ? String(doc.uploaded_by) : '',
-        uploaded_by_name: doc.uploaded_by ? uploaderNames.get(String(doc.uploaded_by)) ?? null : null,
-        created_at: String(doc.created_at),
-        kind: 'correction',
-        employee_name: meta ? nameById.get(meta.employeeId) ?? null : null,
-        work_date: meta?.workDate ?? null,
-      });
-    }),
-  );
+  // docId -> агрегат метаданных корректировок/заявлений (дедуп с сохранением источников/дат/сотрудников).
+  const docAgg = new Map<number, { sources: Set<'correction' | 'leave_request'>; dates: Set<string>; employeeIds: Set<number> }>();
+  const ensureAgg = (docId: number) => {
+    let agg = docAgg.get(docId);
+    if (!agg) { agg = { sources: new Set(), dates: new Set(), employeeIds: new Set() }; docAgg.set(docId, agg); }
+    return agg;
+  };
 
-  correctionItems.sort((a, b) => {
-    const d = String(a.work_date ?? '').localeCompare(String(b.work_date ?? ''));
-    if (d !== 0) return d;
-    return String(a.employee_name ?? '').localeCompare(String(b.employee_name ?? ''));
+  if (adjustments.length > 0) {
+    const adjById = new Map<number, { employee_id: number; work_date: string }>();
+    for (const a of adjustments) adjById.set(a.id, { employee_id: a.employee_id, work_date: a.work_date });
+
+    // --- 3. Собственные файлы корректировок (own). ---
+    const ownLinks = await query<{ entity_id: string; document_id: number | string }>(
+      `SELECT entity_id, document_id FROM document_links
+        WHERE entity_type = $1 AND purpose = $2 AND entity_id = ANY($3::text[])`,
+      [CORRECTION_ATTACHMENT_ENTITY_TYPE, CORRECTION_ATTACHMENT_PURPOSE, adjustments.map(a => String(a.id))],
+    );
+    for (const link of ownLinks) {
+      const adj = adjById.get(Number(link.entity_id));
+      if (!adj) continue;
+      const agg = ensureAgg(Number(link.document_id));
+      agg.sources.add('correction');
+      agg.dates.add(adj.work_date);
+      agg.employeeIds.add(adj.employee_id);
+    }
+
+    // --- 4. Кандидаты-заявки: source_id корректировки + time_correction-заявки дня. ---
+    // leaveId -> контексты (employee_id, work_date), в которых заявка фигурирует.
+    const leaveContexts = new Map<number, Array<{ employee_id: number; work_date: string }>>();
+    const addLeaveContext = (leaveId: number, ctx: { employee_id: number; work_date: string }) => {
+      const arr = leaveContexts.get(leaveId) ?? [];
+      arr.push(ctx);
+      leaveContexts.set(leaveId, arr);
+    };
+    for (const a of adjustments) {
+      if (a.source_type === 'leave_request' && a.source_id) {
+        const id = Number(a.source_id.split(':', 1)[0]);
+        if (Number.isFinite(id) && id > 0) addLeaveContext(id, { employee_id: a.employee_id, work_date: a.work_date });
+      }
+    }
+    // time_correction-заявки периода (служебка о работе в выходной): (employee_id|дата) -> leaveId(s).
+    const tcRows = await query<{ id: number | string; employee_id: number | string; d: string }>(
+      `SELECT id, employee_id, COALESCE(correction_date, start_date)::text AS d
+         FROM leave_requests
+        WHERE employee_id = ANY($1::int[])
+          AND request_type = 'time_correction'
+          AND status <> 'rejected'
+          AND COALESCE(correction_date, start_date) >= $2::date
+          AND COALESCE(correction_date, start_date) <= $3::date`,
+      [employeeIds, startDate, endDate],
+    );
+    const tcByKey = new Map<string, number[]>();
+    for (const r of tcRows) {
+      const key = `${Number(r.employee_id)}|${String(r.d)}`;
+      const arr = tcByKey.get(key) ?? [];
+      arr.push(Number(r.id));
+      tcByKey.set(key, arr);
+    }
+    for (const a of adjustments) {
+      const ids = tcByKey.get(`${a.employee_id}|${a.work_date}`);
+      if (ids) for (const id of ids) addLeaveContext(id, { employee_id: a.employee_id, work_date: a.work_date });
+    }
+
+    // --- 5. doc-id заявок (document_links entity_type='leave_request' + legacy documents.leave_request_id). ---
+    const leaveIds = [...leaveContexts.keys()];
+    if (leaveIds.length > 0) {
+      const leaveDocIds = new Map<number, Set<number>>();
+      const addLeaveDoc = (leaveId: number, docId: number) => {
+        const set = leaveDocIds.get(leaveId) ?? new Set<number>();
+        set.add(docId);
+        leaveDocIds.set(leaveId, set);
+      };
+      const lrLinks = await query<{ entity_id: string; document_id: number | string }>(
+        `SELECT entity_id, document_id FROM document_links
+          WHERE entity_type = 'leave_request' AND entity_id = ANY($1::text[])`,
+        [leaveIds.map(String)],
+      );
+      for (const l of lrLinks) addLeaveDoc(Number(l.entity_id), Number(l.document_id));
+      const legacy = await query<{ id: number | string; leave_request_id: number | string }>(
+        `SELECT id, leave_request_id FROM documents WHERE leave_request_id = ANY($1::int[])`,
+        [leaveIds],
+      );
+      for (const l of legacy) addLeaveDoc(Number(l.leave_request_id), Number(l.id));
+
+      for (const [leaveId, set] of leaveDocIds) {
+        const ctxs = leaveContexts.get(leaveId) ?? [];
+        for (const docId of set) {
+          const agg = ensureAgg(docId);
+          agg.sources.add('leave_request');
+          for (const ctx of ctxs) { agg.dates.add(ctx.work_date); agg.employeeIds.add(ctx.employee_id); }
+        }
+      }
+    }
+  }
+
+  // Нет ни служебок, ни файлов корректировок/заявлений — пустой ответ.
+  if (weekendDocs.length === 0 && docAgg.size === 0) return [];
+
+  // --- 6. Документы корректировок/заявлений. ---
+  const corrDocIds = [...docAgg.keys()];
+  type DocRow = { id: number; file_name: string; file_size: number; mime_type: string; r2_key: string; uploaded_by: string | null; created_at: string };
+  const docsById = new Map<number, DocRow>();
+  if (corrDocIds.length > 0) {
+    const docs = await query<{ id: number | string; file_name: string; file_size: number | string; mime_type: string; r2_key: string; uploaded_by: string | null; created_at: string }>(
+      `SELECT id, file_name, file_size, mime_type, r2_key, uploaded_by, created_at
+         FROM documents WHERE id = ANY($1::int[])`,
+      [corrDocIds],
+    );
+    for (const d of docs) {
+      docsById.set(Number(d.id), {
+        id: Number(d.id), file_name: String(d.file_name), file_size: Number(d.file_size),
+        mime_type: String(d.mime_type), r2_key: String(d.r2_key),
+        uploaded_by: d.uploaded_by ? String(d.uploaded_by) : null, created_at: String(d.created_at),
+      });
+    }
+  }
+
+  // --- 7+8. Профили загрузивших (имя + employee_id) и должности (субъекты ∪ загрузившие). ---
+  const subjectEmployeeIds = new Set<number>();
+  for (const agg of docAgg.values()) for (const id of agg.employeeIds) subjectEmployeeIds.add(id);
+
+  const uploaderIds = new Set<string>();
+  for (const w of weekendDocs) if (w.uploaded_by) uploaderIds.add(String(w.uploaded_by));
+  for (const d of docsById.values()) if (d.uploaded_by) uploaderIds.add(d.uploaded_by);
+
+  const uploaderName = new Map<string, string | null>();
+  const uploaderEmpId = new Map<string, number | null>();
+  if (uploaderIds.size > 0) {
+    const profiles = await query<{ id: string; full_name: string | null; employee_id: number | string | null }>(
+      `SELECT id, full_name, employee_id FROM user_profiles WHERE id = ANY($1::uuid[])`,
+      [[...uploaderIds]],
+    );
+    for (const p of profiles) {
+      uploaderName.set(String(p.id), p.full_name ?? null);
+      uploaderEmpId.set(String(p.id), p.employee_id != null ? Number(p.employee_id) : null);
+    }
+  }
+
+  const positionEmpIds = new Set<number>(subjectEmployeeIds);
+  for (const empId of uploaderEmpId.values()) if (empId != null) positionEmpIds.add(empId);
+  const positionByEmp = new Map<number, string | null>();
+  if (positionEmpIds.size > 0) {
+    const empRows = await query<{ id: number | string; position_id: number | string | null }>(
+      `SELECT id, position_id FROM employees WHERE id = ANY($1::int[])`,
+      [[...positionEmpIds]],
+    );
+    const empToPos = new Map<number, string | null>();
+    const posIds = new Set<string>();
+    for (const e of empRows) {
+      const pid = e.position_id != null ? String(e.position_id) : null;
+      empToPos.set(Number(e.id), pid);
+      if (pid) posIds.add(pid);
+    }
+    const posName = new Map<string, string | null>();
+    if (posIds.size > 0) {
+      const posRows = await query<{ id: string | number; name: string | null }>(
+        `SELECT id, name FROM positions WHERE id::text = ANY($1::text[])`,
+        [[...posIds]],
+      );
+      for (const p of posRows) posName.set(String(p.id), p.name ?? null);
+    }
+    for (const [empId, pid] of empToPos) positionByEmp.set(empId, pid ? posName.get(pid) ?? null : null);
+  }
+  const uploaderPosition = (uploaderId: string | null): string | null => {
+    if (!uploaderId) return null;
+    const empId = uploaderEmpId.get(uploaderId);
+    return empId != null ? positionByEmp.get(empId) ?? null : null;
+  };
+
+  const composeReason = (sources: Set<'correction' | 'leave_request'>): string => {
+    const hasC = sources.has('correction');
+    const hasL = sources.has('leave_request');
+    if (hasC && hasL) return 'Корректировка, заявление';
+    if (hasL) return 'Заявление';
+    return 'Корректировка';
+  };
+
+  // --- Сборка. ---
+  const weekendItems: IApprovalAttachment[] = weekendDocs.map(doc => ({
+    ...doc,
+    uploader_position: uploaderPosition(doc.uploaded_by ? String(doc.uploaded_by) : null),
+    kind: 'weekend_memo',
+    sources: [],
+    reason_label: 'Служебка (выходные)',
+    employee_id: null,
+    employee_name: null,
+    employee_position: null,
+    employees: [],
+    work_date: null,
+    work_dates: [],
+    is_submitter_file: Boolean(submittedBy && doc.uploaded_by && String(doc.uploaded_by) === submittedBy),
+  }));
+
+  const corrItems: IApprovalAttachment[] = [];
+  for (const [docId, agg] of docAgg) {
+    const doc = docsById.get(docId);
+    if (!doc) continue;
+    const dates = [...agg.dates].sort();
+    const employees: IApprovalAttachmentEmployee[] = [...agg.employeeIds]
+      .map(id => ({ employee_id: id, employee_name: nameById.get(id) ?? null, employee_position: positionByEmp.get(id) ?? null }))
+      .sort((a, b) => String(a.employee_name ?? '').localeCompare(String(b.employee_name ?? '')));
+    const first = employees[0] ?? null;
+    corrItems.push({
+      document_id: doc.id,
+      file_name: doc.file_name,
+      file_size: doc.file_size,
+      mime_type: doc.mime_type,
+      r2_key: doc.r2_key,
+      uploaded_by: doc.uploaded_by ?? '',
+      uploaded_by_name: doc.uploaded_by ? uploaderName.get(doc.uploaded_by) ?? null : null,
+      uploader_position: uploaderPosition(doc.uploaded_by),
+      created_at: doc.created_at,
+      kind: agg.sources.has('correction') ? 'correction' : 'leave_request',
+      sources: [...agg.sources],
+      reason_label: composeReason(agg.sources),
+      employee_id: first?.employee_id ?? null,
+      employee_name: first?.employee_name ?? null,
+      employee_position: first?.employee_position ?? null,
+      employees,
+      work_date: dates[0] ?? null,
+      work_dates: dates,
+      is_submitter_file: Boolean(submittedBy && doc.uploaded_by && doc.uploaded_by === submittedBy),
+    });
+  }
+
+  // Сортировка: файлы подавшего табель — первыми; внутри — служебки, затем по ФИО и дате.
+  const all = [...weekendItems, ...corrItems];
+  all.sort((a, b) => {
+    if (a.is_submitter_file !== b.is_submitter_file) return a.is_submitter_file ? -1 : 1;
+    const aMemo = a.kind === 'weekend_memo' ? 0 : 1;
+    const bMemo = b.kind === 'weekend_memo' ? 0 : 1;
+    if (aMemo !== bMemo) return aMemo - bMemo;
+    const n = String(a.employee_name ?? '').localeCompare(String(b.employee_name ?? ''));
+    if (n !== 0) return n;
+    return String(a.work_date ?? '').localeCompare(String(b.work_date ?? ''));
   });
 
-  return [...weekendItems, ...correctionItems];
+  return Promise.all(all.map(signUrls));
 }
 
 export async function countApprovalAttachments(approvalId: number): Promise<number> {

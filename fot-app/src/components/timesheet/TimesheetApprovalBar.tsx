@@ -2,7 +2,7 @@ import { type FC, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check, X, Send, RotateCcw, AlertCircle,
-  Upload, FileText, ChevronDown, MessageSquare, HelpCircle, Eye, Trash2,
+  Upload, FileText, ChevronDown, MessageSquare, HelpCircle,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -16,8 +16,7 @@ import {
 import { ApiError } from '../../api/client';
 import { useTimesheetApprovalStatus } from '../../hooks/useTimesheetApprovalData';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { FilePreviewModal } from '../documents/FilePreviewModal';
-import { displayFileName } from '../../utils/fileNameDisplay';
+import { AttachmentList } from './AttachmentList';
 import {
   formatTimesheetRangeLabel,
   getAllowedSubmissionHalf,
@@ -57,19 +56,6 @@ interface IMissingDay {
 const formatDayLabel = (iso: string): string => {
   const [, m, d] = iso.split('-');
   return `${Number(d)}.${m}`;
-};
-
-const formatFileSize = (bytes: number): string => {
-  if (bytes < 1024) return `${bytes} Б`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
-};
-
-/** 'YYYY-MM-DD' → 'DD.MM' для подписи файла корректировки. */
-const formatMemoDay = (iso: string | null | undefined): string => {
-  if (!iso) return '';
-  const parts = iso.split('-');
-  return parts.length === 3 ? `${parts[2]}.${parts[1]}` : iso;
 };
 
 interface IActiveCardProps {
@@ -389,7 +375,15 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
   fileInputRef,
 }) => {
   const popoverRef = useRef<HTMLDivElement | null>(null);
-  const [preview, setPreview] = useState<IApprovalAttachment | null>(null);
+
+  const loadUrl = async (att: IApprovalAttachment, d: 'inline' | 'attachment'): Promise<string> => {
+    // Агрегатор отдаёт подписанные URL сразу; getAttachmentDownloadUrl на файлах
+    // корректировок/заявлений вернёт 404, поэтому fallback — только при отсутствии прямого URL.
+    const direct = d === 'inline' ? att.preview_url : att.download_url;
+    if (direct) return direct;
+    const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(att.document_id, d);
+    return download_url;
+  };
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent): void => {
@@ -435,56 +429,16 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
       )}
 
       <div className="ts-corr-attachments ts-corr-attachments--popover">
-        {attachmentsLoading && <div className="ts-corr-attachments__empty">Загрузка…</div>}
-        {!attachmentsLoading && attachments.length === 0 && (
-          <div className="ts-corr-attachments__empty">Файлов нет</div>
-        )}
-        {attachments.length > 0 && (
-          <ul className="ts-corr-attachments__list">
-            {attachments.map(att => {
-              const corrMeta = att.kind === 'correction'
-                ? [att.employee_name, formatMemoDay(att.work_date)].filter(Boolean).join(' · ')
-                : '';
-              // Удаление — только для своей служебки в редактируемом окне. Файлы корректировок
-              // управляются в списке корректировок, здесь они read-only.
-              const canDelete = !readOnly && att.kind !== 'correction';
-              return (
-                <li key={att.document_id} className="ts-corr-attachments__item">
-                  <FileText size={14} className="ts-corr-attachments__icon" />
-                  <span
-                    className="ts-corr-attachments__name"
-                    title={`${att.file_name} · ${formatFileSize(att.file_size)}${corrMeta ? ` · ${corrMeta}` : ''}`}
-                  >
-                    {displayFileName(att.file_name)}
-                    {corrMeta && <span className="ts-corr-attachments__tag">{corrMeta}</span>}
-                  </span>
-                  <span className="ts-corr-attachments__meta">{formatFileSize(att.file_size)}</span>
-                  <button
-                    type="button"
-                    className="ts-corr-attachments__btn"
-                    onClick={() => setPreview(att)}
-                    title="Открыть файл"
-                    aria-label="Открыть файл"
-                  >
-                    <Eye size={14} />
-                  </button>
-                  {canDelete && (
-                    <button
-                      type="button"
-                      className="ts-corr-attachments__btn ts-corr-attachments__btn--danger"
-                      onClick={() => onDeleteAttachment(att.document_id)}
-                      title="Удалить файл"
-                      aria-label="Удалить файл"
-                      disabled={deletingId === att.document_id}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <AttachmentList
+          attachments={attachments}
+          loading={attachmentsLoading}
+          urlLoader={loadUrl}
+          onDelete={readOnly ? undefined : onDeleteAttachment}
+          // Удаление — только своя служебка в редактируемом окне. Файлы корректировок и
+          // заявлений управляются в своих местах, здесь read-only.
+          canDelete={(att) => !readOnly && att.kind === 'weekend_memo'}
+          deletingId={deletingId}
+        />
       </div>
 
       {!readOnly && (
@@ -507,22 +461,6 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
         </div>
       )}
 
-      {preview && (
-        <FilePreviewModal
-          documentId={preview.document_id}
-          fileName={preview.file_name}
-          mimeType={preview.mime_type}
-          urlLoader={async (d) => {
-            // Агрегатор отдаёт подписанные URL сразу; getAttachmentDownloadUrl на файлах
-            // корректировок вернёт 404, поэтому fallback — только при отсутствии прямого URL.
-            const direct = d === 'inline' ? preview.preview_url : preview.download_url;
-            if (direct) return direct;
-            const { download_url } = await timesheetApprovalService.getAttachmentDownloadUrl(preview.document_id, d);
-            return download_url;
-          }}
-          onClose={() => setPreview(null)}
-        />
-      )}
     </div>
   );
 };
