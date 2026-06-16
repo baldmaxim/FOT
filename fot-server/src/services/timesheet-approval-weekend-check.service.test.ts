@@ -18,7 +18,8 @@ vi.mock('./schedule.service.js', () => ({
   resolveSchedulesForPeriod: vi.fn(),
   isWorkingDay: vi.fn(),
 }));
-vi.mock('./timesheet-department-assignments.service.js', () => ({
+vi.mock('./timesheet-department-assignments.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('./timesheet-department-assignments.service.js')>()),
   listEmployeeMembershipsForDepartmentPeriod: vi.fn(),
 }));
 vi.mock('./timesheet-approval-attachments.service.js', () => ({

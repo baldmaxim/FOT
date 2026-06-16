@@ -31,7 +31,8 @@ vi.mock('./schedule.service.js', () => ({
 const { mockListMemberships } = vi.hoisted(() => ({
   mockListMemberships: vi.fn(),
 }));
-vi.mock('./timesheet-department-assignments.service.js', () => ({
+vi.mock('./timesheet-department-assignments.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('./timesheet-department-assignments.service.js')>()),
   listEmployeeMembershipsForDepartmentPeriod: mockListMemberships,
 }));
 

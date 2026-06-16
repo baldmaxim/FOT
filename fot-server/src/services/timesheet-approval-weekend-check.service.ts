@@ -1,6 +1,11 @@
 import { query } from '../config/postgres.js';
 import { loadCalendarMonth, resolveSchedulesForPeriod, isWorkingDay } from './schedule.service.js';
-import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-department-assignments.service.js';
+import {
+  listEmployeeMembershipsForDepartmentPeriod,
+  buildMembershipWindowMap,
+  isWithinMembershipWindow,
+  type IMembershipWindow,
+} from './timesheet-department-assignments.service.js';
 import { countApprovalAttachmentsForApprovals } from './timesheet-approval-attachments.service.js';
 import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
 import { countCorrectionAttachments, listDaysWithTimeCorrectionMemo } from './correction-attachments.service.js';
@@ -106,19 +111,14 @@ export async function checkWeekendWorkRequirement(params: {
   // Окно членства в отделе по сотруднику: уволенный/переведённый числится в отделе
   // только с joined_date (вкл.) до transferred_out_date (искл.). Его «работа в выходной»
   // ПОСЛЕ выхода (СКУД уже на другом объекте) не должна требовать служебку в этом отделе.
-  const membershipWindow = new Map<number, { joined: string | null; transferredOut: string | null }>();
+  const membershipWindow = new Map<number, IMembershipWindow>();
   let employeeIds: number[];
   if (params.employeeIds) {
     employeeIds = [...new Set(params.employeeIds)].filter((id): id is number => Number.isInteger(id) && id > 0);
   } else if (departmentId) {
     const memberships = await listEmployeeMembershipsForDepartmentPeriod(departmentId, startDate, endDate);
     employeeIds = memberships.map(m => m.employee_id);
-    for (const m of memberships) {
-      membershipWindow.set(m.employee_id, {
-        joined: m.joined_date ?? null,
-        transferredOut: m.transferred_out_date ?? null,
-      });
-    }
+    for (const [id, w] of buildMembershipWindowMap(memberships)) membershipWindow.set(id, w);
   } else {
     employeeIds = [];
   }
@@ -127,13 +127,8 @@ export async function checkWeekendWorkRequirement(params: {
   }
 
   // Путь по employeeIds (подача «по людям») окна не имеет — там фильтр не применяем.
-  const isWithinMembership = (empId: number, iso: string): boolean => {
-    const window = membershipWindow.get(empId);
-    if (!window) return true;
-    if (window.transferredOut && iso >= window.transferredOut) return false;
-    if (window.joined && iso < window.joined) return false;
-    return true;
-  };
+  const isWithinMembership = (empId: number, iso: string): boolean =>
+    isWithinMembershipWindow(membershipWindow.get(empId), iso, 'always');
 
   const offByEmployee = await getOffDatesByEmployee(employeeIds, startDate, endDate);
   const allOffDates = new Set<string>();

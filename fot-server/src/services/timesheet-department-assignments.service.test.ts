@@ -23,6 +23,8 @@ import {
   isEmployeeAssignedToDepartmentOnDate,
   listScopedMembersByDepartment,
   resolveTimesheetPeriodRange,
+  buildMembershipWindowMap,
+  isWithinMembershipWindow,
 } from './timesheet-department-assignments.service.js';
 
 describe('timesheet-department-assignments.service', () => {
@@ -86,6 +88,43 @@ describe('timesheet-department-assignments.service', () => {
         .mockResolvedValueOnce(null); // dismissal events не нашлись (например дата > dismissal_date)
 
       await expect(isEmployeeAssignedToDepartmentOnDate(8730, BRIGADE, '2026-06-01')).resolves.toBe(false);
+    });
+  });
+
+  describe('buildMembershipWindowMap / isWithinMembershipWindow — окно членства', () => {
+    it('строит карту окон из memberships', () => {
+      const map = buildMembershipWindowMap([
+        { employee_id: 2096, transferred_out_date: '2026-06-05', joined_date: null, joined_via_transfer: false },
+        { employee_id: 420, transferred_out_date: null, joined_date: '2026-06-05', joined_via_transfer: true },
+      ]);
+      expect(map.get(2096)).toEqual({ joined: null, transferredOut: '2026-06-05', joinedViaTransfer: false });
+      expect(map.get(420)).toEqual({ joined: '2026-06-05', transferredOut: null, joinedViaTransfer: true });
+    });
+
+    it('нет окна (подача «по людям») → всегда true', () => {
+      expect(isWithinMembershipWindow(undefined, '2026-06-12')).toBe(true);
+    });
+
+    it('верхняя граница: дата >= transferredOut → false (искл.), раньше → true', () => {
+      const w = { joined: null, transferredOut: '2026-06-05', joinedViaTransfer: false };
+      // Кейс Шамхаловой: переведена 05.06, праздничный выход 12.06 — вне окна УОК.
+      expect(isWithinMembershipWindow(w, '2026-06-12', 'viaTransferOnly')).toBe(false);
+      expect(isWithinMembershipWindow(w, '2026-06-05', 'viaTransferOnly')).toBe(false);
+      expect(isWithinMembershipWindow(w, '2026-06-04', 'viaTransferOnly')).toBe(true);
+    });
+
+    it('нижняя граница по режимам', () => {
+      const wReal = { joined: '2026-06-05', transferredOut: null, joinedViaTransfer: true };
+      const wDirty = { joined: '2026-06-05', transferredOut: null, joinedViaTransfer: false };
+      // always — режет всегда
+      expect(isWithinMembershipWindow(wDirty, '2026-06-01', 'always')).toBe(false);
+      // viaTransferOnly — режет только при настоящем переводе
+      expect(isWithinMembershipWindow(wReal, '2026-06-01', 'viaTransferOnly')).toBe(false);
+      expect(isWithinMembershipWindow(wDirty, '2026-06-01', 'viaTransferOnly')).toBe(true);
+      // never — нижнюю границу не применяем
+      expect(isWithinMembershipWindow(wReal, '2026-06-01', 'never')).toBe(true);
+      // в окне (>= joined) — всегда true
+      expect(isWithinMembershipWindow(wReal, '2026-06-05', 'viaTransferOnly')).toBe(true);
     });
   });
 

@@ -1,5 +1,10 @@
 import { query } from '../config/postgres.js';
-import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-department-assignments.service.js';
+import {
+  listEmployeeMembershipsForDepartmentPeriod,
+  buildMembershipWindowMap,
+  isWithinMembershipWindow,
+  type IMembershipWindow,
+} from './timesheet-department-assignments.service.js';
 import { getOffDatesByEmployee } from './timesheet-approval-weekend-check.service.js';
 import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
 import type { ITimesheetDateRange } from './timesheet-range.service.js';
@@ -66,7 +71,7 @@ export async function validateCorrectionAttachments(
   // только с joined_date (вкл.) до transferred_out_date (искл.). Его СКУД-выход в
   // выходной ПОСЛЕ перевода (присутствие уже на другом объекте) не должен требовать
   // корректировку в этом отделе. Зеркалит логику checkWeekendWorkRequirement.
-  const membershipWindow = new Map<number, { joined: string | null; transferredOut: string | null }>();
+  const membershipWindow = new Map<number, IMembershipWindow>();
   let employeeIds: number[];
   if (scope.kind === 'department') {
     const memberships = await listEmployeeMembershipsForDepartmentPeriod(
@@ -75,12 +80,7 @@ export async function validateCorrectionAttachments(
       range.endDate,
     );
     employeeIds = memberships.map(m => m.employee_id);
-    for (const m of memberships) {
-      membershipWindow.set(m.employee_id, {
-        joined: m.joined_date ?? null,
-        transferredOut: m.transferred_out_date ?? null,
-      });
-    }
+    for (const [id, w] of buildMembershipWindowMap(memberships)) membershipWindow.set(id, w);
   } else {
     employeeIds = [...new Set(scope.employeeIds)].filter((id): id is number => Number.isInteger(id) && id > 0);
   }
@@ -89,13 +89,8 @@ export async function validateCorrectionAttachments(
   }
 
   // Путь по employeeIds (подача «по людям») окна не имеет — там фильтр не применяем.
-  const isWithinMembership = (empId: number, iso: string): boolean => {
-    const window = membershipWindow.get(empId);
-    if (!window) return true;
-    if (window.transferredOut && iso >= window.transferredOut) return false;
-    if (window.joined && iso < window.joined) return false;
-    return true;
-  };
+  const isWithinMembership = (empId: number, iso: string): boolean =>
+    isWithinMembershipWindow(membershipWindow.get(empId), iso, 'always');
 
   const adjustments = await query<IAdjustmentDateRow>(
     `SELECT employee_id, work_date

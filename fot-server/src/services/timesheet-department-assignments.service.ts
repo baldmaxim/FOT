@@ -136,6 +136,57 @@ export interface IDepartmentEmployeeMembership {
   joined_via_transfer?: boolean;
 }
 
+/** Окно членства сотрудника в отделе за период: верхняя граница (перевод-выход) и нижняя (перевод-вход). */
+export interface IMembershipWindow {
+  /** Дата входа (вкл.), = effective_from. null = с начала периода. */
+  joined: string | null;
+  /** Дата выхода (искл.), = effective_to + 1. null = ещё в отделе. */
+  transferredOut: string | null;
+  /** Нижняя граница достоверна (вход — следствие настоящего перевода). */
+  joinedViaTransfer: boolean;
+}
+
+/**
+ * Режим применения нижней границы окна (joined):
+ * - `always` — всегда (исторически так делают weekend-check / correction-validation);
+ * - `viaTransferOnly` — только при настоящем переводе (как основной табель-грид), не режет «грязный» effective_from;
+ * - `never` — нижнюю границу не применять (только верхняя, transferredOut).
+ */
+export type LowerBoundMode = 'always' | 'viaTransferOnly' | 'never';
+
+/** Строит карту employee_id → окно членства из результата listEmployeeMembershipsForDepartmentPeriod. */
+export function buildMembershipWindowMap(
+  memberships: IDepartmentEmployeeMembership[],
+): Map<number, IMembershipWindow> {
+  const map = new Map<number, IMembershipWindow>();
+  for (const m of memberships) {
+    map.set(m.employee_id, {
+      joined: m.joined_date ?? null,
+      transferredOut: m.transferred_out_date ?? null,
+      joinedViaTransfer: m.joined_via_transfer ?? false,
+    });
+  }
+  return map;
+}
+
+/**
+ * Дата `iso` входит в окно членства сотрудника в отделе. Нет окна (подача «по людям») → true.
+ * Верхняя граница (transferredOut) применяется всегда; нижняя (joined) — согласно `lowerBound`.
+ */
+export function isWithinMembershipWindow(
+  window: IMembershipWindow | undefined,
+  iso: string,
+  lowerBound: LowerBoundMode = 'always',
+): boolean {
+  if (!window) return true;
+  if (window.transferredOut && iso >= window.transferredOut) return false;
+  if (window.joined && iso < window.joined) {
+    if (lowerBound === 'always') return false;
+    if (lowerBound === 'viaTransferOnly' && window.joinedViaTransfer) return false;
+  }
+  return true;
+}
+
 export async function listEmployeeIdsAssignedToDepartmentPeriod(
   departmentId: string,
   startDate: string,

@@ -21,6 +21,12 @@ import {
   type ITimesheetDateRange,
 } from '../services/timesheet-range.service.js';
 import { timesheetResponsiblesService } from '../services/timesheet-responsibles.service.js';
+import {
+  listEmployeeMembershipsForDepartmentPeriod,
+  buildMembershipWindowMap,
+  isWithinMembershipWindow,
+  type IMembershipWindow,
+} from '../services/timesheet-department-assignments.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { settingsService } from '../services/settings.service.js';
 import { IS_PRODUCTION } from '../config/features.js';
@@ -1331,27 +1337,36 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     if (approval) {
       // Для персональной подачи берём состав из снимка — иначе подцепим чужих сотрудников отдела.
       let employeeIds: number[];
+      let membershipWindow: Map<number, IMembershipWindow> | null = null;
       if (approval.manager_employee_id != null) {
         const snap = await listApprovalEmployees(approval.id);
         employeeIds = snap.map(s => s.employee_id);
       } else if (approval.department_id) {
-        employeeIds = await import('../services/timesheet-department-assignments.service.js').then(m =>
-          m.listEmployeeIdsAssignedToDepartmentPeriod(approval.department_id!, approval.start_date, approval.end_date),
+        const memberships = await listEmployeeMembershipsForDepartmentPeriod(
+          approval.department_id, approval.start_date, approval.end_date,
         );
+        employeeIds = memberships.map(m => m.employee_id);
+        membershipWindow = buildMembershipWindowMap(memberships);
       } else {
         employeeIds = [];
       }
       let count = 0;
       if (employeeIds.length > 0) {
-        const row = await queryOne<{ count: number | string }>(
-          `SELECT COUNT(*)::int AS count FROM attendance_adjustments
+        // Берём pending-корректировки и отбрасываем те, что вне окна членства сотрудника
+        // в этом отделе (чужой выход после перевода не должен блокировать утверждение).
+        const pendingRows = await query<{ employee_id: number; work_date: string }>(
+          `SELECT employee_id, work_date::text AS work_date FROM attendance_adjustments
              WHERE approval_status = 'pending'
                AND employee_id = ANY($1::int[])
                AND work_date >= $2
                AND work_date <= $3`,
           [employeeIds, approval.start_date, approval.end_date],
         );
-        count = row ? Number(row.count) : 0;
+        count = pendingRows.filter((r) =>
+          membershipWindow == null
+            ? true
+            : isWithinMembershipWindow(membershipWindow.get(Number(r.employee_id)), String(r.work_date).slice(0, 10), 'viaTransferOnly'),
+        ).length;
       }
       if (count > 0) {
         res.status(409).json({
@@ -2069,12 +2084,27 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         employeeIds: snapshotIds,
       });
 
-      const employeeIds = isPersonal
-        ? snapshotIds!
-        : row.department_id
-          ? await import('../services/timesheet-department-assignments.service.js')
-              .then((mod) => mod.listEmployeeIdsAssignedToDepartmentPeriod(row.department_id!, row.start_date, row.end_date))
-          : [];
+      // Состав отдела + окно членства по сотруднику. Персональная подача («по людям»)
+      // окна не имеет — там фильтр не применяется (window === null).
+      let employeeIds: number[];
+      let membershipWindow: Map<number, IMembershipWindow> | null = null;
+      if (isPersonal) {
+        employeeIds = snapshotIds!;
+      } else if (row.department_id) {
+        const memberships = await listEmployeeMembershipsForDepartmentPeriod(
+          row.department_id, row.start_date, row.end_date,
+        );
+        employeeIds = memberships.map((m) => m.employee_id);
+        membershipWindow = buildMembershipWindowMap(memberships);
+      } else {
+        employeeIds = [];
+      }
+      // Корректировка учитывается, только если её дата входит в окно членства сотрудника
+      // в ЭТОМ отделе. Иначе чужой выход (после перевода) «прилипает» к табелю по общей дате.
+      const withinWindow = (empId: number, iso: string): boolean =>
+        membershipWindow == null
+          ? true
+          : isWithinMembershipWindow(membershipWindow.get(empId), iso, 'viaTransferOnly');
 
       let anyCorrection = false;
       let correctionExceedsSkud = false;
@@ -2093,36 +2123,40 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
           created_by: string | null;
           approval_status: string | null;
         }>(
-          `SELECT employee_id, work_date, status, hours_override, source_type, created_by, approval_status
+          `SELECT employee_id, work_date::text AS work_date, status, hours_override, source_type, created_by, approval_status
              FROM attendance_adjustments
              WHERE employee_id = ANY($1::int[])
                AND work_date >= $2
                AND work_date <= $3`,
           [employeeIds, row.start_date, row.end_date],
         );
-        anyCorrection = adjustments.some((a) => String(a.source_type) === 'manual');
-        absentDays = adjustments.some((a) => String(a.status) === 'absent');
+        // Отбрасываем корректировки вне окна членства сотрудника в этом отделе.
+        const inWindow = adjustments.filter((a) =>
+          withinWindow(Number(a.employee_id), String(a.work_date).slice(0, 10)));
+
+        anyCorrection = inWindow.some((a) => String(a.source_type) === 'manual');
+        absentDays = inWindow.some((a) => String(a.status) === 'absent');
 
         if (weekend.weekendWorkDates.length > 0) {
           const weekendSet = new Set(weekend.weekendWorkDates);
           pendingWeekendDates = [...new Set(
-            adjustments
-              .filter((a) => String(a.approval_status ?? '') === 'pending' && weekendSet.has(String(a.work_date)))
-              .map((a) => String(a.work_date)),
+            inWindow
+              .filter((a) => String(a.approval_status ?? '') === 'pending' && weekendSet.has(String(a.work_date).slice(0, 10)))
+              .map((a) => String(a.work_date).slice(0, 10)),
           )].sort();
           approvedWeekendDates = [...new Set(
-            adjustments
-              .filter((a) => String(a.approval_status ?? '') === 'approved' && weekendSet.has(String(a.work_date)))
-              .map((a) => String(a.work_date)),
+            inWindow
+              .filter((a) => String(a.approval_status ?? '') === 'approved' && weekendSet.has(String(a.work_date).slice(0, 10)))
+              .map((a) => String(a.work_date).slice(0, 10)),
           )].sort();
         }
 
         if (anyCorrection) {
-          const workAdjustments = adjustments.filter((a) => String(a.source_type) === 'manual' && a.hours_override != null);
+          const workAdjustments = inWindow.filter((a) => String(a.source_type) === 'manual' && a.hours_override != null);
           if (workAdjustments.length > 0) {
-            const dates = [...new Set(workAdjustments.map((a) => String(a.work_date)))];
+            const dates = [...new Set(workAdjustments.map((a) => String(a.work_date).slice(0, 10)))];
             const skudRows = await query<{ employee_id: number; date: string; total_minutes: number | string | null }>(
-              `SELECT employee_id, date, total_minutes
+              `SELECT employee_id, date::text AS date, total_minutes
                  FROM skud_daily_summary
                  WHERE employee_id = ANY($1::int[])
                    AND date = ANY($2::date[])`,
@@ -2130,15 +2164,15 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
             );
             const skudMap = new Map<string, number>();
             for (const s of skudRows) {
-              skudMap.set(`${Number(s.employee_id)}_${String(s.date)}`, Number(s.total_minutes ?? 0));
+              skudMap.set(`${Number(s.employee_id)}_${String(s.date).slice(0, 10)}`, Number(s.total_minutes ?? 0));
             }
             const largeDates = new Set<string>();
             for (const adj of workAdjustments) {
-              const skudMinutes = skudMap.get(`${Number(adj.employee_id)}_${String(adj.work_date)}`) ?? 0;
+              const skudMinutes = skudMap.get(`${Number(adj.employee_id)}_${String(adj.work_date).slice(0, 10)}`) ?? 0;
               const adjHours = Number(adj.hours_override ?? 0);
               if (adjHours * 60 > skudMinutes + 1) {
                 correctionExceedsSkud = true;
-                largeDates.add(String(adj.work_date));
+                largeDates.add(String(adj.work_date).slice(0, 10));
               }
             }
             largeCorrectionDates = [...largeDates].sort();
