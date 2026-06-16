@@ -99,6 +99,18 @@ interface ICorrectionModalProps {
   // Если true — модалка открывается на вкладке «Передвижения», рядом вкладка «Корректировки»
   // с обычным содержимым. Размер модалки при переключении не меняется.
   showTravelTab?: boolean;
+  // Сосуществование «работа в выходной» + «удалёнка» (см. план): companion-карточка,
+  // кнопка «+ Удалёнка» (отдельная remote-строка через create) и дефолт её часов.
+  companionWorkRequest?: {
+    id: number;
+    approval_status: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
+    approved_at: string | null;
+    approved_by_name: string | null;
+    reason: string | null;
+  } | null;
+  canAddRemote?: boolean;
+  remoteDefaultHours?: number;
+  onAddRemote?: (hours: number, notes: string, files?: File[]) => void;
 }
 
 type ModalTab = 'events' | 'correction';
@@ -328,6 +340,22 @@ const CorrectionTab: FC<{
   attachmentsSlot?: ReactNode;
   // Разрешить staged-picker файлов в форме создания (файлы уйдут 4-м аргументом onSave).
   allowAttachmentsOnCreate?: boolean;
+  // Согласованный выход в выходной (leave_request/work), поверх которого лежит ведущая
+  // корректировка «Удалёнка» — рисуем второй read-only карточкой.
+  companionWorkRequest?: {
+    id: number;
+    approval_status: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
+    approved_at: string | null;
+    approved_by_name: string | null;
+    reason: string | null;
+  } | null;
+  // День — согласованная заявка «работа в выходной» без удалёнки: можно ДОБАВИТЬ remote
+  // отдельной строкой (кнопка), не редактируя саму заявку.
+  canAddRemote?: boolean;
+  // Дефолт часов для формы «+ Удалёнка» (полный день по графику).
+  remoteDefaultHours?: number;
+  // Создаёт ОТДЕЛЬНУЮ remote-корректировку (через create, не update заявки).
+  onAddRemote?: (hours: number, notes: string, files?: File[]) => void;
 }> = ({
   onClose,
   onSave,
@@ -343,7 +371,14 @@ const CorrectionTab: FC<{
   initialMode,
   attachmentsSlot,
   allowAttachmentsOnCreate,
+  companionWorkRequest,
+  canAddRemote,
+  remoteDefaultHours,
+  onAddRemote,
 }) => {
+  const [addingRemote, setAddingRemote] = useState(false);
+  const [remoteHours, setRemoteHours] = useState<number>(remoteDefaultHours || 8);
+  const [remoteNotes, setRemoteNotes] = useState('');
   const hasExistingCorrection = Boolean(correctionInfo?.is_correction);
   const [mode, setMode] = useState<'view' | 'edit'>(
     initialMode ?? (hasExistingCorrection ? 'view' : 'edit'),
@@ -404,6 +439,13 @@ const CorrectionTab: FC<{
       authorLine || null,
     ].filter(Boolean).join('\n');
     const trimmedInitialNotes = initialNotes?.trim();
+    // «Только заявка work, удалёнки ещё нет»: карандаш прячем (не даём конвертировать
+    // заявку через update), основной путь добавления часов — кнопка «+ Удалёнка».
+    const isWorkOnlyAddRemote = Boolean(canAddRemote && onAddRemote && initialStatus === 'work');
+    const showEditPencil = !isWorkOnlyAddRemote;
+    const companionApprovedBy = companionWorkRequest?.approved_by_name
+      ? ` (${companionWorkRequest.approved_by_name})`
+      : '';
     return (
       <>
         <div className="ts-modal-body">
@@ -413,15 +455,17 @@ const CorrectionTab: FC<{
               {statusLabel} · <b>{hoursLabel}</b>
             </span>
             <span className="ts-correction-view-row__actions">
-              <button
-                type="button"
-                className="ts-corrections-btn"
-                onClick={() => setMode('edit')}
-                aria-label="Изменить корректировку"
-                title="Изменить"
-              >
-                <Pencil size={14} />
-              </button>
+              {showEditPencil && (
+                <button
+                  type="button"
+                  className="ts-corrections-btn"
+                  onClick={() => setMode('edit')}
+                  aria-label="Изменить корректировку"
+                  title="Изменить"
+                >
+                  <Pencil size={14} />
+                </button>
+              )}
               {onDelete && (
                 <button
                   type="button"
@@ -438,6 +482,65 @@ const CorrectionTab: FC<{
           {trimmedInitialNotes && (
             <div className="ts-correction-view-comment">{trimmedInitialNotes}</div>
           )}
+
+          {/* Companion: согласованный выход в выходной (read-only), поверх которого лежит удалёнка. */}
+          {companionWorkRequest && (
+            <>
+              <div className="ts-correction-view-row" title="Выход в выходной согласован">
+                <span className="ts-correction-view-row__icon">✔</span>
+                <span className="ts-correction-view-row__text">
+                  Работа в выходной/праздник <span style={{ color: 'var(--success)' }}>· выход согласован{companionApprovedBy}</span>
+                </span>
+              </div>
+              {companionWorkRequest.reason?.trim() && (
+                <div className="ts-correction-view-comment">{companionWorkRequest.reason}</div>
+              )}
+            </>
+          )}
+
+          {/* Добавление отдельной remote-корректировки поверх согласованного выхода. */}
+          {isWorkOnlyAddRemote && !addingRemote && (
+            <button
+              type="button"
+              className="ts-btn ts-btn--primary"
+              style={{ marginTop: 8 }}
+              onClick={() => { setRemoteHours(remoteDefaultHours || 8); setRemoteNotes(''); setAddingRemote(true); }}
+            >
+              + Добавить корректировку (Удалёнка)
+            </button>
+          )}
+          {isWorkOnlyAddRemote && addingRemote && (() => {
+            const wholeHours = Math.floor(remoteHours);
+            const minutes = Math.round((remoteHours - wholeHours) * 60);
+            const applyHM = (h: number, m: number) => {
+              const clampedM = Math.max(0, Math.min(59, m));
+              setRemoteHours(Math.max(0, h) + clampedM / 60);
+            };
+            const remoteCanSave = remoteNotes.trim().length > 0 && remoteHours > 0;
+            return (
+              <div className="ts-form-group" style={{ marginTop: 8 }}>
+                <label className="ts-form-label">Удалёнка — часы</label>
+                <div className="ts-hours-inputs">
+                  <input type="number" className="ts-form-input ts-form-input--hm" value={wholeHours}
+                    onChange={e => applyHM(parseInt(e.target.value, 10) || 0, minutes)} min={0} max={24} />
+                  <span className="ts-hours-separator">ч</span>
+                  <input type="number" className="ts-form-input ts-form-input--hm" value={minutes}
+                    onChange={e => applyHM(wholeHours, parseInt(e.target.value, 10) || 0)} min={0} max={59} />
+                  <span className="ts-hours-separator">м</span>
+                </div>
+                <label className="ts-form-label" style={{ marginTop: 8 }}>Комментарий <span className="ts-form-required">*</span></label>
+                <input type="text" className="ts-form-input" value={remoteNotes}
+                  onChange={e => setRemoteNotes(e.target.value)} placeholder="Причина (удалённая работа)..." />
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+                  <button type="button" className="ts-btn" onClick={() => setAddingRemote(false)}>Отмена</button>
+                  <button type="button" className="ts-btn ts-btn--primary" disabled={!remoteCanSave}
+                    onClick={() => { onAddRemote?.(remoteHours, remoteNotes.trim()); setAddingRemote(false); }}>
+                    Сохранить
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </div>
         {attachmentsSlot}
       </>
@@ -1144,6 +1247,10 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   initialMode,
   allowAttachmentsOnCreate,
   showTravelTab,
+  companionWorkRequest,
+  canAddRemote,
+  remoteDefaultHours,
+  onAddRemote,
 }) => {
   const hasObjectsBlock = !disableObjectEntries
     && Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
@@ -1324,6 +1431,10 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           initialMode={initialMode}
           attachmentsSlot={attachmentsNode}
           allowAttachmentsOnCreate={allowAttachmentsOnCreate}
+          companionWorkRequest={companionWorkRequest}
+          canAddRemote={canAddRemote}
+          remoteDefaultHours={remoteDefaultHours}
+          onAddRemote={onAddRemote}
         />
       )}
       {hasObjectsBlock && (

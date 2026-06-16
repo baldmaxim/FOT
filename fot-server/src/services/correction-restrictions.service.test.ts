@@ -110,6 +110,25 @@ describe('correction-restrictions.service', () => {
     })).rejects.toMatchObject({ code: 'hours_exceed_norm' });
   });
 
+  it('skipNormAndAnomalyChecks: удалёнка поверх согласованного выхода в выходной (норма 0) не блокируется', async () => {
+    setupQueryOne({ restrictions: ROLE_SITE_SUPERVISOR, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 8,
+      scheduledNormHours: 0, // выходной
+      skipNormAndAnomalyChecks: true,
+    })).resolves.toBeUndefined();
+  });
+
+  it('без skip-флага та же удалёнка в выходной блокируется (контроль)', async () => {
+    setupQueryOne({ restrictions: ROLE_SITE_SUPERVISOR, anomalous: false, totalMinutes: 0, monthCount: 0 });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 8,
+      scheduledNormHours: 0,
+    })).rejects.toMatchObject({ code: 'not_anomalous' });
+  });
+
   it('блокирует при достижении max_corrections_per_month', async () => {
     setupQueryOne({
       restrictions: { ...ROLE_SITE_SUPERVISOR, max_corrections_per_month: 2 },

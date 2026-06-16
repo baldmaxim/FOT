@@ -89,6 +89,7 @@ vi.mock('./timesheet-object.service.js', () => ({
 import {
   buildAttendanceEntries,
   upsertAttendanceAdjustment,
+  isWorkRemoteApprovalPair,
 } from './attendance.service.js';
 
 function tableFromSql(sql: string): 'skud_daily_summary' | 'attendance_adjustments' | 'user_profiles' | 'employees' | 'unknown' {
@@ -360,6 +361,64 @@ describe('attendance.service', () => {
     });
 
     expect(result.entries[0]).toMatchObject({ id: 5002, status: 'remote', hours_worked: 0 });
+  });
+
+  it('сосуществование work+remote: одна entry=remote с часами, companion = согласованный выход', async () => {
+    mockedState.isWorkingDay = false; // суббота
+    mockedState.adjustmentRows = [
+      {
+        id: 6001, employee_id: 700, work_date: '2026-06-06', status: 'work',
+        hours_override: null, source_type: 'leave_request', source_id: '999',
+        reason: 'Работа в выходной', created_by: 'user-1', approval_status: 'approved',
+        approved_by: 'user-9',
+        created_at: '2026-06-05T18:49:00.000Z', updated_at: '2026-06-05T18:49:00.000Z', metadata: {},
+      },
+      {
+        id: 6002, employee_id: 700, work_date: '2026-06-06', status: 'remote',
+        hours_override: 8, source_type: 'manual', source_id: 'manual',
+        reason: 'Удалённая работа', created_by: 'user-1', approval_status: 'auto_approved',
+        created_at: '2026-06-06T09:00:00.000Z', updated_at: '2026-06-06T09:00:00.000Z', metadata: {},
+      },
+    ];
+    mockedState.userProfileRows = [{ id: 'user-9', full_name: 'Согласующий Н. Н.' }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [700, new Map([['2026-06-06', { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 700, full_name: 'Постоев Евгений' }],
+      startDate: '2026-06-06',
+      endDate: '2026-06-06',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-06-08',
+    });
+
+    // Одна авторитетная запись на день — remote (manual приоритетнее leave_request).
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: 6002,
+      status: 'remote',
+      hours_worked: 8,
+      source_type: 'manual',
+    });
+    // Companion — согласованный выход с человекочитаемым согласующим.
+    expect(result.entries[0].companion_work_request).toMatchObject({
+      id: 6001,
+      approval_status: 'approved',
+      approved_by_name: 'Согласующий Н. Н.',
+    });
+  });
+
+  it('isWorkRemoteApprovalPair: исключение строго по комбинации source_type+status', () => {
+    // Нужная пара (в обе стороны) — не вытесняется.
+    expect(isWorkRemoteApprovalPair('manual', 'remote', 'leave_request', 'work')).toBe(true);
+    expect(isWorkRemoteApprovalPair('leave_request', 'work', 'manual', 'remote')).toBe(true);
+    // Несовместимые комбинации — вытесняются как раньше.
+    expect(isWorkRemoteApprovalPair('manual', 'work', 'leave_request', 'remote')).toBe(false);
+    expect(isWorkRemoteApprovalPair('leave_request', 'remote', 'manual', 'work')).toBe(false);
+    expect(isWorkRemoteApprovalPair('manual', 'remote', 'leave_request', 'vacation')).toBe(false);
+    expect(isWorkRemoteApprovalPair('leave_request', 'vacation', 'manual', 'remote')).toBe(false);
   });
 
   it('adds credited travel minutes (within limit) to summary hours and exposes delay metadata', async () => {

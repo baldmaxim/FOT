@@ -358,6 +358,22 @@ async function loadAcceptedWeekendDaysForMonth(
   return { saturdays, sundays };
 }
 
+/**
+ * Есть ли за (employee, date) согласованный выход в выходной — материализованная заявка
+ * «работа в выходной» (status='work') в состоянии approved/auto_approved. Признак того,
+ * что корректировку «Удалёнка» можно зачесть сразу и не блокировать гардом нормы.
+ */
+export async function hasApprovedWorkOnDate(employeeId: number, workDate: string): Promise<boolean> {
+  const rows = await query<{ id: number | string }>(
+    `SELECT id FROM attendance_adjustments
+      WHERE employee_id = $1 AND work_date = $2 AND status = 'work'
+        AND approval_status IN ('approved', 'auto_approved')
+      LIMIT 1`,
+    [employeeId, workDate],
+  );
+  return rows.length > 0;
+}
+
 export async function resolveAdjustmentApprovalStatus(
   employeeId: number,
   workDate: string,
@@ -404,15 +420,8 @@ export async function resolveAdjustmentApprovalStatus(
   // Корректировка «удалённая работа» поверх уже согласованного выхода в выходной:
   // если за этот день есть одобренная заявка «работа в выходной» (ответственный
   // согласовал выход), отдельного согласования удалёнки не требуется — зачитываем сразу.
-  if (status === 'remote') {
-    const approvedWork = await query<{ id: number | string }>(
-      `SELECT id FROM attendance_adjustments
-        WHERE employee_id = $1 AND work_date = $2 AND status = 'work'
-          AND approval_status IN ('approved', 'auto_approved')
-        LIMIT 1`,
-      [employeeId, workDate],
-    ).then(rows => rows[0] ?? null);
-    if (approvedWork) return 'auto_approved';
+  if (status === 'remote' && await hasApprovedWorkOnDate(employeeId, workDate)) {
+    return 'auto_approved';
   }
 
   return 'pending';
@@ -481,6 +490,26 @@ export async function reapproveAdjustmentsForRange(
     return calendarCache.get(key) ?? null;
   };
 
+  // Согласованные выходы (work approved/auto) в диапазоне: удалёнка поверх них при
+  // bulk-пересчёте должна остаться auto_approved, а не падать в pending (зеркалит
+  // resolveAdjustmentApprovalStatus). Один запрос на весь диапазон.
+  const approvedWorkKeys = new Set<string>();
+  {
+    const wParams: unknown[] = [startDate, endDate];
+    let wSql = `SELECT employee_id, work_date::text AS work_date
+                  FROM attendance_adjustments
+                 WHERE work_date >= $1 AND work_date <= $2 AND status = 'work'
+                   AND approval_status IN ('approved', 'auto_approved')`;
+    if (employeeIds && employeeIds.length > 0) {
+      wParams.push(employeeIds);
+      wSql += ` AND employee_id = ANY($3::int[])`;
+    }
+    const workRows = await query<{ employee_id: number | string; work_date: string }>(wSql, wParams);
+    for (const r of workRows) {
+      approvedWorkKeys.add(`${Number(r.employee_id)}_${String(r.work_date).slice(0, 10)}`);
+    }
+  }
+
   const toUpdate: Array<{ id: number; status: 'auto_approved' | 'pending' }> = [];
   for (const row of rows) {
     const empId = Number(row.employee_id);
@@ -496,6 +525,9 @@ export async function reapproveAdjustmentsForRange(
     } else if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) {
       target = 'auto_approved';
     } else if (!isDepartmentApprovalRequired(empId)) {
+      target = 'auto_approved';
+    } else if (status === 'remote' && approvedWorkKeys.has(`${empId}_${workDate}`)) {
+      // Удалёнка поверх согласованного выхода — зачитываем сразу.
       target = 'auto_approved';
     } else {
       const schedule = schedules.get(empId)?.get(workDate);
@@ -1761,6 +1793,9 @@ export const timesheetController = {
       // Гарды роли: «только аномалии», «не больше плана», «лимит за месяц».
       if (parsed.status === 'work' || parsed.status === 'remote') {
         const scheduledNorm = await resolveScheduledNormHours(parsed.employee_id, parsed.work_date);
+        // Удалёнка поверх согласованного выхода — норму/аномалию не проверяем.
+        const skipNormAndAnomalyChecks = parsed.status === 'remote'
+          && await hasApprovedWorkOnDate(parsed.employee_id, parsed.work_date);
         await assertCorrectionAllowed({
           systemRoleId: req.user.system_role_id,
           createdBy: req.user.id,
@@ -1768,6 +1803,7 @@ export const timesheetController = {
           workDate: parsed.work_date,
           hoursOverride: typeof normalizedHours === 'number' ? normalizedHours : 0,
           scheduledNormHours: scheduledNorm,
+          skipNormAndAnomalyChecks,
         });
       }
 
@@ -1966,6 +2002,8 @@ export const timesheetController = {
             Number(existing.employee_id),
             String(existing.work_date),
           );
+          const skipNormAndAnomalyChecks = nextStatus === 'remote'
+            && await hasApprovedWorkOnDate(Number(existing.employee_id), String(existing.work_date));
           await assertCorrectionAllowed({
             systemRoleId: req.user.system_role_id,
             createdBy: req.user.id,
@@ -1974,6 +2012,7 @@ export const timesheetController = {
             hoursOverride: typeof normalizedHours === 'number' ? normalizedHours : 0,
             scheduledNormHours: scheduledNormUpd,
             excludeAdjustmentId: id,
+            skipNormAndAnomalyChecks,
           });
         }
 

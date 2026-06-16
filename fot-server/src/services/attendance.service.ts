@@ -147,6 +147,21 @@ export interface IAttendanceEntry {
   // графика (обычная СКУД-переработка — режется). Не выставляется для hours_override=0
   // (обнулённый день / обязательная суббота с часами из СКУД).
   hours_overridden?: boolean;
+  // Источник авторитетной корректировки дня (leave_request | manual | legacy | ...).
+  // Фронт по нему отличает материализованную заявку (status='work' + source_type='leave_request')
+  // от обычного СКУД-дня и понимает, можно ли добавить «Удалёнку» поверх согласованного выхода.
+  source_type?: string | null;
+  // «Спутник» — согласованный выход в выходной (leave_request/work), поверх которого
+  // лежит авторитетная day-level корректировка «Удалёнка» (manual/remote). Заполняется
+  // ТОЛЬКО когда обе строки сосуществуют: ведущая entry = remote (часы), companion = work
+  // (одобрение выхода для отображения). Часы у companion не показываем — они на ведущей.
+  companion_work_request?: {
+    id: number;
+    approval_status: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
+    approved_at: string | null;
+    approved_by_name: string | null;
+    reason: string | null;
+  } | null;
 }
 
 export interface IAttendanceBuildResult {
@@ -598,6 +613,15 @@ export async function buildAttendanceEntries(params: {
     return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
   });
 
+  // Согласованные выходы (leave_request/work) по дню — чтобы прицепить companion к
+  // ведущей remote-entry, когда удалёнка лежит поверх согласованной заявки.
+  const workRequestByKey = new Map<string, IAttendanceAdjustment>();
+  for (const adj of dailyAdjustments) {
+    if (adj.source_type === 'leave_request' && adj.status === 'work') {
+      workRequestByKey.set(`${adj.employee_id}_${adj.work_date}`, adj);
+    }
+  }
+
   for (const adjustment of sortedAdjustments) {
     const key = `${adjustment.employee_id}_${adjustment.work_date}`;
     if (byEmployeeDate.get(adjustment.employee_id)?.has(adjustment.work_date)) {
@@ -682,11 +706,26 @@ export async function buildAttendanceEntries(params: {
       effectiveHours = null;
     }
 
+    // Companion: если ведущая запись — НЕ сама заявка work, а за день есть согласованный
+    // выход (leave_request/work) — прицепляем его как «спутник» для отображения одобрения.
+    const workReq = workRequestByKey.get(key);
+    const companionWorkRequest = workReq && Number(workReq.id) !== Number(adjustment.id)
+      ? {
+          id: Number(workReq.id),
+          approval_status: workReq.approval_status ?? null,
+          approved_at: workReq.approved_at ?? null,
+          approved_by_name: workReq.approved_by ? (userNames.get(workReq.approved_by) || null) : null,
+          reason: workReq.reason ?? null,
+        }
+      : null;
+
     pushEntry({
       id: adjustment.id,
       employee_id: adjustment.employee_id,
       work_date: adjustment.work_date,
       status: adjustment.status,
+      source_type: adjustment.source_type,
+      companion_work_request: companionWorkRequest,
       hours_worked: effectiveHours,
       display_hours_worked: effectiveHours,
       base_hours_worked: effectiveHours,
@@ -1228,20 +1267,41 @@ const CORRECTION_ATTACHMENT_ENTITY_LITERAL = 'attendance_adjustment';
 const CORRECTION_ATTACHMENT_PURPOSE_LITERAL = 'timesheet_correction';
 
 /**
+ * «Работа в выходной» (leave_request/work — факт согласованного выхода) и «Удалёнка»
+ * (manual/remote — источник зачтённых часов) сосуществуют на одном дне НАМЕРЕННО:
+ * заявка остаётся сигналом одобрения для проверок/служебок, а часы берёт remote.
+ * Поэтому supersede НЕ должен вытеснять эту конкретную пару. Все прочие кросс-
+ * источниковые пары по-прежнему взаимоисключающие.
+ */
+export function isWorkRemoteApprovalPair(
+  survivorType: string, survivorStatus: string,
+  conflictType: string, conflictStatus: string,
+): boolean {
+  const isManualRemote = (t: string, s: string) => t === 'manual' && s === 'remote';
+  const isLeaveWork = (t: string, s: string) => t === 'leave_request' && s === 'work';
+  return (
+    (isManualRemote(survivorType, survivorStatus) && isLeaveWork(conflictType, conflictStatus))
+    || (isLeaveWork(survivorType, survivorStatus) && isManualRemote(conflictType, conflictStatus))
+  );
+}
+
+/**
  * Day-level корректировки разных источников (manual ↔ leave_request) на один
  * (employee_id, work_date) взаимоисключающие. После записи одной снимаем конфликтующие
  * day-level записи ДРУГОГО источника, перенося их вложения на выжившую (чтобы файл из
  * заявки не пропал). manual_object (по-объектные) и записи того же источника не трогаем (#5/#8).
+ * Исключение: пара leave_request/work ↔ manual/remote — оставляем обе (см. выше).
  */
 async function supersedeConflictingDayLevelAdjustments(survivor: {
   id: number;
   employee_id: number;
   work_date: string;
   source_type: string;
+  status: string;
 }, exec?: DbExecutor): Promise<void> {
-  const conflicts = await sqlRows<{ id: number | string; source_type: string; source_id: string | null }>(
+  const conflicts = await sqlRows<{ id: number | string; source_type: string; source_id: string | null; status: string }>(
     exec,
-    `SELECT id, source_type, source_id
+    `SELECT id, source_type, source_id, status
        FROM attendance_adjustments
       WHERE employee_id = $1 AND work_date = $2
         AND id <> $3
@@ -1250,6 +1310,10 @@ async function supersedeConflictingDayLevelAdjustments(survivor: {
     [survivor.employee_id, survivor.work_date, survivor.id, survivor.source_type, OBJECT_ADJUSTMENT_SOURCE_TYPE],
   );
   for (const conflict of conflicts) {
+    // Пару «согласованный выход + удалёнка» не разводим — обе строки нужны.
+    if (isWorkRemoteApprovalPair(survivor.source_type, survivor.status, conflict.source_type, conflict.status)) {
+      continue;
+    }
     const removedId = Number(conflict.id);
     // Собственные вложения удаляемой строки → копируем на выжившую (без дублей).
     await sqlRows(exec,
@@ -1362,6 +1426,7 @@ export async function upsertAttendanceAdjustment(input: {
         employee_id: input.employee_id,
         work_date: input.work_date,
         source_type: input.source_type,
+        status: String(survivor.status ?? input.status),
       }, exec);
     } catch (error) {
       console.error('[attendance] supersedeConflictingDayLevelAdjustments error:', error);

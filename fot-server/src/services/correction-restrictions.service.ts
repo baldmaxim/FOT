@@ -126,6 +126,12 @@ export interface IAssertCorrectionAllowedInput {
   scheduledNormHours: number;
   /** При update — id строки, которую правим (исключаем из подсчёта лимита). */
   excludeAdjustmentId?: number | null;
+  /**
+   * Пропустить ограничения cap-by-norm / anomalies-only / monthly-limit. Ставится для
+   * корректировки «Удалёнка» поверх УЖЕ согласованного выхода в выходной: норма дня = 0,
+   * СКУД-аномалии нет, но выход одобрен ответственным — блокировать часы не нужно.
+   */
+  skipNormAndAnomalyChecks?: boolean;
 }
 
 /**
@@ -135,6 +141,9 @@ export interface IAssertCorrectionAllowedInput {
  * Контракт: если все флаги выключены — no-op (быстрый возврат).
  */
 export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInput): Promise<void> {
+  // Удалёнка поверх согласованного выхода: норма дня 0 и нет СКУД-аномалии, но выход
+  // одобрен — гарды cap/anomalies/limit не применяем.
+  if (input.skipNormAndAnomalyChecks) return;
   const restrictions = await loadRoleRestrictions(input.systemRoleId);
   if (
     !restrictions.corrections_anomalies_only

@@ -617,6 +617,54 @@ export const TimesheetPage: FC = () => {
     }
   }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
+  // Добавление ОТДЕЛЬНОЙ корректировки «Удалёнка» поверх согласованного выхода в выходной.
+  // Всегда create() (не update заявки): backend сделает source_type='manual', auto_approved
+  // (есть approved work), supersede пару work↔remote не разводит. Modalentry перечитываем
+  // из свежих данных — у create()-ответа ещё нет companion_work_request.
+  const handleAddRemoteOverWork = useCallback(async (hours: number, notes: string, files?: File[]) => {
+    if (!modalEmployee) return;
+    const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+    try {
+      const created = await timesheetService.create({
+        employee_id: modalEmployee.id,
+        work_date: workDate,
+        status: 'remote',
+        hours_worked: hours,
+        notes,
+      });
+      if (files && files.length > 0 && created.id != null) {
+        const adjustmentId = created.id;
+        try {
+          await Promise.all(files.map(file => correctionAttachmentsService.upload(adjustmentId, file)));
+        } catch (uploadErr) {
+          console.error('Upload correction files error:', uploadErr);
+          toast.error?.(uploadErr instanceof Error ? uploadErr.message : 'Удалёнка добавлена, но файлы не загрузились');
+        }
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+      ]);
+      // Свежая entry с companion_work_request (не из create()-ответа).
+      const fresh = queryClient.getQueryData<TimesheetResponse>(
+        ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', 'with-objects'],
+      );
+      const freshEntry = fresh?.entries?.find(
+        e => e.employee_id === modalEmployee.id && e.work_date === workDate,
+      ) ?? null;
+      if (freshEntry) {
+        setModalMode('day');
+        setModalObjectEntry(null);
+        setModalObjectTarget(null);
+        setModalEntry(freshEntry);
+      }
+    } catch (err) {
+      console.error('Add remote over work error:', err);
+      toast.error?.(err instanceof Error ? err.message : 'Не удалось добавить удалёнку');
+    }
+  }, [modalEmployee, year, month, modalDay, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+
   // Повторное сохранение корректировки с явно выбранным объектом (после OBJECT_REQUIRED).
   const confirmObjectPrompt = useCallback(async () => {
     if (!objectPrompt || !modalEmployee || !objectPrompt.selected) return;
@@ -2337,6 +2385,20 @@ export const TimesheetPage: FC = () => {
             onSaveObject={handleSaveObjectByTarget}
             onDeleteObject={handleDeleteObjectByTarget}
             onZeroOutDay={(notes) => { void handleSaveCorrection('manual', 0, notes).then(() => closeModal()); }}
+            companionWorkRequest={modalEntry?.companion_work_request ?? null}
+            canAddRemote={
+              modalMode !== 'object'
+              && modalEntry?.status === 'work'
+              && modalEntry?.source_type === 'leave_request'
+              && !lockedDateSet.has(modalWorkDate)
+            }
+            remoteDefaultHours={modalEmployee
+              ? (getWorkHoursForDay(
+                  getScheduleForTimesheetDay(schedules, dailySchedules, modalEmployee.id, year, month, modalDay),
+                  year, month, modalDay,
+                ) || 8)
+              : 8}
+            onAddRemote={handleAddRemoteOverWork}
           />
         </Suspense>
       )}

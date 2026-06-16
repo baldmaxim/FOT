@@ -37,6 +37,21 @@ export interface TimesheetEntry {
   // Такие корректировки нельзя удалить через DELETE /api/timesheet/:id — фронт по этому флагу
   // прячет кнопку «Снять корректировку» в day-modal режима «По сотрудникам».
   has_object_adjustments?: boolean;
+  // Источник авторитетной корректировки: 'leave_request' (материализованная заявка),
+  // 'manual', 'manual_object', 'legacy_tender_timesheet'. Отличает заявку «работа в выходной»
+  // (status='work' + source_type='leave_request') от обычного дня → решает, показывать ли
+  // кнопку «+ Удалёнка».
+  source_type?: string | null;
+  // Согласованный выход в выходной (leave_request/work), поверх которого лежит ведущая
+  // корректировка «Удалёнка» (manual/remote). Заполнен ТОЛЬКО при сосуществовании обеих
+  // записей → модалка рисует вторую (read-only) карточку «выход согласован».
+  companion_work_request?: {
+    id: number;
+    approval_status: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
+    approved_at: string | null;
+    approved_by_name: string | null;
+    reason: string | null;
+  } | null;
 }
 
 export interface TimesheetObjectEntry {
