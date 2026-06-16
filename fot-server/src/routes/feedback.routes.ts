@@ -26,6 +26,12 @@ router.get(
   feedbackController.listTasks,
 );
 
+router.get(
+  '/tasks/department/:id',
+  requirePageAccess('/feedback-review', 'view'),
+  feedbackController.getDepartmentTasks,
+);
+
 router.delete(
   '/:id',
   requirePageAccess('/feedback-review', 'edit'),

@@ -1,0 +1,280 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.back:hover {
+  color: var(--accent);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.sub {
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+  margin-top: 3px;
+}
+
+.summary {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.statOverall {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 160px;
+}
+
+.ovPct {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.ovSub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.hint {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.empty {
+  text-align: center;
+  color: var(--text-tertiary);
+  padding: 24px;
+}
+
+/* ===== Список сотрудников (1 день) ===== */
+.elist {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 16px 8px;
+}
+
+.erow {
+  display: grid;
+  grid-template-columns: minmax(150px, 230px) 150px 1fr;
+  gap: 14px;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.erow:last-child {
+  border-bottom: none;
+}
+
+.ename {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.estatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.estatus.done {
+  color: var(--text-primary);
+}
+
+.estatus.miss {
+  color: var(--text-tertiary);
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.etask {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.etaskEmpty {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* ===== Недельная сетка (период) ===== */
+.wtable {
+  padding: 0 16px 8px;
+}
+
+.wrow {
+  display: grid;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.wrow:last-child {
+  border-bottom: none;
+}
+
+.whead {
+  padding: 10px 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.wd {
+  text-align: center;
+}
+
+.ch {
+  text-align: center;
+}
+
+.cp {
+  text-align: right;
+}
+
+.wname {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell {
+  width: 26px;
+  height: 26px;
+  margin: 0 auto;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.cellDone {
+  background: rgba(34, 197, 94, 0.18);
+  color: var(--success);
+}
+
+.cellMiss {
+  background: rgba(239, 68, 68, 0.14);
+  color: var(--error);
+}
+
+.wcount {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.wpct {
+  text-align: right;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.wlegend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 16px 4px;
+}
+
+.lg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
+.sq {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+}
+
+@media (max-width: 560px) {
+  .erow {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .estatus {
+    order: -1;
+  }
+}

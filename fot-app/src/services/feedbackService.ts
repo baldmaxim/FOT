@@ -32,6 +32,32 @@ export interface IFeedbackTaskRow {
   department_name: string | null;
 }
 
+export interface IDailyCount {
+  date: string;
+  count: number;
+}
+
+export interface ITasksResult {
+  rows: IFeedbackTaskRow[];
+  stats: IDepartmentStat[];
+  daily: IDailyCount[];
+  workingDays: number;
+}
+
+export interface IEmployeeFills {
+  id: number;
+  full_name: string | null;
+  fills: Array<{ date: string; content: string }>;
+}
+
+export interface IDepartmentTasksResult {
+  department_name: string | null;
+  from: string;
+  to: string;
+  workingDates: string[];
+  employees: IEmployeeFills[];
+}
+
 export interface IFeedbackFilters {
   department?: string;
   q?: string;
@@ -60,9 +86,19 @@ export const feedbackService = {
     return res.data;
   },
 
-  listTasks: async (filters: IFeedbackFilters = {}): Promise<{ rows: IFeedbackTaskRow[]; stats: IDepartmentStat[] }> => {
-    const res = await apiClient.get<ApiResponse<{ rows: IFeedbackTaskRow[]; stats: IDepartmentStat[] }>>(
+  listTasks: async (filters: IFeedbackFilters = {}): Promise<ITasksResult> => {
+    const res = await apiClient.get<ApiResponse<ITasksResult>>(
       `/feedback/tasks${buildQuery({ ...filters })}`,
+    );
+    return res.data;
+  },
+
+  getDepartmentTasks: async (
+    departmentId: string,
+    filters: { from?: string; to?: string } = {},
+  ): Promise<IDepartmentTasksResult> => {
+    const res = await apiClient.get<ApiResponse<IDepartmentTasksResult>>(
+      `/feedback/tasks/department/${departmentId}${buildQuery({ ...filters })}`,
     );
     return res.data;
   },

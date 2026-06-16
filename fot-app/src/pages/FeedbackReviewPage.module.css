@@ -92,40 +92,7 @@
   max-width: 360px;
 }
 
-/* Сводная таблица отделов СУ-10 (5 столбцов). */
-.statTable {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.statTable th {
-  text-align: left;
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  border-bottom: 1px solid var(--border);
-}
-
-.statTable td {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.statTable td:nth-child(3),
-.statTable td:nth-child(5) {
-  font-weight: 600;
-  color: var(--accent);
-  white-space: nowrap;
-}
-
-.statTable td:first-child {
-  color: var(--text-tertiary);
-  width: 36px;
-}
-
-/* Кликабельная ячейка названия отдела. */
+/* Кликабельная ячейка названия отдела (в модалке прохождений тестов). */
 .deptCell {
   cursor: pointer;
   color: var(--accent);
@@ -279,8 +246,7 @@
 }
 
 @media (max-width: 640px) {
-  .table,
-  .statTable {
+  .table {
     display: block;
     overflow-x: auto;
     white-space: nowrap;

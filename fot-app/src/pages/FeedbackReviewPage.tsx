@@ -1,10 +1,16 @@
 import { type FC, lazy, type ReactNode, Suspense, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Settings, Trash2, X } from 'lucide-react';
-import { feedbackService, type FeedbackKind, type IDepartmentStat } from '../services/feedbackService';
+import { feedbackService, type FeedbackKind } from '../services/feedbackService';
 import { testsService, type ITestResponseRow } from '../services/testsService';
 import { useStructureTree } from '../hooks/useStructure';
 import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
+import { DeptStatsGrid } from '../components/feedback/DeptStatsGrid';
+import { PeriodFilter } from '../components/feedback/PeriodFilter';
+import { DailyActivity } from '../components/feedback/DailyActivity';
+import { DepartmentTasksPage } from '../components/feedback/DepartmentTasksPage';
+import { todayIso, isSingleDay, periodLabel } from '../components/feedback/deptStats';
 import { findSu10CompanyNode, collectDepartmentIds } from '../utils/departmentUtils';
 import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
 import { useToast } from '../contexts/ToastContext';
@@ -30,8 +36,6 @@ const SUB_TABS: Array<{ key: SubTab; label: string }> = [
 const fmtDate = (iso: string | null): string =>
   iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 
-const fmtDay = (d: string): string => new Date(d).toLocaleDateString('ru-RU');
-
 // id отделов (kind='department') внутри «(СУ-10) ООО СУ-10».
 const useSu10DeptIds = (tree?: OrgDepartmentNode[]): Set<string> => useMemo(() => {
   if (!tree) return new Set<string>();
@@ -54,36 +58,6 @@ const DeptDetailModal: FC<{ title: string; onClose: () => void; children: ReactN
         <div className={styles.modalBody}>{children}</div>
       </div>
     </div>
-  );
-};
-
-// ---- Сводка отделов СУ-10 (5 столбцов), отделы кликабельны ----
-const Su10StatsTable: FC<{ rows: IDepartmentStat[]; verb: string; onSelect: (s: IDepartmentStat) => void }> = ({ rows, verb, onSelect }) => {
-  const pairs = useMemo(() => {
-    const out: Array<[IDepartmentStat, IDepartmentStat | null]> = [];
-    for (let i = 0; i < rows.length; i += 2) out.push([rows[i], rows[i + 1] ?? null]);
-    return out;
-  }, [rows]);
-
-  if (!rows.length) return <div className={styles.empty}>Нет отделов</div>;
-  return (
-    <table className={styles.statTable}>
-      <thead>
-        <tr><th>№</th><th>Отдел</th><th>{verb}</th><th>Отдел</th><th>{verb}</th></tr>
-      </thead>
-      <tbody>
-        {pairs.map(([a, b], i) => (
-          <tr key={a.department_id ?? i}>
-            <td>{i + 1}</td>
-            <td className={styles.deptCell} onClick={() => onSelect(a)}>{a.department_name}</td>
-            <td>{a.filled}/{a.total}</td>
-            {b
-              ? <><td className={styles.deptCell} onClick={() => onSelect(b)}>{b.department_name}</td><td>{b.filled}/{b.total}</td></>
-              : <><td></td><td></td></>}
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 };
 
@@ -112,10 +86,12 @@ const FilterBar: FC<IFilterBarProps> = ({ from, onFrom, to, onTo, q, onQ, tree, 
 
 // ---- Вкладка «Задачи» ----
 const TasksTab: FC = () => {
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const today = useMemo(() => todayIso(), []);
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
   const [department, setDepartment] = useState('');
-  const [modalDept, setModalDept] = useState<{ id: string; name: string } | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deptParam = searchParams.get('dept');
 
   const structure = useStructureTree();
   const tree = structure.data?.departments;
@@ -129,53 +105,52 @@ const TasksTab: FC = () => {
 
   const rows = useMemo(() => (data?.stats ?? [])
     .filter(s => s.department_id && su10Ids.has(s.department_id))
-    .filter(s => !department || s.department_id === department)
-    .sort((a, b) => a.department_name.localeCompare(b.department_name, 'ru')),
+    .filter(s => !department || s.department_id === department),
   [data, su10Ids, department]);
+
+  const single = isSingleDay(from, to);
+
+  const openDept = (id: string): void => setSearchParams(prev => {
+    const next = new URLSearchParams(prev);
+    next.set('dept', id);
+    return next;
+  });
+  const closeDept = (): void => setSearchParams(prev => {
+    const next = new URLSearchParams(prev);
+    next.delete('dept');
+    return next;
+  });
+
+  // Клик по отделу → страница отдела (адрес ?dept=<id>, работает «назад»).
+  if (deptParam) {
+    return (
+      <div className={styles.tabBody}>
+        <DepartmentTasksPage departmentId={deptParam} from={from} to={to} single={single} onBack={closeDept} />
+      </div>
+    );
+  }
+
+  const note = single
+    ? periodLabel(from, to)
+    : `${periodLabel(from, to)} · ${data?.workingDays ?? 0} раб. дн.`;
 
   return (
     <div className={styles.tabBody}>
-      <FilterBar from={from} onFrom={setFrom} to={to} onTo={setTo}
-        tree={tree} treeLoading={structure.isPending} treeError={structure.isError}
-        department={department} onDepartment={setDepartment} />
-      <Su10StatsTable rows={rows} verb="Заполнили" onSelect={s => s.department_id && setModalDept({ id: s.department_id, name: s.department_name })} />
-
-      {modalDept && (
-        <DeptDetailModal title={modalDept.name} onClose={() => setModalDept(null)}>
-          <DeptTasksContent departmentId={modalDept.id} from={from} to={to} />
-        </DeptDetailModal>
-      )}
+      <DeptStatsGrid
+        rows={rows}
+        verb="Заполнили"
+        showCounts={single}
+        overallNote={note}
+        onSelect={s => s.department_id && openDept(s.department_id)}
+        leadingControls={
+          <PeriodFilter from={from} to={to} today={today} onChange={(f, t) => { setFrom(f); setTo(t); }}>
+            <DepartmentTreeSelect departments={tree ?? []} value={department} onChange={setDepartment}
+              isLoading={structure.isPending} isError={structure.isError} showAllOption />
+          </PeriodFilter>
+        }
+        activity={single ? undefined : <DailyActivity daily={data?.daily ?? []} from={from} to={to} />}
+      />
     </div>
-  );
-};
-
-// Содержимое модалки «Задачи отдела» — серверная выборка с поиском по ФИО.
-const DeptTasksContent: FC<{ departmentId: string; from: string; to: string }> = ({ departmentId, from, to }) => {
-  const [q, setQ] = useState('');
-  const { data, isLoading } = useQuery({
-    queryKey: ['fb-tasks-dept', departmentId, from, to, q],
-    queryFn: () => feedbackService.listTasks({ department: departmentId, from, to, q }),
-    staleTime: 30_000,
-  });
-  return (
-    <>
-      <input className={styles.search} placeholder="Поиск по ФИО" value={q} onChange={e => setQ(e.target.value)} />
-      {isLoading ? <div className={styles.empty}>Загрузка…</div> : (
-        <table className={styles.table}>
-          <thead><tr><th>Сотрудник</th><th>Задача</th><th>Дата</th></tr></thead>
-          <tbody>
-            {(data?.rows ?? []).map(r => (
-              <tr key={r.id}>
-                <td>{r.full_name ?? '—'}</td>
-                <td className={styles.textCell}>{r.content}</td>
-                <td>{fmtDay(r.task_date)}</td>
-              </tr>
-            ))}
-            {!data?.rows.length && <tr><td colSpan={3} className={styles.empty}>Нет данных</td></tr>}
-          </tbody>
-        </table>
-      )}
-    </>
   );
 };
 
@@ -232,11 +207,9 @@ const MessagesTab: FC<{ kind: FeedbackKind }> = ({ kind }) => {
   );
 };
 
-// ---- Вкладка «Тесты» ----
+// ---- Вкладка «Тесты» (визуально та же сетка; метрика «прошли/всего», без периода) ----
 const TestsTab: FC = () => {
   const [selectedTest, setSelectedTest] = useState<string>('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
   const [department, setDepartment] = useState('');
   const [managerOpen, setManagerOpen] = useState(false);
   const [modalDept, setModalDept] = useState<string | null>(null);
@@ -267,28 +240,34 @@ const TestsTab: FC = () => {
 
   const rows = useMemo(() => (stats ?? [])
     .filter(s => s.department_id && su10Ids.has(s.department_id))
-    .filter(s => !department || s.department_id === department)
-    .sort((a, b) => a.department_name.localeCompare(b.department_name, 'ru')),
+    .filter(s => !department || s.department_id === department),
   [stats, su10Ids, department]);
 
   return (
     <div className={styles.tabBody}>
-      <div className={styles.testsHead}>
-        <select className={styles.select} value={effectiveTest} onChange={e => setSelectedTest(e.target.value)}>
-          {(tests ?? []).map(t => (
-            <option key={t.id} value={t.id}>{t.title}{t.is_active ? '' : ' (неактивен)'}</option>
-          ))}
-          {!tests?.length && <option value="">Тестов нет</option>}
-        </select>
-        <button className={styles.gearBtn} onClick={() => setManagerOpen(true)} title="Управление тестами">
-          <Settings size={18} />
-        </button>
-      </div>
-
-      <FilterBar from={from} onFrom={setFrom} to={to} onTo={setTo}
-        tree={tree} treeLoading={structure.isPending} treeError={structure.isError}
-        department={department} onDepartment={setDepartment} />
-      <Su10StatsTable rows={rows} verb="Прошли" onSelect={s => setModalDept(s.department_name)} />
+      <DeptStatsGrid
+        rows={rows}
+        verb="Прошли"
+        showCounts
+        onSelect={s => setModalDept(s.department_name)}
+        leadingControls={
+          <div className={styles.testsHead}>
+            <select className={styles.select} value={effectiveTest} onChange={e => setSelectedTest(e.target.value)}>
+              {(tests ?? []).map(t => (
+                <option key={t.id} value={t.id}>{t.title}{t.is_active ? '' : ' (неактивен)'}</option>
+              ))}
+              {!tests?.length && <option value="">Тестов нет</option>}
+            </select>
+            <button className={styles.gearBtn} onClick={() => setManagerOpen(true)} title="Управление тестами">
+              <Settings size={18} />
+            </button>
+            <div className={styles.deptSelect}>
+              <DepartmentTreeSelect departments={tree ?? []} value={department} onChange={setDepartment}
+                isLoading={structure.isPending} isError={structure.isError} showAllOption />
+            </div>
+          </div>
+        }
+      />
 
       {modalDept && (
         <DeptDetailModal title={modalDept} onClose={() => setModalDept(null)}>
