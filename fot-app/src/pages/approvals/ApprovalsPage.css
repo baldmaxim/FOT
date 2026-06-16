@@ -1279,6 +1279,37 @@
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
+.cor-dept-timesheet-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cor-dept-timesheet-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
+.cor-dept-timesheet-btn svg {
+  flex-shrink: 0;
+}
+@media (max-width: 768px) {
+  .cor-dept-timesheet-btn {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0 8px;
+  }
+}
 .cor-items {
   list-style: none;
   margin: 0;

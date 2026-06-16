@@ -18,6 +18,7 @@ import {
 } from '../../services/correctionApprovalService';
 import { timesheetService } from '../../services/timesheetService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
+import { DepartmentTimesheetModal } from '../../components/timesheet/DepartmentTimesheetModal';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
 import { CorrectionApprovalSettingsModal } from './CorrectionApprovalSettingsModal';
 const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
@@ -180,6 +181,12 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
+  const [tsModal, setTsModal] = useState<{
+    departmentId?: string;
+    employeeIds?: number[];
+    departmentName: string;
+    month: string;
+  } | null>(null);
   const [deptId, setDeptId] = useState('');
   const [nameQuery, setNameQuery] = useState('');
   const debouncedName = useDebouncedValue(nameQuery, 200);
@@ -295,6 +302,21 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
         else next.delete(item.id);
       }
       return next;
+    });
+  };
+
+  // Табель отдела за месяц первой (самой ранней) запрошенной даты выхода.
+  // is_direct_reports-группа имеет синтетический department_id → грузим по составу.
+  const openTimesheet = (group: ICorrectionDepartmentGroup) => {
+    const month = (group.items.map(i => i.work_date).filter(Boolean).sort()[0]
+      ?? period.startDate).slice(0, 7);
+    setTsModal({
+      departmentName: group.department_name,
+      departmentId: group.is_direct_reports ? undefined : group.department_id,
+      employeeIds: group.is_direct_reports
+        ? [...new Set(group.items.map(i => i.employee_id))]
+        : undefined,
+      month,
     });
   };
 
@@ -496,6 +518,16 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
                   >
                     {group.pending_count} · {group.employees_count}&thinsp;чел
                   </span>
+                  <button
+                    type="button"
+                    className="cor-dept-timesheet-btn"
+                    onClick={(e) => { e.stopPropagation(); openTimesheet(group); }}
+                    title="Табель отдела за месяц"
+                    aria-label={`Табель отдела ${group.department_name}`}
+                  >
+                    <FileText size={15} />
+                    {!isMobile && <span>Табель</span>}
+                  </button>
                 </div>
 
                 {isOpen && (
@@ -580,6 +612,10 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
 
       {showSettings && (
         <CorrectionApprovalSettingsModal onClose={() => setShowSettings(false)} />
+      )}
+
+      {tsModal && (
+        <DepartmentTimesheetModal {...tsModal} onClose={() => setTsModal(null)} />
       )}
     </>
   );
