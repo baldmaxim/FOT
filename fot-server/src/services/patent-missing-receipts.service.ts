@@ -10,6 +10,13 @@ export const MONTHLY_PATENT_AMOUNT = 10000;
  */
 export const SU10_ROOT_ID = '2cd8a403-6454-408b-9c2b-8a2db65c7511';
 
+/**
+ * Префиксы гражданств (UPPER), для которых нужен патент (визово-безвизовые не-ЕАЭС).
+ * `МОЛД` покрывает «МОЛДОВА, РЕСПУБЛИКА»/«МОЛДАВИЯ». Граждане РФ/ЕАЭС и визовых стран
+ * (Сербия/Турция — там разрешение на работу, не патент) в список не попадают.
+ */
+export const PATENT_COUNTRY_PREFIXES = ['УЗБЕКИСТАН', 'ТАДЖИКИСТАН', 'УКРАИНА', 'АЗЕРБАЙДЖАН', 'МОЛД'];
+
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export interface IMissingPatentRow {
@@ -87,9 +94,13 @@ export async function getMissingPatentReceipts(from: string, to: string): Promis
        AND e.org_department_id IN (
          SELECT public.get_descendant_department_ids(ARRAY[$4]::uuid[])
        )
+       AND EXISTS (
+         SELECT 1 FROM unnest($5::text[]) pfx
+         WHERE UPPER(TRIM(e.country)) LIKE pfx || '%'
+       )
        AND COALESCE(pd.paid_sum, 0) < $3::numeric
      ORDER BY od.name NULLS LAST, e.full_name`,
-    [from, to, requiredSum, SU10_ROOT_ID],
+    [from, to, requiredSum, SU10_ROOT_ID, PATENT_COUNTRY_PREFIXES],
   );
 
   return rows.map(r => ({
