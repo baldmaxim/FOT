@@ -16,6 +16,9 @@ router.use(authenticate);
 router.get('/my', patentReceiptsController.getMy); // audit:self-scoped
 router.post('/my/upload', upload.single('file'), patentReceiptsController.uploadMy); // audit:self-scoped
 router.get('/', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.list);
+router.get('/missing', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.listMissing);
+router.get('/missing/export', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.exportMissing);
+router.get('/su10-departments', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.su10Departments);
 router.get('/:id', requirePageAccess('/admin/patent-receipts', 'view'), patentReceiptsController.getOne);
 router.patch('/:id', requirePageAccess('/admin/patent-receipts', 'edit'), patentReceiptsController.update);
 router.patch('/:id/verify', requirePageAccess('/admin/patent-receipts', 'edit'), patentReceiptsController.setVerified);

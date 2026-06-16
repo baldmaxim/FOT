@@ -1,4 +1,4 @@
-import { apiClient } from '../api/client';
+import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 
 export type ReceiptSourceType = 'solidarnost_terminal' | 'sber_pdf' | 'tinkoff_pdf' | 'unknown';
 export type RecognitionStatus = 'pending' | 'processing' | 'done' | 'failed' | 'needs_review';
@@ -126,8 +126,26 @@ export interface IMyPatentReceipt {
   documents: { file_name: string | null; mime_type: string | null; recognition_status: RecognitionStatus | null } | null;
 }
 
+export interface IMissingPatentRow {
+  employee_id: number;
+  full_name: string | null;
+  position_name: string | null;
+  department_name: string | null;
+  manager_full_name: string | null;
+  paid_sum: number;
+  required_sum: number;
+  months_count: number;
+}
+
 interface ApiResponse<T> {
   data: T;
+}
+
+interface MissingResponse {
+  success: boolean;
+  data: IMissingPatentRow[];
+  required_sum: number | null;
+  months_count: number | null;
 }
 
 export const patentReceiptService = {
@@ -170,6 +188,27 @@ export const patentReceiptService = {
   listMy: async (): Promise<IMyPatentReceipt[]> => {
     const res = await apiClient.get<ApiResponse<IMyPatentReceipt[]>>('/patent-receipts/my');
     return res.data;
+  },
+
+  listMissing: async (from: string, to: string): Promise<MissingResponse> => {
+    const params = new URLSearchParams({ from, to });
+    const res = await apiClient.get<MissingResponse>(`/patent-receipts/missing?${params.toString()}`);
+    return res;
+  },
+
+  su10Departments: async (): Promise<{ id: string; name: string }[]> => {
+    const res = await apiClient.get<ApiResponse<{ id: string; name: string }[]>>('/patent-receipts/su10-departments');
+    return res.data;
+  },
+
+  exportMissing: async (from: string, to: string): Promise<Blob> => {
+    const params = new URLSearchParams({ from, to });
+    const response = await fetch(
+      buildApiUrl(`/patent-receipts/missing/export?${params.toString()}`),
+      { credentials: 'include', headers: buildAuthHeaders() },
+    );
+    if (!response.ok) throw new Error('Ошибка экспорта');
+    return response.blob();
   },
 
   uploadMy: async (file: File, periodStart: string, periodEnd: string): Promise<{ id: number }> => {

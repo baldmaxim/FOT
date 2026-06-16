@@ -17,6 +17,8 @@ import {
 } from '../services/patent-receipt-encryption.helper.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getEmployeeUserId } from '../services/recipients.service.js';
+import ExcelJS from 'exceljs';
+import { getMissingPatentReceipts, getSu10Departments } from '../services/patent-missing-receipts.service.js';
 
 function emitPatentReceiptChanged(params: {
   entityId?: number;
@@ -670,8 +672,104 @@ const setVerified = async (req: AuthenticatedRequest, res: Response): Promise<vo
   }
 };
 
+const listMissing = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { from, to } = req.query as Record<string, string | undefined>;
+    if (!from || !to || !ISO_DATE_RE.test(from) || !ISO_DATE_RE.test(to)) {
+      res.status(400).json({ success: false, error: 'Параметры from/to обязательны (YYYY-MM-DD)' });
+      return;
+    }
+    if (from > to) {
+      res.status(400).json({ success: false, error: 'Дата «по» должна быть не раньше даты «с»' });
+      return;
+    }
+
+    const data = await getMissingPatentReceipts(from, to);
+    res.json({
+      success: true,
+      data,
+      required_sum: data[0]?.required_sum ?? null,
+      months_count: data[0]?.months_count ?? null,
+    });
+  } catch (err) {
+    console.error('patent-receipts.listMissing error:', err);
+    Sentry.captureException(err, { tags: { route: 'GET /api/patent-receipts/missing' } });
+    res.status(500).json({ success: false, error: 'Ошибка построения списка' });
+  }
+};
+
+const exportMissing = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { from, to } = req.query as Record<string, string | undefined>;
+    if (!from || !to || !ISO_DATE_RE.test(from) || !ISO_DATE_RE.test(to)) {
+      res.status(400).json({ success: false, error: 'Параметры from/to обязательны (YYYY-MM-DD)' });
+      return;
+    }
+    if (from > to) {
+      res.status(400).json({ success: false, error: 'Дата «по» должна быть не раньше даты «с»' });
+      return;
+    }
+
+    const data = await getMissingPatentReceipts(from, to);
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Чеки не прикреплены');
+    ws.columns = [
+      { header: '№', key: 'num', width: 6 },
+      { header: 'ФИО', key: 'fio', width: 36 },
+      { header: 'Должность', key: 'position', width: 28 },
+      { header: 'Бригада/отдел', key: 'department', width: 30 },
+      { header: 'Руководитель', key: 'manager', width: 36 },
+      { header: 'Сумма ₽', key: 'sum', width: 14 },
+    ];
+    const headerRow = ws.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } };
+    headerRow.alignment = { vertical: 'middle' };
+
+    data.forEach((row, idx) => {
+      ws.addRow({
+        num: idx + 1,
+        fio: row.full_name ?? '',
+        position: row.position_name ?? '',
+        department: row.department_name ?? '',
+        manager: row.manager_full_name ?? '',
+        sum: row.paid_sum,
+      });
+    });
+    ws.getColumn('sum').numFmt = '#,##0.00';
+
+    const buf = await wb.xlsx.writeBuffer();
+    const safeFileName = `Чеки_не_прикреплены_${from}_${to}.xlsx`.replace(/[\/\\?%*:|"<>]/g, '_');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="${encodeURIComponent(safeFileName)}"; filename*=UTF-8''${encodeURIComponent(safeFileName)}`);
+    res.send(Buffer.from(buf));
+  } catch (err) {
+    console.error('patent-receipts.exportMissing error:', err);
+    Sentry.captureException(err, { tags: { route: 'GET /api/patent-receipts/missing/export' } });
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: 'Ошибка экспорта' });
+    }
+  }
+};
+
+const su10Departments = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const data = await getSu10Departments();
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('patent-receipts.su10Departments error:', err);
+    Sentry.captureException(err, { tags: { route: 'GET /api/patent-receipts/su10-departments' } });
+    res.status(500).json({ success: false, error: 'Ошибка загрузки отделов' });
+  }
+};
+
 export const patentReceiptsController = {
   list,
+  listMissing,
+  exportMissing,
+  su10Departments,
   getOne,
   getMy,
   uploadMy,

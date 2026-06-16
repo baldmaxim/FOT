@@ -1,6 +1,6 @@
 import { type FC, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp, FileText, Check } from 'lucide-react';
+import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp, FileText, Check, Search, FileWarning } from 'lucide-react';
 
 export const PatentReceiptsEncryptionBadge: FC = () => (
   <span
@@ -17,6 +17,7 @@ import {
 } from '../../services/patentReceiptService';
 import { employeeService } from '../../services/employeeService';
 import { PatentReceiptEditModal } from '../../components/PatentReceiptEditModal';
+import { MissingPatentReceiptsModal } from '../../components/MissingPatentReceiptsModal';
 import { useToast } from '../../contexts/ToastContext';
 import { ApiError } from '../../api/client';
 import styles from './PatentReceiptsPage.module.css';
@@ -76,6 +77,9 @@ export const PatentReceiptsPage: FC = () => {
   const [filterTo, setFilterTo] = useState('');
   const [filterNeedsReview, setFilterNeedsReview] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [searchFio, setSearchFio] = useState('');
+  const [filterDeptId, setFilterDeptId] = useState('');
+  const [showMissing, setShowMissing] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [recognizingDocId, setRecognizingDocId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -142,6 +146,30 @@ export const PatentReceiptsPage: FC = () => {
   const rows = data ?? [];
   const employees = employeesQuery.data ?? [];
 
+  const empById = useMemo(() => new Map(employees.map(e => [e.id, e])), [employees]);
+
+  const su10DeptsQuery = useQuery({
+    queryKey: ['su10-departments'],
+    queryFn: () => patentReceiptService.su10Departments(),
+    staleTime: 30 * 60 * 1000,
+  });
+  const deptOptions = su10DeptsQuery.data ?? [];
+
+  const visibleRows = useMemo(() => {
+    const q = searchFio.trim().toUpperCase().replace(/Ё/g, 'Е');
+    return rows.filter(r => {
+      if (q) {
+        const name = (r.employees?.full_name || '').toUpperCase().replace(/Ё/g, 'Е');
+        if (!name.includes(q)) return false;
+      }
+      if (filterDeptId) {
+        const emp = r.employee_id != null ? empById.get(r.employee_id) : undefined;
+        if (!emp || emp.org_department_id !== filterDeptId) return false;
+      }
+      return true;
+    });
+  }, [rows, searchFio, filterDeptId, empById]);
+
   const handleRecognize = async (documentId: number) => {
     setRecognizingDocId(documentId);
     try {
@@ -179,6 +207,27 @@ export const PatentReceiptsPage: FC = () => {
               ))}
           </select>
         </label>
+        <label className={styles.field}>
+          <span>Поиск по ФИО</span>
+          <div className={styles.searchBox}>
+            <Search size={14} />
+            <input
+              type="text"
+              value={searchFio}
+              onChange={e => setSearchFio(e.target.value)}
+              placeholder="Фамилия или имя"
+            />
+          </div>
+        </label>
+        <label className={styles.field}>
+          <span>Бригада/отдел</span>
+          <select value={filterDeptId} onChange={e => setFilterDeptId(e.target.value)}>
+            <option value="">Все</option>
+            {deptOptions.map(d => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </label>
         <label className={styles.checkbox}>
           <input
             type="checkbox"
@@ -187,6 +236,9 @@ export const PatentReceiptsPage: FC = () => {
           />
           <span>Только требующие проверки</span>
         </label>
+        <button className={styles.btnSecondary} onClick={() => setShowMissing(true)}>
+          <FileWarning size={14} /> Чеки не прикреплены
+        </button>
         <button className={styles.btnSecondary} onClick={() => setShowAdvanced(v => !v)}>
           {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Доп. фильтры
         </button>
@@ -213,7 +265,7 @@ export const PatentReceiptsPage: FC = () => {
 
       {isLoading ? (
         <div className={styles.empty}>Загрузка…</div>
-      ) : rows.length === 0 ? (
+      ) : visibleRows.length === 0 ? (
         <div className={styles.empty}>Чеков нет</div>
       ) : (
         <div className={styles.tableWrap}>
@@ -234,7 +286,7 @@ export const PatentReceiptsPage: FC = () => {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r: IPatentReceiptListRow) => {
+              {visibleRows.map((r: IPatentReceiptListRow) => {
                 const status = r.documents?.recognition_status as RecognitionStatus | null;
                 const badge = status ? STATUS_BADGE[status] : null;
                 const fioMismatch = fioMismatches(r.payer_full_name, r.employees?.full_name);
@@ -338,6 +390,8 @@ export const PatentReceiptsPage: FC = () => {
           onSaved={() => { setEditingId(null); void refetch(); }}
         />
       )}
+
+      {showMissing && <MissingPatentReceiptsModal onClose={() => setShowMissing(false)} />}
     </div>
   );
 };
