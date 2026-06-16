@@ -509,6 +509,31 @@ function isSigurNotFound(error: unknown): boolean {
 /** Сколько раз воркер пытается досинхронизировать отзыв в Sigur, прежде чем 'failed'. */
 export const MAX_REVOKE_SYNC_ATTEMPTS = 5;
 
+/** Возможные агрегатные статусы заявки подрядчика. */
+export type SubmissionStatus = 'pending' | 'partially_applied' | 'approved' | 'rejected';
+
+/**
+ * Чистый пересчёт агрегатного статуса заявки по счётчикам пропусков.
+ * Повторяет логику decideSubmission плюс явный случай пустой заявки (total===0):
+ * все пропуска ушли из заявки → закрываем как 'rejected' (применять нечего).
+ * reviewed_at/reviewed_by НЕ трогает — это ответственность вызывающего кода.
+ */
+export const computeSubmissionStatus = (
+  current: string,
+  counts: { total: number; pending: number; approved: number; rejected: number },
+): SubmissionStatus => {
+  if (counts.total === 0) return 'rejected';
+  let next: SubmissionStatus = current as SubmissionStatus;
+  if (counts.pending === 0) {
+    if (counts.rejected === 0) next = 'approved';
+    else if (counts.approved === 0) next = 'rejected';
+    else next = 'partially_applied'; // финальный mixed (pending===0)
+  } else if (counts.approved > 0 || counts.rejected > 0) {
+    next = 'partially_applied'; // частично решено, но есть pending
+  }
+  return next;
+};
+
 /**
  * Быстрый путь отзыва: пропуск МГНОВЕННО возвращается в пул в БД, а перенос/
  * блокировка профиля в Sigur откладывается на фоновый воркер
@@ -537,6 +562,14 @@ export const enqueueRevoke = async (input: {
   const syncState = needsSigur ? 'pending_revoke' : 'synced';
 
   await withTransaction(async client => {
+    // Authoritative submission_id под блокировкой строки пропуска (защита от гонки:
+    // pre-tx SELECT может устареть, если параллельно меняли привязку к заявке).
+    const locked = await client.query<{ submission_id: string | null }>(
+      `SELECT submission_id FROM contractor_passes WHERE id = $1::uuid FOR UPDATE`,
+      [pass.id],
+    );
+    const oldSubmissionId = locked.rows[0]?.submission_id ?? null;
+
     await client.query(
       `UPDATE contractor_passes
           SET status = 'in_pool',
@@ -560,6 +593,47 @@ export const enqueueRevoke = async (input: {
         WHERE pass_id = $1::uuid AND valid_until IS NULL`,
       [pass.id],
     );
+
+    // Пересчёт агрегатного статуса заявки, из которой только что ушёл пропуск.
+    // Иначе заявка может зависнуть в 'partially_applied' без pending-пропусков.
+    if (oldSubmissionId) {
+      const agg = await client.query<{
+        current: string; total: string; pending: string; approved: string; rejected: string;
+      }>(
+        `SELECT s.status AS current,
+                COUNT(p.*)::text                                            AS total,
+                COUNT(p.*) FILTER (WHERE p.approval_status = 'pending')::text  AS pending,
+                COUNT(p.*) FILTER (WHERE p.approval_status = 'approved')::text AS approved,
+                COUNT(p.*) FILTER (WHERE p.approval_status = 'rejected')::text AS rejected
+           FROM contractor_submissions s
+           LEFT JOIN contractor_passes p ON p.submission_id = s.id
+          WHERE s.id = $1::uuid
+          GROUP BY s.status`,
+        [oldSubmissionId],
+      );
+      const row = agg.rows[0];
+      if (row) {
+        const counts = {
+          total: Number(row.total),
+          pending: Number(row.pending),
+          approved: Number(row.approved),
+          rejected: Number(row.rejected),
+        };
+        const next = computeSubmissionStatus(row.current, counts);
+        if (next !== row.current) {
+          // reviewed_at проставляем только при финализации (pending===0), сохраняя
+          // уже существующее время согласования; reviewed_by авто-переходом не трогаем.
+          const stampReviewed = counts.pending === 0;
+          await client.query(
+            `UPDATE contractor_submissions
+                SET status = $1,
+                    reviewed_at = ${stampReviewed ? 'COALESCE(reviewed_at, now())' : 'reviewed_at'}
+              WHERE id = $2::uuid AND status IN ('pending', 'partially_applied')`,
+            [next, oldSubmissionId],
+          );
+        }
+      }
+    }
   });
 
   void input.userId;

@@ -57,6 +57,7 @@ import {
   claimRevokeTasks,
   retryRevokeSync,
   assignPoolPassesByCount,
+  computeSubmissionStatus,
   MAX_REVOKE_SYNC_ATTEMPTS,
 } from './contractor-pool.service.js';
 
@@ -91,9 +92,10 @@ describe('enqueueRevoke', () => {
     const res = await enqueueRevoke({ passId: 'p1', userId: 'u1' });
 
     expect(res).toEqual({ pass_id: 'p1', pass_number: '001', status: 'returned_to_pool' });
-    // первый client.query — UPDATE contractor_passes c параметром syncState='pending_revoke'
-    expect(String(captured[0]?.[0])).toContain("status = 'in_pool'");
-    expect((captured[0]?.[1] as unknown[])).toContain('pending_revoke');
+    // UPDATE contractor_passes c параметром syncState='pending_revoke'
+    const upd = captured.find(c => String(c[0]).includes("status = 'in_pool'"));
+    expect(upd).toBeTruthy();
+    expect(upd?.[1] as unknown[]).toContain('pending_revoke');
   });
 
   it('в dry-run сразу synced (синхронизировать нечего)', async () => {
@@ -108,7 +110,74 @@ describe('enqueueRevoke', () => {
     pgQueryOne.mockResolvedValue({ id: 'p1', pass_number: '001', status: 'assigned', sigur_employee_id: 5 });
 
     await enqueueRevoke({ passId: 'p1', userId: 'u1' });
-    expect((captured[0]?.[1] as unknown[])).toContain('synced');
+    const upd = captured.find(c => String(c[0]).includes("status = 'in_pool'"));
+    expect(upd?.[1] as unknown[]).toContain('synced');
+  });
+
+  it('пересчитывает статус заявки: отзыв последнего pending → approved', async () => {
+    let captured: unknown[][] = [];
+    pgTx.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      const q = vi.fn(async (sql: string) => {
+        if (/FOR UPDATE/.test(sql)) return { rows: [{ submission_id: 'sub1' }] };
+        if (/FROM contractor_submissions s/.test(sql)) {
+          return { rows: [{ current: 'partially_applied', total: '9', pending: '0', approved: '9', rejected: '0' }] };
+        }
+        return { rows: [] };
+      });
+      const r = await fn({ query: q });
+      captured = q.mock.calls;
+      return r;
+    });
+    pgQueryOne.mockResolvedValue({ id: 'p1', pass_number: '001', status: 'applied', sigur_employee_id: 5 });
+
+    await enqueueRevoke({ passId: 'p1', userId: 'u1' });
+
+    const subUpd = captured.find(c => String(c[0]).includes('UPDATE contractor_submissions'));
+    expect(subUpd).toBeTruthy();
+    // финализация: reviewed_at не перезатираем, если уже был (COALESCE).
+    expect(String(subUpd?.[0])).toContain('COALESCE(reviewed_at, now())');
+    expect(subUpd?.[1]).toEqual(['approved', 'sub1']);
+  });
+
+  it('не трогает заявку, если остались pending-пропуска', async () => {
+    let captured: unknown[][] = [];
+    pgTx.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      const q = vi.fn(async (sql: string) => {
+        if (/FOR UPDATE/.test(sql)) return { rows: [{ submission_id: 'sub1' }] };
+        if (/FROM contractor_submissions s/.test(sql)) {
+          return { rows: [{ current: 'pending', total: '3', pending: '2', approved: '0', rejected: '0' }] };
+        }
+        return { rows: [] };
+      });
+      const r = await fn({ query: q });
+      captured = q.mock.calls;
+      return r;
+    });
+    pgQueryOne.mockResolvedValue({ id: 'p1', pass_number: '001', status: 'submitted', sigur_employee_id: 5 });
+
+    await enqueueRevoke({ passId: 'p1', userId: 'u1' });
+
+    const subUpd = captured.find(c => String(c[0]).includes('UPDATE contractor_submissions'));
+    expect(subUpd).toBeUndefined();
+  });
+
+  it('пропуск без заявки (submission_id NULL) — заявку не трогает', async () => {
+    let captured: unknown[][] = [];
+    pgTx.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      const q = vi.fn(async (sql: string) => {
+        if (/FOR UPDATE/.test(sql)) return { rows: [{ submission_id: null }] };
+        return { rows: [] };
+      });
+      const r = await fn({ query: q });
+      captured = q.mock.calls;
+      return r;
+    });
+    pgQueryOne.mockResolvedValue({ id: 'p1', pass_number: '001', status: 'assigned', sigur_employee_id: 5 });
+
+    await enqueueRevoke({ passId: 'p1', userId: 'u1' });
+
+    const subUpd = captured.find(c => String(c[0]).includes('UPDATE contractor_submissions'));
+    expect(subUpd).toBeUndefined();
   });
 
   it('бросает, если пропуск уже в пуле / отозван', async () => {
@@ -208,5 +277,37 @@ describe('assignPoolPassesByCount', () => {
     pgQuery.mockResolvedValueOnce([]);
     const res = await assignPoolPassesByCount({ count: 5, orgDepartmentId: 'org', userId: 'u1' });
     expect(res).toEqual({ assigned: [], failed: [] });
+  });
+});
+
+describe('computeSubmissionStatus', () => {
+  it('всё одобрено, нет pending → approved', () => {
+    expect(computeSubmissionStatus('partially_applied', { total: 9, pending: 0, approved: 9, rejected: 0 }))
+      .toBe('approved');
+  });
+
+  it('финальный mixed (approved + rejected, нет pending) → partially_applied', () => {
+    expect(computeSubmissionStatus('partially_applied', { total: 5, pending: 0, approved: 3, rejected: 2 }))
+      .toBe('partially_applied');
+  });
+
+  it('часть одобрена, есть pending → partially_applied', () => {
+    expect(computeSubmissionStatus('pending', { total: 5, pending: 2, approved: 3, rejected: 0 }))
+      .toBe('partially_applied');
+  });
+
+  it('всё ещё pending, ничего не решено → статус без изменений', () => {
+    expect(computeSubmissionStatus('pending', { total: 4, pending: 4, approved: 0, rejected: 0 }))
+      .toBe('pending');
+  });
+
+  it('все пропуска ушли из заявки (total=0) → rejected', () => {
+    expect(computeSubmissionStatus('partially_applied', { total: 0, pending: 0, approved: 0, rejected: 0 }))
+      .toBe('rejected');
+  });
+
+  it('всё отклонено, нет pending → rejected', () => {
+    expect(computeSubmissionStatus('partially_applied', { total: 3, pending: 0, approved: 0, rejected: 3 }))
+      .toBe('rejected');
   });
 });

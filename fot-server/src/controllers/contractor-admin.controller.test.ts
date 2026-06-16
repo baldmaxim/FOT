@@ -65,7 +65,10 @@ vi.mock('../services/notification.service.js', () => ({
 vi.mock('../services/push.service.js', () => ({
   pushService: { sendGenericNotification: vi.fn().mockResolvedValue([]) },
 }));
-vi.mock('../services/contractor-pool.service.js', () => ({ enqueueRevoke: h.enqueueRevoke }));
+vi.mock('../services/contractor-pool.service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/contractor-pool.service.js')>()),
+  enqueueRevoke: h.enqueueRevoke,
+}));
 vi.mock('./employee-lifecycle.controller.js', () => ({
   applyDismissalImmediately: h.applyDismissal,
   insertDismissalHistory: h.insertDismissalHistory,

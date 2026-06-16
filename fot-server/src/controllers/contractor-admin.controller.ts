@@ -38,7 +38,7 @@ import {
   replaceSigurEmployeeAccessPoints,
 } from '../services/sigur-live-cards.service.js';
 import { resolveAccessPointNamesToIds } from '../services/contractor-access.service.js';
-import { enqueueRevoke } from '../services/contractor-pool.service.js';
+import { enqueueRevoke, computeSubmissionStatus } from '../services/contractor-pool.service.js';
 import {
   applyDismissalImmediately,
   insertDismissalHistory,
@@ -714,8 +714,10 @@ export const contractorAdminController = {
       if (!(await ensureSystemAdmin(req, res))) return;
       const row = await queryOne<{ count: string }>(
         `SELECT COUNT(*)::text AS count
-           FROM contractor_submissions
-          WHERE status IN ('pending', 'partially_applied')`,
+           FROM contractor_submissions s
+          WHERE s.status IN ('pending', 'partially_applied')
+            AND EXISTS (SELECT 1 FROM contractor_passes p
+                         WHERE p.submission_id = s.id AND p.approval_status = 'pending')`,
       );
       res.json({ success: true, data: { count: Number(row?.count ?? 0) } });
     } catch (error) {
@@ -834,12 +836,15 @@ export const contractorAdminController = {
                 s.status,
                 s.submitted_at,
                 s.apply_error,
-                COUNT(p.*)                                       AS passes,
-                COUNT(p.*) FILTER (WHERE p.status = 'applied')    AS applied
+                COUNT(p.*)                                              AS passes,
+                COUNT(p.*) FILTER (WHERE p.status = 'applied')           AS applied,
+                COUNT(p.*) FILTER (WHERE p.approval_status = 'pending')  AS pending
            FROM contractor_submissions s
            JOIN org_departments d ON d.id = s.org_department_id
            LEFT JOIN contractor_passes p ON p.submission_id = s.id
           WHERE s.status IN ('pending', 'partially_applied')
+            AND EXISTS (SELECT 1 FROM contractor_passes p2
+                         WHERE p2.submission_id = s.id AND p2.approval_status = 'pending')
           GROUP BY s.id, d.name
           ORDER BY s.submitted_at ASC`,
       );
@@ -1471,14 +1476,9 @@ export const contractorAdminController = {
       const approvedCount = Number(counts?.approved ?? 0);
       const rejectedCount = Number(counts?.rejected ?? 0);
 
-      let finalStatus = sub.status;
-      if (pending === 0) {
-        if (rejectedCount === 0) finalStatus = 'approved';
-        else if (approvedCount === 0) finalStatus = 'rejected';
-        else finalStatus = 'partially_applied';
-      } else if (approvedCount > 0 || rejectedCount > 0) {
-        finalStatus = 'partially_applied';
-      }
+      const finalStatus = computeSubmissionStatus(sub.status, {
+        total, pending, approved: approvedCount, rejected: rejectedCount,
+      });
 
       const applyError = [...failures, ...warnings];
       await execute(
@@ -1490,8 +1490,6 @@ export const contractorAdminController = {
           WHERE id = $4::uuid`,
         [finalStatus, req.user.id, applyError.length ? applyError.join('; ') : null, submissionId],
       );
-
-      void total;
 
       // Поиск дублей-однофамильцев только что активированных. Набор активированных и список
       // кандидатов — серверно-авторитетные: сохраняем батч, клиент сможет лишь блокировать

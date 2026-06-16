@@ -65,6 +65,7 @@ export interface IPendingSubmission {
   apply_error: string | null;
   passes: string;
   applied: string;
+  pending: string;
 }
 
 export interface ISubmissionDetailRow {

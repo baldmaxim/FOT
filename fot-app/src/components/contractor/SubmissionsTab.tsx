@@ -195,7 +195,7 @@ export const SubmissionsTab: FC = () => {
           {subs.map(s => {
             const total = Number(s.passes) || 0;
             const applied = Number(s.applied) || 0;
-            const pending = Math.max(total - applied, 0);
+            const pending = Number(s.pending) || 0;
             const isOpen = expanded === s.id;
             const selectedSet = selectedByPass.get(s.id);
             const selectedCount = selectedSet?.size ?? pending;
