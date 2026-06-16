@@ -194,30 +194,32 @@ export const MonitorTab: FC = () => {
     <div>
       <SyncFailedPanel />
 
-      <div className={styles.field}>
-        <span className={styles.label}>Поиск по номеру пропуска или ФИО (по всем подрядчикам)</span>
-        <input
-          className={styles.input}
-          type="search"
-          inputMode="search"
-          placeholder="Например: 1650"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-      </div>
-
-      {!searchActive && (
+      <div className={styles.filterRow}>
         <div className={styles.field}>
-          <span className={styles.label}>Подрядчик</span>
-          <ContractorOrgSelect
-            orgs={orgs}
-            value={orgId}
-            onChange={setOrgId}
-            emptyOptionLabel="— выбрать —"
-            loading={orgsQuery.isLoading}
+          <span className={styles.label}>Поиск по номеру пропуска или ФИО (по всем подрядчикам)</span>
+          <input
+            className={styles.input}
+            type="search"
+            inputMode="search"
+            placeholder="Например: 1650"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
           />
         </div>
-      )}
+
+        {!searchActive && (
+          <div className={styles.field}>
+            <span className={styles.label}>Подрядчик</span>
+            <ContractorOrgSelect
+              orgs={orgs}
+              value={orgId}
+              onChange={setOrgId}
+              emptyOptionLabel="— выбрать —"
+              loading={orgsQuery.isLoading}
+            />
+          </div>
+        )}
+      </div>
 
       {!searchActive && !orgId && <div className={styles.empty}>Выберите подрядчика или введите номер пропуска</div>}
 

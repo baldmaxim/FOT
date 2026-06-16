@@ -262,6 +262,18 @@
   flex-wrap: wrap;
 }
 
+.filterRow {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.filterRow .field {
+  flex: 1 1 280px;
+  margin-bottom: 0;
+}
+
 .checkList {
   display: flex;
   flex-wrap: wrap;
