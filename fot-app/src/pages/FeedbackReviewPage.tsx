@@ -10,6 +10,7 @@ import { DeptStatsGrid } from '../components/feedback/DeptStatsGrid';
 import { PeriodFilter } from '../components/feedback/PeriodFilter';
 import { DailyActivity } from '../components/feedback/DailyActivity';
 import { DepartmentTasksPage } from '../components/feedback/DepartmentTasksPage';
+import { usePeriodSelection } from '../components/feedback/usePeriodSelection';
 import { todayIso, isSingleDay, periodLabel } from '../components/feedback/deptStats';
 import { findSu10CompanyNode, collectDepartmentIds } from '../utils/departmentUtils';
 import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
@@ -87,8 +88,7 @@ const FilterBar: FC<IFilterBarProps> = ({ from, onFrom, to, onTo, q, onQ, tree, 
 // ---- Вкладка «Задачи» ----
 const TasksTab: FC = () => {
   const today = useMemo(() => todayIso(), []);
-  const [from, setFrom] = useState(today);
-  const [to, setTo] = useState(today);
+  const { from, to, setPreset, setDates } = usePeriodSelection(today);
   const [department, setDepartment] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const deptParam = searchParams.get('dept');
@@ -125,7 +125,15 @@ const TasksTab: FC = () => {
   if (deptParam) {
     return (
       <div className={styles.tabBody}>
-        <DepartmentTasksPage departmentId={deptParam} from={from} to={to} single={single} onBack={closeDept} />
+        <DepartmentTasksPage
+          departmentId={deptParam}
+          from={from}
+          to={to}
+          today={today}
+          onPreset={setPreset}
+          onDates={setDates}
+          onBack={closeDept}
+        />
       </div>
     );
   }
@@ -143,7 +151,7 @@ const TasksTab: FC = () => {
         overallNote={note}
         onSelect={s => s.department_id && openDept(s.department_id)}
         leadingControls={
-          <PeriodFilter from={from} to={to} today={today} onChange={(f, t) => { setFrom(f); setTo(t); }}>
+          <PeriodFilter from={from} to={to} today={today} onPreset={setPreset} onDates={setDates}>
             <DepartmentTreeSelect departments={tree ?? []} value={department} onChange={setDepartment}
               isLoading={structure.isPending} isError={structure.isError} showAllOption />
           </PeriodFilter>

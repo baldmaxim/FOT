@@ -2,15 +2,18 @@ import { type FC, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft } from 'lucide-react';
 import { feedbackService, type IDailyCount } from '../../services/feedbackService';
-import { fillColor, periodLabel } from './deptStats';
+import { fillColor, periodLabel, isSingleDay, type PresetKey } from './deptStats';
 import { DailyActivity } from './DailyActivity';
+import { PeriodFilter } from './PeriodFilter';
 import styles from './DepartmentTasksPage.module.css';
 
 interface IDepartmentTasksPageProps {
   departmentId: string;
   from: string;
   to: string;
-  single: boolean;
+  today: string;
+  onPreset: (key: PresetKey) => void;
+  onDates: (from: string, to: string) => void;
   onBack: () => void;
 }
 
@@ -26,7 +29,16 @@ const fmtRu = (iso: string): string => {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
-export const DepartmentTasksPage: FC<IDepartmentTasksPageProps> = ({ departmentId, from, to, single, onBack }) => {
+export const DepartmentTasksPage: FC<IDepartmentTasksPageProps> = ({
+  departmentId,
+  from,
+  to,
+  today,
+  onPreset,
+  onDates,
+  onBack,
+}) => {
+  const single = isSingleDay(from, to);
   const { data, isLoading } = useQuery({
     queryKey: ['fb-dept-tasks', departmentId, from, to],
     queryFn: () => feedbackService.getDepartmentTasks(departmentId, { from, to }),
@@ -73,6 +85,8 @@ export const DepartmentTasksPage: FC<IDepartmentTasksPageProps> = ({ departmentI
           <div className={styles.sub}>{periodLabel(from, to)} · {employees.length} сотр.</div>
         </div>
       </div>
+
+      <PeriodFilter from={from} to={to} today={today} onPreset={onPreset} onDates={onDates} />
 
       <div className={styles.summary}>
         <div className={styles.statOverall}>
