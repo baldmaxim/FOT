@@ -14,39 +14,55 @@ describe('timesheet-period.service', () => {
     expect(parseTimesheetApprovalPeriod('2026-04')).toBeNull();
   });
 
-  it('builds opening and overdue events on the first day of month', () => {
+  const reminderSettings = {
+    timezone: 'Europe/Moscow',
+    openingReminderHour: 9,
+    deadlineMorningHour: 10,
+    deadlineAfternoonHour: 16,
+    escalationHour: 17,
+    overdueHour: 9,
+  };
+
+  it('first day of month: opening for previous H2 (window opens), overdue for previous H1', () => {
     const events = getTimesheetReminderEventsForDate(
       new Date('2026-05-01T09:30:00+03:00'),
-      {
-        timezone: 'Europe/Moscow',
-        openingReminderHour: 9,
-        deadlineMorningHour: 10,
-        deadlineAfternoonHour: 16,
-        escalationHour: 17,
-        overdueHour: 9,
-      },
+      reminderSettings,
+    );
+
+    expect(events).toContainEqual({ period: '2026-04-H2', stage: 'opening' });
+    expect(events).toContainEqual({ period: '2026-04-H1', stage: 'overdue' });
+  });
+
+  it('day 15: deadline chain for previous H2 (its submission window closes today)', () => {
+    const events = getTimesheetReminderEventsForDate(
+      new Date('2026-05-15T17:10:00+03:00'),
+      reminderSettings,
+    );
+
+    expect(events).toContainEqual({ period: '2026-04-H2', stage: 'deadline_morning' });
+    expect(events).toContainEqual({ period: '2026-04-H2', stage: 'deadline_afternoon' });
+    expect(events).toContainEqual({ period: '2026-04-H2', stage: 'escalation' });
+  });
+
+  it('day 16: opening for current H1 (window opens), overdue for previous H2', () => {
+    const events = getTimesheetReminderEventsForDate(
+      new Date('2026-05-16T09:30:00+03:00'),
+      reminderSettings,
     );
 
     expect(events).toContainEqual({ period: '2026-05-H1', stage: 'opening' });
     expect(events).toContainEqual({ period: '2026-04-H2', stage: 'overdue' });
   });
 
-  it('builds deadline chain for second half on last day of month', () => {
+  it('builds deadline chain for current H1 on last day of month', () => {
     const events = getTimesheetReminderEventsForDate(
       new Date('2026-04-30T17:10:00+03:00'),
-      {
-        timezone: 'Europe/Moscow',
-        openingReminderHour: 9,
-        deadlineMorningHour: 10,
-        deadlineAfternoonHour: 16,
-        escalationHour: 17,
-        overdueHour: 9,
-      },
+      reminderSettings,
     );
 
-    expect(events).toContainEqual({ period: buildTimesheetApprovalPeriod(2026, 4, 'H2'), stage: 'deadline_morning' });
-    expect(events).toContainEqual({ period: buildTimesheetApprovalPeriod(2026, 4, 'H2'), stage: 'deadline_afternoon' });
-    expect(events).toContainEqual({ period: buildTimesheetApprovalPeriod(2026, 4, 'H2'), stage: 'escalation' });
+    expect(events).toContainEqual({ period: buildTimesheetApprovalPeriod(2026, 4, 'H1'), stage: 'deadline_morning' });
+    expect(events).toContainEqual({ period: buildTimesheetApprovalPeriod(2026, 4, 'H1'), stage: 'deadline_afternoon' });
+    expect(events).toContainEqual({ period: buildTimesheetApprovalPeriod(2026, 4, 'H1'), stage: 'escalation' });
   });
 });
 

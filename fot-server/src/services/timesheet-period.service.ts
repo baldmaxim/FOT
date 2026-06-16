@@ -167,16 +167,52 @@ export function getTimesheetReminderEventsForDate(
   >,
 ): ITimesheetReminderEvent[] {
   const parts = getZonedDateParts(date, settings.timezone);
+  // Цепочка напоминаний идёт по окну подачи: подать табель можно только за
+  // последний завершённый полупериод. Поэтому события привязаны не к текущему
+  // полупериоду, а к тому, чьё окно открывается/закрывается в этот день.
   const currentH1 = buildTimesheetApprovalPeriod(parts.year, parts.month, 'H1');
-  const currentH2 = buildTimesheetApprovalPeriod(parts.year, parts.month, 'H2');
+  const prevH2 = getPreviousTimesheetApprovalPeriod(currentH1); // (M-1) H2
+  const prevH1 = prevH2 ? getPreviousTimesheetApprovalPeriod(prevH2) : null; // (M-1) H1
   const lastDay = getLastDayOfMonth(parts.year, parts.month);
   const events: ITimesheetReminderEvent[] = [];
 
-  if (parts.day === 1 && parts.hour >= settings.openingReminderHour) {
-    events.push({ period: currentH1, stage: 'opening' });
+  // 1-е число: открылось окно подачи за прошлый H2 (16–конец прошлого месяца);
+  // прошлый H1 (1–15 прошлого месяца) — просрочка (окно закрылось последним днём).
+  if (parts.day === 1) {
+    if (prevH2 && parts.hour >= settings.openingReminderHour) {
+      events.push({ period: prevH2, stage: 'opening' });
+    }
+    if (prevH1 && parts.hour >= settings.overdueHour) {
+      events.push({ period: prevH1, stage: 'overdue' });
+    }
   }
 
-  if (parts.day === 15) {
+  // 15-е число: окно подачи за прошлый H2 закрывается сегодня — дедлайн-цепочка.
+  if (parts.day === 15 && prevH2) {
+    if (parts.hour >= settings.deadlineMorningHour) {
+      events.push({ period: prevH2, stage: 'deadline_morning' });
+    }
+    if (parts.hour >= settings.deadlineAfternoonHour) {
+      events.push({ period: prevH2, stage: 'deadline_afternoon' });
+    }
+    if (parts.hour >= settings.escalationHour) {
+      events.push({ period: prevH2, stage: 'escalation' });
+    }
+  }
+
+  // 16-е число: открылось окно подачи за текущий H1 (1–15);
+  // прошлый H2 — просрочка (его окно закрылось 15-го).
+  if (parts.day === 16) {
+    if (parts.hour >= settings.openingReminderHour) {
+      events.push({ period: currentH1, stage: 'opening' });
+    }
+    if (prevH2 && parts.hour >= settings.overdueHour) {
+      events.push({ period: prevH2, stage: 'overdue' });
+    }
+  }
+
+  // Последний день месяца: окно подачи за текущий H1 (16–конец) закрывается — дедлайн.
+  if (parts.day === lastDay) {
     if (parts.hour >= settings.deadlineMorningHour) {
       events.push({ period: currentH1, stage: 'deadline_morning' });
     }
@@ -185,33 +221,6 @@ export function getTimesheetReminderEventsForDate(
     }
     if (parts.hour >= settings.escalationHour) {
       events.push({ period: currentH1, stage: 'escalation' });
-    }
-  }
-
-  if (parts.day === 16 && parts.hour >= settings.openingReminderHour) {
-    events.push({ period: currentH2, stage: 'opening' });
-  }
-
-  if (parts.day === 16 && parts.hour >= settings.overdueHour) {
-    events.push({ period: currentH1, stage: 'overdue' });
-  }
-
-  if (parts.day === lastDay) {
-    if (parts.hour >= settings.deadlineMorningHour) {
-      events.push({ period: currentH2, stage: 'deadline_morning' });
-    }
-    if (parts.hour >= settings.deadlineAfternoonHour) {
-      events.push({ period: currentH2, stage: 'deadline_afternoon' });
-    }
-    if (parts.hour >= settings.escalationHour) {
-      events.push({ period: currentH2, stage: 'escalation' });
-    }
-  }
-
-  if (parts.day === 1 && parts.hour >= settings.overdueHour) {
-    const previousH2 = getPreviousTimesheetApprovalPeriod(currentH1);
-    if (previousH2) {
-      events.push({ period: previousH2, stage: 'overdue' });
     }
   }
 
