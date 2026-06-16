@@ -168,6 +168,11 @@ const buildRowsForDepartment = (
     };
 
   const nameToId = new Map<string, number>(data.employees.map(e => [e.full_name, e.id]));
+  const positionByEmpId = new Map<number, string>(
+    data.employees.map(e => [e.id, e.position_id ? (data.posMap.get(e.position_id) ?? '') : '']),
+  );
+  const positionForEmpId = (empId: number | undefined): string =>
+    empId != null ? (positionByEmpId.get(empId) ?? '') : '';
   const targets = listObjectExportTargets(splitData);
   const seenFullNames = new Set<string>();
 
@@ -188,6 +193,7 @@ const buildRowsForDepartment = (
         departmentName: data.departmentName,
         objectAddress,
         managerName,
+        position: positionForEmpId(empId),
       });
     }
   }
@@ -207,6 +213,7 @@ const buildRowsForDepartment = (
       departmentName: data.departmentName,
       objectAddress: '',
       managerName,
+      position: positionForEmpId(empId),
     });
   }
 
@@ -230,6 +237,7 @@ const buildRowsForDepartment = (
         departmentName: data.departmentName,
         objectAddress: CURRENT_ACTIVITY_ADDRESS,
         managerName,
+        position: positionForEmpId(empId),
       });
     }
   }
