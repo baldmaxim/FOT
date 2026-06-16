@@ -10,6 +10,19 @@ export const APPROVAL_ATTACHMENT_CATEGORY = 'timesheet_weekend_confirmation';
 const CORRECTION_ATTACHMENT_ENTITY_TYPE = 'attendance_adjustment';
 const CORRECTION_ATTACHMENT_PURPOSE = 'timesheet_correction';
 
+// Метки видов заявлений (как в leave-requests.controller.ts / фронтовом leaveRequestService.ts).
+const LEAVE_TYPE_LABELS: Record<string, string> = {
+  vacation: 'Отпуск',
+  sick_leave: 'Больничный',
+  remote: 'Удалёнка',
+  certificate: 'Справка',
+  time_correction: 'Корректировка табеля',
+  unpaid: 'За свой счёт',
+  work: 'Работа в выходной/праздник',
+  educational_leave: 'Учебный отпуск',
+  sick_worked: 'Работа на больничном',
+};
+
 export interface IApprovalAttachmentEmployee {
   employee_id: number;
   employee_name: string | null;
@@ -31,8 +44,10 @@ export interface IApprovalAttachment {
   kind?: 'weekend_memo' | 'correction' | 'leave_request';
   /** Все источники документа (один файл может быть и корректировкой, и заявлением). */
   sources?: Array<'correction' | 'leave_request'>;
-  /** Человекочитаемая причина появления: «Корректировка» | «Заявление» | «Корректировка, заявление» | «Служебка (выходные)». */
+  /** Причина появления: «Корректировка» | вид заявления («Отпуск», «Больничный»…) | «Корректировка, Отпуск» | «Служебка (выходные)». */
   reason_label?: string;
+  /** Для файла корректировки — id корректировки (нужен для удаления через correction-attachments). */
+  adjustment_id?: number | null;
   /** Субъект (к кому относится файл) — первый сотрудник, для обратной совместимости. */
   employee_id?: number | null;
   employee_name?: string | null;
@@ -199,11 +214,12 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
     }));
   }
 
-  // docId -> агрегат метаданных корректировок/заявлений (дедуп с сохранением источников/дат/сотрудников).
-  const docAgg = new Map<number, { sources: Set<'correction' | 'leave_request'>; dates: Set<string>; employeeIds: Set<number> }>();
-  const ensureAgg = (docId: number) => {
+  // docId -> агрегат метаданных корректировок/заявлений (дедуп с сохранением источников/дат/сотрудников/типов).
+  type DocAgg = { sources: Set<'correction' | 'leave_request'>; dates: Set<string>; employeeIds: Set<number>; leaveTypes: Set<string>; adjustmentId: number | null };
+  const docAgg = new Map<number, DocAgg>();
+  const ensureAgg = (docId: number): DocAgg => {
     let agg = docAgg.get(docId);
-    if (!agg) { agg = { sources: new Set(), dates: new Set(), employeeIds: new Set() }; docAgg.set(docId, agg); }
+    if (!agg) { agg = { sources: new Set(), dates: new Set(), employeeIds: new Set(), leaveTypes: new Set(), adjustmentId: null }; docAgg.set(docId, agg); }
     return agg;
   };
 
@@ -218,12 +234,14 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
       [CORRECTION_ATTACHMENT_ENTITY_TYPE, CORRECTION_ATTACHMENT_PURPOSE, adjustments.map(a => String(a.id))],
     );
     for (const link of ownLinks) {
-      const adj = adjById.get(Number(link.entity_id));
+      const adjId = Number(link.entity_id);
+      const adj = adjById.get(adjId);
       if (!adj) continue;
       const agg = ensureAgg(Number(link.document_id));
       agg.sources.add('correction');
       agg.dates.add(adj.work_date);
       agg.employeeIds.add(adj.employee_id);
+      if (agg.adjustmentId == null) agg.adjustmentId = adjId;
     }
 
     // --- 4. Кандидаты-заявки: source_id корректировки + time_correction-заявки дня. ---
@@ -284,11 +302,21 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
       );
       for (const l of legacy) addLeaveDoc(Number(l.leave_request_id), Number(l.id));
 
+      // Вид заявления (request_type) для подписи типа файла.
+      const leaveTypeById = new Map<number, string>();
+      const typeRows = await query<{ id: number | string; request_type: string | null }>(
+        `SELECT id, request_type FROM leave_requests WHERE id = ANY($1::int[])`,
+        [leaveIds],
+      );
+      for (const t of typeRows) if (t.request_type) leaveTypeById.set(Number(t.id), String(t.request_type));
+
       for (const [leaveId, set] of leaveDocIds) {
         const ctxs = leaveContexts.get(leaveId) ?? [];
+        const leaveType = leaveTypeById.get(leaveId);
         for (const docId of set) {
           const agg = ensureAgg(docId);
           agg.sources.add('leave_request');
+          if (leaveType) agg.leaveTypes.add(leaveType);
           for (const ctx of ctxs) { agg.dates.add(ctx.work_date); agg.employeeIds.add(ctx.employee_id); }
         }
       }
@@ -369,12 +397,14 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
     return empId != null ? positionByEmp.get(empId) ?? null : null;
   };
 
-  const composeReason = (sources: Set<'correction' | 'leave_request'>): string => {
-    const hasC = sources.has('correction');
-    const hasL = sources.has('leave_request');
-    if (hasC && hasL) return 'Корректировка, заявление';
-    if (hasL) return 'Заявление';
-    return 'Корректировка';
+  const composeReason = (sources: Set<'correction' | 'leave_request'>, leaveTypes: Set<string>): string => {
+    const parts: string[] = [];
+    if (sources.has('correction')) parts.push('Корректировка');
+    if (sources.has('leave_request')) {
+      const labels = [...new Set([...leaveTypes].map(t => LEAVE_TYPE_LABELS[t] ?? 'Заявление'))];
+      parts.push(labels.length > 0 ? labels.join(', ') : 'Заявление');
+    }
+    return parts.join(', ');
   };
 
   // --- Сборка. ---
@@ -384,6 +414,7 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
     kind: 'weekend_memo',
     sources: [],
     reason_label: 'Служебка (выходные)',
+    adjustment_id: null,
     employee_id: null,
     employee_name: null,
     employee_position: null,
@@ -414,7 +445,8 @@ export async function listApprovalPeriodAttachments(approvalId: number): Promise
       created_at: doc.created_at,
       kind: agg.sources.has('correction') ? 'correction' : 'leave_request',
       sources: [...agg.sources],
-      reason_label: composeReason(agg.sources),
+      reason_label: composeReason(agg.sources, agg.leaveTypes),
+      adjustment_id: agg.adjustmentId,
       employee_id: first?.employee_id ?? null,
       employee_name: first?.employee_name ?? null,
       employee_position: first?.employee_position ?? null,

@@ -17,6 +17,8 @@ import {
   type IBulkResult,
 } from '../../services/correctionApprovalService';
 import { timesheetService } from '../../services/timesheetService';
+import { correctionAttachmentsService } from '../../services/correctionAttachmentsService';
+import { documentService } from '../../services/documentService';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { DepartmentTimesheetModal } from '../../components/timesheet/DepartmentTimesheetModal';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
@@ -630,9 +632,16 @@ interface IApprovalCardExtrasProps {
 
 const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) => {
   const toast = useToast();
+  const queryClient = useQueryClient();
+  const { isAdmin, profile } = useAuth();
   const [attModalOpen, setAttModalOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [exporting, setExporting] = useState<'fact' | '1c' | 'employee' | 'employee_1c' | null>(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | ''>('');
+
+  // Удалять файлы вправе админы и начальники отделов/участков (бэк дополнительно проверяет доступ и статус).
+  const canManageAttachments =
+    isAdmin || (profile?.managed_department_ids?.length ?? 0) > 0 || profile?.has_direct_reports === true;
 
   const monthStr = useMemo(() => {
     const d = new Date(row.start_date + 'T00:00:00');
@@ -650,7 +659,7 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
     queryFn: () => timesheetApprovalService.listAttachments({ approval_id: row.id }),
     staleTime: 30_000,
   });
-  const attachments = attachmentsQuery.data ?? [];
+  const attachments = useMemo(() => attachmentsQuery.data ?? [], [attachmentsQuery.data]);
 
   const loadAttachmentUrl = useCallback(
     async (att: IApprovalAttachment, disposition: 'inline' | 'attachment' = 'attachment'): Promise<string> => {
@@ -663,6 +672,32 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
       return download_url;
     },
     [],
+  );
+
+  const handleDeleteAttachment = useCallback(
+    async (documentId: number) => {
+      const att = attachments.find(a => a.document_id === documentId);
+      if (!att) return;
+      if (!window.confirm(`Удалить файл «${att.file_name}»?`)) return;
+      setDeletingId(documentId);
+      try {
+        if (att.kind === 'weekend_memo') {
+          await timesheetApprovalService.deleteAttachment(documentId);
+        } else if (att.kind === 'correction') {
+          if (att.adjustment_id == null) throw new Error('Не удалось определить корректировку файла');
+          await correctionAttachmentsService.remove(att.adjustment_id, documentId);
+        } else {
+          await documentService.remove(documentId);
+        }
+        await queryClient.invalidateQueries({ queryKey: ['approval-attachments', row.id] });
+        toast.success?.('Файл удалён');
+      } catch (err) {
+        toast.error?.(err instanceof Error ? err.message : 'Не удалось удалить файл');
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [attachments, queryClient, row.id, toast],
   );
 
   const downloadBlob = (blob: Blob, name: string) => {
@@ -778,6 +813,9 @@ const ApprovalCardExtras: FC<IApprovalCardExtrasProps> = ({ row, employees }) =>
           loading={attachmentsQuery.isLoading}
           urlLoader={loadAttachmentUrl}
           onClose={() => setAttModalOpen(false)}
+          onDelete={canManageAttachments ? handleDeleteAttachment : undefined}
+          canDelete={canManageAttachments ? () => true : undefined}
+          deletingId={deletingId}
         />
       )}
       {!isPersonal && (

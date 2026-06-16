@@ -1,5 +1,5 @@
 import { type FC, useState } from 'react';
-import { FileText, Eye, Trash2 } from 'lucide-react';
+import { Eye, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { FilePreviewModal } from '../documents/FilePreviewModal';
 import { displayFileName } from '../../utils/fileNameDisplay';
 import { formatFileSize, formatDateRanges } from '../../utils/attachmentFormat';
@@ -37,11 +37,12 @@ const subjectTitle = (att: IApprovalAttachment): string | undefined => {
 
 const AttachmentRow: FC<{
   att: IApprovalAttachment;
+  index: number;
   onPreview: () => void;
   onDelete?: (documentId: number) => void;
   canDelete: boolean;
   deleting: boolean;
-}> = ({ att, onPreview, onDelete, canDelete, deleting }) => {
+}> = ({ att, index, onPreview, onDelete, canDelete, deleting }) => {
   const subject = subjectLabel(att);
   const showUploader =
     !!att.uploaded_by_name && (!subject || (att.employees?.length ?? 0) > 1 || att.uploaded_by_name !== att.employee_name);
@@ -49,23 +50,23 @@ const AttachmentRow: FC<{
 
   return (
     <li className={styles.row}>
-      <FileText size={16} className={styles.fileIcon} />
+      <span className={styles.num}>{index}</span>
       <div className={styles.info}>
-        <div className={styles.nameLine}>
+        <div className={styles.topLine}>
+          {att.reason_label && <span className={styles.badge}>{att.reason_label}</span>}
           <span className={styles.name} title={att.file_name}>{displayFileName(att.file_name)}</span>
           <span className={styles.size}>{formatFileSize(att.file_size)}</span>
         </div>
-        <div className={styles.metaLine}>
-          {att.reason_label && <span className={styles.badge}>{att.reason_label}</span>}
-          {dates && <span className={styles.dates}>{dates}</span>}
-        </div>
-        {subject && (
+        {(subject || dates) && (
           <div className={styles.metaLine} title={subjectTitle(att)}>
-            <span className={styles.metaKey}>Сотрудник:</span>
-            <span className={styles.metaVal}>
-              {subject}
-              {att.employee_position && (att.employees?.length ?? 0) <= 1 ? `, ${att.employee_position}` : ''}
-            </span>
+            {subject && (
+              <span className={styles.metaVal}>
+                {subject}
+                {att.employee_position && (att.employees?.length ?? 0) <= 1 ? `, ${att.employee_position}` : ''}
+              </span>
+            )}
+            {subject && dates && <span className={styles.dot}>·</span>}
+            {dates && <span className={styles.dates}>{dates}</span>}
           </div>
         )}
         {showUploader && (
@@ -109,6 +110,8 @@ export const AttachmentList: FC<IAttachmentListProps> = ({
   grouped = true,
 }) => {
   const [preview, setPreview] = useState<IApprovalAttachment | null>(null);
+  const [openSubmitter, setOpenSubmitter] = useState(true);
+  const [openOthers, setOpenOthers] = useState(true);
 
   if (loading) return <div className={styles.empty}>Загрузка…</div>;
   if (attachments.length === 0) return <div className={styles.empty}>Файлов нет</div>;
@@ -117,32 +120,43 @@ export const AttachmentList: FC<IAttachmentListProps> = ({
   const otherFiles = attachments.filter(a => !a.is_submitter_file);
   const showHeaders = grouped && submitterFiles.length > 0 && otherFiles.length > 0;
 
-  const renderList = (items: IApprovalAttachment[]) => (
-    <ul className={styles.list}>
-      {items.map(att => (
-        <AttachmentRow
-          key={att.document_id}
-          att={att}
-          onPreview={() => setPreview(att)}
-          onDelete={onDelete}
-          canDelete={Boolean(canDelete?.(att))}
-          deleting={deletingId === att.document_id}
-        />
-      ))}
-    </ul>
+  const renderRow = (att: IApprovalAttachment, i: number) => (
+    <AttachmentRow
+      key={att.document_id}
+      att={att}
+      index={i + 1}
+      onPreview={() => setPreview(att)}
+      onDelete={onDelete}
+      canDelete={Boolean(canDelete?.(att))}
+      deleting={deletingId === att.document_id}
+    />
+  );
+
+  const renderGroup = (
+    title: string,
+    items: IApprovalAttachment[],
+    open: boolean,
+    toggle: () => void,
+  ) => (
+    <div className={styles.group}>
+      <button type="button" className={styles.groupHeader} onClick={toggle} aria-expanded={open}>
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span className={styles.groupTitle}>{title}</span>
+        <span className={styles.groupCount}>{items.length}</span>
+      </button>
+      {open && <ul className={styles.list}>{items.map(renderRow)}</ul>}
+    </div>
   );
 
   return (
     <div className={styles.container}>
       {showHeaders ? (
         <>
-          <div className={styles.groupHeader}>Руководитель</div>
-          {renderList(submitterFiles)}
-          <div className={styles.groupHeader}>Сотрудники</div>
-          {renderList(otherFiles)}
+          {renderGroup('Руководитель', submitterFiles, openSubmitter, () => setOpenSubmitter(v => !v))}
+          {renderGroup('Сотрудники', otherFiles, openOthers, () => setOpenOthers(v => !v))}
         </>
       ) : (
-        renderList(attachments)
+        <ul className={styles.list}>{attachments.map(renderRow)}</ul>
       )}
 
       {preview && (

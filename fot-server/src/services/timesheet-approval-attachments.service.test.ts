@@ -86,8 +86,15 @@ const setupHappyPath = (): void => {
       ];
     }
 
-    // --- leave_requests (time_correction) ---
+    // --- leave_requests ---
     if (sql.includes('FROM leave_requests')) {
+      // Вид заявления по id (для подписи типа).
+      if (sql.includes('SELECT id, request_type')) {
+        const ids = (params[0] as number[]).map(Number);
+        const types: Record<number, string> = { 55: 'vacation', 77: 'vacation', 66: 'time_correction' };
+        return ids.filter(id => types[id]).map(id => ({ id, request_type: types[id] }));
+      }
+      // time_correction-заявки дня.
       return [{ id: 66, employee_id: 200, d: '2026-06-07' }];
     }
 
@@ -146,30 +153,32 @@ describe('listApprovalPeriodAttachments', () => {
     expect(memo.uploader_position).toBe('Начальник отдела');
     expect(memo.work_dates).toEqual([]);
 
-    // Корректировка руководителя — два источника.
+    // Корректировка руководителя — два источника, тип отпуска в подписи, adjustment_id для удаления.
     const corr = result[1];
     expect(corr.document_id).toBe(20);
     expect(corr.kind).toBe('correction');
     expect([...(corr.sources ?? [])].sort()).toEqual(['correction', 'leave_request']);
-    expect(corr.reason_label).toBe('Корректировка, заявление');
+    expect(corr.reason_label).toBe('Корректировка, Отпуск');
+    expect(corr.adjustment_id).toBe(1004);
     expect(corr.is_submitter_file).toBe(true);
     expect(corr.employee_name).toBe('Иванов Иван');
     expect(corr.employee_position).toBe('Геодезист');
     expect(corr.work_dates).toEqual(['2026-06-05']);
 
-    // Отпуск: один файл без own-ссылки, дедуп на 3 дня.
+    // Отпуск: один файл без own-ссылки, дедуп на 3 дня, тип «Отпуск».
     const vacation = result[2];
     expect(vacation.document_id).toBe(30);
     expect(vacation.kind).toBe('leave_request');
-    expect(vacation.reason_label).toBe('Заявление');
+    expect(vacation.reason_label).toBe('Отпуск');
     expect(vacation.is_submitter_file).toBe(false);
     expect(vacation.employee_name).toBe('Иванов Иван');
     expect(vacation.work_dates).toEqual(['2026-06-01', '2026-06-02', '2026-06-03']);
 
-    // Legacy-файл заявления (documents.leave_request_id) тоже попал.
+    // Legacy-файл заявления (documents.leave_request_id) тоже попал; тип time_correction.
     const legacy = result[3];
     expect(legacy.document_id).toBe(40);
     expect(legacy.kind).toBe('leave_request');
+    expect(legacy.reason_label).toBe('Корректировка табеля');
     expect(legacy.employee_name).toBe('Петров Пётр');
     expect(legacy.employee_position).toBe('Инженер');
     expect(legacy.work_dates).toEqual(['2026-06-07']);

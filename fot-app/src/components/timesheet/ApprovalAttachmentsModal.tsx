@@ -12,6 +12,9 @@ interface IApprovalAttachmentsModalProps {
   loading?: boolean;
   urlLoader: (att: IApprovalAttachment, disposition: Disposition) => Promise<string>;
   onClose: () => void;
+  onDelete?: (documentId: number) => void;
+  canDelete?: (att: IApprovalAttachment) => boolean;
+  deletingId?: number | null;
 }
 
 export const ApprovalAttachmentsModal: FC<IApprovalAttachmentsModalProps> = ({
@@ -19,6 +22,9 @@ export const ApprovalAttachmentsModal: FC<IApprovalAttachmentsModalProps> = ({
   loading = false,
   urlLoader,
   onClose,
+  onDelete,
+  canDelete,
+  deletingId = null,
 }) => {
   return (
     <ModalShell
@@ -38,7 +44,14 @@ export const ApprovalAttachmentsModal: FC<IApprovalAttachmentsModalProps> = ({
             </button>
           </div>
           <div className={styles.body}>
-            <AttachmentList attachments={attachments} loading={loading} urlLoader={urlLoader} />
+            <AttachmentList
+              attachments={attachments}
+              loading={loading}
+              urlLoader={urlLoader}
+              onDelete={onDelete}
+              canDelete={canDelete}
+              deletingId={deletingId}
+            />
           </div>
         </>
       )}

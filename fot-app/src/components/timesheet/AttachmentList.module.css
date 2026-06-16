@@ -1,7 +1,7 @@
 .container {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -11,13 +11,48 @@
   font-size: 13px;
 }
 
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.groupHeader:hover {
+  color: var(--text-primary);
+}
+
+.groupTitle {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.groupCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.14));
   color: var(--text-secondary);
-  padding: 8px 2px 2px;
 }
 
 .list {
@@ -33,16 +68,20 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-secondary, var(--surface));
 }
 
-.fileIcon {
+.num {
   flex: 0 0 auto;
-  margin-top: 2px;
+  min-width: 18px;
+  margin-top: 1px;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-secondary);
+  text-align: right;
 }
 
 .info {
@@ -53,14 +92,28 @@
   gap: 3px;
 }
 
-.nameLine {
+.topLine {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
+.badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--accent-soft, rgba(99, 102, 241, 0.14));
+  color: var(--accent, #6366f1);
+  white-space: nowrap;
+}
+
 .name {
+  flex: 1 1 auto;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
@@ -68,6 +121,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  text-align: right;
 }
 
 .size {
@@ -95,20 +149,11 @@
   overflow-wrap: anywhere;
 }
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  background: var(--accent-soft, rgba(99, 102, 241, 0.14));
-  color: var(--accent, #6366f1);
-  white-space: nowrap;
+.dot {
+  color: var(--text-tertiary, var(--text-secondary));
 }
 
 .dates {
-  font-size: 12px;
   color: var(--text-secondary);
 }
 
@@ -148,7 +193,7 @@
 
 @media (max-width: 430px) {
   .row {
-    padding: 10px;
+    padding: 9px 10px;
   }
 
   .iconBtn {

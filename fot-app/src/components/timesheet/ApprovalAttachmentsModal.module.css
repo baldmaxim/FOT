@@ -13,7 +13,7 @@
   background: var(--bg-primary, var(--surface));
   border: 1px solid var(--border);
   border-radius: 12px;
-  width: min(640px, 96vw);
+  width: min(820px, 96vw);
   max-height: min(80dvh, 760px);
   display: flex;
   flex-direction: column;
