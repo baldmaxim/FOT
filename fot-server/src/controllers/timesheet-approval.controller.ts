@@ -228,7 +228,7 @@ async function ensureTimesheetActionDepartmentAccess(
  * (для адресации HR-уведомлений). Возвращает null, если у пользователя
  * нет employee_id или нет ни одного активного подчинённого с org_department_id.
  */
-async function resolvePersonalSubmissionContext(req: AuthenticatedRequest): Promise<{
+export async function resolvePersonalSubmissionContext(req: AuthenticatedRequest): Promise<{
   managerEmployeeId: number;
   employeeIds: number[];
   affectedDepartmentIds: string[];
@@ -238,13 +238,18 @@ async function resolvePersonalSubmissionContext(req: AuthenticatedRequest): Prom
   const subordinateIds = await listDirectSubordinates(managerEmployeeId);
   if (subordinateIds.length === 0) return null;
 
+  // Сам руководитель тоже входит в персональную подачу (строка РУКОВОДИТЕЛЬ /
+  // source='self' в его сетке). Без него снимок состоит лишь из подчинённых и
+  // руководитель «теряется» у проверяющего. Зеркалит resolveManagerPersonalSnapshotIds.
+  const candidateIds = [...new Set([managerEmployeeId, ...subordinateIds])];
+
   const rows = await query<{ id: number; org_department_id: string | null }>(
     `SELECT id, org_department_id
        FROM employees
       WHERE id = ANY($1::int[])
         AND (is_archived IS NULL OR is_archived = false)
         AND (employment_status IS NULL OR employment_status = 'active')`,
-    [subordinateIds],
+    [candidateIds],
   );
 
   const employeeIds = rows.map(r => Number(r.id)).filter(id => Number.isInteger(id) && id > 0);
