@@ -31,7 +31,11 @@ vi.mock('../config/postgres.js', () => ({
 vi.mock('../services/data-scope.service.js', () => ({ resolveCompanyScope: h.resolveCompanyScope }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest },
-  AUDIT_ACTIONS: { CONTRACTOR_SUBMISSION_APPROVED: 'CONTRACTOR_SUBMISSION_APPROVED' },
+  AUDIT_ACTIONS: {
+    CONTRACTOR_SUBMISSION_APPROVED: 'CONTRACTOR_SUBMISSION_APPROVED',
+    CONTRACTOR_SUBMISSION_REJECTED: 'CONTRACTOR_SUBMISSION_REJECTED',
+    CONTRACTOR_SUBMISSION_PASS_DECIDED: 'CONTRACTOR_SUBMISSION_PASS_DECIDED',
+  },
 }));
 vi.mock('../config/contractor.js', () => ({
   isContractorSigurDryRun: h.isDryRun,
@@ -108,6 +112,7 @@ describe('contractorAdminController.approveSubmission', () => {
     h.isDryRun.mockReturnValue(false);
     h.execute.mockResolvedValue(1);
     h.logFromRequest.mockResolvedValue(undefined);
+    h.assignCard.mockResolvedValue({ card: { cardId: 10 }, previousSigurEmployeeId: null, reassigned: false });
     // withTransaction(fn) → выполняет fn с фейковым client.
     h.withTransaction.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) =>
       fn({ query: vi.fn().mockResolvedValue({ rows: [] }) }),
@@ -238,7 +243,7 @@ describe('contractorAdminController.approveSubmission', () => {
     await contractorAdminController.approveSubmission(makeReq(), res as never);
 
     // привязка карты — раньше переименования, и при провале переименование не выполняется
-    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], undefined, 'external', true);
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], undefined, 'external', true, { expectedHolderName: 'A', reassignPolicy: 'safe-only' });
     expect(h.updEmp).not.toHaveBeenCalled();
     const body = res.body as { data: { status: string; failed: number; errors: string[] } };
     expect(body.data.status).toBe('partially_applied');
@@ -281,6 +286,7 @@ describe('contractorAdminController.decideSubmission — срок действи
     h.isDryRun.mockReturnValue(false);
     h.execute.mockResolvedValue(1);
     h.logFromRequest.mockResolvedValue(undefined);
+    h.assignCard.mockResolvedValue({ card: { cardId: 10 }, previousSigurEmployeeId: null, reassigned: false });
     h.resolveAP.mockResolvedValue({ accessPointIds: [], unmatchedNames: [] });
     // Поиск дублей (findDuplicatesForNames) делает доп. query() — по умолчанию пусто.
     h.query.mockResolvedValue([]);
@@ -313,7 +319,7 @@ describe('contractorAdminController.decideSubmission — срок действи
     );
 
     const expIso = new Date('2027-01-15T23:59:59').toISOString();
-    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true);
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true, { expectedHolderName: 'A', reassignPolicy: 'safe-only' });
 
     const passUpd = txCalls.find(c => String(c[0]).includes('UPDATE contractor_passes'));
     expect(passUpd).toBeTruthy();
@@ -340,7 +346,7 @@ describe('contractorAdminController.decideSubmission — срок действи
     const eoy = `${new Date().getFullYear()}-12-31`;
     const def = eoy >= minDate ? eoy : minDate;
     const expIso = new Date(`${def}T23:59:59`).toISOString();
-    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true);
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true, { expectedHolderName: 'A', reassignPolicy: 'safe-only' });
   });
 
   it('per-item expires_at приоритетнее общего', async () => {
@@ -362,7 +368,7 @@ describe('contractorAdminController.decideSubmission — срок действи
     );
 
     const expIso = new Date('2028-03-03T23:59:59').toISOString();
-    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true);
+    expect(h.assignCard).toHaveBeenCalledWith(11, ['168,15956'], expIso, 'external', true, { expectedHolderName: 'A', reassignPolicy: 'safe-only' });
   });
 
   it('срок раньше завтрашней даты → пропуск не активируется (failed)', async () => {
@@ -576,5 +582,144 @@ describe('contractorAdminController.blockDuplicate', () => {
     const body = res.body as { data: { action: string; dry_run: boolean } };
     expect(body.data.action).toBe('dismissed');
     expect(body.data.dry_run).toBe(true);
+  });
+});
+
+describe('contractorAdminController.rejectSubmissionPasses', () => {
+  const SUB = 'sub-1';
+  const P_PENDING = '11111111-1111-1111-1111-111111111111';
+  const P_APPLIED = '22222222-2222-2222-2222-222222222222';
+
+  const makeRejReq = (bodyObj: unknown) => ({
+    user: { id: 'admin-1', company_scope: { roots: 'all' } },
+    params: { id: SUB },
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+    body: bodyObj,
+  }) as never;
+
+  type ReturnedRow = { id: string; pass_number: string; sigur_employee_id: number | null; old_status: string };
+
+  // Прогон транзакции: client.query маршрутизируется по фрагменту SQL.
+  // capturedTxCalls собирает все вызовы для ассертов (CTE-UPDATE, закрытие holders, recompute).
+  let txCalls: unknown[][] = [];
+  const wireTx = (returnedRows: ReturnedRow[], aggRow: Record<string, string>) => {
+    h.withTransaction.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      const q = vi.fn(async (sql: string) => {
+        if (String(sql).includes('WITH locked')) return { rows: returnedRows };
+        if (String(sql).includes('LEFT JOIN contractor_passes')) return { rows: [aggRow] };
+        return { rows: [] };
+      });
+      const r = await fn({ query: q });
+      txCalls = txCalls.concat(q.mock.calls);
+      return r;
+    });
+  };
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    txCalls = [];
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.bgConn.mockResolvedValue('external');
+    h.isDryRun.mockReturnValue(false);
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('409 если заявка уже обработана', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: SUB, status: 'approved' });
+    const res = makeRes();
+    await contractorAdminController.rejectSubmissionPasses(
+      makeRejReq({ pass_ids: [P_PENDING] }), res as never,
+    );
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('защита: holders закрываются ТОЛЬКО по id из RETURNING, не по входным pass_ids', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: SUB, status: 'pending' })       // submission
+      .mockResolvedValueOnce({ status: 'rejected' });              // after-status
+    // RETURNING вернул только pending-пропуск (DB-страж отфильтровал applied).
+    wireTx(
+      [{ id: P_PENDING, pass_number: '001', sigur_employee_id: 11, old_status: 'submitted' }],
+      { current: 'pending', total: '0', pending: '0', approved: '0', rejected: '0' },
+    );
+
+    const res = makeRes();
+    await contractorAdminController.rejectSubmissionPasses(
+      // передаём и applied-id — он не должен попасть в закрытие holders
+      makeRejReq({ pass_ids: [P_PENDING, P_APPLIED] }), res as never,
+    );
+
+    const holderCall = txCalls.find(c => String(c[0]).includes('contractor_pass_holders'));
+    expect(holderCall).toBeTruthy();
+    expect(holderCall?.[1]?.[0]).toEqual([P_PENDING]);       // только RETURNING-id
+    expect(holderCall?.[1]?.[0]).not.toContain(P_APPLIED);
+    const body = res.body as { data: { returned: number } };
+    expect(body.data.returned).toBe(1);
+  });
+
+  it('первичная заявка (submitted): контейнер сохранён, Sigur не зовётся, заявка → rejected', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: SUB, status: 'pending' })
+      .mockResolvedValueOnce({ status: 'rejected' });
+    wireTx(
+      [{ id: P_PENDING, pass_number: '001', sigur_employee_id: 11, old_status: 'submitted' }],
+      { current: 'pending', total: '0', pending: '0', approved: '0', rejected: '0' },
+    );
+
+    const res = makeRes();
+    await contractorAdminController.rejectSubmissionPasses(
+      makeRejReq({ pass_ids: [P_PENDING] }), res as never,
+    );
+
+    // updateSigurEmployee НЕ вызван (профиль первички уже нейтрален).
+    expect(h.updEmp).not.toHaveBeenCalled();
+    // CTE-UPDATE НЕ обнуляет sigur_employee_id / card_uid.
+    const updCall = txCalls.find(c => String(c[0]).includes('WITH locked'));
+    expect(updCall).toBeTruthy();
+    expect(String(updCall?.[0])).not.toMatch(/SET[\s\S]*?sigur_employee_id\s*=\s*NULL/);
+    expect(String(updCall?.[0])).not.toContain('card_uid');
+    const body = res.body as { data: { returned: number; status: string } };
+    expect(body.data.returned).toBe(1);
+    expect(body.data.status).toBe('rejected');
+  });
+
+  it('changeHolder (blocked): профиль-контейнер нейтрализован, sigur_employee_id сохранён', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: SUB, status: 'pending' })
+      .mockResolvedValueOnce({ status: 'rejected' });
+    wireTx(
+      [{ id: P_PENDING, pass_number: '007', sigur_employee_id: 22, old_status: 'blocked' }],
+      { current: 'pending', total: '0', pending: '0', approved: '0', rejected: '0' },
+    );
+
+    const res = makeRes();
+    await contractorAdminController.rejectSubmissionPasses(
+      makeRejReq({ pass_ids: [P_PENDING] }), res as never,
+    );
+
+    expect(h.updEmp).toHaveBeenCalledWith(22, { name: 'Пропуск 007', blocked: true }, 'external');
+    // контейнер не обнуляется в БД.
+    const updCall = txCalls.find(c => String(c[0]).includes('WITH locked'));
+    expect(String(updCall?.[0])).not.toMatch(/SET[\s\S]*?sigur_employee_id\s*=\s*NULL/);
+  });
+
+  it('dry-run: Sigur не зовётся даже для changeHolder', async () => {
+    h.isDryRun.mockReturnValue(true);
+    h.queryOne
+      .mockResolvedValueOnce({ id: SUB, status: 'pending' })
+      .mockResolvedValueOnce({ status: 'rejected' });
+    wireTx(
+      [{ id: P_PENDING, pass_number: '007', sigur_employee_id: 22, old_status: 'blocked' }],
+      { current: 'pending', total: '0', pending: '0', approved: '0', rejected: '0' },
+    );
+
+    const res = makeRes();
+    await contractorAdminController.rejectSubmissionPasses(
+      makeRejReq({ pass_ids: [P_PENDING] }), res as never,
+    );
+
+    expect(h.updEmp).not.toHaveBeenCalled();
   });
 });

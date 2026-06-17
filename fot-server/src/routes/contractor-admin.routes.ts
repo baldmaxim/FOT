@@ -42,6 +42,8 @@ router.get('/submissions/:id/export', apprView, contractorAdminController.export
 router.get('/submissions/:id', apprView, contractorAdminController.getSubmissionDetail);
 router.post('/submissions/:id/approve', apprEdit, requireCritical2FA, contractorAdminController.approveSubmission);
 router.post('/submissions/:id/reject', apprEdit, contractorAdminController.rejectSubmission);
+// Отклонить выделенные пропуска: возврат в пул подрядчика пустыми (ФИО очищается).
+router.post('/submissions/:id/reject-passes', apprEdit, contractorAdminController.rejectSubmissionPasses);
 router.post('/submissions/:id/decide', apprEdit, requireCritical2FA, contractorAdminController.decideSubmission);
 // Блокировка старого дубля-однофамильца только что активированного (по batch_id).
 router.post('/duplicates/block', apprEdit, requireCritical2FA, contractorAdminController.blockDuplicate);

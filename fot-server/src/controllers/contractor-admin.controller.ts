@@ -460,7 +460,10 @@ export const contractorAdminController = {
             sigurEmployeeId = profile.sigurEmployeeId;
             try {
               // Карта обязательна: при отсутствии в Sigur — создаём из UID/W26.
-              await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], expIso, connection, true);
+              // Профиль свежий (placeholder-имя) → safe-only без ФИО: не «крадём» карту в пустой слот.
+              await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], expIso, connection, true, {
+                reassignPolicy: 'safe-only',
+              });
             } catch (cardError) {
               const m = cardError instanceof Error ? cardError.message : String(cardError);
               // Провал привязки карты => пропуск бесполезен. В БД не пишем,
@@ -979,7 +982,10 @@ export const contractorAdminController = {
             if (!row.card_uid) {
               throw new Error('нет UID карты');
             }
-            await assignSigurEmployeeCardBinding(row.pass_sigur_id, [row.card_uid], undefined, connection, true);
+            await assignSigurEmployeeCardBinding(row.pass_sigur_id, [row.card_uid], undefined, connection, true, {
+              expectedHolderName: row.holder_name ?? undefined,
+              reassignPolicy: 'safe-only',
+            });
 
             await updateSigurEmployee(
               row.pass_sigur_id,
@@ -1352,7 +1358,22 @@ export const contractorAdminController = {
               if (!pass.card_uid) {
                 throw new Error('нет UID карты');
               }
-              await assignSigurEmployeeCardBinding(pass.sigur_employee_id, [pass.card_uid], itemExpIso, connection, true);
+              const cardBind = await assignSigurEmployeeCardBinding(
+                pass.sigur_employee_id,
+                [pass.card_uid],
+                itemExpIso,
+                connection,
+                true,
+                { expectedHolderName: pass.holder_name ?? undefined, reassignPolicy: 'safe-only' },
+              );
+              if (cardBind.reassigned && cardBind.previousSigurEmployeeId) {
+                localWarnings.push(
+                  `pass ${pass.id}: карта перенесена с профиля ${cardBind.previousSigurEmployeeId} → ${pass.sigur_employee_id}`,
+                );
+                console.log(
+                  `[contractor-approve] card reassigned pass=${pass.id} from=${cardBind.previousSigurEmployeeId} to=${pass.sigur_employee_id}`,
+                );
+              }
 
               await updateSigurEmployee(
                 pass.sigur_employee_id,
@@ -1787,6 +1808,166 @@ export const contractorAdminController = {
       }
       console.error('Contractor rejectSubmission error:', error);
       res.status(500).json({ success: false, error: 'Не удалось отклонить заявку' });
+    }
+  },
+
+  /**
+   * POST /submissions/:id/reject-passes — отклонить ВЫДЕЛЕННЫЕ пропуска заявки.
+   * Body: { pass_ids: uuid[], comment? }.
+   * Выбранные pending-пропуска возвращаются в пул подрядчика ПУСТЫМИ (ФИО очищается),
+   * как штатный assigned-слот: org_department_id / sigur_employee_id / card_uid СОХРАНЯЮТСЯ
+   * (Sigur-профиль — переиспользуемый контейнер, см. миграцию 178). Открытая строка истории
+   * владельца закрывается (valid_until), не удаляется. Sigur трогаем только для changeHolder-
+   * пропусков (status='blocked' до очистки) — возвращаем профиль к нейтральному виду.
+   */
+  async rejectSubmissionPasses(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const submissionId = req.params.id;
+      const { pass_ids, comment } = z.object({
+        pass_ids: z.array(z.string().uuid()).min(1).max(MAX_ACTIVATION_BATCH),
+        comment: z.string().trim().max(1000).optional(),
+      }).parse(req.body);
+
+      const sub = await queryOne<{ id: string; status: string }>(
+        'SELECT id, status FROM contractor_submissions WHERE id = $1::uuid',
+        [submissionId],
+      );
+      if (!sub) {
+        res.status(404).json({ success: false, error: 'Заявка не найдена' });
+        return;
+      }
+      if (sub.status !== 'pending' && sub.status !== 'partially_applied') {
+        res.status(409).json({ success: false, error: 'Заявка уже обработана' });
+        return;
+      }
+
+      // 1) Очистка holder-состояния ТОЛЬКО реально pending-пропусков (guard approval_status='pending'
+      //    защищает активные/одобренные пропуска от stale/malicious id). Контейнер
+      //    (sigur_employee_id / card_uid / org_department_id) и дефолты слота сохраняем.
+      const returned = await withTransaction(async client => {
+        const upd = await client.query<{
+          id: string; pass_number: string; sigur_employee_id: number | null; old_status: string;
+        }>(
+          `WITH locked AS (
+             SELECT id, pass_number, sigur_employee_id, status AS old_status
+               FROM contractor_passes
+              WHERE submission_id = $1::uuid
+                AND id = ANY($2::uuid[])
+                AND approval_status = 'pending'
+              FOR UPDATE
+           )
+           UPDATE contractor_passes p
+              SET status          = 'assigned',
+                  approval_status = 'not_submitted',
+                  holder_name     = NULL,
+                  submission_id   = NULL,
+                  is_active       = false,
+                  updated_at      = now()
+             FROM locked
+            WHERE p.id = locked.id
+           RETURNING p.id, locked.pass_number, locked.sigur_employee_id, locked.old_status`,
+          [submissionId, pass_ids],
+        );
+        const rows = upd.rows;
+
+        if (rows.length > 0) {
+          // 2) Закрыть открытые строки истории владельца ТОЛЬКО по возвращённым id
+          //    (не DELETE — сохраняем историю попытки).
+          await client.query(
+            `UPDATE contractor_pass_holders
+                SET valid_until = now()
+              WHERE pass_id = ANY($1::uuid[]) AND valid_until IS NULL`,
+            [rows.map(r => r.id)],
+          );
+        }
+
+        // 3) Пересчёт агрегатного статуса заявки (LEFT JOIN — корректный total=0 после ухода
+        //    последнего pending). Паттерн повторяет enqueueRevoke.
+        const agg = await client.query<{
+          current: string; total: string; pending: string; approved: string; rejected: string;
+        }>(
+          `SELECT s.status AS current,
+                  COUNT(p.*)::text                                              AS total,
+                  COUNT(p.*) FILTER (WHERE p.approval_status = 'pending')::text   AS pending,
+                  COUNT(p.*) FILTER (WHERE p.approval_status = 'approved')::text  AS approved,
+                  COUNT(p.*) FILTER (WHERE p.approval_status = 'rejected')::text  AS rejected
+             FROM contractor_submissions s
+             LEFT JOIN contractor_passes p ON p.submission_id = s.id
+            WHERE s.id = $1::uuid
+            GROUP BY s.status`,
+          [submissionId],
+        );
+        const row = agg.rows[0];
+        if (row) {
+          const counts = {
+            total: Number(row.total),
+            pending: Number(row.pending),
+            approved: Number(row.approved),
+            rejected: Number(row.rejected),
+          };
+          const next = computeSubmissionStatus(row.current, counts);
+          if (next !== row.current) {
+            const stampReviewed = counts.pending === 0;
+            await client.query(
+              `UPDATE contractor_submissions
+                  SET status = $1,
+                      reviewed_by = $2::uuid,
+                      reviewed_at = ${stampReviewed ? 'COALESCE(reviewed_at, now())' : 'reviewed_at'}
+                WHERE id = $3::uuid AND status IN ('pending', 'partially_applied')`,
+              [next, req.user.id, submissionId],
+            );
+          }
+        }
+
+        return rows;
+      });
+
+      // 4) Sigur (после коммита, best-effort): нейтрализуем профиль-контейнер ТОЛЬКО для changeHolder
+      //    (old_status='blocked'); первичные pending ('submitted') уже 'Пропуск NN'+blocked.
+      //    sigur_employee_id СОХРАНЯЕМ. Профили pending и так заблокированы — ошибка не открывает доступ.
+      const warnings: string[] = [];
+      if (!isContractorSigurDryRun()) {
+        const toNeutralize = returned.filter(r => r.old_status === 'blocked' && r.sigur_employee_id != null);
+        if (toNeutralize.length > 0) {
+          const connection = await sigurService.getBackgroundConnectionType();
+          for (const r of toNeutralize) {
+            try {
+              await updateSigurEmployee(
+                r.sigur_employee_id as number,
+                { name: `Пропуск ${r.pass_number}`, blocked: true },
+                connection,
+              );
+            } catch (sigurError) {
+              warnings.push(`Пропуск ${r.pass_number}: ${sigurError instanceof Error ? sigurError.message : String(sigurError)}`);
+            }
+          }
+        }
+      }
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_SUBMISSION_PASS_DECIDED, {
+        entityType: 'contractor_submission',
+        entityId: submissionId,
+        details: { decision: 'rejected', returned_count: returned.length, comment: comment ?? null },
+      });
+
+      const after = await queryOne<{ status: string }>(
+        'SELECT status FROM contractor_submissions WHERE id = $1::uuid',
+        [submissionId],
+      );
+
+      res.json({
+        success: true,
+        data: { returned: returned.length, status: after?.status ?? sub.status, warnings },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Contractor rejectSubmissionPasses error:', error);
+      Sentry.captureException(error, { tags: { route: 'contractor.rejectSubmissionPasses' } });
+      res.status(500).json({ success: false, error: 'Не удалось отклонить выделенные пропуска' });
     }
   },
 };

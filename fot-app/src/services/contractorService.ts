@@ -486,6 +486,17 @@ export const contractorAdminService = {
   async rejectSubmission(id: string, comment?: string): Promise<void> {
     await apiClient.post(`/admin/contractor/submissions/${id}/reject`, { comment });
   },
+  async rejectSubmissionPasses(
+    id: string,
+    passIds: string[],
+    comment?: string,
+  ): Promise<{ returned: number; status: string; warnings: string[] }> {
+    const r = await apiClient.post<ApiResponse<{ returned: number; status: string; warnings: string[] }>>(
+      `/admin/contractor/submissions/${id}/reject-passes`,
+      { pass_ids: passIds, comment },
+    );
+    return r.data;
+  },
   async decideSubmissionItems(
     id: string,
     decisions: IDecideItem[],

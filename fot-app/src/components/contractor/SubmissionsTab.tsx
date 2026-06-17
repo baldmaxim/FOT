@@ -49,7 +49,8 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
   };
 
   if (detailQuery.isLoading) return <div className={styles.detailRow}>Загрузка…</div>;
-  if (rows.length === 0) return <div className={styles.detailRow}>Нет пропусков</div>;
+  // Показываем только пропуска на согласовании (уже активные/одобренные скрыты).
+  if (pendingRows.length === 0) return <div className={styles.detailRow}>Нет пропусков на согласовании</div>;
 
   return (
     <table className={styles.table}>
@@ -74,19 +75,16 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
         </tr>
       </thead>
       <tbody>
-        {rows.map(r => {
-          const isPending = r.approval_status === 'pending';
-          const isChecked = isPending && effective.has(r.id);
+        {pendingRows.map(r => {
+          const isChecked = effective.has(r.id);
           return (
-            <tr key={r.id} style={isPending && !isChecked ? { opacity: 0.55 } : undefined}>
+            <tr key={r.id} style={!isChecked ? { opacity: 0.55 } : undefined}>
               <td>
-                {isPending && (
-                  <input
-                    type="checkbox"
-                    checked={isChecked}
-                    onChange={() => togglePass(r.id)}
-                  />
-                )}
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => togglePass(r.id)}
+                />
               </td>
               <td>{r.pass_number}</td>
               <td>{r.holder_name ?? '—'}</td>
@@ -152,19 +150,38 @@ export const SubmissionsTab: FC = () => {
     }
   };
 
-  const handleReject = async () => {
+  const handleRejectSelected = async () => {
     if (!rejectId) return;
-    const idToRemove = rejectId;
+    const submissionId = rejectId;
+    const sel = selectedByPass.get(submissionId);
     setBusy(true);
-    qc.setQueryData<IPendingSubmission[]>(['contractor-pending-subs'], old =>
-      old ? old.filter(s => s.id !== idToRemove) : old,
-    );
     try {
-      await contractorAdminService.rejectSubmission(idToRemove, rejectComment.trim() || undefined);
-      toast.success('Заявка отклонена');
+      let passIds = sel ? Array.from(sel) : [];
+      // Выбор не материализован (строка не раскрывалась) → берём все pending из детали.
+      if (sel === undefined) {
+        const detail = await contractorAdminService.getSubmissionDetail(submissionId);
+        passIds = detail.filter(r => r.approval_status === 'pending').map(r => r.id);
+      }
+      if (passIds.length === 0) {
+        toast.warning('Не выбрано ни одного пропуска');
+        return;
+      }
+      const res = await contractorAdminService.rejectSubmissionPasses(
+        submissionId,
+        passIds,
+        rejectComment.trim() || undefined,
+      );
+      if (res.warnings?.length) toast.warning(res.warnings.join('; '));
+      else toast.success('Пропуска отклонены');
       setRejectId(null);
       setRejectComment('');
+      setSelectedByPass(prev => {
+        const m = new Map(prev);
+        m.delete(submissionId);
+        return m;
+      });
       await refreshSubs();
+      await qc.invalidateQueries({ queryKey: ['contractor-sub-detail', submissionId] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка отклонения');
       await refreshSubs();
@@ -231,9 +248,9 @@ export const SubmissionsTab: FC = () => {
                     <button
                       className="btn-secondary"
                       onClick={() => { setRejectId(s.id); setRejectComment(''); }}
-                      disabled={busy || s.status === 'partially_applied'}
+                      disabled={busy || selectedCount === 0}
                     >
-                      Отклонить всю
+                      Отклонить выделенные ({selectedCount})
                     </button>
                     <button
                       className="btn-secondary"
@@ -272,7 +289,10 @@ export const SubmissionsTab: FC = () => {
           onTouchEnd={overlay.onTouchEnd}
         >
           <div className={styles.modal}>
-            <h2 className={styles.modalTitle}>Отклонить заявку</h2>
+            <h2 className={styles.modalTitle}>Отклонить выделенные пропуска</h2>
+            <p className={styles.label} style={{ marginBottom: 12 }}>
+              ФИО будут очищены, пропуска вернутся в пул подрядчика пустыми.
+            </p>
             <div className={styles.field}>
               <span className={styles.label}>Причина (необязательно)</span>
               <textarea
@@ -287,7 +307,7 @@ export const SubmissionsTab: FC = () => {
               </button>
               <button
                 className="btn-primary"
-                onClick={() => void handleReject()}
+                onClick={() => void handleRejectSelected()}
                 disabled={busy}
               >
                 Отклонить
