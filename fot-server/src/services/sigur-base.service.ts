@@ -340,6 +340,7 @@ export class SigurServiceBase {
         }
 
         if (attempt >= SIGUR_RETRY_ATTEMPTS || !this.isRetryableError(error)) {
+          this.logSigurFailure(method, endpoint, error);
           throw error;
         }
 
@@ -369,6 +370,32 @@ export class SigurServiceBase {
       cause = (cause as { cause?: unknown }).cause;
     }
     return false;
+  }
+
+  /**
+   * Логирует реальную причину не-retryable ошибки Sigur (для записи) с редакцией секретов.
+   * Только в серверный лог — наружу (в API/тост) сырое тело не отдаём. GET-пробы (404/422 orphan)
+   * пропускаем, чтобы не шуметь.
+   */
+  private logSigurFailure(method: string, endpoint: string, error: unknown): void {
+    if (!(error instanceof AxiosError)) return;
+    const status = error.response?.status;
+    if (!status || method === 'get') return;
+    console.error(`[sigur] ${method.toUpperCase()} ${endpoint} → ${status}: ${this.sanitizeSigurBody(error.response?.data)}`);
+  }
+
+  private sanitizeSigurBody(body: unknown): string {
+    try {
+      let text = typeof body === 'string' ? body : JSON.stringify(body);
+      if (!text) return '(пустой ответ)';
+      text = text.replace(
+        /("?(?:token|password|secret|authorization|apikey|api_key)"?\s*[:=]\s*)"?[^",}\s]+"?/gi,
+        '$1"***"',
+      );
+      return text.length > 500 ? `${text.slice(0, 500)}…` : text;
+    } catch {
+      return '(нечитаемое тело ответа)';
+    }
   }
 
   /** Выполняет GET-запрос с автоматической переавторизацией при 401. */

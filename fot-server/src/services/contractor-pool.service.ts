@@ -316,7 +316,10 @@ export const addPassesToPool = async (input: IAddPoolInput): Promise<IAddPoolRes
         sigurEmployeeId = profile.sigurEmployeeId;
         try {
           // Карта обязательна: при отсутствии в Sigur — создаём из UID/W26.
-          await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], undefined, connection, true);
+          // Профиль свежий (placeholder-имя) → safe-only без ФИО: не «крадём» карту в пустой слот.
+          await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], undefined, connection, true, {
+            reassignPolicy: 'safe-only',
+          });
         } catch (cardError) {
           const m = cardError instanceof Error ? cardError.message : String(cardError);
           // Провал привязки карты => пропуск в пул не попадает. В БД не пишем,

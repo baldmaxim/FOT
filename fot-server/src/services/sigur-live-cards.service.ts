@@ -59,6 +59,69 @@ const getBindingEmployeeIdLocal = (raw: Record<string, unknown>): number | null 
   return null;
 };
 
+const httpStatusOf = (e: unknown): number | undefined => {
+  if (e && typeof e === 'object') {
+    const x = e as { response?: { status?: number }; status?: number };
+    return x.response?.status ?? x.status;
+  }
+  return undefined;
+};
+
+/** 422 на запись карты в Sigur — валидационная ошибка (в т.ч. «карта уже существует»). */
+const isCreateConflict = (e: unknown): boolean => httpStatusOf(e) === 422;
+
+/** GET профиля удалённого сотрудника Sigur отдаёт 404 (или 422 в 1.6.3.14) → трактуем как orphan. */
+const isOwnerOrphan = (e: unknown): boolean => {
+  const status = httpStatusOf(e);
+  return status === 404 || status === 422;
+};
+
+const normalizeName = (value: unknown): string =>
+  String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+/** Политика перепривязки карты, если она уже привязана к ДРУГОМУ профилю Sigur. */
+export type CardReassignPolicy = 'always' | 'safe-only';
+
+export interface IAssignCardBindingOptions {
+  /** Ожидаемое ФИО держателя (из заявки) — для safe-only сравнения с владельцем карты. */
+  expectedHolderName?: string;
+  /** 'always' — реассайн всегда (ручная админ-привязка); 'safe-only' — только безопасно. */
+  reassignPolicy?: CardReassignPolicy;
+}
+
+/**
+ * Проверяет, безопасно ли перепривязать карту с владельца `existingEmployeeId`.
+ * Для 'always' (ручная админ-привязка) — разрешено всегда. Для 'safe-only' — только если владелец
+ * orphan или его ФИО точно совпадает с `opts.expectedHolderName` (тот же человек / дубль-профиль).
+ * Иначе бросает конфликт-ошибку БЕЗ удаления чужой привязки.
+ */
+async function ensureReassignAllowed(
+  existingEmployeeId: number,
+  cardId: number,
+  opts: IAssignCardBindingOptions,
+  connection?: ConnectionType,
+): Promise<void> {
+  if ((opts.reassignPolicy ?? 'always') === 'always') return;
+
+  let owner: Record<string, unknown>;
+  try {
+    owner = await sigurService.getEmployeeById(existingEmployeeId, connection) as Record<string, unknown>;
+  } catch (lookupError) {
+    if (isOwnerOrphan(lookupError)) return; // владелец удалён → привязка осиротела, можно забрать
+    throw lookupError;
+  }
+
+  const ownerName = String(resolveField(owner, 'name', 'fullName', 'full_name') ?? '');
+  const expected = normalizeName(opts.expectedHolderName);
+  if (expected && normalizeName(ownerName) === expected) return; // тот же человек (дубль-профиль)
+
+  const dept = resolveField(owner, 'departmentId', 'department_id', 'department');
+  throw new Error(
+    `карта ${cardId} уже привязана в Sigur к employeeId ${existingEmployeeId} `
+    + `(${ownerName || 'без имени'}, отдел ${dept ?? '—'}) — требуется ручная проверка ФИО`,
+  );
+}
+
 export async function updateSigurEmployeeCardExpiration(
   sigurEmployeeId: number,
   cardId: number,
@@ -178,7 +241,10 @@ export async function replaceSigurEmployeeAccessPoints(
 /**
  * Привязать карту к sigur-сотруднику по UID кандидатам (Sigur card / W26 / HEX / DEC).
  * Если карта уже у того же сотрудника — продлевает срок (PATCH).
- * Если карта у другого — снимает с него (DELETE) и создаёт привязку (POST).
+ * Если карта у другого — поведение зависит от `opts.reassignPolicy`:
+ *  - 'always' (ручная админ-привязка): снимает с владельца (DELETE) и создаёт привязку (POST);
+ *  - 'safe-only' (подряд/пул): перепривязывает ТОЛЬКО если владелец orphan или ФИО точно совпадает
+ *    с `opts.expectedHolderName`; иначе бросает конфликт-ошибку БЕЗ удаления чужой привязки.
  *
  * Если карта не найдена в Sigur:
  *  - при `createIfMissing=true` — создаёт её из UID/W26 (POST /cards, format W26) и привязывает;
@@ -190,12 +256,28 @@ export async function assignSigurEmployeeCardBinding(
   expirationDate?: string,
   connection?: ConnectionType,
   createIfMissing = false,
+  opts: IAssignCardBindingOptions = {},
 ): Promise<{ card: ISigurCardSummary; previousSigurEmployeeId: number | null; reassigned: boolean }> {
   if (candidates.length === 0) {
     throw new Error('UID карты обязателен');
   }
 
-  const { matches } = await sigurService.findCardByCandidates(candidates, connection);
+  // Декодируем W26 заранее: ищем карту И по сырому UID, И по выведенному W26-значению.
+  // Иначе уже существующая в Sigur W26-карта не находится по UID → код создаёт дубль → Sigur 422.
+  const w26Forms: string[] = [];
+  let decoded: ReturnType<typeof deriveCardW26> | null = null;
+  for (const candidate of candidates) {
+    try {
+      const d = deriveCardW26(candidate);
+      if (!decoded) decoded = d;
+      w26Forms.push(d.value, d.w26);
+    } catch {
+      /* кандидат не декодируется — пропускаем */
+    }
+  }
+  const searchCandidates = [...new Set([...candidates, ...w26Forms])];
+
+  const { matches } = await sigurService.findCardByCandidates(searchCandidates, connection);
   const cards = matches.map(toCardSummary).filter((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
   let card: NonNullable<ReturnType<typeof toCardSummary>> | undefined = cards[0];
 
@@ -203,28 +285,23 @@ export async function assignSigurEmployeeCardBinding(
     if (!createIfMissing) {
       throw new Error('Карта не найдена в Sigur. Создайте карту в Sigur Manager перед привязкой.');
     }
-    // Вывести value из первого кандидата, который удаётся декодировать (UID или W26).
-    let decoded: ReturnType<typeof deriveCardW26> | null = null;
-    for (const candidate of candidates) {
-      try {
-        decoded = deriveCardW26(candidate);
-        break;
-      } catch {
-        /* пробуем следующий кандидат */
-      }
-    }
     if (!decoded) {
       throw new Error(`Не удалось вывести значение карты из UID/W26: ${candidates.join(', ')}`);
     }
-    const createdRaw = await sigurService.createCard(decoded.value, 'W26', connection);
-    card = toCardSummary(createdRaw) ?? undefined;
+    // Создаём карту; при гонке/дубле (422) — перечитываем по W26 и продолжаем привязку.
+    try {
+      const createdRaw = await sigurService.createCard(decoded.value, 'W26', connection);
+      card = toCardSummary(createdRaw) ?? undefined;
+    } catch (createError) {
+      if (!isCreateConflict(createError)) throw createError;
+    }
     if (!card) {
-      // Ответ POST /cards без распознаваемого id — перечитываем по value.
-      const refetched = await sigurService.findCardByCandidates([decoded.value], connection);
+      // POST /cards без распознаваемого id ИЛИ 422-дубль — перечитываем по value/W26.
+      const refetched = await sigurService.findCardByCandidates([decoded.value, decoded.w26], connection);
       card = refetched.matches.map(toCardSummary).find((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
     }
     if (!card) {
-      throw new Error(`Карта создана, но не найдена в Sigur: value ${decoded.value}`);
+      throw new Error(`Карта создана/уже существует, но не найдена в Sigur: value ${decoded.value}`);
     }
   }
 
@@ -257,6 +334,8 @@ export async function assignSigurEmployeeCardBinding(
     );
   } else {
     if (existingEmployeeId) {
+      // Не «крадём» карту у другого активного человека без явного разрешения политики.
+      await ensureReassignAllowed(existingEmployeeId, card.cardId, opts, connection);
       await sigurService.deleteEmployeeCardBinding(existingEmployeeId, card.cardId, cardFormat, connection);
     }
     await sigurService.createEmployeeCardBinding(

@@ -76,8 +76,8 @@ describe('addPassesToPool — карта обязательна', () => {
 
     expect(res.created).toEqual(['01']);
     expect(res.failed).toEqual([]);
-    // привязка вызвана с createIfMissing=true (5-й аргумент)
-    expect(sig.bindCard).toHaveBeenCalledWith(1, ['168,15956'], undefined, 'external', true);
+    // привязка вызвана с createIfMissing=true (5-й аргумент) и safe-only политикой (6-й)
+    expect(sig.bindCard).toHaveBeenCalledWith(1, ['168,15956'], undefined, 'external', true, { reassignPolicy: 'safe-only' });
     // профиль НЕ удаляли
     expect(sig.deleteEmployee).not.toHaveBeenCalled();
     expect(lastInsertSql()).toContain('INSERT INTO contractor_passes');
