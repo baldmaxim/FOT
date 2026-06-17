@@ -191,16 +191,17 @@ export const dataApiKeyService = {
     try {
       await withTransaction(async (client) => {
         await client.query('DELETE FROM data_api_key_tables WHERE key_id = $1', [keyId]);
-        if (entries.length === 0) return;
-
-        const tableNames = entries.map(e => e.table_name);
-        const fields = entries.map(e => e.allowed_fields);
-        await client.query(
-          `INSERT INTO data_api_key_tables (key_id, table_name, allowed_fields)
-           SELECT $1, u.table_name, u.allowed_fields
-             FROM unnest($2::text[], $3::text[][]) AS u(table_name, allowed_fields)`,
-          [keyId, tableNames, fields],
-        );
+        // Построчная вставка: node-pg корректно сериализует JS string[] в text[].
+        // unnest($::text[][]) тут не подходит — он разворачивает 2-D массив в
+        // скаляры (а не по под-массиву на строку) и требует прямоугольный массив.
+        // Кол-во записей ограничено zod-схемой (max 200), цикл безопасен.
+        for (const entry of entries) {
+          await client.query(
+            `INSERT INTO data_api_key_tables (key_id, table_name, allowed_fields)
+             VALUES ($1, $2, $3::text[])`,
+            [keyId, entry.table_name, entry.allowed_fields],
+          );
+        }
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown';

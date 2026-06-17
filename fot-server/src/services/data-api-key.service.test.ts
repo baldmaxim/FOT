@@ -102,6 +102,31 @@ describe('replaceKeyTables', () => {
     expect(clientQuery).toHaveBeenCalledTimes(1);
     expect(clientQuery.mock.calls[0][0]).toMatch(/^DELETE FROM data_api_key_tables/);
   });
+
+  it('вставляет по строке на таблицу; allowed_fields — одномерный массив (регрессия 2-D unnest)', async () => {
+    const clientQuery = vi.fn().mockResolvedValue({ rows: [] });
+    pgTx.mockImplementation(async (fn) => fn({ query: clientQuery } as never));
+
+    // Разное число полей у таблиц ломало прежний unnest($::text[][]).
+    await dataApiKeyService.replaceKeyTables('key-1', [
+      { table_name: 'employees', allowed_fields: ['id', 'full_name', 'email'] },
+      { table_name: 'org_departments', allowed_fields: ['id'] },
+    ]);
+
+    // 1 DELETE + по 1 INSERT на таблицу
+    expect(clientQuery).toHaveBeenCalledTimes(3);
+    expect(clientQuery.mock.calls[0][0]).toMatch(/^DELETE FROM data_api_key_tables/);
+
+    const inserts = clientQuery.mock.calls.slice(1);
+    for (const [sql] of inserts) {
+      expect(sql).toMatch(/^INSERT INTO data_api_key_tables/);
+    }
+    // Каждый INSERT: [keyId, table_name, string[]] — поля плоским массивом, не 2-D.
+    expect(inserts[0][1]).toEqual(['key-1', 'employees', ['id', 'full_name', 'email']]);
+    expect(inserts[1][1]).toEqual(['key-1', 'org_departments', ['id']]);
+    expect(Array.isArray(inserts[0][1][2])).toBe(true);
+    expect(Array.isArray(inserts[0][1][2][0])).toBe(false);
+  });
 });
 
 describe('revokeKey', () => {
