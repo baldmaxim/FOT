@@ -346,7 +346,11 @@ describe('timesheet-object.service', () => {
     expect(result.objectEntries).toHaveLength(2);
   });
 
-  it('overrides only the targeted object when manual object adjustment exists', async () => {
+  it('authoritative object correction clears same-day uncorrected skud objects (Ортиков: К13+К14 одного ЖК)', async () => {
+    // Кейс бр.Ортиков: сотрудник отмечается на двух точках одного ЖК (КПП A/Объект A и
+    // КПП B/Объект B). Руководитель/табельщица ставит явную объектную правку 4ч на Объект B.
+    // Правка авторитетна для дня → неоткорректированный СКУД-Объект A снимается, дневной итог
+    // = часы правки (4ч). Иначе итог = A(3)+B(4) ≈ норма графика, и «Как в 1С» схлопывает правку.
     mockedState.tables.skud_events = [
       { employee_id: 1, event_date: '2026-04-12', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
       { employee_id: 1, event_date: '2026-04-12', event_time: '12:00:00', access_point: 'КПП A', direction: 'exit' },
@@ -379,11 +383,6 @@ describe('timesheet-object.service', () => {
     });
 
     expect(result.objectEntries).toEqual([
-      expect.objectContaining({
-        object_name: 'Объект A',
-        hours_worked: 3,
-        is_correction: false,
-      }),
       expect.objectContaining({
         adjustment_id: 55,
         object_name: 'Объект B',
@@ -930,5 +929,82 @@ describe('timesheet-object.service', () => {
     });
 
     expect(result.objectEntries).toEqual([]);
+  });
+
+  it('raw-fallback: break_minutes = сумма гэпов между закрытыми парами (кейс Кальсиной 16.06)', async () => {
+    // 5 закрытых пар «Офис», перерывы 10/6/48/6 мин. Сумма пар ≈ 479 мин, перерыв ≈ 71 мин.
+    // До фикса fallback не считал break → потребитель вычитал весь час обеда (479−60=419=6ч59м).
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-06-16', event_time: '08:21:37', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '08:39:20', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '08:49:46', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '11:18:09', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '11:24:08', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '12:59:15', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '13:47:46', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '16:03:34', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '16:09:23', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '17:31:42', access_point: 'КПП A', direction: 'exit' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-06-16',
+      endDate: '2026-06-16',
+      todayStr: '2026-06-17',
+      adjustments: [],
+    });
+
+    const summary = result.rawFallbackSummaries.get(1)?.get('2026-06-16');
+    expect(summary).toBeTruthy();
+    expect(summary?.total_minutes).toBe(479);
+    expect(summary?.break_minutes).toBe(71);
+  });
+
+  it('raw-fallback: незакрытый orphan-вход в прошлом дне НЕ добавляет перерыв', async () => {
+    // Гэп начисляется только при закрытии следующей пары (паритет с SQL, миграция 168).
+    // Висячий вход 11:00 без выхода не закрывает пару → break = 0, а не 60.
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-06-16', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '11:00:00', access_point: 'КПП A', direction: 'entry' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-06-16',
+      endDate: '2026-06-16',
+      todayStr: '2026-06-17',
+      adjustments: [],
+    });
+
+    const summary = result.rawFallbackSummaries.get(1)?.get('2026-06-16');
+    expect(summary?.total_minutes).toBe(60);
+    expect(summary?.break_minutes).toBe(0);
+  });
+
+  it('raw-fallback: live-сегодня учитывает перерыв перед открытым интервалом', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 16, 12, 0, 0)); // 16 июня 12:00 (локально)
+
+    mockedState.tables.skud_events = [
+      { employee_id: 1, event_date: '2026-06-16', event_time: '09:00:00', access_point: 'КПП A', direction: 'entry' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '10:00:00', access_point: 'КПП A', direction: 'exit' },
+      { employee_id: 1, event_date: '2026-06-16', event_time: '10:30:00', access_point: 'КПП A', direction: 'entry' },
+    ];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-06-16',
+      endDate: '2026-06-16',
+      todayStr: '2026-06-16',
+      adjustments: [],
+    });
+
+    const summary = result.rawFallbackSummaries.get(1)?.get('2026-06-16');
+    // total = (10:00−09:00) + (now 12:00 − 10:30) = 60 + 90 = 150 мин
+    expect(summary?.total_minutes).toBe(150);
+    // перерыв 10:00→10:30 = 30 мин (открытый интервал трактуется как пара)
+    expect(summary?.break_minutes).toBe(30);
   });
 });

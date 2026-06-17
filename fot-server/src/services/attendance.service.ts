@@ -892,6 +892,7 @@ export async function buildAttendanceEntries(params: {
             first_entry: rawSummary.first_entry,
             last_exit: rawSummary.last_exit,
             presence_covers_shift: presenceCoversShift,
+            break_minutes: getSummaryBreakMinutes(rawSummary),
           });
         } else {
           pushEntry({

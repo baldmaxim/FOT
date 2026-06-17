@@ -77,6 +77,7 @@ export interface IRawFallbackSummary {
   last_exit: string | null;
   total_hours: number | null;
   total_minutes?: number | null;
+  break_minutes?: number | null;
 }
 
 interface IRawEventRow {
@@ -222,6 +223,11 @@ const buildRawFallbackSummary = (
   if (windowEvents.length === 0) return null;
 
   let totalSeconds = 0;
+  // Перерыв = сумма гэпов МЕЖДУ закрытыми парами. Начисляется при ЗАКРЫТИИ следующей пары
+  // (паритет с SQL-агрегатом, миграция 168, строки 197-204), а не при открытии входа —
+  // иначе висячий незакрытый orphan-вход ложно добавил бы перерыв.
+  let breakSeconds = 0;
+  let prevPairExitEpoch: number | null = null;
   let openEntryEpoch: number | null = null;
   let openEntryPoint: string | null = null;
 
@@ -240,6 +246,10 @@ const buildRawFallbackSummary = (
 
     if (event.direction === 'exit' && openEntryEpoch !== null) {
       totalSeconds += Math.max(0, eventEpochSeconds(event) - openEntryEpoch);
+      if (prevPairExitEpoch !== null) {
+        breakSeconds += Math.max(0, openEntryEpoch - prevPairExitEpoch);
+      }
+      prevPairExitEpoch = eventEpochSeconds(event);
       openEntryEpoch = null;
       openEntryPoint = null;
     }
@@ -249,6 +259,10 @@ const buildRawFallbackSummary = (
     const now = nowEpochSeconds(todayStr);
     if (now > openEntryEpoch) {
       totalSeconds += now - openEntryEpoch;
+      // Открытый интервал трактуется как закрытая пара → учитываем гэп перед ним.
+      if (prevPairExitEpoch !== null) {
+        breakSeconds += Math.max(0, openEntryEpoch - prevPairExitEpoch);
+      }
     }
   }
 
@@ -268,6 +282,7 @@ const buildRawFallbackSummary = (
     last_exit: lastExit,
     total_hours: roundHours(totalMinutes / 60),
     total_minutes: totalMinutes,
+    break_minutes: Math.round(breakSeconds / 60),
   };
 };
 
