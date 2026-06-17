@@ -11,8 +11,10 @@ import { getPresence } from '../services/skud-presence.service.js';
 import { getPresenceByObject, filterPresenceByEmployeeIds } from '../services/skud-presence-by-object.service.js';
 import { resolveAccessibleObjectIdsForRequest } from '../services/employee-skud-object-access.service.js';
 import { getDisciplineViolations } from '../services/skud-discipline.service.js';
+import { getDisciplineKpi, type KpiMetric } from '../services/discipline-kpi.service.js';
 import {
   buildDisciplineWorkbook,
+  buildDisciplineKpiWorkbook,
   buildEmployeeSkudWorkbook,
   formatMonthRangeLabel,
   sanitizeExportFileName,
@@ -397,6 +399,80 @@ async function getScopedDisciplineData(
     ),
     violations: data.violations.filter(item => employeeIdSet.has(item.employee_id)),
   };
+}
+
+const KPI_METRICS: KpiMetric[] = ['attendance', 'sick', 'unpaid'];
+
+function parseKpiMetrics(raw: unknown): KpiMetric[] {
+  if (typeof raw !== 'string' || !raw.trim()) return [...KPI_METRICS];
+  const requested = raw.split(',').map(value => value.trim()).filter(Boolean);
+  const filtered = KPI_METRICS.filter(metric => requested.includes(metric));
+  return filtered.length > 0 ? filtered : [...KPI_METRICS];
+}
+
+type DisciplineKpiQuery = {
+  scope: 'employee' | 'department';
+  employeeId: number | null;
+  departmentId: string | null;
+  startMonth: string;
+  endMonth: string;
+  metrics: KpiMetric[];
+};
+
+function parseDisciplineKpiQuery(req: AuthenticatedRequest): DisciplineKpiQuery | { error: string } {
+  const fallbackMonth = formatDateToISO(new Date()).slice(0, 7);
+  const startMonth = (req.query.startMonth as string) || fallbackMonth;
+  const endMonth = (req.query.endMonth as string) || startMonth;
+  if (!MONTH_PATTERN.test(startMonth) || !MONTH_PATTERN.test(endMonth)) {
+    return { error: 'Некорректный формат месяца. Используйте YYYY-MM' };
+  }
+
+  const scope: 'employee' | 'department' = req.query.scope === 'department' ? 'department' : 'employee';
+  const employeeIdRaw = req.query.employee_id;
+  const employeeId = typeof employeeIdRaw === 'string' && /^\d+$/.test(employeeIdRaw) ? Number(employeeIdRaw) : null;
+  const departmentId = typeof req.query.department_id === 'string' && req.query.department_id.trim()
+    ? req.query.department_id.trim()
+    : null;
+
+  if (scope === 'employee' && employeeId == null) return { error: 'Не указан сотрудник (employee_id)' };
+  if (scope === 'department' && !departmentId) return { error: 'Не указан отдел (department_id)' };
+
+  return { scope, employeeId, departmentId, startMonth, endMonth, metrics: parseKpiMetrics(req.query.metrics) };
+}
+
+/**
+ * Резолвит целевой набор сотрудников для KPI с учётом уже применённого scope
+ * (data — результат getScopedDisciplineData, ограниченный видимостью пользователя).
+ * scope=employee: сотрудник должен входить в видимый набор. scope=department:
+ * выбранный отдел + его потомки, пересечённые с видимым набором.
+ */
+async function resolveKpiTarget(
+  scope: 'employee' | 'department',
+  employeeId: number | null,
+  departmentId: string | null,
+  data: IDisciplineResult,
+): Promise<{ employeeIds: number[]; subject: string; accessible: boolean }> {
+  if (scope === 'employee') {
+    if (employeeId == null || !data.employees[employeeId]) {
+      return { employeeIds: [], subject: '', accessible: false };
+    }
+    return {
+      employeeIds: [employeeId],
+      subject: data.employees[employeeId].full_name || `#${employeeId}`,
+      accessible: true,
+    };
+  }
+
+  if (!departmentId) return { employeeIds: [], subject: '', accessible: false };
+  const descendants = await query<{ id: string }>(
+    'SELECT id FROM public.get_descendant_department_ids($1::uuid[])',
+    [[departmentId]],
+  );
+  const deptSet = new Set([departmentId, ...(descendants || []).map(row => row.id)]);
+  const employeeIds = Object.entries(data.employees)
+    .filter(([, employee]) => employee.department_id != null && deptSet.has(employee.department_id))
+    .map(([id]) => Number(id));
+  return { employeeIds, subject: data.departments[departmentId] || 'Отдел', accessible: true };
 }
 
 function buildDisciplineEmployeeSummaries(data: IDisciplineResult): DisciplineExportEmployeeSummary[] {
@@ -1101,6 +1177,71 @@ const skudReadController = {
     } catch (error) {
       console.error('exportDisciplineViolations error:', error);
       res.status(500).json({ success: false, error: 'Ошибка экспорта аналитики дисциплины' });
+    }
+  },
+
+  /**
+   * GET /api/skud/discipline/kpi — KPI-сводка по сотруднику или отделу.
+   */
+  async getDisciplineKpi(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = parseDisciplineKpiQuery(req);
+      if ('error' in parsed) {
+        res.status(400).json({ success: false, error: parsed.error });
+        return;
+      }
+      const { scope, employeeId, departmentId, startMonth, endMonth, metrics } = parsed;
+
+      const data = await getScopedDisciplineData(req, startMonth, endMonth);
+      const { employeeIds, subject, accessible } = await resolveKpiTarget(scope, employeeId, departmentId, data);
+      if (scope === 'employee' && !accessible) {
+        res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+        return;
+      }
+
+      const result = await getDisciplineKpi({ scope, subject, startMonth, endMonth, metrics, employeeIds, discipline: data });
+      res.json({ success: true, data: result });
+    } catch (error) {
+      console.error('getDisciplineKpi error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка получения KPI дисциплины' });
+    }
+  },
+
+  /**
+   * GET /api/skud/discipline/kpi/export — KPI-сводка в Excel.
+   */
+  async exportDisciplineKpi(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = parseDisciplineKpiQuery(req);
+      if ('error' in parsed) {
+        res.status(400).json({ success: false, error: parsed.error });
+        return;
+      }
+      const { scope, employeeId, departmentId, startMonth, endMonth, metrics } = parsed;
+
+      const data = await getScopedDisciplineData(req, startMonth, endMonth);
+      const { employeeIds, subject, accessible } = await resolveKpiTarget(scope, employeeId, departmentId, data);
+      if (scope === 'employee' && !accessible) {
+        res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+        return;
+      }
+
+      const result = await getDisciplineKpi({ scope, subject, startMonth, endMonth, metrics, employeeIds, discipline: data });
+      const workbook = buildDisciplineKpiWorkbook(result);
+      const buffer = await workbook.xlsx.writeBuffer();
+      const fileName = sanitizeExportFileName(
+        `KPI_дисциплины_${(subject || 'отчёт').replace(/\s+/g, '_')}_${formatMonthRangeLabel(startMonth, endMonth).replace(/\s+/g, '_')}.xlsx`,
+      );
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+      );
+      res.send(Buffer.from(buffer));
+    } catch (error) {
+      console.error('exportDisciplineKpi error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка экспорта KPI дисциплины' });
     }
   },
 

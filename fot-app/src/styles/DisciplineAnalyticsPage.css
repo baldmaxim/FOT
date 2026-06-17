@@ -461,6 +461,16 @@
   background: var(--surface-hover);
 }
 
+.da-btn-kpi {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.da-btn-kpi:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
 /* Side panel */
 .da-panel {
   position: fixed;
@@ -743,7 +753,8 @@
   .da-header-spacer {
     display: none;
   }
-  .da-btn-export {
+  .da-btn-export,
+  .da-btn-kpi {
     width: 100%;
     justify-content: center;
   }

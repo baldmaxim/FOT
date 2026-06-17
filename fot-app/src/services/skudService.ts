@@ -35,6 +35,107 @@ interface DownloadFileResult {
   filename: string;
 }
 
+export type KpiMetric = 'attendance' | 'sick' | 'unpaid';
+export type KpiSeverity = 'green' | 'yellow' | 'red';
+
+export interface IKpiAttendance {
+  lateCount: number;
+  lateMinutes: number;
+  earlyCount: number;
+  underworkCount: number;
+  absenceCount: number;
+  workedHours: number;
+  normHours: number;
+  severity: KpiSeverity;
+}
+
+export interface IKpiLeaveCase {
+  startDate: string;
+  endDate: string;
+  days: number;
+  isMonFri: boolean;
+  isAfterHoliday: boolean;
+  isShort: boolean;
+  retroactive: boolean;
+}
+
+export interface IKpiSick {
+  totalDays: number;
+  caseCount: number;
+  shortCaseCount: number;
+  monFriCount: number;
+  afterHolidayCount: number;
+  workedSickDays: number;
+  cases: IKpiLeaveCase[];
+  severity: KpiSeverity;
+}
+
+export interface IKpiUnpaid {
+  totalDays: number;
+  caseCount: number;
+  retroactiveCaseCount: number;
+  daysThisYear: number;
+  overLimit: boolean;
+  cases: IKpiLeaveCase[];
+  severity: KpiSeverity;
+}
+
+export interface IKpiPending {
+  sickDays: number;
+  unpaidDays: number;
+}
+
+export interface IDisciplineKpiRow {
+  employeeId: number;
+  name: string;
+  department: string;
+  attendance: IKpiAttendance | null;
+  sick: IKpiSick | null;
+  unpaid: IKpiUnpaid | null;
+  pending: IKpiPending;
+  severity: KpiSeverity;
+}
+
+export interface IDisciplineKpiTotals {
+  employeeCount: number;
+  attendance: Omit<IKpiAttendance, 'severity'> | null;
+  sick: Omit<IKpiSick, 'cases' | 'severity'> | null;
+  unpaid: { totalDays: number; caseCount: number; retroactiveCaseCount: number; overLimitEmployees: number } | null;
+  pending: IKpiPending;
+}
+
+export interface IDisciplineKpiResult {
+  scope: 'employee' | 'department';
+  subject: string;
+  startMonth: string;
+  endMonth: string;
+  metrics: KpiMetric[];
+  totals: IDisciplineKpiTotals;
+  rows: IDisciplineKpiRow[];
+  overallSeverity: KpiSeverity;
+}
+
+interface IDisciplineKpiParams {
+  scope: 'employee' | 'department';
+  employeeId?: number;
+  departmentId?: string;
+  startMonth: string;
+  endMonth: string;
+  metrics: KpiMetric[];
+}
+
+const buildKpiParams = (params: IDisciplineKpiParams): URLSearchParams => {
+  const search = new URLSearchParams({
+    scope: params.scope,
+    startMonth: params.startMonth,
+    endMonth: params.endMonth,
+    metrics: params.metrics.join(','),
+  });
+  if (params.scope === 'employee' && params.employeeId != null) search.append('employee_id', String(params.employeeId));
+  if (params.scope === 'department' && params.departmentId) search.append('department_id', params.departmentId);
+  return search;
+};
+
 const normalizeAccessPointName = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
@@ -402,6 +503,23 @@ export const skudService = {
     return fetchExportFile(
       `/skud/discipline/export?${params.toString()}`,
       `discipline_${filters.startMonth}_${filters.endMonth || filters.startMonth}.xlsx`,
+    );
+  },
+
+  async getDisciplineKpi(params: IDisciplineKpiParams, signal?: AbortSignal): Promise<IDisciplineKpiResult> {
+    const search = buildKpiParams(params);
+    const response = await apiClient.get<ApiResponse<IDisciplineKpiResult>>(
+      `/skud/discipline/kpi?${search.toString()}`,
+      { signal },
+    );
+    return response.data;
+  },
+
+  async exportDisciplineKpi(params: IDisciplineKpiParams): Promise<DownloadFileResult> {
+    const search = buildKpiParams(params);
+    return fetchExportFile(
+      `/skud/discipline/kpi/export?${search.toString()}`,
+      `kpi_discipline_${params.startMonth}_${params.endMonth}.xlsx`,
     );
   },
 

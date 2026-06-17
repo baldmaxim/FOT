@@ -4,6 +4,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useManagedDepartments } from '../hooks/useManagedDepartments';
 import { DisciplineTable } from '../components/discipline/DisciplineTable';
 import { DisciplineDetailPanel } from '../components/discipline/DisciplineDetailPanel';
+import { DisciplineKpiModal } from '../components/discipline/DisciplineKpiModal';
 import { DepartmentTreeMultiSelect } from '../components/staff/DepartmentTreeMultiSelect';
 import { triggerBlobDownload } from '../utils/download';
 import { getVisibleRootNodes, filterDepartmentTreeByIds, collectDescendantIds } from '../utils/departmentUtils';
@@ -130,6 +131,7 @@ export const DisciplineAnalyticsPage: FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<'all' | 'violations'>('all');
+  const [showKpiModal, setShowKpiModal] = useState(false);
 
   const normalizedPeriod = useMemo(() => {
     if (startMonth <= endMonth) return { startMonth, endMonth };
@@ -236,6 +238,25 @@ export const DisciplineAnalyticsPage: FC = () => {
       (a, b) => a.department.localeCompare(b.department, 'ru') || a.name.localeCompare(b.name, 'ru'),
     );
   }, [rawViolations, empData, deptData]);
+
+  // Списки для KPI-модалки: сотрудники для поиска по ФИО и отделы из видимого набора.
+  const kpiEmployees = useMemo(
+    () => employees.map(e => ({ id: e.employee_id, name: e.name, departmentId: e.departmentId, department: e.department })),
+    [employees],
+  );
+  const kpiDepartments = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const e of employees) if (e.departmentId) map.set(e.departmentId, e.department);
+    return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  }, [employees]);
+  const kpiPeriodLabel = useMemo(() => {
+    const fmt = (value: string) => {
+      const [y, m] = value.split('-').map(Number);
+      return `${MONTH_NAMES[m - 1]} ${y}`;
+    };
+    const { startMonth: s, endMonth: e } = normalizedPeriod;
+    return s === e ? fmt(s) : `${fmt(s)} — ${fmt(e)}`;
+  }, [normalizedPeriod]);
 
   const deptFilteredBase = useMemo(() => {
     let list = employees;
@@ -391,6 +412,10 @@ export const DisciplineAnalyticsPage: FC = () => {
           </button>
         </div>
         <div className="da-header-spacer" />
+        <button className="da-btn da-btn-kpi" onClick={() => setShowKpiModal(true)}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7"/><rect x="12" y="6" width="3" height="11"/><rect x="17" y="13" width="3" height="4"/></svg>
+          KPI-отчёт
+        </button>
         <button className="da-btn da-btn-export" onClick={() => { void exportToExcel(); }} disabled={isExporting}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           {isExporting ? 'Экспорт...' : 'Экспорт в Excel'}
@@ -490,6 +515,17 @@ export const DisciplineAnalyticsPage: FC = () => {
         employee={panelEmployee}
         onClose={() => setPanelEmpId(null)}
       />
+
+      {showKpiModal && (
+        <DisciplineKpiModal
+          employees={kpiEmployees}
+          departments={kpiDepartments}
+          startMonth={normalizedPeriod.startMonth}
+          endMonth={normalizedPeriod.endMonth}
+          periodLabel={kpiPeriodLabel}
+          onClose={() => setShowKpiModal(false)}
+        />
+      )}
     </div>
   );
 };

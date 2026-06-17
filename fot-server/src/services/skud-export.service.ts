@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { formatDateToISO } from '../utils/date.utils.js';
 import { defangCsvCell } from '../utils/file-validation.utils.js';
 import type { IDisciplineViolation } from '../types/skud.types.js';
+import type { IDisciplineKpiResult, IKpiLeaveCase, KpiSeverity } from './discipline-kpi.service.js';
 
 const MONTH_NAMES = [
   'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -437,6 +438,198 @@ export function buildDisciplineWorkbook(params: {
   buildRatingSheet('underwork', 'Рейтинг недоработок', 'Кол-во недоработок');
   buildRatingSheet('early', 'Рейтинг ранних уходов', 'Кол-во ранних уходов');
   buildRatingSheet('absence', 'Отсутствия более 3ч', 'Кол-во отсутствий');
+
+  return workbook;
+}
+
+const KPI_SEVERITY_LABEL: Record<KpiSeverity, string> = {
+  green: 'Норма',
+  yellow: 'Внимание',
+  red: 'Риск',
+};
+const KPI_SEVERITY_FILL: Record<KpiSeverity, string> = {
+  green: 'FFDCFCE7',
+  yellow: 'FFFEF9C3',
+  red: 'FFFEE2E2',
+};
+
+function formatMinutesLabel(minutes: number): string {
+  if (!minutes || minutes <= 0) return '0м';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h > 0 && m > 0) return `${h}ч ${m}м`;
+  if (h > 0) return `${h}ч`;
+  return `${m}м`;
+}
+
+function formatKpiCase(c: IKpiLeaveCase): string {
+  const range = c.startDate === c.endDate
+    ? formatDateShort(c.startDate)
+    : `${formatDateShort(c.startDate)}–${formatDateShort(c.endDate)}`;
+  const flags: string[] = [];
+  if (c.isShort) flags.push('короткий');
+  if (c.isMonFri) flags.push('Пн/Пт');
+  if (c.isAfterHoliday) flags.push('после праздника');
+  if (c.retroactive) flags.push('задним числом');
+  const suffix = flags.length > 0 ? ` [${flags.join(', ')}]` : '';
+  return `${range} — ${c.days} дн.${suffix}`;
+}
+
+export function buildDisciplineKpiWorkbook(result: IDisciplineKpiResult): ExcelJS.Workbook {
+  const workbook = new ExcelJS.Workbook();
+  const hasAttendance = result.metrics.includes('attendance');
+  const hasSick = result.metrics.includes('sick');
+  const hasUnpaid = result.metrics.includes('unpaid');
+
+  // ── Лист «Сводка» ──
+  const summary = workbook.addWorksheet('Сводка');
+  summary.columns = [{ width: 34 }, { width: 30 }];
+  const addLine = (label: string, value: string | number) => {
+    const row = summary.addRow([label, String(value)]);
+    row.getCell(1).font = { bold: true };
+    return row;
+  };
+  const titleRow = summary.addRow([`KPI дисциплины — ${result.subject}`]);
+  summary.mergeCells(titleRow.number, 1, titleRow.number, 2);
+  titleRow.getCell(1).font = { bold: true, size: 14 };
+  addLine('Охват', result.scope === 'employee' ? 'Сотрудник' : 'Отдел');
+  addLine('Период', formatMonthRangeLabel(result.startMonth, result.endMonth));
+  const overallRow = addLine('Общий статус', KPI_SEVERITY_LABEL[result.overallSeverity]);
+  overallRow.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: KPI_SEVERITY_FILL[result.overallSeverity] } };
+  if (result.scope === 'department') addLine('Сотрудников в охвате', result.totals.employeeCount);
+  summary.addRow([]);
+
+  if (hasAttendance && result.totals.attendance) {
+    const a = result.totals.attendance;
+    summary.addRow(['— График / СКУД —']).getCell(1).font = { bold: true, italic: true };
+    addLine('Опозданий', a.lateCount);
+    addLine('Сумма опозданий', formatMinutesLabel(a.lateMinutes));
+    addLine('Ранних уходов', a.earlyCount);
+    addLine('Недоработок', a.underworkCount);
+    addLine('Отсутствий внутри смены', a.absenceCount);
+    addLine('Часов отработано', formatExportHours(a.workedHours));
+    addLine('Часов по графику', formatExportHours(a.normHours));
+    summary.addRow([]);
+  }
+
+  if (hasSick && result.totals.sick) {
+    const s = result.totals.sick;
+    summary.addRow(['— Больничные —']).getCell(1).font = { bold: true, italic: true };
+    addLine('Случаев', s.caseCount);
+    addLine('Дней всего', s.totalDays);
+    addLine('Коротких (3–5 дн.)', s.shortCaseCount);
+    addLine('Старт/финиш Пн/Пт', s.monFriCount);
+    addLine('После праздника', s.afterHolidayCount);
+    addLine('Работал на больничном (дн.)', s.workedSickDays);
+    addLine('На согласовании (дн.)', result.totals.pending.sickDays);
+    summary.addRow([]);
+  }
+
+  if (hasUnpaid && result.totals.unpaid) {
+    const u = result.totals.unpaid;
+    summary.addRow(['— За свой счёт —']).getCell(1).font = { bold: true, italic: true };
+    addLine('Случаев', u.caseCount);
+    addLine('Дней всего', u.totalDays);
+    addLine('Задним числом (случаев)', u.retroactiveCaseCount);
+    if (result.scope === 'employee') {
+      const row = result.rows[0];
+      addLine('Дней за календарный год', row?.unpaid?.daysThisYear ?? 0);
+      addLine('Превышение лимита (14 дн.)', row?.unpaid?.overLimit ? 'Да' : 'Нет');
+    } else {
+      addLine('Превысили лимит (чел.)', u.overLimitEmployees);
+    }
+    addLine('На согласовании (дн.)', result.totals.pending.unpaidDays);
+    summary.addRow([]);
+  }
+
+  // ── Лист «Сотрудники» (для отдела) ──
+  if (result.scope === 'department') {
+    const sheet = workbook.addWorksheet('Сотрудники');
+    const columns: Partial<ExcelJS.Column>[] = [
+      { header: '№', key: 'num', width: 5 },
+      { header: 'ФИО', key: 'name', width: 32 },
+      { header: 'Отдел', key: 'department', width: 26 },
+      { header: 'Статус', key: 'severity', width: 12 },
+    ];
+    if (hasAttendance) columns.push(
+      { header: 'Опоздания', key: 'late', width: 12 },
+      { header: 'Мин. опозд.', key: 'lateMin', width: 12 },
+      { header: 'Ранние уходы', key: 'early', width: 13 },
+      { header: 'Недоработки', key: 'underwork', width: 13 },
+      { header: 'Отсутствия', key: 'absence', width: 12 },
+    );
+    if (hasSick) columns.push(
+      { header: 'Больн. случаев', key: 'sickCases', width: 14 },
+      { header: 'Больн. дней', key: 'sickDays', width: 12 },
+      { header: 'Коротких', key: 'sickShort', width: 11 },
+    );
+    if (hasUnpaid) columns.push(
+      { header: 'За свой счёт дней', key: 'unpaidDays', width: 16 },
+      { header: 'За год', key: 'unpaidYear', width: 9 },
+    );
+    sheet.columns = columns;
+    const header = sheet.getRow(1);
+    header.height = 26;
+    header.eachCell(cell => {
+      cell.font = { bold: true, size: 11, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2563EB' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = thinBorder;
+    });
+    result.rows.forEach((r, index) => {
+      const row = sheet.addRow({
+        num: index + 1,
+        name: defangCsvCell(r.name),
+        department: defangCsvCell(r.department),
+        severity: KPI_SEVERITY_LABEL[r.severity],
+        late: r.attendance?.lateCount ?? '—',
+        lateMin: r.attendance ? formatMinutesLabel(r.attendance.lateMinutes) : '—',
+        early: r.attendance?.earlyCount ?? '—',
+        underwork: r.attendance?.underworkCount ?? '—',
+        absence: r.attendance?.absenceCount ?? '—',
+        sickCases: r.sick?.caseCount ?? '—',
+        sickDays: r.sick?.totalDays ?? '—',
+        sickShort: r.sick?.shortCaseCount ?? '—',
+        unpaidDays: r.unpaid?.totalDays ?? '—',
+        unpaidYear: r.unpaid?.daysThisYear ?? '—',
+      });
+      row.getCell('severity').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: KPI_SEVERITY_FILL[r.severity] } };
+      row.eachCell(cell => { cell.border = thinBorder; cell.alignment = { vertical: 'middle', ...(cell.alignment || {}) }; });
+    });
+  }
+
+  // ── Лист «Детализация» ──
+  const detail = workbook.addWorksheet('Детализация');
+  detail.columns = [{ width: 32 }, { width: 18 }, { width: 60 }];
+  const addDetailHeader = (text: string) => {
+    const row = detail.addRow([text]);
+    detail.mergeCells(row.number, 1, row.number, 3);
+    row.getCell(1).font = { bold: true, size: 12 };
+    row.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2E8F0' } };
+  };
+  for (const r of result.rows) {
+    addDetailHeader(`${r.name} — ${r.department} — ${KPI_SEVERITY_LABEL[r.severity]}`);
+    if (hasAttendance && r.attendance) {
+      const a = r.attendance;
+      detail.addRow(['График / СКУД', 'Опоздания', `${a.lateCount} (${formatMinutesLabel(a.lateMinutes)})`]);
+      detail.addRow(['', 'Ранние уходы', String(a.earlyCount)]);
+      detail.addRow(['', 'Недоработки', String(a.underworkCount)]);
+      detail.addRow(['', 'Отсутствия', String(a.absenceCount)]);
+    }
+    if (hasSick && r.sick) {
+      if (r.sick.cases.length === 0) detail.addRow(['Больничные', 'Случаев', '0']);
+      r.sick.cases.forEach((c, i) => detail.addRow([i === 0 ? 'Больничные' : '', `Случай ${i + 1}`, formatKpiCase(c)]));
+      if (r.sick.workedSickDays > 0) detail.addRow(['', 'Работал на больничном', `${r.sick.workedSickDays} дн.`]);
+      if (r.pending.sickDays > 0) detail.addRow(['', 'На согласовании', `${r.pending.sickDays} дн.`]).getCell(2).font = { italic: true, color: { argb: 'FF92400E' } };
+    }
+    if (hasUnpaid && r.unpaid) {
+      if (r.unpaid.cases.length === 0) detail.addRow(['За свой счёт', 'Случаев', '0']);
+      r.unpaid.cases.forEach((c, i) => detail.addRow([i === 0 ? 'За свой счёт' : '', `Случай ${i + 1}`, formatKpiCase(c)]));
+      detail.addRow(['', 'За календарный год', `${r.unpaid.daysThisYear} дн.${r.unpaid.overLimit ? ' (превышение лимита)' : ''}`]);
+      if (r.pending.unpaidDays > 0) detail.addRow(['', 'На согласовании', `${r.pending.unpaidDays} дн.`]).getCell(2).font = { italic: true, color: { argb: 'FF92400E' } };
+    }
+    detail.addRow([]);
+  }
 
   return workbook;
 }

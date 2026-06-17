@@ -103,6 +103,19 @@ router.get(
   skudController.exportDisciplineViolations
 );
 
+// GET /api/skud/discipline/kpi - KPI-сводка по сотруднику/отделу (header+)
+router.get(
+  '/discipline/kpi',
+  requirePageAccess('/discipline', 'view'),
+  skudController.getDisciplineKpi
+);
+
+router.get(
+  '/discipline/kpi/export',
+  requirePageAccess('/discipline', 'view'),
+  skudController.exportDisciplineKpi
+);
+
 // GET /api/skud/daily-summary - дневные сводки (admin+)
 // Доступ под /skud-settings: вкладка «База» живёт на этой странице.
 router.get(
