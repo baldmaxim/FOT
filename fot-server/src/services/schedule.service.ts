@@ -137,6 +137,27 @@ export const isWorkingDay = (
   return schedule.work_days.includes(getISODow(date));
 };
 
+/**
+ * Праздник, выпавший на БУДНИЙ рабочий день графика (например 12 июня — пятница).
+ * Такой день трактуется как обязательная суббота — зачитывается в субботнюю квоту
+ * expected_saturdays_per_month (см. computeMandatoryExemptions / resolveAdjustmentApprovalStatus).
+ *
+ * Явный guard на Сб/Вс ОБЯЗАТЕЛЕН: для графиков, где суббота/воскресенье сами
+ * рабочие (6/1, цикл), без него праздничная Сб/Вс получила бы isWorkingDay(...,null)=true
+ * и внезапно зачлась бы в квоту — а праздничные Сб/Вс мы не трогаем (остаются
+ * «лишним выходом»). isWorkingDay(...,null) отсекает праздник на цикл-офф будний
+ * день (work_hours ≤ 0).
+ */
+export const isHolidayOnWorkday = (
+  schedule: IResolvedSchedule,
+  date: Date,
+  calendar: IProductionCalendarMonth | null,
+): boolean => {
+  const dow = date.getDay();
+  if (dow === 0 || dow === 6) return false;
+  return isHoliday(date, schedule, calendar) && isWorkingDay(schedule, date, null);
+};
+
 /** Возвращает work_start/work_end/work_hours для конкретного дня с учётом day_overrides и cycle_days */
 export const getScheduleForDate = (schedule: IResolvedSchedule, date: Date): IDayScheduleParams => {
   const slot = getCycleSlot(schedule, date);

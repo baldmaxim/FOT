@@ -13,7 +13,7 @@ import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass, exportTimesheetMassUnified } from './timesheet-mass-export.controller.js';
 import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned, getDepartmentSupervisor } from './timesheet-assigned-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
-import { resolveSchedulesForPeriod, isWorkingDay, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
+import { resolveSchedulesForPeriod, isWorkingDay, isHolidayOnWorkday, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getSelfHistoryLimitForUser,
   isSelfEmployeeRequest,
@@ -27,6 +27,7 @@ import {
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
 import { isTimekeeper } from '../services/timekeeper-scope.service.js';
+import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
 import {
   buildAttendanceEntries,
@@ -219,31 +220,35 @@ export const isMandatoryWeekendSlotAvailable = (
 };
 
 /**
- * ISO-даты непраздничных суббот/воскресений месяца year-mon. mandatory_holidays
- * исключаются всегда; обычные holidays — только если respectsHolidays.
+ * Праздничная ли суббота для данного графика: mandatory_holidays (всегда) ∪
+ * holidays (если respects_holidays). Праздничные субботы не входят в квоту
+ * обязательных суббот и остаются pending.
  */
-export const listNonHolidayWeekendDays = (
-  year: number,
-  mon: number,
+const isHolidaySaturday = (
+  iso: string,
+  schedule: { respects_holidays: boolean },
   calendar: { holidays?: string[]; mandatory_holidays?: string[] } | null,
-  respectsHolidays: boolean,
-  dow: WeekendDow,
-): string[] => {
-  const lastDay = new Date(year, mon, 0).getDate();
-  const monthStr = String(mon).padStart(2, '0');
-  const out: string[] = [];
-  for (let d = 1; d <= lastDay; d++) {
-    if (new Date(year, mon - 1, d).getDay() !== dow) continue;
-    const iso = `${year}-${monthStr}-${String(d).padStart(2, '0')}`;
-    const isHoliday = !!calendar && (
-      (calendar.mandatory_holidays?.includes(iso) ?? false)
-      || (respectsHolidays && (calendar.holidays?.includes(iso) ?? false))
-    );
-    if (isHoliday) continue;
-    out.push(iso);
-  }
-  return out;
+): boolean => !!calendar && (
+  (calendar.mandatory_holidays?.includes(iso) ?? false)
+  || (schedule.respects_holidays && (calendar.holidays?.includes(iso) ?? false))
+);
+
+/**
+ * Праздничный КАЛЕНДАРНЫЙ выходной (Сб/Вс) — не входит в субботнюю квоту и слот не
+ * занимает. В отличие от isHolidaySaturday, НЕ срабатывает на праздник-будень
+ * (isHolidayOnWorkday): тот квоту занимает, поэтому при подсчёте usedBefore/quota
+ * его исключать нельзя.
+ */
+const isHolidayWeekend = (
+  iso: string,
+  schedule: { respects_holidays: boolean },
+  calendar: { holidays?: string[]; mandatory_holidays?: string[] } | null,
+): boolean => {
+  const dow = new Date(`${iso}T00:00:00`).getDay();
+  return (dow === 0 || dow === 6) && isHolidaySaturday(iso, schedule, calendar);
 };
+
+// listNonHolidayWeekendDays вынесена в ../services/timesheet-weekend-days.util.js
 
 /**
  * Для каждого сотрудника — множества отработанных ISO-суббот и ISO-воскресений
@@ -265,6 +270,9 @@ async function loadAcceptedWeekendDaysForMonth(
   const monthStart = `${year}-${monthStr}-01`;
   const monthEnd = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
 
+  // Календарь месяца — чтобы относить праздник-будень (например 12.06) к субботней квоте.
+  const calendar = await loadCalendarMonth(year, mon);
+
   // Корректировки (work/remote с auto_approved или approved)
   const rows = await query<{ employee_id: number | string; work_date: string }>(
     `SELECT employee_id, work_date FROM attendance_adjustments
@@ -277,10 +285,15 @@ async function loadAcceptedWeekendDaysForMonth(
   );
   for (const row of rows) {
     const iso = String(row.work_date).slice(0, 10);
-    const dow = new Date(`${iso}T00:00:00`).getDay();
-    if (dow !== 6 && dow !== 0) continue;
     const empId = Number(row.employee_id);
-    const target = dow === 6 ? saturdays : sundays;
+    const dateObj = new Date(`${iso}T00:00:00`);
+    const dow = dateObj.getDay();
+    const sched = schedulesMap.get(empId);
+    // Праздник-будень зачитывается в субботнюю квоту наравне с субботами.
+    const target = (dow === 6 || (sched && isHolidayOnWorkday(sched, dateObj, calendar)))
+      ? saturdays
+      : dow === 0 ? sundays : null;
+    if (!target) continue;
     let set = target.get(empId);
     if (!set) {
       set = new Set<string>();
@@ -307,19 +320,23 @@ async function loadAcceptedWeekendDaysForMonth(
     [employeeIds, monthStart, monthEnd],
   );
 
-  // Группируем СКУД-дни по сотруднику и дню недели
+  // Группируем СКУД-дни по сотруднику и дню недели (праздник-будень → субботняя группа)
   const skudByEmpAndDow = new Map<number, { sat: string[]; sun: string[] }>();
   for (const row of skudRows) {
     const iso = String(row.date).slice(0, 10);
-    const dow = new Date(`${iso}T00:00:00`).getDay();
-    if (dow !== 6 && dow !== 0) continue;
     const empId = Number(row.employee_id);
+    const dateObj = new Date(`${iso}T00:00:00`);
+    const dow = dateObj.getDay();
+    const sched = schedulesMap.get(empId);
+    const isHolWd = !!sched && isHolidayOnWorkday(sched, dateObj, calendar);
+    let bucket: 'sat' | 'sun' | null = null;
+    if (dow === 6 || isHolWd) bucket = 'sat';
+    else if (dow === 0) bucket = 'sun';
+    if (!bucket) continue;
     if (!skudByEmpAndDow.has(empId)) {
       skudByEmpAndDow.set(empId, { sat: [], sun: [] });
     }
-    const group = skudByEmpAndDow.get(empId)!;
-    if (dow === 6) group.sat.push(iso);
-    else group.sun.push(iso);
+    skudByEmpAndDow.get(empId)![bucket].push(iso);
   }
 
   // Берём только первые N для каждого сотрудника
@@ -417,6 +434,27 @@ export async function resolveAdjustmentApprovalStatus(
   const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
   if (isWorkingDay(schedule, dateObj, monthCalendar)) return 'auto_approved';
 
+  // Обязательная (плановая) суббота ИЛИ праздник-будень (12.06 и т.п.): пока за
+  // месяц не исчерпана квота expected_saturdays_per_month — согласует только
+  // руководитель (auto_approved), админ не нужен. Праздник-будень конкурирует за
+  // тот же субботний слот. Считаем хронологически РАНЕЕ занятые слоты месяца
+  // (строгое d < workDate → идемпотентность); праздничные Сб/Вс слот не занимают.
+  const isHolWorkday = isHolidayOnWorkday(schedule, dateObj, monthCalendar);
+  if ((dateObj.getDay() === 6 || isHolWorkday) && (schedule.expected_saturdays_per_month ?? 0) > 0) {
+    const { saturdays } = await loadAcceptedWeekendDaysForMonth(
+      [employeeId], dateObj.getFullYear(), dateObj.getMonth() + 1,
+      new Map([[employeeId, schedule]]),
+    );
+    const usedBefore = [...(saturdays.get(employeeId) ?? new Set<string>())]
+      .filter(d => d < workDate && !isHolidayWeekend(d, schedule, monthCalendar)).length;
+    const expected = schedule.expected_saturdays_per_month ?? 0;
+    if (isHolWorkday) {
+      if (usedBefore < expected) return 'auto_approved';
+    } else if (isMandatoryWeekendSlotAvailable(schedule, workDate, dateObj, monthCalendar, usedBefore, 6)) {
+      return 'auto_approved';
+    }
+  }
+
   // Корректировка «удалённая работа» поверх уже согласованного выхода в выходной:
   // если за этот день есть одобренная заявка «работа в выходной» (ответственный
   // согласовал выход), отдельного согласования удалёнки не требуется — зачитываем сразу.
@@ -490,6 +528,29 @@ export async function reapproveAdjustmentsForRange(
     return calendarCache.get(key) ?? null;
   };
 
+  // Квота обязательных суббот (первые N непраздничных принятых суббот месяца →
+  // auto_approved). Кэш по (empId, year-month): диапазон может пересекать месяцы.
+  const satQuotaCache = new Map<string, Set<string>>();
+  const getSaturdayQuotaSet = async (
+    empId: number,
+    dateObj: Date,
+    schedule: IResolvedSchedule,
+    calendar: { holidays?: string[]; mandatory_holidays?: string[] } | null,
+  ): Promise<Set<string>> => {
+    const y = dateObj.getFullYear();
+    const m = dateObj.getMonth() + 1;
+    const key = `${empId}:${y}-${m}`;
+    if (!satQuotaCache.has(key)) {
+      const { saturdays } = await loadAcceptedWeekendDaysForMonth(
+        [empId], y, m, new Map([[empId, schedule]]),
+      );
+      const nonHoliday = [...(saturdays.get(empId) ?? new Set<string>())]
+        .filter(d => !isHolidayWeekend(d, schedule, calendar)).sort();
+      satQuotaCache.set(key, new Set(nonHoliday.slice(0, schedule.expected_saturdays_per_month ?? 0)));
+    }
+    return satQuotaCache.get(key)!;
+  };
+
   // Согласованные выходы (work approved/auto) в диапазоне: удалёнка поверх них при
   // bulk-пересчёте должна остаться auto_approved, а не падать в pending (зеркалит
   // resolveAdjustmentApprovalStatus). Один запрос на весь диапазон.
@@ -536,8 +597,16 @@ export async function reapproveAdjustmentsForRange(
       } else {
         const dateObj = new Date(`${workDate}T00:00:00`);
         const calendar = await getCalendar(dateObj);
+        const isHolWorkday = isHolidayOnWorkday(schedule, dateObj, calendar);
         if (isWorkingDay(schedule, dateObj, calendar)) {
           target = 'auto_approved';
+        } else if (
+          (schedule.expected_saturdays_per_month ?? 0) > 0
+          && (isHolWorkday || (dateObj.getDay() === 6 && !isHolidaySaturday(workDate, schedule, calendar)))
+        ) {
+          // Обязательная суббота или праздник-будень: первые N принятых дней месяца → auto_approved.
+          const quota = await getSaturdayQuotaSet(empId, dateObj, schedule, calendar);
+          target = quota.has(workDate) ? 'auto_approved' : 'pending';
         } else {
           target = 'pending';
         }
@@ -1605,6 +1674,15 @@ export const timesheetController = {
           let worked = 0;
           if (workedSet) {
             for (const iso of inWindow) if (workedSet.has(iso)) worked++;
+            // Праздник-будень (12.06 и т.п.) зачитывается в субботнюю норму наравне
+            // с фактической субботой — иначе грид покажет фантомный недобор. Норма
+            // (required/normHours) при этом не меняется, credited капается ниже.
+            if (dow === 6) {
+              for (const iso of workedSet) {
+                if (empCutoff && iso >= empCutoff) continue;
+                if (isHolidayOnWorkday(sched, new Date(`${iso}T00:00:00`), calendarMonth)) worked++;
+              }
+            }
           }
           const credited = Math.min(worked, required);
           const shortfall = required - credited;

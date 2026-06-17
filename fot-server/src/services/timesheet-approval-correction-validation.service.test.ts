@@ -14,10 +14,11 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: pgTx,
 }));
 
-const { mockGetOffDatesByEmployee, mockResolveSchedulesForPeriod, mockLoadCalendarMonth } = vi.hoisted(() => ({
+const { mockGetOffDatesByEmployee, mockResolveSchedulesForPeriod, mockLoadCalendarMonth, mockIsHolidayOnWorkday } = vi.hoisted(() => ({
   mockGetOffDatesByEmployee: vi.fn(),
   mockResolveSchedulesForPeriod: vi.fn(),
   mockLoadCalendarMonth: vi.fn(),
+  mockIsHolidayOnWorkday: vi.fn(),
 }));
 vi.mock('./timesheet-approval-weekend-check.service.js', () => ({
   getOffDatesByEmployee: mockGetOffDatesByEmployee,
@@ -26,6 +27,7 @@ vi.mock('./timesheet-approval-weekend-check.service.js', () => ({
 vi.mock('./schedule.service.js', () => ({
   resolveSchedulesForPeriod: mockResolveSchedulesForPeriod,
   loadCalendarMonth: mockLoadCalendarMonth,
+  isHolidayOnWorkday: mockIsHolidayOnWorkday,
 }));
 
 const { mockListMemberships } = vi.hoisted(() => ({
@@ -88,6 +90,7 @@ function setupMocks(): void {
   mockResolveSchedulesForPeriod.mockResolvedValue(new Map());
   mockLoadCalendarMonth.mockResolvedValue(null);
   mockListNonHolidayWeekendDays.mockReturnValue([]);
+  mockIsHolidayOnWorkday.mockReturnValue(false);
 }
 
 type SchedAttrs = {
@@ -119,6 +122,7 @@ beforeEach(() => {
   mockLoadCalendarMonth.mockReset();
   mockListNonHolidayWeekendDays.mockReset();
   mockListMemberships.mockReset();
+  mockIsHolidayOnWorkday.mockReset();
   setupMocks();
 });
 
@@ -373,6 +377,72 @@ describe('validateCorrectionAttachments', () => {
     if (!result.ok) {
       expect(result.missing).toHaveLength(1);
       expect(result.missing[0].date).toBe('2026-05-23');
+    }
+  });
+
+  // ─── Праздник-будень (например 12.06 — пятница-праздник) ───
+  const JUNE = { startDate: '2026-06-01', endDate: '2026-06-30' };
+  const isoOf = (d: Date): string =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const JUNE_SATURDAYS = ['2026-06-06', '2026-06-13', '2026-06-20', '2026-06-27'];
+  const onlyJuneSaturdays = (_y: number, _m: number, _c: unknown, _r: boolean, dow: number): string[] =>
+    dow === 6 ? JUNE_SATURDAYS : [];
+
+  it('праздник-будень 12.06 при квоте 1, субботы нет → ok (зачтён как обязательная суббота)', async () => {
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set(['2026-06-12'])]]));
+    mockResolveSchedulesForPeriod.mockResolvedValue(
+      makeSchedules(1, ['2026-06-12'], { expected_saturdays_per_month: 1, respects_holidays: true }),
+    );
+    mockListNonHolidayWeekendDays.mockImplementation(onlyJuneSaturdays);
+    mockIsHolidayOnWorkday.mockImplementation((_s: unknown, d: Date) => isoOf(d) === '2026-06-12');
+    setupQueries({ skud: [{ employee_id: 1, date: '2026-06-12', total_minutes: 400 }] });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1] }, JUNE);
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('праздник-будень 12.06 при квоте 0 → блок (требуется корректировка)', async () => {
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set(['2026-06-12'])]]));
+    mockResolveSchedulesForPeriod.mockResolvedValue(
+      makeSchedules(1, ['2026-06-12'], { expected_saturdays_per_month: 0, respects_holidays: true }),
+    );
+    mockListNonHolidayWeekendDays.mockImplementation(onlyJuneSaturdays);
+    mockIsHolidayOnWorkday.mockImplementation((_s: unknown, d: Date) => isoOf(d) === '2026-06-12');
+    setupQueries({
+      skud: [{ employee_id: 1, date: '2026-06-12', total_minutes: 400 }],
+      employees: [{ id: 1, full_name: 'Тест Т.Т.' }],
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1] }, JUNE);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missing).toHaveLength(1);
+      expect(result.missing[0].date).toBe('2026-06-12');
+      expect(result.missing[0].kind).toBe('weekend_no_correction');
+    }
+  });
+
+  it('праздник-будень 12.06 + суббота 13.06, обе без корректировки, квота 1 → блок поздней (13.06)', async () => {
+    const days = ['2026-06-12', '2026-06-13'];
+    mockGetOffDatesByEmployee.mockResolvedValue(new Map([[1, new Set(days)]]));
+    mockResolveSchedulesForPeriod.mockResolvedValue(
+      makeSchedules(1, days, { expected_saturdays_per_month: 1, respects_holidays: true }),
+    );
+    mockListNonHolidayWeekendDays.mockImplementation(onlyJuneSaturdays);
+    mockIsHolidayOnWorkday.mockImplementation((_s: unknown, d: Date) => isoOf(d) === '2026-06-12');
+    setupQueries({
+      skud: days.map(d => ({ employee_id: 1, date: d, total_minutes: 400 })),
+      employees: [{ id: 1, full_name: 'Тест Т.Т.' }],
+    });
+
+    const result = await validateCorrectionAttachments({ kind: 'personal', employeeIds: [1] }, JUNE);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missing).toHaveLength(1);
+      expect(result.missing[0].date).toBe('2026-06-13');
     }
   });
 

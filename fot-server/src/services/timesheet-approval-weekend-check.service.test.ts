@@ -17,6 +17,9 @@ vi.mock('./schedule.service.js', () => ({
   loadCalendarMonth: vi.fn(),
   resolveSchedulesForPeriod: vi.fn(),
   isWorkingDay: vi.fn(),
+  // computeMandatoryExemptions (через checkWeekendWorkRequirement) зовёт предикат;
+  // по умолчанию праздников-буден нет.
+  isHolidayOnWorkday: vi.fn(() => false),
 }));
 vi.mock('./timesheet-department-assignments.service.js', async (importActual) => ({
   ...(await importActual<typeof import('./timesheet-department-assignments.service.js')>()),
