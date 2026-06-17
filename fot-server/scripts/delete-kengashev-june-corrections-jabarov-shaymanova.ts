@@ -1,6 +1,6 @@
 /**
  * Одноразовая чистка: удаляет ВСЕ корректировки табеля, сделанные начальником участка
- * Кенгашевым У.А., за период 1–15 мая 2026, и только по двум бригадам:
+ * Кенгашевым У.А., за период 1–15 июня 2026, и только по двум бригадам:
  *   - бр.Жабаров Т.А.
  *   - бр.Шайманова Х.К.У.
  *
@@ -14,7 +14,7 @@
  * включить и таких — добавить их id в EXTRA_EMPLOYEE_IDS ниже.
  *
  * Что удаляется: ВСЕ строки attendance_adjustments с created_by = Кенгашев,
- * work_date ∈ [2026-05-01; 2026-05-15], employee_id ∈ члены бригад — любой status/source_type
+ * work_date ∈ [2026-06-01; 2026-06-15], employee_id ∈ члены бригад — любой status/source_type
  * (manual, manual_object, work/absent/vacation и т.д.). Перед удалением строки чистятся
  * её вложения (document_links/documents) и осиротевшие объекты в R2.
  *
@@ -22,8 +22,8 @@
  *
  * Запуск (из build-контекста на проде, где есть src+tsx и .env сайта):
  *   cd fot-server
- *   npx tsx scripts/delete-kengashev-may-corrections-jabarov-shaymanova.ts            # DRY-RUN
- *   npx tsx scripts/delete-kengashev-may-corrections-jabarov-shaymanova.ts --migrate  # ПРИМЕНИТЬ
+ *   npx tsx scripts/delete-kengashev-june-corrections-jabarov-shaymanova.ts            # DRY-RUN
+ *   npx tsx scripts/delete-kengashev-june-corrections-jabarov-shaymanova.ts --migrate  # ПРИМЕНИТЬ
  */
 import { query, execute } from '../src/config/postgres.js';
 import { purgeCorrectionAttachments } from '../src/services/correction-attachments.service.js';
@@ -34,8 +34,8 @@ const APPLY = process.argv.includes('--migrate') || process.argv.includes('migra
 
 const KENGASHEV_NAME = 'Кенгашев Улмас Аллабердиевич';
 const BRIGADE_NAMES = ['бр.Жабаров Т.А.', 'бр.Шайманова Х.К.У.'];
-const DATE_FROM = '2026-05-01';
-const DATE_TO = '2026-05-15';
+const DATE_FROM = '2026-06-01';
+const DATE_TO = '2026-06-15';
 
 /** Доп. сотрудники для включения в скоуп (переведённые/уволенные из этих бригад). Пусто по умолчанию. */
 const EXTRA_EMPLOYEE_IDS: number[] = [];
