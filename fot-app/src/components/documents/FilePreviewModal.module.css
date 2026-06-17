@@ -13,8 +13,8 @@
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: 12px;
-  width: min(960px, 95vw);
-  height: min(720px, 90dvh);
+  width: min(1100px, 95vw);
+  height: 90dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -73,6 +73,7 @@
   justify-content: center;
   background: var(--bg-secondary);
   padding: 8px;
+  overflow: auto;
 }
 
 .image {
@@ -80,6 +81,27 @@
   max-height: 100%;
   object-fit: contain;
   border-radius: 6px;
+  margin: auto;
+  user-select: none;
+  transition: width 0.12s ease;
+}
+
+.zoomLabel {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.iconBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.iconBtn:disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
 }
 
 .iframe {

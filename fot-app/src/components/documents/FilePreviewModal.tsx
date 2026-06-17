@@ -1,10 +1,15 @@
-import { type FC, useCallback, useEffect, useState } from 'react';
-import { X, Download } from 'lucide-react';
+import { type FC, type WheelEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { X, Download, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
 import { documentService } from '../../services/documentService';
 import { ModalShell } from '../ui/ModalShell';
 import styles from './FilePreviewModal.module.css';
 
 type Disposition = 'inline' | 'attachment';
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.25;
+const clampZoom = (z: number): number => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
 interface IFilePreviewModalProps {
   documentId?: number;
@@ -28,6 +33,31 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
 }) => {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [baseW, setBaseW] = useState<number | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  // Сброс зума при смене файла, чтобы новый открывался вписанным.
+  useEffect(() => {
+    setZoom(1);
+    setBaseW(null);
+  }, [url, fileName]);
+
+  // Ширина картинки во вписанном (zoom=1) состоянии — база для масштаба.
+  const handleImgLoad = useCallback(() => {
+    const w = imgRef.current?.getBoundingClientRect().width;
+    if (w) setBaseW(w);
+  }, []);
+
+  const zoomIn = useCallback(() => setZoom(z => clampZoom(z + ZOOM_STEP)), []);
+  const zoomOut = useCallback(() => setZoom(z => clampZoom(z - ZOOM_STEP)), []);
+  const zoomReset = useCallback(() => setZoom(1), []);
+
+  const handleWheel = useCallback((e: WheelEvent<HTMLDivElement>) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    setZoom(z => clampZoom(z + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+  }, []);
 
   const loadUrl = useCallback(
     (disposition: Disposition): Promise<string> => {
@@ -72,6 +102,41 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
           <div className={styles.header}>
             <span className={styles.title} title={fileName}>{fileName}</span>
             <div className={styles.actions}>
+              {url && isImage && (
+                <>
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    onClick={zoomOut}
+                    disabled={zoom <= ZOOM_MIN}
+                    title="Уменьшить"
+                    aria-label="Уменьшить"
+                  >
+                    <ZoomOut size={16} />
+                  </button>
+                  <span className={styles.zoomLabel}>{Math.round(zoom * 100)}%</span>
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    onClick={zoomIn}
+                    disabled={zoom >= ZOOM_MAX}
+                    title="Увеличить"
+                    aria-label="Увеличить"
+                  >
+                    <ZoomIn size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.iconBtn}
+                    onClick={zoomReset}
+                    disabled={zoom === 1}
+                    title="Сбросить масштаб"
+                    aria-label="Сбросить масштаб"
+                  >
+                    <Maximize size={16} />
+                  </button>
+                </>
+              )}
               {url && (
                 <button type="button" className={styles.iconBtn} onClick={handleDownload} title="Скачать">
                   <Download size={16} />
@@ -82,11 +147,23 @@ export const FilePreviewModal: FC<IFilePreviewModalProps> = ({
               </button>
             </div>
           </div>
-          <div className={styles.body}>
+          <div className={styles.body} onWheel={handleWheel}>
             {error && <div className={styles.error}>{error}</div>}
             {!error && !url && <div className={styles.loading}>Загрузка…</div>}
             {url && !error && isImage && (
-              <img src={url} alt={fileName} className={styles.image} />
+              <img
+                ref={imgRef}
+                src={url}
+                alt={fileName}
+                className={styles.image}
+                onLoad={handleImgLoad}
+                style={
+                  zoom > 1 && baseW
+                    ? { width: baseW * zoom, height: 'auto', maxWidth: 'none', maxHeight: 'none' }
+                    : undefined
+                }
+                draggable={false}
+              />
             )}
             {url && !error && isPdf && (
               <iframe src={url} title={fileName} className={styles.iframe} />
