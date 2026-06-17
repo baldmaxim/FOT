@@ -719,6 +719,7 @@ const exportMissing = async (req: AuthenticatedRequest, res: Response): Promise<
       { header: 'ФИО', key: 'fio', width: 36 },
       { header: 'Должность', key: 'position', width: 28 },
       { header: 'Бригада/отдел', key: 'department', width: 30 },
+      { header: 'Объекты', key: 'objects', width: 40 },
       { header: 'Руководитель', key: 'manager', width: 36 },
       { header: 'Сумма ₽', key: 'sum', width: 14 },
     ];
@@ -733,11 +734,13 @@ const exportMissing = async (req: AuthenticatedRequest, res: Response): Promise<
         fio: row.full_name ?? '',
         position: row.position_name ?? '',
         department: row.department_name ?? '',
+        objects: row.objects.join(', '),
         manager: row.manager_full_name ?? '',
         sum: row.paid_sum,
       });
     });
     ws.getColumn('sum').numFmt = '#,##0.00';
+    ws.getColumn('objects').alignment = { wrapText: true, vertical: 'top' };
 
     const buf = await wb.xlsx.writeBuffer();
     const safeFileName = `Чеки_не_прикреплены_${from}_${to}.xlsx`.replace(/[\/\\?%*:|"<>]/g, '_');

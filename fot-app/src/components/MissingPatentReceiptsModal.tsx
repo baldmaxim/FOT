@@ -115,6 +115,7 @@ export const MissingPatentReceiptsModal: FC<IProps> = ({ onClose }) => {
                       <th>ФИО</th>
                       <th>Должность</th>
                       <th>Бригада/отдел</th>
+                      <th>Объекты</th>
                       <th>Руководитель</th>
                       <th className={styles.alignRight}>Сумма ₽</th>
                     </tr>
@@ -126,6 +127,7 @@ export const MissingPatentReceiptsModal: FC<IProps> = ({ onClose }) => {
                         <td>{r.full_name || '—'}</td>
                         <td>{r.position_name || '—'}</td>
                         <td>{r.department_name || '—'}</td>
+                        <td>{r.objects.length ? r.objects.join(', ') : '—'}</td>
                         <td>{r.manager_full_name || '—'}</td>
                         <td className={styles.alignRight}>{formatAmount(r.paid_sum)}</td>
                       </tr>

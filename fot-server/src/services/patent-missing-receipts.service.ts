@@ -26,6 +26,7 @@ export interface IMissingPatentRow {
   position_name: string | null;
   department_name: string | null;
   manager_full_name: string | null;
+  objects: string[];
   paid_sum: number;
   required_sum: number;
   months_count: number;
@@ -102,6 +103,37 @@ export async function getMissingPatentReceipts(from: string, to: string): Promis
     [from, to, requiredSum, SU10_ROOT_ID, PATENT_COUNTRY_PREFIXES],
   );
 
+  // Объекты, где сотрудник работал в периоде: проходы СКУД (access_point → объект)
+  // + ручные объектные корректировки. Тот же маппинг, что в fetchEmployeeIdsForObjects.
+  const employeeIds = rows.map(r => Number(r.employee_id));
+  const objectsMap = new Map<number, string[]>();
+  if (employeeIds.length > 0) {
+    const objRows = await query<{ employee_id: number | string; objects: string[] | null }>(
+      `SELECT employee_id, array_agg(DISTINCT object_name ORDER BY object_name) AS objects
+         FROM (
+           SELECT se.employee_id, so.name AS object_name
+             FROM skud_events se
+             JOIN skud_object_access_points sap
+               ON BTRIM(lower(sap.access_point_name)) = BTRIM(lower(se.access_point))
+             JOIN skud_objects so ON so.id = sap.object_id
+            WHERE se.employee_id = ANY($1::bigint[])
+              AND se.event_date BETWEEN $2::date AND $3::date
+           UNION
+           SELECT aa.employee_id,
+                  COALESCE(so.name, NULLIF(aa.metadata->>'object_name', '')) AS object_name
+             FROM attendance_adjustments aa
+             LEFT JOIN skud_objects so ON so.id = NULLIF(aa.metadata->>'object_id', '')::uuid
+            WHERE aa.source_type = 'manual_object'
+              AND aa.employee_id = ANY($1::bigint[])
+              AND aa.work_date BETWEEN $2::date AND $3::date
+         ) t
+        WHERE object_name IS NOT NULL AND object_name <> ''
+        GROUP BY employee_id`,
+      [employeeIds, from, to],
+    );
+    objRows.forEach(o => objectsMap.set(Number(o.employee_id), o.objects ?? []));
+  }
+
   // Руководитель: прямой (employee_direct_reports), иначе начальник участка/отдела
   // (employee_department_access, full-доступ) — тот же приоритет, что в согласованиях.
   const mgrMap = await resolveResponsibleEmployeeIdsByEmployee(
@@ -127,6 +159,7 @@ export async function getMissingPatentReceipts(from: string, to: string): Promis
       position_name: r.position_name,
       department_name: r.department_name,
       manager_full_name: managers.length > 0 ? managers.join(', ') : null,
+      objects: objectsMap.get(Number(r.employee_id)) ?? [],
       paid_sum: Number(r.paid_sum) || 0,
       required_sum: requiredSum,
       months_count: monthsCount,

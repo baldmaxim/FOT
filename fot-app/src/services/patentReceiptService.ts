@@ -132,6 +132,7 @@ export interface IMissingPatentRow {
   position_name: string | null;
   department_name: string | null;
   manager_full_name: string | null;
+  objects: string[];
   paid_sum: number;
   required_sum: number;
   months_count: number;
