@@ -1065,6 +1065,254 @@ const getHistoryByDepartment = async (req: AuthenticatedRequest, res: Response):
   }
 };
 
+/** Группа заявок одного ответственного: внутри — те же карточки отделов, что видит он сам. */
+interface IResponsibleGroup {
+  responsible_employee_id: number | null;
+  responsible_name: string | null;
+  items_count: number;
+  employees_count: number;
+  departments: IDepartmentGroup[];
+  is_unassigned?: boolean;
+}
+
+/** Сентинель-ключ bucket'а «Без назначенного ответственного» (employee_id всегда > 0). */
+const UNASSIGNED_RESPONSIBLE_KEY = 0;
+
+/** Строит карточки отделов из набора уже готовых item'ов (группировка по отделу сотрудника). */
+function buildDepartmentGroups(
+  items: IPendingItem[],
+  deptByEmp: Map<number, string | null>,
+  deptNamesMap: Map<string, string>,
+): IDepartmentGroup[] {
+  const groups = new Map<string, IDepartmentGroup>();
+  for (const item of items) {
+    const deptId = deptByEmp.get(Number(item.employee_id)) ?? null;
+    if (!deptId) continue;
+    let group = groups.get(deptId);
+    if (!group) {
+      group = {
+        department_id: deptId,
+        department_name: deptNamesMap.get(deptId) ?? deptId,
+        pending_count: 0,
+        employees_count: 0,
+        items: [],
+      };
+      groups.set(deptId, group);
+    }
+    group.items.push(item);
+  }
+  for (const group of groups.values()) {
+    group.pending_count = group.items.length;
+    group.employees_count = new Set(group.items.map(i => i.employee_id)).size;
+  }
+  return [...groups.values()].sort((a, b) => a.department_name.localeCompare(b.department_name, 'ru'));
+}
+
+/**
+ * Админ-обзор очереди согласований выходных, сгруппированный по ответственным
+ * лицам (read-only). В отличие от getPendingByDepartment, НЕ скрывает
+ * маршрутизированные строки — показывает их под их ответственным, чтобы
+ * админ видел раздел «глазами» каждого ответственного.
+ *
+ * Скоуп: system-admin (`'all'`) — все строки whitelist-отделов; company-admin —
+ * только в пределах своего scope (без добавления direct-reports). Пустой scope
+ * у админа → []. Не-админ → 403.
+ */
+const getAllByResponsible = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user.is_admin) {
+      res.status(403).json({ success: false, error: 'Insufficient permissions' });
+      return;
+    }
+
+    const startDate = isIsoDate(req.query.start_date) ? req.query.start_date : null;
+    const endDate = isIsoDate(req.query.end_date) ? req.query.end_date : null;
+    if (!startDate || !endDate || endDate < startDate) {
+      res.status(400).json({ success: false, error: 'start_date и end_date обязательны (YYYY-MM-DD)' });
+      return;
+    }
+    const mode: 'pending' | 'history' = req.query.mode === 'history' ? 'history' : 'pending';
+
+    const accessible = await resolveAccessibleDepartmentIds(req);
+    // Админ с пустым scope (company-admin без доступа) → пустой список, не 403.
+    if (accessible !== 'all' && accessible.length === 0) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+    const isAllScope = accessible === 'all';
+    const allowedDeptIds = isAllScope ? null : new Set(accessible);
+
+    const adjustments = await query<{
+      id: number;
+      employee_id: number;
+      work_date: string;
+      status: string;
+      hours_override: number | null;
+      reason: string | null;
+      created_by: string | null;
+      created_at: string;
+      approval_status: string;
+      approved_by: string | null;
+      approved_at: string | null;
+      approval_comment: string | null;
+    }>(
+      mode === 'history'
+        ? `SELECT id, employee_id, work_date::text AS work_date, status, hours_override, reason, created_by, created_at,
+                  approval_status, approved_by, approved_at, approval_comment
+             FROM attendance_adjustments
+            WHERE approval_status = ANY($1::text[])
+              AND work_date >= $2::date
+              AND work_date <= $3::date
+            ORDER BY approved_at DESC`
+        : `SELECT id, employee_id, work_date::text AS work_date, status, hours_override, reason, created_by, created_at,
+                  approval_status, approved_by, approved_at, approval_comment
+             FROM attendance_adjustments
+            WHERE approval_status = 'pending'
+              AND work_date >= $2::date
+              AND work_date <= $3::date
+            ORDER BY work_date ASC`,
+      mode === 'history' ? [['approved', 'rejected'], startDate, endDate] : [['pending'], startDate, endDate],
+    );
+
+    if (adjustments.length === 0) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const employeeIds = [...new Set(adjustments.map(a => Number(a.employee_id)))];
+    const employees = await query<{ id: number; full_name: string | null; org_department_id: string | null }>(
+      `SELECT e.id, e.full_name, e.org_department_id
+         FROM employees e
+        WHERE e.id = ANY($1::bigint[])`,
+      [employeeIds],
+    );
+
+    const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
+
+    // Только whitelist-отделы и только в пределах scope (без direct-reports).
+    const empInfoMap = new Map<number, { full_name: string | null; department_id: string | null }>();
+    for (const e of employees) {
+      const deptId = e.org_department_id ? String(e.org_department_id) : null;
+      if (!deptId || !requiredDepartments.has(deptId)) continue;
+      if (!isAllScope && !allowedDeptIds!.has(deptId)) continue;
+      empInfoMap.set(Number(e.id), { full_name: e.full_name ?? null, department_id: deptId });
+    }
+    if (empInfoMap.size === 0) {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const visibleAdjustments = adjustments.filter(a => empInfoMap.has(Number(a.employee_id)));
+    const routableRows = visibleAdjustments.map(a => ({
+      id: Number(a.id),
+      employee_id: Number(a.employee_id),
+      work_date: String(a.work_date),
+      org_department_id: empInfoMap.get(Number(a.employee_id))!.department_id,
+    }));
+    const responsiblesMap = await resolveResponsibleEmployeeIdsForRows(routableRows);
+
+    // Имена отделов и авторов/проверяющих — одним проходом по видимым строкам.
+    const deptNamesMap = new Map<string, string>();
+    const deptByEmp = new Map<number, string | null>();
+    const visibleDeptIds = new Set<string>();
+    for (const [empId, info] of empInfoMap) {
+      deptByEmp.set(empId, info.department_id);
+      if (info.department_id) visibleDeptIds.add(info.department_id);
+    }
+    if (visibleDeptIds.size > 0) {
+      const deptRows = await query<{ id: string; name: string | null }>(
+        `SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])`,
+        [[...visibleDeptIds]],
+      );
+      for (const row of deptRows) deptNamesMap.set(String(row.id), String(row.name ?? ''));
+    }
+
+    const userIds = [...new Set([
+      ...visibleAdjustments.map(a => a.created_by).filter((v): v is string => Boolean(v)),
+      ...visibleAdjustments.map(a => a.approved_by).filter((v): v is string => Boolean(v)),
+    ])];
+    const userNamesMap = new Map<string, string>();
+    if (userIds.length > 0) {
+      const userRows = await query<{ id: string; full_name: string | null }>(
+        `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
+        [userIds],
+      );
+      for (const row of userRows) userNamesMap.set(String(row.id), String(row.full_name ?? ''));
+    }
+
+    // Один item на строку (переиспользуется во всех bucket'ах ответственных).
+    const itemByAdjId = new Map<number, IPendingItem>();
+    for (const adj of visibleAdjustments) {
+      const empInfo = empInfoMap.get(Number(adj.employee_id))!;
+      itemByAdjId.set(Number(adj.id), {
+        id: Number(adj.id),
+        employee_id: Number(adj.employee_id),
+        employee_name: empInfo.full_name,
+        work_date: String(adj.work_date),
+        status: String(adj.status),
+        hours_override: typeof adj.hours_override === 'number' ? adj.hours_override : null,
+        notes: adj.reason ?? null,
+        created_by: adj.created_by ? String(adj.created_by) : null,
+        created_by_name: adj.created_by ? userNamesMap.get(String(adj.created_by)) ?? null : null,
+        created_at: String(adj.created_at),
+        approval_status: String(adj.approval_status) as IPendingItem['approval_status'],
+        approved_by: adj.approved_by ? String(adj.approved_by) : null,
+        approved_by_name: adj.approved_by ? userNamesMap.get(String(adj.approved_by)) ?? null : null,
+        approved_at: adj.approved_at ? String(adj.approved_at) : null,
+        approval_comment: adj.approval_comment ?? null,
+      });
+    }
+
+    // Раскладка строк по ответственным (строка может попасть к нескольким).
+    const buckets = new Map<number, IPendingItem[]>();
+    for (const adj of visibleAdjustments) {
+      const item = itemByAdjId.get(Number(adj.id))!;
+      const responsibles = responsiblesMap.get(Number(adj.id)) ?? [];
+      const keys = responsibles.length > 0 ? responsibles : [UNASSIGNED_RESPONSIBLE_KEY];
+      for (const key of keys) {
+        const list = buckets.get(key) ?? [];
+        list.push(item);
+        buckets.set(key, list);
+      }
+    }
+
+    // Имена ответственных.
+    const responsibleIds = [...buckets.keys()].filter(k => k !== UNASSIGNED_RESPONSIBLE_KEY);
+    const responsibleNames = new Map<number, string | null>();
+    if (responsibleIds.length > 0) {
+      const rows = await query<{ id: number; full_name: string | null }>(
+        `SELECT id, full_name FROM employees WHERE id = ANY($1::bigint[])`,
+        [responsibleIds],
+      );
+      for (const row of rows) responsibleNames.set(Number(row.id), row.full_name ?? null);
+    }
+
+    const result: IResponsibleGroup[] = [];
+    for (const [key, items] of buckets) {
+      const departments = buildDepartmentGroups(items, deptByEmp, deptNamesMap);
+      result.push({
+        responsible_employee_id: key === UNASSIGNED_RESPONSIBLE_KEY ? null : key,
+        responsible_name: key === UNASSIGNED_RESPONSIBLE_KEY ? null : (responsibleNames.get(key) ?? null),
+        items_count: items.length,
+        employees_count: new Set(items.map(i => i.employee_id)).size,
+        departments,
+        is_unassigned: key === UNASSIGNED_RESPONSIBLE_KEY,
+      });
+    }
+
+    result.sort((a, b) => {
+      if (a.is_unassigned && !b.is_unassigned) return 1;
+      if (!a.is_unassigned && b.is_unassigned) return -1;
+      return (a.responsible_name ?? '').localeCompare(b.responsible_name ?? '', 'ru');
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('correction-approval.getAllByResponsible error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения обзора по ответственным' });
+  }
+};
+
 /** Возвращает уже утверждённую/отклонённую корректировку обратно в pending. */
 const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -1218,6 +1466,7 @@ const saveSettings = async (req: AuthenticatedRequest, res: Response): Promise<v
 export const correctionApprovalController = {
   getPendingByDepartment,
   getHistoryByDepartment,
+  getAllByResponsible,
   approveOne,
   rejectOne,
   revertOne,

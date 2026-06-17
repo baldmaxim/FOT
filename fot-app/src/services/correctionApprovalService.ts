@@ -30,6 +30,17 @@ export interface ICorrectionDepartmentGroup {
   is_direct_reports?: boolean;
 }
 
+/** Группа заявок одного ответственного для админ-обзора (read-only). */
+export interface IResponsibleApprovalGroup {
+  responsible_employee_id: number | null;
+  responsible_name: string | null;
+  items_count: number;
+  employees_count: number;
+  departments: ICorrectionDepartmentGroup[];
+  /** true для секции «Без назначенного ответственного». */
+  is_unassigned?: boolean;
+}
+
 export interface IBulkResult {
   processed_count: number;
   skipped_not_pending: number;
@@ -51,6 +62,18 @@ export const correctionApprovalService = {
     const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
     const res = await apiClient.get<ApiResponse<ICorrectionDepartmentGroup[]>>(
       `/correction-approvals/pending-by-department?${params.toString()}`,
+    );
+    return res.data ?? [];
+  },
+
+  async getAllByResponsible(
+    startDate: string,
+    endDate: string,
+    mode: 'pending' | 'history',
+  ): Promise<IResponsibleApprovalGroup[]> {
+    const params = new URLSearchParams({ start_date: startDate, end_date: endDate, mode });
+    const res = await apiClient.get<ApiResponse<IResponsibleApprovalGroup[]>>(
+      `/correction-approvals/all-by-responsible?${params.toString()}`,
     );
     return res.data ?? [];
   },

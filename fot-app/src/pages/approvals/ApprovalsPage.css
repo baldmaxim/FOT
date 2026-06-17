@@ -71,6 +71,27 @@
   color: var(--text-primary);
   line-height: 1.2;
 }
+.approvals-period-preview-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.approvals-period-preview-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  border-color: var(--primary);
+}
 .approvals-period-half-toggle {
   display: inline-flex;
   gap: 8px;
@@ -1166,6 +1187,16 @@
 .cor-actionbar-summary b {
   color: var(--text-primary);
   font-weight: 600;
+}
+.cor-actionbar-readonly {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 3px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .cor-actionbar-btns {
   display: inline-flex;

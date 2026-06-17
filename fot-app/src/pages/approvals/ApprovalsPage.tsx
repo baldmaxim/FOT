@@ -1,6 +1,6 @@
-import { type FC, useState, useMemo, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import { type FC, useState, useMemo, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, X, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, FileText, Download, Settings } from 'lucide-react';
+import { Check, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, FileText, Download, Settings, Eye } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -13,7 +13,6 @@ import { ApprovalAttachmentsModal } from '../../components/timesheet/ApprovalAtt
 import {
   correctionApprovalService,
   type ICorrectionDepartmentGroup,
-  type ICorrectionPendingItem,
   type IBulkResult,
 } from '../../services/correctionApprovalService';
 import { timesheetService } from '../../services/timesheetService';
@@ -23,6 +22,9 @@ import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { DepartmentTimesheetModal } from '../../components/timesheet/DepartmentTimesheetModal';
 import { ApprovalCommentModal } from './ApprovalCommentModal';
 import { CorrectionApprovalSettingsModal } from './CorrectionApprovalSettingsModal';
+import { CorrectionGroupsList } from './CorrectionGroupsList';
+import { WeekendApprovalsPreviewModal } from './WeekendApprovalsPreviewModal';
+import { WEEKDAY_SHORT_RU, removeItemsByIds } from './approvalsShared';
 const TimesheetCorrectionModal = lazy(() => import('../../components/timesheet/TimesheetCorrectionModal').then(module => ({
   default: module.TimesheetCorrectionModal,
 })));
@@ -53,118 +55,20 @@ const TIMESHEET_STATUS_TABS: Array<{ code: TimesheetApprovalStatus; label: strin
   { code: 'rejected', label: 'Отклонённые / на доработке' },
 ];
 
-// На согласование выходных дней попадают только статусы work/remote, а также
-// manual (work, прицепленная к СКУД-объекту в POST /api/timesheet). Все они по
-// смыслу = «Работа» или «Удалёнка», поэтому manual/work показываем как «Работа».
-const STATUS_LABELS: Record<string, string> = {
-  work: 'Дополнительная плата',
-  remote: 'Удалёнка',
-  sick: 'Больничный',
-  vacation: 'Отпуск',
-  absent: 'Неявка',
-  manual: 'Работа',
-  dayoff: 'Отгул',
-  unpaid: 'За свой счёт',
-  educational_leave: 'Учебный отпуск',
-};
-
-const STATUS_ICONS: Record<string, string> = {
-  work: '✔',
-  remote: '🏠',
-  sick: '🏥',
-  vacation: '🏖',
-  absent: '❌',
-  manual: '✔',
-  dayoff: '📅',
-  unpaid: '💸',
-  educational_leave: '🎓',
-};
-
 const formatDate = (iso: string): string => {
   const d = new Date(iso + 'T00:00:00');
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
-
-const WEEKDAY_SHORT_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
-const MONTH_GENITIVE_SHORT_RU = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
 const formatDateWithWeekday = (iso: string): string => {
   const d = new Date(iso + 'T00:00:00');
   return `${formatDate(iso)} (${WEEKDAY_SHORT_RU[d.getDay()]})`;
 };
 
-const formatDateCompact = (iso: string): { day: string; weekday: string } => {
-  const d = new Date(iso + 'T00:00:00');
-  return {
-    day: `${d.getDate()} ${MONTH_GENITIVE_SHORT_RU[d.getMonth()]}`,
-    weekday: WEEKDAY_SHORT_RU[d.getDay()].toLowerCase(),
-  };
-};
-
-const formatDateTimeShort = (iso: string): string => {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const day = d.getDate();
-  const m = MONTH_GENITIVE_SHORT_RU[d.getMonth()];
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${day} ${m}, ${hh}:${mm}`;
-};
-
-const formatHM = (decimal: number | null): string => {
-  if (decimal == null) return '—';
-  const h = Math.floor(decimal);
-  const m = Math.round((decimal - h) * 60);
-  if (m === 0) return `${h}ч`;
-  return `${h}ч ${m}м`;
-};
-
-interface IGroupCheckboxProps {
-  state: 'none' | 'partial' | 'all';
-  onChange: (checked: boolean) => void;
-  ariaLabel: string;
-}
-
-const GroupCheckbox: FC<IGroupCheckboxProps> = ({ state, onChange, ariaLabel }) => {
-  const ref = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = state === 'partial';
-  }, [state]);
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      className="cor-dept-check"
-      checked={state === 'all'}
-      onChange={(e) => onChange(e.target.checked)}
-      aria-label={ariaLabel}
-    />
-  );
-};
-
 const formatBulkToast = (verb: 'Утверждено' | 'Отклонено' | 'Возвращено', data: IBulkResult): string => {
   const skipped = data.skipped_not_pending + data.skipped_no_access;
   if (skipped > 0) return `${verb}: ${data.processed_count} (пропущено: ${skipped})`;
   return `${verb}: ${data.processed_count}`;
-};
-
-// Оптимистичное удаление обработанных записей из кэша списка: строки пропадают
-// с экрана сразу, не дожидаясь фонового refetch'а. Пустые группы выкидываются,
-// счётчики пересчитываются.
-const removeItemsByIds = (
-  groups: ICorrectionDepartmentGroup[] | undefined,
-  ids: number[],
-): ICorrectionDepartmentGroup[] | undefined => {
-  if (!groups) return groups;
-  const toRemove = new Set(ids);
-  return groups
-    .map(group => {
-      const items = group.items.filter(item => !toRemove.has(item.id));
-      if (items.length === group.items.length) return group;
-      const employees = new Set(items.map(it => it.employee_id));
-      return { ...group, items, pending_count: items.length, employees_count: employees.size };
-    })
-    .filter(group => group.items.length > 0);
 };
 
 interface ICorrectionsTabProps {
@@ -322,40 +226,18 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
     });
   };
 
-  const groupSelectionState = (group: ICorrectionDepartmentGroup): 'none' | 'partial' | 'all' => {
-    if (group.items.length === 0) return 'none';
-    let count = 0;
-    for (const item of group.items) {
-      if (selectedIds.has(item.id)) count++;
-    }
-    if (count === 0) return 'none';
-    if (count === group.items.length) return 'all';
-    return 'partial';
-  };
-
   const allItemIds = useMemo(() => {
     const ids: number[] = [];
     for (const g of groups) for (const it of g.items) ids.push(it.id);
     return ids;
   }, [groups]);
 
-  const totalEmployees = useMemo(() => {
-    const ids = new Set<number>();
-    for (const g of groups) for (const it of g.items) ids.add(it.employee_id);
-    return ids.size;
-  }, [groups]);
-
-  const allSelectionState: 'none' | 'partial' | 'all' = useMemo(() => {
-    if (allItemIds.length === 0) return 'none';
-    let count = 0;
-    for (const id of allItemIds) if (selectedIds.has(id)) count++;
-    if (count === 0) return 'none';
-    if (count === allItemIds.length) return 'all';
-    return 'partial';
-  }, [allItemIds, selectedIds]);
-
   const toggleAll = (checked: boolean) => {
     setSelectedIds(checked ? new Set(allItemIds) : new Set());
+  };
+
+  const toggleExpand = (departmentId: string) => {
+    setExpanded(s => ({ ...s, [departmentId]: !s[departmentId] }));
   };
 
   const bulkPending = bulkApproveSelectedMutation.isPending
@@ -422,65 +304,6 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
           />
         </div>
 
-        {canSelect && groups.length > 0 && (
-          <div className="cor-actionbar">
-            <GroupCheckbox
-              state={allSelectionState}
-              onChange={toggleAll}
-              ariaLabel="Выбрать все выходные дни во всех отделах"
-            />
-            <span className="cor-actionbar-summary">
-              {selectedIds.size > 0 ? (
-                <>Выбрано: <b>{selectedIds.size}</b></>
-              ) : (
-                <><b>{allItemIds.length}</b> в <b>{groups.length}</b> отд. · <b>{totalEmployees}</b> чел</>
-              )}
-            </span>
-            <div className="cor-actionbar-btns">
-              {!isHistory ? (
-                <>
-                  <button
-                    type="button"
-                    className="cor-actionbar-btn cor-actionbar-btn--approve"
-                    onClick={() => bulkApproveSelectedMutation.mutate([...selectedIds])}
-                    disabled={selectedIds.size === 0 || bulkPending}
-                  >
-                    <Check size={15} />
-                    {(() => {
-                      const label = isMobile ? 'Утв. выбр.' : 'Утвердить выбранные';
-                      return selectedIds.size > 0 ? `${label} (${selectedIds.size})` : label;
-                    })()}
-                  </button>
-                  <button
-                    type="button"
-                    className="cor-actionbar-btn cor-actionbar-btn--reject"
-                    onClick={() => bulkRejectSelectedMutation.mutate([...selectedIds])}
-                    disabled={selectedIds.size === 0 || bulkPending}
-                  >
-                    <X size={15} />
-                    {(() => {
-                      const label = isMobile ? 'Откл. выбр.' : 'Отклонить выбранные';
-                      return selectedIds.size > 0 ? `${label} (${selectedIds.size})` : label;
-                    })()}
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="cor-actionbar-btn cor-actionbar-btn--revert"
-                  onClick={() => bulkRevertSelectedMutation.mutate([...selectedIds])}
-                  disabled={selectedIds.size === 0 || bulkPending}
-                >
-                  <RotateCcw size={15} />
-                  {(() => {
-                    const label = isMobile ? 'Вернуть' : 'Вернуть выбранные';
-                    return selectedIds.size > 0 ? `${label} (${selectedIds.size})` : label;
-                  })()}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {query.isLoading ? (
@@ -492,124 +315,25 @@ const CorrectionsTab: FC<ICorrectionsTabProps> = ({ period }) => {
           {isHistory ? 'В истории за период ничего нет' : 'Нет выходных дней на согласовании за период'}
         </div>
       ) : (
-        <ul className="approvals-list">
-          {groups.map(group => {
-            const isOpen = !!expanded[group.department_id];
-            return (
-              <li key={group.department_id} className="cor-dept-card">
-                <div className={`cor-dept-header${isOpen ? ' cor-dept-header--expanded' : ''}`}>
-                  {canSelect && (
-                    <GroupCheckbox
-                      state={groupSelectionState(group)}
-                      onChange={(checked) => toggleGroup(group, checked)}
-                      ariaLabel={`Выбрать все в отделе ${group.department_name}`}
-                    />
-                  )}
-                  <button
-                    type="button"
-                    className="cor-dept-toggle"
-                    onClick={() => setExpanded(s => ({ ...s, [group.department_id]: !isOpen }))}
-                    aria-expanded={isOpen}
-                  >
-                    {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    <span className="cor-dept-name" title={group.department_name}>{group.department_name}</span>
-                  </button>
-                  <span
-                    className="cor-dept-stats"
-                    title={`Записей: ${group.pending_count} · Сотрудников: ${group.employees_count}`}
-                  >
-                    {group.pending_count} · {group.employees_count}&thinsp;чел
-                  </span>
-                  <button
-                    type="button"
-                    className="cor-dept-timesheet-btn"
-                    onClick={(e) => { e.stopPropagation(); openTimesheet(group); }}
-                    title="Табель отдела за месяц"
-                    aria-label={`Табель отдела ${group.department_name}`}
-                  >
-                    <FileText size={15} />
-                    {!isMobile && <span>Табель</span>}
-                  </button>
-                </div>
-
-                {isOpen && (
-                  <ul className="cor-items">
-                    {group.items.map((item: ICorrectionPendingItem) => {
-                      const trimmed = (item.notes ?? '').trim();
-                      const isShort = trimmed.length > 0 && trimmed.length < 10;
-                      const noNotes = trimmed.length === 0;
-                      const decisionMod = isHistory && item.approval_status === 'approved'
-                        ? ' cor-item--decided-approved'
-                        : isHistory && item.approval_status === 'rejected'
-                          ? ' cor-item--decided-rejected'
-                          : '';
-                      const warningMod = !isHistory
-                        ? (noNotes ? ' cor-item--no-notes' : isShort ? ' cor-item--short-notes' : '')
-                        : '';
-                      const itemMods = `${warningMod}${decisionMod}`;
-                      const notesExpanded = expandedNotes.has(item.id);
-                      const hours = formatHM(item.hours_override);
-                      const dateParts = formatDateCompact(item.work_date);
-                      const showAuthor = !!item.created_by_name && item.created_by_name !== item.employee_name;
-                      const decisionLabel = item.approval_status === 'approved' ? 'Утв.' : item.approval_status === 'rejected' ? 'Откл.' : '';
-                      return (
-                        <li key={item.id} className={`cor-item${itemMods}`}>
-                          {canSelect && (
-                            <input
-                              type="checkbox"
-                              className="cor-item-check"
-                              checked={selectedIds.has(item.id)}
-                              onChange={() => toggleId(item.id)}
-                              aria-label={`Выбрать корректировку ${item.employee_name ?? item.employee_id} ${item.work_date}`}
-                            />
-                          )}
-                          <span className="cor-item-date" data-hours={hours}>
-                            <span className="cor-item-date-day">{dateParts.day}</span>
-                            <span className="cor-item-date-wd">{dateParts.weekday}</span>
-                          </span>
-                          <span className="cor-item-employee">{item.employee_name ?? `#${item.employee_id}`}</span>
-                          <div className="cor-item-task">
-                            <span className="cor-item-task-caption">Формат</span>
-                            <span className={`cor-item-status cor-item-status--${item.status}`}>
-                              <span className="cor-item-status-icon" aria-hidden="true">{STATUS_ICONS[item.status] ?? '•'}</span>
-                              <span className="cor-item-status-label">{STATUS_LABELS[item.status] ?? item.status}</span>
-                            </span>
-                          </div>
-                          <span className="cor-item-hours">{hours}</span>
-                          <div
-                            className={`cor-item-notes${noNotes ? ' cor-item-notes--empty' : ''}${isShort && !isHistory ? ' cor-item-notes--short' : ''}${notesExpanded ? ' cor-item-notes--expanded' : ''}`}
-                            onClick={() => toggleNotes(item.id)}
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNotes(item.id); } }}
-                          >
-                            <span className="cor-item-notes-caption">Задача</span>
-                            {noNotes ? (
-                              <span className="cor-item-notes-placeholder">Без комментария</span>
-                            ) : (
-                              <span className="cor-item-notes-text">{trimmed}</span>
-                            )}
-                            {showAuthor && (
-                              <span className="cor-item-notes-author">— {item.created_by_name}</span>
-                            )}
-                            {isHistory && (item.approved_by_name || item.approved_at) && (
-                              <span className={`cor-item-decision cor-item-decision--${item.approval_status}`}>
-                                {item.approval_status === 'approved' ? <Check size={11} /> : <X size={11} />}
-                                <span className="cor-item-decision-label">{decisionLabel}</span>
-                                {item.approved_by_name && <span className="cor-item-decision-by">{item.approved_by_name}</span>}
-                                {item.approved_at && <span className="cor-item-decision-at">· {formatDateTimeShort(item.approved_at)}</span>}
-                              </span>
-                            )}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <CorrectionGroupsList
+          groups={groups}
+          isHistory={isHistory}
+          isMobile={isMobile}
+          canSelect={canSelect}
+          selectedIds={selectedIds}
+          onToggleId={toggleId}
+          onToggleGroup={toggleGroup}
+          onToggleAll={toggleAll}
+          expanded={expanded}
+          onToggleExpand={toggleExpand}
+          expandedNotes={expandedNotes}
+          onToggleNotes={toggleNotes}
+          onOpenTimesheet={openTimesheet}
+          onBulkApprove={(ids) => bulkApproveSelectedMutation.mutate(ids)}
+          onBulkReject={(ids) => bulkRejectSelectedMutation.mutate(ids)}
+          onBulkRevert={(ids) => bulkRevertSelectedMutation.mutate(ids)}
+          bulkPending={bulkPending}
+        />
       )}
 
       {showSettings && (
@@ -1331,7 +1055,9 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
 };
 
 export const ApprovalsPage: FC = () => {
+  const { isAdmin } = useAuth();
   const [tab, setTab] = useState<Tab>('corrections');
+  const [showPreview, setShowPreview] = useState(false);
 
   const initial = useMemo(() => getCurrentHalf(new Date()), []);
   const [year, setYear] = useState<number>(initial.year);
@@ -1423,11 +1149,29 @@ export const ApprovalsPage: FC = () => {
             </button>
           </section>
         )}
+        {isAdmin && tab === 'corrections' && (
+          <button
+            type="button"
+            className="approvals-period-preview-btn"
+            onClick={() => setShowPreview(true)}
+            title="Просмотр согласований по ответственным (только чтение)"
+          >
+            <Eye size={16} />
+            <span>Просмотр</span>
+          </button>
+        )}
       </div>
 
       {tab === 'corrections'
         ? <CorrectionsTab period={correctionsPeriod} />
         : <TimesheetsTab period={period} />}
+
+      {showPreview && (
+        <WeekendApprovalsPreviewModal
+          period={correctionsPeriod}
+          onClose={() => setShowPreview(false)}
+        />
+      )}
     </div>
   );
 };

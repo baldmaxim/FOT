@@ -108,6 +108,7 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // список из HTTP-кэша (Cache-Control: max-age=30 на всех GET /api/*).
     || path === '/correction-approvals/pending-by-department'
     || path === '/correction-approvals/history-by-department'
+    || path === '/correction-approvals/all-by-responsible'
     || path === '/timesheet-approvals/review-list'
     // Заявления: после создания/отмены/одобрения юзер ждёт мгновенного
     // обновления списка. Браузерный max-age=30 ловил все эти случаи —

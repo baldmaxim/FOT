@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Response, NextFunction } from 'express';
 import { correctionApprovalController } from '../controllers/correction-approval.controller.js';
-import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requirePageAccess, requireAdmin } from '../middleware/auth.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
@@ -69,6 +69,14 @@ router.get(
   '/history-by-department',
   requireQueueAccess('view'),
   correctionApprovalController.getHistoryByDepartment,
+);
+
+// Админ-обзор очереди «глазами ответственных» (read-only). Только админ;
+// контроллер дополнительно режет по scope (system-admin — всё, company-admin — свой).
+router.get(
+  '/all-by-responsible',
+  requireAdmin,
+  correctionApprovalController.getAllByResponsible,
 );
 
 router.post(
