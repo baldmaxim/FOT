@@ -142,7 +142,10 @@ export interface IAssertCorrectionAllowedInput {
  */
 export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInput): Promise<void> {
   // Удалёнка поверх согласованного выхода: норма дня 0 и нет СКУД-аномалии, но выход
-  // одобрен — гарды cap/anomalies/limit не применяем.
+  // одобрен ответственным — гарды cap/anomalies/limit НЕ применяем. Это намеренное полное
+  // исключение, включая monthly_limit: такой день не должен «съедать» месячную квоту правок.
+  // Ставится только для status='remote' (см. вызовы в timesheet.controller). Если бизнес
+  // решит, что лимит должен считать и этот кейс — разнести на два отдельных skip-флага.
   if (input.skipNormAndAnomalyChecks) return;
   const restrictions = await loadRoleRestrictions(input.systemRoleId);
   if (
@@ -197,6 +200,104 @@ export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInp
   }
 
   // hours === 0 — явное обнуление дня, разрешено для всех ролей
+}
+
+export interface IBulkCorrectionItem {
+  employeeId: number;
+  workDate: string;
+  /** Часы, которые будут записаны (для remote — плановые/8, для work/manual — присланные). */
+  hoursOverride: number;
+  /** Норма часов дня по графику (для cap-by-norm). */
+  scheduledNormHours: number;
+}
+
+/**
+ * Атомарная (preflight) проверка ограничений роли для bulk-правок — ДО единой записи.
+ * Нужна потому, что bulk пишет по одной строке: последовательный гард ловил бы превышение
+ * лимита только на N-й строке, оставив N-1 уже записанной (частичный успех). Здесь же мы
+ * проверяем весь батч целиком и при нарушении бросаем CorrectionRestrictionError — контроллер
+ * вернёт 422, не записав ничего.
+ *
+ * Учитывает upsert-семантику: повторная правка уже существующей даты не увеличивает счётчик
+ * (проекция строится по объединению множеств дат «уже есть» ∪ «в батче»).
+ */
+export async function assertBulkCorrectionAllowed(input: {
+  systemRoleId: string;
+  createdBy: string;
+  items: IBulkCorrectionItem[];
+}): Promise<void> {
+  const r = await loadRoleRestrictions(input.systemRoleId);
+  if (!r.corrections_anomalies_only && !r.corrections_cap_by_schedule_norm) return;
+
+  // Только «считаемые» позиции (положительные часы).
+  const counted = input.items.filter(it => Number.isFinite(it.hoursOverride) && it.hoursOverride > 0);
+  if (counted.length === 0) return;
+
+  // 1) Аномалии и cap-by-norm — по каждой позиции.
+  for (const it of counted) {
+    const norm = Number.isFinite(it.scheduledNormHours) ? it.scheduledNormHours : 0;
+    if (r.corrections_anomalies_only) {
+      const anomalous = await isSkudAnomalousDay(it.employeeId, it.workDate, norm > 0);
+      if (!anomalous) {
+        throw new CorrectionRestrictionError(
+          'not_anomalous',
+          'Корректировка часов разрешена только в дни-аномалии СКУД (пропуск пары, ошибка СКУД, пропуск скана).',
+          { employeeId: it.employeeId, workDate: it.workDate },
+        );
+      }
+    }
+    if (r.corrections_cap_by_schedule_norm && it.hoursOverride > norm) {
+      throw new CorrectionRestrictionError(
+        'hours_exceed_norm',
+        `Часы корректировки (${it.hoursOverride}) превышают плановые часы дня (${norm}).`,
+        { employeeId: it.employeeId, workDate: it.workDate, scheduledNormHours: norm },
+      );
+    }
+  }
+
+  // 2) Лимит N-в-месяц — проекция по (сотрудник, календарный месяц).
+  if (r.corrections_anomalies_only && r.max_corrections_per_month != null) {
+    const max = r.max_corrections_per_month;
+    const batchByKey = new Map<string, Set<string>>(); // `${emp}|${YYYY-MM}` → set(YYYY-MM-DD)
+    for (const it of counted) {
+      const ym = it.workDate.slice(0, 7);
+      const key = `${it.employeeId}|${ym}`;
+      if (!batchByKey.has(key)) batchByKey.set(key, new Set());
+      batchByKey.get(key)!.add(it.workDate);
+    }
+    const empIds = [...new Set(counted.map(it => it.employeeId))];
+    const months = [...new Set([...batchByKey.keys()].map(k => k.split('|')[1]))];
+
+    const rows = await query<{ employee_id: string | number; ym: string; d: string }>(
+      `SELECT employee_id,
+              to_char(work_date, 'YYYY-MM') AS ym,
+              work_date::text AS d
+         FROM attendance_adjustments
+        WHERE created_by = $1::uuid
+          AND employee_id = ANY($2::bigint[])
+          AND to_char(work_date, 'YYYY-MM') = ANY($3::text[])
+          AND approval_status IN ('pending','approved','auto_approved')
+          AND hours_override > 0`,
+      [input.createdBy, empIds, months],
+    );
+    const existingByKey = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const key = `${Number(row.employee_id)}|${row.ym}`;
+      if (!existingByKey.has(key)) existingByKey.set(key, new Set());
+      existingByKey.get(key)!.add(String(row.d).slice(0, 10));
+    }
+    for (const [key, batchDates] of batchByKey) {
+      const union = new Set([...(existingByKey.get(key) ?? new Set<string>()), ...batchDates]);
+      if (union.size > max) {
+        const employeeId = Number(key.split('|')[0]);
+        throw new CorrectionRestrictionError(
+          'monthly_limit',
+          `Достигнут лимит корректировок аномалий по сотруднику в этом месяце (${max}).`,
+          { limit: max, used: union.size, employeeId },
+        );
+      }
+    }
+  }
 }
 
 /** Проверка для bulk-эндпоинта. Кидает 'bulk_disabled' если у роли corrections_disable_bulk=true. */

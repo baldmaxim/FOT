@@ -15,6 +15,7 @@ vi.mock('../config/postgres.js', () => ({
 import {
   assertCorrectionAllowed,
   assertBulkAllowed,
+  assertBulkCorrectionAllowed,
   assertObjectCorrectionsAllowed,
   CorrectionRestrictionError,
   invalidateCorrectionRestrictionsCache,
@@ -249,5 +250,121 @@ describe('correction-restrictions.service', () => {
   it('assertObjectCorrectionsAllowed: пропускает при disable_object_entries=false', async () => {
     setupQueryOne({ restrictions: ROLE_OFF, anomalous: false, totalMinutes: 0, monthCount: 0 });
     await expect(assertObjectCorrectionsAllowed(BASE.systemRoleId)).resolves.toBeUndefined();
+  });
+
+  describe('assertBulkCorrectionAllowed (preflight)', () => {
+    /**
+     * Роутер для bulk: queryOne отвечает за роль + аномалии, query — за проекцию лимита
+     * (SELECT ... FROM attendance_adjustments с to_char). existingRows = уже записанные
+     * «считаемые» строки за месяц.
+     */
+    function setupBulk(opts: {
+      restrictions: IRoleRow;
+      anomalous: boolean;
+      existingRows?: Array<{ employee_id: number; ym: string; d: string }>;
+    }) {
+      pgQueryOne.mockImplementation(async (sql: string) => {
+        if (/FROM\s+system_roles/i.test(sql)) return opts.restrictions;
+        if (/is_skud_anomalous_day/.test(sql)) return { anomalous: opts.anomalous };
+        return null;
+      });
+      pgQuery.mockImplementation(async (sql: string) => {
+        if (/FROM\s+attendance_adjustments/i.test(sql)) return opts.existingRows ?? [];
+        return [];
+      });
+    }
+
+    const ROLE_LIMIT3: IRoleRow = { ...ROLE_SITE_SUPERVISOR, max_corrections_per_month: 3 };
+    const bulkBase = { systemRoleId: BASE.systemRoleId, createdBy: BASE.createdBy };
+
+    it('all-or-nothing: 4 даты одного сотрудника за месяц → monthly_limit (ничего не пишется)', async () => {
+      setupBulk({ restrictions: ROLE_LIMIT3, anomalous: true });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04'].map(d => ({
+          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8,
+        })),
+      })).rejects.toMatchObject({ code: 'monthly_limit', details: { employeeId: 42 } });
+    });
+
+    it('несколько сотрудников по 1 дню — проходит (лимит per-employee)', async () => {
+      setupBulk({ restrictions: ROLE_LIMIT3, anomalous: true });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: [10, 11, 12, 13].map(emp => ({
+          employeeId: emp, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8,
+        })),
+      })).resolves.toBeUndefined();
+    });
+
+    it('учитывает уже записанные даты месяца (проекция объединением)', async () => {
+      // 2 существующие + 2 новые даты = 4 > 3 → блок
+      setupBulk({
+        restrictions: ROLE_LIMIT3,
+        anomalous: true,
+        existingRows: [
+          { employee_id: 42, ym: '2026-06', d: '2026-06-10' },
+          { employee_id: 42, ym: '2026-06', d: '2026-06-11' },
+        ],
+      });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: ['2026-06-01', '2026-06-02'].map(d => ({
+          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8,
+        })),
+      })).rejects.toMatchObject({ code: 'monthly_limit' });
+    });
+
+    it('повторная правка существующей даты не задваивает счётчик', async () => {
+      // 2 существующие, обе перезаписываются батчем (те же даты) → union=2 ≤ 3 → проходит
+      setupBulk({
+        restrictions: ROLE_LIMIT3,
+        anomalous: true,
+        existingRows: [
+          { employee_id: 42, ym: '2026-06', d: '2026-06-10' },
+          { employee_id: 42, ym: '2026-06', d: '2026-06-11' },
+        ],
+      });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: ['2026-06-10', '2026-06-11'].map(d => ({
+          employeeId: 42, workDate: d, hoursOverride: 8, scheduledNormHours: 8,
+        })),
+      })).resolves.toBeUndefined();
+    });
+
+    it('неаномальный день в батче → not_anomalous', async () => {
+      setupBulk({ restrictions: ROLE_LIMIT3, anomalous: false });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8 }],
+      })).rejects.toMatchObject({ code: 'not_anomalous' });
+    });
+
+    it('часы > нормы в батче → hours_exceed_norm', async () => {
+      setupBulk({ restrictions: ROLE_LIMIT3, anomalous: true });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 10, scheduledNormHours: 8 }],
+      })).rejects.toMatchObject({ code: 'hours_exceed_norm' });
+    });
+
+    it('роль без ограничений — no-op', async () => {
+      setupBulk({ restrictions: ROLE_OFF, anomalous: false });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: [{ employeeId: 42, workDate: '2026-06-01', hoursOverride: 8, scheduledNormHours: 8 }],
+      })).resolves.toBeUndefined();
+    });
+
+    it('позиции с hours<=0 (обнуление) не считаются в лимит', async () => {
+      setupBulk({ restrictions: { ...ROLE_LIMIT3, max_corrections_per_month: 1 }, anomalous: true });
+      await expect(assertBulkCorrectionAllowed({
+        ...bulkBase,
+        items: ['2026-06-01', '2026-06-02', '2026-06-03'].map(d => ({
+          employeeId: 42, workDate: d, hoursOverride: 0, scheduledNormHours: 8,
+        })),
+      })).resolves.toBeUndefined();
+    });
   });
 });

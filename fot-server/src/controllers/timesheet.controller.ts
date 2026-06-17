@@ -55,6 +55,7 @@ import { correctionApprovalSettingsService } from '../services/correction-approv
 import {
   assertCorrectionAllowed,
   assertBulkAllowed,
+  assertBulkCorrectionAllowed,
   assertObjectCorrectionsAllowed,
   CorrectionRestrictionError,
   computeCorrectionEligibility,
@@ -177,6 +178,19 @@ const formatZodErrorMessage = (err: z.ZodError): string => {
  * не имеют практического смысла и сразу `auto_approved`.
  */
 const WORKED_STATUSES_FOR_APPROVAL = new Set<TimeStatus>(['work', 'remote']);
+
+/**
+ * Статусы «отработанные часы», которые засчитываются в ограничения роли при правке
+ * (только-аномалии / не-больше-нормы / лимит N-в-месяц). Отдельно от
+ * WORKED_STATUSES_FOR_APPROVAL: та множественность управляет автосогласованием, а эта —
+ * вызовом assertCorrectionAllowed. Важно: модалка корректировки сохраняет правку часов со
+ * status='manual', поэтому без 'manual' здесь гард обходился целиком (см. инцидент с лимитом).
+ */
+const LIMIT_COUNTED_STATUSES = new Set<TimeStatus>(['work', 'remote', 'manual']);
+
+/** Правка засчитывается в ограничения роли: «отработанный» статус и положительные часы. */
+const countsTowardLimit = (status: TimeStatus, hours: number | null | undefined): boolean =>
+  LIMIT_COUNTED_STATUSES.has(status) && typeof hours === 'number' && Number.isFinite(hours) && hours > 0;
 
 /** Сб = 6, Вс = 0 (Date#getDay() кодировка). */
 export type WeekendDow = 0 | 6;
@@ -1869,7 +1883,9 @@ export const timesheetController = {
         : (parsed.hours_worked ?? null);
 
       // Гарды роли: «только аномалии», «не больше плана», «лимит за месяц».
-      if (parsed.status === 'work' || parsed.status === 'remote') {
+      // Правка часов через модалку идёт со status='manual' — её тоже обязаны проверять,
+      // иначе аномалии/норма/лимит обходятся (см. countsTowardLimit).
+      if (countsTowardLimit(parsed.status, normalizedHours)) {
         const scheduledNorm = await resolveScheduledNormHours(parsed.employee_id, parsed.work_date);
         // Удалёнка поверх согласованного выхода — норму/аномалию не проверяем.
         const skipNormAndAnomalyChecks = parsed.status === 'remote'
@@ -2075,7 +2091,22 @@ export const timesheetController = {
           ? (parsed.hours_worked ?? (plannedHours || 8))
           : parsed.hours_worked;
 
-        if (nextStatus === 'work' || nextStatus === 'remote') {
+        // Часы «для проверки» ≠ часы «для записи». В гард передаём эффективные часы
+        // (что реально будет в строке), но пишем строго присланное (см. блок update ниже).
+        const existingHours = typeof existing.hours_override === 'number'
+          ? existing.hours_override
+          : Number(existing.hours_override ?? 0);
+        const hoursProvided = parsed.hours_worked !== undefined; // null = явное обнуление, тоже «передано»
+        const effectiveHours = nextStatus === 'remote'
+          ? (typeof normalizedHours === 'number' ? normalizedHours : 0)
+          : (hoursProvided ? (parsed.hours_worked ?? 0) : existingHours);
+        // Гард только когда правка реально вводит/меняет засчитываемые часы — иначе
+        // редактирование одной лишь заметки на исторической строке упёрлось бы в
+        // not_anomalous/monthly_limit и сломало бы правку.
+        const statusChangedToCounted = parsed.status !== undefined
+          && parsed.status !== String(existing.status)
+          && LIMIT_COUNTED_STATUSES.has(nextStatus);
+        if (countsTowardLimit(nextStatus, effectiveHours) && (hoursProvided || statusChangedToCounted)) {
           const scheduledNormUpd = await resolveScheduledNormHours(
             Number(existing.employee_id),
             String(existing.work_date),
@@ -2087,7 +2118,7 @@ export const timesheetController = {
             createdBy: req.user.id,
             employeeId: Number(existing.employee_id),
             workDate: String(existing.work_date),
-            hoursOverride: typeof normalizedHours === 'number' ? normalizedHours : 0,
+            hoursOverride: effectiveHours,
             scheduledNormHours: scheduledNormUpd,
             excludeAdjustmentId: id,
             skipNormAndAnomalyChecks,
@@ -2208,6 +2239,31 @@ export const timesheetController = {
       const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
       const plannedHoursByItem = await resolvePlannedHoursByItems(uniqueItems);
 
+      // PREFLIGHT: ограничения роли (только-аномалии / не-больше-нормы / лимит N-в-месяц)
+      // для bulk проверяем ЦЕЛИКОМ до единой записи. Иначе sequential-upsert дал бы частичный
+      // успех (первые строки записаны, на превышающей — 422). assertBulkCorrectionAllowed
+      // бросит CorrectionRestrictionError → 422, ничего не пишем.
+      const bulkCounts = LIMIT_COUNTED_STATUSES.has(parsed.status)
+        && (parsed.status === 'remote' || (parsed.hours_worked ?? 0) > 0);
+      if (bulkCounts) {
+        const preflightItems = await Promise.all(uniqueItems.map(async item => {
+          const hours = parsed.status === 'remote'
+            ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) || 8)
+            : (parsed.hours_worked ?? 0);
+          return {
+            employeeId: item.employee_id,
+            workDate: item.work_date,
+            hoursOverride: Number(hours) || 0,
+            scheduledNormHours: await resolveScheduledNormHours(item.employee_id, item.work_date),
+          };
+        }));
+        await assertBulkCorrectionAllowed({
+          systemRoleId: req.user.system_role_id,
+          createdBy: req.user.id,
+          items: preflightItems,
+        });
+      }
+
       // Для work/remote (где статус согласования зависит от уже зачтённых плановых
       // суббот) обходим items последовательно, чтобы каждый upsert был виден
       // последующим расчётам — иначе при бульке нескольких суббот одного месяца
@@ -2217,17 +2273,7 @@ export const timesheetController = {
         const itemHoursOverride = parsed.status === 'remote'
           ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) || 8)
           : (parsed.hours_worked ?? null);
-        if (parsed.status === 'work' || parsed.status === 'remote') {
-          const scheduledNormBulk = await resolveScheduledNormHours(item.employee_id, item.work_date);
-          await assertCorrectionAllowed({
-            systemRoleId: req.user.system_role_id,
-            createdBy: req.user.id,
-            employeeId: item.employee_id,
-            workDate: item.work_date,
-            hoursOverride: typeof itemHoursOverride === 'number' ? itemHoursOverride : 0,
-            scheduledNormHours: scheduledNormBulk,
-          });
-        }
+        // Ограничения роли уже проверены целиком в PREFLIGHT выше (assertBulkCorrectionAllowed).
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           item.employee_id,
           item.work_date,
@@ -2340,6 +2386,30 @@ export const timesheetController = {
         });
       }
       const allowedHours = Math.max(0, parsed.hours_worked);
+
+      // Defense-in-depth: для ролей, где объектные правки РАЗРЕШЕНЫ, но задан лимит/только-
+      // аномалии/не-больше-нормы — объектная правка тоже обязана подчиняться ограничениям.
+      // Для site_supervisor путь уже закрыт assertObjectCorrectionsAllowed выше; здесь — на
+      // случай будущих ролей. Проверяем ДО mutex-DELETE, чтобы при блокировке ничего не удалить.
+      // Существующую объектную строку исключаем из счётчика (повторная правка не задваивает).
+      if (allowedHours > 0) {
+        const existingObjRows = await query<{ id: number | string }>(
+          `SELECT id FROM attendance_adjustments
+            WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
+            LIMIT 1`,
+          [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, parsed.object_key],
+        );
+        const scheduledNormObj = await resolveScheduledNormHours(parsed.employee_id, parsed.work_date);
+        await assertCorrectionAllowed({
+          systemRoleId: req.user.system_role_id,
+          createdBy: req.user.id,
+          employeeId: parsed.employee_id,
+          workDate: parsed.work_date,
+          hoursOverride: allowedHours,
+          scheduledNormHours: scheduledNormObj,
+          excludeAdjustmentId: existingObjRows[0] ? Number(existingObjRows[0].id) : null,
+        });
+      }
 
       // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
       // строки на тот же (employee, work_date) перед сохранением. RETURNING нужен
