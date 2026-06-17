@@ -23,5 +23,7 @@ export const StaffControlHubPage: FC = () => {
     },
   ], []);
 
-  return <HubShell tabs={tabs} defaultTab="roster" />;
+  // persistInUrl={false}: StaffControlPage перезаписывает query string (dept/q/schedule)
+  // и затирает ?tab=, что при URL-вкладках давало цикл навигации (Throttling navigation).
+  return <HubShell tabs={tabs} defaultTab="roster" persistInUrl={false} />;
 };
