@@ -725,6 +725,23 @@ export const settingsService = {
     return this.getDashboardConfig();
   },
 
+  async getFeedbackHiddenDepartmentsConfig(): Promise<{ hiddenDepartmentIds: string[] }> {
+    const value = await this.get('feedback_hidden_su10_departments');
+    return { hiddenDepartmentIds: parseCsvCodes(value, []) };
+  },
+
+  async setFeedbackHiddenDepartmentsConfig(hiddenDepartmentIds: string[], userId: string): Promise<{ hiddenDepartmentIds: string[] }> {
+    const clean = Array.from(new Set(hiddenDepartmentIds.map(id => id.trim()).filter(Boolean)));
+    await this.set(
+      'feedback_hidden_su10_departments',
+      clean.join(','),
+      userId,
+      'Отделы СУ-10, скрытые из сводки задач на странице «Обратная связь».',
+    );
+    this.invalidateCache();
+    return this.getFeedbackHiddenDepartmentsConfig();
+  },
+
   async getOpenRouterConfig(): Promise<IOpenRouterPublicSettings> {
     await loadCache();
 

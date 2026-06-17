@@ -5,6 +5,7 @@ import { escapeLike } from '../utils/search.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { canAccessEmployeeInScope, resolveAccessibleEmployeeIds } from '../services/data-scope.service.js';
 import { loadCalendarMonth } from '../services/schedule.service.js';
+import { settingsService } from '../services/settings.service.js';
 
 const MAX_CONTENT_LENGTH = 5000;
 
@@ -480,6 +481,40 @@ const getDepartmentTasks = async (req: AuthenticatedRequest, res: Response): Pro
   }
 };
 
+// ============================ Админ: скрытые из сводки отделы СУ-10 ============================
+
+const hiddenDepartmentsSchema = z.object({
+  hiddenDepartmentIds: z.array(z.string()),
+});
+
+const getHiddenDepartments = async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const data = await settingsService.getFeedbackHiddenDepartmentsConfig();
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('feedback.getHiddenDepartments error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения списка скрытых отделов' });
+  }
+};
+
+const saveHiddenDepartments = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const parsed = hiddenDepartmentsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ success: false, error: 'hiddenDepartmentIds должен быть массивом строк' });
+      return;
+    }
+    const data = await settingsService.setFeedbackHiddenDepartmentsConfig(
+      parsed.data.hiddenDepartmentIds,
+      req.user.id,
+    );
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('feedback.saveHiddenDepartments error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка сохранения списка скрытых отделов' });
+  }
+};
+
 export const feedbackController = {
   submit,
   listMessages,
@@ -487,4 +522,6 @@ export const feedbackController = {
   getDepartmentTasks,
   remove,
   buildDepartmentStats,
+  getHiddenDepartments,
+  saveHiddenDepartments,
 };

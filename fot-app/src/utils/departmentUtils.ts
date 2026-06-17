@@ -221,6 +221,22 @@ export const collectDepartmentIds = (node: OrgDepartmentNode): string[] => {
   return out;
 };
 
+// Отделы (kind='department') внутри компании СУ-10 как {id, name}, отсортированы.
+// Множество id совпадает с collectDepartmentIds(findSu10CompanyNode(...)).
+export const collectSu10Departments = (nodes: OrgDepartmentNode[]): IDepartmentOption[] => {
+  const company = findSu10CompanyNode(nodes);
+  if (!company) return [];
+  const out: IDepartmentOption[] = [];
+  const walk = (n: OrgDepartmentNode): void => {
+    n.children?.forEach(c => {
+      if (c.kind === 'department') out.push({ id: c.id, name: c.name });
+      walk(c);
+    });
+  };
+  walk(company);
+  return sortDepartmentOptions(out);
+};
+
 export const filterDepartmentTree = (nodes: OrgDepartmentNode[], query: string): OrgDepartmentNode[] => {
   const sortedNodes = sortDepartmentTree(nodes);
   const normalizedQuery = query.trim().toLowerCase();

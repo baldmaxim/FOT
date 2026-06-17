@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { feedbackController } from '../controllers/feedback.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { noStore } from '../middleware/noStore.js';
 
 const router = Router();
 
@@ -30,6 +31,21 @@ router.get(
   '/tasks/department/:id',
   requirePageAccess('/feedback-review', 'view'),
   feedbackController.getDepartmentTasks,
+);
+
+// Скрытые из сводки задач отделы СУ-10 (общая настройка). noStore — иначе
+// браузерный max-age=30 отдаёт старое значение 30 с после сохранения.
+router.get(
+  '/hidden-departments',
+  requirePageAccess('/feedback-review', 'view'),
+  noStore,
+  feedbackController.getHiddenDepartments,
+);
+
+router.put(
+  '/hidden-departments',
+  requirePageAccess('/feedback-review', 'edit'),
+  feedbackController.saveHiddenDepartments,
 );
 
 router.delete(

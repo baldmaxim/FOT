@@ -12,9 +12,10 @@ import { DailyActivity } from '../components/feedback/DailyActivity';
 import { DepartmentTasksPage } from '../components/feedback/DepartmentTasksPage';
 import { usePeriodSelection } from '../components/feedback/usePeriodSelection';
 import { todayIso, isSingleDay, periodLabel } from '../components/feedback/deptStats';
-import { findSu10CompanyNode, collectDepartmentIds } from '../utils/departmentUtils';
+import { findSu10CompanyNode, collectDepartmentIds, collectSu10Departments, type IDepartmentOption } from '../utils/departmentUtils';
 import { useOverlayDismiss } from '../hooks/useOverlayDismiss';
 import { useToast } from '../contexts/ToastContext';
+import { useAuth } from '../contexts/AuthContext';
 import type { OrgDepartmentNode } from '../types/organization';
 import styles from './FeedbackReviewPage.module.css';
 
@@ -86,7 +87,7 @@ const FilterBar: FC<IFilterBarProps> = ({ from, onFrom, to, onTo, q, onQ, tree, 
 );
 
 // ---- Вкладка «Задачи» ----
-const TasksTab: FC = () => {
+const TasksTab: FC<{ hiddenIds: Set<string> }> = ({ hiddenIds }) => {
   const today = useMemo(() => todayIso(), []);
   const { from, to, setPreset, setDates } = usePeriodSelection(today);
   const [department, setDepartment] = useState('');
@@ -105,8 +106,9 @@ const TasksTab: FC = () => {
 
   const rows = useMemo(() => (data?.stats ?? [])
     .filter(s => s.department_id && su10Ids.has(s.department_id))
+    .filter(s => !s.department_id || !hiddenIds.has(s.department_id))
     .filter(s => !department || s.department_id === department),
-  [data, su10Ids, department]);
+  [data, su10Ids, hiddenIds, department]);
 
   const single = isSingleDay(from, to);
 
@@ -351,8 +353,103 @@ const DeptTakersContent: FC<{ testId: string; responses: ITestResponseRow[]; dep
   );
 };
 
+// ---- Модалка «Отделы в сводке» (выбор скрытых отделов СУ-10) ----
+const DeptVisibilityModal: FC<{
+  departments: IDepartmentOption[];
+  hiddenIds: Set<string>;
+  loading: boolean;
+  onSave: (hiddenDepartmentIds: string[]) => Promise<void>;
+  onClose: () => void;
+}> = ({ departments, hiddenIds, loading, onSave, onClose }) => {
+  const { showToast } = useToast();
+  const [q, setQ] = useState('');
+  const [saving, setSaving] = useState(false);
+  // draft хранит именно СКРЫТЫЕ id; checked = НЕ скрыт. Пересоздаётся при каждом открытии.
+  const [draftHiddenIds, setDraftHiddenIds] = useState<Set<string>>(() => new Set(hiddenIds));
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return needle ? departments.filter(d => d.name.toLowerCase().includes(needle)) : departments;
+  }, [departments, q]);
+
+  const toggle = (id: string): void => setDraftHiddenIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+
+  const handleSave = async (): Promise<void> => {
+    setSaving(true);
+    try {
+      await onSave([...draftHiddenIds]);
+      showToast('success', 'Список отделов сохранён');
+      onClose();
+    } catch (err) {
+      console.error('feedback hidden departments save error:', err);
+      showToast('error', 'Не удалось сохранить список');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <DeptDetailModal title="Отделы в сводке" onClose={onClose}>
+      <p className={styles.modalHint}>Снимите отметку, чтобы скрыть отдел из сводки задач.</p>
+      <input className={styles.search} placeholder="Поиск отдела" value={q} onChange={e => setQ(e.target.value)} />
+      {loading ? (
+        <div className={styles.empty}>Загрузка…</div>
+      ) : !departments.length ? (
+        <div className={styles.empty}>Отделы СУ-10 не найдены</div>
+      ) : (
+        <div className={styles.deptList}>
+          {filtered.map(d => {
+            const id = String(d.id);
+            return (
+              <label key={id} className={styles.deptRow}>
+                <input type="checkbox" checked={!draftHiddenIds.has(id)} onChange={() => toggle(id)} />
+                <span>{d.name}</span>
+              </label>
+            );
+          })}
+          {!filtered.length && <div className={styles.empty}>Ничего не найдено</div>}
+        </div>
+      )}
+      <div className={styles.modalFooter}>
+        <button type="button" className={styles.btnGhost} onClick={onClose} disabled={saving}>Отмена</button>
+        <button type="button" className={styles.btnPrimary} onClick={handleSave} disabled={saving || loading}>
+          {saving ? 'Сохранение…' : 'Сохранить'}
+        </button>
+      </div>
+    </DeptDetailModal>
+  );
+};
+
 export const FeedbackReviewPage: FC = () => {
   const [tab, setTab] = useState<SubTab>('tasks');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { canEditPage } = useAuth();
+  const queryClient = useQueryClient();
+
+  const structure = useStructureTree();
+  const su10Departments = useMemo(
+    () => collectSu10Departments(structure.data?.departments ?? []),
+    [structure.data],
+  );
+
+  const { data: hiddenData } = useQuery({
+    queryKey: ['feedback-hidden-departments'],
+    queryFn: () => feedbackService.getHiddenDepartments(),
+    staleTime: 5 * 60_000,
+  });
+  const hiddenIds = useMemo(() => new Set(hiddenData?.hiddenDepartmentIds ?? []), [hiddenData]);
+
+  const showGear = tab === 'tasks' && canEditPage('/feedback-review');
+
+  const handleSaveHidden = async (ids: string[]): Promise<void> => {
+    await feedbackService.saveHiddenDepartments(ids);
+    await queryClient.invalidateQueries({ queryKey: ['feedback-hidden-departments'] });
+  };
 
   return (
     <div className={styles.page}>
@@ -366,12 +463,33 @@ export const FeedbackReviewPage: FC = () => {
             {t.label}
           </button>
         ))}
+        {showGear && (
+          <button
+            type="button"
+            className={`${styles.gearBtn} ${styles.subTabsGear}`}
+            onClick={() => setSettingsOpen(true)}
+            title="Отделы в сводке"
+            aria-label="Отделы в сводке"
+          >
+            <Settings size={18} />
+          </button>
+        )}
       </div>
 
-      {tab === 'tasks' && <TasksTab />}
+      {tab === 'tasks' && <TasksTab hiddenIds={hiddenIds} />}
       {tab === 'suggestions' && <MessagesTab kind="suggestion" />}
       {tab === 'complaints' && <MessagesTab kind="complaint" />}
       {tab === 'tests' && <TestsTab />}
+
+      {settingsOpen && (
+        <DeptVisibilityModal
+          departments={su10Departments}
+          hiddenIds={hiddenIds}
+          loading={structure.isPending}
+          onSave={handleSaveHidden}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 };

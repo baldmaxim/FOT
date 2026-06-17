@@ -106,4 +106,19 @@ export const feedbackService = {
   remove: async (id: number): Promise<void> => {
     await apiClient.delete(`/feedback/${id}`);
   },
+
+  getHiddenDepartments: async (): Promise<{ hiddenDepartmentIds: string[] }> => {
+    const res = await apiClient.get<ApiResponse<{ hiddenDepartmentIds: string[] }>>(
+      '/feedback/hidden-departments',
+    );
+    return res.data;
+  },
+
+  saveHiddenDepartments: async (hiddenDepartmentIds: string[]): Promise<{ hiddenDepartmentIds: string[] }> => {
+    const res = await apiClient.put<ApiResponse<{ hiddenDepartmentIds: string[] }>>(
+      '/feedback/hidden-departments',
+      { hiddenDepartmentIds },
+    );
+    return res.data;
+  },
 };
