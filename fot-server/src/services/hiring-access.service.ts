@@ -14,6 +14,15 @@ import { query } from '../config/postgres.js';
 // TODO: вынести в системные настройки (override) при необходимости.
 export const HR_HEAD_POSITION_REGEX = 'руководител.*управлени.*персонал';
 
+// Роли, которым разрешено подавать заявки на поиск сотрудника и видеть вкладку
+// «Заявки на поиск сотрудников»: руководитель отдела (manager) и руководитель
+// строительства (manager_obj). View-only на уровне страницы — работу по заявке
+// ведут рекрутеры/руководитель отдела кадров.
+export const HIRING_REQUESTER_ROLE_CODES = ['manager', 'manager_obj'] as const;
+
+export const isHiringRequesterRole = (code: string | null | undefined): boolean =>
+  !!code && (HIRING_REQUESTER_ROLE_CODES as readonly string[]).includes(code);
+
 export async function isHiringManagerByEmployee(employeeId: number | null | undefined): Promise<boolean> {
   if (!employeeId) return false;
   const rows = await query<{ ok: boolean }>(

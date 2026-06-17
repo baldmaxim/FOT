@@ -16,7 +16,7 @@ export const StaffControlHubPage: FC = () => {
     },
     {
       key: 'hiring',
-      label: 'Заявки для HR',
+      label: 'Заявки на поиск сотрудников',
       accessPath: '/staff-control/hiring',
       icon: Briefcase,
       render: () => <HiringRequestsBoard />,

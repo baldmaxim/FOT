@@ -28,6 +28,7 @@ vi.mock('../services/hiring-access.service.js', () => ({
   getActiveAssigneeEmployeeIds: assignees,
   hasActiveHiringAssignment: vi.fn(async () => false),
   hasHiringAutoAccess: autoAccess,
+  isHiringRequesterRole: (code: string) => code === 'manager' || code === 'manager_obj',
 }));
 
 const { pageView } = vi.hoisted(() => ({ pageView: vi.fn(async () => false) }));
@@ -70,6 +71,54 @@ describe('create', () => {
     const res = makeRes();
     await c.create(makeReq({ body: { position_title: 'Прораб', headcount: 2 } }), res);
     expect(res._status).toBe(201);
+  });
+  it('201 для роли manager без page-view гранта', async () => {
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: 'd1', full_name: 'Иванов И.И.' }).mockResolvedValueOnce({ id: 5 });
+    const res = makeRes();
+    await c.create(makeReq({ user: { role_code: 'manager' }, body: { position_title: 'Прораб' } }), res);
+    expect(res._status).toBe(201);
+  });
+  it('403 для timekeeper (регресс: не должен получить доступ)', async () => {
+    const res = makeRes();
+    await c.create(makeReq({ user: { role_code: 'timekeeper' }, body: { position_title: 'Прораб' } }), res);
+    expect(res._status).toBe(403);
+  });
+  it('автозаполняет заказчика ФИО автора, hh=null, дату из CURRENT_DATE', async () => {
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: 'd1', full_name: 'Иванов И.И.' }).mockResolvedValueOnce({ id: 5 });
+    const res = makeRes();
+    await c.create(makeReq({ user: { role_code: 'manager_obj' }, body: { position_title: 'Прораб', customer_name: 'Хакер', hh_vacancy_url: 'evil' } }), res);
+    expect(res._status).toBe(201);
+    const insertParams = pgQueryOne.mock.calls[1][1] as unknown[];
+    expect(insertParams[4]).toBe('Иванов И.И.'); // customer_name = ФИО автора
+    expect(insertParams[6]).toBeNull();           // start_work_date → COALESCE CURRENT_DATE
+    expect(insertParams[14]).toBeNull();          // hh_vacancy_url игнорируется при create
+  });
+});
+
+describe('updateFields (роль-зависимые поля)', () => {
+  it('автор не может менять hh_vacancy_url (поле игнорируется)', async () => {
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 10, stage: 'new' });
+    const res = makeRes();
+    await c.updateFields(makeReq({ params: { id: '1' }, body: { hh_vacancy_url: 'x' } }), res);
+    expect(res._json).toMatchObject({ success: true });
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+  it('ответственный-рекрутер меняет только hh_vacancy_url', async () => {
+    assignees.mockResolvedValue([10]);
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 99, stage: 'in_progress' });
+    const res = makeRes();
+    await c.updateFields(makeReq({ params: { id: '1' }, body: { hh_vacancy_url: 'http://x', position_title: 'Z' } }), res);
+    expect(res._json).toMatchObject({ success: true });
+    expect(pgExecute).toHaveBeenCalledTimes(1);
+    const sql = (pgExecute.mock.calls[0][0] as string);
+    expect(sql).toContain('hh_vacancy_url');
+    expect(sql).not.toContain('position_title');
+  });
+  it('403 если не автор, не manage и не ответственный', async () => {
+    pgQueryOne.mockResolvedValueOnce({ author_employee_id: 99, stage: 'closed' });
+    const res = makeRes();
+    await c.updateFields(makeReq({ params: { id: '1' }, body: { position_title: 'Z' } }), res);
+    expect(res._status).toBe(403);
   });
 });
 

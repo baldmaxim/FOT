@@ -19,9 +19,7 @@ export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
 
   const [f, setF] = useState({
     position_title: request?.position_title ?? '',
-    customer_name: request?.customer_name ?? '',
     headcount: request?.headcount ?? 1,
-    start_work_date: request?.start_work_date ?? '',
     deadline: request?.deadline ?? '',
     duties: request?.duties ?? '',
     experience: request?.experience ?? '',
@@ -29,7 +27,6 @@ export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
     software: request?.software ?? '',
     gender: request?.gender ?? 'any',
     salary_level: request?.salary_level ?? '',
-    hh_vacancy_url: request?.hh_vacancy_url ?? '',
   });
   const set = (k: keyof typeof f, v: string | number) => setF(p => ({ ...p, [k]: v }));
 
@@ -68,14 +65,6 @@ export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
         <div className={styles.modalBody}>
           <div className={styles.formGrid}>
             <div className={styles.field}>
-              <label>Дата поступления в работу</label>
-              <input type="date" value={f.start_work_date ?? ''} onChange={e => set('start_work_date', e.target.value)} />
-            </div>
-            <div className={styles.field}>
-              <label>Заказчик ФИО</label>
-              <input placeholder="Иванов Иван Иванович" value={f.customer_name} onChange={e => set('customer_name', e.target.value)} />
-            </div>
-            <div className={styles.field}>
               <label>Должность <span className={styles.req}>*</span></label>
               <input placeholder="инженер контроля качества по фасадным работам" value={f.position_title} onChange={e => set('position_title', e.target.value)} />
             </div>
@@ -87,17 +76,23 @@ export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
               <label>Обязанности</label>
               <textarea placeholder="операционный контроль качества всех видов СМР по СПК и НВФ, сдача работ Заказчику, выдача замечаний/предписаний, входной контроль материалов и т.д." value={f.duties} onChange={e => set('duties', e.target.value)} />
             </div>
-            <div className={styles.field}>
-              <label>Опыт работы</label>
-              <input placeholder="От 3 лет" value={f.experience} onChange={e => set('experience', e.target.value)} />
-            </div>
-            <div className={styles.field}>
-              <label>Пол</label>
-              <select value={f.gender} onChange={e => set('gender', e.target.value)}>
-                <option value="any">Не важно</option>
-                <option value="male">Мужской</option>
-                <option value="female">Женский</option>
-              </select>
+            <div className={`${styles.full} ${styles.tripleRow}`}>
+              <div className={styles.field}>
+                <label>Опыт работы</label>
+                <input placeholder="От 3 лет" value={f.experience} onChange={e => set('experience', e.target.value)} />
+              </div>
+              <div className={styles.field}>
+                <label>Пол</label>
+                <select value={f.gender} onChange={e => set('gender', e.target.value)}>
+                  <option value="any">Не важно</option>
+                  <option value="male">Мужской</option>
+                  <option value="female">Женский</option>
+                </select>
+              </div>
+              <div className={styles.field}>
+                <label>Срок закрытия (дедлайн)</label>
+                <input type="date" value={f.deadline ?? ''} onChange={e => set('deadline', e.target.value)} />
+              </div>
             </div>
             <div className={`${styles.field} ${styles.full}`}>
               <label>Требования</label>
@@ -106,14 +101,6 @@ export const HiringRequestCreateModal: FC<IProps> = ({ onClose, request }) => {
             <div className={`${styles.field} ${styles.full}`}>
               <label>Программы</label>
               <input placeholder="AutoCad, Excel, Word и другие" value={f.software} onChange={e => set('software', e.target.value)} />
-            </div>
-            <div className={styles.field}>
-              <label>Срок закрытия (дедлайн)</label>
-              <input type="date" value={f.deadline ?? ''} onChange={e => set('deadline', e.target.value)} />
-            </div>
-            <div className={styles.field}>
-              <label>Ссылка на вакансию HH</label>
-              <input placeholder="https://hh.kz/vacancy/..." value={f.hh_vacancy_url} onChange={e => set('hh_vacancy_url', e.target.value)} />
             </div>
             <div className={`${styles.field} ${styles.full}`}>
               <label>Уровень заработной платы</label>

@@ -7,6 +7,7 @@ import {
   isHiringManagerByEmployee,
   isRecruiter,
   getActiveAssigneeEmployeeIds,
+  isHiringRequesterRole,
 } from '../services/hiring-access.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -30,6 +31,8 @@ async function canWorkRequest(req: AuthenticatedRequest, requestId: number): Pro
 
 async function canCreateHiring(req: AuthenticatedRequest): Promise<boolean> {
   if (req.user.is_admin) return true;
+  // Руководитель отдела / руководитель строительства подают заявки по роли.
+  if (isHiringRequesterRole(req.user.role_code)) return true;
   if (await isHiringManagerByEmployee(req.user.employee_id)) return true;
   return hasPageView(req.user.role_code, '/staff-control/hiring');
 }
@@ -171,25 +174,30 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   if (!parsed.success) { res.status(400).json({ success: false, error: 'position_title обязателен' }); return; }
   const b = parsed.data;
 
-  // отдел автора (если есть employee_id) — иначе из тела (для админов без employee_id)
+  // Заказчик = ФИО автора (заполняется автоматически, не вводится в форме).
+  // Отдел автора — для аналитики. Грузим строку сотрудника при наличии employee_id.
   let departmentId: string | null = b.department_id ?? null;
-  if (!departmentId && req.user.employee_id) {
-    const emp = await queryOne<{ org_department_id: string | null }>(
-      `SELECT org_department_id FROM employees WHERE id = $1`, [req.user.employee_id],
+  let authorName: string | null = null;
+  if (req.user.employee_id) {
+    const emp = await queryOne<{ org_department_id: string | null; full_name: string | null }>(
+      `SELECT org_department_id, full_name FROM employees WHERE id = $1`, [req.user.employee_id],
     );
-    departmentId = emp?.org_department_id ?? null;
+    if (!departmentId) departmentId = emp?.org_department_id ?? null;
+    authorName = emp?.full_name ?? null;
   }
+  // Дата создания заявки = «дата поступления в работу» (если фронт не прислал — сегодня).
+  const startWorkDate = b.start_work_date || null;
 
   const row = await queryOne<{ id: number }>(
     `INSERT INTO hiring_requests
        (author_user_id, author_employee_id, department_id, position_title, customer_name, headcount,
         start_work_date, deadline, duties, experience, requirements, software, gender, salary_level, hh_vacancy_url)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     VALUES ($1,$2,$3,$4,$5,$6, COALESCE($7::date, CURRENT_DATE) ,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING id`,
     [
-      req.user.id, req.user.employee_id ?? null, departmentId, b.position_title, b.customer_name ?? null, b.headcount,
-      b.start_work_date || null, b.deadline || null, b.duties ?? null, b.experience ?? null, b.requirements ?? null,
-      b.software ?? null, b.gender ?? null, b.salary_level ?? null, b.hh_vacancy_url ?? null,
+      req.user.id, req.user.employee_id ?? null, departmentId, b.position_title, authorName, b.headcount,
+      startWorkDate, b.deadline || null, b.duties ?? null, b.experience ?? null, b.requirements ?? null,
+      b.software ?? null, b.gender ?? null, b.salary_level ?? null, null,
     ],
   );
   res.status(201).json({ success: true, data: { id: row?.id } });
@@ -204,12 +212,24 @@ const updateFields = async (req: AuthenticatedRequest, res: Response): Promise<v
   if (!request) { res.status(404).json({ success: false, error: 'Заявка не найдена' }); return; }
   const manage = await canManageHiring(req);
   const isAuthor = req.user.employee_id != null && request.author_employee_id === req.user.employee_id;
-  if (!manage && !(isAuthor && ['new', 'rework'].includes(request.stage))) {
+  const isWork = await canWorkRequest(req, id); // manage ∨ активный ответственный (рекрутер)
+  const canAuthorEdit = isAuthor && ['new', 'rework'].includes(request.stage);
+  if (!manage && !canAuthorEdit && !isWork) {
     res.status(403).json({ success: false, error: 'Редактирование недоступно' }); return;
   }
   const parsed = createSchema.partial().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ success: false, error: 'Некорректные поля' }); return; }
-  const allowed = ['position_title', 'customer_name', 'headcount', 'start_work_date', 'deadline', 'duties', 'experience', 'requirements', 'software', 'gender', 'salary_level', 'hh_vacancy_url'] as const;
+  // Роль-зависимый whitelist полей:
+  //  - manage: всё;
+  //  - автор (new/rework): поля заявки (без авто-полей customer_name/start_work_date и рекрутерского hh_vacancy_url);
+  //  - ответственный-рекрутер: только ссылка на вакансию.
+  const MANAGE_FIELDS = ['position_title', 'customer_name', 'headcount', 'start_work_date', 'deadline', 'duties', 'experience', 'requirements', 'software', 'gender', 'salary_level', 'hh_vacancy_url'] as const;
+  const AUTHOR_FIELDS = ['position_title', 'headcount', 'deadline', 'duties', 'experience', 'requirements', 'software', 'gender', 'salary_level'] as const;
+  const allowed: readonly string[] = manage
+    ? MANAGE_FIELDS
+    : canAuthorEdit
+      ? AUTHOR_FIELDS
+      : ['hh_vacancy_url'];
   const sets: string[] = [];
   const params: unknown[] = [];
   for (const key of allowed) {

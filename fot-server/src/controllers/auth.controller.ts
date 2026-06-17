@@ -15,7 +15,7 @@ import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
 import { listManagedDepartmentIdsForUser } from '../services/department-access.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
-import { hasHiringAutoAccess } from '../services/hiring-access.service.js';
+import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
 import { TIMEKEEPER_ROLE_CODE, listTimekeeperAccessibleDepartmentIds, listTimekeeperDirectEmployeeIds } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
@@ -122,10 +122,11 @@ async function buildProfileResponse(
     page_access['/timesheet'] = { can_view: true, can_edit: true };
   }
 
-  // Вкладка «Заявки для HR»: авто-доступ рекрутерам пула, руководителю отдела
-  // кадров (по должности) и активным ответственным — без ручного грантa роли.
+  // Вкладка «Заявки на поиск сотрудников»: роли-заявители (руководитель/руководитель
+  // строительства) видят вкладку и подают заявки; рекрутеры пула, руководитель отдела
+  // кадров (по должности) и активные ответственные — авто-доступ без ручного гранта роли.
   if (!role.is_admin && !page_access['/staff-control/hiring']?.can_view
-      && await hasHiringAutoAccess(profile.employee_id, role.is_admin)) {
+      && (isHiringRequesterRole(role.code) || await hasHiringAutoAccess(profile.employee_id, role.is_admin))) {
     page_access['/staff-control/hiring'] = { can_view: true, can_edit: false };
   }
 

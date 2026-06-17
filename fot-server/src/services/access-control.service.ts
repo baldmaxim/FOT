@@ -2,7 +2,7 @@ import { query } from '../config/postgres.js';
 import { DEFAULT_ACCESS_PAGE_CATALOG, type PageCatalogItem } from '../config/access-control.js';
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
 import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
-import { hasHiringAutoAccess } from './hiring-access.service.js';
+import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
@@ -150,9 +150,11 @@ export async function resolveEffectivePageAccess(
     : await hasPageView(req.user.role_code, pagePath);
   if (byRole) return true;
   if (await hasManagerAutoAccess(req, pagePath)) return true;
-  // Авто-доступ к вкладке «Заявки для HR»: рекрутеры пула, руководитель
-  // отдела кадров (по должности) и активные ответственные за заявку.
+  // Авто-доступ к вкладке «Заявки на поиск сотрудников» (view-only): роли-заявители
+  // (руководитель/руководитель строительства), рекрутеры пула, руководитель отдела
+  // кадров (по должности) и активные ответственные за заявку. Edit намеренно не выдаём.
   if (pagePath === '/staff-control/hiring' && action === 'view') {
+    if (isHiringRequesterRole(req.user.role_code)) return true;
     return hasHiringAutoAccess(req.user.employee_id, req.user.is_admin);
   }
   return false;

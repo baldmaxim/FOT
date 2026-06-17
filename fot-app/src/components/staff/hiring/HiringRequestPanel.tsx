@@ -45,6 +45,7 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
   const removeAssigneeMut = useMutation({ mutationFn: (emp: number) => hiringRequestService.removeAssignee(requestId, emp), onSuccess: invalidate, onError: onErr });
   const primaryMut = useMutation({ mutationFn: (emp: number) => hiringRequestService.setPrimary(requestId, emp), onSuccess: invalidate, onError: onErr });
   const commentMut = useMutation({ mutationFn: (body: string) => hiringRequestService.addComment(requestId, body), onSuccess: invalidate, onError: onErr });
+  const vacancyMut = useMutation({ mutationFn: (url: string) => hiringRequestService.update(requestId, { hh_vacancy_url: url || null }), onSuccess: () => { invalidate(); toast.success('Ссылка на вакансию сохранена'); setVacEdit(null); }, onError: onErr });
   const fileMut = useMutation({ mutationFn: (file: File) => hiringRequestService.uploadFile(requestId, file), onSuccess: () => { invalidate(); toast.success('Файл прикреплён'); }, onError: onErr });
 
   const canWork = useMemo(() => {
@@ -57,6 +58,7 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
   const canApprove = isAuthor || canManage;
 
   const [comment, setComment] = useState('');
+  const [vacEdit, setVacEdit] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (isLoading || !r) {
@@ -180,14 +182,35 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
               {r.duties && <><dt>Обязанности</dt><dd>{r.duties}</dd></>}
               {r.requirements && <><dt>Требования</dt><dd>{r.requirements}</dd></>}
               {r.software && <><dt>Программы</dt><dd><div className={styles.chips}>{r.software.split(',').map((s, i) => <span key={i} className={styles.chip}>{s.trim()}</span>)}</div></dd></>}
-              {r.start_work_date && <><dt>Выход</dt><dd>{fmtDate(r.start_work_date)}</dd></>}
+              {r.start_work_date && <><dt>Дата заявки</dt><dd>{fmtDate(r.start_work_date)}</dd></>}
             </dl>
           </div>
 
           {/* Вакансия */}
           <div className={styles.sec}>
-            <div className={styles.secH}><h4>Вакансия и источники</h4></div>
-            {r.hh_vacancy_url
+            <div className={styles.secH}>
+              <h4>Вакансия и источники</h4>
+              {canWork && vacEdit === null && (
+                <button className={styles.mini} onClick={() => setVacEdit(r.hh_vacancy_url ?? '')}>
+                  {r.hh_vacancy_url ? '✎ Изменить' : '＋ Добавить ссылку'}
+                </button>
+              )}
+            </div>
+            {vacEdit !== null ? (
+              <div>
+                <input
+                  className={styles.poolSearch}
+                  style={{ marginBottom: 6 }}
+                  placeholder="https://hh.kz/vacancy/..."
+                  value={vacEdit}
+                  onChange={e => setVacEdit(e.target.value)}
+                />
+                <div className={styles.candActs}>
+                  <button className={`${styles.mini} ${styles.ok}`} disabled={vacancyMut.isPending} onClick={() => vacancyMut.mutate(vacEdit.trim())}>Сохранить</button>
+                  <button className={styles.mini} onClick={() => setVacEdit(null)}>Отмена</button>
+                </div>
+              </div>
+            ) : r.hh_vacancy_url
               ? <div className={styles.vacLink}><span>🔗 Вакансия на HeadHunter</span><a href={r.hh_vacancy_url} target="_blank" rel="noreferrer">Открыть ↗</a></div>
               : <div style={{ color: 'var(--text-tertiary)', fontSize: 12.5 }}>Вакансия ещё не указана.</div>}
           </div>
