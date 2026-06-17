@@ -11,6 +11,16 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
+// POST /api/timesheet/corrections/attachments/bulk (multipart `file` + `adjustment_ids`)
+// Один файл → один документ → ссылки на все переданные корректировки (дни) одного сотрудника.
+// Регистрируется ДО параметрических роутов `/:id/...`.
+router.post(
+  '/attachments/bulk',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr', '/employee/requests'], 'edit'),
+  upload.single('file'),
+  correctionAttachmentsController.uploadBulk,
+);
+
 // GET /api/timesheet/corrections/:id/attachments
 router.get(
   '/:id/attachments',

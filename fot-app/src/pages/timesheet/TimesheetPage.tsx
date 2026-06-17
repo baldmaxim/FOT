@@ -8,7 +8,7 @@ import { TimesheetTeamManagementModal } from '../../components/timesheet/Timeshe
 import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
 import { timesheetService } from '../../services/timesheetService';
-import { correctionAttachmentsService } from '../../services/correctionAttachmentsService';
+import { correctionAttachmentsService, uploadSharedCorrectionFiles } from '../../services/correctionAttachmentsService';
 import { ApiError } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -1235,17 +1235,15 @@ export const TimesheetPage: FC = () => {
   }, [viewMode, isObjectBulkOperation, bulkObjectTargets.length, bulkTargets.length, toast]);
 
   const handleSaveBulkCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
-    // Цепляем прикреплённые файлы к каждой созданной/обновлённой корректировке.
-    const uploadFilesTo = async (adjustmentIds: number[]) => {
+    // Прикрепляем общие файлы: один документ на сотрудника на файл (а не копия на каждый
+    // день). Bulk-выделение грида может охватывать несколько сотрудников.
+    const uploadFilesTo = async (items: Array<{ adjustment_id: number | null; employee_id: number }>) => {
       if (!files?.length) return;
-      if (adjustmentIds.length === 0) {
+      if (items.every(item => item.adjustment_id == null)) {
         toast.error('Файлы не прикреплены: сервер не вернул ID корректировок');
         return;
       }
-      const uploadResults = await Promise.allSettled(
-        adjustmentIds.flatMap(id => files.map(file => correctionAttachmentsService.upload(id, file)))
-      );
-      const failed = uploadResults.filter(r => r.status === 'rejected').length;
+      const { failed } = await uploadSharedCorrectionFiles(items, files);
       if (failed > 0) {
         console.error('Bulk attachments upload error: failed uploads =', failed);
         toast.error(`Корректировка применена, но ${failed} файл(ов) не загрузилось`);
@@ -1274,7 +1272,10 @@ export const TimesheetPage: FC = () => {
             hours_worked: hours ?? 0,
             notes,
           })));
-          await uploadFilesTo(saved.map(s => s.adjustment_id).filter((id): id is number => id != null));
+          await uploadFilesTo(bulkObjectTargets.map((target, i) => ({
+            adjustment_id: saved[i]?.adjustment_id ?? null,
+            employee_id: target.employee.id,
+          })));
           toast.success(`Корректировка по объектам применена для ${bulkObjectTargets.length} ячеек`);
         } else {
           // Статусы отсутствия (отпуск, удалёнка, больничный…) — дневная корректировка
@@ -1283,7 +1284,7 @@ export const TimesheetPage: FC = () => {
             bulkObjectTargets.map(t => [`${t.employee.id}_${t.workDate}`, { employee_id: t.employee.id, work_date: t.workDate }]),
           ).values()];
           const result = await timesheetService.bulkCorrect({ items: dayItems, status, hours_worked: hours, notes });
-          await uploadFilesTo((result.items ?? []).map(i => i.adjustment_id));
+          await uploadFilesTo((result.items ?? []).map(i => ({ adjustment_id: i.adjustment_id, employee_id: i.employee_id })));
           toast.success(`Корректировка применена для ${result.processed} дней`);
         }
 
@@ -1307,7 +1308,7 @@ export const TimesheetPage: FC = () => {
         notes,
       });
 
-      await uploadFilesTo((result.items ?? []).map(i => i.adjustment_id));
+      await uploadFilesTo((result.items ?? []).map(i => ({ adjustment_id: i.adjustment_id, employee_id: i.employee_id })));
       clearBulkState();
       await invalidate();
       toast.success(`Корректировка применена для ${result.processed} ячеек`);

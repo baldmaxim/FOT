@@ -6,9 +6,12 @@ import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   createCorrectionAttachment,
+  createCorrectionAttachmentForMany,
   deleteCorrectionAttachment,
   listCorrectionAttachments,
+  loadAdjustmentsByIds,
   loadCorrectionAdjustmentById,
+  loadCorrectionDocumentEmployeeIds,
 } from '../services/correction-attachments.service.js';
 
 interface MulterRequest extends AuthenticatedRequest {
@@ -33,6 +36,31 @@ const isMimeAllowed = (mime: string): boolean => {
 const parseAdjustmentId = (raw: string): number | null => {
   const id = Number(raw);
   return Number.isFinite(id) && id > 0 ? id : null;
+};
+
+const MAX_BULK_ADJUSTMENTS = 100;
+
+/** Парсит adjustment_ids из multipart-поля: JSON-массив или CSV. Возвращает уникальные id. */
+const parseAdjustmentIds = (raw: unknown): number[] | null => {
+  if (raw == null) return null;
+  let arr: unknown = raw;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    try {
+      arr = JSON.parse(trimmed);
+    } catch {
+      arr = trimmed.split(',');
+    }
+  }
+  if (!Array.isArray(arr)) return null;
+  const ids: number[] = [];
+  for (const item of arr) {
+    const id = Number(item);
+    if (!Number.isInteger(id) || id <= 0) return null;
+    ids.push(id);
+  }
+  return [...new Set(ids)];
 };
 
 const ensureAdjustmentAccess = async (
@@ -159,6 +187,96 @@ const upload = async (req: MulterRequest, res: Response): Promise<void> => {
   }
 };
 
+const uploadBulk = async (req: MulterRequest, res: Response): Promise<void> => {
+  try {
+    if (!(await r2Service.isEnabledAsync())) {
+      res.status(503).json({ success: false, error: 'R2 хранилище не настроено' });
+      return;
+    }
+    if (!req.file) {
+      res.status(400).json({ success: false, error: 'Файл обязателен' });
+      return;
+    }
+
+    const adjustmentIds = parseAdjustmentIds((req.body as Record<string, unknown> | undefined)?.adjustment_ids);
+    if (!adjustmentIds || adjustmentIds.length === 0) {
+      res.status(400).json({ success: false, error: 'Не переданы корректировки' });
+      return;
+    }
+    if (adjustmentIds.length > MAX_BULK_ADJUSTMENTS) {
+      res.status(400).json({ success: false, error: `Слишком много корректировок (макс. ${MAX_BULK_ADJUSTMENTS})` });
+      return;
+    }
+
+    const adjustments = await loadAdjustmentsByIds(adjustmentIds);
+    if (adjustments.length !== adjustmentIds.length) {
+      res.status(400).json({ success: false, error: 'Часть корректировок не найдена' });
+      return;
+    }
+    const employeeIds = [...new Set(adjustments.map(adj => adj.employee_id))];
+    if (employeeIds.length !== 1) {
+      res.status(400).json({ success: false, error: 'Все корректировки должны быть одного сотрудника' });
+      return;
+    }
+    const employeeId = employeeIds[0];
+    if (!(await canAccessEmployeeInScope(req, employeeId))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      return;
+    }
+
+    const file = req.file;
+    const mimeType = file.mimetype || 'application/octet-stream';
+    if (!isMimeAllowed(mimeType)) {
+      res.status(400).json({ success: false, error: 'Тип файла не разрешён' });
+      return;
+    }
+    if (file.size <= 0) {
+      res.status(400).json({ success: false, error: 'Пустой файл' });
+      return;
+    }
+
+    const safeFileName = sanitizeFileName(decodeMulterFilename(file.originalname));
+    const r2Key = r2Service.generateKey(employeeId, safeFileName);
+    await r2Service.uploadObject(r2Key, file.buffer, mimeType);
+
+    let attachment;
+    try {
+      attachment = await createCorrectionAttachmentForMany({
+        adjustmentIds,
+        employeeId,
+        fileName: safeFileName,
+        fileSize: file.size,
+        mimeType,
+        r2Key,
+        uploadedBy: req.user.id,
+      });
+    } catch (insertErr) {
+      try { await r2Service.deleteObject(r2Key); } catch { /* best-effort */ }
+      throw insertErr;
+    }
+
+    const downloadUrl = await r2Service.generateDownloadUrl(attachment.r2_key, attachment.original_name);
+    const previewUrl = await r2Service.generateDownloadUrl(attachment.r2_key, attachment.original_name, 'inline');
+    res.json({
+      success: true,
+      data: {
+        id: attachment.id,
+        source: attachment.source,
+        original_name: attachment.original_name,
+        mime_type: attachment.mime_type,
+        file_size: attachment.file_size,
+        uploaded_at: attachment.uploaded_at,
+        uploader_name: attachment.uploader_name,
+        download_url: downloadUrl,
+        preview_url: previewUrl,
+      },
+    });
+  } catch (err) {
+    console.error('correction-attachments.uploadBulk error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка загрузки файла' });
+  }
+};
+
 const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const adjustmentId = parseAdjustmentId(req.params.id);
@@ -169,6 +287,16 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
     const adj = await ensureAdjustmentAccess(req, res, adjustmentId);
     if (!adj) return;
+
+    // Полное удаление снимает файл со всех привязанных дней → проверяем доступ ко всем
+    // сотрудникам этих дней (после фикса — один и тот же, но защищаемся от чужих связей).
+    const linkedEmployeeIds = await loadCorrectionDocumentEmployeeIds(documentId);
+    for (const empId of linkedEmployeeIds) {
+      if (!(await canAccessEmployeeInScope(req, empId))) {
+        res.status(403).json({ success: false, error: 'Нет доступа к части связанных дней' });
+        return;
+      }
+    }
 
     const result = await deleteCorrectionAttachment(adjustmentId, documentId);
     if (!result.owned) {
@@ -197,5 +325,6 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 export const correctionAttachmentsController = {
   list,
   upload,
+  uploadBulk,
   remove,
 };

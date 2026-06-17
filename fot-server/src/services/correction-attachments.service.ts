@@ -34,6 +34,18 @@ export async function loadCorrectionAdjustmentById(
   return row ?? null;
 }
 
+/** Batch-загрузка (id, employee_id) корректировок для валидации массовой загрузки файла. */
+export async function loadAdjustmentsByIds(
+  ids: number[],
+): Promise<Array<{ id: number; employee_id: number }>> {
+  if (ids.length === 0) return [];
+  const rows = await query<{ id: number | string; employee_id: number | string }>(
+    `SELECT id, employee_id FROM attendance_adjustments WHERE id = ANY($1::int[])`,
+    [ids],
+  );
+  return rows.map(row => ({ id: Number(row.id), employee_id: Number(row.employee_id) }));
+}
+
 function leaveRequestIdFromAdjustment(adj: ICorrectionAdjustmentMeta): number | null {
   if (adj.source_type !== 'leave_request' || !adj.source_id) return null;
   const raw = adj.source_id.split(':', 1)[0];
@@ -329,14 +341,98 @@ export async function createCorrectionAttachment(params: {
 }
 
 /**
- * Удаление собственного вложения корректировки. Возвращает r2_key (для удаления объекта)
- * и булев флаг — было ли это вложение действительно «своим» (для adjustment).
- * Если документ принадлежит только leave_request — возвращает {owned:false} без удаления.
+ * Создаёт ОДИН документ-вложение и привязывает его к НЕСКОЛЬКИМ корректировкам (дням)
+ * одного сотрудника. Используется массовой корректировкой: один файл-заявление на весь
+ * диапазон, а не копия на каждый день. Все adjustmentIds должны принадлежать employeeId.
+ */
+export async function createCorrectionAttachmentForMany(params: {
+  adjustmentIds: number[];
+  employeeId: number;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  r2Key: string;
+  uploadedBy: string;
+}): Promise<ICorrectionAttachment> {
+  const uniqueIds = [...new Set(params.adjustmentIds)].filter(id => Number.isFinite(id) && id > 0);
+  if (uniqueIds.length === 0) throw new Error('adjustmentIds is empty');
+
+  return withTransaction(async (client) => {
+    const result = await client.query<{
+      id: number | string;
+      file_name: string;
+      file_size: number | string;
+      mime_type: string;
+      r2_key: string;
+      uploaded_by: string;
+      created_at: string;
+    }>(
+      `INSERT INTO documents
+         (employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by)
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7)
+       RETURNING id, file_name, file_size, mime_type, r2_key, uploaded_by, created_at`,
+      [
+        params.employeeId,
+        CORRECTION_ATTACHMENT_PURPOSE,
+        params.fileName,
+        params.fileSize,
+        params.mimeType,
+        params.r2Key,
+        params.uploadedBy,
+      ],
+    );
+    const doc = result.rows[0];
+    if (!doc) throw new Error('Failed to insert document');
+
+    // Одна ссылка на каждый день диапазона, все на один document_id.
+    await client.query(
+      `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
+         SELECT $1, $2, adj_id::text, $3 FROM unnest($4::int[]) AS adj_id
+       ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
+      [doc.id, CORRECTION_ATTACHMENT_ENTITY_TYPE, CORRECTION_ATTACHMENT_PURPOSE, uniqueIds],
+    );
+
+    return {
+      id: Number(doc.id),
+      source: 'adjustment',
+      original_name: String(doc.file_name),
+      mime_type: String(doc.mime_type) || null,
+      file_size: Number(doc.file_size),
+      uploaded_at: String(doc.created_at),
+      uploader_name: null,
+      r2_key: String(doc.r2_key),
+    };
+  });
+}
+
+/**
+ * Distinct employee_id всех корректировок (attendance_adjustment-ссылок) документа.
+ * Используется для проверки доступа перед полным удалением общего файла: он может быть
+ * привязан к нескольким дням одного сотрудника.
+ */
+export async function loadCorrectionDocumentEmployeeIds(documentId: number): Promise<number[]> {
+  const rows = await query<{ employee_id: number | string }>(
+    `SELECT DISTINCT aa.employee_id
+       FROM document_links dl
+       JOIN attendance_adjustments aa ON aa.id = dl.entity_id::int
+      WHERE dl.document_id = $1 AND dl.entity_type = $2 AND dl.purpose = $3`,
+    [documentId, CORRECTION_ATTACHMENT_ENTITY_TYPE, CORRECTION_ATTACHMENT_PURPOSE],
+  );
+  return rows.map(row => Number(row.employee_id));
+}
+
+/**
+ * Полное удаление вложения корректировки: документ снимается со ВСЕХ привязанных дней
+ * (один общий файл массовой корректировки = одна корзина = удалить везде). Возвращает
+ * r2_key для удаления объекта и флаг owned.
+ * Если документ имеет ссылки иного типа (например leave_request) — {owned:false} без
+ * удаления: такой файл принадлежит ещё и заявке, его R2 трогать нельзя.
  */
 export async function deleteCorrectionAttachment(
   adjustmentId: number,
   documentId: number,
 ): Promise<{ owned: boolean; r2Key: string | null }> {
+  // Документ должен быть привязан к указанной корректировке (точка входа для доступа).
   const ownLink = await queryOne<{ document_id: number }>(
     `SELECT document_id FROM document_links
        WHERE document_id = $1 AND entity_type = $2 AND entity_id = $3 AND purpose = $4
@@ -345,6 +441,15 @@ export async function deleteCorrectionAttachment(
   );
   if (!ownLink) return { owned: false, r2Key: null };
 
+  // Любая ссылка не-correction → документ общий с заявкой, полное удаление недопустимо.
+  const foreign = await queryOne<{ cnt: number | string }>(
+    `SELECT COUNT(*)::int AS cnt FROM document_links
+       WHERE document_id = $1
+         AND NOT (entity_type = $2 AND purpose = $3)`,
+    [documentId, CORRECTION_ATTACHMENT_ENTITY_TYPE, CORRECTION_ATTACHMENT_PURPOSE],
+  );
+  if (Number(foreign?.cnt ?? 0) > 0) return { owned: false, r2Key: null };
+
   const doc = await queryOne<{ r2_key: string }>(
     `SELECT r2_key FROM documents WHERE id = $1 LIMIT 1`,
     [documentId],
@@ -352,31 +457,18 @@ export async function deleteCorrectionAttachment(
   const r2Key = doc ? String(doc.r2_key) : null;
 
   await withTransaction(async (client) => {
-    await client.query(
-      `DELETE FROM document_links
-        WHERE document_id = $1
-          AND entity_type = $2
-          AND entity_id = $3
-          AND purpose = $4`,
-      [documentId, CORRECTION_ATTACHMENT_ENTITY_TYPE, String(adjustmentId), CORRECTION_ATTACHMENT_PURPOSE],
-    );
-    // Документ корректировки уникально привязан к одной adjustment.
-    // Безопасно удалить, если других ссылок не осталось.
-    const others = await client.query<{ cnt: number | string }>(
-      `SELECT COUNT(*)::int AS cnt FROM document_links WHERE document_id = $1`,
-      [documentId],
-    );
-    if (Number(others.rows[0]?.cnt ?? 0) === 0) {
-      await client.query(`DELETE FROM documents WHERE id = $1`, [documentId]);
-    }
+    // Снимаем документ со всех дней и удаляем сам документ (foreign-ссылок уже нет).
+    await client.query(`DELETE FROM document_links WHERE document_id = $1`, [documentId]);
+    await client.query(`DELETE FROM documents WHERE id = $1`, [documentId]);
   });
 
   return { owned: true, r2Key };
 }
 
 /**
- * Удаляет все собственные вложения корректировки (для cascade при удалении adjustment).
- * Возвращает массив r2_key для post-cleanup в R2.
+ * Отвязывает вложения корректировки от ОДНОГО дня (cascade при удалении adjustment).
+ * Общий файл, привязанный к другим дням, сохраняется. Возвращает r2_key ТОЛЬКО реально
+ * осиротевших документов (для удаления объекта в R2).
  */
 export async function purgeCorrectionAttachments(adjustmentId: number): Promise<string[]> {
   const docs = await query<{ document_id: number | string; r2_key: string }>(
@@ -389,6 +481,9 @@ export async function purgeCorrectionAttachments(adjustmentId: number): Promise<
   if (docs.length === 0) return [];
 
   const docIds = docs.map(row => Number(row.document_id));
+  const r2ByDoc = new Map<number, string>(docs.map(row => [Number(row.document_id), String(row.r2_key)]));
+
+  let orphanIds: number[] = [];
   await withTransaction(async (client) => {
     await client.query(
       `DELETE FROM document_links
@@ -400,11 +495,14 @@ export async function purgeCorrectionAttachments(adjustmentId: number): Promise<
       [docIds],
     );
     const stillReferenced = new Set(otherRows.rows.map(row => Number(row.document_id)));
-    const orphanIds = docIds.filter(id => !stillReferenced.has(id));
+    orphanIds = docIds.filter(id => !stillReferenced.has(id));
     if (orphanIds.length > 0) {
       await client.query(`DELETE FROM documents WHERE id = ANY($1::int[])`, [orphanIds]);
     }
   });
 
-  return docs.map(row => String(row.r2_key));
+  // R2 чистим только для осиротевших — общий файл на других днях остаётся валидным.
+  return orphanIds
+    .map(id => r2ByDoc.get(id))
+    .filter((key): key is string => Boolean(key));
 }

@@ -2,7 +2,7 @@ import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lock, Pencil, Trash2, Plus, Paperclip } from 'lucide-react';
 import { timesheetService, type ITimesheetCorrectionRow } from '../../services/timesheetService';
-import { correctionAttachmentsService } from '../../services/correctionAttachmentsService';
+import { uploadSharedCorrectionFiles } from '../../services/correctionAttachmentsService';
 import type { TimesheetStatus, TimesheetEmployee } from '../../types';
 import { TimesheetCorrectionModal } from './TimesheetCorrectionModal';
 import { TimesheetBulkCorrectionModal } from './TimesheetBulkCorrectionModal';
@@ -86,17 +86,12 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
         notes: params.notes,
       });
 
-      // Загружаем файлы для каждой созданной корректировки
+      // Один файл → один общий документ на все дни сотрудника (а не копия на каждый день).
       if (params.files?.length) {
         if (!result.items?.length) {
           toast.error('Файлы не прикреплены: сервер не вернул ID корректировок');
         } else {
-          const uploadResults = await Promise.allSettled(
-            result.items.flatMap(item =>
-              params.files!.map(file => correctionAttachmentsService.upload(item.adjustment_id, file))
-            )
-          );
-          const failed = uploadResults.filter(r => r.status === 'rejected').length;
+          const { failed } = await uploadSharedCorrectionFiles(result.items, params.files);
           if (failed > 0) {
             console.error('Bulk attachments upload error: failed uploads =', failed);
             toast.error(`Корректировка применена, но ${failed} файл(ов) не загрузилось`);
