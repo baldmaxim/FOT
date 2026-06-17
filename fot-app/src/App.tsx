@@ -95,7 +95,7 @@ const ApprovalsPage = lazy(() => import('./pages/approvals/ApprovalsPage').then(
 const DisciplineAnalyticsPage = lazy(() => import('./pages/DisciplineAnalyticsPage').then(m => ({ default: m.DisciplineAnalyticsPage })));
 
 // Staff Control
-const StaffControlPage = lazy(() => import('./pages/StaffControlPage').then(m => ({ default: m.StaffControlPage })));
+const StaffControlHubPage = lazy(() => import('./pages/StaffControlHubPage').then(m => ({ default: m.StaffControlHubPage })));
 
 // Employee portal
 const EmployeeDashboardPage = lazy(() => import('./pages/employee/EmployeeDashboardPage').then(m => ({ default: m.EmployeeDashboardPage })));
@@ -412,12 +412,12 @@ const AppRoutes = () => {
           />
         </Route>
 
-<Route element={<ProtectedRoute requiredPage="/staff-control" />}>
+<Route element={<ProtectedRoute requiredPage={['/staff-control', '/staff-control/hiring']} />}>
           <Route
             path="/staff-control"
             element={
               <Layout title="Управление кадрами" theme={theme} onToggleTheme={toggleTheme}>
-                <StaffControlPage />
+                <StaffControlHubPage />
               </Layout>
             }
           />

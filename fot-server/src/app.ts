@@ -42,6 +42,7 @@ import mtsRoutes from './routes/mts.routes.js';
 import presenceRoutes from './routes/presence.routes.js';
 import feedbackRoutes from './routes/feedback.routes.js';
 import testsRoutes from './routes/tests.routes.js';
+import hiringRequestsRoutes from './routes/hiring-requests.routes.js';
 
 const app = express();
 
@@ -124,6 +125,7 @@ app.use('/api/admin/data-api', adminDataApiRoutes);
 app.use('/api/patent-receipts', patentReceiptsRoutes);
 app.use('/api/daily-tasks', dailyTasksRoutes);
 app.use('/api/direct-reports', directReportsRoutes);
+app.use('/api/hiring-requests', hiringRequestsRoutes);
 app.use('/api/admin/weekend-approvals', weekendApprovalsRoutes);
 app.use('/api/downloads', downloadsRoutes);
 app.use('/api/contractor', contractorRoutes);
