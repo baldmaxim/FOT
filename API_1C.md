@@ -184,3 +184,72 @@ curl -H "Authorization: Bearer fot_..." \
 curl -H "Authorization: Bearer fot_..." \
   "https://fotsu10.fvds.ru/external/v1/tables/employees?limit=5"
 ```
+
+---
+
+## Расчётный табель отдела (JSON)
+
+Помимо «сырых» таблиц `/external/v1/*` есть **расчётный** эндпоинт: он отдаёт уже
+собранный табель отдела со всеми корректировками (тот же расчёт, что в выгрузке
+«Единый 1С»), а не сырые СКУД-события. Это отдельный путь на Node — `/api/public/v1`
+(не `/external/v1`), но авторизация тем же data-api токеном.
+
+- **URL:** `GET https://fot.su10.ru/api/public/v1/timesheet`
+- **Авторизация:** `Authorization: Bearer fot_<prefix>_<secret>` (как обычно).
+- **Требование:** ключу должна быть открыта таблица `employees` (вкладка «API-доступ» →
+  ключ → «Таблицы»). Иначе `403`.
+
+### Параметры query-string
+
+| Параметр | Обязателен | Значение |
+|---|---|---|
+| `department_id` | да | UUID отдела/бригады. Несколько — через запятую. Поддерево НЕ раскрывается: подотделы перечисляйте явно. |
+| `month` | да | Месяц `YYYY-MM`. |
+| `half` | нет | `FULL` (по умолч.), `H1` (1–15), `H2` (16–конец). |
+| `from`, `to` | нет | Произвольный диапазон `YYYY-MM-DD` внутри месяца (имеет приоритет над `half`). |
+
+### Формат ответа
+
+```json
+{
+  "period": { "month": "2026-06", "start": "2026-06-01", "end": "2026-06-30", "half": "FULL" },
+  "departments": [
+    {
+      "id": "0e2c…uuid",
+      "name": "бр. Иванова",
+      "employees": [
+        {
+          "id": 123,
+          "full_name": "Иванов Иван Иванович",
+          "tab_number": "СУ10-000123",
+          "sigur_employee_id": 4567,
+          "position": "Маляр",
+          "total_hours": 168,
+          "days": {
+            "2026-06-01": { "status": "work",    "hours": 8, "corrected": false, "hours_overridden": false },
+            "2026-06-02": { "status": "vacation", "hours": 0, "corrected": true,  "hours_overridden": false }
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `status` — машинный код дня: `work`, `vacation`, `dayoff`, `remote`, `unpaid`,
+  `absent`, `sick`, `business_trip`, `manual`.
+- `corrected` — день получен/изменён ручной корректировкой; `hours_overridden` —
+  часы заданы вручную поверх СКУД.
+- `total_hours` — сумма часов за период.
+
+### Ошибки
+
+`401` — нет/неверный токен. `403` — ключу не открыта `employees`. `400` — нет/кривые
+`department_id`/`month`/период.
+
+### Проверка
+
+```bash
+curl -H "Authorization: Bearer fot_..." \
+  "https://fot.su10.ru/api/public/v1/timesheet?department_id=<uuid>&month=2026-06&half=FULL"
+```

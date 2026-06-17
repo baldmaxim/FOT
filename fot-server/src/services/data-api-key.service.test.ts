@@ -138,3 +138,67 @@ describe('revokeKey', () => {
     expect(params[0]).toBe('key-1');
   });
 });
+
+describe('authenticateRawToken', () => {
+  const makeRow = (overrides: Record<string, unknown> = {}) => {
+    const { plaintext_token, prefix, secret } = generateRawToken();
+    return {
+      plaintext_token,
+      prefix,
+      row: {
+        id: 'key-1',
+        name: 'тест',
+        key_hash: hashSecret(secret),
+        rate_limit_per_minute: 60,
+        expires_at: null,
+        revoked_at: null,
+        ...overrides,
+      },
+    };
+  };
+
+  it('отклоняет мусорный формат до запроса в БД', async () => {
+    const result = await dataApiKeyService.authenticateRawToken('not-a-token');
+    expect(result).toEqual({ ok: false, detail: 'Invalid token format' });
+    expect(pgQueryOne).not.toHaveBeenCalled();
+  });
+
+  it('валидный токен → ok + обновляет last_used_at', async () => {
+    const { plaintext_token, row } = makeRow();
+    pgQueryOne.mockResolvedValueOnce(row);
+    pgExecute.mockResolvedValueOnce(1);
+
+    const result = await dataApiKeyService.authenticateRawToken(plaintext_token);
+    expect(result).toEqual({ ok: true, key: { id: 'key-1', name: 'тест', rate_limit_per_minute: 60 } });
+    expect(pgExecute.mock.calls[0][0]).toMatch(/UPDATE data_api_keys SET last_used_at/);
+  });
+
+  it('неизвестный prefix → Invalid token', async () => {
+    const { plaintext_token } = makeRow();
+    pgQueryOne.mockResolvedValueOnce(null);
+    const result = await dataApiKeyService.authenticateRawToken(plaintext_token);
+    expect(result).toEqual({ ok: false, detail: 'Invalid token' });
+  });
+
+  it('неверный секрет (hash не совпал) → Invalid token, без last_used_at', async () => {
+    const { plaintext_token, row } = makeRow({ key_hash: hashSecret('other-secret') });
+    pgQueryOne.mockResolvedValueOnce(row);
+    const result = await dataApiKeyService.authenticateRawToken(plaintext_token);
+    expect(result).toEqual({ ok: false, detail: 'Invalid token' });
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+
+  it('отозванный ключ → Token revoked', async () => {
+    const { plaintext_token, row } = makeRow({ revoked_at: '2020-01-01T00:00:00.000Z' });
+    pgQueryOne.mockResolvedValueOnce(row);
+    const result = await dataApiKeyService.authenticateRawToken(plaintext_token);
+    expect(result).toEqual({ ok: false, detail: 'Token revoked' });
+  });
+
+  it('просроченный ключ → Token expired', async () => {
+    const { plaintext_token, row } = makeRow({ expires_at: '2000-01-01T00:00:00.000Z' });
+    pgQueryOne.mockResolvedValueOnce(row);
+    const result = await dataApiKeyService.authenticateRawToken(plaintext_token);
+    expect(result).toEqual({ ok: false, detail: 'Token expired' });
+  });
+});

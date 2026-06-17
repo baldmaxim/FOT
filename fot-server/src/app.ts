@@ -43,6 +43,7 @@ import presenceRoutes from './routes/presence.routes.js';
 import feedbackRoutes from './routes/feedback.routes.js';
 import testsRoutes from './routes/tests.routes.js';
 import hiringRequestsRoutes from './routes/hiring-requests.routes.js';
+import publicDataApiRoutes from './routes/public-data-api.routes.js';
 
 const app = express();
 
@@ -134,6 +135,7 @@ app.use('/api/mts', mtsRoutes);
 app.use('/api/presence', presenceRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/tests', testsRoutes);
+app.use('/api/public/v1', publicDataApiRoutes);
 
 // 404 handler
 app.use((_req, res) => {

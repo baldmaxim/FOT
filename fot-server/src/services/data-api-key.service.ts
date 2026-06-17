@@ -123,6 +123,53 @@ export const dataApiKeyService = {
     }
   },
 
+  /**
+   * Аутентификация публичного data-api токена (fot_<prefix>_<secret>) — зеркало
+   * fot-data-api/app/services/auth.py: lookup по key_prefix, sha256(secret) сверяется
+   * в постоянном времени, проверка revoked/expires, best-effort last_used_at.
+   * Возвращает дискриминированный результат, чтобы middleware отдал 401 с причиной.
+   */
+  async authenticateRawToken(rawToken: string): Promise<
+    | { ok: true; key: { id: string; name: string; rate_limit_per_minute: number } }
+    | { ok: false; detail: string }
+  > {
+    const parsed = parseToken(rawToken);
+    if (!parsed) return { ok: false, detail: 'Invalid token format' };
+
+    let row: {
+      id: string; name: string; key_hash: string;
+      rate_limit_per_minute: number; expires_at: string | null; revoked_at: string | null;
+    } | null;
+    try {
+      row = await queryOne(
+        `SELECT id, name, key_hash, rate_limit_per_minute, expires_at, revoked_at
+           FROM data_api_keys
+          WHERE key_prefix = $1
+          LIMIT 1`,
+        [parsed.prefix],
+      );
+    } catch {
+      return { ok: false, detail: 'Invalid token' };
+    }
+    if (!row) return { ok: false, detail: 'Invalid token' };
+
+    const expected = Buffer.from(row.key_hash ?? '', 'utf8');
+    const actual = Buffer.from(hashSecret(parsed.secret), 'utf8');
+    if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+      return { ok: false, detail: 'Invalid token' };
+    }
+    if (row.revoked_at) return { ok: false, detail: 'Token revoked' };
+    if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {
+      return { ok: false, detail: 'Token expired' };
+    }
+
+    // best-effort, ошибки игнорируем (как в Python-сервисе)
+    void execute('UPDATE data_api_keys SET last_used_at = now() WHERE id = $1', [row.id])
+      .catch(() => { /* noop */ });
+
+    return { ok: true, key: { id: row.id, name: row.name, rate_limit_per_minute: row.rate_limit_per_minute } };
+  },
+
   async updateKey(
     id: string,
     patch: Partial<Pick<DataApiKeyRow, 'name' | 'description' | 'rate_limit_per_minute' | 'expires_at'>>,
