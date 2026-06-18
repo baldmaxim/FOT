@@ -235,7 +235,7 @@ export const MonitorTab: FC = () => {
             <tr>
               <th>№</th>
               {searchActive && <th>Подрядчик</th>}
-              <th>UID</th><th>ФИО</th><th>Статус</th><th>Согласование</th>
+              <th>UID</th><th>W26</th><th>ФИО</th><th>Статус</th><th>Согласование</th>
               <th>Активен</th><th>Объекты</th><th>Точки</th><th>Срок</th><th></th>
             </tr>
           </thead>
@@ -245,6 +245,7 @@ export const MonitorTab: FC = () => {
                 <td>{p.pass_number}</td>
                 {searchActive && <td>{p.org_name ?? '—'}</td>}
                 <td>{p.card_uid ?? '—'}</td>
+                <td>{p.w26 ?? '—'}</td>
                 <td>{p.holder_name ?? '—'}</td>
                 <td>{p.status}</td>
                 <td>{p.approval_status}</td>

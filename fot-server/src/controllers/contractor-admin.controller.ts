@@ -36,6 +36,7 @@ import {
 import {
   assignSigurEmployeeCardBinding,
   replaceSigurEmployeeAccessPoints,
+  deriveCardW26,
 } from '../services/sigur-live-cards.service.js';
 import { resolveAccessPointNamesToIds } from '../services/contractor-access.service.js';
 import { enqueueRevoke, computeSubmissionStatus } from '../services/contractor-pool.service.js';
@@ -1164,7 +1165,17 @@ export const contractorAdminController = {
           [orgId],
         );
       }
-      res.json({ success: true, data: rows });
+      // W26, выведенный из сохранённого card_uid (формула FOT) — для сверки с Sigur.
+      const decodeW26 = (uid: unknown): string | null => {
+        if (typeof uid !== 'string' || !uid.trim()) return null;
+        try {
+          return deriveCardW26(uid).w26;
+        } catch {
+          return null;
+        }
+      };
+      const data = (rows as Array<Record<string, unknown>>).map(r => ({ ...r, w26: decodeW26(r.card_uid) }));
+      res.json({ success: true, data });
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ success: false, error: 'Не указана организация или строка поиска' });

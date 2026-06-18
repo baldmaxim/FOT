@@ -145,6 +145,8 @@ export interface SigurEmployeeCardSummary {
   startDate: string | null;
   expirationDate: string | null;
   issued: boolean | null;
+  /** Номер карты в формате W26 (facility,number) с сервера Sigur — для сверки. */
+  w26: string | null;
 }
 
 export interface SigurEmployeeAccessRuleSummary {

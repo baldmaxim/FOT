@@ -152,6 +152,7 @@ export interface IMonitorPassRow {
   is_active: boolean;
   sigur_employee_id: number | null;
   card_uid: string | null;
+  w26: string | null;
   holder_name: string | null;
   org_name?: string | null;
   expires_at: string | null;

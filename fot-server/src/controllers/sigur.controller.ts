@@ -56,6 +56,7 @@ interface IEmployeeProfileResponse {
     cardNumber: string | null;
     status: string | null;
     expirationDate: string | null;
+    w26: string | null;
   }>;
   accessRules: Array<{ accessRuleId: number; accessRuleName: string | null }>;
   accessPoints: IEnrichedAccessPointBinding[];
@@ -383,10 +384,45 @@ async function buildEmployeeProfileData(
     console.warn('Sigur get employee profile cards warning:', cardBindingsResult.reason);
   }
 
-  const cards = cardsRaw
+  const cardsBase = cardsRaw
     .map(card => toCardSummary(card))
     .filter((card): card is NonNullable<ReturnType<typeof toCardSummary>> => !!card)
     .sort((left, right) => (left.cardNumber || '').localeCompare(right.cardNumber || '', 'ru'));
+
+  // W26 каждой карты берём из фактического номера на сервере Sigur (formattedValue),
+  // чтобы можно было сверять. Привязка несёт только cardId — подтягиваем по кэшу карт.
+  const hexValueToW26 = (value: string): string | null => {
+    const hex = value.trim().toUpperCase().replace(/[^0-9A-F]/g, '');
+    if (hex.length < 4) return null;
+    const v = hex.length >= 6 ? hex.slice(-6) : hex.padStart(6, '0');
+    const facility = parseInt(v.slice(0, 2), 16);
+    const number = parseInt(v.slice(2), 16);
+    if (!Number.isFinite(facility) || !Number.isFinite(number)) return null;
+    return `${facility},${number}`;
+  };
+  let cards: Array<typeof cardsBase[number] & { w26: string | null }> =
+    cardsBase.map(card => ({ ...card, w26: null }));
+  if (cardsBase.length > 0) {
+    try {
+      const allCards = await sigurService.getCardsCached(connection);
+      const cardById = new Map<number, Record<string, unknown>>();
+      for (const rawCard of allCards) {
+        const id = normalizeInt(resolveField(rawCard, 'id', 'cardId', 'card_id'));
+        if (id) cardById.set(id, rawCard);
+      }
+      cards = cardsBase.map(card => {
+        const sigurCard = cardById.get(card.cardId);
+        let w26: string | null = null;
+        if (sigurCard) {
+          const formatted = String(resolveField(sigurCard, 'formattedValue', 'formatted_value') ?? '').trim();
+          w26 = formatted || hexValueToW26(String(resolveField(sigurCard, 'value') ?? ''));
+        }
+        return { ...card, w26 };
+      });
+    } catch (cardsListError) {
+      console.warn('Sigur get employee profile W26 enrichment warning:', cardsListError);
+    }
+  }
 
   const accessRuleBindingsRaw = accessRuleBindingsResult.status === 'fulfilled'
     ? accessRuleBindingsResult.value as Record<string, unknown>[]

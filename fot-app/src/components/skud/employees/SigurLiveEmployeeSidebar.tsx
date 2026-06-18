@@ -1192,7 +1192,10 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 return (
                   <div key={card.cardId} className="ep-sigur-card-row">
                     <div className="ep-sigur-card-main">
-                      <div className="ep-sigur-card-name">{card.cardNumber || `Карта #${card.cardId}`}</div>
+                      <div className="ep-sigur-card-name">
+                        {card.w26 ? `W26 ${card.w26}` : (card.cardNumber || `Карта #${card.cardId}`)}
+                        {card.w26 && <span className="ep-sigur-card-id">#{card.cardId}</span>}
+                      </div>
                       <div className={`ep-sigur-card-state ${isExpired(card.expirationDate) ? 'expired' : ''}`}>
                         {card.status || 'Активна'}
                         <span>{formatDisplayDate(card.expirationDate)}</span>

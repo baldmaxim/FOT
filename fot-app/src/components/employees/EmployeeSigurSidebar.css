@@ -843,6 +843,13 @@ textarea.ep-sigur-field-input {
   color: var(--text-primary);
 }
 
+.ep-sigur-card-id {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
 .ep-sigur-card-state {
   display: inline-flex;
   align-items: center;
