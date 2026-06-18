@@ -96,6 +96,7 @@ const DisciplineAnalyticsPage = lazy(() => import('./pages/DisciplineAnalyticsPa
 
 // Staff Control
 const StaffControlHubPage = lazy(() => import('./pages/StaffControlHubPage').then(m => ({ default: m.StaffControlHubPage })));
+const HiringRequestsBoard = lazy(() => import('./components/staff/hiring/HiringRequestsBoard').then(m => ({ default: m.HiringRequestsBoard })));
 
 // Employee portal
 const EmployeeDashboardPage = lazy(() => import('./pages/employee/EmployeeDashboardPage').then(m => ({ default: m.EmployeeDashboardPage })));
@@ -299,6 +300,21 @@ const AppRoutes = () => {
           />
         </Route>
 
+        {/* Доска «Заявки на поиск сотрудников» в ЛК — для рекрутеров (команда подбора),
+            руководителя ОК, заявителей (manager/manager_obj) и активных ответственных.
+            Тот же компонент, что и вкладка панели; доступ по существующему праву
+            /staff-control/hiring (бэк инжектит его нужной аудитории). */}
+        <Route element={<ProtectedRoute requiredPage="/staff-control/hiring" />}>
+          <Route
+            path="/employee/hiring"
+            element={
+              <EmployeeLayout title="Заявки на поиск сотрудников">
+                <HiringRequestsBoard />
+              </EmployeeLayout>
+            }
+          />
+        </Route>
+
         <Route element={<ProtectedRoute requiredPage="/dashboard" />}>
           <Route
             path="/dashboard"
@@ -412,7 +428,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-<Route element={<ProtectedRoute requiredPage={['/staff-control', '/staff-control/hiring']} />}>
+<Route element={<ProtectedRoute requiredPage="/staff-control" />}>
           <Route
             path="/staff-control"
             element={

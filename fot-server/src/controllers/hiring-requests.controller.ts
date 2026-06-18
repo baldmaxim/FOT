@@ -13,6 +13,7 @@ import {
 import { getUserIdsByEmployeeIds, getEmployeeUserId } from '../services/recipients.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
+import { getIo } from '../socket/io-instance.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 type MulterRequest = AuthenticatedRequest & { file?: { originalname: string; buffer: Buffer; size: number; mimetype: string } };
@@ -39,6 +40,18 @@ async function canCreateHiring(req: AuthenticatedRequest): Promise<boolean> {
   if (isHiringRequesterRole(req.user.role_code)) return true;
   if (await isHiringManagerByEmployee(req.user.employee_id)) return true;
   return hasPageView(req.user.role_code, '/staff-control/hiring');
+}
+
+// Доступ к доске заявок (page_access['/staff-control/hiring']) у рекрутера/ответственного
+// вычисляется на /auth/me из пула, активных назначений и должности. При изменении этих
+// факторов шлём сотруднику 'profile:access_changed' — фронт тихо пересняет /auth/me и
+// показывает/прячет пункт ЛК без релогина (см. AuthContext). Best-effort, fire-and-forget.
+async function emitHiringAccessChanged(employeeId: number | null | undefined): Promise<void> {
+  if (!employeeId) return;
+  const io = getIo();
+  if (!io) return;
+  const userId = await getEmployeeUserId(employeeId);
+  if (userId) io.to(`user:${userId}`).emit('profile:access_changed');
 }
 
 // ===================== Helpers =====================
@@ -218,7 +231,7 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       const title = 'Новая заявка на подбор';
       const body = `${authorName ?? 'Сотрудник'} подал заявку: ${b.position_title}`
         + (b.headcount && b.headcount > 1 ? ` (${b.headcount} чел.)` : '');
-      const path = '/staff-control?tab=hiring';
+      const path = '/employee/hiring';
 
       await notificationService.createMany(userIds.map(userId => ({
         userId,
@@ -376,12 +389,15 @@ const addAssignee = async (req: AuthenticatedRequest, res: Response): Promise<vo
     );
     const title = 'Назначена заявка на подбор';
     const body = `Вас назначили ответственным по заявке: ${reqRow?.position_title ?? `#${id}`}`;
-    const path = '/staff-control?tab=hiring';
+    const path = '/employee/hiring';
     await notificationService.createMany([{
       userId, type: 'hiring_request_assigned', title, body, metadata: { requestId: id, path },
     }]);
     await pushService.sendGenericNotification([userId], title, body, { path, requestId: id });
   })().catch(e => console.error('hiring-assign notify error:', e));
+
+  // Назначение даёт сотруднику авто-доступ к доске → обновляем его сессию.
+  void emitHiringAccessChanged(employeeId).catch(e => console.error('hiring-access emit error:', e));
 
   res.json({ success: true });
 };
@@ -423,6 +439,8 @@ const removeAssignee = async (req: AuthenticatedRequest, res: Response): Promise
     }
   });
   await logEvent(id, req.user.id, 'unassign', { body: `Снят ответственный (employee #${employeeId})` });
+  // Снятие может убрать авто-доступ (если нет других назначений/пула) → пересчитать сессию.
+  void emitHiringAccessChanged(employeeId).catch(e => console.error('hiring-access emit error:', e));
   res.json({ success: true });
 };
 
@@ -449,6 +467,8 @@ const addRecruiter = async (req: AuthenticatedRequest, res: Response): Promise<v
      ON CONFLICT (employee_id) WHERE is_active = TRUE DO NOTHING`,
     [employeeId, req.user.id],
   );
+  // Включение в пул даёт доступ к доске в ЛК → обновляем сессию рекрутера.
+  void emitHiringAccessChanged(employeeId).catch(e => console.error('hiring-access emit error:', e));
   res.json({ success: true });
 };
 
@@ -464,6 +484,8 @@ const removeRecruiter = async (req: AuthenticatedRequest, res: Response): Promis
     [employeeId],
   );
   await execute(`UPDATE hiring_recruiters SET is_active = FALSE WHERE employee_id = $1 AND is_active = TRUE`, [employeeId]);
+  // Исключение из пула может убрать доступ (если нет активных назначений) → пересчитать сессию.
+  void emitHiringAccessChanged(employeeId).catch(e => console.error('hiring-access emit error:', e));
   res.json({ success: true, data: { active_requests: active } });
 };
 
