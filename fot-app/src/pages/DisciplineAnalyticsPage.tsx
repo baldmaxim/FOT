@@ -249,15 +249,6 @@ export const DisciplineAnalyticsPage: FC = () => {
     for (const e of employees) if (e.departmentId) map.set(e.departmentId, e.department);
     return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   }, [employees]);
-  const kpiPeriodLabel = useMemo(() => {
-    const fmt = (value: string) => {
-      const [y, m] = value.split('-').map(Number);
-      return `${MONTH_NAMES[m - 1]} ${y}`;
-    };
-    const { startMonth: s, endMonth: e } = normalizedPeriod;
-    return s === e ? fmt(s) : `${fmt(s)} — ${fmt(e)}`;
-  }, [normalizedPeriod]);
-
   const deptFilteredBase = useMemo(() => {
     let list = employees;
     if (selectedDeptIds.length > 0) {
@@ -522,7 +513,6 @@ export const DisciplineAnalyticsPage: FC = () => {
           departments={kpiDepartments}
           startMonth={normalizedPeriod.startMonth}
           endMonth={normalizedPeriod.endMonth}
-          periodLabel={kpiPeriodLabel}
           onClose={() => setShowKpiModal(false)}
         />
       )}

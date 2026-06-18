@@ -193,10 +193,34 @@
   cursor: pointer;
 }
 
-.periodNote {
+.periodPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.periodRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.periodFrom {
+  width: 28px;
   font-size: 13px;
   color: var(--text-muted, #64748b);
-  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.periodSelect {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 10px;
+  font-size: 16px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 9px;
+  background: var(--surface, #fff);
+  color: var(--text, #0f172a);
 }
 
 .collectBtn,

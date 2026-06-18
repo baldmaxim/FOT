@@ -31,9 +31,9 @@ interface IKpiDepartment {
 interface IDisciplineKpiModalProps {
   employees: IKpiEmployee[];
   departments: IKpiDepartment[];
+  /** Стартовый период — из текущего выбора на странице; дальше меняется в модалке. */
   startMonth: string;
   endMonth: string;
-  periodLabel: string;
   onClose: () => void;
 }
 
@@ -42,6 +42,14 @@ const METRIC_OPTIONS: { key: KpiMetric; label: string }[] = [
   { key: 'sick', label: 'Больничные' },
   { key: 'unpaid', label: 'За свой счёт' },
 ];
+
+const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+const getMonthParts = (value: string): { year: number; month: number } => {
+  const [year, month] = value.split('-').map(Number);
+  return { year, month };
+};
+const buildMonthValue = (year: number, month: number): string => `${year}-${String(month).padStart(2, '0')}`;
 
 const SEVERITY_LABEL: Record<KpiSeverity, string> = {
   green: 'Норма',
@@ -85,11 +93,12 @@ export const DisciplineKpiModal: FC<IDisciplineKpiModalProps> = ({
   departments,
   startMonth,
   endMonth,
-  periodLabel,
   onClose,
 }) => {
   const overlayHandlers = useOverlayDismiss(onClose);
 
+  const [periodStart, setPeriodStart] = useState(startMonth);
+  const [periodEnd, setPeriodEnd] = useState(endMonth);
   const [scope, setScope] = useState<'employee' | 'department'>('employee');
   const [employeeQuery, setEmployeeQuery] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState<IKpiEmployee | null>(null);
@@ -113,6 +122,22 @@ export const DisciplineKpiModal: FC<IDisciplineKpiModalProps> = ({
     return departments.filter(d => d.name.toLowerCase().includes(q)).slice(0, 40);
   }, [departmentQuery, departments]);
 
+  const currentYear = new Date().getFullYear();
+  const yearOptions = useMemo(() => {
+    const selected = [periodStart, periodEnd].map(v => Number(v.slice(0, 4)));
+    const minYear = Math.min(currentYear, ...selected) - 2;
+    const maxYear = Math.max(currentYear, ...selected) + 1;
+    return Array.from({ length: maxYear - minYear + 1 }, (_, i) => minYear + i);
+  }, [periodStart, periodEnd, currentYear]);
+
+  const updatePeriod = (which: 'start' | 'end', part: 'month' | 'year', value: number): void => {
+    const setter = which === 'start' ? setPeriodStart : setPeriodEnd;
+    const current = which === 'start' ? periodStart : periodEnd;
+    const parts = getMonthParts(current);
+    setter(part === 'month' ? buildMonthValue(parts.year, value) : buildMonthValue(value, parts.month));
+    setResult(null);
+  };
+
   const toggleMetric = (key: KpiMetric): void => {
     setMetrics(prev => {
       const next = new Set(prev);
@@ -128,8 +153,9 @@ export const DisciplineKpiModal: FC<IDisciplineKpiModalProps> = ({
     scope,
     employeeId: scope === 'employee' ? selectedEmployee?.id : undefined,
     departmentId: scope === 'department' ? selectedDepartment?.id : undefined,
-    startMonth,
-    endMonth,
+    // Нормализуем порядок: getDisciplineKpi не свопает start/end для leave-запросов.
+    startMonth: periodStart <= periodEnd ? periodStart : periodEnd,
+    endMonth: periodStart <= periodEnd ? periodEnd : periodStart,
     metrics: [...metrics],
   });
 
@@ -264,7 +290,34 @@ export const DisciplineKpiModal: FC<IDisciplineKpiModalProps> = ({
             </div>
           </div>
 
-          <div className={styles.periodNote}>Период: {periodLabel}</div>
+          <div className={styles.field}>
+            <label className={styles.label}>Период</label>
+            <div className={styles.periodPicker}>
+              {(['start', 'end'] as const).map(which => {
+                const value = which === 'start' ? periodStart : periodEnd;
+                const parts = getMonthParts(value);
+                return (
+                  <div key={which} className={styles.periodRow}>
+                    <span className={styles.periodFrom}>{which === 'start' ? 'С' : 'По'}</span>
+                    <select
+                      className={styles.periodSelect}
+                      value={parts.month}
+                      onChange={e => updatePeriod(which, 'month', Number(e.target.value))}
+                    >
+                      {MONTH_NAMES.map((name, i) => <option key={i} value={i + 1}>{name}</option>)}
+                    </select>
+                    <select
+                      className={styles.periodSelect}
+                      value={parts.year}
+                      onChange={e => updatePeriod(which, 'year', Number(e.target.value))}
+                    >
+                      {yearOptions.map(year => <option key={year} value={year}>{year}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
           <button type="button" className={styles.collectBtn} onClick={() => { void handleCollect(); }} disabled={!canCollect || loading}>
             {loading ? 'Сбор…' : 'Собрать'}
