@@ -428,19 +428,6 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
         </div>
       )}
 
-      <div className="ts-corr-attachments ts-corr-attachments--popover">
-        <AttachmentList
-          attachments={attachments}
-          loading={attachmentsLoading}
-          urlLoader={loadUrl}
-          onDelete={readOnly ? undefined : onDeleteAttachment}
-          // Удаление — только своя служебка в редактируемом окне. Файлы корректировок и
-          // заявлений управляются в своих местах, здесь read-only.
-          canDelete={(att) => !readOnly && att.kind === 'weekend_memo'}
-          deletingId={deletingId}
-        />
-      </div>
-
       {!readOnly && (
         <div className="ts-memo-popover-actions">
           <button
@@ -460,6 +447,19 @@ const WeekendMemoPopover: FC<IWeekendMemoPopoverProps> = ({
           />
         </div>
       )}
+
+      <div className="ts-corr-attachments ts-corr-attachments--popover">
+        <AttachmentList
+          attachments={attachments}
+          loading={attachmentsLoading}
+          urlLoader={loadUrl}
+          onDelete={readOnly ? undefined : onDeleteAttachment}
+          // Удаление — только своя служебка в редактируемом окне. Файлы корректировок и
+          // заявлений управляются в своих местах, здесь read-only.
+          canDelete={(att) => !readOnly && att.kind === 'weekend_memo'}
+          deletingId={deletingId}
+        />
+      </div>
 
     </div>
   );
