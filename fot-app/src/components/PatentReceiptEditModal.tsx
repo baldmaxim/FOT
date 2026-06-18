@@ -8,6 +8,7 @@ import {
   type PaymentMethod,
 } from '../services/patentReceiptService';
 import { settingsService, type IOpenRouterModelInfo } from '../services/settingsService';
+import { useAuth } from '../contexts/AuthContext';
 import { ModalShell } from './ui/ModalShell';
 import styles from './PatentReceiptEditModal.module.css';
 
@@ -108,6 +109,8 @@ const formatAmount = (value: string): string => {
 const parseAmount = (value: string): string => value.replace(/\s+/g, '').replace(',', '.');
 
 export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved }) => {
+  const { canEditPage } = useAuth();
+  const canEdit = canEditPage('/admin/patent-receipts');
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['patent-receipt', receiptId],
@@ -207,21 +210,23 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
                 <div><span>Источник:</span> {data.source_type || '—'}</div>
                 {data.manually_edited && <div className={styles.manualTag}>Правлено вручную</div>}
               </div>
-              <div className={styles.recognizeBox}>
-                <select value={overrideModel} onChange={e => setOverrideModel(e.target.value)}>
-                  <option value="">По умолчанию ({orSettingsQuery.data?.model || '—'})</option>
-                  {(orSettingsQuery.data?.allowedModels || []).map((m: IOpenRouterModelInfo) => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </select>
-                <button
-                  className={styles.btnSecondary}
-                  onClick={() => recognizeMutation.mutate()}
-                  disabled={recognizeMutation.isPending}
-                >
-                  <RefreshCw size={14} /> {recognizeMutation.isPending ? 'Распознаём…' : 'Распознать заново'}
-                </button>
-              </div>
+              {canEdit && (
+                <div className={styles.recognizeBox}>
+                  <select value={overrideModel} onChange={e => setOverrideModel(e.target.value)}>
+                    <option value="">По умолчанию ({orSettingsQuery.data?.model || '—'})</option>
+                    {(orSettingsQuery.data?.allowedModels || []).map((m: IOpenRouterModelInfo) => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    className={styles.btnSecondary}
+                    onClick={() => recognizeMutation.mutate()}
+                    disabled={recognizeMutation.isPending}
+                  >
+                    <RefreshCw size={14} /> {recognizeMutation.isPending ? 'Распознаём…' : 'Распознать заново'}
+                  </button>
+                </div>
+              )}
               {recognizeMutation.isSuccess && recognizeMutation.data && !recognizeMutation.data.ok && (
                 <div className={styles.errorMsg}>Ошибка: {recognizeMutation.data.error}</div>
               )}
@@ -315,13 +320,15 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
           ) : (
             <>
               <button className={styles.btnSecondary} onClick={requestClose}>Закрыть</button>
-              <button
-                className={styles.btnPrimary}
-                onClick={() => setEditing(true)}
-                disabled={!form}
-              >
-                <Pencil size={14} /> Редактировать
-              </button>
+              {canEdit && (
+                <button
+                  className={styles.btnPrimary}
+                  onClick={() => setEditing(true)}
+                  disabled={!form}
+                >
+                  <Pencil size={14} /> Редактировать
+                </button>
+              )}
             </>
           )}
         </div>

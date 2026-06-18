@@ -19,6 +19,7 @@ import { employeeService } from '../../services/employeeService';
 import { PatentReceiptEditModal } from '../../components/PatentReceiptEditModal';
 import { MissingPatentReceiptsModal } from '../../components/MissingPatentReceiptsModal';
 import { useToast } from '../../contexts/ToastContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { ApiError } from '../../api/client';
 import styles from './PatentReceiptsPage.module.css';
 
@@ -71,6 +72,8 @@ const fioMismatches = (payerFio: string | null | undefined, employeeFio: string 
 
 export const PatentReceiptsPage: FC = () => {
   const toast = useToast();
+  const { canEditPage } = useAuth();
+  const canEdit = canEditPage('/admin/patent-receipts');
   const queryClient = useQueryClient();
   const [filterEmployeeId, setFilterEmployeeId] = useState<number | null>(null);
   const [filterFrom, setFilterFrom] = useState('');
@@ -236,9 +239,11 @@ export const PatentReceiptsPage: FC = () => {
           />
           <span>Только требующие проверки</span>
         </label>
-        <button className={styles.btnSecondary} onClick={() => setShowMissing(true)}>
-          <FileWarning size={14} /> Чеки не прикреплены
-        </button>
+        {canEdit && (
+          <button className={styles.btnSecondary} onClick={() => setShowMissing(true)}>
+            <FileWarning size={14} /> Чеки не прикреплены
+          </button>
+        )}
         <button className={styles.btnSecondary} onClick={() => setShowAdvanced(v => !v)}>
           {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />} Доп. фильтры
         </button>
@@ -345,7 +350,7 @@ export const PatentReceiptsPage: FC = () => {
                             <Eye size={14} />
                           </button>
                         )}
-                        {r.id !== null && (
+                        {canEdit && r.id !== null && (
                           <button
                             className={r.is_verified ? styles.iconBtnVerified : styles.iconBtn}
                             onClick={() => handleToggleVerified(r.id!, r.is_verified)}
@@ -355,7 +360,7 @@ export const PatentReceiptsPage: FC = () => {
                             <Check size={14} className={verifyingId === r.id ? styles.spin : undefined} />
                           </button>
                         )}
-                        {canRecognize && (
+                        {canEdit && canRecognize && (
                           <button
                             className={styles.iconBtn}
                             onClick={() => handleRecognize(r.document_id)}
@@ -365,14 +370,16 @@ export const PatentReceiptsPage: FC = () => {
                             <RefreshCw size={14} className={isRecognizing ? styles.spin : undefined} />
                           </button>
                         )}
-                        <button
-                          className={styles.iconBtnDanger}
-                          onClick={() => handleDelete(r.document_id)}
-                          disabled={deletingId === r.document_id}
-                          title="Удалить чек"
-                        >
-                          <Trash2 size={14} className={deletingId === r.document_id ? styles.spin : undefined} />
-                        </button>
+                        {canEdit && (
+                          <button
+                            className={styles.iconBtnDanger}
+                            onClick={() => handleDelete(r.document_id)}
+                            disabled={deletingId === r.document_id}
+                            title="Удалить чек"
+                          >
+                            <Trash2 size={14} className={deletingId === r.document_id ? styles.spin : undefined} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
