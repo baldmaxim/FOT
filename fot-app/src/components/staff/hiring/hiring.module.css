@@ -1,5 +1,9 @@
 /* ===== Доска ===== */
 .wrap { display: flex; flex-direction: column; gap: 14px; }
+/* Отступы для standalone-режима в ЛК (EmployeeLayout не пэддит контент). */
+.padded { padding: 24px 28px 32px; }
+@media (max-width: 600px) { .padded { padding: 16px; } }
+@media (max-width: 430px) { .padded { padding: 12px; } }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .toolbarLeft { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .viewSwitch { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }

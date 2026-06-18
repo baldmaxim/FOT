@@ -14,7 +14,12 @@ import styles from './hiring.module.css';
 
 export const HIRING_QK = ['hiring-requests'];
 
-export const HiringRequestsBoard: FC = () => {
+interface IHiringRequestsBoardProps {
+  /** Добавляет внешние отступы — для standalone-использования в ЛК (EmployeeLayout не пэддит контент). */
+  padded?: boolean;
+}
+
+export const HiringRequestsBoard: FC<IHiringRequestsBoardProps> = ({ padded = false }) => {
   const [stageFilter, setStageFilter] = useState<HiringStage | 'all'>('all');
   const [view, setView] = useState<'board' | 'analytics'>('board');
   const [createOpen, setCreateOpen] = useState(false);
@@ -46,7 +51,7 @@ export const HiringRequestsBoard: FC = () => {
 
   if (view === 'analytics') {
     return (
-      <div className={styles.wrap}>
+      <div className={`${styles.wrap}${padded ? ' ' + styles.padded : ''}`}>
         <div className={styles.toolbar}>
           <div className={styles.viewSwitch}>
             <button onClick={() => setView('board')}>Доска</button>
@@ -59,7 +64,7 @@ export const HiringRequestsBoard: FC = () => {
   }
 
   return (
-    <div className={styles.wrap}>
+    <div className={`${styles.wrap}${padded ? ' ' + styles.padded : ''}`}>
       <div className={styles.toolbar}>
         <div className={styles.toolbarLeft}>
           {caps.can_manage && (

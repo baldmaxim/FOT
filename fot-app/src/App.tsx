@@ -309,7 +309,7 @@ const AppRoutes = () => {
             path="/employee/hiring"
             element={
               <EmployeeLayout title="Заявки на поиск сотрудников">
-                <HiringRequestsBoard />
+                <HiringRequestsBoard padded />
               </EmployeeLayout>
             }
           />
