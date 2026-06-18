@@ -79,6 +79,26 @@ const isOwnerOrphan = (e: unknown): boolean => {
 const normalizeName = (value: unknown): string =>
   String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 
+/**
+ * Точное ли совпадение карты Sigur с декодированным W26 кандидата.
+ * Матчер `findCardByCandidates` ненадёжен: Sigur `?value=` делает ПРЕФИКСНЫЙ матч, а ключи
+ * включают «голый» номер без facility (`num.toString(16)`), из-за чего возвращается ЧУЖАЯ карта
+ * с другим value. Идентичность W26-карты — полный 3-байтовый value (facility+number),
+ * поэтому сверяем именно его (или нормализованный formattedValue, т.к. Sigur паддит facility).
+ */
+function isExactCardMatch(raw: Record<string, unknown>, decoded: ReturnType<typeof deriveCardW26>): boolean {
+  const norm = (s: string): string => s.toUpperCase().replace(/^0+/, '');
+  const value = norm(String(resolveField(raw, 'value', 'cardValue', 'card_value') ?? ''));
+  if (value && value === norm(decoded.value)) return true;
+
+  const normW26 = (s: string): string => {
+    const m = s.replace(/\s/g, '').match(/^(\d+),(\d+)$/);
+    return m ? `${Number(m[1])},${Number(m[2])}` : '';
+  };
+  const fmt = normW26(String(resolveField(raw, 'formattedValue', 'formatted_value') ?? ''));
+  return !!fmt && fmt === normW26(decoded.w26);
+}
+
 /** Политика перепривязки карты, если она уже привязана к ДРУГОМУ профилю Sigur. */
 export type CardReassignPolicy = 'always' | 'safe-only';
 
@@ -278,7 +298,10 @@ export async function assignSigurEmployeeCardBinding(
   const searchCandidates = [...new Set([...candidates, ...w26Forms])];
 
   const { matches } = await sigurService.findCardByCandidates(searchCandidates, connection);
-  const cards = matches.map(toCardSummary).filter((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
+  // Отбрасываем ложные частичные совпадения матчера: для W26 берём только карты с ТОЧНЫМ value.
+  // Иначе новый пластик ошибочно «привязывается» к карте другого сотрудника, а safe-only бросает конфликт.
+  const exactMatches = decoded ? matches.filter(m => isExactCardMatch(m, decoded!)) : matches;
+  const cards = exactMatches.map(toCardSummary).filter((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
   let card: NonNullable<ReturnType<typeof toCardSummary>> | undefined = cards[0];
 
   if (!card) {
@@ -298,7 +321,10 @@ export async function assignSigurEmployeeCardBinding(
     if (!card) {
       // POST /cards без распознаваемого id ИЛИ 422-дубль — перечитываем по value/W26.
       const refetched = await sigurService.findCardByCandidates([decoded.value, decoded.w26], connection);
-      card = refetched.matches.map(toCardSummary).find((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
+      card = refetched.matches
+        .filter(m => isExactCardMatch(m, decoded!))
+        .map(toCardSummary)
+        .find((c): c is NonNullable<ReturnType<typeof toCardSummary>> => !!c);
     }
     if (!card) {
       throw new Error(`Карта создана/уже существует, но не найдена в Sigur: value ${decoded.value}`);

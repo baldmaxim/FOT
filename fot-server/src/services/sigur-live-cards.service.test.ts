@@ -121,6 +121,26 @@ describe('assignSigurEmployeeCardBinding', () => {
     expect(sig.createEmployeeCardBinding).toHaveBeenCalled();
   });
 
+  it('ложное частичное совпадение (чужая карта с другим value) → игнор, создаётся новая карта', async () => {
+    // UID нового пластика → value 267876; матчер по «голому» номеру ошибочно вернул чужую карту 71A2C0.
+    const UID_NEW = '1826787600000000'; // deriveCardW26 → value 267876 (W26 38,30838)
+    const FOREIGN_CARD = { id: 15318, value: '71A2C0', format: 'W26', holder: { holderId: 137365, type: 'EMP' } };
+    const NEW_CARD = { id: 99001, value: '267876', format: 'W26' };
+    sig.findCardByCandidates = vi.fn(async () => ({ matches: [FOREIGN_CARD], tried: [], sample: [] }));
+    sig.createCard = vi.fn(async () => NEW_CARD);
+    sig.getCardBindings = vi.fn(async () => []); // новая карта свободна
+
+    const res = await assignSigurEmployeeCardBinding(500, [UID_NEW], undefined, 'external', true, {
+      expectedHolderName: 'Рахмонкулов Огабек Отабек Угли',
+      reassignPolicy: 'safe-only',
+    });
+
+    expect(sig.createCard).toHaveBeenCalledWith('267876', 'W26', 'external');
+    expect(sig.createEmployeeCardBinding).toHaveBeenCalledWith(500, 99001, expect.any(String), expect.any(String), 'external', 'W26');
+    expect(sig.deleteEmployeeCardBinding).not.toHaveBeenCalled();
+    expect(res.card.cardId).toBe(99001);
+  });
+
   it('createCard вернул 422 (гонка/дубль) → refetch по W26 и привязка', async () => {
     sig.findCardByCandidates = vi.fn()
       .mockResolvedValueOnce({ matches: [], tried: [], sample: [] }) // первичный поиск — пусто
