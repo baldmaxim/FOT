@@ -33,12 +33,13 @@ vi.mock('../services/hiring-access.service.js', () => ({
   isHiringRequesterRole: (code: string) => code === 'manager' || code === 'manager_obj',
 }));
 
-const { userIdsByEmp, createMany, sendPush } = vi.hoisted(() => ({
+const { userIdsByEmp, empUserId, createMany, sendPush } = vi.hoisted(() => ({
   userIdsByEmp: vi.fn(async () => [] as string[]),
+  empUserId: vi.fn(async () => null as string | null),
   createMany: vi.fn(async () => undefined),
   sendPush: vi.fn(async () => undefined),
 }));
-vi.mock('../services/recipients.service.js', () => ({ getUserIdsByEmployeeIds: userIdsByEmp }));
+vi.mock('../services/recipients.service.js', () => ({ getUserIdsByEmployeeIds: userIdsByEmp, getEmployeeUserId: empUserId }));
 vi.mock('../services/notification.service.js', () => ({ notificationService: { createMany } }));
 vi.mock('../services/push.service.js', () => ({ pushService: { sendGenericNotification: sendPush } }));
 
@@ -67,7 +68,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mgr.mockResolvedValue(false); recruiter.mockResolvedValue(false);
   assignees.mockResolvedValue([]); pageView.mockResolvedValue(false);
-  hrManagers.mockResolvedValue([]); userIdsByEmp.mockResolvedValue([]);
+  hrManagers.mockResolvedValue([]); userIdsByEmp.mockResolvedValue([]); empUserId.mockResolvedValue(null);
   pgQuery.mockResolvedValue([]); pgQueryOne.mockResolvedValue(null); pgExecute.mockResolvedValue(1);
 });
 
@@ -206,6 +207,31 @@ describe('addAssignee', () => {
     const res = makeRes();
     await c.addAssignee(makeReq({ params: { id: '1' }, body: { employee_id: 77 } }), res);
     expect(res._status).toBe(400);
+  });
+  it('уведомляет назначенного рекрутера (type=hiring_request_assigned)', async () => {
+    mgr.mockResolvedValue(true);
+    recruiter.mockResolvedValue(true);
+    empUserId.mockResolvedValue('rec-user');
+    pgQueryOne.mockResolvedValueOnce({ position_title: 'Прораб' }); // SELECT position_title
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    const res = makeRes();
+    await c.addAssignee(makeReq({ user: { employee_id: 10 }, params: { id: '1' }, body: { employee_id: 77 } }), res);
+    await new Promise(r => setImmediate(r));
+    expect(res._json).toMatchObject({ success: true });
+    expect(empUserId).toHaveBeenCalledWith(77);
+    const items = createMany.mock.calls[0][0] as Array<{ userId: string; type: string }>;
+    expect(items).toEqual([expect.objectContaining({ userId: 'rec-user', type: 'hiring_request_assigned' })]);
+    expect(sendPush).toHaveBeenCalledTimes(1);
+  });
+  it('не уведомляет, если рекрутер назначил сам себя', async () => {
+    mgr.mockResolvedValue(true);
+    recruiter.mockResolvedValue(true);
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    const res = makeRes();
+    await c.addAssignee(makeReq({ user: { employee_id: 77 }, params: { id: '1' }, body: { employee_id: 77 } }), res);
+    await new Promise(r => setImmediate(r));
+    expect(empUserId).not.toHaveBeenCalled();
+    expect(createMany).not.toHaveBeenCalled();
   });
 });
 

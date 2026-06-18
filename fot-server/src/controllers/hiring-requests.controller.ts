@@ -10,7 +10,7 @@ import {
   getHiringManagerEmployeeIds,
   isHiringRequesterRole,
 } from '../services/hiring-access.service.js';
-import { getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+import { getUserIdsByEmployeeIds, getEmployeeUserId } from '../services/recipients.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -365,6 +365,24 @@ const addAssignee = async (req: AuthenticatedRequest, res: Response): Promise<vo
     );
   });
   await logEvent(id, req.user.id, 'assign', { body: `Назначен ответственный (employee #${employeeId})` });
+
+  // Оповещение назначенного рекрутера — fire-and-forget.
+  void (async () => {
+    if (employeeId === req.user.employee_id) return; // сам себя не уведомляет
+    const userId = await getEmployeeUserId(employeeId);
+    if (!userId) return;
+    const reqRow = await queryOne<{ position_title: string }>(
+      `SELECT position_title FROM hiring_requests WHERE id = $1`, [id],
+    );
+    const title = 'Назначена заявка на подбор';
+    const body = `Вас назначили ответственным по заявке: ${reqRow?.position_title ?? `#${id}`}`;
+    const path = '/staff-control?tab=hiring';
+    await notificationService.createMany([{
+      userId, type: 'hiring_request_assigned', title, body, metadata: { requestId: id, path },
+    }]);
+    await pushService.sendGenericNotification([userId], title, body, { path, requestId: id });
+  })().catch(e => console.error('hiring-assign notify error:', e));
+
   res.json({ success: true });
 };
 
