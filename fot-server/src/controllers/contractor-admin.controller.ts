@@ -1391,7 +1391,10 @@ export const contractorAdminController = {
                 { name: pass.holder_name, blocked: false },
                 connection,
               );
-              if (resolvedIds.length > 0) {
+              // Пустой выбор точек → очищаем все (resolvedIds=[]). Непустой с сопоставленными →
+              // ставим ровно их. Непустой, но всё не сопоставилось (names>0, resolvedIds=0) →
+              // НЕ трогаем текущие, остаётся только warning выше.
+              if (names.length === 0 || resolvedIds.length > 0) {
                 await replaceSigurEmployeeAccessPoints(pass.sigur_employee_id, resolvedIds, connection);
               }
             }

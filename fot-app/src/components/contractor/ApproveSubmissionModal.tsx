@@ -117,9 +117,6 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   const [batchId, setBatchId] = useState<string | null>(null);
   const [duplicates, setDuplicates] = useState<IDuplicateRow[]>([]);
   const [blockingKey, setBlockingKey] = useState<number | null>(null);
-  // Усиленное подтверждение увольнения штатного дубля.
-  const [staffConfirm, setStaffConfirm] = useState<IDuplicateRow | null>(null);
-  const [confirmText, setConfirmText] = useState('');
 
   // Предзаполнение при загрузке деталей.
   useEffect(() => {
@@ -291,8 +288,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
 
   const handleBlockClick = (row: IDuplicateRow) => {
     if (row.source === 'employee') {
-      setStaffConfirm(row);
-      setConfirmText('');
+      void runBlock(row); // увольнение сразу, без подтверждения
       return;
     }
     const what = row.card_uid ? 'возвращён в пул' : 'удалён';
@@ -656,7 +652,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                             onClick={() => handleBlockClick(d)}
                             disabled={blockingKey === d.sigur_employee_id}
                           >
-                            Заблокировать
+                            Уволить
                           </button>
                         </td>
                       </tr>
@@ -672,48 +668,6 @@ export const ApproveSubmissionModal: FC<IProps> = ({
               <button className="btn-primary" onClick={onApplied} disabled={blockingKey !== null}>
                 Готово
               </button>
-            </div>
-          </div>
-        )}
-
-        {staffConfirm && (
-          <div
-            className={styles.overlay}
-            onMouseDown={e => { if (e.target === e.currentTarget) setStaffConfirm(null); }}
-          >
-            <div className={styles.modal} style={{ maxWidth: 460 }}>
-              <h2 className={styles.modalTitle}>Уволить штатного сотрудника?</h2>
-              <div className={styles.statusNote} style={{ marginBottom: 8 }}>
-                {staffConfirm.full_name} — {staffConfirm.place_name ?? 'отдел не указан'} (ID {staffConfirm.employee_id ?? '—'}).
-                <br />
-                Сотрудник будет заблокирован в Sigur и перенесён в «Уволенные».
-                Точное совпадение ФИО не гарантирует, что это тот же человек.
-              </div>
-              <div className={styles.field}>
-                <span className={styles.label}>Для подтверждения введите слово «УВОЛИТЬ»</span>
-                <input
-                  className={styles.input}
-                  value={confirmText}
-                  onChange={e => setConfirmText(e.target.value)}
-                  placeholder="УВОЛИТЬ"
-                />
-              </div>
-              <div className={styles.modalActions}>
-                <button className="btn-secondary" onClick={() => setStaffConfirm(null)}>
-                  Отмена
-                </button>
-                <button
-                  className="btn-primary"
-                  disabled={confirmText.trim() !== 'УВОЛИТЬ' || blockingKey !== null}
-                  onClick={() => {
-                    const row = staffConfirm;
-                    setStaffConfirm(null);
-                    void runBlock(row);
-                  }}
-                >
-                  Уволить
-                </button>
-              </div>
             </div>
           </div>
         )}

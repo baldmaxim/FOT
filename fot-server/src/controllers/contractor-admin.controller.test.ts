@@ -423,6 +423,50 @@ describe('contractorAdminController.decideSubmission — срок действи
     const insertCall = h.queryOne.mock.calls.find(c => String(c[0]).includes('contractor_activation_batches'));
     expect(insertCall?.[1]?.[2]).toEqual([11]);
   });
+
+  it('пустой выбор точек → replaceAP вызван с [] (очистка всех точек)', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
+      .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+    ]);
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved', access_point_names: [], expires_at: '2027-01-15' }] }),
+      res as never,
+    );
+
+    expect(h.resolveAP).not.toHaveBeenCalled();
+    expect(h.replaceAP).toHaveBeenCalledWith(11, [], 'external');
+    const body = res.body as { data: { applied: number } };
+    expect(body.data.applied).toBe(1);
+  });
+
+  it('непустой выбор, всё не сопоставилось → replaceAP не вызван, текущие точки не снимаются', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
+      .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+    ]);
+    h.resolveAP.mockResolvedValue({ accessPointIds: [], unmatchedNames: ['КПП X'] });
+
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeDecideReq({ decisions: [{ pass_id: PASS_ID, decision: 'approved', access_point_names: ['КПП X'], expires_at: '2027-01-15' }] }),
+      res as never,
+    );
+
+    expect(h.resolveAP).toHaveBeenCalledWith(['КПП X'], 'external');
+    expect(h.replaceAP).not.toHaveBeenCalled();
+    const body = res.body as { data: { applied: number; warnings: string[] } };
+    expect(body.data.applied).toBe(1);
+    expect(body.data.warnings.some(w => w.includes('КПП X'))).toBe(true);
+  });
 });
 
 describe('contractorAdminController.blockDuplicate', () => {
