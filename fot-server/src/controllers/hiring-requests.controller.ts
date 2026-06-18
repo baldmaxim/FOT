@@ -7,8 +7,12 @@ import {
   isHiringManagerByEmployee,
   isRecruiter,
   getActiveAssigneeEmployeeIds,
+  getHiringManagerEmployeeIds,
   isHiringRequesterRole,
 } from '../services/hiring-access.service.js';
+import { getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+import { notificationService } from '../services/notification.service.js';
+import { pushService } from '../services/push.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 type MulterRequest = AuthenticatedRequest & { file?: { originalname: string; buffer: Buffer; size: number; mimetype: string } };
@@ -200,7 +204,34 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       b.software ?? null, b.gender ?? null, b.salary_level ?? null, null,
     ],
   );
-  res.status(201).json({ success: true, data: { id: row?.id } });
+  const requestId = row?.id;
+  // Оповещение руководителя(ей) отдела кадров о новой заявке — fire-and-forget,
+  // сбой уведомления не должен ломать создание заявки.
+  if (requestId) {
+    void (async () => {
+      const mgrEmpIds = (await getHiringManagerEmployeeIds())
+        .filter(eid => eid !== req.user.employee_id); // самого автора не уведомляем
+      if (mgrEmpIds.length === 0) return;
+      const userIds = await getUserIdsByEmployeeIds(mgrEmpIds);
+      if (userIds.length === 0) return;
+
+      const title = 'Новая заявка на подбор';
+      const body = `${authorName ?? 'Сотрудник'} подал заявку: ${b.position_title}`
+        + (b.headcount && b.headcount > 1 ? ` (${b.headcount} чел.)` : '');
+      const path = '/staff-control?tab=hiring';
+
+      await notificationService.createMany(userIds.map(userId => ({
+        userId,
+        type: 'hiring_request',
+        title,
+        body,
+        metadata: { requestId, path },
+      })));
+      await pushService.sendGenericNotification(userIds, title, body, { path, requestId });
+    })().catch(e => console.error('hiring-request notify error:', e));
+  }
+
+  res.status(201).json({ success: true, data: { id: requestId } });
 };
 
 const updateFields = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

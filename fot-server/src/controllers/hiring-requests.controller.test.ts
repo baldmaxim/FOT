@@ -16,20 +16,31 @@ vi.mock('../config/postgres.js', () => ({
   query: pgQuery, queryOne: pgQueryOne, execute: pgExecute, withTransaction: pgTx,
 }));
 
-const { mgr, recruiter, assignees, autoAccess } = vi.hoisted(() => ({
+const { mgr, recruiter, assignees, autoAccess, hrManagers } = vi.hoisted(() => ({
   mgr: vi.fn(async () => false),
   recruiter: vi.fn(async () => false),
   assignees: vi.fn(async () => [] as number[]),
   autoAccess: vi.fn(async () => true),
+  hrManagers: vi.fn(async () => [] as number[]),
 }));
 vi.mock('../services/hiring-access.service.js', () => ({
   isHiringManagerByEmployee: mgr,
   isRecruiter: recruiter,
   getActiveAssigneeEmployeeIds: assignees,
+  getHiringManagerEmployeeIds: hrManagers,
   hasActiveHiringAssignment: vi.fn(async () => false),
   hasHiringAutoAccess: autoAccess,
   isHiringRequesterRole: (code: string) => code === 'manager' || code === 'manager_obj',
 }));
+
+const { userIdsByEmp, createMany, sendPush } = vi.hoisted(() => ({
+  userIdsByEmp: vi.fn(async () => [] as string[]),
+  createMany: vi.fn(async () => undefined),
+  sendPush: vi.fn(async () => undefined),
+}));
+vi.mock('../services/recipients.service.js', () => ({ getUserIdsByEmployeeIds: userIdsByEmp }));
+vi.mock('../services/notification.service.js', () => ({ notificationService: { createMany } }));
+vi.mock('../services/push.service.js', () => ({ pushService: { sendGenericNotification: sendPush } }));
 
 const { pageView } = vi.hoisted(() => ({ pageView: vi.fn(async () => false) }));
 vi.mock('../services/access-control.service.js', () => ({ hasPageView: pageView }));
@@ -56,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mgr.mockResolvedValue(false); recruiter.mockResolvedValue(false);
   assignees.mockResolvedValue([]); pageView.mockResolvedValue(false);
+  hrManagers.mockResolvedValue([]); userIdsByEmp.mockResolvedValue([]);
   pgQuery.mockResolvedValue([]); pgQueryOne.mockResolvedValue(null); pgExecute.mockResolvedValue(1);
 });
 
@@ -92,6 +104,28 @@ describe('create', () => {
     expect(insertParams[4]).toBe('Иванов И.И.'); // customer_name = ФИО автора
     expect(insertParams[6]).toBeNull();           // start_work_date → COALESCE CURRENT_DATE
     expect(insertParams[14]).toBeNull();          // hh_vacancy_url игнорируется при create
+  });
+  it('уведомляет руководителя ОК (type=hiring_request), исключая автора', async () => {
+    hrManagers.mockResolvedValue([10, 20]); // 10 — сам автор, 20 — другой руководитель ОК
+    userIdsByEmp.mockResolvedValue(['hr-user']);
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: 'd1', full_name: 'Иванов И.И.' }).mockResolvedValueOnce({ id: 7 });
+    const res = makeRes();
+    await c.create(makeReq({ user: { role_code: 'manager', employee_id: 10 }, body: { position_title: 'Прораб', headcount: 2 } }), res);
+    await new Promise(r => setImmediate(r)); // дождаться fire-and-forget оповещения
+    expect(userIdsByEmp).toHaveBeenCalledWith([20]); // автор (10) исключён
+    expect(createMany).toHaveBeenCalledTimes(1);
+    const items = createMany.mock.calls[0][0] as Array<{ userId: string; type: string }>;
+    expect(items).toEqual([expect.objectContaining({ userId: 'hr-user', type: 'hiring_request' })]);
+    expect(sendPush).toHaveBeenCalledTimes(1);
+  });
+  it('не шлёт уведомление, если руководителей ОК нет', async () => {
+    hrManagers.mockResolvedValue([]);
+    pgQueryOne.mockResolvedValueOnce({ org_department_id: 'd1', full_name: 'Иванов И.И.' }).mockResolvedValueOnce({ id: 8 });
+    const res = makeRes();
+    await c.create(makeReq({ user: { role_code: 'manager' }, body: { position_title: 'Прораб' } }), res);
+    await new Promise(r => setImmediate(r));
+    expect(createMany).not.toHaveBeenCalled();
+    expect(sendPush).not.toHaveBeenCalled();
   });
 });
 

@@ -36,6 +36,21 @@ export async function isHiringManagerByEmployee(employeeId: number | null | unde
   return rows.length > 0;
 }
 
+/**
+ * Список employee_id всех руководителей отдела кадров (по должности).
+ * Используется для оповещения о новых заявках на подбор.
+ */
+export async function getHiringManagerEmployeeIds(): Promise<number[]> {
+  const rows = await query<{ id: number }>(
+    `SELECT e.id
+       FROM employees e
+       JOIN positions p ON p.id = e.position_id
+      WHERE lower(p.name) ~ $1`,
+    [HR_HEAD_POSITION_REGEX],
+  );
+  return rows.map(r => Number(r.id));
+}
+
 export async function isRecruiter(employeeId: number | null | undefined): Promise<boolean> {
   if (!employeeId) return false;
   const rows = await query<{ ok: boolean }>(
