@@ -168,25 +168,27 @@ export const WeekendApprovalsPreviewModal: FC<IProps> = ({ period, onClose }) =>
               <span className="wap-readonly-note">Режим только чтения</span>
             </div>
 
-            {query.isLoading ? (
-              <div className="approvals-empty">Загрузка…</div>
-            ) : query.isError ? (
-              <div className="approvals-empty">Ошибка загрузки</div>
-            ) : groups.length === 0 ? (
-              <div className="approvals-empty">
-                {isHistory ? 'В истории за период ничего нет' : 'Нет заявок по выходным за период'}
-              </div>
-            ) : (
-              groups.map(group => (
-                <ResponsibleSection
-                  key={group.responsible_employee_id ?? 'unassigned'}
-                  group={group}
-                  isHistory={isHistory}
-                  isMobile={isMobile}
-                  onOpenTimesheet={openTimesheet}
-                />
-              ))
-            )}
+            <div className="wap-list">
+              {query.isLoading ? (
+                <div className="approvals-empty">Загрузка…</div>
+              ) : query.isError ? (
+                <div className="approvals-empty">Ошибка загрузки</div>
+              ) : groups.length === 0 ? (
+                <div className="approvals-empty">
+                  {isHistory ? 'В истории за период ничего нет' : 'Нет заявок по выходным за период'}
+                </div>
+              ) : (
+                groups.map(group => (
+                  <ResponsibleSection
+                    key={group.responsible_employee_id ?? 'unassigned'}
+                    group={group}
+                    isHistory={isHistory}
+                    isMobile={isMobile}
+                    onOpenTimesheet={openTimesheet}
+                  />
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>

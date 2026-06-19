@@ -5,6 +5,10 @@
   max-height: min(88dvh, 920px);
 }
 
+.wap-modal .approvals-modal-header {
+  flex-shrink: 0;
+}
+
 .wap-body {
   flex: 1;
   min-height: 0;
@@ -12,7 +16,15 @@
   flex-direction: column;
   gap: 14px;
   padding: 14px 18px;
+}
+
+.wap-list {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .wap-topbar {
@@ -21,11 +33,7 @@
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  position: sticky;
-  top: -14px;
-  z-index: 1;
-  background: var(--bg-secondary, var(--bg-primary));
-  padding-top: 2px;
+  flex-shrink: 0;
 }
 
 .wap-readonly-note {
