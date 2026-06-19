@@ -2,11 +2,12 @@ import { useMemo, useRef, useState, type FC } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   hiringRequestService, FUNNEL_KEYS, stageMeta, CANDIDATE_STATUS_META,
-  type HiringStage, type IHiringCandidate,
+  type HiringStage, type IHiringCandidate, type IHiringFile,
 } from '../../../services/hiringRequestService';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useToast } from '../../../contexts/ToastContext';
 import { ApiError } from '../../../api/client';
+import { FilePreviewModal } from '../../documents/FilePreviewModal';
 import { Avatar, pluralDays, fmtDate } from './hiringUi';
 import { HiringRequestCreateModal } from './HiringRequestCreateModal';
 import { HIRING_QK } from './HiringRequestsBoard';
@@ -47,6 +48,7 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
   const commentMut = useMutation({ mutationFn: (body: string) => hiringRequestService.addComment(requestId, body), onSuccess: invalidate, onError: onErr });
   const vacancyMut = useMutation({ mutationFn: (url: string) => hiringRequestService.update(requestId, { hh_vacancy_url: url || null }), onSuccess: () => { invalidate(); toast.success('Ссылка на вакансию сохранена'); setVacEdit(null); }, onError: onErr });
   const fileMut = useMutation({ mutationFn: (file: File) => hiringRequestService.uploadFile(requestId, file), onSuccess: () => { invalidate(); toast.success('Файл прикреплён'); }, onError: onErr });
+  const deleteFileMut = useMutation({ mutationFn: (fileId: number) => hiringRequestService.deleteFile(requestId, fileId), onSuccess: () => { invalidate(); toast.success('Файл удалён'); }, onError: onErr });
 
   const canWork = useMemo(() => {
     if (!r) return false;
@@ -59,6 +61,7 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
 
   const [comment, setComment] = useState('');
   const [vacEdit, setVacEdit] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<IHiringFile | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (isLoading || !r) {
@@ -222,8 +225,12 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
             {r.files.map(f => (
               <div key={f.id} className={styles.file}>
                 <span className={styles.ic}>📄</span>
-                <span className={styles.nm}>{f.file_name}</span>
-                <button className={styles.hh} onClick={async () => { try { const url = await hiringRequestService.getFileDownloadUrl(requestId, f.id); window.open(url, '_blank'); } catch (e) { onErr(e); } }}>↓</button>
+                <span className={styles.nm} style={{ cursor: 'pointer' }} title="Просмотреть" onClick={() => setPreviewFile(f)}>{f.file_name}</span>
+                <button className={styles.hh} title="Скачать" onClick={async () => { try { const url = await hiringRequestService.getFileDownloadUrl(requestId, f.id, 'attachment'); window.open(url, '_blank'); } catch (e) { onErr(e); } }}>↓</button>
+                {canWork && (
+                  <button className={`${styles.mini} ${styles.no}`} title="Удалить" disabled={deleteFileMut.isPending}
+                    onClick={() => { if (window.confirm(`Удалить файл «${f.file_name}»?`)) deleteFileMut.mutate(f.id); }}>✕</button>
+                )}
               </div>
             ))}
             {canWork && <>
@@ -278,6 +285,14 @@ export const HiringRequestPanel: FC<IProps> = ({ requestId, canManage: canManage
 
       {rejectOpen && <RejectModal requestId={requestId} onClose={() => setRejectOpen(false)} onDone={invalidate} />}
       {editOpen && <HiringRequestCreateModal request={r} onClose={() => { setEditOpen(false); invalidate(); }} />}
+      {previewFile && (
+        <FilePreviewModal
+          fileName={previewFile.file_name}
+          mimeType={previewFile.mime_type}
+          urlLoader={(d) => hiringRequestService.getFileDownloadUrl(requestId, previewFile.id, d)}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
     </>
   );
 };

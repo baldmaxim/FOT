@@ -172,8 +172,8 @@ export const hiringRequestService = {
     if (candidateId) form.append('candidate_id', String(candidateId));
     return apiClient.post(`/hiring-requests/${id}/files`, form);
   },
-  getFileDownloadUrl: async (id: number, fileId: number) => {
-    const res = await apiClient.get<{ data: { url: string } }>(`/hiring-requests/${id}/files/${fileId}/download`);
+  getFileDownloadUrl: async (id: number, fileId: number, disposition: 'inline' | 'attachment' = 'attachment') => {
+    const res = await apiClient.get<{ data: { url: string } }>(`/hiring-requests/${id}/files/${fileId}/download?disposition=${disposition}`);
     return res.data.url;
   },
   deleteFile: async (id: number, fileId: number) =>

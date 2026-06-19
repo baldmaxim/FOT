@@ -11,6 +11,8 @@ import {
   isHiringRequesterRole,
 } from '../services/hiring-access.service.js';
 import { getUserIdsByEmployeeIds, getEmployeeUserId } from '../services/recipients.service.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
+import { sanitizeFileName } from '../utils/file-validation.utils.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { getIo } from '../socket/io-instance.js';
@@ -656,15 +658,16 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
   if (!(await r2Service.isEnabledAsync())) { res.status(503).json({ success: false, error: 'R2 хранилище не настроено' }); return; }
   if (!req.file) { res.status(400).json({ success: false, error: 'Файл обязателен' }); return; }
   const candidateId = req.body?.candidate_id ? Number(req.body.candidate_id) : null;
-  const r2Key = r2Service.generateHiringRequestKey(id, req.file.originalname);
+  const fileName = sanitizeFileName(decodeMulterFilename(req.file.originalname));
+  const r2Key = r2Service.generateHiringRequestKey(id, fileName);
   await r2Service.uploadObject(r2Key, req.file.buffer, req.file.mimetype);
   try {
     const row = await queryOne<{ id: number }>(
       `INSERT INTO hiring_request_files (request_id, candidate_id, r2_key, file_name, file_size, mime_type, uploaded_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-      [id, candidateId, r2Key, req.file.originalname, req.file.size, req.file.mimetype, req.user.id],
+      [id, candidateId, r2Key, fileName, req.file.size, req.file.mimetype, req.user.id],
     );
-    await logEvent(id, req.user.id, 'file', { body: `Прикреплён файл: ${req.file.originalname}` });
+    await logEvent(id, req.user.id, 'file', { body: `Прикреплён файл: ${fileName}` });
     res.status(201).json({ success: true, data: { id: row?.id } });
   } catch (err) {
     try { await r2Service.deleteObject(r2Key); } catch { /* best-effort */ }
@@ -686,7 +689,8 @@ const downloadFile = async (req: AuthenticatedRequest, res: Response): Promise<v
     `SELECT r2_key, file_name FROM hiring_request_files WHERE id = $1 AND request_id = $2`, [fileId, id],
   );
   if (!file) { res.status(404).json({ success: false, error: 'Файл не найден' }); return; }
-  const url = await r2Service.generateDownloadUrl(file.r2_key, file.file_name);
+  const disposition = req.query.disposition === 'inline' ? 'inline' : 'attachment';
+  const url = await r2Service.generateDownloadUrl(file.r2_key, file.file_name, disposition);
   res.json({ success: true, data: { url } });
 };
 
