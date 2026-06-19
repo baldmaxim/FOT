@@ -34,7 +34,7 @@ export const FeedbackCard: FC = () => {
   return (
     <div className={styles.card}>
       <div className={styles.header}>
-        <h3 className={styles.title}>Обратная связь</h3>
+        <h3 className={styles.title}>Обратная связь по работе компании</h3>
       </div>
 
       <select
@@ -51,7 +51,7 @@ export const FeedbackCard: FC = () => {
         value={text}
         onChange={e => setText(e.target.value)}
         placeholder={kind === 'suggestion'
-          ? 'Опишите, что можно улучшить...'
+          ? 'Опишите, что можно улучшить в вашей работе, работе вашего или смежного отдела...'
           : 'Опишите проблему или жалобу...'}
         maxLength={MAX_LEN}
       />
