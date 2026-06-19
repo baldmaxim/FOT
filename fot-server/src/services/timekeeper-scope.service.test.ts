@@ -16,6 +16,7 @@ import {
   resolveTimekeeperDepartmentSeeds,
   resolveTimekeeperDirectEmployeeIds,
   resolveTimekeeperObjectIds,
+  TIMEKEEPER_PRESENCE_WINDOW_DAYS,
 } from './timekeeper-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -68,6 +69,21 @@ describe('listTimekeeperDepartmentSeeds', () => {
     const [, params] = pgQuery.mock.calls[1];
     expect(params).toEqual(['tk-1', ['folder-1']]);
   });
+
+  it('present считает обе ветки: ручную привязку И фактические проходы СКУД (окно)', async () => {
+    pgQuery
+      .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
+      .mockResolvedValueOnce([{ id: 'br-A' }]); // present ∩ folder_desc
+    await listTimekeeperDepartmentSeeds('tk-1');
+    const [sql] = pgQuery.mock.calls[1];
+    expect(sql).toContain('employee_skud_object_access'); // ветка B (ручная)
+    expect(sql).toContain('skud_object_access_points'); // ветка A (проходы)
+    expect(sql).toContain('skud_events');
+    expect(sql).toContain('UNION');
+    expect(sql).toContain(`INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days'`);
+    // гейт по папкам сохранён
+    expect(sql).toContain('folder_desc');
+  });
 });
 
 describe('listTimekeeperDirectEmployeeIds', () => {
@@ -81,13 +97,16 @@ describe('listTimekeeperDirectEmployeeIds', () => {
     expect(ids).toEqual([10, 20]);
   });
 
-  it('берёт сотрудников из обоих источников: явных назначений и места работы СКУД', async () => {
+  it('берёт сотрудников из трёх источников: явных назначений, места работы СКУД и фактических проходов', async () => {
     pgQuery.mockResolvedValue([{ employee_id: 5 }]);
     await listTimekeeperDirectEmployeeIds('tk-1');
     const [sql, params] = pgQuery.mock.calls[0];
     expect(sql).toContain('employee_object_assignment');
     expect(sql).toContain('employee_skud_object_access');
-    expect(sql).toContain('UNION');
+    expect(sql).toContain('skud_object_access_points');
+    expect(sql).toContain('skud_events');
+    expect(sql).toContain(`INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days'`);
+    expect(sql.match(/UNION/g)?.length).toBe(2); // три источника → два UNION
     expect(params).toEqual(['tk-1']);
   });
 });

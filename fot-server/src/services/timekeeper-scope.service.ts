@@ -14,6 +14,14 @@ import { query } from '../config/postgres.js';
 
 export const TIMEKEEPER_ROLE_CODE = 'timekeeper';
 
+/**
+ * Окно (в днях) для ветки «присутствие по фактическим проходам СКУД».
+ * Бригада/сотрудник считаются присутствующими на объекте табельщицы, если за
+ * последние N дней были проходы через проходные этого объекта. Согласовано с
+ * прецедентом listSelectableObjectsForEmployee (employee-skud-object-access.service.ts).
+ */
+export const TIMEKEEPER_PRESENCE_WINDOW_DAYS = 90;
+
 export function isTimekeeper(req: AuthenticatedRequest): boolean {
   return req.user.role_code === TIMEKEEPER_ROLE_CODE;
 }
@@ -31,8 +39,11 @@ export async function resolveTimekeeperObjectIds(timekeeperUserId: string): Prom
 
 /**
  * Видимые табельщице бригады = ПЕРЕСЕЧЕНИЕ:
- *   - «присутствуют на её объектах»: бригады, где есть работники с её объектов
- *     (timekeeper_object_access → employee_skud_object_access → employee_department_access, kind='brigade');
+ *   - «присутствуют на её объектах» (две ветки, объединяются UNION):
+ *       (B) ручная привязка «место работы» — employee_skud_object_access;
+ *       (A) фактические проходы СКУД за последние TIMEKEEPER_PRESENCE_WINDOW_DAYS дней —
+ *           skud_events → skud_object_access_points (как в табеле «По объектам»).
+ *     В обеих ветках бригада берётся из employee_department_access (kind='brigade');
  *   - «входят в выбранные папки»: поддерево timekeeper_folder_access (get_descendant_department_ids).
  * Папки не выбраны → пусто (строго): табельщица не видит никого.
  *
@@ -54,12 +65,25 @@ export async function listTimekeeperDepartmentSeeds(timekeeperUserId: string): P
        SELECT id FROM public.get_descendant_department_ids($2::uuid[])
      ),
      present AS (
+       -- (B) ручная привязка «место работы»
        SELECT DISTINCT eda.department_id AS id
          FROM timekeeper_object_access toa
          JOIN employee_skud_object_access esoa
            ON esoa.skud_object_id = toa.skud_object_id AND esoa.is_active = true
          JOIN employee_department_access eda
            ON eda.employee_id = esoa.employee_id AND eda.is_active = true
+         JOIN org_departments d ON d.id = eda.department_id AND d.kind = 'brigade'
+        WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
+       UNION
+       -- (A) фактические проходы СКУД на объекты табельщицы за окно
+       SELECT DISTINCT eda.department_id AS id
+         FROM timekeeper_object_access toa
+         JOIN skud_object_access_points sap ON sap.object_id = toa.skud_object_id
+         JOIN skud_events se
+           ON BTRIM(se.access_point) = BTRIM(sap.access_point_name)
+          AND se.event_date >= (CURRENT_DATE - INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days')
+         JOIN employee_department_access eda
+           ON eda.employee_id = se.employee_id AND eda.is_active = true
          JOIN org_departments d ON d.id = eda.department_id AND d.kind = 'brigade'
         WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
      )
@@ -97,8 +121,11 @@ export async function listTimekeeperAccessibleDepartmentIds(timekeeperUserId: st
 }
 
 /**
- * Сотрудники объектов табельщицы: назначенные ЯВНО (employee_object_assignment)
- * + те, у кого её объекты указаны как место работы СКУД (employee_skud_object_access).
+ * Сотрудники объектов табельщицы из трёх источников:
+ *   - назначенные ЯВНО (employee_object_assignment);
+ *   - место работы СКУД (employee_skud_object_access);
+ *   - фактические проходы СКУД за последние TIMEKEEPER_PRESENCE_WINDOW_DAYS дней
+ *     (skud_events → skud_object_access_points).
  * По user_id, без req-кэша — для использования вне запроса (buildProfileResponse).
  */
 export async function listTimekeeperDirectEmployeeIds(timekeeperUserId: string): Promise<number[]> {
@@ -114,6 +141,14 @@ export async function listTimekeeperDirectEmployeeIds(timekeeperUserId: string):
          FROM timekeeper_object_access toa
          JOIN employee_skud_object_access esoa
            ON esoa.skud_object_id = toa.skud_object_id AND esoa.is_active = true
+        WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
+       UNION
+       SELECT se.employee_id
+         FROM timekeeper_object_access toa
+         JOIN skud_object_access_points sap ON sap.object_id = toa.skud_object_id
+         JOIN skud_events se
+           ON BTRIM(se.access_point) = BTRIM(sap.access_point_name)
+          AND se.event_date >= (CURRENT_DATE - INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days')
         WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
      ) u`,
     [timekeeperUserId],
