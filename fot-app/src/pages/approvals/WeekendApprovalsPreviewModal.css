@@ -2,7 +2,11 @@
 
 .wap-modal {
   width: min(980px, 100%);
-  max-height: min(88dvh, 920px);
+  /* Простой dvh-кап как в DepartmentTimesheetModal (где скролл работает).
+     vh-фолбэк — на случай движков без dvh / без dvh внутри min(): иначе
+     объявление max-height отбрасывается и модалка не упирается во вьюпорт. */
+  max-height: 88vh;
+  max-height: 88dvh;
 }
 
 .wap-modal .approvals-modal-header {

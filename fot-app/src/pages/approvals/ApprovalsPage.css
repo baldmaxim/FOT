@@ -1183,6 +1183,7 @@
   font-size: 13px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .cor-actionbar-summary b {
   color: var(--text-primary);

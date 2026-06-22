@@ -137,6 +137,7 @@ export const CorrectionGroupsList: FC<ICorrectionGroupsListProps> = ({
             )}
           </span>
           {readOnly && <span className="cor-actionbar-readonly">Режим просмотра</span>}
+          {!readOnly && (
           <div className="cor-actionbar-btns">
             {!isHistory ? (
               <>
@@ -180,6 +181,7 @@ export const CorrectionGroupsList: FC<ICorrectionGroupsListProps> = ({
               </button>
             )}
           </div>
+          )}
         </div>
       )}
 
