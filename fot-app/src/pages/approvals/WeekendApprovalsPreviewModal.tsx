@@ -1,4 +1,5 @@
 import { type FC, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { X, ChevronDown, ChevronUp } from 'lucide-react';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
@@ -127,7 +128,7 @@ export const WeekendApprovalsPreviewModal: FC<IProps> = ({ period, onClose }) =>
     });
   };
 
-  return (
+  return createPortal(
     <>
       <div className="approvals-modal-overlay" {...overlayHandlers}>
         <div className="approvals-modal wap-modal">
@@ -143,52 +144,50 @@ export const WeekendApprovalsPreviewModal: FC<IProps> = ({ period, onClose }) =>
             </button>
           </div>
 
-          <div className="approvals-modal-body wap-body">
-            <div className="wap-topbar">
-              <div className="cor-view-tabs" role="tablist" aria-label="Раздел согласования">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'pending'}
-                  className={`cor-view-tab${mode === 'pending' ? ' is-active' : ''}`}
-                  onClick={() => setMode('pending')}
-                >
-                  На проверке
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === 'history'}
-                  className={`cor-view-tab${mode === 'history' ? ' is-active' : ''}`}
-                  onClick={() => setMode('history')}
-                >
-                  История
-                </button>
-              </div>
-              <span className="wap-readonly-note">Режим только чтения</span>
+          <div className="wap-topbar">
+            <div className="cor-view-tabs" role="tablist" aria-label="Раздел согласования">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'pending'}
+                className={`cor-view-tab${mode === 'pending' ? ' is-active' : ''}`}
+                onClick={() => setMode('pending')}
+              >
+                На проверке
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'history'}
+                className={`cor-view-tab${mode === 'history' ? ' is-active' : ''}`}
+                onClick={() => setMode('history')}
+              >
+                История
+              </button>
             </div>
+            <span className="wap-readonly-note">Режим только чтения</span>
+          </div>
 
-            <div className="wap-list">
-              {query.isLoading ? (
-                <div className="approvals-empty">Загрузка…</div>
-              ) : query.isError ? (
-                <div className="approvals-empty">Ошибка загрузки</div>
-              ) : groups.length === 0 ? (
-                <div className="approvals-empty">
-                  {isHistory ? 'В истории за период ничего нет' : 'Нет заявок по выходным за период'}
-                </div>
-              ) : (
-                groups.map(group => (
-                  <ResponsibleSection
-                    key={group.responsible_employee_id ?? 'unassigned'}
-                    group={group}
-                    isHistory={isHistory}
-                    isMobile={isMobile}
-                    onOpenTimesheet={openTimesheet}
-                  />
-                ))
-              )}
-            </div>
+          <div className="wap-list">
+            {query.isLoading ? (
+              <div className="approvals-empty">Загрузка…</div>
+            ) : query.isError ? (
+              <div className="approvals-empty">Ошибка загрузки</div>
+            ) : groups.length === 0 ? (
+              <div className="approvals-empty">
+                {isHistory ? 'В истории за период ничего нет' : 'Нет заявок по выходным за период'}
+              </div>
+            ) : (
+              groups.map(group => (
+                <ResponsibleSection
+                  key={group.responsible_employee_id ?? 'unassigned'}
+                  group={group}
+                  isHistory={isHistory}
+                  isMobile={isMobile}
+                  onOpenTimesheet={openTimesheet}
+                />
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -196,6 +195,7 @@ export const WeekendApprovalsPreviewModal: FC<IProps> = ({ period, onClose }) =>
       {tsModal && (
         <DepartmentTimesheetModal {...tsModal} onClose={() => setTsModal(null)} />
       )}
-    </>
+    </>,
+    document.body,
   );
 };

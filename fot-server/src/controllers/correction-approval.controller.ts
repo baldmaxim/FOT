@@ -1156,6 +1156,9 @@ const getAllByResponsible = async (req: AuthenticatedRequest, res: Response): Pr
       approved_at: string | null;
       approval_comment: string | null;
     }>(
+      // Обе ветки используют $1::text[] (статусы), $2/$3 — даты. Текст pending-ветки
+      // ОБЯЗАН ссылаться на $1, иначе PostgreSQL падает на Parse: "could not determine
+      // data type of parameter $1" (мокнутые тесты этого не ловят).
       mode === 'history'
         ? `SELECT id, employee_id, work_date::text AS work_date, status, hours_override, reason, created_by, created_at,
                   approval_status, approved_by, approved_at, approval_comment
@@ -1167,7 +1170,7 @@ const getAllByResponsible = async (req: AuthenticatedRequest, res: Response): Pr
         : `SELECT id, employee_id, work_date::text AS work_date, status, hours_override, reason, created_by, created_at,
                   approval_status, approved_by, approved_at, approval_comment
              FROM attendance_adjustments
-            WHERE approval_status = 'pending'
+            WHERE approval_status = ANY($1::text[])
               AND work_date >= $2::date
               AND work_date <= $3::date
             ORDER BY work_date ASC`,
