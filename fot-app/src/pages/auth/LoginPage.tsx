@@ -1,12 +1,14 @@
 import React, { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../../contexts/ToastContext';
 import { ApiError } from '../../api/client';
 import styles from './Auth.module.css';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const { login } = useAuth();
+  const toast = useToast();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -38,7 +40,9 @@ export const LoginPage: React.FC = () => {
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === 'PENDING_APPROVAL') {
-          navigate('/pending-approval', { replace: true });
+          toast.warning('Ваш аккаунт пока не оформлен. Войти можно будет после подтверждения администратором.');
+          setLoading(false);
+          submittingRef.current = false;
           return;
         }
         setError(err.message);

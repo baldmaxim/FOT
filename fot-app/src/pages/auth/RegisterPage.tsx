@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../../contexts/ToastContext';
 import { ApiError } from '../../api/client';
 import styles from './Register.module.css';
 
@@ -8,7 +9,9 @@ import styles from './Register.module.css';
 const CYRILLIC_NAME_RE = /[^а-яёА-ЯЁ\s-]/g;
 
 export const RegisterPage: React.FC = () => {
-  const { register } = useAuth();
+  const { register, logout } = useAuth();
+  const toast = useToast();
+  const navigate = useNavigate();
 
   // Form fields
   const [fullName, setFullName] = useState('');
@@ -20,7 +23,6 @@ export const RegisterPage: React.FC = () => {
 
   // Form state
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // Validations
@@ -73,7 +75,9 @@ export const RegisterPage: React.FC = () => {
         password,
         full_name: fullName.trim(),
       });
-      setSuccess(true);
+      toast.success('Регистрация прошла успешно. Дождитесь подтверждения администратором.');
+      logout();
+      navigate('/login', { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
@@ -84,45 +88,6 @@ export const RegisterPage: React.FC = () => {
       setLoading(false);
     }
   };
-
-  if (success) {
-    return (
-      <div className={styles.container}>
-        <div className={styles.wrapper}>
-          <div className={styles.logo}>
-            <div className={styles.logoIcon}>
-              <span>F</span>
-            </div>
-            <div className={styles.logoText}>FOT</div>
-          </div>
-
-          <div className={styles.card}>
-            <div className={styles.successContainer}>
-              <div className={styles.successIcon}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                  <polyline points="22 4 12 14.01 9 11.01"/>
-                </svg>
-              </div>
-              <h2 className={styles.successTitle}>Заявка отправлена</h2>
-
-              <p className={styles.successText}>
-                Ваша заявка на регистрацию отправлена администратору системы.<br/>
-                После одобрения вы сможете войти в портал используя указанный email.
-              </p>
-              <Link to="/login" className={styles.successBtn}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="19" y1="12" x2="5" y2="12"/>
-                  <polyline points="12 19 5 12 12 5"/>
-                </svg>
-                Вернуться на страницу входа
-              </Link>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className={styles.container}>
