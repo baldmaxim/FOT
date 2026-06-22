@@ -51,6 +51,8 @@ router.post('/duplicates/block', apprEdit, requireCritical2FA, contractorAdminCo
 // Отправленные / мониторинг / история по пропуску.
 router.get('/passes/sent', apprView, contractorAdminController.listSentPasses);
 router.get('/passes/monitor', apprView, contractorAdminController.monitorPasses);
+router.get('/passes/stats', apprView, contractorAdminController.passStats);
+router.get('/passes/stats/export', apprView, contractorAdminController.exportPassStats);
 router.get('/passes/sync-failed', apprView, contractorPoolController.syncFailed);
 router.get('/passes/:id/history', apprView, contractorAdminController.getPassHistoryAdmin);
 router.post('/passes/:id/revoke', apprEdit, requireCritical2FA, contractorPoolController.revokePass);

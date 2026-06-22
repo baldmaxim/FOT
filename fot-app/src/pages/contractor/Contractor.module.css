@@ -125,6 +125,14 @@
 .btn:hover:not(:disabled) { background: var(--surface-hover); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Кнопка с иконкой: ровное выравнивание иконки и текста. */
+.btnIcon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .btnPrimary {
   border-color: var(--primary);
   background: var(--primary);
@@ -272,6 +280,27 @@
 .filterRow .field {
   flex: 1 1 280px;
   margin-bottom: 0;
+}
+/* Кнопка-действие в строке фильтров: не растягивается, выровнена по инпутам (под спейсер-лейблом). */
+.filterRow .field.filterAction {
+  flex: 0 0 auto;
+}
+
+/* Модалка «Статистика пропусков»: широкая, со скроллом таблицы внутри. */
+.statsModal {
+  max-width: 820px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 32px);
+}
+.statsBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.statsTotalRow td {
+  font-weight: 700;
+  border-top: 2px solid var(--border);
 }
 
 .checkList {

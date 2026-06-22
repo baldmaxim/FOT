@@ -90,6 +90,83 @@ const ensureSystemAdmin = async (
   return true;
 };
 
+/** Окно «использования» старых пропусков для статистики (последние N дней по СКУД). */
+const OLD_PASS_USAGE_WINDOW_DAYS = 14;
+
+/** Строка статистики пропусков по одному подрядчику. */
+interface IContractorPassStatsRow {
+  org_department_id: string;
+  /** Выдано новых номерных пропусков (все, кроме окончательно отозванных). */
+  issued_new: number;
+  /** Активные новые номерные пропуска (профиль разблокирован в Sigur). */
+  active_new: number;
+  /** Старые «белые» пропуска — сотрудники в папке подрядчика без нового номерного пропуска. */
+  old_total: number;
+  /** Из них реально использовались (проходы по СКУД за окно OLD_PASS_USAGE_WINDOW_DAYS). */
+  old_used: number;
+}
+
+/**
+ * Статистика пропусков по списку подрядчиков (org_department_id[]).
+ * Считается одним запросом для всех переданных организаций.
+ *   • Новые номерные пропуска — таблица contractor_passes.
+ *   • Старые «белые» — активные сотрудники в папке подрядчика (employees.org_department_id),
+ *     чей sigur_employee_id НЕ закреплён за действующим номерным пропуском.
+ *   • «Используются старые» — наличие событий skud_events за последние OLD_PASS_USAGE_WINDOW_DAYS дней
+ *     (skud_events.employee_id ссылается на локальный employees.id).
+ */
+const fetchContractorPassStats = async (orgIds: string[]): Promise<IContractorPassStatsRow[]> => {
+  if (orgIds.length === 0) return [];
+  return query<IContractorPassStatsRow>(
+    `WITH orgs AS (
+       SELECT unnest($1::uuid[]) AS id
+     ),
+     pass_stats AS (
+       SELECT org_department_id AS oid,
+              count(*) FILTER (WHERE status <> 'revoked') AS issued_new,
+              count(*) FILTER (WHERE is_active)           AS active_new
+         FROM contractor_passes
+        WHERE org_department_id = ANY($1::uuid[])
+        GROUP BY org_department_id
+     ),
+     old_white AS (
+       SELECT e.org_department_id AS oid, e.id AS emp_id
+         FROM employees e
+        WHERE e.org_department_id = ANY($1::uuid[])
+          AND e.employment_status = 'active'
+          AND NOT e.is_archived
+          AND NOT EXISTS (
+            SELECT 1 FROM contractor_passes cp
+             WHERE cp.org_department_id = e.org_department_id
+               AND cp.sigur_employee_id = e.sigur_employee_id
+               AND cp.status <> 'revoked'
+          )
+     ),
+     old_stats AS (
+       SELECT ow.oid,
+              count(*) AS old_total,
+              count(*) FILTER (
+                WHERE EXISTS (
+                  SELECT 1 FROM skud_events se
+                   WHERE se.employee_id = ow.emp_id
+                     AND se.event_date >= CURRENT_DATE - $2::int
+                )
+              ) AS old_used
+         FROM old_white ow
+        GROUP BY ow.oid
+     )
+     SELECT o.id::text AS org_department_id,
+            COALESCE(ps.issued_new, 0)::int AS issued_new,
+            COALESCE(ps.active_new, 0)::int AS active_new,
+            COALESCE(os.old_total, 0)::int  AS old_total,
+            COALESCE(os.old_used, 0)::int   AS old_used
+       FROM orgs o
+       LEFT JOIN pass_stats ps ON ps.oid = o.id
+       LEFT JOIN old_stats  os ON os.oid = o.id`,
+    [orgIds, OLD_PASS_USAGE_WINDOW_DAYS],
+  );
+};
+
 /** Строка дубля-однофамильца (подрядный пропуск или штатный сотрудник). */
 interface IDuplicateRow {
   source: 'contractor_pass' | 'employee';
@@ -1183,6 +1260,116 @@ export const contractorAdminController = {
       }
       console.error('Contractor monitorPasses error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить мониторинг' });
+    }
+  },
+
+  /**
+   * GET /passes/stats — статистика пропусков по всем подрядчикам.
+   * Возвращает по строке на организацию: выдано новых / активные / всего старых /
+   * используются старые. Фильтрацию по конкретному подрядчику делает фронт.
+   */
+  async passStats(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const orgs = await getContractorOrgs();
+      if (orgs.length === 0) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+      const stats = await fetchContractorPassStats(orgs.map(o => o.id));
+      const byId = new Map(stats.map(s => [s.org_department_id, s]));
+      const data = orgs.map(o => {
+        const s = byId.get(o.id);
+        return {
+          org_department_id: o.id,
+          org_name: o.name,
+          issued_new: s?.issued_new ?? 0,
+          active_new: s?.active_new ?? 0,
+          old_total: s?.old_total ?? 0,
+          old_used: s?.old_used ?? 0,
+        };
+      });
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Contractor passStats error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить статистику пропусков' });
+    }
+  },
+
+  /**
+   * GET /passes/stats/export?org_department_id=? — xlsx со статистикой пропусков.
+   * Без параметра — все подрядчики (только непустые строки), с параметром — один.
+   */
+  async exportPassStats(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+
+      const orgRaw = typeof req.query.org_department_id === 'string'
+        ? req.query.org_department_id.trim() : '';
+      const orgFilter = orgRaw ? z.string().uuid().parse(orgRaw) : null;
+
+      const orgs = await getContractorOrgs();
+      const nameById = new Map(orgs.map(o => [o.id, o.name]));
+      const ids = orgFilter ? [orgFilter] : orgs.map(o => o.id);
+      const stats = await fetchContractorPassStats(ids);
+
+      const rows = stats
+        .map(s => ({ ...s, org_name: nameById.get(s.org_department_id) ?? '—' }))
+        // в режиме «все подрядчики» показываем только тех, у кого есть хоть какие-то пропуска
+        .filter(s => (orgFilter ? true : s.issued_new > 0 || s.old_total > 0))
+        .sort((a, b) => a.org_name.localeCompare(b.org_name, 'ru'));
+
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Статистика');
+      ws.columns = [
+        { header: 'Подрядчик', key: 'org_name', width: 40 },
+        { header: 'Выдано новых', key: 'issued_new', width: 16 },
+        { header: 'Активные', key: 'active_new', width: 14 },
+        { header: 'Всего старых', key: 'old_total', width: 16 },
+        { header: `Используются старые (${OLD_PASS_USAGE_WINDOW_DAYS} дн.)`, key: 'old_used', width: 28 },
+      ];
+      ws.getRow(1).font = { bold: true };
+      for (const r of rows) {
+        ws.addRow({
+          org_name: r.org_name,
+          issued_new: r.issued_new,
+          active_new: r.active_new,
+          old_total: r.old_total,
+          old_used: r.old_used,
+        });
+      }
+      if (rows.length > 1) {
+        const total = rows.reduce(
+          (acc, r) => ({
+            issued_new: acc.issued_new + r.issued_new,
+            active_new: acc.active_new + r.active_new,
+            old_total: acc.old_total + r.old_total,
+            old_used: acc.old_used + r.old_used,
+          }),
+          { issued_new: 0, active_new: 0, old_total: 0, old_used: 0 },
+        );
+        const totalRow = ws.addRow({ org_name: 'Итого', ...total });
+        totalRow.font = { bold: true };
+      }
+
+      const buf = Buffer.from(await wb.xlsx.writeBuffer());
+      const baseName = orgFilter ? (nameById.get(orgFilter) ?? 'Подрядчик') : 'Все подрядчики';
+      const safeOrg = baseName.replace(/[\\/:*?"<>|]+/g, '_').trim();
+      const fileName = `Статистика_пропусков_${safeOrg}.xlsx`;
+
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition',
+        `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      res.send(buf);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректная организация' });
+        return;
+      }
+      console.error('Contractor exportPassStats error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: 'Не удалось сформировать файл' });
+      }
     }
   },
 

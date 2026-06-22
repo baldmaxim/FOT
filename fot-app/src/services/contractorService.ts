@@ -162,6 +162,19 @@ export interface IMonitorPassRow {
   object_label: string;
 }
 
+export interface IContractorPassStat {
+  org_department_id: string;
+  org_name: string;
+  /** Выдано новых номерных пропусков (все, кроме отозванных). */
+  issued_new: number;
+  /** Активные новые номерные пропуска. */
+  active_new: number;
+  /** Старые «белые» пропуска — сотрудники в папке подрядчика без нового номерного пропуска. */
+  old_total: number;
+  /** Из них реально использовались (проходы по СКУД за последние 2 недели). */
+  old_used: number;
+}
+
 export interface IHolderHistoryRow {
   id: string;
   holder_name: string;
@@ -631,6 +644,21 @@ export const contractorAdminService = {
   async getPassHistoryAdmin(passId: string): Promise<IPassHistory> {
     const r = await apiClient.get<ApiResponse<IPassHistory>>(`/admin/contractor/passes/${passId}/history`);
     return r.data ?? { holders: [], decisions: [] };
+  },
+
+  // Статистика пропусков (новые номерные vs старые белые)
+  async getPassStats(): Promise<IContractorPassStat[]> {
+    const r = await apiClient.get<ApiResponse<IContractorPassStat[]>>('/admin/contractor/passes/stats');
+    return r.data ?? [];
+  },
+  async exportPassStats(orgDepartmentId?: string): Promise<Blob> {
+    const qs = orgDepartmentId ? `?org_department_id=${encodeURIComponent(orgDepartmentId)}` : '';
+    const response = await fetch(
+      buildApiUrl(`/admin/contractor/passes/stats/export${qs}`),
+      { credentials: 'include', headers: buildAuthHeaders() },
+    );
+    if (!response.ok) throw new Error('Не удалось скачать файл');
+    return response.blob();
   },
 
   // Застрявшие отзывы (досинхронизация с Sigur)

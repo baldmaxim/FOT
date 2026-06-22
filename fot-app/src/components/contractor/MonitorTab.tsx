@@ -3,8 +3,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { BarChart3 } from 'lucide-react';
 import { contractorAdminService, type IPassHistory } from '../../services/contractorService';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
+import { PassStatsModal } from './PassStatsModal';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 /** Застрявшие отзывы: вернулись в пул в БД, но Sigur не подтвердил перенос/блокировку. */
@@ -164,6 +166,7 @@ export const MonitorTab: FC = () => {
   const [orgId, setOrgId] = useState('');
   const [search, setSearch] = useState('');
   const [historyPassId, setHistoryPassId] = useState<string | null>(null);
+  const [statsOpen, setStatsOpen] = useState(false);
 
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
   const searchActive = debouncedSearch.length >= 1;
@@ -219,6 +222,17 @@ export const MonitorTab: FC = () => {
             />
           </div>
         )}
+
+        <div className={`${styles.field} ${styles.filterAction}`}>
+          <span className={styles.label}>&nbsp;</span>
+          <button
+            type="button"
+            className={`${styles.btn} ${styles.btnIcon}`}
+            onClick={() => setStatsOpen(true)}
+          >
+            <BarChart3 size={14} /> Статистика пропусков
+          </button>
+        </div>
       </div>
 
       {!searchActive && !orgId && <div className={styles.empty}>Выберите подрядчика или введите номер пропуска</div>}
@@ -270,6 +284,14 @@ export const MonitorTab: FC = () => {
 
       {historyPassId && (
         <PassHistoryModal passId={historyPassId} onClose={() => setHistoryPassId(null)} />
+      )}
+
+      {statsOpen && (
+        <PassStatsModal
+          orgs={orgs}
+          orgsLoading={orgsQuery.isLoading}
+          onClose={() => setStatsOpen(false)}
+        />
       )}
     </div>
   );
