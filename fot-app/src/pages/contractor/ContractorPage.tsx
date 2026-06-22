@@ -330,7 +330,6 @@ export const ContractorPage: FC = () => {
                       const ap = approvalBadge(p.approval_status);
                       const editable = p.status === 'assigned' && !p.submission_id;
                       const canChangeOwner = p.status === 'applied' || (p.status === 'blocked' && !p.submission_id);
-                      const showDocs = (p.holder_name ?? '').trim().length > 0;
                       const value = edited[p.id] ?? p.holder_name ?? '';
                       return (
                         <tr key={p.id}>
@@ -359,19 +358,17 @@ export const ContractorPage: FC = () => {
                           </td>
                           <td>
                             <div className={styles.actionsCell}>
-                              {showDocs && (
-                                <button
-                                  className="btn-secondary"
-                                  disabled={busy}
-                                  onClick={() => openDocs(p)}
-                                  title={hasAllDocs(p) ? 'Документы заполнены' : 'Заполнить документы'}
-                                >
-                                  Документы
-                                  {hasAllDocs(p) && (
-                                    <span className={styles.docCheck} aria-hidden="true">✓</span>
-                                  )}
-                                </button>
-                              )}
+                              <button
+                                className="btn-secondary"
+                                disabled={busy}
+                                onClick={() => openDocs(p)}
+                                title={hasAllDocs(p) ? 'Документы заполнены' : 'Заполнить документы'}
+                              >
+                                Документы
+                                {hasAllDocs(p) && (
+                                  <span className={styles.docCheck} aria-hidden="true">✓</span>
+                                )}
+                              </button>
                               {canChangeOwner && (
                                 <button
                                   className="btn-secondary"
