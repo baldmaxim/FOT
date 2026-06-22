@@ -415,6 +415,71 @@ export const contractorController = {
     }
   },
 
+  /**
+   * Сохранить персональные документы держателя пропуска (паспорт, патент).
+   * Body: { passport_series_number, passport_issue_date, patent_number, patent_issue_date }.
+   * Все поля необязательны (пустые → NULL). Доступно для любого пропуска организации.
+   */
+  async savePassDocuments(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      const passId = req.params.id;
+
+      const dateField = z.preprocess(
+        v => (typeof v === 'string' && v.trim() === '' ? null : v),
+        z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      );
+      const parsed = z.object({
+        passport_series_number: z.string().trim().max(50).nullable().optional(),
+        passport_issue_date: dateField,
+        patent_number: z.string().trim().max(50).nullable().optional(),
+        patent_issue_date: dateField,
+      }).parse(req.body);
+
+      const pass = await queryOne<{ id: string }>(
+        `SELECT id FROM contractor_passes
+          WHERE id = $1::uuid AND org_department_id = $2::uuid`,
+        [passId, orgId],
+      );
+      if (!pass) {
+        res.status(404).json({ success: false, error: 'Пропуск не найден' });
+        return;
+      }
+
+      const norm = (v: string | null | undefined): string | null => {
+        const s = (v ?? '').trim();
+        return s.length > 0 ? s : null;
+      };
+
+      await execute(
+        `UPDATE contractor_passes
+            SET passport_series_number = $1,
+                passport_issue_date = $2,
+                patent_number = $3,
+                patent_issue_date = $4,
+                updated_at = now()
+          WHERE id = $5::uuid`,
+        [
+          norm(parsed.passport_series_number),
+          parsed.passport_issue_date ?? null,
+          norm(parsed.patent_number),
+          parsed.patent_issue_date ?? null,
+          passId,
+        ],
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Contractor savePassDocuments error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось сохранить документы' });
+    }
+  },
+
   /** Назначить роста-человека на пропуск. Body: { roster_id }. (legacy) */
   async assignPass(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {

@@ -23,6 +23,7 @@ router.post('/roster/:id/unmark', edit, contractorController.unmarkPerson);
 router.get('/passes', view, contractorController.getPasses);
 router.post('/passes/:id/holder', edit, contractorController.setPassHolder);
 router.post('/passes/:id/change-holder', edit, contractorController.changeHolder);
+router.post('/passes/:id/documents', edit, contractorController.savePassDocuments);
 router.get('/passes/:id/history', view, contractorController.getPassHistory);
 router.post('/passes/:id/assign', edit, contractorController.assignPass);
 router.post('/submit', edit, contractorController.submit);

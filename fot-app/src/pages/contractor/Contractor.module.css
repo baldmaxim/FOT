@@ -400,6 +400,21 @@
   border-color: var(--error);
 }
 
+/* Ячейка действий в строке пропуска: «Документы» + «Сменить владельца». */
+.actionsCell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Зелёная галочка «все документы заполнены» на кнопке «Документы». */
+.docCheck {
+  margin-left: 6px;
+  color: var(--success);
+  font-weight: 700;
+}
+
 .docsBlock {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

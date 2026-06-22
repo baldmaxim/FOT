@@ -45,6 +45,18 @@ export interface IPassRow {
   submission_id: string | null;
   access_point_names: string[] | null;
   object_label: string;
+  passport_series_number: string | null;
+  passport_issue_date: string | null;
+  patent_number: string | null;
+  patent_issue_date: string | null;
+}
+
+/** Персональные документы держателя пропуска (паспорт/патент). */
+export interface IPassDocuments {
+  passport_series_number: string | null;
+  passport_issue_date: string | null;
+  patent_number: string | null;
+  patent_issue_date: string | null;
 }
 
 export interface ISubmissionRow {
@@ -382,6 +394,9 @@ export const contractorService = {
   async getPassHistory(passId: string): Promise<IPassHistory> {
     const r = await apiClient.get<ApiResponse<IPassHistory>>(`/contractor/passes/${passId}/history`);
     return r.data ?? { holders: [], decisions: [] };
+  },
+  async savePassDocuments(passId: string, docs: IPassDocuments): Promise<void> {
+    await apiClient.post(`/contractor/passes/${passId}/documents`, docs);
   },
   async submit(): Promise<void> {
     await apiClient.post('/contractor/submit');

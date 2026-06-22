@@ -41,6 +41,18 @@ const fmtDate = (iso: string | null): string => {
   try { return new Date(iso).toLocaleDateString('ru-RU'); } catch { return iso; }
 };
 
+/** Маска номера патента: «77 №2600295204» (2 цифры серии + 10 цифр номера). */
+const formatPatentNumber = (raw: string): string => {
+  const digits = raw.replace(/\D/g, '').slice(0, 12);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)} №${digits.slice(2)}`;
+};
+
+/** Все документы держателя заполнены (для зелёной галочки на кнопке). */
+const hasAllDocs = (p: IPassRow): boolean =>
+  !!(p.passport_series_number?.trim() && p.passport_issue_date
+    && p.patent_number?.trim() && p.patent_issue_date);
+
 export const ContractorPage: FC = () => {
   const toast = useToast();
   const qc = useQueryClient();
@@ -50,8 +62,16 @@ export const ContractorPage: FC = () => {
   const [changeOwnerPass, setChangeOwnerPass] = useState<IPassRow | null>(null);
   const [changeOwnerName, setChangeOwnerName] = useState('');
   const [changeOwnerDate, setChangeOwnerDate] = useState(new Date().toISOString().slice(0, 10));
+  const [docsPass, setDocsPass] = useState<IPassRow | null>(null);
+  const [docForm, setDocForm] = useState({
+    passport_series_number: '',
+    passport_issue_date: '',
+    patent_number: '',
+    patent_issue_date: '',
+  });
 
   const changeOverlay = useOverlayDismiss(() => setChangeOwnerPass(null));
+  const docsOverlay = useOverlayDismiss(() => setDocsPass(null));
 
   const orgQuery = useQuery({ queryKey: ['contractor-org'], queryFn: contractorService.getMyOrg, staleTime: 5 * 60_000 });
   const rosterQuery = useQuery({ queryKey: ['contractor-roster'], queryFn: contractorService.getRoster, staleTime: 30_000 });
@@ -97,6 +117,36 @@ export const ContractorPage: FC = () => {
       return;
     }
     await run(() => contractorService.setPassHolder(p.id, value || null));
+  };
+
+  const openDocs = (p: IPassRow) => {
+    setDocForm({
+      passport_series_number: p.passport_series_number ?? '',
+      passport_issue_date: (p.passport_issue_date ?? '').slice(0, 10),
+      patent_number: p.patent_number ?? '',
+      patent_issue_date: (p.patent_issue_date ?? '').slice(0, 10),
+    });
+    setDocsPass(p);
+  };
+
+  const saveDocs = () => {
+    if (!docsPass) return;
+    const passId = docsPass.id;
+    setBusy(true);
+    contractorService
+      .savePassDocuments(passId, {
+        passport_series_number: docForm.passport_series_number.trim() || null,
+        passport_issue_date: docForm.passport_issue_date || null,
+        patent_number: docForm.patent_number.trim() || null,
+        patent_issue_date: docForm.patent_issue_date || null,
+      })
+      .then(async () => {
+        toast.success('Документы сохранены');
+        setDocsPass(null);
+        await refresh();
+      })
+      .catch(e => toast.error(e instanceof Error ? e.message : 'Не удалось сохранить'))
+      .finally(() => setBusy(false));
   };
 
   const statusLabel: Record<string, string> = {
@@ -280,6 +330,7 @@ export const ContractorPage: FC = () => {
                       const ap = approvalBadge(p.approval_status);
                       const editable = p.status === 'assigned' && !p.submission_id;
                       const canChangeOwner = p.status === 'applied' || (p.status === 'blocked' && !p.submission_id);
+                      const showDocs = (p.holder_name ?? '').trim().length > 0;
                       const value = edited[p.id] ?? p.holder_name ?? '';
                       return (
                         <tr key={p.id}>
@@ -307,19 +358,34 @@ export const ContractorPage: FC = () => {
                             {ap && <>{' '}<span className={`${styles.badge} ${ap.cls}`}>{ap.label}</span></>}
                           </td>
                           <td>
-                            {canChangeOwner && (
-                              <button
-                                className="btn-secondary"
-                                disabled={busy}
-                                onClick={() => {
-                                  setChangeOwnerPass(p);
-                                  setChangeOwnerName('');
-                                  setChangeOwnerDate(new Date().toISOString().slice(0, 10));
-                                }}
-                              >
-                                Сменить владельца
-                              </button>
-                            )}
+                            <div className={styles.actionsCell}>
+                              {showDocs && (
+                                <button
+                                  className="btn-secondary"
+                                  disabled={busy}
+                                  onClick={() => openDocs(p)}
+                                  title={hasAllDocs(p) ? 'Документы заполнены' : 'Заполнить документы'}
+                                >
+                                  Документы
+                                  {hasAllDocs(p) && (
+                                    <span className={styles.docCheck} aria-hidden="true">✓</span>
+                                  )}
+                                </button>
+                              )}
+                              {canChangeOwner && (
+                                <button
+                                  className="btn-secondary"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setChangeOwnerPass(p);
+                                    setChangeOwnerName('');
+                                    setChangeOwnerDate(new Date().toISOString().slice(0, 10));
+                                  }}
+                                >
+                                  Сменить владельца
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -390,6 +456,77 @@ export const ContractorPage: FC = () => {
                 }}
               >
                 Сменить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {docsPass && (
+        <div
+          className={styles.overlay}
+          onMouseDown={docsOverlay.onMouseDown}
+          onMouseUp={docsOverlay.onMouseUp}
+          onMouseLeave={docsOverlay.onMouseLeave}
+          onTouchStart={docsOverlay.onTouchStart}
+          onTouchEnd={docsOverlay.onTouchEnd}
+        >
+          <div className={styles.modal}>
+            <h2 className={styles.modalTitle}>
+              Документы — {docsPass.holder_name ?? `пропуск № ${docsPass.pass_number}`}
+            </h2>
+            <div className={styles.field}>
+              <span className={styles.label}>Паспорт серия номер</span>
+              <input
+                className={`${styles.input} ${styles.fullInput}`}
+                value={docForm.passport_series_number}
+                autoFocus
+                placeholder="Серия и номер"
+                onChange={e => setDocForm(prev => ({ ...prev, passport_series_number: e.target.value }))}
+              />
+            </div>
+            <div className={styles.field}>
+              <span className={styles.label}>Дата выдачи документа, удостоверяющего личность</span>
+              <input
+                className={`${styles.input} ${styles.numInput}`}
+                type="date"
+                value={docForm.passport_issue_date}
+                onChange={e => setDocForm(prev => ({ ...prev, passport_issue_date: e.target.value }))}
+              />
+            </div>
+            <div className={styles.field}>
+              <span className={styles.label}>Номер патента</span>
+              <input
+                className={`${styles.input} ${styles.fullInput}`}
+                value={docForm.patent_number}
+                inputMode="numeric"
+                placeholder="77 №2600295204"
+                onChange={e => setDocForm(prev => ({ ...prev, patent_number: formatPatentNumber(e.target.value) }))}
+              />
+            </div>
+            <div className={styles.field}>
+              <span className={styles.label}>Дата выдачи патента</span>
+              <input
+                className={`${styles.input} ${styles.numInput}`}
+                type="date"
+                value={docForm.patent_issue_date}
+                onChange={e => setDocForm(prev => ({ ...prev, patent_issue_date: e.target.value }))}
+              />
+            </div>
+            <div className={styles.modalActions}>
+              <button
+                className="btn-secondary"
+                onClick={() => setDocsPass(null)}
+                disabled={busy}
+              >
+                Отмена
+              </button>
+              <button
+                className="btn-primary"
+                onClick={saveDocs}
+                disabled={busy}
+              >
+                Сохранить
               </button>
             </div>
           </div>

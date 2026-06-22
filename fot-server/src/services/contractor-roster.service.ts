@@ -46,6 +46,10 @@ export interface IContractorPassRow {
   submission_id: string | null;
   access_point_names: string[] | null;
   object_label: string;
+  passport_series_number: string | null;
+  passport_issue_date: string | null;
+  patent_number: string | null;
+  patent_issue_date: string | null;
 }
 
 const PAGE_SIZE = 500;
@@ -146,6 +150,10 @@ export const getPasses = async (orgDepartmentId: string): Promise<IContractorPas
             p.expires_at,
             p.submission_id,
             p.access_point_names,
+            p.passport_series_number,
+            to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
+            p.patent_number,
+            to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
             COALESCE(
               (SELECT string_agg(o.name, ', ' ORDER BY o.name)
                  FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
