@@ -2,23 +2,27 @@
 
 .wap-modal {
   width: min(980px, 100%);
-  /* Простой dvh-кап как в DepartmentTimesheetModal (где скролл работает).
-     vh-фолбэк — на случай движков без dvh / без dvh внутри min(): иначе
-     объявление max-height отбрасывается и модалка не упирается во вьюпорт. */
-  max-height: 88vh;
-  max-height: 88dvh;
+  /* Определённая высота, а не только max-height: при height:auto flex-контейнер
+     имеет «неопределённую» основную высоту, и .wap-list (flex:1) не получает
+     реального предела → растёт по контенту, overflow:hidden модалки режет низ.
+     vh-фолбэк — для движков без dvh; max-height — кап на больших экранах. */
+  height: 88vh;
+  height: 88dvh;
+  max-height: 920px;
+  min-height: 0;
 }
 
 .wap-modal .approvals-modal-header {
   flex-shrink: 0;
 }
 
-/* Скролл-паттерн как в DepartmentTimesheetModal: модалка ограничена max-height,
-   .wap-list — единственный flex:1-ребёнок со своим overflow. */
+/* Единственная скроллируемая область модалки (шапка и табы — flex-shrink:0). */
 .wap-list {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   gap: 14px;
