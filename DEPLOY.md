@@ -525,25 +525,70 @@ cd /opt/fot-build
 bash scripts/deploy-server.sh migrate
 ```
 
-Раннер: подтягивает свежий `personal/main` в `/opt/fot-build`, затем
-`fot-server/scripts/run-migrations.mjs` (`DATABASE_URL` из `.env` сайта, CA из
-`.migration/yandex-ca.pem`). Каждый файл с собственным `BEGIN/COMMIT` выполняется как есть;
-без транзакции — оборачивается в `BEGIN…COMMIT`. При первой ошибке — стоп (как
-`ON_ERROR_STOP=1`), exit 1, последующие миграции не трогаются.
-
-**Однократный bootstrap** (БД уже накатана вручную — таблицы учёта ещё нет). Первый запуск
-раннера строго read-only и сам подскажет это. Пометить все текущие файлы применёнными
-**без выполнения**:
+Scope `migrate` перед накатом **сам синхронизирует build-контекст с git** (как обычный
+деплой):
 
 ```bash
-# на сервере:
-node /opt/fot-build/fot-server/scripts/run-migrations.mjs --baseline \
-  --dir /opt/fot-build/docs/migrations \
-  --env /srv/sites/fot.su10.ru/fot-server/.env \
-  --ca  /srv/sites/fot.su10.ru/.migration/yandex-ca.pem
+git fetch personal main --prune
+git checkout -f -B main personal/main
+git reset --hard personal/main   # перетрёт локальные правки в /opt/fot-build
+git clean -fd                    # удалит неотслеживаемые файлы в build-контексте
 ```
 
+Затем запускает `fot-server/scripts/run-migrations.mjs` (`DATABASE_URL` из `.env` сайта, CA
+из `.migration/yandex-ca.pem`). Каждый файл с собственным `BEGIN/COMMIT` выполняется как
+есть; без транзакции — оборачивается в `BEGIN…COMMIT`; файлы с `CONCURRENTLY`/`VACUUM`
+выполняются по одному оператору в autocommit (как `psql -f`). При первой ошибке — стоп (как
+`ON_ERROR_STOP=1`), exit 1, последующие миграции не трогаются. Подключение к реплике для
+записи запрещено (`--baseline`/`--init`/накат требуют PRIMARY).
+
+#### Однократный bootstrap (первое подключение раннера)
+
+БД уже накатана вручную — таблицы учёта `schema_migrations` ещё нет. Первый запуск раннера
+строго read-only и сам подскажет, что делать.
+
+1. **Доставить коммит с раннером на сервер.** Текущий `deploy-server.sh` на сервере ещё не
+   знает scope `migrate`, а обновление кода происходит уже внутри него — поэтому
+   `deploy-server.sh migrate` сразу не сработает. Сначала синхронизировать вручную:
+
+   ```bash
+   cd /opt/fot-build
+   git fetch personal main --prune
+   git reset --hard personal/main
+   git --no-pager log -1 --oneline   # убедиться, что коммит с раннером на месте
+   ```
+
+2. **Read-only отчёт** (ничего не пишет):
+
+   ```bash
+   bash scripts/deploy-server.sh migrate --dry-run
+   # ожидается: «Таблица учёта: отсутствует», «Новых: <N>», «ничего не применялось»
+   ```
+
+3. **Baseline** — пометить все текущие файлы применёнными **без выполнения SQL**:
+
+   ```bash
+   bash scripts/deploy-server.sh migrate --baseline
+   # ожидается: «Baseline: помечено как применённые <N>»
+   ```
+
+   Или раннер напрямую (без git-синхронизации):
+
+   ```bash
+   node /opt/fot-build/fot-server/scripts/run-migrations.mjs --baseline \
+     --dir /opt/fot-build/docs/migrations \
+     --env /srv/sites/fot.su10.ru/fot-server/.env \
+     --ca  /srv/sites/fot.su10.ru/.migration/yandex-ca.pem
+   ```
+
+4. **Контроль** — должно стать 0 новых:
+
+   ```bash
+   bash scripts/deploy-server.sh migrate --dry-run   # «Новых: 0»
+   ```
+
 Для пустой/новой БД вместо `--baseline` используется `--init` (реально накатить всё).
+Дальше рутинно — просто `bash scripts/deploy-server.sh migrate`.
 
 **Порядок:** сначала `migrate`, затем (если backend зависит от схемы) деплой кода:
 
