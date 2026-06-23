@@ -2,17 +2,11 @@
 
 /* Высокая специфичность (.approvals-modal.wap-modal): базовый .approvals-modal
    в бандле идёт ПОЗЖE .wap-modal и при равной специфичности перебивал ширину
-   (модалка становилась 480px). Кладём всю раскладку сюда, чтобы каскад не мешал.
-   Определённая высота (height, а не только max-height) даёт .wap-list реальный
-   предел для overflow-y — иначе flex-контейнер «неопределённой» высоты не
-   ограничивает список, и overflow:hidden модалки режет низ.
-   vh-фолбэк — для движков без dvh; max-height — кап на больших экранах. */
+   (модалка становилась 480px). Кладём всю раскладку сюда, чтобы каскад не мешал. */
 .approvals-modal.wap-modal {
   width: min(980px, 100%);
-  height: 88vh;
-  height: 88dvh;
-  max-height: 920px;
-  min-height: 0;
+  max-height: 88vh;   /* короткий список → модалка по контенту, без пустого низа */
+  max-height: 88dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -23,10 +17,15 @@
   flex: 0 0 auto;
 }
 
-/* Единственная скроллируемая область модалки. */
+/* Единственная скроллируемая область. Явный max-height в единицах вьюпорта —
+   НЕ зависит от того, как резолвится flex-высота родителя (в этой модалке она
+   не ограничивала список → скролл не появлялся). overflow-y:auto + max-height
+   скроллится всегда. 130px ≈ высота шапки + табов. */
 .approvals-modal.wap-modal > .wap-list {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-height: 0;
+  max-height: calc(88vh - 130px);
+  max-height: calc(88dvh - 130px);
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -117,5 +116,10 @@
   }
   .wap-list {
     padding: 0 12px 12px;
+  }
+  /* На узком экране топбар переносится и выше — щедрее вычет под скролл-область. */
+  .approvals-modal.wap-modal > .wap-list {
+    max-height: calc(88vh - 170px);
+    max-height: calc(88dvh - 170px);
   }
 }
