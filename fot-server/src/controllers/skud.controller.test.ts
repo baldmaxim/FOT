@@ -73,6 +73,20 @@ vi.mock('../services/data-scope.service.js', () => ({
   hasObjectViewScope: vi.fn(async () => false),
 }));
 
+vi.mock('../services/employee-skud-object-access.service.js', () => ({
+  resolveAccessibleObjectIdsForRequest: vi.fn(async () => ({ is_unrestricted: true, object_ids: [] })),
+}));
+
+// getPresenceByObject (data fetch) мокаем; filterPresenceByEmployeeIds и
+// mergePresenceResponses (чистые функции) берём настоящие через importActual.
+const presenceByObjectMock = vi.hoisted(() => vi.fn());
+vi.mock('../services/skud-presence-by-object.service.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/skud-presence-by-object.service.js')>(
+    '../services/skud-presence-by-object.service.js',
+  );
+  return { ...actual, getPresenceByObject: presenceByObjectMock };
+});
+
 vi.mock('./skud-write.controller.js', () => ({
   skudWriteController: {},
 }));
@@ -83,11 +97,21 @@ vi.mock('./skud-travel.controller.js', () => ({
 
 import { skudController } from './skud.controller.js';
 import { getDisciplineViolations } from '../services/skud-discipline.service.js';
-import { resolveRequestDataScope, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
+import {
+  resolveRequestDataScope,
+  resolveManagedDepartmentIds,
+  resolveAccessibleEmployeeIds,
+  hasObjectViewScope,
+} from '../services/data-scope.service.js';
+import { resolveAccessibleObjectIdsForRequest } from '../services/employee-skud-object-access.service.js';
+import type { IPresenceByObjectResponse } from '../services/skud-presence-by-object.service.js';
 
 const mockGetDisciplineViolations = vi.mocked(getDisciplineViolations);
 const mockResolveRequestDataScope = vi.mocked(resolveRequestDataScope);
 const mockResolveManagedDepartmentIds = vi.mocked(resolveManagedDepartmentIds);
+const mockResolveAccessibleEmployeeIds = vi.mocked(resolveAccessibleEmployeeIds);
+const mockHasObjectViewScope = vi.mocked(hasObjectViewScope);
+const mockResolveAccessibleObjectIds = vi.mocked(resolveAccessibleObjectIdsForRequest);
 
 function makeReq(overrides: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest {
   return {
@@ -276,5 +300,99 @@ describe('skudController.getDisciplineViolations (data-scope)', () => {
     const payload = res.payload as { success: boolean; data: typeof fullData };
     expect(Object.keys(payload.data.employees)).toEqual(['1']);
     expect(payload.data.violations).toEqual([fullData.violations[0]]);
+  });
+});
+
+describe('skudController.getPresenceByObject (object + employee union)', () => {
+  function emp(id: number) {
+    return {
+      employee_id: id,
+      full_name: `Сотрудник ${id}`,
+      position_name: null,
+      department_name: null,
+      first_entry: '09:00:00',
+      last_access_point: 'ap',
+      since: '09:00:00',
+      is_unsynced: false,
+    };
+  }
+
+  function bucket(objectId: string, name: string, employees: ReturnType<typeof emp>[]) {
+    return {
+      object_id: objectId,
+      object_name: name,
+      has_map: false,
+      online_count: employees.length,
+      companies: [{ company_id: 'c', company_name: 'К', online_count: employees.length, employees }],
+    };
+  }
+
+  // Снимок всех объектов: на ЖК Инжой — чужие (id 1,2), на Стройке-2 — его люди (10,11).
+  const allSnapshot: IPresenceByObjectResponse = {
+    generated_at: '2026-06-22T09:00:00Z',
+    total_online: 4,
+    scope_mode: 'all',
+    buckets: [
+      bucket('obj-assigned', 'ЖК Инжой', [emp(1), emp(2)]),
+      bucket('obj-other', 'Стройка-2', [emp(10), emp(11)]),
+    ],
+  };
+  const assignedSnapshot: IPresenceByObjectResponse = {
+    generated_at: '2026-06-22T09:00:00Z',
+    total_online: 2,
+    scope_mode: 'object',
+    buckets: [bucket('obj-assigned', 'ЖК Инжой', [emp(1), emp(2)])],
+  };
+
+  beforeEach(() => {
+    presenceByObjectMock.mockReset();
+    mockResolveAccessibleObjectIds.mockReset();
+    mockResolveAccessibleEmployeeIds.mockReset();
+    mockHasObjectViewScope.mockReset();
+    mockHasObjectViewScope.mockResolvedValue(false);
+    presenceByObjectMock.mockImplementation(async (opts?: { allowedObjectIds?: string[] | 'all' }) => {
+      const ids = opts?.allowedObjectIds ?? 'all';
+      if (ids === 'all') return structuredClone(allSnapshot);
+      return structuredClone(assignedSnapshot);
+    });
+  });
+
+  it('union: назначенный объект целиком + свои сотрудники на другом объекте (object_employee)', async () => {
+    mockResolveAccessibleObjectIds.mockResolvedValue({ is_unrestricted: false, object_ids: ['obj-assigned'] });
+    mockResolveAccessibleEmployeeIds.mockResolvedValue(new Set([10, 11]));
+
+    const req = makeReq({ user: { id: 'u', position_type: 'site_supervisor', employee_id: 2521 } as never });
+    const res = makeRes();
+    await skudController.getPresenceByObject(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const data = (res.payload as { data: IPresenceByObjectResponse & { scope_mode: string; assigned_object_ids: string[] } }).data;
+    expect(data.scope_mode).toBe('object_employee');
+    expect(data.assigned_object_ids).toEqual(['obj-assigned']);
+
+    const assigned = data.buckets.find(b => b.object_id === 'obj-assigned')!;
+    const other = data.buckets.find(b => b.object_id === 'obj-other')!;
+    // Назначенный объект — целиком (2 чужих), без is_partial.
+    expect(assigned.online_count).toBe(2);
+    expect(assigned.is_partial).toBeUndefined();
+    // Чужой объект — только его люди, помечен частичным.
+    expect(other.online_count).toBe(2);
+    expect(other.is_partial).toBe(true);
+    expect(data.total_online).toBe(4);
+  });
+
+  it('без сотрудников на других объектах остаётся чистый object', async () => {
+    mockResolveAccessibleObjectIds.mockResolvedValue({ is_unrestricted: false, object_ids: ['obj-assigned'] });
+    // Его единственный доступный сотрудник присутствует только на назначенном объекте.
+    mockResolveAccessibleEmployeeIds.mockResolvedValue(new Set([1]));
+
+    const req = makeReq({ user: { id: 'u', position_type: 'site_supervisor', employee_id: 2521 } as never });
+    const res = makeRes();
+    await skudController.getPresenceByObject(req, res);
+
+    const data = (res.payload as { data: IPresenceByObjectResponse & { scope_mode: string } }).data;
+    expect(data.scope_mode).toBe('object');
+    expect(data.buckets.every(b => !b.is_partial)).toBe(true);
+    expect(data.buckets.find(b => b.object_id === 'obj-other')).toBeUndefined();
   });
 });

@@ -68,6 +68,9 @@ export interface IPresenceObjectBucket {
   has_map: boolean;
   online_count: number;
   companies: IPresenceObjectCompany[];
+  /** true — «частичный» объект: показаны только сотрудники пользователя (его бригады на
+   *  чужом объекте), а не весь онлайн объекта. undefined = полный объект. */
+  is_partial?: boolean;
 }
 
 export interface IPresenceByObjectResponse {
@@ -78,8 +81,9 @@ export interface IPresenceByObjectResponse {
   is_unrestricted: boolean;
   /** Список skud_object_id, к которым приписан текущий пользователь (пустой если is_unrestricted или нет приписок). */
   assigned_object_ids: string[];
-  /** Режим выдачи: all — все объекты; object — по приписке объектов; employee — свои сотрудники на объектах. */
-  scope_mode: 'all' | 'object' | 'employee';
+  /** Режим выдачи: all — все объекты; object — по приписке объектов; employee — свои
+   *  сотрудники на объектах; object_employee — назначенный объект + свои сотрудники на других. */
+  scope_mode: 'all' | 'object' | 'employee' | 'object_employee';
 }
 
 export interface SkudDailySummary {

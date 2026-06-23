@@ -116,7 +116,7 @@ const ObjectCard: FC<{
         </div>
         <div className={styles.cardCount}>
           <span className={styles.cardCountValue}>{bucket.online_count}</span>
-          <span className={styles.cardCountLabel}>в моменте</span>
+          <span className={styles.cardCountLabel}>{bucket.is_partial ? 'ваши' : 'в моменте'}</span>
         </div>
       </div>
       {bucket.companies.length === 0 ? (
@@ -339,10 +339,10 @@ export const SkudPresencePage: FC = () => {
   const displayedTotal = isFiltering ? filtered.filteredCount : filtered.totalOnline;
 
   // Detail-view: ровно 1 приписанный объект (бэк отдаст ровно 1 bucket).
-  // При is_unrestricted рендерим обычную сетку даже если backend случайно
-  // вернул 1 bucket (например, осталась всего одна стройка в системе).
+  // Только для чистого объектного режима: при object_employee (union — назначенный
+  // объект + свои сотрудники на других) рисуем сетку, иначе чужие объекты скроются.
   const isSingleObjectView = !!data
-    && !data.is_unrestricted
+    && data.scope_mode === 'object'
     && data.assigned_object_ids.length === 1;
 
   return (

@@ -38,6 +38,7 @@ vi.mock('./sigur-presence-resolver.service.js', () => ({
 import {
   getPresenceByObject,
   filterPresenceByEmployeeIds,
+  mergePresenceResponses,
   invalidatePresenceByObjectCache,
   NO_COMPANY_ID,
   SIGUR_COMPANY_ID_PREFIX,
@@ -641,5 +642,61 @@ describe('filterPresenceByEmployeeIds', () => {
     expect(snapshot.total_online).toBe(4);
     expect(snapshot.buckets).toHaveLength(2);
     expect(snapshot.buckets[0].companies[0].employees).toHaveLength(2);
+  });
+});
+
+describe('mergePresenceResponses', () => {
+  function makeBucket(objectId: string, name: string, online: number, isPartial?: boolean) {
+    return {
+      object_id: objectId,
+      object_name: name,
+      has_map: false,
+      online_count: online,
+      companies: [{ company_id: 'c', company_name: 'К', online_count: online, employees: [] }],
+      ...(isPartial ? { is_partial: true } : {}),
+    };
+  }
+
+  function makeResp(buckets: ReturnType<typeof makeBucket>[]): IPresenceByObjectResponse {
+    return {
+      generated_at: '2026-06-22T09:00:00Z',
+      total_online: buckets.reduce((s, b) => s + b.online_count, 0),
+      scope_mode: 'object',
+      buckets,
+    };
+  }
+
+  it('concatenates buckets, sums total, sorts by count DESC, sets object_employee', () => {
+    const assigned = makeResp([makeBucket('obj-1', 'ЖК Инжой', 3)]);
+    const elsewhere = makeResp([
+      makeBucket('obj-2', 'Стройка-2', 5, true),
+      makeBucket('obj-3', 'Стройка-3', 1, true),
+    ]);
+
+    const merged = mergePresenceResponses(assigned, elsewhere);
+
+    expect(merged.scope_mode).toBe('object_employee');
+    expect(merged.total_online).toBe(9);
+    expect(merged.buckets.map(b => b.object_id)).toEqual(['obj-2', 'obj-1', 'obj-3']);
+    // Назначенный объект — полный (без is_partial), чужие — частичные.
+    expect(merged.buckets.find(b => b.object_id === 'obj-1')!.is_partial).toBeUndefined();
+    expect(merged.buckets.find(b => b.object_id === 'obj-2')!.is_partial).toBe(true);
+  });
+
+  it('does not mutate inputs (cached refs preserved, original order intact)', () => {
+    const assignedBuckets = [makeBucket('obj-1', 'ЖК Инжой', 1)];
+    const assigned = makeResp(assignedBuckets);
+    const elsewhere = makeResp([makeBucket('obj-2', 'Стройка-2', 9, true)]);
+
+    const beforeRef = assigned.buckets[0];
+    const merged = mergePresenceResponses(assigned, elsewhere);
+
+    expect(assigned.buckets).toHaveLength(1);
+    expect(assigned.buckets[0]).toBe(beforeRef);
+    expect(assigned.total_online).toBe(1);
+    expect(assigned.scope_mode).toBe('object');
+    // Слитый массив — новый, исходный bucket переиспользован по ссылке.
+    expect(merged.buckets).not.toBe(assigned.buckets);
+    expect(merged.buckets).toContain(beforeRef);
   });
 });

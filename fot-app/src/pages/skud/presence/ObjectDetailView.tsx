@@ -33,7 +33,9 @@ export const ObjectDetailView: FC<IObjectDetailViewProps> = ({ bucket, headerRig
         <div className={styles.modalTitle}>
           <MapPinIcon className={styles.cardIcon} />
           <span>{bucket.object_name}</span>
-          <span className={styles.modalBadge}>{bucket.online_count} чел.</span>
+          <span className={styles.modalBadge}>
+            {bucket.online_count} {bucket.is_partial ? 'ваших' : 'чел.'}
+          </span>
         </div>
         {headerRight}
       </header>

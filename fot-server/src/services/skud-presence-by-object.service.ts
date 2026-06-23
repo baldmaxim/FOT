@@ -42,14 +42,22 @@ export interface IPresenceObjectBucket {
   has_map: boolean;
   online_count: number;
   companies: IPresenceObjectCompany[];
+  /** true — «частичный» объект: показаны только сотрудники пользователя (его бригады
+   *  на чужом объекте), а не весь онлайн объекта. Для назначенного объекта не ставится
+   *  (undefined = полный объект). */
+  is_partial?: boolean;
 }
 
 export interface IPresenceByObjectResponse {
   generated_at: string;
   total_online: number;
   buckets: IPresenceObjectBucket[];
-  /** Режим выдачи: all — все объекты; object — по приписке объектов; employee — по своим сотрудникам. */
-  scope_mode?: 'all' | 'object' | 'employee';
+  /**
+   * Режим выдачи: all — все объекты; object — по приписке объектов; employee — по своим
+   * сотрудникам; object_employee — назначенный объект целиком + свои сотрудники на других
+   * объектах (union).
+   */
+  scope_mode?: 'all' | 'object' | 'employee' | 'object_employee';
 }
 
 /**
@@ -85,6 +93,25 @@ export function filterPresenceByEmployeeIds(
   }
 
   return { ...resp, total_online: totalOnline, buckets, scope_mode: 'employee' };
+}
+
+/**
+ * Слияние двух снимков присутствия для режима «назначенный объект + свои сотрудники»
+ * (union). На вход: `assigned` (buckets назначенных объектов, целиком) и
+ * `personalElsewhere` (buckets сотрудников пользователя на ДРУГИХ объектах,
+ * непустой). Buckets двух выборок непересекающиеся по object_id — простой concat
+ * без дедупа. НЕ мутирует вход (assigned.buckets — ссылка на SWR-кэш): строит новый
+ * массив, исходные buckets не переупорядочивает.
+ */
+export function mergePresenceResponses(
+  assigned: IPresenceByObjectResponse,
+  personalElsewhere: IPresenceByObjectResponse,
+): IPresenceByObjectResponse {
+  const buckets = [...assigned.buckets, ...personalElsewhere.buckets].sort((a, b) =>
+    compareByCountThenName(a.online_count, b.online_count, a.object_name, b.object_name),
+  );
+  const totalOnline = buckets.reduce((sum, bucket) => sum + bucket.online_count, 0);
+  return { ...assigned, total_online: totalOnline, buckets, scope_mode: 'object_employee' };
 }
 
 const CACHE_TTL_MS = 30_000;

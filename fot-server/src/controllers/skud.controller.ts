@@ -8,7 +8,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 
 import { getDashboardStats } from '../services/skud-dashboard.service.js';
 import { getPresence } from '../services/skud-presence.service.js';
-import { getPresenceByObject, filterPresenceByEmployeeIds } from '../services/skud-presence-by-object.service.js';
+import { getPresenceByObject, filterPresenceByEmployeeIds, mergePresenceResponses } from '../services/skud-presence-by-object.service.js';
 import { resolveAccessibleObjectIdsForRequest } from '../services/employee-skud-object-access.service.js';
 import { getDisciplineViolations } from '../services/skud-discipline.service.js';
 import { getDisciplineKpi, type KpiMetric } from '../services/discipline-kpi.service.js';
@@ -1286,7 +1286,7 @@ const skudReadController = {
       const scope = await resolveAccessibleObjectIdsForRequest(req);
 
       let data: Awaited<ReturnType<typeof getPresenceByObject>>;
-      let scopeMode: 'all' | 'object' | 'employee';
+      let scopeMode: 'all' | 'object' | 'employee' | 'object_employee';
 
       if (scope.is_unrestricted) {
         data = await getPresenceByObject({ allowedObjectIds: 'all' });
@@ -1300,6 +1300,24 @@ const skudReadController = {
           if (empIds !== 'all') data = filterPresenceByEmployeeIds(data, empIds);
         }
         scopeMode = 'object';
+
+        // Union: к назначенному объекту (целиком) добавляем доступных сотрудников
+        // пользователя на ДРУГИХ объектах, где они сейчас присутствуют. Чужие объекты
+        // помечаем is_partial — показаны только его люди, а не весь онлайн объекта.
+        // object_id === null («Без объекта») в union не включаем.
+        const unionEmpIds = await resolveAccessibleEmployeeIds(req);
+        if (unionEmpIds !== 'all' && unionEmpIds.size > 0) {
+          const all = await getPresenceByObject({ allowedObjectIds: 'all' });
+          const mine = filterPresenceByEmployeeIds(all, unionEmpIds);
+          const assignedSet = new Set(scope.object_ids);
+          const elsewhere = mine.buckets
+            .filter(b => b.object_id !== null && !assignedSet.has(b.object_id))
+            .map(b => ({ ...b, is_partial: true }));
+          if (elsewhere.length > 0) {
+            data = mergePresenceResponses(data, { ...mine, buckets: elsewhere });
+            scopeMode = 'object_employee';
+          }
+        }
       } else {
         const empIds = await resolveAccessibleEmployeeIds(req);
         if (empIds !== 'all' && empIds.size > 0) {
