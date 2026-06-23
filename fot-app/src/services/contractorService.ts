@@ -47,6 +47,7 @@ export interface IPassRow {
   object_label: string;
   passport_series_number: string | null;
   passport_issue_date: string | null;
+  birth_date: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
@@ -56,6 +57,7 @@ export interface IPassRow {
 export interface IPassDocuments {
   passport_series_number: string | null;
   passport_issue_date: string | null;
+  birth_date: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;

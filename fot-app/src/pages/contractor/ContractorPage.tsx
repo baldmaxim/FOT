@@ -50,8 +50,8 @@ const formatPatentNumber = (raw: string): string => {
 
 /** Все документы держателя заполнены (для зелёной галочки на кнопке). */
 const hasAllDocs = (p: IPassRow): boolean =>
-  !!(p.passport_series_number?.trim() && p.passport_issue_date
-    && p.patent_number?.trim() && p.patent_issue_date);
+  !!(p.passport_series_number?.trim() && p.passport_issue_date && p.birth_date
+    && p.patent_number?.trim() && p.patent_issue_date && p.patent_blank_number?.trim());
 
 export const ContractorPage: FC = () => {
   const toast = useToast();
@@ -66,6 +66,7 @@ export const ContractorPage: FC = () => {
   const [docForm, setDocForm] = useState({
     passport_series_number: '',
     passport_issue_date: '',
+    birth_date: '',
     patent_number: '',
     patent_issue_date: '',
     patent_blank_number: '',
@@ -124,6 +125,7 @@ export const ContractorPage: FC = () => {
     setDocForm({
       passport_series_number: p.passport_series_number ?? '',
       passport_issue_date: (p.passport_issue_date ?? '').slice(0, 10),
+      birth_date: (p.birth_date ?? '').slice(0, 10),
       patent_number: p.patent_number ?? '',
       patent_issue_date: (p.patent_issue_date ?? '').slice(0, 10),
       patent_blank_number: p.patent_blank_number ?? '',
@@ -139,6 +141,7 @@ export const ContractorPage: FC = () => {
       .savePassDocuments(passId, {
         passport_series_number: docForm.passport_series_number.trim() || null,
         passport_issue_date: docForm.passport_issue_date || null,
+        birth_date: docForm.birth_date || null,
         patent_number: docForm.patent_number.trim() || null,
         patent_issue_date: docForm.patent_issue_date || null,
         patent_blank_number: docForm.patent_blank_number.trim() || null,
@@ -485,14 +488,25 @@ export const ContractorPage: FC = () => {
                 onChange={e => setDocForm(prev => ({ ...prev, passport_series_number: e.target.value }))}
               />
             </div>
-            <div className={styles.field}>
-              <span className={styles.label}>Дата выдачи документа, удостоверяющего личность</span>
-              <input
-                className={`${styles.input} ${styles.numInput}`}
-                type="date"
-                value={docForm.passport_issue_date}
-                onChange={e => setDocForm(prev => ({ ...prev, passport_issue_date: e.target.value }))}
-              />
+            <div className={styles.docRow}>
+              <div className={styles.field}>
+                <span className={styles.label}>Дата выдачи документа, удостоверяющего личность</span>
+                <input
+                  className={`${styles.input} ${styles.numInput}`}
+                  type="date"
+                  value={docForm.passport_issue_date}
+                  onChange={e => setDocForm(prev => ({ ...prev, passport_issue_date: e.target.value }))}
+                />
+              </div>
+              <div className={styles.field}>
+                <span className={styles.label}>Дата рождения</span>
+                <input
+                  className={`${styles.input} ${styles.numInput}`}
+                  type="date"
+                  value={docForm.birth_date}
+                  onChange={e => setDocForm(prev => ({ ...prev, birth_date: e.target.value }))}
+                />
+              </div>
             </div>
             <div className={styles.field}>
               <span className={styles.label}>Номер патента</span>

@@ -48,6 +48,7 @@ export interface IContractorPassRow {
   object_label: string;
   passport_series_number: string | null;
   passport_issue_date: string | null;
+  birth_date: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
@@ -153,6 +154,7 @@ export const getPasses = async (orgDepartmentId: string): Promise<IContractorPas
             p.access_point_names,
             p.passport_series_number,
             to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
+            to_char(p.birth_date, 'YYYY-MM-DD') AS birth_date,
             p.patent_number,
             to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
             p.patent_blank_number,
