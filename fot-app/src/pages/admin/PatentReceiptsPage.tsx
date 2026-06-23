@@ -18,6 +18,7 @@ import {
 import { employeeService } from '../../services/employeeService';
 import { PatentReceiptEditModal } from '../../components/PatentReceiptEditModal';
 import { MissingPatentReceiptsModal } from '../../components/MissingPatentReceiptsModal';
+import { EmployeePatentReceiptsModal } from '../../components/EmployeePatentReceiptsModal';
 import { useToast } from '../../contexts/ToastContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { ApiError } from '../../api/client';
@@ -89,6 +90,7 @@ export const PatentReceiptsPage: FC = () => {
     return () => clearTimeout(t);
   }, [searchFio]);
   const [showMissing, setShowMissing] = useState(false);
+  const [employeeReceipts, setEmployeeReceipts] = useState<{ id: number; name: string } | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [recognizingDocId, setRecognizingDocId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -311,7 +313,22 @@ export const PatentReceiptsPage: FC = () => {
                   >
                     <td>{formatDate(r.payment_date)}</td>
                     <td>{formatPeriod(r.period_start, r.period_end)}</td>
-                    <td className={styles.colWide}>{r.employees?.full_name || '—'}</td>
+                    <td className={styles.colWide}>
+                      {r.employee_id != null ? (
+                        <button
+                          type="button"
+                          className={styles.employeeLink}
+                          onClick={() =>
+                            setEmployeeReceipts({ id: r.employee_id!, name: r.employees?.full_name || '' })
+                          }
+                          title="Показать все чеки сотрудника"
+                        >
+                          {r.employees?.full_name || '—'}
+                        </button>
+                      ) : (
+                        r.employees?.full_name || '—'
+                      )}
+                    </td>
                     <td className={styles.colWide}>
                       {r.payer_full_name || '—'}
                       {fioMismatch && (
@@ -395,6 +412,15 @@ export const PatentReceiptsPage: FC = () => {
             </tbody>
           </table>
         </div>
+      )}
+
+      {employeeReceipts !== null && (
+        <EmployeePatentReceiptsModal
+          employeeId={employeeReceipts.id}
+          employeeName={employeeReceipts.name}
+          onClose={() => setEmployeeReceipts(null)}
+          onOpenReceipt={id => setEditingId(id)}
+        />
       )}
 
       {editingId !== null && (
