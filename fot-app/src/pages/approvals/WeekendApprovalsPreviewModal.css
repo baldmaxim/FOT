@@ -1,28 +1,40 @@
 /* Модалка «Просмотр согласований по ответственным» (read-only для админа). */
 
-.wap-modal {
+/* Высокая специфичность (.approvals-modal.wap-modal): базовый .approvals-modal
+   в бандле идёт ПОЗЖE .wap-modal и при равной специфичности перебивал ширину
+   (модалка становилась 480px). Кладём всю раскладку сюда, чтобы каскад не мешал.
+   Определённая высота (height, а не только max-height) даёт .wap-list реальный
+   предел для overflow-y — иначе flex-контейнер «неопределённой» высоты не
+   ограничивает список, и overflow:hidden модалки режет низ.
+   vh-фолбэк — для движков без dvh; max-height — кап на больших экранах. */
+.approvals-modal.wap-modal {
   width: min(980px, 100%);
-  /* Определённая высота, а не только max-height: при height:auto flex-контейнер
-     имеет «неопределённую» основную высоту, и .wap-list (flex:1) не получает
-     реального предела → растёт по контенту, overflow:hidden модалки режет низ.
-     vh-фолбэк — для движков без dvh; max-height — кап на больших экранах. */
   height: 88vh;
   height: 88dvh;
   max-height: 920px;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.wap-modal .approvals-modal-header {
-  flex-shrink: 0;
+.approvals-modal.wap-modal > .approvals-modal-header,
+.approvals-modal.wap-modal > .wap-topbar {
+  flex: 0 0 auto;
 }
 
-/* Единственная скроллируемая область модалки (шапка и табы — flex-shrink:0). */
-.wap-list {
-  flex: 1 1 auto;
+/* Единственная скроллируемая область модалки. */
+.approvals-modal.wap-modal > .wap-list {
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+/* Раскладка списка и топбара — обычная специфичность (база их не трогает,
+   мобильный @media для padding продолжает работать). */
+.wap-list {
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -35,7 +47,6 @@
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  flex-shrink: 0;
   padding: 14px 18px 12px;
 }
 
