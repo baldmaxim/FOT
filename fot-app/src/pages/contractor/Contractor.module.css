@@ -270,6 +270,16 @@
   flex-wrap: wrap;
 }
 
+/* Две колонки в одну строку (модалка «Документы»: дата патента + номер бланка). */
+.docRow {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.docRow .field {
+  flex: 1 1 180px;
+}
+
 .filterRow {
   display: flex;
   gap: 12px;

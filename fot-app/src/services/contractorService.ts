@@ -49,6 +49,7 @@ export interface IPassRow {
   passport_issue_date: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
+  patent_blank_number: string | null;
 }
 
 /** Персональные документы держателя пропуска (паспорт/патент). */
@@ -57,6 +58,7 @@ export interface IPassDocuments {
   passport_issue_date: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
+  patent_blank_number: string | null;
 }
 
 export interface ISubmissionRow {

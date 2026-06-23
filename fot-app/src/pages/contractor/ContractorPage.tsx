@@ -68,6 +68,7 @@ export const ContractorPage: FC = () => {
     passport_issue_date: '',
     patent_number: '',
     patent_issue_date: '',
+    patent_blank_number: '',
   });
 
   const changeOverlay = useOverlayDismiss(() => setChangeOwnerPass(null));
@@ -125,6 +126,7 @@ export const ContractorPage: FC = () => {
       passport_issue_date: (p.passport_issue_date ?? '').slice(0, 10),
       patent_number: p.patent_number ?? '',
       patent_issue_date: (p.patent_issue_date ?? '').slice(0, 10),
+      patent_blank_number: p.patent_blank_number ?? '',
     });
     setDocsPass(p);
   };
@@ -139,6 +141,7 @@ export const ContractorPage: FC = () => {
         passport_issue_date: docForm.passport_issue_date || null,
         patent_number: docForm.patent_number.trim() || null,
         patent_issue_date: docForm.patent_issue_date || null,
+        patent_blank_number: docForm.patent_blank_number.trim() || null,
       })
       .then(async () => {
         toast.success('Документы сохранены');
@@ -501,14 +504,25 @@ export const ContractorPage: FC = () => {
                 onChange={e => setDocForm(prev => ({ ...prev, patent_number: formatPatentNumber(e.target.value) }))}
               />
             </div>
-            <div className={styles.field}>
-              <span className={styles.label}>Дата выдачи патента</span>
-              <input
-                className={`${styles.input} ${styles.numInput}`}
-                type="date"
-                value={docForm.patent_issue_date}
-                onChange={e => setDocForm(prev => ({ ...prev, patent_issue_date: e.target.value }))}
-              />
+            <div className={styles.docRow}>
+              <div className={styles.field}>
+                <span className={styles.label}>Дата выдачи патента</span>
+                <input
+                  className={`${styles.input} ${styles.numInput}`}
+                  type="date"
+                  value={docForm.patent_issue_date}
+                  onChange={e => setDocForm(prev => ({ ...prev, patent_issue_date: e.target.value }))}
+                />
+              </div>
+              <div className={styles.field}>
+                <span className={styles.label}>Номер бланка</span>
+                <input
+                  className={`${styles.input} ${styles.fullInput}`}
+                  value={docForm.patent_blank_number}
+                  placeholder="Например: ПР8048893"
+                  onChange={e => setDocForm(prev => ({ ...prev, patent_blank_number: e.target.value }))}
+                />
+              </div>
             </div>
             <div className={styles.modalActions}>
               <button

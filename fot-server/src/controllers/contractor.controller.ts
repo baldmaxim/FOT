@@ -435,6 +435,7 @@ export const contractorController = {
         passport_issue_date: dateField,
         patent_number: z.string().trim().max(50).nullable().optional(),
         patent_issue_date: dateField,
+        patent_blank_number: z.string().trim().max(50).nullable().optional(),
       }).parse(req.body);
 
       const pass = await queryOne<{ id: string }>(
@@ -458,13 +459,15 @@ export const contractorController = {
                 passport_issue_date = $2,
                 patent_number = $3,
                 patent_issue_date = $4,
+                patent_blank_number = $5,
                 updated_at = now()
-          WHERE id = $5::uuid`,
+          WHERE id = $6::uuid`,
         [
           norm(parsed.passport_series_number),
           parsed.passport_issue_date ?? null,
           norm(parsed.patent_number),
           parsed.patent_issue_date ?? null,
+          norm(parsed.patent_blank_number),
           passId,
         ],
       );
