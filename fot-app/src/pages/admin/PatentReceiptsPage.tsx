@@ -1,4 +1,4 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Eye, RefreshCw, AlertTriangle, CheckCircle2, Clock, XCircle, UserX, ShieldCheck, Trash2, ChevronDown, ChevronUp, FileText, Check, Search, FileWarning } from 'lucide-react';
 
@@ -81,7 +81,13 @@ export const PatentReceiptsPage: FC = () => {
   const [filterNeedsReview, setFilterNeedsReview] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [searchFio, setSearchFio] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filterDeptId, setFilterDeptId] = useState('');
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchFio.trim()), 350);
+    return () => clearTimeout(t);
+  }, [searchFio]);
   const [showMissing, setShowMissing] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [recognizingDocId, setRecognizingDocId] = useState<number | null>(null);
@@ -95,8 +101,8 @@ export const PatentReceiptsPage: FC = () => {
   });
 
   const queryKey = useMemo(
-    () => ['patent-receipts', filterEmployeeId, filterFrom, filterTo, filterNeedsReview],
-    [filterEmployeeId, filterFrom, filterTo, filterNeedsReview],
+    () => ['patent-receipts', filterEmployeeId, filterFrom, filterTo, filterNeedsReview, debouncedSearch],
+    [filterEmployeeId, filterFrom, filterTo, filterNeedsReview, debouncedSearch],
   );
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey,
@@ -105,6 +111,7 @@ export const PatentReceiptsPage: FC = () => {
       from: filterFrom || undefined,
       to: filterTo || undefined,
       needs_review: filterNeedsReview ? true : undefined,
+      search: debouncedSearch || undefined,
     }),
   });
 

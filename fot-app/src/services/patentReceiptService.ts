@@ -112,6 +112,7 @@ export interface IListFilters {
   to?: string;
   needs_review?: boolean;
   status?: RecognitionStatus;
+  search?: string;
 }
 
 export interface IMyPatentReceipt {
@@ -157,6 +158,7 @@ export const patentReceiptService = {
     if (filters?.to) params.set('to', filters.to);
     if (filters?.needs_review !== undefined) params.set('needs_review', String(filters.needs_review));
     if (filters?.status) params.set('status', filters.status);
+    if (filters?.search) params.set('search', filters.search);
     const qs = params.toString();
     const res = await apiClient.get<ApiResponse<IPatentReceiptListRow[]>>(`/patent-receipts${qs ? `?${qs}` : ''}`);
     return res.data;

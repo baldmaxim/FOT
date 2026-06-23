@@ -97,6 +97,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       to,
       needs_review,
       status,
+      search,
     } = req.query as Record<string, string | undefined>;
 
     const whereParts: string[] = [`d.category = 'patent_check'`];
@@ -111,6 +112,15 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     }
     if (status) {
       whereParts.push(`d.recognition_status = ${addParam(status)}`);
+    }
+    // Поиск по ФИО — на сервере (до LIMIT), иначе клиентский фильтр не видит
+    // чеки за пределами топ-500 свежих.
+    const searchTerm = typeof search === 'string' ? search.trim() : '';
+    if (searchTerm) {
+      const normalized = searchTerm.toUpperCase().replace(/Ё/g, 'Е').replace(/[%_\\]/g, '\\$&');
+      whereParts.push(
+        `upper(replace(e.full_name, 'Ё', 'Е')) LIKE ${addParam(`%${normalized}%`)} ESCAPE '\\'`,
+      );
     }
 
     const whereSql = `WHERE ${whereParts.join(' AND ')}`;
