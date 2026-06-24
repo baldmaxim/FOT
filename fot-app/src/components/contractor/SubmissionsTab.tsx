@@ -9,6 +9,7 @@ import {
 } from '../../services/contractorService';
 import { passStatusLabel, approvalStatusLabel } from '../../utils/contractorStatus';
 import { ApproveSubmissionModal } from './ApproveSubmissionModal';
+import { PassDocumentsModal, hasDocDuplicate } from './PassDocumentsModal';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 interface ISubmissionDetailProps {
@@ -18,6 +19,7 @@ interface ISubmissionDetailProps {
 }
 
 const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, onChange }) => {
+  const [docRow, setDocRow] = useState<ISubmissionDetailRow | null>(null);
   const detailQuery = useQuery({
     queryKey: ['contractor-sub-detail', submissionId],
     queryFn: () => contractorAdminService.getSubmissionDetail(submissionId),
@@ -53,6 +55,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
   if (pendingRows.length === 0) return <div className={styles.detailRow}>Нет пропусков на согласовании</div>;
 
   return (
+    <>
     <table className={styles.table}>
       <thead>
         <tr>
@@ -68,6 +71,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
           </th>
           <th>№</th>
           <th>ФИО</th>
+          <th>Документы</th>
           <th>UID</th>
           <th>Точки доступа</th>
           <th>Статус</th>
@@ -77,6 +81,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
       <tbody>
         {pendingRows.map(r => {
           const isChecked = effective.has(r.id);
+          const dup = hasDocDuplicate(r);
           return (
             <tr key={r.id} style={!isChecked ? { opacity: 0.55 } : undefined}>
               <td>
@@ -88,6 +93,16 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
               </td>
               <td>{r.pass_number}</td>
               <td>{r.holder_name ?? '—'}</td>
+              <td>
+                <button
+                  className="btn-secondary"
+                  onClick={() => setDocRow(r)}
+                  title={dup ? 'Повторяющийся номер документа' : 'Просмотр документов'}
+                >
+                  Документы
+                  {dup && <span className={styles.docCross} aria-hidden="true">✗</span>}
+                </button>
+              </td>
               <td>{r.card_uid ?? '—'}</td>
               <td>{(r.access_point_names ?? []).join(', ') || '—'}</td>
               <td>{passStatusLabel(r.pass_status)}</td>
@@ -97,8 +112,24 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
         })}
       </tbody>
     </table>
+    {docRow && (
+      <PassDocumentsModalPortal row={docRow} onClose={() => setDocRow(null)} />
+    )}
+    </>
   );
 };
+
+/** Read-only модалка документов с подсветкой дублей (для админских таблиц заявок). */
+const PassDocumentsModalPortal: FC<{ row: ISubmissionDetailRow; onClose: () => void }> = ({ row, onClose }) => (
+  <PassDocumentsModal
+    documents={row}
+    holderName={row.holder_name}
+    passNumber={row.pass_number}
+    readOnly
+    duplicates={{ patent: row.dup_patent, passport: row.dup_passport }}
+    onClose={onClose}
+  />
+);
 
 export const SubmissionsTab: FC = () => {
   const toast = useToast();

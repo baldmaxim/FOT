@@ -2,8 +2,9 @@ import { useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { contractorService, type IRosterRow, type IPassRow } from '../../services/contractorService';
+import { contractorService, type IRosterRow, type IPassRow, type IPassDocuments } from '../../services/contractorService';
 import { ContractorDocumentsBlock } from '../../components/contractor/ContractorDocumentsBlock';
+import { PassDocumentsModal } from '../../components/contractor/PassDocumentsModal';
 import styles from './Contractor.module.css';
 
 type Tab = 'roster' | 'passes' | 'removals';
@@ -41,13 +42,6 @@ const fmtDate = (iso: string | null): string => {
   try { return new Date(iso).toLocaleDateString('ru-RU'); } catch { return iso; }
 };
 
-/** Маска номера патента: «77 №2600295204» (2 цифры серии + 10 цифр номера). */
-const formatPatentNumber = (raw: string): string => {
-  const digits = raw.replace(/\D/g, '').slice(0, 12);
-  if (digits.length <= 2) return digits;
-  return `${digits.slice(0, 2)} №${digits.slice(2)}`;
-};
-
 /** Все документы держателя заполнены (для зелёной галочки на кнопке). */
 const hasAllDocs = (p: IPassRow): boolean =>
   !!(p.passport_series_number?.trim() && p.passport_issue_date && p.birth_date
@@ -63,17 +57,8 @@ export const ContractorPage: FC = () => {
   const [changeOwnerName, setChangeOwnerName] = useState('');
   const [changeOwnerDate, setChangeOwnerDate] = useState(new Date().toISOString().slice(0, 10));
   const [docsPass, setDocsPass] = useState<IPassRow | null>(null);
-  const [docForm, setDocForm] = useState({
-    passport_series_number: '',
-    passport_issue_date: '',
-    birth_date: '',
-    patent_number: '',
-    patent_issue_date: '',
-    patent_blank_number: '',
-  });
 
   const changeOverlay = useOverlayDismiss(() => setChangeOwnerPass(null));
-  const docsOverlay = useOverlayDismiss(() => setDocsPass(null));
 
   const orgQuery = useQuery({ queryKey: ['contractor-org'], queryFn: contractorService.getMyOrg, staleTime: 5 * 60_000 });
   const rosterQuery = useQuery({ queryKey: ['contractor-roster'], queryFn: contractorService.getRoster, staleTime: 30_000 });
@@ -86,6 +71,13 @@ export const ContractorPage: FC = () => {
   const latest = subs[0];
   const hasPending = subs.some(s => s.status === 'pending');
   const filledCount = passes.filter(p => p.status === 'assigned' && !p.submission_id && (edited[p.id] ?? p.holder_name ?? '').trim().length >= 2).length;
+  // Пропуска, готовые к отправке (ФИО есть), но без полного комплекта документов —
+  // блокируют отправку всей заявки.
+  const missingDocs = passes.filter(
+    p => p.status === 'assigned' && !p.submission_id
+      && (edited[p.id] ?? p.holder_name ?? '').trim().length >= 2
+      && !hasAllDocs(p),
+  );
   // Сохранённые, но ещё не отправленные на согласование пропуска (по данным сервера, без черновиков).
   const unsentCount = passes.filter(p => p.status === 'assigned' && !p.submission_id && (p.holder_name ?? '').trim().length >= 2).length;
   const removals = roster.filter(r => r.state === 'pending_remove');
@@ -121,31 +113,12 @@ export const ContractorPage: FC = () => {
     await run(() => contractorService.setPassHolder(p.id, value || null));
   };
 
-  const openDocs = (p: IPassRow) => {
-    setDocForm({
-      passport_series_number: p.passport_series_number ?? '',
-      passport_issue_date: (p.passport_issue_date ?? '').slice(0, 10),
-      birth_date: (p.birth_date ?? '').slice(0, 10),
-      patent_number: p.patent_number ?? '',
-      patent_issue_date: (p.patent_issue_date ?? '').slice(0, 10),
-      patent_blank_number: p.patent_blank_number ?? '',
-    });
-    setDocsPass(p);
-  };
-
-  const saveDocs = () => {
+  const saveDocs = (docs: IPassDocuments) => {
     if (!docsPass) return;
     const passId = docsPass.id;
     setBusy(true);
     contractorService
-      .savePassDocuments(passId, {
-        passport_series_number: docForm.passport_series_number.trim() || null,
-        passport_issue_date: docForm.passport_issue_date || null,
-        birth_date: docForm.birth_date || null,
-        patent_number: docForm.patent_number.trim() || null,
-        patent_issue_date: docForm.patent_issue_date || null,
-        patent_blank_number: docForm.patent_blank_number.trim() || null,
-      })
+      .savePassDocuments(passId, docs)
       .then(async () => {
         toast.success('Документы сохранены');
         setDocsPass(null);
@@ -304,13 +277,21 @@ export const ContractorPage: FC = () => {
                 <button
                   className="btn-primary"
                   onClick={() => run(() => contractorService.submit(), 'Отправлено на согласование')}
-                  disabled={busy || hasPending || filledCount === 0}
+                  disabled={busy || hasPending || filledCount === 0 || missingDocs.length > 0}
                   title={hasPending ? 'Уже есть заявка на согласовании'
-                    : filledCount === 0 ? 'Впишите ФИО хотя бы в один пропуск' : ''}
+                    : filledCount === 0 ? 'Впишите ФИО хотя бы в один пропуск'
+                    : missingDocs.length > 0 ? `Заполните документы у пропусков: ${missingDocs.map(p => `№${p.pass_number}`).join(', ')}` : ''}
                 >
                   Отправить на согласование ({filledCount})
                 </button>
               </div>
+              {missingDocs.length > 0 && (
+                <div className={styles.warnNote}>
+                  Нельзя отправить: у пропусков с вписанным ФИО не заполнены документы —{' '}
+                  <b>{missingDocs.map(p => `№${p.pass_number}`).join(', ')}</b>. Откройте «Документы»
+                  и заполните паспорт, патент и дату рождения.
+                </div>
+              )}
               {hasPending && filledCount > 0 && (
                 <div className={styles.warnNote}>
                   Пропуска с вписанным ФИО ({filledCount}) ещё <b>не отправлены</b>: они уйдут на
@@ -367,7 +348,7 @@ export const ContractorPage: FC = () => {
                               <button
                                 className="btn-secondary"
                                 disabled={busy}
-                                onClick={() => openDocs(p)}
+                                onClick={() => setDocsPass(p)}
                                 title={hasAllDocs(p) ? 'Документы заполнены' : 'Заполнить документы'}
                               >
                                 Документы
@@ -466,96 +447,15 @@ export const ContractorPage: FC = () => {
       )}
 
       {docsPass && (
-        <div
-          className={styles.overlay}
-          onMouseDown={docsOverlay.onMouseDown}
-          onMouseUp={docsOverlay.onMouseUp}
-          onMouseLeave={docsOverlay.onMouseLeave}
-          onTouchStart={docsOverlay.onTouchStart}
-          onTouchEnd={docsOverlay.onTouchEnd}
-        >
-          <div className={styles.modal}>
-            <h2 className={styles.modalTitle}>
-              Документы — {docsPass.holder_name ?? `пропуск № ${docsPass.pass_number}`}
-            </h2>
-            <div className={styles.field}>
-              <span className={styles.label}>Паспорт серия номер</span>
-              <input
-                className={`${styles.input} ${styles.fullInput}`}
-                value={docForm.passport_series_number}
-                autoFocus
-                placeholder="Серия и номер"
-                onChange={e => setDocForm(prev => ({ ...prev, passport_series_number: e.target.value }))}
-              />
-            </div>
-            <div className={styles.docRow}>
-              <div className={styles.field}>
-                <span className={styles.label}>Дата выдачи документа, удостоверяющего личность</span>
-                <input
-                  className={`${styles.input} ${styles.numInput}`}
-                  type="date"
-                  value={docForm.passport_issue_date}
-                  onChange={e => setDocForm(prev => ({ ...prev, passport_issue_date: e.target.value }))}
-                />
-              </div>
-              <div className={styles.field}>
-                <span className={styles.label}>Дата рождения</span>
-                <input
-                  className={`${styles.input} ${styles.numInput}`}
-                  type="date"
-                  value={docForm.birth_date}
-                  onChange={e => setDocForm(prev => ({ ...prev, birth_date: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div className={styles.field}>
-              <span className={styles.label}>Номер патента</span>
-              <input
-                className={`${styles.input} ${styles.fullInput}`}
-                value={docForm.patent_number}
-                inputMode="numeric"
-                placeholder="77 №2600295204"
-                onChange={e => setDocForm(prev => ({ ...prev, patent_number: formatPatentNumber(e.target.value) }))}
-              />
-            </div>
-            <div className={styles.docRow}>
-              <div className={styles.field}>
-                <span className={styles.label}>Дата выдачи патента</span>
-                <input
-                  className={`${styles.input} ${styles.numInput}`}
-                  type="date"
-                  value={docForm.patent_issue_date}
-                  onChange={e => setDocForm(prev => ({ ...prev, patent_issue_date: e.target.value }))}
-                />
-              </div>
-              <div className={styles.field}>
-                <span className={styles.label}>Номер бланка</span>
-                <input
-                  className={`${styles.input} ${styles.fullInput}`}
-                  value={docForm.patent_blank_number}
-                  placeholder="Например: ПР8048893"
-                  onChange={e => setDocForm(prev => ({ ...prev, patent_blank_number: e.target.value }))}
-                />
-              </div>
-            </div>
-            <div className={styles.modalActions}>
-              <button
-                className="btn-secondary"
-                onClick={() => setDocsPass(null)}
-                disabled={busy}
-              >
-                Отмена
-              </button>
-              <button
-                className="btn-primary"
-                onClick={saveDocs}
-                disabled={busy}
-              >
-                Сохранить
-              </button>
-            </div>
-          </div>
-        </div>
+        <PassDocumentsModal
+          documents={docsPass}
+          holderName={docsPass.holder_name}
+          passNumber={docsPass.pass_number}
+          readOnly={docsPass.approval_status === 'approved'}
+          busy={busy}
+          onClose={() => setDocsPass(null)}
+          onSave={saveDocs}
+        />
       )}
     </div>
   );

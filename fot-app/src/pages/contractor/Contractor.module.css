@@ -425,6 +425,23 @@
   font-weight: 700;
 }
 
+/* Красный крест «повторяющийся номер документа» у кнопки «Документы» (админ). */
+.docCross {
+  margin-left: 6px;
+  color: var(--error);
+  font-weight: 700;
+}
+
+/* Поле документа с дублирующимся номером — красная рамка + пояснение. */
+.docDupInput {
+  border-color: var(--error) !important;
+}
+.docDupNote {
+  font-size: 12px;
+  color: var(--error);
+  margin-top: 4px;
+}
+
 .docsBlock {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

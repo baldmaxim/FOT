@@ -10,6 +10,7 @@ import {
   type ISubmissionDetailRow,
   type ISigurAccessPointOption,
 } from '../../services/contractorService';
+import { PassDocumentsModal, hasDocDuplicate } from './PassDocumentsModal';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 const fmtSize = (bytes: number): string => {
@@ -111,6 +112,8 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   const [apExpanded, setApExpanded] = useState(true);
   // По умолчанию все pending-пропуска выбраны (если родитель не передал initialSelected).
   const [selectedPasses, setSelectedPasses] = useState<Set<string>>(initialSelected ?? new Set());
+  // Просмотр документов держателя (read-only) — открывается из строки таблицы.
+  const [docRow, setDocRow] = useState<ISubmissionDetailRow | null>(null);
 
   // Этап после активации: показ дублей-однофамильцев.
   const [view, setView] = useState<'apply' | 'duplicates'>('apply');
@@ -303,6 +306,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   const staffDups = duplicates.filter(d => d.source === 'employee');
 
   return (
+    <>
     <div
       className={styles.overlay}
       onMouseDown={overlay.onMouseDown}
@@ -370,6 +374,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                       </th>
                       <th>№</th>
                       <th>ФИО</th>
+                      <th>Документы</th>
                       <th>Точки доступа</th>
                       {!forAll && <th>Срок действия</th>}
                     </tr>
@@ -391,6 +396,18 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                           </td>
                           <td>{r.pass_number}</td>
                           <td>{r.holder_name ?? '—'}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => setDocRow(r)}
+                              disabled={busy}
+                              title={hasDocDuplicate(r) ? 'Повторяющийся номер документа' : 'Просмотр документов'}
+                            >
+                              Документы
+                              {hasDocDuplicate(r) && <span className={styles.docCross} aria-hidden="true">✗</span>}
+                            </button>
+                          </td>
                           <td>
                             {apForAll ? (
                               <div style={{ color: 'var(--text-primary)' }}>
@@ -673,6 +690,17 @@ export const ApproveSubmissionModal: FC<IProps> = ({
         )}
       </div>
     </div>
+    {docRow && (
+      <PassDocumentsModal
+        documents={docRow}
+        holderName={docRow.holder_name}
+        passNumber={docRow.pass_number}
+        readOnly
+        duplicates={{ patent: docRow.dup_patent, passport: docRow.dup_passport }}
+        onClose={() => setDocRow(null)}
+      />
+    )}
+    </>
   );
 };
 

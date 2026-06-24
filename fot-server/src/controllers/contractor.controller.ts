@@ -19,6 +19,13 @@ import {
   listOrgDocuments,
   uploadOrgDocument,
 } from '../services/contractor-documents.service.js';
+import {
+  CONTRACTOR_DOCUMENT_DUPLICATE,
+  CONTRACTOR_DOCUMENTS_INCOMPLETE,
+  duplicateMessage,
+  findOrgDocDuplicate,
+  isDocsComplete,
+} from '../services/contractor-docs.service.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 
 interface IMulterRequest extends AuthenticatedRequest {
@@ -439,46 +446,105 @@ export const contractorController = {
         patent_blank_number: z.string().trim().max(50).nullable().optional(),
       }).parse(req.body);
 
-      const pass = await queryOne<{ id: string }>(
-        `SELECT id FROM contractor_passes
-          WHERE id = $1::uuid AND org_department_id = $2::uuid`,
-        [passId, orgId],
-      );
-      if (!pass) {
-        res.status(404).json({ success: false, error: 'Пропуск не найден' });
-        return;
-      }
-
       const norm = (v: string | null | undefined): string | null => {
         const s = (v ?? '').trim();
         return s.length > 0 ? s : null;
       };
 
-      await execute(
-        `UPDATE contractor_passes
-            SET passport_series_number = $1,
-                passport_issue_date = $2,
-                birth_date = $3,
-                patent_number = $4,
-                patent_issue_date = $5,
-                patent_blank_number = $6,
-                updated_at = now()
-          WHERE id = $7::uuid`,
-        [
-          norm(parsed.passport_series_number),
-          parsed.passport_issue_date ?? null,
-          parsed.birth_date ?? null,
-          norm(parsed.patent_number),
-          parsed.patent_issue_date ?? null,
-          norm(parsed.patent_blank_number),
+      // Нормализованный набор сохраняемых значений.
+      const next = {
+        passport_series_number: norm(parsed.passport_series_number),
+        passport_issue_date: parsed.passport_issue_date ?? null,
+        birth_date: parsed.birth_date ?? null,
+        patent_number: norm(parsed.patent_number),
+        patent_issue_date: parsed.patent_issue_date ?? null,
+        patent_blank_number: norm(parsed.patent_blank_number),
+      };
+
+      // Конфликт уникальности (CONTRACTOR_DOCUMENT_DUPLICATE) или read-only/неполнота —
+      // прокидываем через типизированную ошибку из транзакции.
+      type SaveError = { http: number; code?: string; message: string };
+      const failWith = (e: SaveError): never => {
+        throw Object.assign(new Error(e.message), { __save: e });
+      };
+
+      // Транзакция + FOR UPDATE по пропускам организации: savePassDocuments —
+      // единственная точка записи документов, поэтому org-блокировки достаточно,
+      // чтобы два параллельных сохранения не создали дубль.
+      await withTransaction(async client => {
+        const passRes = await client.query<{
+          id: string;
+          approval_status: string;
+          status: string;
+        }>(
+          `SELECT id, approval_status, status
+             FROM contractor_passes
+            WHERE org_department_id = $1::uuid
+            FOR UPDATE`,
+          [orgId],
+        );
+        const pass = passRes.rows.find(r => r.id === passId);
+        if (!pass) {
+          failWith({ http: 404, message: 'Пропуск не найден' });
+          return;
+        }
+        // Read-only после согласования (Шаг 3): документы выданного/одобренного/отозванного
+        // пропуска не редактируются.
+        if (pass.approval_status === 'approved' || pass.status === 'applied' || pass.status === 'revoked') {
+          failWith({ http: 409, message: 'Документы согласованного пропуска изменять нельзя' });
+          return;
+        }
+        // У пропуска в заявке (pending) нельзя оставлять неполный комплект.
+        if (pass.approval_status === 'pending' && !isDocsComplete(next)) {
+          failWith({
+            http: 409,
+            code: CONTRACTOR_DOCUMENTS_INCOMPLETE,
+            message: 'Документы отправленного пропуска должны быть заполнены полностью',
+          });
+          return;
+        }
+        // Дубль паспорта/патента внутри организации (grandfather: только при записи новых значений).
+        const dup = await findOrgDocDuplicate(client, {
+          orgId,
           passId,
-        ],
-      );
+          patentNumber: next.patent_number,
+          passportNumber: next.passport_series_number,
+        });
+        if (dup) {
+          failWith({ http: 409, code: CONTRACTOR_DOCUMENT_DUPLICATE, message: duplicateMessage(dup) });
+          return;
+        }
+        await client.query(
+          `UPDATE contractor_passes
+              SET passport_series_number = $1,
+                  passport_issue_date = $2,
+                  birth_date = $3,
+                  patent_number = $4,
+                  patent_issue_date = $5,
+                  patent_blank_number = $6,
+                  updated_at = now()
+            WHERE id = $7::uuid`,
+          [
+            next.passport_series_number,
+            next.passport_issue_date,
+            next.birth_date,
+            next.patent_number,
+            next.patent_issue_date,
+            next.patent_blank_number,
+            passId,
+          ],
+        );
+      });
 
       res.json({ success: true });
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      const save = (error as { __save?: { http: number; code?: string; message: string } }).__save;
+      if (save) {
+        res.status(save.http).json({ success: false, error: save.message, code: save.code });
         return;
       }
       console.error('Contractor savePassDocuments error:', error);
@@ -573,15 +639,43 @@ export const contractorController = {
         return;
       }
 
-      const eligible = await queryOne<{ n: string }>(
-        `SELECT COUNT(*)::text AS n FROM contractor_passes
+      const eligibleRows = await query<{
+        pass_number: string;
+        holder_name: string | null;
+        passport_series_number: string | null;
+        passport_issue_date: string | null;
+        birth_date: string | null;
+        patent_number: string | null;
+        patent_issue_date: string | null;
+        patent_blank_number: string | null;
+      }>(
+        `SELECT pass_number, holder_name,
+                passport_series_number, passport_issue_date, birth_date,
+                patent_number, patent_issue_date, patent_blank_number
+           FROM contractor_passes
           WHERE org_department_id = $1::uuid AND submission_id IS NULL
             AND status = 'assigned' AND holder_name IS NOT NULL`,
         [orgId],
       );
-      const passes = Number(eligible?.n ?? 0);
+      const passes = eligibleRows.length;
       if (passes === 0) {
         res.status(409).json({ success: false, error: 'Нет пропусков с заполненным ФИО' });
+        return;
+      }
+      // Гейт полноты документов: заявку нельзя отправить, пока у каждого пропуска
+      // не заполнены все 6 полей. Не отправляем частично — отклоняем всю отправку.
+      const incomplete = eligibleRows.filter(r => !isDocsComplete(r));
+      if (incomplete.length > 0) {
+        const list = incomplete
+          .slice(0, 10)
+          .map(r => `№${r.pass_number}${r.holder_name ? ` (${r.holder_name})` : ''}`)
+          .join(', ');
+        const more = incomplete.length > 10 ? ` и ещё ${incomplete.length - 10}` : '';
+        res.status(409).json({
+          success: false,
+          code: CONTRACTOR_DOCUMENTS_INCOMPLETE,
+          error: `Заполните документы у всех пропусков перед отправкой: ${list}${more}`,
+        });
         return;
       }
 

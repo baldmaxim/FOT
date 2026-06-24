@@ -4,9 +4,10 @@ import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { BarChart3 } from 'lucide-react';
-import { contractorAdminService, type IPassHistory } from '../../services/contractorService';
+import { contractorAdminService, type IPassHistory, type IMonitorPassRow } from '../../services/contractorService';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
 import { PassStatsModal } from './PassStatsModal';
+import { PassDocumentsModal } from './PassDocumentsModal';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 /** Застрявшие отзывы: вернулись в пул в БД, но Sigur не подтвердил перенос/блокировку. */
@@ -166,6 +167,7 @@ export const MonitorTab: FC = () => {
   const [orgId, setOrgId] = useState('');
   const [search, setSearch] = useState('');
   const [historyPassId, setHistoryPassId] = useState<string | null>(null);
+  const [docRow, setDocRow] = useState<IMonitorPassRow | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
 
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
@@ -260,7 +262,17 @@ export const MonitorTab: FC = () => {
                 {searchActive && <td>{p.org_name ?? '—'}</td>}
                 <td>{p.card_uid ?? '—'}</td>
                 <td>{p.w26 ?? '—'}</td>
-                <td>{p.holder_name ?? '—'}</td>
+                <td>
+                  {p.holder_name ?? '—'}
+                  <button
+                    className="btn-secondary"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => setDocRow(p)}
+                    title="Просмотр документов"
+                  >
+                    Документы
+                  </button>
+                </td>
                 <td>{p.status}</td>
                 <td>{p.approval_status}</td>
                 <td>
@@ -284,6 +296,16 @@ export const MonitorTab: FC = () => {
 
       {historyPassId && (
         <PassHistoryModal passId={historyPassId} onClose={() => setHistoryPassId(null)} />
+      )}
+
+      {docRow && (
+        <PassDocumentsModal
+          documents={docRow}
+          holderName={docRow.holder_name}
+          passNumber={docRow.pass_number}
+          readOnly
+          onClose={() => setDocRow(null)}
+        />
       )}
 
       {statsOpen && (

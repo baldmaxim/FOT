@@ -84,6 +84,12 @@ export interface IPendingSubmission {
   pending: string;
 }
 
+/** Совпадение номера документа с другим держателем внутри организации. */
+export interface IPassDocDuplicate {
+  holder_name: string | null;
+  pass_number: string;
+}
+
 export interface ISubmissionDetailRow {
   id: string;
   pass_number: string;
@@ -94,6 +100,17 @@ export interface ISubmissionDetailRow {
   is_active: boolean;
   access_point_names: string[] | null;
   object_label: string;
+  passport_series_number: string | null;
+  passport_issue_date: string | null;
+  birth_date: string | null;
+  patent_number: string | null;
+  patent_issue_date: string | null;
+  patent_blank_number: string | null;
+  documents_complete: boolean;
+  /** Другие держатели той же орг с таким же номером патента. */
+  dup_patent: IPassDocDuplicate[];
+  /** Другие держатели той же орг с таким же номером паспорта. */
+  dup_passport: IPassDocDuplicate[];
 }
 
 export interface IPoolItem {
@@ -176,6 +193,12 @@ export interface IMonitorPassRow {
   submission_id: string | null;
   updated_at: string;
   object_label: string;
+  passport_series_number: string | null;
+  passport_issue_date: string | null;
+  birth_date: string | null;
+  patent_number: string | null;
+  patent_issue_date: string | null;
+  patent_blank_number: string | null;
 }
 
 export interface IContractorPassStat {

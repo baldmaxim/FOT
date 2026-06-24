@@ -33,6 +33,7 @@ import {
   getOrgDocumentDownloadUrl,
   listOrgDocuments,
 } from '../services/contractor-documents.service.js';
+import { normalizeDocSql } from '../services/contractor-docs.service.js';
 import {
   assignSigurEmployeeCardBinding,
   replaceSigurEmployeeAccessPoints,
@@ -949,6 +950,40 @@ export const contractorAdminController = {
                 p.approval_status,
                 p.is_active,
                 p.access_point_names,
+                p.passport_series_number,
+                to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
+                to_char(p.birth_date, 'YYYY-MM-DD') AS birth_date,
+                p.patent_number,
+                to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
+                p.patent_blank_number,
+                (p.passport_series_number IS NOT NULL AND p.passport_issue_date IS NOT NULL
+                   AND p.birth_date IS NOT NULL AND p.patent_number IS NOT NULL
+                   AND p.patent_issue_date IS NOT NULL AND p.patent_blank_number IS NOT NULL)
+                  AS documents_complete,
+                COALESCE((
+                  SELECT jsonb_agg(jsonb_build_object(
+                           'holder_name', COALESCE(hq.holder_name, q.holder_name),
+                           'pass_number', q.pass_number) ORDER BY q.pass_number)
+                    FROM contractor_passes q
+                    LEFT JOIN contractor_pass_holders hq
+                      ON hq.pass_id = q.id AND hq.valid_until IS NULL
+                   WHERE q.org_department_id = p.org_department_id
+                     AND q.status <> 'revoked' AND q.id <> p.id
+                     AND ${normalizeDocSql('p.patent_number')} IS NOT NULL
+                     AND ${normalizeDocSql('q.patent_number')} = ${normalizeDocSql('p.patent_number')}
+                ), '[]'::jsonb) AS dup_patent,
+                COALESCE((
+                  SELECT jsonb_agg(jsonb_build_object(
+                           'holder_name', COALESCE(hq.holder_name, q.holder_name),
+                           'pass_number', q.pass_number) ORDER BY q.pass_number)
+                    FROM contractor_passes q
+                    LEFT JOIN contractor_pass_holders hq
+                      ON hq.pass_id = q.id AND hq.valid_until IS NULL
+                   WHERE q.org_department_id = p.org_department_id
+                     AND q.status <> 'revoked' AND q.id <> p.id
+                     AND ${normalizeDocSql('p.passport_series_number')} IS NOT NULL
+                     AND ${normalizeDocSql('q.passport_series_number')} = ${normalizeDocSql('p.passport_series_number')}
+                ), '[]'::jsonb) AS dup_passport,
                 COALESCE(
                   (SELECT string_agg(o.name, ', ' ORDER BY o.name)
                      FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
@@ -1213,6 +1248,12 @@ export const contractorAdminController = {
                p.access_point_names,
                p.submission_id,
                p.updated_at,
+               p.passport_series_number,
+               to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
+               to_char(p.birth_date, 'YYYY-MM-DD') AS birth_date,
+               p.patent_number,
+               to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
+               p.patent_blank_number,
                COALESCE(
                  (SELECT string_agg(o.name, ', ' ORDER BY o.name)
                     FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
