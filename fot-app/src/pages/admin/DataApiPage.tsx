@@ -1,6 +1,7 @@
 import { useMemo, useState, type FC } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   dataApiService,
   type DataApiKey,
@@ -61,6 +62,7 @@ interface ICreateModalProps {
 const CreateKeyModal: FC<ICreateModalProps> = ({ onClose, onCreated }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const dismiss = useOverlayDismiss(onClose);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [rateLimit, setRateLimit] = useState(60);
@@ -94,7 +96,7 @@ const CreateKeyModal: FC<ICreateModalProps> = ({ onClose, onCreated }) => {
   };
 
   return (
-    <div className={styles.modalBackdrop} onClick={onClose}>
+    <div className={styles.modalBackdrop} {...dismiss}>
       <div className={styles.modal} onClick={e => e.stopPropagation()}>
         <h3>Новый API-ключ</h3>
         <div className={styles.formRow}>
@@ -160,6 +162,7 @@ interface ITokenModalProps {
 
 const TokenRevealModal: FC<ITokenModalProps> = ({ result, onClose }) => {
   const toast = useToast();
+  const dismiss = useOverlayDismiss(onClose);
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(result.plaintext_token);
@@ -170,7 +173,7 @@ const TokenRevealModal: FC<ITokenModalProps> = ({ result, onClose }) => {
   };
 
   return (
-    <div className={styles.modalBackdrop} onClick={onClose}>
+    <div className={styles.modalBackdrop} {...dismiss}>
       <div className={styles.modal} onClick={e => e.stopPropagation()}>
         <h3>Сохраните токен</h3>
         <div className={styles.tokenBox}>
@@ -202,6 +205,7 @@ interface IAccessEditorProps {
 const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const dismiss = useOverlayDismiss(onClose);
   const [tab, setTab] = useState<'access' | 'logs'>('access');
 
   const tablesQuery = useQuery({
@@ -332,7 +336,7 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
   );
 
   return (
-    <div className={styles.modalBackdrop} onClick={onClose}>
+    <div className={styles.modalBackdrop} {...dismiss}>
       <div className={styles.modal} onClick={e => e.stopPropagation()}>
         <div className={styles.toolbar}>
           <h3>Ключ: {apiKey.name}</h3>
