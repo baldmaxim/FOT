@@ -31,6 +31,14 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Дети колоночного флекса по умолчанию flex-shrink:1 — секции ужимались под
+   высоту списка вместо переполнения (а .wap-section{overflow:hidden} резал
+   контент), из-за чего список не скроллился (scrollHeight==clientHeight).
+   Запрещаем сжатие → контент переполняет .wap-list → появляется скролл. */
+.approvals-modal.wap-modal > .wap-list > * {
+  flex-shrink: 0;
+}
+
 /* Раскладка списка и топбара — обычная специфичность (база их не трогает,
    мобильный @media для padding продолжает работать). */
 .wap-list {
