@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { contractorService, type IRosterRow, type IPassRow, type IPassDocuments } from '../../services/contractorService';
+import { citizenshipRequiresPatent } from '../../services/citizenship';
 import { ContractorDocumentsBlock } from '../../components/contractor/ContractorDocumentsBlock';
 import { PassDocumentsModal } from '../../components/contractor/PassDocumentsModal';
 import styles from './Contractor.module.css';
@@ -42,10 +43,17 @@ const fmtDate = (iso: string | null): string => {
   try { return new Date(iso).toLocaleDateString('ru-RU'); } catch { return iso; }
 };
 
-/** Все документы держателя заполнены (для зелёной галочки на кнопке). */
-const hasAllDocs = (p: IPassRow): boolean =>
-  !!(p.passport_series_number?.trim() && p.passport_issue_date && p.birth_date
-    && p.patent_number?.trim() && p.patent_issue_date && p.patent_blank_number?.trim());
+/**
+ * Все документы держателя заполнены (для зелёной галочки на кнопке).
+ * Паспорт, даты и гражданство — всегда; патент — только для патентных гражданств.
+ */
+const hasAllDocs = (p: IPassRow): boolean => {
+  const base = !!(p.passport_series_number?.trim() && p.passport_issue_date
+    && p.birth_date && p.citizenship?.trim());
+  if (!base) return false;
+  if (!citizenshipRequiresPatent(p.citizenship)) return true;
+  return !!(p.patent_number?.trim() && p.patent_issue_date && p.patent_blank_number?.trim());
+};
 
 export const ContractorPage: FC = () => {
   const toast = useToast();

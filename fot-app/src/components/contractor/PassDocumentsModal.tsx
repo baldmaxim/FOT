@@ -1,6 +1,7 @@
 import { useState, type FC } from 'react';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import type { IPassDocDuplicate, IPassDocuments } from '../../services/contractorService';
+import { CITIZENSHIP_OPTIONS, citizenshipRequiresPatent } from '../../services/citizenship';
 import styles from '../../pages/contractor/Contractor.module.css';
 
 /** Маска номера патента: «77 №2600295204» (2 цифры серии + 10 цифр номера). */
@@ -55,10 +56,14 @@ export const PassDocumentsModal: FC<IProps> = ({
     passport_series_number: documents.passport_series_number ?? '',
     passport_issue_date: (documents.passport_issue_date ?? '').slice(0, 10),
     birth_date: (documents.birth_date ?? '').slice(0, 10),
+    citizenship: documents.citizenship ?? '',
     patent_number: documents.patent_number ?? '',
     patent_issue_date: (documents.patent_issue_date ?? '').slice(0, 10),
     patent_blank_number: documents.patent_blank_number ?? '',
   });
+
+  // Патент нужен только гражданам визово-безвизовых не-ЕАЭС стран.
+  const needsPatent = citizenshipRequiresPatent(form.citizenship);
 
   const passportDup = dupNote(duplicates?.passport);
   const patentDup = dupNote(duplicates?.patent);
@@ -67,13 +72,16 @@ export const PassDocumentsModal: FC<IProps> = ({
   const patentCls = `${styles.input} ${styles.fullInput} ${patentDup ? styles.docDupInput : ''}`;
 
   const handleSave = () => {
+    // Если патент не требуется — обнуляем поля патента, чтобы не копились
+    // устаревшие значения и не срабатывал дубль-детектор.
     onSave?.({
       passport_series_number: form.passport_series_number.trim() || null,
       passport_issue_date: form.passport_issue_date || null,
       birth_date: form.birth_date || null,
-      patent_number: form.patent_number.trim() || null,
-      patent_issue_date: form.patent_issue_date || null,
-      patent_blank_number: form.patent_blank_number.trim() || null,
+      citizenship: form.citizenship.trim() || null,
+      patent_number: needsPatent ? form.patent_number.trim() || null : null,
+      patent_issue_date: needsPatent ? form.patent_issue_date || null : null,
+      patent_blank_number: needsPatent ? form.patent_blank_number.trim() || null : null,
     });
   };
 
@@ -104,6 +112,21 @@ export const PassDocumentsModal: FC<IProps> = ({
           {passportDup && <span className={styles.docDupNote}>{passportDup}</span>}
         </div>
 
+        <div className={styles.field}>
+          <span className={styles.label}>Гражданство</span>
+          <select
+            className={`${styles.input} ${styles.fullInput}`}
+            value={form.citizenship}
+            disabled={readOnly}
+            onChange={e => setForm(prev => ({ ...prev, citizenship: e.target.value }))}
+          >
+            <option value="">Выберите…</option>
+            {CITIZENSHIP_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.value}</option>
+            ))}
+          </select>
+        </div>
+
         <div className={styles.docRow}>
           <div className={styles.field}>
             <span className={styles.label}>Дата выдачи документа, удостоверяющего личность</span>
@@ -127,41 +150,45 @@ export const PassDocumentsModal: FC<IProps> = ({
           </div>
         </div>
 
-        <div className={styles.field}>
-          <span className={styles.label}>Номер патента</span>
-          <input
-            className={patentCls}
-            value={form.patent_number}
-            inputMode="numeric"
-            disabled={readOnly}
-            placeholder="77 №2600295204"
-            onChange={e => setForm(prev => ({ ...prev, patent_number: formatPatentNumber(e.target.value) }))}
-          />
-          {patentDup && <span className={styles.docDupNote}>{patentDup}</span>}
-        </div>
+        {needsPatent && (
+          <>
+            <div className={styles.field}>
+              <span className={styles.label}>Номер патента</span>
+              <input
+                className={patentCls}
+                value={form.patent_number}
+                inputMode="numeric"
+                disabled={readOnly}
+                placeholder="77 №2600295204"
+                onChange={e => setForm(prev => ({ ...prev, patent_number: formatPatentNumber(e.target.value) }))}
+              />
+              {patentDup && <span className={styles.docDupNote}>{patentDup}</span>}
+            </div>
 
-        <div className={styles.docRow}>
-          <div className={styles.field}>
-            <span className={styles.label}>Дата выдачи патента</span>
-            <input
-              className={`${styles.input} ${styles.numInput}`}
-              type="date"
-              value={form.patent_issue_date}
-              disabled={readOnly}
-              onChange={e => setForm(prev => ({ ...prev, patent_issue_date: e.target.value }))}
-            />
-          </div>
-          <div className={styles.field}>
-            <span className={styles.label}>Номер бланка</span>
-            <input
-              className={`${styles.input} ${styles.fullInput}`}
-              value={form.patent_blank_number}
-              disabled={readOnly}
-              placeholder="Например: ПР8048893"
-              onChange={e => setForm(prev => ({ ...prev, patent_blank_number: e.target.value }))}
-            />
-          </div>
-        </div>
+            <div className={styles.docRow}>
+              <div className={styles.field}>
+                <span className={styles.label}>Дата выдачи патента</span>
+                <input
+                  className={`${styles.input} ${styles.numInput}`}
+                  type="date"
+                  value={form.patent_issue_date}
+                  disabled={readOnly}
+                  onChange={e => setForm(prev => ({ ...prev, patent_issue_date: e.target.value }))}
+                />
+              </div>
+              <div className={styles.field}>
+                <span className={styles.label}>Номер бланка</span>
+                <input
+                  className={`${styles.input} ${styles.fullInput}`}
+                  value={form.patent_blank_number}
+                  disabled={readOnly}
+                  placeholder="Например: ПР8048893"
+                  onChange={e => setForm(prev => ({ ...prev, patent_blank_number: e.target.value }))}
+                />
+              </div>
+            </div>
+          </>
+        )}
 
         <div className={styles.modalActions}>
           <button className="btn-secondary" onClick={onClose} disabled={busy}>

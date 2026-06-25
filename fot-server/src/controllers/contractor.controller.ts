@@ -441,6 +441,7 @@ export const contractorController = {
         passport_series_number: z.string().trim().max(50).nullable().optional(),
         passport_issue_date: dateField,
         birth_date: dateField,
+        citizenship: z.string().trim().max(50).nullable().optional(),
         patent_number: z.string().trim().max(50).nullable().optional(),
         patent_issue_date: dateField,
         patent_blank_number: z.string().trim().max(50).nullable().optional(),
@@ -456,6 +457,7 @@ export const contractorController = {
         passport_series_number: norm(parsed.passport_series_number),
         passport_issue_date: parsed.passport_issue_date ?? null,
         birth_date: parsed.birth_date ?? null,
+        citizenship: norm(parsed.citizenship),
         patent_number: norm(parsed.patent_number),
         patent_issue_date: parsed.patent_issue_date ?? null,
         patent_blank_number: norm(parsed.patent_blank_number),
@@ -519,15 +521,17 @@ export const contractorController = {
               SET passport_series_number = $1,
                   passport_issue_date = $2,
                   birth_date = $3,
-                  patent_number = $4,
-                  patent_issue_date = $5,
-                  patent_blank_number = $6,
+                  citizenship = $4,
+                  patent_number = $5,
+                  patent_issue_date = $6,
+                  patent_blank_number = $7,
                   updated_at = now()
-            WHERE id = $7::uuid`,
+            WHERE id = $8::uuid`,
           [
             next.passport_series_number,
             next.passport_issue_date,
             next.birth_date,
+            next.citizenship,
             next.patent_number,
             next.patent_issue_date,
             next.patent_blank_number,
@@ -645,12 +649,13 @@ export const contractorController = {
         passport_series_number: string | null;
         passport_issue_date: string | null;
         birth_date: string | null;
+        citizenship: string | null;
         patent_number: string | null;
         patent_issue_date: string | null;
         patent_blank_number: string | null;
       }>(
         `SELECT pass_number, holder_name,
-                passport_series_number, passport_issue_date, birth_date,
+                passport_series_number, passport_issue_date, birth_date, citizenship,
                 patent_number, patent_issue_date, patent_blank_number
            FROM contractor_passes
           WHERE org_department_id = $1::uuid AND submission_id IS NULL

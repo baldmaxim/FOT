@@ -10,22 +10,46 @@ import type { PoolClient } from 'pg';
 export const CONTRACTOR_DOCUMENT_DUPLICATE = 'CONTRACTOR_DOCUMENT_DUPLICATE';
 export const CONTRACTOR_DOCUMENTS_INCOMPLETE = 'CONTRACTOR_DOCUMENTS_INCOMPLETE';
 
-/** Обязательные поля полного комплекта документов. */
-export const REQUIRED_DOC_FIELDS = [
+/**
+ * Гражданства (UPPER), которым нужен патент (визово-безвизовые не-ЕАЭС).
+ * Тот же набор, что PATENT_COUNTRY_PREFIXES в patent-missing-receipts.service,
+ * и продублирован в SQL `documents_complete` (contractor-admin.controller) и
+ * на фронте (fot-app/src/services/citizenship.ts) — держать в синхроне.
+ */
+export const CITIZENSHIP_PATENT_SET = new Set([
+  'УЗБЕКИСТАН',
+  'ТАДЖИКИСТАН',
+  'УКРАИНА',
+  'АЗЕРБАЙДЖАН',
+  'МОЛДОВА',
+]);
+
+/** Нужен ли патент гражданину с данным гражданством (регистронезависимо). */
+export const citizenshipRequiresPatent = (c: string | null | undefined): boolean =>
+  !!c && CITIZENSHIP_PATENT_SET.has(c.trim().toUpperCase());
+
+/** Базовые поля комплекта (нужны всегда, независимо от гражданства). */
+export const BASE_DOC_FIELDS = [
   'passport_series_number',
   'passport_issue_date',
   'birth_date',
+  'citizenship',
+] as const;
+
+/** Поля патента — обязательны только для патентных гражданств. */
+export const PATENT_DOC_FIELDS = [
   'patent_number',
   'patent_issue_date',
   'patent_blank_number',
 ] as const;
 
-export type DocField = (typeof REQUIRED_DOC_FIELDS)[number];
+export type DocField = (typeof BASE_DOC_FIELDS)[number] | (typeof PATENT_DOC_FIELDS)[number];
 
 export interface IDocRow {
   passport_series_number: string | null;
   passport_issue_date: string | null;
   birth_date: string | null;
+  citizenship: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
@@ -44,10 +68,16 @@ export const normalizeDocNumber = (v: string | null | undefined): string | null 
 export const normalizeDocSql = (col: string): string =>
   `NULLIF(lower(regexp_replace(coalesce(${col},''), '[^0-9A-Za-zА-Яа-яЁё]', '', 'g')), '')`;
 
-/** Все 6 полей заполнены. */
+/**
+ * Комплект полный: базовые поля заполнены всегда; поля патента — только если
+ * гражданство требует патента (ЕАЭС/«Другое» обходятся без патента).
+ */
 export const isDocsComplete = (row: Partial<IDocRow> | null | undefined): boolean => {
   if (!row) return false;
-  return REQUIRED_DOC_FIELDS.every(f => {
+  const fields: readonly DocField[] = citizenshipRequiresPatent(row.citizenship)
+    ? [...BASE_DOC_FIELDS, ...PATENT_DOC_FIELDS]
+    : BASE_DOC_FIELDS;
+  return fields.every(f => {
     const v = (row as Record<string, unknown>)[f];
     return typeof v === 'string' ? v.trim().length > 0 : v != null;
   });

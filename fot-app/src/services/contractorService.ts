@@ -48,6 +48,7 @@ export interface IPassRow {
   passport_series_number: string | null;
   passport_issue_date: string | null;
   birth_date: string | null;
+  citizenship: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
@@ -58,6 +59,7 @@ export interface IPassDocuments {
   passport_series_number: string | null;
   passport_issue_date: string | null;
   birth_date: string | null;
+  citizenship: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
@@ -103,6 +105,7 @@ export interface ISubmissionDetailRow {
   passport_series_number: string | null;
   passport_issue_date: string | null;
   birth_date: string | null;
+  citizenship: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
@@ -196,6 +199,7 @@ export interface IMonitorPassRow {
   passport_series_number: string | null;
   passport_issue_date: string | null;
   birth_date: string | null;
+  citizenship: string | null;
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;

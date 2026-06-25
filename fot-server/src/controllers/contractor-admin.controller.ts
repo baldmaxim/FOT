@@ -953,12 +953,18 @@ export const contractorAdminController = {
                 p.passport_series_number,
                 to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
                 to_char(p.birth_date, 'YYYY-MM-DD') AS birth_date,
+                p.citizenship,
                 p.patent_number,
                 to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
                 p.patent_blank_number,
+                -- Список патентных гражданств продублирован из CITIZENSHIP_PATENT_SET
+                -- (contractor-docs.service) — держать в синхроне.
                 (p.passport_series_number IS NOT NULL AND p.passport_issue_date IS NOT NULL
-                   AND p.birth_date IS NOT NULL AND p.patent_number IS NOT NULL
-                   AND p.patent_issue_date IS NOT NULL AND p.patent_blank_number IS NOT NULL)
+                   AND p.birth_date IS NOT NULL AND p.citizenship IS NOT NULL
+                   AND (upper(trim(p.citizenship)) NOT IN
+                          ('УЗБЕКИСТАН','ТАДЖИКИСТАН','УКРАИНА','АЗЕРБАЙДЖАН','МОЛДОВА')
+                        OR (p.patent_number IS NOT NULL AND p.patent_issue_date IS NOT NULL
+                            AND p.patent_blank_number IS NOT NULL)))
                   AS documents_complete,
                 COALESCE((
                   SELECT jsonb_agg(jsonb_build_object(
@@ -1251,6 +1257,7 @@ export const contractorAdminController = {
                p.passport_series_number,
                to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
                to_char(p.birth_date, 'YYYY-MM-DD') AS birth_date,
+               p.citizenship,
                p.patent_number,
                to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
                p.patent_blank_number,
