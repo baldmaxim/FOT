@@ -1,30 +1,36 @@
 /**
  * Одноразовая чистка: удаляет ЧАСОВЫЕ корректировки табеля, внесённые начальниками участков
- * (роль site_supervisor) по отделу «ЛИНИЯ-Общестрой» начиная с 16 июня 2026.
+ * (роль site_supervisor) по рабочим бригадам и ИТР отдела «ЛИНИЯ-Общестрой» начиная с 16.06.2026.
  *
  * Контекст: до фикса гарда (POSITIVE_TIME_STATUSES/guardsRestriction) начальники участков
- * дописывали рабочие часы (в т.ч. себе/прорабам, работа в выходные, работа на больничном) в
+ * дописывали рабочие часы (себе/прорабам/рабочим, работа в выходные, работа на больничном) в
  * обход лимита=0. Эти правки нужно снять, чтобы дни вернулись к расчёту по СКУД.
  *
+ * ОХВАТ ПО ОТДЕЛАМ (важно): рабочие сидят в бригадах «бр.*» — детях узла «Бригады», а
+ * «ЛИНИЯ-Общестрой» — узел ИТР (рабочих там нет). Поэтому скоуп = поддеревья двух узлов
+ * «Бригады» и «ЛИНИЯ-Общестрой» (оба — дети «Строительный участок»), развёрнутые через
+ * public.get_descendant_department_ids. Узлы резолвим по имени через родителя, без хардкода UUID.
+ *
  * Фильтр (согласован):
- *   - отдел: employees.org_department_id = ЛИНИЯ-Общестрой;
+ *   - отдел: org_department_id сотрудника ∈ поддеревья(«Бригады», «ЛИНИЯ-Общестрой»);
  *   - автор: только роль site_supervisor (user_profiles.system_role_id);
  *   - статус: только часы — status IN ('work','manual') ИЛИ source_type = 'manual_object';
  *   - дата: work_date >= 2026-06-16 (по дню табеля);
  *   - только положительные часы: status='work' ИЛИ hours_override > 0
  *     (обнуления hours_override = 0 НЕ удаляются — за ролью сохранено право обнулять день).
  *
- * Что удаляется: строки attendance_adjustments под фильтр. Перед удалением чистятся вложения
- * (document_links/documents) и осиротевшие объекты в R2. Идемпотентно: повторный запуск → 0 строк.
+ * Перед удалением чистятся вложения (document_links/documents) и осиротевшие объекты в R2.
+ * Идемпотентно: повторный запуск → 0 строк.
  *
- * Страховка: на --migrate множество найденных id сверяется с --expected-ids (или с
- * DEFAULT_EXPECTED_IDS). При расхождении — abort, ничего не удаляется (защита от строк,
- * появившихся между DRY-RUN и запуском). Сверку можно отключить флагом --no-expect.
+ * Страховка: на --migrate обязательно указать ожидаемый результат свежего DRY-RUN — либо
+ * --expect-count=N, либо --expected-ids=ID,ID,...; найденное сверяется, при расхождении abort
+ * (защита от строк, появившихся/исчезнувших между DRY-RUN и запуском). --no-expect — осознанный обход.
  *
  * Запуск (из build-контекста на проде, где есть src+tsx и .env сайта):
  *   cd fot-server
- *   npx tsx scripts/delete-line-obshchestroy-supervisor-hours-from-jun16.ts            # DRY-RUN
- *   npx tsx scripts/delete-line-obshchestroy-supervisor-hours-from-jun16.ts --migrate --expected-ids=46859,47291,47328,48343,48552,48700
+ *   npx tsx scripts/delete-line-obshchestroy-supervisor-hours-from-jun16.ts                 # DRY-RUN
+ *   npx tsx scripts/delete-line-obshchestroy-supervisor-hours-from-jun16.ts --migrate --expect-count=36
+ *   npx tsx scripts/delete-line-obshchestroy-supervisor-hours-from-jun16.ts --migrate --expected-ids=46859,47291,...
  */
 import { query, withTransaction } from '../src/config/postgres.js';
 import { purgeCorrectionAttachments } from '../src/services/correction-attachments.service.js';
@@ -34,12 +40,10 @@ const LOG = '[del-line-obshchestroy-sup-hours]';
 const APPLY = process.argv.includes('--migrate') || process.argv.includes('migrate');
 const NO_EXPECT = process.argv.includes('--no-expect');
 
-const DEPARTMENT_NAME = 'ЛИНИЯ-Общестрой';
+const PARENT_NAME = 'Строительный участок';
+const ROOT_DEPT_NAMES = ['Бригады', 'ЛИНИЯ-Общестрой'];
 const SUPERVISOR_ROLE_CODE = 'site_supervisor';
 const DATE_FROM = '2026-06-16';
-
-/** Ожидаемые id (из DRY-RUN на момент написания). Сверяются на --migrate, если --expected-ids не задан. */
-const DEFAULT_EXPECTED_IDS: number[] = [46859, 47291, 47328, 48343, 48552, 48700];
 
 /** Разбирает --expected-ids=1,2,3 из argv. Возвращает null, если флаг не передан. */
 const parseExpectedIds = (): number[] | null => {
@@ -52,11 +56,20 @@ const parseExpectedIds = (): number[] | null => {
     .filter(n => Number.isFinite(n));
 };
 
+/** Разбирает --expect-count=N из argv. Возвращает null, если флаг не передан. */
+const parseExpectCount = (): number | null => {
+  const arg = process.argv.find(a => a.startsWith('--expect-count='));
+  if (!arg) return null;
+  const n = Number(arg.slice('--expect-count='.length).trim());
+  return Number.isFinite(n) ? n : null;
+};
+
 interface ITargetRow {
   id: string;
   employee_id: number;
   full_name: string | null;
   position: string | null;
+  dept: string | null;
   work_date: string;
   status: string;
   source_type: string;
@@ -67,18 +80,32 @@ interface ITargetRow {
 const main = async (): Promise<void> => {
   console.log(`${LOG} режим: ${APPLY ? 'MIGRATE (удаление в БД)' : 'DRY-RUN (только план)'}`);
 
-  // 1) Отдел ЛИНИЯ-Общестрой (ожидаем ровно 1).
-  const depts = await query<{ id: string; name: string }>(
-    `SELECT id, name FROM org_departments WHERE name = $1`,
-    [DEPARTMENT_NAME],
+  // 1) Корневые узлы охвата: дети «Строительный участок» с именами «Бригады» и «ЛИНИЯ-Общестрой».
+  const roots = await query<{ id: string; name: string }>(
+    `SELECT d.id, d.name
+       FROM org_departments d
+       JOIN org_departments par ON par.id = d.parent_id
+      WHERE par.name = $1 AND d.name = ANY($2::text[])`,
+    [PARENT_NAME, ROOT_DEPT_NAMES],
   );
-  if (depts.length !== 1) {
-    throw new Error(`Ожидался ровно 1 отдел "${DEPARTMENT_NAME}", найдено ${depts.length}: ${JSON.stringify(depts)}`);
+  if (roots.length !== ROOT_DEPT_NAMES.length) {
+    throw new Error(
+      `Ожидалось ${ROOT_DEPT_NAMES.length} корневых узла (${ROOT_DEPT_NAMES.join(', ')}) под "${PARENT_NAME}", ` +
+      `найдено ${roots.length}: ${JSON.stringify(roots)}`,
+    );
   }
-  const deptId = depts[0].id;
-  console.log(`${LOG} отдел: ${depts[0].name} (${deptId})`);
+  const rootIds = roots.map(r => r.id);
+  roots.forEach(r => console.log(`${LOG} корень охвата: ${r.name} (${r.id})`));
 
-  // 2) Авторы — пользователи с ролью site_supervisor.
+  // 2) Разворачиваем поддеревья в плоский список id отделов.
+  const deptRows = await query<{ id: string }>(
+    `SELECT id FROM public.get_descendant_department_ids($1::uuid[])`,
+    [rootIds],
+  );
+  const deptIds = deptRows.map(r => r.id);
+  console.log(`${LOG} отделов в охвате (с поддеревьями): ${deptIds.length}`);
+
+  // 3) Авторы — пользователи с ролью site_supervisor.
   const supervisors = await query<{ id: string }>(
     `SELECT p.id
        FROM public.user_profiles p
@@ -93,12 +120,13 @@ const main = async (): Promise<void> => {
     return;
   }
 
-  // 3) Целевые часовые корректировки по отделу.
+  // 4) Целевые часовые корректировки по охвату.
   const targets = await query<ITargetRow>(
     `SELECT a.id,
             a.employee_id,
             e.full_name,
             pos.name AS position,
+            d.name AS dept,
             a.work_date::text AS work_date,
             a.status,
             a.source_type,
@@ -106,18 +134,19 @@ const main = async (): Promise<void> => {
             up.full_name AS author
        FROM attendance_adjustments a
        JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN org_departments d ON d.id = e.org_department_id
        LEFT JOIN positions pos ON pos.id = e.position_id
        JOIN public.user_profiles up ON up.id = a.created_by
-      WHERE e.org_department_id = $1::uuid
+      WHERE e.org_department_id = ANY($1::uuid[])
         AND a.created_by = ANY($2::uuid[])
         AND a.work_date >= $3::date
         AND (a.status IN ('work','manual') OR a.source_type = 'manual_object')
         AND (a.status = 'work' OR a.hours_override > 0)
-      ORDER BY a.work_date, e.full_name`,
-    [deptId, supervisorIds, DATE_FROM],
+      ORDER BY d.name, a.work_date, e.full_name`,
+    [deptIds, supervisorIds, DATE_FROM],
   );
 
-  console.log(`${LOG} к удалению: ${targets.length} строк, отдел "${DEPARTMENT_NAME}", work_date >= ${DATE_FROM}`);
+  console.log(`${LOG} к удалению: ${targets.length} строк, охват «${ROOT_DEPT_NAMES.join(' + ')}», work_date >= ${DATE_FROM}`);
   if (targets.length === 0) {
     console.log(`${LOG} нечего удалять (идемпотентно).`);
     return;
@@ -127,7 +156,8 @@ const main = async (): Promise<void> => {
   for (const t of targets) {
     console.log(
       `${LOG}   id=${t.id} ${t.work_date} ${t.status}/${t.source_type} ` +
-      `hours=${t.hours_override ?? 'null'} | ${t.full_name ?? '?'} (${t.position ?? '—'}) | автор: ${t.author ?? '?'}`,
+      `hours=${t.hours_override ?? 'null'} | ${t.full_name ?? '?'} (${t.position ?? '—'}) ` +
+      `| отдел: ${t.dept ?? '—'} | автор: ${t.author ?? '?'}`,
     );
   }
   console.log(`${LOG} сотрудников затронуто: ${new Set(targets.map(t => t.employee_id)).size}`);
@@ -136,26 +166,43 @@ const main = async (): Promise<void> => {
 
   if (!APPLY) {
     console.log(`${LOG} id: ${ids.join(',')}`);
-    console.log(`${LOG} DRY-RUN: БД не изменялась. Запусти с --migrate (+ --expected-ids=...) для удаления.`);
+    console.log(`${LOG} count: ${ids.length}`);
+    console.log(`${LOG} DRY-RUN: БД не изменялась. Для удаления: --migrate --expect-count=${ids.length} (или --expected-ids=...).`);
     return;
   }
 
-  // 4) Страховка: сверяем найденные id с ожидаемыми (если сверка не отключена).
+  // 5) Страховка: сверяем найденное с ожиданием оператора (число или точное множество id).
   if (!NO_EXPECT) {
-    const expected = (parseExpectedIds() ?? DEFAULT_EXPECTED_IDS).slice().sort((a, b) => a - b);
-    const same = ids.length === expected.length && ids.every((v, i) => v === expected[i]);
-    if (!same) {
+    const expectedIds = parseExpectedIds();
+    const expectCount = parseExpectCount();
+    if (expectedIds === null && expectCount === null) {
       throw new Error(
-        `Найденные id [${ids.join(',')}] не совпадают с ожидаемыми [${expected.join(',')}]. ` +
-        `Сверь DRY-RUN и передай актуальный --expected-ids=... (или --no-expect, чтобы отключить сверку).`,
+        'Для --migrate укажи ожидаемый результат свежего DRY-RUN: --expect-count=N или ' +
+        '--expected-ids=ID,ID,... (или --no-expect для осознанного обхода сверки).',
       );
     }
-    console.log(`${LOG} сверка id с ожидаемыми пройдена (${ids.length}).`);
+    if (expectedIds !== null) {
+      const exp = expectedIds.slice().sort((a, b) => a - b);
+      const same = ids.length === exp.length && ids.every((v, i) => v === exp[i]);
+      if (!same) {
+        throw new Error(
+          `Найденные id [${ids.join(',')}] не совпадают с --expected-ids [${exp.join(',')}]. ` +
+          'Сверь свежий DRY-RUN.',
+        );
+      }
+      console.log(`${LOG} сверка по --expected-ids пройдена (${ids.length}).`);
+    }
+    if (expectCount !== null && expectCount !== ids.length) {
+      throw new Error(
+        `Найдено ${ids.length} строк, ожидалось --expect-count=${expectCount}. Сверь свежий DRY-RUN.`,
+      );
+    }
+    if (expectCount !== null) console.log(`${LOG} сверка по --expect-count пройдена (${ids.length}).`);
   } else {
-    console.log(`${LOG} сверка id отключена (--no-expect).`);
+    console.log(`${LOG} сверка отключена (--no-expect).`);
   }
 
-  // 5) Чистим вложения каждой строки → собираем осиротевшие R2-ключи (часовые правки обычно
+  // 6) Чистим вложения каждой строки → собираем осиротевшие R2-ключи (часовые правки обычно
   //    без файлов; шаг защитный). purgeCorrectionAttachments работает своей транзакцией.
   const r2Keys: string[] = [];
   for (const id of ids) {
@@ -167,13 +214,13 @@ const main = async (): Promise<void> => {
     }
   }
 
-  // 6) Удаляем сами корректировки одной транзакцией.
+  // 7) Удаляем сами корректировки одной транзакцией.
   await withTransaction(async (client) => {
     await client.query(`DELETE FROM attendance_adjustments WHERE id = ANY($1::bigint[])`, [ids]);
   });
   console.log(`${LOG} удалено строк attendance_adjustments: ${ids.length}`);
 
-  // 7) Удаляем осиротевшие объекты в R2 (best-effort, после commit).
+  // 8) Удаляем осиротевшие объекты в R2 (best-effort, после commit).
   if (r2Keys.length > 0) {
     if (await r2Service.isEnabledAsync()) {
       const res = await Promise.allSettled(r2Keys.map(k => r2Service.deleteObject(k)));
