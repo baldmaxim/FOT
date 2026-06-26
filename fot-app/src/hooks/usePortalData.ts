@@ -12,6 +12,7 @@ export const getMyPaymentsQueryKey = () => ['my-payments'] as const;
 export const getMyDocumentsQueryKey = () => ['my-documents'] as const;
 export const getMyLeaveRequestsQueryKey = () => ['my-leave-requests'] as const;
 export const getLeaveRequestsManageQueryKey = (scope: 'department' | 'all', filter: 'pending' | 'all') => ['leave-requests-manage', scope, filter] as const;
+export const getVacationLeaveRequestsQueryKey = () => ['leave-requests-vacations'] as const;
 export const getEmployeeHistoryQueryKey = (employeeId: number | null) => ['employee-history', employeeId] as const;
 export const getMyDailyTasksQueryKey = () => ['my-daily-tasks'] as const;
 export const getTodayDailyTaskQueryKey = () => ['today-daily-task'] as const;
@@ -55,6 +56,13 @@ export const useLeaveRequestsManage = (
       ? leaveRequestService.getDepartment()
       : leaveRequestService.getAll(filter === 'pending' ? 'pending' : undefined)
   ),
+  staleTime: 30_000,
+  placeholderData: previousData => previousData,
+});
+
+export const useVacationLeaveRequests = () => useQuery({
+  queryKey: getVacationLeaveRequestsQueryKey(),
+  queryFn: () => leaveRequestService.getVacations(),
   staleTime: 30_000,
   placeholderData: previousData => previousData,
 });

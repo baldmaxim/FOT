@@ -276,6 +276,43 @@
   padding-top: 12px;
 }
 
+/* Отметка «Отдел кадров ознакомлен» (зелёная галочка) — вкладка «Отпуска» и карточка руководителя */
+.lrm-hr-ack {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #16a34a;
+  margin-top: 4px;
+  line-height: 1.2;
+}
+
+/* Кнопка «Ознакомиться» (вкладка «Отпуска») */
+.lrm-ack-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.lrm-ack-btn:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.25);
+}
+
+.lrm-ack-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .lrm-action-row {
   display: flex;
   gap: 8px;

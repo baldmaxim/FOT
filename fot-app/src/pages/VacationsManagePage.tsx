@@ -1,0 +1,256 @@
+import { type FC, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  Clock,
+  CheckCircle,
+  XCircle,
+  Ban,
+  Paperclip,
+  ChevronDown,
+  ChevronUp,
+  UserCheck,
+} from 'lucide-react';
+import {
+  leaveRequestService,
+  REQUEST_TYPE_LABELS,
+  STATUS_LABELS,
+  type ILeaveRequest,
+  type ILeaveRequestAttachment,
+  type LeaveRequestStatus,
+} from '../services/leaveRequestService';
+import { useVacationLeaveRequests, getVacationLeaveRequestsQueryKey } from '../hooks/usePortalData';
+import { FilePreviewModal } from '../components/documents/FilePreviewModal';
+import { formatLeaveRequestDatesCompact } from '../utils/leaveRequestDates';
+import { displayFileName } from '../utils/fileNameDisplay';
+import { formatFioShort } from '../utils/formatFio';
+import './LeaveRequestsManagePage.css';
+
+const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
+  pending: '#f59e0b',
+  approved: '#22c55e',
+  rejected: '#ef4444',
+  cancelled: '#6b7280',
+};
+
+const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
+  pending: Clock,
+  approved: CheckCircle,
+  rejected: XCircle,
+  cancelled: Ban,
+};
+
+const EMPTY_REQUESTS: ILeaveRequest[] = [];
+const NO_DEPARTMENT_KEY = 'Без отдела';
+
+interface IPreviewState {
+  documentId: number;
+  fileName: string;
+  mimeType: string | null;
+}
+
+export const VacationsManagePage: FC = () => {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useVacationLeaveRequests();
+  const requests = data ?? EMPTY_REQUESTS;
+
+  const [preview, setPreview] = useState<IPreviewState | null>(null);
+  const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
+  const [acking, setAcking] = useState<Set<number>>(new Set());
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, ILeaveRequest[]>();
+    for (const r of requests) {
+      const key = r.department_name?.trim() || NO_DEPARTMENT_KEY;
+      const list = map.get(key) ?? [];
+      list.push(r);
+      map.set(key, list);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => {
+      if (a === NO_DEPARTMENT_KEY) return 1;
+      if (b === NO_DEPARTMENT_KEY) return -1;
+      return a.localeCompare(b, 'ru');
+    });
+  }, [requests]);
+
+  useEffect(() => {
+    if (grouped.length > 2) {
+      setCollapsedDepts(new Set(grouped.map(([key]) => key)));
+    } else {
+      setCollapsedDepts(new Set());
+    }
+  }, [grouped.length]);
+
+  const toggleDept = (key: string) => {
+    setCollapsedDepts(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const formatDate = (date: string) =>
+    new Date(date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+  const handleAcknowledge = async (id: number) => {
+    setAcking(prev => new Set(prev).add(id));
+    // Оптимистично проставляем отметку во всех кэшах отпусков до refetch'а.
+    const nowIso = new Date().toISOString();
+    queryClient.setQueriesData<ILeaveRequest[] | undefined>(
+      { queryKey: getVacationLeaveRequestsQueryKey() },
+      (prev) => prev?.map(r => (r.id === id ? { ...r, hr_acknowledged_at: nowIso } : r)),
+    );
+    try {
+      await leaveRequestService.acknowledgeHr(id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-vacations'] }),
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+      ]);
+    } catch (err) {
+      console.error('hr-acknowledge error:', err);
+      await queryClient.invalidateQueries({ queryKey: ['leave-requests-vacations'] });
+    } finally {
+      setAcking(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  const openAttachment = (att: ILeaveRequestAttachment) => {
+    setPreview({ documentId: att.id, fileName: att.file_name, mimeType: att.mime_type });
+  };
+
+  const stop = (e: ReactMouseEvent) => e.stopPropagation();
+
+  const renderCard = (r: ILeaveRequest) => {
+    const Icon = STATUS_ICONS[r.status];
+    const isAcked = !!r.hr_acknowledged_at;
+    const isAcking = acking.has(r.id);
+    return (
+      <div key={r.id} className="lrm-card">
+        <div className="lrm-card-main">
+          <div className="lrm-card-top">
+            <div className="lrm-card-employee-block">
+              <span className="lrm-card-employee">{r.employee_name || `#${r.employee_id}`}</span>
+              {(r.department_name || r.position_name) && (
+                <div className="lrm-card-meta">
+                  {r.department_name}
+                  {r.department_name && r.position_name ? ' · ' : ''}
+                  {r.position_name}
+                </div>
+              )}
+            </div>
+            <div className="lrm-status-wrap">
+              <span className="lrm-status" style={{ color: STATUS_COLORS[r.status] }}>
+                <Icon size={14} /> <strong>{STATUS_LABELS[r.status]}</strong>
+              </span>
+              {(r.status === 'approved' || r.status === 'rejected') && (r.reviewer || r.reviewed_at) && (
+                <div className="lrm-status-meta">
+                  {formatFioShort(r.reviewer?.full_name)}
+                  {r.reviewer?.full_name && r.reviewed_at ? ' · ' : ''}
+                  {r.reviewed_at ? formatDate(r.reviewed_at) : ''}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="lrm-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>
+          <div className="lrm-card-dates">
+            <strong>{formatLeaveRequestDatesCompact(r)}</strong>
+          </div>
+          {r.reason && <div className="lrm-card-reason">{r.reason}</div>}
+          {r.attachments && r.attachments.length > 0 && (
+            <div className="lrm-attachments" onClick={stop}>
+              {r.attachments.map(att => (
+                <button
+                  key={att.id}
+                  type="button"
+                  className="lrm-attachment-btn"
+                  onClick={(e) => { e.stopPropagation(); openAttachment(att); }}
+                  title={att.file_name}
+                >
+                  <Paperclip size={12} />
+                  <span className="lrm-attachment-name">{displayFileName(att.file_name)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {r.review_comment && (
+            <div className="lrm-card-comment">
+              <span className="lrm-card-comment-label">Комментарий:</span> {r.review_comment}
+            </div>
+          )}
+        </div>
+
+        <div className="lrm-card-actions" onClick={stop}>
+          {isAcked ? (
+            <div className="lrm-hr-ack">
+              <CheckCircle size={15} /> Отдел кадров ознакомлен
+              {r.hr_acknowledged_at ? ` · ${formatDate(r.hr_acknowledged_at)}` : ''}
+            </div>
+          ) : (
+            <button
+              className="lrm-ack-btn"
+              disabled={isAcking}
+              onClick={() => handleAcknowledge(r.id)}
+            >
+              <UserCheck size={14} /> {isAcking ? 'Отмечаем…' : 'Ознакомиться'}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const totalEmployees = (items: ILeaveRequest[]) =>
+    new Set(items.map(i => i.employee_id)).size;
+
+  return (
+    <div className="lrm-shell">
+      <div className="lrm-page">
+        {isLoading ? (
+          <div className="lrm-loading">Загрузка...</div>
+        ) : requests.length === 0 ? (
+          <div className="lrm-empty">Нет отпусков</div>
+        ) : (
+          <div className="lrm-list">
+            {grouped.map(([department, items]) => {
+              const isCollapsed = collapsedDepts.has(department);
+              return (
+                <div
+                  key={department}
+                  className={`lrm-group${isCollapsed ? ' lrm-group--collapsed' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="lrm-group-toggle"
+                    onClick={() => toggleDept(department)}
+                    aria-expanded={!isCollapsed}
+                  >
+                    {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                    <span className="lrm-group-name">{department}</span>
+                    <span className="lrm-group-stats">
+                      {items.length} · {totalEmployees(items)} чел
+                    </span>
+                  </button>
+                  {!isCollapsed && items.map(renderCard)}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {preview && (
+        <FilePreviewModal
+          documentId={preview.documentId}
+          fileName={preview.fileName}
+          mimeType={preview.mimeType}
+          onClose={() => setPreview(null)}
+        />
+      )}
+    </div>
+  );
+};

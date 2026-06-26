@@ -241,6 +241,11 @@ export const LeaveRequestsManagePage: FC = () => {
                   {r.reviewed_at ? formatDate(r.reviewed_at) : ''}
                 </div>
               )}
+              {r.hr_acknowledged_at && (
+                <div className="lrm-hr-ack" title="Отдел кадров ознакомлен">
+                  <CheckCircle size={13} /> Отдел кадров ознакомлен
+                </div>
+              )}
             </div>
           </div>
           {awaitingApproval && (

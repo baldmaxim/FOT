@@ -38,6 +38,9 @@ export interface ILeaveRequest {
   is_direct_subordinate?: boolean;
   attachments?: ILeaveRequestAttachment[];
   reviewer?: { id: string; full_name: string | null } | null;
+  /** Отметка «Отдел кадров ознакомлен» (только отпуска). NULL/отсутствует — не отмечено. */
+  hr_acknowledged_at?: string | null;
+  hr_acknowledged_by?: string | null;
   /**
    * Для time_correction/work заявок — текущий approval_status связанной
    * attendance_adjustment. 'pending' = ждёт согласования на странице /approvals.
@@ -125,6 +128,19 @@ export const leaveRequestService = {
   getAll: async (status?: LeaveRequestStatus) => {
     const params = status ? `?status=${status}` : '';
     const res = await apiClient.get<ApiResponse<ILeaveRequest[]>>(`/leave-requests${params}`);
+    return res.data;
+  },
+
+  // Отпуска всех сотрудников кроме рабочих (вкладка «Отпуска», admin/hr).
+  getVacations: async (status?: LeaveRequestStatus) => {
+    const params = status ? `?status=${status}` : '';
+    const res = await apiClient.get<ApiResponse<ILeaveRequest[]>>(`/leave-requests/vacations${params}`);
+    return res.data;
+  },
+
+  // Отметка «Отдел кадров ознакомлен» по заявлению на отпуск (admin/hr).
+  acknowledgeHr: async (id: number) => {
+    const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/hr-acknowledge`, {});
     return res.data;
   },
 

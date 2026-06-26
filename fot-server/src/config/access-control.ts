@@ -42,6 +42,7 @@ export const PAGE_PATHS = {
   TIMESHEET: '/timesheet',
   TIMESHEET_HR: '/timesheet-hr',
   LEAVE_REQUESTS: '/leave-requests',
+  LEAVE_VACATIONS: '/leave-vacations',
   SALARY_RAISE_REVIEW: '/salary-raise-review',
   DISCIPLINE: '/discipline',
   STAFF_CONTROL: '/staff-control',
@@ -87,6 +88,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/dashboard',                  label: 'Обзор',                                group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: false, sort_order: 20,  is_active: true },
   { key: '/leave-requests',             label: 'Заявления',                            group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 30,  is_active: true },
   { key: '/salary-raise-review',        label: 'Заявления — Проверка повышений оклада', group_code: 'mine', group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 31,  is_active: true },
+  { key: '/leave-vacations',            label: 'Заявления — Отпуска (отдел кадров)',    group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: true,  sort_order: 32,  is_active: true },
   { key: '/skud-presence',              label: 'Сотрудники на объектах',               group_code: 'mine',  group_label: 'Моё',                  surface: 'page',      supports_edit: false, sort_order: 40,  is_active: true },
   // Блок «Управление»
   { key: '/staff-control',              label: 'Управление кадрами',                   group_code: 'work',  group_label: 'Управление',           surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },

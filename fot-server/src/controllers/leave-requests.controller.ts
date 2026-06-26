@@ -26,6 +26,9 @@ const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 
 // Типы заявлений с адресной маршрутизацией: назначенный ответственный
 // (employee_direct_reports) → иначе начальник отдела. Админ (scope=all) видит всё.
 const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid', 'work', 'sick_worked']);
+// Типы «отпусков» для вкладки «Отпуска» (отдел кадров): ежегодный, за свой счёт,
+// учебный. Больничные и прочее сюда не входят.
+const VACATION_REQUEST_TYPES: string[] = ['vacation', 'unpaid', 'educational_leave'];
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
@@ -1223,6 +1226,112 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/**
+ * Отпуска для вкладки «Отпуска» (только админ + отдел кадров, гейт по /leave-vacations).
+ * Показываем заявления типов vacation/unpaid/educational_leave всех сотрудников,
+ * КРОМЕ рабочих. «Рабочий» определяется по системной роли аккаунта сотрудника
+ * (system_roles.code = 'worker'): positions.category на проде не заполнен (всё 'other'),
+ * поэтому фильтр по должности недостоверен. Все статусы. Скоуп отделов намеренно
+ * не применяем — отдел кадров видит организацию целиком.
+ */
+const getVacations = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const status = req.query.status as string | undefined;
+    const params: unknown[] = [VACATION_REQUEST_TYPES];
+    let statusSql = '';
+    if (status) {
+      params.push(status);
+      statusSql = ` AND lr.status = $${params.length}`;
+    }
+
+    const data = await query<{ id: number; employee_id: number; request_type: string; status: string; reviewer_id: string | null; [k: string]: unknown }>(
+      `SELECT lr.*,
+              e.full_name           AS employee_name,
+              e.org_department_id   AS org_department_id,
+              od.name               AS department_name,
+              p.name                AS position_name
+         FROM leave_requests lr
+         JOIN employees e             ON e.id = lr.employee_id
+         LEFT JOIN org_departments od ON od.id = e.org_department_id
+         LEFT JOIN positions p        ON p.id = e.position_id
+        WHERE lr.request_type = ANY($1::text[])
+          AND NOT EXISTS (
+                SELECT 1 FROM user_profiles up
+                  JOIN system_roles sr ON sr.id = up.system_role_id
+                 WHERE up.employee_id = e.id AND sr.code = 'worker'
+              )${statusSql}
+        ORDER BY lr.created_at DESC`,
+      params,
+    );
+
+    const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
+    const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
+    const reviewerIds = [...new Set(data.map(r => r.reviewer_id).filter((v): v is string => !!v))];
+    const reviewerMap = await loadReviewerProfiles(reviewerIds);
+
+    const enriched = data.map(r => ({
+      ...r,
+      attachments: attachmentsMap.get(Number(r.id)) ?? [],
+      reviewer: r.reviewer_id ? (reviewerMap.get(String(r.reviewer_id)) ?? null) : null,
+    }));
+    res.json({ success: true, data: enriched });
+  } catch (err) {
+    console.error('leave-requests.getVacations error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения отпусков' });
+  }
+};
+
+/**
+ * Отметка «Отдел кадров ознакомлен» по заявлению на отпуск (админ + отдел кадров).
+ * Идемпотентно: COALESCE фиксирует первую отметку и не перетирает её повторными кликами.
+ * Realtime синхронизирует галочку сотруднику в ЛК и его руководителю.
+ */
+const hrAcknowledge = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    const request = await queryOne<{ id: number; employee_id: number; request_type: string }>(
+      `SELECT id, employee_id, request_type FROM leave_requests WHERE id = $1`,
+      [id],
+    );
+    if (!request) {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+    if (!VACATION_REQUEST_TYPES.includes(request.request_type)) {
+      res.status(400).json({ success: false, error: 'Отметка доступна только для отпусков' });
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const data = await queryOne(
+      `UPDATE leave_requests SET
+         hr_acknowledged_at = COALESCE(hr_acknowledged_at, $2),
+         hr_acknowledged_by = COALESCE(hr_acknowledged_by, $1),
+         updated_at = $2
+       WHERE id = $3
+       RETURNING *`,
+      [req.user.id, nowIso, id],
+    );
+
+    // Realtime: сотрудник и его руководитель видят отметку без перезагрузки.
+    getLeaveRequestRecipients(request.employee_id, req.user.id)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'leave_request:changed',
+          targetUserIds: recipients,
+          payload: { entityId: request.id, employeeId: request.employee_id, action: 'hr_acknowledge' },
+        });
+      })
+      .catch((e) => console.error('[leave-requests] emit hr_acknowledge realtime error:', e));
+
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('leave-requests.hrAcknowledge error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка отметки об ознакомлении' });
+  }
+};
+
 export const leaveRequestsController = {
   create,
   getMy,
@@ -1230,8 +1339,10 @@ export const leaveRequestsController = {
   getById,
   getDepartment,
   getAll,
+  getVacations,
   pendingCount,
   approve,
   reject,
   cancel,
+  hrAcknowledge,
 };

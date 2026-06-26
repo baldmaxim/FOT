@@ -22,6 +22,7 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
     const keys: QueryKey[] = [
       ['leave-requests-manage'],
       ['my-leave-requests'],
+      ['leave-requests-vacations'],
     ];
     if (payload.entityId != null) {
       keys.push(['leave-request', payload.entityId]);

@@ -80,6 +80,11 @@ export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({ request: r, today, 
               {r.reviewed_at ? formatDate(r.reviewed_at) : ''}
             </div>
           )}
+          {r.hr_acknowledged_at && (
+            <div className="lr-hr-ack" title="Отдел кадров ознакомлен">
+              <CheckCircle size={13} /> Отдел кадров ознакомлен
+            </div>
+          )}
         </div>
         {canCancel && (
           <button className="btn-secondary lr-cancel-btn" onClick={() => onCancel?.(r.id, r.status)}>Отменить</button>

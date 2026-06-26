@@ -43,6 +43,14 @@ router.get(
   leaveRequestsController.pendingCount
 );
 
+// GET /api/leave-requests/vacations — отпуска всех сотрудников кроме рабочих (admin/hr)
+// Должен идти ДО GET /:id, иначе '/vacations' матчится как id.
+router.get(
+  '/vacations',
+  requirePageAccess('/leave-vacations', 'view'),
+  leaveRequestsController.getVacations
+);
+
 // GET /api/leave-requests — все заявления организации (hr/admin)
 router.get(
   '/',
@@ -76,6 +84,13 @@ router.patch(
   '/:id/cancel',
   requirePageAccess('/employee/requests', 'edit'),
   leaveRequestsController.cancel
+);
+
+// PATCH /api/leave-requests/:id/hr-acknowledge — отметка «Отдел кадров ознакомлен» (admin/hr)
+router.patch(
+  '/:id/hr-acknowledge',
+  requirePageAccess('/leave-vacations', 'edit'),
+  leaveRequestsController.hrAcknowledge
 );
 
 export default router;
