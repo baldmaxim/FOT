@@ -180,17 +180,30 @@ const formatZodErrorMessage = (err: z.ZodError): string => {
 const WORKED_STATUSES_FOR_APPROVAL = new Set<TimeStatus>(['work', 'remote']);
 
 /**
- * Статусы «отработанные часы», которые засчитываются в ограничения роли при правке
- * (только-аномалии / не-больше-нормы / лимит N-в-месяц). Отдельно от
+ * Статусы, дающие положительное рабочее время — В ТОМ ЧИСЛЕ при hours_override=null:
+ * UI шлёт часы только для manual/remote (HOURS_EDITABLE_STATUSES), а work/sick_worked
+ * приходят без часов, и бэкенд доначисляет их (work → СКУД при согласованном выходе,
+ * sick_worked → норма графика как absence-as-worked). Поэтому гард ограничений роли
+ * (только-аномалии / не-больше-нормы / лимит N-в-месяц) обязан срабатывать по статусу, а не
+ * только по явным часам, иначе work/sick_worked обходят лимит. Отдельно от
  * WORKED_STATUSES_FOR_APPROVAL: та множественность управляет автосогласованием, а эта —
- * вызовом assertCorrectionAllowed. Важно: модалка корректировки сохраняет правку часов со
- * status='manual', поэтому без 'manual' здесь гард обходился целиком (см. инцидент с лимитом).
+ * вызовом assertCorrectionAllowed.
  */
-const LIMIT_COUNTED_STATUSES = new Set<TimeStatus>(['work', 'remote', 'manual']);
+const POSITIVE_TIME_STATUSES = new Set<TimeStatus>(['work', 'remote', 'manual', 'sick_worked']);
 
-/** Правка засчитывается в ограничения роли: «отработанный» статус и положительные часы. */
-const countsTowardLimit = (status: TimeStatus, hours: number | null | undefined): boolean =>
-  LIMIT_COUNTED_STATUSES.has(status) && typeof hours === 'number' && Number.isFinite(hours) && hours > 0;
+/**
+ * Нужен ли гард ограничений роли (assertCorrectionAllowed) для этой правки. true, если правка
+ * может дать положительное рабочее время. Исключения (разрешены всем ролям):
+ *  - явное обнуление: любой статус с hours === 0;
+ *  - manual без явных часов: не правка времени.
+ * Для work/remote/sick_worked возвращает true даже при null — часы доначислятся на бэке.
+ */
+export const guardsRestriction = (status: TimeStatus, explicitHours: number | null | undefined): boolean => {
+  if (!POSITIVE_TIME_STATUSES.has(status)) return false;
+  if (typeof explicitHours === 'number' && explicitHours === 0) return false;
+  if (status === 'manual') return typeof explicitHours === 'number' && Number.isFinite(explicitHours) && explicitHours > 0;
+  return true;
+};
 
 /** Сб = 6, Вс = 0 (Date#getDay() кодировка). */
 export type WeekendDow = 0 | 6;
@@ -1883,11 +1896,16 @@ export const timesheetController = {
         : (parsed.hours_worked ?? null);
 
       // Гарды роли: «только аномалии», «не больше плана», «лимит за месяц».
-      // Правка часов через модалку идёт со status='manual' — её тоже обязаны проверять,
-      // иначе аномалии/норма/лимит обходятся (см. countsTowardLimit).
-      if (countsTowardLimit(parsed.status, normalizedHours)) {
+      // Правка часов через модалку идёт со status='manual', а work/sick_worked могут прийти
+      // без явных часов и доначислиться на бэке — все они обязаны проходить гард (см. guardsRestriction).
+      if (guardsRestriction(parsed.status, normalizedHours)) {
         const scheduledNorm = await resolveScheduledNormHours(parsed.employee_id, parsed.work_date);
-        // Удалёнка поверх согласованного выхода — норму/аномалию не проверяем.
+        // Для статусов с неявными часами (work/sick_worked) подставляем положительное значение —
+        // точная величина не важна: при лимите=0 monthly_limit сработает при любом hours>0.
+        const guardHours = typeof normalizedHours === 'number'
+          ? normalizedHours
+          : (scheduledNorm > 0 ? scheduledNorm : 8);
+        // Удалёнка поверх согласованного выхода — норму/аномалию не проверяем (но лимит — да).
         const skipNormAndAnomalyChecks = parsed.status === 'remote'
           && await hasApprovedWorkOnDate(parsed.employee_id, parsed.work_date);
         await assertCorrectionAllowed({
@@ -1895,7 +1913,7 @@ export const timesheetController = {
           createdBy: req.user.id,
           employeeId: parsed.employee_id,
           workDate: parsed.work_date,
-          hoursOverride: typeof normalizedHours === 'number' ? normalizedHours : 0,
+          hoursOverride: guardHours,
           scheduledNormHours: scheduledNorm,
           skipNormAndAnomalyChecks,
         });
@@ -2105,12 +2123,21 @@ export const timesheetController = {
         // not_anomalous/monthly_limit и сломало бы правку.
         const statusChangedToCounted = parsed.status !== undefined
           && parsed.status !== String(existing.status)
-          && LIMIT_COUNTED_STATUSES.has(nextStatus);
-        if (countsTowardLimit(nextStatus, effectiveHours) && (hoursProvided || statusChangedToCounted)) {
+          && POSITIVE_TIME_STATUSES.has(nextStatus);
+        // Вход для guardsRestriction: явные часы (или null при обнулении), а при смене статуса на
+        // work/sick_worked без часов — undefined (часы доначислятся → гард обязателен).
+        const guardInputHours = hoursProvided
+          ? (nextStatus === 'remote' ? effectiveHours : (parsed.hours_worked ?? null))
+          : (statusChangedToCounted ? undefined : effectiveHours);
+        if (guardsRestriction(nextStatus, guardInputHours) && (hoursProvided || statusChangedToCounted)) {
           const scheduledNormUpd = await resolveScheduledNormHours(
             Number(existing.employee_id),
             String(existing.work_date),
           );
+          // Для неявных часов (work/sick_worked без часов) — положительный fallback на норму.
+          const guardHours = typeof effectiveHours === 'number' && effectiveHours > 0
+            ? effectiveHours
+            : (scheduledNormUpd > 0 ? scheduledNormUpd : 8);
           const skipNormAndAnomalyChecks = nextStatus === 'remote'
             && await hasApprovedWorkOnDate(Number(existing.employee_id), String(existing.work_date));
           await assertCorrectionAllowed({
@@ -2118,7 +2145,7 @@ export const timesheetController = {
             createdBy: req.user.id,
             employeeId: Number(existing.employee_id),
             workDate: String(existing.work_date),
-            hoursOverride: effectiveHours,
+            hoursOverride: guardHours,
             scheduledNormHours: scheduledNormUpd,
             excludeAdjustmentId: id,
             skipNormAndAnomalyChecks,
@@ -2243,18 +2270,22 @@ export const timesheetController = {
       // для bulk проверяем ЦЕЛИКОМ до единой записи. Иначе sequential-upsert дал бы частичный
       // успех (первые строки записаны, на превышающей — 422). assertBulkCorrectionAllowed
       // бросит CorrectionRestrictionError → 422, ничего не пишем.
-      const bulkCounts = LIMIT_COUNTED_STATUSES.has(parsed.status)
-        && (parsed.status === 'remote' || (parsed.hours_worked ?? 0) > 0);
+      const bulkCounts = guardsRestriction(parsed.status, parsed.hours_worked);
       if (bulkCounts) {
         const preflightItems = await Promise.all(uniqueItems.map(async item => {
+          const scheduledNormHours = await resolveScheduledNormHours(item.employee_id, item.work_date);
+          // work/sick_worked без явных часов доначисляются на бэке — для preflight берём
+          // положительный fallback на норму (иначе 0 отфильтруется и обход лимита пройдёт).
           const hours = parsed.status === 'remote'
             ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) || 8)
-            : (parsed.hours_worked ?? 0);
+            : (typeof parsed.hours_worked === 'number' && parsed.hours_worked > 0
+              ? parsed.hours_worked
+              : (scheduledNormHours > 0 ? scheduledNormHours : 8));
           return {
             employeeId: item.employee_id,
             workDate: item.work_date,
             hoursOverride: Number(hours) || 0,
-            scheduledNormHours: await resolveScheduledNormHours(item.employee_id, item.work_date),
+            scheduledNormHours,
           };
         }));
         await assertBulkCorrectionAllowed({

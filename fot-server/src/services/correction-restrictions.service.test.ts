@@ -130,6 +130,51 @@ describe('correction-restrictions.service', () => {
     })).rejects.toMatchObject({ code: 'not_anomalous' });
   });
 
+  it('skip-флаг НЕ обходит месячный лимит: лимит=0 → monthly_limit (выходные закрыты для роли)', async () => {
+    setupQueryOne({
+      restrictions: { ...ROLE_SITE_SUPERVISOR, max_corrections_per_month: 0 },
+      anomalous: false,
+      totalMinutes: 0,
+      monthCount: 0,
+    });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 8,
+      scheduledNormHours: 0, // выходной
+      skipNormAndAnomalyChecks: true,
+    })).rejects.toMatchObject({ code: 'monthly_limit', details: { limit: 0 } });
+  });
+
+  it('skip-флаг + лимит=null → проходит (норму/аномалию пропускаем, лимита нет)', async () => {
+    setupQueryOne({
+      restrictions: { ...ROLE_SITE_SUPERVISOR, max_corrections_per_month: null },
+      anomalous: false,
+      totalMinutes: 0,
+      monthCount: 99,
+    });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 8,
+      scheduledNormHours: 0,
+      skipNormAndAnomalyChecks: true,
+    })).resolves.toBeUndefined();
+  });
+
+  it('skip-флаг + лимит достигнут (2/2) → monthly_limit', async () => {
+    setupQueryOne({
+      restrictions: { ...ROLE_SITE_SUPERVISOR, max_corrections_per_month: 2 },
+      anomalous: false,
+      totalMinutes: 0,
+      monthCount: 2,
+    });
+    await expect(assertCorrectionAllowed({
+      ...BASE,
+      hoursOverride: 8,
+      scheduledNormHours: 0,
+      skipNormAndAnomalyChecks: true,
+    })).rejects.toMatchObject({ code: 'monthly_limit', details: { limit: 2, used: 2 } });
+  });
+
   it('блокирует при достижении max_corrections_per_month', async () => {
     setupQueryOne({
       restrictions: { ...ROLE_SITE_SUPERVISOR, max_corrections_per_month: 2 },

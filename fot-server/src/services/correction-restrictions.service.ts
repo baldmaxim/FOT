@@ -127,9 +127,11 @@ export interface IAssertCorrectionAllowedInput {
   /** При update — id строки, которую правим (исключаем из подсчёта лимита). */
   excludeAdjustmentId?: number | null;
   /**
-   * Пропустить ограничения cap-by-norm / anomalies-only / monthly-limit. Ставится для
+   * Пропустить проверки cap-by-norm и anomalies-only (НО НЕ месячный лимит). Ставится для
    * корректировки «Удалёнка» поверх УЖЕ согласованного выхода в выходной: норма дня = 0,
-   * СКУД-аномалии нет, но выход одобрен ответственным — блокировать часы не нужно.
+   * СКУД-аномалии нет, но выход одобрен ответственным — норму/аномалию проверять не нужно.
+   * Месячный лимит (max_corrections_per_month) при этом ОСТАЁТСЯ в силе: роль с лимитом=0
+   * не должна добавлять часы в выходной даже поверх согласованного выхода.
    */
   skipNormAndAnomalyChecks?: boolean;
 }
@@ -141,12 +143,6 @@ export interface IAssertCorrectionAllowedInput {
  * Контракт: если все флаги выключены — no-op (быстрый возврат).
  */
 export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInput): Promise<void> {
-  // Удалёнка поверх согласованного выхода: норма дня 0 и нет СКУД-аномалии, но выход
-  // одобрен ответственным — гарды cap/anomalies/limit НЕ применяем. Это намеренное полное
-  // исключение, включая monthly_limit: такой день не должен «съедать» месячную квоту правок.
-  // Ставится только для status='remote' (см. вызовы в timesheet.controller). Если бизнес
-  // решит, что лимит должен считать и этот кейс — разнести на два отдельных skip-флага.
-  if (input.skipNormAndAnomalyChecks) return;
   const restrictions = await loadRoleRestrictions(input.systemRoleId);
   if (
     !restrictions.corrections_anomalies_only
@@ -160,7 +156,10 @@ export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInp
   const isScheduled = scheduledNorm > 0;
 
   if (hours > 0) {
-    if (restrictions.corrections_anomalies_only) {
+    // Удалёнка поверх согласованного выхода: норму/аномалию НЕ проверяем (выход уже одобрен
+    // ответственным), но месячный лимит ниже — проверяем всегда (роль с лимитом=0 не должна
+    // добавлять часы в выходной даже так).
+    if (!input.skipNormAndAnomalyChecks && restrictions.corrections_anomalies_only) {
       const anomalous = await isSkudAnomalousDay(input.employeeId, input.workDate, isScheduled);
       if (!anomalous) {
         throw new CorrectionRestrictionError(
@@ -170,7 +169,7 @@ export async function assertCorrectionAllowed(input: IAssertCorrectionAllowedInp
       }
     }
 
-    if (restrictions.corrections_cap_by_schedule_norm && hours > scheduledNorm) {
+    if (!input.skipNormAndAnomalyChecks && restrictions.corrections_cap_by_schedule_norm && hours > scheduledNorm) {
       throw new CorrectionRestrictionError(
         'hours_exceed_norm',
         `Часы корректировки (${hours}) превышают плановые часы дня (${scheduledNorm}).`,

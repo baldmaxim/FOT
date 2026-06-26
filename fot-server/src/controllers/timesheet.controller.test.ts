@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isMandatoryWeekendSlotAvailable } from './timesheet.controller.js';
+import { isMandatoryWeekendSlotAvailable, guardsRestriction } from './timesheet.controller.js';
 
 const baseSchedule = {
   pattern_type: '5+2',
@@ -206,5 +206,46 @@ describe('isMandatoryWeekendSlotAvailable — воскресенья', () => {
     expect(
       isMandatoryWeekendSlotAvailable(both, '2026-05-09', dateOf('2026-05-09'), null, 1, 6),
     ).toBe(true);
+  });
+});
+
+describe('guardsRestriction — какие правки проходят гард ограничений роли', () => {
+  it('manual с явными часами > 0 → гард нужен', () => {
+    expect(guardsRestriction('manual', 5)).toBe(true);
+  });
+
+  it('manual с явным 0 (обнуление) → гард не нужен', () => {
+    expect(guardsRestriction('manual', 0)).toBe(false);
+  });
+
+  it('manual без часов (null/undefined) → гард не нужен (не правка времени)', () => {
+    expect(guardsRestriction('manual', null)).toBe(false);
+    expect(guardsRestriction('manual', undefined)).toBe(false);
+  });
+
+  it('work без явных часов → гард нужен (часы доначислятся из СКУД)', () => {
+    expect(guardsRestriction('work', null)).toBe(true);
+    expect(guardsRestriction('work', undefined)).toBe(true);
+  });
+
+  it('work с явным 0 → гард не нужен (обнуление)', () => {
+    expect(guardsRestriction('work', 0)).toBe(false);
+  });
+
+  it('sick_worked («работа на больничном») без часов → гард нужен (часы по графику)', () => {
+    expect(guardsRestriction('sick_worked', null)).toBe(true);
+    expect(guardsRestriction('sick_worked', 8)).toBe(true);
+  });
+
+  it('remote без часов → гард нужен', () => {
+    expect(guardsRestriction('remote', null)).toBe(true);
+  });
+
+  it('статусы-отсутствия (vacation/sick/unpaid/absent/educational_leave) → гард не нужен', () => {
+    expect(guardsRestriction('vacation', null)).toBe(false);
+    expect(guardsRestriction('sick', 8)).toBe(false);
+    expect(guardsRestriction('unpaid', 5)).toBe(false);
+    expect(guardsRestriction('absent', null)).toBe(false);
+    expect(guardsRestriction('educational_leave', 8)).toBe(false);
   });
 });
