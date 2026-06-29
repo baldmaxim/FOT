@@ -17,8 +17,10 @@
   border: 1px solid var(--border);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
   width: 100%;
-  max-width: 920px;
-  max-height: 92vh;
+  /* Шире — чтобы 8-колоночная таблица помещалась без горизонтального скролла.
+     Ограничено 85vw/85vh с отступами от краёв (см. .overlay padding). */
+  max-width: 85vw;
+  max-height: 85vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -202,6 +204,11 @@
 }
 
 @media (max-width: 600px) {
+  /* На телефоне используем почти всю ширину (85vw оставляло бы лишние поля);
+     таблица при нехватке места по-прежнему скроллится внутри .tableWrap. */
+  .modal {
+    max-width: 100%;
+  }
   .table {
     font-size: 12px;
   }
