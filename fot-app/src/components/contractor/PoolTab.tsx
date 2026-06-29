@@ -9,7 +9,7 @@ import { DepartmentTreeSelect } from '../staff/DepartmentTreeSelect';
 import type { OrgDepartmentNode } from '../../types/organization';
 import styles from '../../pages/contractor/Contractor.module.css';
 
-const CHUNK = 10;
+const CHUNK = 4;
 
 interface IScanRow {
   uid: string;

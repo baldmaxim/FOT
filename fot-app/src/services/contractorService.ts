@@ -613,7 +613,11 @@ export const contractorAdminService = {
     return r.data?.next ?? 1;
   },
   async addToPool(input: IPoolIssueInput): Promise<IPoolIssueResult> {
-    const r = await apiClient.post<ApiResponse<IPoolIssueResult>>('/admin/contractor/pool/issue', input);
+    const r = await apiClient.post<ApiResponse<IPoolIssueResult>>(
+      '/admin/contractor/pool/issue',
+      input,
+      { timeoutMs: 120_000 },
+    );
     return r.data;
   },
   async assignPool(passIds: string[], orgDepartmentId: string): Promise<IPoolAssignResult> {
