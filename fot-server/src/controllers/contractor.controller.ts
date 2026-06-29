@@ -496,6 +496,13 @@ export const contractorController = {
           failWith({ http: 409, message: 'Документы согласованного пропуска изменять нельзя' });
           return;
         }
+        // Read-only пока заявка на согласовании (status='submitted'): подрядчик не может
+        // менять документы поданного пропуска до решения согласующего. Поток «смены владельца»
+        // (status='blocked', pending) сюда НЕ попадает — там ввод документов нового владельца разрешён.
+        if (pass.status === 'submitted') {
+          failWith({ http: 409, message: 'Пропуск на согласовании — документы нельзя изменить до решения' });
+          return;
+        }
         // У пропуска в заявке (pending) нельзя оставлять неполный комплект.
         if (pass.approval_status === 'pending' && !isDocsComplete(next)) {
           failWith({

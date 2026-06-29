@@ -459,7 +459,12 @@ export const ContractorPage: FC = () => {
           documents={docsPass}
           holderName={docsPass.holder_name}
           passNumber={docsPass.pass_number}
-          readOnly={docsPass.approval_status === 'approved'}
+          readOnly={docsPass.approval_status === 'approved' || docsPass.status === 'submitted'}
+          readOnlyReason={
+            docsPass.status === 'submitted'
+              ? 'Пропуск на согласовании — изменения недоступны до решения'
+              : undefined
+          }
           busy={busy}
           onClose={() => setDocsPass(null)}
           onSave={saveDocs}

@@ -26,6 +26,8 @@ interface IProps {
   passNumber: string;
   /** Только просмотр (админ / согласованный пропуск). */
   readOnly?: boolean;
+  /** Подпись-причина блокировки (показывается под заголовком при readOnly). */
+  readOnlyReason?: string;
   busy?: boolean;
   /** Совпадения номеров с другими держателями (для подсветки). */
   duplicates?: IDuplicates;
@@ -46,6 +48,7 @@ export const PassDocumentsModal: FC<IProps> = ({
   holderName,
   passNumber,
   readOnly = false,
+  readOnlyReason,
   busy = false,
   duplicates,
   onClose,
@@ -98,6 +101,9 @@ export const PassDocumentsModal: FC<IProps> = ({
         <h2 className={styles.modalTitle}>
           Документы — {holderName ?? `пропуск № ${passNumber}`}
         </h2>
+        {readOnly && readOnlyReason && (
+          <p className={styles.docDupNote} style={{ marginTop: 0 }}>{readOnlyReason}</p>
+        )}
 
         <div className={styles.field}>
           <span className={styles.label}>Паспорт серия номер</span>
