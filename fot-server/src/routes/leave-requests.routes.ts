@@ -86,6 +86,15 @@ router.patch(
   leaveRequestsController.cancel
 );
 
+// PATCH /api/leave-requests/:id/revoke-approval — управленческая отмена согласованного
+// отпуска. Гейт пускает руководителей/админа; точную проверку «согласовавший/админ»
+// делает контроллер (page-access сам по себе недостаточен).
+router.patch(
+  '/:id/revoke-approval',
+  requirePageAccess('/leave-requests', 'edit'),
+  leaveRequestsController.revokeApproval
+);
+
 // PATCH /api/leave-requests/:id/hr-acknowledge — отметка «Отдел кадров ознакомлен» (admin/hr)
 router.patch(
   '/:id/hr-acknowledge',

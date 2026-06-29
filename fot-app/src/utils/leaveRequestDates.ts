@@ -70,3 +70,16 @@ export function formatLeaveRequestDatesFull(r: ILeaveRequest): string[] {
 export function hasDiscreteDates(r: ILeaveRequest): boolean {
   return !!(r.selected_dates && r.selected_dates.length > 0);
 }
+
+/** Минимальная (самая ранняя) дата заявления, ISO. `selected_dates` приоритетнее диапазона. */
+export function leaveRequestMinDate(r: ILeaveRequest): string {
+  if (r.selected_dates && r.selected_dates.length > 0) {
+    return [...r.selected_dates].sort()[0];
+  }
+  return r.start_date;
+}
+
+/** Все даты заявления строго в будущем относительно `today` (ISO YYYY-MM-DD). */
+export function isLeaveRequestFullyFuture(r: ILeaveRequest, today: string): boolean {
+  return leaveRequestMinDate(r) > today;
+}

@@ -24,7 +24,7 @@ import {
 import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
-import { formatLeaveRequestDatesCompact } from '../utils/leaveRequestDates';
+import { formatLeaveRequestDatesCompact, leaveRequestMinDate } from '../utils/leaveRequestDates';
 import { displayFileName } from '../utils/fileNameDisplay';
 import { formatFioShort } from '../utils/formatFio';
 import './LeaveRequestsManagePage.css';
@@ -43,6 +43,8 @@ const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
   cancelled: Ban,
 };
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
+// Типы «отпусков», для которых доступна управленческая отмена согласованного.
+const VACATION_TYPES = new Set(['vacation', 'unpaid', 'educational_leave']);
 const NO_DEPARTMENT_KEY = 'Без отдела';
 const DIRECT_REPORTS_KEY = '__direct_reports__';
 const DIRECT_REPORTS_TITLE = 'Непосредственные подчинённые';
@@ -65,14 +67,20 @@ interface IEventsPanelState {
 }
 
 export const LeaveRequestsManagePage: FC = () => {
-  const { hasPermission } = useAuth();
+  const { hasPermission, profile } = useAuth();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
   const scope = isDepartmentScope ? 'department' : 'all';
   const queryClient = useQueryClient();
 
+  // «Сегодня» в Europe/Moscow (как на бэке) — для показа кнопки отмены только на будущих отпусках.
+  const todayIso = useMemo(() => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' }), []);
+
   const [filter, setFilter] = useState<'pending' | 'all'>('pending');
   const [commentId, setCommentId] = useState<number | null>(null);
   const [comment, setComment] = useState('');
+  const [revokeId, setRevokeId] = useState<number | null>(null);
+  const [revokeReason, setRevokeReason] = useState('');
+  const [revoking, setRevoking] = useState(false);
   const [preview, setPreview] = useState<IPreviewState | null>(null);
   const [eventsPanel, setEventsPanel] = useState<IEventsPanelState | null>(null);
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
@@ -173,6 +181,25 @@ export const LeaveRequestsManagePage: FC = () => {
     } catch (err) {
       console.error('Reject error:', err);
       await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
+    }
+  };
+
+  const handleRevoke = async (id: number) => {
+    setRevoking(true);
+    try {
+      await leaveRequestService.revokeApproval(id, revokeReason.trim() || undefined);
+      setRevokeId(null);
+      setRevokeReason('');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-vacations'] }),
+      ]);
+    } catch (err) {
+      console.error('Revoke error:', err);
+      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
+    } finally {
+      setRevoking(false);
     }
   };
 
@@ -334,6 +361,52 @@ export const LeaveRequestsManagePage: FC = () => {
                   onClick={(e) => { e.stopPropagation(); setCommentId(r.id); }}
                 >
                   <X size={14} /> Не согласовать
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {r.status === 'approved'
+          && VACATION_TYPES.has(r.request_type)
+          && (profile?.is_admin || profile?.id === r.reviewer_id)
+          && (profile?.is_admin || leaveRequestMinDate(r) > todayIso) && (
+          <div className="lrm-card-actions" onClick={stop}>
+            {revokeId === r.id ? (
+              <div className="lrm-comment-form">
+                <div className="lrm-revoke-confirm">Отменить согласованный отпуск?</div>
+                <input
+                  className="lrm-comment-input"
+                  placeholder="Причина (необязательно)"
+                  value={revokeReason}
+                  onChange={e => setRevokeReason(e.target.value)}
+                  onClick={stop}
+                  onKeyDown={e => e.stopPropagation()}
+                />
+                <div className="lrm-comment-btns">
+                  <button
+                    className="lrm-action-btn reject"
+                    disabled={revoking}
+                    onClick={(e) => { e.stopPropagation(); handleRevoke(r.id); }}
+                  >
+                    <Ban size={14} /> {revoking ? 'Отменяем…' : 'Отменить отпуск'}
+                  </button>
+                  <button
+                    className="lrm-action-btn ghost"
+                    disabled={revoking}
+                    onClick={(e) => { e.stopPropagation(); setRevokeId(null); setRevokeReason(''); }}
+                  >
+                    Назад
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="lrm-action-row">
+                <button
+                  className="lrm-action-btn revoke"
+                  onClick={(e) => { e.stopPropagation(); setRevokeId(r.id); setRevokeReason(''); }}
+                >
+                  <Ban size={14} /> Отменить согласованное
                 </button>
               </div>
             )}

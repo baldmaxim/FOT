@@ -5,7 +5,8 @@ import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
-import { getLeaveRequestRecipients } from '../services/recipients.service.js';
+import { getLeaveRequestRecipients, getEmployeeUserId } from '../services/recipients.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import {
   canAccessEmployeeInScope,
   canEditEmployeeInScope,
@@ -1189,10 +1190,11 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     const nowIso = new Date().toISOString();
     const data = await withTransaction(async (client) => {
       const updated = await client.query(
-        `UPDATE leave_requests SET status = 'cancelled', updated_at = $1
+        `UPDATE leave_requests SET status = 'cancelled',
+                cancelled_by = $3, cancelled_at = $1, updated_at = $1
           WHERE id = $2
           RETURNING *`,
-        [nowIso, id],
+        [nowIso, id, req.user.id],
       );
       // Чистим корректировки и для pending-заявок: легаси work-заявки могли
       // материализовать pending-строки ещё при создании — без удаления они
@@ -1332,6 +1334,174 @@ const hrAcknowledge = async (req: AuthenticatedRequest, res: Response): Promise<
   }
 };
 
+/**
+ * Затрагиваемые отпуском даты (YYYY-MM-DD, отсортированы): `selected_dates`
+ * приоритетнее диапазона. Для непрерывного отпуска разворачиваем start..end.
+ * Используется и для проверки «строго в будущем», и для гарда закрытого табеля.
+ */
+function collectLeaveRequestDates(r: { start_date: string; end_date: string; selected_dates: string[] | null }): string[] {
+  if (Array.isArray(r.selected_dates) && r.selected_dates.length > 0) {
+    return [...new Set(r.selected_dates)].sort();
+  }
+  const out: string[] = [];
+  const [sy, sm, sd] = r.start_date.split('-').map(Number);
+  const [ey, em, ed] = r.end_date.split('-').map(Number);
+  let t = Date.UTC(sy, sm - 1, sd);
+  const end = Date.UTC(ey, em - 1, ed);
+  for (let guard = 0; t <= end && guard < 400; guard++, t += 86_400_000) {
+    const d = new Date(t);
+    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`);
+  }
+  return out;
+}
+
+/**
+ * Управленческая отмена СОГЛАСОВАННОГО отпуска (admin или согласовавший руководитель).
+ * Иной смысл, чем у самоотмены сотрудника (`cancel`): откат принятого решения.
+ *  - типы: только vacation/unpaid/educational_leave; статус: только approved;
+ *  - право (источник истины): is_admin || reviewer_id === req.user.id;
+ *  - руководитель — только если ВСЕ даты строго в будущем (Europe/Moscow);
+ *  - закрытый/сданный табель (submitted/approved по снапшоту состава) → 409, ничего не трогаем;
+ *  - откат табеля — тем же точечным DELETE, что и `cancel` (для отпусков он полный);
+ *  - след: cancelled_by/at/reason; reviewer_id НЕ трогаем; сотрудник получает уведомление.
+ */
+const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const reasonRaw = req.body?.reason;
+    const reason = typeof reasonRaw === 'string' && reasonRaw.trim() ? reasonRaw.trim() : null;
+
+    const request = await queryOne<{
+      id: number; employee_id: number; request_type: string; status: string;
+      reviewer_id: string | null; start_date: string; end_date: string; selected_dates: string[] | null;
+    }>(`SELECT * FROM leave_requests WHERE id = $1`, [id]);
+
+    if (!request) {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+    if (!VACATION_REQUEST_TYPES.includes(request.request_type)) {
+      res.status(400).json({ success: false, error: 'Отмена доступна только для отпусков' });
+      return;
+    }
+    if (request.status !== 'approved') {
+      res.status(400).json({ success: false, error: 'Отменить можно только согласованное заявление' });
+      return;
+    }
+
+    const isAdmin = !!req.user.is_admin;
+    const isApprover = !!request.reviewer_id && req.user.id === request.reviewer_id;
+    if (!isAdmin && !isApprover) {
+      res.status(403).json({ success: false, error: 'Отменить согласованный отпуск может только администратор или согласовавший руководитель' });
+      return;
+    }
+
+    const dates = collectLeaveRequestDates(request);
+    const minDate = dates[0];
+
+    // Руководитель — только полностью будущий отпуск. Админ может и начавшийся/прошедший.
+    if (!isAdmin && !(minDate && minDate > moscowTodayIso())) {
+      res.status(400).json({ success: false, error: 'Руководитель может отменить только отпуск, который ещё не начался' });
+      return;
+    }
+
+    // Жёсткий гард: ни одна дата не должна попадать в уже сданный/одобренный табель.
+    // Членство берём из снапшота состава подачи (timesheet_approval_employees) — не из
+    // org_department_id (членство снапшотное). У руководителя не срабатывает (даты будущие).
+    if (dates.length > 0) {
+      const locked = await query<{ ok: number }>(
+        `SELECT 1 AS ok
+           FROM unnest($2::date[]) AS d(work_date)
+           JOIN timesheet_approvals a
+             ON a.start_date <= d.work_date AND a.end_date >= d.work_date
+           JOIN timesheet_approval_employees s
+             ON s.approval_id = a.id AND s.employee_id = $1
+          WHERE a.status IN ('submitted','approved')
+          LIMIT 1`,
+        [request.employee_id, dates],
+      );
+      if (locked.length > 0) {
+        res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку' });
+        return;
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const result = await withTransaction(async (client) => {
+      // Анти-гонка: блокируем строку и повторно проверяем статус внутри транзакции.
+      const locked = await client.query<{ status: string }>(
+        `SELECT status FROM leave_requests WHERE id = $1 FOR UPDATE`,
+        [id],
+      );
+      const current = locked.rows[0];
+      if (!current || current.status !== 'approved') {
+        return { conflict: true as const };
+      }
+      const updated = await client.query(
+        `UPDATE leave_requests SET status = 'cancelled',
+                cancelled_by = $1, cancelled_at = $2, cancel_reason = $3, updated_at = $2
+          WHERE id = $4
+          RETURNING *`,
+        [req.user.id, nowIso, reason, id],
+      );
+      // Точечный откат табеля — ровно строки этого заявления (как в cancel). Шире не трогаем.
+      await client.query(
+        `DELETE FROM attendance_adjustments
+           WHERE source_type = 'leave_request'
+             AND source_id = ANY($1::text[])`,
+        [[String(id), `${id}:time_correction`]],
+      );
+      return { conflict: false as const, row: updated.rows[0] ?? null };
+    });
+
+    if (result.conflict) {
+      res.status(409).json({ success: false, error: 'Статус заявления изменился, обновите страницу' });
+      return;
+    }
+
+    broadcastPendingChanged();
+
+    // Realtime: автор, его руководитель и инициатор отмены.
+    getLeaveRequestRecipients(request.employee_id, req.user.id)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'leave_request:changed',
+          targetUserIds: recipients,
+          payload: { entityId: request.id, employeeId: request.employee_id, action: 'revoke' },
+        });
+      })
+      .catch((e) => console.error('[leave-requests] emit revoke realtime error:', e));
+
+    // Уведомление сотруднику (обязательно): согласованный отпуск отменён.
+    const employeeUserId = await getEmployeeUserId(request.employee_id);
+    if (employeeUserId) {
+      const label = LEAVE_TYPE_LABELS[request.request_type] || request.request_type;
+      const dateLabel = formatLeaveDateLabel({
+        request_type: request.request_type,
+        start_date: request.start_date,
+        end_date: request.end_date,
+        correction_date: null,
+        selected_dates: request.selected_dates,
+      });
+      const body = `Согласованный отпуск отменён: ${label}${dateLabel ? ` (${dateLabel})` : ''}${reason ? `. Причина: ${reason}` : ''}`;
+      notificationService.createMany([{
+        userId: employeeUserId,
+        type: 'leave_request',
+        title: 'Отпуск отменён',
+        body,
+        metadata: { requestType: request.request_type, employeeId: request.employee_id, action: 'revoke' },
+      }]).catch((e) => console.error('[leave-requests] revoke notification save error:', e));
+      pushService.sendGenericNotification([employeeUserId], 'Отпуск отменён', body, { path: '/employee/requests' })
+        .catch((e) => console.error('[leave-requests] revoke push error:', e));
+    }
+
+    res.json({ success: true, data: result.row });
+  } catch (err) {
+    console.error('leave-requests.revokeApproval error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка отмены согласованного отпуска' });
+  }
+};
+
 export const leaveRequestsController = {
   create,
   getMy,
@@ -1345,4 +1515,5 @@ export const leaveRequestsController = {
   reject,
   cancel,
   hrAcknowledge,
+  revokeApproval,
 };

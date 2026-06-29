@@ -348,6 +348,37 @@
   background: rgba(239, 68, 68, 0.25);
 }
 
+/* Управленческая отмена согласованного отпуска — приглушённый деструктив */
+.lrm-action-btn.revoke {
+  background: rgba(239, 68, 68, 0.10);
+  color: #ef4444;
+}
+
+.lrm-action-btn.revoke:hover {
+  background: rgba(239, 68, 68, 0.18);
+}
+
+.lrm-action-btn.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+
+.lrm-action-btn.ghost:hover {
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.08));
+}
+
+.lrm-action-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.lrm-revoke-confirm {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .lrm-comment-form {
   display: flex;
   flex-direction: column;

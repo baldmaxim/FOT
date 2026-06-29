@@ -159,6 +159,12 @@ export const leaveRequestService = {
     return res.data;
   },
 
+  // Управленческая отмена согласованного отпуска (admin или согласовавший руководитель).
+  revokeApproval: async (id: number, reason?: string) => {
+    const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/revoke-approval`, { reason });
+    return res.data;
+  },
+
   getPendingCount: async (): Promise<{ count: number }> => {
     const res = await apiClient.get<ApiResponse<{ count: number }>>('/leave-requests/pending-count');
     return res.data;

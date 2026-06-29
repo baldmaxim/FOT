@@ -57,17 +57,20 @@ vi.mock('../services/weekend-approval-assignments.service.js', () => ({
   resolveResponsibleEmployeeForTarget: weekendResponsibleMock,
 }));
 
-vi.mock('../services/push.service.js', () => ({ pushService: { sendToUser: vi.fn(), sendLeaveRequestNotification: vi.fn(async () => []) } }));
+vi.mock('../services/push.service.js', () => ({ pushService: { sendToUser: vi.fn(), sendLeaveRequestNotification: vi.fn(async () => []), sendGenericNotification: vi.fn(async () => []) } }));
 vi.mock('../services/notification.service.js', () => ({ notificationService: { create: vi.fn(), createMany: vi.fn(async () => undefined) } }));
 vi.mock('../socket/io-instance.js', () => ({ getIo: vi.fn(() => null) }));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
-vi.mock('../services/recipients.service.js', () => ({ getLeaveRequestRecipients: vi.fn(async () => []) }));
+vi.mock('../services/recipients.service.js', () => ({ getLeaveRequestRecipients: vi.fn(async () => []), getEmployeeUserId: vi.fn(async () => 'emp-user-uuid') }));
+// Детерминированное «сегодня» (Europe/Moscow) для проверок будущности отпуска.
+vi.mock('../utils/date.utils.js', () => ({ moscowTodayIso: vi.fn(() => '2026-06-29') }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: vi.fn(async () => []) }));
 import { resolveAccessibleDepartmentIds, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
 vi.mock('../services/employee-skud-object-access.service.js', () => ({ listSelectableObjectsForEmployee: vi.fn(async () => []) }));
 vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object' }));
 
 import { leaveRequestsController } from './leave-requests.controller.js';
+import { notificationService } from '../services/notification.service.js';
 
 function makeReq(overrides: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest {
   return {
@@ -413,5 +416,110 @@ describe('leaveRequestsController.approve (маршрутизация прав)'
 
     expect(res._status).toBe(403);
     expect(upsertSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('leaveRequestsController.revokeApproval', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+  });
+
+  // Approved-отпуск, согласованный пользователем 'reviewer-uuid' (= makeReq().user.id), будущие даты.
+  const approvedVacation = (over: Record<string, unknown> = {}) => ({
+    id: 708, employee_id: 247, request_type: 'vacation', status: 'approved',
+    reviewer_id: 'reviewer-uuid', start_date: '2026-12-01', end_date: '2026-12-05',
+    selected_dates: null, ...over,
+  });
+
+  const adminReq = (over: Record<string, unknown> = {}) =>
+    makeReq({ user: { id: 'admin-uuid', is_admin: true } as never, ...over });
+
+  it('404 — заявление не найдено', async () => {
+    pgQueryOne.mockResolvedValueOnce(null);
+    const res = makeRes();
+    await leaveRequestsController.revokeApproval(makeReq(), res);
+    expect(res._status).toBe(404);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('400 — тип не отпускной', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({ request_type: 'remote' }));
+    const res = makeRes();
+    await leaveRequestsController.revokeApproval(makeReq(), res);
+    expect(res._status).toBe(400);
+  });
+
+  it('400 — статус не approved', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({ status: 'pending' }));
+    const res = makeRes();
+    await leaveRequestsController.revokeApproval(makeReq(), res);
+    expect(res._status).toBe(400);
+  });
+
+  it('403 — не админ и не согласовавший', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({ reviewer_id: 'someone-else' }));
+    const res = makeRes();
+    await leaveRequestsController.revokeApproval(makeReq(), res); // user.id='reviewer-uuid', is_admin отсутствует
+    expect(res._status).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('400 — руководитель не может отменить начавшийся/прошедший отпуск', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({ start_date: '2026-01-01', end_date: '2026-01-05' }));
+    const res = makeRes();
+    await leaveRequestsController.revokeApproval(makeReq(), res);
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('409 — период уже сдан/закрыт в табеле', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({ start_date: '2026-01-01', end_date: '2026-01-03' }));
+    pgQuery.mockResolvedValueOnce([{ ok: 1 }]); // гард: период submitted/approved
+    const res = makeRes();
+    await leaveRequestsController.revokeApproval(adminReq(), res); // админ: проверка дат пропущена
+    expect(res._status).toBe(409);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('успех — cancelled, cancelled_by/reason, точечный DELETE, уведомление', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation());
+    pgQuery.mockResolvedValueOnce([]); // гард: период не закрыт
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] }) // FOR UPDATE
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] }) // UPDATE
+      .mockResolvedValueOnce({ rowCount: 2 }); // DELETE
+    const res = makeRes();
+
+    await leaveRequestsController.revokeApproval(makeReq({ body: { reason: 'тест' } }), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: { status: string } }).data.status).toBe('cancelled');
+
+    const updateCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall).toBeDefined();
+    expect(String(updateCall![0])).toContain('cancelled_by');
+    expect(updateCall![1]).toEqual(['reviewer-uuid', expect.any(String), 'тест', '708']);
+
+    const deleteCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('DELETE FROM attendance_adjustments'));
+    expect(deleteCall).toBeDefined();
+    expect(deleteCall![1]).toEqual([['708', '708:time_correction']]);
+
+    expect(notificationService.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('админ может отменить начавшийся отпуск, если период не закрыт', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({ start_date: '2026-01-01', end_date: '2026-01-03' }));
+    pgQuery.mockResolvedValueOnce([]); // гард: период не закрыт
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
+      .mockResolvedValueOnce({ rowCount: 1 });
+    const res = makeRes();
+
+    await leaveRequestsController.revokeApproval(adminReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(pgTx).toHaveBeenCalledTimes(1);
   });
 });
