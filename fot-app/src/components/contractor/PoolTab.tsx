@@ -4,7 +4,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useCardReaderAgent } from '../../contexts/CardReaderAgentContext';
-import { contractorAdminService, type IPoolCell, type ISigurDepartmentNode } from '../../services/contractorService';
+import { contractorAdminService, type IPoolCell, type IPoolFail, type ISigurDepartmentNode } from '../../services/contractorService';
 import { DepartmentTreeSelect } from '../staff/DepartmentTreeSelect';
 import type { OrgDepartmentNode } from '../../types/organization';
 import styles from '../../pages/contractor/Contractor.module.css';
@@ -73,6 +73,8 @@ export const PoolTab: FC = () => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignOrgId, setAssignOrgId] = useState<string>('');
   const [countStr, setCountStr] = useState('');
+  // Сводка проблемных номеров последнего выпуска — не очищаем матрицу молча.
+  const [issueProblems, setIssueProblems] = useState<IPoolFail[]>([]);
   const lastSeqRef = useRef(0);
   const dragRef = useRef<null | { mode: 'add' | 'remove' }>(null);
 
@@ -105,7 +107,7 @@ export const PoolTab: FC = () => {
   const folderId = settingsQuery.data?.sigur_department_id ?? null;
   const folderName = settingsQuery.data?.name ?? null;
   const cells: IPoolCell[] = useMemo(() => matrixQuery.data?.cells ?? [], [matrixQuery.data]);
-  const totals = matrixQuery.data?.totals ?? { free: 0, occupied: 0 };
+  const totals = matrixQuery.data?.totals ?? { free: 0, occupied: 0, provisioning: 0, failed: 0 };
   const freeCells = useMemo(() => cells.filter(c => c.status === 'free' && c.id), [cells]);
   const freeIds = useMemo(() => new Set(freeCells.map(c => c.id as string)), [freeCells]);
 
@@ -159,12 +161,9 @@ export const PoolTab: FC = () => {
 
   const fromNum = Number(fromStr);
   const toNum = toStr ? Number(toStr) : null;
-  const width = useMemo(() => {
-    const maxNum = Math.max(toNum ?? 0, (Number.isFinite(fromNum) ? fromNum : 1) + Math.max(rows.length - 1, 0));
-    return Math.max(2, String(maxNum || 1).length);
-  }, [fromNum, toNum, rows.length]);
+  // Канонический формат номера — без ведущих нулей (как пишет бэкенд при reserve).
   const passNumberAt = (idx: number): string =>
-    String((Number.isFinite(fromNum) ? fromNum : 1) + idx).padStart(width, '0');
+    String((Number.isFinite(fromNum) ? fromNum : 1) + idx);
 
   const canAddPool =
     folderId != null &&
@@ -180,12 +179,13 @@ export const PoolTab: FC = () => {
   const handleAddToPool = async () => {
     if (!canAddPool) return;
     setBusy(true);
+    setIssueProblems([]);
     const cards = rows.map((r, i) => ({ uid: r.uid, sequence: i }));
     const chunks: Array<typeof cards> = [];
     for (let i = 0; i < cards.length; i += CHUNK) chunks.push(cards.slice(i, i + CHUNK));
     setProgress({ done: 0, total: cards.length });
 
-    const agg = { created: [] as string[], failed: [] as Array<{ pass_number: string; error: string }>, warnings: [] as string[] };
+    const agg = { created: [] as string[], failed: [] as IPoolFail[], warnings: [] as string[] };
     try {
       for (let k = 0; k < chunks.length; k += 1) {
         const data = await contractorAdminService.addToPool({
@@ -203,7 +203,9 @@ export const PoolTab: FC = () => {
         setRows([]);
         lastSeqRef.current = cardSeq;
       } else {
-        toast.error(`Добавлено ${agg.created.length}, ошибок ${agg.failed.length}`);
+        // Не очищаем считанные карты и показываем конкретные проблемные номера.
+        toast.error(`Добавлено ${agg.created.length}, проблем ${agg.failed.length}`);
+        setIssueProblems(agg.failed);
       }
       await refreshPool();
     } catch (e) {
@@ -211,6 +213,26 @@ export const PoolTab: FC = () => {
     } finally {
       setBusy(false);
       setProgress(null);
+    }
+  };
+
+  const runRetry = async (passNumbers?: string[]) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await contractorAdminService.retryProvisioning(passNumbers);
+      if (res.failed.length === 0) {
+        toast.success(`Повторно выпущено: ${res.created.length}`);
+        setIssueProblems([]);
+      } else {
+        toast.error(`Выпущено ${res.created.length}, осталось проблем ${res.failed.length}`);
+        setIssueProblems(res.failed);
+      }
+      await refreshPool();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка повтора');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -398,6 +420,28 @@ export const PoolTab: FC = () => {
         </button>
       </div>
 
+      {issueProblems.length > 0 && (
+        <div className={styles.issueProblems}>
+          <div className={styles.issueProblemsHead}>
+            <span>Не выпущены ({issueProblems.length}):</span>
+            <button
+              className="btn-secondary"
+              onClick={() => void runRetry(issueProblems.map(p => p.pass_number))}
+              disabled={busy}
+            >
+              Повторить проблемные
+            </button>
+          </div>
+          <ul className={styles.issueProblemsList}>
+            {issueProblems.map(p => (
+              <li key={p.pass_number}>
+                <b>{p.pass_number}</b> — {p.error}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <h3 className={styles.title} style={{ marginTop: 24 }}>Назначение пропусков подрядчику</h3>
       <div className={styles.field}>
         <span className={styles.label}>Подрядная организация</span>
@@ -462,7 +506,23 @@ export const PoolTab: FC = () => {
           Свободно: <b style={{ color: 'var(--success)' }}>{totals.free}</b>
           {' · '}
           Занято: <b style={{ color: 'var(--error)' }}>{totals.occupied}</b>
+          {totals.provisioning > 0 && (
+            <>{' · '}Выпускается: <b>{totals.provisioning}</b></>
+          )}
+          {totals.failed > 0 && (
+            <>{' · '}Ошибки: <b style={{ color: 'var(--warning, #b8860b)' }}>{totals.failed}</b></>
+          )}
         </span>
+        {totals.failed > 0 && (
+          <button
+            className="btn-secondary"
+            onClick={() => void runRetry()}
+            disabled={busy}
+            title="Повторить выпуск всех проблемных номеров"
+          >
+            Повторить ошибки ({totals.failed})
+          </button>
+        )}
       </div>
 
       {matrixQuery.isLoading ? (
@@ -472,6 +532,34 @@ export const PoolTab: FC = () => {
       ) : (
         <div className={styles.matrix}>
           {cells.map(c => {
+            // Ошибка выпуска — кликабельная ячейка: повтор по конкретному номеру.
+            if (c.status === 'failed') {
+              return (
+                <button
+                  key={c.pass_number}
+                  type="button"
+                  className={`${styles.matrixCell} ${styles.matrixCellFailed}`}
+                  onClick={() => void runRetry([c.pass_number])}
+                  disabled={busy}
+                  title={`Ошибка выпуска${c.error ? `: ${c.error}` : ''}. Нажмите, чтобы повторить.`}
+                >
+                  {c.pass_number}
+                </button>
+              );
+            }
+            // Идёт выпуск (или завис) — нейтральная неактивная ячейка.
+            if (c.status === 'provisioning') {
+              return (
+                <span
+                  key={c.pass_number}
+                  className={`${styles.matrixCell} ${styles.matrixCellProvisioning}`}
+                  title="Выпускается…"
+                  aria-disabled
+                >
+                  {c.pass_number}
+                </span>
+              );
+            }
             const free = c.status === 'free' && c.id != null;
             const on = free ? selected.has(c.id as string) : false;
             const cls = `${styles.matrixCell} ${free ? styles.matrixCellFree : styles.matrixCellOccupied} ${on ? styles.matrixCellOn : ''}`;

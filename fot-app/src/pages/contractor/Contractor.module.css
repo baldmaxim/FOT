@@ -575,6 +575,58 @@
   font-weight: 600;
 }
 
+/* Идёт выпуск (или завис между reserve и provision) — нейтральная неактивная. */
+.matrixCellProvisioning {
+  background: var(--bg-secondary);
+  border-color: var(--border);
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
+.matrixCellProvisioning:hover { background: var(--bg-secondary); }
+
+/* Ошибка выпуска в Sigur — жёлтая, кликабельная (повтор по номеру). */
+.matrixCellFailed {
+  background: var(--warning-muted, rgba(184, 134, 11, 0.14));
+  border-color: var(--warning, #b8860b);
+  color: var(--warning, #b8860b);
+  font-weight: 600;
+}
+
+.matrixCellFailed:hover {
+  background: var(--warning-muted, rgba(184, 134, 11, 0.22));
+}
+
+/* Сводка проблемных номеров последнего выпуска. */
+.issueProblems {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--warning, #b8860b);
+  border-radius: var(--radius-sm);
+  background: var(--warning-muted, rgba(184, 134, 11, 0.1));
+}
+
+.issueProblemsHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.issueProblemsList {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.issueProblemsList li { margin: 2px 0; overflow-wrap: anywhere; }
+
 @media (max-width: 768px) {
   .page { padding: 12px; }
   .table th, .table td { padding: 6px 8px; font-size: 13px; }

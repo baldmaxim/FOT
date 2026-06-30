@@ -141,16 +141,29 @@ export interface IPoolRangesResult {
   totals: { free: number; occupied: number };
 }
 
+export type PoolCellStatus = 'free' | 'occupied' | 'provisioning' | 'failed';
+
 export interface IPoolCell {
   pass_number: string;
-  status: 'free' | 'occupied';
-  /** id свободной строки (для назначения); null для занятых. */
+  status: PoolCellStatus;
+  /** id свободной строки (для назначения); null для остальных. */
   id: string | null;
+  /** id строки provisioning/provisioning_failed (для повтора выпуска); иначе null. */
+  failed_id: string | null;
+  /** текст ошибки выпуска (tooltip); иначе null. */
+  error: string | null;
+}
+
+export interface IPoolMatrixTotals {
+  free: number;
+  occupied: number;
+  provisioning: number;
+  failed: number;
 }
 
 export interface IPoolMatrixResult {
   cells: IPoolCell[];
-  totals: { free: number; occupied: number };
+  totals: IPoolMatrixTotals;
 }
 
 export interface ISigurDepartmentNode {
@@ -303,10 +316,26 @@ export interface IPoolIssueInput {
   cards: Array<{ uid: string; sequence: number }>;
 }
 
+export type PoolFailStage = 'input' | 'range' | 'duplicate' | 'card' | 'sigur';
+
+export interface IPoolFail {
+  pass_number: string;
+  error: string;
+  stage: PoolFailStage;
+}
+
 export interface IPoolIssueResult {
   created: string[];
-  failed: Array<{ pass_number: string; error: string }>;
+  failed: IPoolFail[];
   warnings: string[];
+  reserved: string[];
+  missing: string[];
+}
+
+export interface IPoolRetryResult {
+  retried: number;
+  created: string[];
+  failed: IPoolFail[];
 }
 
 export interface IPoolAssignResult {
@@ -606,7 +635,7 @@ export const contractorAdminService = {
   },
   async getPoolMatrix(): Promise<IPoolMatrixResult> {
     const r = await apiClient.get<ApiResponse<IPoolMatrixResult>>('/admin/contractor/pool/matrix');
-    return r.data ?? { cells: [], totals: { free: 0, occupied: 0 } };
+    return r.data ?? { cells: [], totals: { free: 0, occupied: 0, provisioning: 0, failed: 0 } };
   },
   async getPoolNextNumber(): Promise<number> {
     const r = await apiClient.get<ApiResponse<{ next: number }>>('/admin/contractor/pool/next-number');
@@ -616,6 +645,15 @@ export const contractorAdminService = {
     const r = await apiClient.post<ApiResponse<IPoolIssueResult>>(
       '/admin/contractor/pool/issue',
       input,
+      { timeoutMs: 120_000 },
+    );
+    return r.data;
+  },
+  /** Повторить выпуск «застрявших» строк пула; без passNumbers — все застрявшие. */
+  async retryProvisioning(passNumbers?: string[]): Promise<IPoolRetryResult> {
+    const r = await apiClient.post<ApiResponse<IPoolRetryResult>>(
+      '/admin/contractor/pool/retry-provisioning',
+      { pass_numbers: passNumbers },
       { timeoutMs: 120_000 },
     );
     return r.data;

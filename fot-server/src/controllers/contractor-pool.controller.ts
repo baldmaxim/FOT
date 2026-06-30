@@ -25,6 +25,7 @@ import {
   listPool,
   PoolNotConfiguredError,
   retryRevokeSync,
+  retryStuckPoolPasses,
   setFreePoolDepartmentId,
 } from '../services/contractor-pool.service.js';
 import { kickContractorPassSync } from '../services/contractor-pass-sync.scheduler.js';
@@ -211,7 +212,15 @@ export const contractorPoolController = {
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_ADDED, {
         entityType: 'contractor_pool',
         entityId: 'pool',
-        details: { created: result.created.length, failed: result.failed.length, warnings: result.warnings.length },
+        details: {
+          created: result.created.length,
+          failed: result.failed.length,
+          warnings: result.warnings.length,
+          // Конкретные не выпущенные номера и контрольный missing — чтобы дыру
+          // можно было найти по аудиту (раньше падал «какой-то один» без следа).
+          failed_numbers: result.failed.map(f => f.pass_number),
+          missing: result.missing,
+        },
       });
 
       res.json({ success: true, data: result });
@@ -230,6 +239,51 @@ export const contractorPoolController = {
       });
       console.error('Pool issueToPool error:', error);
       res.status(500).json({ success: false, error: 'Не удалось добавить пропуска в пул' });
+    }
+  },
+
+  /**
+   * POST /pool/retry-provisioning — повторить выпуск «застрявших» строк пула
+   * (provisioning_failed + stale provisioning). Body: { pass_numbers?: string[] }.
+   * Без pass_numbers — обрабатывает все застрявшие; иначе только указанные номера.
+   */
+  async retryProvisioning(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const body = z.object({
+        pass_numbers: z.array(z.string().trim().min(1)).max(500).optional(),
+      }).parse(req.body ?? {});
+
+      const result = await retryStuckPoolPasses(body.pass_numbers);
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_ADDED, {
+        entityType: 'contractor_pool',
+        entityId: 'pool',
+        details: {
+          action: 'retry_provisioning',
+          retried: result.retried,
+          recovered: result.created.length,
+          failed: result.failed.length,
+          failed_numbers: result.failed.map(f => f.pass_number),
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      if (error instanceof PoolNotConfiguredError) {
+        sendPoolNotConfigured(res);
+        return;
+      }
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      Sentry.captureException(error, {
+        tags: { route: 'contractor.pool.retryProvisioning' },
+        extra: { userId: req.user?.id },
+      });
+      console.error('Pool retryProvisioning error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось перезапустить выпуск пропусков' });
     }
   },
 
@@ -437,6 +491,9 @@ export const contractorPoolController = {
   async getNextNumber(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureSystemAdmin(req, res))) return;
+      // MAX по ВСЕМ строкам пула (org IS NULL), включая provisioning/
+      // provisioning_failed: reserve материализует строку до Sigur, поэтому
+      // сорвавшийся выпуск больше не «теряет» номер — MAX его учитывает.
       const rows = await query<{ max_num: number | null }>(
         `SELECT MAX(pass_number::int) AS max_num FROM contractor_passes
           WHERE org_department_id IS NULL`,

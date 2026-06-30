@@ -11,9 +11,11 @@
  *      Sigur-папку конкретного подрядчика и проставляет org_department_id +
  *      status='assigned'. ФИО и точки доступа подрядчик/админ вписывают позже.
  */
+import * as Sentry from '@sentry/node';
 import { query, execute, queryOne, withTransaction } from '../config/postgres.js';
 import { settingsService } from './settings.service.js';
 import { sigurService } from './sigur.service.js';
+import type { ConnectionType } from './sigur-base.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
 import {
   createSigurEmployee,
@@ -204,34 +206,60 @@ export const getPoolRanges = async (): Promise<IPoolRangesResult> => {
   return { ranges, totals: { free: freeCount, occupied: occupiedCount } };
 };
 
+export type PoolCellStatus = 'free' | 'occupied' | 'provisioning' | 'failed';
+
 export interface IPoolCell {
   pass_number: string;
-  status: 'free' | 'occupied';
-  /** id строки in_pool (нужен для назначения); null для занятых. */
+  status: PoolCellStatus;
+  /** id строки in_pool (нужен для назначения); null для остальных. */
   id: string | null;
+  /** id строки provisioning/provisioning_failed (нужен для повтора выпуска); иначе null. */
+  failed_id: string | null;
+  /** текст ошибки выпуска (для tooltip ячейки); иначе null. */
+  error: string | null;
+}
+
+export interface IPoolMatrixTotals {
+  free: number;
+  occupied: number;
+  provisioning: number;
+  failed: number;
 }
 
 export interface IPoolMatrixResult {
   cells: IPoolCell[];
-  totals: { free: number; occupied: number };
+  totals: IPoolMatrixTotals;
 }
 
 /**
  * Плоская матрица всего пула для UI: одна ячейка на номер пропуска, с цветом по
- * статусу. Дедупликация по pass_number та же, что в getPoolRanges:
- *   free     — ВСЕ строки номера in_pool без org → берём id свободной строки;
- *   occupied — есть хоть одна занятая строка → id=null.
- * revoked в выборку не попадает.
+ * статусу. Дедупликация по pass_number; приоритет статусов (сверху вниз):
+ *   failed       — есть строка provisioning_failed (org IS NULL): выпуск сорвался;
+ *   provisioning — есть строка provisioning (org IS NULL): идёт выпуск/завис;
+ *   free         — ВСЕ строки номера in_pool без org → берём id свободной строки;
+ *   occupied     — иначе (назначен подрядчику / отправлен / открыт / заблокирован).
+ * revoked в выборку не попадает. failed/provisioning перекрывают free/occupied.
  */
 export const getPoolMatrix = async (): Promise<IPoolMatrixResult> => {
   const cells = await query<IPoolCell>(
     `SELECT pass_number,
             CASE
+              WHEN count(*) FILTER (
+                     WHERE status = 'provisioning_failed' AND org_department_id IS NULL) > 0
+                THEN 'failed'
+              WHEN count(*) FILTER (
+                     WHERE status = 'provisioning' AND org_department_id IS NULL) > 0
+                THEN 'provisioning'
               WHEN bool_and(status = 'in_pool' AND org_department_id IS NULL)
                 THEN 'free'
               ELSE 'occupied'
             END AS status,
-            (array_agg(id) FILTER (WHERE status = 'in_pool' AND org_department_id IS NULL))[1] AS id
+            (array_agg(id) FILTER (WHERE status = 'in_pool' AND org_department_id IS NULL))[1] AS id,
+            (array_agg(id) FILTER (
+               WHERE status IN ('provisioning', 'provisioning_failed')
+                 AND org_department_id IS NULL))[1] AS failed_id,
+            (array_agg(sigur_sync_error) FILTER (
+               WHERE status = 'provisioning_failed' AND org_department_id IS NULL))[1] AS error
        FROM contractor_passes
       WHERE pass_number ~ '^[0-9]+$'
         AND status <> 'revoked'
@@ -239,13 +267,12 @@ export const getPoolMatrix = async (): Promise<IPoolMatrixResult> => {
       ORDER BY pass_number::bigint ASC`,
   );
 
-  let free = 0;
-  let occupied = 0;
+  const totals: IPoolMatrixTotals = { free: 0, occupied: 0, provisioning: 0, failed: 0 };
   for (const c of cells) {
-    if (c.status === 'free') free += 1; else occupied += 1;
+    totals[c.status] += 1;
   }
 
-  return { cells, totals: { free, occupied } };
+  return { cells, totals };
 };
 
 export interface IAddPoolInput {
@@ -255,100 +282,352 @@ export interface IAddPoolInput {
   createdBy: string;
 }
 
+/** Этап, на котором номер не попал в пул (для сводки и UI). */
+export type PoolFailStage = 'input' | 'range' | 'duplicate' | 'card' | 'sigur';
+
 export interface IAddPoolResult {
   created: string[];
-  failed: Array<{ pass_number: string; error: string }>;
+  failed: Array<{ pass_number: string; error: string; stage: PoolFailStage }>;
   warnings: string[];
+  /** Номера, по которым строка в БД материализована (status='provisioning') до Sigur. */
+  reserved: string[];
+  /** Ожидаемые номера без строки в БД после reserve — в норме []; непусто = баг reserve. */
+  missing: string[];
 }
 
+/** Контекст провижининга (резолвится один раз на партию/retry). */
+interface IProvisionCtx {
+  dryRun: boolean;
+  poolDeptId: number;
+  connection: ConnectionType | undefined;
+  /**
+   * Идемпотентный поиск уже существующего Sigur-профиля пула по passNumber.
+   * Задаётся только в retry-пути (где возможен orphan после краша). В обычном
+   * выпуске не задаётся — профиль создаётся напрямую (дублей нет: reserve уже
+   * гарантировал единственную строку на номер).
+   */
+  resolveProfile?: (passNumber: string) => Promise<number | null>;
+}
+
+interface IProvisionRow {
+  id: string;
+  passNumber: string;
+  cardUid: string;
+  /** Уже привязанный профиль (retry строки provisioning_failed) или null. */
+  sigurEmployeeId: number | null;
+}
+
+const normalizeSigurInt = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+/** Первое непустое значение среди возможных имён поля Sigur (без тяжёлых зависимостей). */
+const readField = (obj: Record<string, unknown>, ...keys: string[]): unknown => {
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== undefined && v !== null) return v;
+  }
+  return undefined;
+};
+
+/** Перевести зарезервированную строку в provisioning_failed, сохранив текст ошибки и sigur_employee_id. */
+const markProvisioningFailed = async (id: string, error: string): Promise<void> => {
+  await execute(
+    `UPDATE contractor_passes
+        SET status = 'provisioning_failed',
+            sigur_sync_error = $2,
+            updated_at = now()
+      WHERE id = $1::uuid AND status IN ('provisioning', 'provisioning_failed')`,
+    [id, error],
+  );
+};
+
 /**
- * Массовое добавление карт в общий пул. Для каждой:
- *   1) создаём в Sigur заблокированный профиль «Пропуск NNNN» в выбранной папке;
- *   2) привязываем карту по UID-кандидатам;
- *   3) INSERT contractor_passes (status='in_pool', org_department_id=NULL).
- * Идемпотентно по pass_number в пуле (частичный UNIQUE).
+ * Найти существующий Sigur-профиль пула по естественному ключу FOT-POOL:{n}
+ * (или placeholder-имени «Пропуск N»). Используется только в retry, чтобы не
+ * плодить дубли/orphan после краша между createSigurEmployee и UPDATE.
+ * Один полный fetch employees на retry мемоизируется снаружи (см. ниже).
+ */
+const findPoolProfileInList = (
+  employees: Record<string, unknown>[],
+  passNumber: string,
+): number | null => {
+  const wantDesc = `FOT-POOL:${passNumber}`;
+  const wantName = `Пропуск ${passNumber}`;
+  for (const e of employees) {
+    const desc = String(readField(e, 'description', 'Description') ?? '');
+    const name = String(readField(e, 'name', 'NAME', 'Name', 'fullName', 'full_name') ?? '').trim();
+    if (desc === wantDesc || name === wantName) {
+      const id = normalizeSigurInt(readField(e, 'id', 'ID', 'Id'));
+      if (id) return id;
+    }
+  }
+  return null;
+};
+
+/**
+ * PROVISION одной зарезервированной строки: профиль Sigur (reuse/lookup/create)
+ * → UPDATE sigur_employee_id (до привязки карты) → привязка карты (safe-only) →
+ * status='in_pool'. Любой сбой Sigur НЕ удаляет строку и НЕ удаляет профиль
+ * безусловно: строка переводится в provisioning_failed (видна в матрице, ждёт
+ * retry). Дыра в нумерации не образуется — строка уже существует.
+ */
+const provisionOnePoolPass = async (
+  row: IProvisionRow,
+  ctx: IProvisionCtx,
+): Promise<{ ok: true } | { ok: false; error: string; stage: 'card' | 'sigur' }> => {
+  if (ctx.dryRun) {
+    const fakeId = row.sigurEmployeeId ?? -(Date.now() + (Number(row.passNumber) || 0));
+    await execute(
+      `UPDATE contractor_passes
+          SET sigur_employee_id = $2, status = 'in_pool', sigur_sync_error = NULL, updated_at = now()
+        WHERE id = $1::uuid AND status IN ('provisioning', 'provisioning_failed')`,
+      [row.id, fakeId],
+    );
+    return { ok: true };
+  }
+
+  if (!row.cardUid) {
+    const error = 'карта: UID не сохранён';
+    await markProvisioningFailed(row.id, error);
+    return { ok: false, error, stage: 'card' };
+  }
+
+  // 1) Профиль Sigur: переиспользуем сохранённый id, иначе (только в retry) ищем
+  //    существующий по FOT-POOL:{n}, иначе создаём новый.
+  let sigurEmployeeId = row.sigurEmployeeId;
+  if (sigurEmployeeId == null) {
+    try {
+      if (ctx.resolveProfile) {
+        sigurEmployeeId = await ctx.resolveProfile(row.passNumber);
+      }
+      if (sigurEmployeeId == null) {
+        const profile = await createSigurEmployee({
+          name: `Пропуск ${row.passNumber}`,
+          departmentId: ctx.poolDeptId,
+          description: `FOT-POOL:${row.passNumber}`,
+          blocked: true,
+        }, ctx.connection);
+        sigurEmployeeId = profile.sigurEmployeeId;
+      }
+      // Фиксируем ссылку на профиль СРАЗУ — до привязки карты, чтобы при сбое
+      // привязки строка не осталась без sigur_employee_id (иначе orphan-профиль).
+      await execute(
+        `UPDATE contractor_passes SET sigur_employee_id = $2, updated_at = now() WHERE id = $1::uuid`,
+        [row.id, sigurEmployeeId],
+      );
+    } catch (e) {
+      const msg = `профиль: ${e instanceof Error ? e.message : String(e)}`;
+      await markProvisioningFailed(row.id, msg);
+      Sentry.captureException(e, {
+        tags: { service: 'contractor-pool', stage: 'provision-profile' },
+        extra: { passNumber: row.passNumber },
+      });
+      return { ok: false, error: msg, stage: 'sigur' };
+    }
+  }
+
+  // 2) Привязка карты. Профиль свежий/placeholder → safe-only без ФИО: не «крадём»
+  //    карту у активного держателя. Карты нет в Sigur → создаём из UID/W26.
+  try {
+    await assignSigurEmployeeCardBinding(sigurEmployeeId, [row.cardUid], undefined, ctx.connection, true, {
+      reassignPolicy: 'safe-only',
+    });
+  } catch (e) {
+    const msg = `карта: ${e instanceof Error ? e.message : String(e)}`;
+    // Профиль НЕ удаляем — оставляем blocked-плейсхолдер для retry (sigur_employee_id сохранён).
+    await markProvisioningFailed(row.id, msg);
+    Sentry.captureException(e, {
+      tags: { service: 'contractor-pool', stage: 'provision-card' },
+      extra: { passNumber: row.passNumber, cardUid: row.cardUid },
+    });
+    return { ok: false, error: msg, stage: 'card' };
+  }
+
+  // 3) Успех — строка готова к назначению подрядчику.
+  await execute(
+    `UPDATE contractor_passes
+        SET status = 'in_pool', sigur_sync_error = NULL, updated_at = now()
+      WHERE id = $1::uuid AND status IN ('provisioning', 'provisioning_failed')`,
+    [row.id],
+  );
+  return { ok: true };
+};
+
+/**
+ * Массовое добавление карт в общий пул — reserve-then-provision.
+ *
+ * RESERVE: на каждый номер материализуем строку contractor_passes
+ *   (status='provisioning', sigur_employee_id=NULL) ДО любого обращения к Sigur.
+ *   Канонический формат номера — String(num), без ведущих нулей. Дубль (числовой
+ *   или по partial-uniq) → failed{duplicate}, строка не создаётся. Так номер
+ *   физически не может «потеряться» из-за сбоя Sigur — дыр в нумерации нет.
+ * PROVISION: по каждой зарезервированной строке создаём профиль Sigur и
+ *   привязываем карту; сбой → provisioning_failed (видно в матрице, retry).
+ * RECONCILE: контроль, что все ожидаемые номера материализованы (missing → Sentry).
  */
 export const addPassesToPool = async (input: IAddPoolInput): Promise<IAddPoolResult> => {
   const dryRun = isContractorSigurDryRun();
   const poolDeptId = dryRun ? 0 : await requireFreePoolDepartmentId();
   const connection = dryRun ? undefined : await sigurService.getBackgroundConnectionType();
 
-  const maxSeq = input.cards.reduce((m, c) => Math.max(m, c.sequence), 0);
-  const lastNumber = Math.max(input.to ?? 0, input.from + maxSeq);
-  const width = Math.max(2, String(lastNumber).length);
-
   const created: string[] = [];
-  const failed: Array<{ pass_number: string; error: string }> = [];
+  const failed: Array<{ pass_number: string; error: string; stage: PoolFailStage }> = [];
   const warnings: string[] = [];
+  const reserved: Array<{ id: string; passNumber: string; cardUid: string }> = [];
 
   const cards = [...input.cards].sort((a, b) => a.sequence - b.sequence);
+  const maxSeq = cards.reduce((m, c) => Math.max(m, c.sequence), 0);
+
+  // Дыры во входной последовательности (партия ожидается непрерывной): номер без
+  // карты помечаем заранее как failed{input}, а не «молча пропускаем».
+  const seqSet = new Set(cards.map(c => c.sequence));
+  for (let seq = 0; seq <= maxSeq; seq += 1) {
+    if (seqSet.has(seq)) continue;
+    const num = input.from + seq;
+    if (input.to && num > input.to) continue;
+    failed.push({ pass_number: String(num), error: 'нет карты на этот номер (пропуск во входных данных)', stage: 'input' });
+  }
+
+  // --- RESERVE ---
+  const expected: number[] = [];
+  const accounted = new Set<number>();
   for (const card of cards) {
     const num = input.from + card.sequence;
     if (input.to && num > input.to) {
-      failed.push({ pass_number: String(num), error: `вне пула (> ${input.to})` });
+      failed.push({ pass_number: String(num), error: `вне пула (> ${input.to})`, stage: 'range' });
       continue;
     }
-    const passNumber = String(num).padStart(width, '0');
+    const passNumber = String(num); // канонический формат — без ведущих нулей
     const cardUid = card.uid.trim();
+    expected.push(num);
 
-    // Идемпотентность: если уже в пуле — пропускаем.
-    const exists = await queryOne<{ id: string }>(
+    // Preflight числового дубля: ловит смысловой дубль даже при разном тексте
+    // (legacy '0991' против нового '991') — partial-uniq на text это не покрывает.
+    const dup = await queryOne<{ id: string }>(
       `SELECT id FROM contractor_passes
-        WHERE pass_number = $1 AND org_department_id IS NULL`,
-      [passNumber],
+        WHERE org_department_id IS NULL
+          AND pass_number ~ '^[0-9]+$'
+          AND pass_number::bigint = $1`,
+      [num],
     );
-    if (exists) {
+    if (dup) {
       warnings.push(`${passNumber}: уже в пуле`);
+      failed.push({ pass_number: passNumber, error: 'уже в пуле', stage: 'duplicate' });
+      accounted.add(num);
       continue;
     }
 
-    try {
-      let sigurEmployeeId: number;
-      if (dryRun) {
-        sigurEmployeeId = -(Date.now() + num);
-      } else {
-        const profile = await createSigurEmployee({
-          name: `Пропуск ${passNumber}`,
-          departmentId: poolDeptId,
-          description: `FOT-POOL:${passNumber}`,
-          blocked: true,
-        }, connection);
-        sigurEmployeeId = profile.sigurEmployeeId;
-        try {
-          // Карта обязательна: при отсутствии в Sigur — создаём из UID/W26.
-          // Профиль свежий (placeholder-имя) → safe-only без ФИО: не «крадём» карту в пустой слот.
-          await assignSigurEmployeeCardBinding(sigurEmployeeId, [cardUid], undefined, connection, true, {
-            reassignPolicy: 'safe-only',
-          });
-        } catch (cardError) {
-          const m = cardError instanceof Error ? cardError.message : String(cardError);
-          // Провал привязки карты => пропуск в пул не попадает. В БД не пишем,
-          // подчищаем только что созданный Sigur-профиль (best-effort).
-          try {
-            await sigurService.deleteEmployee(sigurEmployeeId, connection);
-          } catch (cleanupError) {
-            warnings.push(`${passNumber} очистка профиля: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
-          }
-          failed.push({ pass_number: passNumber, error: `карта: ${m}` });
-          continue;
-        }
-      }
-
-      await execute(
-        `INSERT INTO contractor_passes
-           (org_department_id, pass_number, sigur_employee_id, card_uid, status, created_by)
-         VALUES (NULL, $1, $2, $3, 'in_pool', $4::uuid)
-         ON CONFLICT DO NOTHING`,
-        [passNumber, sigurEmployeeId, cardUid, input.createdBy],
-      );
-      created.push(passNumber);
-    } catch (passError) {
-      const msg = passError instanceof Error ? passError.message : String(passError);
-      failed.push({ pass_number: passNumber, error: msg });
+    // Целевой ON CONFLICT именно по partial-uniq contractor_passes_pool_pass_number_uniq,
+    // чтобы не проглотить чужой конфликт. Нет RETURNING → строку успели вставить (гонка).
+    const ins = await queryOne<{ id: string }>(
+      `INSERT INTO contractor_passes
+         (org_department_id, pass_number, sigur_employee_id, card_uid, status, created_by)
+       VALUES (NULL, $1, NULL, $2, 'provisioning', $3::uuid)
+       ON CONFLICT (pass_number) WHERE org_department_id IS NULL DO NOTHING
+       RETURNING id`,
+      [passNumber, cardUid, input.createdBy],
+    );
+    if (!ins) {
+      warnings.push(`${passNumber}: уже в пуле`);
+      failed.push({ pass_number: passNumber, error: 'уже в пуле', stage: 'duplicate' });
+      accounted.add(num);
+      continue;
     }
+    reserved.push({ id: ins.id, passNumber, cardUid });
+    accounted.add(num);
   }
 
-  return { created, failed, warnings };
+  // --- RECONCILE: каждый ожидаемый номер обязан иметь строку (reserved или duplicate). ---
+  const missing = expected.filter(n => !accounted.has(n)).map(String);
+  if (missing.length > 0) {
+    Sentry.captureMessage('contractor pool reserve: numbers missing after reserve', {
+      level: 'error',
+      tags: { service: 'contractor-pool', stage: 'reconcile' },
+      extra: { missing, from: input.from, to: input.to ?? null },
+    });
+  }
+
+  // --- PROVISION ---
+  const ctx: IProvisionCtx = { dryRun, poolDeptId, connection };
+  for (const row of reserved) {
+    const res = await provisionOnePoolPass(
+      { id: row.id, passNumber: row.passNumber, cardUid: row.cardUid, sigurEmployeeId: null },
+      ctx,
+    );
+    if (res.ok) created.push(row.passNumber);
+    else failed.push({ pass_number: row.passNumber, error: res.error, stage: res.stage });
+  }
+
+  return { created, failed, warnings, reserved: reserved.map(r => r.passNumber), missing };
+};
+
+export interface IRetryProvisionResult {
+  retried: number;
+  created: string[];
+  failed: Array<{ pass_number: string; error: string; stage: PoolFailStage }>;
+}
+
+/**
+ * Повторный выпуск «застрявших» строк пула:
+ *   - status='provisioning_failed' (сбой Sigur при выпуске), и
+ *   - status='provisioning' со stale updated_at (краш между reserve и provision).
+ * Прогоняет тот же provisionOnePoolPass с идемпотентным lookup профиля (без
+ * дублей). passNumbers? — ограничить конкретными номерами (клик по failed-ячейке).
+ */
+export const STALE_PROVISIONING_MS = 10 * 60_000;
+
+export const retryStuckPoolPasses = async (passNumbers?: string[]): Promise<IRetryProvisionResult> => {
+  const dryRun = isContractorSigurDryRun();
+  const poolDeptId = dryRun ? 0 : await requireFreePoolDepartmentId();
+  const connection = dryRun ? undefined : await sigurService.getBackgroundConnectionType();
+
+  const filterNums = passNumbers && passNumbers.length > 0 ? passNumbers : null;
+  const rows = await query<{
+    id: string; pass_number: string; card_uid: string | null; sigur_employee_id: number | null;
+  }>(
+    `SELECT id, pass_number, card_uid, sigur_employee_id
+       FROM contractor_passes
+      WHERE org_department_id IS NULL
+        AND (
+          status = 'provisioning_failed'
+          OR (status = 'provisioning'
+              AND updated_at < now() - ($1::bigint * interval '1 millisecond'))
+        )
+        AND ($2::text[] IS NULL OR pass_number = ANY($2::text[]))
+      ORDER BY pass_number::bigint ASC`,
+    [STALE_PROVISIONING_MS, filterNums],
+  );
+
+  // Идемпотентный lookup профиля: один полный fetch employees на весь retry,
+  // мемоизированный (нужен только для строк с потерянным sigur_employee_id).
+  let employeeCache: Record<string, unknown>[] | null = null;
+  const resolveProfile = async (passNumber: string): Promise<number | null> => {
+    if (dryRun) return null;
+    if (!employeeCache) {
+      employeeCache = await sigurService.getEmployees(undefined, connection) as Record<string, unknown>[];
+    }
+    return findPoolProfileInList(employeeCache, passNumber);
+  };
+
+  const ctx: IProvisionCtx = { dryRun, poolDeptId, connection, resolveProfile };
+  const created: string[] = [];
+  const failed: Array<{ pass_number: string; error: string; stage: PoolFailStage }> = [];
+  for (const r of rows) {
+    const res = await provisionOnePoolPass(
+      { id: r.id, passNumber: r.pass_number, cardUid: (r.card_uid ?? '').trim(), sigurEmployeeId: r.sigur_employee_id },
+      ctx,
+    );
+    if (res.ok) created.push(r.pass_number);
+    else failed.push({ pass_number: r.pass_number, error: res.error, stage: res.stage });
+  }
+
+  return { retried: rows.length, created, failed };
 };
 
 export interface IAssignPoolResult {
