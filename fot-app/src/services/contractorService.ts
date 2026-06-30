@@ -338,6 +338,11 @@ export interface IPoolRetryResult {
   failed: IPoolFail[];
 }
 
+export interface IPoolCancelResult {
+  cancelled: string[];
+  failed: Array<{ pass_number: string; error: string }>;
+}
+
 export interface IPoolAssignResult {
   assigned: string[];
   failed: Array<{ pass_id: string; error: string }>;
@@ -653,6 +658,15 @@ export const contractorAdminService = {
   async retryProvisioning(passNumbers?: string[]): Promise<IPoolRetryResult> {
     const r = await apiClient.post<ApiResponse<IPoolRetryResult>>(
       '/admin/contractor/pool/retry-provisioning',
+      { pass_numbers: passNumbers },
+      { timeoutMs: 120_000 },
+    );
+    return r.data;
+  },
+  /** Отменить «застрявший» выпуск по номерам: удалить строки + почистить Sigur-профиль. */
+  async cancelProvisioning(passNumbers: string[]): Promise<IPoolCancelResult> {
+    const r = await apiClient.post<ApiResponse<IPoolCancelResult>>(
+      '/admin/contractor/pool/cancel-provisioning',
       { pass_numbers: passNumbers },
       { timeoutMs: 120_000 },
     );

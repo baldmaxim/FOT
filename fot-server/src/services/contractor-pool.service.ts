@@ -19,6 +19,7 @@ import type { ConnectionType } from './sigur-base.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
 import {
   createSigurEmployee,
+  deleteSigurEmployee,
   moveSigurEmployee,
   updateSigurEmployee,
 } from './sigur-live-employees-crud.service.js';
@@ -628,6 +629,74 @@ export const retryStuckPoolPasses = async (passNumbers?: string[]): Promise<IRet
   }
 
   return { retried: rows.length, created, failed };
+};
+
+export interface ICancelProvisionResult {
+  cancelled: string[];
+  failed: Array<{ pass_number: string; error: string }>;
+}
+
+/**
+ * Отмена «застрявшего» выпуска: по указанным номерам удаляет строки пула в
+ * статусах provisioning / provisioning_failed (org IS NULL), предварительно
+ * подчищая placeholder-профиль в Sigur (best-effort). Номер освобождается —
+ * оператор сознательно отменяет ошибочный/дублирующий выпуск.
+ *
+ * АККУРАТНОСТЬ С ДАННЫМИ: гард `status IN ('provisioning','provisioning_failed')
+ * AND org_department_id IS NULL` присутствует и в SELECT, и в DELETE — выданные
+ * пропуска (in_pool/assigned/submitted/applied/blocked) НЕ затрагиваются.
+ * Удаляется только placeholder-профиль ЭТОГО пропуска; карта, привязанная к
+ * другому профилю (дубль-сосед), не трогается.
+ */
+export const cancelProvisioningFailedPasses = async (
+  passNumbers: string[],
+): Promise<ICancelProvisionResult> => {
+  const cancelled: string[] = [];
+  const failed: Array<{ pass_number: string; error: string }> = [];
+  if (!passNumbers || passNumbers.length === 0) return { cancelled, failed };
+
+  const dryRun = isContractorSigurDryRun();
+  const connection = dryRun ? undefined : await sigurService.getBackgroundConnectionType();
+
+  const rows = await query<{ id: string; pass_number: string; sigur_employee_id: number | null }>(
+    `SELECT id, pass_number, sigur_employee_id
+       FROM contractor_passes
+      WHERE org_department_id IS NULL
+        AND status IN ('provisioning', 'provisioning_failed')
+        AND pass_number = ANY($1::text[])
+      ORDER BY pass_number::bigint ASC`,
+    [passNumbers],
+  );
+
+  for (const r of rows) {
+    try {
+      // 1) Sigur: подчищаем placeholder-профиль ЭТОГО пропуска (best-effort).
+      //    404/уже удалён — не помеха удалению строки.
+      if (!dryRun && r.sigur_employee_id != null) {
+        try {
+          await deleteSigurEmployee(r.sigur_employee_id, connection);
+        } catch (e) {
+          Sentry.captureException(e, {
+            tags: { service: 'contractor-pool', stage: 'cancel-cleanup' },
+            extra: { passNumber: r.pass_number, sigurEmployeeId: r.sigur_employee_id },
+          });
+        }
+      }
+      // 2) БД: удаляем строку (гард повторно — на случай гонки). Номер освобождается.
+      const del = await execute(
+        `DELETE FROM contractor_passes
+          WHERE id = $1::uuid AND org_department_id IS NULL
+            AND status IN ('provisioning', 'provisioning_failed')`,
+        [r.id],
+      );
+      if (del > 0) cancelled.push(r.pass_number);
+      else failed.push({ pass_number: r.pass_number, error: 'строка изменилась под нами' });
+    } catch (e) {
+      failed.push({ pass_number: r.pass_number, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return { cancelled, failed };
 };
 
 export interface IAssignPoolResult {

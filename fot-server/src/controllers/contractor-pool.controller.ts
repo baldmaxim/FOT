@@ -16,6 +16,7 @@ import {
   addPassesToPool,
   assignPoolPassesByCount,
   assignPoolPassesToContractor,
+  cancelProvisioningFailedPasses,
   enqueueRevoke,
   getFreePasses,
   getFreePoolDepartmentId,
@@ -284,6 +285,45 @@ export const contractorPoolController = {
       });
       console.error('Pool retryProvisioning error:', error);
       res.status(500).json({ success: false, error: 'Не удалось перезапустить выпуск пропусков' });
+    }
+  },
+
+  /**
+   * POST /pool/cancel-provisioning — отменить «застрявший» выпуск по номерам:
+   * удалить строки provisioning/provisioning_failed (org IS NULL) + подчистить
+   * placeholder-профиль в Sigur. Освобождает номер. Body: { pass_numbers: string[] }.
+   */
+  async cancelProvisioning(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const body = z.object({
+        pass_numbers: z.array(z.string().trim().min(1)).min(1).max(500),
+      }).parse(req.body ?? {});
+
+      const result = await cancelProvisioningFailedPasses(body.pass_numbers);
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_ADDED, {
+        entityType: 'contractor_pool',
+        entityId: 'pool',
+        details: {
+          action: 'cancel_provisioning',
+          cancelled: result.cancelled,
+          failed_numbers: result.failed.map(f => f.pass_number),
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      Sentry.captureException(error, {
+        tags: { route: 'contractor.pool.cancelProvisioning' },
+        extra: { userId: req.user?.id },
+      });
+      console.error('Pool cancelProvisioning error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось отменить выпуск пропусков' });
     }
   },
 

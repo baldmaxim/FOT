@@ -73,8 +73,6 @@ export const PoolTab: FC = () => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignOrgId, setAssignOrgId] = useState<string>('');
   const [countStr, setCountStr] = useState('');
-  // Сводка проблемных номеров последнего выпуска — не очищаем матрицу молча.
-  const [issueProblems, setIssueProblems] = useState<IPoolFail[]>([]);
   const lastSeqRef = useRef(0);
   const dragRef = useRef<null | { mode: 'add' | 'remove' }>(null);
 
@@ -108,6 +106,10 @@ export const PoolTab: FC = () => {
   const folderName = settingsQuery.data?.name ?? null;
   const cells: IPoolCell[] = useMemo(() => matrixQuery.data?.cells ?? [], [matrixQuery.data]);
   const totals = matrixQuery.data?.totals ?? { free: 0, occupied: 0, provisioning: 0, failed: 0 };
+  // Реальные сбои выпуска берём из матрицы (status='failed' = строка provisioning_failed).
+  // Шум reserve-фазы ('уже в пуле' / 'нет карты во входных') строкой не материализуется
+  // и сюда не попадает — оператор видит только то, что требует действия.
+  const failedCells: IPoolCell[] = useMemo(() => cells.filter(c => c.status === 'failed'), [cells]);
   const freeCells = useMemo(() => cells.filter(c => c.status === 'free' && c.id), [cells]);
   const freeIds = useMemo(() => new Set(freeCells.map(c => c.id as string)), [freeCells]);
 
@@ -179,7 +181,6 @@ export const PoolTab: FC = () => {
   const handleAddToPool = async () => {
     if (!canAddPool) return;
     setBusy(true);
-    setIssueProblems([]);
     const cards = rows.map((r, i) => ({ uid: r.uid, sequence: i }));
     const chunks: Array<typeof cards> = [];
     for (let i = 0; i < cards.length; i += CHUNK) chunks.push(cards.slice(i, i + CHUNK));
@@ -198,14 +199,16 @@ export const PoolTab: FC = () => {
         agg.warnings.push(...data.warnings);
         setProgress({ done: Math.min((k + 1) * CHUNK, cards.length), total: cards.length });
       }
-      if (agg.failed.length === 0) {
+      // Реальные сбои выпуска — только Sigur (card/sigur); 'duplicate'/'input'/'range'
+      // это норма ввода, оператора ими не тревожим.
+      const realFailed = agg.failed.filter(f => f.stage === 'card' || f.stage === 'sigur');
+      if (realFailed.length === 0) {
         toast.success(`Добавлено в пул: ${agg.created.length}`);
         setRows([]);
         lastSeqRef.current = cardSeq;
       } else {
-        // Не очищаем считанные карты и показываем конкретные проблемные номера.
-        toast.error(`Добавлено ${agg.created.length}, проблем ${agg.failed.length}`);
-        setIssueProblems(agg.failed);
+        // Не очищаем считанные карты; проблемные номера видны в блоке ниже (из матрицы).
+        toast.error(`Добавлено ${agg.created.length}, проблем ${realFailed.length}`);
       }
       await refreshPool();
     } catch (e) {
@@ -223,14 +226,30 @@ export const PoolTab: FC = () => {
       const res = await contractorAdminService.retryProvisioning(passNumbers);
       if (res.failed.length === 0) {
         toast.success(`Повторно выпущено: ${res.created.length}`);
-        setIssueProblems([]);
       } else {
         toast.error(`Выпущено ${res.created.length}, осталось проблем ${res.failed.length}`);
-        setIssueProblems(res.failed);
       }
       await refreshPool();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка повтора');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runCancel = async (passNumbers: string[]) => {
+    if (busy || passNumbers.length === 0) return;
+    setBusy(true);
+    try {
+      const res = await contractorAdminService.cancelProvisioning(passNumbers);
+      if (res.failed.length === 0) {
+        toast.success(`Отменено выпусков: ${res.cancelled.length}`);
+      } else {
+        toast.error(`Отменено ${res.cancelled.length}, не удалось ${res.failed.length}`);
+      }
+      await refreshPool();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка отмены');
     } finally {
       setBusy(false);
     }
@@ -420,22 +439,30 @@ export const PoolTab: FC = () => {
         </button>
       </div>
 
-      {issueProblems.length > 0 && (
+      {failedCells.length > 0 && (
         <div className={styles.issueProblems}>
           <div className={styles.issueProblemsHead}>
-            <span>Не выпущены ({issueProblems.length}):</span>
+            <span>Ошибки выпуска ({failedCells.length}):</span>
             <button
               className="btn-secondary"
-              onClick={() => void runRetry(issueProblems.map(p => p.pass_number))}
+              onClick={() => void runRetry(failedCells.map(c => c.pass_number))}
               disabled={busy}
             >
-              Повторить проблемные
+              Повторить все
             </button>
           </div>
           <ul className={styles.issueProblemsList}>
-            {issueProblems.map(p => (
-              <li key={p.pass_number}>
-                <b>{p.pass_number}</b> — {p.error}
+            {failedCells.map(c => (
+              <li key={c.pass_number}>
+                <b>{c.pass_number}</b> — {c.error ?? 'ошибка выпуска'}
+                <span className={styles.issueProblemActions}>
+                  <button className="btn-secondary" onClick={() => void runRetry([c.pass_number])} disabled={busy}>
+                    Повторить
+                  </button>
+                  <button className="btn-secondary" onClick={() => void runCancel([c.pass_number])} disabled={busy}>
+                    Отменить выпуск
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
