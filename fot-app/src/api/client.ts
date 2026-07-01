@@ -146,7 +146,13 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // очистки данных до перезагрузки страницы (≈30–60 сек).
     || path === '/contractor/passes'
     || path === '/contractor/roster'
-    || path === '/contractor/submissions';
+    || path === '/contractor/submissions'
+    // Общий пул подрядчика: после добавления/удаления/выпуска пропусков матрица и
+    // панель аномалий должны обновиться сразу. Иначе HTTP-кэш max-age=30 отдавал
+    // старую матрицу — добавленная карта не появлялась (и удалённая не исчезала)
+    // до перезагрузки страницы, хотя React Query уже инвалидировал ['contractor-pool-*'].
+    || path === '/admin/contractor/pool/matrix'
+    || path === '/admin/contractor/pool/anomalies';
 };
 
 const refreshSession = async (): Promise<boolean> => {
