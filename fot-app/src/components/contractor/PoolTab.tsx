@@ -18,13 +18,16 @@ interface IScanRow {
   hexUid?: string;
   /** Весь payload ридера — сохраняем в БД для анализа коллизий. */
   reader?: Record<string, unknown>;
-  /** Результат универсальной проверки (БД+Sigur): undefined — ещё проверяется/не проверяли. */
-  conflict?: IPoolCardConflict;
+  /** Результат универсальной проверки (БД+Sigur): undefined — ещё идёт; 'failed' — не удалось. */
+  conflict?: IPoolCardConflict | 'failed';
 }
 
 /** Бейдж результата проверки карты (БД пула + Sigur) в таблице считанных карт. */
-const renderCardCheck = (c?: IPoolCardConflict) => {
+const renderCardCheck = (c?: IPoolCardConflict | 'failed') => {
   if (!c) return <span className={styles.checkMuted}>проверка…</span>;
+  if (c === 'failed') {
+    return <span className={styles.checkMuted} title="Не удалось проверить (Sigur/сеть). Проверьте вручную.">— нет проверки</span>;
+  }
   if (!c.has_conflict) {
     return (
       <span
@@ -225,7 +228,7 @@ export const PoolTab: FC = () => {
     if (added) {
       void contractorAdminService.checkPoolCard(uid)
         .then(res => setRows(prev => prev.map(r => (r.uid === uid ? { ...r, conflict: res } : r))))
-        .catch(() => { /* проверка не обязательна */ });
+        .catch(() => setRows(prev => prev.map(r => (r.uid === uid ? { ...r, conflict: 'failed' } : r))));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardSeq]);
