@@ -692,9 +692,12 @@ export const contractorAdminService = {
   },
   /** Проверить считанную карту ДО добавления: где уже засветилась (БД пула + Sigur). */
   async checkPoolCard(uid: string, excludePassNumber?: string): Promise<IPoolCardConflict> {
+    // Проверка ходит в Sigur (карта → привязка → владелец) — обычно ~2–3с. Ограничиваем
+    // 15с, чтобы при недоступном endpoint/Sigur бейдж быстро ушёл в «нет проверки».
     const r = await apiClient.post<ApiResponse<IPoolCardConflict>>(
       '/admin/contractor/pool/check-card',
       { uid, exclude_pass_number: excludePassNumber },
+      { timeoutMs: 15_000 },
     );
     return r.data;
   },
