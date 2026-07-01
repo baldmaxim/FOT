@@ -35,9 +35,10 @@ router.post('/:id/assignees', guard, c.addAssignee);
 router.patch('/:id/assignees/:employeeId/primary', guard, c.setPrimaryAssignee);
 router.delete('/:id/assignees/:employeeId', guard, c.removeAssignee);
 
-// --- Кандидаты (approve до :cid) ---
+// --- Кандидаты (approve/verdict до :cid) ---
 router.post('/:id/candidates', guard, c.addCandidate);
 router.patch('/:id/candidates/:cid/approve', guard, c.approveCandidate);
+router.patch('/:id/candidates/:cid/verdict', guard, c.verdictCandidate);
 router.patch('/:id/candidates/:cid', guard, c.updateCandidate);
 router.delete('/:id/candidates/:cid', guard, c.deleteCandidate);
 

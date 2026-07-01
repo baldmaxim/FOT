@@ -302,21 +302,58 @@ const CandidateRow: FC<{ c: IHiringCandidate; requestId: number; canWork: boolea
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [fbEdit, setFbEdit] = useState<string | null>(null);
+  const [vModal, setVModal] = useState<'invite' | 'reject' | null>(null);
   const onErr = (e: unknown) => toast.error(e instanceof ApiError ? e.message : 'Ошибка');
+
+  // «Пригласить»/«Отказать» — вердикт по кандидату (мнение), доступен заказчику и рекрутёру/HR.
+  const canVerdict = canApprove || canWork;
 
   const status = c.applicant_approved ? { label: 'Кандидат выбран', color: 'var(--success)' } : CANDIDATE_STATUS_META[c.status];
   const approve = async (v: boolean) => { try { await hiringRequestService.approveCandidate(requestId, c.id, v); onChanged(); } catch (e) { onErr(e); } };
   const saveFb = async () => { try { await hiringRequestService.updateCandidate(requestId, c.id, { applicant_feedback: fbEdit ?? '' }); setFbEdit(null); onChanged(); } catch (e) { onErr(e); } };
   const changeStatus = async (s: string) => { try { await hiringRequestService.updateCandidate(requestId, c.id, { status: s as IHiringCandidate['status'] }); onChanged(); } catch (e) { onErr(e); } };
+  const submitVerdict = async (verdict: 'invite' | 'reject', comment: string) => {
+    try { await hiringRequestService.setCandidateVerdict(requestId, c.id, verdict, comment); setVModal(null); onChanged(); } catch (e) { onErr(e); }
+  };
+
+  // Тултип при наведении: вердикт («от какой кнопки») + комментарии раздельно по роли.
+  const verdictText = c.applicant_verdict === 'invite' ? 'Пригласить' : c.applicant_verdict === 'reject' ? 'Отказать' : null;
+  const rowTip = [
+    verdictText ? `Вердикт: ${verdictText}` : null,
+    c.applicant_feedback ? `Заказчик: ${c.applicant_feedback}` : null,
+    c.seeker_feedback ? `HR: ${c.seeker_feedback}` : null,
+  ].filter(Boolean).join('\n') || undefined;
 
   return (
     <div className={styles.cand}>
-      <div className={styles.candRow} onClick={() => setOpen(o => !o)}>
+      <div className={styles.candRow} onClick={() => setOpen(o => !o)} title={rowTip}>
         <Avatar name={c.full_name} id={c.id} />
         <span className={styles.candName}>{c.full_name}</span>
+        {canVerdict && (
+          <>
+            <button
+              className={`${styles.mini} ${styles.ok} ${c.applicant_verdict === 'invite' ? styles.approved : ''}`}
+              title="Пригласить кандидата (с комментарием)"
+              onClick={e => { e.stopPropagation(); setVModal('invite'); }}
+            >Пригласить</button>
+            <button
+              className={`${styles.mini} ${styles.no} ${c.applicant_verdict === 'reject' ? styles.rejected : ''}`}
+              title="Отказать кандидату (с комментарием)"
+              onClick={e => { e.stopPropagation(); setVModal('reject'); }}
+            >Отказать</button>
+          </>
+        )}
         <span className={styles.cpill} style={{ color: status.color, background: c.applicant_approved ? 'var(--success-muted,rgba(34,197,94,.13))' : 'var(--surface-elevated)' }}>{c.applicant_approved ? '✓ ' : ''}{status.label}</span>
         {c.hh_resume_url && <a className={styles.hh} href={c.hh_resume_url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>HH ↗</a>}
       </div>
+      {vModal && (
+        <CandidateVerdictModal
+          action={vModal}
+          candidateName={c.full_name}
+          onClose={() => setVModal(null)}
+          onSubmit={submitVerdict}
+        />
+      )}
       {open && (
         <div className={styles.candDet}>
           <div className={styles.candLine}>
@@ -362,6 +399,38 @@ const CandidateRow: FC<{ c: IHiringCandidate; requestId: number; canWork: boolea
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// Модалка комментария к вердикту «Пригласить»/«Отказать». Комментарий необязателен.
+const CandidateVerdictModal: FC<{
+  action: 'invite' | 'reject';
+  candidateName: string;
+  onClose: () => void;
+  onSubmit: (action: 'invite' | 'reject', comment: string) => void;
+}> = ({ action, candidateName, onClose, onSubmit }) => {
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+  const title = action === 'invite' ? 'Пригласить кандидата' : 'Отказать кандидату';
+  const submit = () => { setBusy(true); onSubmit(action, comment); };
+  return (
+    <div className={styles.overlay} onClick={onClose}>
+      <div className={`${styles.modal} ${styles.modalSm}`} onClick={e => e.stopPropagation()}>
+        <div className={styles.modalHead}><div><h3>{title}</h3><p>{candidateName}</p></div><button className={styles.x} onClick={onClose}>✕</button></div>
+        <div className={styles.modalBody}>
+          <div className={`${styles.field} ${styles.full}`}>
+            <label>Комментарий</label>
+            <textarea placeholder="Необязательно: ваша оценка кандидата" value={comment} onChange={e => setComment(e.target.value)} autoFocus />
+          </div>
+        </div>
+        <div className={styles.modalFoot}>
+          <button className={styles.btnGhost} onClick={onClose} disabled={busy}>Отмена</button>
+          <button className={action === 'invite' ? styles.btnPrimary : styles.btnDanger} onClick={submit} disabled={busy}>
+            {action === 'invite' ? 'Пригласить' : 'Отказать'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

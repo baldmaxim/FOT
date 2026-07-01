@@ -2,6 +2,7 @@ import { apiClient } from '../api/client';
 
 export type HiringStage = 'new' | 'in_progress' | 'interview' | 'offer' | 'closed' | 'cancelled' | 'rework';
 export type CandidateStatus = 'new' | 'screening' | 'interview' | 'offer' | 'accepted' | 'reserve' | 'reject';
+export type CandidateVerdict = 'invite' | 'reject';
 export type Gender = 'any' | 'male' | 'female';
 
 export interface IHiringAssignee {
@@ -52,6 +53,8 @@ export interface IHiringCandidate {
   seeker_feedback: string | null;
   applicant_feedback: string | null;
   applicant_approved: boolean;
+  applicant_verdict: CandidateVerdict | null;
+  verdict_at: string | null;
 }
 
 export interface IHiringFile {
@@ -158,6 +161,8 @@ export const hiringRequestService = {
     apiClient.patch(`/hiring-requests/${id}/candidates/${cid}`, body),
   approveCandidate: async (id: number, cid: number, approved: boolean) =>
     apiClient.patch(`/hiring-requests/${id}/candidates/${cid}/approve`, { approved }),
+  setCandidateVerdict: async (id: number, cid: number, verdict: CandidateVerdict, comment?: string) =>
+    apiClient.patch(`/hiring-requests/${id}/candidates/${cid}/verdict`, { verdict, comment }),
   deleteCandidate: async (id: number, cid: number) =>
     apiClient.delete(`/hiring-requests/${id}/candidates/${cid}`),
 

@@ -541,6 +541,40 @@ const updateCandidate = async (req: AuthenticatedRequest, res: Response): Promis
   res.json({ success: true });
 };
 
+// Вердикт по кандидату («Пригласить»/«Отказать») + необязательный комментарий.
+// Это МНЕНИЕ (заказчик или HR/ответственный), а не статус воронки. Комментарий
+// раздельно по роли: work-роль → seeker_feedback, автор-заказчик → applicant_feedback.
+const VERDICTS = ['invite', 'reject'] as const;
+const verdictCandidate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const id = parseId(req.params.id);
+  const cid = parseId(req.params.cid);
+  if (!id || !cid) { res.status(400).json({ success: false, error: 'Некорректные параметры' }); return; }
+  const cand = await queryOne<{ request_id: number }>(`SELECT request_id FROM hiring_candidates WHERE id = $1`, [cid]);
+  if (!cand || Number(cand.request_id) !== id) { res.status(404).json({ success: false, error: 'Кандидат не найден' }); return; }
+
+  const verdict = String(req.body?.verdict ?? '');
+  if (!(VERDICTS as readonly string[]).includes(verdict)) { res.status(400).json({ success: false, error: 'Недопустимый вердикт' }); return; }
+
+  const isWork = await canWorkRequest(req, id);
+  const request = await queryOne<{ author_employee_id: number | null }>(`SELECT author_employee_id FROM hiring_requests WHERE id = $1`, [id]);
+  const isAuthor = req.user.employee_id != null && request?.author_employee_id === req.user.employee_id;
+  if (!isWork && !isAuthor) { res.status(403).json({ success: false, error: 'Нет прав' }); return; }
+
+  const sets = ['applicant_verdict = $1', 'verdict_by = $2', 'verdict_at = NOW()'];
+  const params: unknown[] = [verdict, req.user.id];
+  // Комментарий необязателен. Пишем в поле по роли; пустая строка → NULL.
+  if ('comment' in (req.body ?? {})) {
+    const raw = typeof req.body.comment === 'string' ? req.body.comment.trim() : '';
+    const field = isWork ? 'seeker_feedback' : 'applicant_feedback';
+    params.push(raw.length > 0 ? raw : null);
+    sets.push(`${field} = $${params.length}`);
+  }
+  params.push(cid);
+  await execute(`UPDATE hiring_candidates SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${params.length}`, params);
+  await logEvent(id, req.user.id, 'candidate', { body: `Вердикт по кандидату: ${verdict === 'invite' ? 'пригласить' : 'отказать'}` });
+  res.json({ success: true });
+};
+
 const approveCandidate = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const id = parseId(req.params.id);
   const cid = parseId(req.params.cid);
@@ -745,7 +779,7 @@ export const hiringRequestsController = {
   list, getById, create, updateFields, changeStage, reject, resubmit, setUrgent,
   listAssignees, addAssignee, setPrimaryAssignee, removeAssignee,
   listRecruiters, addRecruiter, removeRecruiter,
-  addCandidate, updateCandidate, approveCandidate, deleteCandidate,
+  addCandidate, updateCandidate, verdictCandidate, approveCandidate, deleteCandidate,
   finalizeSelection, unfinalize,
   addComment, addLink, uploadFile, downloadFile, deleteFile,
   analytics,

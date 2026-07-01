@@ -265,6 +265,72 @@ describe('approveCandidate', () => {
   });
 });
 
+describe('verdictCandidate', () => {
+  it('заказчик (author) invite + comment → applicant_verdict + applicant_feedback (trim)', async () => {
+    pgQueryOne
+      .mockResolvedValueOnce({ request_id: 1 })          // cand
+      .mockResolvedValueOnce({ author_employee_id: 10 }); // request (author = user 10)
+    const res = makeRes();
+    await c.verdictCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { verdict: 'invite', comment: '  ок  ' } }), res);
+    expect(res._json).toMatchObject({ success: true });
+    const sql = pgExecute.mock.calls[0][0] as string;
+    const params = pgExecute.mock.calls[0][1] as unknown[];
+    expect(sql).toContain('applicant_verdict');
+    expect(sql).toContain('applicant_feedback');
+    expect(sql).not.toContain('seeker_feedback');
+    expect(params[0]).toBe('invite');
+    expect(params).toContain('ок'); // обрезан
+  });
+
+  it('рекрутёр (work) reject → пишет в seeker_feedback', async () => {
+    assignees.mockResolvedValue([10]); // isWork
+    pgQueryOne
+      .mockResolvedValueOnce({ request_id: 1 })
+      .mockResolvedValueOnce({ author_employee_id: 99 });
+    const res = makeRes();
+    await c.verdictCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { verdict: 'reject', comment: 'слабо' } }), res);
+    expect(res._json).toMatchObject({ success: true });
+    const sql = pgExecute.mock.calls[0][0] as string;
+    expect(sql).toContain('seeker_feedback');
+    expect(sql).not.toContain('applicant_feedback');
+  });
+
+  it('403 посторонний (не автор и не work)', async () => {
+    pgQueryOne
+      .mockResolvedValueOnce({ request_id: 1 })
+      .mockResolvedValueOnce({ author_employee_id: 99 });
+    const res = makeRes();
+    await c.verdictCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { verdict: 'invite' } }), res);
+    expect(res._status).toBe(403);
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+
+  it('400 недопустимый вердикт', async () => {
+    pgQueryOne.mockResolvedValueOnce({ request_id: 1 });
+    const res = makeRes();
+    await c.verdictCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { verdict: 'maybe' } }), res);
+    expect(res._status).toBe(400);
+  });
+
+  it('404 если кандидат из другой заявки', async () => {
+    pgQueryOne.mockResolvedValueOnce({ request_id: 999 });
+    const res = makeRes();
+    await c.verdictCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { verdict: 'invite' } }), res);
+    expect(res._status).toBe(404);
+  });
+
+  it('comment необязателен — UPDATE без feedback-полей', async () => {
+    pgQueryOne
+      .mockResolvedValueOnce({ request_id: 1 })
+      .mockResolvedValueOnce({ author_employee_id: 10 });
+    const res = makeRes();
+    await c.verdictCandidate(makeReq({ params: { id: '1', cid: '2' }, body: { verdict: 'invite' } }), res);
+    expect(res._json).toMatchObject({ success: true });
+    const sql = pgExecute.mock.calls[0][0] as string;
+    expect(sql).not.toContain('feedback');
+  });
+});
+
 describe('finalizeSelection', () => {
   it('400 если 0 утверждённых', async () => {
     pgQueryOne.mockResolvedValueOnce({ author_employee_id: 10, headcount: 2 }).mockResolvedValueOnce({ n: 0 });
