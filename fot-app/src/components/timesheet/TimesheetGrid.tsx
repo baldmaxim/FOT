@@ -193,6 +193,7 @@ const getSectionLabel = (
   source: NonNullable<TimesheetEmployee['source']>,
   departmentName?: string,
 ): string | null => {
+  if (source === 'supervisor') return 'Начальник участка';
   if (source === 'self') return 'Руководитель';
   if (source === 'direct_report') return 'Мои сотрудники';
   return departmentName ?? 'Сотрудники отдела';

@@ -11,7 +11,7 @@ import type {
 import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass, exportTimesheetMassUnified } from './timesheet-mass-export.controller.js';
-import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned, getDepartmentSupervisor } from './timesheet-assigned-export.controller.js';
+import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned, getDepartmentSupervisor, listBrigadeSupervisorEmployeeIds } from './timesheet-assigned-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
 import { resolveSchedulesForPeriod, isWorkingDay, isHolidayOnWorkday, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
@@ -1381,6 +1381,13 @@ export const timesheetController = {
       const departmentMemberships: IDepartmentEmployeeMembership[] = shouldApplyDeptFilter
         ? await listEmployeeMembershipsForDepartmentPeriod(department_id as string, startDate, endDate)
         : [];
+      // Начальник(и) участка бригады — отдельной строкой «Начальник участка» первыми
+      // в сетке (для табельщиц/HR/админов). Для не-бригад пусто. Резолвится на бэке
+      // (site_supervisor бригады) — совпадает с руководителем, выбранным в «По участкам».
+      const supervisorIds = shouldApplyDeptFilter
+        ? await listBrigadeSupervisorEmployeeIds(department_id as string)
+        : [];
+      const supervisorSet = new Set<number>(supervisorIds);
       mark('scope');
       const departmentEmployeeIds = departmentMemberships.map(m => m.employee_id);
       const transferredOutByEmployeeId = new Map<number, string | null>(
@@ -1400,6 +1407,7 @@ export const timesheetController = {
         (shouldApplyDeptFilter || isDirectReportsOnlyScope)
         && departmentEmployeeIds.length === 0
         && additionalEmployeeIds.length === 0
+        && supervisorIds.length === 0
       ) {
         return res.json(emptyResponse);
       }
@@ -1434,6 +1442,7 @@ export const timesheetController = {
         const unionEmployeeIds = [...new Set([
           ...departmentEmployeeIds,
           ...additionalEmployeeIds,
+          ...supervisorIds,
         ])];
         empParams.push(unionEmployeeIds);
         empWhere.push(`id = ANY($${empParams.length}::int[])`);
@@ -1476,7 +1485,9 @@ export const timesheetController = {
       // Сужает членов view-отделов до сотрудников объектов руководителя (миграция 167).
       if (await hasObjectViewScope(req)) {
         const acc = await resolveAccessibleEmployeeIds(req);
-        if (acc !== 'all') employees = employees.filter(e => acc.has(Number(e.id)));
+        // Начальник участка добавлен явно как строка «Начальник участка» — не срезаем его
+        // object-view-скоупом (он может быть вне объектов текущего пользователя).
+        if (acc !== 'all') employees = employees.filter(e => acc.has(Number(e.id)) || supervisorSet.has(Number(e.id)));
       }
 
       const employeeIds = employees.map(e => Number(e.id)).filter(Number.isFinite);
@@ -1746,11 +1757,14 @@ export const timesheetController = {
         && (editableDeptIds === 'all' || editableDeptIds.includes(department_id as string));
       const employeesWithNames = (employees || []).map(e => {
         const empId = Number(e.id);
-        // self > department > direct_report. Если человек одновременно в выбранном
-        // отделе и в direct_reports — оставляем в основной секции, не дублируем.
-        let source: 'department' | 'direct_report' | 'self' = 'department';
+        // self > supervisor > department > direct_report. Если человек одновременно в
+        // выбранном отделе и в direct_reports — оставляем в основной секции, не дублируем.
+        // Начальник участка (supervisor) — отдельная секция «Начальник участка», первой.
+        let source: 'department' | 'direct_report' | 'self' | 'supervisor' = 'department';
         if (selfTimesheetId != null && selfTimesheetId === empId) {
           source = 'self';
+        } else if (supervisorSet.has(empId)) {
+          source = 'supervisor';
         } else if (departmentMembershipSet.has(empId)) {
           source = 'department';
         } else if (directReportSet.has(empId)) {
@@ -1765,7 +1779,10 @@ export const timesheetController = {
           joined_date: joinedCutoffByEmployeeId.get(empId) ?? null,
           excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
           source,
-          editable: isListEmpEditable(empId) || (departmentMembershipSet.has(empId) && displayedDeptEditable),
+          // Строка начальника участка — только для показа: его табель ведётся в его участке.
+          editable: source === 'supervisor'
+            ? false
+            : (isListEmpEditable(empId) || (departmentMembershipSet.has(empId) && displayedDeptEditable)),
         };
       });
 

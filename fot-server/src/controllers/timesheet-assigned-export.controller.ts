@@ -402,6 +402,51 @@ export async function listAssignedEmployees(req: AuthenticatedRequest, res: Resp
 }
 
 /**
+ * Активные начальники участка (site_supervisor), закреплённые за бригадой через
+ * ручную привязку employee_department_access (source <> 'sigur_sync'). Упорядочены
+ * по ФИО. Вызывающий гарантирует, что departmentId — бригада (kind не проверяется).
+ */
+async function queryBrigadeSupervisorRows(
+  departmentId: string,
+): Promise<Array<{ id: number; full_name: string }>> {
+  const rows = await query<{ id: number; full_name: string | null }>(
+    `SELECT DISTINCT e.id, e.full_name
+       FROM employee_department_access eda
+       INNER JOIN employees e        ON e.id = eda.employee_id
+       INNER JOIN org_departments od ON od.id = eda.department_id
+       INNER JOIN user_profiles up   ON up.employee_id = e.id
+       INNER JOIN system_roles sr    ON sr.id = up.system_role_id
+      WHERE eda.department_id = $1
+        AND eda.is_active = true
+        AND eda.source <> 'sigur_sync'
+        AND e.employment_status = 'active'
+        AND e.is_archived = false
+        AND od.is_active = true
+        AND sr.code = 'site_supervisor'
+      ORDER BY e.full_name`,
+    [departmentId],
+  );
+  return rows
+    .filter(row => Number.isFinite(Number(row.id)))
+    .map(row => ({ id: Number(row.id), full_name: String(row.full_name ?? '').trim() }));
+}
+
+/**
+ * ID начальников участка бригады для строки «Начальник участка» в сетке табеля.
+ * Для не-бригад (и несуществующих отделов) возвращает []. Единый источник правды
+ * с шапкой табеля (getDepartmentSupervisor).
+ */
+export async function listBrigadeSupervisorEmployeeIds(departmentId: string): Promise<number[]> {
+  const dept = await query<{ kind: string | null }>(
+    `SELECT kind FROM org_departments WHERE id = $1`,
+    [departmentId],
+  );
+  if (dept.length === 0 || (dept[0].kind ?? 'department') !== 'brigade') return [];
+  const rows = await queryBrigadeSupervisorRows(departmentId);
+  return rows.map(row => row.id);
+}
+
+/**
  * GET /api/timesheet/department-supervisor?department_id=UUID
  * Начальник участка (site_supervisor), за которым закреплена бригада через
  * employee_department_access. Возвращает kind отдела и supervisor (или null).
@@ -425,28 +470,8 @@ export async function getDepartmentSupervisor(req: AuthenticatedRequest, res: Re
 
     let supervisor: { id: number; full_name: string } | null = null;
     if (kind === 'brigade') {
-      const rows = await query<{ id: number; full_name: string | null }>(
-        `SELECT e.id, e.full_name
-           FROM employee_department_access eda
-           INNER JOIN employees e        ON e.id = eda.employee_id
-           INNER JOIN org_departments od ON od.id = eda.department_id
-           INNER JOIN user_profiles up   ON up.employee_id = e.id
-           INNER JOIN system_roles sr    ON sr.id = up.system_role_id
-          WHERE eda.department_id = $1
-            AND eda.is_active = true
-            AND eda.source <> 'sigur_sync'
-            AND e.employment_status = 'active'
-            AND e.is_archived = false
-            AND od.is_active = true
-            AND sr.code = 'site_supervisor'
-          ORDER BY e.full_name
-          LIMIT 1`,
-        [departmentId],
-      );
-      const row = rows[0];
-      if (row && Number.isFinite(Number(row.id))) {
-        supervisor = { id: Number(row.id), full_name: String(row.full_name ?? '').trim() };
-      }
+      const rows = await queryBrigadeSupervisorRows(departmentId);
+      if (rows[0]) supervisor = rows[0];
     }
 
     return res.json({
