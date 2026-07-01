@@ -12,6 +12,8 @@ interface IContractorOrgSelectProps {
   searchPlaceholder?: string;
   disabled?: boolean;
   loading?: boolean;
+  /** Кол-во по org (id → N): показывается как «Название (N)» в триггере и опциях. */
+  counts?: Map<string, number>;
 }
 
 /**
@@ -26,12 +28,18 @@ export const ContractorOrgSelect: FC<IContractorOrgSelectProps> = ({
   searchPlaceholder = 'Поиск организации…',
   disabled = false,
   loading = false,
+  counts,
 }) => {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const ref = useRef<HTMLDivElement>(null);
 
   const selected = useMemo(() => orgs.find(o => o.id === value), [orgs, value]);
+
+  const orgLabel = useCallback(
+    (o: IContractorOrg): string => (counts?.has(o.id) ? `${o.name} (${counts.get(o.id)})` : o.name),
+    [counts],
+  );
 
   const filtered = useMemo(() => {
     if (!q.trim()) return orgs;
@@ -69,7 +77,7 @@ export const ContractorOrgSelect: FC<IContractorOrgSelectProps> = ({
         disabled={disabled}
       >
         <span className={styles.triggerText}>
-          {selected ? selected.name : emptyOptionLabel}
+          {selected ? orgLabel(selected) : emptyOptionLabel}
         </span>
         <ChevronDown size={14} />
       </button>
@@ -95,7 +103,7 @@ export const ContractorOrgSelect: FC<IContractorOrgSelectProps> = ({
                 className={`${styles.option} ${o.id === value ? styles.optionActive : ''}`}
                 onClick={() => pick(o.id)}
               >
-                {o.name}
+                {orgLabel(o)}
               </div>
             ))}
             {loading && orgs.length === 0 && (

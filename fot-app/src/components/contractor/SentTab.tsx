@@ -51,6 +51,9 @@ export const SentTab: FC = () => {
 
   const visible = orgId ? grouped.filter(g => g.id === orgId) : grouped;
 
+  // Кол-во выданных пропусков на подрядчика (= строки таблицы) — для «(N)» в дропдауне.
+  const counts = useMemo(() => new Map(grouped.map(g => [g.id, g.rows.length])), [grouped]);
+
   const handleRevoke = async (r: ISentPassRow) => {
     if (busyId) return;
     const ok = window.confirm(
@@ -87,6 +90,7 @@ export const SentTab: FC = () => {
           emptyOptionLabel="— все подрядчики —"
           searchPlaceholder="Поиск подрядчика…"
           loading={orgsQuery.isLoading}
+          counts={counts}
         />
       </div>
 
