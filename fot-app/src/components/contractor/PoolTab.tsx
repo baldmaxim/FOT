@@ -76,6 +76,7 @@ export const PoolTab: FC = () => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignOrgId, setAssignOrgId] = useState<string>('');
   const [countStr, setCountStr] = useState('');
+  const [matrixSearch, setMatrixSearch] = useState(''); // поиск по номеру в матрице пула
   const lastSeqRef = useRef(0);
   const dragRef = useRef<null | { mode: 'add' | 'remove' }>(null);
 
@@ -123,6 +124,13 @@ export const PoolTab: FC = () => {
   const folderId = settingsQuery.data?.sigur_department_id ?? null;
   const folderName = settingsQuery.data?.name ?? null;
   const cells: IPoolCell[] = useMemo(() => matrixQuery.data?.cells ?? [], [matrixQuery.data]);
+  // Отфильтрованные для отображения: если задан поиск — показываем только совпавшие
+  // по номеру пропуска (подстрока). На выделение/удаление/тоталы не влияет.
+  const visibleCells: IPoolCell[] = useMemo(() => {
+    const q = matrixSearch.trim();
+    if (!q) return cells;
+    return cells.filter(c => c.pass_number.includes(q));
+  }, [cells, matrixSearch]);
   const totals = matrixQuery.data?.totals ?? { free: 0, occupied: 0, provisioning: 0, failed: 0 };
   // Реальные сбои выпуска берём из матрицы (status='failed' = строка provisioning_failed).
   // Шум reserve-фазы ('уже в пуле' / 'нет карты во входных') строкой не материализуется
@@ -664,6 +672,16 @@ export const PoolTab: FC = () => {
         <div className={styles.poolMatrixSide}>
       <div className={styles.matrixHeader}>
         <span className={styles.title} style={{ fontSize: 14 }}>Матрица пула</span>
+        <input
+          type="search"
+          inputMode="numeric"
+          placeholder="Поиск по №"
+          value={matrixSearch}
+          onChange={e => setMatrixSearch(e.target.value)}
+          className={styles.matrixSearch}
+          style={{ width: 120 }}
+          title="Показать только пропуска с этим номером"
+        />
         <span className={styles.statusNote}>
           Свободно: <b style={{ color: 'var(--success)' }}>{totals.free}</b>
           {' · '}
@@ -709,9 +727,11 @@ export const PoolTab: FC = () => {
         <div className={styles.empty}>Загрузка…</div>
       ) : cells.length === 0 ? (
         <div className={styles.empty}>Пул пуст</div>
+      ) : visibleCells.length === 0 ? (
+        <div className={styles.empty}>Нет пропусков с номером «{matrixSearch.trim()}»</div>
       ) : (
         <div className={styles.matrix}>
-          {cells.map(c => {
+          {visibleCells.map(c => {
             // Режим удаления: любая ячейка (кроме provisioning) кликается на пометку.
             if (deleteMode) {
               const delId = cellDeletableId(c);
