@@ -1,7 +1,8 @@
 import { query, queryOne } from '../config/postgres.js';
-import { loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
+import { isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 import { buildAttendanceEntries, type IAttendanceEntry } from './attendance.service.js';
+import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
 import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
 import {
   listEmployeeIdsAssignedToDepartmentPeriod,
@@ -70,6 +71,73 @@ export const resolveTimesheetExportDays = (
   }
   return Array.from({ length: daysInMonth }, (_, index) => index + 1);
 };
+
+/**
+ * Плановые (обязательные по квоте графика) выходные за ПОЛНЫЙ календарный месяц.
+ * Считаем за весь месяц — не только за период выгрузки — иначе «первые N суббот»
+ * определятся неверно при экспорте за половину/диапазон. Возвращает набор
+ * `${employeeId}|${date}` дней, которые считаются плановыми (сырой СКУД без
+ * корректировки, в пределах квоты expected_saturdays/sundays_per_month).
+ */
+async function computeExportWeekendExemptions(
+  employeeIds: number[],
+  year: number,
+  mon: number,
+  calendar: IProductionCalendarMonth | null,
+): Promise<Set<string>> {
+  if (employeeIds.length === 0) return new Set();
+  const mm = String(mon).padStart(2, '0');
+  const monthStart = `${year}-${mm}-01`;
+  const monthEnd = `${year}-${mm}-${String(new Date(year, mon, 0).getDate()).padStart(2, '0')}`;
+  const holidayDates = [
+    ...(calendar?.holidays ?? []),
+    ...(calendar?.mandatory_holidays ?? []),
+  ];
+  // Кандидаты — присутствия в календарные выходные (сб/вс) ИЛИ в праздники месяца
+  // (праздник-будень может засчитываться в субботнюю квоту). Функция сама отфильтрует
+  // лишнее по графику/календарю.
+  const skudRows = await query<{ employee_id: number; date: string }>(
+    `SELECT employee_id, date::text AS date
+       FROM skud_daily_summary
+      WHERE employee_id = ANY($1::int[])
+        AND date >= $2::date AND date <= $3::date
+        AND (is_present = true OR COALESCE(total_hours, 0) > 0)
+        AND (EXTRACT(DOW FROM date) IN (0, 6) OR date::text = ANY($4::text[]))`,
+    [employeeIds, monthStart, monthEnd, holidayDates],
+  );
+  if (skudRows.length === 0) return new Set();
+  const adjRows = await query<{ employee_id: number; work_date: string }>(
+    `SELECT employee_id, work_date::text AS work_date
+       FROM attendance_adjustments
+      WHERE employee_id = ANY($1::int[])
+        AND work_date >= $2::date AND work_date <= $3::date`,
+    [employeeIds, monthStart, monthEnd],
+  );
+  const adjSet = new Set(adjRows.map(r => `${r.employee_id}|${r.work_date}`));
+  return computeMandatoryExemptions(skudRows, adjSet);
+}
+
+/**
+ * Включать ли часы дня в выгрузку. Рабочий день по личному графику — всегда да.
+ * Выходной день — только если работа согласована (approved/auto_approved) ИЛИ это
+ * плановая суббота/воскресенье (в наборе exemptions). Иначе (сырой СКУД-проход,
+ * pending/rejected, необязательный выход) — часы обнуляются. Одинаково для обоих
+ * режимов (HR/actual и начальник участка/capped), поэтому выходные у них сходятся.
+ */
+export function includeExportDayHours(
+  entry: IAttendanceEntry,
+  schedule: IResolvedSchedule | undefined,
+  employeeId: number,
+  date: string,
+  calendar: IProductionCalendarMonth | null,
+  exemptions: Set<string>,
+): boolean {
+  if (!schedule) return true;
+  const [y, m, d] = date.split('-').map(Number);
+  if (isWorkingDay(schedule, new Date(y, m - 1, d), calendar)) return true;
+  if (entry.approval_status === 'approved' || entry.approval_status === 'auto_approved') return true;
+  return exemptions.has(`${employeeId}|${date}`);
+}
 
 export async function fetchTimesheetDataForDepartment(
   month: string,
@@ -181,6 +249,11 @@ export async function fetchTimesheetDataForDepartment(
     persistTravelSegments: false,
   });
 
+  // Плановые выходные за полный месяц — для решения, оставлять ли часы выходного дня.
+  const weekendExemptions = await computeExportWeekendExemptions(
+    empArr.map(e => e.id), year, mon, calendarMonth,
+  );
+
   const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
   for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
     dataMap.set(employeeId, new Map());
@@ -190,9 +263,13 @@ export async function fetchTimesheetDataForDepartment(
         : (typeof entry.display_hours_worked === 'number'
           ? entry.display_hours_worked
           : (typeof entry.hours_worked === 'number' ? entry.hours_worked : 0));
+      // Несогласованные/необязательные часы выходного не выгружаем (см. includeExportDayHours).
+      const keepHours = includeExportDayHours(
+        entry, dailySchedulesMap.get(employeeId)?.get(date), employeeId, date, calendarMonth, weekendExemptions,
+      );
       dataMap.get(employeeId)!.set(date, {
         status: entry.status,
-        hours: visibleHours,
+        hours: keepHours ? visibleHours : 0,
         corrected: entry.is_correction,
         hoursOverridden: entry.hours_overridden ?? false,
       });
@@ -355,6 +432,11 @@ export async function fetchTimesheetDataForEmployees(
     persistTravelSegments: false,
   });
 
+  // Плановые выходные за полный месяц — для решения, оставлять ли часы выходного дня.
+  const weekendExemptions = await computeExportWeekendExemptions(
+    empArr.map(e => e.id), year, mon, calendarMonth,
+  );
+
   const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
   for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
     dataMap.set(employeeId, new Map());
@@ -364,9 +446,13 @@ export async function fetchTimesheetDataForEmployees(
         : (typeof entry.display_hours_worked === 'number'
           ? entry.display_hours_worked
           : (typeof entry.hours_worked === 'number' ? entry.hours_worked : 0));
+      // Несогласованные/необязательные часы выходного не выгружаем (см. includeExportDayHours).
+      const keepHours = includeExportDayHours(
+        entry, dailySchedulesMap.get(employeeId)?.get(date), employeeId, date, calendarMonth, weekendExemptions,
+      );
       dataMap.get(employeeId)!.set(date, {
         status: entry.status,
-        hours: visibleHours,
+        hours: keepHours ? visibleHours : 0,
         corrected: entry.is_correction,
         hoursOverridden: entry.hours_overridden ?? false,
       });
