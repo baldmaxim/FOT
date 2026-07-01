@@ -25,6 +25,8 @@ import {
 } from './sigur-live-employees-crud.service.js';
 import { assignSigurEmployeeCardBinding } from './sigur-live-cards.service.js';
 import { getOrgSigurDepartmentId, ContractorScopeError } from './contractor-scope.service.js';
+import { deriveCardW26 } from './sigur-card-w26.util.js';
+import { resolveField } from './sigur-sync-shared.js';
 
 export const POOL_SETTINGS_KEY = 'contractor.free_pool.sigur_department_id';
 
@@ -328,12 +330,107 @@ export const getPoolAnomalies = async (): Promise<IPoolAnomaly[]> =>
       ORDER BY p.pass_number::bigint ASC`,
   );
 
+/** Результат универсальной проверки карты: где она уже засветилась (БД пула + Sigur). */
+export interface IPoolCardConflict {
+  card_uid: string;
+  w26: string | null;
+  /** Строки пула с этой же картой (по card_uid), кроме исключённого номера. */
+  db: Array<{ pass_number: string; status: string; card_hex_uid: string | null }>;
+  /** Найдена ли карта в Sigur и к кому привязана. */
+  sigur: null | {
+    card_id: number | null;
+    value: string | null;
+    bound_employee_id: number | null;
+    bound_employee_name: string | null;
+    /** Владелец в Sigur — плейсхолдер пула («Пропуск N»), а не реальный человек. */
+    is_pool_placeholder: boolean;
+  };
+  /** Есть ли реальный конфликт (карта уже на другом номере или у реального сотрудника). */
+  has_conflict: boolean;
+  /** Sigur был недоступен/ошибка — проверка неполная (только БД). */
+  sigur_error?: string;
+}
+
+const toIntOrNull = (v: unknown): number | null => {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') { const n = Number(v.trim()); if (Number.isFinite(n)) return n; }
+  return null;
+};
+
+/**
+ * Универсальная проверка карты ПЕРЕД добавлением/при удалении: пробегает и по БД
+ * пула (по card_uid), и по Sigur (по W26 → карта → привязка → владелец). Возвращает
+ * все места, где карта уже засветилась, чтобы UI мог предупредить оператора об
+ * ошибке ДО действия. Sigur-ошибка не роняет проверку — вернём частичный результат.
+ */
+export const checkPoolCardConflicts = async (
+  uid: string,
+  opts?: { excludePassNumber?: string; connection?: ConnectionType },
+): Promise<IPoolCardConflict> => {
+  const cardUid = (uid ?? '').trim();
+  let w26: string | null = null;
+  const candidates: string[] = [];
+  try {
+    const dec = deriveCardW26(cardUid);
+    w26 = dec.w26;
+    candidates.push(dec.value, dec.w26);
+  } catch { /* нечитаемый uid — ищем только по сырому значению */ }
+  candidates.push(cardUid);
+
+  const db = await query<{ pass_number: string; status: string; card_hex_uid: string | null }>(
+    `SELECT pass_number, status, card_hex_uid FROM contractor_passes
+      WHERE card_uid = $1 AND status <> 'revoked'
+        AND ($2::text IS NULL OR pass_number <> $2)
+      ORDER BY created_at ASC`,
+    [cardUid, opts?.excludePassNumber ?? null],
+  );
+
+  let sigur: IPoolCardConflict['sigur'] = null;
+  let sigur_error: string | undefined;
+  if (!isContractorSigurDryRun()) {
+    try {
+      const connection = opts?.connection ?? await sigurService.getBackgroundConnectionType();
+      const { matches } = await sigurService.findCardByCandidates(candidates, connection);
+      const cards = matches as Record<string, unknown>[];
+      if (cards.length > 0) {
+        const first = cards[0];
+        const cardId = toIntOrNull(resolveField(first, 'cardId', 'card_id', 'id', 'ID'));
+        const value = String(resolveField(first, 'value', 'cardValue', 'card_value') ?? '') || null;
+        let ownerId: number | null = null;
+        let ownerName: string | null = null;
+        if (cardId != null) {
+          const binds = await sigurService.getCardBindings({ cardId }, connection) as Record<string, unknown>[];
+          for (const b of binds) {
+            const oid = toIntOrNull(resolveField(b, 'employeeId', 'employee_id'));
+            if (oid) { ownerId = oid; break; }
+          }
+          if (ownerId != null) {
+            try {
+              const emp = await sigurService.getEmployeeById(ownerId, connection) as Record<string, unknown>;
+              ownerName = String(resolveField(emp, 'name', 'fullName', 'FullName', 'Name') ?? '').trim() || null;
+            } catch { /* профиль мог быть удалён */ }
+          }
+        }
+        const isPlaceholder = !!ownerName && /^\s*Пропуск\s/i.test(ownerName);
+        sigur = { card_id: cardId, value, bound_employee_id: ownerId, bound_employee_name: ownerName, is_pool_placeholder: isPlaceholder };
+      }
+    } catch (e) {
+      sigur_error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  const has_conflict = db.length > 0 || !!sigur?.bound_employee_id;
+  return { card_uid: cardUid, w26, db, sigur, has_conflict, sigur_error };
+};
+
 export interface IAddPoolInput {
   from: number;
   to?: number;
   /** hex_uid — полный CSN карты с ридера (опц.): уникальный ключ для дедупа против
-   *  коллизий W26 (разные физ. карты сворачиваются в один 24-бит W26). */
-  cards: Array<{ uid: string; sequence: number; hex_uid?: string }>;
+   *  коллизий W26 (разные физ. карты сворачиваются в один 24-бит W26).
+   *  reader — весь payload ридера (w26/sigurCard/hexUid/decBe/decLe/rawHex) для
+   *  анализа коллизий; хранится в card_reader_payload как есть. */
+  cards: Array<{ uid: string; sequence: number; hex_uid?: string; reader?: Record<string, unknown> }>;
   createdBy: string;
 }
 
@@ -561,6 +658,7 @@ export const addPassesToPool = async (input: IAddPoolInput): Promise<IAddPoolRes
     const passNumber = String(num); // канонический формат — без ведущих нулей
     const cardUid = card.uid.trim();
     const cardHexUid = card.hex_uid?.trim() || null; // полный CSN карты (если ридер прислал)
+    const cardReaderJson = card.reader && typeof card.reader === 'object' ? JSON.stringify(card.reader) : null;
     expected.push(num);
 
     // Preflight числового дубля: ловит смысловой дубль даже при разном тексте
@@ -609,11 +707,11 @@ export const addPassesToPool = async (input: IAddPoolInput): Promise<IAddPoolRes
     // чтобы не проглотить чужой конфликт. Нет RETURNING → строку успели вставить (гонка).
     const ins = await queryOne<{ id: string }>(
       `INSERT INTO contractor_passes
-         (org_department_id, pass_number, sigur_employee_id, card_uid, card_hex_uid, status, created_by)
-       VALUES (NULL, $1, NULL, $2, $3, 'provisioning', $4::uuid)
+         (org_department_id, pass_number, sigur_employee_id, card_uid, card_hex_uid, card_reader_payload, status, created_by)
+       VALUES (NULL, $1, NULL, $2, $3, $4::jsonb, 'provisioning', $5::uuid)
        ON CONFLICT (pass_number) WHERE org_department_id IS NULL DO NOTHING
        RETURNING id`,
-      [passNumber, cardUid, cardHexUid, input.createdBy],
+      [passNumber, cardUid, cardHexUid, cardReaderJson, input.createdBy],
     );
     if (!ins) {
       warnings.push(`${passNumber}: уже в пуле`);

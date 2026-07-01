@@ -4,7 +4,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useCardReaderAgent } from '../../contexts/CardReaderAgentContext';
-import { contractorAdminService, type IPoolAnomaly, type IPoolCell, type IPoolFail, type ISigurDepartmentNode } from '../../services/contractorService';
+import { contractorAdminService, type IPoolAnomaly, type IPoolCardConflict, type IPoolCell, type IPoolFail, type ISigurDepartmentNode } from '../../services/contractorService';
 import { formatCardW26 } from '../../utils/cardW26';
 import { DepartmentTreeSelect } from '../staff/DepartmentTreeSelect';
 import type { OrgDepartmentNode } from '../../types/organization';
@@ -16,7 +16,37 @@ interface IScanRow {
   uid: string;
   /** Полный серийник карты с ридера (CSN) — для дедупа по уникальному ключу, а не по 24-бит W26. */
   hexUid?: string;
+  /** Весь payload ридера — сохраняем в БД для анализа коллизий. */
+  reader?: Record<string, unknown>;
+  /** Результат универсальной проверки (БД+Sigur): undefined — ещё проверяется/не проверяли. */
+  conflict?: IPoolCardConflict;
 }
+
+/** Бейдж результата проверки карты (БД пула + Sigur) в таблице считанных карт. */
+const renderCardCheck = (c?: IPoolCardConflict) => {
+  if (!c) return <span className={styles.checkMuted}>проверка…</span>;
+  if (!c.has_conflict) {
+    return (
+      <span
+        className={styles.checkOk}
+        title={c.sigur_error ? `Sigur недоступен: ${c.sigur_error} (проверена только БД)` : 'Свободна: в БД пула и в Sigur не найдена'}
+      >
+        ✓ свободна
+      </span>
+    );
+  }
+  const parts: string[] = [];
+  if (c.db.length > 0) parts.push(`в пуле: № ${c.db.map(d => d.pass_number).join(', ')}`);
+  if (c.sigur?.bound_employee_id) {
+    parts.push(c.sigur.is_pool_placeholder
+      ? `в Sigur: ${c.sigur.bound_employee_name ?? 'пул'}`
+      : `в Sigur у «${c.sigur.bound_employee_name ?? '—'}»`);
+  }
+  const short = c.db.length > 0
+    ? `уже № ${c.db.map(d => d.pass_number).join(',')}`
+    : (c.sigur?.bound_employee_name ?? 'занята');
+  return <span className={styles.checkWarn} title={parts.join('; ')}>⚠ {short}</span>;
+};
 
 const SigurDepartmentPicker: FC<{
   nodes: ISigurDepartmentNode[];
@@ -180,13 +210,23 @@ export const PoolTab: FC = () => {
     // Полный CSN карты — сохраняем отдельно: две физически разные карты могут дать
     // один и тот же 24-бит W26, но hexUid у них различается (ловим дубли по нему).
     const hexUid = lastCard?.hexUid?.trim() || undefined;
+    const reader = lastCard ? { ...lastCard } : undefined;
+    let added = false;
     setRows(prev => {
       if (prev.some(r => r.uid === uid)) {
         toast.error(`Карта ${uid} уже считана`);
         return prev;
       }
-      return [...prev, { uid, hexUid }];
+      added = true;
+      return [...prev, { uid, hexUid, reader }];
     });
+    // Универсальная проверка (БД пула + Sigur) — сразу после скана, чтобы предупредить
+    // об ошибке ДО добавления. Не критично: при сбое просто не покажем бейдж.
+    if (added) {
+      void contractorAdminService.checkPoolCard(uid)
+        .then(res => setRows(prev => prev.map(r => (r.uid === uid ? { ...r, conflict: res } : r))))
+        .catch(() => { /* проверка не обязательна */ });
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardSeq]);
 
@@ -242,7 +282,7 @@ export const PoolTab: FC = () => {
   const handleAddToPool = async () => {
     if (!canAddPool) return;
     setBusy(true);
-    const cards = rows.map((r, i) => ({ uid: r.uid, sequence: i, hex_uid: r.hexUid }));
+    const cards = rows.map((r, i) => ({ uid: r.uid, sequence: i, hex_uid: r.hexUid, reader: r.reader }));
     const chunks: Array<typeof cards> = [];
     for (let i = 0; i < cards.length; i += CHUNK) chunks.push(cards.slice(i, i + CHUNK));
     setProgress({ done: 0, total: cards.length });
@@ -488,12 +528,13 @@ export const PoolTab: FC = () => {
             </button>
           </div>
           <table className={styles.table}>
-            <thead><tr><th>№</th><th>W26</th><th></th></tr></thead>
+            <thead><tr><th>№</th><th>W26</th><th>Проверка</th><th></th></tr></thead>
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.uid}>
                   <td>{passNumberAt(i)}</td>
                   <td title={r.uid}>{formatCardW26(r.uid)}</td>
+                  <td>{renderCardCheck(r.conflict)}</td>
                   <td>
                     <button
                       className="btn-secondary"
@@ -679,7 +720,6 @@ export const PoolTab: FC = () => {
           value={matrixSearch}
           onChange={e => setMatrixSearch(e.target.value)}
           className={styles.matrixSearch}
-          style={{ width: 120 }}
           title="Показать только пропуска с этим номером"
         />
         <span className={styles.statusNote}>

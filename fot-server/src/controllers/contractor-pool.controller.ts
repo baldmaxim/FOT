@@ -17,6 +17,7 @@ import {
   assignPoolPassesByCount,
   assignPoolPassesToContractor,
   cancelProvisioningFailedPasses,
+  checkPoolCardConflicts,
   deletePoolPasses,
   enqueueRevoke,
   getFreePasses,
@@ -203,6 +204,7 @@ export const contractorPoolController = {
           uid: z.string().trim().min(1),
           sequence: z.number().int().nonnegative(),
           hex_uid: z.string().trim().min(1).optional(),
+          reader: z.record(z.unknown()).optional(),
         })).min(1).max(100),
       }).parse(req.body);
 
@@ -327,6 +329,30 @@ export const contractorPoolController = {
       });
       console.error('Pool cancelProvisioning error:', error);
       res.status(500).json({ success: false, error: 'Не удалось отменить выпуск пропусков' });
+    }
+  },
+
+  /**
+   * POST /pool/check-card — универсальная проверка карты ДО добавления: где она уже
+   * засветилась (БД пула по card_uid + Sigur по W26 → владелец). Body: { uid, exclude_pass_number? }.
+   */
+  async checkCard(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const body = z.object({
+        uid: z.string().trim().min(1),
+        exclude_pass_number: z.string().trim().optional(),
+      }).parse(req.body ?? {});
+      const data = await checkPoolCardConflicts(body.uid, { excludePassNumber: body.exclude_pass_number });
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.checkCard' } });
+      console.error('Pool checkCard error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось проверить карту' });
     }
   },
 

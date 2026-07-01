@@ -315,8 +315,24 @@ export interface IBlockDuplicateResult {
 export interface IPoolIssueInput {
   from: number;
   to?: number;
-  /** hex_uid — полный CSN карты с ридера (опционально), для дедупа по уникальному ключу. */
-  cards: Array<{ uid: string; sequence: number; hex_uid?: string }>;
+  /** hex_uid — полный CSN карты с ридера; reader — весь payload ридера (для анализа коллизий). */
+  cards: Array<{ uid: string; sequence: number; hex_uid?: string; reader?: Record<string, unknown> }>;
+}
+
+/** Универсальная проверка карты перед добавлением: где она уже засветилась (БД пула + Sigur). */
+export interface IPoolCardConflict {
+  card_uid: string;
+  w26: string | null;
+  db: Array<{ pass_number: string; status: string; card_hex_uid: string | null }>;
+  sigur: null | {
+    card_id: number | null;
+    value: string | null;
+    bound_employee_id: number | null;
+    bound_employee_name: string | null;
+    is_pool_placeholder: boolean;
+  };
+  has_conflict: boolean;
+  sigur_error?: string;
 }
 
 export type PoolFailStage = 'input' | 'range' | 'duplicate' | 'duplicate_card' | 'card' | 'sigur';
@@ -671,6 +687,14 @@ export const contractorAdminService = {
       '/admin/contractor/pool/issue',
       input,
       { timeoutMs: 120_000 },
+    );
+    return r.data;
+  },
+  /** Проверить считанную карту ДО добавления: где уже засветилась (БД пула + Sigur). */
+  async checkPoolCard(uid: string, excludePassNumber?: string): Promise<IPoolCardConflict> {
+    const r = await apiClient.post<ApiResponse<IPoolCardConflict>>(
+      '/admin/contractor/pool/check-card',
+      { uid, exclude_pass_number: excludePassNumber },
     );
     return r.data;
   },

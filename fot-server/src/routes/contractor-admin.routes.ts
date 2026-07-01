@@ -68,6 +68,7 @@ router.get('/pool/ranges', apprView, contractorPoolController.getRanges);
 router.get('/pool/matrix', apprView, contractorPoolController.matrix);
 router.get('/pool/anomalies', apprView, contractorPoolController.anomalies);
 router.get('/pool/next-number', apprView, contractorPoolController.getNextNumber);
+router.post('/pool/check-card', apprView, contractorPoolController.checkCard);
 router.post('/pool/issue', apprEdit, requireCritical2FA, contractorPoolController.issueToPool);
 router.post('/pool/retry-provisioning', apprEdit, requireCritical2FA, contractorPoolController.retryProvisioning);
 router.post('/pool/cancel-provisioning', apprEdit, requireCritical2FA, contractorPoolController.cancelProvisioning);
