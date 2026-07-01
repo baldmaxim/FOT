@@ -66,10 +66,12 @@ router.get('/pool', apprView, contractorPoolController.list);
 router.get('/pool/free', apprView, contractorPoolController.free);
 router.get('/pool/ranges', apprView, contractorPoolController.getRanges);
 router.get('/pool/matrix', apprView, contractorPoolController.matrix);
+router.get('/pool/anomalies', apprView, contractorPoolController.anomalies);
 router.get('/pool/next-number', apprView, contractorPoolController.getNextNumber);
 router.post('/pool/issue', apprEdit, requireCritical2FA, contractorPoolController.issueToPool);
 router.post('/pool/retry-provisioning', apprEdit, requireCritical2FA, contractorPoolController.retryProvisioning);
 router.post('/pool/cancel-provisioning', apprEdit, requireCritical2FA, contractorPoolController.cancelProvisioning);
+router.post('/pool/delete', apprEdit, requireCritical2FA, contractorPoolController.deletePasses);
 router.post('/pool/assign', apprEdit, requireCritical2FA, contractorPoolController.assign);
 router.post('/pool/assign-count', apprEdit, requireCritical2FA, contractorPoolController.assignCount);
 

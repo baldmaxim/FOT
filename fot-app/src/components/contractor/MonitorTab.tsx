@@ -5,6 +5,7 @@ import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { BarChart3 } from 'lucide-react';
 import { contractorAdminService, type IPassHistory, type IMonitorPassRow } from '../../services/contractorService';
+import { formatCardW26 } from '../../utils/cardW26';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
 import { PassStatsModal } from './PassStatsModal';
 import { PassDocumentsModal } from './PassDocumentsModal';
@@ -251,7 +252,7 @@ export const MonitorTab: FC = () => {
             <tr>
               <th>№</th>
               {searchActive && <th>Подрядчик</th>}
-              <th>UID</th><th>W26</th><th>ФИО</th><th>Статус</th><th>Согласование</th>
+              <th>W26</th><th>ФИО</th><th>Статус</th><th>Согласование</th>
               <th>Активен</th><th>Объекты</th><th>Точки</th><th>Срок</th><th></th>
             </tr>
           </thead>
@@ -260,8 +261,7 @@ export const MonitorTab: FC = () => {
               <tr key={p.id}>
                 <td>{p.pass_number}</td>
                 {searchActive && <td>{p.org_name ?? '—'}</td>}
-                <td>{p.card_uid ?? '—'}</td>
-                <td>{p.w26 ?? '—'}</td>
+                <td title={p.card_uid ?? ''}>{p.w26 ?? formatCardW26(p.card_uid)}</td>
                 <td>
                   {p.holder_name ?? '—'}
                   <button

@@ -212,9 +212,11 @@ export type PoolCellStatus = 'free' | 'occupied' | 'provisioning' | 'failed';
 export interface IPoolCell {
   pass_number: string;
   status: PoolCellStatus;
-  /** id строки in_pool (нужен для назначения); null для остальных. */
+  /** id строки in_pool (нужен для назначения и удаления free); null для остальных. */
   id: string | null;
-  /** id строки provisioning/provisioning_failed (нужен для повтора выпуска); иначе null. */
+  /** id занятой строки (assigned/submitted/applied/blocked) — для удаления занятого; иначе null. */
+  occupied_id: string | null;
+  /** id строки provisioning/provisioning_failed (нужен для повтора выпуска/удаления); иначе null. */
   failed_id: string | null;
   /** текст ошибки выпуска (для tooltip ячейки); иначе null. */
   error: string | null;
@@ -257,6 +259,9 @@ export const getPoolMatrix = async (): Promise<IPoolMatrixResult> => {
             END AS status,
             (array_agg(id) FILTER (WHERE status = 'in_pool' AND org_department_id IS NULL))[1] AS id,
             (array_agg(id) FILTER (
+               WHERE status IN ('assigned', 'submitted', 'applied', 'blocked')
+                 AND org_department_id IS NOT NULL))[1] AS occupied_id,
+            (array_agg(id) FILTER (
                WHERE status IN ('provisioning', 'provisioning_failed')
                  AND org_department_id IS NULL))[1] AS failed_id,
             (array_agg(sigur_sync_error) FILTER (
@@ -276,15 +281,64 @@ export const getPoolMatrix = async (): Promise<IPoolMatrixResult> => {
   return { cells, totals };
 };
 
+/** Причина, по которой строка пула считается проблемной. */
+export type PoolAnomalyReason = 'no_profile' | 'duplicate_card';
+
+export interface IPoolAnomaly {
+  id: string;
+  pass_number: string;
+  card_uid: string | null;
+  sigur_employee_id: number | null;
+  reason: PoolAnomalyReason;
+  /** Другой(ие) номер(а) с той же картой (для duplicate_card); иначе null. */
+  dup_with: string | null;
+}
+
+/**
+ * Битые строки общего пула (status='in_pool', org IS NULL), которые выглядят как
+ * обычные ячейки, но требуют удаления и повторного добавления:
+ *   no_profile     — sigur_employee_id IS NULL: карта считана, но профиль в Sigur
+ *                    не заведён → «пропуск никому не назначен» (2556–2558);
+ *   duplicate_card — card_uid встречается на >1 непогашенной строке → одна карта
+ *                    на нескольких номерах (сдвиг: 2554/2555/2560/2891 vs соседи).
+ * Показываем только in_pool-кандидатов на удаление; для duplicate_card отдаём
+ * dup_with (номера-двойники), чтобы оператор понял, какую строку удалять.
+ */
+export const getPoolAnomalies = async (): Promise<IPoolAnomaly[]> =>
+  query<IPoolAnomaly>(
+    `WITH dupcards AS (
+       SELECT card_uid
+         FROM contractor_passes
+        WHERE card_uid IS NOT NULL AND status <> 'revoked'
+        GROUP BY card_uid
+       HAVING COUNT(*) > 1
+     )
+     SELECT p.id,
+            p.pass_number,
+            p.card_uid,
+            p.sigur_employee_id,
+            CASE WHEN p.sigur_employee_id IS NULL THEN 'no_profile' ELSE 'duplicate_card' END AS reason,
+            (SELECT string_agg(DISTINCT o.pass_number, ', ' ORDER BY o.pass_number)
+               FROM contractor_passes o
+              WHERE o.card_uid = p.card_uid AND o.status <> 'revoked' AND o.id <> p.id) AS dup_with
+       FROM contractor_passes p
+      WHERE p.org_department_id IS NULL
+        AND p.status = 'in_pool'
+        AND (p.sigur_employee_id IS NULL OR p.card_uid IN (SELECT card_uid FROM dupcards))
+      ORDER BY p.pass_number::bigint ASC`,
+  );
+
 export interface IAddPoolInput {
   from: number;
   to?: number;
-  cards: Array<{ uid: string; sequence: number }>;
+  /** hex_uid — полный CSN карты с ридера (опц.): уникальный ключ для дедупа против
+   *  коллизий W26 (разные физ. карты сворачиваются в один 24-бит W26). */
+  cards: Array<{ uid: string; sequence: number; hex_uid?: string }>;
   createdBy: string;
 }
 
 /** Этап, на котором номер не попал в пул (для сводки и UI). */
-export type PoolFailStage = 'input' | 'range' | 'duplicate' | 'card' | 'sigur';
+export type PoolFailStage = 'input' | 'range' | 'duplicate' | 'duplicate_card' | 'card' | 'sigur';
 
 export interface IAddPoolResult {
   created: string[];
@@ -506,6 +560,7 @@ export const addPassesToPool = async (input: IAddPoolInput): Promise<IAddPoolRes
     }
     const passNumber = String(num); // канонический формат — без ведущих нулей
     const cardUid = card.uid.trim();
+    const cardHexUid = card.hex_uid?.trim() || null; // полный CSN карты (если ридер прислал)
     expected.push(num);
 
     // Preflight числового дубля: ловит смысловой дубль даже при разном тексте
@@ -524,15 +579,41 @@ export const addPassesToPool = async (input: IAddPoolInput): Promise<IAddPoolRes
       continue;
     }
 
+    // Анти-сдвиг: если считанная карта уже привязана к ДРУГОМУ пропуску (любой
+    // не-revoked статус), не заводим вторую строку на ту же карту — иначе номера
+    // «смещаются» (одна физическая карта висит на двух номерах, как было при
+    // повторном добавлении 2554/2555/2560/2891). Громкая ошибка вместо тихой дыры.
+    const cardDup = await queryOne<{ pass_number: string; card_hex_uid: string | null }>(
+      `SELECT pass_number, card_hex_uid FROM contractor_passes
+        WHERE card_uid = $1 AND status <> 'revoked'
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [cardUid],
+    );
+    if (cardDup && cardDup.pass_number !== passNumber) {
+      // Если у обеих карт известен полный CSN и он РАЗНЫЙ — это не «та же карта», а
+      // коллизия W26: две физически разные карты свернулись в один 24-бит W26. Sigur
+      // всё равно не удержит две карты с одинаковым value, поэтому блокируем с явным
+      // сообщением (карту нужно заменить/перекодировать), а не «карта уже у пропуска».
+      const isW26Collision = !!cardHexUid && !!cardDup.card_hex_uid && cardDup.card_hex_uid !== cardHexUid;
+      const error = isW26Collision
+        ? `коллизия W26 с пропуском ${cardDup.pass_number} (разные карты, одинаковый W26 ${cardUid}) — замените карту`
+        : `карта уже у пропуска ${cardDup.pass_number}`;
+      warnings.push(`${passNumber}: ${error}`);
+      failed.push({ pass_number: passNumber, error, stage: 'duplicate_card' });
+      accounted.add(num);
+      continue;
+    }
+
     // Целевой ON CONFLICT именно по partial-uniq contractor_passes_pool_pass_number_uniq,
     // чтобы не проглотить чужой конфликт. Нет RETURNING → строку успели вставить (гонка).
     const ins = await queryOne<{ id: string }>(
       `INSERT INTO contractor_passes
-         (org_department_id, pass_number, sigur_employee_id, card_uid, status, created_by)
-       VALUES (NULL, $1, NULL, $2, 'provisioning', $3::uuid)
+         (org_department_id, pass_number, sigur_employee_id, card_uid, card_hex_uid, status, created_by)
+       VALUES (NULL, $1, NULL, $2, $3, 'provisioning', $4::uuid)
        ON CONFLICT (pass_number) WHERE org_department_id IS NULL DO NOTHING
        RETURNING id`,
-      [passNumber, cardUid, input.createdBy],
+      [passNumber, cardUid, cardHexUid, input.createdBy],
     );
     if (!ins) {
       warnings.push(`${passNumber}: уже в пуле`);
@@ -697,6 +778,129 @@ export const cancelProvisioningFailedPasses = async (
   }
 
   return { cancelled, failed };
+};
+
+export interface IDeletePoolResult {
+  deleted: string[];
+  failed: Array<{ pass_id: string; pass_number: string | null; error: string }>;
+}
+
+/**
+ * Форсированное удаление пропусков из пула ПО id строки + подчистка placeholder-
+ * профиля в Sigur. В отличие от cancelProvisioningFailedPasses (только
+ * provisioning/provisioning_failed), работает с ЛЮБЫМ статусом кроме 'revoked':
+ * in_pool (зелёные/битые — no_profile/дубль карты) и назначенные/поданные
+ * подрядчику — оператор исправляет ошибки и добавляет номер заново.
+ *
+ * Для каждой строки:
+ *   1) best-effort deleteSigurEmployee (404/orphan — не помеха);
+ *   2) в транзакции: фиксируем submission_id под FOR UPDATE, DELETE строки
+ *      (contractor_pass_holders уходят каскадом ON DELETE CASCADE,
+ *      contractor_roster.assigned_pass_id обнуляется ON DELETE SET NULL),
+ *      затем пересчитываем агрегатный статус заявки (как в enqueueRevoke).
+ * Номер после удаления освобождается (partial-uniq больше не держит).
+ */
+export const deletePoolPasses = async (
+  passIds: string[],
+  userId: string,
+): Promise<IDeletePoolResult> => {
+  const deleted: string[] = [];
+  const failed: Array<{ pass_id: string; pass_number: string | null; error: string }> = [];
+  if (!passIds || passIds.length === 0) return { deleted, failed };
+
+  const dryRun = isContractorSigurDryRun();
+  const connection = dryRun ? undefined : await sigurService.getBackgroundConnectionType();
+
+  const rows = await query<{ id: string; pass_number: string; status: string; sigur_employee_id: number | null }>(
+    `SELECT id, pass_number, status, sigur_employee_id
+       FROM contractor_passes
+      WHERE id = ANY($1::uuid[]) AND status <> 'revoked'`,
+    [passIds],
+  );
+  const byId = new Map(rows.map(r => [r.id, r]));
+
+  for (const passId of passIds) {
+    const row = byId.get(passId);
+    if (!row) {
+      failed.push({ pass_id: passId, pass_number: null, error: 'пропуск не найден или уже удалён' });
+      continue;
+    }
+    try {
+      // 1) Sigur: удаляем placeholder-профиль ЭТОГО пропуска (best-effort).
+      //    Orphan (404/422) — норма; прочие ошибки логируем, но не валим удаление.
+      if (!dryRun && row.sigur_employee_id != null) {
+        try {
+          await deleteSigurEmployee(row.sigur_employee_id, connection);
+        } catch (e) {
+          if (!isSigurNotFound(e)) {
+            Sentry.captureException(e, {
+              tags: { service: 'contractor-pool', stage: 'delete-cleanup' },
+              extra: { passNumber: row.pass_number, sigurEmployeeId: row.sigur_employee_id },
+            });
+          }
+        }
+      }
+
+      // 2) БД: удаляем строку в транзакции + пересчёт заявки, если пропуск в неё входил.
+      const ok = await withTransaction(async client => {
+        const locked = await client.query<{ submission_id: string | null }>(
+          `SELECT submission_id FROM contractor_passes
+            WHERE id = $1::uuid AND status <> 'revoked' FOR UPDATE`,
+          [passId],
+        );
+        if (locked.rows.length === 0) return false;
+        const submissionId = locked.rows[0].submission_id;
+
+        await client.query(`DELETE FROM contractor_passes WHERE id = $1::uuid`, [passId]);
+
+        if (submissionId) {
+          const agg = await client.query<{
+            current: string; total: string; pending: string; approved: string; rejected: string;
+          }>(
+            `SELECT s.status AS current,
+                    COUNT(p.*)::text                                            AS total,
+                    COUNT(p.*) FILTER (WHERE p.approval_status = 'pending')::text  AS pending,
+                    COUNT(p.*) FILTER (WHERE p.approval_status = 'approved')::text AS approved,
+                    COUNT(p.*) FILTER (WHERE p.approval_status = 'rejected')::text AS rejected
+               FROM contractor_submissions s
+               LEFT JOIN contractor_passes p ON p.submission_id = s.id
+              WHERE s.id = $1::uuid
+              GROUP BY s.status`,
+            [submissionId],
+          );
+          const aggRow = agg.rows[0];
+          if (aggRow) {
+            const counts = {
+              total: Number(aggRow.total),
+              pending: Number(aggRow.pending),
+              approved: Number(aggRow.approved),
+              rejected: Number(aggRow.rejected),
+            };
+            const next = computeSubmissionStatus(aggRow.current, counts);
+            if (next !== aggRow.current) {
+              const stampReviewed = counts.pending === 0;
+              await client.query(
+                `UPDATE contractor_submissions
+                    SET status = $1,
+                        reviewed_at = ${stampReviewed ? 'COALESCE(reviewed_at, now())' : 'reviewed_at'}
+                  WHERE id = $2::uuid AND status IN ('pending', 'partially_applied')`,
+                [next, submissionId],
+              );
+            }
+          }
+        }
+        return true;
+      });
+
+      if (ok) deleted.push(row.pass_number);
+      else failed.push({ pass_id: passId, pass_number: row.pass_number, error: 'строка изменилась под нами' });
+    } catch (e) {
+      failed.push({ pass_id: passId, pass_number: row.pass_number, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  void userId;
+  return { deleted, failed };
 };
 
 export interface IAssignPoolResult {

@@ -11,6 +11,7 @@ const { pgQuery, pgQueryOne, pgExecute, pgTx } = vi.hoisted(() => ({
 const sig = vi.hoisted(() => ({
   getBackgroundConnectionType: vi.fn(async () => 'external'),
   deleteEmployee: vi.fn(async () => undefined),
+  deleteEmployeeCrud: vi.fn(async () => undefined),
   getEmployees: vi.fn(async () => [] as Record<string, unknown>[]),
   create: vi.fn(async () => ({ sigurEmployeeId: 1 })),
   bindCard: vi.fn(async () => ({ card: { cardId: 10 }, previousSigurEmployeeId: null, reassigned: false })),
@@ -33,6 +34,7 @@ vi.mock('./sigur.service.js', () => ({
 }));
 vi.mock('./sigur-live-employees-crud.service.js', () => ({
   createSigurEmployee: sig.create,
+  deleteSigurEmployee: sig.deleteEmployeeCrud,
   moveSigurEmployee: vi.fn(async () => undefined),
   updateSigurEmployee: vi.fn(async () => undefined),
 }));
@@ -50,7 +52,7 @@ vi.mock('./settings.service.js', () => ({
   settingsService: { get: sig.settingsGet, set: vi.fn(async () => undefined) },
 }));
 
-import { addPassesToPool, retryStuckPoolPasses } from './contractor-pool.service.js';
+import { addPassesToPool, deletePoolPasses, retryStuckPoolPasses } from './contractor-pool.service.js';
 
 /**
  * pgQueryOne обслуживает в reserve две разные команды (отличаем по SQL):
@@ -58,12 +60,18 @@ import { addPassesToPool, retryStuckPoolPasses } from './contractor-pool.service
  *   - reserve INSERT ... RETURNING id (params[0] = passNumber).
  * dupNumbers — числовые номера, по которым preflight «находит» существующий пропуск.
  */
-const setupDb = (opts?: { dupNumbers?: number[] }) => {
+const setupDb = (opts?: { dupNumbers?: number[]; dupCards?: Record<string, string> }) => {
   const dup = new Set(opts?.dupNumbers ?? []);
+  const dupCards = opts?.dupCards ?? {};
   pgQueryOne.mockImplementation(async (sql: string, params: unknown[]) => {
     const s = String(sql);
     if (s.includes('pass_number::bigint')) {
       return dup.has(Number(params[0])) ? { id: `existing-${params[0]}` } : null;
+    }
+    // Анти-сдвиг: preflight по карте (card_uid = $1) — вернуть номер-владельца, если задан.
+    if (s.includes('card_uid = $1')) {
+      const owner = dupCards[String(params[0])];
+      return owner ? { pass_number: owner } : null;
     }
     if (s.includes('INSERT INTO contractor_passes') && s.includes('RETURNING id')) {
       return { id: `row-${params[0]}` };
@@ -186,6 +194,22 @@ describe('addPassesToPool — reserve-then-provision', () => {
     expect(sig.create).not.toHaveBeenCalled();
   });
 
+  it('анти-сдвиг: карта уже у другого пропуска → failed{duplicate_card}, без INSERT', async () => {
+    setupDb({ dupCards: { '168,50': '2553' } }); // карта 168,50 уже привязана к пропуску 2553
+    const res = await addPassesToPool({
+      from: 2554,
+      cards: [{ uid: '168,50', sequence: 0 }],
+      createdBy: 'u1',
+    });
+    expect(res.created).toEqual([]);
+    expect(res.reserved).toEqual([]);
+    expect(res.failed[0]).toMatchObject({ pass_number: '2554', stage: 'duplicate_card' });
+    expect(res.failed[0].error).toContain('2553');
+    expect(res.missing).toEqual([]);
+    expect(sig.create).not.toHaveBeenCalled();
+    expect(insertedPassNumbers()).toEqual([]);
+  });
+
   it('номер вне пула (> to) → failed{range}, без резерва', async () => {
     const res = await addPassesToPool({
       from: 1,
@@ -229,5 +253,61 @@ describe('retryStuckPoolPasses', () => {
     expect(res.created).toEqual(['11']);
     expect(sig.create).not.toHaveBeenCalled();
     expect(sig.bindCard).toHaveBeenCalledWith(888, ['168,11'], undefined, 'external', true, { reassignPolicy: 'safe-only' });
+  });
+});
+
+describe('deletePoolPasses', () => {
+  // Транзакция: выполняем callback с фейковым client; submission_id отсутствует.
+  const txNoSubmission = () => {
+    pgTx.mockImplementation(async (cb: (client: unknown) => unknown) => cb({
+      query: async (sql: string) => (
+        String(sql).includes('submission_id')
+          ? { rows: [{ submission_id: null }] }
+          : { rows: [], rowCount: 1 }
+      ),
+    }));
+  };
+
+  it('удаляет строки + профиль Sigur; null-профиль — без вызова Sigur', async () => {
+    pgQuery.mockResolvedValueOnce([
+      { id: 'a1', pass_number: '2555', status: 'in_pool', sigur_employee_id: 148306 },
+      { id: 'a2', pass_number: '2556', status: 'in_pool', sigur_employee_id: null },
+    ]);
+    txNoSubmission();
+
+    const res = await deletePoolPasses(['a1', 'a2'], 'u1');
+
+    expect(res.deleted.sort()).toEqual(['2555', '2556']);
+    expect(res.failed).toEqual([]);
+    // профиль Sigur удалён только у строки с sigur_employee_id
+    expect(sig.deleteEmployeeCrud).toHaveBeenCalledTimes(1);
+    expect(sig.deleteEmployeeCrud).toHaveBeenCalledWith(148306, 'external');
+  });
+
+  it('сбой Sigur best-effort: строка всё равно удаляется', async () => {
+    pgQuery.mockResolvedValueOnce([
+      { id: 'a1', pass_number: '2560', status: 'in_pool', sigur_employee_id: 148307 },
+    ]);
+    sig.deleteEmployeeCrud.mockRejectedValueOnce(new Error('Sigur 500'));
+    txNoSubmission();
+
+    const res = await deletePoolPasses(['a1'], 'u1');
+
+    expect(res.deleted).toEqual(['2560']);
+    expect(res.failed).toEqual([]);
+  });
+
+  it('id не найден (или revoked) → failed', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    const res = await deletePoolPasses(['zzz'], 'u1');
+    expect(res.deleted).toEqual([]);
+    expect(res.failed[0]).toMatchObject({ pass_id: 'zzz' });
+    expect(sig.deleteEmployeeCrud).not.toHaveBeenCalled();
+  });
+
+  it('пустой список — no-op', async () => {
+    const res = await deletePoolPasses([], 'u1');
+    expect(res).toEqual({ deleted: [], failed: [] });
+    expect(pgQuery).not.toHaveBeenCalled();
   });
 });

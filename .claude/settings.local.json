@@ -152,7 +152,17 @@
       "Bash(git --no-pager diff HEAD -- fot-server/src/controllers/contractor-admin.controller.ts fot-app/src/services/contractorService.ts)",
       "PowerShell(\"----- HEAD diff \\(head\\) -----\")",
       "Bash(git --no-pager log --oneline -1)",
-      "PowerShell(npx eslint src/components/dashboard/RequestModals.tsx src/pages/employee/EmployeeDashboardPage.tsx src/pages/employee/LeaveRequestsPage.tsx 2>&1)"
+      "PowerShell(npx eslint src/components/dashboard/RequestModals.tsx src/pages/employee/EmployeeDashboardPage.tsx src/pages/employee/LeaveRequestsPage.tsx 2>&1)",
+      "PowerShell(cd C:\\\\Users\\\\Usrr\\\\VSCode\\\\Odintsov\\\\FOT; $env:GCM_CREDENTIAL_STORE='dpapi'; git push personal main 2>&1 | Select-Object -Last 6)",
+      "Bash(mkdir -p \"/c/var/www/fot/.migration\")",
+      "Bash(cp \"/c/Users/Usrr/VSCode/Odintsov/FOT/.migration/yandex-ca.pem\" \"/c/var/www/fot/.migration/yandex-ca.pem\")",
+      "Read(//c/var/www/fot/.migration/**)",
+      "Bash(python -c \"import psycopg2; print\\('psycopg2 ok'\\)\")",
+      "Bash(python -c \"import psycopg; print\\('psycopg3 ok'\\)\")",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python build_xlsx.py)",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python -c ' *)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"EXIT: $?\")"
     ],
     "defaultMode": "bypassPermissions",
     "additionalDirectories": [

@@ -517,14 +517,42 @@
   min-width: 0;
 }
 
-/* Матрица всего пула: цвет = статус, выбор протяжкой ЛКМ */
+/* Раскладка вкладки пула: слева управление, справа матрица высотой в экран. */
+.poolLayout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.poolControls {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.poolMatrixSide {
+  flex: 0 0 auto;
+  width: min(46vw, 680px);
+  position: sticky;
+  top: 12px;
+  align-self: flex-start;
+}
+
+.matrixHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 8px;
+  flex-wrap: wrap;
+}
+
+/* Матрица всего пула: цвет = статус, выбор протяжкой ЛКМ. 15 колонок, высота в экран. */
 .matrix {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-  gap: 6px;
-  max-height: 420px;
+  grid-template-columns: repeat(15, minmax(0, 1fr));
+  gap: 4px;
+  max-height: calc(100dvh - 150px);
   overflow: auto;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
@@ -536,9 +564,9 @@
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-primary);
-  padding: 8px 4px;
+  padding: 6px 2px;
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   text-align: center;
@@ -573,6 +601,15 @@
   border-color: var(--primary);
   color: #fff;
   font-weight: 600;
+}
+
+/* Помечен на удаление (режим удаления): красная рамка поверх любого статуса. */
+.matrixCellDel,
+.matrixCellDel:hover {
+  outline: 2px solid var(--error);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 2px var(--error-muted);
+  font-weight: 700;
 }
 
 /* Идёт выпуск (или завис между reserve и provision) — нейтральная неактивная. */
@@ -638,10 +675,56 @@
   font-size: 12px;
 }
 
+/* Тумблер режима удаления в шапке матрицы. */
+.deleteToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.deleteToggle input { cursor: pointer; }
+
+/* Кнопка деструктивного действия (удаление из пула). */
+.dangerBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius-sm);
+  background: var(--error);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dangerBtn:hover { filter: brightness(0.95); }
+.dangerBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Планшет/узкий десктоп: колонки пула в стек, матрица на всю ширину. */
+@media (max-width: 1200px) {
+  .poolLayout { flex-direction: column; }
+  .poolMatrixSide {
+    width: 100%;
+    position: static;
+    top: auto;
+  }
+  .matrix { max-height: 60vh; }
+}
+
 @media (max-width: 768px) {
   .page { padding: 12px; }
   .table th, .table td { padding: 6px 8px; font-size: 13px; }
   .cabinetLayout { flex-direction: column; }
+  /* На мобиле 15 колонок не влезают — авто-подбор без горизонтального скролла, тап-цели. */
+  .matrix { grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); }
+  .matrixCell { padding: 10px 4px; font-size: 14px; }
   .sideMenu {
     flex-direction: row;
     flex-wrap: wrap;

@@ -4,7 +4,8 @@ import { useToast } from '../../contexts/ToastContext';
 import { useStructureTree } from '../../hooks/useStructure';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useCardReaderAgent } from '../../contexts/CardReaderAgentContext';
-import { contractorAdminService, type IPoolCell, type IPoolFail, type ISigurDepartmentNode } from '../../services/contractorService';
+import { contractorAdminService, type IPoolAnomaly, type IPoolCell, type IPoolFail, type ISigurDepartmentNode } from '../../services/contractorService';
+import { formatCardW26 } from '../../utils/cardW26';
 import { DepartmentTreeSelect } from '../staff/DepartmentTreeSelect';
 import type { OrgDepartmentNode } from '../../types/organization';
 import styles from '../../pages/contractor/Contractor.module.css';
@@ -13,6 +14,8 @@ const CHUNK = 4;
 
 interface IScanRow {
   uid: string;
+  /** Полный серийник карты с ридера (CSN) — для дедупа по уникальному ключу, а не по 24-бит W26. */
+  hexUid?: string;
 }
 
 const SigurDepartmentPicker: FC<{
@@ -76,7 +79,15 @@ export const PoolTab: FC = () => {
   const lastSeqRef = useRef(0);
   const dragRef = useRef<null | { mode: 'add' | 'remove' }>(null);
 
+  // Удаление из пула: режим-тумблер + выбор строк (по id) + подтверждение.
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [delSel, setDelSel] = useState<Set<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState<null | { ids: string[]; labels: string[] }>(null);
+  // Карты, отклонённые анти-сдвигом при последнем добавлении (stage='duplicate_card').
+  const [dupCardIssues, setDupCardIssues] = useState<IPoolFail[]>([]);
+
   const settingsOverlay = useOverlayDismiss(() => setSelectFolderOpen(false));
+  const confirmOverlay = useOverlayDismiss(() => setConfirmDelete(null));
 
   const structureQuery = useStructureTree();
   const departments = useMemo<OrgDepartmentNode[]>(
@@ -101,6 +112,13 @@ export const PoolTab: FC = () => {
     staleTime: 10_000,
     refetchInterval: 15_000,
   });
+  const anomaliesQuery = useQuery({
+    queryKey: ['contractor-pool-anomalies'],
+    queryFn: contractorAdminService.getPoolAnomalies,
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+  });
+  const anomalies: IPoolAnomaly[] = useMemo(() => anomaliesQuery.data ?? [], [anomaliesQuery.data]);
 
   const folderId = settingsQuery.data?.sigur_department_id ?? null;
   const folderName = settingsQuery.data?.name ?? null;
@@ -151,12 +169,15 @@ export const PoolTab: FC = () => {
     // отдаём его приоритетно, с откатом на UID, если ридер W26 не прислал.
     const uid = lastCard?.w26?.trim() || lastCard?.sigurCard?.trim();
     if (!uid) return;
+    // Полный CSN карты — сохраняем отдельно: две физически разные карты могут дать
+    // один и тот же 24-бит W26, но hexUid у них различается (ловим дубли по нему).
+    const hexUid = lastCard?.hexUid?.trim() || undefined;
     setRows(prev => {
       if (prev.some(r => r.uid === uid)) {
         toast.error(`Карта ${uid} уже считана`);
         return prev;
       }
-      return [...prev, { uid }];
+      return [...prev, { uid, hexUid }];
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardSeq]);
@@ -175,13 +196,45 @@ export const PoolTab: FC = () => {
     !busy;
 
   const refreshPool = async () => {
-    await qc.invalidateQueries({ queryKey: ['contractor-pool-matrix'] });
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ['contractor-pool-matrix'] }),
+      qc.invalidateQueries({ queryKey: ['contractor-pool-anomalies'] }),
+    ]);
   };
+
+  // id строки, которую можно удалить из данной ячейки (по её статусу).
+  // provisioning не трогаем — выпуск ещё идёт (для него есть «Отменить выпуск»).
+  const cellDeletableId = (c: IPoolCell): string | null => {
+    if (c.status === 'free') return c.id;
+    if (c.status === 'occupied') return c.occupied_id;
+    if (c.status === 'failed') return c.failed_id;
+    return null;
+  };
+
+  const toggleDelSel = (id: string) => {
+    setDelSel(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // Человекочитаемые метки выбранных на удаление (номера пропусков) — для модалки.
+  const delSelLabels = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const c of cells) {
+      const id = cellDeletableId(c);
+      if (id) byId.set(id, c.pass_number);
+    }
+    return Array.from(delSel).map(id => (byId.has(id) ? `№${byId.get(id)}` : id));
+  }, [cells, delSel]);
+
+  const exitDeleteMode = () => { setDeleteMode(false); setDelSel(new Set()); };
 
   const handleAddToPool = async () => {
     if (!canAddPool) return;
     setBusy(true);
-    const cards = rows.map((r, i) => ({ uid: r.uid, sequence: i }));
+    const cards = rows.map((r, i) => ({ uid: r.uid, sequence: i, hex_uid: r.hexUid }));
     const chunks: Array<typeof cards> = [];
     for (let i = 0; i < cards.length; i += CHUNK) chunks.push(cards.slice(i, i + CHUNK));
     setProgress({ done: 0, total: cards.length });
@@ -200,12 +253,17 @@ export const PoolTab: FC = () => {
         setProgress({ done: Math.min((k + 1) * CHUNK, cards.length), total: cards.length });
       }
       // Реальные сбои выпуска — только Sigur (card/sigur); 'duplicate'/'input'/'range'
-      // это норма ввода, оператора ими не тревожим.
+      // это норма ввода, оператора ими не тревожим. duplicate_card — анти-сдвиг:
+      // карта уже привязана к другому пропуску, показываем отдельным блоком.
       const realFailed = agg.failed.filter(f => f.stage === 'card' || f.stage === 'sigur');
-      if (realFailed.length === 0) {
+      const dupCards = agg.failed.filter(f => f.stage === 'duplicate_card');
+      setDupCardIssues(dupCards);
+      if (realFailed.length === 0 && dupCards.length === 0) {
         toast.success(`Добавлено в пул: ${agg.created.length}`);
         setRows([]);
         lastSeqRef.current = cardSeq;
+      } else if (dupCards.length > 0) {
+        toast.error(`Добавлено ${agg.created.length}; карт уже в пуле: ${dupCards.length}`);
       } else {
         // Не очищаем считанные карты; проблемные номера видны в блоке ниже (из матрицы).
         toast.error(`Добавлено ${agg.created.length}, проблем ${realFailed.length}`);
@@ -250,6 +308,27 @@ export const PoolTab: FC = () => {
       await refreshPool();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка отмены');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Форсированное удаление из пула (+ профиль Sigur) по id строк. Освобождает номера.
+  const runDelete = async (passIds: string[]) => {
+    if (busy || passIds.length === 0) return;
+    setBusy(true);
+    try {
+      const res = await contractorAdminService.deletePoolPasses(passIds);
+      if (res.failed.length === 0) {
+        toast.success(`Удалено из пула: ${res.deleted.length}`);
+      } else {
+        toast.error(`Удалено ${res.deleted.length}, не удалось ${res.failed.length}`);
+      }
+      setDelSel(new Set());
+      setConfirmDelete(null);
+      await refreshPool();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка удаления');
     } finally {
       setBusy(false);
     }
@@ -338,6 +417,8 @@ export const PoolTab: FC = () => {
 
   return (
     <div>
+      <div className={styles.poolLayout}>
+        <div className={styles.poolControls}>
       <div className={styles.field}>
         <span className={styles.label}>Папка общего пула в Sigur</span>
         <div className={styles.poolRow}>
@@ -399,12 +480,12 @@ export const PoolTab: FC = () => {
             </button>
           </div>
           <table className={styles.table}>
-            <thead><tr><th>№</th><th>UID</th><th></th></tr></thead>
+            <thead><tr><th>№</th><th>W26</th><th></th></tr></thead>
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.uid}>
                   <td>{passNumberAt(i)}</td>
-                  <td>{r.uid}</td>
+                  <td title={r.uid}>{formatCardW26(r.uid)}</td>
                   <td>
                     <button
                       className="btn-secondary"
@@ -439,6 +520,22 @@ export const PoolTab: FC = () => {
         </button>
       </div>
 
+      {dupCardIssues.length > 0 && (
+        <div className={styles.issueProblems}>
+          <div className={styles.issueProblemsHead}>
+            <span>Карты уже в пуле — не добавлены ({dupCardIssues.length}):</span>
+            <button className="btn-secondary" onClick={() => setDupCardIssues([])} disabled={busy}>
+              Скрыть
+            </button>
+          </div>
+          <ul className={styles.issueProblemsList}>
+            {dupCardIssues.map(f => (
+              <li key={f.pass_number}><b>{f.pass_number}</b> — {f.error}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {failedCells.length > 0 && (
         <div className={styles.issueProblems}>
           <div className={styles.issueProblemsHead}>
@@ -461,6 +558,41 @@ export const PoolTab: FC = () => {
                   </button>
                   <button className="btn-secondary" onClick={() => void runCancel([c.pass_number])} disabled={busy}>
                     Отменить выпуск
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {anomalies.length > 0 && (
+        <div className={styles.issueProblems}>
+          <div className={styles.issueProblemsHead}>
+            <span>Проблемные пропуска в пуле ({anomalies.length}):</span>
+            <button
+              className="btn-secondary"
+              onClick={() => setConfirmDelete({ ids: anomalies.map(a => a.id), labels: anomalies.map(a => `№${a.pass_number}`) })}
+              disabled={busy}
+            >
+              Удалить все
+            </button>
+          </div>
+          <ul className={styles.issueProblemsList}>
+            {anomalies.map(a => (
+              <li key={a.id}>
+                <b>{a.pass_number}</b>{' — '}
+                {a.reason === 'no_profile'
+                  ? 'нет профиля в Sigur (карта никому не назначена)'
+                  : `дубль карты${a.dup_with ? ` с № ${a.dup_with}` : ''}`}
+                {a.card_uid ? ` · ${formatCardW26(a.card_uid)}` : ''}
+                <span className={styles.issueProblemActions}>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => setConfirmDelete({ ids: [a.id], labels: [`№${a.pass_number}`] })}
+                    disabled={busy}
+                  >
+                    Удалить из пула
                   </button>
                 </span>
               </li>
@@ -527,7 +659,10 @@ export const PoolTab: FC = () => {
         )}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '12px 0 8px', flexWrap: 'wrap' }}>
+        </div>{/* /poolControls */}
+
+        <div className={styles.poolMatrixSide}>
+      <div className={styles.matrixHeader}>
         <span className={styles.title} style={{ fontSize: 14 }}>Матрица пула</span>
         <span className={styles.statusNote}>
           Свободно: <b style={{ color: 'var(--success)' }}>{totals.free}</b>
@@ -550,6 +685,24 @@ export const PoolTab: FC = () => {
             Повторить ошибки ({totals.failed})
           </button>
         )}
+        <label className={styles.deleteToggle} title="Режим удаления пропусков из пула (+ Sigur)">
+          <input
+            type="checkbox"
+            checked={deleteMode}
+            onChange={e => (e.target.checked ? setDeleteMode(true) : exitDeleteMode())}
+            disabled={busy}
+          />
+          Режим удаления
+        </label>
+        {deleteMode && (
+          <button
+            className={styles.dangerBtn}
+            onClick={() => setConfirmDelete({ ids: Array.from(delSel), labels: delSelLabels })}
+            disabled={busy || delSel.size === 0}
+          >
+            Удалить выбранные ({delSel.size})
+          </button>
+        )}
       </div>
 
       {matrixQuery.isLoading ? (
@@ -559,6 +712,34 @@ export const PoolTab: FC = () => {
       ) : (
         <div className={styles.matrix}>
           {cells.map(c => {
+            // Режим удаления: любая ячейка (кроме provisioning) кликается на пометку.
+            if (deleteMode) {
+              const delId = cellDeletableId(c);
+              const base = c.status === 'free' ? styles.matrixCellFree
+                : c.status === 'failed' ? styles.matrixCellFailed
+                  : c.status === 'provisioning' ? styles.matrixCellProvisioning
+                    : styles.matrixCellOccupied;
+              if (!delId) {
+                return (
+                  <span key={c.pass_number} className={`${styles.matrixCell} ${base}`} aria-disabled title="Идёт выпуск — нельзя удалить">
+                    {c.pass_number}
+                  </span>
+                );
+              }
+              const marked = delSel.has(delId);
+              return (
+                <button
+                  key={c.pass_number}
+                  type="button"
+                  className={`${styles.matrixCell} ${base} ${marked ? styles.matrixCellDel : ''}`}
+                  onClick={() => toggleDelSel(delId)}
+                  disabled={busy}
+                  title={marked ? 'Снять пометку удаления' : 'Пометить на удаление'}
+                >
+                  {c.pass_number}
+                </button>
+              );
+            }
             // Ошибка выпуска — кликабельная ячейка: повтор по конкретному номеру.
             if (c.status === 'failed') {
               return (
@@ -614,6 +795,8 @@ export const PoolTab: FC = () => {
           })}
         </div>
       )}
+        </div>{/* /poolMatrixSide */}
+      </div>{/* /poolLayout */}
 
       {selectFolderOpen && (
         <div
@@ -642,6 +825,41 @@ export const PoolTab: FC = () => {
               <button className="btn-secondary" onClick={() => setSelectFolderOpen(false)} disabled={busy}>Отмена</button>
               <button className="btn-primary" onClick={() => void handleSaveFolder()} disabled={busy || draftFolderId == null}>
                 Сохранить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDelete && (
+        <div
+          className={styles.overlay}
+          onMouseDown={confirmOverlay.onMouseDown}
+          onMouseUp={confirmOverlay.onMouseUp}
+          onMouseLeave={confirmOverlay.onMouseLeave}
+          onTouchStart={confirmOverlay.onTouchStart}
+          onTouchEnd={confirmOverlay.onTouchEnd}
+        >
+          <div className={styles.modal} style={{ maxWidth: 480 }}>
+            <h2 className={styles.modalTitle}>Удалить из пула?</h2>
+            <div className={styles.statusNote} style={{ marginBottom: 12 }}>
+              Будет удалено пропусков: <b>{confirmDelete.ids.length}</b>. Профили в Sigur будут
+              снесены, номера освободятся. Назначенные подрядчику пропуска уйдут из заявки.
+              Действие необратимо.
+            </div>
+            {confirmDelete.labels.length > 0 && (
+              <div className={styles.statusNote} style={{ marginBottom: 12, maxHeight: 120, overflow: 'auto' }}>
+                {confirmDelete.labels.join(', ')}
+              </div>
+            )}
+            <div className={styles.modalActions}>
+              <button className="btn-secondary" onClick={() => setConfirmDelete(null)} disabled={busy}>Отмена</button>
+              <button
+                className={styles.dangerBtn}
+                onClick={() => void runDelete(confirmDelete.ids)}
+                disabled={busy || confirmDelete.ids.length === 0}
+              >
+                {busy ? 'Удаляю…' : `Удалить (${confirmDelete.ids.length})`}
               </button>
             </div>
           </div>

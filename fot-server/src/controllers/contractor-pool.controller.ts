@@ -17,9 +17,11 @@ import {
   assignPoolPassesByCount,
   assignPoolPassesToContractor,
   cancelProvisioningFailedPasses,
+  deletePoolPasses,
   enqueueRevoke,
   getFreePasses,
   getFreePoolDepartmentId,
+  getPoolAnomalies,
   getPoolMatrix,
   getPoolRanges,
   listFailedSyncs,
@@ -189,7 +191,7 @@ export const contractorPoolController = {
 
   /**
    * POST /pool/issue — добавить пакет карт в пул.
-   * Body: { from, to?, cards: [{uid, sequence}] }.
+   * Body: { from, to?, cards: [{uid, sequence, hex_uid?}] }.
    */
   async issueToPool(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -200,6 +202,7 @@ export const contractorPoolController = {
         cards: z.array(z.object({
           uid: z.string().trim().min(1),
           sequence: z.number().int().nonnegative(),
+          hex_uid: z.string().trim().min(1).optional(),
         })).min(1).max(100),
       }).parse(req.body);
 
@@ -324,6 +327,57 @@ export const contractorPoolController = {
       });
       console.error('Pool cancelProvisioning error:', error);
       res.status(500).json({ success: false, error: 'Не удалось отменить выпуск пропусков' });
+    }
+  },
+
+  /** GET /pool/anomalies — битые строки пула (no_profile / duplicate_card) для панели удаления. */
+  async anomalies(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const data = await getPoolAnomalies();
+      res.json({ success: true, data });
+    } catch (error) {
+      Sentry.captureException(error, { tags: { route: 'contractor.pool.anomalies' } });
+      console.error('Pool anomalies error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить проблемные пропуска' });
+    }
+  },
+
+  /**
+   * POST /pool/delete — форсированно удалить пропуска из пула по id строк +
+   * подчистить placeholder-профили в Sigur. Освобождает номера. Работает с любым
+   * статусом кроме revoked. Body: { pass_ids: [uuid] }.
+   */
+  async deletePasses(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const body = z.object({
+        pass_ids: z.array(z.string().uuid()).min(1).max(500),
+      }).parse(req.body ?? {});
+
+      const result = await deletePoolPasses(body.pass_ids, req.user.id);
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_POOL_PASSES_DELETED, {
+        entityType: 'contractor_pool',
+        entityId: 'pool',
+        details: {
+          deleted: result.deleted,
+          failed_ids: result.failed.map(f => f.pass_id),
+        },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      Sentry.captureException(error, {
+        tags: { route: 'contractor.pool.deletePasses' },
+        extra: { userId: req.user?.id },
+      });
+      console.error('Pool deletePasses error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось удалить пропуска из пула' });
     }
   },
 

@@ -8,6 +8,7 @@ import {
   type IPendingSubmission,
 } from '../../services/contractorService';
 import { passStatusLabel, approvalStatusLabel } from '../../utils/contractorStatus';
+import { formatCardW26 } from '../../utils/cardW26';
 import { ApproveSubmissionModal } from './ApproveSubmissionModal';
 import { PassDocumentsModal, hasDocDuplicate } from './PassDocumentsModal';
 import styles from '../../pages/contractor/Contractor.module.css';
@@ -72,7 +73,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
           <th>№</th>
           <th>ФИО</th>
           <th>Документы</th>
-          <th>UID</th>
+          <th>W26</th>
           <th>Точки доступа</th>
           <th>Статус</th>
           <th>Согласование</th>
@@ -103,7 +104,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
                   {dup && <span className={styles.docCross} aria-hidden="true">✗</span>}
                 </button>
               </td>
-              <td>{r.card_uid ?? '—'}</td>
+              <td title={r.card_uid ?? ''}>{formatCardW26(r.card_uid)}</td>
               <td>{(r.access_point_names ?? []).join(', ') || '—'}</td>
               <td>{passStatusLabel(r.pass_status)}</td>
               <td>{approvalStatusLabel(r.approval_status)}</td>

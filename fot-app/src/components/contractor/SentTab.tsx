@@ -2,6 +2,7 @@ import { useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { contractorAdminService, type ISentPassRow } from '../../services/contractorService';
+import { formatCardW26 } from '../../utils/cardW26';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
 import styles from '../../pages/contractor/Contractor.module.css';
 
@@ -103,7 +104,7 @@ export const SentTab: FC = () => {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>№</th><th>UID</th><th>ФИО</th><th>Статус</th>
+                <th>№</th><th>W26</th><th>ФИО</th><th>Статус</th>
                 <th>Согласование</th><th>Активен</th><th>Обновлён</th><th></th>
               </tr>
             </thead>
@@ -113,7 +114,7 @@ export const SentTab: FC = () => {
                 return (
                   <tr key={r.id}>
                     <td>{r.pass_number}</td>
-                    <td>{r.card_uid ?? '—'}</td>
+                    <td title={r.card_uid ?? ''}>{formatCardW26(r.card_uid)}</td>
                     <td>{r.holder_name ?? '—'}</td>
                     <td><span className={`${styles.badge} ${styles.badgePending}`}>{sl.label}</span></td>
                     <td>{approvalLabel[r.approval_status] ?? r.approval_status}</td>

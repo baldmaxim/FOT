@@ -146,9 +146,11 @@ export type PoolCellStatus = 'free' | 'occupied' | 'provisioning' | 'failed';
 export interface IPoolCell {
   pass_number: string;
   status: PoolCellStatus;
-  /** id свободной строки (для назначения); null для остальных. */
+  /** id свободной строки (для назначения и удаления free); null для остальных. */
   id: string | null;
-  /** id строки provisioning/provisioning_failed (для повтора выпуска); иначе null. */
+  /** id занятой строки (assigned/submitted/applied/blocked) — для удаления занятого; иначе null. */
+  occupied_id: string | null;
+  /** id строки provisioning/provisioning_failed (для повтора выпуска/удаления); иначе null. */
   failed_id: string | null;
   /** текст ошибки выпуска (tooltip); иначе null. */
   error: string | null;
@@ -313,10 +315,11 @@ export interface IBlockDuplicateResult {
 export interface IPoolIssueInput {
   from: number;
   to?: number;
-  cards: Array<{ uid: string; sequence: number }>;
+  /** hex_uid — полный CSN карты с ридера (опционально), для дедупа по уникальному ключу. */
+  cards: Array<{ uid: string; sequence: number; hex_uid?: string }>;
 }
 
-export type PoolFailStage = 'input' | 'range' | 'duplicate' | 'card' | 'sigur';
+export type PoolFailStage = 'input' | 'range' | 'duplicate' | 'duplicate_card' | 'card' | 'sigur';
 
 export interface IPoolFail {
   pass_number: string;
@@ -341,6 +344,23 @@ export interface IPoolRetryResult {
 export interface IPoolCancelResult {
   cancelled: string[];
   failed: Array<{ pass_number: string; error: string }>;
+}
+
+export type PoolAnomalyReason = 'no_profile' | 'duplicate_card';
+
+export interface IPoolAnomaly {
+  id: string;
+  pass_number: string;
+  card_uid: string | null;
+  sigur_employee_id: number | null;
+  reason: PoolAnomalyReason;
+  /** Другой(ие) номер(а) с той же картой (для duplicate_card); иначе null. */
+  dup_with: string | null;
+}
+
+export interface IPoolDeleteResult {
+  deleted: string[];
+  failed: Array<{ pass_id: string; pass_number: string | null; error: string }>;
 }
 
 export interface IPoolAssignResult {
@@ -668,6 +688,20 @@ export const contractorAdminService = {
     const r = await apiClient.post<ApiResponse<IPoolCancelResult>>(
       '/admin/contractor/pool/cancel-provisioning',
       { pass_numbers: passNumbers },
+      { timeoutMs: 120_000 },
+    );
+    return r.data;
+  },
+  /** Битые строки пула (no_profile / duplicate_card) для панели проблемных пропусков. */
+  async getPoolAnomalies(): Promise<IPoolAnomaly[]> {
+    const r = await apiClient.get<ApiResponse<IPoolAnomaly[]>>('/admin/contractor/pool/anomalies');
+    return r.data ?? [];
+  },
+  /** Форсированно удалить пропуска из пула по id строк (+ профиль в Sigur). */
+  async deletePoolPasses(passIds: string[]): Promise<IPoolDeleteResult> {
+    const r = await apiClient.post<ApiResponse<IPoolDeleteResult>>(
+      '/admin/contractor/pool/delete',
+      { pass_ids: passIds },
       { timeoutMs: 120_000 },
     );
     return r.data;
