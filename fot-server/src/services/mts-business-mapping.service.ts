@@ -1,0 +1,72 @@
+import { execute, query, queryOne } from '../config/postgres.js';
+import { encryptionService } from './encryption.service.js';
+import { msisdnHash, normalizeMsisdn } from './mts-business-cdr.service.js';
+
+// Привязка номера телефона (MSISDN) → сотрудник FOT. Ключ — детерминированный
+// хэш номера (msisdn_hash), по нему же джойнится агрегация CDR. Сам номер
+// хранится зашифрованным (msisdn_enc). ПДн в открытом виде в БД не лежат.
+
+export interface IMtsBusinessNumberMapRow {
+  msisdn: string | null;
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+  linkedAt: string | null;
+}
+
+class MtsBusinessMappingService {
+  async getNumberMap(): Promise<IMtsBusinessNumberMapRow[]> {
+    const rows = await query<{
+      msisdn_enc: string | null;
+      employee_id: number | null;
+      full_name: string | null;
+      tab_number: string | null;
+      linked_at: string | null;
+    }>(
+      `SELECT m.msisdn_enc, m.employee_id, e.full_name, e.tab_number, m.linked_at
+         FROM mts_business_number_map m
+         LEFT JOIN employees e ON e.id = m.employee_id
+        ORDER BY m.linked_at DESC NULLS LAST`,
+    );
+    return rows.map(r => ({
+      msisdn: encryptionService.decryptField(r.msisdn_enc),
+      employeeId: r.employee_id,
+      employeeFullName: r.full_name,
+      employeeTabNumber: r.tab_number,
+      linkedAt: r.linked_at,
+    }));
+  }
+
+  /**
+   * Привязать/переназначить номер к сотруднику. employeeId=null снимает привязку
+   * (строка остаётся, но без сотрудника). Возвращает обновлённый список.
+   */
+  async setNumberMap(
+    rawMsisdn: string,
+    employeeId: number | null,
+    userId: string,
+  ): Promise<IMtsBusinessNumberMapRow[]> {
+    const norm = normalizeMsisdn(rawMsisdn);
+    const hash = msisdnHash(rawMsisdn);
+    if (!norm || !hash) {
+      throw new Error('МТС Бизнес: некорректный номер телефона');
+    }
+    if (employeeId != null) {
+      const emp = await queryOne<{ id: number }>('SELECT id FROM employees WHERE id = $1', [employeeId]);
+      if (!emp) throw new Error('Сотрудник не найден');
+    }
+    await execute(
+      `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, employee_id, linked_by, linked_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (msisdn_hash) DO UPDATE
+         SET msisdn_enc = EXCLUDED.msisdn_enc,
+             employee_id = EXCLUDED.employee_id,
+             linked_by = EXCLUDED.linked_by,
+             linked_at = NOW()`,
+      [hash, encryptionService.encrypt(norm), employeeId, userId],
+    );
+    return this.getNumberMap();
+  }
+}
+
+export const mtsBusinessMappingService = new MtsBusinessMappingService();

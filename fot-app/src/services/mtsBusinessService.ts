@@ -1,0 +1,144 @@
+import { apiClient } from '../api/client';
+
+// Клиент модуля «МТС Бизнес» (детализация звонков, время разговоров).
+// Мультиаккаунт: несколько API/лицевых счетов. Бэкенд отдаёт { success, data }.
+
+export interface IMtsBusinessAccount {
+  id: string;
+  label: string;
+  accountNumber: string | null;
+  login: string;
+  baseUrl: string;
+  isActive: boolean;
+  hasPassword: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IMtsBusinessRequestRow {
+  messageId: string;
+  accountId: string | null;
+  scope: string;
+  targetCount: number;
+  dateFrom: string;
+  dateTo: string;
+  status: string;
+  requestedAt: string;
+  checkedAt: string | null;
+}
+
+export interface IMtsBusinessNumberMapRow {
+  msisdn: string | null;
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+  linkedAt: string | null;
+}
+
+export interface IMtsBusinessTalkTimeRow {
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+  calls: number;
+  totalSeconds: number;
+}
+
+export interface IMtsBusinessUploadResult {
+  parsed: number;
+  inserted: number;
+  skipped: number;
+}
+
+interface ApiResponse<T> {
+  success: boolean;
+  data: T;
+}
+
+export const mtsBusinessService = {
+  // === Аккаунты ===
+  listAccounts: async (): Promise<IMtsBusinessAccount[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsBusinessAccount[]>>('/mts-business/accounts');
+    return res.data;
+  },
+
+  createAccount: async (data: {
+    label: string; accountNumber?: string; login: string; password: string; baseUrl?: string;
+  }): Promise<IMtsBusinessAccount[]> => {
+    const res = await apiClient.post<ApiResponse<IMtsBusinessAccount[]>>('/mts-business/accounts', data);
+    return res.data;
+  },
+
+  updateAccount: async (id: string, data: {
+    label?: string; accountNumber?: string | null; login?: string; password?: string; baseUrl?: string | null; isActive?: boolean;
+  }): Promise<IMtsBusinessAccount[]> => {
+    const res = await apiClient.put<ApiResponse<IMtsBusinessAccount[]>>(`/mts-business/accounts/${id}`, data);
+    return res.data;
+  },
+
+  deleteAccount: async (id: string): Promise<IMtsBusinessAccount[]> => {
+    const res = await apiClient.delete<ApiResponse<IMtsBusinessAccount[]>>(`/mts-business/accounts/${id}`);
+    return res.data;
+  },
+
+  testAccount: async (id: string): Promise<{ ok: boolean; error?: string; mtsHttp?: number }> => {
+    const res = await apiClient.post<ApiResponse<{ ok: boolean; error?: string; mtsHttp?: number }>>(
+      `/mts-business/accounts/${id}/test`, {},
+    );
+    return res.data;
+  },
+
+  // === Заказ детализации ===
+  orderDetalization: async (input: {
+    accountId: string;
+    scope: 'msisdn' | 'account';
+    targets: string[];
+    dateFrom: string;
+    dateTo: string;
+    deliveryAddress: string;
+  }): Promise<{ messageId: string }> => {
+    const res = await apiClient.post<ApiResponse<{ messageId: string }>>('/mts-business/detalization/order', {
+      ...input,
+      confirmed: true,
+    });
+    return res.data;
+  },
+
+  listRequests: async (): Promise<IMtsBusinessRequestRow[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsBusinessRequestRow[]>>('/mts-business/detalization/requests');
+    return res.data;
+  },
+
+  refreshStatus: async (messageId: string): Promise<{ messageId: string; status: string }> => {
+    const res = await apiClient.post<ApiResponse<{ messageId: string; status: string }>>(
+      `/mts-business/detalization/requests/${encodeURIComponent(messageId)}/refresh-status`, {},
+    );
+    return res.data;
+  },
+
+  uploadDetalization: async (file: File, opts: { sourceMessageId?: string; msisdn?: string } = {}): Promise<IMtsBusinessUploadResult> => {
+    const form = new FormData();
+    form.append('file', file);
+    if (opts.sourceMessageId) form.append('sourceMessageId', opts.sourceMessageId);
+    if (opts.msisdn) form.append('msisdn', opts.msisdn);
+    const res = await apiClient.post<ApiResponse<IMtsBusinessUploadResult>>('/mts-business/detalization/upload', form);
+    return res.data;
+  },
+
+  // === Привязка номеров ===
+  getNumberMap: async (): Promise<IMtsBusinessNumberMapRow[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsBusinessNumberMapRow[]>>('/mts-business/number-map');
+    return res.data;
+  },
+
+  setNumberMap: async (data: { msisdn: string; employeeId: number | null }): Promise<IMtsBusinessNumberMapRow[]> => {
+    const res = await apiClient.put<ApiResponse<IMtsBusinessNumberMapRow[]>>('/mts-business/number-map', data);
+    return res.data;
+  },
+
+  // === Отчёт ===
+  getTalkTimeReport: async (from: string, to: string): Promise<IMtsBusinessTalkTimeRow[]> => {
+    const qs = new URLSearchParams({ from, to });
+    const res = await apiClient.get<ApiResponse<IMtsBusinessTalkTimeRow[]>>(`/mts-business/report/talk-time?${qs.toString()}`);
+    return res.data;
+  },
+};

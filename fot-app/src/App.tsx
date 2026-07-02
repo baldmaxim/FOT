@@ -80,6 +80,7 @@ const MtsTracksTab = lazy(() => import('./pages/mts/TracksTab').then(m => ({ def
 const MtsTasksTab = lazy(() => import('./pages/mts/TasksTab').then(m => ({ default: m.TasksTab })));
 const MtsDictionariesTab = lazy(() => import('./pages/mts/DictionariesTab').then(m => ({ default: m.DictionariesTab })));
 const MtsConnectionTab = lazy(() => import('./pages/mts/ConnectionTab').then(m => ({ default: m.ConnectionTab })));
+const MtsBusinessPage = lazy(() => import('./pages/mts-business/MtsBusinessPage').then(m => ({ default: m.MtsBusinessPage })));
 const SigurPage = lazy(() => import('./pages/skud/SigurPage').then(m => ({ default: m.SigurPage })));
 const SkudCardReaderPage = lazy(() => import('./pages/skud/SkudCardReaderPage').then(m => ({ default: m.SkudCardReaderPage })));
 const ContractorPage = lazy(() => import('./pages/contractor/ContractorPage').then(m => ({ default: m.ContractorPage })));
@@ -482,6 +483,17 @@ const AppRoutes = () => {
             {/* Legacy: /mts/objects удалена — функция переехала в карточку геозоны. */}
             <Route path="objects" element={<Navigate to="/mts/geofences" replace />} />
           </Route>
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/mts-business" />}>
+          <Route
+            path="/mts-business"
+            element={
+              <Layout title="МТС Бизнес — звонки" theme={theme} onToggleTheme={toggleTheme}>
+                <MtsBusinessPage />
+              </Layout>
+            }
+          />
         </Route>
 
         <Route element={<ProtectedRoute requiredPage="/skud-card-reader" />}>

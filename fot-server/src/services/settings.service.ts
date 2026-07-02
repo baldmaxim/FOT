@@ -124,6 +124,11 @@ export interface IMtsResolvedConfig {
 
 export const DEFAULT_MTS_BASE_URL = 'https://api.mpoisk.ru/v6/api';
 
+/** МТС «Бизнес» (Business API) — база v1. Детализация звонков.
+ *  Креды (несколько аккаунтов) — в таблице mts_business_accounts,
+ *  см. mts-business-accounts.service.ts. */
+export const DEFAULT_MTS_BUSINESS_BASE_URL = 'https://api.mts.ru/b2b/v1';
+
 /**
  * Allow-list хостов МТС API. Защита от SSRF / увода токена через подмену
  * base URL: даже админ с edit-доступом не может направить интеграцию на
@@ -145,6 +150,31 @@ export const assertMtsBaseUrlAllowed = (raw: string): void => {
   if (!(MTS_ALLOWED_HOSTS as readonly string[]).includes(url.hostname)) {
     throw new Error(
       `MTS base URL: хост "${url.hostname}" не в allow-list (разрешены: ${MTS_ALLOWED_HOSTS.join(', ')})`,
+    );
+  }
+};
+
+/**
+ * Allow-list хостов МТС «Бизнес» API. Та же защита от SSRF/увода кредов, что и
+ * у M-Poisk: даже админ с edit-доступом не может направить интеграцию на чужой
+ * хост. Расширять только при подтверждённой смене вендором.
+ */
+export const MTS_BUSINESS_ALLOWED_HOSTS = ['api.mts.ru'] as const;
+
+/** Проверяет URL МТС Бизнес: https + хост из allow-list. */
+export const assertMtsBusinessBaseUrlAllowed = (raw: string): void => {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('MTS Business base URL: невалидный URL');
+  }
+  if (url.protocol !== 'https:') {
+    throw new Error('MTS Business base URL: разрешён только https://');
+  }
+  if (!(MTS_BUSINESS_ALLOWED_HOSTS as readonly string[]).includes(url.hostname)) {
+    throw new Error(
+      `MTS Business base URL: хост "${url.hostname}" не в allow-list (разрешены: ${MTS_BUSINESS_ALLOWED_HOSTS.join(', ')})`,
     );
   }
 };

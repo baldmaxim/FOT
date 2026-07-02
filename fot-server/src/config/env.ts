@@ -65,6 +65,17 @@ const envSchema = z.object({
   MTS_GEOFENCE_REPEAT_MIN: z.string().regex(/^\d+$/).default('30'),
   MTS_GEOFENCE_SNAPSHOT_MAX_AGE_MIN: z.string().regex(/^\d+$/).default('15'),
 
+  // МТС «Бизнес» (Business API, api.mts.ru/b2b/v1) — детализация звонков (время
+  // разговоров). Отдельный модуль. Авторизация — логин/пароль → access_token
+  // (Bearer, с TTL). Заказ детализации приходит документом (XML) на email;
+  // XML загружается в модуль и парсится. Значения задаёт пользователь вручную
+  // в .env или в системных настройках (логин/пароль в БД — шифруются).
+  MTS_BUSINESS_API_BASE_URL: optionalUrl,
+  MTS_BUSINESS_API_LOGIN: optionalString,
+  MTS_BUSINESS_API_PASSWORD: optionalString,
+  // Такт поллера статусов «висящих» заявок детализации. По умолчанию 5 минут.
+  MTS_BUSINESS_STATUS_POLL_MS: z.string().regex(/^\d+$/).default('300000'),
+
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,
   VAPID_PRIVATE_KEY: optionalString,
