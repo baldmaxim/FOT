@@ -20,14 +20,16 @@ export interface IMtsBusinessOrderInput {
   deliveryAddress: string;
 }
 
-// По докам МТС: dateFrom — начало дня, dateTo — КОНЕЦ дня (иначе последний день
-// периода не попадает в детализацию).
+// Проверено живым вызовом 02.07.2026 (валидатор МТС /papi-call-details):
+//  - documentFormat строго в НИЖНЕМ регистре ('xml'), вопреки докам ('XML');
+//  - даты без 'Z' (dateFrom — начало дня, dateTo — КОНЕЦ дня, иначе последний
+//    день периода не попадает в детализацию); с 'Z' сервис отвечал 500.
 const toMtsDate = (isoDate: string, boundary: 'from' | 'to'): string => {
   const d = (isoDate || '').trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
     throw new Error(`МТС Бизнес: дата должна быть в формате YYYY-MM-DD (получено "${isoDate}")`);
   }
-  return boundary === 'from' ? `${d}T00:00:00Z` : `${d}T23:59:59Z`;
+  return boundary === 'from' ? `${d}T00:00:00` : `${d}T23:59:59`;
 };
 
 const pickString = (body: unknown, keys: string[]): string | null => {
@@ -67,7 +69,7 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
     const body = {
       dateFrom: toMtsDate(input.dateFrom, 'from'),
       dateTo: toMtsDate(input.dateTo, 'to'),
-      documentFormat: 'XML',
+      documentFormat: 'xml',
       deliveryAddress: input.deliveryAddress,
       msisdns: input.targets,
     };
@@ -81,7 +83,7 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
     const body = {
       dateFrom: toMtsDate(input.dateFrom, 'from'),
       dateTo: toMtsDate(input.dateTo, 'to'),
-      documentFormat: 'XML',
+      documentFormat: 'xml',
       deliveryAddress: input.deliveryAddress,
       accounts: input.targets,
     };
