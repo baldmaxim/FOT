@@ -173,6 +173,12 @@ describe('resolveAccessibleDepartmentIds (для админа)', () => {
     const second = await resolveAccessibleDepartmentIds(req);
     expect(second).toEqual(['comp-A']);
   });
+
+  it("кадровая служба (role_code='hr', не админ) → 'all' на чтение", async () => {
+    const req = buildReq({ role_code: 'hr', is_admin: false, system_role_id: 'role-hr', employee_id: 2520 });
+    const result = await resolveAccessibleDepartmentIds(req);
+    expect(result).toBe('all');
+  });
 });
 
 describe('canAccessEmployeeInScope', () => {

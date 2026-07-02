@@ -330,9 +330,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       case 'timesheet.workflow.monitor':
         return state.profile?.page_access?.['/timesheet-hr']?.can_view === true;
       case 'data.scope.all':
-        return !!state.profile?.is_admin;
+        // Кадровая служба (hr) видит всю организацию на чтение (как админ по данным,
+        // но без админ-доступа к страницам). Зеркалит бэк resolveAccessibleDepartmentIds.
+        return !!state.profile?.is_admin || state.profile?.role_code === 'hr';
       case 'data.scope.department':
-        return !state.profile?.is_admin;
+        return !state.profile?.is_admin && state.profile?.role_code !== 'hr';
       default:
         return false;
     }

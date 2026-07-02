@@ -111,6 +111,10 @@ export async function resolveRequestDataScopeWithDirectReports(
 export async function resolveAccessibleDepartmentIds(
   req: AuthenticatedRequest,
 ): Promise<string[] | 'all'> {
+  // Кадровая служба (hr) видит всю организацию на ЧТЕНИЕ. Не через is_admin —
+  // чтобы page-access оставался ограниченным. Редактирование остаётся закрытым
+  // (resolveEditableDepartmentIds для hr не расширяется).
+  if (!req.user.is_admin && req.user.role_code === 'hr') return 'all';
   if (req.user.is_admin) {
     const scope = await resolveCompanyScope(req);
     if (scope.roots === 'all') return 'all';
