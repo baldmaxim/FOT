@@ -11,9 +11,12 @@ import { noStore } from '../middleware/noStore.js';
 
 const router = Router();
 
+// Детализация по лицевому счёту за месяц реально весит >100 МБ (проверено:
+// 115 МБ XML по ЛС с 22 номерами). Держим запас; nginx client_max_body_size
+// на сайте должен быть не меньше.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 300 * 1024 * 1024 },
 });
 
 router.use(authenticate);

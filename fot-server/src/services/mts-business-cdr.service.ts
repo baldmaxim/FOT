@@ -222,24 +222,15 @@ class MtsBusinessCdrService {
    * дубли схлопываются (первое ФИО побеждает).
    */
   extractSimNames(xml: string): ISimName[] {
-    const parser = new XMLParser({
-      ignoreAttributes: false,
-      attributeNamePrefix: '@_',
-      parseAttributeValue: false,
-      parseTagValue: false,
-      trimValues: true,
-      processEntities: false,
-    });
-    let parsed: unknown;
-    try { parsed = parser.parse(xml); } catch { return []; }
-
-    const tps: Record<string, unknown>[] = [];
-    collectByTag(parsed, 'tp', tps);
-
+    // Regex-проход вместо полного парсинга: файл по ЛС реально весит >100 МБ,
+    // а второе дерево fast-xml-parser на таком объёме — лишние секунды и память.
     const byMsisdn = new Map<string, string>();
-    for (const tp of tps) {
-      const msisdn = normalizeMsisdn(tp['@_sim'] as string | undefined);
-      const fio = String(tp['@_u'] ?? '').trim();
+    for (const m of xml.matchAll(/<tp\s[^>]*>/g)) {
+      const tag = m[0];
+      const sim = tag.match(/\ssim="([^"]*)"/)?.[1];
+      const u = tag.match(/\su="([^"]*)"/)?.[1];
+      const msisdn = normalizeMsisdn(sim);
+      const fio = (u ?? '').trim();
       if (!msisdn || !/^7\d{10}$/.test(msisdn) || !fio) continue;
       if (!byMsisdn.has(msisdn)) byMsisdn.set(msisdn, fio);
     }
