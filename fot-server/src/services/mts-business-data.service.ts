@@ -50,7 +50,7 @@ const pickString = (body: unknown, keys: string[]): string | null => {
     if (typeof v === 'string' && v.length > 0) return v;
     if (typeof v === 'number') return String(v);
   }
-  for (const wrap of ['data', 'result', 'response', 'request']) {
+  for (const wrap of ['data', 'result', 'response', 'request', 'relatedParty']) {
     const inner = b[wrap];
     if (inner && typeof inner === 'object') {
       const found = pickString(inner, keys);
@@ -118,9 +118,25 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
   }
 
   async checkRequestStatus(accountId: string, messageId: string): Promise<{ status: MtsBusinessRequestStatus; raw: string | null }> {
+    // Контракт (support.mts.ru «Как проверить статус заявки»): id заявки — внутри
+    // массива relatedParty, validFor ОБЯЗАТЕЛЕН (без него 400 «Не указано время
+    // поиска validFor»). Ищем широким окном: 30 дней назад — завтра.
+    // Ответ: { relatedParty: [{ id, status: Completed|InProgress|Faulted, … }] }.
+    const fmtDay = (d: Date): string => {
+      const p = (n: number): string => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T00:00:00`;
+    };
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    const end = new Date();
+    end.setDate(end.getDate() + 1);
+
     const resp = await this.request<unknown>('post', '/Product/CheckRequestStatusByUUID', {
       accountId,
-      data: { id: messageId },
+      data: {
+        relatedParty: [{ characteristic: [] }, { id: messageId }],
+        validFor: { startDateTime: fmtDay(start), endDateTime: fmtDay(end) },
+      },
     });
     const raw = pickString(resp, ['status', 'state']);
     return { status: normalizeStatus(raw), raw };
