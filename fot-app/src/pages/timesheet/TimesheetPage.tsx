@@ -510,7 +510,9 @@ export const TimesheetPage: FC = () => {
   const handleDayClick = (emp: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => {
     if (bulkModeEnabled && viewMode === 'employees') return;
     // View-отдел (миграция 167): сотрудник виден, но не редактируем — редактор не открываем.
-    if (emp.editable === false) {
+    // Роль без права правки вообще (hr) — модалка всё равно открывается, но в режиме
+    // просмотра (hideCorrectionTab, см. рендер модалки ниже), поэтому её не блокируем здесь.
+    if (emp.editable === false && canEditTimesheet) {
       toast.info?.('Сотрудник доступен только для просмотра');
       return;
     }
@@ -546,7 +548,7 @@ export const TimesheetPage: FC = () => {
       toast.info?.(OBJECT_ENTRIES_DISABLED_MESSAGE);
       return;
     }
-    if (emp.editable === false) {
+    if (emp.editable === false && canEditTimesheet) {
       toast.info?.('Сотрудник доступен только для просмотра');
       return;
     }
@@ -2290,6 +2292,8 @@ export const TimesheetPage: FC = () => {
             open={modalOpen}
             onClose={closeModal}
             onSave={handleSaveModalCorrection}
+            // Роль без права правки (hr): только события СКУД, без блока корректировок.
+            hideCorrectionTab={!canEditTimesheet}
             allowAttachmentsOnCreate
             onDelete={
               modalMode === 'object' && modalObjectEntry?.adjustment_id
