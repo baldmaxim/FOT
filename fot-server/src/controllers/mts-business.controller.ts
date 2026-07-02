@@ -252,11 +252,26 @@ export const mtsBusinessController = {
         accountId?.trim() || null,
       );
 
+      // XML несёт пары «номер → ФИО» (<tp sim= u=>) — сохраняем и автопривязываем
+      // однозначные совпадения ФИО с сотрудниками ФОТ.
+      let names = { saved: 0, autoLinked: 0 };
+      if ((file.originalname || '').toLowerCase().endsWith('.xml')) {
+        const pairs = mtsBusinessCdrService.extractSimNames(file.buffer.toString('utf8'));
+        if (pairs.length > 0) names = await mtsBusinessMappingService.syncMtsNames(pairs, req.user.id);
+      }
+
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_DETALIZATION_UPLOADED, {
-        details: { fileName: file.originalname ?? null, parsed: result.parsed, inserted: result.inserted, skipped: result.skipped },
+        details: {
+          fileName: file.originalname ?? null,
+          parsed: result.parsed,
+          inserted: result.inserted,
+          skipped: result.skipped,
+          mtsNames: names.saved,
+          autoLinked: names.autoLinked,
+        },
       });
 
-      res.json({ success: true, data: result });
+      res.json({ success: true, data: { ...result, mtsNames: names.saved, autoLinked: names.autoLinked } });
     } catch (error) {
       fail(res, error, 'Ошибка обработки файла детализации');
     }

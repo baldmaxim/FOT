@@ -315,7 +315,8 @@ const UploadSection: FC = () => {
     if (!file) { setMsg({ ok: false, text: 'Выберите файл (XLS/XML)' }); return; }
     try {
       const r = await upload.mutateAsync({ file, accountId: accountId || undefined, msisdn: msisdn.trim() || undefined });
-      setMsg({ ok: true, text: `Разобрано: ${r.parsed}, добавлено: ${r.inserted}, пропущено (дубли): ${r.skipped}` });
+      const extra = r.autoLinked ? `, автопривязано к сотрудникам: ${r.autoLinked}` : '';
+      setMsg({ ok: true, text: `Разобрано: ${r.parsed}, добавлено: ${r.inserted}, пропущено (дубли): ${r.skipped}${extra}` });
       setFile(null);
     } catch (e) {
       setMsg({ ok: false, text: errText(e, 'Ошибка обработки файла') });
@@ -385,11 +386,12 @@ const NumberMapSection: FC = () => {
       {rows.length > 0 && (
         <div className={styles.tableWrap}>
           <table className={styles.table}>
-            <thead><tr><th>Номер</th><th>Звонки</th><th>Время</th><th>Последний звонок</th><th>Сотрудник</th><th>Привязать</th></tr></thead>
+            <thead><tr><th>Номер</th><th>ФИО у МТС</th><th>Звонки</th><th>Время</th><th>Последний звонок</th><th>Сотрудник</th><th>Привязать</th></tr></thead>
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.msisdn ?? `row-${i}`}>
                   <td>{r.msisdn ?? '—'}</td>
+                  <td>{r.mtsFio ?? '—'}</td>
                   <td>{r.calls}</td>
                   <td>{fmtDur(r.totalSeconds)}</td>
                   <td>{fmtLast(r.lastCallAt)}</td>

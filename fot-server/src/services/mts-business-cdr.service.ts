@@ -26,6 +26,11 @@ export interface IParsedCall {
   callType: string | null;
 }
 
+export interface ISimName {
+  msisdn: string; // канонический 7XXXXXXXXXX
+  fio: string;
+}
+
 export interface ITalkTimeRow {
   employeeId: number | null;
   employeeFullName: string | null;
@@ -209,6 +214,36 @@ class MtsBusinessCdrService {
       }
     }
     return calls;
+  }
+
+  /**
+   * Пары «номер → ФИО» из XML МТС: узлы <tp sim="номер" u="ФИО …">. Источник
+   * для автопривязки номеров к сотрудникам. Номер валидируется как 7XXXXXXXXXX,
+   * дубли схлопываются (первое ФИО побеждает).
+   */
+  extractSimNames(xml: string): ISimName[] {
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '@_',
+      parseAttributeValue: false,
+      parseTagValue: false,
+      trimValues: true,
+      processEntities: false,
+    });
+    let parsed: unknown;
+    try { parsed = parser.parse(xml); } catch { return []; }
+
+    const tps: Record<string, unknown>[] = [];
+    collectByTag(parsed, 'tp', tps);
+
+    const byMsisdn = new Map<string, string>();
+    for (const tp of tps) {
+      const msisdn = normalizeMsisdn(tp['@_sim'] as string | undefined);
+      const fio = String(tp['@_u'] ?? '').trim();
+      if (!msisdn || !/^7\d{10}$/.test(msisdn) || !fio) continue;
+      if (!byMsisdn.has(msisdn)) byMsisdn.set(msisdn, fio);
+    }
+    return [...byMsisdn.entries()].map(([msisdn, fio]) => ({ msisdn, fio }));
   }
 
   /**

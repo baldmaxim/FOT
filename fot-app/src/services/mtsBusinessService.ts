@@ -40,6 +40,7 @@ export interface IMtsBusinessImportedNumberRow {
   calls: number;
   totalSeconds: number;
   lastCallAt: string | null;
+  mtsFio: string | null;
   employeeId: number | null;
   employeeFullName: string | null;
   employeeTabNumber: string | null;
@@ -68,6 +69,8 @@ export interface IMtsBusinessUploadResult {
   parsed: number;
   inserted: number;
   skipped: number;
+  mtsNames?: number;
+  autoLinked?: number;
 }
 
 interface ApiResponse<T> {

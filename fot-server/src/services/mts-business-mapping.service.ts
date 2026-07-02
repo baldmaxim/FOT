@@ -1,6 +1,6 @@
 import { execute, query, queryOne } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
-import { msisdnHash, normalizeMsisdn } from './mts-business-cdr.service.js';
+import { msisdnHash, normalizeMsisdn, type ISimName } from './mts-business-cdr.service.js';
 
 // Привязка номера телефона (MSISDN) → сотрудник FOT. Ключ — детерминированный
 // хэш номера (msisdn_hash), по нему же джойнится агрегация CDR. Сам номер
@@ -19,6 +19,7 @@ export interface IMtsBusinessImportedNumberRow {
   calls: number;
   totalSeconds: number;
   lastCallAt: string | null;
+  mtsFio: string | null;
   employeeId: number | null;
   employeeFullName: string | null;
   employeeTabNumber: string | null;
@@ -57,6 +58,7 @@ class MtsBusinessMappingService {
       calls: string;
       total_sec: string;
       last_call_at: string | null;
+      mts_fio: string | null;
       employee_id: number | null;
       full_name: string | null;
       tab_number: string | null;
@@ -65,6 +67,7 @@ class MtsBusinessMappingService {
               COUNT(*)::text AS calls,
               COALESCE(SUM(c.duration_sec), 0)::text AS total_sec,
               MAX(c.started_at) AS last_call_at,
+              m.mts_fio,
               m.employee_id,
               e.full_name,
               e.tab_number
@@ -72,7 +75,7 @@ class MtsBusinessMappingService {
          LEFT JOIN mts_business_number_map m ON m.msisdn_hash = c.msisdn_hash
          LEFT JOIN employees e ON e.id = m.employee_id
         WHERE c.msisdn_hash IS NOT NULL
-        GROUP BY c.msisdn_hash, m.employee_id, e.full_name, e.tab_number
+        GROUP BY c.msisdn_hash, m.mts_fio, m.employee_id, e.full_name, e.tab_number
         ORDER BY COALESCE(SUM(c.duration_sec), 0) DESC`,
     );
     return rows.map(r => ({
@@ -80,10 +83,56 @@ class MtsBusinessMappingService {
       calls: Number(r.calls),
       totalSeconds: Number(r.total_sec),
       lastCallAt: r.last_call_at,
+      mtsFio: r.mts_fio,
       employeeId: r.employee_id,
       employeeFullName: r.full_name,
       employeeTabNumber: r.tab_number,
     }));
+  }
+
+  /**
+   * Пары «номер → ФИО» из XML МТС: сохранить ФИО в привязку и автопривязать
+   * к сотруднику при ТОЧНОМ однозначном совпадении нормализованного ФИО
+   * (регистр/ё/пробелы). Ручные привязки не перетираются (employee_id IS NULL).
+   */
+  async syncMtsNames(pairs: ISimName[], userId: string): Promise<{ saved: number; autoLinked: number }> {
+    let saved = 0;
+    let autoLinked = 0;
+    for (const { msisdn, fio } of pairs) {
+      const hash = msisdnHash(msisdn);
+      const norm = normalizeMsisdn(msisdn);
+      if (!hash || !norm) continue;
+      const fioClean = fio.replace(/\s+/g, ' ').trim();
+      if (!fioClean) continue;
+
+      await execute(
+        `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, mts_fio, linked_by, linked_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (msisdn_hash) DO UPDATE
+           SET mts_fio = EXCLUDED.mts_fio,
+               msisdn_enc = COALESCE(mts_business_number_map.msisdn_enc, EXCLUDED.msisdn_enc)`,
+        [hash, encryptionService.encrypt(norm), fioClean, userId],
+      );
+      saved++;
+
+      const matches = await query<{ id: number }>(
+        `SELECT id FROM employees
+          WHERE LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
+              = LOWER(REPLACE($1, 'ё', 'е'))
+          LIMIT 2`,
+        [fioClean],
+      );
+      if (matches.length !== 1) continue;
+
+      const updated = await execute(
+        `UPDATE mts_business_number_map
+            SET employee_id = $2, linked_by = $3, linked_at = NOW()
+          WHERE msisdn_hash = $1 AND employee_id IS NULL`,
+        [hash, matches[0].id, userId],
+      );
+      autoLinked += updated;
+    }
+    return { saved, autoLinked };
   }
 
   /**
