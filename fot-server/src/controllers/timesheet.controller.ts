@@ -835,10 +835,10 @@ async function canAccessEmployeeForTimesheetDate(
     return true;
   }
 
-  // Объектный view-скоуп (отделы ∩ объекты): для ПРОСМОТРА авторитетен видимый
-  // набор сотрудников. Для записи (requireEdit) идём по editable-ветке ниже —
-  // view-сотрудники туда не попадают (read-only сохранён).
-  if (!requireEdit && await hasObjectViewScope(req)) {
+  // Объектный view-скоуп (отделы ∩ объекты) ИЛИ hr: для ПРОСМОТРА авторитетен видимый
+  // набор сотрудников (для hr resolveAccessibleEmployeeIds='all'). Для записи (requireEdit)
+  // идём по editable-ветке ниже — hr/view-сотрудники туда не попадают (read-only сохранён).
+  if (!requireEdit && (req.user.role_code === 'hr' || await hasObjectViewScope(req))) {
     const acc = await resolveAccessibleEmployeeIds(req);
     return acc === 'all' || acc.has(employeeId);
   }
@@ -894,8 +894,8 @@ async function canAccessEmployeeForTimesheetPeriod(
     return true;
   }
 
-  // Объектный view-скоуп (отделы ∩ объекты): для ПРОСМОТРА авторитетен видимый набор.
-  if (!requireEdit && await hasObjectViewScope(req)) {
+  // Объектный view-скоуп (отделы ∩ объекты) ИЛИ hr: для ПРОСМОТРА авторитетен видимый набор.
+  if (!requireEdit && (req.user.role_code === 'hr' || await hasObjectViewScope(req))) {
     const acc = await resolveAccessibleEmployeeIds(req);
     return acc === 'all' || acc.has(employeeId);
   }
@@ -937,6 +937,13 @@ export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<
     if (accessible.length > 0) return 'department';
     // is_admin со scope=[] (теоретически не возникает: company_scope=[] только если не is_admin)
   }
+
+  // hr (role_code='hr', is_admin=false): полный ПРОСМОТР организации в табеле.
+  // Именно 'department' (не 'all') — иначе canAccessEmployeeForTimesheet* (scope==='all')
+  // откроет и запись. При 'department' getAll грузит всех сотрудников выбранного отдела
+  // (resolveTimesheetScopedDepartmentId → requested id, т.к. accessible='all'), а правка
+  // остаётся закрытой (editable-скоуп hr пуст + page can_edit=false → edit-роуты 403).
+  if (req.user.role_code === 'hr') return 'department';
 
   if (await hasManagedTimesheetAccess(req, 'view')) {
     const managedDepartmentIds = await resolveManagedDepartmentIds(req);

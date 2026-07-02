@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isMandatoryWeekendSlotAvailable, guardsRestriction } from './timesheet.controller.js';
+import { isMandatoryWeekendSlotAvailable, guardsRestriction, resolveTimesheetScope } from './timesheet.controller.js';
+import type { AuthenticatedRequest } from '../types/index.js';
 
 const baseSchedule = {
   pattern_type: '5+2',
@@ -247,5 +248,12 @@ describe('guardsRestriction — какие правки проходят гар�
     expect(guardsRestriction('unpaid', 5)).toBe(false);
     expect(guardsRestriction('absent', null)).toBe(false);
     expect(guardsRestriction('educational_leave', 8)).toBe(false);
+  });
+});
+
+describe('resolveTimesheetScope — hr (кадровая служба)', () => {
+  it("hr (role_code='hr', не админ) → 'department' (просмотр всех, но не wide-edit 'all')", async () => {
+    const req = { user: { role_code: 'hr', is_admin: false, employee_id: 2520 } } as unknown as AuthenticatedRequest;
+    expect(await resolveTimesheetScope(req)).toBe('department');
   });
 });
