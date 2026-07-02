@@ -2,17 +2,19 @@ import axios, { AxiosError } from 'axios';
 import { assertMtsBusinessBaseUrlAllowed } from './settings.service.js';
 import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
 
-// Авторизация МТС «Бизнес» (Business API): логин/пароль → access_token (Bearer).
-// Токен живёт ограниченное время (expires_in) — кэшируем В ПАМЯТИ ПО accountId
-// (у каждого лицевого счёта свой API) и обновляем заранее либо принудительно
-// (после 401 в base-сервисе).
+// Авторизация МТС «Бизнес» (Business API): Consumer Key/Secret → access_token
+// (Bearer). Токен живёт expires_in (обычно 3600с) — кэшируем В ПАМЯТИ ПО
+// accountId (у каждого лицевого счёта свой API) и обновляем заранее либо
+// принудительно (после 401 в base-сервисе).
 //
-// ВНИМАНИЕ: точный URL и тело запроса токена нужно подтвердить по документации
-// МТС Бизнес. Заложен ожидаемый контракт: POST <base>/Token с JSON
-// { login, password } → { access_token, expires_in }. Парсинг ответа терпимый.
-// Если контракт иной — правится ТОЛЬКО этот файл.
+// Контракт подтверждён по support.mts.ru («Как получить токен для МТС Бизнес API»):
+//   POST https://api.mts.ru/token  (origin базового URL + /token, НЕ под /b2b/v1)
+//   Basic Auth: Consumer Key : Consumer Secret (генерируются в ЛК МТС Бизнес)
+//   Content-Type: application/x-www-form-urlencoded, тело grant_type=client_credentials
+//   → { access_token, token_type: "Bearer", expires_in: 3600, scope }
+// В полях аккаунта login/password храним Consumer Key/Consumer Secret.
 
-const AUTH_ENDPOINT = '/Token';
+const AUTH_ENDPOINT = '/token';
 const AUTH_TIMEOUT_MS = 15_000;
 const EXPIRY_SKEW_MS = 60_000;
 const DEFAULT_TTL_SEC = 3600;
@@ -84,13 +86,19 @@ class MtsBusinessAuthService {
     }
     const baseURL = account.baseUrl.replace(/\/+$/, '');
     assertMtsBusinessBaseUrlAllowed(baseURL);
+    // Токен выдаётся на корне хоста (https://api.mts.ru/token), а не под /b2b/v1.
+    const tokenUrl = `${new URL(baseURL).origin}${AUTH_ENDPOINT}`;
 
     const tStart = Date.now();
     try {
       const response = await axios.post(
-        `${baseURL}${AUTH_ENDPOINT}`,
-        { login: account.login, password: account.password },
-        { timeout: AUTH_TIMEOUT_MS, headers: { 'Content-Type': 'application/json' } },
+        tokenUrl,
+        new URLSearchParams({ grant_type: 'client_credentials' }).toString(),
+        {
+          timeout: AUTH_TIMEOUT_MS,
+          auth: { username: account.login, password: account.password },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        },
       );
       const token = pickToken(response.data);
       if (!token) {
