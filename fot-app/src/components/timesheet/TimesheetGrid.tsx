@@ -196,6 +196,7 @@ const getSectionLabel = (
   if (source === 'supervisor') return 'Начальник участка';
   if (source === 'self') return 'Руководитель';
   if (source === 'direct_report') return 'Мои сотрудники';
+  if (source === 'skud_presence') return 'ЛИНИЯ-Общестрой';
   return departmentName ?? 'Сотрудники отдела';
 };
 

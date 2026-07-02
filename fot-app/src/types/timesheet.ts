@@ -122,7 +122,7 @@ export interface IEmployeeStats {
   deviation_hours: number;
 }
 
-export type TimesheetEmployeeSource = 'department' | 'direct_report' | 'self' | 'supervisor';
+export type TimesheetEmployeeSource = 'department' | 'direct_report' | 'self' | 'supervisor' | 'skud_presence';
 
 export interface TimesheetEmployee {
   id: number;

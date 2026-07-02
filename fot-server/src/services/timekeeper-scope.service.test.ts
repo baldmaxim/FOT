@@ -15,6 +15,7 @@ import {
   listTimekeeperDirectEmployeeIds,
   resolveTimekeeperDepartmentSeeds,
   resolveTimekeeperDirectEmployeeIds,
+  resolveTimekeeperLiObshestroyPresenceIds,
   resolveTimekeeperObjectIds,
   TIMEKEEPER_PRESENCE_WINDOW_DAYS,
 } from './timekeeper-scope.service.js';
@@ -141,5 +142,28 @@ describe('resolveTimekeeperDirectEmployeeIds (кэш на req)', () => {
     expect([...set]).toEqual([5, 7]);
     await resolveTimekeeperDirectEmployeeIds(req);
     expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('resolveTimekeeperLiObshestroyPresenceIds', () => {
+  it('пусто, если нет присутствующих сотрудников вообще (без второго запроса)', async () => {
+    pgQuery.mockResolvedValueOnce([]); // resolveTimekeeperDirectEmployeeIds -> пусто
+    const req = buildReq();
+    const set = await resolveTimekeeperLiObshestroyPresenceIds(req);
+    expect([...set]).toEqual([]);
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('фильтрует присутствующих по org_department_id = ЛИНИЯ-Общестрой', async () => {
+    pgQuery
+      .mockResolvedValueOnce([{ employee_id: 5 }, { employee_id: 7 }, { employee_id: 9 }]) // direct employees
+      .mockResolvedValueOnce([{ id: 7 }]); // только 7 реально в ЛИНИЯ-Общестрой
+    const req = buildReq();
+    const set = await resolveTimekeeperLiObshestroyPresenceIds(req);
+    expect([...set]).toEqual([7]);
+    const [sql, params] = pgQuery.mock.calls[1];
+    expect(sql).toContain('org_department_id');
+    expect(params[0]).toEqual([5, 7, 9]);
+    expect(params[1]).toBe('0b24809e-5f04-45e1-bbe2-8a82990d6bdd');
   });
 });

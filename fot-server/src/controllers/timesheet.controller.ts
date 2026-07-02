@@ -26,7 +26,7 @@ import {
   resolveEffectiveDirectSubordinates,
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
-import { isTimekeeper } from '../services/timekeeper-scope.service.js';
+import { isTimekeeper, resolveTimekeeperLiObshestroyPresenceIds } from '../services/timekeeper-scope.service.js';
 import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
 import {
@@ -203,6 +203,33 @@ export const guardsRestriction = (status: TimeStatus, explicitHours: number | nu
   if (typeof explicitHours === 'number' && explicitHours === 0) return false;
   if (status === 'manual') return typeof explicitHours === 'number' && Number.isFinite(explicitHours) && explicitHours > 0;
   return true;
+};
+
+export type TimesheetEmployeeSource = 'department' | 'direct_report' | 'self' | 'supervisor' | 'skud_presence';
+
+/**
+ * Приоритет источника строки сотрудника в гриде Табеля:
+ * self > supervisor > department > skud_presence > direct_report.
+ * Начальник участка (supervisor) — секция «Начальник участка», первой.
+ * skud_presence (ЛИНИЯ-Общестрой по факту присутствия на объектах табельщицы) —
+ * секцией после department (см. sourceOrder на фронте), НЕ должна перетягивать
+ * на себя реального члена выбранного отдела — department проверяется раньше.
+ */
+export const resolveEmployeeTimesheetSource = (params: {
+  empId: number;
+  isSelf: boolean;
+  supervisorSet: Set<number>;
+  departmentMembershipSet: Set<number>;
+  liPresenceSet: Set<number>;
+  directReportSet: Set<number>;
+}): TimesheetEmployeeSource => {
+  const { empId, isSelf, supervisorSet, departmentMembershipSet, liPresenceSet, directReportSet } = params;
+  if (isSelf) return 'self';
+  if (supervisorSet.has(empId)) return 'supervisor';
+  if (departmentMembershipSet.has(empId)) return 'department';
+  if (liPresenceSet.has(empId)) return 'skud_presence';
+  if (directReportSet.has(empId)) return 'direct_report';
+  return 'department';
 };
 
 /** Сб = 6, Вс = 0 (Date#getDay() кодировка). */
@@ -1395,6 +1422,12 @@ export const timesheetController = {
         ? await listBrigadeSupervisorEmployeeIds(department_id as string)
         : [];
       const supervisorSet = new Set<number>(supervisorIds);
+      // Табельщица: сотрудники «ЛИНИЯ-Общестрой», присутствующие на её объектах —
+      // отдельной секцией после бригады (не члены выбранного отдела).
+      const liPresenceIds = (shouldApplyDeptFilter && isTimekeeper(req))
+        ? [...await resolveTimekeeperLiObshestroyPresenceIds(req)]
+        : [];
+      const liPresenceSet = new Set<number>(liPresenceIds);
       mark('scope');
       const departmentEmployeeIds = departmentMemberships.map(m => m.employee_id);
       const transferredOutByEmployeeId = new Map<number, string | null>(
@@ -1415,6 +1448,7 @@ export const timesheetController = {
         && departmentEmployeeIds.length === 0
         && additionalEmployeeIds.length === 0
         && supervisorIds.length === 0
+        && liPresenceIds.length === 0
       ) {
         return res.json(emptyResponse);
       }
@@ -1450,6 +1484,7 @@ export const timesheetController = {
           ...departmentEmployeeIds,
           ...additionalEmployeeIds,
           ...supervisorIds,
+          ...liPresenceIds,
         ])];
         empParams.push(unionEmployeeIds);
         empWhere.push(`id = ANY($${empParams.length}::int[])`);
@@ -1764,19 +1799,14 @@ export const timesheetController = {
         && (editableDeptIds === 'all' || editableDeptIds.includes(department_id as string));
       const employeesWithNames = (employees || []).map(e => {
         const empId = Number(e.id);
-        // self > supervisor > department > direct_report. Если человек одновременно в
-        // выбранном отделе и в direct_reports — оставляем в основной секции, не дублируем.
-        // Начальник участка (supervisor) — отдельная секция «Начальник участка», первой.
-        let source: 'department' | 'direct_report' | 'self' | 'supervisor' = 'department';
-        if (selfTimesheetId != null && selfTimesheetId === empId) {
-          source = 'self';
-        } else if (supervisorSet.has(empId)) {
-          source = 'supervisor';
-        } else if (departmentMembershipSet.has(empId)) {
-          source = 'department';
-        } else if (directReportSet.has(empId)) {
-          source = 'direct_report';
-        }
+        const source = resolveEmployeeTimesheetSource({
+          empId,
+          isSelf: selfTimesheetId != null && selfTimesheetId === empId,
+          supervisorSet,
+          departmentMembershipSet,
+          liPresenceSet,
+          directReportSet,
+        });
         return {
           ...e,
           position_name: e.position_id ? posMap.get(e.position_id) || null : null,

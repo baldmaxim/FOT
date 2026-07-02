@@ -168,3 +168,31 @@ export async function resolveTimekeeperDirectEmployeeIds(req: AuthenticatedReque
   req.user.__timekeeper_direct_employees = ids;
   return ids;
 }
+
+const LI_OBSHESTROY_DEPARTMENT_ID = '0b24809e-5f04-45e1-bbe2-8a82990d6bdd'; // «ЛИНИЯ-Общестрой»
+
+/**
+ * Сотрудники «ЛИНИЯ-Общестрой» (по ТЕКУЩЕМУ employees.org_department_id, не по
+ * employee_department_access — там бывают протухшие active-строки из sigur_sync
+ * у людей, реально переведённых в другую бригаду), присутствующие на любом из
+ * объектов табельщицы — в том же смысле «присутствия», что и остальные источники
+ * resolveTimekeeperDirectEmployeeIds (явное назначение employee_object_assignment,
+ * ручная привязка employee_skud_object_access, ИЛИ фактические проходы skud_events
+ * за 90 дней). Не члены её бригад, показываются отдельной секцией после бригады
+ * в Табеле. Точечно по конкретному отделу — не обобщено на все leaf-отделы.
+ */
+export async function resolveTimekeeperLiObshestroyPresenceIds(
+  req: AuthenticatedRequest,
+): Promise<Set<number>> {
+  const direct = await resolveTimekeeperDirectEmployeeIds(req);
+  if (direct.size === 0) return new Set();
+  const rows = await query<{ id: number | string }>(
+    `SELECT id FROM employees
+      WHERE id = ANY($1::int[]) AND org_department_id = $2::uuid
+        AND employment_status = 'active' AND is_archived = false`,
+    [[...direct], LI_OBSHESTROY_DEPARTMENT_ID],
+  );
+  return new Set(
+    rows.map(r => Number(r.id)).filter((id): id is number => Number.isInteger(id)),
+  );
+}

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isMandatoryWeekendSlotAvailable, guardsRestriction, resolveTimesheetScope } from './timesheet.controller.js';
+import {
+  isMandatoryWeekendSlotAvailable,
+  guardsRestriction,
+  resolveTimesheetScope,
+  resolveEmployeeTimesheetSource,
+} from './timesheet.controller.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const baseSchedule = {
@@ -255,5 +260,49 @@ describe('resolveTimesheetScope — hr (кадровая служба)', () => {
   it("hr (role_code='hr', не админ) → 'department' (просмотр всех, но не wide-edit 'all')", async () => {
     const req = { user: { role_code: 'hr', is_admin: false, employee_id: 2520 } } as unknown as AuthenticatedRequest;
     expect(await resolveTimesheetScope(req)).toBe('department');
+  });
+});
+
+describe('resolveEmployeeTimesheetSource — приоритет секции строки', () => {
+  const emptySets = () => ({
+    supervisorSet: new Set<number>(),
+    departmentMembershipSet: new Set<number>(),
+    liPresenceSet: new Set<number>(),
+    directReportSet: new Set<number>(),
+  });
+
+  it('department побеждает skud_presence, если сотрудник и реальный член бригады, и в ЛИНИЯ-presence', () => {
+    const sets = emptySets();
+    sets.departmentMembershipSet.add(10);
+    sets.liPresenceSet.add(10);
+    expect(resolveEmployeeTimesheetSource({ empId: 10, isSelf: false, ...sets })).toBe('department');
+  });
+
+  it('skud_presence — когда сотрудник НЕ член бригады, но присутствует по СКУД на объекте табельщицы', () => {
+    const sets = emptySets();
+    sets.liPresenceSet.add(11);
+    expect(resolveEmployeeTimesheetSource({ empId: 11, isSelf: false, ...sets })).toBe('skud_presence');
+  });
+
+  it('supervisor побеждает и department, и skud_presence', () => {
+    const sets = emptySets();
+    sets.supervisorSet.add(12);
+    sets.departmentMembershipSet.add(12);
+    sets.liPresenceSet.add(12);
+    expect(resolveEmployeeTimesheetSource({ empId: 12, isSelf: false, ...sets })).toBe('supervisor');
+  });
+
+  it('self побеждает всё остальное', () => {
+    const sets = emptySets();
+    sets.supervisorSet.add(13);
+    sets.liPresenceSet.add(13);
+    expect(resolveEmployeeTimesheetSource({ empId: 13, isSelf: true, ...sets })).toBe('self');
+  });
+
+  it('skud_presence побеждает direct_report', () => {
+    const sets = emptySets();
+    sets.liPresenceSet.add(14);
+    sets.directReportSet.add(14);
+    expect(resolveEmployeeTimesheetSource({ empId: 14, isSelf: false, ...sets })).toBe('skud_presence');
   });
 });

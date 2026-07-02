@@ -325,14 +325,16 @@ export const TimesheetPage: FC = () => {
   const deferredTimesheetData = useDeferredValue(timesheetQuery.data);
   const employees = useMemo<TimesheetEmployee[]>(() => {
     const raw = deferredTimesheetData?.employees || [];
-    // Группировка строк табеля: supervisor → self → direct_report → department.
-    // Начальник участка (supervisor) — первой секцией. Внутри группы сохраняем
-    // порядок ответа (бэк сортирует по full_name).
+    // Группировка строк табеля: supervisor → self → direct_report → department → skud_presence.
+    // Начальник участка (supervisor) — первой секцией. skud_presence (ЛИНИЯ-Общестрой
+    // по факту присутствия у табельщицы) — последней, после бригады. Внутри группы
+    // сохраняем порядок ответа (бэк сортирует по full_name).
     const sourceOrder: Record<NonNullable<TimesheetEmployee['source']>, number> = {
       supervisor: 0,
       self: 1,
       direct_report: 2,
       department: 3,
+      skud_presence: 4,
     };
     return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
   }, [deferredTimesheetData]);
