@@ -1,10 +1,84 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 1100px;
-  margin: 0 auto;
+  gap: 12px;
+  width: 100%;
+  max-width: 100%;
 }
+
+/* Вкладки */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  margin-bottom: 4px;
+}
+.tab {
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary, #64748b);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  min-height: 40px;
+}
+.tabActive {
+  color: var(--color-primary, #2563eb);
+  border-bottom-color: var(--color-primary, #2563eb);
+}
+
+/* Модалка */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 1000;
+}
+.modal {
+  background: var(--color-surface, #fff);
+  border-radius: 12px;
+  padding: 20px;
+  width: 100%;
+  max-width: 460px;
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+
+/* KPI-плитки */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.kpi {
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.kpiValue { font-size: 22px; font-weight: 700; color: var(--color-text, #0f172a); }
+.kpiLabel { font-size: 12px; color: var(--color-text-secondary, #64748b); margin-top: 2px; }
+
+/* Сегментированный переключатель */
+.segment { display: inline-flex; border: 1px solid var(--color-border, #e2e8f0); border-radius: 8px; overflow: hidden; }
+.segBtn { padding: 6px 14px; font-size: 13px; font-weight: 600; background: transparent; border: none; cursor: pointer; color: var(--color-text-secondary, #64748b); min-height: 36px; }
+.segBtnActive { background: var(--color-primary, #2563eb); color: #fff; }
+
+/* Строка-бар в дашборде */
+.barRow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--color-border, #eef2f7); cursor: default; }
+.barRowClickable { cursor: pointer; }
+.barRowActive { background: rgba(37, 99, 235, 0.06); }
+.barLabel { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.barSub { font-size: 11px; color: var(--color-text-secondary, #64748b); }
+.barTrack { height: 6px; border-radius: 4px; background: var(--color-border, #e2e8f0); margin-top: 3px; overflow: hidden; }
+.barFill { height: 100%; background: var(--color-primary, #2563eb); border-radius: 4px; }
+.barValue { font-size: 13px; font-weight: 600; white-space: nowrap; }
 
 .card {
   background: var(--color-surface, #fff);
@@ -31,8 +105,8 @@
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
+  gap: 3px;
+  margin-bottom: 8px;
 }
 
 .label {

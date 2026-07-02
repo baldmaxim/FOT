@@ -1,10 +1,12 @@
 import { type FC, useMemo, useState } from 'react';
 import { ApiError } from '../../api/client';
+import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   useMtsBusinessAccounts,
   useMtsBusinessRequests,
   useMtsBusinessNumberMap,
   useMtsBusinessReport,
+  useMtsBusinessAccountsSummary,
   useCreateMtsBusinessAccount,
   useUpdateMtsBusinessAccount,
   useDeleteMtsBusinessAccount,
@@ -20,7 +22,11 @@ const errText = (e: unknown, fallback: string): string => (e instanceof ApiError
 
 const pad = (n: number): string => String(n).padStart(2, '0');
 const toISODate = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const formatDuration = (sec: number): string => `${Math.floor(sec / 3600)}ч ${pad(Math.floor((sec % 3600) / 60))}м ${pad(sec % 60)}с`;
+const fmtDur = (sec: number): string => {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return h > 0 ? `${h} ч ${pad(m)} м` : `${m} м ${pad(sec % 60)} с`;
+};
 
 const statusBadge = (status: string): { cls: string; label: string } => {
   switch (status) {
@@ -31,97 +37,122 @@ const statusBadge = (status: string): { cls: string; label: string } => {
   }
 };
 
-const AccountsSection: FC = () => {
-  const accounts = useMtsBusinessAccounts();
+type Msg = { ok: boolean; text: string } | null;
+
+// ================= Модалка аккаунта =================
+const AccountModal: FC<{ account: IMtsBusinessAccount | null; onClose: () => void }> = ({ account, onClose }) => {
   const createM = useCreateMtsBusinessAccount();
   const updateM = useUpdateMtsBusinessAccount();
-  const deleteM = useDeleteMtsBusinessAccount();
-
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [label, setLabel] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
-  const [login, setLogin] = useState('');
+  const editing = Boolean(account);
+  const [label, setLabel] = useState(account?.label ?? '');
+  const [accountNumber, setAccountNumber] = useState(account?.accountNumber ?? '');
+  const [login, setLogin] = useState(account?.login ?? '');
   const [password, setPassword] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const [baseUrl, setBaseUrl] = useState(account?.baseUrl ?? '');
+  const [msg, setMsg] = useState<Msg>(null);
+  const overlay = useOverlayDismiss(onClose);
 
-  const rows = accounts.data ?? [];
-
-  const resetForm = (): void => {
-    setEditingId(null); setLabel(''); setAccountNumber(''); setLogin(''); setPassword(''); setBaseUrl('');
-  };
-
-  const startEdit = (a: IMtsBusinessAccount): void => {
-    setEditingId(a.id); setLabel(a.label); setAccountNumber(a.accountNumber ?? '');
-    setLogin(a.login); setPassword(''); setBaseUrl(a.baseUrl); setMsg(null);
-  };
-
+  const busy = createM.isPending || updateM.isPending;
   const onSave = async (): Promise<void> => {
     setMsg(null);
     try {
-      if (editingId) {
+      if (account) {
         await updateM.mutateAsync({
-          id: editingId,
+          id: account.id,
           data: {
             label: label.trim(), accountNumber: accountNumber.trim() || null, login: login.trim(),
-            baseUrl: baseUrl.trim() || null,
-            ...(password.trim() ? { password: password.trim() } : {}),
+            baseUrl: baseUrl.trim() || null, ...(password.trim() ? { password: password.trim() } : {}),
           },
         });
-        setMsg({ ok: true, text: 'Аккаунт обновлён' });
       } else {
         await createM.mutateAsync({
           label: label.trim(), accountNumber: accountNumber.trim() || undefined,
           login: login.trim(), password: password.trim(), baseUrl: baseUrl.trim() || undefined,
         });
-        setMsg({ ok: true, text: 'Аккаунт добавлен' });
       }
-      resetForm();
+      onClose();
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка сохранения аккаунта (возможно нужен 2FA)') });
+      setMsg({ ok: false, text: errText(e, 'Ошибка сохранения (возможно нужен 2FA)') });
     }
   };
+
+  return (
+    <div className={styles.modalOverlay} {...overlay}>
+      <div className={styles.modal}>
+        <h3 className={styles.cardTitle}>{editing ? 'Изменить аккаунт' : 'Новый аккаунт МТС Бизнес'}</h3>
+        <div className={styles.field}>
+          <label className={styles.label}>Название</label>
+          <input className={styles.input} type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="СУ-10 основной" autoFocus />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Лицевой счёт (ЛС)</label>
+          <input className={styles.input} type="text" value={accountNumber} onChange={e => setAccountNumber(e.target.value)} placeholder="277308204324" />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Логин API</label>
+          <input className={styles.input} type="text" autoComplete="off" value={login} onChange={e => setLogin(e.target.value)} />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Пароль API {editing && '(пусто — не менять)'}</label>
+          <input className={styles.input} type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Base URL (необязательно)</label>
+          <input className={styles.input} type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://api.mts.ru/b2b/v1" />
+        </div>
+        {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
+        <div className={styles.actions}>
+          <button className={styles.btn} onClick={onSave} disabled={busy || !label.trim() || !login.trim() || (!editing && !password.trim())}>
+            {editing ? 'Сохранить' : 'Добавить'} (2FA)
+          </button>
+          <button className={styles.btnSecondary} onClick={onClose} disabled={busy}>Отмена</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ================= Аккаунты (список название+ЛС, «+» модалка) =================
+const AccountsSection: FC = () => {
+  const accounts = useMtsBusinessAccounts();
+  const deleteM = useDeleteMtsBusinessAccount();
+  const [modal, setModal] = useState<{ open: boolean; account: IMtsBusinessAccount | null }>({ open: false, account: null });
+  const [tests, setTests] = useState<Record<string, Msg>>({});
+  const rows = accounts.data ?? [];
 
   const onTest = async (id: string): Promise<void> => {
-    setTestResults(prev => ({ ...prev, [id]: { ok: false, text: 'Проверка…' } }));
+    setTests(p => ({ ...p, [id]: { ok: false, text: '…' } }));
     try {
       const r = await mtsBusinessService.testAccount(id);
-      setTestResults(prev => ({ ...prev, [id]: r.ok ? { ok: true, text: 'OK' } : { ok: false, text: r.error || 'Ошибка' } }));
+      setTests(p => ({ ...p, [id]: r.ok ? { ok: true, text: 'OK' } : { ok: false, text: r.error || 'Ошибка' } }));
     } catch (e) {
-      setTestResults(prev => ({ ...prev, [id]: { ok: false, text: errText(e, 'Ошибка') } }));
+      setTests(p => ({ ...p, [id]: { ok: false, text: errText(e, 'Ошибка') } }));
     }
   };
-
   const onDelete = async (id: string): Promise<void> => {
     if (!window.confirm('Удалить аккаунт?')) return;
-    setMsg(null);
-    try {
-      await deleteM.mutateAsync(id);
-      if (editingId === id) resetForm();
-    } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка удаления (возможно нужен 2FA)') });
-    }
+    try { await deleteM.mutateAsync(id); } catch { /* ignore, 2FA */ }
   };
-
-  const busy = createM.isPending || updateM.isPending;
 
   return (
     <section className={styles.card}>
-      <h2 className={styles.cardTitle}>Аккаунты МТС Бизнес (несколько API/счетов)</h2>
-      {rows.length > 0 && (
+      <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0, marginBottom: 8 }}>
+        <h2 className={styles.cardTitle} style={{ margin: 0 }}>Аккаунты (API / лицевые счета)</h2>
+        <button className={styles.btn} onClick={() => setModal({ open: true, account: null })}>+ Аккаунт</button>
+      </div>
+      {rows.length === 0 ? (
+        <p className={styles.hint}>Нет аккаунтов. Нажмите «+ Аккаунт», чтобы добавить API-доступ по лицевому счёту.</p>
+      ) : (
         <div className={styles.tableWrap}>
           <table className={styles.table}>
-            <thead><tr><th>Название</th><th>ЛС</th><th>Логин</th><th>Base URL</th><th>Статус</th><th></th></tr></thead>
+            <thead><tr><th>Название</th><th>Лицевой счёт</th><th>Статус</th><th></th></tr></thead>
             <tbody>
               {rows.map(a => {
-                const t = testResults[a.id];
+                const t = tests[a.id];
                 return (
                   <tr key={a.id}>
                     <td>{a.label}</td>
                     <td>{a.accountNumber ?? '—'}</td>
-                    <td>{a.login}</td>
-                    <td><code>{a.baseUrl}</code></td>
                     <td>
                       {a.isActive
                         ? <span className={`${styles.badge} ${styles.badgeOk}`}>активен</span>
@@ -130,7 +161,7 @@ const AccountsSection: FC = () => {
                     </td>
                     <td>
                       <button className={styles.btnSecondary} onClick={() => onTest(a.id)}>Проверить</button>{' '}
-                      <button className={styles.btnSecondary} onClick={() => startEdit(a)}>Изменить</button>{' '}
+                      <button className={styles.btnSecondary} onClick={() => setModal({ open: true, account: a })}>Изменить</button>{' '}
                       <button className={styles.btnSecondary} onClick={() => onDelete(a.id)} disabled={deleteM.isPending}>Удалить</button>
                     </td>
                   </tr>
@@ -140,66 +171,34 @@ const AccountsSection: FC = () => {
           </table>
         </div>
       )}
-
-      <h3 className={styles.cardTitle} style={{ marginTop: 14 }}>{editingId ? 'Изменить аккаунт' : 'Добавить аккаунт'}</h3>
-      <div className={styles.row}>
-        <div className={styles.field}>
-          <label className={styles.label}>Название</label>
-          <input className={styles.input} type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="СУ-10 основной" />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.label}>Лицевой счёт (ЛС)</label>
-          <input className={styles.input} type="text" value={accountNumber} onChange={e => setAccountNumber(e.target.value)} placeholder="277308204324" />
-        </div>
-      </div>
-      <div className={styles.row}>
-        <div className={styles.field}>
-          <label className={styles.label}>Логин</label>
-          <input className={styles.input} type="text" autoComplete="off" value={login} onChange={e => setLogin(e.target.value)} />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.label}>Пароль {editingId && '(пусто — не менять)'}</label>
-          <input className={styles.input} type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} />
-        </div>
-      </div>
-      <div className={styles.field}>
-        <label className={styles.label}>Base URL (необязательно)</label>
-        <input className={styles.input} type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://api.mts.ru/b2b/v1" />
-      </div>
-      <div className={styles.actions}>
-        <button className={styles.btn} onClick={onSave} disabled={busy || !label.trim() || !login.trim() || (!editingId && !password.trim())}>
-          {editingId ? 'Сохранить' : 'Добавить'} (нужен 2FA)
-        </button>
-        {editingId && <button className={styles.btnSecondary} onClick={resetForm} disabled={busy}>Отмена</button>}
-      </div>
-      {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
+      {modal.open && <AccountModal account={modal.account} onClose={() => setModal({ open: false, account: null })} />}
     </section>
   );
 };
 
+// ================= Заказ детализации =================
 const OrderSection: FC = () => {
   const accounts = useMtsBusinessAccounts();
   const order = useOrderMtsBusinessDetalization();
   const now = useMemo(() => new Date(), []);
   const active = (accounts.data ?? []).filter(a => a.isActive);
-
   const [accountId, setAccountId] = useState('');
   const [scope, setScope] = useState<'msisdn' | 'account'>('msisdn');
   const [targets, setTargets] = useState('');
   const [dateFrom, setDateFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth(), 1)));
   const [dateTo, setDateTo] = useState(toISODate(now));
   const [email, setEmail] = useState('');
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<Msg>(null);
 
   const onOrder = async (): Promise<void> => {
     setMsg(null);
     const acc = accountId || active[0]?.id;
-    if (!acc) { setMsg({ ok: false, text: 'Сначала добавьте и выберите аккаунт' }); return; }
+    if (!acc) { setMsg({ ok: false, text: 'Сначала добавьте аккаунт' }); return; }
     const list = targets.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
-    if (list.length === 0) { setMsg({ ok: false, text: 'Укажите хотя бы один номер/лицевой счёт' }); return; }
+    if (list.length === 0) { setMsg({ ok: false, text: 'Укажите номер/лицевой счёт' }); return; }
     try {
       const r = await order.mutateAsync({ accountId: acc, scope, targets: list, dateFrom, dateTo, deliveryAddress: email.trim() });
-      setMsg({ ok: true, text: `Заявка создана. messageId: ${r.messageId}. Документ придёт на email.` });
+      setMsg({ ok: true, text: `Заявка создана (messageId: ${r.messageId}). Документ придёт на email.` });
       setTargets('');
     } catch (e) {
       setMsg({ ok: false, text: errText(e, 'Ошибка заказа детализации') });
@@ -209,7 +208,6 @@ const OrderSection: FC = () => {
   return (
     <section className={styles.card}>
       <h2 className={styles.cardTitle}>Заказать детализацию</h2>
-      <p className={styles.hint}>Документ формируется как файл и уходит на email. Если настроен автозабор с почты, файл подтянется автоматически; иначе загрузите его ниже — система посчитает время разговоров.</p>
       <div className={styles.row}>
         <div className={styles.field}>
           <label className={styles.label}>Аккаунт</label>
@@ -225,8 +223,6 @@ const OrderSection: FC = () => {
             <option value="account">По лицевым счетам</option>
           </select>
         </div>
-      </div>
-      <div className={styles.row}>
         <div className={styles.field}>
           <label className={styles.label}>Период с</label>
           <input className={styles.input} type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
@@ -237,7 +233,7 @@ const OrderSection: FC = () => {
         </div>
       </div>
       <div className={styles.field}>
-        <label className={styles.label}>{scope === 'account' ? 'Лицевые счета (через запятую/пробел)' : 'Номера 7XXXXXXXXXX (через запятую/пробел)'}</label>
+        <label className={styles.label}>{scope === 'account' ? 'Лицевые счета (через запятую)' : 'Номера 7XXXXXXXXXX (через запятую)'}</label>
         <textarea className={styles.textarea} value={targets} onChange={e => setTargets(e.target.value)} placeholder="79001234567, 79007654321" />
       </div>
       <div className={styles.field}>
@@ -245,13 +241,14 @@ const OrderSection: FC = () => {
         <input className={styles.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="пусто — служебный ящик автозабора" />
       </div>
       <div className={styles.actions}>
-        <button className={styles.btn} onClick={onOrder} disabled={order.isPending || active.length === 0}>Заказать (нужен 2FA)</button>
+        <button className={styles.btn} onClick={onOrder} disabled={order.isPending || active.length === 0}>Заказать (2FA)</button>
       </div>
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
     </section>
   );
 };
 
+// ================= Заявки =================
 const RequestsSection: FC = () => {
   const requests = useMtsBusinessRequests(true);
   const refresh = useRefreshMtsBusinessStatus();
@@ -262,7 +259,7 @@ const RequestsSection: FC = () => {
       <h2 className={styles.cardTitle}>Заявки на детализацию</h2>
       <div className={styles.tableWrap}>
         <table className={styles.table}>
-          <thead><tr><th>messageId</th><th>Тип</th><th>Кол-во</th><th>Период</th><th>Статус</th><th>Проверено</th><th></th></tr></thead>
+          <thead><tr><th>messageId</th><th>Тип</th><th>Кол-во</th><th>Период</th><th>Статус</th><th></th></tr></thead>
           <tbody>
             {rows.map(r => {
               const b = statusBadge(r.status);
@@ -273,7 +270,6 @@ const RequestsSection: FC = () => {
                   <td>{r.targetCount}</td>
                   <td>{r.dateFrom} — {r.dateTo}</td>
                   <td><span className={`${styles.badge} ${b.cls}`}>{b.label}</span></td>
-                  <td>{r.checkedAt ? new Date(r.checkedAt).toLocaleString('ru-RU') : '—'}</td>
                   <td><button className={styles.btnSecondary} onClick={() => refresh.mutate(r.messageId)} disabled={refresh.isPending}>Обновить</button></td>
                 </tr>
               );
@@ -285,18 +281,21 @@ const RequestsSection: FC = () => {
   );
 };
 
+// ================= Загрузка детализации =================
 const UploadSection: FC = () => {
+  const accounts = useMtsBusinessAccounts();
   const upload = useUploadMtsBusinessDetalization();
+  const active = (accounts.data ?? []).filter(a => a.isActive);
   const [file, setFile] = useState<File | null>(null);
+  const [accountId, setAccountId] = useState('');
   const [msisdn, setMsisdn] = useState('');
-  const [sourceMessageId, setSourceMessageId] = useState('');
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<Msg>(null);
 
   const onUpload = async (): Promise<void> => {
     setMsg(null);
-    if (!file) { setMsg({ ok: false, text: 'Выберите файл детализации (XLS/XML)' }); return; }
+    if (!file) { setMsg({ ok: false, text: 'Выберите файл (XLS/XML)' }); return; }
     try {
-      const r = await upload.mutateAsync({ file, msisdn: msisdn.trim() || undefined, sourceMessageId: sourceMessageId.trim() || undefined });
+      const r = await upload.mutateAsync({ file, accountId: accountId || undefined, msisdn: msisdn.trim() || undefined });
       setMsg({ ok: true, text: `Разобрано: ${r.parsed}, добавлено: ${r.inserted}, пропущено (дубли): ${r.skipped}` });
       setFile(null);
     } catch (e) {
@@ -307,36 +306,40 @@ const UploadSection: FC = () => {
   return (
     <section className={styles.card}>
       <h2 className={styles.cardTitle}>Загрузка детализации (XLS/XML)</h2>
-      <p className={styles.hint}>Загрузите файл-отчёт (Excel .xls/.xlsx или XML). Свой номер берётся из имени листа; если файл по одному номеру без него — впишите номер ниже.</p>
-      <div className={styles.field}>
-        <label className={styles.label}>Файл</label>
-        <input className={styles.input} type="file" accept=".xls,.xlsx,.xml,application/vnd.ms-excel,text/xml,application/xml"
-          onChange={e => setFile(e.target.files?.[0] ?? null)} />
-      </div>
+      <p className={styles.hint}>Файл-отчёт из МТС (Excel или XML). Свой номер берётся из файла; привязка к лицевому счёту — для дашборда по ЛС.</p>
       <div className={styles.row}>
         <div className={styles.field}>
-          <label className={styles.label}>Номер (если не указан в файле)</label>
-          <input className={styles.input} type="text" value={msisdn} onChange={e => setMsisdn(e.target.value)} placeholder="79001234567" />
+          <label className={styles.label}>Файл</label>
+          <input className={styles.input} type="file" accept=".xls,.xlsx,.xml,application/vnd.ms-excel,text/xml,application/xml"
+            onChange={e => setFile(e.target.files?.[0] ?? null)} />
         </div>
         <div className={styles.field}>
-          <label className={styles.label}>messageId заявки (необязательно)</label>
-          <input className={styles.input} type="text" value={sourceMessageId} onChange={e => setSourceMessageId(e.target.value)} />
+          <label className={styles.label}>Лицевой счёт (аккаунт)</label>
+          <select className={styles.select} value={accountId} onChange={e => setAccountId(e.target.value)}>
+            <option value="">— не привязывать —</option>
+            {active.map(a => <option key={a.id} value={a.id}>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>)}
+          </select>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Номер (если не в файле)</label>
+          <input className={styles.input} type="text" value={msisdn} onChange={e => setMsisdn(e.target.value)} placeholder="79001234567" />
         </div>
       </div>
       <div className={styles.actions}>
-        <button className={styles.btn} onClick={onUpload} disabled={upload.isPending || !file}>Загрузить (нужен 2FA)</button>
+        <button className={styles.btn} onClick={onUpload} disabled={upload.isPending || !file}>Загрузить (2FA)</button>
       </div>
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
     </section>
   );
 };
 
+// ================= Привязка номеров =================
 const NumberMapSection: FC = () => {
   const map = useMtsBusinessNumberMap(true);
   const setMap = useSetMtsBusinessNumberMap();
   const [msisdn, setMsisdn] = useState('');
   const [employeeId, setEmployeeId] = useState('');
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<Msg>(null);
   const rows = map.data ?? [];
 
   const onAdd = async (): Promise<void> => {
@@ -365,22 +368,21 @@ const NumberMapSection: FC = () => {
           <label className={styles.label}>ID сотрудника (пусто — снять)</label>
           <input className={styles.input} type="text" value={employeeId} onChange={e => setEmployeeId(e.target.value)} placeholder="123" />
         </div>
-      </div>
-      <div className={styles.actions}>
-        <button className={styles.btn} onClick={onAdd} disabled={setMap.isPending}>Сохранить привязку (нужен 2FA)</button>
+        <div className={styles.field} style={{ justifyContent: 'flex-end' }}>
+          <button className={styles.btn} onClick={onAdd} disabled={setMap.isPending}>Сохранить (2FA)</button>
+        </div>
       </div>
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
       {rows.length > 0 && (
-        <div className={styles.tableWrap} style={{ marginTop: 12 }}>
+        <div className={styles.tableWrap} style={{ marginTop: 8 }}>
           <table className={styles.table}>
-            <thead><tr><th>Номер</th><th>Сотрудник</th><th>Таб. №</th><th>Привязан</th></tr></thead>
+            <thead><tr><th>Номер</th><th>Сотрудник</th><th>Таб. №</th></tr></thead>
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.msisdn ?? `row-${i}`}>
                   <td>{r.msisdn ?? '—'}</td>
                   <td>{r.employeeFullName ?? <span className={`${styles.badge} ${styles.badgeMuted}`}>не привязан</span>}</td>
                   <td>{r.employeeTabNumber ?? '—'}</td>
-                  <td>{r.linkedAt ? new Date(r.linkedAt).toLocaleDateString('ru-RU') : '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -391,62 +393,135 @@ const NumberMapSection: FC = () => {
   );
 };
 
-const ReportSection: FC = () => {
+// ================= Дашборд «Основное» =================
+const Bars: FC<{ items: { key: string; label: string; sub?: string; value: number; active?: boolean; onClick?: () => void }[] }> = ({ items }) => {
+  const max = Math.max(1, ...items.map(i => i.value));
+  return (
+    <div>
+      {items.map(it => (
+        <div
+          key={it.key}
+          className={`${styles.barRow} ${it.onClick ? styles.barRowClickable : ''} ${it.active ? styles.barRowActive : ''}`}
+          onClick={it.onClick}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div className={styles.barLabel}>{it.label}{it.sub && <span className={styles.barSub}> · {it.sub}</span>}</div>
+            <div className={styles.barTrack}><div className={styles.barFill} style={{ width: `${Math.round((it.value / max) * 100)}%` }} /></div>
+          </div>
+          <div className={styles.barValue}>{fmtDur(it.value)}</div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const DashboardSection: FC = () => {
   const now = useMemo(() => new Date(), []);
   const [from, setFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth(), 1)));
   const [to, setTo] = useState(toISODate(now));
-  const report = useMtsBusinessReport(from, to, true);
-  const rows = report.data ?? [];
-  const totalSec = rows.reduce((acc, r) => acc + r.totalSeconds, 0);
+  const [view, setView] = useState<'accounts' | 'employees'>('accounts');
+  const [accountId, setAccountId] = useState<string>(''); // фильтр по ЛС в режиме сотрудников
+
+  const summary = useMtsBusinessAccountsSummary(from, to, true);
+  const report = useMtsBusinessReport(from, to, view === 'employees', accountId || undefined);
+  const accountsMeta = useMtsBusinessAccounts();
+
+  const accRows = summary.data ?? [];
+  const totalCalls = accRows.reduce((a, r) => a + r.calls, 0);
+  const totalSec = accRows.reduce((a, r) => a + r.totalSeconds, 0);
+  const accountsWithData = accRows.filter(r => r.accountId).length;
+  const empRows = (report.data ?? []).filter(r => r.employeeId != null);
+  const mappedEmployees = empRows.length;
+
+  const accBars = accRows.map(r => ({
+    key: r.accountId ?? 'none',
+    label: r.label ?? (r.accountId ? 'Без названия' : 'Без привязки к ЛС'),
+    sub: [r.accountNumber, `${r.calls} зв.`, `${r.numbers} ном.`].filter(Boolean).join(' · '),
+    value: r.totalSeconds,
+    active: false,
+    onClick: r.accountId ? () => { setAccountId(r.accountId as string); setView('employees'); } : undefined,
+  }));
+
+  const empBars = (report.data ?? []).map((r, i) => ({
+    key: r.employeeId != null ? String(r.employeeId) : `unmapped-${i}`,
+    label: r.employeeFullName ?? 'Не привязанные номера',
+    sub: [r.employeeTabNumber, `${r.calls} зв.`, `вх ${fmtDur(r.inSeconds)}`, `исх ${fmtDur(r.outSeconds)}`].filter(Boolean).join(' · '),
+    value: r.totalSeconds,
+  }));
 
   return (
-    <section className={styles.card}>
-      <h2 className={styles.cardTitle}>Время разговоров по сотрудникам</h2>
-      <div className={styles.row}>
-        <div className={styles.field}>
-          <label className={styles.label}>С</label>
-          <input className={styles.input} type="date" value={from} onChange={e => setFrom(e.target.value)} />
+    <div className={styles.page}>
+      <section className={styles.card}>
+        <div className={styles.row}>
+          <div className={styles.field}>
+            <label className={styles.label}>Период с</label>
+            <input className={styles.input} type="date" value={from} onChange={e => setFrom(e.target.value)} />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label}>по</label>
+            <input className={styles.input} type="date" value={to} onChange={e => setTo(e.target.value)} />
+          </div>
         </div>
-        <div className={styles.field}>
-          <label className={styles.label}>По</label>
-          <input className={styles.input} type="date" value={to} onChange={e => setTo(e.target.value)} />
+        <div className={styles.kpiGrid}>
+          <div className={styles.kpi}><div className={styles.kpiValue}>{fmtDur(totalSec)}</div><div className={styles.kpiLabel}>Время разговоров</div></div>
+          <div className={styles.kpi}><div className={styles.kpiValue}>{totalCalls.toLocaleString('ru-RU')}</div><div className={styles.kpiLabel}>Звонков</div></div>
+          <div className={styles.kpi}><div className={styles.kpiValue}>{accountsWithData}</div><div className={styles.kpiLabel}>Лицевых счетов</div></div>
+          <div className={styles.kpi}><div className={styles.kpiValue}>{totalCalls ? fmtDur(Math.round(totalSec / totalCalls)) : '—'}</div><div className={styles.kpiLabel}>Средний звонок</div></div>
         </div>
-      </div>
-      {report.isLoading ? (
-        <p className={styles.hint}>Загрузка…</p>
-      ) : rows.length === 0 ? (
-        <p className={styles.hint}>Нет данных за период. Загрузите детализацию и привяжите номера.</p>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead><tr><th>Сотрудник</th><th>Таб. №</th><th>Звонков</th><th>Время разговоров</th></tr></thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={r.employeeId ?? `unmapped-${i}`}>
-                  <td>{r.employeeFullName ?? <span className={`${styles.badge} ${styles.badgeMuted}`}>не привязанные номера</span>}</td>
-                  <td>{r.employeeTabNumber ?? '—'}</td>
-                  <td>{r.calls}</td>
-                  <td>{formatDuration(r.totalSeconds)}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr><th>Итого</th><th></th><th>{rows.reduce((a, r) => a + r.calls, 0)}</th><th>{formatDuration(totalSec)}</th></tr>
-            </tfoot>
-          </table>
+      </section>
+
+      <section className={styles.card}>
+        <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0 }}>
+          <div className={styles.segment}>
+            <button className={`${styles.segBtn} ${view === 'accounts' ? styles.segBtnActive : ''}`} onClick={() => setView('accounts')}>По лицевым счетам</button>
+            <button className={`${styles.segBtn} ${view === 'employees' ? styles.segBtnActive : ''}`} onClick={() => setView('employees')}>По сотрудникам</button>
+          </div>
+          {view === 'employees' && (
+            <select className={styles.select} style={{ maxWidth: 260 }} value={accountId} onChange={e => setAccountId(e.target.value)}>
+              <option value="">Все лицевые счета</option>
+              {(accountsMeta.data ?? []).map(a => <option key={a.id} value={a.id}>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>)}
+            </select>
+          )}
         </div>
-      )}
-    </section>
+
+        {view === 'accounts' ? (
+          summary.isLoading ? <p className={styles.hint}>Загрузка…</p>
+            : accBars.length === 0 ? <p className={styles.hint}>Нет данных за период. Загрузите детализацию (вкладка «Администрирование»).</p>
+              : <Bars items={accBars} />
+        ) : (
+          report.isLoading ? <p className={styles.hint}>Загрузка…</p>
+            : empBars.length === 0 ? <p className={styles.hint}>Нет данных. Загрузите детализацию и привяжите номера к сотрудникам.</p>
+              : <>
+                  <p className={styles.hint}>Сотрудников с данными: {mappedEmployees}. Клик по ЛС на вкладке слева фильтрует список.</p>
+                  <Bars items={empBars} />
+                </>
+        )}
+      </section>
+    </div>
   );
 };
 
-export const MtsBusinessPage: FC = () => (
-  <div className={styles.page}>
-    <AccountsSection />
-    <OrderSection />
-    <RequestsSection />
-    <UploadSection />
-    <NumberMapSection />
-    <ReportSection />
-  </div>
-);
+// ================= Страница с вкладками =================
+export const MtsBusinessPage: FC = () => {
+  const [tab, setTab] = useState<'main' | 'admin'>('main');
+  return (
+    <div className={styles.page}>
+      <div className={styles.tabs}>
+        <button className={`${styles.tab} ${tab === 'main' ? styles.tabActive : ''}`} onClick={() => setTab('main')}>Основное</button>
+        <button className={`${styles.tab} ${tab === 'admin' ? styles.tabActive : ''}`} onClick={() => setTab('admin')}>Администрирование</button>
+      </div>
+
+      {tab === 'main' ? (
+        <DashboardSection />
+      ) : (
+        <>
+          <AccountsSection />
+          <OrderSection />
+          <RequestsSection />
+          <UploadSection />
+          <NumberMapSection />
+        </>
+      )}
+    </div>
+  );
+};

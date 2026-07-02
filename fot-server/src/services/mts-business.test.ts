@@ -80,56 +80,40 @@ describe('МТС Бизнес: разбор даты', () => {
   });
 });
 
-describe('МТС Бизнес: парсинг XML детализации', () => {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-    <Report>
-      <Calls>
-        <Call>
-          <date>2026-06-01T09:15:00Z</date>
-          <duration>125</duration>
-          <msisdn>+7 (900) 123-45-67</msisdn>
-          <peer>89001112233</peer>
-          <direction>outbound</direction>
-        </Call>
-        <Call>
-          <date>01.06.2026 10:00:00</date>
-          <duration>00:02:00</duration>
-          <number>79001234567</number>
-          <direction>inbound</direction>
-        </Call>
-        <Call>
-          <duration>50</duration>
-          <msisdn>79001234567</msisdn>
-        </Call>
-      </Calls>
-    </Report>`;
+describe('МТС Бизнес: парсинг XML детализации (реальный формат API)', () => {
+  // Реальный формат: Report → <ds n="СВОЙ_НОМЕР" type= sim=> → <i d= n= s= du=>.
+  // Голос = записи s="Телеф." с du-длительностью; направление — по маркеру «&lt;--».
+  const xml = `<?xml version="1.0" encoding="utf-8"?><Report><ds sd="01.06.2026" ed="30.06.2026" n="79001234567" t="0" f="0" type="Сетевой ресурс" sim="8970101">`
+    + `<i d="01.06.2026 12:40:48" n="&lt;--+79152763968" zp="VoLTE" s="Телеф." du="1:10" c="0" />`
+    + `<i d="03.06.2026 9:36:11" n="+79857422174" zp="VoLTE" s="Телеф." du="0:27" c="0" />`
+    + `<i d="02.06.2026 10:15:18" n="&lt;--+79525432792" zp="VoLTE" s="Телеф." du="2:29" c="0" />`
+    + `<i d="01.06.2026 0:24:32" n="internet.mts.ru" s="4G" du="250Kb" c="0" />`
+    + `<i d="04.06.2026 16:23:47" n="Call_waiting" s="cw" du="1" c="0" />`
+    + `</ds></Report>`;
 
-  it('достаёт звонки, пропускает строки без даты', () => {
+  it('берёт только голосовые звонки (Телеф.), пропускает трафик/ожидание', () => {
     const calls = mtsBusinessCdrService.parseXml(xml);
-    // Третий звонок без даты — отброшен.
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
+    expect(calls.map(c => c.durationSec).sort((a, b) => a - b)).toEqual([27, 70, 149]);
   });
 
-  it('нормализует номера и длительность', () => {
+  it('свой номер из <ds n>, направление по маркеру «<--»', () => {
     const calls = mtsBusinessCdrService.parseXml(xml);
-    const first = calls[0];
-    expect(first.msisdn).toBe('79001234567');
-    expect(first.peer).toBe('79001112233');
-    expect(first.durationSec).toBe(125);
-    expect(first.direction).toBe('outbound');
-
-    const second = calls[1];
-    expect(second.msisdn).toBe('79001234567'); // из <number>
-    expect(second.durationSec).toBe(120);      // 00:02:00
+    expect(calls.every(c => c.msisdn === '79001234567')).toBe(true);
+    const incoming = calls.find(c => c.direction === 'in' && c.durationSec === 149);
+    expect(incoming).toBeDefined();
+    expect(incoming?.peer).toBe('+79525432792'); // маркер «&lt;--» снят
+    expect(calls.filter(c => c.direction === 'out')).toHaveLength(1); // только 0:27
+    expect(calls.filter(c => c.direction === 'in')).toHaveLength(2);  // 1:10 и 2:29
   });
 
-  it('fallbackMsisdn присваивается строкам без собственного номера', () => {
-    const noOwn = `<Report><Calls>
-      <Call><date>2026-06-02T08:00:00Z</date><duration>30</duration><peer>79005556677</peer></Call>
-    </Calls></Report>`;
+  it('fallbackMsisdn, если у раздела нет числового номера', () => {
+    const noOwn = `<Report><ds type="Сетевой ресурс">`
+      + `<i d="02.06.2026 8:00:00" n="+79005556677" s="Телеф." du="0:30" /></ds></Report>`;
     const calls = mtsBusinessCdrService.parseXml(noOwn, '+7 900 000 11 22');
     expect(calls).toHaveLength(1);
     expect(calls[0].msisdn).toBe('79000001122');
+    expect(calls[0].durationSec).toBe(30);
   });
 
   it('пустой/битый XML → пустой список без исключения', () => {
@@ -178,8 +162,9 @@ describe('МТС Бизнес: парсинг XLS-детализации', () =>
     expect(calls).toHaveLength(2);
   });
 
-  it('parseFile с .xml идёт в XML-ветку', () => {
-    const xml = '<Report><Calls><Call><date>2026-06-01T09:00:00Z</date><duration>60</duration><msisdn>79001234567</msisdn></Call></Calls></Report>';
+  it('parseFile с .xml идёт в XML-ветку (реальный формат)', () => {
+    const xml = '<Report><ds n="79001234567" type="Сетевой ресурс">'
+      + '<i d="01.06.2026 9:00:00" n="+79150000000" s="Телеф." du="1:00" /></ds></Report>';
     const calls = mtsBusinessCdrService.parseFile(Buffer.from(xml, 'utf8'), 'detaliz.xml');
     expect(calls).toHaveLength(1);
     expect(calls[0].durationSec).toBe(60);

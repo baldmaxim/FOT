@@ -41,6 +41,17 @@ export interface IMtsBusinessTalkTimeRow {
   employeeTabNumber: string | null;
   calls: number;
   totalSeconds: number;
+  inSeconds: number;
+  outSeconds: number;
+}
+
+export interface IMtsBusinessAccountSummaryRow {
+  accountId: string | null;
+  label: string | null;
+  accountNumber: string | null;
+  calls: number;
+  totalSeconds: number;
+  numbers: number;
 }
 
 export interface IMtsBusinessUploadResult {
@@ -115,9 +126,10 @@ export const mtsBusinessService = {
     return res.data;
   },
 
-  uploadDetalization: async (file: File, opts: { sourceMessageId?: string; msisdn?: string } = {}): Promise<IMtsBusinessUploadResult> => {
+  uploadDetalization: async (file: File, opts: { accountId?: string; sourceMessageId?: string; msisdn?: string } = {}): Promise<IMtsBusinessUploadResult> => {
     const form = new FormData();
     form.append('file', file);
+    if (opts.accountId) form.append('accountId', opts.accountId);
     if (opts.sourceMessageId) form.append('sourceMessageId', opts.sourceMessageId);
     if (opts.msisdn) form.append('msisdn', opts.msisdn);
     const res = await apiClient.post<ApiResponse<IMtsBusinessUploadResult>>('/mts-business/detalization/upload', form);
@@ -135,10 +147,17 @@ export const mtsBusinessService = {
     return res.data;
   },
 
-  // === Отчёт ===
-  getTalkTimeReport: async (from: string, to: string): Promise<IMtsBusinessTalkTimeRow[]> => {
+  // === Отчёт / дашборд ===
+  getTalkTimeReport: async (from: string, to: string, accountId?: string): Promise<IMtsBusinessTalkTimeRow[]> => {
     const qs = new URLSearchParams({ from, to });
+    if (accountId) qs.set('accountId', accountId);
     const res = await apiClient.get<ApiResponse<IMtsBusinessTalkTimeRow[]>>(`/mts-business/report/talk-time?${qs.toString()}`);
+    return res.data;
+  },
+
+  getAccountsSummary: async (from: string, to: string): Promise<IMtsBusinessAccountSummaryRow[]> => {
+    const qs = new URLSearchParams({ from, to });
+    const res = await apiClient.get<ApiResponse<IMtsBusinessAccountSummaryRow[]>>(`/mts-business/report/accounts-summary?${qs.toString()}`);
     return res.data;
   },
 };

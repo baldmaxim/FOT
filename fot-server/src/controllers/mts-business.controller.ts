@@ -243,12 +243,13 @@ export const mtsBusinessController = {
         res.status(400).json({ success: false, error: 'Файл детализации (XLS/XML) не передан' });
         return;
       }
-      const { sourceMessageId, msisdn } = req.body as { sourceMessageId?: string; msisdn?: string };
+      const { sourceMessageId, msisdn, accountId } = req.body as { sourceMessageId?: string; msisdn?: string; accountId?: string };
       const result = await mtsBusinessCdrService.parseFileAndStore(
         file.buffer,
         file.originalname || 'upload.xls',
         sourceMessageId?.trim() || null,
         msisdn?.trim() || null,
+        accountId?.trim() || null,
       );
 
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_DETALIZATION_UPLOADED, {
@@ -284,8 +285,24 @@ export const mtsBusinessController = {
     }
   },
 
-  // === Отчёт ===
+  // === Отчёт / дашборд ===
   async getTalkTimeReport(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const from = String(req.query.from || '');
+      const to = String(req.query.to || '');
+      const accountId = req.query.accountId ? String(req.query.accountId) : null;
+      if (!DATE_RE.test(from) || !DATE_RE.test(to)) {
+        res.status(400).json({ success: false, error: 'Параметры from/to должны быть в формате YYYY-MM-DD' });
+        return;
+      }
+      res.json({ success: true, data: await mtsBusinessCdrService.getTalkTimeReport(from, to, accountId) });
+    } catch (error) {
+      fail(res, error, 'Ошибка формирования отчёта времени разговоров');
+    }
+  },
+
+  /** Сводка по лицевым счетам за период (для дашборда «Основное»). */
+  async getAccountsSummary(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const from = String(req.query.from || '');
       const to = String(req.query.to || '');
@@ -293,9 +310,9 @@ export const mtsBusinessController = {
         res.status(400).json({ success: false, error: 'Параметры from/to должны быть в формате YYYY-MM-DD' });
         return;
       }
-      res.json({ success: true, data: await mtsBusinessCdrService.getTalkTimeReport(from, to) });
+      res.json({ success: true, data: await mtsBusinessCdrService.getAccountsSummary(from, to) });
     } catch (error) {
-      fail(res, error, 'Ошибка формирования отчёта времени разговоров');
+      fail(res, error, 'Ошибка формирования сводки по лицевым счетам');
     }
   },
 };

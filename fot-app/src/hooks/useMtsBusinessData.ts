@@ -4,8 +4,10 @@ import { mtsBusinessService } from '../services/mtsBusinessService';
 export const getMtsBusinessAccountsKey = () => ['mts-business', 'accounts'] as const;
 export const getMtsBusinessRequestsKey = () => ['mts-business', 'requests'] as const;
 export const getMtsBusinessNumberMapKey = () => ['mts-business', 'number-map'] as const;
-export const getMtsBusinessReportKey = (from: string, to: string) =>
-  ['mts-business', 'report', from, to] as const;
+export const getMtsBusinessReportKey = (from: string, to: string, accountId?: string) =>
+  ['mts-business', 'report', from, to, accountId ?? 'all'] as const;
+export const getMtsBusinessAccountsSummaryKey = (from: string, to: string) =>
+  ['mts-business', 'accounts-summary', from, to] as const;
 
 export const useMtsBusinessAccounts = () => useQuery({
   queryKey: getMtsBusinessAccountsKey(),
@@ -27,9 +29,16 @@ export const useMtsBusinessNumberMap = (enabled: boolean) => useQuery({
   enabled,
 });
 
-export const useMtsBusinessReport = (from: string, to: string, enabled: boolean) => useQuery({
-  queryKey: getMtsBusinessReportKey(from, to),
-  queryFn: () => mtsBusinessService.getTalkTimeReport(from, to),
+export const useMtsBusinessReport = (from: string, to: string, enabled: boolean, accountId?: string) => useQuery({
+  queryKey: getMtsBusinessReportKey(from, to, accountId),
+  queryFn: () => mtsBusinessService.getTalkTimeReport(from, to, accountId),
+  staleTime: 30_000,
+  enabled,
+});
+
+export const useMtsBusinessAccountsSummary = (from: string, to: string, enabled: boolean) => useQuery({
+  queryKey: getMtsBusinessAccountsSummaryKey(from, to),
+  queryFn: () => mtsBusinessService.getAccountsSummary(from, to),
   staleTime: 30_000,
   enabled,
 });
@@ -86,9 +95,12 @@ export const useRefreshMtsBusinessStatus = () => {
 export const useUploadMtsBusinessDetalization = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (args: { file: File; sourceMessageId?: string; msisdn?: string }) =>
-      mtsBusinessService.uploadDetalization(args.file, { sourceMessageId: args.sourceMessageId, msisdn: args.msisdn }),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] }); },
+    mutationFn: (args: { file: File; accountId?: string; sourceMessageId?: string; msisdn?: string }) =>
+      mtsBusinessService.uploadDetalization(args.file, { accountId: args.accountId, sourceMessageId: args.sourceMessageId, msisdn: args.msisdn }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'accounts-summary'] });
+    },
   });
 };
 

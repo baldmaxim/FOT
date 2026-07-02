@@ -4,14 +4,18 @@ import * as XLSX from 'xlsx';
 import { execute, query } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 
-// Разбор XML-детализации МТС «Бизнес» → строки CDR (звонки) → персист с дедупом
-// → агрегация «время разговоров» по сотрудникам.
+// Разбор детализации МТС «Бизнес» → строки CDR (звонки) → персист с дедупом
+// → агрегация «время разговоров» по сотрудникам. ПДн шифруются (iv:authTag:enc).
 //
-// ВАЖНО: точная схема XML детализации МТС Бизнес не зафиксирована публично —
-// нужен реальный образец файла. Парсер намеренно ТЕРПИМ: ищет повторяющиеся
-// «строки-звонки» в любом месте дерева и достаёт поля по списку кандидатов имён
-// (см. FIELD_CANDIDATES). При появлении реального образца — правится ТОЛЬКО этот
-// список и parseDurationSec/parseCallDate. Формат iv:authTag:encrypted для ПДн.
+// Форматы (подтверждены реальными образцами):
+//  - XML (реально приходит из API/на почту): <Report>…<ds n="СВОЙ_НОМЕР" type=…
+//    sim=…>…<i d="ДД.ММ.ГГГГ Ч:ММ:СС" n="собеседник" s="Телеф." du="М:СС" …/>…
+//    </ds>… Данные в АТРИБУТАХ. Детальный раздел — <ds> с n = номер (сводки
+//    услуг под <tp> имеют n = название услуги и отсекаются). Голос = запись
+//    s="Телеф." с du в формате длительности (проверено 1:1). Направление — по
+//    маркеру «&lt;--» в n (входящий). Трафик (Kb)/SMS/ожидание — отсекаются.
+//  - XLS (отчёт из ЛК/Тарифер): лист на номер (имя листа = номер), звонок = строка
+//    с Volume в формате длительности. См. parseXls.
 
 export interface IParsedCall {
   msisdn: string | null;
@@ -28,25 +32,51 @@ export interface ITalkTimeRow {
   employeeTabNumber: string | null;
   calls: number;
   totalSeconds: number;
+  inSeconds: number;
+  outSeconds: number;
 }
 
-const FIELD_CANDIDATES = {
-  duration: ['duration', 'callduration', 'durationsec', 'durationseconds', 'length', 'talktime', 'продолжительность', 'длительность', 'длительностьразговора'],
-  date: ['date', 'calldate', 'startdate', 'starttime', 'datetime', 'dateandtime', 'begin', 'begintime', 'start', 'дата', 'датавремя', 'датазвонка', 'датаивремя', 'времяначала'],
-  msisdn: ['msisdn', 'abonent', 'ownnumber', 'мойномер', 'номерабонента', 'номертелефона'],
-  msisdnFallback: ['number', 'phone', 'номер'],
-  peer: ['peer', 'othernumber', 'callednumber', 'callingnumber', 'contact', 'contactnumber', 'destination', 'interlocutor', 'номерсобеседника', 'номервызываемого', 'вызываемыйномер', 'абонентб'],
-  direction: ['direction', 'type', 'calltype', 'category', 'направление', 'типзвонка', 'вид', 'видсвязи'],
-} as const;
-
-/** Ключ объекта → нормализованный вид (нижний регистр, только буквы/цифры, без @_ ). */
-const normKey = (k: string): string => k.replace(/^@_/, '').toLowerCase().replace(/[^a-zа-я0-9]/gi, '');
+export interface IAccountSummaryRow {
+  accountId: string | null;
+  label: string | null;
+  accountNumber: string | null;
+  calls: number;
+  totalSeconds: number;
+  numbers: number;
+}
 
 const sha256 = (s: string): string => crypto.createHash('sha256').update(s).digest('hex');
 
-// В XLS-детализации МТС строка = ЗВОНОК, если Volume («Кол-во/объём») — длительность
-// H:MM:SS. GPRS даёт «… Mb», SMS — штуки/0. Так отличаем голос от трафика/SMS.
-const DURATION_RE = /^\d{1,3}:\d{2}:\d{2}$/;
+// Длительность звонка: М:СС (XML из API) либо Ч:ММ:СС (XLS-отчёт). Так отличаем
+// голос от трафика («…Kb»/«…Mb») и SMS (штуки) и от du="1" (ожидание/сервис).
+const DURATION_RE = /^\d{1,3}:\d{2}(:\d{2})?$/;
+// Голосовая запись детализации: атрибут s="Телеф." (проверено: s="Телеф." ⟺
+// запись с du в формате длительности, т.е. реальный разговор).
+const VOICE_S_RE = /^Телеф/i;
+
+const asArray = <T>(v: T | T[] | undefined | null): T[] =>
+  v == null ? [] : Array.isArray(v) ? v : [v];
+
+/** Рекурсивно собрать все узлы под ключом tag (учитывая массивы/вложенность). */
+const collectByTag = (node: unknown, tag: string, out: Record<string, unknown>[]): void => {
+  if (Array.isArray(node)) {
+    for (const el of node) collectByTag(el, tag, out);
+    return;
+  }
+  if (node && typeof node === 'object') {
+    const obj = node as Record<string, unknown>;
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === tag) for (const el of asArray(v)) if (el && typeof el === 'object') out.push(el as Record<string, unknown>);
+      if (v && typeof v === 'object') collectByTag(v, tag, out);
+    }
+  }
+};
+
+/** Собеседник из атрибута n: убрать маркер входящего «<--»/«&lt;--» и сервис-префиксы. */
+const cleanPeer = (raw: string): string | null => {
+  const s = (raw || '').replace(/^(&lt;|<)--/, '').replace(/^[a-z0-9]+_/i, '').trim();
+  return s || null;
+};
 
 const cell = (row: unknown[], idx: number): string => {
   if (idx < 0 || idx >= row.length) return '';
@@ -112,84 +142,71 @@ export const parseCallDate = (value: unknown): string | null => {
   if (value == null) return null;
   const s = String(value).trim();
   if (!s) return null;
-  const direct = new Date(s);
-  if (!Number.isNaN(direct.getTime())) return direct.toISOString();
-  // DD.MM.YYYY [HH:MM[:SS]]
-  const m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  // DD.MM.YYYY [H:MM[:SS]] — ПРИОРИТЕТНО (иначе new Date путает DD.MM как MM.DD).
+  // Час может быть однозначным (напр. "9:36:11"). Время трактуется как локальное
+  // (сервер в Europe/Moscow — как и весь проект).
+  const m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if (m) {
     const [, dd, mm, yyyy, hh = '00', mi = '00', ss = '00'] = m;
     const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(mi), Number(ss));
     if (!Number.isNaN(d.getTime())) return d.toISOString();
   }
+  const direct = new Date(s);
+  if (!Number.isNaN(direct.getTime())) return direct.toISOString();
   return null;
-};
-
-const readField = (normalizedByKey: Map<string, unknown>, candidates: readonly string[]): unknown => {
-  for (const c of candidates) {
-    if (normalizedByKey.has(c)) return normalizedByKey.get(c);
-  }
-  return undefined;
-};
-
-const looksLikeCall = (normalizedByKey: Map<string, unknown>): boolean => {
-  return FIELD_CANDIDATES.duration.some(c => normalizedByKey.has(c));
-};
-
-const mapToNormalized = (obj: Record<string, unknown>): Map<string, unknown> => {
-  const map = new Map<string, unknown>();
-  for (const [k, v] of Object.entries(obj)) {
-    // Берём скалярные значения (и атрибуты). Вложенные объекты пропускаем как поля.
-    if (v == null || typeof v !== 'object') map.set(normKey(k), v);
-  }
-  return map;
-};
-
-const collectRecords = (node: unknown, out: Record<string, unknown>[]): void => {
-  if (Array.isArray(node)) {
-    for (const el of node) collectRecords(el, out);
-    return;
-  }
-  if (node && typeof node === 'object') {
-    const obj = node as Record<string, unknown>;
-    const normalized = mapToNormalized(obj);
-    if (looksLikeCall(normalized)) out.push(obj);
-    for (const v of Object.values(obj)) {
-      if (v && typeof v === 'object') collectRecords(v, out);
-    }
-  }
 };
 
 class MtsBusinessCdrService {
   /**
-   * Разбирает XML-детализацию в строки звонков. fallbackMsisdn — номер, который
-   * присвоить строкам без собственного номера (когда детализация по одному номеру).
+   * Разбирает XML-детализацию МТС (реальный формат API). Детальные записи лежат
+   * под разделами <ds n="СВОЙ_НОМЕР" type=… sim=…> (по одному на номер), внутри —
+   * <i d="ДД.ММ.ГГГГ Ч:ММ:СС" n="собеседник" s="Телеф." du="М:СС" …/>. Голос —
+   * записи s="Телеф." с du в формате длительности. Направление — по маркеру «<--»
+   * в атрибуте n (входящий). Свой номер — атрибут n у раздела <ds>.
+   * fallbackMsisdn — если у раздела нет числового номера.
    */
   parseXml(xml: string, fallbackMsisdn?: string | null): IParsedCall[] {
     const parser = new XMLParser({
       ignoreAttributes: false,
       attributeNamePrefix: '@_',
       parseAttributeValue: false,
-      // Значения тегов оставляем строками: длинные номера/лицевые счета не теряют
-      // точность (число > 2^53), а длительность/дату мы парсим сами.
+      // Значения оставляем строками: длинные номера не теряют точность (>2^53),
+      // длительность/дату парсим сами.
       parseTagValue: false,
       trimValues: true,
+      // Реальный файл содержит тысячи «&lt;--» (маркер входящего) → упирается в
+      // лимит раскрытия сущностей fast-xml-parser (1000). Отключаем обработку
+      // сущностей; «&lt;--» снимаем в cleanPeer вручную.
+      processEntities: false,
     });
     const parsed = parser.parse(xml);
-    const records: Record<string, unknown>[] = [];
-    collectRecords(parsed, records);
+
+    // Все <ds>; детальный раздел — тот, у кого n = номер (сводки услуг имеют
+    // n = название услуги → normalizeMsisdn вернёт null → пропуск).
+    const dss: Record<string, unknown>[] = [];
+    collectByTag(parsed, 'ds', dss);
 
     const calls: IParsedCall[] = [];
-    for (const rec of records) {
-      const nk = mapToNormalized(rec);
-      const startedAt = parseCallDate(readField(nk, FIELD_CANDIDATES.date));
-      if (!startedAt) continue; // строки без даты не агрегируем (started_at NOT NULL)
-      const durationSec = parseDurationSec(readField(nk, FIELD_CANDIDATES.duration));
-      const ownRaw = readField(nk, FIELD_CANDIDATES.msisdn) ?? readField(nk, FIELD_CANDIDATES.msisdnFallback);
-      const msisdn = normalizeMsisdn(ownRaw as string | null | undefined) ?? normalizeMsisdn(fallbackMsisdn);
-      const peer = normalizeMsisdn(readField(nk, FIELD_CANDIDATES.peer) as string | null | undefined);
-      const directionRaw = readField(nk, FIELD_CANDIDATES.direction);
-      const direction = directionRaw != null ? String(directionRaw).slice(0, 40) : null;
-      calls.push({ msisdn, peer, startedAt, durationSec, direction, callType: null });
+    for (const ds of dss) {
+      const own = normalizeMsisdn(ds['@_n'] as string | undefined) ?? normalizeMsisdn(fallbackMsisdn);
+      if (!own) continue;
+      for (const it of asArray(ds.i as Record<string, unknown> | Record<string, unknown>[] | undefined)) {
+        const item = it as Record<string, unknown>;
+        if (!VOICE_S_RE.test(String(item['@_s'] ?? ''))) continue; // только голос (Телеф.)
+        const du = String(item['@_du'] ?? '');
+        if (!DURATION_RE.test(du)) continue;
+        const startedAt = parseCallDate(String(item['@_d'] ?? ''));
+        if (!startedAt) continue;
+        const peerRaw = String(item['@_n'] ?? '');
+        calls.push({
+          msisdn: own,
+          peer: cleanPeer(peerRaw),
+          startedAt,
+          durationSec: parseDurationSec(du),
+          direction: /^(&lt;|<)--/.test(peerRaw) ? 'in' : 'out',
+          callType: 'Телеф.',
+        });
+      }
     }
     return calls;
   }
@@ -249,21 +266,26 @@ class MtsBusinessCdrService {
     return this.parseXml(buffer.toString('utf8'), fallbackMsisdn);
   }
 
-  /** Разобрать файл и сохранить (диспетчер по расширению). */
+  /** Разобрать файл и сохранить (диспетчер по расширению). accountId — привязка к ЛС. */
   async parseFileAndStore(
     buffer: Buffer,
     filename: string,
     sourceMessageId: string | null,
     fallbackMsisdn?: string | null,
+    accountId?: string | null,
   ): Promise<{ parsed: number; inserted: number; skipped: number }> {
     const calls = this.parseFile(buffer, filename, fallbackMsisdn);
-    const { inserted, skipped } = await this.storeCalls(calls, sourceMessageId);
+    const { inserted, skipped } = await this.storeCalls(calls, sourceMessageId, accountId ?? null);
     console.log(`[mts-biz-cdr] file="${filename}" parsed=${calls.length} inserted=${inserted} skipped=${skipped}`);
     return { parsed: calls.length, inserted, skipped };
   }
 
   /** Персист строк CDR с дедупом по dedup_hash. Возвращает счётчики. */
-  async storeCalls(calls: IParsedCall[], sourceMessageId: string | null): Promise<{ inserted: number; skipped: number }> {
+  async storeCalls(
+    calls: IParsedCall[],
+    sourceMessageId: string | null,
+    accountId: string | null = null,
+  ): Promise<{ inserted: number; skipped: number }> {
     let inserted = 0;
     const CHUNK = 500;
     for (let i = 0; i < calls.length; i += CHUNK) {
@@ -277,6 +299,7 @@ class MtsBusinessCdrService {
         );
         params.push(
           dedup,
+          accountId,
           mHash,
           encryptionService.encryptField(c.msisdn),
           encryptionService.encryptField(c.peer),
@@ -287,12 +310,12 @@ class MtsBusinessCdrService {
           sourceMessageId,
         );
         const b = params.length;
-        rows.push(`($${b - 8}, $${b - 7}, $${b - 6}, $${b - 5}, $${b - 4}, $${b - 3}, $${b - 2}, $${b - 1}, $${b})`);
+        rows.push(`($${b - 9}, $${b - 8}, $${b - 7}, $${b - 6}, $${b - 5}, $${b - 4}, $${b - 3}, $${b - 2}, $${b - 1}, $${b})`);
       }
       if (rows.length === 0) continue;
       const affected = await execute(
         `INSERT INTO mts_business_cdr
-           (dedup_hash, msisdn_hash, msisdn_enc, peer_number_enc, direction, started_at, duration_sec, call_type, source_message_id)
+           (dedup_hash, account_id, msisdn_hash, msisdn_enc, peer_number_enc, direction, started_at, duration_sec, call_type, source_message_id)
          VALUES ${rows.join(', ')}
          ON CONFLICT (dedup_hash) DO NOTHING`,
         params,
@@ -302,40 +325,36 @@ class MtsBusinessCdrService {
     return { inserted, skipped: calls.length - inserted };
   }
 
-  /** Разобрать XML и сохранить. */
-  async parseAndStore(
-    xml: string,
-    sourceMessageId: string | null,
-    fallbackMsisdn?: string | null,
-  ): Promise<{ parsed: number; inserted: number; skipped: number }> {
-    const calls = this.parseXml(xml, fallbackMsisdn);
-    const { inserted, skipped } = await this.storeCalls(calls, sourceMessageId);
-    console.log(`[mts-biz-cdr] parsed=${calls.length} inserted=${inserted} skipped=${skipped}`);
-    return { parsed: calls.length, inserted, skipped };
-  }
-
-  /** Агрегация «время разговоров» по сотрудникам за период [from, to] (YYYY-MM-DD, включительно). */
-  async getTalkTimeReport(from: string, to: string): Promise<ITalkTimeRow[]> {
+  /**
+   * Агрегация «время разговоров» по сотрудникам за период [from, to] (YYYY-MM-DD,
+   * включительно). accountId — опциональный фильтр по лицевому счёту.
+   */
+  async getTalkTimeReport(from: string, to: string, accountId?: string | null): Promise<ITalkTimeRow[]> {
     const rows = await query<{
       employee_id: number | null;
       full_name: string | null;
       tab_number: string | null;
       calls: string;
       total_sec: string;
+      in_sec: string;
+      out_sec: string;
     }>(
       `SELECT m.employee_id,
               e.full_name,
               e.tab_number,
               COUNT(*)::text AS calls,
-              COALESCE(SUM(c.duration_sec), 0)::text AS total_sec
+              COALESCE(SUM(c.duration_sec), 0)::text AS total_sec,
+              COALESCE(SUM(c.duration_sec) FILTER (WHERE c.direction = 'in'), 0)::text AS in_sec,
+              COALESCE(SUM(c.duration_sec) FILTER (WHERE c.direction = 'out'), 0)::text AS out_sec
          FROM mts_business_cdr c
          LEFT JOIN mts_business_number_map m ON m.msisdn_hash = c.msisdn_hash
          LEFT JOIN employees e ON e.id = m.employee_id
         WHERE c.started_at >= $1::date
           AND c.started_at < ($2::date + INTERVAL '1 day')
+          AND ($3::uuid IS NULL OR c.account_id = $3::uuid)
         GROUP BY m.employee_id, e.full_name, e.tab_number
         ORDER BY SUM(c.duration_sec) DESC NULLS LAST`,
-      [from, to],
+      [from, to, accountId ?? null],
     );
     return rows.map(r => ({
       employeeId: r.employee_id,
@@ -343,6 +362,42 @@ class MtsBusinessCdrService {
       employeeTabNumber: r.tab_number,
       calls: Number(r.calls),
       totalSeconds: Number(r.total_sec),
+      inSeconds: Number(r.in_sec),
+      outSeconds: Number(r.out_sec),
+    }));
+  }
+
+  /** Сводка по лицевым счетам за период: звонки/время/кол-во номеров на аккаунт. */
+  async getAccountsSummary(from: string, to: string): Promise<IAccountSummaryRow[]> {
+    const rows = await query<{
+      account_id: string | null;
+      label: string | null;
+      account_number: string | null;
+      calls: string;
+      total_sec: string;
+      numbers: string;
+    }>(
+      `SELECT c.account_id,
+              a.label,
+              a.account_number,
+              COUNT(*)::text AS calls,
+              COALESCE(SUM(c.duration_sec), 0)::text AS total_sec,
+              COUNT(DISTINCT c.msisdn_hash)::text AS numbers
+         FROM mts_business_cdr c
+         LEFT JOIN mts_business_accounts a ON a.id = c.account_id
+        WHERE c.started_at >= $1::date
+          AND c.started_at < ($2::date + INTERVAL '1 day')
+        GROUP BY c.account_id, a.label, a.account_number
+        ORDER BY SUM(c.duration_sec) DESC NULLS LAST`,
+      [from, to],
+    );
+    return rows.map(r => ({
+      accountId: r.account_id,
+      label: r.label,
+      accountNumber: r.account_number,
+      calls: Number(r.calls),
+      totalSeconds: Number(r.total_sec),
+      numbers: Number(r.numbers),
     }));
   }
 }

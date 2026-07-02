@@ -47,6 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_mts_business_requests_status
 CREATE TABLE IF NOT EXISTS mts_business_cdr (
   id                BIGSERIAL PRIMARY KEY,
   dedup_hash        TEXT NOT NULL UNIQUE,
+  account_id        UUID REFERENCES mts_business_accounts(id) ON DELETE SET NULL, -- лицевой счёт (для дашбордов по ЛС)
   msisdn_hash       TEXT,                    -- хэш собственного номера (не ПДн)
   msisdn_enc        TEXT,                    -- зашифрованный собственный номер
   peer_number_enc   TEXT,                    -- зашифрованный номер собеседника
@@ -62,6 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_mts_business_cdr_msisdn_time
   ON mts_business_cdr (msisdn_hash, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mts_business_cdr_started
   ON mts_business_cdr (started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mts_business_cdr_account_time
+  ON mts_business_cdr (account_id, started_at DESC);
 
 -- 3. Привязка номера (MSISDN) → сотрудник FOT. Ключ — хэш номера; сам номер
 --    хранится зашифрованным.
