@@ -209,7 +209,7 @@ const OrderSection: FC = () => {
   return (
     <section className={styles.card}>
       <h2 className={styles.cardTitle}>Заказать детализацию</h2>
-      <p className={styles.hint}>Документ формируется как файл и уходит на email. Затем загрузите его ниже — система посчитает время разговоров.</p>
+      <p className={styles.hint}>Документ формируется как файл и уходит на email. Если настроен автозабор с почты, файл подтянется автоматически; иначе загрузите его ниже — система посчитает время разговоров.</p>
       <div className={styles.row}>
         <div className={styles.field}>
           <label className={styles.label}>Аккаунт</label>
@@ -242,7 +242,7 @@ const OrderSection: FC = () => {
       </div>
       <div className={styles.field}>
         <label className={styles.label}>Email для документа</label>
-        <input className={styles.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="mailbox@example.com" />
+        <input className={styles.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="пусто — служебный ящик автозабора" />
       </div>
       <div className={styles.actions}>
         <button className={styles.btn} onClick={onOrder} disabled={order.isPending || active.length === 0}>Заказать (нужен 2FA)</button>

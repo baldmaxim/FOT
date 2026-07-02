@@ -10,6 +10,7 @@ import { MtsBusinessAuthError } from '../services/mts-business-auth.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { query, execute, queryOne } from '../config/postgres.js';
 import { encryptionService } from '../services/encryption.service.js';
+import { env } from '../config/env.js';
 
 // МТС «Бизнес» — детализация звонков (время разговоров). Мультиаккаунт (несколько
 // API/лицевых счетов). Безопасность как в /mts: ошибки апстрима без тела (ПДн),
@@ -148,12 +149,16 @@ export const mtsBusinessController = {
         res.status(400).json({ success: false, error: 'Даты периода должны быть в формате YYYY-MM-DD' });
         return;
       }
-      if (!deliveryAddress || !deliveryAddress.includes('@')) {
+      // Пустой email → служебный ящик автозабора (IMAP), чтобы файл подтянулся сам.
+      const fallbackDelivery = env.MTS_BUSINESS_DELIVERY_EMAIL
+        || (env.MTS_BUSINESS_IMAP_USER?.includes('@') ? env.MTS_BUSINESS_IMAP_USER : undefined);
+      const delivery = (deliveryAddress || '').trim() || fallbackDelivery || '';
+      if (!delivery.includes('@')) {
         res.status(400).json({ success: false, error: 'Укажите корректный email для доставки документа' });
         return;
       }
 
-      const input: IMtsBusinessOrderInput = { targets: list, dateFrom, dateTo, deliveryAddress };
+      const input: IMtsBusinessOrderInput = { targets: list, dateFrom, dateTo, deliveryAddress: delivery };
       const { messageId } = scopeVal === 'account'
         ? await mtsBusinessDataService.orderCallDetailByAccount(accountId, input)
         : await mtsBusinessDataService.orderCallDetailByMsisdn(accountId, input);

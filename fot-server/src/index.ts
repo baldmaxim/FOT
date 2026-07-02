@@ -20,6 +20,7 @@ import { startContractorPassSyncScheduler, stopContractorPassSyncScheduler } fro
 import { startMtsLocationPoller, stopMtsLocationPoller } from './services/mts-location-poller.service.js';
 import { startMtsGeofenceMonitor, stopMtsGeofenceMonitor } from './services/mts-geofence-monitor.service.js';
 import { startMtsBusinessStatusPoller, stopMtsBusinessStatusPoller } from './services/mts-business-status-poller.service.js';
+import { startMtsBusinessMailIngest, stopMtsBusinessMailIngest } from './services/mts-business-mail-ingest.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
 import { getPresenceByObject } from './services/skud-presence-by-object.service.js';
@@ -104,6 +105,7 @@ httpServer.listen(PORT, HOST, () => {
   startMtsLocationPoller();
   startMtsGeofenceMonitor();
   startMtsBusinessStatusPoller();
+  startMtsBusinessMailIngest();
   void aiReceiptRecognitionService.resumePendingRecognitions().then(count => {
     if (count > 0) console.log(`[ai-receipt-recognition] возобновлено задач: ${count}`);
   });
@@ -135,7 +137,7 @@ const gracefulShutdown = (signal: string): void => {
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopDismissalScheduler,
     stopContractorPassSyncScheduler, stopMtsLocationPoller, stopMtsGeofenceMonitor,
-    stopMtsBusinessStatusPoller,
+    stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest,
   ];
   for (const stop of stoppers) {
     try {

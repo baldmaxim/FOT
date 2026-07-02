@@ -75,6 +75,24 @@ const envSchema = z.object({
   MTS_BUSINESS_API_PASSWORD: optionalString,
   // Такт поллера статусов «висящих» заявок детализации. По умолчанию 5 минут.
   MTS_BUSINESS_STATUS_POLL_MS: z.string().regex(/^\d+$/).default('300000'),
+  // IMAP-автозабор писем с детализацией («онлайн» без ручной загрузки):
+  // deliveryAddress заказа указывает на служебный ящик, поллер забирает письмо,
+  // достаёт XML/XLS (вложение или ссылку) и прогоняет через тот же конвейер,
+  // что и ручная загрузка. Хост не задан → автозабор выключен.
+  MTS_BUSINESS_IMAP_HOST: optionalString,
+  MTS_BUSINESS_IMAP_PORT: z.string().regex(/^\d+$/).default('993'),
+  MTS_BUSINESS_IMAP_SECURE: z.string().default('true'),
+  MTS_BUSINESS_IMAP_USER: optionalString,
+  MTS_BUSINESS_IMAP_PASSWORD: optionalString,
+  MTS_BUSINESS_IMAP_MAILBOX: z.string().default('INBOX'),
+  MTS_BUSINESS_MAIL_POLL_MS: z.string().regex(/^\d+$/).default('300000'),
+  // Фильтр отправителя (подстрока адреса From) и хосты-суффиксы, с которых
+  // разрешено скачивать файл по ссылке из письма (через запятую).
+  MTS_BUSINESS_MAIL_FROM_FILTER: z.string().default('mts.ru'),
+  MTS_BUSINESS_MAIL_LINK_HOSTS: z.string().default('mts.ru'),
+  // Email доставки по умолчанию при заказе детализации (если в форме пусто).
+  // Не задан → берётся MTS_BUSINESS_IMAP_USER, если он похож на email.
+  MTS_BUSINESS_DELIVERY_EMAIL: optionalString,
 
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,
