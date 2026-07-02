@@ -4,7 +4,7 @@ import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   useMtsBusinessAccounts,
   useMtsBusinessRequests,
-  useMtsBusinessNumberMap,
+  useMtsBusinessImportedNumbers,
   useMtsBusinessReport,
   useMtsBusinessAccountsSummary,
   useCreateMtsBusinessAccount,
@@ -16,6 +16,7 @@ import {
   useSetMtsBusinessNumberMap,
 } from '../../hooks/useMtsBusinessData';
 import { mtsBusinessService, type IMtsBusinessAccount } from '../../services/mtsBusinessService';
+import { EmployeeFioPicker } from '../mts/EmployeeFioPicker';
 import styles from './MtsBusinessPage.module.css';
 
 const errText = (e: unknown, fallback: string): string => (e instanceof ApiError ? e.message : fallback);
@@ -333,62 +334,94 @@ const UploadSection: FC = () => {
   );
 };
 
-// ================= Привязка номеров =================
+// ================= Импортированные номера: привязка к сотрудникам =================
 const NumberMapSection: FC = () => {
-  const map = useMtsBusinessNumberMap(true);
+  const imported = useMtsBusinessImportedNumbers(true);
   const setMap = useSetMtsBusinessNumberMap();
-  const [msisdn, setMsisdn] = useState('');
-  const [employeeId, setEmployeeId] = useState('');
+  const [manualMsisdn, setManualMsisdn] = useState('');
   const [msg, setMsg] = useState<Msg>(null);
-  const rows = map.data ?? [];
+  const rows = imported.data ?? [];
 
-  const onAdd = async (): Promise<void> => {
+  const link = async (msisdn: string, employeeId: number | null): Promise<void> => {
     setMsg(null);
-    if (!msisdn.trim()) { setMsg({ ok: false, text: 'Укажите номер' }); return; }
-    const empId = employeeId.trim() ? Number(employeeId.trim()) : null;
-    if (employeeId.trim() && !Number.isFinite(empId)) { setMsg({ ok: false, text: 'ID сотрудника — число' }); return; }
     try {
-      await setMap.mutateAsync({ msisdn: msisdn.trim(), employeeId: empId });
-      setMsisdn(''); setEmployeeId('');
-      setMsg({ ok: true, text: 'Привязка сохранена' });
+      await setMap.mutateAsync({ msisdn, employeeId });
+      setMsg({ ok: true, text: employeeId != null ? 'Привязка сохранена' : 'Привязка снята' });
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка сохранения привязки') });
+      setMsg({ ok: false, text: errText(e, 'Ошибка сохранения привязки (возможно нужен 2FA)') });
     }
   };
 
+  const fmtLast = (iso: string | null): string => iso
+    ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '—';
+
   return (
     <section className={styles.card}>
-      <h2 className={styles.cardTitle}>Привязка номеров к сотрудникам</h2>
-      <div className={styles.row}>
-        <div className={styles.field}>
-          <label className={styles.label}>Номер</label>
-          <input className={styles.input} type="text" value={msisdn} onChange={e => setMsisdn(e.target.value)} placeholder="79001234567" />
-        </div>
-        <div className={styles.field}>
-          <label className={styles.label}>ID сотрудника (пусто — снять)</label>
-          <input className={styles.input} type="text" value={employeeId} onChange={e => setEmployeeId(e.target.value)} placeholder="123" />
-        </div>
-        <div className={styles.field} style={{ justifyContent: 'flex-end' }}>
-          <button className={styles.btn} onClick={onAdd} disabled={setMap.isPending}>Сохранить (2FA)</button>
-        </div>
-      </div>
-      {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
+      <h2 className={styles.cardTitle}>Импортированные номера — привязка к сотрудникам</h2>
+      <p className={styles.hint}>Все свои номера из загруженных детализаций. Найдите сотрудника по ФИО в строке номера — его время разговоров появится в отчёте «По сотрудникам». Сохранение требует 2FA.</p>
+      {imported.isLoading && <p className={styles.hint}>Загрузка…</p>}
+      {!imported.isLoading && rows.length === 0 && (
+        <p className={styles.hint}>Номеров пока нет — загрузите детализацию в разделе выше.</p>
+      )}
       {rows.length > 0 && (
-        <div className={styles.tableWrap} style={{ marginTop: 8 }}>
+        <div className={styles.tableWrap}>
           <table className={styles.table}>
-            <thead><tr><th>Номер</th><th>Сотрудник</th><th>Таб. №</th></tr></thead>
+            <thead><tr><th>Номер</th><th>Звонки</th><th>Время</th><th>Последний звонок</th><th>Сотрудник</th><th>Привязать</th></tr></thead>
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.msisdn ?? `row-${i}`}>
                   <td>{r.msisdn ?? '—'}</td>
-                  <td>{r.employeeFullName ?? <span className={`${styles.badge} ${styles.badgeMuted}`}>не привязан</span>}</td>
-                  <td>{r.employeeTabNumber ?? '—'}</td>
+                  <td>{r.calls}</td>
+                  <td>{fmtDur(r.totalSeconds)}</td>
+                  <td>{fmtLast(r.lastCallAt)}</td>
+                  <td>
+                    {r.employeeFullName
+                      ? <>{r.employeeFullName}{r.employeeTabNumber ? ` (таб. ${r.employeeTabNumber})` : ''}</>
+                      : <span className={`${styles.badge} ${styles.badgeMuted}`}>не привязан</span>}
+                  </td>
+                  <td>
+                    {r.msisdn != null && (
+                      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                        <EmployeeFioPicker
+                          disabled={setMap.isPending}
+                          placeholder={r.employeeId != null ? 'Сменить…' : 'Поиск по ФИО…'}
+                          onSelect={id => { void link(r.msisdn as string, id); }}
+                        />
+                        {r.employeeId != null && (
+                          <button
+                            className={styles.btnSecondary}
+                            onClick={() => { void link(r.msisdn as string, null); }}
+                            disabled={setMap.isPending}
+                          >
+                            Снять
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+      <div className={styles.row} style={{ marginTop: 8 }}>
+        <div className={styles.field}>
+          <label className={styles.label}>Номер вне списка</label>
+          <input className={styles.input} type="text" value={manualMsisdn} onChange={e => setManualMsisdn(e.target.value)} placeholder="79001234567" />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Сотрудник</label>
+          <EmployeeFioPicker
+            disabled={setMap.isPending || !manualMsisdn.trim()}
+            onSelect={id => {
+              void link(manualMsisdn.trim(), id).then(() => setManualMsisdn(''));
+            }}
+          />
+        </div>
+      </div>
+      {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
     </section>
   );
 };

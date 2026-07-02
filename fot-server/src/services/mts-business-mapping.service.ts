@@ -14,6 +14,16 @@ export interface IMtsBusinessNumberMapRow {
   linkedAt: string | null;
 }
 
+export interface IMtsBusinessImportedNumberRow {
+  msisdn: string | null;
+  calls: number;
+  totalSeconds: number;
+  lastCallAt: string | null;
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+}
+
 class MtsBusinessMappingService {
   async getNumberMap(): Promise<IMtsBusinessNumberMapRow[]> {
     const rows = await query<{
@@ -34,6 +44,45 @@ class MtsBusinessMappingService {
       employeeFullName: r.full_name,
       employeeTabNumber: r.tab_number,
       linkedAt: r.linked_at,
+    }));
+  }
+
+  /**
+   * Импортированные номера: все уникальные свои номера из загруженных CDR со
+   * статистикой и текущей привязкой — источник для ручной связи с сотрудником.
+   */
+  async getImportedNumbers(): Promise<IMtsBusinessImportedNumberRow[]> {
+    const rows = await query<{
+      msisdn_enc: string | null;
+      calls: string;
+      total_sec: string;
+      last_call_at: string | null;
+      employee_id: number | null;
+      full_name: string | null;
+      tab_number: string | null;
+    }>(
+      `SELECT MIN(c.msisdn_enc) AS msisdn_enc,
+              COUNT(*)::text AS calls,
+              COALESCE(SUM(c.duration_sec), 0)::text AS total_sec,
+              MAX(c.started_at) AS last_call_at,
+              m.employee_id,
+              e.full_name,
+              e.tab_number
+         FROM mts_business_cdr c
+         LEFT JOIN mts_business_number_map m ON m.msisdn_hash = c.msisdn_hash
+         LEFT JOIN employees e ON e.id = m.employee_id
+        WHERE c.msisdn_hash IS NOT NULL
+        GROUP BY c.msisdn_hash, m.employee_id, e.full_name, e.tab_number
+        ORDER BY COALESCE(SUM(c.duration_sec), 0) DESC`,
+    );
+    return rows.map(r => ({
+      msisdn: encryptionService.decryptField(r.msisdn_enc),
+      calls: Number(r.calls),
+      totalSeconds: Number(r.total_sec),
+      lastCallAt: r.last_call_at,
+      employeeId: r.employee_id,
+      employeeFullName: r.full_name,
+      employeeTabNumber: r.tab_number,
     }));
   }
 

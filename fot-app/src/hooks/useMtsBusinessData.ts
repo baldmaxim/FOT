@@ -4,6 +4,7 @@ import { mtsBusinessService } from '../services/mtsBusinessService';
 export const getMtsBusinessAccountsKey = () => ['mts-business', 'accounts'] as const;
 export const getMtsBusinessRequestsKey = () => ['mts-business', 'requests'] as const;
 export const getMtsBusinessNumberMapKey = () => ['mts-business', 'number-map'] as const;
+export const getMtsBusinessImportedNumbersKey = () => ['mts-business', 'imported-numbers'] as const;
 export const getMtsBusinessReportKey = (from: string, to: string, accountId?: string) =>
   ['mts-business', 'report', from, to, accountId ?? 'all'] as const;
 export const getMtsBusinessAccountsSummaryKey = (from: string, to: string) =>
@@ -26,6 +27,13 @@ export const useMtsBusinessNumberMap = (enabled: boolean) => useQuery({
   queryKey: getMtsBusinessNumberMapKey(),
   queryFn: () => mtsBusinessService.getNumberMap(),
   staleTime: 60_000,
+  enabled,
+});
+
+export const useMtsBusinessImportedNumbers = (enabled: boolean) => useQuery({
+  queryKey: getMtsBusinessImportedNumbersKey(),
+  queryFn: () => mtsBusinessService.getImportedNumbers(),
+  staleTime: 30_000,
   enabled,
 });
 
@@ -100,6 +108,7 @@ export const useUploadMtsBusinessDetalization = () => {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
       void qc.invalidateQueries({ queryKey: ['mts-business', 'accounts-summary'] });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
     },
   });
 };
@@ -111,6 +120,7 @@ export const useSetMtsBusinessNumberMap = () => {
       mtsBusinessService.setNumberMap(data),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: getMtsBusinessNumberMapKey() });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
       void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
     },
   });

@@ -271,6 +271,15 @@ export const mtsBusinessController = {
     }
   },
 
+  /** Импортированные номера из CDR (статистика + привязка) для ручной связи. */
+  async getImportedNumbers(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      res.json({ success: true, data: await mtsBusinessMappingService.getImportedNumbers() });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения импортированных номеров');
+    }
+  },
+
   async setNumberMap(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { msisdn, employeeId } = req.body as { msisdn?: string; employeeId?: number | null };

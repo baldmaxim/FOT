@@ -35,6 +35,16 @@ export interface IMtsBusinessNumberMapRow {
   linkedAt: string | null;
 }
 
+export interface IMtsBusinessImportedNumberRow {
+  msisdn: string | null;
+  calls: number;
+  totalSeconds: number;
+  lastCallAt: string | null;
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+}
+
 export interface IMtsBusinessTalkTimeRow {
   employeeId: number | null;
   employeeFullName: string | null;
@@ -139,6 +149,11 @@ export const mtsBusinessService = {
   // === Привязка номеров ===
   getNumberMap: async (): Promise<IMtsBusinessNumberMapRow[]> => {
     const res = await apiClient.get<ApiResponse<IMtsBusinessNumberMapRow[]>>('/mts-business/number-map');
+    return res.data;
+  },
+
+  getImportedNumbers: async (): Promise<IMtsBusinessImportedNumberRow[]> => {
+    const res = await apiClient.get<ApiResponse<IMtsBusinessImportedNumberRow[]>>('/mts-business/number-map/imported');
     return res.data;
   },
 
