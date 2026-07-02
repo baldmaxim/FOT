@@ -313,6 +313,22 @@
   cursor: default;
 }
 
+/* Вкладка «Отпуска»: до нажатия кнопка «Ознакомлен» оранжевая (после — зелёная плашка .lrm-hr-ack).
+   Модификатор, чтобы не задеть базовую .lrm-ack-btn на карточке руководителя во вкладке «Заявления». */
+.lrm-ack-btn.lrm-ack-btn--pending {
+  background: rgba(249, 115, 22, 0.15);
+  color: #ea580c;
+}
+
+.lrm-ack-btn.lrm-ack-btn--pending:hover:not(:disabled) {
+  background: rgba(249, 115, 22, 0.25);
+}
+
+/* Отступ под-вкладок «Не ознакомлен / Ознакомлен» над списком отделов (вкладка «Отпуска»). */
+.lrm-subtabs {
+  margin-bottom: 12px;
+}
+
 .lrm-action-row {
   display: flex;
   gap: 8px;

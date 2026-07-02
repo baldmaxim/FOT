@@ -56,10 +56,17 @@ export const VacationsManagePage: FC = () => {
   const [preview, setPreview] = useState<IPreviewState | null>(null);
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
   const [acking, setAcking] = useState<Set<number>>(new Set());
+  // Под-вкладки: «Не ознакомлен» (hr_acknowledged_at пусто) / «Ознакомлен».
+  const [ackFilter, setAckFilter] = useState<'unacked' | 'acked'>('unacked');
+
+  const filtered = useMemo(
+    () => requests.filter(r => (ackFilter === 'acked' ? !!r.hr_acknowledged_at : !r.hr_acknowledged_at)),
+    [requests, ackFilter],
+  );
 
   const grouped = useMemo(() => {
     const map = new Map<string, ILeaveRequest[]>();
-    for (const r of requests) {
+    for (const r of filtered) {
       const key = r.department_name?.trim() || NO_DEPARTMENT_KEY;
       const list = map.get(key) ?? [];
       list.push(r);
@@ -70,7 +77,7 @@ export const VacationsManagePage: FC = () => {
       if (b === NO_DEPARTMENT_KEY) return -1;
       return a.localeCompare(b, 'ru');
     });
-  }, [requests]);
+  }, [filtered]);
 
   useEffect(() => {
     if (grouped.length > 2) {
@@ -187,16 +194,15 @@ export const VacationsManagePage: FC = () => {
         <div className="lrm-card-actions" onClick={stop}>
           {isAcked ? (
             <div className="lrm-hr-ack">
-              <CheckCircle size={15} /> Отдел кадров ознакомлен
-              {r.hr_acknowledged_at ? ` · ${formatDate(r.hr_acknowledged_at)}` : ''}
+              <CheckCircle size={15} /> Ознакомлен
             </div>
           ) : (
             <button
-              className="lrm-ack-btn"
+              className="lrm-ack-btn lrm-ack-btn--pending"
               disabled={isAcking}
               onClick={() => handleAcknowledge(r.id)}
             >
-              <UserCheck size={14} /> {isAcking ? 'Отмечаем…' : 'Ознакомиться'}
+              <UserCheck size={14} /> {isAcking ? 'Отмечаем…' : 'Ознакомлен'}
             </button>
           )}
         </div>
@@ -215,8 +221,28 @@ export const VacationsManagePage: FC = () => {
         ) : requests.length === 0 ? (
           <div className="lrm-empty">Нет отпусков</div>
         ) : (
-          <div className="lrm-list">
-            {grouped.map(([department, items]) => {
+          <>
+            <div className="lrm-filter lrm-subtabs">
+              <button
+                className={`lrm-filter-btn ${ackFilter === 'unacked' ? 'active' : ''}`}
+                onClick={() => setAckFilter('unacked')}
+              >
+                Не ознакомлен
+              </button>
+              <button
+                className={`lrm-filter-btn ${ackFilter === 'acked' ? 'active' : ''}`}
+                onClick={() => setAckFilter('acked')}
+              >
+                Ознакомлен
+              </button>
+            </div>
+            {grouped.length === 0 ? (
+              <div className="lrm-empty">
+                {ackFilter === 'acked' ? 'Нет ознакомленных отпусков' : 'Все отпуска обработаны'}
+              </div>
+            ) : (
+              <div className="lrm-list">
+                {grouped.map(([department, items]) => {
               const isCollapsed = collapsedDepts.has(department);
               return (
                 <div
@@ -239,7 +265,9 @@ export const VacationsManagePage: FC = () => {
                 </div>
               );
             })}
-          </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
