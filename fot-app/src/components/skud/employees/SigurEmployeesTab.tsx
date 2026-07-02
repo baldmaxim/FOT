@@ -130,6 +130,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const [deletingDepartments, setDeletingDepartments] = useState(false);
   const [departmentContextMenu, setDepartmentContextMenu] = useState<DepartmentContextMenuState>(null);
   const [employeeDialog, setEmployeeDialog] = useState<EmployeeDialogState>(null);
+  const [triedSubmitEmployee, setTriedSubmitEmployee] = useState(false);
   const [employeeMoveDialog, setEmployeeMoveDialog] = useState<EmployeeMoveDialogState>(null);
   const [bulkAccessPointsEmployeeIds, setBulkAccessPointsEmployeeIds] = useState<number[] | null>(null);
   const [newEmployeePositionName, setNewEmployeePositionName] = useState('');
@@ -551,6 +552,11 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     }
   };
 
+  const closeEmployeeDialog = () => {
+    setEmployeeDialog(null);
+    setTriedSubmitEmployee(false);
+  };
+
   const openCreateEmployeeDialog = () => {
     setEmployeeDialog({
       mode: 'create',
@@ -562,6 +568,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       description: '',
       blocked: false,
     });
+    setTriedSubmitEmployee(false);
     setNewEmployeePositionName('');
     setEmployeeNameSuggestionsQuery('');
   };
@@ -602,6 +609,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
         description: profile.profile.description ?? '',
         blocked: profile.profile.blocked === true,
       });
+      setTriedSubmitEmployee(false);
       setEmployeeNameSuggestionsQuery('');
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Не удалось загрузить профиль сотрудника Sigur');
@@ -612,8 +620,15 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
 
   const handleSaveEmployee = async () => {
     if (!employeeDialog) return;
-    if (!employeeDialog.name.trim() || !employeeDialog.departmentId) {
-      setError('Для сотрудника нужны ФИО и отдел');
+    const missingCreate = employeeDialog.mode === 'create'
+      && (!employeeDialog.name.trim() || !employeeDialog.departmentId || !employeeDialog.positionId);
+    const missingEdit = employeeDialog.mode === 'edit'
+      && (!employeeDialog.name.trim() || !employeeDialog.departmentId);
+    if (missingCreate || missingEdit) {
+      setTriedSubmitEmployee(true);
+      setError(employeeDialog.mode === 'create'
+        ? 'Укажите ФИО, отдел и должность'
+        : 'Для сотрудника нужны ФИО и отдел');
       return;
     }
 
@@ -637,7 +652,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
             description: employeeDialog.description.trim() || null,
             blocked: employeeDialog.blocked,
           });
-      setEmployeeDialog(null);
+      closeEmployeeDialog();
       setSelectedDeptId(profile.profile.departmentId ?? Number(employeeDialog.departmentId));
       setSelectedEmployeeId(profile.sigurEmployeeId);
       setEmployeeSearch('');
@@ -1100,6 +1115,11 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const contextCanRename = contextMenuSelection.length === 1;
   const contextCanDelete = contextMenuSelection.length > 0;
 
+  const nameInvalid = !!employeeDialog && triedSubmitEmployee && !employeeDialog.name.trim();
+  const deptInvalid = !!employeeDialog && triedSubmitEmployee && !employeeDialog.departmentId;
+  const posInvalid = !!employeeDialog && triedSubmitEmployee
+    && employeeDialog.mode === 'create' && !employeeDialog.positionId;
+
   return (
     <div className="sigur-live-page">
       <div className="employees-page sigur-live-employees-layout">
@@ -1423,7 +1443,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
       )}
 
       {employeeDialog && (
-        <div className="ep-modal-overlay" onClick={() => setEmployeeDialog(null)}>
+        <div className="ep-modal-overlay" onClick={closeEmployeeDialog}>
           <div className="ep-modal ep-modal-wide" onClick={event => event.stopPropagation()}>
             <div className="ep-modal-header">
               <div className="ep-modal-heading">
@@ -1437,7 +1457,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <label>
                   ФИО
                   <input
-                    className="ep-modal-input"
+                    className={`ep-modal-input${nameInvalid ? ' ep-modal-field--error' : ''}`}
                     value={employeeDialog.name}
                     onChange={event => setEmployeeDialog(prev => prev ? { ...prev, name: event.target.value } : prev)}
                     disabled={loadingSelectedSuggestion}
@@ -1471,7 +1491,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <label>
                   Отдел
                   <select
-                    className="ep-modal-select"
+                    className={`ep-modal-select${deptInvalid ? ' ep-modal-field--error' : ''}`}
                     value={employeeDialog.departmentId}
                     onChange={event => setEmployeeDialog(prev => prev ? { ...prev, departmentId: event.target.value } : prev)}
                   >
@@ -1486,7 +1506,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <label>
                   Должность
                   <select
-                    className="ep-modal-select"
+                    className={`ep-modal-select${posInvalid ? ' ep-modal-field--error' : ''}`}
                     value={employeeDialog.positionId}
                     onChange={event => setEmployeeDialog(prev => prev ? { ...prev, positionId: event.target.value } : prev)}
                   >
@@ -1543,7 +1563,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
               </div>
             </div>
             <div className="ep-modal-footer">
-              <button className="ep-modal-btn secondary" onClick={() => setEmployeeDialog(null)}>
+              <button className="ep-modal-btn secondary" onClick={closeEmployeeDialog}>
                 Отмена
               </button>
               <button className="ep-modal-btn primary" onClick={() => void handleSaveEmployee()} disabled={savingEmployee || loadingSelectedSuggestion}>

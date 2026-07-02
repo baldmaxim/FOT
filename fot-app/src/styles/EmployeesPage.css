@@ -1085,6 +1085,12 @@
   box-shadow: 0 0 0 3px var(--primary-light);
 }
 
+.ep-modal-field--error,
+.ep-modal-field--error:focus {
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px var(--error-muted);
+}
+
 .ep-modal-select {
   cursor: pointer;
   appearance: none;
