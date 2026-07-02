@@ -195,8 +195,21 @@ const OrderSection: FC = () => {
     setMsg(null);
     const acc = accountId || active[0]?.id;
     if (!acc) { setMsg({ ok: false, text: 'Сначала добавьте аккаунт' }); return; }
-    const list = targets.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
-    if (list.length === 0) { setMsg({ ok: false, text: 'Укажите номер/лицевой счёт' }); return; }
+    let list = targets.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+    // «По лицевым счетам» с пустым полем = все номера ЛС выбранного аккаунта.
+    if (list.length === 0 && scope === 'account') {
+      const accNumber = active.find(a => a.id === acc)?.accountNumber;
+      if (accNumber) list = [accNumber];
+    }
+    if (list.length === 0) {
+      setMsg({
+        ok: false,
+        text: scope === 'account'
+          ? 'Укажите лицевой счёт (или заполните ЛС в аккаунте)'
+          : 'Укажите номера — либо выберите тип «По лицевым счетам», чтобы заказать по всем номерам ЛС разом',
+      });
+      return;
+    }
     try {
       const r = await order.mutateAsync({ accountId: acc, scope, targets: list, dateFrom, dateTo, deliveryAddress: email.trim() });
       setMsg({ ok: true, text: `Заявка создана (messageId: ${r.messageId}). Документ придёт на email.` });
@@ -234,8 +247,13 @@ const OrderSection: FC = () => {
         </div>
       </div>
       <div className={styles.field}>
-        <label className={styles.label}>{scope === 'account' ? 'Лицевые счета (через запятую)' : 'Номера 7XXXXXXXXXX (через запятую)'}</label>
-        <textarea className={styles.textarea} value={targets} onChange={e => setTargets(e.target.value)} placeholder="79001234567, 79007654321" />
+        <label className={styles.label}>{scope === 'account' ? 'Лицевые счета (через запятую; пусто — ЛС выбранного аккаунта, все его номера)' : 'Номера 7XXXXXXXXXX (через запятую)'}</label>
+        <textarea
+          className={styles.textarea}
+          value={targets}
+          onChange={e => setTargets(e.target.value)}
+          placeholder={scope === 'account' ? 'пусто — все номера лицевого счёта' : '79001234567, 79007654321'}
+        />
       </div>
       <div className={styles.field}>
         <label className={styles.label}>Email для документа</label>
