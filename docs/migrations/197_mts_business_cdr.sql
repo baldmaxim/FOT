@@ -90,10 +90,10 @@ SET label = EXCLUDED.label,
     is_active = EXCLUDED.is_active,
     updated_at = NOW();
 
--- 5. Доступ — только super_admin (как у /mts, миграция 108).
+-- 5. Доступ — только роль admin (как у /mts; роли super_admin в system_roles нет).
 INSERT INTO role_page_access (role_code, page_path, can_view, can_edit)
 VALUES
-  ('super_admin', '/mts-business', true, true)
+  ('admin', '/mts-business', true, true)
 ON CONFLICT (role_code, page_path) DO UPDATE
 SET can_view = role_page_access.can_view OR EXCLUDED.can_view,
     can_edit = role_page_access.can_edit OR EXCLUDED.can_edit;

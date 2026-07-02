@@ -5,7 +5,7 @@ import { authenticate, requireCritical2FA, requirePageAccess } from '../middlewa
 import { noStore } from '../middleware/noStore.js';
 
 // МТС «Бизнес» — детализация звонков (время разговоров). Доступ — страница
-// /mts-business (только super_admin, миграция 197). Смена настроек и заказ
+// /mts-business (только роль admin, как /mts; миграция 197). Смена настроек и заказ
 // детализации — под critical 2FA. Cache-Control: no-store на всём модуле
 // (детализация звонков — ПДн, не должна оседать в HTTP-кэше браузера).
 
