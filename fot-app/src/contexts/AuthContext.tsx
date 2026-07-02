@@ -328,7 +328,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       case 'timesheet.workflow.review':
         return state.profile?.page_access?.['/timesheet-hr']?.can_edit === true;
       case 'timesheet.workflow.monitor':
-        return state.profile?.page_access?.['/timesheet-hr']?.can_view === true;
+        // Кадровая служба (hr) видит режим «По участкам» в Табеле на чтение,
+        // хотя страницы /timesheet-hr у неё нет (см. data.scope.all выше).
+        return state.profile?.page_access?.['/timesheet-hr']?.can_view === true
+          || state.profile?.role_code === 'hr';
       case 'data.scope.all':
         // Кадровая служба (hr) видит всю организацию на чтение (как админ по данным,
         // но без админ-доступа к страницам). Зеркалит бэк resolveAccessibleDepartmentIds.
