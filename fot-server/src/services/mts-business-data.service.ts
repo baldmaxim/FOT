@@ -32,7 +32,17 @@ const toMtsDate = (isoDate: string, boundary: 'from' | 'to'): string => {
   return boundary === 'from' ? `${d}T00:00:00` : `${d}T23:59:59`;
 };
 
+// Реальный ответ заказа (проверено 02.07.2026) — МАССИВ:
+// [{ code: 200, message: "OK", request: { messageId, requests: [...] } }]
+// поэтому обходим и массивы, и обёртку request.
 const pickString = (body: unknown, keys: string[]): string | null => {
+  if (Array.isArray(body)) {
+    for (const el of body) {
+      const found = pickString(el, keys);
+      if (found) return found;
+    }
+    return null;
+  }
   if (!body || typeof body !== 'object') return null;
   const b = body as Record<string, unknown>;
   for (const k of keys) {
@@ -40,7 +50,7 @@ const pickString = (body: unknown, keys: string[]): string | null => {
     if (typeof v === 'string' && v.length > 0) return v;
     if (typeof v === 'number') return String(v);
   }
-  for (const wrap of ['data', 'result', 'response']) {
+  for (const wrap of ['data', 'result', 'response', 'request']) {
     const inner = b[wrap];
     if (inner && typeof inner === 'object') {
       const found = pickString(inner, keys);
