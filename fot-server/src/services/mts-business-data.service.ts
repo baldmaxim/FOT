@@ -60,6 +60,14 @@ const pickString = (body: unknown, keys: string[]): string | null => {
   return null;
 };
 
+/** Лог тела ответа без messageId: email маскируем, остальное усекаем. */
+const logResponseWithoutMessageId = (endpoint: string, body: unknown): void => {
+  let snippet = '';
+  try { snippet = JSON.stringify(body); } catch { snippet = String(body); }
+  snippet = snippet.replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '***@***');
+  console.error(`[mts-biz] ${endpoint}: 2xx без messageId, body: ${snippet.slice(0, 500)}`);
+};
+
 const normalizeStatus = (raw: string | null): MtsBusinessRequestStatus => {
   const s = (raw || '').toLowerCase();
   if (s.includes('complet') || s.includes('done') || s.includes('готов')) return 'completed';
@@ -85,7 +93,10 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
     };
     const resp = await this.request<unknown>('post', '/Documents/CallHistoryByMSISDN', { accountId, data: body });
     const messageId = pickString(resp, ['messageId', 'messageID', 'id', 'requestId']);
-    if (!messageId) throw new Error('МТС Бизнес: ответ заказа детализации без messageId');
+    if (!messageId) {
+      logResponseWithoutMessageId('CallHistoryByMSISDN', resp);
+      throw new Error('МТС Бизнес: ответ заказа детализации без messageId');
+    }
     return { messageId };
   }
 
@@ -99,7 +110,10 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
     };
     const resp = await this.request<unknown>('post', '/Documents/CallHistoryByAccount', { accountId, data: body });
     const messageId = pickString(resp, ['messageId', 'messageID', 'id', 'requestId']);
-    if (!messageId) throw new Error('МТС Бизнес: ответ заказа детализации без messageId');
+    if (!messageId) {
+      logResponseWithoutMessageId('CallHistoryByAccount', resp);
+      throw new Error('МТС Бизнес: ответ заказа детализации без messageId');
+    }
     return { messageId };
   }
 
