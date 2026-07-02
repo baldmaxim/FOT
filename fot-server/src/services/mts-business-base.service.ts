@@ -109,6 +109,13 @@ export class MtsBusinessServiceBase {
         | undefined;
       const code = body?.code != null ? String(body.code) : undefined;
       const message = body?.message || body?.error_description || body?.description || error.message || 'Ошибка вызова МТС Бизнес API';
+      // Тело ошибки апстрима (усечённое) — единственный источник причины,
+      // когда МТС отвечает 4xx/5xx без стандартных полей. ПДн там нет.
+      if (error.response?.data !== undefined) {
+        let snippet = '';
+        try { snippet = JSON.stringify(error.response.data); } catch { snippet = String(error.response.data); }
+        console.error(`[mts-biz] upstream ${status} body: ${snippet.slice(0, 500)}`);
+      }
       return new MtsBusinessApiError(message, status, code, body?.description);
     }
     return new MtsBusinessApiError(error instanceof Error ? error.message : String(error), 0);

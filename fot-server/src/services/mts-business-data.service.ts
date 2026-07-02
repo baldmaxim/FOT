@@ -20,12 +20,14 @@ export interface IMtsBusinessOrderInput {
   deliveryAddress: string;
 }
 
-const toMtsDate = (isoDate: string): string => {
+// По докам МТС: dateFrom — начало дня, dateTo — КОНЕЦ дня (иначе последний день
+// периода не попадает в детализацию).
+const toMtsDate = (isoDate: string, boundary: 'from' | 'to'): string => {
   const d = (isoDate || '').trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
     throw new Error(`МТС Бизнес: дата должна быть в формате YYYY-MM-DD (получено "${isoDate}")`);
   }
-  return `${d}T00:00:00Z`;
+  return boundary === 'from' ? `${d}T00:00:00Z` : `${d}T23:59:59Z`;
 };
 
 const pickString = (body: unknown, keys: string[]): string | null => {
@@ -63,8 +65,8 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
 
   async orderCallDetailByMsisdn(accountId: string, input: IMtsBusinessOrderInput): Promise<{ messageId: string }> {
     const body = {
-      dateFrom: toMtsDate(input.dateFrom),
-      dateTo: toMtsDate(input.dateTo),
+      dateFrom: toMtsDate(input.dateFrom, 'from'),
+      dateTo: toMtsDate(input.dateTo, 'to'),
       documentFormat: 'XML',
       deliveryAddress: input.deliveryAddress,
       msisdns: input.targets,
@@ -77,8 +79,8 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
 
   async orderCallDetailByAccount(accountId: string, input: IMtsBusinessOrderInput): Promise<{ messageId: string }> {
     const body = {
-      dateFrom: toMtsDate(input.dateFrom),
-      dateTo: toMtsDate(input.dateTo),
+      dateFrom: toMtsDate(input.dateFrom, 'from'),
+      dateTo: toMtsDate(input.dateTo, 'to'),
       documentFormat: 'XML',
       deliveryAddress: input.deliveryAddress,
       accounts: input.targets,
