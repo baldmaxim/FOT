@@ -199,11 +199,18 @@ class MtsBusinessCdrService {
     collectByTag(parsed, 'ds', dss);
 
     const calls: IParsedCall[] = [];
+    // ВРЕМЕННО (диагностика): собираем все встреченные значения zp/c, чтобы
+    // проверить, не несут ли они признак роуминга/стоимости звонка. Убрать
+    // после проверки.
+    const diagZp = new Set<string>();
+    const diagC = new Set<string>();
     for (const ds of dss) {
       const own = normalizeMsisdn(ds['@_n'] as string | undefined) ?? normalizeMsisdn(fallbackMsisdn);
       if (!own) continue;
       for (const it of asArray(ds.i as Record<string, unknown> | Record<string, unknown>[] | undefined)) {
         const item = it as Record<string, unknown>;
+        if (item['@_zp'] != null) diagZp.add(String(item['@_zp']));
+        if (item['@_c'] != null) diagC.add(String(item['@_c']));
         if (!VOICE_S_RE.test(String(item['@_s'] ?? ''))) continue; // только голос (Телеф.)
         const du = String(item['@_du'] ?? '');
         if (!DURATION_RE.test(du)) continue;
@@ -220,6 +227,7 @@ class MtsBusinessCdrService {
         });
       }
     }
+    console.log(`[mts-biz][diag] parseXml zp=[${[...diagZp].join(', ')}] c=[${[...diagC].join(', ')}]`);
     return calls;
   }
 
