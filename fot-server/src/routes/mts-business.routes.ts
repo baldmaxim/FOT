@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { mtsBusinessController } from '../controllers/mts-business.controller.js';
+import { mtsBusinessBillingController } from '../controllers/mts-business-billing.controller.js';
 import { authenticate, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 
@@ -68,5 +69,17 @@ router.put('/number-map', requirePageAccess('/mts-business', 'edit'), requireCri
 // Отчёт «время разговоров» по сотрудникам + сводка по лицевым счетам (дашборд)
 router.get('/report/talk-time', requirePageAccess('/mts-business', 'view'), mtsBusinessController.getTalkTimeReport);
 router.get('/report/accounts-summary', requirePageAccess('/mts-business', 'view'), mtsBusinessController.getAccountsSummary);
+
+// Баланс/начисления/неоплаченные счета (вкладка «Финансы»). Обслуживается из
+// истории — обновление данных только через /billing/refresh (edit + 2FA) и
+// ежедневный планировщик, не по каждому открытию страницы.
+router.get('/billing/summary', requirePageAccess('/mts-business', 'view'), mtsBusinessBillingController.getSummary);
+router.get('/billing/trend', requirePageAccess('/mts-business', 'view'), mtsBusinessBillingController.getTrend);
+router.post(
+  '/billing/refresh',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessBillingController.refresh,
+);
 
 export default router;

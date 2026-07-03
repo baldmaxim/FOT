@@ -34,6 +34,13 @@ export class MtsBusinessApiError extends Error {
   }
 }
 
+// 403/1010 — «Запрос не авторизован: сервис заблокирован или подписка не
+// найдена» (support.mts.ru, раздел кодов ошибок): аккаунт не подключил эту
+// функцию в тарифе. Не баг и не повод для Sentry — контроллеры должны
+// отдавать { unavailable: true }, а не 5xx.
+export const isFeatureUnavailable = (error: unknown): boolean =>
+  error instanceof MtsBusinessApiError && error.status === 403 && error.code === '1010';
+
 class MtsBusinessRequestLimiter {
   private active = 0;
   private queue: Array<() => void> = [];

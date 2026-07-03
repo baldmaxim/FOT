@@ -13,8 +13,15 @@ import {
   useUploadMtsBusinessDetalization,
   useSetMtsBusinessNumberMap,
 } from '../../hooks/useMtsBusinessData';
+import {
+  useMtsBusinessBillingSummary,
+  useMtsBusinessBillingTrend,
+  useRefreshMtsBusinessBilling,
+} from '../../hooks/useMtsBusinessBillingData';
 import { mtsBusinessService, type IMtsBusinessAccount } from '../../services/mtsBusinessService';
+import type { MtsBusinessDailyMetric } from '../../services/mtsBusinessBillingService';
 import { EmployeeFioPicker } from '../mts/EmployeeFioPicker';
+import { TrendLineChart } from './TrendLineChart';
 import styles from './MtsBusinessPage.module.css';
 
 const errText = (e: unknown, fallback: string): string => (e instanceof ApiError ? e.message : fallback);
@@ -26,6 +33,10 @@ const fmtDur = (sec: number): string => {
   const m = Math.floor((sec % 3600) / 60);
   return h > 0 ? `${h} ч ${pad(m)} м` : `${m} м ${pad(sec % 60)} с`;
 };
+const fmtLast = (iso: string | null): string => iso
+  ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+  : '—';
+const fmtMoney = (v: number | null): string => v == null ? '—' : `${v.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
 
 type Msg = { ok: boolean; text: string } | null;
 
@@ -309,10 +320,6 @@ const NumberMapSection: FC = () => {
     }
   };
 
-  const fmtLast = (iso: string | null): string => iso
-    ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
-    : '—';
-
   return (
     <section className={styles.card}>
       <h2 className={styles.cardTitle}>Импортированные номера — привязка к сотрудникам</h2>
@@ -492,19 +499,152 @@ const DashboardSection: FC = () => {
   );
 };
 
+// ================= Вкладка «Финансы» =================
+const FinanceSection: FC = () => {
+  const now = useMemo(() => new Date(), []);
+  const [from, setFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth() - 2, now.getDate())));
+  const [to, setTo] = useState(toISODate(now));
+  const [metric, setMetric] = useState<MtsBusinessDailyMetric>('balance');
+  const [accountId, setAccountId] = useState('');
+  const [msg, setMsg] = useState<Msg>(null);
+
+  const summary = useMtsBusinessBillingSummary();
+  const trend = useMtsBusinessBillingTrend(metric, from, to, accountId || undefined);
+  const refresh = useRefreshMtsBusinessBilling();
+  const accountsMeta = useMtsBusinessAccounts();
+
+  const accRows = summary.data?.accounts ?? [];
+  const empRows = summary.data?.employees ?? [];
+  const totalBalance = accRows.reduce((a, r) => a + (r.balance ?? 0), 0);
+  const totalUnpaid = accRows.reduce((a, r) => a + (r.unpaidAmount ?? 0), 0);
+  const overdueCount = accRows.filter(r => (r.unpaidAmount ?? 0) > 0).length;
+
+  const onRefresh = async (): Promise<void> => {
+    setMsg(null);
+    try {
+      const r = await refresh.mutateAsync(accountId || undefined);
+      const failed = r.results.reduce((a, x) => a + x.failed, 0);
+      setMsg({ ok: failed === 0, text: `Обновлено ЛС: ${r.results.length}${failed ? `, ошибок по части номеров: ${failed}` : ''}` });
+    } catch (e) {
+      setMsg({ ok: false, text: errText(e, 'Ошибка обновления (возможно нужен 2FA)') });
+    }
+  };
+
+  return (
+    <div className={styles.page}>
+      <section className={styles.card}>
+        <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0 }}>
+          <h2 className={styles.cardTitle} style={{ margin: 0 }}>Финансы</h2>
+          <button className={styles.btn} onClick={onRefresh} disabled={refresh.isPending}>Обновить сейчас (2FA)</button>
+        </div>
+        <div className={styles.kpiGrid}>
+          <div className={styles.kpi}><div className={styles.kpiValue}>{fmtMoney(totalBalance)}</div><div className={styles.kpiLabel}>Суммарный баланс по ЛС</div></div>
+          <div className={styles.kpi}><div className={styles.kpiValue}>{fmtMoney(totalUnpaid)}</div><div className={styles.kpiLabel}>Неоплаченные счета</div></div>
+          <div className={styles.kpi}><div className={styles.kpiValue}>{overdueCount}</div><div className={styles.kpiLabel}>ЛС с просрочкой</div></div>
+        </div>
+        {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
+      </section>
+
+      <section className={styles.card}>
+        <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0 }}>
+          <div className={styles.segment}>
+            <button className={`${styles.segBtn} ${metric === 'balance' ? styles.segBtnActive : ''}`} onClick={() => setMetric('balance')}>Баланс</button>
+            <button className={`${styles.segBtn} ${metric === 'unpaid_amount' ? styles.segBtnActive : ''}`} onClick={() => setMetric('unpaid_amount')}>Неоплаченные</button>
+          </div>
+          <select className={styles.select} style={{ maxWidth: 260 }} value={accountId} onChange={e => setAccountId(e.target.value)}>
+            <option value="">Все лицевые счета</option>
+            {(accountsMeta.data ?? []).map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
+          </select>
+        </div>
+        <div className={styles.row}>
+          <div className={styles.field}>
+            <label className={styles.label}>Период с</label>
+            <input className={styles.input} type="date" value={from} onChange={e => setFrom(e.target.value)} />
+          </div>
+          <div className={styles.field}>
+            <label className={styles.label}>по</label>
+            <input className={styles.input} type="date" value={to} onChange={e => setTo(e.target.value)} />
+          </div>
+        </div>
+        {trend.isLoading ? (
+          <p className={styles.hint}>Загрузка…</p>
+        ) : (
+          <TrendLineChart points={trend.data ?? []} formatValue={v => fmtMoney(Math.round(v))} />
+        )}
+      </section>
+
+      <section className={styles.card}>
+        <h2 className={styles.cardTitle}>По лицевым счетам</h2>
+        {summary.isLoading ? (
+          <p className={styles.hint}>Загрузка…</p>
+        ) : accRows.length === 0 ? (
+          <p className={styles.hint}>Нет данных. Нажмите «Обновить сейчас» или дождитесь ежедневного автообновления.</p>
+        ) : (
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead><tr><th>Лицевой счёт</th><th>Баланс</th><th>Кредитный лимит</th><th>Неоплаченные</th><th>Обновлено</th></tr></thead>
+              <tbody>
+                {accRows.map(r => (
+                  <tr key={r.accountId}>
+                    <td>{r.label}{r.accountNumber ? ` (${r.accountNumber})` : ''}</td>
+                    <td>{fmtMoney(r.balance)}</td>
+                    <td>{fmtMoney(r.creditLimit)}</td>
+                    <td>
+                      {(r.unpaidAmount ?? 0) > 0
+                        ? <span className={`${styles.badge} ${styles.badgeErr}`}>{fmtMoney(r.unpaidAmount)}</span>
+                        : fmtMoney(r.unpaidAmount)}
+                    </td>
+                    <td>{fmtLast(r.capturedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className={styles.card}>
+        <h2 className={styles.cardTitle}>По сотрудникам</h2>
+        {summary.isLoading ? (
+          <p className={styles.hint}>Загрузка…</p>
+        ) : empRows.length === 0 ? (
+          <p className={styles.hint}>Нет данных — привяжите номера к сотрудникам на вкладке «Администрирование».</p>
+        ) : (
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead><tr><th>Сотрудник</th><th>Баланс</th><th>Начисления</th><th>Обновлено</th></tr></thead>
+              <tbody>
+                {empRows.map((r, i) => (
+                  <tr key={r.employeeId ?? `unmapped-${i}`}>
+                    <td>{r.employeeFullName ?? 'Не привязан'}{r.employeeTabNumber ? ` (таб. ${r.employeeTabNumber})` : ''}</td>
+                    <td>{fmtMoney(r.balance)}</td>
+                    <td>{fmtMoney(r.chargesAmount)}</td>
+                    <td>{fmtLast(r.capturedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+};
+
 // ================= Страница с вкладками =================
 export const MtsBusinessPage: FC = () => {
-  const [tab, setTab] = useState<'main' | 'admin'>('main');
+  const [tab, setTab] = useState<'main' | 'finance' | 'admin'>('main');
   return (
     <div className={styles.page}>
       <div className={styles.tabs}>
         <button className={`${styles.tab} ${tab === 'main' ? styles.tabActive : ''}`} onClick={() => setTab('main')}>Основное</button>
+        <button className={`${styles.tab} ${tab === 'finance' ? styles.tabActive : ''}`} onClick={() => setTab('finance')}>Финансы</button>
         <button className={`${styles.tab} ${tab === 'admin' ? styles.tabActive : ''}`} onClick={() => setTab('admin')}>Администрирование</button>
       </div>
 
-      {tab === 'main' ? (
-        <DashboardSection />
-      ) : (
+      {tab === 'main' && <DashboardSection />}
+      {tab === 'finance' && <FinanceSection />}
+      {tab === 'admin' && (
         <>
           <AccountsSection />
           <SyncSection />

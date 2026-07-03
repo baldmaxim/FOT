@@ -99,6 +99,11 @@ const envSchema = z.object({
   MTS_BUSINESS_CDR_DAILY_TARGET_HOUR_MSK: z.string().regex(/^\d+$/).default('4'),
   MTS_BUSINESS_CDR_DAILY_WINDOW_DAYS: z.string().regex(/^\d+$/).default('3'),
 
+  // Ежедневный снимок баланса/начислений/неоплаченных счетов (вкладка «Финансы»).
+  // Позже CDR-планировщика по умолчанию — чтобы не конкурировать за rate-gate
+  // одного аккаунта в одно и то же окно.
+  MTS_BUSINESS_METRICS_DAILY_TARGET_HOUR_MSK: z.string().regex(/^\d+$/).default('5'),
+
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,
   VAPID_PRIVATE_KEY: optionalString,
