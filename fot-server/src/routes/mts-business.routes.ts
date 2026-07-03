@@ -37,6 +37,14 @@ router.post(
   mtsBusinessController.orderDetalization,
 );
 router.get('/detalization/requests', requirePageAccess('/mts-business', 'view'), mtsBusinessController.listRequests);
+
+// Ручной бэкафилл за период — синхронно, без email (Bills/BillingStatementExtdByMSISDN).
+router.post(
+  '/detalization/fetch-sync',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessController.fetchSyncDetalization,
+);
 router.post(
   '/detalization/requests/:id/refresh-status',
   requirePageAccess('/mts-business', 'view'),

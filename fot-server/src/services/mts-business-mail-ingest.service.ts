@@ -31,19 +31,24 @@ const LEASE_KEY = 'mts_business_mail_ingest';
 const LEASE_TTL_SECONDS = 300;
 const STARTUP_DELAY_MS = 60_000;
 const MAX_MESSAGES_PER_TICK = 10;
-const MAX_SOURCE_BYTES = 30 * 1024 * 1024; // сырое письмо целиком
-const MAX_FILE_BYTES = 25 * 1024 * 1024;   // как у multer в роутах модуля
+// Сырое MIME-письмо: base64-вложение крупнее исходного файла на ~37% + заголовки.
+const MAX_SOURCE_BYTES = 420 * 1024 * 1024;
+const MAX_FILE_BYTES = 300 * 1024 * 1024; // как у multer в роутах модуля (реальный XML по ЛС — до 115 МБ)
 const MAX_LINKS_PER_MESSAGE = 3;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+// Реальный messageId ответа МТС — не UUID, а hex16_счётчик (пример c1ba2d26d5999fb4_1).
+const MTS_MESSAGE_ID_RE = /[0-9a-f]{16}_\d+/gi;
 
-/** Все UUID из текста (нижний регистр, без дублей) — кандидаты в messageId заявки. */
+/** Все UUID/messageId МТС из текста (нижний регистр, без дублей) — кандидаты в messageId заявки. */
 export const extractUuids = (text: string): string[] => {
   const out: string[] = [];
-  for (const m of text.matchAll(UUID_RE)) {
-    const v = m[0].toLowerCase();
-    if (!out.includes(v)) out.push(v);
+  for (const re of [UUID_RE, MTS_MESSAGE_ID_RE]) {
+    for (const m of text.matchAll(re)) {
+      const v = m[0].toLowerCase();
+      if (!out.includes(v)) out.push(v);
+    }
   }
   return out;
 };

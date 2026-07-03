@@ -89,6 +89,7 @@ cd fot-data-api && uvicorn app.main:app --reload --port 4001
 - **patent-expiry-reminder**: уведомления об истечении патентов.
 - **daily-tasks-reminder**: напоминания о суточных задачах. Тик каждые 5 мин, активная отправка 16:50–17:00 МСК.
 - **ai-receipt-recognition**: возобновление очереди распознавания чеков при старте.
+- **mts-business-cdr-daily-scheduler**: ежедневное автообновление детализации звонков МТС Бизнес через синхронный Bills API (без email/IMAP), раз в сутки после заданного часа МСК, с catchup-окном; per-аккаунт rate-limit гейт (60/300 запросов в мин).
 
 ## Socket.IO
 

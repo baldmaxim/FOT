@@ -122,6 +122,55 @@ describe('МТС Бизнес: парсинг XML детализации (реа
   });
 });
 
+describe('МТС Бизнес: парсинг синхронного JSON-ответа Bills/BillingStatementExtdByMSISDN', () => {
+  // Фрагмент реального ответа (живой вызов 02.07.2026, ЛС 277308204324): голос —
+  // networkEvent='call' с factUnitCode='SECOND'; трафик/SMS/«Удержание вызова»
+  // (networkEvent='other' с тем же categoryId='local_call') — не звонки.
+  const usages = [
+    {
+      date: '2026-07-01T09:24:05+03:00',
+      Characteristics: { direction: 'I', networkEvent: 'call', factUnits: 77, factUnitCode: 'SECOND', calledMsisdn: '79256513945', categoryId: 'local_call' },
+    },
+    {
+      date: '2026-07-01T09:25:51+03:00',
+      Characteristics: { direction: 'O', networkEvent: 'call', factUnits: 25, factUnitCode: 'SECOND', calledMsisdn: '79686159766', categoryId: 'local_call' },
+    },
+    {
+      date: '2026-07-01T03:29:55+03:00',
+      Characteristics: { direction: 'O', networkEvent: 'traffic', factUnits: 33536000, factUnitCode: 'BYTE', calledMsisdn: 'internet.mts.ru', categoryId: 'mobile_internet' },
+    },
+    {
+      date: '2026-07-01T09:00:00+03:00',
+      Characteristics: { direction: 'O', networkEvent: 'sms', factUnits: 1, factUnitCode: 'FACT', calledMsisdn: '79001112233', categoryId: 'sms' },
+    },
+    {
+      date: '2026-07-01T10:31:54+03:00',
+      Characteristics: { direction: 'O', networkEvent: 'other', factUnits: 1, factUnitCode: 'FACT', calledMsisdn: 'Call_holding', categoryId: 'local_call' },
+    },
+  ];
+
+  it('берёт только networkEvent=call, пропускает трафик/SMS/«Удержание вызова»', () => {
+    const calls = mtsBusinessCdrService.parseBillingStatementResponse({ Usages: usages }, '79001234567');
+    expect(calls).toHaveLength(2);
+    expect(calls.map(c => c.durationSec).sort((a, b) => a - b)).toEqual([25, 77]);
+  });
+
+  it('собственный номер — из аргумента, собеседник/направление — из Characteristics', () => {
+    const calls = mtsBusinessCdrService.parseBillingStatementResponse({ Usages: usages }, '+7 900 123 45 67');
+    expect(calls.every(c => c.msisdn === '79001234567')).toBe(true);
+    const incoming = calls.find(c => c.direction === 'in');
+    expect(incoming?.peer).toBe('79256513945');
+    expect(incoming?.durationSec).toBe(77);
+    expect(calls.find(c => c.direction === 'out')?.peer).toBe('79686159766');
+  });
+
+  it('пустой/битый ответ → пустой список без исключения', () => {
+    expect(mtsBusinessCdrService.parseBillingStatementResponse({ Usages: [] }, '79001234567')).toEqual([]);
+    expect(mtsBusinessCdrService.parseBillingStatementResponse(null, '79001234567')).toEqual([]);
+    expect(mtsBusinessCdrService.parseBillingStatementResponse({ Usages: usages }, 'invalid')).toEqual([]);
+  });
+});
+
 describe('МТС Бизнес: пары номер→ФИО из XML (<tp sim= u=>)', () => {
   it('извлекает пары, чистит пробелы, схлопывает дубли, отсекает не-номера', () => {
     const xml = '<Report>'

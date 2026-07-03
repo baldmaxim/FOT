@@ -59,12 +59,41 @@ class MtsBusinessRequestLimiter {
 
 const limiter = new MtsBusinessRequestLimiter(MTS_BIZ_MAX_CONCURRENCY);
 
+// Гейт на тариф пакета запросов МТС (60 или 300/мин, задаётся per-аккаунт в
+// mts_business_accounts.rate_limit_per_min). Скользящее окно 60с: при
+// исчерпании — не ошибка, а ожидание освобождения окна (не роняем запрос).
+class MtsBusinessRateGate {
+  private timestamps = new Map<string, number[]>();
+
+  async acquire(accountId: string, limitPerMin: number): Promise<void> {
+    const windowMs = 60_000;
+    for (;;) {
+      const now = Date.now();
+      let arr = this.timestamps.get(accountId);
+      if (!arr) {
+        arr = [];
+        this.timestamps.set(accountId, arr);
+      }
+      while (arr.length && now - arr[0] >= windowMs) arr.shift();
+      if (arr.length < limitPerMin) {
+        arr.push(now);
+        return;
+      }
+      const waitMs = windowMs - (now - arr[0]) + 10;
+      console.warn(`[mts-biz] rate-limit ${limitPerMin}/мин account=${accountId} — жду ${waitMs}ms`);
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+  }
+}
+
+const rateGate = new MtsBusinessRateGate();
+
 export class MtsBusinessServiceBase {
   // axios-клиент кэшируется per baseURL (у разных аккаунтов может отличаться).
   private clients = new Map<string, AxiosInstance>();
 
   /** Клиент без Authorization: токен подставляется per-request (меняется по TTL). */
-  private async getClient(accountId: string): Promise<{ client: AxiosInstance; baseURL: string }> {
+  private async getClient(accountId: string): Promise<{ client: AxiosInstance; baseURL: string; rateLimitPerMin: number }> {
     const account = await mtsBusinessAccountsService.getResolvedAccount(accountId);
     if (!account) {
       throw new MtsBusinessApiError('МТС Бизнес: аккаунт не найден или без пароля', 0);
@@ -81,7 +110,7 @@ export class MtsBusinessServiceBase {
       });
       this.clients.set(baseURL, client);
     }
-    return { client, baseURL };
+    return { client, baseURL, rateLimitPerMin: account.rateLimitPerMin };
   }
 
   /** Сбросить кэш axios-клиентов (после смены base URL аккаунтов). */
@@ -133,13 +162,14 @@ export class MtsBusinessServiceBase {
     console.log(`[mts-biz] → ${m} ${endpoint} account=${accountId}`);
     const tStart = Date.now();
     try {
-      const { client } = await this.getClient(accountId);
+      const { client, rateLimitPerMin } = await this.getClient(accountId);
       let attempt = 0;
       let reauthTried = false;
       let lastError: unknown;
 
       while (attempt <= MTS_BIZ_RETRY_ATTEMPTS) {
         try {
+          await rateGate.acquire(accountId, rateLimitPerMin);
           const token = await mtsBusinessAuthService.getAccessToken(accountId);
           const response = await client.request<T>({
             method,

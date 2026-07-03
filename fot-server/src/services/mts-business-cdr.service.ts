@@ -16,6 +16,13 @@ import { encryptionService } from './encryption.service.js';
 //    маркеру «&lt;--» в n (входящий). Трафик (Kb)/SMS/ожидание — отсекаются.
 //  - XLS (отчёт из ЛК/Тарифер): лист на номер (имя листа = номер), звонок = строка
 //    с Volume в формате длительности. См. parseXls.
+//  - JSON (синхронный GET /Bills/BillingStatementExtdByMSISDN, проверено живым
+//    вызовом 02.07.2026): { Usages: [{ date, Characteristics: { networkEvent,
+//    direction, factUnits, factUnitCode, calledMsisdn } }] }. Голос —
+//    networkEvent==='call' (НЕ categoryId — у «Удержание вызова» тот же
+//    categoryId=local_call, но networkEvent='other'). Длительность — factUnits
+//    при factUnitCode==='SECOND'. Собеседник (calledMsisdn) НЕ замаскирован.
+//    См. parseBillingStatementResponse.
 
 export interface IParsedCall {
   msisdn: string | null;
@@ -283,6 +290,37 @@ class MtsBusinessCdrService {
     return calls;
   }
 
+  /**
+   * Разбирает синхронный JSON-ответ GET /Bills/BillingStatementExtdByMSISDN
+   * (см. формат в шапке файла). ownMsisdn — номер, по которому сделан запрос
+   * (в самом ответе своего номера нет — API уже скопирован на один msisdn).
+   */
+  parseBillingStatementResponse(data: unknown, ownMsisdn: string): IParsedCall[] {
+    const own = normalizeMsisdn(ownMsisdn);
+    if (!own) return [];
+    const usages = data && typeof data === 'object' ? (data as Record<string, unknown>).Usages : null;
+    const calls: IParsedCall[] = [];
+    for (const raw of asArray(usages as Record<string, unknown>[] | undefined)) {
+      const u = raw as { date?: string; Characteristics?: Record<string, unknown> };
+      const c = u.Characteristics;
+      if (!c || c.networkEvent !== 'call') continue; // трафик/SMS/сервисные события (в т.ч. «Удержание вызова») — не звонок
+      if (c.factUnitCode !== 'SECOND') continue;
+      const startedAt = parseCallDate(u.date);
+      if (!startedAt) continue;
+      const peerRaw = c.calledMsisdn != null ? String(c.calledMsisdn) : null;
+      const direction = c.direction === 'I' ? 'in' : c.direction === 'O' ? 'out' : null;
+      calls.push({
+        msisdn: own,
+        peer: normalizeMsisdn(peerRaw) ?? peerRaw,
+        startedAt,
+        durationSec: Math.max(0, Math.round(Number(c.factUnits) || 0)),
+        direction,
+        callType: 'call',
+      });
+    }
+    return calls;
+  }
+
   /** Разобрать файл детализации по расширению: .xls/.xlsx → XLS, .xml → XML. */
   parseFile(buffer: Buffer, filename: string, fallbackMsisdn?: string | null): IParsedCall[] {
     const ext = (filename.split('.').pop() || '').toLowerCase();
@@ -391,6 +429,27 @@ class MtsBusinessCdrService {
       inSeconds: Number(r.in_sec),
       outSeconds: Number(r.out_sec),
     }));
+  }
+
+  /**
+   * Уже известные (встречавшиеся в CDR) свои номера конкретного аккаунта —
+   * источник списка для ежедневного автообновления (mts-business-cdr-daily-
+   * scheduler.service.ts). Новый номер сначала должен один раз попасть в CDR
+   * (ручной бэкафилл/загрузка), дальше подхватывается автоматически.
+   */
+  async getKnownMsisdnsByAccount(accountId: string): Promise<string[]> {
+    const rows = await query<{ msisdn_enc: string | null }>(
+      `SELECT DISTINCT ON (msisdn_hash) msisdn_enc
+         FROM mts_business_cdr
+        WHERE account_id = $1 AND msisdn_hash IS NOT NULL`,
+      [accountId],
+    );
+    const out: string[] = [];
+    for (const r of rows) {
+      const msisdn = encryptionService.decryptField(r.msisdn_enc);
+      if (msisdn) out.push(msisdn);
+    }
+    return out;
   }
 
   /** Сводка по лицевым счетам за период: звонки/время/кол-во номеров на аккаунт. */

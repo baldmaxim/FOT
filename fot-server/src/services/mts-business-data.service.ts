@@ -10,6 +10,11 @@ import { mtsBusinessAuthService } from './mts-business-auth.service.js';
 //   POST /Documents/CallHistoryByMSISDN   { dateFrom, dateTo, documentFormat, deliveryAddress, msisdns }
 //   POST /Documents/CallHistoryByAccount  { dateFrom, dateTo, documentFormat, deliveryAddress, accounts }
 //   POST /Product/CheckRequestStatusByUUID { id }  → { status: Completed|InProgress|Faulted }
+//   GET  /Bills/BillingStatementExtdByMSISDN?msisdn&startDateTime&endDateTime
+//        → { Usages: [...] } — синхронно, без email/заявки. Проверено живым
+//        вызовом 02.07.2026: даты принимаются в ISO с 'Z' (в отличие от
+//        Documents/* выше, где 'Z' ломает запрос — это ДРУГОЙ эндпоинт со
+//        своими правилами формата).
 
 export type MtsBusinessRequestStatus = 'completed' | 'in_progress' | 'faulted' | 'unknown';
 
@@ -30,6 +35,16 @@ const toMtsDate = (isoDate: string, boundary: 'from' | 'to'): string => {
     throw new Error(`МТС Бизнес: дата должна быть в формате YYYY-MM-DD (получено "${isoDate}")`);
   }
   return boundary === 'from' ? `${d}T00:00:00` : `${d}T23:59:59`;
+};
+
+// Bills/BillingStatementExtdByMSISDN — ДРУГОЙ формат дат, чем Documents/* выше
+// (проверено живым вызовом 02.07.2026: 'Z' здесь принимается нормально).
+const toBillsDate = (isoDate: string, boundary: 'from' | 'to'): string => {
+  const d = (isoDate || '').trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    throw new Error(`МТС Бизнес: дата должна быть в формате YYYY-MM-DD (получено "${isoDate}")`);
+  }
+  return boundary === 'from' ? `${d}T00:00:00Z` : `${d}T23:59:59Z`;
 };
 
 // Реальный ответ заказа (проверено 02.07.2026) — МАССИВ:
@@ -140,6 +155,25 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
     });
     const raw = pickString(resp, ['status', 'state']);
     return { status: normalizeStatus(raw), raw };
+  }
+
+  /**
+   * Синхронная детализация по номеру (без email/заявки) — проверено живым
+   * вызовом 02.07.2026 на реальном аккаунте. dateFrom/dateTo — YYYY-MM-DD.
+   * Возвращает сырой JSON ({ Usages: [...] }) — разбор в mtsBusinessCdrService.
+   */
+  async getBillingStatementExtdByMsisdn(
+    accountId: string,
+    params: { msisdn: string; dateFrom: string; dateTo: string },
+  ): Promise<unknown> {
+    return this.request('get', '/Bills/BillingStatementExtdByMSISDN', {
+      accountId,
+      params: {
+        msisdn: params.msisdn,
+        startDateTime: toBillsDate(params.dateFrom, 'from'),
+        endDateTime: toBillsDate(params.dateTo, 'to'),
+      },
+    });
   }
 
   /** Сброс кэшей клиентов и токенов (после смены аккаунтов/URL). */

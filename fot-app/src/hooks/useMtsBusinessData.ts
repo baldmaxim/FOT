@@ -54,7 +54,7 @@ export const useMtsBusinessAccountsSummary = (from: string, to: string, enabled:
 export const useCreateMtsBusinessAccount = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { label: string; accountNumber?: string; login: string; password: string; baseUrl?: string }) =>
+    mutationFn: (data: { label: string; accountNumber?: string; login: string; password: string; baseUrl?: string; rateLimitPerMin?: number }) =>
       mtsBusinessService.createAccount(data),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: getMtsBusinessAccountsKey() }); },
   });
@@ -63,7 +63,7 @@ export const useCreateMtsBusinessAccount = () => {
 export const useUpdateMtsBusinessAccount = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (args: { id: string; data: { label?: string; accountNumber?: string | null; login?: string; password?: string; baseUrl?: string | null; isActive?: boolean } }) =>
+    mutationFn: (args: { id: string; data: { label?: string; accountNumber?: string | null; login?: string; password?: string; baseUrl?: string | null; isActive?: boolean; rateLimitPerMin?: number } }) =>
       mtsBusinessService.updateAccount(args.id, args.data),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: getMtsBusinessAccountsKey() }); },
   });
@@ -89,6 +89,19 @@ export const useOrderMtsBusinessDetalization = () => {
       deliveryAddress: string;
     }) => mtsBusinessService.orderDetalization(input),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: getMtsBusinessRequestsKey() }); },
+  });
+};
+
+export const useFetchSyncMtsBusinessDetalization = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { accountId: string; msisdns: string[]; dateFrom: string; dateTo: string }) =>
+      mtsBusinessService.fetchSyncDetalization(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'accounts-summary'] });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
+    },
   });
 };
 

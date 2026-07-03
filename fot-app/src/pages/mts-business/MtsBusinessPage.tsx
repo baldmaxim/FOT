@@ -3,15 +3,13 @@ import { ApiError } from '../../api/client';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   useMtsBusinessAccounts,
-  useMtsBusinessRequests,
   useMtsBusinessImportedNumbers,
   useMtsBusinessReport,
   useMtsBusinessAccountsSummary,
   useCreateMtsBusinessAccount,
   useUpdateMtsBusinessAccount,
   useDeleteMtsBusinessAccount,
-  useOrderMtsBusinessDetalization,
-  useRefreshMtsBusinessStatus,
+  useFetchSyncMtsBusinessDetalization,
   useUploadMtsBusinessDetalization,
   useSetMtsBusinessNumberMap,
 } from '../../hooks/useMtsBusinessData';
@@ -29,15 +27,6 @@ const fmtDur = (sec: number): string => {
   return h > 0 ? `${h} ч ${pad(m)} м` : `${m} м ${pad(sec % 60)} с`;
 };
 
-const statusBadge = (status: string): { cls: string; label: string } => {
-  switch (status) {
-    case 'completed': return { cls: styles.badgeOk, label: 'Готов' };
-    case 'in_progress': return { cls: styles.badgeWait, label: 'В обработке' };
-    case 'faulted': return { cls: styles.badgeErr, label: 'Ошибка' };
-    default: return { cls: styles.badgeMuted, label: status || '—' };
-  }
-};
-
 type Msg = { ok: boolean; text: string } | null;
 
 // ================= Модалка аккаунта =================
@@ -50,25 +39,29 @@ const AccountModal: FC<{ account: IMtsBusinessAccount | null; onClose: () => voi
   const [login, setLogin] = useState(account?.login ?? '');
   const [password, setPassword] = useState('');
   const [baseUrl, setBaseUrl] = useState(account?.baseUrl ?? '');
+  const [rateLimitPerMin, setRateLimitPerMin] = useState(String(account?.rateLimitPerMin ?? 60));
   const [msg, setMsg] = useState<Msg>(null);
   const overlay = useOverlayDismiss(onClose);
 
   const busy = createM.isPending || updateM.isPending;
   const onSave = async (): Promise<void> => {
     setMsg(null);
+    const rateLimit = Math.max(1, Number.parseInt(rateLimitPerMin, 10) || 60);
     try {
       if (account) {
         await updateM.mutateAsync({
           id: account.id,
           data: {
             label: label.trim(), accountNumber: accountNumber.trim() || null, login: login.trim(),
-            baseUrl: baseUrl.trim() || null, ...(password.trim() ? { password: password.trim() } : {}),
+            baseUrl: baseUrl.trim() || null, rateLimitPerMin: rateLimit,
+            ...(password.trim() ? { password: password.trim() } : {}),
           },
         });
       } else {
         await createM.mutateAsync({
           label: label.trim(), accountNumber: accountNumber.trim() || undefined,
           login: login.trim(), password: password.trim(), baseUrl: baseUrl.trim() || undefined,
+          rateLimitPerMin: rateLimit,
         });
       }
       onClose();
@@ -100,6 +93,10 @@ const AccountModal: FC<{ account: IMtsBusinessAccount | null; onClose: () => voi
         <div className={styles.field}>
           <label className={styles.label}>Base URL (необязательно)</label>
           <input className={styles.input} type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://api.mts.ru/b2b/v1" />
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Лимит запросов/мин (тариф пакета — 60 или 300)</label>
+          <input className={styles.input} type="number" min={1} value={rateLimitPerMin} onChange={e => setRateLimitPerMin(e.target.value)} />
         </div>
         {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
         <div className={styles.actions}>
@@ -177,64 +174,47 @@ const AccountsSection: FC = () => {
   );
 };
 
-// ================= Заказ детализации =================
-const OrderSection: FC = () => {
+// ================= Синхронная детализация: автообновление + ручной бэкафилл =================
+const SyncSection: FC = () => {
   const accounts = useMtsBusinessAccounts();
-  const order = useOrderMtsBusinessDetalization();
+  const fetchSync = useFetchSyncMtsBusinessDetalization();
   const now = useMemo(() => new Date(), []);
   const active = (accounts.data ?? []).filter(a => a.isActive);
   const [accountId, setAccountId] = useState('');
-  const [scope, setScope] = useState<'msisdn' | 'account'>('msisdn');
   const [targets, setTargets] = useState('');
   const [dateFrom, setDateFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth(), 1)));
   const [dateTo, setDateTo] = useState(toISODate(now));
-  const [email, setEmail] = useState('');
   const [msg, setMsg] = useState<Msg>(null);
 
-  const onOrder = async (): Promise<void> => {
+  const onFetch = async (): Promise<void> => {
     setMsg(null);
     const acc = accountId || active[0]?.id;
     if (!acc) { setMsg({ ok: false, text: 'Сначала добавьте аккаунт' }); return; }
-    let list = targets.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
-    // «По лицевым счетам» с пустым полем = все номера ЛС выбранного аккаунта.
-    if (list.length === 0 && scope === 'account') {
-      const accNumber = active.find(a => a.id === acc)?.accountNumber;
-      if (accNumber) list = [accNumber];
-    }
-    if (list.length === 0) {
-      setMsg({
-        ok: false,
-        text: scope === 'account'
-          ? 'Укажите лицевой счёт (или заполните ЛС в аккаунте)'
-          : 'Укажите номера — либо выберите тип «По лицевым счетам», чтобы заказать по всем номерам ЛС разом',
-      });
-      return;
-    }
+    const list = targets.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+    if (list.length === 0) { setMsg({ ok: false, text: 'Укажите хотя бы один номер 7XXXXXXXXXX' }); return; }
     try {
-      const r = await order.mutateAsync({ accountId: acc, scope, targets: list, dateFrom, dateTo, deliveryAddress: email.trim() });
-      setMsg({ ok: true, text: `Заявка создана (messageId: ${r.messageId}). Документ придёт на email.` });
-      setTargets('');
+      const r = await fetchSync.mutateAsync({ accountId: acc, msisdns: list, dateFrom, dateTo });
+      const failedText = r.failedNumbers.length ? `, ошибки по номерам: ${r.failedNumbers.join(', ')}` : '';
+      setMsg({ ok: r.failedNumbers.length === 0, text: `Разобрано звонков: ${r.parsed}, добавлено: ${r.inserted}, пропущено (дубли): ${r.skipped}${failedText}` });
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка заказа детализации') });
+      setMsg({ ok: false, text: errText(e, 'Ошибка загрузки детализации') });
     }
   };
 
   return (
     <section className={styles.card}>
-      <h2 className={styles.cardTitle}>Заказать детализацию</h2>
+      <h2 className={styles.cardTitle}>Детализация звонков</h2>
+      <p className={styles.hint}>
+        Автообновление — раз в сутки, без участия: за уже известные номера каждого лицевого счёта данные подтягиваются
+        сами (учитывается тариф пакета запросов). Ниже — разовая ручная загрузка за произвольный период
+        (например, для нового номера или досрочной проверки).
+      </p>
       <div className={styles.row}>
         <div className={styles.field}>
           <label className={styles.label}>Аккаунт</label>
           <select className={styles.select} value={accountId} onChange={e => setAccountId(e.target.value)}>
             <option value="">{active.length ? '— выберите —' : 'нет аккаунтов'}</option>
             {active.map(a => <option key={a.id} value={a.id}>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>)}
-          </select>
-        </div>
-        <div className={styles.field}>
-          <label className={styles.label}>Тип</label>
-          <select className={styles.select} value={scope} onChange={e => setScope(e.target.value as 'msisdn' | 'account')}>
-            <option value="msisdn">По номерам</option>
-            <option value="account">По лицевым счетам</option>
           </select>
         </div>
         <div className={styles.field}>
@@ -247,55 +227,13 @@ const OrderSection: FC = () => {
         </div>
       </div>
       <div className={styles.field}>
-        <label className={styles.label}>{scope === 'account' ? 'Лицевые счета (через запятую; пусто — ЛС выбранного аккаунта, все его номера)' : 'Номера 7XXXXXXXXXX (через запятую)'}</label>
-        <textarea
-          className={styles.textarea}
-          value={targets}
-          onChange={e => setTargets(e.target.value)}
-          placeholder={scope === 'account' ? 'пусто — все номера лицевого счёта' : '79001234567, 79007654321'}
-        />
-      </div>
-      <div className={styles.field}>
-        <label className={styles.label}>Email для документа</label>
-        <input className={styles.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="пусто — служебный ящик автозабора" />
+        <label className={styles.label}>Номера 7XXXXXXXXXX (через запятую)</label>
+        <textarea className={styles.textarea} value={targets} onChange={e => setTargets(e.target.value)} placeholder="79001234567, 79007654321" />
       </div>
       <div className={styles.actions}>
-        <button className={styles.btn} onClick={onOrder} disabled={order.isPending || active.length === 0}>Заказать (2FA)</button>
+        <button className={styles.btn} onClick={onFetch} disabled={fetchSync.isPending || active.length === 0}>Загрузить за период (2FA)</button>
       </div>
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
-    </section>
-  );
-};
-
-// ================= Заявки =================
-const RequestsSection: FC = () => {
-  const requests = useMtsBusinessRequests(true);
-  const refresh = useRefreshMtsBusinessStatus();
-  const rows = requests.data ?? [];
-  if (rows.length === 0) return null;
-  return (
-    <section className={styles.card}>
-      <h2 className={styles.cardTitle}>Заявки на детализацию</h2>
-      <div className={styles.tableWrap}>
-        <table className={styles.table}>
-          <thead><tr><th>messageId</th><th>Тип</th><th>Кол-во</th><th>Период</th><th>Статус</th><th></th></tr></thead>
-          <tbody>
-            {rows.map(r => {
-              const b = statusBadge(r.status);
-              return (
-                <tr key={r.messageId}>
-                  <td><code>{r.messageId}</code></td>
-                  <td>{r.scope === 'account' ? 'счета' : 'номера'}</td>
-                  <td>{r.targetCount}</td>
-                  <td>{r.dateFrom} — {r.dateTo}</td>
-                  <td><span className={`${styles.badge} ${b.cls}`}>{b.label}</span></td>
-                  <td><button className={styles.btnSecondary} onClick={() => refresh.mutate(r.messageId)} disabled={refresh.isPending}>Обновить</button></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
     </section>
   );
 };
@@ -569,8 +507,7 @@ export const MtsBusinessPage: FC = () => {
       ) : (
         <>
           <AccountsSection />
-          <OrderSection />
-          <RequestsSection />
+          <SyncSection />
           <UploadSection />
           <NumberMapSection />
         </>

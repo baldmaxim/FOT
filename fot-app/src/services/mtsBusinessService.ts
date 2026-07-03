@@ -11,8 +11,17 @@ export interface IMtsBusinessAccount {
   baseUrl: string;
   isActive: boolean;
   hasPassword: boolean;
+  rateLimitPerMin: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface IMtsBusinessFetchSyncResult {
+  requestedNumbers: number;
+  parsed: number;
+  inserted: number;
+  skipped: number;
+  failedNumbers: string[];
 }
 
 export interface IMtsBusinessRequestRow {
@@ -86,14 +95,14 @@ export const mtsBusinessService = {
   },
 
   createAccount: async (data: {
-    label: string; accountNumber?: string; login: string; password: string; baseUrl?: string;
+    label: string; accountNumber?: string; login: string; password: string; baseUrl?: string; rateLimitPerMin?: number;
   }): Promise<IMtsBusinessAccount[]> => {
     const res = await apiClient.post<ApiResponse<IMtsBusinessAccount[]>>('/mts-business/accounts', data);
     return res.data;
   },
 
   updateAccount: async (id: string, data: {
-    label?: string; accountNumber?: string | null; login?: string; password?: string; baseUrl?: string | null; isActive?: boolean;
+    label?: string; accountNumber?: string | null; login?: string; password?: string; baseUrl?: string | null; isActive?: boolean; rateLimitPerMin?: number;
   }): Promise<IMtsBusinessAccount[]> => {
     const res = await apiClient.put<ApiResponse<IMtsBusinessAccount[]>>(`/mts-business/accounts/${id}`, data);
     return res.data;
@@ -124,6 +133,14 @@ export const mtsBusinessService = {
       ...input,
       confirmed: true,
     });
+    return res.data;
+  },
+
+  // Синхронный бэкафилл за произвольный период (без email/заявки, Bills API).
+  fetchSyncDetalization: async (input: {
+    accountId: string; msisdns: string[]; dateFrom: string; dateTo: string;
+  }): Promise<IMtsBusinessFetchSyncResult> => {
+    const res = await apiClient.post<ApiResponse<IMtsBusinessFetchSyncResult>>('/mts-business/detalization/fetch-sync', input);
     return res.data;
   },
 

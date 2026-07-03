@@ -15,6 +15,7 @@ export interface IMtsBusinessAccountPublic {
   baseUrl: string;
   isActive: boolean;
   hasPassword: boolean;
+  rateLimitPerMin: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -25,6 +26,7 @@ export interface IMtsBusinessResolvedAccount {
   baseUrl: string;
   login: string;
   password: string;
+  rateLimitPerMin: number;
 }
 
 interface AccountRow {
@@ -35,6 +37,7 @@ interface AccountRow {
   password_enc: string;
   base_url: string | null;
   is_active: boolean;
+  rate_limit_per_min: number;
   created_at: string;
   updated_at: string;
 }
@@ -47,6 +50,7 @@ const toPublic = (r: AccountRow): IMtsBusinessAccountPublic => ({
   baseUrl: (r.base_url || '').trim() || DEFAULT_MTS_BUSINESS_BASE_URL,
   isActive: r.is_active,
   hasPassword: Boolean(r.password_enc),
+  rateLimitPerMin: r.rate_limit_per_min,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -54,7 +58,7 @@ const toPublic = (r: AccountRow): IMtsBusinessAccountPublic => ({
 class MtsBusinessAccountsService {
   async list(): Promise<IMtsBusinessAccountPublic[]> {
     const rows = await query<AccountRow>(
-      `SELECT id, label, account_number, login, password_enc, base_url, is_active, created_at, updated_at
+      `SELECT id, label, account_number, login, password_enc, base_url, is_active, rate_limit_per_min, created_at, updated_at
          FROM mts_business_accounts
         ORDER BY created_at ASC`,
     );
@@ -64,7 +68,7 @@ class MtsBusinessAccountsService {
   /** Резолв кредов аккаунта (пароль расшифрован). null — если нет/неактивен/битый пароль. */
   async getResolvedAccount(id: string): Promise<IMtsBusinessResolvedAccount | null> {
     const r = await queryOne<AccountRow>(
-      `SELECT id, label, account_number, login, password_enc, base_url, is_active, created_at, updated_at
+      `SELECT id, label, account_number, login, password_enc, base_url, is_active, rate_limit_per_min, created_at, updated_at
          FROM mts_business_accounts WHERE id = $1`,
       [id],
     );
@@ -73,11 +77,14 @@ class MtsBusinessAccountsService {
     if (!password) return null;
     const baseUrl = (r.base_url || '').trim() || DEFAULT_MTS_BUSINESS_BASE_URL;
     assertMtsBusinessBaseUrlAllowed(baseUrl);
-    return { id: r.id, label: r.label, baseUrl, login: r.login, password };
+    return { id: r.id, label: r.label, baseUrl, login: r.login, password, rateLimitPerMin: r.rate_limit_per_min };
   }
 
   async create(
-    input: { label: string; accountNumber?: string | null; login: string; password: string; baseUrl?: string | null; isActive?: boolean },
+    input: {
+      label: string; accountNumber?: string | null; login: string; password: string;
+      baseUrl?: string | null; isActive?: boolean; rateLimitPerMin?: number;
+    },
     userId: string,
   ): Promise<IMtsBusinessAccountPublic[]> {
     const label = input.label?.trim();
@@ -88,19 +95,23 @@ class MtsBusinessAccountsService {
     }
     const baseUrl = input.baseUrl?.trim() || null;
     if (baseUrl) assertMtsBusinessBaseUrlAllowed(baseUrl);
+    const rateLimitPerMin = input.rateLimitPerMin && input.rateLimitPerMin > 0 ? Math.floor(input.rateLimitPerMin) : 60;
     const id = crypto.randomUUID();
     await execute(
       `INSERT INTO mts_business_accounts
-         (id, label, account_number, login, password_enc, base_url, is_active, created_by, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-      [id, label, input.accountNumber?.trim() || null, login, encryptionService.encrypt(password), baseUrl, input.isActive ?? true, userId],
+         (id, label, account_number, login, password_enc, base_url, is_active, rate_limit_per_min, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+      [id, label, input.accountNumber?.trim() || null, login, encryptionService.encrypt(password), baseUrl, input.isActive ?? true, rateLimitPerMin, userId],
     );
     return this.list();
   }
 
   async update(
     id: string,
-    input: { label?: string; accountNumber?: string | null; login?: string; password?: string | null; baseUrl?: string | null; isActive?: boolean },
+    input: {
+      label?: string; accountNumber?: string | null; login?: string; password?: string | null;
+      baseUrl?: string | null; isActive?: boolean; rateLimitPerMin?: number;
+    },
     _userId: string,
   ): Promise<IMtsBusinessAccountPublic[]> {
     const existing = await queryOne<{ id: string }>('SELECT id FROM mts_business_accounts WHERE id = $1', [id]);
@@ -130,6 +141,12 @@ class MtsBusinessAccountsService {
       push('base_url', v);
     }
     if (input.isActive !== undefined) push('is_active', input.isActive);
+    if (input.rateLimitPerMin !== undefined) {
+      if (!Number.isFinite(input.rateLimitPerMin) || input.rateLimitPerMin <= 0) {
+        throw new Error('Лимит запросов/мин должен быть положительным числом');
+      }
+      push('rate_limit_per_min', Math.floor(input.rateLimitPerMin));
+    }
     // Пароль меняем только если передана непустая строка (пустая = не трогаем).
     if (input.password !== undefined && input.password !== null && input.password.trim() !== '') {
       push('password_enc', encryptionService.encrypt(input.password.trim()));

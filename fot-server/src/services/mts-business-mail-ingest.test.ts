@@ -21,6 +21,16 @@ describe('mts-business-mail-ingest helpers', () => {
     expect(extractUuids('без идентификаторов')).toEqual([]);
   });
 
+  it('extractUuids: находит реальный messageId МТС формата hex16_счётчик', () => {
+    const text = 'Ваш запрос C1BA2D26D5999FB4_1 обработан. Повтор: c1ba2d26d5999fb4_1, ещё abcdef0123456789_42.';
+    expect(extractUuids(text)).toEqual(['c1ba2d26d5999fb4_1', 'abcdef0123456789_42']);
+  });
+
+  it('extractUuids: комбинирует UUID и messageId МТС в одном тексте', () => {
+    const text = 'UUID 123e4567-e89b-12d3-a456-426614174000 и messageId c1ba2d26d5999fb4_1 в одном письме.';
+    expect(extractUuids(text)).toEqual(['123e4567-e89b-12d3-a456-426614174000', 'c1ba2d26d5999fb4_1']);
+  });
+
   it('isIngestableFilename: xml/xls/xlsx, регистронезависимо', () => {
     expect(isIngestableFilename('detal.XML')).toBe(true);
     expect(isIngestableFilename('report.xlsx')).toBe(true);

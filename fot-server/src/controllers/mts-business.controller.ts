@@ -59,11 +59,11 @@ export const mtsBusinessController = {
 
   async createAccount(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { label, accountNumber, login, password, baseUrl } = req.body as {
-        label?: string; accountNumber?: string | null; login?: string; password?: string; baseUrl?: string | null;
+      const { label, accountNumber, login, password, baseUrl, rateLimitPerMin } = req.body as {
+        label?: string; accountNumber?: string | null; login?: string; password?: string; baseUrl?: string | null; rateLimitPerMin?: number;
       };
       const data = await mtsBusinessAccountsService.create(
-        { label: label ?? '', accountNumber, login: login ?? '', password: password ?? '', baseUrl },
+        { label: label ?? '', accountNumber, login: login ?? '', password: password ?? '', baseUrl, rateLimitPerMin },
         req.user.id,
       );
       mtsBusinessDataService.invalidate();
@@ -78,12 +78,12 @@ export const mtsBusinessController = {
 
   async updateAccount(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { label, accountNumber, login, password, baseUrl, isActive } = req.body as {
-        label?: string; accountNumber?: string | null; login?: string; password?: string | null; baseUrl?: string | null; isActive?: boolean;
+      const { label, accountNumber, login, password, baseUrl, isActive, rateLimitPerMin } = req.body as {
+        label?: string; accountNumber?: string | null; login?: string; password?: string | null; baseUrl?: string | null; isActive?: boolean; rateLimitPerMin?: number;
       };
       const data = await mtsBusinessAccountsService.update(
         req.params.id,
-        { label, accountNumber, login, password, baseUrl, isActive },
+        { label, accountNumber, login, password, baseUrl, isActive, rateLimitPerMin },
         req.user.id,
       );
       mtsBusinessDataService.invalidate();
@@ -179,6 +179,58 @@ export const mtsBusinessController = {
       res.json({ success: true, data: { messageId } });
     } catch (error) {
       fail(res, error, 'Ошибка заказа детализации МТС Бизнес');
+    }
+  },
+
+  /**
+   * Ручной бэкафилл детализации за произвольный период — синхронно, через
+   * Bills/BillingStatementExtdByMSISDN (без email/заявки). По каждому номеру
+   * отдельный запрос (через общий rate-limit гейт per accountId — см.
+   * mts-business-base.service); ошибка одного номера не рушит остальные.
+   */
+  async fetchSyncDetalization(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { accountId, msisdns, dateFrom, dateTo } = req.body as {
+        accountId?: string; msisdns?: unknown; dateFrom?: string; dateTo?: string;
+      };
+      if (!accountId) {
+        res.status(400).json({ success: false, error: 'Выберите аккаунт' });
+        return;
+      }
+      const list = Array.isArray(msisdns) ? msisdns.map(t => String(t).trim()).filter(Boolean) : [];
+      if (list.length === 0) {
+        res.status(400).json({ success: false, error: 'Укажите хотя бы один номер' });
+        return;
+      }
+      if (!dateFrom || !dateTo || !DATE_RE.test(dateFrom) || !DATE_RE.test(dateTo)) {
+        res.status(400).json({ success: false, error: 'Даты периода должны быть в формате YYYY-MM-DD' });
+        return;
+      }
+
+      const allCalls: Parameters<typeof mtsBusinessCdrService.storeCalls>[0] = [];
+      const failedNumbers: string[] = [];
+      for (const msisdn of list) {
+        try {
+          const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(accountId, { msisdn, dateFrom, dateTo });
+          allCalls.push(...mtsBusinessCdrService.parseBillingStatementResponse(resp, msisdn));
+        } catch (error) {
+          failedNumbers.push(msisdn);
+          console.error(`[mts-biz] fetch-sync номер — ошибка:`, error instanceof Error ? error.message : 'unknown');
+        }
+      }
+
+      const { inserted, skipped } = await mtsBusinessCdrService.storeCalls(allCalls, null, accountId);
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_DETALIZATION_FETCHED_SYNC, {
+        details: { accountId, requestedNumbers: list.length, failedNumbers: failedNumbers.length, dateFrom, dateTo, inserted, skipped },
+      });
+
+      res.json({
+        success: true,
+        data: { requestedNumbers: list.length, parsed: allCalls.length, inserted, skipped, failedNumbers },
+      });
+    } catch (error) {
+      fail(res, error, 'Ошибка синхронной загрузки детализации');
     }
   },
 

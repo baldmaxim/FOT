@@ -93,6 +93,11 @@ const envSchema = z.object({
   // Email доставки по умолчанию при заказе детализации (если в форме пусто).
   // Не задан → берётся MTS_BUSINESS_IMAP_USER, если он похож на email.
   MTS_BUSINESS_DELIVERY_EMAIL: optionalString,
+  // Ежедневное автообновление детализации через синхронный Bills API (без email):
+  // час МСК, после которого считаем предыдущие сутки полностью тарифицированными,
+  // и глубина catchup-окна (если тик пропущен — сколько дней досинхронизировать).
+  MTS_BUSINESS_CDR_DAILY_TARGET_HOUR_MSK: z.string().regex(/^\d+$/).default('4'),
+  MTS_BUSINESS_CDR_DAILY_WINDOW_DAYS: z.string().regex(/^\d+$/).default('3'),
 
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,
