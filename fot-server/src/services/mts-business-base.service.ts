@@ -136,7 +136,7 @@ export class MtsBusinessServiceBase {
     return error instanceof AxiosError && (error.response?.status === 401 || error.response?.status === 403);
   }
 
-  private toApiError(error: unknown): MtsBusinessApiError {
+  private toApiError(error: unknown, suppressBodyLog = false): MtsBusinessApiError {
     if (error instanceof MtsBusinessApiError) return error;
     if (error instanceof AxiosError) {
       const status = error.response?.status ?? 0;
@@ -146,8 +146,9 @@ export class MtsBusinessServiceBase {
       const code = body?.code != null ? String(body.code) : undefined;
       const message = body?.message || body?.error_description || body?.description || error.message || 'Ошибка вызова МТС Бизнес API';
       // Тело ошибки апстрима (усечённое) — единственный источник причины,
-      // когда МТС отвечает 4xx/5xx без стандартных полей. ПДн там нет.
-      if (error.response?.data !== undefined) {
+      // когда МТС отвечает 4xx/5xx без стандартных полей. ПДн там нет — КРОМЕ
+      // PersonalData/* (паспорт/адрес), там suppressBodyLog=true (см. request()).
+      if (!suppressBodyLog && error.response?.data !== undefined) {
         let snippet = '';
         try { snippet = JSON.stringify(error.response.data); } catch { snippet = String(error.response.data); }
         console.error(`[mts-biz] upstream ${status} body: ${snippet.slice(0, 500)}`);
@@ -160,7 +161,7 @@ export class MtsBusinessServiceBase {
   protected async request<T>(
     method: 'get' | 'post' | 'put' | 'patch' | 'delete',
     endpoint: string,
-    options: { accountId: string; params?: Record<string, unknown>; data?: unknown; timeout?: number },
+    options: { accountId: string; params?: Record<string, unknown>; data?: unknown; timeout?: number; suppressErrorBodyLog?: boolean },
   ): Promise<T> {
     const { accountId } = options;
     const release = await limiter.acquire();
@@ -197,7 +198,7 @@ export class MtsBusinessServiceBase {
             continue;
           }
           if (attempt >= MTS_BIZ_RETRY_ATTEMPTS || !this.isRetryable(error)) {
-            const apiErr = this.toApiError(error);
+            const apiErr = this.toApiError(error, options.suppressErrorBodyLog);
             console.error(
               `[mts-biz] ✗ ${m} ${endpoint} ${Date.now() - tStart}ms http=${apiErr.status} code=${apiErr.code ?? '-'}`,
             );
@@ -209,7 +210,7 @@ export class MtsBusinessServiceBase {
           attempt++;
         }
       }
-      throw this.toApiError(lastError);
+      throw this.toApiError(lastError, options.suppressErrorBodyLog);
     } finally {
       release();
     }

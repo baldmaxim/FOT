@@ -91,11 +91,13 @@ class MtsBusinessMappingService {
   }
 
   /**
-   * Пары «номер → ФИО» из XML МТС: сохранить ФИО в привязку и автопривязать
-   * к сотруднику при ТОЧНОМ однозначном совпадении нормализованного ФИО
-   * (регистр/ё/пробелы). Ручные привязки не перетираются (employee_id IS NULL).
+   * Пары «номер → ФИО» (из XML МТС или PersonalData/PersonalDataInfo): сохранить
+   * ФИО в привязку и автопривязать к сотруднику при ТОЧНОМ однозначном совпадении
+   * нормализованного ФИО (регистр/ё/пробелы). Ручные привязки не перетираются
+   * (employee_id IS NULL). userId=null — источник не привязан к конкретному
+   * админу (фоновый планировщик, а не ручное действие в UI).
    */
-  async syncMtsNames(pairs: ISimName[], userId: string): Promise<{ saved: number; autoLinked: number }> {
+  async syncMtsNames(pairs: ISimName[], userId: string | null): Promise<{ saved: number; autoLinked: number }> {
     let saved = 0;
     let autoLinked = 0;
     for (const { msisdn, fio } of pairs) {
@@ -136,20 +138,74 @@ class MtsBusinessMappingService {
   }
 
   /**
+   * Пере-проверка автопривязки для уже сохранённых номеров: те, что ещё без
+   * сотрудника, но уже имеют mts_fio (из прошлых XML-загрузок) — например,
+   * ФИО пришло раньше, чем сотрудник появился в ФОТ, или коллизия ФИО с тех
+   * пор разрешилась. Та же логика точного совпадения, что в syncMtsNames.
+   */
+  async autoLinkByFio(userId: string): Promise<{ checked: number; linked: number }> {
+    const unlinked = await query<{ msisdn_hash: string; mts_fio: string }>(
+      `SELECT msisdn_hash, mts_fio FROM mts_business_number_map
+        WHERE employee_id IS NULL AND mts_fio IS NOT NULL AND mts_fio <> ''`,
+    );
+    let linked = 0;
+    for (const row of unlinked) {
+      const matches = await query<{ id: number }>(
+        `SELECT id FROM employees
+          WHERE LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
+              = LOWER(REPLACE($1, 'ё', 'е'))
+          LIMIT 2`,
+        [row.mts_fio],
+      );
+      if (matches.length !== 1) continue;
+      const updated = await execute(
+        `UPDATE mts_business_number_map
+            SET employee_id = $2, linked_by = $3, linked_at = NOW()
+          WHERE msisdn_hash = $1 AND employee_id IS NULL`,
+        [row.msisdn_hash, matches[0].id, userId],
+      );
+      linked += updated;
+    }
+    return { checked: unlinked.length, linked };
+  }
+
+  /**
    * Завести номер в number_map без привязки к сотруднику (employee_id=NULL),
    * если его там ещё нет — источник: структура абонента (HierarchyStructure),
-   * а не CDR. ON CONFLICT DO NOTHING — не трогает уже существующую привязку.
+   * а не CDR. account_id проставляется (или доливается, если ещё не был
+   * известен) — без него синк баланса/тарифа по номерам его не найдёт (см.
+   * getKnownMsisdnsByAccount). ON CONFLICT не трогает employee_id/mts_fio.
    */
-  async ensureNumberDiscovered(rawMsisdn: string): Promise<void> {
+  async ensureNumberDiscovered(rawMsisdn: string, accountId: string): Promise<{ needsFio: boolean }> {
     const norm = normalizeMsisdn(rawMsisdn);
     const hash = msisdnHash(rawMsisdn);
-    if (!norm || !hash) return;
+    if (!norm || !hash) return { needsFio: false };
     await execute(
-      `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, linked_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (msisdn_hash) DO NOTHING`,
-      [hash, encryptionService.encrypt(norm)],
+      `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, account_id, linked_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (msisdn_hash) DO UPDATE
+         SET account_id = COALESCE(mts_business_number_map.account_id, EXCLUDED.account_id)`,
+      [hash, encryptionService.encrypt(norm), accountId],
     );
+    const row = await queryOne<{ employee_id: number | null; mts_fio: string | null }>(
+      `SELECT employee_id, mts_fio FROM mts_business_number_map WHERE msisdn_hash = $1`,
+      [hash],
+    );
+    return { needsFio: row != null && row.employee_id == null && !row.mts_fio };
+  }
+
+  /** Номера аккаунта, известные ТОЛЬКО через number_map (напр. из HierarchyStructure, без CDR-истории). */
+  async getKnownMsisdnsByAccount(accountId: string): Promise<string[]> {
+    const rows = await query<{ msisdn_enc: string | null }>(
+      `SELECT msisdn_enc FROM mts_business_number_map WHERE account_id = $1 AND msisdn_enc IS NOT NULL`,
+      [accountId],
+    );
+    const out: string[] = [];
+    for (const r of rows) {
+      const msisdn = encryptionService.decryptField(r.msisdn_enc);
+      if (msisdn) out.push(msisdn);
+    }
+    return out;
   }
 
   /**

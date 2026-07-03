@@ -138,3 +138,16 @@ export const useSetMtsBusinessNumberMap = () => {
     },
   });
 };
+
+export const useAutoLinkMtsBusinessNumberMap = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => mtsBusinessService.autoLinkNumberMap(),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: getMtsBusinessNumberMapKey() });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'billing'] });
+    },
+  });
+};

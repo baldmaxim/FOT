@@ -182,6 +182,11 @@ export const mtsBusinessService = {
     return res.data;
   },
 
+  autoLinkNumberMap: async (): Promise<{ checked: number; linked: number }> => {
+    const res = await apiClient.post<ApiResponse<{ checked: number; linked: number }>>('/mts-business/number-map/auto-link', {});
+    return res.data;
+  },
+
   // === Отчёт / дашборд ===
   getTalkTimeReport: async (from: string, to: string, accountId?: string): Promise<IMtsBusinessTalkTimeRow[]> => {
     const qs = new URLSearchParams({ from, to });

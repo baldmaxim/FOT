@@ -12,6 +12,7 @@ import {
   useFetchSyncMtsBusinessDetalization,
   useUploadMtsBusinessDetalization,
   useSetMtsBusinessNumberMap,
+  useAutoLinkMtsBusinessNumberMap,
 } from '../../hooks/useMtsBusinessData';
 import {
   useMtsBusinessBillingSummary,
@@ -344,6 +345,7 @@ const UploadSection: FC = () => {
 const NumberMapSection: FC = () => {
   const imported = useMtsBusinessImportedNumbers(true);
   const setMap = useSetMtsBusinessNumberMap();
+  const autoLink = useAutoLinkMtsBusinessNumberMap();
   const [manualMsisdn, setManualMsisdn] = useState('');
   const [msg, setMsg] = useState<Msg>(null);
   const rows = imported.data ?? [];
@@ -358,10 +360,30 @@ const NumberMapSection: FC = () => {
     }
   };
 
+  const onAutoLink = async (): Promise<void> => {
+    setMsg(null);
+    try {
+      const r = await autoLink.mutateAsync();
+      setMsg({ ok: true, text: `Проверено непривязанных с ФИО: ${r.checked}, привязано автоматически: ${r.linked}` });
+    } catch (e) {
+      setMsg({ ok: false, text: errText(e, 'Ошибка автопривязки (возможно нужен 2FA)') });
+    }
+  };
+
   return (
     <section className={styles.card}>
-      <h2 className={styles.cardTitle}>Импортированные номера — привязка к сотрудникам</h2>
-      <p className={styles.hint}>Все свои номера из загруженных детализаций. Найдите сотрудника по ФИО в строке номера — его время разговоров появится в отчёте «По сотрудникам». Сохранение требует 2FA.</p>
+      <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0, marginBottom: 8 }}>
+        <h2 className={styles.cardTitle} style={{ margin: 0 }}>Импортированные номера — привязка к сотрудникам</h2>
+        <button className={styles.btnSecondary} onClick={() => { void onAutoLink(); }} disabled={autoLink.isPending}>
+          Автосвязать по ФИО (2FA)
+        </button>
+      </div>
+      <p className={styles.hint}>
+        Все свои номера из загруженных детализаций. Найдите сотрудника по ФИО в строке номера — его время разговоров
+        появится в отчёте «По сотрудникам». «Автосвязать по ФИО» пере-проверяет непривязанные номера с известным ФИО от
+        МТС и линкует только при точном однозначном совпадении — спорные случаи остаются для ручной привязки. Сохранение
+        требует 2FA.
+      </p>
       {imported.isLoading && <p className={styles.hint}>Загрузка…</p>}
       {!imported.isLoading && rows.length === 0 && (
         <p className={styles.hint}>Номеров пока нет — загрузите детализацию в разделе выше.</p>

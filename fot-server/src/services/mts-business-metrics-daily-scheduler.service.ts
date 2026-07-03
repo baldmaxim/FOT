@@ -59,6 +59,20 @@ function getMoscowHour(now: Date): number {
   return Number.parseInt(hourStr === '24' ? '0' : hourStr, 10);
 }
 
+/**
+ * Известные номера аккаунта — объединение CDR-истории и number_map (номера,
+ * найденные через HierarchyStructure, в CDR могут вообще не встречаться).
+ * Без объединения синк баланса/тарифа не видел бы номера, обнаруженные
+ * только через структуру абонента, даже после привязки к сотруднику.
+ */
+async function getAllKnownMsisdns(accountId: string): Promise<string[]> {
+  const [cdrNumbers, mappedNumbers] = await Promise.all([
+    mtsBusinessCdrService.getKnownMsisdnsByAccount(accountId),
+    mtsBusinessMappingService.getKnownMsisdnsByAccount(accountId),
+  ]);
+  return [...new Set([...cdrNumbers, ...mappedNumbers])];
+}
+
 const logSkip = (context: string, error: unknown): void => {
   if (isFeatureUnavailable(error)) {
     console.warn(`[mts-biz-metrics] ${context} — функция не подключена в тарифе МТС`);
@@ -120,7 +134,7 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
     }
   }
 
-  const msisdns = await mtsBusinessCdrService.getKnownMsisdnsByAccount(accountId);
+  const msisdns = await getAllKnownMsisdns(accountId);
   for (const msisdn of msisdns) {
     try {
       const balance = await mtsBusinessBillingService.checkBalanceByMsisdn(accountId, msisdn);
@@ -193,15 +207,26 @@ export async function refreshAccountCatalog(accountId: string): Promise<IRefresh
     });
     for (const n of hierarchy.numbers) {
       if (!n.msisdn) continue;
-      await mtsBusinessMappingService.ensureNumberDiscovered(n.msisdn);
+      const { needsFio } = await mtsBusinessMappingService.ensureNumberDiscovered(n.msisdn, accountId);
       discovered++;
+      // ФИО добираем ТОЛЬКО для действительно неизвестных номеров (нет ни
+      // сотрудника, ни ФИО) — не дёргаем PersonalData/PersonalDataInfo повторно
+      // для уже распознанных/подтверждённо-неоднозначных номеров.
+      if (needsFio) {
+        try {
+          const fio = await mtsBusinessCatalogService.getPersonalDataFio(accountId, n.msisdn);
+          if (fio) await mtsBusinessMappingService.syncMtsNames([{ msisdn: n.msisdn, fio }], null);
+        } catch (error) {
+          logSkip(`account=${accountId} номер — ФИО из PersonalData`, error);
+        }
+      }
     }
   } catch (error) {
     failed++;
     logSkip(`account=${accountId} структура абонента`, error);
   }
 
-  const msisdns = await mtsBusinessCdrService.getKnownMsisdnsByAccount(accountId);
+  const msisdns = await getAllKnownMsisdns(accountId);
   for (const msisdn of msisdns) {
     try {
       const tariff = await mtsBusinessCatalogService.getBillPlanInfo(accountId, msisdn);

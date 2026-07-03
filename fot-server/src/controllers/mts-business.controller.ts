@@ -361,6 +361,21 @@ export const mtsBusinessController = {
     }
   },
 
+  /** Пере-проверка автопривязки по ФИО для уже сохранённых, но не связанных номеров. */
+  async autoLinkNumberMap(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const result = await mtsBusinessMappingService.autoLinkByFio(req.user.id);
+      if (result.linked > 0) {
+        await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_NUMBER_MAP_UPDATED, {
+          details: { autoLinked: result.linked, checked: result.checked },
+        });
+      }
+      res.json({ success: true, data: result });
+    } catch (error) {
+      fail(res, error, 'Ошибка автопривязки по ФИО');
+    }
+  },
+
   // === Отчёт / дашборд ===
   async getTalkTimeReport(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {

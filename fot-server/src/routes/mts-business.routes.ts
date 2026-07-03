@@ -67,6 +67,12 @@ router.post(
 router.get('/number-map', requirePageAccess('/mts-business', 'view'), mtsBusinessController.getNumberMap);
 router.get('/number-map/imported', requirePageAccess('/mts-business', 'view'), mtsBusinessController.getImportedNumbers);
 router.put('/number-map', requirePageAccess('/mts-business', 'edit'), requireCritical2FA, mtsBusinessController.setNumberMap);
+router.post(
+  '/number-map/auto-link',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessController.autoLinkNumberMap,
+);
 
 // Отчёт «время разговоров» по сотрудникам + сводка по лицевым счетам (дашборд)
 router.get('/report/talk-time', requirePageAccess('/mts-business', 'view'), mtsBusinessController.getTalkTimeReport);

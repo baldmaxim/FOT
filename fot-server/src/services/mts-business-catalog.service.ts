@@ -189,6 +189,28 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     const status: MtsProductRequestStatus = s.includes('complet') ? 'completed' : s.includes('progress') ? 'in_progress' : s.includes('fault') ? 'faulted' : 'unknown';
     return { status, raw };
   }
+
+  /**
+   * ФИО пользователя номера — ЕДИНСТВЕННЫЙ способ получить имя для номеров
+   * без XML-детализации (напр. найденных через HierarchyStructure). Эндпоинт
+   * (`PersonalData/PersonalDataInfo`) отдаёт ПОЛНЫЙ пакет персданных (паспорт,
+   * дата/место рождения, адрес регистрации) — сознательное решение: берём из
+   * ответа ТОЛЬКО ФИО, остальные поля не парсим, никуда не пишем и не логируем
+   * (см. suppressErrorBodyLog — тело ошибки этого эндпоинта тоже не в логах).
+   */
+  async getPersonalDataFio(accountId: string, msisdn: string): Promise<string | null> {
+    const resp = await this.request<unknown>('get', '/PersonalData/PersonalDataInfo', {
+      accountId,
+      params: { 'contactMedium.phoneNumber': msisdn },
+      suppressErrorBodyLog: true,
+    });
+    const r = (resp ?? {}) as Record<string, unknown>;
+    const surName = asString(r.SurName) ?? asString(r.surName) ?? asString(r.LastName);
+    const firstName = asString(r.FirstName) ?? asString(r.firstName);
+    const secondName = asString(r.SecondName) ?? asString(r.secondName);
+    const fio = [surName, firstName, secondName].filter((v): v is string => Boolean(v)).join(' ');
+    return fio || null;
+  }
 }
 
 export const mtsBusinessCatalogService = new MtsBusinessCatalogService();
