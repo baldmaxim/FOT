@@ -36,6 +36,7 @@ import {
   loadAttendanceAdjustmentsWithAuthors,
   updateAttendanceAdjustmentById,
   upsertAttendanceAdjustment,
+  type IAttendanceEntry,
 } from '../services/attendance.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE, resolveDayObjectForAdjustment } from '../services/timesheet-object.service.js';
@@ -1548,7 +1549,7 @@ export const timesheetController = {
         if (acc !== 'all') employees = employees.filter(e => acc.has(Number(e.id)) || supervisorSet.has(Number(e.id)));
       }
 
-      const employeeIds = employees.map(e => Number(e.id)).filter(Number.isFinite);
+      let employeeIds = employees.map(e => Number(e.id)).filter(Number.isFinite);
 
       const empList = employees.map(e => ({ id: Number(e.id) }));
       const [dailySchedulesMap, calendarMonth] = await Promise.all([
@@ -1593,7 +1594,7 @@ export const timesheetController = {
       // Переключение факт/урезано выполняет фронт по per-role show_actual_hours
       // (selectVisibleHours). Путь 'capped_to_schedule' нужен только экспорту/зарплате.
       const effectiveDisplayMode: 'actual' | 'capped_to_schedule' = 'actual';
-      const { entries, objectEntries } = await buildAttendanceEntries({
+      let { entries, objectEntries } = await buildAttendanceEntries({
         employees: employees.map(employee => ({
           id: Number(employee.id),
           full_name: employee.full_name || null,
@@ -1611,6 +1612,55 @@ export const timesheetController = {
         synthesizeObjectOnlyDays: true,
       });
       mark(includeObjectDetails ? 'attendance_with_objects' : 'attendance');
+
+      // Скрываем из ростера сотрудников, у которых за весь период нет НИ ОДНОЙ настоящей
+      // записи. buildAttendanceEntries сам дозаполняет каждый рабочий по графику день
+      // синтетической заглушкой status='absent' (id: null, hours_worked: 0, без СКУД) —
+      // именно из таких заглушек состоят «фантомные» строки сотрудников, чьё членство
+      // в отделе живо только по протухшему snapshot (employees.org_department_id), а
+      // реально они не появлялись. Критерий — не «entry существует» (заглушки есть у
+      // всех), а «entry несёт реальный сигнал»: id корректировки/adjustment, явный
+      // is_correction, СКУД-присутствие (first_entry/last_exit), часы > 0 (включая
+      // synthetic 'remote' для сотрудников с schedule_type='remote' — это следствие
+      // явно назначенного графика, не фантом) или зачтённые travel-сегменты.
+      // Больничный/отпуск/удалёнка-по-заявке — настоящие adjustment-записи (id != null),
+      // такие сотрудники под фильтр не попадают. Self-карточка руководителя и строка(и)
+      // «Начальник участка» исключены из фильтрации явно.
+      if (shouldApplyDeptFilter || isDirectReportsOnlyScope) {
+        const hasRealActivity = (entry: IAttendanceEntry): boolean =>
+          entry.id != null ||
+          entry.is_correction ||
+          entry.first_entry != null ||
+          entry.last_exit != null ||
+          (entry.hours_worked ?? 0) > 0 ||
+          (entry.base_hours_worked ?? 0) > 0 ||
+          (entry.travel_segments_count ?? 0) > 0;
+
+        const rosterMemberIds = new Set<number>([...departmentEmployeeIds, ...directReportIds]);
+        const exemptIds = new Set<number>([
+          ...(selfTimesheetId != null ? [selfTimesheetId] : []),
+          ...supervisorIds,
+        ]);
+
+        const idsWithRealActivity = new Set<number>();
+        for (const entry of entries) {
+          if (hasRealActivity(entry)) idsWithRealActivity.add(entry.employee_id);
+        }
+        for (const entry of objectEntries) idsWithRealActivity.add(entry.employee_id);
+
+        const zeroActivityIds = new Set<number>();
+        for (const id of rosterMemberIds) {
+          if (!exemptIds.has(id) && !idsWithRealActivity.has(id)) zeroActivityIds.add(id);
+        }
+
+        if (zeroActivityIds.size > 0) {
+          employees = employees.filter(e => !zeroActivityIds.has(Number(e.id)));
+          employeeIds = employees.map(e => Number(e.id)).filter(Number.isFinite);
+          entries = entries.filter(e => !zeroActivityIds.has(e.employee_id));
+          objectEntries = objectEntries.filter(e => !zeroActivityIds.has(e.employee_id));
+        }
+      }
+      mark('zero_activity_filter');
 
       const startDay = Number.parseInt(startDate.slice(-2), 10);
       const endDay = Number.parseInt(endDate.slice(-2), 10);
