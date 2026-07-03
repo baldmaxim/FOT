@@ -48,7 +48,12 @@ export const mtsBusinessCatalogController = {
     }
   },
 
-  /** Ручное обновление каталога (тариф/услуги/пакеты/структура) по аккаунту (или всем активным). */
+  /**
+   * Ручное обновление каталога (тариф/услуги/пакеты/структура) по аккаунту
+   * (или всем активным). Дороже, чем billing-refresh: на каждый номер — до
+   * 2-3 вызовов МТС (тариф/услуги/ФИО), плюс структура абонента и пакеты на
+   * ЛС. Отвечаем сразу (started), работа идёт в фоне — иначе таймаут.
+   */
   async refresh(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { accountId, confirmed } = req.body as { accountId?: string; confirmed?: boolean };
@@ -64,18 +69,24 @@ export const mtsBusinessCatalogController = {
         return;
       }
 
-      const results = [];
-      for (const account of accounts) {
-        results.push(await refreshAccountCatalog(account.id));
-      }
-
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_METRICS_REFRESHED, {
         details: { accountId: accountId ?? null, accounts: accounts.length, kind: 'catalog' },
       });
 
-      res.json({ success: true, data: { results } });
+      res.json({ success: true, data: { started: true, accounts: accounts.length } });
+
+      void Promise.all(accounts.map(a => refreshAccountCatalog(a.id)))
+        .then(results => {
+          const discovered = results.reduce((sum, r) => sum + r.discovered, 0);
+          const failed = results.reduce((sum, r) => sum + r.failed, 0);
+          console.log(`[mts-biz-catalog] фоновое обновление завершено: ЛС=${results.length} discovered=${discovered} failed=${failed}`);
+        })
+        .catch(error => {
+          console.error('[mts-biz-catalog] фоновое обновление упало:', error instanceof Error ? error.message : 'unknown');
+          Sentry.captureException(error, { tags: { module: 'mts-business-catalog', kind: 'background-refresh' } });
+        });
     } catch (error) {
-      fail(res, error, 'Ошибка обновления каталога');
+      fail(res, error, 'Ошибка запуска обновления каталога');
     }
   },
 

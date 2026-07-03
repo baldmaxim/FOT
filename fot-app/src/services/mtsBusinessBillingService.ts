@@ -34,7 +34,8 @@ export interface IMtsBusinessTrendPoint {
 }
 
 export interface IMtsBusinessRefreshResult {
-  results: { accountId: string; numbers: number; failed: number }[];
+  started: boolean;
+  accounts: number;
 }
 
 interface ApiResponse<T> {

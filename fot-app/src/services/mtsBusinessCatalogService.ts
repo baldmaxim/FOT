@@ -27,7 +27,8 @@ export interface IMtsBusinessAccountPackages {
 }
 
 export interface IMtsBusinessCatalogRefreshResult {
-  results: { accountId: string; numbers: number; discovered: number; failed: number }[];
+  started: boolean;
+  accounts: number;
 }
 
 interface ApiResponse<T> {

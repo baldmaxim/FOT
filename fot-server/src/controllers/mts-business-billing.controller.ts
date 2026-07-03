@@ -68,7 +68,9 @@ export const mtsBusinessBillingController = {
   /**
    * Ручное обновление снимка баланса/начислений по одному аккаунту (или всем
    * активным, если accountId не передан) — та же функция, что использует
-   * ежедневный планировщик. Ошибка одного аккаунта не рушит остальные.
+   * ежедневный планировщик. Обход всех номеров аккаунта через rate-gate МТС
+   * может занять несколько минут — отвечаем сразу (started), реальная работа
+   * идёт в фоне, чтобы не упереться в таймаут прокси/фронта.
    */
   async refresh(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -85,18 +87,23 @@ export const mtsBusinessBillingController = {
         return;
       }
 
-      const results = [];
-      for (const account of accounts) {
-        results.push(await refreshAccountMetrics(account.id));
-      }
-
       await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_METRICS_REFRESHED, {
         details: { accountId: accountId ?? null, accounts: accounts.length },
       });
 
-      res.json({ success: true, data: { results } });
+      res.json({ success: true, data: { started: true, accounts: accounts.length } });
+
+      void Promise.all(accounts.map(a => refreshAccountMetrics(a.id)))
+        .then(results => {
+          const failed = results.reduce((sum, r) => sum + r.failed, 0);
+          console.log(`[mts-biz-billing] фоновое обновление завершено: ЛС=${results.length} failed=${failed}`);
+        })
+        .catch(error => {
+          console.error('[mts-biz-billing] фоновое обновление упало:', error instanceof Error ? error.message : 'unknown');
+          Sentry.captureException(error, { tags: { module: 'mts-business-billing', kind: 'background-refresh' } });
+        });
     } catch (error) {
-      fail(res, error, 'Ошибка обновления снимка баланса');
+      fail(res, error, 'Ошибка запуска обновления баланса');
     }
   },
 };

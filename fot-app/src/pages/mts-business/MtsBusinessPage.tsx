@@ -774,14 +774,16 @@ const FinanceSection: FC = () => {
     };
   });
 
+  // Обновление идёт в фоне на бэкенде (обход всех номеров занимает минуты
+  // из-за rate-gate МТС) — ответ приходит сразу, готовые данные подтянутся
+  // при следующем обновлении вкладки.
   const onRefresh = async (): Promise<void> => {
     setMsg(null);
     try {
       const r = await refresh.mutateAsync(accountId || undefined);
-      const failed = r.results.reduce((a, x) => a + x.failed, 0);
-      setMsg({ ok: failed === 0, text: `Обновлено ЛС: ${r.results.length}${failed ? `, ошибок по части номеров: ${failed}` : ''}` });
+      setMsg({ ok: true, text: `Обновление запущено (ЛС: ${r.accounts}) — данные появятся через несколько минут, откройте вкладку заново` });
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка обновления (возможно нужен 2FA)') });
+      setMsg({ ok: false, text: errText(e, 'Ошибка запуска обновления (возможно нужен 2FA)') });
     }
   };
 
@@ -789,11 +791,9 @@ const FinanceSection: FC = () => {
     setMsg(null);
     try {
       const r = await refreshCatalog.mutateAsync(accountId || undefined);
-      const failed = r.results.reduce((a, x) => a + x.failed, 0);
-      const discovered = r.results.reduce((a, x) => a + x.discovered, 0);
-      setMsg({ ok: failed === 0, text: `Каталог обновлён: ЛС ${r.results.length}, обнаружено номеров: ${discovered}${failed ? `, ошибок: ${failed}` : ''}` });
+      setMsg({ ok: true, text: `Обновление каталога запущено (ЛС: ${r.accounts}) — данные появятся через несколько минут, откройте вкладку заново` });
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка обновления каталога (возможно нужен 2FA)') });
+      setMsg({ ok: false, text: errText(e, 'Ошибка запуска обновления каталога (возможно нужен 2FA)') });
     }
   };
 
