@@ -18,12 +18,17 @@ CREATE TABLE IF NOT EXISTS mts_business_metric_daily (
   currency_code TEXT,
   valid_from    TIMESTAMPTZ,
   valid_to      TIMESTAMPTZ,
+  -- Плоская колонка, а не (captured_at::date) в индексе: cast timestamptz→date
+  -- зависит от TimeZone-настройки сессии, PG считает такую функцию STABLE, а
+  -- не IMMUTABLE, и отказывается строить по ней индекс ("functions in index
+  -- expression must be marked IMMUTABLE"). Проставляется CURRENT_DATE при upsert.
+  captured_date DATE NOT NULL DEFAULT CURRENT_DATE,
   captured_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Идемпотентный upsert: одна метрика на scope-цель в сутки.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mts_business_metric_daily_key
-  ON mts_business_metric_daily (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, (captured_at::date));
+  ON mts_business_metric_daily (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, captured_date);
 
 CREATE INDEX IF NOT EXISTS idx_mts_business_metric_daily_msisdn
   ON mts_business_metric_daily (msisdn_hash, captured_at DESC);

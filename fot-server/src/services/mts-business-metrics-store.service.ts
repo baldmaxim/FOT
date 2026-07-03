@@ -45,7 +45,7 @@ export interface IMetricTrendPoint {
   amount: number;
 }
 
-export type MtsBusinessSnapshotMetric = 'validity_info' | 'bill_plan' | 'product_services' | 'hierarchy';
+export type MtsBusinessSnapshotMetric = 'validity_info' | 'bill_plan' | 'product_services' | 'hierarchy' | 'budget_rules';
 
 export interface ISnapshotUpsert {
   accountId: string;
@@ -80,11 +80,11 @@ class MtsBusinessMetricsStoreService {
     const hash = input.msisdn ? msisdnHash(input.msisdn) : null;
     await execute(
       `INSERT INTO mts_business_metric_daily
-         (account_id, scope, account_no, msisdn_hash, metric, amount, currency_code, valid_from, valid_to, captured_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-       ON CONFLICT (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, (captured_at::date))
+         (account_id, scope, account_no, msisdn_hash, metric, amount, currency_code, valid_from, valid_to, captured_date, captured_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_DATE, NOW())
+       ON CONFLICT (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, captured_date)
        DO UPDATE SET amount = EXCLUDED.amount, currency_code = EXCLUDED.currency_code,
-         valid_from = EXCLUDED.valid_from, valid_to = EXCLUDED.valid_to, captured_at = NOW()`,
+         valid_from = EXCLUDED.valid_from, valid_to = EXCLUDED.valid_to, captured_date = CURRENT_DATE, captured_at = NOW()`,
       [
         input.accountId,
         input.scope,
@@ -184,13 +184,13 @@ class MtsBusinessMetricsStoreService {
     to: string,
   ): Promise<IMetricTrendPoint[]> {
     const rows = await query<{ date: string; amount: string }>(
-      `SELECT (captured_at::date)::text AS date, SUM(amount)::text AS amount
+      `SELECT captured_date::text AS date, SUM(amount)::text AS amount
          FROM mts_business_metric_daily
         WHERE scope = 'account' AND metric = $1
-          AND captured_at::date >= $2::date AND captured_at::date <= $3::date
+          AND captured_date >= $2::date AND captured_date <= $3::date
           AND ($4::uuid IS NULL OR account_id = $4::uuid)
-        GROUP BY captured_at::date
-        ORDER BY captured_at::date`,
+        GROUP BY captured_date
+        ORDER BY captured_date`,
       [metric, from, to, accountId ?? null],
     );
     return rows.map(r => ({ date: r.date, amount: Number(r.amount) }));
@@ -201,10 +201,10 @@ class MtsBusinessMetricsStoreService {
     const hash = input.msisdn ? msisdnHash(input.msisdn) : null;
     await execute(
       `INSERT INTO mts_business_metric_snapshot
-         (account_id, scope, account_no, msisdn_hash, metric, payload, captured_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
-       ON CONFLICT (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, (captured_at::date))
-       DO UPDATE SET payload = EXCLUDED.payload, captured_at = NOW()`,
+         (account_id, scope, account_no, msisdn_hash, metric, payload, captured_date, captured_at)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, NOW())
+       ON CONFLICT (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, captured_date)
+       DO UPDATE SET payload = EXCLUDED.payload, captured_date = CURRENT_DATE, captured_at = NOW()`,
       [input.accountId, input.scope, input.accountNo ?? null, hash, input.metric, JSON.stringify(input.payload)],
     );
   }

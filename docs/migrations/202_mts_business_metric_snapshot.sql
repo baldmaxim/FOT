@@ -13,13 +13,16 @@ CREATE TABLE IF NOT EXISTS mts_business_metric_snapshot (
   scope       VARCHAR(16) NOT NULL,       -- 'account' | 'msisdn'
   account_no  TEXT,
   msisdn_hash TEXT,
-  metric      VARCHAR(32) NOT NULL,       -- 'validity_info' | 'bill_plan' | 'product_services' | 'hierarchy'
+  metric      VARCHAR(32) NOT NULL,       -- 'validity_info' | 'bill_plan' | 'product_services' | 'hierarchy' | 'budget_rules'
   payload     JSONB NOT NULL,
+  -- Плоская колонка, а не (captured_at::date) в индексе — см. комментарий в
+  -- миграции 201 (STABLE-cast timestamptz→date не годится для индекса).
+  captured_date DATE NOT NULL DEFAULT CURRENT_DATE,
   captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mts_business_metric_snapshot_key
-  ON mts_business_metric_snapshot (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, (captured_at::date));
+  ON mts_business_metric_snapshot (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, captured_date);
 
 CREATE INDEX IF NOT EXISTS idx_mts_business_metric_snapshot_msisdn
   ON mts_business_metric_snapshot (msisdn_hash, captured_at DESC);
