@@ -110,12 +110,19 @@ const parseHierarchy = (resp: unknown): IMtsHierarchy => {
 
 class MtsBusinessCatalogService extends MtsBusinessServiceBase {
   async getBillPlanInfo(accountId: string, msisdn: string): Promise<IMtsTariff> {
+    // Проверено живым вызовом 03.07.2026: без `fields` МТС отвечает голым
+    // 500 "EJB Exception" (необработанное исключение на стороне МТС, а не
+    // валидация) — доки помечали `fields` обязательным без примера значения.
+    // 'MOAF' — значение, используемое в соседних GET-методах этого же API
+    // (CheckBalanceByMSISDN, ValidityInfo); если МТС всё равно 500 — нужно
+    // искать другое значение, доки для конкретно этого метода его не дают.
     const resp = await this.request<unknown>('get', '/Product/BillPlanInfo', {
       accountId,
       params: {
         'productCharacteristic.name': 'MSISDN',
         'productCharacteristic.value': msisdn,
         'productLine.name': 'MobileConnectivity',
+        fields: 'MOAF',
       },
     });
     return parseTariff(resp);
