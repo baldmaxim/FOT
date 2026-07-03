@@ -3,6 +3,7 @@ import multer from 'multer';
 import { mtsBusinessController } from '../controllers/mts-business.controller.js';
 import { mtsBusinessBillingController } from '../controllers/mts-business-billing.controller.js';
 import { mtsBusinessCatalogController } from '../controllers/mts-business-catalog.controller.js';
+import { mtsBusinessBudgetController } from '../controllers/mts-business-budget.controller.js';
 import { authenticate, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 
@@ -92,6 +93,32 @@ router.post(
   requirePageAccess('/mts-business', 'edit'),
   requireCritical2FA,
   mtsBusinessCatalogController.refresh,
+);
+
+// Управляющие действия (Фаза 3) — безопасные обратимые операции: добавить/
+// удалить услугу или добровольную блокировку, правило корп.бюджета.
+// Асинхронно (eventId → статус-поллер), edit + critical 2FA + confirmed=true.
+router.post(
+  '/catalog/services',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessCatalogController.modifyService,
+);
+router.get('/actions', requirePageAccess('/mts-business', 'view'), mtsBusinessCatalogController.getActions);
+
+router.get('/budget/rules', requirePageAccess('/mts-business', 'view'), mtsBusinessBudgetController.getRulesByMsisdn);
+router.get('/budget/available-rules', requirePageAccess('/mts-business', 'view'), mtsBusinessBudgetController.getAvailableRules);
+router.post(
+  '/budget/rules',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessBudgetController.addRule,
+);
+router.post(
+  '/budget/rules/remove',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessBudgetController.removeRule,
 );
 
 export default router;

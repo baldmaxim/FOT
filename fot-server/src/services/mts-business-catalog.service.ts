@@ -36,6 +36,8 @@ export interface IMtsHierarchy {
   numbers: IMtsHierarchyNumber[];
 }
 
+export type MtsProductRequestStatus = 'completed' | 'in_progress' | 'faulted' | 'unknown';
+
 const asString = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
 const toNumber = (v: unknown): number | null => {
   if (v == null) return null;
@@ -137,6 +139,55 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
   async getHierarchyStructure(accountId: string): Promise<IMtsHierarchy> {
     const resp = await this.request<unknown>('get', '/Service/HierarchyStructure', { accountId });
     return parseHierarchy(resp);
+  }
+
+  /**
+   * Добавить/удалить услугу ИЛИ добровольную блокировку — один и тот же
+   * эндпоинт (различаются только externalID: PEXXXX — услуга, BLXXXX —
+   * блокировка). Контракт (тело запроса, eventID-ответ) — НЕ проверен живым
+   * вызовом, только по докам support.mts.ru.
+   */
+  async modifyProduct(accountId: string, msisdn: string, action: 'create' | 'delete', externalID: string): Promise<{ eventId: string }> {
+    const resp = await this.request<unknown>('post', '/Product/ModifyProduct', {
+      accountId,
+      data: {
+        msisdn,
+        characteristic: [{ name: 'MobileConnectivity' }],
+        item: [{
+          action,
+          product: {
+            externalID,
+            productCharacteristic: [{ name: 'ResourceServiceRequestItemType', value: 'ResourceServiceRequestItem' }],
+          },
+        }],
+      },
+    });
+    const r = (resp ?? {}) as Record<string, unknown>;
+    const eventId = asString(r.eventID) ?? asString(r.eventId);
+    if (!eventId) throw new Error('МТС Бизнес: ответ ModifyProduct без eventID');
+    return { eventId };
+  }
+
+  /** Статус заявки ModifyProduct — Product/CheckRequestStatus (НЕ CheckRequestStatusByUUID, используемый для детализации). */
+  async checkModifyProductStatus(accountId: string, msisdn: string, eventId: string): Promise<{ status: MtsProductRequestStatus; raw: string | null }> {
+    const now = new Date();
+    const start = new Date(now.getTime() - 12 * 60 * 60 * 1000); // окно не более суток — см. доку
+    const fmtDay = (d: Date): string => {
+      const p = (n: number): string => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    };
+    const resp = await this.request<unknown>('post', '/Product/CheckRequestStatus', {
+      accountId,
+      data: {
+        relatedParty: [{ characteristic: [{ name: 'MSISDN', value: msisdn }] }, { id: eventId }],
+        validFor: { startDateTime: fmtDay(start), endDateTime: fmtDay(now) },
+      },
+    });
+    const r = (resp ?? {}) as Record<string, unknown>;
+    const raw = asString(r.status);
+    const s = (raw || '').toLowerCase();
+    const status: MtsProductRequestStatus = s.includes('complet') ? 'completed' : s.includes('progress') ? 'in_progress' : s.includes('fault') ? 'faulted' : 'unknown';
+    return { status, raw };
   }
 }
 

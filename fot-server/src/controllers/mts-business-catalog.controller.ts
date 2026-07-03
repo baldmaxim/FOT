@@ -4,6 +4,8 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { mtsBusinessAccountsService } from '../services/mts-business-accounts.service.js';
 import { mtsBusinessMetricsStoreService } from '../services/mts-business-metrics-store.service.js';
 import { refreshAccountCatalog } from '../services/mts-business-metrics-daily-scheduler.service.js';
+import { mtsBusinessCatalogService } from '../services/mts-business-catalog.service.js';
+import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
 import { MtsBusinessApiError } from '../services/mts-business-base.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 
@@ -74,6 +76,43 @@ export const mtsBusinessCatalogController = {
       res.json({ success: true, data: { results } });
     } catch (error) {
       fail(res, error, 'Ошибка обновления каталога');
+    }
+  },
+
+  /** Добавить/удалить услугу или добровольную блокировку — общий ModifyProduct, различаются action_type для аудита/статуса. */
+  async modifyService(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { accountId, msisdn, externalID, kind, mode, confirmed } = req.body as {
+        accountId?: string; msisdn?: string; externalID?: string;
+        kind?: 'service' | 'block'; mode?: 'add' | 'remove'; confirmed?: boolean;
+      };
+      if (confirmed !== true) { res.status(400).json({ success: false, error: 'Требуется подтверждение (confirmed=true)' }); return; }
+      if (!accountId || !msisdn || !externalID || (kind !== 'service' && kind !== 'block') || (mode !== 'add' && mode !== 'remove')) {
+        res.status(400).json({ success: false, error: 'Укажите accountId, msisdn, externalID, kind (service|block) и mode (add|remove)' });
+        return;
+      }
+      const { eventId } = await mtsBusinessCatalogService.modifyProduct(accountId, msisdn, mode === 'add' ? 'create' : 'delete', externalID);
+      const actionType = `${kind}_${mode}` as const;
+      await mtsBusinessActionsService.create({
+        eventId, accountId, scope: 'msisdn', msisdn, actionType, payload: { externalID }, requestedBy: req.user.id,
+      });
+      const auditAction = kind === 'service'
+        ? (mode === 'add' ? AUDIT_ACTIONS.MTS_BUSINESS_SERVICE_ADD_REQUESTED : AUDIT_ACTIONS.MTS_BUSINESS_SERVICE_REMOVE_REQUESTED)
+        : (mode === 'add' ? AUDIT_ACTIONS.MTS_BUSINESS_BLOCK_ADD_REQUESTED : AUDIT_ACTIONS.MTS_BUSINESS_BLOCK_REMOVE_REQUESTED);
+      await auditService.logFromRequest(req, req.user.id, auditAction, { details: { accountId, externalID } });
+      res.json({ success: true, data: { eventId } });
+    } catch (error) {
+      fail(res, error, 'Ошибка изменения услуги/блокировки');
+    }
+  },
+
+  /** Список заявок на управляющие действия (для бейджей «в обработке» на фронте). */
+  async getActions(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const data = await mtsBusinessActionsService.list();
+      res.json({ success: true, data });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения списка заявок');
     }
   },
 };
