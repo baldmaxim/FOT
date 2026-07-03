@@ -1,11 +1,8 @@
 import { type FC, useMemo, useState } from 'react';
-import { ApiError } from '../../api/client';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   useMtsBusinessAccounts,
   useMtsBusinessImportedNumbers,
-  useMtsBusinessReport,
-  useMtsBusinessAccountsSummary,
   useCreateMtsBusinessAccount,
   useUpdateMtsBusinessAccount,
   useDeleteMtsBusinessAccount,
@@ -15,16 +12,6 @@ import {
   useAutoLinkMtsBusinessNumberMap,
 } from '../../hooks/useMtsBusinessData';
 import {
-  useMtsBusinessBillingSummary,
-  useMtsBusinessBillingTrend,
-  useRefreshMtsBusinessBilling,
-} from '../../hooks/useMtsBusinessBillingData';
-import {
-  useMtsBusinessEmployeesCatalog,
-  useMtsBusinessAccountsPackages,
-  useRefreshMtsBusinessCatalog,
-} from '../../hooks/useMtsBusinessCatalogData';
-import {
   useMtsBusinessActions,
   useMtsBusinessBudgetRules,
   useModifyMtsBusinessService,
@@ -32,44 +19,12 @@ import {
   useRemoveMtsBusinessBudgetRule,
 } from '../../hooks/useMtsBusinessActionsData';
 import { mtsBusinessService, type IMtsBusinessAccount } from '../../services/mtsBusinessService';
-import type { MtsBusinessDailyMetric } from '../../services/mtsBusinessBillingService';
 import type { IMtsBusinessBudgetRule } from '../../services/mtsBusinessActionsService';
 import { EmployeeFioPicker } from '../mts/EmployeeFioPicker';
-import { TrendLineChart } from './TrendLineChart';
+import { OverviewSection } from './OverviewSection';
+import { errText, toISODate, fmtDur, fmtLast, ACTION_TYPE_LABELS } from './mtsBusinessFormat';
 import styles from './MtsBusinessPage.module.css';
 
-const errText = (e: unknown, fallback: string): string => (e instanceof ApiError ? e.message : fallback);
-
-const pad = (n: number): string => String(n).padStart(2, '0');
-const toISODate = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const fmtDur = (sec: number): string => {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return h > 0 ? `${h} ч ${pad(m)} м` : `${m} м ${pad(sec % 60)} с`;
-};
-const fmtLast = (iso: string | null): string => iso
-  ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
-  : '—';
-const fmtMoney = (v: number | null): string => v == null ? '—' : `${v.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
-const UNIT_LABELS: Record<string, string> = { BYTE: 'интернет', MINUTE: 'минуты', SECOND: 'минуты', ITEM: 'SMS', MONEY: 'деньги' };
-const fmtPackage = (p: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }): string => {
-  const label = (p.unitOfMeasure && UNIT_LABELS[p.unitOfMeasure]) || p.unitOfMeasure || '—';
-  const unit = p.unitOfMeasure === 'BYTE' ? 'МБ' : '';
-  const toUnit = (v: number | null): string => {
-    if (v == null) return '—';
-    return p.unitOfMeasure === 'BYTE' ? Math.round(v / 1_000_000).toLocaleString('ru-RU') : Math.round(v).toLocaleString('ru-RU');
-  };
-  return `${label}: ${toUnit(p.remainder)}${unit ? ` ${unit}` : ''} из ${toUnit(p.quota)}${unit ? ` ${unit}` : ''}`;
-};
-
-const ACTION_TYPE_LABELS: Record<string, string> = {
-  service_add: 'Добавить услугу',
-  service_remove: 'Удалить услугу',
-  block_add: 'Подключить блокировку',
-  block_remove: 'Снять блокировку',
-  budget_rule_add: 'Добавить правило бюджета',
-  budget_rule_remove: 'Удалить правило бюджета',
-};
 const STATUS_BADGE: Record<string, { cls: (typeof styles)[keyof typeof styles]; label: string }> = {
   completed: { cls: styles.badgeOk, label: 'готово' },
   in_progress: { cls: styles.badgeWait, label: 'в обработке' },
@@ -618,328 +573,17 @@ const ActionsSection: FC = () => {
   );
 };
 
-// ================= Дашборд «Основное» =================
-const Bars: FC<{ items: { key: string; label: string; sub?: string; value: number; active?: boolean; onClick?: () => void }[] }> = ({ items }) => {
-  const max = Math.max(1, ...items.map(i => i.value));
-  return (
-    <div>
-      {items.map(it => (
-        <div
-          key={it.key}
-          className={`${styles.barRow} ${it.onClick ? styles.barRowClickable : ''} ${it.active ? styles.barRowActive : ''}`}
-          onClick={it.onClick}
-        >
-          <div style={{ minWidth: 0 }}>
-            <div className={styles.barLabel}>{it.label}{it.sub && <span className={styles.barSub}> · {it.sub}</span>}</div>
-            <div className={styles.barTrack}><div className={styles.barFill} style={{ width: `${Math.round((it.value / max) * 100)}%` }} /></div>
-          </div>
-          <div className={styles.barValue}>{fmtDur(it.value)}</div>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-const DashboardSection: FC = () => {
-  const now = useMemo(() => new Date(), []);
-  const [from, setFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth(), 1)));
-  const [to, setTo] = useState(toISODate(now));
-  const [view, setView] = useState<'accounts' | 'employees'>('accounts');
-  const [accountId, setAccountId] = useState<string>(''); // фильтр по ЛС в режиме сотрудников
-
-  const summary = useMtsBusinessAccountsSummary(from, to, true);
-  const report = useMtsBusinessReport(from, to, view === 'employees', accountId || undefined);
-  const accountsMeta = useMtsBusinessAccounts();
-
-  const accRows = summary.data ?? [];
-  const totalCalls = accRows.reduce((a, r) => a + r.calls, 0);
-  const totalSec = accRows.reduce((a, r) => a + r.totalSeconds, 0);
-  const accountsWithData = accRows.filter(r => r.accountId).length;
-  const empRows = (report.data ?? []).filter(r => r.employeeId != null);
-  const mappedEmployees = empRows.length;
-
-  const accBars = accRows.map(r => ({
-    key: r.accountId ?? 'none',
-    label: r.label ?? (r.accountId ? 'Без названия' : 'Без привязки к ЛС'),
-    sub: [r.accountNumber, `${r.calls} зв.`, `${r.numbers} ном.`].filter(Boolean).join(' · '),
-    value: r.totalSeconds,
-    active: false,
-    onClick: r.accountId ? () => { setAccountId(r.accountId as string); setView('employees'); } : undefined,
-  }));
-
-  const empBars = (report.data ?? []).map((r, i) => ({
-    key: r.employeeId != null ? String(r.employeeId) : `unmapped-${i}`,
-    label: r.employeeFullName ?? 'Не привязанные номера',
-    sub: [r.employeeTabNumber, `${r.calls} зв.`, `вх ${fmtDur(r.inSeconds)}`, `исх ${fmtDur(r.outSeconds)}`].filter(Boolean).join(' · '),
-    value: r.totalSeconds,
-  }));
-
-  return (
-    <div className={styles.page}>
-      <section className={styles.card}>
-        <div className={styles.row}>
-          <div className={styles.field}>
-            <label className={styles.label}>Период с</label>
-            <input className={styles.input} type="date" value={from} onChange={e => setFrom(e.target.value)} />
-          </div>
-          <div className={styles.field}>
-            <label className={styles.label}>по</label>
-            <input className={styles.input} type="date" value={to} onChange={e => setTo(e.target.value)} />
-          </div>
-        </div>
-        <div className={styles.kpiGrid}>
-          <div className={styles.kpi}><div className={styles.kpiValue}>{fmtDur(totalSec)}</div><div className={styles.kpiLabel}>Время разговоров</div></div>
-          <div className={styles.kpi}><div className={styles.kpiValue}>{totalCalls.toLocaleString('ru-RU')}</div><div className={styles.kpiLabel}>Звонков</div></div>
-          <div className={styles.kpi}><div className={styles.kpiValue}>{accountsWithData}</div><div className={styles.kpiLabel}>Лицевых счетов</div></div>
-          <div className={styles.kpi}><div className={styles.kpiValue}>{totalCalls ? fmtDur(Math.round(totalSec / totalCalls)) : '—'}</div><div className={styles.kpiLabel}>Средний звонок</div></div>
-        </div>
-      </section>
-
-      <section className={styles.card}>
-        <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0 }}>
-          <div className={styles.segment}>
-            <button className={`${styles.segBtn} ${view === 'accounts' ? styles.segBtnActive : ''}`} onClick={() => setView('accounts')}>По лицевым счетам</button>
-            <button className={`${styles.segBtn} ${view === 'employees' ? styles.segBtnActive : ''}`} onClick={() => setView('employees')}>По сотрудникам</button>
-          </div>
-          {view === 'employees' && (
-            <select className={styles.select} style={{ maxWidth: 260 }} value={accountId} onChange={e => setAccountId(e.target.value)}>
-              <option value="">Все лицевые счета</option>
-              {(accountsMeta.data ?? []).map(a => <option key={a.id} value={a.id}>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>)}
-            </select>
-          )}
-        </div>
-
-        {view === 'accounts' ? (
-          summary.isLoading ? <p className={styles.hint}>Загрузка…</p>
-            : accBars.length === 0 ? <p className={styles.hint}>Нет данных за период. Загрузите детализацию (вкладка «Администрирование»).</p>
-              : <Bars items={accBars} />
-        ) : (
-          report.isLoading ? <p className={styles.hint}>Загрузка…</p>
-            : empBars.length === 0 ? <p className={styles.hint}>Нет данных. Загрузите детализацию и привяжите номера к сотрудникам.</p>
-              : <>
-                  <p className={styles.hint}>Сотрудников с данными: {mappedEmployees}. Клик по ЛС на вкладке слева фильтрует список.</p>
-                  <Bars items={empBars} />
-                </>
-        )}
-      </section>
-    </div>
-  );
-};
-
-// ================= Вкладка «Финансы» =================
-const FinanceSection: FC = () => {
-  const now = useMemo(() => new Date(), []);
-  const [from, setFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth() - 2, now.getDate())));
-  const [to, setTo] = useState(toISODate(now));
-  const [metric, setMetric] = useState<MtsBusinessDailyMetric>('balance');
-  const [accountId, setAccountId] = useState('');
-  const [msg, setMsg] = useState<Msg>(null);
-
-  const summary = useMtsBusinessBillingSummary();
-  const trend = useMtsBusinessBillingTrend(metric, from, to, accountId || undefined);
-  const refresh = useRefreshMtsBusinessBilling();
-  const accountsMeta = useMtsBusinessAccounts();
-  const employeesCatalog = useMtsBusinessEmployeesCatalog(accountId || undefined);
-  const accountsPackages = useMtsBusinessAccountsPackages();
-  const refreshCatalog = useRefreshMtsBusinessCatalog();
-
-  const accRows = summary.data?.accounts ?? [];
-  const totalBalance = accRows.reduce((a, r) => a + (r.balance ?? 0), 0);
-  const totalUnpaid = accRows.reduce((a, r) => a + (r.unpaidAmount ?? 0), 0);
-  const overdueCount = accRows.filter(r => (r.unpaidAmount ?? 0) > 0).length;
-
-  // Сводка по сотрудникам (баланс/начисления) + каталог (тариф/услуги) — два
-  // независимых источника, объединяем по employeeId на клиенте.
-  const catalogByEmployee = useMemo(() => {
-    const map = new Map<string, { tariffNames: Set<string>; servicesCount: number; servicesMonthlyTotal: number }>();
-    for (const c of employeesCatalog.data ?? []) {
-      const key = c.employeeId != null ? String(c.employeeId) : `unmapped-${c.employeeFullName ?? ''}`;
-      let g = map.get(key);
-      if (!g) { g = { tariffNames: new Set(), servicesCount: 0, servicesMonthlyTotal: 0 }; map.set(key, g); }
-      if (c.tariffName) g.tariffNames.add(c.tariffName);
-      g.servicesCount += c.servicesCount;
-      g.servicesMonthlyTotal += c.servicesMonthlyTotal;
-    }
-    return map;
-  }, [employeesCatalog.data]);
-
-  const empRows = (summary.data?.employees ?? []).map(r => {
-    const key = r.employeeId != null ? String(r.employeeId) : `unmapped-${r.employeeFullName ?? ''}`;
-    const c = catalogByEmployee.get(key);
-    return {
-      ...r,
-      tariffName: c ? [...c.tariffNames].join(', ') || null : null,
-      servicesCount: c?.servicesCount ?? 0,
-      servicesMonthlyTotal: c?.servicesMonthlyTotal ?? 0,
-    };
-  });
-
-  // Обновление идёт в фоне на бэкенде (обход всех номеров занимает минуты
-  // из-за rate-gate МТС) — ответ приходит сразу, готовые данные подтянутся
-  // при следующем обновлении вкладки.
-  const onRefresh = async (): Promise<void> => {
-    setMsg(null);
-    try {
-      const r = await refresh.mutateAsync(accountId || undefined);
-      setMsg({ ok: true, text: `Обновление запущено (ЛС: ${r.accounts}) — данные появятся через несколько минут, откройте вкладку заново` });
-    } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка запуска обновления (возможно нужен 2FA)') });
-    }
-  };
-
-  const onRefreshCatalog = async (): Promise<void> => {
-    setMsg(null);
-    try {
-      const r = await refreshCatalog.mutateAsync(accountId || undefined);
-      setMsg({ ok: true, text: `Обновление каталога запущено (ЛС: ${r.accounts}) — данные появятся через несколько минут, откройте вкладку заново` });
-    } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка запуска обновления каталога (возможно нужен 2FA)') });
-    }
-  };
-
-  return (
-    <div className={styles.page}>
-      <section className={styles.card}>
-        <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0 }}>
-          <h2 className={styles.cardTitle} style={{ margin: 0 }}>Финансы</h2>
-          <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className={styles.btn} onClick={onRefresh} disabled={refresh.isPending}>Обновить сейчас (2FA)</button>
-            <button className={styles.btnSecondary} onClick={onRefreshCatalog} disabled={refreshCatalog.isPending}>Обновить каталог (2FA)</button>
-          </span>
-        </div>
-        <div className={styles.kpiGrid}>
-          <div className={styles.kpi}><div className={styles.kpiValue}>{fmtMoney(totalBalance)}</div><div className={styles.kpiLabel}>Суммарный баланс по ЛС</div></div>
-          <div className={styles.kpi}><div className={styles.kpiValue}>{fmtMoney(totalUnpaid)}</div><div className={styles.kpiLabel}>Неоплаченные счета</div></div>
-          <div className={styles.kpi}><div className={styles.kpiValue}>{overdueCount}</div><div className={styles.kpiLabel}>ЛС с просрочкой</div></div>
-        </div>
-        {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
-      </section>
-
-      <section className={styles.card}>
-        <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0 }}>
-          <div className={styles.segment}>
-            <button className={`${styles.segBtn} ${metric === 'balance' ? styles.segBtnActive : ''}`} onClick={() => setMetric('balance')}>Баланс</button>
-            <button className={`${styles.segBtn} ${metric === 'unpaid_amount' ? styles.segBtnActive : ''}`} onClick={() => setMetric('unpaid_amount')}>Неоплаченные</button>
-          </div>
-          <select className={styles.select} style={{ maxWidth: 260 }} value={accountId} onChange={e => setAccountId(e.target.value)}>
-            <option value="">Все лицевые счета</option>
-            {(accountsMeta.data ?? []).map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
-          </select>
-        </div>
-        <div className={styles.row}>
-          <div className={styles.field}>
-            <label className={styles.label}>Период с</label>
-            <input className={styles.input} type="date" value={from} onChange={e => setFrom(e.target.value)} />
-          </div>
-          <div className={styles.field}>
-            <label className={styles.label}>по</label>
-            <input className={styles.input} type="date" value={to} onChange={e => setTo(e.target.value)} />
-          </div>
-        </div>
-        {trend.isLoading ? (
-          <p className={styles.hint}>Загрузка…</p>
-        ) : (
-          <TrendLineChart points={trend.data ?? []} formatValue={v => fmtMoney(Math.round(v))} />
-        )}
-      </section>
-
-      <section className={styles.card}>
-        <h2 className={styles.cardTitle}>По лицевым счетам</h2>
-        {summary.isLoading ? (
-          <p className={styles.hint}>Загрузка…</p>
-        ) : accRows.length === 0 ? (
-          <p className={styles.hint}>Нет данных. Нажмите «Обновить сейчас» или дождитесь ежедневного автообновления.</p>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead><tr><th>Лицевой счёт</th><th>Баланс</th><th>Кредитный лимит</th><th>Неоплаченные</th><th>Обновлено</th></tr></thead>
-              <tbody>
-                {accRows.map(r => (
-                  <tr key={r.accountId}>
-                    <td>{r.label}{r.accountNumber ? ` (${r.accountNumber})` : ''}</td>
-                    <td>{fmtMoney(r.balance)}</td>
-                    <td>{fmtMoney(r.creditLimit)}</td>
-                    <td>
-                      {(r.unpaidAmount ?? 0) > 0
-                        ? <span className={`${styles.badge} ${styles.badgeErr}`}>{fmtMoney(r.unpaidAmount)}</span>
-                        : fmtMoney(r.unpaidAmount)}
-                    </td>
-                    <td>{fmtLast(r.capturedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className={styles.card}>
-        <h2 className={styles.cardTitle}>По сотрудникам</h2>
-        {summary.isLoading ? (
-          <p className={styles.hint}>Загрузка…</p>
-        ) : empRows.length === 0 ? (
-          <p className={styles.hint}>Нет данных — привяжите номера к сотрудникам на вкладке «Администрирование».</p>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead><tr><th>Сотрудник</th><th>Тариф</th><th>Баланс</th><th>Начисления</th><th>Услуги</th><th>Обновлено</th></tr></thead>
-              <tbody>
-                {empRows.map((r, i) => (
-                  <tr key={r.employeeId ?? `unmapped-${i}`}>
-                    <td>{r.employeeFullName ?? 'Не привязан'}{r.employeeTabNumber ? ` (таб. ${r.employeeTabNumber})` : ''}</td>
-                    <td>{r.tariffName ?? '—'}</td>
-                    <td>{fmtMoney(r.balance)}</td>
-                    <td>{fmtMoney(r.chargesAmount)}</td>
-                    <td>{r.servicesCount > 0 ? `${r.servicesCount} · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : '—'}</td>
-                    <td>{fmtLast(r.capturedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className={styles.card}>
-        <h2 className={styles.cardTitle}>Остатки пакетов по лицевым счетам</h2>
-        {accountsPackages.isLoading ? (
-          <p className={styles.hint}>Загрузка…</p>
-        ) : (accountsPackages.data ?? []).every(a => a.packages.length === 0) ? (
-          <p className={styles.hint}>Нет данных — нажмите «Обновить каталог» или дождитесь еженедельного автообновления.</p>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead><tr><th>Лицевой счёт</th><th>Пакеты</th><th>Обновлено</th></tr></thead>
-              <tbody>
-                {(accountsPackages.data ?? []).filter(a => a.packages.length > 0).map(a => (
-                  <tr key={a.accountId}>
-                    <td>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</td>
-                    <td>{a.packages.map(fmtPackage).join(' · ')}</td>
-                    <td>{fmtLast(a.capturedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </div>
-  );
-};
-
 // ================= Страница с вкладками =================
 export const MtsBusinessPage: FC = () => {
-  const [tab, setTab] = useState<'main' | 'finance' | 'admin'>('main');
+  const [tab, setTab] = useState<'main' | 'admin'>('main');
   return (
     <div className={styles.page}>
       <div className={styles.tabs}>
         <button className={`${styles.tab} ${tab === 'main' ? styles.tabActive : ''}`} onClick={() => setTab('main')}>Основное</button>
-        <button className={`${styles.tab} ${tab === 'finance' ? styles.tabActive : ''}`} onClick={() => setTab('finance')}>Финансы</button>
         <button className={`${styles.tab} ${tab === 'admin' ? styles.tabActive : ''}`} onClick={() => setTab('admin')}>Администрирование</button>
       </div>
 
-      {tab === 'main' && <DashboardSection />}
-      {tab === 'finance' && <FinanceSection />}
+      {tab === 'main' && <OverviewSection />}
       {tab === 'admin' && (
         <>
           <AccountsSection />
