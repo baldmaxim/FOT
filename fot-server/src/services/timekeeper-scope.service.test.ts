@@ -15,6 +15,7 @@ import {
   listTimekeeperDirectEmployeeIds,
   resolveTimekeeperDepartmentSeeds,
   resolveTimekeeperDirectEmployeeIds,
+  resolveTimekeeperEditableLiIds,
   resolveTimekeeperLiObshestroyPresenceIds,
   resolveTimekeeperObjectIds,
   TIMEKEEPER_PRESENCE_WINDOW_DAYS,
@@ -146,24 +147,55 @@ describe('resolveTimekeeperDirectEmployeeIds (кэш на req)', () => {
 });
 
 describe('resolveTimekeeperLiObshestroyPresenceIds', () => {
-  it('пусто, если нет присутствующих сотрудников вообще (без второго запроса)', async () => {
-    pgQuery.mockResolvedValueOnce([]); // resolveTimekeeperDirectEmployeeIds -> пусто
+  it('одним запросом: ЛИНИЯ-Общестрой, присутствие за ПЕРИОД (не 90 дней)', async () => {
+    pgQuery.mockResolvedValueOnce([{ id: 7 }, { id: 9 }]);
     const req = buildReq();
-    const set = await resolveTimekeeperLiObshestroyPresenceIds(req);
-    expect([...set]).toEqual([]);
+    const set = await resolveTimekeeperLiObshestroyPresenceIds(req, '2026-06-16', '2026-06-30');
+    expect([...set]).toEqual([7, 9]);
     expect(pgQuery).toHaveBeenCalledTimes(1);
+    const [sql, params] = pgQuery.mock.calls[0];
+    expect(sql).toContain('org_department_id');
+    expect(sql).toContain('employee_object_assignment');
+    expect(sql).toContain('employee_skud_object_access');
+    expect(sql).toContain('skud_events');
+    // Охват присутствия — по периоду, а не по 90-дневному окну.
+    expect(sql).toContain('se.event_date >= $3::date');
+    expect(sql).toContain('se.event_date <= $4::date');
+    expect(sql).not.toContain(`INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days'`);
+    expect(params[0]).toBe('tk-1');
+    expect(params[1]).toBe('0b24809e-5f04-45e1-bbe2-8a82990d6bdd');
+    expect(params[2]).toBe('2026-06-16');
+    expect(params[3]).toBe('2026-06-30');
   });
 
-  it('фильтрует присутствующих по org_department_id = ЛИНИЯ-Общестрой', async () => {
+  it('пусто, если запрос ничего не вернул', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    const set = await resolveTimekeeperLiObshestroyPresenceIds(buildReq(), '2026-06-01', '2026-06-15');
+    expect([...set]).toEqual([]);
+  });
+});
+
+describe('resolveTimekeeperEditableLiIds (гейт правки, 90д ∩ ЛИНИЯ-Общестрой, кэш)', () => {
+  it('direct-сотрудники ∩ ЛИНИЯ-Общестрой; кэширует на req', async () => {
     pgQuery
-      .mockResolvedValueOnce([{ employee_id: 5 }, { employee_id: 7 }, { employee_id: 9 }]) // direct employees
-      .mockResolvedValueOnce([{ id: 7 }]); // только 7 реально в ЛИНИЯ-Общестрой
+      .mockResolvedValueOnce([{ employee_id: 5 }, { employee_id: 7 }, { employee_id: 9 }]) // direct (90д)
+      .mockResolvedValueOnce([{ id: 7 }]); // только 7 в ЛИНИЯ-Общестрой
     const req = buildReq();
-    const set = await resolveTimekeeperLiObshestroyPresenceIds(req);
+    const set = await resolveTimekeeperEditableLiIds(req);
     expect([...set]).toEqual([7]);
     const [sql, params] = pgQuery.mock.calls[1];
     expect(sql).toContain('org_department_id');
     expect(params[0]).toEqual([5, 7, 9]);
     expect(params[1]).toBe('0b24809e-5f04-45e1-bbe2-8a82990d6bdd');
+    // Второй вызов — из кэша, без новых запросов.
+    await resolveTimekeeperEditableLiIds(req);
+    expect(pgQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('пусто без direct-сотрудников (второй запрос не идёт)', async () => {
+    pgQuery.mockResolvedValueOnce([]); // direct пусто
+    const set = await resolveTimekeeperEditableLiIds(buildReq());
+    expect([...set]).toEqual([]);
+    expect(pgQuery).toHaveBeenCalledTimes(1);
   });
 });

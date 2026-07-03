@@ -117,7 +117,11 @@ export async function listTimekeeperAccessibleDepartmentIds(timekeeperUserId: st
     [seeds],
   );
   const subtree = rows.map(r => r.id);
-  return subtree.length > 0 ? [...new Set([...seeds, ...subtree])] : seeds;
+  // ЛИНИЯ-Общестрой — соседняя ветка (не бригада), но табельщица ведёт её людей по
+  // присутствию, поэтому даём выбрать отдел в «По отделу». Состав грида сузится до её
+  // людей (isTimekeeperLiDeptView), правка — только по присутствие-набору (edit-гейт).
+  // Это только профильный managed_department_ids (селектор), не backend-скоуп.
+  return [...new Set([...seeds, ...subtree, LI_OBSHESTROY_DEPARTMENT_ID])];
 }
 
 /**
@@ -169,30 +173,80 @@ export async function resolveTimekeeperDirectEmployeeIds(req: AuthenticatedReque
   return ids;
 }
 
-const LI_OBSHESTROY_DEPARTMENT_ID = '0b24809e-5f04-45e1-bbe2-8a82990d6bdd'; // «ЛИНИЯ-Общестрой»
+export const LI_OBSHESTROY_DEPARTMENT_ID = '0b24809e-5f04-45e1-bbe2-8a82990d6bdd'; // «ЛИНИЯ-Общестрой»
 
 /**
  * Сотрудники «ЛИНИЯ-Общестрой» (по ТЕКУЩЕМУ employees.org_department_id, не по
  * employee_department_access — там бывают протухшие active-строки из sigur_sync
  * у людей, реально переведённых в другую бригаду), присутствующие на любом из
- * объектов табельщицы — в том же смысле «присутствия», что и остальные источники
- * resolveTimekeeperDirectEmployeeIds (явное назначение employee_object_assignment,
- * ручная привязка employee_skud_object_access, ИЛИ фактические проходы skud_events
- * за 90 дней). Не члены её бригад, показываются отдельной секцией после бригады
- * в Табеле. Точечно по конкретному отделу — не обобщено на все leaf-отделы.
+ * объектов табельщицы В ВЫБРАННОМ ПЕРИОДЕ [startDate, endDate]. «Присутствие» =
+ * явное назначение employee_object_assignment, ручная привязка
+ * employee_skud_object_access, ИЛИ фактические проходы skud_events в пределах
+ * периода (не 90 дней — иначе тянет «хвост» ИТР, засветившихся раз за квартал).
+ * Не члены её бригад, показываются отдельной секцией после бригады в Табеле.
  */
 export async function resolveTimekeeperLiObshestroyPresenceIds(
   req: AuthenticatedRequest,
+  startDate: string,
+  endDate: string,
 ): Promise<Set<number>> {
+  const rows = await query<{ id: number | string }>(
+    `SELECT DISTINCT e.id
+       FROM employees e
+      WHERE e.org_department_id = $2::uuid
+        AND e.employment_status = 'active' AND e.is_archived = false
+        AND e.id IN (
+          SELECT eoa.employee_id
+            FROM timekeeper_object_access toa
+            JOIN employee_object_assignment eoa
+              ON eoa.skud_object_id = toa.skud_object_id AND eoa.is_active = true
+           WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
+          UNION
+          SELECT esoa.employee_id
+            FROM timekeeper_object_access toa
+            JOIN employee_skud_object_access esoa
+              ON esoa.skud_object_id = toa.skud_object_id AND esoa.is_active = true
+           WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
+          UNION
+          SELECT se.employee_id
+            FROM timekeeper_object_access toa
+            JOIN skud_object_access_points sap ON sap.object_id = toa.skud_object_id
+            JOIN skud_events se
+              ON BTRIM(se.access_point) = BTRIM(sap.access_point_name)
+             AND se.event_date >= $3::date AND se.event_date <= $4::date
+           WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
+        )`,
+    [req.user.id, LI_OBSHESTROY_DEPARTMENT_ID, startDate, endDate],
+  );
+  return new Set(
+    rows.map(r => Number(r.id)).filter((id): id is number => Number.isInteger(id)),
+  );
+}
+
+/**
+ * Множество ЛИНИЯ-Общестрой-сотрудников на объектах табельщицы для АВТОРИЗАЦИИ ПРАВКИ
+ * (не для показа): `resolveTimekeeperDirectEmployeeIds` (90-дневное присутствие по всем
+ * её объектам) ∩ org_department_id = ЛИНИЯ-Общестрой. Шире, чем период-версия для показа
+ * (`resolveTimekeeperLiObshestroyPresenceIds`), т.к. гейт правки не зависит от выбранного
+ * периода — но строго ограничен LI на её объектах (не пускает чужих ИТР/подрядных).
+ * Кэш на `req.user.__timekeeper_editable_li`.
+ */
+export async function resolveTimekeeperEditableLiIds(req: AuthenticatedRequest): Promise<Set<number>> {
+  if (req.user.__timekeeper_editable_li) return req.user.__timekeeper_editable_li;
   const direct = await resolveTimekeeperDirectEmployeeIds(req);
-  if (direct.size === 0) return new Set();
+  if (direct.size === 0) {
+    req.user.__timekeeper_editable_li = new Set();
+    return req.user.__timekeeper_editable_li;
+  }
   const rows = await query<{ id: number | string }>(
     `SELECT id FROM employees
       WHERE id = ANY($1::int[]) AND org_department_id = $2::uuid
         AND employment_status = 'active' AND is_archived = false`,
     [[...direct], LI_OBSHESTROY_DEPARTMENT_ID],
   );
-  return new Set(
+  const set = new Set(
     rows.map(r => Number(r.id)).filter((id): id is number => Number.isInteger(id)),
   );
+  req.user.__timekeeper_editable_li = set;
+  return set;
 }

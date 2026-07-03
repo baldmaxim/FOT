@@ -132,6 +132,7 @@ export interface AuthenticatedRequest extends Request {
     __skud_object_scope?: { is_unrestricted: boolean; object_ids: string[] };
     __timekeeper_dept_seeds?: string[];
     __timekeeper_direct_employees?: Set<number>;
+    __timekeeper_editable_li?: Set<number>;
     __accessible_employee_ids?: Set<number>;
     __editable_subtree_ids?: string[];
     __editable_employee_ids?: Set<number>;

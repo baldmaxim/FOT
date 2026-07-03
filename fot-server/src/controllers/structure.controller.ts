@@ -5,6 +5,7 @@ import { auditService } from '../services/audit.service.js';
 import { getKnownArchiveDepartment, isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
 import { resolveAccessibleDepartmentIds, resolveCompanyScope } from '../services/data-scope.service.js';
+import { isTimekeeper, LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
 import type {
   AuthenticatedRequest,
   OrgDepartment,
@@ -254,7 +255,14 @@ async function loadTreeForCache(req: AuthenticatedRequest): Promise<object> {
     loadAccessibleDeptSet(req),
   ]);
   const fullTree = buildDepartmentTree(departments, null);
-  const departmentTree = filterTreeByScope(fullTree, scope);
+  // Табельщица: показываем в дереве отдел «ЛИНИЯ-Общестрой» (её люди по присутствию),
+  // хотя он не в её seed-скоупе. Только дерево-навигация (селектор «По отделу»);
+  // видимость сотрудников ЛИНИЯ-Общестрой в Кадрах и правка не расширяются
+  // (resolveAccessibleDepartmentIds/editable без LI; состав табеля сужается в getAll).
+  const treeScope = scope !== 'all' && isTimekeeper(req)
+    ? new Set<string>([...scope, LI_OBSHESTROY_DEPARTMENT_ID])
+    : scope;
+  const departmentTree = filterTreeByScope(fullTree, treeScope);
 
   return {
     success: true,

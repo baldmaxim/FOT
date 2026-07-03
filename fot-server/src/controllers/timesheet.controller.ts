@@ -26,7 +26,7 @@ import {
   resolveEffectiveDirectSubordinates,
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
-import { isTimekeeper, resolveTimekeeperLiObshestroyPresenceIds } from '../services/timekeeper-scope.service.js';
+import { isTimekeeper, resolveTimekeeperEditableLiIds, resolveTimekeeperLiObshestroyPresenceIds, LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
 import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
 import {
@@ -861,7 +861,19 @@ async function canAccessEmployeeForTimesheetDate(
     }
   }
 
-  // Прямые подчинённые (employee_direct_reports) / явные сотрудники табельщицы.
+  // Табельщица: правка сотрудников ЛИНИЯ-Общестрой, работающих на её объектах
+  // («По отделу → ЛИНИЯ-Общестрой»). Бригады правятся веткой editable-seeds выше.
+  // Строго LI ∩ её объекты — чужих ИТР/подрядных, прошедших через объект, не пускаем.
+  // Read-only не затрагивается: ветка под requireEdit.
+  if (requireEdit && isTimekeeper(req)) {
+    const editableLi = await resolveTimekeeperEditableLiIds(req);
+    if (editableLi.has(employeeId)) {
+      return true;
+    }
+  }
+
+  // Прямые подчинённые руководителя (employee_direct_reports). Для табельщицы пусто —
+  // её объектные сотрудники обработаны веткой выше.
   const directSubs = await resolveEffectiveDirectSubordinates(req);
   if (directSubs.includes(employeeId)) {
     return true;
@@ -916,7 +928,19 @@ async function canAccessEmployeeForTimesheetPeriod(
     }
   }
 
-  // Прямые подчинённые (employee_direct_reports) / явные сотрудники табельщицы.
+  // Табельщица: правка сотрудников ЛИНИЯ-Общестрой, работающих на её объектах
+  // («По отделу → ЛИНИЯ-Общестрой»). Бригады правятся веткой editable-seeds выше.
+  // Строго LI ∩ её объекты — чужих ИТР/подрядных, прошедших через объект, не пускаем.
+  // Read-only не затрагивается: ветка под requireEdit.
+  if (requireEdit && isTimekeeper(req)) {
+    const editableLi = await resolveTimekeeperEditableLiIds(req);
+    if (editableLi.has(employeeId)) {
+      return true;
+    }
+  }
+
+  // Прямые подчинённые руководителя (employee_direct_reports). Для табельщицы пусто —
+  // её объектные сотрудники обработаны веткой выше.
   const directSubs = await resolveEffectiveDirectSubordinates(req);
   if (directSubs.includes(employeeId)) {
     return true;
@@ -985,6 +1009,14 @@ export async function resolveTimesheetScopedDepartmentId(
   }
 
   if (scope === 'department') {
+    // Табельщица: разрешаем выбор «ЛИНИЯ-Общестрой» в «По отделу», хотя это не её
+    // seed-бригада (соседняя ветка). Состав грида при этом сужается до её людей
+    // (isTimekeeperLiDeptView в getAll), а правка — только по присутствие-набору
+    // (edit-гейт, часть A). В editable-скоуп LI-отдел не входит → массовой правки
+    // всего отдела нет.
+    if (isTimekeeper(req) && requestedDepartmentId === LI_OBSHESTROY_DEPARTMENT_ID) {
+      return LI_OBSHESTROY_DEPARTMENT_ID;
+    }
     return resolveScopedDepartmentId(req, requestedDepartmentId);
   }
 
@@ -1389,9 +1421,17 @@ export const timesheetController = {
       // дополнительный AND по авто-резолвнутому department_id ломает кейс «руководитель ведёт несколько отделов,
       // сотрудник числится не в первом».
       const shouldApplyDeptFilter = hasDeptFilter && !hasEmployeeFilter;
-      const departmentMemberships: IDepartmentEmployeeMembership[] = shouldApplyDeptFilter
+      // Табельщица + выбран отдел «ЛИНИЯ-Общестрой» («По отделу»): показываем НЕ весь
+      // отдел (~98), а только её людей — присутствующих на её объектах в периоде.
+      const isTimekeeperLiDeptView = shouldApplyDeptFilter && isTimekeeper(req)
+        && department_id === LI_OBSHESTROY_DEPARTMENT_ID;
+      let departmentMemberships: IDepartmentEmployeeMembership[] = shouldApplyDeptFilter
         ? await listEmployeeMembershipsForDepartmentPeriod(department_id as string, startDate, endDate)
         : [];
+      if (isTimekeeperLiDeptView) {
+        const herLi = await resolveTimekeeperLiObshestroyPresenceIds(req, startDate, endDate);
+        departmentMemberships = departmentMemberships.filter(m => herLi.has(m.employee_id));
+      }
       // Начальник(и) участка бригады — отдельной строкой «Начальник участка» первыми
       // в сетке (для табельщиц/HR/админов). Для не-бригад пусто. Резолвится на бэке
       // (site_supervisor бригады) — совпадает с руководителем, выбранным в «По участкам».
@@ -1399,11 +1439,10 @@ export const timesheetController = {
         ? await listBrigadeSupervisorEmployeeIds(department_id as string)
         : [];
       const supervisorSet = new Set<number>(supervisorIds);
-      // Табельщица: сотрудники «ЛИНИЯ-Общестрой», присутствующие на её объектах —
-      // отдельной секцией после бригады (не члены выбранного отдела).
-      const liPresenceIds = (shouldApplyDeptFilter && isTimekeeper(req))
-        ? [...await resolveTimekeeperLiObshestroyPresenceIds(req)]
-        : [];
+      // ЛИНИЯ-Общестрой больше НЕ подмешивается секцией в «По участкам»/«По объектам».
+      // Её сотрудники видны только как состав отдела в «По отделу → ЛИНИЯ-Общестрой»
+      // (isTimekeeperLiDeptView выше, состав уже сужен до её объектных людей).
+      const liPresenceIds: number[] = [];
       const liPresenceSet = new Set<number>(liPresenceIds);
       mark('scope');
       const departmentEmployeeIds = departmentMemberships.map(m => m.employee_id);
