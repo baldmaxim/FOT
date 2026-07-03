@@ -145,9 +145,6 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
 
   async getHierarchyStructure(accountId: string): Promise<IMtsHierarchy> {
     const resp = await this.request<unknown>('get', '/Service/HierarchyStructure', { accountId });
-    // ВРЕМЕННО (диагностика): смотрим сырой ответ на наличие полей статуса
-    // линии, отсутствующих в parseHierarchy. Убрать после проверки.
-    console.log('[mts-biz][diag] HierarchyStructure raw:', JSON.stringify(resp));
     return parseHierarchy(resp);
   }
 
