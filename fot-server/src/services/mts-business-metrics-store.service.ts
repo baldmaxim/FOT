@@ -45,6 +45,35 @@ export interface IMetricTrendPoint {
   amount: number;
 }
 
+export type MtsBusinessSnapshotMetric = 'validity_info' | 'bill_plan' | 'product_services' | 'hierarchy';
+
+export interface ISnapshotUpsert {
+  accountId: string;
+  scope: 'account' | 'msisdn';
+  accountNo?: string | null;
+  msisdn?: string | null; // сырой номер — хэшируется внутри, не хранится здесь
+  metric: MtsBusinessSnapshotMetric;
+  payload: unknown;
+}
+
+export interface IEmployeeCatalogRow {
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+  tariffName: string | null;
+  servicesCount: number;
+  servicesMonthlyTotal: number;
+  capturedAt: string | null;
+}
+
+export interface IAccountPackagesRow {
+  accountId: string;
+  label: string;
+  accountNumber: string | null;
+  packages: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }[];
+  capturedAt: string | null;
+}
+
 class MtsBusinessMetricsStoreService {
   async upsertDaily(input: IMetricDailyUpsert): Promise<void> {
     if (!Number.isFinite(input.amount)) return;
@@ -165,6 +194,110 @@ class MtsBusinessMetricsStoreService {
       [metric, from, to, accountId ?? null],
     );
     return rows.map(r => ({ date: r.date, amount: Number(r.amount) }));
+  }
+
+  /** Один ряд/сутки/метрику/цель — как upsertDaily, но для JSONB-структур (тариф/услуги/пакеты/иерархия). */
+  async upsertSnapshot(input: ISnapshotUpsert): Promise<void> {
+    const hash = input.msisdn ? msisdnHash(input.msisdn) : null;
+    await execute(
+      `INSERT INTO mts_business_metric_snapshot
+         (account_id, scope, account_no, msisdn_hash, metric, payload, captured_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, (captured_at::date))
+       DO UPDATE SET payload = EXCLUDED.payload, captured_at = NOW()`,
+      [input.accountId, input.scope, input.accountNo ?? null, hash, input.metric, JSON.stringify(input.payload)],
+    );
+  }
+
+  /** Обогащённая таблица «по сотрудникам»: тариф, кол-во/сумма платных услуг (per-номер метрики). */
+  async getEmployeesCatalogSummary(accountId?: string | null): Promise<IEmployeeCatalogRow[]> {
+    const rows = await query<{
+      msisdn_hash: string;
+      employee_id: number | null;
+      full_name: string | null;
+      tab_number: string | null;
+      metric: MtsBusinessSnapshotMetric;
+      payload: unknown;
+      captured_at: string;
+    }>(
+      `WITH latest AS (
+         SELECT DISTINCT ON (msisdn_hash, metric) msisdn_hash, metric, payload, captured_at
+           FROM mts_business_metric_snapshot
+          WHERE scope = 'msisdn' AND msisdn_hash IS NOT NULL
+            AND metric IN ('bill_plan', 'product_services')
+            AND ($1::uuid IS NULL OR account_id = $1::uuid)
+          ORDER BY msisdn_hash, metric, captured_at DESC
+       )
+       SELECT nm.msisdn_hash, nm.employee_id, e.full_name, e.tab_number, l.metric, l.payload, l.captured_at
+         FROM mts_business_number_map nm
+         JOIN latest l ON l.msisdn_hash = nm.msisdn_hash
+         LEFT JOIN employees e ON e.id = nm.employee_id
+        ORDER BY e.full_name NULLS LAST, nm.msisdn_hash`,
+      [accountId ?? null],
+    );
+
+    const byNumber = new Map<string, IEmployeeCatalogRow>();
+    for (const r of rows) {
+      let g = byNumber.get(r.msisdn_hash);
+      if (!g) {
+        g = {
+          employeeId: r.employee_id,
+          employeeFullName: r.full_name,
+          employeeTabNumber: r.tab_number,
+          tariffName: null,
+          servicesCount: 0,
+          servicesMonthlyTotal: 0,
+          capturedAt: null,
+        };
+        byNumber.set(r.msisdn_hash, g);
+      }
+      if (!g.capturedAt || r.captured_at > g.capturedAt) g.capturedAt = r.captured_at;
+      if (r.metric === 'bill_plan') {
+        const p = r.payload as { tariffName?: string | null };
+        g.tariffName = p?.tariffName ?? null;
+      } else if (r.metric === 'product_services') {
+        const services = Array.isArray(r.payload) ? (r.payload as { monthlyAmount?: number | null }[]) : [];
+        g.servicesCount = services.length;
+        g.servicesMonthlyTotal = services.reduce((a, s) => a + (s.monthlyAmount ?? 0), 0);
+      }
+    }
+    return [...byNumber.values()];
+  }
+
+  /** Остатки пакетов минут/SMS/интернета по каждому активному ЛС (metric='validity_info', scope='account'). */
+  async getAccountsPackagesSummary(): Promise<IAccountPackagesRow[]> {
+    const rows = await query<{
+      account_id: string;
+      label: string;
+      account_number: string | null;
+      payload: unknown;
+      captured_at: string | null;
+    }>(
+      `WITH latest AS (
+         SELECT DISTINCT ON (account_id) account_id, payload, captured_at
+           FROM mts_business_metric_snapshot
+          WHERE scope = 'account' AND metric = 'validity_info' AND account_id IS NOT NULL
+          ORDER BY account_id, captured_at DESC
+       )
+       SELECT a.id AS account_id, a.label, a.account_number, l.payload, l.captured_at
+         FROM mts_business_accounts a
+         LEFT JOIN latest l ON l.account_id = a.id
+        WHERE a.is_active
+        ORDER BY a.label`,
+    );
+    return rows.map(r => ({
+      accountId: r.account_id,
+      label: r.label,
+      accountNumber: r.account_number,
+      packages: Array.isArray(r.payload)
+        ? (r.payload as { unitOfMeasure?: string | null; quota?: number | null; remainder?: number | null }[]).map(p => ({
+            unitOfMeasure: p.unitOfMeasure ?? null,
+            quota: p.quota ?? null,
+            remainder: p.remainder ?? null,
+          }))
+        : [],
+      capturedAt: r.captured_at,
+    }));
   }
 }
 

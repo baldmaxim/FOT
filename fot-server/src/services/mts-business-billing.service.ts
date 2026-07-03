@@ -26,6 +26,16 @@ export interface IMtsCharge {
   periodEnd: string | null;
 }
 
+export interface IMtsPackageCounter {
+  unitOfMeasure: string | null; // BYTE | MINUTE | SECOND | ITEM | MONEY
+  quota: number | null;
+  remainder: number | null;
+  consumption: number | null;
+  rotate: string | null;
+  validFrom: string | null;
+  validTo: string | null;
+}
+
 const toNumber = (v: unknown): number | null => {
   if (v == null) return null;
   const n = typeof v === 'string' ? Number.parseFloat(v) : Number(v);
@@ -64,6 +74,38 @@ const parseBalance = (resp: unknown): IMtsBalance => ({
   currencyCode: asString(deepFind(resp, ['unitOfMeasure', 'currencyCode', 'currencyName'])),
   validUntil: asString(deepFind(resp, ['endDateTime'])),
 });
+
+/** Глубокий обход в поисках ВСЕХ объектов, содержащих ключ-маркер (не первого, как deepFind). */
+const collectByMarker = (body: unknown, marker: string, depth = 0, out: Record<string, unknown>[] = []): Record<string, unknown>[] => {
+  if (depth > 8 || body == null) return out;
+  if (Array.isArray(body)) {
+    for (const el of body) collectByMarker(el, marker, depth + 1, out);
+    return out;
+  }
+  if (typeof body !== 'object') return out;
+  const b = body as Record<string, unknown>;
+  if (b[marker] !== undefined) out.push(b);
+  for (const v of Object.values(b)) {
+    if (v && typeof v === 'object') collectByMarker(v, marker, depth + 1, out);
+  }
+  return out;
+};
+
+const parsePackages = (resp: unknown): IMtsPackageCounter[] => {
+  const items = collectByMarker(resp, 'unitOfMeasure');
+  return items.map(r => {
+    const validFor = r.validFor as Record<string, unknown> | undefined;
+    return {
+      unitOfMeasure: asString(r.unitOfMeasure),
+      quota: toNumber(r.BQ),
+      remainder: toNumber(r.reminder),
+      consumption: toNumber(r.Consumption),
+      rotate: asString(r.Rotate),
+      validFrom: asString(validFor?.startDateTime),
+      validTo: asString(validFor?.endDateTime),
+    };
+  });
+};
 
 // Не дробить на по-одному запросу на номер — это уже создавало проблему с
 // rate-limit у детализации звонков (см. миграцию 200).
@@ -130,6 +172,19 @@ class MtsBusinessBillingService extends MtsBusinessServiceBase {
       }
     }
     return out;
+  }
+
+  /** Остатки пакетов минут/SMS/интернета — по лицевому счёту (не по номеру, см. доку ValidityInfo). */
+  async getValidityInfo(accountId: string, accountNo: string): Promise<IMtsPackageCounter[]> {
+    const resp = await this.request<unknown>('get', '/Bills/ValidityInfo', {
+      accountId,
+      params: {
+        'customerAccount.accountNo': accountNo,
+        'customerAccount.productRelationship.product.productLine.name': 'Counters',
+        fields: 'MOAF',
+      },
+    });
+    return parsePackages(resp);
   }
 }
 

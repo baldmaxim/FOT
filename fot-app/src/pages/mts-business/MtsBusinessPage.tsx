@@ -18,6 +18,11 @@ import {
   useMtsBusinessBillingTrend,
   useRefreshMtsBusinessBilling,
 } from '../../hooks/useMtsBusinessBillingData';
+import {
+  useMtsBusinessEmployeesCatalog,
+  useMtsBusinessAccountsPackages,
+  useRefreshMtsBusinessCatalog,
+} from '../../hooks/useMtsBusinessCatalogData';
 import { mtsBusinessService, type IMtsBusinessAccount } from '../../services/mtsBusinessService';
 import type { MtsBusinessDailyMetric } from '../../services/mtsBusinessBillingService';
 import { EmployeeFioPicker } from '../mts/EmployeeFioPicker';
@@ -37,6 +42,16 @@ const fmtLast = (iso: string | null): string => iso
   ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
   : '—';
 const fmtMoney = (v: number | null): string => v == null ? '—' : `${v.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
+const UNIT_LABELS: Record<string, string> = { BYTE: 'интернет', MINUTE: 'минуты', SECOND: 'минуты', ITEM: 'SMS', MONEY: 'деньги' };
+const fmtPackage = (p: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }): string => {
+  const label = (p.unitOfMeasure && UNIT_LABELS[p.unitOfMeasure]) || p.unitOfMeasure || '—';
+  const unit = p.unitOfMeasure === 'BYTE' ? 'МБ' : '';
+  const toUnit = (v: number | null): string => {
+    if (v == null) return '—';
+    return p.unitOfMeasure === 'BYTE' ? Math.round(v / 1_000_000).toLocaleString('ru-RU') : Math.round(v).toLocaleString('ru-RU');
+  };
+  return `${label}: ${toUnit(p.remainder)}${unit ? ` ${unit}` : ''} из ${toUnit(p.quota)}${unit ? ` ${unit}` : ''}`;
+};
 
 type Msg = { ok: boolean; text: string } | null;
 
@@ -512,12 +527,40 @@ const FinanceSection: FC = () => {
   const trend = useMtsBusinessBillingTrend(metric, from, to, accountId || undefined);
   const refresh = useRefreshMtsBusinessBilling();
   const accountsMeta = useMtsBusinessAccounts();
+  const employeesCatalog = useMtsBusinessEmployeesCatalog(accountId || undefined);
+  const accountsPackages = useMtsBusinessAccountsPackages();
+  const refreshCatalog = useRefreshMtsBusinessCatalog();
 
   const accRows = summary.data?.accounts ?? [];
-  const empRows = summary.data?.employees ?? [];
   const totalBalance = accRows.reduce((a, r) => a + (r.balance ?? 0), 0);
   const totalUnpaid = accRows.reduce((a, r) => a + (r.unpaidAmount ?? 0), 0);
   const overdueCount = accRows.filter(r => (r.unpaidAmount ?? 0) > 0).length;
+
+  // Сводка по сотрудникам (баланс/начисления) + каталог (тариф/услуги) — два
+  // независимых источника, объединяем по employeeId на клиенте.
+  const catalogByEmployee = useMemo(() => {
+    const map = new Map<string, { tariffNames: Set<string>; servicesCount: number; servicesMonthlyTotal: number }>();
+    for (const c of employeesCatalog.data ?? []) {
+      const key = c.employeeId != null ? String(c.employeeId) : `unmapped-${c.employeeFullName ?? ''}`;
+      let g = map.get(key);
+      if (!g) { g = { tariffNames: new Set(), servicesCount: 0, servicesMonthlyTotal: 0 }; map.set(key, g); }
+      if (c.tariffName) g.tariffNames.add(c.tariffName);
+      g.servicesCount += c.servicesCount;
+      g.servicesMonthlyTotal += c.servicesMonthlyTotal;
+    }
+    return map;
+  }, [employeesCatalog.data]);
+
+  const empRows = (summary.data?.employees ?? []).map(r => {
+    const key = r.employeeId != null ? String(r.employeeId) : `unmapped-${r.employeeFullName ?? ''}`;
+    const c = catalogByEmployee.get(key);
+    return {
+      ...r,
+      tariffName: c ? [...c.tariffNames].join(', ') || null : null,
+      servicesCount: c?.servicesCount ?? 0,
+      servicesMonthlyTotal: c?.servicesMonthlyTotal ?? 0,
+    };
+  });
 
   const onRefresh = async (): Promise<void> => {
     setMsg(null);
@@ -530,12 +573,27 @@ const FinanceSection: FC = () => {
     }
   };
 
+  const onRefreshCatalog = async (): Promise<void> => {
+    setMsg(null);
+    try {
+      const r = await refreshCatalog.mutateAsync(accountId || undefined);
+      const failed = r.results.reduce((a, x) => a + x.failed, 0);
+      const discovered = r.results.reduce((a, x) => a + x.discovered, 0);
+      setMsg({ ok: failed === 0, text: `Каталог обновлён: ЛС ${r.results.length}, обнаружено номеров: ${discovered}${failed ? `, ошибок: ${failed}` : ''}` });
+    } catch (e) {
+      setMsg({ ok: false, text: errText(e, 'Ошибка обновления каталога (возможно нужен 2FA)') });
+    }
+  };
+
   return (
     <div className={styles.page}>
       <section className={styles.card}>
         <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0 }}>
           <h2 className={styles.cardTitle} style={{ margin: 0 }}>Финансы</h2>
-          <button className={styles.btn} onClick={onRefresh} disabled={refresh.isPending}>Обновить сейчас (2FA)</button>
+          <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className={styles.btn} onClick={onRefresh} disabled={refresh.isPending}>Обновить сейчас (2FA)</button>
+            <button className={styles.btnSecondary} onClick={onRefreshCatalog} disabled={refreshCatalog.isPending}>Обновить каталог (2FA)</button>
+          </span>
         </div>
         <div className={styles.kpiGrid}>
           <div className={styles.kpi}><div className={styles.kpiValue}>{fmtMoney(totalBalance)}</div><div className={styles.kpiLabel}>Суммарный баланс по ЛС</div></div>
@@ -612,14 +670,40 @@ const FinanceSection: FC = () => {
         ) : (
           <div className={styles.tableWrap}>
             <table className={styles.table}>
-              <thead><tr><th>Сотрудник</th><th>Баланс</th><th>Начисления</th><th>Обновлено</th></tr></thead>
+              <thead><tr><th>Сотрудник</th><th>Тариф</th><th>Баланс</th><th>Начисления</th><th>Услуги</th><th>Обновлено</th></tr></thead>
               <tbody>
                 {empRows.map((r, i) => (
                   <tr key={r.employeeId ?? `unmapped-${i}`}>
                     <td>{r.employeeFullName ?? 'Не привязан'}{r.employeeTabNumber ? ` (таб. ${r.employeeTabNumber})` : ''}</td>
+                    <td>{r.tariffName ?? '—'}</td>
                     <td>{fmtMoney(r.balance)}</td>
                     <td>{fmtMoney(r.chargesAmount)}</td>
+                    <td>{r.servicesCount > 0 ? `${r.servicesCount} · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : '—'}</td>
                     <td>{fmtLast(r.capturedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className={styles.card}>
+        <h2 className={styles.cardTitle}>Остатки пакетов по лицевым счетам</h2>
+        {accountsPackages.isLoading ? (
+          <p className={styles.hint}>Загрузка…</p>
+        ) : (accountsPackages.data ?? []).every(a => a.packages.length === 0) ? (
+          <p className={styles.hint}>Нет данных — нажмите «Обновить каталог» или дождитесь еженедельного автообновления.</p>
+        ) : (
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead><tr><th>Лицевой счёт</th><th>Пакеты</th><th>Обновлено</th></tr></thead>
+              <tbody>
+                {(accountsPackages.data ?? []).filter(a => a.packages.length > 0).map(a => (
+                  <tr key={a.accountId}>
+                    <td>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</td>
+                    <td>{a.packages.map(fmtPackage).join(' · ')}</td>
+                    <td>{fmtLast(a.capturedAt)}</td>
                   </tr>
                 ))}
               </tbody>

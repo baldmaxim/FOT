@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { mtsBusinessController } from '../controllers/mts-business.controller.js';
 import { mtsBusinessBillingController } from '../controllers/mts-business-billing.controller.js';
+import { mtsBusinessCatalogController } from '../controllers/mts-business-catalog.controller.js';
 import { authenticate, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 
@@ -80,6 +81,17 @@ router.post(
   requirePageAccess('/mts-business', 'edit'),
   requireCritical2FA,
   mtsBusinessBillingController.refresh,
+);
+
+// Тариф/услуги/остатки пакетов/структура абонента (обогащение «Финансы»).
+// Меняется редко — обновляется еженедельным кадансом планировщика или вручную.
+router.get('/catalog/employees', requirePageAccess('/mts-business', 'view'), mtsBusinessCatalogController.getEmployeesCatalog);
+router.get('/catalog/accounts-packages', requirePageAccess('/mts-business', 'view'), mtsBusinessCatalogController.getAccountsPackages);
+router.post(
+  '/catalog/refresh',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessCatalogController.refresh,
 );
 
 export default router;

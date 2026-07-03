@@ -2,8 +2,10 @@ import * as Sentry from '@sentry/node';
 import { env } from '../config/env.js';
 import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
 import { mtsBusinessBillingService } from './mts-business-billing.service.js';
+import { mtsBusinessCatalogService } from './mts-business-catalog.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
 import { mtsBusinessCdrService } from './mts-business-cdr.service.js';
+import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { MtsBusinessApiError, isFeatureUnavailable } from './mts-business-base.service.js';
 import {
   tryAcquireSigurRuntimeLease,
@@ -33,7 +35,14 @@ function resolveTargetHourMsk(): number {
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 let lastRunYmdMsk: string | null = null;
+let lastWeeklyRunYmdMsk: string | null = null;
 let runInFlight: Promise<void> | null = null;
+
+const daysBetween = (fromYmd: string, toYmd: string): number => {
+  const a = new Date(`${fromYmd}T00:00:00Z`).getTime();
+  const b = new Date(`${toYmd}T00:00:00Z`).getTime();
+  return Math.round((b - a) / 86_400_000);
+};
 
 function getMoscowYmd(now: Date): string {
   const formatter = new Intl.DateTimeFormat('ru-RU', {
@@ -146,6 +155,73 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
   return { accountId, numbers: msisdns.length, failed };
 }
 
+export interface IRefreshCatalogResult {
+  accountId: string;
+  numbers: number;
+  discovered: number;
+  failed: number;
+}
+
+/**
+ * Снимает остатки пакетов ЛС, структуру абонента (+авто-обнаружение новых
+ * номеров в mts_business_number_map) и тариф/услуги по известным номерам —
+ * реже, чем баланс/начисления (меняется редко). Используется еженедельным
+ * кадансом планировщика и ручным «Обновить сейчас».
+ */
+export async function refreshAccountCatalog(accountId: string): Promise<IRefreshCatalogResult> {
+  let failed = 0;
+  let discovered = 0;
+  const accounts = await mtsBusinessAccountsService.list();
+  const account = accounts.find(a => a.id === accountId);
+
+  if (account?.accountNumber) {
+    try {
+      const packages = await mtsBusinessBillingService.getValidityInfo(accountId, account.accountNumber);
+      await mtsBusinessMetricsStoreService.upsertSnapshot({
+        accountId, scope: 'account', accountNo: account.accountNumber, metric: 'validity_info', payload: packages,
+      });
+    } catch (error) {
+      failed++;
+      logSkip(`account="${account.label}" остатки пакетов`, error);
+    }
+  }
+
+  try {
+    const hierarchy = await mtsBusinessCatalogService.getHierarchyStructure(accountId);
+    await mtsBusinessMetricsStoreService.upsertSnapshot({
+      accountId, scope: 'account', accountNo: account?.accountNumber ?? null, metric: 'hierarchy', payload: hierarchy,
+    });
+    for (const n of hierarchy.numbers) {
+      if (!n.msisdn) continue;
+      await mtsBusinessMappingService.ensureNumberDiscovered(n.msisdn);
+      discovered++;
+    }
+  } catch (error) {
+    failed++;
+    logSkip(`account=${accountId} структура абонента`, error);
+  }
+
+  const msisdns = await mtsBusinessCdrService.getKnownMsisdnsByAccount(accountId);
+  for (const msisdn of msisdns) {
+    try {
+      const tariff = await mtsBusinessCatalogService.getBillPlanInfo(accountId, msisdn);
+      await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId, scope: 'msisdn', msisdn, metric: 'bill_plan', payload: tariff });
+    } catch (error) {
+      failed++;
+      logSkip(`account=${accountId} номер — тариф`, error);
+    }
+    try {
+      const services = await mtsBusinessCatalogService.getProductInfo(accountId, msisdn);
+      await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId, scope: 'msisdn', msisdn, metric: 'product_services', payload: services });
+    } catch (error) {
+      failed++;
+      logSkip(`account=${accountId} номер — услуги`, error);
+    }
+  }
+
+  return { accountId, numbers: msisdns.length, discovered, failed };
+}
+
 async function runDailySyncCycle(ymd: string): Promise<void> {
   if (runInFlight) return;
 
@@ -177,14 +253,33 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
               console.log(`[mts-biz-metrics] account="${account.label}" numbers=${res.numbers} failed=${res.failed}`);
             }
 
+            // Каталог (тариф/услуги/пакеты/структура) — реже, раз в 7 суток:
+            // меняется редко, не стоит гонять по rate-gate каждый день.
+            const dueWeekly = !lastWeeklyRunYmdMsk || daysBetween(lastWeeklyRunYmdMsk, ymd) >= 7;
+            let totalCatalogNumbers = 0;
+            let totalDiscovered = 0;
+            let totalCatalogFailed = 0;
+            if (dueWeekly) {
+              for (const account of accounts) {
+                const res = await refreshAccountCatalog(account.id);
+                totalCatalogNumbers += res.numbers;
+                totalDiscovered += res.discovered;
+                totalCatalogFailed += res.failed;
+                console.log(`[mts-biz-metrics] catalog account="${account.label}" numbers=${res.numbers} discovered=${res.discovered} failed=${res.failed}`);
+              }
+              lastWeeklyRunYmdMsk = ymd;
+            }
+
             lastRunYmdMsk = ymd;
             await mergeSigurRuntimeState({
               key: DAILY_STATE_KEY,
               meta: {
                 lastRunYmdMsk: ymd,
+                lastWeeklyRunYmdMsk,
                 lastSuccessAt: new Date().toISOString(),
                 lastStartedAt: startedAtIso,
                 lastResult: { accounts: accounts.length, numbers: totalNumbers, failed: totalFailed },
+                ...(dueWeekly ? { lastCatalogResult: { accounts: accounts.length, numbers: totalCatalogNumbers, discovered: totalDiscovered, failed: totalCatalogFailed } } : {}),
               },
             }).catch(err => console.error('[mts-biz-metrics] mergeSigurRuntimeState error:', (err as Error).message));
           } catch (error) {
@@ -232,6 +327,10 @@ async function loadLastRunFromRuntimeState(): Promise<void> {
     const stored = state?.meta?.lastRunYmdMsk;
     if (typeof stored === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(stored)) {
       lastRunYmdMsk = stored;
+    }
+    const storedWeekly = state?.meta?.lastWeeklyRunYmdMsk;
+    if (typeof storedWeekly === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(storedWeekly)) {
+      lastWeeklyRunYmdMsk = storedWeekly;
     }
   } catch (err) {
     console.error('[mts-biz-metrics] failed to load runtime_state:', (err as Error).message);

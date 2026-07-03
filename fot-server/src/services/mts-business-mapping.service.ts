@@ -136,6 +136,23 @@ class MtsBusinessMappingService {
   }
 
   /**
+   * Завести номер в number_map без привязки к сотруднику (employee_id=NULL),
+   * если его там ещё нет — источник: структура абонента (HierarchyStructure),
+   * а не CDR. ON CONFLICT DO NOTHING — не трогает уже существующую привязку.
+   */
+  async ensureNumberDiscovered(rawMsisdn: string): Promise<void> {
+    const norm = normalizeMsisdn(rawMsisdn);
+    const hash = msisdnHash(rawMsisdn);
+    if (!norm || !hash) return;
+    await execute(
+      `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, linked_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (msisdn_hash) DO NOTHING`,
+      [hash, encryptionService.encrypt(norm)],
+    );
+  }
+
+  /**
    * Привязать/переназначить номер к сотруднику. employeeId=null снимает привязку
    * (строка остаётся, но без сотрудника). Возвращает обновлённый список.
    */
