@@ -1441,7 +1441,10 @@ export const TimesheetPage: FC = () => {
       if (nextMode === 'assigned') {
         next.set('mode', 'assigned');
       } else {
-        next.delete('mode');
+        // Явно ставим mode=department: у табельщицы режим по умолчанию assigned,
+        // пока queryMode !== 'department' (см. деривацию timesheetMode). Простое
+        // delete('mode') оставляло бы её в assigned — «По отделу» не переключался.
+        next.set('mode', 'department');
         next.delete('assignee');
         next.delete('dept');
       }
