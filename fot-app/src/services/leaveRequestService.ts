@@ -159,6 +159,12 @@ export const leaveRequestService = {
     return res.data;
   },
 
+  // Правка текста обоснования заявления руководителем/админом (admin/manager/manager_obj/site_supervisor).
+  updateReason: async (id: number, reason: string) => {
+    const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/reason`, { reason });
+    return res.data;
+  },
+
   // Управленческая отмена согласованного отпуска (admin или согласовавший руководитель).
   revokeApproval: async (id: number, reason?: string) => {
     const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/revoke-approval`, { reason });

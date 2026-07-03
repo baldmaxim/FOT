@@ -1,5 +1,6 @@
 import { query, queryOne } from '../config/postgres.js';
 import { collectDeptIds } from './skud-shared.service.js';
+import type { TimesheetApprovalStatus } from '../types/index.js';
 
 export type TimesheetDisplayHalf = 'H1' | 'H2' | 'FULL';
 
@@ -520,4 +521,29 @@ export async function getEmployeeAssignmentSnapshotDepartment(
     )) || null;
 
   return activeAssignment?.org_department_id ?? null;
+}
+
+export interface IApprovalLockInfo {
+  id: number;
+  start_date: string;
+  end_date: string;
+  status: TimesheetApprovalStatus;
+}
+
+/** Возвращает активное (submitted/approved) согласование отдела, покрывающее рабочую дату, либо null. */
+export async function findApprovalLockForDate(
+  departmentId: string,
+  workDate: string,
+): Promise<IApprovalLockInfo | null> {
+  const rows = await query<IApprovalLockInfo>(
+    `SELECT id, start_date, end_date, status FROM timesheet_approvals
+       WHERE department_id = $1
+         AND status IN ('submitted', 'approved')
+         AND start_date <= $2
+         AND end_date >= $2
+       ORDER BY status DESC
+       LIMIT 1`,
+    [departmentId, workDate],
+  );
+  return rows[0] ?? null;
 }

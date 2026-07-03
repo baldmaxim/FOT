@@ -518,15 +518,10 @@ export const TimesheetPage: FC = () => {
       toast.info?.('Сотрудник доступен только для просмотра');
       return;
     }
-    const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    // Проблема с передвижением (превышение лимита или непривязанная точка): модалка
-    // открывается на вкладке «Передвижения». Замок периода её не блокирует — решение
-    // по передвижению должно быть доступно и в закрытом периоде (как было раньше).
-    const hasTravel = (entry?.travel_problematic_segments || 0) > 0 || (entry?.travel_delay_minutes || 0) > 0;
-    if (!hasTravel && isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
-      toast.info?.(lockMessage(lockedDateSet.get(workDate)));
-      return;
-    }
+    // Заперт по периоду (submitted/approved) — модалка всё равно открывается, но в
+    // режиме «только просмотр» (readOnly проп, см. рендер модалки ниже): события СКУД
+    // и текст заявки видны, кнопки правки/удаления/добавления скрыты. Сообщение о
+    // блокировке показывается баннером внутри модалки (infoBanner), а не тостом.
     setModalEmployee(emp);
     setModalDay(day);
     setModalEntry(entry);
@@ -554,11 +549,7 @@ export const TimesheetPage: FC = () => {
       toast.info?.('Сотрудник доступен только для просмотра');
       return;
     }
-    const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    if (isTimesheetDepartmentScope && lockedDateSet.has(workDate)) {
-      toast.info?.(lockMessage(lockedDateSet.get(workDate)));
-      return;
-    }
+    // Заперт по периоду — модалка открывается в readOnly-режиме (см. handleDayClick выше).
     setModalEmployee(emp);
     setModalDay(day);
     setModalEntry(entryMap.get(`${emp.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`) || null);
@@ -769,6 +760,31 @@ export const TimesheetPage: FC = () => {
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку');
     }
   }, [modalEntry?.id, modalEmployee, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+
+  // Точечная правка текста заявки «работа в выходной/праздник» (initialNotes или
+  // companion_work_request.reason) — не закрывает модалку, только обновляет отображаемый текст.
+  const handleUpdateReason = useCallback(async (id: number, reason: string) => {
+    try {
+      await timesheetService.update(id, { notes: reason });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Не удалось сохранить текст заявления');
+      throw error;
+    }
+    setModalEntry(prev => {
+      if (!prev) return prev;
+      if (prev.id === id) return { ...prev, notes: reason };
+      if (prev.companion_work_request?.id === id) {
+        return { ...prev, companion_work_request: { ...prev.companion_work_request, reason } };
+      }
+      return prev;
+    });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
+      queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+      queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+      queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+    ]);
+  }, [queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
   const handleDeleteObjectCorrection = useCallback(async () => {
     if (objectEntriesDisabled) {
@@ -2309,7 +2325,14 @@ export const TimesheetPage: FC = () => {
                   ? handleDeleteDayCorrection
                   : undefined
             }
-            infoBanner={null}
+            infoBanner={
+              isTimesheetDepartmentScope && lockedDateSet.has(modalWorkDate)
+                ? lockMessage(lockedDateSet.get(modalWorkDate))
+                : null
+            }
+            readOnly={isTimesheetDepartmentScope && lockedDateSet.has(modalWorkDate)}
+            canEditReasonText={canEditTimesheet}
+            onUpdateReason={handleUpdateReason}
             allowedStatuses={
               // После выхода на работу (день уже = work по СКУД/согласованной правке)
               // добавочная корректировка недобора возможна только статусом «Корректировка

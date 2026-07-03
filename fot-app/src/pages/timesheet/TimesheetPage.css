@@ -2163,6 +2163,14 @@
   word-break: break-word;
 }
 
+/* Текст заявки с точечной инлайн-правкой (карандаш руководителя/админа). */
+.ts-correction-view-comment--editable {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 /* Автор корректировки по объекту в списке (#9). */
 .ts-correction-view-author {
   margin-top: 4px;

@@ -10,6 +10,7 @@ import {
   Paperclip,
   ChevronDown,
   ChevronUp,
+  Pencil,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -81,6 +82,9 @@ export const LeaveRequestsManagePage: FC = () => {
   const [revokeId, setRevokeId] = useState<number | null>(null);
   const [revokeReason, setRevokeReason] = useState('');
   const [revoking, setRevoking] = useState(false);
+  const [editingReasonId, setEditingReasonId] = useState<number | null>(null);
+  const [reasonDraft, setReasonDraft] = useState('');
+  const [savingReason, setSavingReason] = useState(false);
   const [preview, setPreview] = useState<IPreviewState | null>(null);
   const [eventsPanel, setEventsPanel] = useState<IEventsPanelState | null>(null);
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
@@ -181,6 +185,30 @@ export const LeaveRequestsManagePage: FC = () => {
     } catch (err) {
       console.error('Reject error:', err);
       await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
+    }
+  };
+
+  // Правка текста заявления (например, дописать пропущенный объект) — доступна
+  // независимо от статуса заявления, синхронизируется с копией в табеле на бэке.
+  const handleUpdateReason = async (id: number) => {
+    const trimmed = reasonDraft.trim();
+    if (!trimmed) return;
+    setSavingReason(true);
+    try {
+      await leaveRequestService.updateReason(id, trimmed);
+      queryClient.setQueriesData<ILeaveRequest[] | undefined>(
+        { queryKey: ['leave-requests-manage'] },
+        (prev) => (prev ? prev.map(r => (r.id === id ? { ...r, reason: trimmed } : r)) : prev),
+      );
+      setEditingReasonId(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
+      ]);
+    } catch (err) {
+      console.error('Update reason error:', err);
+    } finally {
+      setSavingReason(false);
     }
   };
 
@@ -297,7 +325,52 @@ export const LeaveRequestsManagePage: FC = () => {
               <strong>{formatLeaveRequestDatesCompact(r)}</strong>
             </div>
           )}
-          {r.reason && <div className="lrm-card-reason">{r.reason}</div>}
+          {editingReasonId === r.id ? (
+            <div className="lrm-card-reason lrm-card-reason--editing" onClick={stop}>
+              <textarea
+                className="lrm-reason-textarea"
+                value={reasonDraft}
+                onChange={(e) => setReasonDraft(e.target.value)}
+                maxLength={500}
+                rows={3}
+                disabled={savingReason}
+                autoFocus
+              />
+              <div className="lrm-reason-actions">
+                <button
+                  type="button"
+                  className="lrm-action-btn approve"
+                  disabled={savingReason || !reasonDraft.trim()}
+                  onClick={() => void handleUpdateReason(r.id)}
+                >
+                  Сохранить
+                </button>
+                <button
+                  type="button"
+                  className="lrm-action-btn ghost"
+                  disabled={savingReason}
+                  onClick={() => setEditingReasonId(null)}
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+          ) : (
+            r.reason && (
+              <div className="lrm-card-reason lrm-card-reason--viewable">
+                <span>{r.reason}</span>
+                <button
+                  type="button"
+                  className="lrm-reason-edit-btn"
+                  onClick={(e) => { e.stopPropagation(); setEditingReasonId(r.id); setReasonDraft(r.reason ?? ''); }}
+                  aria-label="Изменить текст заявления"
+                  title="Изменить текст"
+                >
+                  <Pencil size={13} />
+                </button>
+              </div>
+            )
+          )}
           {r.attachments && r.attachments.length > 0 && (
             <div className="lrm-attachments" onClick={stop}>
               {r.attachments.map(att => (

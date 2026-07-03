@@ -46,7 +46,9 @@ import {
   listEmployeeMembershipsForDepartmentPeriod,
   resolveTimesheetDateRange,
   resolveTimesheetPeriodRange,
+  findApprovalLockForDate,
   type IDepartmentEmployeeMembership,
+  type IApprovalLockInfo,
 } from '../services/timesheet-department-assignments.service.js';
 import { fetchTimesheetDataForDepartment, fetchTimesheetDataForEmployees } from '../services/timesheet-export.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
@@ -72,7 +74,7 @@ import {
   purgeCorrectionAttachments,
 } from '../services/correction-attachments.service.js';
 import { r2Service } from '../services/r2.service.js';
-import { syncLeaveRequestOnDayRemoval } from '../services/leave-request-sync.service.js';
+import { syncLeaveRequestOnDayRemoval, syncLeaveRequestReason } from '../services/leave-request-sync.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients } from '../services/recipients.service.js';
@@ -707,31 +709,6 @@ interface IManagedDepartmentTimesheetSummary {
   /** Только для virtual_direct: id сотрудников-подчинённых для построения
    * списка ФИО на фронте без дополнительных запросов. */
   direct_subordinate_employee_ids?: number[];
-}
-
-interface IApprovalLockInfo {
-  id: number;
-  start_date: string;
-  end_date: string;
-  status: TimesheetApprovalStatus;
-}
-
-/** Возвращает список активных (submitted/approved/returned) согласований отдела, покрывающих рабочую дату. */
-async function findApprovalLockForDate(
-  departmentId: string,
-  workDate: string,
-): Promise<IApprovalLockInfo | null> {
-  const rows = await query<IApprovalLockInfo>(
-    `SELECT id, start_date, end_date, status FROM timesheet_approvals
-       WHERE department_id = $1
-         AND status IN ('submitted', 'approved')
-         AND start_date <= $2
-         AND end_date >= $2
-       ORDER BY status DESC
-       LIMIT 1`,
-    [departmentId, workDate],
-  );
-  return rows[0] ?? null;
 }
 
 /**
@@ -2154,6 +2131,55 @@ export const timesheetController = {
 	          error: `Период ${approvalLockUpdate.start_date} – ${approvalLockUpdate.end_date} уже ${approvalLockUpdate.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
 	        });
 	      }
+
+        // Notes-only правка заявки «работа в выходной/праздник»: изолированная ветка,
+        // которая структурно не может задеть status/hours_override и синхронизирует
+        // текст с leave_requests.reason (см. syncLeaveRequestReason).
+        const existingSourceId = String(existing.source_id ?? '');
+        if (
+          String(existing.source_type) === 'leave_request'
+          && parsed.notes !== undefined
+          && parsed.status === undefined
+          && parsed.hours_worked === undefined
+          && /^\d+$/.test(existingSourceId)
+        ) {
+          await syncLeaveRequestReason(Number(existingSourceId), parsed.notes ?? null);
+          const updatedNotesOnly = await getAttendanceAdjustmentById(id);
+          if (!updatedNotesOnly) return res.status(404).json({ success: false, error: 'Запись не найдена' });
+
+          const actualHoursNotesOnly = typeof updatedNotesOnly.hours_override === 'number'
+            ? updatedNotesOnly.hours_override
+            : (typeof updatedNotesOnly.hours_worked === 'number' ? updatedNotesOnly.hours_worked : null);
+
+          const auditFullNameNotesOnly = await loadEmployeeFullNameForAudit(Number(updatedNotesOnly.employee_id));
+          await auditService.logFromRequest(req, req.user.id, 'UPDATE_LEAVE_REQUEST_REASON', {
+            entityType: 'timesheet',
+            entityId: String(id),
+            details: {
+              notes: parsed.notes,
+              employee_id: Number(updatedNotesOnly.employee_id),
+              employee_full_name: auditFullNameNotesOnly,
+              work_date: String(updatedNotesOnly.work_date),
+            },
+          });
+
+          return res.json({
+            success: true,
+            data: {
+              id: Number(updatedNotesOnly.id),
+              employee_id: Number(updatedNotesOnly.employee_id),
+              work_date: String(updatedNotesOnly.work_date),
+              status: String(updatedNotesOnly.status),
+              hours_worked: actualHoursNotesOnly,
+              display_hours_worked: actualHoursNotesOnly,
+              notes: typeof updatedNotesOnly.reason === 'string' ? updatedNotesOnly.reason : null,
+              is_correction: true,
+              corrected_at: String(updatedNotesOnly.updated_at ?? updatedNotesOnly.created_at ?? new Date().toISOString()),
+              corrected_by_name: null,
+            },
+          });
+        }
+
         const nextStatus = (parsed.status ?? String(existing.status)) as TimeStatus;
         const plannedHours = (await resolvePlannedHoursByItems([{
           employee_id: Number(existing.employee_id),

@@ -151,6 +151,61 @@
   margin-top: 6px;
 }
 
+.lrm-card-reason--viewable {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lrm-card-reason--editing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lrm-reason-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.lrm-reason-edit-btn:hover {
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.08));
+}
+
+.lrm-reason-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-secondary, var(--bg-primary));
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.lrm-reason-textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
+.lrm-reason-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .lrm-card-pending-admin {
   display: inline-flex;
   align-items: center;

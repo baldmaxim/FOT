@@ -19,6 +19,8 @@ import { resolveResponsibleEmployeeIdsByEmployee } from '../services/approval-ro
 import { resolveResponsibleEmployeeForTarget } from '../services/weekend-approval-assignments.service.js';
 import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
+import { syncLeaveRequestReason } from '../services/leave-request-sync.service.js';
+import { auditService } from '../services/audit.service.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
 import type { TimeStatus } from '../types/index.js';
@@ -1161,6 +1163,59 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   }
 };
 
+/**
+ * Правка текста обоснования заявления руководителем/админом (например, дописать
+ * пропущенный объект). Разрешена независимо от статуса заявления и от того,
+ * заперты ли по периоду какие-то из материализованных дней — см.
+ * syncLeaveRequestReason: leave_requests.reason обновляется всегда, копии в
+ * attendance_adjustments — только для незапертых дней.
+ */
+const updateReason = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body as { reason?: unknown };
+
+    if (typeof reason !== 'string') {
+      res.status(400).json({ success: false, error: 'Текст заявления обязателен' });
+      return;
+    }
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length > 500) {
+      res.status(400).json({ success: false, error: 'Текст заявления не может быть длиннее 500 символов' });
+      return;
+    }
+
+    const request = await queryOne<{ id: number; employee_id: number; request_type: string }>(
+      `SELECT * FROM leave_requests WHERE id = $1`,
+      [id],
+    );
+    if (!request) {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+
+    if (!(await canManageLeaveRequest(req, request.employee_id, request.request_type, 'edit'))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
+      return;
+    }
+
+    await syncLeaveRequestReason(Number(id), trimmedReason || null);
+
+    const data = await queryOne(`SELECT * FROM leave_requests WHERE id = $1`, [id]);
+
+    auditService.logFromRequest(req, req.user.id, 'UPDATE_LEAVE_REQUEST_REASON', {
+      entityType: 'leave_request',
+      entityId: String(id),
+      details: { employee_id: request.employee_id, reason: trimmedReason },
+    }).catch((e) => console.error('[leave-requests] audit updateReason error:', e));
+
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('leave-requests.updateReason error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка правки текста заявления' });
+  }
+};
+
 /** Отмена заявления автором (статусы pending или approved). Откатываем
  *  материализованные строки attendance_adjustments в той же транзакции. */
 const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -1513,6 +1568,7 @@ export const leaveRequestsController = {
   pendingCount,
   approve,
   reject,
+  updateReason,
   cancel,
   hrAcknowledge,
   revokeApproval,

@@ -111,6 +111,15 @@ interface ICorrectionModalProps {
   canAddRemote?: boolean;
   remoteDefaultHours?: number;
   onAddRemote?: (hours: number, notes: string, files?: File[]) => void;
+  // День заперт согласованием периода (submitted/approved) — модалка открывается
+  // в режиме «только просмотр»: скрыты все кнопки правки/удаления/добавления,
+  // события СКУД и текст заявки остаются видны.
+  readOnly?: boolean;
+  // Разрешить точечную правку текста заявки «работа в выходной/праздник»
+  // (initialNotes при initialStatus='work' и companionWorkRequest.reason),
+  // не открывая полную форму редактирования корректировки.
+  canEditReasonText?: boolean;
+  onUpdateReason?: (id: number, reason: string) => Promise<void>;
 }
 
 type ModalTab = 'events' | 'correction';
@@ -315,6 +324,69 @@ const EventsTab: FC<{
   );
 };
 
+// Точечная инлайн-правка текста заявки «работа в выходной/праздник» — без открытия
+// полной формы редактирования корректировки (та меняет ещё и статус/часы).
+const EditableReasonLine: FC<{
+  id: number;
+  text: string;
+  onUpdateReason: (id: number, reason: string) => Promise<void>;
+}> = ({ id, text, onUpdateReason }) => {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(text);
+  const [saving, setSaving] = useState(false);
+
+  if (!editing) {
+    return (
+      <div className="ts-correction-view-comment ts-correction-view-comment--editable">
+        <span>{text}</span>
+        <button
+          type="button"
+          className="ts-corrections-btn"
+          onClick={() => { setValue(text); setEditing(true); }}
+          aria-label="Изменить текст заявления"
+          title="Изменить текст"
+        >
+          <Pencil size={13} />
+        </button>
+      </div>
+    );
+  }
+
+  const handleSave = async () => {
+    const trimmed = value.trim();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    try {
+      await onUpdateReason(id, trimmed);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="ts-correction-view-comment" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <textarea
+        className="ts-form-textarea"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        maxLength={500}
+        rows={3}
+        disabled={saving}
+        autoFocus
+      />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button type="button" className="ts-btn ts-btn--primary" disabled={saving || !value.trim()} onClick={() => void handleSave()}>
+          Сохранить
+        </button>
+        <button type="button" className="ts-btn" disabled={saving} onClick={() => setEditing(false)}>
+          Отмена
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const CorrectionTab: FC<{
   onClose: () => void;
   onSave: (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => void;
@@ -356,6 +428,9 @@ const CorrectionTab: FC<{
   remoteDefaultHours?: number;
   // Создаёт ОТДЕЛЬНУЮ remote-корректировку (через create, не update заявки).
   onAddRemote?: (hours: number, notes: string, files?: File[]) => void;
+  readOnly?: boolean;
+  canEditReasonText?: boolean;
+  onUpdateReason?: (id: number, reason: string) => Promise<void>;
 }> = ({
   onClose,
   onSave,
@@ -375,6 +450,9 @@ const CorrectionTab: FC<{
   canAddRemote,
   remoteDefaultHours,
   onAddRemote,
+  readOnly,
+  canEditReasonText,
+  onUpdateReason,
 }) => {
   const [addingRemote, setAddingRemote] = useState(false);
   const [remoteHours, setRemoteHours] = useState<number>(remoteDefaultHours || 8);
@@ -417,7 +495,19 @@ const CorrectionTab: FC<{
     onSave(selectedStatus, needsHoursForStatus ? hours : null, trimmedNotes, stagedFiles);
   };
 
-  if (mode === 'view' && hasExistingCorrection) {
+  // Период заперт согласованием — редактирование недоступно. Если корректировки за
+  // день ещё нет, форму создания не показываем (её всё равно нельзя сохранить).
+  if (readOnly && !hasExistingCorrection) {
+    return (
+      <div className="ts-modal-body">
+        <div className="ts-correction-view-comment">Нет корректировки за этот день. Период закрыт для редактирования.</div>
+      </div>
+    );
+  }
+
+  const effectiveMode = readOnly ? 'view' : mode;
+
+  if (effectiveMode === 'view' && hasExistingCorrection) {
     const statusMeta = getStatusMeta(initialStatus);
     const statusLabel = statusMeta?.label ?? initialStatus;
     const statusIcon = statusMeta?.icon ?? '✎';
@@ -442,7 +532,11 @@ const CorrectionTab: FC<{
     // «Только заявка work, удалёнки ещё нет»: карандаш прячем (не даём конвертировать
     // заявку через update), основной путь добавления часов — кнопка «+ Удалёнка».
     const isWorkOnlyAddRemote = Boolean(canAddRemote && onAddRemote && initialStatus === 'work');
-    const showEditPencil = !isWorkOnlyAddRemote;
+    const showEditPencil = !isWorkOnlyAddRemote && !readOnly;
+    // Точечная правка текста заявки (без открытия полной формы): только на самой
+    // «work»-записи, у которой обычный карандаш скрыт (isWorkOnlyAddRemote).
+    const canEditThisReasonText = Boolean(canEditReasonText && onUpdateReason && !readOnly && isWorkOnlyAddRemote);
+    const canEditCompanionReasonText = Boolean(canEditReasonText && onUpdateReason && !readOnly);
     const companionApprovedBy = companionWorkRequest?.approved_by_name
       ? ` (${companionWorkRequest.approved_by_name})`
       : '';
@@ -466,7 +560,7 @@ const CorrectionTab: FC<{
                   <Pencil size={14} />
                 </button>
               )}
-              {onDelete && (
+              {onDelete && !readOnly && (
                 <button
                   type="button"
                   className="ts-corrections-btn ts-corrections-btn--danger"
@@ -480,7 +574,15 @@ const CorrectionTab: FC<{
             </span>
           </div>
           {trimmedInitialNotes && (
-            <div className="ts-correction-view-comment">{trimmedInitialNotes}</div>
+            canEditThisReasonText && correctionInfo?.adjustment_id != null ? (
+              <EditableReasonLine
+                id={correctionInfo.adjustment_id}
+                text={trimmedInitialNotes}
+                onUpdateReason={onUpdateReason!}
+              />
+            ) : (
+              <div className="ts-correction-view-comment">{trimmedInitialNotes}</div>
+            )
           )}
 
           {/* Companion: согласованный выход в выходной (read-only), поверх которого лежит удалёнка. */}
@@ -493,13 +595,21 @@ const CorrectionTab: FC<{
                 </span>
               </div>
               {companionWorkRequest.reason?.trim() && (
-                <div className="ts-correction-view-comment">{companionWorkRequest.reason}</div>
+                canEditCompanionReasonText ? (
+                  <EditableReasonLine
+                    id={companionWorkRequest.id}
+                    text={companionWorkRequest.reason.trim()}
+                    onUpdateReason={onUpdateReason!}
+                  />
+                ) : (
+                  <div className="ts-correction-view-comment">{companionWorkRequest.reason}</div>
+                )
               )}
             </>
           )}
 
           {/* Добавление отдельной remote-корректировки поверх согласованного выхода. */}
-          {isWorkOnlyAddRemote && !addingRemote && (
+          {isWorkOnlyAddRemote && !readOnly && !addingRemote && (
             <button
               type="button"
               className="ts-btn ts-btn--primary"
@@ -509,7 +619,7 @@ const CorrectionTab: FC<{
               + Добавить корректировку (Удалёнка)
             </button>
           )}
-          {isWorkOnlyAddRemote && addingRemote && (() => {
+          {isWorkOnlyAddRemote && !readOnly && addingRemote && (() => {
             const wholeHours = Math.floor(remoteHours);
             const minutes = Math.round((remoteHours - wholeHours) * 60);
             const applyHM = (h: number, m: number) => {
@@ -698,6 +808,7 @@ interface IObjectCorrectionsListProps {
   // Ограничение статусов в форме добавления (#6): на дне с присутствием/работой —
   // только «Корректировка табеля» (manual).
   allowedStatuses?: TimesheetStatus[];
+  readOnly?: boolean;
 }
 
 // Серая скруглённая карточка для inline-форм (единый стиль с «День целиком»/«Удалёнка»).
@@ -722,6 +833,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
   preselectedObjectKey,
   initialMode,
   allowedStatuses,
+  readOnly,
 }) => {
   const addStatusOptions = useMemo(
     () => CREATABLE_STATUS_META.filter(meta => !allowedStatuses || allowedStatuses.includes(meta.status)),
@@ -960,7 +1072,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       {/* Шапка блока: «Обнулить день» (слева) + «Добавить корректировку» вверху справа (#2/#4) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <div style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>Корректировки по объектам</div>
-        {!adding && !hasDayLevelCorrection && expanded.size === 0 && onZeroOutDay && (
+        {!readOnly && !adding && !hasDayLevelCorrection && expanded.size === 0 && onZeroOutDay && (
           <button
             type="button"
             className="ts-btn"
@@ -977,7 +1089,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
             Обнулить день
           </button>
         )}
-        {!adding && !hasDayLevelCorrection && expanded.size === 0 && (
+        {!readOnly && !adding && !hasDayLevelCorrection && expanded.size === 0 && (
           <button
             type="button"
             className="ts-btn ts-btn--primary"
@@ -990,25 +1102,27 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
         )}
       </div>
 
-      {hasDayLevelCorrection && dayLevelSummary && onDeleteDayLevel && (
+      {hasDayLevelCorrection && dayLevelSummary && (
         <div className="ts-correction-view-row" style={{ marginBottom: 10 }}>
           <span className="ts-correction-view-row__icon">{dayLevelMeta?.icon ?? '📝'}</span>
           <span className="ts-correction-view-row__text">
             {dayLevelMeta?.label ?? 'День целиком'} · <b>{formatHM(dayLevelSummary.hours)}</b>
             {dayLevelSummary.notes.trim() && ` · «${dayLevelSummary.notes.trim()}»`}
           </span>
-          <span className="ts-correction-view-row__actions">
-            <button
-              type="button"
-              className="ts-corrections-btn ts-corrections-btn--danger"
-              onClick={() => {
-                if (window.confirm('Снять общую корректировку дня?')) onDeleteDayLevel();
-              }}
-              title="Снять корректировку дня"
-            >
-              <Trash2 size={14} />
-            </button>
-          </span>
+          {onDeleteDayLevel && !readOnly && (
+            <span className="ts-correction-view-row__actions">
+              <button
+                type="button"
+                className="ts-corrections-btn ts-corrections-btn--danger"
+                onClick={() => {
+                  if (window.confirm('Снять общую корректировку дня?')) onDeleteDayLevel();
+                }}
+                title="Снять корректировку дня"
+              >
+                <Trash2 size={14} />
+              </button>
+            </span>
+          )}
         </div>
       )}
 
@@ -1021,7 +1135,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       {correctedEntries.map(entry => {
         const state = rowState[entry.object_key] ?? { hours: 0, notes: '' };
         const hasExisting = entry.adjustment_id != null && entry.is_correction;
-        const isExpanded = expanded.has(entry.object_key);
+        const isExpanded = !readOnly && expanded.has(entry.object_key);
 
         // Сводный режим: единый стиль карточки (#2) — иконка + «объект · часы» + комментарий.
         if (hasExisting && !isExpanded) {
@@ -1034,24 +1148,26 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
                 <span className="ts-correction-view-row__text">
                   {entry.object_name} · <b>{formatHM(baseHours)}</b>
                 </span>
-                <span className="ts-correction-view-row__actions">
-                  <button
-                    type="button"
-                    className="ts-corrections-btn"
-                    onClick={() => toggleExpanded(entry.object_key)}
-                    title="Изменить часы"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="ts-corrections-btn ts-corrections-btn--danger"
-                    onClick={() => handleDelete(entry)}
-                    title="Снять корректировку"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </span>
+                {!readOnly && (
+                  <span className="ts-correction-view-row__actions">
+                    <button
+                      type="button"
+                      className="ts-corrections-btn"
+                      onClick={() => toggleExpanded(entry.object_key)}
+                      title="Изменить часы"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ts-corrections-btn ts-corrections-btn--danger"
+                      onClick={() => handleDelete(entry)}
+                      title="Снять корректировку"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </span>
+                )}
               </div>
               {trimmedNotes && (
                 <div className="ts-correction-view-comment">{trimmedNotes}</div>
@@ -1113,7 +1229,7 @@ const ObjectCorrectionsList: FC<IObjectCorrectionsListProps> = ({
       })}
 
       {/* Форма добавления: статус → объект (#5/#5.1/#5.2) */}
-      {adding && (
+      {adding && !readOnly && (
         <div style={FORM_CARD_STYLE}>
           <div className="ts-form-group">
             <label className="ts-form-label">Тип записи</label>
@@ -1251,6 +1367,9 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   canAddRemote,
   remoteDefaultHours,
   onAddRemote,
+  readOnly,
+  canEditReasonText,
+  onUpdateReason,
 }) => {
   const hasObjectsBlock = !disableObjectEntries
     && Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
@@ -1435,6 +1554,9 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           canAddRemote={canAddRemote}
           remoteDefaultHours={remoteDefaultHours}
           onAddRemote={onAddRemote}
+          readOnly={readOnly}
+          canEditReasonText={canEditReasonText}
+          onUpdateReason={onUpdateReason}
         />
       )}
       {hasObjectsBlock && (
@@ -1455,6 +1577,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           preselectedObjectKey={preselectedObjectKey}
           initialMode={initialMode}
           allowedStatuses={allowedStatuses}
+          readOnly={readOnly}
         />
       )}
       {hasObjectsBlock && attachmentsNode}

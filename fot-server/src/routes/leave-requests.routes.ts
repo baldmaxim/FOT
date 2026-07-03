@@ -79,6 +79,13 @@ router.patch(
   leaveRequestsController.reject
 );
 
+// PATCH /api/leave-requests/:id/reason — правка текста обоснования руководителем/админом
+router.patch(
+  '/:id/reason',
+  requirePageAccess('/leave-requests', 'edit'),
+  leaveRequestsController.updateReason
+);
+
 // PATCH /api/leave-requests/:id/cancel — отмена (worker+)
 router.patch(
   '/:id/cancel',

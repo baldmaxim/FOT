@@ -1,4 +1,9 @@
 import type { PoolClient } from 'pg';
+import { withTransaction } from '../config/postgres.js';
+import {
+  getEmployeeAssignmentSnapshotDepartment,
+  findApprovalLockForDate,
+} from './timesheet-department-assignments.service.js';
 
 /**
  * Синхронизирует заявление после удаления из табеля ОДНОГО материализованного дня
@@ -56,4 +61,42 @@ export async function syncLeaveRequestOnDayRemoval(
     [requestId, remaining, remaining[0], remaining[remaining.length - 1]],
   );
   return { employeeId: reqRow.employee_id, cancelled: false };
+}
+
+/**
+ * Синхронизирует текст заявления (обоснование) между исходной заявкой и её
+ * материализованными в табель копиями.
+ *
+ * Правило: leave_requests.reason — «текущая» запись, обновляется всегда.
+ * attendance_adjustments.reason конкретного дня обновляется, только если этот
+ * день НЕ заперт согласованием периода отдела (submitted/approved timesheet_approvals) —
+ * запертый день остаётся замороженным снимком текста на момент закрытия периода,
+ * симметрично тому, как уже заморожены его часы/статус.
+ */
+export async function syncLeaveRequestReason(requestId: number, reason: string | null): Promise<void> {
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE leave_requests SET reason = $2, updated_at = now() WHERE id = $1`,
+      [requestId, reason],
+    );
+
+    const rows = (await client.query<{ id: number; employee_id: number; work_date: string }>(
+      `SELECT id, employee_id, work_date::text AS work_date
+         FROM attendance_adjustments
+        WHERE source_type = 'leave_request' AND source_id = $1`,
+      [String(requestId)],
+    )).rows;
+
+    for (const row of rows) {
+      const workDate = row.work_date.slice(0, 10);
+      const departmentId = await getEmployeeAssignmentSnapshotDepartment(row.employee_id, workDate);
+      const lock = departmentId ? await findApprovalLockForDate(departmentId, workDate) : null;
+      if (lock) continue; // день заперт по периоду — текст остаётся замороженным
+
+      await client.query(
+        `UPDATE attendance_adjustments SET reason = $2, updated_at = now() WHERE id = $1`,
+        [row.id, reason],
+      );
+    }
+  });
 }
