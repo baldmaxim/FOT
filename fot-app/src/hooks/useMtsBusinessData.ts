@@ -126,6 +126,19 @@ export const useUploadMtsBusinessDetalization = () => {
   });
 };
 
+export const useClearMtsBusinessDetalization = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => mtsBusinessService.clearDetalization(),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'accounts-summary'] });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessNumberMapKey() });
+    },
+  });
+};
+
 export const useSetMtsBusinessNumberMap = () => {
   const qc = useQueryClient();
   return useMutation({

@@ -36,6 +36,11 @@ export interface IMtsSubscriberContext {
 }
 
 class MtsBusinessMappingService {
+  /** Полная очистка привязок номер→сотрудник и ФИО от МТС. */
+  async clearAllNumberMap(): Promise<number> {
+    return execute('DELETE FROM mts_business_number_map');
+  }
+
   async getNumberMap(): Promise<IMtsBusinessNumberMapRow[]> {
     const rows = await query<{
       msisdn_enc: string | null;

@@ -167,6 +167,12 @@ export const mtsBusinessService = {
     return res.data;
   },
 
+  // Временная очистка: удаляет всю детализацию звонков и привязки номеров (тест импорта из API).
+  clearDetalization: async (): Promise<{ cdrDeleted: number; numberMapDeleted: number }> => {
+    const res = await apiClient.delete<ApiResponse<{ cdrDeleted: number; numberMapDeleted: number }>>('/mts-business/detalization');
+    return res.data;
+  },
+
   // === Привязка номеров ===
   getNumberMap: async (): Promise<IMtsBusinessNumberMapRow[]> => {
     const res = await apiClient.get<ApiResponse<IMtsBusinessNumberMapRow[]>>('/mts-business/number-map');

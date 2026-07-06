@@ -234,6 +234,20 @@ export const mtsBusinessController = {
     }
   },
 
+  /** Полная очистка детализации звонков + привязок номеров (временная кнопка «Очистить XML»). */
+  async clearDetalization(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const cdrDeleted = await mtsBusinessCdrService.clearAllCdr();
+      const numberMapDeleted = await mtsBusinessMappingService.clearAllNumberMap();
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_DETALIZATION_CLEARED, {
+        details: { cdrDeleted, numberMapDeleted },
+      });
+      res.json({ success: true, data: { cdrDeleted, numberMapDeleted } });
+    } catch (error) {
+      fail(res, error, 'Ошибка очистки детализации');
+    }
+  },
+
   async listRequests(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const rows = await query<{

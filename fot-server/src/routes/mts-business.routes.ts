@@ -55,6 +55,14 @@ router.post(
   mtsBusinessController.refreshStatus,
 );
 
+// Полная очистка детализации + привязок (временная кнопка «Очистить XML» для теста импорта из API).
+router.delete(
+  '/detalization',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessController.clearDetalization,
+);
+
 // Загрузка XML-детализации (файл с email) → парсинг → CDR.
 router.post(
   '/detalization/upload',

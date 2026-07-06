@@ -8,6 +8,7 @@ import {
   useDeleteMtsBusinessAccount,
   useFetchSyncMtsBusinessDetalization,
   useUploadMtsBusinessDetalization,
+  useClearMtsBusinessDetalization,
   useSetMtsBusinessNumberMap,
   useAutoLinkMtsBusinessNumberMap,
 } from '../../hooks/useMtsBusinessData';
@@ -249,11 +250,25 @@ const SyncSection: FC = () => {
 const UploadSection: FC = () => {
   const accounts = useMtsBusinessAccounts();
   const upload = useUploadMtsBusinessDetalization();
+  const clear = useClearMtsBusinessDetalization();
   const active = (accounts.data ?? []).filter(a => a.isActive);
   const [file, setFile] = useState<File | null>(null);
   const [accountId, setAccountId] = useState('');
   const [msisdn, setMsisdn] = useState('');
   const [msg, setMsg] = useState<Msg>(null);
+
+  // Временная кнопка для теста импорта из API: удаляет всю детализацию звонков и
+  // привязки номеров, чтобы повторный синк из API не отсекался дедупом как дубли.
+  const onClear = async (): Promise<void> => {
+    setMsg(null);
+    if (!window.confirm('Удалить ВСЕ звонки и привязки номеров? Действие необратимо (нужен 2FA).')) return;
+    try {
+      const r = await clear.mutateAsync();
+      setMsg({ ok: true, text: `Удалено звонков: ${r.cdrDeleted}, привязок номеров: ${r.numberMapDeleted}` });
+    } catch (e) {
+      setMsg({ ok: false, text: errText(e, 'Ошибка очистки (возможно нужен 2FA)') });
+    }
+  };
 
   const onUpload = async (): Promise<void> => {
     setMsg(null);
@@ -296,6 +311,7 @@ const UploadSection: FC = () => {
       </div>
       <div className={styles.actions}>
         <button className={styles.btn} onClick={onUpload} disabled={upload.isPending || !file}>Загрузить</button>
+        <button className={styles.btnSecondary} onClick={() => { void onClear(); }} disabled={clear.isPending}>Очистить XML</button>
       </div>
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
     </section>
