@@ -22,6 +22,8 @@ export interface IMtsSubscriberRow {
   employeeId: number | null;
   employeeFullName: string | null;
   employeeTabNumber: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
   calls: number;
   totalSeconds: number;
   lastCallAt: string | null;
@@ -66,6 +68,8 @@ class MtsBusinessSubscribersService {
       employee_id: number | null;
       full_name: string | null;
       tab_number: string | null;
+      department_id: string | null;
+      department_name: string | null;
       balance: string | null;
       charges_amount: string | null;
       bill_plan: unknown;
@@ -123,6 +127,8 @@ class MtsBusinessSubscribersService {
               m.employee_id,
               e.full_name,
               e.tab_number,
+              e.org_department_id::text AS department_id,
+              od.name AS department_name,
               mt.balance::text AS balance,
               mt.charges_amount::text AS charges_amount,
               s.bill_plan,
@@ -133,6 +139,7 @@ class MtsBusinessSubscribersService {
          LEFT JOIN metrics mt ON mt.msisdn_hash = COALESCE(m.msisdn_hash, c.msisdn_hash)
          LEFT JOIN snaps s ON s.msisdn_hash = COALESCE(m.msisdn_hash, c.msisdn_hash)
          LEFT JOIN employees e ON e.id = m.employee_id
+         LEFT JOIN org_departments od ON od.id = e.org_department_id
          LEFT JOIN mts_business_accounts a ON a.id = COALESCE(m.account_id::text, c.account_id)::uuid
         ORDER BY e.full_name NULLS LAST, COALESCE(c.total_sec, 0) DESC`,
     );
@@ -160,6 +167,8 @@ class MtsBusinessSubscribersService {
         employeeId: r.employee_id,
         employeeFullName: r.full_name,
         employeeTabNumber: r.tab_number,
+        departmentId: r.department_id,
+        departmentName: r.department_name,
         calls: Number(r.calls),
         totalSeconds: Number(r.total_sec),
         lastCallAt: r.last_call_at,

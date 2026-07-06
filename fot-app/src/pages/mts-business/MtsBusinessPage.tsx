@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { OverviewSection } from './OverviewSection';
 import { SubscribersTab } from './subscribers/SubscribersTab';
 import { AdminTab } from './admin/AdminTab';
+import { RefreshAllButton } from './overview/RefreshAllPanel';
 import styles from './MtsBusinessPage.module.css';
 
 // Страница «МТС Бизнес», вкладки привязаны к URL:
@@ -36,6 +37,7 @@ export const MtsBusinessPage: FC = () => {
         <button className={`${styles.tab} ${tab === 'main' ? styles.tabActive : ''}`} onClick={() => go('main')}>Основное</button>
         <button className={`${styles.tab} ${tab === 'subscribers' ? styles.tabActive : ''}`} onClick={() => go('subscribers')}>Абоненты</button>
         <button className={`${styles.tab} ${tab === 'admin' ? styles.tabActive : ''}`} onClick={() => go('admin')}>Администрирование</button>
+        <span className={styles.tabsRight}><RefreshAllButton /></span>
       </div>
 
       {tab === 'main' && <OverviewSection />}

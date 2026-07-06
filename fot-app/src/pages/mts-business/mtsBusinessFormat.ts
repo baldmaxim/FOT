@@ -17,6 +17,16 @@ export const fmtLast = (iso: string | null): string => iso
   : '—';
 export const fmtMoney = (v: number | null): string => v == null ? '—' : `${v.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
 
+/** 79151204230 → «+7 (915) 120-42-30»; иное — как есть. */
+export const fmtPhone = (msisdn: string | null | undefined): string => {
+  if (!msisdn) return '—';
+  const d = msisdn.replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('7')) {
+    return `+7 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7, 9)}-${d.slice(9, 11)}`;
+  }
+  return msisdn;
+};
+
 export const UNIT_LABELS: Record<string, string> = { BYTE: 'интернет', MINUTE: 'минуты', SECOND: 'минуты', ITEM: 'SMS', MONEY: 'деньги' };
 export const fmtPackage = (p: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }): string => {
   const label = (p.unitOfMeasure && UNIT_LABELS[p.unitOfMeasure]) || p.unitOfMeasure || '—';

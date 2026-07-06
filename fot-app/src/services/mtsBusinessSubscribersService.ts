@@ -17,6 +17,8 @@ export interface IMtsSubscriberRow {
   employeeId: number | null;
   employeeFullName: string | null;
   employeeTabNumber: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
   calls: number;
   totalSeconds: number;
   lastCallAt: string | null;
@@ -70,6 +72,26 @@ export interface IMtsSubscriberAvailable {
   tariffs: MtsSection<IMtsAvailableTariffRow[]>;
 }
 
+export interface IMtsUsageRow {
+  date: string | null;
+  category: string;
+  label: string | null;
+  networkEvent: string | null;
+  direction: 'in' | 'out' | null;
+  peer: string | null;
+  units: number | null;
+  unitCode: string | null;
+  amount: number;
+}
+
+export interface IMtsUsageResult {
+  month: string;
+  rows?: IMtsUsageRow[];
+  total?: number;
+  unavailable?: true;
+  reason?: string;
+}
+
 export interface IMtsSubscriberSyncResult {
   msisdn: string;
   sections: number;
@@ -99,6 +121,13 @@ export const mtsBusinessSubscribersService = {
   available: async (msisdn: string): Promise<IMtsSubscriberAvailable> => {
     const res = await apiClient.get<ApiResponse<IMtsSubscriberAvailable>>(
       `/mts-business/subscribers/${encodeURIComponent(msisdn)}/available`,
+    );
+    return res.data;
+  },
+
+  usage: async (msisdn: string, month: string): Promise<IMtsUsageResult> => {
+    const res = await apiClient.get<ApiResponse<IMtsUsageResult>>(
+      `/mts-business/subscribers/${encodeURIComponent(msisdn)}/usage?month=${encodeURIComponent(month)}`,
     );
     return res.data;
   },

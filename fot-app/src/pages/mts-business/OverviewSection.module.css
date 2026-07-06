@@ -301,3 +301,12 @@
 @media (max-width: 480px) {
   .card { padding: 12px 14px; }
 }
+
+/* Период в шапке (рядом с переключателем ЛС) */
+.headerDates {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.headerDatesSep { color: var(--text-tertiary); font-size: 13px; }

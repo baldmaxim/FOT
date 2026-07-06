@@ -47,6 +47,19 @@ export interface IStatementUsageEvent {
   amount: number; // рубли, ≥0 (расход)
 }
 
+/** Строка детальной выписки по использованию SIM (для вкладки «Использование»). */
+export interface IStatementUsageRow {
+  date: string | null;
+  category: MtsExpenseCategory;
+  label: string | null;        // человекочитаемое описание от МТС
+  networkEvent: string | null; // call | sms | traffic | …
+  direction: 'in' | 'out' | null;
+  peer: string | null;         // собеседник / APN
+  units: number | null;        // factUnits (секунды/байты/шт)
+  unitCode: string | null;     // SECOND | BYTE | FACT | …
+  amount: number;              // рубли, ≥0
+}
+
 export interface ITalkTimeRow {
   employeeId: number | null;
   employeeFullName: string | null;
@@ -371,6 +384,37 @@ class MtsBusinessCdrService {
       const amount = pickAmount(c) ?? pickAmount(u) ?? 0;
       out.push({ category: classifyUsage(c), amount: Math.abs(amount) });
     }
+    return out;
+  }
+
+  /**
+   * Детальная выписка по использованию SIM (вкладка «Использование» карточки):
+   * каждое событие Usages[] с датой, типом, описанием, объёмом и деньгами.
+   * Схема подтверждена дампом probe 06.07.2026: date, amount, Characteristics
+   * { networkEvent, factUnits, factUnitCode, direction, calledMsisdn, label }.
+   */
+  parseStatementUsageRows(data: unknown): IStatementUsageRow[] {
+    const usages = data && typeof data === 'object' ? (data as Record<string, unknown>).Usages : null;
+    const out: IStatementUsageRow[] = [];
+    for (const raw of asArray(usages as Record<string, unknown>[] | undefined)) {
+      const u = raw as { Characteristics?: Record<string, unknown> } & Record<string, unknown>;
+      const c = u.Characteristics ?? {};
+      const amount = pickAmount(c) ?? pickAmount(u) ?? 0;
+      const factUnits = Number(c.factUnits);
+      out.push({
+        date: typeof u.date === 'string' ? u.date : null,
+        category: classifyUsage(c),
+        label: typeof c.label === 'string' && c.label ? c.label : null,
+        networkEvent: typeof c.networkEvent === 'string' ? c.networkEvent : null,
+        direction: c.direction === 'I' ? 'in' : c.direction === 'O' ? 'out' : null,
+        peer: typeof c.calledMsisdn === 'string' && c.calledMsisdn ? c.calledMsisdn : null,
+        units: Number.isFinite(factUnits) ? factUnits : null,
+        unitCode: typeof c.factUnitCode === 'string' ? c.factUnitCode : null,
+        amount: Math.abs(amount),
+      });
+    }
+    // Свежие сверху — как в выписке ЛК.
+    out.sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
     return out;
   }
 

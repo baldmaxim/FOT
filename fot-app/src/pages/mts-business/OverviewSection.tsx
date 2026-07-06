@@ -183,15 +183,49 @@ export const OverviewSection: FC = () => {
   return (
     <div className={styles.page}>
       <div className={styles.header}>
-        <h1 className={styles.headerTitle}>Обзор</h1>
         <Seg
           value={accountId}
           onChange={setAccountId}
           options={[{ v: '', label: 'Все ЛС' }, ...(accountsMeta.data ?? []).map(a => ({ v: a.id, label: a.label }))]}
         />
+        <span className={styles.headerDates}>
+          <input className={styles.dateInput} type="date" value={callsFrom} onChange={e => setCallsFrom(e.target.value)} />
+          <span className={styles.headerDatesSep}>—</span>
+          <input className={styles.dateInput} type="date" value={callsTo} onChange={e => setCallsTo(e.target.value)} />
+        </span>
       </div>
 
-      <RefreshAllPanel accountId={accountId || undefined} />
+      <RefreshAllPanel />
+
+      <section className={styles.card}>
+        <div className={styles.cardTitleText} style={{ marginBottom: 12 }}>По лицевым счетам</div>
+        {billingSummary.isLoading ? <p className={styles.hint}>Загрузка…</p> : billingAccounts.length === 0 ? (
+          stepUnavailable('billing')
+            ? <UnavailableNotice />
+            : <p className={styles.hint}>Нет данных. Нажмите «Обновить» вверху страницы или дождитесь ежедневного автообновления.</p>
+        ) : (
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead><tr><th>Лицевой счёт</th><th>Баланс</th><th>Кредитный лимит</th><th>Неоплаченные</th><th>Обновлено</th></tr></thead>
+              <tbody>
+                {billingAccounts.map(r => (
+                  <tr key={r.accountId}>
+                    <td>{r.label}{r.accountNumber ? ` (${r.accountNumber})` : ''}</td>
+                    <td>{fmtMoney(r.balance)}</td>
+                    <td>{fmtMoney(r.creditLimit)}</td>
+                    <td>
+                      {(r.unpaidAmount ?? 0) > 0
+                        ? <span className={`${styles.badge} ${styles.badgeErr}`}>{fmtMoney(r.unpaidAmount)}</span>
+                        : fmtMoney(r.unpaidAmount)}
+                    </td>
+                    <td>{fmtLast(r.capturedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className={styles.card}>
         <div className={styles.kpiGrid}>
@@ -222,10 +256,6 @@ export const OverviewSection: FC = () => {
         <div className={styles.cardTitle}>
           <span className={styles.cardTitleText}>Лицевые счета</span>
           <span className={styles.cardTitleExtra}>период с {callsFrom} по {callsTo}</span>
-        </div>
-        <div className={styles.actions} style={{ marginBottom: 12 }}>
-          <input className={styles.dateInput} type="date" value={callsFrom} onChange={e => setCallsFrom(e.target.value)} />
-          <input className={styles.dateInput} type="date" value={callsTo} onChange={e => setCallsTo(e.target.value)} />
         </div>
         {accSummary.isLoading ? <p className={styles.hint}>Загрузка…</p>
           : accountsOverview.length === 0
@@ -338,36 +368,6 @@ export const OverviewSection: FC = () => {
           </section>
         </div>
       </div>
-
-      <section className={styles.card}>
-        <div className={styles.cardTitleText} style={{ marginBottom: 12 }}>По лицевым счетам</div>
-        {billingSummary.isLoading ? <p className={styles.hint}>Загрузка…</p> : billingAccounts.length === 0 ? (
-          stepUnavailable('billing')
-            ? <UnavailableNotice />
-            : <p className={styles.hint}>Нет данных. Нажмите «Обновить» вверху страницы или дождитесь ежедневного автообновления.</p>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead><tr><th>Лицевой счёт</th><th>Баланс</th><th>Кредитный лимит</th><th>Неоплаченные</th><th>Обновлено</th></tr></thead>
-              <tbody>
-                {billingAccounts.map(r => (
-                  <tr key={r.accountId}>
-                    <td>{r.label}{r.accountNumber ? ` (${r.accountNumber})` : ''}</td>
-                    <td>{fmtMoney(r.balance)}</td>
-                    <td>{fmtMoney(r.creditLimit)}</td>
-                    <td>
-                      {(r.unpaidAmount ?? 0) > 0
-                        ? <span className={`${styles.badge} ${styles.badgeErr}`}>{fmtMoney(r.unpaidAmount)}</span>
-                        : fmtMoney(r.unpaidAmount)}
-                    </td>
-                    <td>{fmtLast(r.capturedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
 
       <section className={styles.card}>
         <div className={styles.cardTitleText} style={{ marginBottom: 12 }}>По сотрудникам</div>

@@ -3,6 +3,7 @@ import { useOverlayDismiss } from '../../../hooks/useOverlayDismiss';
 import {
   useMtsBusinessSubscriberDetails,
   useMtsBusinessSubscriberAvailable,
+  useMtsBusinessSubscriberUsage,
   useRefreshMtsBusinessSubscriber,
   useChangeMtsBusinessTariff,
 } from '../../../hooks/useMtsBusinessSubscribers';
@@ -17,8 +18,8 @@ import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
 import { EmployeeFioPicker } from '../../mts/EmployeeFioPicker';
 import {
-  errText, fmtDur, fmtLast, fmtMoney, fmtPackage,
-  EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS,
+  errText, fmtDur, fmtLast, fmtMoney, fmtPackage, fmtPhone,
+  EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS, PD_STATUS_LABELS,
 } from '../mtsBusinessFormat';
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
@@ -39,6 +40,20 @@ const lastMonths = (n: number): { value: string; label: string }[] => {
 };
 
 const dash = (v: string | number | null | undefined): string => (v == null || v === '' ? '—' : String(v));
+
+/** Объём события выписки: секунды → длительность, байты → МБ, штуки → как есть. */
+const fmtUnits = (units: number | null, code: string | null): string => {
+  if (units == null) return '';
+  if (code === 'SECOND') return fmtDur(units);
+  if (code === 'BYTE') return `${(units / 1_000_000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`;
+  return String(units);
+};
+
+/** Платные услуги сверху (по убыванию абонплаты), затем бесплатные. */
+const sortPaidFirst = (items: IMtsSubServiceItem[]): IMtsSubServiceItem[] =>
+  [...items].sort((a, b) => (b.monthlyAmount ?? 0) - (a.monthlyAmount ?? 0));
+
+const USAGE_ROWS_CAP = 1500;
 
 const KV: FC<{ label: string; value: ReactNode }> = ({ label, value }) => (
   <div className={st.kv}>
@@ -69,6 +84,9 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
   const expenses = useMtsBusinessSubscriberExpenses(msisdn, month, true);
   const [pdOpen, setPdOpen] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
+  const [view, setView] = useState<'main' | 'usage'>('main');
+  const [availSearch, setAvailSearch] = useState('');
+  const usage = useMtsBusinessSubscriberUsage(msisdn, month, view === 'usage');
 
   const accountId = details.data?.accountId ?? row.accountId ?? '';
   const busy = modify.isPending || changeTariff.isPending || refresh.isPending || setMap.isPending;
@@ -141,9 +159,11 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
       <div className={st.drawer}>
         <div className={st.drawerHeader}>
           <div>
-            <h3 className={st.drawerTitle}>{msisdn}</h3>
+            <h3 className={st.drawerTitle}>
+              <a className={st.phoneLink} href={`tel:+${msisdn.replace(/\D/g, '')}`} title="Позвонить">{fmtPhone(msisdn)}</a>
+            </h3>
             <p className={st.drawerSub}>
-              {[row.employeeFullName ?? row.mtsFio ?? row.mtsComment, row.accountLabel, row.tariffName].filter(Boolean).join(' · ') || 'Абонент МТС'}
+              {[row.employeeFullName ?? row.mtsFio ?? row.mtsComment, row.departmentName, row.accountLabel, row.tariffName].filter(Boolean).join(' · ') || 'Абонент МТС'}
             </p>
           </div>
           <button className={st.drawerClose} onClick={onClose} aria-label="Закрыть">×</button>
@@ -151,15 +171,44 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
 
         {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
 
+        <div className={st.drawerTabs}>
+          <button className={`${st.drawerTab} ${view === 'main' ? st.drawerTabActive : ''}`} onClick={() => setView('main')}>Управление</button>
+          <button className={`${st.drawerTab} ${view === 'usage' ? st.drawerTabActive : ''}`} onClick={() => setView('usage')}>Использование</button>
+        </div>
+
+        {view === 'main' && (<>
+
         <div className={st.section}>
-          <div className={st.sectionHead}><h4 className={st.sectionTitle}>Абонент</h4><PersonalDataStatusBadge status={row.pdStatus} /></div>
+          <div className={st.sectionHead}>
+            <h4 className={st.sectionTitle}>Статистика</h4>
+            <select className={st.monthSelect} value={month} onChange={e => setMonth(e.target.value)}>
+              {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </div>
+          <KV label="Звонки (всего в базе)" value={`${row.calls} · ${fmtDur(row.totalSeconds)}`} />
+          <KV label="Последний звонок" value={fmtLast(row.lastCallAt)} />
+          {expenses.isLoading && <p className={styles.hint}>Загрузка расходов…</p>}
+          {expenses.data && (
+            <>
+              {EXPENSE_ORDER.map(cat => {
+                const b = expenses.data.summary[cat];
+                if (!b || (b.count === 0 && b.amount === 0)) return null;
+                return <KV key={cat} label={EXPENSE_CATEGORY_LABELS[cat]} value={`${b.count ? `${b.count} · ` : ''}${fmtMoney(b.amount)}`} />;
+              })}
+              <KV label="Итого расходов" value={<b>{fmtMoney(expenses.data.summary.total)}</b>} />
+            </>
+          )}
+        </div>
+
+        <div className={st.section}>
+          <div className={st.sectionHead}><h4 className={st.sectionTitle}>Абонент</h4></div>
           <KV label="ФИО в МТС" value={dash(row.mtsFio)} />
           <KV label="Комментарий МТС" value={dash(row.mtsComment)} />
           <KV label="Лицевой счёт" value={dash(row.accountLabel)} />
           <KV
             label="Сотрудник ФОТ"
             value={row.employeeFullName
-              ? `${row.employeeFullName}${row.employeeTabNumber ? ` (таб. ${row.employeeTabNumber})` : ''}`
+              ? `${row.employeeFullName}${row.employeeTabNumber ? ` (таб. ${row.employeeTabNumber})` : ''}${row.departmentName ? ` · ${row.departmentName}` : ''}`
               : 'не привязан'}
           />
           <div className={styles.actions} style={{ marginTop: 8, alignItems: 'center' }}>
@@ -171,13 +220,28 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
             {row.employeeId != null && (
               <button className={styles.btnSecondary} disabled={busy} onClick={() => { void onLink(null); }}>Снять</button>
             )}
-            <button className={styles.btnSecondary} onClick={() => setPdOpen(true)}>Персданные</button>
+          </div>
+        </div>
+
+        <div className={st.section}>
+          <div className={st.sectionHead}>
+            <h4 className={st.sectionTitle}>Персональные данные</h4>
+            <PersonalDataStatusBadge status={row.pdStatus} />
+          </div>
+          <KV label="ФИО по данным МТС" value={dash(row.mtsFio)} />
+          <KV label="Статус" value={row.pdStatus ? (PD_STATUS_LABELS[row.pdStatus] ?? row.pdStatus) : 'не проверено — обновите данные'} />
+          <KV label="Проверено" value={fmtLast(row.pdSyncedAt)} />
+          <p className={styles.hint}>
+            Паспортные данные хранятся в зашифрованном виде и не отображаются. Внесение/изменение уходит в МТС;
+            пользователь номера подтверждает данные через Госуслуги (придёт SMS).
+          </p>
+          <div className={styles.actions} style={{ marginTop: 4 }}>
+            <button className={styles.btnSecondary} onClick={() => setPdOpen(true)}>Внести / изменить</button>
           </div>
         </div>
 
         <div className={st.section}>
           <div className={st.sectionHead}><h4 className={st.sectionTitle}>Финансы и тариф</h4></div>
-          <KV label="Баланс ЛС" value={d?.balance ? `${fmtMoney(d.balance.amount)} (${fmtLast(d.balance.capturedAt)})` : fmtMoney(row.balance)} />
           <KV label="Начисления" value={d?.charges ? fmtMoney(d.charges.amount) : fmtMoney(row.chargesAmount)} />
           <KV label="Тариф" value={dash(d?.tariff.name ?? row.tariffName)} />
           <KV label="Абонплата" value={d?.tariff.fee?.amount != null ? `${fmtMoney(d.tariff.fee.amount)}/мес` : '—'} />
@@ -188,7 +252,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
 
         <div className={st.section}>
           <div className={st.sectionHead}><h4 className={st.sectionTitle}>Подключённые услуги ({d?.services.length ?? row.servicesCount})</h4></div>
-          {details.isLoading ? <p className={styles.hint}>Загрузка…</p> : serviceList(d?.services ?? [], 'service', 'remove', 'Платных услуг нет — обновите данные, если список пуст ошибочно')}
+          {details.isLoading ? <p className={styles.hint}>Загрузка…</p> : serviceList(sortPaidFirst(d?.services ?? []), 'service', 'remove', 'Услуг нет — обновите данные, если список пуст ошибочно')}
         </div>
 
         <div className={st.section}>
@@ -209,10 +273,24 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           {showAvailable && available.data && (
             <>
               <h5 className={st.sectionTitle} style={{ margin: '6px 0' }}>Доступные услуги</h5>
+              <input
+                className={st.availSearch}
+                type="search"
+                placeholder="Поиск услуги по названию…"
+                value={availSearch}
+                onChange={e => setAvailSearch(e.target.value)}
+              />
               {isMtsUnavailable(available.data.services)
                 ? <UnavailableNotice compact />
                 : 'data' in available.data.services
-                  ? serviceList(available.data.services.data, 'service', 'add', 'Нет доступных услуг')
+                  ? serviceList(
+                      sortPaidFirst(available.data.services.data.filter(it =>
+                        !availSearch.trim()
+                        || `${it.name ?? ''} ${it.code ?? ''}`.toLowerCase().includes(availSearch.trim().toLowerCase()),
+                      )),
+                      'service', 'add',
+                      availSearch.trim() ? 'Ничего не найдено по запросу' : 'Нет доступных услуг',
+                    )
                   : <p className={styles.err}>Ошибка загрузки</p>}
               <h5 className={st.sectionTitle} style={{ margin: '10px 0 6px' }}>Доступные блокировки</h5>
               {isMtsUnavailable(available.data.blocks)
@@ -244,28 +322,6 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           )}
         </div>
 
-        <div className={st.section}>
-          <div className={st.sectionHead}>
-            <h4 className={st.sectionTitle}>Статистика</h4>
-            <select className={st.monthSelect} value={month} onChange={e => setMonth(e.target.value)}>
-              {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </select>
-          </div>
-          <KV label="Звонки (всего в базе)" value={`${row.calls} · ${fmtDur(row.totalSeconds)}`} />
-          <KV label="Последний звонок" value={fmtLast(row.lastCallAt)} />
-          {expenses.isLoading && <p className={styles.hint}>Загрузка расходов…</p>}
-          {expenses.data && (
-            <>
-              {EXPENSE_ORDER.map(cat => {
-                const b = expenses.data.summary[cat];
-                if (!b || (b.count === 0 && b.amount === 0)) return null;
-                return <KV key={cat} label={EXPENSE_CATEGORY_LABELS[cat]} value={`${b.count ? `${b.count} · ` : ''}${fmtMoney(b.amount)}`} />;
-              })}
-              <KV label="Итого расходов" value={<b>{fmtMoney(expenses.data.summary.total)}</b>} />
-            </>
-          )}
-        </div>
-
         {((d?.payments ?? []).length > 0 || (d?.forwarding ?? []).length > 0 || d?.roaming || (d?.deliveryMethod ?? []).length > 0) && (
           <div className={st.section}>
             <div className={st.sectionHead}><h4 className={st.sectionTitle}>Прочее</h4></div>
@@ -279,6 +335,47 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
             {(d?.deliveryMethod ?? []).map((dm, i) => (
               <KV key={`dm-${i}`} label="Доставка счетов" value={`${dash(dm.method)}${dm.address ? ` · ${dm.address}` : ''}`} />
             ))}
+          </div>
+        )}
+
+        </>)}
+
+        {view === 'usage' && (
+          <div className={st.section}>
+            <div className={st.sectionHead}>
+              <h4 className={st.sectionTitle}>Использование SIM — детальная выписка</h4>
+              <select className={st.monthSelect} value={month} onChange={e => setMonth(e.target.value)}>
+                {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            </div>
+            {usage.isLoading && <p className={styles.hint}>Загрузка выписки из МТС…</p>}
+            {usage.isError && <p className={styles.err}>Не удалось загрузить выписку.</p>}
+            {usage.data?.unavailable && <UnavailableNotice message="Детализация не активирована для этого лицевого счёта." />}
+            {usage.data?.rows && (
+              usage.data.rows.length === 0
+                ? <p className={styles.hint}>За выбранный месяц событий нет.</p>
+                : (
+                  <>
+                    <KV label={`Событий за месяц: ${usage.data.rows.length}`} value={<b>итого {fmtMoney(usage.data.total ?? 0)}</b>} />
+                    <ul className={st.list}>
+                      {usage.data.rows.slice(0, USAGE_ROWS_CAP).map((u, i) => (
+                        <li key={`u-${i}`} className={st.listItem}>
+                          <span className={st.usageDate}>{fmtLast(u.date)}</span>
+                          <span className={st.listName}>
+                            {u.label ?? u.networkEvent ?? '—'}
+                            {u.peer ? ` · ${u.direction === 'in' ? 'от' : ''}${u.direction === 'out' ? '→ ' : ' '}${u.peer}` : ''}
+                          </span>
+                          <span className={st.listPrice}>{fmtUnits(u.units, u.unitCode)}</span>
+                          <span className={st.usageAmount}>{u.amount > 0 ? fmtMoney(u.amount) : ''}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {usage.data.rows.length > USAGE_ROWS_CAP && (
+                      <p className={styles.hint}>Показаны первые {USAGE_ROWS_CAP} из {usage.data.rows.length} событий.</p>
+                    )}
+                  </>
+                )
+            )}
           </div>
         )}
 

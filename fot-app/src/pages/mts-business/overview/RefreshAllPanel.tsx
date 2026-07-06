@@ -20,19 +20,47 @@ const StepIcon: FC<{ status: IMtsRefreshStep['status'] }> = ({ status }) => {
 };
 
 /**
- * Кнопка «Обновить» + панель прогресса фонового полного обновления модуля.
- * Состояние живёт на бэке (переживает уход со страницы/рестарт): polling раз в
- * 3с пока идёт прогон; по завершении инвалидируются все запросы модуля.
+ * Кнопка «Обновить» (строка вкладок страницы): запуск фонового полного
+ * обновления всех активных ЛС. Прогресс — в RefreshAllPanel на «Основном»
+ * (общий react-query кэш статуса, один polling на страницу).
  */
-export const RefreshAllPanel: FC<{ accountId?: string }> = ({ accountId }) => {
+export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
   const status = useMtsBusinessRefreshAllStatus();
   const start = useStartMtsBusinessRefreshAll();
-  const [dismissedStartedAt, setDismissedStartedAt] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const running = status.data?.running === true;
+  useMtsBusinessRefreshAllCompletion(status.data?.running);
+
+  const onStart = async (): Promise<void> => {
+    setStartError(null);
+    try {
+      await start.mutateAsync(accountId ? { accountId } : {});
+    } catch (e) {
+      setStartError(errText(e, 'Не удалось запустить (возможно нужен 2FA)'));
+    }
+  };
+
+  return (
+    <span className={s.controls}>
+      {startError && <span className={s.err}>{startError}</span>}
+      <button className={s.btn} onClick={() => { void onStart(); }} disabled={running || start.isPending}>
+        {running || start.isPending ? <><span className={s.spinnerLight} /> Обновление…</> : 'Обновить'}
+      </button>
+    </span>
+  );
+};
+
+/**
+ * Панель прогресса фонового полного обновления. Состояние живёт на бэке
+ * (переживает уход со страницы/рестарт): polling раз в 3с пока идёт прогон;
+ * по завершении инвалидируются все запросы модуля.
+ */
+export const RefreshAllPanel: FC = () => {
+  const status = useMtsBusinessRefreshAllStatus();
+  const [dismissedStartedAt, setDismissedStartedAt] = useState<string | null>(null);
 
   const data = status.data;
   const running = data?.running === true;
-  useMtsBusinessRefreshAllCompletion(data?.running);
 
   const multiAccount = useMemo(
     () => new Set((data?.steps ?? []).map(st => st.accountId)).size > 1,
@@ -43,25 +71,8 @@ export const RefreshAllPanel: FC<{ accountId?: string }> = ({ accountId }) => {
     && data.startedAt != null
     && (running || (data.finishedAt != null && dismissedStartedAt !== data.startedAt));
 
-  const onStart = async (): Promise<void> => {
-    setStartError(null);
-    try {
-      await start.mutateAsync(accountId ? { accountId } : {});
-      setDismissedStartedAt(null);
-    } catch (e) {
-      setStartError(errText(e, 'Не удалось запустить обновление (возможно нужен 2FA)'));
-    }
-  };
-
   return (
     <div className={s.wrap}>
-      <div className={s.controls}>
-        <button className={s.btn} onClick={() => { void onStart(); }} disabled={running || start.isPending}>
-          {running || start.isPending ? <><span className={s.spinnerLight} /> Обновление…</> : 'Обновить'}
-        </button>
-        {startError && <span className={s.err}>{startError}</span>}
-      </div>
-
       {showPanel && data && (
         <div className={s.panel}>
           <div className={s.panelHead}>

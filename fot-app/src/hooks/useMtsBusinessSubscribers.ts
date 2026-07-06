@@ -31,6 +31,14 @@ export const useMtsBusinessSubscriberAvailable = (msisdn: string | null, enabled
   enabled: enabled && Boolean(msisdn),
 });
 
+/** Детальная выписка за месяц (живой вызов МТС) — грузится при открытии вкладки «Использование». */
+export const useMtsBusinessSubscriberUsage = (msisdn: string | null, month: string, enabled: boolean) => useQuery({
+  queryKey: ['mts-business', 'subscriber-usage', msisdn ?? '', month] as const,
+  queryFn: () => mtsBusinessSubscribersService.usage(msisdn as string, month),
+  staleTime: 5 * 60_000,
+  enabled: enabled && Boolean(msisdn),
+});
+
 export const useRefreshMtsBusinessSubscriber = () => {
   const qc = useQueryClient();
   return useMutation({

@@ -156,6 +156,7 @@ router.get('/actions', requirePageAccess('/mts-business', 'view'), mtsBusinessCa
 router.get('/subscribers', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscribersController.list);
 router.get('/subscribers/:msisdn/details', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscribersController.details);
 router.get('/subscribers/:msisdn/available', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscribersController.available);
+router.get('/subscribers/:msisdn/usage', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscribersController.usage);
 router.post(
   '/subscribers/:msisdn/refresh',
   requirePageAccess('/mts-business', 'edit'),

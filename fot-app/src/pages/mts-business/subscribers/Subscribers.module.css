@@ -48,6 +48,24 @@
 .rowClickable { cursor: pointer; }
 .rowClickable:hover td { background: rgba(59, 130, 246, 0.06); }
 
+.phoneLink {
+  color: var(--primary);
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.phoneLink:hover { text-decoration: underline; }
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.pagerInfo { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
+
 /* ===== Боковая панель (40% экрана) ===== */
 .drawerOverlay {
   position: fixed;
@@ -159,6 +177,41 @@
   margin-top: 4px;
 }
 .capturedAt { font-size: 12px; color: var(--text-tertiary); }
+
+/* Вкладки внутри панели */
+.drawerTabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.drawerTab {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  min-height: 40px;
+}
+.drawerTabActive { color: var(--primary); border-bottom-color: var(--primary); }
+
+.availSearch {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  box-sizing: border-box;
+}
+
+.usageDate { flex: 0 0 auto; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+.usageAmount { flex: 0 0 auto; font-weight: 600; white-space: nowrap; min-width: 56px; text-align: right; }
 
 .monthSelect {
   padding: 6px 10px;

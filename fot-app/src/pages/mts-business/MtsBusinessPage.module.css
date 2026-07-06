@@ -9,9 +9,14 @@
 /* Вкладки */
 .tabs {
   display: flex;
+  align-items: center;
   gap: 4px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;
+}
+.tabsRight {
+  margin-left: auto;
+  padding-bottom: 4px;
 }
 .tab {
   padding: 8px 16px;
@@ -206,35 +211,17 @@
 .badgeErr { background: rgba(220, 38, 38, 0.12); color: #dc2626; }
 .badgeMuted { background: rgba(100, 116, 139, 0.15); color: #64748b; }
 
-/* ===== Админ-вкладка: лента якорей + карточки-секции ===== */
-.adminStack {
-  display: flex;
-  flex-direction: column;
+/* ===== Админ-вкладка: компактная сетка карточек ===== */
+.adminGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   gap: 12px;
+  align-items: start;
 }
 
-.anchors {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  -webkit-overflow-scrolling: touch;
+@media (max-width: 480px) {
+  .adminGrid { grid-template-columns: 1fr; }
 }
-
-.anchorChip {
-  flex: 0 0 auto;
-  padding: 8px 14px;
-  min-height: 44px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.anchorChip:hover { color: var(--text-primary); border-color: var(--primary); }
 
 .cardHeader {
   display: flex;
