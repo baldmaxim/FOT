@@ -164,7 +164,16 @@ export class MtsBusinessServiceBase {
   protected async request<T>(
     method: 'get' | 'post' | 'put' | 'patch' | 'delete',
     endpoint: string,
-    options: { accountId: string; params?: Record<string, unknown>; data?: unknown; timeout?: number; suppressErrorBodyLog?: boolean },
+    options: {
+      accountId: string;
+      params?: Record<string, unknown>;
+      data?: unknown;
+      timeout?: number;
+      suppressErrorBodyLog?: boolean;
+      // Доп. заголовки per-запрос (PersonalData/ChangePersonalData требует
+      // x-soap-action и X-MTS-MSISDN). Authorization всегда подставляется поверх.
+      headers?: Record<string, string>;
+    },
   ): Promise<T> {
     const { accountId } = options;
     const release = await limiter.acquire();
@@ -188,7 +197,7 @@ export class MtsBusinessServiceBase {
             params: options.params,
             data: options.data,
             timeout: options.timeout ?? MTS_BIZ_TIMEOUTS.quick,
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { ...(options.headers ?? {}), Authorization: `Bearer ${token}` },
           });
           console.log(`[mts-biz] ← ${response.status} ${m} ${endpoint} ${Date.now() - tStart}ms`);
           // Диагностика контрактов: сырое тело ответа при MTS_PROBE_RAW=1 (кроме

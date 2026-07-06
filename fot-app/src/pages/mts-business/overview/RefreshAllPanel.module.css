@@ -1,0 +1,88 @@
+.wrap { display: flex; flex-direction: column; gap: 8px; }
+
+.controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  background: var(--primary);
+  color: #fff;
+  min-height: 40px;
+}
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.err { color: var(--error); font-size: 13px; margin: 0; }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.panelTitle { font-size: 13px; font-weight: 600; }
+.panelMeta { font-size: 12px; color: var(--text-secondary); }
+.hideBtn {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  min-height: 32px;
+}
+.hideBtn:hover { color: var(--text-primary); }
+
+.steps { display: flex; flex-direction: column; }
+
+.stepRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+  min-width: 0;
+}
+.stepRow:last-child { border-bottom: none; }
+
+.stepLabel { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stepMeta { margin-left: auto; color: var(--text-secondary); font-size: 12px; text-align: right; }
+
+.iconOk { color: var(--success); font-weight: 700; width: 16px; text-align: center; }
+.iconErr { color: var(--error); font-weight: 700; width: 16px; text-align: center; }
+.iconWarn { color: var(--warning); font-weight: 700; width: 16px; text-align: center; }
+.iconPending { color: var(--text-tertiary); font-weight: 700; width: 16px; text-align: center; }
+
+.spinner,
+.spinnerLight {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--primary);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: refreshAllSpin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+.spinnerLight { border-color: #fff; border-right-color: transparent; }
+@keyframes refreshAllSpin { to { transform: rotate(360deg); } }
+
+@media (max-width: 480px) {
+  .btn { min-height: 44px; }
+  .stepMeta { max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+}

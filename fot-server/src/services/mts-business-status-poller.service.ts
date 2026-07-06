@@ -6,6 +6,8 @@ import { mtsBusinessActionsService } from './mts-business-actions.service.js';
 import { mtsBusinessCatalogService } from './mts-business-catalog.service.js';
 import { mtsBusinessBudgetService } from './mts-business-budget.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
+import { mtsBusinessPersonalDataService } from './mts-business-personal-data.service.js';
+import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { MtsBusinessApiError } from './mts-business-base.service.js';
 import { encryptionService } from './encryption.service.js';
 import {
@@ -61,6 +63,12 @@ async function pollActionRequests(): Promise<{ pending: number; updated: number 
         if (row.actionType === 'service_add' || row.actionType === 'service_remove') {
           const services = await mtsBusinessCatalogService.getProductInfo(row.accountId, msisdn);
           await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId: row.accountId, scope: 'msisdn', msisdn, metric: 'product_services', payload: services });
+        } else if (row.actionType === 'block_add' || row.actionType === 'block_remove') {
+          const blocks = await mtsBusinessCatalogService.getConnectedBlocks(row.accountId, msisdn);
+          await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId: row.accountId, scope: 'msisdn', msisdn, metric: 'connected_blocks', payload: blocks });
+        } else if (row.actionType === 'tariff_change') {
+          const tariff = await mtsBusinessCatalogService.getBillPlanInfo(row.accountId, msisdn);
+          await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId: row.accountId, scope: 'msisdn', msisdn, metric: 'bill_plan', payload: tariff });
         } else if (isBudget) {
           const rules = await mtsBusinessBudgetService.getProvidedRulesByMsisdn(row.accountId, msisdn);
           await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId: row.accountId, scope: 'msisdn', msisdn, metric: 'budget_rules', payload: rules });
@@ -71,6 +79,42 @@ async function pollActionRequests(): Promise<{ pending: number; updated: number 
         console.error(`[mts-biz-status] action check failed http=${error.status} code=${error.code ?? '-'}`);
       } else {
         console.error('[mts-biz-status] action check failed:', error instanceof Error ? error.message : 'unknown');
+      }
+    }
+  }
+  return { pending: pending.length, updated };
+}
+
+/**
+ * Опрос заявок на внесение/удаление персональных данных (ChangePersonalData) —
+ * статус меняется асинхронно (SMS пользователю → подтверждение через
+ * Госуслуги), поэтому опрашиваем Operations/GetOperationResult по MessageId.
+ * При завершении — обновляем кэш ФИО/статуса подтверждения номера.
+ */
+async function pollPersonalDataRequests(): Promise<{ pending: number; updated: number }> {
+  const pending = await mtsBusinessPersonalDataService.getPending(MAX_PER_TICK);
+  let updated = 0;
+  for (const row of pending) {
+    if (!row.msisdn) continue;
+    try {
+      const { status, raw } = await mtsBusinessPersonalDataService.getOperationResult(row.accountId, row.msisdn, row.messageId);
+      await mtsBusinessPersonalDataService.updateStatus(row.messageId, status, raw);
+      updated++;
+      if (status === 'completed') {
+        try {
+          const info = await mtsBusinessPersonalDataService.fetchAndCacheInfo(row.accountId, row.msisdn);
+          if (info.fullName) {
+            await mtsBusinessMappingService.syncMtsNames([{ msisdn: row.msisdn, fio: info.fullName }], null);
+          }
+        } catch {
+          // Кэш ФИО/статуса обновится следующим синком — не валим тик.
+        }
+      }
+    } catch (error) {
+      if (error instanceof MtsBusinessApiError) {
+        console.error(`[mts-biz-status] pd check failed http=${error.status} code=${error.code ?? '-'}`);
+      } else {
+        console.error('[mts-biz-status] pd check failed:', error instanceof Error ? error.message : 'unknown');
       }
     }
   }
@@ -134,6 +178,9 @@ async function tick(owner: string): Promise<void> {
 
           const actions = await pollActionRequests();
           console.log(`[mts-biz-status] actions tick: pending=${actions.pending} updated=${actions.updated}`);
+
+          const personalData = await pollPersonalDataRequests();
+          console.log(`[mts-biz-status] pd tick: pending=${personalData.pending} updated=${personalData.updated}`);
         } catch (error) {
           cronStatus = 'error';
           console.error('[mts-biz-status] tick failed:', error instanceof Error ? error.message : 'unknown');

@@ -1,10 +1,11 @@
 import { apiClient } from '../api/client';
+import type { MtsSection } from './mtsBusinessTypes';
 
 // Карточка номера (read-only) — собирает по одному MSISDN всё, что отдаёт
 // MTS Business API. Каждая секция (кроме identity) — дискриминированное
 // объединение: данные / «нет в тарифе» / ошибка (карточка не падает целиком).
 
-export type MtsSection<T> = { data: T } | { unavailable: true } | { error: string };
+export type { MtsSection } from './mtsBusinessTypes';
 
 export interface IMtsSubIdentity {
   msisdn: string;

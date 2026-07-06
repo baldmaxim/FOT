@@ -1,0 +1,398 @@
+import * as Sentry from '@sentry/node';
+import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
+import { mtsBusinessDataService } from './mts-business-data.service.js';
+import { mtsBusinessCdrService } from './mts-business-cdr.service.js';
+import { mtsBusinessCatalogService } from './mts-business-catalog.service.js';
+import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
+import { isFeatureUnavailable } from './mts-business-base.service.js';
+import {
+  refreshHierarchy,
+  refreshFioForNumbers,
+  refreshTariffAndServices,
+  refreshAccountMetrics,
+} from './mts-business-metrics-daily-scheduler.service.js';
+import { syncAccountSubscribers } from './mts-business-subscriber-sync.service.js';
+import {
+  tryAcquireSigurRuntimeLease,
+  releaseSigurRuntimeLease,
+  startSigurRuntimeLeaseHeartbeat,
+  getSigurRuntimeOwner,
+  getSigurRuntimeState,
+  mergeSigurRuntimeState,
+} from './sigur-runtime-state.service.js';
+
+// Оркестратор «Обновить всё» (кнопка на основной странице МТС Бизнес): один
+// фоновый прогон обновляет ВСЁ, что умеет API — инвентарь номеров
+// (HierarchyStructure), ФИО (PersonalDataInfo), комментарии из ЛК
+// (GetCommentsByMSISDN), балансы/начисления, детализацию звонков
+// (BillingStatementExtdByMSISDN, по умолчанию с начала текущего месяца) и
+// тарифы/услуги/пакеты. Прогон на десятки номеров при лимите 60 зап/мин
+// занимает минуты → работа в фоне, прогресс по шагам persist'ится в
+// sigur_runtime_state.meta после каждого шага (переживает рестарт tsx watch и
+// виден любому инстансу PM2). Конкурентность — lease с heartbeat (тот же
+// паттерн, что у ночных планировщиков; свой ключ, чтобы не конкурировать).
+//
+// Статус шага 'unavailable' (МТС 403/errorCode 1010 — продукт не подключён в
+// тарифе на этом ЛС) показывается в UI отдельно от реальных ошибок: это
+// решается подключением продукта у менеджера МТС, а не кодом.
+
+const LEASE_KEY = 'mts_business_refresh_all';
+const LEASE_TTL_SECONDS = 600;
+
+export type RefreshAllStepId = 'hierarchy' | 'fio' | 'comments' | 'billing' | 'detalization' | 'catalog' | 'subscribers';
+export type RefreshAllStepStatus = 'pending' | 'running' | 'ok' | 'unavailable' | 'error';
+
+export const REFRESH_ALL_STEP_LABELS: Record<RefreshAllStepId, string> = {
+  hierarchy: 'Номера (структура абонента)',
+  fio: 'ФИО (персональные данные)',
+  comments: 'Комментарии из ЛК МТС',
+  billing: 'Балансы и начисления',
+  detalization: 'Детализация звонков',
+  catalog: 'Тарифы, услуги и пакеты',
+  subscribers: 'Полные профили абонентов',
+};
+
+const STEP_ORDER: RefreshAllStepId[] = ['hierarchy', 'fio', 'comments', 'billing', 'detalization', 'catalog', 'subscribers'];
+
+export interface IRefreshAllStep {
+  accountId: string;
+  accountLabel: string;
+  step: RefreshAllStepId;
+  label: string;
+  status: RefreshAllStepStatus;
+  count: number | null;
+  message: string | null;
+}
+
+export interface IRefreshAllStatus {
+  running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  window: { dateFrom: string; dateTo: string } | null;
+  steps: IRefreshAllStep[];
+  error: string | null;
+}
+
+let currentStatus: IRefreshAllStatus | null = null;
+let runInFlight = false;
+
+const getMoscowYmd = (now: Date): string => {
+  const formatter = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const parts = formatter.formatToParts(now);
+  const get = (type: string): string => parts.find(p => p.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+};
+
+/** Окно детализации по умолчанию: с 1-го числа текущего месяца (МСК) по сегодня. */
+export const defaultDetalizationWindow = (now: Date = new Date()): { dateFrom: string; dateTo: string } => {
+  const today = getMoscowYmd(now);
+  return { dateFrom: `${today.slice(0, 7)}-01`, dateTo: today };
+};
+
+/** Ошибок нет → ok; только 1010 без единого успеха → unavailable; иначе error. */
+const stepStatusFromCounters = (c: { failed: number; unavailable: number; hadAnySuccess: boolean }): RefreshAllStepStatus => {
+  if (c.failed > 0) return 'error';
+  if (c.unavailable > 0 && !c.hadAnySuccess) return 'unavailable';
+  return 'ok';
+};
+
+const UNAVAILABLE_MESSAGE = 'Не подключено в тарифе МТС — обратитесь к менеджеру МТС';
+
+async function persistStatus(status: IRefreshAllStatus): Promise<void> {
+  await mergeSigurRuntimeState({ key: LEASE_KEY, meta: { status } }).catch(err =>
+    console.error('[mts-biz-refresh-all] persist status failed:', (err as Error).message),
+  );
+}
+
+interface IStepOutcome {
+  status: RefreshAllStepStatus;
+  count: number | null;
+  message: string | null;
+}
+
+async function runStep(
+  step: RefreshAllStepId,
+  accountId: string,
+  window: { dateFrom: string; dateTo: string },
+): Promise<IStepOutcome> {
+  switch (step) {
+    case 'hierarchy': {
+      const res = await refreshHierarchy(accountId);
+      const status = stepStatusFromCounters({
+        failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.totalNumbers > 0,
+      });
+      return {
+        status,
+        count: res.totalNumbers,
+        message: status === 'unavailable'
+          ? UNAVAILABLE_MESSAGE
+          : status === 'error'
+            ? 'Ошибка запроса структуры абонента'
+            : res.discovered > 0 ? `новых номеров: ${res.discovered}` : null,
+      };
+    }
+    case 'fio': {
+      const msisdns = await mtsBusinessMappingService.getNumbersNeedingFio(accountId);
+      if (msisdns.length === 0) {
+        return { status: 'ok', count: 0, message: 'нет номеров без ФИО' };
+      }
+      const res = await refreshFioForNumbers(accountId, msisdns);
+      const status = stepStatusFromCounters({
+        failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.fetched > 0 || res.unavailable + res.failed < res.requested,
+      });
+      return {
+        status,
+        count: res.fetched,
+        message: status === 'unavailable'
+          ? UNAVAILABLE_MESSAGE
+          : status === 'error'
+            ? `${res.failed} из ${res.requested} номеров с ошибкой`
+            : `получено ФИО: ${res.fetched} из ${res.requested}`,
+      };
+    }
+    case 'comments': {
+      const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
+      if (msisdns.length === 0) {
+        return { status: 'ok', count: 0, message: 'нет известных номеров' };
+      }
+      try {
+        const comments = await mtsBusinessCatalogService.getCommentsByMsisdn(accountId, msisdns);
+        const pairs = [...comments.entries()].map(([msisdn, comment]) => ({ msisdn, comment }));
+        const { saved } = await mtsBusinessMappingService.syncMtsComments(pairs, accountId);
+        return { status: 'ok', count: saved, message: `комментариев: ${saved}` };
+      } catch (error) {
+        if (isFeatureUnavailable(error)) return { status: 'unavailable', count: null, message: UNAVAILABLE_MESSAGE };
+        return { status: 'error', count: null, message: 'Ошибка чтения комментариев' };
+      }
+    }
+    case 'billing': {
+      const res = await refreshAccountMetrics(accountId);
+      // Попыток ≈ numbers (баланс по номерам) + 3 (баланс ЛС, неоплата, начисления bulk).
+      const attempts = res.numbers + 3;
+      const status = stepStatusFromCounters({
+        failed: res.failed, unavailable: res.unavailable, hadAnySuccess: attempts - res.failed - res.unavailable > 0,
+      });
+      return {
+        status,
+        count: res.numbers,
+        message: status === 'unavailable'
+          ? UNAVAILABLE_MESSAGE
+          : status === 'error'
+            ? `${res.failed} запросов с ошибкой`
+            : res.unavailable > 0 ? `часть данных не подключена в тарифе (${res.unavailable})` : null,
+      };
+    }
+    case 'detalization': {
+      const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
+      if (msisdns.length === 0) {
+        return { status: 'ok', count: 0, message: 'нет известных номеров — сначала обновите структуру' };
+      }
+      let failed = 0;
+      let unavailable = 0;
+      const allCalls: Parameters<typeof mtsBusinessCdrService.storeCalls>[0] = [];
+      for (const msisdn of msisdns) {
+        try {
+          const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(accountId, {
+            msisdn, dateFrom: window.dateFrom, dateTo: window.dateTo,
+          });
+          allCalls.push(...mtsBusinessCdrService.parseBillingStatementResponse(resp, msisdn));
+        } catch (error) {
+          if (isFeatureUnavailable(error)) unavailable++;
+          else failed++;
+        }
+      }
+      const { inserted } = allCalls.length > 0
+        ? await mtsBusinessCdrService.storeCalls(allCalls, null, accountId)
+        : { inserted: 0 };
+      const status = stepStatusFromCounters({
+        failed, unavailable, hadAnySuccess: unavailable + failed < msisdns.length,
+      });
+      return {
+        status,
+        count: inserted,
+        message: status === 'unavailable'
+          ? UNAVAILABLE_MESSAGE
+          : status === 'error'
+            ? `${failed} из ${msisdns.length} номеров с ошибкой`
+            : `новых звонков: ${inserted}`,
+      };
+    }
+    case 'catalog': {
+      const res = await refreshTariffAndServices(accountId);
+      const attempts = res.numbers * 2 + 1;
+      const status = stepStatusFromCounters({
+        failed: res.failed, unavailable: res.unavailable, hadAnySuccess: attempts - res.failed - res.unavailable > 0,
+      });
+      return {
+        status,
+        count: res.numbers,
+        message: status === 'unavailable'
+          ? UNAVAILABLE_MESSAGE
+          : status === 'error'
+            ? `${res.failed} запросов с ошибкой`
+            : res.unavailable > 0 ? `часть данных не подключена в тарифе (${res.unavailable})` : null,
+      };
+    }
+    case 'subscribers': {
+      // Полная выгрузка профиля каждого номера (~12 вызовов/номер) — самый
+      // тяжёлый шаг, идёт последним; питает вкладку «Абоненты».
+      const res = await syncAccountSubscribers(accountId);
+      if (res.numbers === 0) {
+        return { status: 'ok', count: 0, message: 'нет известных номеров' };
+      }
+      const status = stepStatusFromCounters({
+        failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.stored > 0,
+      });
+      return {
+        status,
+        count: res.numbers,
+        message: status === 'unavailable'
+          ? UNAVAILABLE_MESSAGE
+          : status === 'error'
+            ? `${res.failed} секций с ошибкой`
+            : res.unavailable > 0 ? `часть секций не подключена в тарифе (${res.unavailable})` : `секций сохранено: ${res.stored}`,
+      };
+    }
+  }
+}
+
+async function runRefreshAll(
+  accounts: Array<{ id: string; label: string }>,
+  window: { dateFrom: string; dateTo: string },
+  owner: string,
+): Promise<void> {
+  const status = currentStatus;
+  if (!status) return;
+  const stopHeartbeat = startSigurRuntimeLeaseHeartbeat({
+    key: LEASE_KEY,
+    owner,
+    ttlSeconds: LEASE_TTL_SECONDS,
+    onError: err => console.error('[mts-biz-refresh-all] heartbeat failed:', err.message),
+  });
+
+  try {
+    for (const account of accounts) {
+      for (const stepId of STEP_ORDER) {
+        const entry = status.steps.find(s => s.accountId === account.id && s.step === stepId);
+        if (!entry) continue;
+        entry.status = 'running';
+        await persistStatus(status);
+        try {
+          const outcome = await runStep(stepId, account.id, window);
+          entry.status = outcome.status;
+          entry.count = outcome.count;
+          entry.message = outcome.message;
+        } catch (error) {
+          entry.status = isFeatureUnavailable(error) ? 'unavailable' : 'error';
+          entry.message = entry.status === 'unavailable'
+            ? UNAVAILABLE_MESSAGE
+            : (error instanceof Error ? error.message : 'unknown').slice(0, 200);
+          if (entry.status === 'error') {
+            console.error(`[mts-biz-refresh-all] step=${stepId} account="${account.label}" —`, error instanceof Error ? error.message : 'unknown');
+          }
+        }
+        await persistStatus(status);
+        console.log(`[mts-biz-refresh-all] account="${account.label}" step=${stepId} → ${entry.status}${entry.count != null ? ` count=${entry.count}` : ''}`);
+      }
+    }
+  } catch (error) {
+    status.error = error instanceof Error ? error.message : 'unknown';
+    console.error('[mts-biz-refresh-all] прогон упал:', status.error);
+    Sentry.captureException(error, { tags: { module: 'mts-business', kind: 'refresh-all' } });
+  } finally {
+    status.running = false;
+    status.finishedAt = new Date().toISOString();
+    // Незавершённые шаги (прогон упал целиком) не должны остаться «pending/running».
+    for (const s of status.steps) {
+      if (s.status === 'pending' || s.status === 'running') {
+        s.status = 'error';
+        s.message = s.message ?? 'Прервано';
+      }
+    }
+    await persistStatus(status);
+    stopHeartbeat();
+    await releaseSigurRuntimeLease({ key: LEASE_KEY, owner }).catch(err =>
+      console.error('[mts-biz-refresh-all] release lease failed:', (err as Error).message),
+    );
+    runInFlight = false;
+    console.log('[mts-biz-refresh-all] прогон завершён');
+  }
+}
+
+export async function startRefreshAll(opts: {
+  accountId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}): Promise<{ started: boolean; alreadyRunning?: boolean }> {
+  if (runInFlight) return { started: false, alreadyRunning: true };
+
+  const all = await mtsBusinessAccountsService.list();
+  const accounts = (opts.accountId ? all.filter(a => a.id === opts.accountId) : all.filter(a => a.isActive))
+    .map(a => ({ id: a.id, label: a.label }));
+  if (accounts.length === 0) {
+    throw new Error('МТС Бизнес: аккаунт не найден или нет активных аккаунтов');
+  }
+
+  const owner = getSigurRuntimeOwner(LEASE_KEY);
+  const acq = await tryAcquireSigurRuntimeLease({ key: LEASE_KEY, owner, ttlSeconds: LEASE_TTL_SECONDS });
+  if (!acq.acquired) return { started: false, alreadyRunning: true };
+
+  const window = opts.dateFrom && opts.dateTo
+    ? { dateFrom: opts.dateFrom, dateTo: opts.dateTo }
+    : defaultDetalizationWindow();
+
+  runInFlight = true;
+  currentStatus = {
+    running: true,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    window,
+    steps: accounts.flatMap(account =>
+      STEP_ORDER.map(step => ({
+        accountId: account.id,
+        accountLabel: account.label,
+        step,
+        label: REFRESH_ALL_STEP_LABELS[step],
+        status: 'pending' as RefreshAllStepStatus,
+        count: null,
+        message: null,
+      })),
+    ),
+    error: null,
+  };
+  await persistStatus(currentStatus);
+
+  console.log(`[mts-biz-refresh-all] старт accounts=${accounts.length} window=${window.dateFrom}..${window.dateTo}`);
+  void runRefreshAll(accounts, window, owner);
+  return { started: true };
+}
+
+/**
+ * Текущий/последний статус прогона. Если процесс с активным прогоном — из
+ * памяти; иначе из runtime_state (последний persist). Если сохранённый статус
+ * «running», но lease уже истёк (сервер перезапустился посреди прогона) —
+ * помечаем прогон прерванным, чтобы фронт не крутил спиннер вечно.
+ */
+export async function getRefreshAllStatus(): Promise<IRefreshAllStatus> {
+  if (runInFlight && currentStatus) return currentStatus;
+
+  const state = await getSigurRuntimeState(LEASE_KEY);
+  const stored = state?.meta?.status as IRefreshAllStatus | undefined;
+  if (!stored || typeof stored !== 'object' || !Array.isArray(stored.steps)) {
+    return { running: false, startedAt: null, finishedAt: null, window: null, steps: [], error: null };
+  }
+  if (stored.running) {
+    const leaseAlive = state?.lease_expires_at != null && Date.parse(state.lease_expires_at) > Date.now();
+    if (!leaseAlive) {
+      return {
+        ...stored,
+        running: false,
+        finishedAt: stored.finishedAt ?? state?.updated_at ?? null,
+        error: stored.error ?? 'Обновление прервано (сервер перезапущен)',
+      };
+    }
+  }
+  return stored;
+}

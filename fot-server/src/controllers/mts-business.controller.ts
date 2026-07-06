@@ -5,7 +5,7 @@ import { mtsBusinessAccountsService } from '../services/mts-business-accounts.se
 import { mtsBusinessDataService, type IMtsBusinessOrderInput } from '../services/mts-business-data.service.js';
 import { mtsBusinessCdrService } from '../services/mts-business-cdr.service.js';
 import { mtsBusinessMappingService } from '../services/mts-business-mapping.service.js';
-import { MtsBusinessApiError } from '../services/mts-business-base.service.js';
+import { MtsBusinessApiError, isFeatureUnavailable } from '../services/mts-business-base.service.js';
 import { MtsBusinessAuthError } from '../services/mts-business-auth.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { query, execute, queryOne } from '../config/postgres.js';
@@ -209,12 +209,20 @@ export const mtsBusinessController = {
 
       const allCalls: Parameters<typeof mtsBusinessCdrService.storeCalls>[0] = [];
       const failedNumbers: string[] = [];
+      // Причина отказа per-номер: 403/1010 = продукт не подключён в тарифе МТС
+      // (лечится у менеджера МТС), остальное — реальная ошибка запроса.
+      const failed: Array<{ msisdn: string; reason: 'MTS_FEATURE_NOT_CONNECTED' | 'MTS_ERROR'; mtsHttp?: number }> = [];
       for (const msisdn of list) {
         try {
           const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(accountId, { msisdn, dateFrom, dateTo });
           allCalls.push(...mtsBusinessCdrService.parseBillingStatementResponse(resp, msisdn));
         } catch (error) {
           failedNumbers.push(msisdn);
+          failed.push({
+            msisdn,
+            reason: isFeatureUnavailable(error) ? 'MTS_FEATURE_NOT_CONNECTED' : 'MTS_ERROR',
+            ...(error instanceof MtsBusinessApiError ? { mtsHttp: error.status } : {}),
+          });
           console.error(`[mts-biz] fetch-sync номер — ошибка:`, error instanceof Error ? error.message : 'unknown');
         }
       }
@@ -227,24 +235,10 @@ export const mtsBusinessController = {
 
       res.json({
         success: true,
-        data: { requestedNumbers: list.length, parsed: allCalls.length, inserted, skipped, failedNumbers },
+        data: { requestedNumbers: list.length, parsed: allCalls.length, inserted, skipped, failedNumbers, failed },
       });
     } catch (error) {
       fail(res, error, 'Ошибка синхронной загрузки детализации');
-    }
-  },
-
-  /** Полная очистка детализации звонков + привязок номеров (временная кнопка «Очистить XML»). */
-  async clearDetalization(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const cdrDeleted = await mtsBusinessCdrService.clearAllCdr();
-      const numberMapDeleted = await mtsBusinessMappingService.clearAllNumberMap();
-      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_DETALIZATION_CLEARED, {
-        details: { cdrDeleted, numberMapDeleted },
-      });
-      res.json({ success: true, data: { cdrDeleted, numberMapDeleted } });
-    } catch (error) {
-      fail(res, error, 'Ошибка очистки детализации');
     }
   },
 

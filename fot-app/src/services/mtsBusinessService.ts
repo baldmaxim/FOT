@@ -16,12 +16,19 @@ export interface IMtsBusinessAccount {
   updatedAt: string;
 }
 
+export interface IMtsBusinessFetchSyncFailedRow {
+  msisdn: string;
+  reason: 'MTS_FEATURE_NOT_CONNECTED' | 'MTS_ERROR';
+  mtsHttp?: number;
+}
+
 export interface IMtsBusinessFetchSyncResult {
   requestedNumbers: number;
   parsed: number;
   inserted: number;
   skipped: number;
   failedNumbers: string[];
+  failed?: IMtsBusinessFetchSyncFailedRow[];
 }
 
 export interface IMtsBusinessRequestRow {
@@ -50,6 +57,8 @@ export interface IMtsBusinessImportedNumberRow {
   totalSeconds: number;
   lastCallAt: string | null;
   mtsFio: string | null;
+  mtsComment: string | null;
+  pdStatus: string | null;
   employeeId: number | null;
   employeeFullName: string | null;
   employeeTabNumber: string | null;
@@ -164,12 +173,6 @@ export const mtsBusinessService = {
     if (opts.sourceMessageId) form.append('sourceMessageId', opts.sourceMessageId);
     if (opts.msisdn) form.append('msisdn', opts.msisdn);
     const res = await apiClient.post<ApiResponse<IMtsBusinessUploadResult>>('/mts-business/detalization/upload', form);
-    return res.data;
-  },
-
-  // Временная очистка: удаляет всю детализацию звонков и привязки номеров (тест импорта из API).
-  clearDetalization: async (): Promise<{ cdrDeleted: number; numberMapDeleted: number }> => {
-    const res = await apiClient.delete<ApiResponse<{ cdrDeleted: number; numberMapDeleted: number }>>('/mts-business/detalization');
     return res.data;
   },
 

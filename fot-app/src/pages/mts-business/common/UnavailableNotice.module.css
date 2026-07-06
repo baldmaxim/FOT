@@ -1,0 +1,30 @@
+.pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+.box {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 4px 0;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.text {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}

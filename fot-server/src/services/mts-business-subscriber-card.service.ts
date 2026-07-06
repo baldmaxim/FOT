@@ -29,7 +29,7 @@ import { isFeatureUnavailable, MtsBusinessApiError } from './mts-business-base.s
 // История расходов — отдельный ленивый метод getExpenses.
 
 /** Секция карточки: данные / «нет в тарифе» / ошибка. */
-export type Section<T> = { data: T } | { unavailable: true } | { error: string };
+export type Section<T> = { data: T } | { unavailable: true; reason: 'MTS_FEATURE_NOT_CONNECTED' } | { error: string };
 
 export interface ISubscriberIdentity {
   msisdn: string;
@@ -82,7 +82,7 @@ const settleSection = async <T>(fn: () => Promise<T>): Promise<Section<T>> => {
   try {
     return { data: await fn() };
   } catch (e) {
-    if (isFeatureUnavailable(e)) return { unavailable: true };
+    if (isFeatureUnavailable(e)) return { unavailable: true, reason: 'MTS_FEATURE_NOT_CONNECTED' };
     // Без ПДн: только http/код.
     console.warn(`[mts-biz-card] секция пропущена: ${e instanceof MtsBusinessApiError ? `http=${e.status} code=${e.code ?? '-'}` : 'ошибка'}`);
     return { error: e instanceof MtsBusinessApiError ? `МТС ${e.status}` : 'ошибка' };

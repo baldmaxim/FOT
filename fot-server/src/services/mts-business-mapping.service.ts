@@ -1,6 +1,6 @@
 import { execute, query, queryOne } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
-import { msisdnHash, normalizeMsisdn, type ISimName } from './mts-business-cdr.service.js';
+import { mtsBusinessCdrService, msisdnHash, normalizeMsisdn, type ISimName } from './mts-business-cdr.service.js';
 
 // Привязка номера телефона (MSISDN) → сотрудник FOT. Ключ — детерминированный
 // хэш номера (msisdn_hash), по нему же джойнится агрегация CDR. Сам номер
@@ -20,6 +20,8 @@ export interface IMtsBusinessImportedNumberRow {
   totalSeconds: number;
   lastCallAt: string | null;
   mtsFio: string | null;
+  mtsComment: string | null;
+  pdStatus: string | null;
   employeeId: number | null;
   employeeFullName: string | null;
   employeeTabNumber: string | null;
@@ -36,11 +38,6 @@ export interface IMtsSubscriberContext {
 }
 
 class MtsBusinessMappingService {
-  /** Полная очистка привязок номер→сотрудник и ФИО от МТС. */
-  async clearAllNumberMap(): Promise<number> {
-    return execute('DELETE FROM mts_business_number_map');
-  }
-
   async getNumberMap(): Promise<IMtsBusinessNumberMapRow[]> {
     const rows = await query<{
       msisdn_enc: string | null;
@@ -64,8 +61,13 @@ class MtsBusinessMappingService {
   }
 
   /**
-   * Импортированные номера: все уникальные свои номера из загруженных CDR со
-   * статистикой и текущей привязкой — источник для ручной связи с сотрудником.
+   * Известные номера: объединение инвентаря number_map (HierarchyStructure,
+   * XML-имена, ручные привязки) и агрегата CDR. Раньше источником были ТОЛЬКО
+   * загруженные CDR — номера, найденные через структуру абонента, не попадали
+   * ни в пикер детализации, ни в таблицу привязок (bootstrap-тупик: без
+   * детализации нет номеров, без номеров не запросить детализацию). Номер без
+   * звонков отдаётся с calls=0. Если account_id не определён, а активный
+   * аккаунт один — подставляем его (та же эвристика, что getSubscriberContext).
    */
   async getImportedNumbers(): Promise<IMtsBusinessImportedNumberRow[]> {
     const rows = await query<{
@@ -74,37 +76,59 @@ class MtsBusinessMappingService {
       total_sec: string;
       last_call_at: string | null;
       mts_fio: string | null;
+      mts_comment: string | null;
+      pd_status: string | null;
       employee_id: number | null;
       full_name: string | null;
       tab_number: string | null;
       account_id: string | null;
     }>(
-      `SELECT MIN(c.msisdn_enc) AS msisdn_enc,
-              COUNT(*)::text AS calls,
-              COALESCE(SUM(c.duration_sec), 0)::text AS total_sec,
-              MAX(c.started_at) AS last_call_at,
-              MAX(c.account_id::text) AS account_id,
+      `WITH cdr AS (
+         SELECT msisdn_hash,
+                MIN(msisdn_enc) AS msisdn_enc,
+                COUNT(*) AS calls,
+                COALESCE(SUM(duration_sec), 0) AS total_sec,
+                MAX(started_at) AS last_call_at,
+                MAX(account_id::text) AS account_id
+           FROM mts_business_cdr
+          WHERE msisdn_hash IS NOT NULL
+          GROUP BY msisdn_hash
+       )
+       SELECT COALESCE(m.msisdn_enc, c.msisdn_enc) AS msisdn_enc,
+              COALESCE(c.calls, 0)::text AS calls,
+              COALESCE(c.total_sec, 0)::text AS total_sec,
+              c.last_call_at,
+              COALESCE(m.account_id::text, c.account_id) AS account_id,
               m.mts_fio,
+              m.mts_comment,
+              m.pd_status,
               m.employee_id,
               e.full_name,
               e.tab_number
-         FROM mts_business_cdr c
-         LEFT JOIN mts_business_number_map m ON m.msisdn_hash = c.msisdn_hash
+         FROM mts_business_number_map m
+         FULL OUTER JOIN cdr c ON c.msisdn_hash = m.msisdn_hash
          LEFT JOIN employees e ON e.id = m.employee_id
-        WHERE c.msisdn_hash IS NOT NULL
-        GROUP BY c.msisdn_hash, m.mts_fio, m.employee_id, e.full_name, e.tab_number
-        ORDER BY COALESCE(SUM(c.duration_sec), 0) DESC`,
+        ORDER BY COALESCE(c.total_sec, 0) DESC, m.linked_at DESC NULLS LAST`,
     );
+
+    let fallbackAccountId: string | null = null;
+    if (rows.some(r => r.account_id == null)) {
+      const active = await query<{ id: string }>(`SELECT id FROM mts_business_accounts WHERE is_active`);
+      if (active.length === 1) fallbackAccountId = active[0].id;
+    }
+
     return rows.map(r => ({
       msisdn: encryptionService.decryptField(r.msisdn_enc),
       calls: Number(r.calls),
       totalSeconds: Number(r.total_sec),
       lastCallAt: r.last_call_at,
       mtsFio: r.mts_fio,
+      mtsComment: r.mts_comment,
+      pdStatus: r.pd_status,
       employeeId: r.employee_id,
       employeeFullName: r.full_name,
       employeeTabNumber: r.tab_number,
-      accountId: r.account_id,
+      accountId: r.account_id ?? fallbackAccountId,
     }));
   }
 
@@ -156,6 +180,73 @@ class MtsBusinessMappingService {
   }
 
   /**
+   * Комментарии номеров из ЛК МТС (Service/GetCommentsByMSISDN) → mts_comment.
+   * Fallback-заметка для идентификации номера, когда PersonalData пуст (админ в
+   * ЛК часто подписывает номер «Иванов Иван / отдел»). employee_id/mts_fio не
+   * трогаем — комментарий не юридическое ФИО, автопривязку по нему не делаем.
+   */
+  async syncMtsComments(
+    pairs: Array<{ msisdn: string; comment: string }>,
+    accountId: string | null,
+  ): Promise<{ saved: number }> {
+    let saved = 0;
+    for (const { msisdn, comment } of pairs) {
+      const hash = msisdnHash(msisdn);
+      const norm = normalizeMsisdn(msisdn);
+      if (!hash || !norm) continue;
+      const clean = comment.replace(/\s+/g, ' ').trim();
+      if (!clean) continue;
+      await execute(
+        `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, account_id, mts_comment, linked_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (msisdn_hash) DO UPDATE
+           SET mts_comment = EXCLUDED.mts_comment,
+               msisdn_enc = COALESCE(mts_business_number_map.msisdn_enc, EXCLUDED.msisdn_enc),
+               account_id = COALESCE(mts_business_number_map.account_id, EXCLUDED.account_id)`,
+        [hash, encryptionService.encrypt(norm), accountId, clean],
+      );
+      saved++;
+    }
+    return { saved };
+  }
+
+  /**
+   * Кэш статуса подтверждения персданных (PersonalDataConfirmation) — для
+   * бейджа «Персданные» в таблице номеров. Обновляется при каждом живом чтении
+   * PersonalData/PersonalDataInfo (карточка, синк ФИО, поллер заявок).
+   */
+  async setPersonalDataStatus(rawMsisdn: string, status: string | null): Promise<void> {
+    const hash = msisdnHash(rawMsisdn);
+    const norm = normalizeMsisdn(rawMsisdn);
+    if (!hash || !norm) return;
+    await execute(
+      `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, pd_status, pd_checked_at, linked_at)
+       VALUES ($1, $2, $3, NOW(), NOW())
+       ON CONFLICT (msisdn_hash) DO UPDATE
+         SET pd_status = EXCLUDED.pd_status,
+             pd_checked_at = NOW(),
+             msisdn_enc = COALESCE(mts_business_number_map.msisdn_enc, EXCLUDED.msisdn_enc)`,
+      [hash, encryptionService.encrypt(norm), status],
+    );
+  }
+
+  /**
+   * Полный ответ PersonalDataInfo (паспорт/дата рождения и пр.) — ТОЛЬКО
+   * шифром (AES-256-GCM). Ни один endpoint его не отдаёт; колонка существует
+   * ради полноты выгрузки по требованию бизнеса (миграция 207).
+   */
+  async setPersonalDataBlob(rawMsisdn: string, ciphertext: string | null): Promise<void> {
+    const hash = msisdnHash(rawMsisdn);
+    if (!hash) return;
+    await execute(
+      `UPDATE mts_business_number_map
+          SET pd_data_enc = $2, pd_synced_at = NOW()
+        WHERE msisdn_hash = $1`,
+      [hash, ciphertext],
+    );
+  }
+
+  /**
    * Пере-проверка автопривязки для уже сохранённых номеров: те, что ещё без
    * сотрудника, но уже имеют mts_fio (из прошлых XML-загрузок) — например,
    * ФИО пришло раньше, чем сотрудник появился в ФОТ, или коллизия ФИО с тех
@@ -193,23 +284,25 @@ class MtsBusinessMappingService {
    * а не CDR. account_id проставляется (или доливается, если ещё не был
    * известен) — без него синк баланса/тарифа по номерам его не найдёт (см.
    * getKnownMsisdnsByAccount). ON CONFLICT не трогает employee_id/mts_fio.
+   * created=true — номер заведён впервые (xmax=0 у свежевставленной строки).
    */
-  async ensureNumberDiscovered(rawMsisdn: string, accountId: string): Promise<{ needsFio: boolean }> {
+  async ensureNumberDiscovered(rawMsisdn: string, accountId: string): Promise<{ needsFio: boolean; created: boolean }> {
     const norm = normalizeMsisdn(rawMsisdn);
     const hash = msisdnHash(rawMsisdn);
-    if (!norm || !hash) return { needsFio: false };
-    await execute(
+    if (!norm || !hash) return { needsFio: false, created: false };
+    const inserted = await queryOne<{ created: boolean }>(
       `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, account_id, linked_at)
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (msisdn_hash) DO UPDATE
-         SET account_id = COALESCE(mts_business_number_map.account_id, EXCLUDED.account_id)`,
+         SET account_id = COALESCE(mts_business_number_map.account_id, EXCLUDED.account_id)
+       RETURNING (xmax = 0) AS created`,
       [hash, encryptionService.encrypt(norm), accountId],
     );
     const row = await queryOne<{ employee_id: number | null; mts_fio: string | null }>(
       `SELECT employee_id, mts_fio FROM mts_business_number_map WHERE msisdn_hash = $1`,
       [hash],
     );
-    return { needsFio: row != null && row.employee_id == null && !row.mts_fio };
+    return { needsFio: row != null && row.employee_id == null && !row.mts_fio, created: inserted?.created === true };
   }
 
   /**
@@ -273,6 +366,39 @@ class MtsBusinessMappingService {
   async getKnownMsisdnsByAccount(accountId: string): Promise<string[]> {
     const rows = await query<{ msisdn_enc: string | null }>(
       `SELECT msisdn_enc FROM mts_business_number_map WHERE account_id = $1 AND msisdn_enc IS NOT NULL`,
+      [accountId],
+    );
+    const out: string[] = [];
+    for (const r of rows) {
+      const msisdn = encryptionService.decryptField(r.msisdn_enc);
+      if (msisdn) out.push(msisdn);
+    }
+    return out;
+  }
+
+  /**
+   * ВСЕ известные номера аккаунта — объединение CDR-истории и инвентаря
+   * number_map (HierarchyStructure). Единый источник для CDR-планировщика,
+   * синка метрик/каталога и оркестратора «Обновить всё»: номер, найденный
+   * любым путём, дальше обслуживается всеми синками одинаково.
+   */
+  async getAllKnownMsisdnsByAccount(accountId: string): Promise<string[]> {
+    const [cdrNumbers, mappedNumbers] = await Promise.all([
+      mtsBusinessCdrService.getKnownMsisdnsByAccount(accountId),
+      this.getKnownMsisdnsByAccount(accountId),
+    ]);
+    return [...new Set([...cdrNumbers, ...mappedNumbers])];
+  }
+
+  /**
+   * Номера аккаунта без идентификации (нет ни сотрудника, ни ФИО из МТС) —
+   * кандидаты на добор ФИО через PersonalData/PersonalDataInfo.
+   */
+  async getNumbersNeedingFio(accountId: string): Promise<string[]> {
+    const rows = await query<{ msisdn_enc: string | null }>(
+      `SELECT msisdn_enc FROM mts_business_number_map
+        WHERE account_id = $1 AND msisdn_enc IS NOT NULL
+          AND employee_id IS NULL AND (mts_fio IS NULL OR mts_fio = '')`,
       [accountId],
     );
     const out: string[] = [];

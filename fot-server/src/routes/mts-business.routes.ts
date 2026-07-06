@@ -5,6 +5,9 @@ import { mtsBusinessBillingController } from '../controllers/mts-business-billin
 import { mtsBusinessCatalogController } from '../controllers/mts-business-catalog.controller.js';
 import { mtsBusinessBudgetController } from '../controllers/mts-business-budget.controller.js';
 import { mtsBusinessSubscriberController } from '../controllers/mts-business-subscriber.controller.js';
+import { mtsBusinessRefreshController } from '../controllers/mts-business-refresh.controller.js';
+import { mtsBusinessPersonalDataController } from '../controllers/mts-business-personal-data.controller.js';
+import { mtsBusinessSubscribersController } from '../controllers/mts-business-subscribers.controller.js';
 import { authenticate, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 
@@ -25,6 +28,41 @@ const upload = multer({
 
 router.use(authenticate);
 router.use(noStore);
+
+// «Обновить всё» — фоновый полный прогон (номера/ФИО/комментарии/балансы/
+// детализация/каталог) с прогрессом по шагам. Запуск — edit + critical 2FA,
+// статус — view (polling с фронта).
+router.post(
+  '/refresh-all',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessRefreshController.start,
+);
+router.get('/refresh-all/status', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getStatus);
+router.get('/schedulers/status', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getSchedulersStatus);
+
+// Персональные данные пользователя номера. Порядок важен: /personal-data/requests
+// должен регистрироваться ДО /personal-data/:msisdn. Запись — critical 2FA;
+// тело формы транзитом уходит в МТС и нигде не сохраняется.
+router.get('/personal-data/requests', requirePageAccess('/mts-business', 'view'), mtsBusinessPersonalDataController.listRequests);
+router.post(
+  '/personal-data/requests/:messageId/refresh-status',
+  requirePageAccess('/mts-business', 'view'),
+  mtsBusinessPersonalDataController.refreshRequestStatus,
+);
+router.get('/personal-data/:msisdn', requirePageAccess('/mts-business', 'view'), mtsBusinessPersonalDataController.getInfo);
+router.post(
+  '/personal-data',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessPersonalDataController.change,
+);
+router.post(
+  '/personal-data/delete',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessPersonalDataController.remove,
+);
 
 // Аккаунты (несколько API/лицевых счетов). Создание/изменение/удаление — 2FA.
 router.get('/accounts', requirePageAccess('/mts-business', 'view'), mtsBusinessController.listAccounts);
@@ -53,14 +91,6 @@ router.post(
   '/detalization/requests/:id/refresh-status',
   requirePageAccess('/mts-business', 'view'),
   mtsBusinessController.refreshStatus,
-);
-
-// Полная очистка детализации + привязок (временная кнопка «Очистить XML» для теста импорта из API).
-router.delete(
-  '/detalization',
-  requirePageAccess('/mts-business', 'edit'),
-  requireCritical2FA,
-  mtsBusinessController.clearDetalization,
 );
 
 // Загрузка XML-детализации (файл с email) → парсинг → CDR.
@@ -120,6 +150,24 @@ router.post(
   mtsBusinessCatalogController.modifyService,
 );
 router.get('/actions', requirePageAccess('/mts-business', 'view'), mtsBusinessCatalogController.getActions);
+
+// Вкладка «Абоненты»: список/детали из БД (снапшоты полного профиля), точечный
+// полный синк одного номера, живой каталог подключаемого, смена тарифа.
+router.get('/subscribers', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscribersController.list);
+router.get('/subscribers/:msisdn/details', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscribersController.details);
+router.get('/subscribers/:msisdn/available', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscribersController.available);
+router.post(
+  '/subscribers/:msisdn/refresh',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessSubscribersController.refreshOne,
+);
+router.post(
+  '/subscribers/tariff',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessSubscribersController.changeTariff,
+);
 
 // Карточка номера (read-only): собирает по одному MSISDN идентификацию, баланс,
 // тариф, услуги/блокировки, переадресацию, роуминг, доставку счёта, начисления.

@@ -4,12 +4,16 @@ import {
   useMtsBusinessSubscriberCard,
   useMtsBusinessSubscriberExpenses,
 } from '../../hooks/useMtsBusinessSubscriberData';
+import { useMtsBusinessPersonalData } from '../../hooks/useMtsBusinessPersonalData';
 import type {
   MtsSection,
   IMtsSubServiceItem,
   IMtsSubForwardingRule,
   MtsExpenseCategory,
 } from '../../services/mtsBusinessSubscriberService';
+import { UnavailableNotice } from './common/UnavailableNotice';
+import { PersonalDataModal } from './personal-data/PersonalDataModal';
+import { PersonalDataStatusBadge } from './personal-data/PersonalDataStatusBadge';
 import { fmtMoney, fmtLast, EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS } from './mtsBusinessFormat';
 import s from './SubscriberCardModal.module.css';
 
@@ -53,7 +57,7 @@ function Section<T>({
     <div className={`${s.section}${wide ? ` ${s.sectionWide}` : ''}`}>
       <div className={s.sectionHead}>
         <h4 className={s.sectionTitle}>{title}</h4>
-        {unavailable && <span className={s.badge}>Не подключено в тарифе</span>}
+        {unavailable && <UnavailableNotice compact />}
       </div>
       {state == null ? (
         <p className={s.hint}>Загрузка…</p>
@@ -96,6 +100,37 @@ const ForwardingList: FC<{ rules: IMtsSubForwardingRule[] }> = ({ rules }) => {
 
 const EXPENSE_ORDER: MtsExpenseCategory[] = ['calls', 'sms', 'internet', 'periodic', 'oneTime', 'topups', 'other'];
 
+/** Персональные данные пользователя номера: статус в МТС + внесение/изменение. */
+const PersonalDataSection: FC<{ msisdn: string }> = ({ msisdn }) => {
+  const info = useMtsBusinessPersonalData(msisdn);
+  const [formOpen, setFormOpen] = useState(false);
+
+  return (
+    <div className={s.section}>
+      <div className={s.sectionHead}>
+        <h4 className={s.sectionTitle}>Персональные данные</h4>
+        {info.data?.unavailable && <UnavailableNotice compact />}
+      </div>
+      {info.isLoading && <p className={s.hint}>Загрузка…</p>}
+      {info.isError && <p className={s.err}>Не удалось получить статус.</p>}
+      {info.data && !info.data.unavailable && (
+        <>
+          <KV label="ФИО в МТС" value={dash(info.data.fullName)} />
+          <KV label="Статус" value={<PersonalDataStatusBadge status={info.data.confirmationStatus ?? null} />} />
+        </>
+      )}
+      {info.data && (
+        <div style={{ marginTop: 8 }}>
+          <button className={s.monthSelect} style={{ cursor: 'pointer' }} onClick={() => setFormOpen(true)}>
+            Внести / изменить
+          </button>
+        </div>
+      )}
+      {formOpen && <PersonalDataModal msisdn={msisdn} onClose={() => setFormOpen(false)} />}
+    </div>
+  );
+};
+
 export const SubscriberCardModal: FC<{ msisdn: string; onClose: () => void }> = ({ msisdn, onClose }) => {
   const overlay = useOverlayDismiss(onClose);
   const months = useMemo(() => lastMonths(6), []);
@@ -127,7 +162,7 @@ export const SubscriberCardModal: FC<{ msisdn: string; onClose: () => void }> = 
           <>
             {id.stale && (
               <div className={s.stale}>
-                Структура абонента отсутствует в снапшоте — IMSI/SIM/договор могут быть пустыми. Обновите каталог кнопкой «Обновить каталог» на вкладке «Основное».
+                Структура абонента отсутствует в снапшоте — IMSI/SIM/договор могут быть пустыми. Нажмите «Обновить» на вкладке «Основное».
               </div>
             )}
 
@@ -171,6 +206,8 @@ export const SubscriberCardModal: FC<{ msisdn: string; onClose: () => void }> = 
                   </>
                 ) : <p className={s.itemMuted}>Нет начислений</p>
               )} />
+
+              <PersonalDataSection msisdn={msisdn} />
 
               <Section title="Роуминг / локация" state={data.roaming} render={r => (
                 <>

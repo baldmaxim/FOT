@@ -4,8 +4,8 @@ import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
 import { mtsBusinessBillingService } from './mts-business-billing.service.js';
 import { mtsBusinessCatalogService } from './mts-business-catalog.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
-import { mtsBusinessCdrService } from './mts-business-cdr.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
+import { mtsBusinessPersonalDataService } from './mts-business-personal-data.service.js';
 import { MtsBusinessApiError, isFeatureUnavailable } from './mts-business-base.service.js';
 import {
   tryAcquireSigurRuntimeLease,
@@ -59,20 +59,6 @@ function getMoscowHour(now: Date): number {
   return Number.parseInt(hourStr === '24' ? '0' : hourStr, 10);
 }
 
-/**
- * Известные номера аккаунта — объединение CDR-истории и number_map (номера,
- * найденные через HierarchyStructure, в CDR могут вообще не встречаться).
- * Без объединения синк баланса/тарифа не видел бы номера, обнаруженные
- * только через структуру абонента, даже после привязки к сотруднику.
- */
-async function getAllKnownMsisdns(accountId: string): Promise<string[]> {
-  const [cdrNumbers, mappedNumbers] = await Promise.all([
-    mtsBusinessCdrService.getKnownMsisdnsByAccount(accountId),
-    mtsBusinessMappingService.getKnownMsisdnsByAccount(accountId),
-  ]);
-  return [...new Set([...cdrNumbers, ...mappedNumbers])];
-}
-
 const logSkip = (context: string, error: unknown): void => {
   if (isFeatureUnavailable(error)) {
     console.warn(`[mts-biz-metrics] ${context} — функция не подключена в тарифе МТС`);
@@ -88,7 +74,8 @@ const logSkip = (context: string, error: unknown): void => {
 export interface IRefreshAccountResult {
   accountId: string;
   numbers: number;
-  failed: number;
+  failed: number;      // не-1010 ошибки
+  unavailable: number; // 403/1010 — функция не подключена в тарифе МТС
 }
 
 /**
@@ -99,6 +86,11 @@ export interface IRefreshAccountResult {
  */
 export async function refreshAccountMetrics(accountId: string): Promise<IRefreshAccountResult> {
   let failed = 0;
+  let unavailable = 0;
+  const bump = (error: unknown): void => {
+    if (isFeatureUnavailable(error)) unavailable++;
+    else failed++;
+  };
   const accounts = await mtsBusinessAccountsService.list();
   const account = accounts.find(a => a.id === accountId);
 
@@ -118,7 +110,7 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
         });
       }
     } catch (error) {
-      failed++;
+      bump(error);
       logSkip(`account="${account.label}" баланс ЛС`, error);
     }
 
@@ -129,12 +121,12 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
         amount: unpaid.amount, currencyCode: unpaid.currencyCode,
       });
     } catch (error) {
-      failed++;
+      bump(error);
       logSkip(`account="${account.label}" неоплаченные счета`, error);
     }
   }
 
-  const msisdns = await getAllKnownMsisdns(accountId);
+  const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
   for (const msisdn of msisdns) {
     try {
       const balance = await mtsBusinessBillingService.checkBalanceByMsisdn(accountId, msisdn);
@@ -145,7 +137,7 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
         });
       }
     } catch (error) {
-      failed++;
+      bump(error);
       logSkip(`account=${accountId} номер — баланс`, error);
     }
   }
@@ -161,30 +153,101 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
         });
       }
     } catch (error) {
-      failed++;
+      bump(error);
       logSkip(`account=${accountId} начисления (bulk)`, error);
     }
   }
 
-  return { accountId, numbers: msisdns.length, failed };
+  return { accountId, numbers: msisdns.length, failed, unavailable };
 }
 
-export interface IRefreshCatalogResult {
+export interface IRefreshHierarchyResult {
   accountId: string;
-  numbers: number;
-  discovered: number;
+  totalNumbers: number; // номеров в структуре абонента
+  discovered: number;   // из них заведено новых в number_map
+  needsFio: string[];   // номера без сотрудника и без ФИО — кандидаты на PersonalDataInfo
   failed: number;
+  unavailable: number;
 }
 
 /**
- * Снимает остатки пакетов ЛС, структуру абонента (+авто-обнаружение новых
- * номеров в mts_business_number_map) и тариф/услуги по известным номерам —
- * реже, чем баланс/начисления (меняется редко). Используется еженедельным
- * кадансом планировщика и ручным «Обновить сейчас».
+ * Структура абонента (HierarchyStructure) → снапшот + авто-обнаружение номеров
+ * в mts_business_number_map. ФИО здесь НЕ добирается — это отдельный шаг
+ * (refreshFioForNumbers), чтобы оркестратор «Обновить всё» показывал статусы
+ * «номера» и «ФИО» раздельно (у них разные подписки в тарифе МТС).
  */
-export async function refreshAccountCatalog(accountId: string): Promise<IRefreshCatalogResult> {
+export async function refreshHierarchy(accountId: string): Promise<IRefreshHierarchyResult> {
+  const result: IRefreshHierarchyResult = {
+    accountId, totalNumbers: 0, discovered: 0, needsFio: [], failed: 0, unavailable: 0,
+  };
+  const accounts = await mtsBusinessAccountsService.list();
+  const account = accounts.find(a => a.id === accountId);
+
+  try {
+    const hierarchy = await mtsBusinessCatalogService.getHierarchyStructure(accountId);
+    await mtsBusinessMetricsStoreService.upsertSnapshot({
+      accountId, scope: 'account', accountNo: account?.accountNumber ?? null, metric: 'hierarchy', payload: hierarchy,
+    });
+    for (const n of hierarchy.numbers) {
+      if (!n.msisdn) continue;
+      result.totalNumbers++;
+      const { needsFio, created } = await mtsBusinessMappingService.ensureNumberDiscovered(n.msisdn, accountId);
+      if (created) result.discovered++;
+      // ФИО добираем ТОЛЬКО для действительно неизвестных номеров (нет ни
+      // сотрудника, ни ФИО) — не дёргаем PersonalData/PersonalDataInfo повторно
+      // для уже распознанных/подтверждённо-неоднозначных номеров.
+      if (needsFio) result.needsFio.push(n.msisdn);
+    }
+  } catch (error) {
+    if (isFeatureUnavailable(error)) result.unavailable++;
+    else result.failed++;
+    logSkip(`account=${accountId} структура абонента`, error);
+  }
+  return result;
+}
+
+export interface IRefreshFioResult {
+  accountId: string;
+  requested: number;
+  fetched: number; // получено ФИО (персданные внесены на стороне МТС)
+  failed: number;
+  unavailable: number;
+}
+
+/** ФИО из PersonalData/PersonalDataInfo по списку номеров (+ кэш статуса подтверждения). */
+export async function refreshFioForNumbers(accountId: string, msisdns: string[]): Promise<IRefreshFioResult> {
+  const result: IRefreshFioResult = { accountId, requested: msisdns.length, fetched: 0, failed: 0, unavailable: 0 };
+  for (const msisdn of msisdns) {
+    try {
+      const info = await mtsBusinessPersonalDataService.fetchAndCacheInfo(accountId, msisdn);
+      if (info.fullName) {
+        await mtsBusinessMappingService.syncMtsNames([{ msisdn, fio: info.fullName }], null);
+        result.fetched++;
+      }
+    } catch (error) {
+      if (isFeatureUnavailable(error)) result.unavailable++;
+      else result.failed++;
+      logSkip(`account=${accountId} номер — ФИО из PersonalData`, error);
+    }
+  }
+  return result;
+}
+
+export interface IRefreshCatalogNumbersResult {
+  accountId: string;
+  numbers: number;
+  failed: number;
+  unavailable: number;
+}
+
+/** Остатки пакетов ЛС + тариф/услуги по всем известным номерам аккаунта. */
+export async function refreshTariffAndServices(accountId: string): Promise<IRefreshCatalogNumbersResult> {
   let failed = 0;
-  let discovered = 0;
+  let unavailable = 0;
+  const bump = (error: unknown): void => {
+    if (isFeatureUnavailable(error)) unavailable++;
+    else failed++;
+  };
   const accounts = await mtsBusinessAccountsService.list();
   const account = accounts.find(a => a.id === accountId);
 
@@ -195,56 +258,57 @@ export async function refreshAccountCatalog(accountId: string): Promise<IRefresh
         accountId, scope: 'account', accountNo: account.accountNumber, metric: 'validity_info', payload: packages,
       });
     } catch (error) {
-      failed++;
+      bump(error);
       logSkip(`account="${account.label}" остатки пакетов`, error);
     }
   }
 
-  try {
-    const hierarchy = await mtsBusinessCatalogService.getHierarchyStructure(accountId);
-    await mtsBusinessMetricsStoreService.upsertSnapshot({
-      accountId, scope: 'account', accountNo: account?.accountNumber ?? null, metric: 'hierarchy', payload: hierarchy,
-    });
-    for (const n of hierarchy.numbers) {
-      if (!n.msisdn) continue;
-      const { needsFio } = await mtsBusinessMappingService.ensureNumberDiscovered(n.msisdn, accountId);
-      discovered++;
-      // ФИО добираем ТОЛЬКО для действительно неизвестных номеров (нет ни
-      // сотрудника, ни ФИО) — не дёргаем PersonalData/PersonalDataInfo повторно
-      // для уже распознанных/подтверждённо-неоднозначных номеров.
-      if (needsFio) {
-        try {
-          const fio = await mtsBusinessCatalogService.getPersonalDataFio(accountId, n.msisdn);
-          if (fio) await mtsBusinessMappingService.syncMtsNames([{ msisdn: n.msisdn, fio }], null);
-        } catch (error) {
-          logSkip(`account=${accountId} номер — ФИО из PersonalData`, error);
-        }
-      }
-    }
-  } catch (error) {
-    failed++;
-    logSkip(`account=${accountId} структура абонента`, error);
-  }
-
-  const msisdns = await getAllKnownMsisdns(accountId);
+  const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
   for (const msisdn of msisdns) {
     try {
       const tariff = await mtsBusinessCatalogService.getBillPlanInfo(accountId, msisdn);
       await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId, scope: 'msisdn', msisdn, metric: 'bill_plan', payload: tariff });
     } catch (error) {
-      failed++;
+      bump(error);
       logSkip(`account=${accountId} номер — тариф`, error);
     }
     try {
       const services = await mtsBusinessCatalogService.getProductInfo(accountId, msisdn);
       await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId, scope: 'msisdn', msisdn, metric: 'product_services', payload: services });
     } catch (error) {
-      failed++;
+      bump(error);
       logSkip(`account=${accountId} номер — услуги`, error);
     }
   }
 
-  return { accountId, numbers: msisdns.length, discovered, failed };
+  return { accountId, numbers: msisdns.length, failed, unavailable };
+}
+
+export interface IRefreshCatalogResult {
+  accountId: string;
+  numbers: number;
+  discovered: number;
+  failed: number;
+  unavailable: number;
+}
+
+/**
+ * Полное обновление каталога: структура абонента + ФИО новых номеров + пакеты/
+ * тариф/услуги. Композиция трёх шагов — используется еженедельным кадансом
+ * планировщика и ручным «Обновить каталог»; оркестратор «Обновить всё» вызывает
+ * шаги по отдельности (раздельные статусы).
+ */
+export async function refreshAccountCatalog(accountId: string): Promise<IRefreshCatalogResult> {
+  const hier = await refreshHierarchy(accountId);
+  const fio = await refreshFioForNumbers(accountId, hier.needsFio);
+  const cat = await refreshTariffAndServices(accountId);
+  return {
+    accountId,
+    numbers: cat.numbers,
+    discovered: hier.discovered,
+    failed: hier.failed + fio.failed + cat.failed,
+    unavailable: hier.unavailable + fio.unavailable + cat.unavailable,
+  };
 }
 
 async function runDailySyncCycle(ymd: string): Promise<void> {

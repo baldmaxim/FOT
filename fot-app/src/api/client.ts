@@ -152,7 +152,11 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // старую матрицу — добавленная карта не появлялась (и удалённая не исчезала)
     // до перезагрузки страницы, хотя React Query уже инвалидировал ['contractor-pool-*'].
     || path === '/admin/contractor/pool/matrix'
-    || path === '/admin/contractor/pool/anomalies';
+    || path === '/admin/contractor/pool/anomalies'
+    // МТС Бизнес: статус фонового «Обновить всё» опрашивается каждые 3с, журнал
+    // заявок персданных — каждые 15с; браузерный max-age=30 ломал бы polling.
+    || path === '/mts-business/refresh-all/status'
+    || path === '/mts-business/personal-data/requests';
 };
 
 const refreshSession = async (): Promise<boolean> => {

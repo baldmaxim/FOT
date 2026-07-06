@@ -10,14 +10,14 @@
 .tabs {
   display: flex;
   gap: 4px;
-  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  border-bottom: 1px solid var(--border);
   margin-bottom: 4px;
 }
 .tab {
   padding: 8px 16px;
   font-size: 14px;
   font-weight: 600;
-  color: var(--color-text-secondary, #64748b);
+  color: var(--text-secondary);
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
@@ -25,8 +25,8 @@
   min-height: 40px;
 }
 .tabActive {
-  color: var(--color-primary, #2563eb);
-  border-bottom-color: var(--color-primary, #2563eb);
+  color: var(--primary);
+  border-bottom-color: var(--primary);
 }
 
 /* Модалка */
@@ -41,7 +41,7 @@
   z-index: 1000;
 }
 .modal {
-  background: var(--color-surface, #fff);
+  background: var(--surface);
   border-radius: 12px;
   padding: 20px;
   width: 100%;
@@ -57,32 +57,32 @@
   gap: 10px;
 }
 .kpi {
-  background: var(--color-surface, #fff);
-  border: 1px solid var(--color-border, #e2e8f0);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px 14px;
 }
-.kpiValue { font-size: 22px; font-weight: 700; color: var(--color-text, #0f172a); }
-.kpiLabel { font-size: 12px; color: var(--color-text-secondary, #64748b); margin-top: 2px; }
+.kpiValue { font-size: 22px; font-weight: 700; color: var(--text-primary); }
+.kpiLabel { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 
 /* Сегментированный переключатель */
-.segment { display: inline-flex; border: 1px solid var(--color-border, #e2e8f0); border-radius: 8px; overflow: hidden; }
-.segBtn { padding: 6px 14px; font-size: 13px; font-weight: 600; background: transparent; border: none; cursor: pointer; color: var(--color-text-secondary, #64748b); min-height: 36px; }
-.segBtnActive { background: var(--color-primary, #2563eb); color: #fff; }
+.segment { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.segBtn { padding: 6px 14px; font-size: 13px; font-weight: 600; background: transparent; border: none; cursor: pointer; color: var(--text-secondary); min-height: 36px; }
+.segBtnActive { background: var(--primary); color: #fff; }
 
 /* Строка-бар в дашборде */
-.barRow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--color-border, #eef2f7); cursor: default; }
+.barRow { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-subtle); cursor: default; }
 .barRowClickable { cursor: pointer; }
 .barRowActive { background: rgba(37, 99, 235, 0.06); }
 .barLabel { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.barSub { font-size: 11px; color: var(--color-text-secondary, #64748b); }
-.barTrack { height: 6px; border-radius: 4px; background: var(--color-border, #e2e8f0); margin-top: 3px; overflow: hidden; }
-.barFill { height: 100%; background: var(--color-primary, #2563eb); border-radius: 4px; }
+.barSub { font-size: 11px; color: var(--text-secondary); }
+.barTrack { height: 6px; border-radius: 4px; background: var(--border); margin-top: 3px; overflow: hidden; }
+.barFill { height: 100%; background: var(--primary); border-radius: 4px; }
 .barValue { font-size: 13px; font-weight: 600; white-space: nowrap; }
 
 .card {
-  background: var(--color-surface, #fff);
-  border: 1px solid var(--color-border, #e2e8f0);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
 }
@@ -94,13 +94,13 @@
 }
 
 .hint {
-  color: var(--color-text-secondary, #64748b);
+  color: var(--text-secondary);
   font-size: 13px;
   margin: 4px 0;
 }
 
-.ok { color: var(--color-success, #16a34a); font-size: 13px; margin: 8px 0 0; }
-.err { color: var(--color-danger, #dc2626); font-size: 13px; margin: 8px 0 0; }
+.ok { color: var(--success); font-size: 13px; margin: 8px 0 0; }
+.err { color: var(--error); font-size: 13px; margin: 8px 0 0; }
 
 .field {
   display: flex;
@@ -112,7 +112,7 @@
 .label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--color-text-secondary, #64748b);
+  color: var(--text-secondary);
 }
 
 .input,
@@ -121,10 +121,10 @@
   width: 100%;
   padding: 10px 12px;
   font-size: 16px;
-  border: 1px solid var(--color-border, #e2e8f0);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--color-bg, #fff);
-  color: var(--color-text, #0f172a);
+  background: var(--surface);
+  color: var(--text-primary);
   box-sizing: border-box;
 }
 
@@ -156,20 +156,20 @@
   min-height: 34px;
 }
 
-.btn { background: var(--color-primary, #2563eb); color: #fff; }
+.btn { background: var(--primary); color: #fff; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btnSecondary {
   background: transparent;
-  border-color: var(--color-border, #e2e8f0);
-  color: var(--color-text, #0f172a);
+  border-color: var(--border);
+  color: var(--text-primary);
 }
 .btnSecondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .linkBtn {
   background: none;
   border: none;
-  color: var(--color-primary, #2563eb);
+  color: var(--primary);
   cursor: pointer;
   padding: 0;
   font: inherit;
@@ -188,11 +188,11 @@
 .table td {
   text-align: left;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
-.table th { color: var(--color-text-secondary, #64748b); font-weight: 600; }
+.table th { color: var(--text-secondary); font-weight: 600; }
 
 .badge {
   display: inline-block;
@@ -205,6 +205,74 @@
 .badgeWait { background: rgba(234, 179, 8, 0.15); color: #a16207; }
 .badgeErr { background: rgba(220, 38, 38, 0.12); color: #dc2626; }
 .badgeMuted { background: rgba(100, 116, 139, 0.15); color: #64748b; }
+
+/* ===== Админ-вкладка: лента якорей + карточки-секции ===== */
+.adminStack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.anchors {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.anchorChip {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.anchorChip:hover { color: var(--text-primary); border-color: var(--primary); }
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.cardHeaderTitle { margin: 0; font-size: 15px; font-weight: 600; }
+.cardHeaderRight { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cardDesc { margin: 0 0 10px; font-size: 12px; color: var(--text-secondary); }
+
+/* Планировщики (последние прогоны фоновых задач) */
+.schedRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+}
+.schedRow:last-child { border-bottom: none; }
+.schedMeta { color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+
+/* Спиннер для кнопок/шагов */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: mtsSpin 0.8s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes mtsSpin { to { transform: rotate(360deg); } }
 
 @media (max-width: 480px) {
   .card { padding: 12px; }

@@ -150,19 +150,26 @@ const parseTariffFee = (resp: unknown): IMtsTariffFee => {
   };
 };
 
+// Реальная схема (probe 06.07.2026): { payments: [{ amount, dateOfPayment,
+// dateOfTransaction, paymentType, currency: { currencyCode } }] }.
 const parsePaymentHistory = (resp: unknown): IMtsPaymentEntry[] => {
-  const items = Array.isArray(resp) ? (resp as Record<string, unknown>[]) : collectByMarker(resp, 'amount');
+  const r0 = resp as Record<string, unknown> | null;
+  const items = Array.isArray(r0?.payments)
+    ? (r0?.payments as Record<string, unknown>[])
+    : Array.isArray(resp) ? (resp as Record<string, unknown>[]) : collectByMarker(resp, 'amount');
   return items
     .map(raw => {
       const r = raw as Record<string, unknown>;
       const amount = toNumber(r.amount ?? deepFind(r, ['taxIncludedAmount', 'sum', 'value']));
-      const date = asString(r.date ?? r.paymentDate ?? r.dateTime) ?? asString(deepFind(r, ['date', 'paymentDate', 'dateTime']));
+      const date = asString(r.dateOfPayment ?? r.date ?? r.paymentDate ?? r.dateTime)
+        ?? asString(deepFind(r, ['dateOfPayment', 'date', 'paymentDate', 'dateTime']));
       if (amount == null && !date) return null;
+      const currency = r.currency as Record<string, unknown> | undefined;
       return {
         date,
         amount,
-        method: asString(r.paymentMethod ?? r.method ?? r.type ?? r.name),
-        currencyCode: asString(r.currencyCode ?? r.currencyName),
+        method: asString(r.paymentType ?? r.paymentMethod ?? r.method ?? r.type ?? r.name),
+        currencyCode: asString(currency?.currencyCode) ?? asString(r.currencyCode ?? r.currencyName),
       };
     })
     .filter((e): e is IMtsPaymentEntry => e !== null);
@@ -206,9 +213,11 @@ class MtsBusinessBillingService extends MtsBusinessServiceBase {
 
   async getUnpaidAmountByAccounts(accountId: string, accountNos: string[]): Promise<IMtsUnpaidAmount> {
     if (accountNos.length === 0) return { accounts: [], amount: 0, currencyCode: null };
+    // Тело — голый массив номеров ЛС (подтверждено probe 06.07.2026: вариант
+    // из доки отвечает 200 с данными; прежний {data:[...]} — наша ошибка).
     const resp = await this.request<unknown>('post', '/Bills/GetUnpaidAmountByAccountNumber', {
       accountId,
-      data: { data: accountNos },
+      data: accountNos,
     });
     const data = deepFind(resp, ['accounts']) !== undefined
       ? resp
@@ -227,10 +236,13 @@ class MtsBusinessBillingService extends MtsBusinessServiceBase {
     for (let i = 0; i < msisdns.length; i += CHARGES_BULK_CHUNK) {
       const chunk = msisdns.slice(i, i + CHARGES_BULK_CHUNK);
       if (chunk.length === 0) continue;
+      // Тело — массив объектов [{id}] (подтверждено probe 06.07.2026, как в
+      // доке §5.2; прежний {id:[...]} — наша ошибка, из-за неё начисления
+      // по номерам не приходили).
       const resp = await this.request<unknown>('post', '/Bills/CheckCharges', {
         accountId,
         params: chunk.length > 1 ? { isBulk: true } : undefined,
-        data: { id: chunk },
+        data: chunk.map(m => ({ id: m })),
       });
       const items = Array.isArray(resp) ? resp : [resp];
       for (const raw of items) {
@@ -272,11 +284,19 @@ class MtsBusinessBillingService extends MtsBusinessServiceBase {
     return parseTariffFee(resp);
   }
 
-  /** История платежей (пополнений) по номеру за период. dateFrom/dateTo — YYYY-MM-DD. */
+  /**
+   * История платежей (пополнений) по номеру за период. dateFrom/dateTo — YYYY-MM-DD.
+   * API требует формат yyyy-MM-dd'T'HH:mm:ssXXX (подтверждено probe 06.07.2026:
+   * на голую дату — 400); таймзона МСК.
+   */
   async getPaymentHistoryByMsisdn(accountId: string, msisdn: string, dateFrom: string, dateTo: string): Promise<IMtsPaymentEntry[]> {
     const resp = await this.request<unknown>('get', '/Bills/PaymentHistoryByMSISDN', {
       accountId,
-      params: { msisdn, dateFrom, dateTo },
+      params: {
+        msisdn,
+        dateFrom: `${dateFrom.slice(0, 10)}T00:00:00+03:00`,
+        dateTo: `${dateTo.slice(0, 10)}T23:59:59+03:00`,
+      },
     });
     return parsePaymentHistory(resp);
   }

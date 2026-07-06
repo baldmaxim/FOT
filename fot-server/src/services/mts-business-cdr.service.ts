@@ -397,11 +397,6 @@ class MtsBusinessCdrService {
     return { parsed: calls.length, inserted, skipped };
   }
 
-  /** Полная очистка детализации звонков (все аккаунты). Возвращает число удалённых строк. */
-  async clearAllCdr(): Promise<number> {
-    return execute('DELETE FROM mts_business_cdr');
-  }
-
   /** Персист строк CDR с дедупом по dedup_hash. Возвращает счётчики. */
   async storeCalls(
     calls: IParsedCall[],

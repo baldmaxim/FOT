@@ -1,5 +1,6 @@
 import { MtsBusinessServiceBase } from './mts-business-base.service.js';
 import { normalizeMsisdn } from './mts-business-cdr.service.js';
+import { mtsBusinessPersonalDataService } from './mts-business-personal-data.service.js';
 
 // Тариф/услуги/остатки пакетов/структура абонента (Product+Service-домен МТС
 // Business API). BillPlanInfo и ProductInfo подтверждены по support.mts.ru.
@@ -422,6 +423,31 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     return { eventId };
   }
 
+  /**
+   * Смена тарифа (POST /Product/ChangeBillPlan?msisdn=) — асинхронно, ответ с
+   * eventID, статус — через Product/CheckRequestStatus (как у ModifyProduct).
+   * Контракт по докам §5.7 — НЕ проверен живым вызовом; dry-run прав есть в
+   * probe-mts-number-all.ts --check-manage (ChangeBillPlanValidation).
+   */
+  async changeBillPlan(accountId: string, msisdn: string, externalID: string): Promise<{ eventId: string }> {
+    const resp = await this.request<unknown>('post', '/Product/ChangeBillPlan', {
+      accountId,
+      params: { msisdn },
+      data: {
+        item: [{
+          product: {
+            externalID,
+            productCharacteristic: [{ name: 'productType', value: 'tariffPlan' }],
+          },
+        }],
+      },
+    });
+    const r = (resp ?? {}) as Record<string, unknown>;
+    const eventId = asString(r.eventID) ?? asString(r.eventId);
+    if (!eventId) throw new Error('МТС Бизнес: ответ ChangeBillPlan без eventID');
+    return { eventId };
+  }
+
   /** Статус заявки ModifyProduct — Product/CheckRequestStatus (НЕ CheckRequestStatusByUUID, используемый для детализации). */
   async checkModifyProductStatus(accountId: string, msisdn: string, eventId: string): Promise<{ status: MtsProductRequestStatus; raw: string | null }> {
     const now = new Date();
@@ -461,23 +487,10 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
    * стороне МТС; для SIM без внесённых данных ответ пуст — ФИО берётся из XML (<tp u>).
    */
   async getPersonalDataFio(accountId: string, msisdn: string): Promise<string | null> {
-    const resp = await this.request<unknown>('get', '/PersonalData/PersonalDataInfo', {
-      accountId,
-      params: { 'contactMedium.phoneNumber': msisdn },
-      suppressErrorBodyLog: true,
-    });
-    const records = (Array.isArray(resp) ? resp : [resp])
-      .filter((v): v is Record<string, unknown> => v != null && typeof v === 'object');
-    for (const r of records) {
-      const name = asString(r.name);
-      if (name) return name.trim();
-      const surName = asString(r.SurName) ?? asString(r.surName) ?? asString(r.LastName);
-      const firstName = asString(r.FirstName) ?? asString(r.firstName);
-      const secondName = asString(r.SecondName) ?? asString(r.secondName);
-      const fio = [surName, firstName, secondName].filter((v): v is string => Boolean(v)).join(' ');
-      if (fio) return fio;
-    }
-    return null;
+    // Делегируем в personal-data сервис (единственный парсер PersonalDataInfo) —
+    // заодно кэшируется статус подтверждения в number_map.pd_status.
+    const info = await mtsBusinessPersonalDataService.fetchAndCacheInfo(accountId, msisdn);
+    return info.fullName;
   }
 
   /**

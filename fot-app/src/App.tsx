@@ -494,6 +494,22 @@ const AppRoutes = () => {
               </Layout>
             }
           />
+          <Route
+            path="/mts-business/subscribers"
+            element={
+              <Layout title="МТС Бизнес — абоненты" theme={theme} onToggleTheme={toggleTheme}>
+                <MtsBusinessPage />
+              </Layout>
+            }
+          />
+          <Route
+            path="/mts-business/admin"
+            element={
+              <Layout title="МТС Бизнес — администрирование" theme={theme} onToggleTheme={toggleTheme}>
+                <MtsBusinessPage />
+              </Layout>
+            }
+          />
         </Route>
 
         <Route element={<ProtectedRoute requiredPage="/skud-card-reader" />}>

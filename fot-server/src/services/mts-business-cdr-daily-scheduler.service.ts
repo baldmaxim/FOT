@@ -3,7 +3,8 @@ import { env } from '../config/env.js';
 import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
 import { mtsBusinessDataService } from './mts-business-data.service.js';
 import { mtsBusinessCdrService } from './mts-business-cdr.service.js';
-import { MtsBusinessApiError } from './mts-business-base.service.js';
+import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
+import { MtsBusinessApiError, isFeatureUnavailable } from './mts-business-base.service.js';
 import {
   tryAcquireSigurRuntimeLease,
   releaseSigurRuntimeLease,
@@ -16,8 +17,9 @@ import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js'
 // Ежедневное автообновление детализации звонков через синхронный
 // Bills/BillingStatementExtdByMSISDN (без email/IMAP) — по одному номеру на
 // запрос, через общий rate-limit гейт per accountId (mts-business-base.service).
-// Известные номера аккаунта — из уже накопленного mts_business_cdr (новый номер
-// сначала попадает туда через ручной бэкафилл, дальше подхватывается сам).
+// Известные номера аккаунта — объединение CDR-истории и инвентаря number_map
+// (HierarchyStructure): новый номер, найденный синком структуры, подхватывается
+// автоматически, без ручного бэкафилла.
 //
 // Тик раз в минуту, работа выполняется один раз в сутки при первом тике после
 // TARGET_HOUR MSK (catchup при рестарте сервера — как sigur-events-daily).
@@ -68,10 +70,11 @@ function addDaysYmd(ymd: string, days: number): string {
   return `${yy}-${mm}-${dd}`;
 }
 
-async function syncAccount(accountId: string, dateFrom: string, dateTo: string): Promise<{ numbers: number; inserted: number; failed: number }> {
-  const msisdns = await mtsBusinessCdrService.getKnownMsisdnsByAccount(accountId);
+async function syncAccount(accountId: string, dateFrom: string, dateTo: string): Promise<{ numbers: number; inserted: number; failed: number; unavailable: number }> {
+  const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
   let inserted = 0;
   let failed = 0;
+  let unavailable = 0;
   const allCalls: Parameters<typeof mtsBusinessCdrService.storeCalls>[0] = [];
 
   for (const msisdn of msisdns) {
@@ -80,7 +83,11 @@ async function syncAccount(accountId: string, dateFrom: string, dateTo: string):
       const calls = mtsBusinessCdrService.parseBillingStatementResponse(resp, msisdn);
       allCalls.push(...calls);
     } catch (error) {
-      failed++;
+      if (isFeatureUnavailable(error)) {
+        unavailable++;
+      } else {
+        failed++;
+      }
       if (error instanceof MtsBusinessApiError) {
         console.error(`[mts-biz-cdr-daily] account=${accountId} номер — ошибка http=${error.status} code=${error.code ?? '-'}`);
       } else {
@@ -93,7 +100,7 @@ async function syncAccount(accountId: string, dateFrom: string, dateTo: string):
     const result = await mtsBusinessCdrService.storeCalls(allCalls, null, accountId);
     inserted = result.inserted;
   }
-  return { numbers: msisdns.length, inserted, failed };
+  return { numbers: msisdns.length, inserted, failed, unavailable };
 }
 
 async function runDailySyncCycle(ymd: string): Promise<void> {
@@ -126,12 +133,14 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
             let totalNumbers = 0;
             let totalInserted = 0;
             let totalFailed = 0;
+            let totalUnavailable = 0;
             for (const account of accounts) {
               const res = await syncAccount(account.id, dateFrom, dateTo);
               totalNumbers += res.numbers;
               totalInserted += res.inserted;
               totalFailed += res.failed;
-              console.log(`[mts-biz-cdr-daily] account="${account.label}" numbers=${res.numbers} inserted=${res.inserted} failed=${res.failed}`);
+              totalUnavailable += res.unavailable;
+              console.log(`[mts-biz-cdr-daily] account="${account.label}" numbers=${res.numbers} inserted=${res.inserted} failed=${res.failed} unavailable=${res.unavailable}`);
             }
 
             lastRunYmdMsk = ymd;
@@ -142,7 +151,7 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
                 lastSuccessAt: new Date().toISOString(),
                 lastStartedAt: startedAtIso,
                 lastWindow: { dateFrom, dateTo },
-                lastResult: { accounts: accounts.length, numbers: totalNumbers, inserted: totalInserted, failed: totalFailed },
+                lastResult: { accounts: accounts.length, numbers: totalNumbers, inserted: totalInserted, failed: totalFailed, unavailable: totalUnavailable },
               },
             }).catch(err => console.error('[mts-biz-cdr-daily] mergeSigurRuntimeState error:', (err as Error).message));
           } catch (error) {

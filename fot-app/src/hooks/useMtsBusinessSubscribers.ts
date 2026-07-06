@@ -1,0 +1,55 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { mtsBusinessSubscribersService } from '../services/mtsBusinessSubscribersService';
+
+// Хуки вкладки «Абоненты МТС».
+
+export const getMtsBusinessSubscribersKey = () => ['mts-business', 'subscribers'] as const;
+export const getMtsBusinessSubscriberDetailsKey = (msisdn: string) =>
+  ['mts-business', 'subscriber-details', msisdn] as const;
+export const getMtsBusinessSubscriberAvailableKey = (msisdn: string) =>
+  ['mts-business', 'subscriber-available', msisdn] as const;
+
+export const useMtsBusinessSubscribers = (enabled = true) => useQuery({
+  queryKey: getMtsBusinessSubscribersKey(),
+  queryFn: () => mtsBusinessSubscribersService.list(),
+  staleTime: 30_000,
+  enabled,
+});
+
+export const useMtsBusinessSubscriberDetails = (msisdn: string | null) => useQuery({
+  queryKey: getMtsBusinessSubscriberDetailsKey(msisdn ?? ''),
+  queryFn: () => mtsBusinessSubscribersService.details(msisdn as string),
+  staleTime: 30_000,
+  enabled: Boolean(msisdn),
+});
+
+/** Живой каталог подключаемого (3 вызова МТС) — грузится по явному запросу из панели. */
+export const useMtsBusinessSubscriberAvailable = (msisdn: string | null, enabled: boolean) => useQuery({
+  queryKey: getMtsBusinessSubscriberAvailableKey(msisdn ?? ''),
+  queryFn: () => mtsBusinessSubscribersService.available(msisdn as string),
+  staleTime: 5 * 60_000,
+  enabled: enabled && Boolean(msisdn),
+});
+
+export const useRefreshMtsBusinessSubscriber = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (msisdn: string) => mtsBusinessSubscribersService.refreshOne(msisdn),
+    onSuccess: (_r, msisdn) => {
+      void qc.invalidateQueries({ queryKey: getMtsBusinessSubscribersKey() });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessSubscriberDetailsKey(msisdn) });
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'personal-data', msisdn] });
+    },
+  });
+};
+
+export const useChangeMtsBusinessTariff = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { accountId?: string; msisdn: string; externalID: string }) =>
+      mtsBusinessSubscribersService.changeTariff(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'actions'] });
+    },
+  });
+};

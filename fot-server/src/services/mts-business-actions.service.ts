@@ -7,7 +7,7 @@ import { msisdnHash } from './mts-business-cdr.service.js';
 // mts-business-catalog.service.ts (услуги/блокировки) и mts-business-budget.service.ts
 // (правила бюджета); здесь только персист заявки + статус-поллинг.
 
-export type MtsBusinessActionType = 'service_add' | 'service_remove' | 'block_add' | 'block_remove' | 'budget_rule_add' | 'budget_rule_remove';
+export type MtsBusinessActionType = 'service_add' | 'service_remove' | 'block_add' | 'block_remove' | 'budget_rule_add' | 'budget_rule_remove' | 'tariff_change';
 
 export interface IActionRequestCreate {
   eventId: string;

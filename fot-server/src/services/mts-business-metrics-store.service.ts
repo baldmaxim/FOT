@@ -45,7 +45,20 @@ export interface IMetricTrendPoint {
   amount: number;
 }
 
-export type MtsBusinessSnapshotMetric = 'validity_info' | 'bill_plan' | 'product_services' | 'hierarchy' | 'budget_rules';
+export type MtsBusinessSnapshotMetric =
+  | 'validity_info'
+  | 'bill_plan'
+  | 'product_services'
+  | 'hierarchy'
+  | 'budget_rules'
+  // Полный профиль абонента (вкладка «Абоненты», scope='msisdn'):
+  | 'connected_blocks'  // подключённые блокировки (IMtsService[])
+  | 'tariff_fee'        // абонплата по тарифу (IMtsTariffFee)
+  | 'forwarding'        // правила переадресации (IMtsForwardingRule[])
+  | 'roaming'           // текущая локация SIM (IMtsRoaming)
+  | 'delivery_method'   // способ доставки счетов (IMtsDeliveryMethod[])
+  | 'payments'          // пополнения за 30 дней (IMtsPaymentEntry[])
+  | 'validity_msisdn';  // остатки пакетов по номеру (IMtsPackageCounter[])
 
 export interface ISnapshotUpsert {
   accountId: string;
@@ -238,6 +251,43 @@ class MtsBusinessMetricsStoreService {
       [hash, metric],
     );
     return row ? { payload: row.payload, capturedAt: row.captured_at } : null;
+  }
+
+  /** Последние снапшоты набора метрик по одному номеру (для деталей абонента, 0 живых вызовов). */
+  async getLatestSnapshotsForMsisdn(
+    rawMsisdn: string,
+    metrics: MtsBusinessSnapshotMetric[],
+  ): Promise<Map<MtsBusinessSnapshotMetric, { payload: unknown; capturedAt: string }>> {
+    const out = new Map<MtsBusinessSnapshotMetric, { payload: unknown; capturedAt: string }>();
+    const hash = msisdnHash(rawMsisdn);
+    if (!hash || metrics.length === 0) return out;
+    const rows = await query<{ metric: MtsBusinessSnapshotMetric; payload: unknown; captured_at: string }>(
+      `SELECT DISTINCT ON (metric) metric, payload, captured_at
+         FROM mts_business_metric_snapshot
+        WHERE scope = 'msisdn' AND msisdn_hash = $1 AND metric = ANY($2::text[])
+        ORDER BY metric, captured_at DESC`,
+      [hash, metrics],
+    );
+    for (const r of rows) out.set(r.metric, { payload: r.payload, capturedAt: r.captured_at });
+    return out;
+  }
+
+  /** Последние скалярные метрики по одному номеру (баланс/начисления) — для деталей абонента. */
+  async getLatestDailyForMsisdn(
+    rawMsisdn: string,
+  ): Promise<Map<MtsBusinessDailyMetric, { amount: number; capturedAt: string }>> {
+    const out = new Map<MtsBusinessDailyMetric, { amount: number; capturedAt: string }>();
+    const hash = msisdnHash(rawMsisdn);
+    if (!hash) return out;
+    const rows = await query<{ metric: MtsBusinessDailyMetric; amount: string; captured_at: string }>(
+      `SELECT DISTINCT ON (metric) metric, amount::text AS amount, captured_at
+         FROM mts_business_metric_daily
+        WHERE scope = 'msisdn' AND msisdn_hash = $1
+        ORDER BY metric, captured_at DESC`,
+      [hash],
+    );
+    for (const r of rows) out.set(r.metric, { amount: Number(r.amount), capturedAt: r.captured_at });
+    return out;
   }
 
   /** Обогащённая таблица «по сотрудникам»: тариф, кол-во/сумма платных услуг (per-номер метрики). */

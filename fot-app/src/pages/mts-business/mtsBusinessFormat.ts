@@ -35,6 +35,7 @@ export const ACTION_TYPE_LABELS: Record<string, string> = {
   block_remove: 'Снять блокировку',
   budget_rule_add: 'Добавить правило бюджета',
   budget_rule_remove: 'Удалить правило бюджета',
+  tariff_change: 'Сменить тариф',
 };
 
 // Карточка номера
@@ -53,4 +54,42 @@ export const FORWARDING_TYPE_LABELS: Record<string, string> = {
   CFB: 'При занятости',
   CFNRY: 'Нет ответа',
   CFNRC: 'Недоступен',
+};
+
+// Персональные данные пользователя номера (PersonalDataConfirmation)
+export const PD_STATUS_LABELS: Record<string, string> = {
+  Activated: 'подтверждены',
+  ActivatedPortIn: 'подтверждены (перенос)',
+  Anonymous: 'не внесены',
+  Depersonalized: 'обезличены',
+  Migration: 'нужна актуализация',
+  NotRequired: 'не требуются',
+  WaitingForAcceptance: 'ожидает SMS-подтверждения',
+  WaitingForCheck: 'на проверке',
+  MismatchOfData: 'расхождение данных',
+  NotFoundInEsia: 'не найден в ЕСИА',
+  RequestNotFoundInEsia: 'заявка не найдена в ЕСИА',
+  Refusal: 'отказ пользователя',
+};
+
+export type PdStatusKind = 'ok' | 'wait' | 'err' | 'muted';
+
+export const PD_STATUS_KIND: Record<string, PdStatusKind> = {
+  Activated: 'ok',
+  ActivatedPortIn: 'ok',
+  NotRequired: 'muted',
+  Depersonalized: 'muted',
+  Anonymous: 'muted',
+  Migration: 'wait',
+  WaitingForAcceptance: 'wait',
+  WaitingForCheck: 'wait',
+  MismatchOfData: 'err',
+  NotFoundInEsia: 'err',
+  RequestNotFoundInEsia: 'err',
+  Refusal: 'err',
+};
+
+export const PD_OPERATION_LABELS: Record<string, string> = {
+  change: 'Внесение / изменение',
+  delete: 'Удаление',
 };

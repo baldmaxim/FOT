@@ -10,19 +10,18 @@ import {
 import {
   useMtsBusinessBillingSummary,
   useMtsBusinessBillingTrend,
-  useRefreshMtsBusinessBilling,
 } from '../../hooks/useMtsBusinessBillingData';
 import {
   useMtsBusinessEmployeesCatalog,
   useMtsBusinessAccountsPackages,
-  useRefreshMtsBusinessCatalog,
 } from '../../hooks/useMtsBusinessCatalogData';
 import { useMtsBusinessActions } from '../../hooks/useMtsBusinessActionsData';
+import { useMtsBusinessRefreshAllStatus } from '../../hooks/useMtsBusinessRefreshAll';
 import type { MtsBusinessDailyMetric } from '../../services/mtsBusinessBillingService';
-import { errText, toISODate, fmtDur, fmtLast, fmtMoney, fmtPackage, ACTION_TYPE_LABELS } from './mtsBusinessFormat';
+import { RefreshAllPanel } from './overview/RefreshAllPanel';
+import { UnavailableNotice } from './common/UnavailableNotice';
+import { toISODate, fmtDur, fmtLast, fmtMoney, fmtPackage, ACTION_TYPE_LABELS } from './mtsBusinessFormat';
 import styles from './OverviewSection.module.css';
-
-type Msg = { ok: boolean; text: string } | null;
 
 const STATUS_BADGE: Record<string, { cls: string; label: string }> = {
   completed: { cls: styles.badgeOk, label: 'готово' },
@@ -99,7 +98,6 @@ export const OverviewSection: FC = () => {
   const [trendMetric, setTrendMetric] = useState<MtsBusinessDailyMetric>('balance');
   const [topMetric, setTopMetric] = useState<'time' | 'cost'>('time');
   const [showRestEmployees, setShowRestEmployees] = useState(false);
-  const [msg, setMsg] = useState<Msg>(null);
 
   const accountsMeta = useMtsBusinessAccounts();
   const accSummary = useMtsBusinessAccountsSummary(callsFrom, callsTo, true);
@@ -109,8 +107,17 @@ export const OverviewSection: FC = () => {
   const employeesCatalog = useMtsBusinessEmployeesCatalog(accountId || undefined);
   const accountsPackages = useMtsBusinessAccountsPackages();
   const actions = useMtsBusinessActions(true);
-  const refreshBilling = useRefreshMtsBusinessBilling();
-  const refreshCatalog = useRefreshMtsBusinessCatalog();
+  const refreshAllStatus = useMtsBusinessRefreshAllStatus();
+
+  // Секция «не подключена в тарифе МТС», если в последнем прогоне «Обновить всё»
+  // соответствующий шаг завершился unavailable (403/1010). Данные обзора идут из
+  // истории БД, поэтому сама пустота ещё не означает отключённый продукт —
+  // сверяемся с фактическим результатом последнего обращения к API.
+  const stepUnavailable = (step: string): boolean =>
+    (refreshAllStatus.data?.steps ?? []).some(st =>
+      st.step === step
+      && st.status === 'unavailable'
+      && (!accountId || st.accountId === accountId));
 
   const accRows = accSummary.data ?? [];
   const totalCalls = accRows.reduce((a, r) => a + r.calls, 0);
@@ -173,25 +180,6 @@ export const OverviewSection: FC = () => {
 
   const recentActions = (actions.data ?? []).slice(0, 6);
 
-  const onRefreshBilling = async (): Promise<void> => {
-    setMsg(null);
-    try {
-      const r = await refreshBilling.mutateAsync(accountId || undefined);
-      setMsg({ ok: true, text: `Обновление запущено (ЛС: ${r.accounts}) — данные появятся через несколько минут` });
-    } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка запуска обновления (возможно нужен 2FA)') });
-    }
-  };
-  const onRefreshCatalog = async (): Promise<void> => {
-    setMsg(null);
-    try {
-      const r = await refreshCatalog.mutateAsync(accountId || undefined);
-      setMsg({ ok: true, text: `Обновление каталога запущено (ЛС: ${r.accounts}) — данные появятся через несколько минут` });
-    } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка запуска обновления каталога (возможно нужен 2FA)') });
-    }
-  };
-
   return (
     <div className={styles.page}>
       <div className={styles.header}>
@@ -202,6 +190,8 @@ export const OverviewSection: FC = () => {
           options={[{ v: '', label: 'Все ЛС' }, ...(accountsMeta.data ?? []).map(a => ({ v: a.id, label: a.label }))]}
         />
       </div>
+
+      <RefreshAllPanel accountId={accountId || undefined} />
 
       <section className={styles.card}>
         <div className={styles.kpiGrid}>
@@ -238,7 +228,10 @@ export const OverviewSection: FC = () => {
           <input className={styles.dateInput} type="date" value={callsTo} onChange={e => setCallsTo(e.target.value)} />
         </div>
         {accSummary.isLoading ? <p className={styles.hint}>Загрузка…</p>
-          : accountsOverview.length === 0 ? <p className={styles.hint}>Нет данных за период. Загрузите детализацию (вкладка «Администрирование»).</p>
+          : accountsOverview.length === 0
+            ? (stepUnavailable('detalization')
+              ? <UnavailableNotice message="Детализация звонков не активирована для этого лицевого счёта." />
+              : <p className={styles.hint}>Нет данных за период. Нажмите «Обновить» вверху страницы.</p>)
             : <>
                 <div className={styles.propBar}>
                   {accountsOverview.map((r, i) => (
@@ -273,7 +266,9 @@ export const OverviewSection: FC = () => {
           {(topMetric === 'time' ? report.isLoading : billingSummary.isLoading) ? (
             <p className={styles.hint}>Загрузка…</p>
           ) : topItems.length === 0 ? (
-            <p className={styles.hint}>Нет данных. Загрузите детализацию и привяжите номера к сотрудникам.</p>
+            stepUnavailable(topMetric === 'time' ? 'detalization' : 'billing')
+              ? <UnavailableNotice />
+              : <p className={styles.hint}>Нет данных. Нажмите «Обновить» вверху страницы и привяжите номера к сотрудникам.</p>
           ) : (
             <>
               <Bars items={topTop} formatValue={topMetric === 'time' ? fmtDur : v => fmtMoney(v)} />
@@ -299,7 +294,9 @@ export const OverviewSection: FC = () => {
               <input className={styles.dateInput} type="date" value={trendFrom} onChange={e => setTrendFrom(e.target.value)} />
               <input className={styles.dateInput} type="date" value={trendTo} onChange={e => setTrendTo(e.target.value)} />
             </div>
-            {trend.isLoading ? <p className={styles.hint}>Загрузка…</p> : (
+            {trend.isLoading ? <p className={styles.hint}>Загрузка…</p>
+              : (trend.data ?? []).length === 0 && stepUnavailable('billing') ? <UnavailableNotice />
+              : (
               <div className={styles.chartWrap}>
                 <ResponsiveContainer>
                   <AreaChart data={trend.data ?? []} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
@@ -318,11 +315,6 @@ export const OverviewSection: FC = () => {
                 </ResponsiveContainer>
               </div>
             )}
-            <div className={styles.actions} style={{ marginTop: 12 }}>
-              <button className={styles.btn} onClick={() => { void onRefreshBilling(); }} disabled={refreshBilling.isPending}>Обновить сейчас</button>
-              <button className={styles.btnSecondary} onClick={() => { void onRefreshCatalog(); }} disabled={refreshCatalog.isPending}>Обновить каталог</button>
-            </div>
-            {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
           </section>
 
           <section className={styles.card}>
@@ -350,7 +342,9 @@ export const OverviewSection: FC = () => {
       <section className={styles.card}>
         <div className={styles.cardTitleText} style={{ marginBottom: 12 }}>По лицевым счетам</div>
         {billingSummary.isLoading ? <p className={styles.hint}>Загрузка…</p> : billingAccounts.length === 0 ? (
-          <p className={styles.hint}>Нет данных. Нажмите «Обновить сейчас» или дождитесь ежедневного автообновления.</p>
+          stepUnavailable('billing')
+            ? <UnavailableNotice />
+            : <p className={styles.hint}>Нет данных. Нажмите «Обновить» вверху страницы или дождитесь ежедневного автообновления.</p>
         ) : (
           <div className={styles.tableWrap}>
             <table className={styles.table}>
@@ -378,7 +372,9 @@ export const OverviewSection: FC = () => {
       <section className={styles.card}>
         <div className={styles.cardTitleText} style={{ marginBottom: 12 }}>По сотрудникам</div>
         {billingSummary.isLoading ? <p className={styles.hint}>Загрузка…</p> : billingEmployeesEnriched.length === 0 ? (
-          <p className={styles.hint}>Нет данных — привяжите номера к сотрудникам на вкладке «Администрирование».</p>
+          stepUnavailable('billing')
+            ? <UnavailableNotice />
+            : <p className={styles.hint}>Нет данных — привяжите номера к сотрудникам на вкладке «Администрирование».</p>
         ) : (
           <div className={styles.tableWrap}>
             <table className={styles.table}>
@@ -403,7 +399,9 @@ export const OverviewSection: FC = () => {
       <section className={styles.card}>
         <div className={styles.cardTitleText} style={{ marginBottom: 12 }}>Остатки пакетов по лицевым счетам</div>
         {accountsPackages.isLoading ? <p className={styles.hint}>Загрузка…</p> : (accountsPackages.data ?? []).every(a => a.packages.length === 0) ? (
-          <p className={styles.hint}>Нет данных — нажмите «Обновить каталог» или дождитесь еженедельного автообновления.</p>
+          stepUnavailable('catalog')
+            ? <UnavailableNotice />
+            : <p className={styles.hint}>Нет данных — нажмите «Обновить» вверху страницы или дождитесь еженедельного автообновления.</p>
         ) : (
           <div className={styles.tableWrap}>
             <table className={styles.table}>

@@ -18,7 +18,8 @@ interface IProps {
 }
 
 const norm = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
-const rowFio = (r: IMtsBusinessImportedNumberRow): string | null => r.employeeFullName ?? r.mtsFio ?? null;
+const rowFio = (r: IMtsBusinessImportedNumberRow): string | null =>
+  r.employeeFullName ?? r.mtsFio ?? r.mtsComment ?? null;
 const chipLabel = (r: IMtsBusinessImportedNumberRow | undefined, msisdn: string): string =>
   (r && rowFio(r)) ?? msisdn;
 
