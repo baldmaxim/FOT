@@ -150,6 +150,16 @@ const deepNumber = (node: unknown, keys: string[]): number | null => {
   return n;
 };
 
+/** Флаг наличия следующей страницы в ответе HierarchyStructure (hasMore/HasMore). */
+const hasMoreFlag = (resp: unknown): boolean | null => {
+  const hit = collectByMarker(resp, 'hasMore')[0] ?? collectByMarker(resp, 'HasMore')[0];
+  if (!hit) return null;
+  const v = hit.hasMore ?? hit.HasMore;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'string') return v.trim().toLowerCase() === 'true';
+  return null;
+};
+
 const parseHierarchy = (resp: unknown): IMtsHierarchy => {
   const accountNodes = collectByMarker(resp, 'accountNo');
   const numberNodes = collectByMarker(resp, 'productSerialNumber');
@@ -334,9 +344,50 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     return parseRoaming(resp);
   }
 
+  /**
+   * Структура абонента с пагинацией (док §5.10: pageSize до 1000, при hasMore
+   * продолжаем). На крупном ЛС без пагинации часть номеров не приходит (206
+   * partial) — номера «терялись» в инвентаре. Останов: явный hasMore=false,
+   * неполная страница, либо страница без НОВЫХ номеров (защита от контура,
+   * который игнорирует пагинацию и повторяет ту же выдачу). Кап MAX_PAGES.
+   */
   async getHierarchyStructure(accountId: string): Promise<IMtsHierarchy> {
-    const resp = await this.request<unknown>('get', '/Service/HierarchyStructure', { accountId });
-    return parseHierarchy(resp);
+    const PAGE_SIZE = 1000;
+    const MAX_PAGES = 50;
+    const merged: IMtsHierarchy = {
+      organizationName: null, contractId: null, inn: null, kpp: null, accounts: [], numbers: [],
+    };
+    const seenAccounts = new Set<string>();
+    const seenMsisdns = new Set<string>();
+
+    for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
+      const resp = await this.request<unknown>('get', '/Service/HierarchyStructure', {
+        accountId, params: { pageNum, pageSize: PAGE_SIZE },
+      });
+      const page = parseHierarchy(resp);
+      merged.organizationName ??= page.organizationName;
+      merged.contractId ??= page.contractId;
+      merged.inn ??= page.inn;
+      merged.kpp ??= page.kpp;
+      for (const a of page.accounts) {
+        if (!seenAccounts.has(a)) { seenAccounts.add(a); merged.accounts.push(a); }
+      }
+      let added = 0;
+      for (const n of page.numbers) {
+        const key = n.msisdn ?? '';
+        if (key && seenMsisdns.has(key)) continue;
+        if (key) seenMsisdns.add(key);
+        merged.numbers.push(n);
+        added++;
+      }
+
+      const more = hasMoreFlag(resp);
+      if (more === true) continue;              // явный флаг — идём дальше
+      if (more === false) break;                // явный флаг — конец
+      if (page.numbers.length < PAGE_SIZE) break; // неполная страница — конец
+      if (added === 0) break;                   // страница без новых номеров — контур без пагинации
+    }
+    return merged;
   }
 
   /** Сырой ответ HierarchyStructure без парсинга — только для диагностики (probe-скрипт). */
@@ -427,6 +478,34 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
       if (fio) return fio;
     }
     return null;
+  }
+
+  /**
+   * Комментарии номеров из ЛК МТС (`Service/GetCommentsByMSISDN`, POST, до 300
+   * MSISDN за запрос). Fallback-источник имени, когда PersonalData пуст: админ в
+   * ЛК часто подписывает номер («Иванов Иван / отдел»). Возвращает карту
+   * нормализованный MSISDN → комментарий (пустые/битые пропускаем).
+   */
+  async getCommentsByMsisdn(accountId: string, msisdns: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const norm = [...new Set(msisdns.map(m => normalizeMsisdn(m)).filter((v): v is string => !!v))];
+    if (!norm.length) return out;
+    // Ограничение документации — до 300 номеров в запросе.
+    for (let i = 0; i < norm.length; i += 300) {
+      const chunk = norm.slice(i, i + 300);
+      const resp = await this.request<unknown>('post', '/Service/GetCommentsByMSISDN', {
+        accountId, data: { msisdns: chunk },
+      });
+      const items = Array.isArray(resp) ? resp : collectByMarker(resp, 'comment');
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        const r = item as Record<string, unknown>;
+        const m = normalizeMsisdn(asString(r.msisdn) ?? asString(r.MSISDN) ?? '');
+        const comment = (asString(r.comment) ?? asString(r.Comment) ?? '').trim();
+        if (m && comment) out.set(m, comment);
+      }
+    }
+    return out;
   }
 }
 
