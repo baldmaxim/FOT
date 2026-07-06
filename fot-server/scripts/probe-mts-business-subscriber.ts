@@ -1,19 +1,17 @@
 /**
- * Проба новых read-only эндпоинтов «карточки номера» МТС Business API (READ-ONLY).
+ * Проба: есть ли ФИО абонента в СИНХРОННОМ МТС API (READ-ONLY).
  *
- * Зачем: контракты TariffRental / PaymentHistory / DocumentDeliveryMethod /
- * BillingStatement / ProductInfo(available|blocks|tariffs) / CallForwardingInfo /
- * CurrentSubscriberLocation / CheckCharges и расширенный HierarchyStructure НЕ
- * проверены живым вызовом. Скрипт дёргает каждый по разу для реального номера и
- * печатает распарсенный результат — видно, заполнились ли поля / какая ошибка
- * (401/421 и т.п.), чтобы поправить params/парсер.
+ * Цель: PersonalDataInfo для корп-SIM пуст, имена есть только в XML (<tp u>).
+ * Проверяем два кандидата, чьи ответы парсятся не полностью:
+ *   [1] Bills/BillingStatementExtdByMSISDN — верхний уровень (мимо .Usages);
+ *   [2] Service/HierarchyStructure — узел номера (мимо productSerialNumber/IMSI/SIM).
+ * Печатает КЛЮЧИ (не значения) — по ним решаем, откуда тянуть ФИО автоматически.
  *
- * Запуск на проде (.env берём из папки сайта, грузим явно; accountId
- * резолвится по номеру автоматически):
- *   cd /opt/fot-build && npx tsx fot-server/scripts/probe-mts-business-subscriber.ts <msisdn> [YYYY-MM]
+ * Запуск на проде (accountId резолвится по номеру, .env берётся из папки сайта):
+ *   cd /opt/fot-build && npx tsx fot-server/scripts/probe-mts-business-subscriber.ts <msisdn>
  * Если .env в нестандартном месте: MTS_ENV_FILE=/путь/.env npx tsx ...
  *
- * Ничего не пишет в БД/МТС. ПДн (ФИО/email) в выводе маскируются. Дампы НЕ коммитить.
+ * Ничего не пишет в БД/МТС. Значения «именных» ключей маскируются (первая буква+***).
  */
 import dotenv from 'dotenv';
 import fs from 'fs';
@@ -38,7 +36,13 @@ if (envPath) {
 }
 
 // Лёгкая маскировка ПДн в выводе: email и значения полей-имён.
-const NAME_KEYS = new Set(['fio', 'name', 'organizationName', 'employeeFullName']);
+// Маскируем значения любых «именных» ключей, чтобы дамп не светил ФИО целиком —
+// достаточно видеть, ЧТО такой ключ есть (первая буква + ***).
+const NAME_KEYS = new Set([
+  'fio', 'name', 'organizationName', 'employeeFullName',
+  'u', 'user', 'userName', 'label', 'alias', 'subscriberName', 'ownerName',
+  'SurName', 'surName', 'FirstName', 'firstName', 'SecondName', 'secondName',
+]);
 const maskPii = (v: unknown, key?: string): unknown => {
   if (typeof v === 'string') {
     let s = v.replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '***@***');
@@ -54,17 +58,20 @@ const maskPii = (v: unknown, key?: string): unknown => {
   return v;
 };
 
+// Фокус пробы: где в СИНХРОННОМ API спрятано имя абонента (ФИО).
+// Проверяем два кандидата — верхний уровень BillingStatementExtd (мимо .Usages)
+// и узел номера в HierarchyStructure. Вывод короткий, ПДн маскируется.
 const main = async (): Promise<void> => {
-  const [msisdn, month] = process.argv.slice(2);
+  const [msisdn] = process.argv.slice(2);
   if (!msisdn) {
-    console.error('Использование: probe-mts-business-subscriber.ts <msisdn> [YYYY-MM]');
+    console.error('Использование: probe-mts-business-subscriber.ts <msisdn>');
     process.exit(1);
   }
 
-  const { mtsBusinessBillingService } = await import('../src/services/mts-business-billing.service.js');
+  const { mtsBusinessDataService } = await import('../src/services/mts-business-data.service.js');
   const { mtsBusinessCatalogService } = await import('../src/services/mts-business-catalog.service.js');
-  const { mtsBusinessSubscriberCardService } = await import('../src/services/mts-business-subscriber-card.service.js');
   const { mtsBusinessMappingService } = await import('../src/services/mts-business-mapping.service.js');
+  const { normalizeMsisdn } = await import('../src/services/mts-business-cdr.service.js');
 
   const ctx = await mtsBusinessMappingService.getSubscriberContext(msisdn);
   if (!ctx) {
@@ -72,32 +79,53 @@ const main = async (): Promise<void> => {
     process.exit(1);
   }
   const { accountId } = ctx;
+  const norm = normalizeMsisdn(msisdn);
+  console.log(`Проба ИМЁН: account=${accountId} msisdn=${msisdn.slice(0, 4)}***${msisdn.slice(-2)}`);
 
-  const show = async (label: string, fn: () => Promise<unknown>): Promise<void> => {
-    try {
-      const res = await fn();
-      console.log(`\n=== ${label} ===`);
-      console.log(JSON.stringify(maskPii(res), null, 2));
-    } catch (e) {
-      console.log(`\n=== ${label} === ОШИБКА: ${e instanceof Error ? e.message : String(e)}`);
+  // 1) BillingStatementExtd — ключи верхнего уровня и всё, КРОМЕ Usages (там могло бы быть имя).
+  try {
+    const today = new Date();
+    const to = today.toISOString().slice(0, 10);
+    const fromD = new Date(today);
+    fromD.setDate(fromD.getDate() - 30);
+    const from = fromD.toISOString().slice(0, 10);
+    const raw = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(accountId, { msisdn, dateFrom: from, dateTo: to });
+    console.log('\n=== [1] BillingStatementExtd ===');
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const r = raw as Record<string, unknown>;
+      console.log('ключи верхнего уровня:', JSON.stringify(Object.keys(r)));
+      const rest: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(r)) if (k !== 'Usages' && k !== 'usages') rest[k] = v;
+      console.log('верхний уровень без Usages (маск., 2500):', JSON.stringify(maskPii(rest)).slice(0, 2500));
+    } else {
+      console.log('тип ответа:', Array.isArray(raw) ? 'array' : typeof raw, JSON.stringify(maskPii(raw)).slice(0, 800));
     }
-  };
+  } catch (e) {
+    console.log('[1] BillingStatementExtd ОШИБКА:', e instanceof Error ? e.message : String(e));
+  }
 
-  console.log(`Проба МТС Бизнес: account=${accountId} msisdn=${msisdn.slice(0, 4)}***${msisdn.slice(-2)}`);
-
-  await show('CheckChargesBulk (начисления)', () => mtsBusinessBillingService.checkChargesBulk(accountId, [msisdn]));
-  await show('TariffRental', () => mtsBusinessBillingService.getTariffRental(accountId, msisdn));
-  await show('DocumentDeliveryMethodByMSISDN', () => mtsBusinessBillingService.getDocumentDeliveryMethod(accountId, msisdn));
-  await show('AvailableServices (ProductInfo actionAllowed=create/service)', () => mtsBusinessCatalogService.getAvailableServices(accountId, msisdn));
-  await show('ConnectedBlocks (ProductInfo actionAllowed=none/block)', () => mtsBusinessCatalogService.getConnectedBlocks(accountId, msisdn));
-  await show('AvailableTariffs (ProductInfo category=AvailibleTariffPlann)', () => mtsBusinessCatalogService.getAvailableTariffs(accountId, msisdn));
-  await show('CallForwardingInfo', () => mtsBusinessCatalogService.getCallForwarding(accountId, msisdn));
-  await show('CurrentSubscriberLocation', () => mtsBusinessCatalogService.getCurrentSubscriberLocation(accountId, msisdn));
-  await show('HierarchyStructure (расширенный parseHierarchy — IMSI/SIM/ИНН/КПП)', () => mtsBusinessCatalogService.getHierarchyStructure(accountId));
-
-  const m = month && /^\d{4}-\d{2}$/.test(month) ? month : new Date().toISOString().slice(0, 7);
-  await show('Card (сборка карточки)', () => mtsBusinessSubscriberCardService.getCard(msisdn));
-  await show(`Expenses ${m}`, () => mtsBusinessSubscriberCardService.getExpenses(msisdn, m));
+  // 2) HierarchyStructure — сколько узлов номера, ключи узла нашего номера, образец.
+  try {
+    const rawH = await mtsBusinessCatalogService.getHierarchyStructureRaw(accountId);
+    const nodes: Record<string, unknown>[] = [];
+    const walk = (o: unknown): void => {
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      if (o && typeof o === 'object') {
+        const r = o as Record<string, unknown>;
+        if ('productSerialNumber' in r) nodes.push(r);
+        Object.values(r).forEach(walk);
+      }
+    };
+    walk(rawH);
+    const node = nodes.find(n => normalizeMsisdn(String(n.productSerialNumber)) === norm) ?? nodes[0];
+    const matched = node ? normalizeMsisdn(String(node.productSerialNumber)) === norm : false;
+    console.log('\n=== [2] HierarchyStructure ===');
+    console.log('узлов с productSerialNumber:', nodes.length, '| наш номер найден:', matched);
+    console.log('ключи узла номера:', node ? JSON.stringify(Object.keys(node)) : 'узел не найден');
+    if (node) console.log('узел (маск., 2500):', JSON.stringify(maskPii(node)).slice(0, 2500));
+  } catch (e) {
+    console.log('[2] HierarchyStructure ОШИБКА:', e instanceof Error ? e.message : String(e));
+  }
 
   process.exit(0);
 };

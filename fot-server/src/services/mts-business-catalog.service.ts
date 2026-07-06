@@ -339,6 +339,11 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     return parseHierarchy(resp);
   }
 
+  /** Сырой ответ HierarchyStructure без парсинга — только для диагностики (probe-скрипт). */
+  async getHierarchyStructureRaw(accountId: string): Promise<unknown> {
+    return this.request<unknown>('get', '/Service/HierarchyStructure', { accountId });
+  }
+
   /**
    * Добавить/удалить услугу ИЛИ добровольную блокировку — один и тот же
    * эндпоинт (различаются только externalID: PEXXXX — услуга, BLXXXX —
