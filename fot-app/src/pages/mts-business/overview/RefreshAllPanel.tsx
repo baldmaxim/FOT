@@ -9,6 +9,18 @@ import { UnavailableNotice } from '../common/UnavailableNotice';
 import { errText, fmtLast } from '../mtsBusinessFormat';
 import s from './RefreshAllPanel.module.css';
 
+// Персист «Скрыть»: startedAt скрытого прогона в localStorage, чтобы карточка
+// не возвращалась после рефреша/деплоя (новый прогон = новый startedAt → снова видна).
+const DISMISSED_KEY = 'mts-refresh-all-dismissed-started-at';
+
+const readDismissed = (): string | null => {
+  try { return localStorage.getItem(DISMISSED_KEY); } catch { return null; }
+};
+
+const writeDismissed = (startedAt: string): void => {
+  try { localStorage.setItem(DISMISSED_KEY, startedAt); } catch { /* приватный режим/недоступно */ }
+};
+
 const StepIcon: FC<{ status: IMtsRefreshStep['status'] }> = ({ status }) => {
   switch (status) {
     case 'running': return <span className={s.spinner} aria-label="выполняется" />;
@@ -57,7 +69,7 @@ export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
  */
 export const RefreshAllPanel: FC = () => {
   const status = useMtsBusinessRefreshAllStatus();
-  const [dismissedStartedAt, setDismissedStartedAt] = useState<string | null>(null);
+  const [dismissedStartedAt, setDismissedStartedAt] = useState<string | null>(() => readDismissed());
 
   const data = status.data;
   const running = data?.running === true;
@@ -84,7 +96,12 @@ export const RefreshAllPanel: FC = () => {
               запущено {fmtLast(data.startedAt)}
             </span>
             {!running && (
-              <button className={s.hideBtn} onClick={() => setDismissedStartedAt(data.startedAt)}>Скрыть</button>
+              <button
+                className={s.hideBtn}
+                onClick={() => {
+                  if (data.startedAt) { writeDismissed(data.startedAt); setDismissedStartedAt(data.startedAt); }
+                }}
+              >Скрыть</button>
             )}
           </div>
           {data.error && <p className={s.err}>{data.error}</p>}
