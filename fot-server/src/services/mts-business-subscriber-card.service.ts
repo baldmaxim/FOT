@@ -102,13 +102,25 @@ class MtsBusinessSubscriberCardService {
     if (!ctx) throw new SubscriberNotLinkedError();
     const { accountId } = ctx;
 
+    // ФИО: сотрудник/mts_fio из справочника; если ни того ни другого — живьём
+    // PersonalDataInfo (тот же источник, что у планировщика; парсим ТОЛЬКО ФИО,
+    // ничего не логируем). Так карточка не остаётся «цифрами без ФИО».
+    let fio = ctx.fio;
+    if (!fio) {
+      try {
+        fio = await mtsBusinessCatalogService.getPersonalDataFio(accountId, msisdn);
+      } catch {
+        /* best-effort: ПДн не логируем, карточку не роняем */
+      }
+    }
+
     // Идентификация — из снапшота структуры абонента (без живого вызова).
     const hierSnap = await mtsBusinessMetricsStoreService.getLatestHierarchyForAccount(accountId);
     const hierarchy = (hierSnap?.payload ?? null) as IMtsHierarchy | null;
     const node = findSubscriberInHierarchy(hierarchy, msisdn);
     const identity: ISubscriberIdentity = {
       msisdn: normalizeMsisdn(msisdn) ?? msisdn,
-      fio: ctx.fio,
+      fio,
       employeeId: ctx.employeeId,
       employeeFullName: ctx.employeeFullName,
       employeeTabNumber: ctx.employeeTabNumber,
