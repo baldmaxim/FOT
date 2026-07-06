@@ -268,8 +268,12 @@ const UploadSection: FC = () => {
 
   return (
     <section className={styles.card}>
-      <h2 className={styles.cardTitle}>Загрузка детализации (XLS/XML)</h2>
-      <p className={styles.hint}>Файл-отчёт из МТС (Excel или XML). Свой номер берётся из файла; привязка к лицевому счёту — для дашборда по ЛС.</p>
+      <h2 className={styles.cardTitle}>Загрузка детализации (XLS/XML) — отсюда тянутся ФИО</h2>
+      <p className={styles.hint}>
+        Файл-отчёт из МТС (Excel или XML). Свой номер берётся из файла; привязка к лицевому счёту — для дашборда по ЛС.
+        <b> Из XML дополнительно извлекаются ФИО владельцев номеров и автопривязываются к сотрудникам</b> — это и есть
+        способ проставить имена по всем номерам разом (JSON-синк «Загрузить за период» выше имён не содержит).
+      </p>
       <div className={styles.row}>
         <div className={styles.field}>
           <label className={styles.label}>Файл</label>
