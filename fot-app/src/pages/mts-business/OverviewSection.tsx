@@ -319,8 +319,8 @@ export const OverviewSection: FC = () => {
               </div>
             )}
             <div className={styles.actions} style={{ marginTop: 12 }}>
-              <button className={styles.btn} onClick={() => { void onRefreshBilling(); }} disabled={refreshBilling.isPending}>Обновить сейчас (2FA)</button>
-              <button className={styles.btnSecondary} onClick={() => { void onRefreshCatalog(); }} disabled={refreshCatalog.isPending}>Обновить каталог (2FA)</button>
+              <button className={styles.btn} onClick={() => { void onRefreshBilling(); }} disabled={refreshBilling.isPending}>Обновить сейчас</button>
+              <button className={styles.btnSecondary} onClick={() => { void onRefreshCatalog(); }} disabled={refreshCatalog.isPending}>Обновить каталог</button>
             </div>
             {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
           </section>

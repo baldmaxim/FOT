@@ -236,7 +236,7 @@ const SyncSection: FC = () => {
         <textarea className={styles.textarea} value={targets} onChange={e => setTargets(e.target.value)} placeholder="79001234567, 79007654321" />
       </div>
       <div className={styles.actions}>
-        <button className={styles.btn} onClick={onFetch} disabled={fetchSync.isPending || active.length === 0}>Загрузить за период (2FA)</button>
+        <button className={styles.btn} onClick={onFetch} disabled={fetchSync.isPending || active.length === 0}>Загрузить за период</button>
       </div>
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
     </section>
@@ -289,7 +289,7 @@ const UploadSection: FC = () => {
         </div>
       </div>
       <div className={styles.actions}>
-        <button className={styles.btn} onClick={onUpload} disabled={upload.isPending || !file}>Загрузить (2FA)</button>
+        <button className={styles.btn} onClick={onUpload} disabled={upload.isPending || !file}>Загрузить</button>
       </div>
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
     </section>
@@ -513,8 +513,8 @@ const ActionsSection: FC = () => {
         </div>
       </div>
       <div className={styles.actions}>
-        <button className={styles.btn} onClick={() => onModify('add')} disabled={modifyService.isPending}>Добавить (2FA)</button>
-        <button className={styles.btnSecondary} onClick={() => onModify('remove')} disabled={modifyService.isPending}>Удалить (2FA)</button>
+        <button className={styles.btn} onClick={() => onModify('add')} disabled={modifyService.isPending}>Добавить</button>
+        <button className={styles.btnSecondary} onClick={() => onModify('remove')} disabled={modifyService.isPending}>Удалить</button>
       </div>
 
       <h3 className={styles.cardTitle} style={{ fontSize: 14, marginTop: 16 }}>Правила корпоративного бюджета выбранного номера</h3>
@@ -529,7 +529,7 @@ const ActionsSection: FC = () => {
                   <td>{r.title ?? r.productCode ?? '—'}</td>
                   <td>{r.limitValue ?? '—'}</td>
                   <td>{r.activeFrom ?? '—'}</td>
-                  <td><button className={styles.btnSecondary} onClick={() => { void onRemoveRule(r); }} disabled={removeRule.isPending}>Удалить (2FA)</button></td>
+                  <td><button className={styles.btnSecondary} onClick={() => { void onRemoveRule(r); }} disabled={removeRule.isPending}>Удалить</button></td>
                 </tr>
               ))}
             </tbody>
@@ -551,7 +551,7 @@ const ActionsSection: FC = () => {
         </div>
       </div>
       <div className={styles.actions}>
-        <button className={styles.btn} onClick={() => { void onAddRule(); }} disabled={addRule.isPending}>Добавить правило (2FA)</button>
+        <button className={styles.btn} onClick={() => { void onAddRule(); }} disabled={addRule.isPending}>Добавить правило</button>
       </div>
 
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
