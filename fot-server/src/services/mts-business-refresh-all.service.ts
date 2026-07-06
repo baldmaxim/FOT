@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import * as Sentry from '@sentry/node';
 import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
 import { mtsBusinessDataService } from './mts-business-data.service.js';
@@ -382,11 +383,28 @@ export async function startRefreshAll(opts: {
   return { started: true };
 }
 
+// Порог «прогон мёртв» по heartbeat: heartbeat идёт каждые TTL/3 (~200с);
+// 450с без heartbeat = минимум два пропущенных бита → держатель lease погиб.
+const HEARTBEAT_STALE_MS = 450_000;
+
+const markInterrupted = (stored: IRefreshAllStatus, finishedAt: string | null): IRefreshAllStatus => ({
+  ...stored,
+  running: false,
+  finishedAt: stored.finishedAt ?? finishedAt ?? new Date().toISOString(),
+  error: stored.error ?? 'Обновление прервано (сервер перезапущен) — запустите заново',
+  steps: stored.steps.map(s =>
+    s.status === 'pending' || s.status === 'running'
+      ? { ...s, status: 'error' as RefreshAllStepStatus, message: s.message ?? 'Прервано' }
+      : s,
+  ),
+});
+
 /**
  * Текущий/последний статус прогона. Если процесс с активным прогоном — из
  * памяти; иначе из runtime_state (последний persist). Если сохранённый статус
- * «running», но lease уже истёк (сервер перезапустился посреди прогона) —
- * помечаем прогон прерванным, чтобы фронт не крутил спиннер вечно.
+ * «running», но lease истёк ИЛИ heartbeat молчит дольше двух интервалов
+ * (сервер перезапустился/упал посреди прогона) — показываем прогон прерванным,
+ * чтобы фронт не крутил спиннер вечно.
  */
 export async function getRefreshAllStatus(): Promise<IRefreshAllStatus> {
   if (runInFlight && currentStatus) return currentStatus;
@@ -398,14 +416,52 @@ export async function getRefreshAllStatus(): Promise<IRefreshAllStatus> {
   }
   if (stored.running) {
     const leaseAlive = state?.lease_expires_at != null && Date.parse(state.lease_expires_at) > Date.now();
-    if (!leaseAlive) {
-      return {
-        ...stored,
-        running: false,
-        finishedAt: stored.finishedAt ?? state?.updated_at ?? null,
-        error: stored.error ?? 'Обновление прервано (сервер перезапущен)',
-      };
+    const heartbeatAlive = state?.heartbeat_at != null && Date.parse(state.heartbeat_at) > Date.now() - HEARTBEAT_STALE_MS;
+    if (!leaseAlive || !heartbeatAlive) {
+      return markInterrupted(stored, state?.updated_at ?? null);
     }
   }
   return stored;
+}
+
+/**
+ * Реанимация при старте сервера: если в runtime_state завис «running»-прогон,
+ * а его владелец — прежний процесс ЭТОГО ЖЕ хоста и он мёртв (деплой/рестарт
+ * убил процесс посреди прогона), сразу помечаем прогон прерванным и снимаем
+ * lease — без этого кнопка «Обновить» блокировалась бы до 10 минут (TTL lease).
+ * Владельца с другого хоста или живой процесс не трогаем.
+ */
+export async function reconcileInterruptedRefreshAll(): Promise<void> {
+  try {
+    const state = await getSigurRuntimeState(LEASE_KEY);
+    const stored = state?.meta?.status as IRefreshAllStatus | undefined;
+    if (!stored || typeof stored !== 'object' || stored.running !== true || !Array.isArray(stored.steps)) return;
+
+    const owner = state?.lease_owner ?? null;
+    const leaseAlive = state?.lease_expires_at != null && Date.parse(state.lease_expires_at) > Date.now();
+    let ownerDead = !leaseAlive || owner == null;
+
+    if (!ownerDead && owner != null) {
+      // owner = `${scope}:${hostname}:${pid}:${rand}` (см. getSigurRuntimeOwner).
+      const parts = owner.split(':');
+      const ownerHost = parts.length >= 4 ? parts[parts.length - 3] : null;
+      const ownerPid = parts.length >= 4 ? Number.parseInt(parts[parts.length - 2], 10) : NaN;
+      if (ownerHost === hostname() && Number.isFinite(ownerPid) && ownerPid !== process.pid) {
+        try {
+          process.kill(ownerPid, 0); // сигнал 0 — только проверка существования
+        } catch {
+          ownerDead = true;
+        }
+      }
+    }
+    if (!ownerDead) return;
+
+    await mergeSigurRuntimeState({ key: LEASE_KEY, meta: { status: markInterrupted(stored, state?.updated_at ?? null) } });
+    if (owner) {
+      await releaseSigurRuntimeLease({ key: LEASE_KEY, owner }).catch(() => undefined);
+    }
+    console.log('[mts-biz-refresh-all] незавершённый прогон помечен прерванным (рестарт сервера)');
+  } catch (e) {
+    console.error('[mts-biz-refresh-all] reconcile failed:', e instanceof Error ? e.message : 'unknown');
+  }
 }

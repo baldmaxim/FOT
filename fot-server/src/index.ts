@@ -23,6 +23,7 @@ import { startMtsBusinessStatusPoller, stopMtsBusinessStatusPoller } from './ser
 import { startMtsBusinessMailIngest, stopMtsBusinessMailIngest } from './services/mts-business-mail-ingest.service.js';
 import { startMtsBusinessCdrDailyScheduler, stopMtsBusinessCdrDailyScheduler } from './services/mts-business-cdr-daily-scheduler.service.js';
 import { startMtsBusinessMetricsDailyScheduler, stopMtsBusinessMetricsDailyScheduler } from './services/mts-business-metrics-daily-scheduler.service.js';
+import { reconcileInterruptedRefreshAll } from './services/mts-business-refresh-all.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
 import { getPresenceByObject } from './services/skud-presence-by-object.service.js';
@@ -110,6 +111,9 @@ httpServer.listen(PORT, HOST, () => {
   startMtsBusinessMailIngest();
   void startMtsBusinessCdrDailyScheduler();
   void startMtsBusinessMetricsDailyScheduler();
+  // Прогон «Обновить всё», убитый рестартом/деплоем, сразу помечаем прерванным —
+  // иначе кнопка блокируется до истечения lease (до 10 минут).
+  void reconcileInterruptedRefreshAll();
   void aiReceiptRecognitionService.resumePendingRecognitions().then(count => {
     if (count > 0) console.log(`[ai-receipt-recognition] возобновлено задач: ${count}`);
   });
