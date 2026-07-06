@@ -181,6 +181,8 @@
 /* Вкладки внутри панели */
 .drawerTabs {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 10px;
