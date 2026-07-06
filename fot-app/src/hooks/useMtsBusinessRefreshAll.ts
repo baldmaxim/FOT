@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { mtsBusinessRefreshService } from '../services/mtsBusinessRefreshService';
+import { mtsBusinessRefreshService, type IMtsRefreshAllSchedule } from '../services/mtsBusinessRefreshService';
 
 // Хуки «Обновить всё»: запуск фонового прогона, polling статуса (3с пока
 // running; возврат на страницу подхватывает идущий прогон), детект завершения
@@ -52,3 +52,23 @@ export const useMtsBusinessSchedulersStatus = (enabled: boolean) => useQuery({
   staleTime: 60_000,
   enabled,
 });
+
+export const getMtsBusinessRefreshAllScheduleKey = () => ['mts-business', 'refresh-all', 'schedule'] as const;
+
+export const useMtsBusinessRefreshAllSchedule = (enabled: boolean) => useQuery({
+  queryKey: getMtsBusinessRefreshAllScheduleKey(),
+  queryFn: () => mtsBusinessRefreshService.getSchedule(),
+  staleTime: 60_000,
+  enabled,
+});
+
+export const useSetMtsBusinessRefreshAllSchedule = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: IMtsRefreshAllSchedule) => mtsBusinessRefreshService.setSchedule(input),
+    onSuccess: next => {
+      qc.setQueryData(getMtsBusinessRefreshAllScheduleKey(), next);
+      void qc.invalidateQueries({ queryKey: getMtsBusinessSchedulersStatusKey() });
+    },
+  });
+};

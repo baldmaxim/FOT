@@ -122,6 +122,19 @@ export interface IMtsResolvedConfig {
   source: 'system_settings' | 'env';
 }
 
+/** Расписание ежедневного автопрогона «Обновить всё» модуля МТС Бизнес. */
+export interface IMtsBusinessRefreshAllScheduleSettings {
+  enabled: boolean;
+  hourMsk: number;
+}
+
+// enabled=false по умолчанию: после деплоя автопрогон не стартует сам,
+// его явно включают в админке МТС Бизнес.
+export const DEFAULT_MTS_BUSINESS_REFRESH_ALL_SCHEDULE: IMtsBusinessRefreshAllScheduleSettings = {
+  enabled: false,
+  hourMsk: 23,
+};
+
 export const DEFAULT_MTS_BASE_URL = 'https://api.mpoisk.ru/v6/api';
 
 /** МТС «Бизнес» (Business API) — база v1. Детализация звонков.
@@ -986,6 +999,45 @@ export const settingsService = {
     }
 
     return this.getMtsConnectionSettings();
+  },
+
+  /** Расписание ежедневного автопрогона «Обновить всё» МТС Бизнес. */
+  async getMtsBusinessRefreshAllSchedule(): Promise<IMtsBusinessRefreshAllScheduleSettings> {
+    const values = await this.getMultiple([
+      'mts_business_refresh_all_enabled',
+      'mts_business_refresh_all_hour_msk',
+    ]);
+    return {
+      enabled: parseBoolean(values.mts_business_refresh_all_enabled, DEFAULT_MTS_BUSINESS_REFRESH_ALL_SCHEDULE.enabled),
+      hourMsk: parseHour(values.mts_business_refresh_all_hour_msk, DEFAULT_MTS_BUSINESS_REFRESH_ALL_SCHEDULE.hourMsk),
+    };
+  },
+
+  async setMtsBusinessRefreshAllSchedule(
+    config: Partial<IMtsBusinessRefreshAllScheduleSettings>,
+    userId: string,
+  ): Promise<IMtsBusinessRefreshAllScheduleSettings> {
+    const current = await this.getMtsBusinessRefreshAllSchedule();
+    const next: IMtsBusinessRefreshAllScheduleSettings = {
+      enabled: config.enabled ?? current.enabled,
+      hourMsk: config.hourMsk ?? current.hourMsk,
+    };
+
+    await this.setMultiple([
+      {
+        key: 'mts_business_refresh_all_enabled',
+        value: String(next.enabled),
+        description: 'МТС Бизнес: включить ежедневный автопрогон «Обновить всё»',
+      },
+      {
+        key: 'mts_business_refresh_all_hour_msk',
+        value: String(next.hourMsk),
+        description: 'МТС Бизнес: час запуска автопрогона «Обновить всё» (МСК, 0–23)',
+      },
+    ], userId);
+
+    this.invalidateCache();
+    return this.getMtsBusinessRefreshAllSchedule();
   },
 
   invalidateCache() {

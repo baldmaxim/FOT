@@ -25,6 +25,11 @@ export interface IMtsRefreshAllStatus {
   error: string | null;
 }
 
+export interface IMtsRefreshAllSchedule {
+  enabled: boolean;
+  hourMsk: number;
+}
+
 export interface IMtsSchedulerStatusRow {
   id: string;
   label: string;
@@ -52,6 +57,16 @@ export const mtsBusinessRefreshService = {
 
   getSchedulersStatus: async (): Promise<IMtsSchedulerStatusRow[]> => {
     const res = await apiClient.get<ApiResponse<IMtsSchedulerStatusRow[]>>('/mts-business/schedulers/status');
+    return res.data;
+  },
+
+  getSchedule: async (): Promise<IMtsRefreshAllSchedule> => {
+    const res = await apiClient.get<ApiResponse<IMtsRefreshAllSchedule>>('/mts-business/refresh-all/schedule');
+    return res.data;
+  },
+
+  setSchedule: async (input: IMtsRefreshAllSchedule): Promise<IMtsRefreshAllSchedule> => {
+    const res = await apiClient.put<ApiResponse<IMtsRefreshAllSchedule>>('/mts-business/refresh-all/schedule', input);
     return res.data;
   },
 };

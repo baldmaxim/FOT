@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { startRefreshAll, getRefreshAllStatus } from '../services/mts-business-refresh-all.service.js';
 import { getSigurRuntimeState } from '../services/sigur-runtime-state.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
+import { settingsService } from '../services/settings.service.js';
 
 // «Обновить всё» — запуск/статус фонового полного обновления модуля МТС Бизнес
 // (см. mts-business-refresh-all.service.ts) + статусы фоновых планировщиков
@@ -17,6 +18,11 @@ const startSchema = z.object({
   dateFrom: z.string().regex(DATE_RE).optional(),
   dateTo: z.string().regex(DATE_RE).optional(),
   confirmed: z.literal(true),
+});
+
+const scheduleSchema = z.object({
+  enabled: z.boolean(),
+  hourMsk: z.number().int().min(0).max(23),
 });
 
 const fail = (res: Response, error: unknown, fallback: string): void => {
@@ -108,9 +114,10 @@ export const mtsBusinessRefreshController = {
   /** Последние прогоны фоновых планировщиков модуля (вкладка «Администрирование»). */
   async getSchedulersStatus(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const [cdrState, metricsState] = await Promise.all([
+      const [cdrState, metricsState, refreshAllDailyState] = await Promise.all([
         getSigurRuntimeState('mts_business_cdr_daily'),
         getSigurRuntimeState('mts_business_metrics_daily'),
+        getSigurRuntimeState('mts_business_refresh_all_daily'),
       ]);
       const data: ISchedulerStatusRow[] = [
         schedulerRowFromState('cdr-daily', 'Детализация звонков (ежедневно)', cdrState?.meta),
@@ -119,10 +126,37 @@ export const mtsBusinessRefreshController = {
           ...schedulerRowFromState('catalog-weekly', 'Каталог: номера, тарифы, услуги (раз в 7 дней)', metricsState?.meta, 'lastCatalogResult'),
           lastRunAt: metaString(metricsState?.meta, 'lastWeeklyRunYmdMsk'),
         },
+        schedulerRowFromState('refresh-all-daily', 'Полное обновление «Обновить всё» (ежедневно, авто)', refreshAllDailyState?.meta),
       ];
       res.json({ success: true, data });
     } catch (error) {
       fail(res, error, 'Ошибка получения статуса планировщиков');
+    }
+  },
+
+  /** Настройка ежедневного автопрогона «Обновить всё» (вкл/выкл + час МСК). */
+  async getSchedule(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      res.json({ success: true, data: await settingsService.getMtsBusinessRefreshAllSchedule() });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения настройки автообновления');
+    }
+  },
+
+  async setSchedule(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = scheduleSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректный запрос', details: parsed.error.flatten() });
+        return;
+      }
+      const next = await settingsService.setMtsBusinessRefreshAllSchedule(parsed.data, req.user.id);
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_REFRESH_ALL_SCHEDULE_UPDATED, {
+        details: { enabled: next.enabled, hourMsk: next.hourMsk },
+      });
+      res.json({ success: true, data: next });
+    } catch (error) {
+      fail(res, error, 'Ошибка сохранения настройки автообновления');
     }
   },
 };

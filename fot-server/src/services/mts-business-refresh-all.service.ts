@@ -81,6 +81,8 @@ export interface IRefreshAllStatus {
   window: { dateFrom: string; dateTo: string } | null;
   steps: IRefreshAllStep[];
   error: string | null;
+  /** Кто запустил прогон. Опционально: старые сохранённые статусы поля не имеют. */
+  initiator?: 'manual' | 'schedule';
 }
 
 let currentStatus: IRefreshAllStatus | null = null;
@@ -339,7 +341,8 @@ export async function startRefreshAll(opts: {
   accountId?: string;
   dateFrom?: string;
   dateTo?: string;
-}): Promise<{ started: boolean; alreadyRunning?: boolean }> {
+  initiator?: 'manual' | 'schedule';
+}): Promise<{ started: boolean; alreadyRunning?: boolean; completion?: Promise<IRefreshAllStatus> }> {
   if (runInFlight) return { started: false, alreadyRunning: true };
 
   const all = await mtsBusinessAccountsService.list();
@@ -363,6 +366,7 @@ export async function startRefreshAll(opts: {
     startedAt: new Date().toISOString(),
     finishedAt: null,
     window,
+    initiator: opts.initiator ?? 'manual',
     steps: accounts.flatMap(account =>
       STEP_ORDER.map(step => ({
         accountId: account.id,
@@ -378,9 +382,15 @@ export async function startRefreshAll(opts: {
   };
   await persistStatus(currentStatus);
 
-  console.log(`[mts-biz-refresh-all] старт accounts=${accounts.length} window=${window.dateFrom}..${window.dateTo}`);
-  void runRefreshAll(accounts, window, owner);
-  return { started: true };
+  console.log(`[mts-biz-refresh-all] старт accounts=${accounts.length} window=${window.dateFrom}..${window.dateTo} initiator=${currentStatus.initiator}`);
+  // runRefreshAll мутирует статус in-place и никогда не бросает (всё в finally),
+  // поэтому completion резолвится итоговым статусом. Ручной контроллер его
+  // игнорирует, планировщик — ждёт для записи итога прогона.
+  const statusRef = currentStatus;
+  const completion = runRefreshAll(accounts, window, owner)
+    .catch(err => console.error('[mts-biz-refresh-all] runRefreshAll rejected:', (err as Error).message))
+    .then(() => statusRef);
+  return { started: true, completion };
 }
 
 // Порог «прогон мёртв» по heartbeat: heartbeat идёт каждые TTL/3 (~200с);

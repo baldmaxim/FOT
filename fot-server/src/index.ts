@@ -23,6 +23,7 @@ import { startMtsBusinessStatusPoller, stopMtsBusinessStatusPoller } from './ser
 import { startMtsBusinessMailIngest, stopMtsBusinessMailIngest } from './services/mts-business-mail-ingest.service.js';
 import { startMtsBusinessCdrDailyScheduler, stopMtsBusinessCdrDailyScheduler } from './services/mts-business-cdr-daily-scheduler.service.js';
 import { startMtsBusinessMetricsDailyScheduler, stopMtsBusinessMetricsDailyScheduler } from './services/mts-business-metrics-daily-scheduler.service.js';
+import { startMtsBusinessRefreshAllDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler } from './services/mts-business-refresh-all-daily-scheduler.service.js';
 import { reconcileInterruptedRefreshAll } from './services/mts-business-refresh-all.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
@@ -111,6 +112,7 @@ httpServer.listen(PORT, HOST, () => {
   startMtsBusinessMailIngest();
   void startMtsBusinessCdrDailyScheduler();
   void startMtsBusinessMetricsDailyScheduler();
+  void startMtsBusinessRefreshAllDailyScheduler();
   // Прогон «Обновить всё», убитый рестартом/деплоем, сразу помечаем прерванным —
   // иначе кнопка блокируется до истечения lease (до 10 минут).
   void reconcileInterruptedRefreshAll();
@@ -146,7 +148,7 @@ const gracefulShutdown = (signal: string): void => {
     stopDailyTasksReminderScheduler, stopDismissalScheduler,
     stopContractorPassSyncScheduler, stopMtsLocationPoller, stopMtsGeofenceMonitor,
     stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
-    stopMtsBusinessMetricsDailyScheduler,
+    stopMtsBusinessMetricsDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler,
   ];
   for (const stop of stoppers) {
     try {

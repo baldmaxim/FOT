@@ -39,6 +39,14 @@ router.post(
   mtsBusinessRefreshController.start,
 );
 router.get('/refresh-all/status', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getStatus);
+// Расписание ежедневного автопрогона «Обновить всё» (вкл/выкл + час МСК).
+router.get('/refresh-all/schedule', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getSchedule);
+router.put(
+  '/refresh-all/schedule',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessRefreshController.setSchedule,
+);
 router.get('/schedulers/status', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getSchedulersStatus);
 
 // Персональные данные пользователя номера. Порядок важен: /personal-data/requests
