@@ -147,13 +147,13 @@
 
 .btn,
 .btnSecondary {
-  padding: 10px 16px;
+  padding: 6px 12px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;
-  min-height: 44px;
+  min-height: 34px;
 }
 
 .btn { background: var(--color-primary, #2563eb); color: #fff; }
@@ -208,4 +208,7 @@
 
 @media (max-width: 480px) {
   .card { padding: 12px; }
+  /* На мобиле возвращаем полноценную тап-цель ≥44px. */
+  .btn,
+  .btnSecondary { min-height: 44px; padding: 10px 16px; font-size: 14px; }
 }

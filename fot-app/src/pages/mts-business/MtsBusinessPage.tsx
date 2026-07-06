@@ -107,8 +107,7 @@ const AccountModal: FC<{ account: IMtsBusinessAccount | null; onClose: () => voi
         {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
         <div className={styles.actions}>
           <button className={styles.btn} onClick={onSave} disabled={busy || !label.trim() || !login.trim() || (!editing && !password.trim())}>
-            {editing ? 'Сохранить' : 'Добавить'} (2FA)
-          </button>
+            {editing ? 'Сохранить' : 'Добавить'}          </button>
           <button className={styles.btnSecondary} onClick={onClose} disabled={busy}>Отмена</button>
         </div>
       </div>
@@ -332,8 +331,7 @@ const NumberMapSection: FC = () => {
       <div className={styles.actions} style={{ justifyContent: 'space-between', marginTop: 0, marginBottom: 8 }}>
         <h2 className={styles.cardTitle} style={{ margin: 0 }}>Импортированные номера — привязка к сотрудникам</h2>
         <button className={styles.btnSecondary} onClick={() => { void onAutoLink(); }} disabled={autoLink.isPending}>
-          Автосвязать по ФИО (2FA)
-        </button>
+          Автосвязать по ФИО        </button>
       </div>
       <p className={styles.hint}>
         Все свои номера из загруженных детализаций. Найдите сотрудника по ФИО в строке номера — его время разговоров

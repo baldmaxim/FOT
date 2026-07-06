@@ -136,7 +136,10 @@ const parsePackages = (resp: unknown): IMtsPackageCounter[] => {
 // живым вызовом — парсеры толерантны (обход по нескольким вероятным ключам).
 // Перед боевым использованием свериться с сырым payload (probe-скрипт).
 const parseTariffFee = (resp: unknown): IMtsTariffFee => ({
-  amount: toNumber(deepFind(resp, ['taxIncludedAmount', 'dutyFreeAmount', 'amount', 'price', 'value'])),
+  amount: toNumber(deepFind(resp, [
+    'taxIncludedAmount', 'dutyFreeAmount', 'rentAmount', 'monthlyFee', 'periodicAmount',
+    'abonentFee', 'abonentPayment', 'rent', 'fee', 'cost', 'sum', 'amount', 'price', 'value',
+  ])),
   currencyCode: asString(deepFind(resp, ['currencyCode', 'currencyName'])),
 });
 

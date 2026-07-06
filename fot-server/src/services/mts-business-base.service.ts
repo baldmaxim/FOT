@@ -191,6 +191,15 @@ export class MtsBusinessServiceBase {
             headers: { Authorization: `Bearer ${token}` },
           });
           console.log(`[mts-biz] ← ${response.status} ${m} ${endpoint} ${Date.now() - tStart}ms`);
+          // Диагностика контрактов: сырое тело ответа при MTS_PROBE_RAW=1 (кроме
+          // PersonalData — там паспорт/адрес). Email маскируем, тело усекаем.
+          // ВРЕМЕННОЕ — снять после сверки парсеров (probe-скрипт).
+          if (process.env.MTS_PROBE_RAW === '1' && !endpoint.includes('PersonalData')) {
+            let raw = '';
+            try { raw = JSON.stringify(response.data); } catch { raw = String(response.data); }
+            raw = raw.replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '***@***');
+            console.log(`[mts-raw] ${endpoint} :: ${raw.slice(0, 4000)}`);
+          }
           return response.data;
         } catch (error) {
           lastError = error;

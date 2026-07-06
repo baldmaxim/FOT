@@ -98,20 +98,22 @@ const parseTariff = (resp: unknown): IMtsTariff => {
 };
 
 const parseServices = (resp: unknown): IMtsService[] => {
-  const items = Array.isArray(resp) ? resp : collectByMarker(resp, 'price');
+  const items = Array.isArray(resp) ? resp : collectByMarker(resp, 'externalID');
   return items
     .map(raw => {
       const r = raw as Record<string, unknown>;
       const price = r.price as Record<string, unknown> | undefined;
-      const amount = toNumber(price?.taxIncludedAmount ?? price?.dutyFreeAmount);
+      const amount = toNumber(price?.taxIncludedAmount ?? price?.dutyFreeAmount)
+        ?? deepNumber(r, ['taxIncludedAmount', 'dutyFreeAmount', 'monthlyFee', 'periodicAmount', 'amount', 'value']);
       const name = asString(r.name);
-      if (!name && amount == null) return null;
+      const code = asString(r.externalID) ?? asString(r.code);
+      if (!name && !code && amount == null) return null;
       return {
-        code: asString(r.externalID),
+        code,
         name,
         status: asString(r.status),
         monthlyAmount: amount,
-        currencyCode: asString(price?.currencyCode),
+        currencyCode: asString(price?.currencyCode) ?? asString(firstValue(r, ['currencyCode', 'currencyName'])),
         startDateTime: asString(r.startDateTime),
         endDateTime: asString(r.endDateTime),
       };
