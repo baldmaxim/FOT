@@ -1,10 +1,14 @@
 import * as Sentry from '@sentry/node';
 import { env } from '../config/env.js';
 import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
-import { mtsBusinessDataService } from './mts-business-data.service.js';
-import { mtsBusinessCdrService } from './mts-business-cdr.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { MtsBusinessApiError, isFeatureUnavailable } from './mts-business-base.service.js';
+import {
+  countCdrByAccount,
+  countCdrTotal,
+  syncMsisdnStatement,
+  verifyCdrStore,
+} from './mts-business-statement-sync.service.js';
 import {
   tryAcquireSigurRuntimeLease,
   releaseSigurRuntimeLease,
@@ -37,9 +41,11 @@ function resolveTargetHourMsk(): number {
 
 function resolveWindowDays(): number {
   const parsed = Number.parseInt(env.MTS_BUSINESS_CDR_DAILY_WINDOW_DAYS, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) return 3;
+  if (!Number.isFinite(parsed) || parsed < 1) return 7;
   return parsed;
 }
+
+const EMPTY_CDR_CATCHUP_DAYS = 30;
 
 let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 let lastRunYmdMsk: string | null = null;
@@ -75,13 +81,12 @@ async function syncAccount(accountId: string, dateFrom: string, dateTo: string):
   let inserted = 0;
   let failed = 0;
   let unavailable = 0;
-  const allCalls: Parameters<typeof mtsBusinessCdrService.storeCalls>[0] = [];
+  const dbTotalBefore = await countCdrByAccount(accountId);
 
   for (const msisdn of msisdns) {
     try {
-      const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(accountId, { msisdn, dateFrom, dateTo });
-      const calls = mtsBusinessCdrService.parseBillingStatementResponse(resp, msisdn);
-      allCalls.push(...calls);
+      const res = await syncMsisdnStatement(accountId, msisdn, dateFrom, dateTo);
+      inserted += res.callsInserted;
     } catch (error) {
       if (isFeatureUnavailable(error)) {
         unavailable++;
@@ -96,10 +101,7 @@ async function syncAccount(accountId: string, dateFrom: string, dateTo: string):
     }
   }
 
-  if (allCalls.length > 0) {
-    const result = await mtsBusinessCdrService.storeCalls(allCalls, null, accountId);
-    inserted = result.inserted;
-  }
+  await verifyCdrStore(accountId, inserted, dbTotalBefore);
   return { numbers: msisdns.length, inserted, failed, unavailable };
 }
 
@@ -108,11 +110,15 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
 
   runInFlight = (async () => {
     const startedAtIso = new Date().toISOString();
-    const windowDays = resolveWindowDays();
+    const cdrTotal = await countCdrTotal();
+    const windowDays = cdrTotal === 0 ? EMPTY_CDR_CATCHUP_DAYS : resolveWindowDays();
     // Синхронизируем вчера ± catchup-окно (без сегодняшнего дня — он ещё не
     // полностью тарифицирован МТС на момент утреннего тика).
     const dateTo = addDaysYmd(ymd, -1);
     const dateFrom = addDaysYmd(ymd, -windowDays);
+    if (cdrTotal === 0) {
+      console.log(`[mts-biz-cdr-daily] CDR пуст — catchup ${windowDays} дн. (${dateFrom}..${dateTo})`);
+    }
     let cronStatus: CronRunStatus = 'ok';
     const owner = getSigurRuntimeOwner(LEASE_KEY);
 

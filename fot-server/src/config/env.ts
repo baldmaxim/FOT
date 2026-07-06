@@ -97,7 +97,7 @@ const envSchema = z.object({
   // час МСК, после которого считаем предыдущие сутки полностью тарифицированными,
   // и глубина catchup-окна (если тик пропущен — сколько дней досинхронизировать).
   MTS_BUSINESS_CDR_DAILY_TARGET_HOUR_MSK: z.string().regex(/^\d+$/).default('4'),
-  MTS_BUSINESS_CDR_DAILY_WINDOW_DAYS: z.string().regex(/^\d+$/).default('3'),
+  MTS_BUSINESS_CDR_DAILY_WINDOW_DAYS: z.string().regex(/^\d+$/).default('7'),
 
   // Ежедневный снимок баланса/начислений/неоплаченных счетов (вкладка «Финансы»).
   // Позже CDR-планировщика по умолчанию — чтобы не конкурировать за rate-gate

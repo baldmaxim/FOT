@@ -165,16 +165,18 @@ class MtsBusinessMetricsStoreService {
          SELECT DISTINCT ON (msisdn_hash, metric) msisdn_hash, metric, amount, captured_at
            FROM mts_business_metric_daily
           WHERE scope = 'msisdn' AND msisdn_hash IS NOT NULL
+            AND metric IN ('charges_amount')
             AND ($1::uuid IS NULL OR account_id = $1::uuid)
           ORDER BY msisdn_hash, metric, captured_at DESC
        )
        SELECT nm.employee_id, e.full_name, e.tab_number,
-              MAX(l.amount) FILTER (WHERE l.metric = 'balance')::text AS balance,
-              MAX(l.amount) FILTER (WHERE l.metric = 'charges_amount')::text AS charges_amount,
+              NULL::text AS balance,
+              SUM(l.amount) FILTER (WHERE l.metric = 'charges_amount')::text AS charges_amount,
               MAX(l.captured_at) AS captured_at
          FROM mts_business_number_map nm
-         JOIN latest l ON l.msisdn_hash = nm.msisdn_hash
+         LEFT JOIN latest l ON l.msisdn_hash = nm.msisdn_hash
          LEFT JOIN employees e ON e.id = nm.employee_id
+        WHERE ($1::uuid IS NULL OR nm.account_id = $1)
         GROUP BY nm.employee_id, e.full_name, e.tab_number
         ORDER BY e.full_name NULLS LAST`,
       [accountId ?? null],

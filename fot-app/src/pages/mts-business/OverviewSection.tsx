@@ -91,7 +91,11 @@ const ChartTooltip: FC<{ active?: boolean; payload?: { value: number }[]; label?
 export const OverviewSection: FC = () => {
   const now = useMemo(() => new Date(), []);
   const [accountId, setAccountId] = useState('');
-  const [callsFrom, setCallsFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth(), 1)));
+  const defaultCallsFrom = useMemo(
+    () => toISODate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30)),
+    [now],
+  );
+  const [callsFrom, setCallsFrom] = useState(defaultCallsFrom);
   const [callsTo, setCallsTo] = useState(toISODate(now));
   const [trendFrom, setTrendFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth() - 2, now.getDate())));
   const [trendTo, setTrendTo] = useState(toISODate(now));
@@ -124,7 +128,10 @@ export const OverviewSection: FC = () => {
   const totalSec = accRows.reduce((a, r) => a + r.totalSeconds, 0);
   const billingAccounts = billingSummary.data?.accounts ?? [];
   const billingEmployees = billingSummary.data?.employees ?? [];
-  const totalCharges = billingEmployees.reduce((a, r) => a + (r.chargesAmount ?? 0), 0);
+  const hasChargesData = billingEmployees.some(r => r.chargesAmount != null);
+  const totalCharges = hasChargesData
+    ? billingEmployees.reduce((a, r) => a + (r.chargesAmount ?? 0), 0)
+    : null;
   const totalUnpaid = billingAccounts.reduce((a, r) => a + (r.unpaidAmount ?? 0), 0);
   const inProgressCount = (actions.data ?? []).filter(a => a.status === 'in_progress').length;
 
@@ -159,6 +166,7 @@ export const OverviewSection: FC = () => {
       value: r.totalSeconds,
     }));
   const costItems = billingEmployeesEnriched
+    .filter(r => (r.chargesAmount ?? 0) > 0)
     .slice()
     .sort((a, b) => (b.chargesAmount ?? 0) - (a.chargesAmount ?? 0))
     .map((r, i) => ({
@@ -235,8 +243,12 @@ export const OverviewSection: FC = () => {
           </div>
           <div className={styles.kpi}>
             <div className={styles.kpiLabel}>Время разговоров</div>
-            <div className={styles.kpiValue}>{fmtDur(totalSec)}</div>
-            <div className={`${styles.kpiSub} ${styles.kpiSubMuted}`}>{totalCalls.toLocaleString('ru-RU')} звонков</div>
+            <div className={styles.kpiValue}>
+              {!accSummary.isLoading && totalCalls === 0 ? '—' : fmtDur(totalSec)}
+            </div>
+            <div className={`${styles.kpiSub} ${styles.kpiSubMuted}`}>
+              {!accSummary.isLoading && totalCalls === 0 ? 'нет данных за период' : `${totalCalls.toLocaleString('ru-RU')} звонков`}
+            </div>
           </div>
           <div className={styles.kpi}>
             <div className={styles.kpiLabel}>

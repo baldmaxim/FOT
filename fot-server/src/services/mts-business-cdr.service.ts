@@ -387,6 +387,11 @@ class MtsBusinessCdrService {
     return out;
   }
 
+  /** Сумма расходов по выписке — fallback для charges_amount, если CheckCharges недоступен. */
+  sumStatementCharges(data: unknown): number {
+    return this.parseStatementUsages(data).reduce((sum, row) => sum + row.amount, 0);
+  }
+
   /**
    * Детальная выписка по использованию SIM (вкладка «Использование» карточки):
    * каждое событие Usages[] с датой, типом, описанием, объёмом и деньгами.
