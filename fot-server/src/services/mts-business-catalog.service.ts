@@ -161,26 +161,69 @@ const hasMoreFlag = (resp: unknown): boolean | null => {
   return null;
 };
 
-const parseHierarchy = (resp: unknown): IMtsHierarchy => {
+/** Значение из productCharacteristic: [{name,value}] (IMSI/SIM/ICCID — подтверждено дампом 06.07.2026). */
+const productCharValue = (node: Record<string, unknown>, name: string): string | null => {
+  const chars = Array.isArray(node.productCharacteristic)
+    ? (node.productCharacteristic as Record<string, unknown>[])
+    : [];
+  const hit = chars.find(c => (asString(c.name) ?? '').toUpperCase() === name);
+  return hit ? asString(hit.value) : null;
+};
+
+// Реальная вложенность (подтверждено дампом probe 06.07.2026):
+// [{ name: <организация>, partyRole: [{ id: <контракт>, customerAccount: [{
+//   accountNo, productRelationship: [{ product: { productSerialNumber,
+//   description: <регион>, productCharacteristic: [{name:'IMSI'|'SIM',value}] } }] }],
+//   characteristic: [{name:'INN'|'KPP',value}] }] }]
+// КРИТИЧНО: accountNo лежит на customerAccount, а НЕ на узле номера — номера
+// собираем ВНУТРИ каждого customerAccount, иначе принадлежность номера к ЛС
+// теряется (один токен видит структуру ВСЕЙ организации, все ЛС сразу).
+export const parseHierarchy = (resp: unknown): IMtsHierarchy => {
   const accountNodes = collectByMarker(resp, 'accountNo');
-  const numberNodes = collectByMarker(resp, 'productSerialNumber');
-  const contractNode = collectByMarker(resp, 'description').find(n => n.description === 'NationalContract' || n.type === 'Customer');
+  const contractNode = collectByMarker(resp, 'description').find(n => n.description === 'NationalContract' || n.type === 'Customer' || n.description === 'Contract');
+  const orgNode = (Array.isArray(resp) ? resp[0] : resp) as Record<string, unknown> | null;
+
+  const numbers: IMtsHierarchyNumber[] = [];
+  const seen = new Set<string>();
+  const pushNumber = (prodNode: Record<string, unknown>, accountNo: string | null): void => {
+    const msisdn = asString(prodNode.productSerialNumber);
+    if (!msisdn || seen.has(msisdn)) return;
+    seen.add(msisdn);
+    numbers.push({
+      msisdn,
+      accountNo,
+      region: asString(prodNode.description) ?? asString((prodNode.product as Record<string, unknown> | undefined)?.description),
+      imsi: productCharValue(prodNode, 'IMSI') ?? asString(firstValue(prodNode, ['IMSI', 'imsi'])),
+      sim: productCharValue(prodNode, 'SIM') ?? asString(firstValue(prodNode, ['SIM', 'sim', 'simId'])),
+      iccid: productCharValue(prodNode, 'ICCID') ?? asString(firstValue(prodNode, ['ICCID', 'iccid'])),
+    });
+  };
+
+  // Основной проход: номера внутри своего customerAccount (знаем их ЛС).
+  for (const acc of accountNodes) {
+    const accountNo = asString(acc.accountNo);
+    for (const prodNode of collectByMarker(acc, 'productSerialNumber')) {
+      pushNumber(prodNode, accountNo);
+    }
+  }
+  // Fallback для иной схемы контура: номера вне customerAccount (без ЛС).
+  for (const prodNode of collectByMarker(resp, 'productSerialNumber')) {
+    pushNumber(prodNode, asString(prodNode.accountNo));
+  }
+
+  const charValue = (node: Record<string, unknown> | null | undefined, name: string): string | null => {
+    const chars = node && Array.isArray(node.characteristic) ? (node.characteristic as Record<string, unknown>[]) : [];
+    const hit = chars.find(c => (asString(c.name) ?? '').toUpperCase() === name);
+    return hit ? asString(hit.value) : null;
+  };
+
   return {
-    organizationName: asString(contractNode?.name),
+    organizationName: asString(orgNode?.name) ?? asString(contractNode?.name),
     contractId: asString(contractNode?.id),
-    // ИНН/КПП/IMSI/SIM — НЕ проверены живым вызовом: ключи угаданы по докам,
-    // при отсутствии остаются null (карточка это переживает).
-    inn: asString(firstValue(resp, ['INN', 'inn'])),
-    kpp: asString(firstValue(resp, ['KPP', 'kpp'])),
+    inn: charValue(contractNode, 'INN') ?? asString(firstValue(resp, ['INN', 'inn'])),
+    kpp: charValue(contractNode, 'KPP') ?? asString(firstValue(resp, ['KPP', 'kpp'])),
     accounts: [...new Set(accountNodes.map(n => asString(n.accountNo)).filter((v): v is string => v !== null))],
-    numbers: numberNodes.map(n => ({
-      msisdn: asString(n.productSerialNumber),
-      accountNo: asString(n.accountNo),
-      region: asString((n.product as Record<string, unknown> | undefined)?.description),
-      imsi: asString(firstValue(n, ['IMSI', 'imsi'])),
-      sim: asString(firstValue(n, ['SIM', 'sim', 'ICCID', 'iccid', 'simId'])),
-      iccid: asString(firstValue(n, ['ICCID', 'iccid'])),
-    })),
+    numbers,
   };
 };
 

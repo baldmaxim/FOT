@@ -11,7 +11,7 @@ import {
   refreshTariffAndServices,
   refreshAccountMetrics,
 } from './mts-business-metrics-daily-scheduler.service.js';
-import { syncAccountSubscribers } from './mts-business-subscriber-sync.service.js';
+import { syncAccountSubscribers, runPool } from './mts-business-subscriber-sync.service.js';
 import {
   tryAcquireSigurRuntimeLease,
   releaseSigurRuntimeLease,
@@ -49,10 +49,19 @@ export const REFRESH_ALL_STEP_LABELS: Record<RefreshAllStepId, string> = {
   billing: 'Балансы и начисления',
   detalization: 'Детализация звонков',
   catalog: 'Тарифы, услуги и пакеты',
-  subscribers: 'Полные профили абонентов',
+  subscribers: 'Профили: ФИО, тарифы, услуги',
 };
 
-const STEP_ORDER: RefreshAllStepId[] = ['hierarchy', 'fio', 'comments', 'billing', 'detalization', 'catalog', 'subscribers'];
+// Бюджет вызовов критичен (rate-limit 60/300 в мин на аккаунт, номеров ~1500):
+// шаги 'fio' и 'catalog' ИСКЛЮЧЕНЫ из прогона — их полностью покрывает шаг
+// 'subscribers' (PersonalDataInfo + тариф/абонплата/услуги/блокировки на номер),
+// иначе те же вызовы выполнялись бы дважды. Типы/лейблы оставлены — старые
+// сохранённые статусы могут содержать эти шаги.
+const STEP_ORDER: RefreshAllStepId[] = ['hierarchy', 'comments', 'billing', 'detalization', 'subscribers'];
+
+// Пул одновременных вызовов внутри шага: упираемся в rate-gate аккаунта,
+// а не в RTT последовательных запросов.
+const STEP_POOL = 3;
 
 export interface IRefreshAllStep {
   accountId: string;
@@ -192,7 +201,7 @@ async function runStep(
       let failed = 0;
       let unavailable = 0;
       const allCalls: Parameters<typeof mtsBusinessCdrService.storeCalls>[0] = [];
-      for (const msisdn of msisdns) {
+      await runPool(msisdns, STEP_POOL, async msisdn => {
         try {
           const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(accountId, {
             msisdn, dateFrom: window.dateFrom, dateTo: window.dateTo,
@@ -202,7 +211,7 @@ async function runStep(
           if (isFeatureUnavailable(error)) unavailable++;
           else failed++;
         }
-      }
+      });
       const { inserted } = allCalls.length > 0
         ? await mtsBusinessCdrService.storeCalls(allCalls, null, accountId)
         : { inserted: 0 };
@@ -236,8 +245,9 @@ async function runStep(
       };
     }
     case 'subscribers': {
-      // Полная выгрузка профиля каждого номера (~12 вызовов/номер) — самый
-      // тяжёлый шаг, идёт последним; питает вкладку «Абоненты».
+      // Bulk-профиль каждого номера (~5 вызовов/номер: персданные со skip по
+      // свежести, тариф, абонплата, услуги, блокировки) — самый тяжёлый шаг,
+      // идёт последним; питает вкладку «Абоненты».
       const res = await syncAccountSubscribers(accountId);
       if (res.numbers === 0) {
         return { status: 'ok', count: 0, message: 'нет известных номеров' };
@@ -252,7 +262,7 @@ async function runStep(
           ? UNAVAILABLE_MESSAGE
           : status === 'error'
             ? `${res.failed} секций с ошибкой`
-            : res.unavailable > 0 ? `часть секций не подключена в тарифе (${res.unavailable})` : `секций сохранено: ${res.stored}`,
+            : `секций сохранено: ${res.stored}${res.pdSkipped ? `, персданные свежие: ${res.pdSkipped}` : ''}${res.unavailable ? `, не в тарифе: ${res.unavailable}` : ''}`,
       };
     }
   }
@@ -273,7 +283,10 @@ async function runRefreshAll(
   });
 
   try {
-    for (const account of accounts) {
+    // Аккаунты — ПАРАЛЛЕЛЬНО: rate-gate у каждого аккаунта свой (лимит МТС —
+    // на Consumer Key), поэтому общее время = максимум по аккаунтам, а не сумма.
+    // Шаги внутри аккаунта — последовательно (детализации нужен инвентарь и т.д.).
+    await Promise.all(accounts.map(async account => {
       for (const stepId of STEP_ORDER) {
         const entry = status.steps.find(s => s.accountId === account.id && s.step === stepId);
         if (!entry) continue;
@@ -296,7 +309,7 @@ async function runRefreshAll(
         await persistStatus(status);
         console.log(`[mts-biz-refresh-all] account="${account.label}" step=${stepId} → ${entry.status}${entry.count != null ? ` count=${entry.count}` : ''}`);
       }
-    }
+    }));
   } catch (error) {
     status.error = error instanceof Error ? error.message : 'unknown';
     console.error('[mts-biz-refresh-all] прогон упал:', status.error);

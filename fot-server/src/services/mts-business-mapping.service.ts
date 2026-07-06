@@ -285,8 +285,15 @@ class MtsBusinessMappingService {
    * известен) — без него синк баланса/тарифа по номерам его не найдёт (см.
    * getKnownMsisdnsByAccount). ON CONFLICT не трогает employee_id/mts_fio.
    * created=true — номер заведён впервые (xmax=0 у свежевставленной строки).
+   * authoritative=true — источник знает НАСТОЯЩИЙ ЛС номера (accountNo из
+   * customerAccount структуры абонента) → перетираем прежний account_id;
+   * иначе только доливаем, если ещё не был известен.
    */
-  async ensureNumberDiscovered(rawMsisdn: string, accountId: string): Promise<{ needsFio: boolean; created: boolean }> {
+  async ensureNumberDiscovered(
+    rawMsisdn: string,
+    accountId: string,
+    authoritative = false,
+  ): Promise<{ needsFio: boolean; created: boolean }> {
     const norm = normalizeMsisdn(rawMsisdn);
     const hash = msisdnHash(rawMsisdn);
     if (!norm || !hash) return { needsFio: false, created: false };
@@ -294,9 +301,12 @@ class MtsBusinessMappingService {
       `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, account_id, linked_at)
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (msisdn_hash) DO UPDATE
-         SET account_id = COALESCE(mts_business_number_map.account_id, EXCLUDED.account_id)
+         SET account_id = CASE
+           WHEN $4 THEN EXCLUDED.account_id
+           ELSE COALESCE(mts_business_number_map.account_id, EXCLUDED.account_id)
+         END
        RETURNING (xmax = 0) AS created`,
-      [hash, encryptionService.encrypt(norm), accountId],
+      [hash, encryptionService.encrypt(norm), accountId, authoritative],
     );
     const row = await queryOne<{ employee_id: number | null; mts_fio: string | null }>(
       `SELECT employee_id, mts_fio FROM mts_business_number_map WHERE msisdn_hash = $1`,
@@ -388,6 +398,20 @@ class MtsBusinessMappingService {
       this.getKnownMsisdnsByAccount(accountId),
     ]);
     return [...new Set([...cdrNumbers, ...mappedNumbers])];
+  }
+
+  /**
+   * Хэши номеров со свежепроверенными персданными (pd_synced_at моложе
+   * maxAgeHours) — bulk-синк профилей пропускает для них PersonalDataInfo,
+   * экономя rate-limit (повторный прогон в тот же день дешевле на ~N вызовов).
+   */
+  async getFreshPdHashes(maxAgeHours: number): Promise<Set<string>> {
+    const rows = await query<{ msisdn_hash: string }>(
+      `SELECT msisdn_hash FROM mts_business_number_map
+        WHERE pd_synced_at IS NOT NULL AND pd_synced_at > NOW() - ($1 * INTERVAL '1 hour')`,
+      [maxAgeHours],
+    );
+    return new Set(rows.map(r => r.msisdn_hash));
   }
 
   /**

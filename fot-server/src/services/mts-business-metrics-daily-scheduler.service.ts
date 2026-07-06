@@ -126,22 +126,9 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
     }
   }
 
+  // Баланс по каждому номеру НЕ снимаем: у номера нет своего баланса — метод
+  // возвращает общий баланс ЛС (уже снят выше). Экономия ~N вызовов на прогон.
   const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
-  for (const msisdn of msisdns) {
-    try {
-      const balance = await mtsBusinessBillingService.checkBalanceByMsisdn(accountId, msisdn);
-      if (balance.amount != null) {
-        await mtsBusinessMetricsStoreService.upsertDaily({
-          accountId, scope: 'msisdn', msisdn, metric: 'balance',
-          amount: balance.amount, currencyCode: balance.currencyCode, validTo: balance.validUntil,
-        });
-      }
-    } catch (error) {
-      bump(error);
-      logSkip(`account=${accountId} номер — баланс`, error);
-    }
-  }
-
   if (msisdns.length > 0) {
     try {
       const charges = await mtsBusinessBillingService.checkChargesBulk(accountId, msisdns);
@@ -182,6 +169,12 @@ export async function refreshHierarchy(accountId: string): Promise<IRefreshHiera
   };
   const accounts = await mtsBusinessAccountsService.list();
   const account = accounts.find(a => a.id === accountId);
+  // Токен видит структуру ВСЕЙ организации (все ЛС сразу) — принадлежность
+  // номера определяем по accountNo его customerAccount, а не по токену,
+  // которым выгружали. Иначе номера «прилипают» к первому синкованному ЛС.
+  const byAccountNo = new Map(
+    accounts.filter(a => a.accountNumber).map(a => [a.accountNumber as string, a.id]),
+  );
 
   try {
     const hierarchy = await mtsBusinessCatalogService.getHierarchyStructure(accountId);
@@ -191,7 +184,12 @@ export async function refreshHierarchy(accountId: string): Promise<IRefreshHiera
     for (const n of hierarchy.numbers) {
       if (!n.msisdn) continue;
       result.totalNumbers++;
-      const { needsFio, created } = await mtsBusinessMappingService.ensureNumberDiscovered(n.msisdn, accountId);
+      const ownerAccountId = n.accountNo ? byAccountNo.get(n.accountNo) ?? null : null;
+      const { needsFio, created } = await mtsBusinessMappingService.ensureNumberDiscovered(
+        n.msisdn,
+        ownerAccountId ?? accountId,
+        ownerAccountId != null, // authoritative: настоящий ЛС известен из структуры
+      );
       if (created) result.discovered++;
       // ФИО добираем ТОЛЬКО для действительно неизвестных номеров (нет ни
       // сотрудника, ни ФИО) — не дёргаем PersonalData/PersonalDataInfo повторно
