@@ -401,6 +401,26 @@ class MtsBusinessMappingService {
   }
 
   /**
+   * Карта «хэш номера → имя» по всем известным номерам (сотрудник ФОТ → иначе
+   * ФИО из МТС → иначе комментарий из ЛК). Используется для подписи
+   * собеседников в детальной выписке: звонок «на номер» превращается в звонок
+   * «конкретному абоненту», если номер есть в нашей базе.
+   */
+  async getNamesByMsisdnHash(): Promise<Map<string, string>> {
+    const rows = await query<{ msisdn_hash: string; mts_fio: string | null; mts_comment: string | null; full_name: string | null }>(
+      `SELECT nm.msisdn_hash, nm.mts_fio, nm.mts_comment, e.full_name
+         FROM mts_business_number_map nm
+         LEFT JOIN employees e ON e.id = nm.employee_id`,
+    );
+    const map = new Map<string, string>();
+    for (const r of rows) {
+      const name = r.full_name ?? r.mts_fio ?? r.mts_comment;
+      if (name) map.set(r.msisdn_hash, name);
+    }
+    return map;
+  }
+
+  /**
    * Хэши номеров со свежепроверенными персданными (pd_synced_at моложе
    * maxAgeHours) — bulk-синк профилей пропускает для них PersonalDataInfo,
    * экономя rate-limit (повторный прогон в тот же день дешевле на ~N вызовов).

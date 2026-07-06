@@ -2,18 +2,16 @@ import { type FC, type ReactNode, useMemo, useState } from 'react';
 import { useOverlayDismiss } from '../../../hooks/useOverlayDismiss';
 import {
   useMtsBusinessSubscriberDetails,
-  useMtsBusinessSubscriberAvailable,
   useMtsBusinessSubscriberUsage,
   useRefreshMtsBusinessSubscriber,
-  useChangeMtsBusinessTariff,
 } from '../../../hooks/useMtsBusinessSubscribers';
 import { useMtsBusinessSubscriberExpenses } from '../../../hooks/useMtsBusinessSubscriberData';
 import { useModifyMtsBusinessService } from '../../../hooks/useMtsBusinessActionsData';
 import { useSetMtsBusinessNumberMap } from '../../../hooks/useMtsBusinessData';
 import type { IMtsSubscriberRow } from '../../../services/mtsBusinessSubscribersService';
 import type { IMtsSubServiceItem } from '../../../services/mtsBusinessSubscriberService';
-import { isMtsUnavailable } from '../../../services/mtsBusinessTypes';
 import { UnavailableNotice } from '../common/UnavailableNotice';
+import { ConnectModal, type ConnectKind } from './ConnectModal';
 import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
 import { EmployeeFioPicker } from '../../mts/EmployeeFioPicker';
@@ -73,11 +71,8 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
   const overlay = useOverlayDismiss(onClose);
   const msisdn = row.msisdn as string;
   const details = useMtsBusinessSubscriberDetails(msisdn);
-  const [showAvailable, setShowAvailable] = useState(false);
-  const available = useMtsBusinessSubscriberAvailable(msisdn, showAvailable);
   const refresh = useRefreshMtsBusinessSubscriber();
   const modify = useModifyMtsBusinessService();
-  const changeTariff = useChangeMtsBusinessTariff();
   const setMap = useSetMtsBusinessNumberMap();
   const months = useMemo(() => lastMonths(6), []);
   const [month, setMonth] = useState(months[0].value);
@@ -85,11 +80,13 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
   const [pdOpen, setPdOpen] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const [view, setView] = useState<'main' | 'usage'>('main');
-  const [availSearch, setAvailSearch] = useState('');
-  const usage = useMtsBusinessSubscriberUsage(msisdn, month, view === 'usage');
+  const [usageDate, setUsageDate] = useState(''); // пусто = весь месяц
+  const [editLink, setEditLink] = useState(false); // редактирование привязки к сотруднику (карандаш)
+  const [connectKind, setConnectKind] = useState<ConnectKind | null>(null); // модалка «+» / смены тарифа
+  const usage = useMtsBusinessSubscriberUsage(msisdn, month, usageDate, view === 'usage');
 
   const accountId = details.data?.accountId ?? row.accountId ?? '';
-  const busy = modify.isPending || changeTariff.isPending || refresh.isPending || setMap.isPending;
+  const busy = modify.isPending || refresh.isPending || setMap.isPending;
 
   const onModify = async (kind: 'service' | 'block', mode: 'add' | 'remove', item: IMtsSubServiceItem): Promise<void> => {
     const code = item.code;
@@ -105,23 +102,12 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
     }
   };
 
-  const onChangeTariff = async (tariffId: string | null, name: string | null): Promise<void> => {
-    if (!tariffId) return;
-    if (!window.confirm(`Перевести номер ${msisdn} на тариф «${name ?? tariffId}»? Потребуется 2FA.`)) return;
-    setMsg(null);
-    try {
-      const r = await changeTariff.mutateAsync({ accountId: accountId || undefined, msisdn, externalID: tariffId });
-      setMsg({ ok: true, text: `Заявка на смену тарифа отправлена (eventId ${r.eventId})` });
-    } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка смены тарифа (возможно нужен 2FA)') });
-    }
-  };
-
   const onLink = async (employeeId: number | null): Promise<void> => {
     setMsg(null);
     try {
       await setMap.mutateAsync({ msisdn, employeeId });
       setMsg({ ok: true, text: employeeId != null ? 'Привязка сохранена' : 'Привязка снята' });
+      setEditLink(false);
     } catch (e) {
       setMsg({ ok: false, text: errText(e, 'Ошибка привязки (возможно нужен 2FA)') });
     }
@@ -208,19 +194,37 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           <KV
             label="Сотрудник ФОТ"
             value={row.employeeFullName
-              ? `${row.employeeFullName}${row.employeeTabNumber ? ` (таб. ${row.employeeTabNumber})` : ''}${row.departmentName ? ` · ${row.departmentName}` : ''}`
+              ? (
+                <>
+                  {row.employeeFullName}{row.employeeTabNumber ? ` (таб. ${row.employeeTabNumber})` : ''}{row.departmentName ? ` · ${row.departmentName}` : ''}
+                  <button
+                    className={st.editBtn}
+                    title="Изменить привязку"
+                    aria-label="Изменить привязку"
+                    disabled={busy}
+                    onClick={() => setEditLink(v => !v)}
+                  >
+                    ✎
+                  </button>
+                </>
+              )
               : 'не привязан'}
           />
-          <div className={styles.actions} style={{ marginTop: 8, alignItems: 'center' }}>
-            <EmployeeFioPicker
-              disabled={busy}
-              placeholder={row.employeeId != null ? 'Сменить сотрудника…' : 'Привязать по ФИО…'}
-              onSelect={id => { void onLink(id); }}
-            />
-            {row.employeeId != null && (
-              <button className={styles.btnSecondary} disabled={busy} onClick={() => { void onLink(null); }}>Снять</button>
-            )}
-          </div>
+          {(row.employeeId == null || editLink) && (
+            <div className={styles.actions} style={{ marginTop: 8, alignItems: 'center' }}>
+              <EmployeeFioPicker
+                disabled={busy}
+                placeholder={row.employeeId != null ? 'Сменить сотрудника…' : 'Привязать по ФИО…'}
+                onSelect={id => { void onLink(id); }}
+              />
+              {row.employeeId != null && (
+                <>
+                  <button className={styles.btnSecondary} disabled={busy} onClick={() => { void onLink(null); }}>Снять</button>
+                  <button className={styles.btnSecondary} disabled={busy} onClick={() => setEditLink(false)}>Отмена</button>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className={st.section}>
@@ -241,7 +245,12 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
         </div>
 
         <div className={st.section}>
-          <div className={st.sectionHead}><h4 className={st.sectionTitle}>Финансы и тариф</h4></div>
+          <div className={st.sectionHead}>
+            <h4 className={st.sectionTitle}>Финансы и тариф</h4>
+            <button className={st.itemBtn} disabled={busy || !accountId} onClick={() => setConnectKind('tariff')}>
+              Сменить тариф
+            </button>
+          </div>
           <KV label="Начисления" value={d?.charges ? fmtMoney(d.charges.amount) : fmtMoney(row.chargesAmount)} />
           <KV label="Тариф" value={dash(d?.tariff.name ?? row.tariffName)} />
           <KV label="Абонплата" value={d?.tariff.fee?.amount != null ? `${fmtMoney(d.tariff.fee.amount)}/мес` : '—'} />
@@ -251,75 +260,19 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
         </div>
 
         <div className={st.section}>
-          <div className={st.sectionHead}><h4 className={st.sectionTitle}>Подключённые услуги ({d?.services.length ?? row.servicesCount})</h4></div>
+          <div className={st.sectionHead}>
+            <h4 className={st.sectionTitle}>Подключённые услуги ({d?.services.length ?? row.servicesCount})</h4>
+            <button className={st.plusBtn} title="Подключить услугу" aria-label="Подключить услугу" disabled={busy || !accountId} onClick={() => setConnectKind('service')}>+</button>
+          </div>
           {details.isLoading ? <p className={styles.hint}>Загрузка…</p> : serviceList(sortPaidFirst(d?.services ?? []), 'service', 'remove', 'Услуг нет — обновите данные, если список пуст ошибочно')}
         </div>
 
         <div className={st.section}>
-          <div className={st.sectionHead}><h4 className={st.sectionTitle}>Блокировки ({d?.blocks.length ?? 0})</h4></div>
-          {details.isLoading ? <p className={styles.hint}>Загрузка…</p> : serviceList(d?.blocks ?? [], 'block', 'remove', 'Блокировок нет')}
-        </div>
-
-        <div className={st.section}>
           <div className={st.sectionHead}>
-            <h4 className={st.sectionTitle}>Подключение услуг и смена тарифа</h4>
-            {!showAvailable && (
-              <button className={st.itemBtn} onClick={() => setShowAvailable(true)}>Загрузить доступные</button>
-            )}
+            <h4 className={st.sectionTitle}>Блокировки ({d?.blocks.length ?? 0})</h4>
+            <button className={st.plusBtn} title="Подключить блокировку" aria-label="Подключить блокировку" disabled={busy || !accountId} onClick={() => setConnectKind('block')}>+</button>
           </div>
-          {!showAvailable && <p className={styles.hint}>Каталог доступного запрашивается из МТС по кнопке (3 живых запроса).</p>}
-          {showAvailable && available.isLoading && <p className={styles.hint}>Загрузка каталога из МТС…</p>}
-          {showAvailable && available.isError && <p className={styles.err}>Не удалось загрузить каталог.</p>}
-          {showAvailable && available.data && (
-            <>
-              <h5 className={st.sectionTitle} style={{ margin: '6px 0' }}>Доступные услуги</h5>
-              <input
-                className={st.availSearch}
-                type="search"
-                placeholder="Поиск услуги по названию…"
-                value={availSearch}
-                onChange={e => setAvailSearch(e.target.value)}
-              />
-              {isMtsUnavailable(available.data.services)
-                ? <UnavailableNotice compact />
-                : 'data' in available.data.services
-                  ? serviceList(
-                      sortPaidFirst(available.data.services.data.filter(it =>
-                        !availSearch.trim()
-                        || `${it.name ?? ''} ${it.code ?? ''}`.toLowerCase().includes(availSearch.trim().toLowerCase()),
-                      )),
-                      'service', 'add',
-                      availSearch.trim() ? 'Ничего не найдено по запросу' : 'Нет доступных услуг',
-                    )
-                  : <p className={styles.err}>Ошибка загрузки</p>}
-              <h5 className={st.sectionTitle} style={{ margin: '10px 0 6px' }}>Доступные блокировки</h5>
-              {isMtsUnavailable(available.data.blocks)
-                ? <UnavailableNotice compact />
-                : 'data' in available.data.blocks
-                  ? serviceList(available.data.blocks.data, 'block', 'add', 'Нет доступных блокировок')
-                  : <p className={styles.err}>Ошибка загрузки</p>}
-              <h5 className={st.sectionTitle} style={{ margin: '10px 0 6px' }}>Тарифы для перехода</h5>
-              {isMtsUnavailable(available.data.tariffs)
-                ? <UnavailableNotice compact />
-                : 'data' in available.data.tariffs
-                  ? (available.data.tariffs.data.length === 0
-                    ? <p className={styles.hint}>Нет доступных тарифов</p>
-                    : (
-                      <ul className={st.list}>
-                        {available.data.tariffs.data.map((t, i) => (
-                          <li key={t.tariffId ?? `t-${i}`} className={st.listItem}>
-                            <span className={st.listName}>{dash(t.name ?? t.tariffId)}</span>
-                            <span className={st.listPrice}>{t.price != null ? `${fmtMoney(t.price)}/мес` : ''}</span>
-                            <button className={st.itemBtn} disabled={busy || !t.tariffId} onClick={() => { void onChangeTariff(t.tariffId, t.name); }}>
-                              Перейти
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    ))
-                  : <p className={styles.err}>Ошибка загрузки</p>}
-            </>
-          )}
+          {details.isLoading ? <p className={styles.hint}>Загрузка…</p> : serviceList(d?.blocks ?? [], 'block', 'remove', 'Блокировок нет')}
         </div>
 
         {((d?.payments ?? []).length > 0 || (d?.forwarding ?? []).length > 0 || d?.roaming || (d?.deliveryMethod ?? []).length > 0) && (
@@ -344,26 +297,48 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           <div className={st.section}>
             <div className={st.sectionHead}>
               <h4 className={st.sectionTitle}>Использование SIM — детальная выписка</h4>
-              <select className={st.monthSelect} value={month} onChange={e => setMonth(e.target.value)}>
-                {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
+              <span className={st.usageControls}>
+                <select
+                  className={st.monthSelect}
+                  value={month}
+                  onChange={e => { setMonth(e.target.value); setUsageDate(''); }}
+                >
+                  {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+                <input
+                  className={st.monthSelect}
+                  type="date"
+                  value={usageDate}
+                  onChange={e => setUsageDate(e.target.value)}
+                  title="Показать использование за конкретную дату"
+                />
+                {usageDate && (
+                  <button className={st.itemBtn} onClick={() => setUsageDate('')}>За месяц</button>
+                )}
+              </span>
             </div>
             {usage.isLoading && <p className={styles.hint}>Загрузка выписки из МТС…</p>}
             {usage.isError && <p className={styles.err}>Не удалось загрузить выписку.</p>}
             {usage.data?.unavailable && <UnavailableNotice message="Детализация не активирована для этого лицевого счёта." />}
             {usage.data?.rows && (
               usage.data.rows.length === 0
-                ? <p className={styles.hint}>За выбранный месяц событий нет.</p>
+                ? <p className={styles.hint}>{usageDate ? `За ${usageDate} событий нет.` : 'За выбранный месяц событий нет.'}</p>
                 : (
                   <>
-                    <KV label={`Событий за месяц: ${usage.data.rows.length}`} value={<b>итого {fmtMoney(usage.data.total ?? 0)}</b>} />
+                    <KV label={`Событий за ${usageDate || 'месяц'}: ${usage.data.rows.length}`} value={<b>итого {fmtMoney(usage.data.total ?? 0)}</b>} />
                     <ul className={st.list}>
                       {usage.data.rows.slice(0, USAGE_ROWS_CAP).map((u, i) => (
                         <li key={`u-${i}`} className={st.listItem}>
                           <span className={st.usageDate}>{fmtLast(u.date)}</span>
                           <span className={st.listName}>
                             {u.label ?? u.networkEvent ?? '—'}
-                            {u.peer ? ` · ${u.direction === 'in' ? 'от' : ''}${u.direction === 'out' ? '→ ' : ' '}${u.peer}` : ''}
+                            {(u.peerName || u.peer) && (
+                              <> · {u.direction === 'in' ? 'от ' : u.direction === 'out' ? '→ ' : ''}
+                                {u.peerName
+                                  ? <>{u.peerName}<span className={st.usagePeerNum}> ({fmtPhone(u.peer)})</span></>
+                                  : fmtPhone(u.peer)}
+                              </>
+                            )}
                           </span>
                           <span className={st.listPrice}>{fmtUnits(u.units, u.unitCode)}</span>
                           <span className={st.usageAmount}>{u.amount > 0 ? fmtMoney(u.amount) : ''}</span>
@@ -389,6 +364,9 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
         </div>
 
         {pdOpen && <PersonalDataModal msisdn={msisdn} onClose={() => setPdOpen(false)} />}
+        {connectKind && accountId && (
+          <ConnectModal msisdn={msisdn} accountId={accountId} kind={connectKind} onClose={() => setConnectKind(null)} />
+        )}
       </div>
     </div>
   );

@@ -79,6 +79,7 @@ export interface IMtsUsageRow {
   networkEvent: string | null;
   direction: 'in' | 'out' | null;
   peer: string | null;
+  peerName: string | null; // имя абонента из нашей базы, если собеседник известен
   units: number | null;
   unitCode: string | null;
   amount: number;
@@ -125,9 +126,11 @@ export const mtsBusinessSubscribersService = {
     return res.data;
   },
 
-  usage: async (msisdn: string, month: string): Promise<IMtsUsageResult> => {
+  /** Период: месяц (YYYY-MM) или конкретный день (date=YYYY-MM-DD, приоритетнее месяца). */
+  usage: async (msisdn: string, month: string, date?: string): Promise<IMtsUsageResult> => {
+    const qs = new URLSearchParams(date ? { date } : { month });
     const res = await apiClient.get<ApiResponse<IMtsUsageResult>>(
-      `/mts-business/subscribers/${encodeURIComponent(msisdn)}/usage?month=${encodeURIComponent(month)}`,
+      `/mts-business/subscribers/${encodeURIComponent(msisdn)}/usage?${qs.toString()}`,
     );
     return res.data;
   },

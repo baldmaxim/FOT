@@ -212,6 +212,64 @@
 
 .usageDate { flex: 0 0 auto; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
 .usageAmount { flex: 0 0 auto; font-weight: 600; white-space: nowrap; min-width: 56px; text-align: right; }
+.usagePeerNum { color: var(--text-secondary); font-size: 12px; }
+.usageControls { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* Модалка подключения услуг/блокировок/тарифов (поверх панели) */
+.connectOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+  z-index: 1100;
+}
+.connectModal {
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 88dvh;
+  overflow-y: auto;
+}
+
+/* Кнопка «+» в шапке секции */
+.plusBtn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--primary);
+  border-radius: 8px;
+  min-width: 32px;
+  min-height: 32px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+.plusBtn:hover { border-color: var(--primary); background: rgba(59, 130, 246, 0.1); }
+.plusBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Карандаш редактирования привязки к сотруднику */
+.editBtn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  margin-left: 6px;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 6px;
+}
+.editBtn:hover { color: var(--primary); background: rgba(59, 130, 246, 0.1); }
+.editBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .monthSelect {
   padding: 6px 10px;
