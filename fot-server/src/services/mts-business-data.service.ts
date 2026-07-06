@@ -176,6 +176,25 @@ class MtsBusinessDataService extends MtsBusinessServiceBase {
     });
   }
 
+  /**
+   * Обычная выписка по номеру за период (в отличие от *Extd* — без расширенных
+   * полей). Источник для сводки расходов по категориям (summarizeMonthExpenses).
+   * Формат дат — как у Extd (with-Z); НЕ проверен живым вызовом — сверить probe.
+   */
+  async getBillingStatementByMsisdn(
+    accountId: string,
+    params: { msisdn: string; dateFrom: string; dateTo: string },
+  ): Promise<unknown> {
+    return this.request('get', '/Bills/BillingStatementByMSISDN', {
+      accountId,
+      params: {
+        msisdn: params.msisdn,
+        startDateTime: toBillsDate(params.dateFrom, 'from'),
+        endDateTime: toBillsDate(params.dateTo, 'to'),
+      },
+    });
+  }
+
   /** Сброс кэшей клиентов и токенов (после смены аккаунтов/URL). */
   invalidate(): void {
     super.invalidate();

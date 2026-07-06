@@ -166,6 +166,16 @@
 }
 .btnSecondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.linkBtn {
+  background: none;
+  border: none;
+  color: var(--color-primary, #2563eb);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+}
+
 .tableWrap { overflow-x: auto; }
 
 .table {

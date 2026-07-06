@@ -1,0 +1,123 @@
+import { apiClient } from '../api/client';
+
+// Карточка номера (read-only) — собирает по одному MSISDN всё, что отдаёт
+// MTS Business API. Каждая секция (кроме identity) — дискриминированное
+// объединение: данные / «нет в тарифе» / ошибка (карточка не падает целиком).
+
+export type MtsSection<T> = { data: T } | { unavailable: true } | { error: string };
+
+export interface IMtsSubIdentity {
+  msisdn: string;
+  fio: string | null;
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+  accountNo: string | null;
+  contractId: string | null;
+  organizationName: string | null;
+  region: string | null;
+  imsi: string | null;
+  sim: string | null;
+  iccid: string | null;
+  inn: string | null;
+  kpp: string | null;
+  stale: boolean;
+  capturedAt: string | null;
+}
+
+export interface IMtsSubBalance {
+  amount: number | null;
+  creditLimit: number | null;
+  currencyCode: string | null;
+  validUntil: string | null;
+}
+
+export interface IMtsSubServiceItem {
+  code: string | null;
+  name: string | null;
+  status: string | null;
+  monthlyAmount: number | null;
+  currencyCode: string | null;
+  startDateTime: string | null;
+  endDateTime: string | null;
+}
+
+export interface IMtsSubTariffFee {
+  amount: number | null;
+  currencyCode: string | null;
+}
+
+export interface IMtsSubTariff {
+  name: string | null;
+  fee: IMtsSubTariffFee | null;
+}
+
+export interface IMtsSubForwardingRule {
+  forwardingType: string | null;
+  forwardingAddress: string | null;
+  noReplyTimer: number | null;
+  numType: string | null;
+  status: string | null;
+}
+
+export interface IMtsSubRoaming {
+  countryId: string | null;
+  countryName: string | null;
+  isInternational: boolean;
+}
+
+export interface IMtsSubDeliveryMethod {
+  method: string | null;
+  address: string | null;
+  documentFormat: string | null;
+}
+
+export interface IMtsSubCharge {
+  msisdn: string;
+  amount: number | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+}
+
+export interface IMtsSubscriberCard {
+  identity: IMtsSubIdentity;
+  balance: MtsSection<IMtsSubBalance>;
+  tariff: MtsSection<IMtsSubTariff>;
+  connectedServices: MtsSection<IMtsSubServiceItem[]>;
+  availableServices: MtsSection<IMtsSubServiceItem[]>;
+  connectedBlocks: MtsSection<IMtsSubServiceItem[]>;
+  availableBlocks: MtsSection<IMtsSubServiceItem[]>;
+  forwarding: MtsSection<IMtsSubForwardingRule[]>;
+  roaming: MtsSection<IMtsSubRoaming>;
+  deliveryMethod: MtsSection<IMtsSubDeliveryMethod[]>;
+  currentCharges: MtsSection<IMtsSubCharge | null>;
+}
+
+export type MtsExpenseCategory = 'calls' | 'sms' | 'internet' | 'periodic' | 'oneTime' | 'topups' | 'other';
+export interface IMtsExpenseBucket {
+  count: number;
+  amount: number;
+}
+export interface IMtsMonthExpenses {
+  month: string;
+  summary: Record<MtsExpenseCategory, IMtsExpenseBucket> & { total: number };
+}
+
+interface ApiResponse<T> {
+  success: boolean;
+  data: T;
+}
+
+export const mtsBusinessSubscriberService = {
+  getCard: async (msisdn: string): Promise<IMtsSubscriberCard> => {
+    const res = await apiClient.get<ApiResponse<IMtsSubscriberCard>>(`/mts-business/subscriber/${encodeURIComponent(msisdn)}/card`);
+    return res.data;
+  },
+
+  getExpenses: async (msisdn: string, month: string): Promise<IMtsMonthExpenses> => {
+    const res = await apiClient.get<ApiResponse<IMtsMonthExpenses>>(
+      `/mts-business/subscriber/${encodeURIComponent(msisdn)}/expenses?month=${encodeURIComponent(month)}`,
+    );
+    return res.data;
+  },
+};

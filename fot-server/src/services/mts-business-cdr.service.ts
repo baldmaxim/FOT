@@ -38,6 +38,15 @@ export interface ISimName {
   fio: string;
 }
 
+// Категории для сводки расходов (карточка номера, §4). topups — только из
+// PaymentHistory, здесь не появляются.
+export type MtsExpenseCategory = 'calls' | 'sms' | 'internet' | 'periodic' | 'oneTime' | 'topups' | 'other';
+
+export interface IStatementUsageEvent {
+  category: MtsExpenseCategory;
+  amount: number; // рубли, ≥0 (расход)
+}
+
 export interface ITalkTimeRow {
   employeeId: number | null;
   employeeFullName: string | null;
@@ -68,6 +77,32 @@ const VOICE_S_RE = /^Телеф/i;
 
 const asArray = <T>(v: T | T[] | undefined | null): T[] =>
   v == null ? [] : Array.isArray(v) ? v : [v];
+
+// Сумма списания в строке выписки — имена полей НЕ проверены живым вызовом
+// (обычная BillingStatement может отличаться от Extd), поэтому обход по ряду
+// вероятных ключей.
+const pickAmount = (o: Record<string, unknown>): number | null => {
+  for (const k of ['cost', 'amount', 'sum', 'charge', 'chargeAmount', 'taxIncludedAmount', 'factCost', 'value']) {
+    if (o[k] != null) {
+      const n = Number(o[k]);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+};
+
+// Категория строки расхода по типу события/единице/категории.
+const classifyUsage = (c: Record<string, unknown>): MtsExpenseCategory => {
+  const ne = String(c.networkEvent ?? '').toLowerCase();
+  const unit = String(c.factUnitCode ?? '').toUpperCase();
+  const cat = String(c.categoryId ?? c.category ?? '').toLowerCase();
+  if (ne === 'call' || unit === 'SECOND' || /call|voice|голос/.test(cat)) return 'calls';
+  if (unit === 'ITEM' || ne === 'sms' || /sms|смс/.test(cat)) return 'sms';
+  if (unit === 'BYTE' || ne === 'gprs' || ne === 'data' || /gprs|internet|интернет|data/.test(cat)) return 'internet';
+  if (/period|subscription|abon|абон/.test(cat)) return 'periodic';
+  if (/one.?time|разов/.test(cat)) return 'oneTime';
+  return 'other';
+};
 
 /** Рекурсивно собрать все узлы под ключом tag (учитывая массивы/вложенность). */
 const collectByTag = (node: unknown, tag: string, out: Record<string, unknown>[]): void => {
@@ -319,6 +354,24 @@ class MtsBusinessCdrService {
       });
     }
     return calls;
+  }
+
+  /**
+   * Категоризированные строки расхода из выписки (Bills/BillingStatement*) —
+   * для сводки расходов карточки номера. В отличие от parseBillingStatementResponse
+   * (только голос для CDR), берёт ВСЕ строки Usages с суммой списания.
+   * Имена денежных полей не проверены живым вызовом — сверить probe-скриптом.
+   */
+  parseStatementUsages(data: unknown): IStatementUsageEvent[] {
+    const usages = data && typeof data === 'object' ? (data as Record<string, unknown>).Usages : null;
+    const out: IStatementUsageEvent[] = [];
+    for (const raw of asArray(usages as Record<string, unknown>[] | undefined)) {
+      const u = raw as { Characteristics?: Record<string, unknown> } & Record<string, unknown>;
+      const c = u.Characteristics ?? {};
+      const amount = pickAmount(c) ?? pickAmount(u) ?? 0;
+      out.push({ category: classifyUsage(c), amount: Math.abs(amount) });
+    }
+    return out;
   }
 
   /** Разобрать файл детализации по расширению: .xls/.xlsx → XLS, .xml → XML. */

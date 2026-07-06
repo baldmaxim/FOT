@@ -1,4 +1,4 @@
-import { execute, query } from '../config/postgres.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
 
 // Персист и чтение скалярных дневных метрик МТС «Бизнес» (mts_business_metric_daily).
@@ -207,6 +207,37 @@ class MtsBusinessMetricsStoreService {
        DO UPDATE SET payload = EXCLUDED.payload, captured_date = CURRENT_DATE, captured_at = NOW()`,
       [input.accountId, input.scope, input.accountNo ?? null, hash, input.metric, JSON.stringify(input.payload)],
     );
+  }
+
+  /** Последний снапшот структуры абонента по аккаунту (для идентификации в карточке). */
+  async getLatestHierarchyForAccount(accountId: string): Promise<{ payload: unknown; capturedAt: string } | null> {
+    const row = await queryOne<{ payload: unknown; captured_at: string }>(
+      `SELECT payload, captured_at
+         FROM mts_business_metric_snapshot
+        WHERE scope = 'account' AND metric = 'hierarchy' AND account_id = $1
+        ORDER BY captured_at DESC
+        LIMIT 1`,
+      [accountId],
+    );
+    return row ? { payload: row.payload, capturedAt: row.captured_at } : null;
+  }
+
+  /** Последний снапшот произвольной метрики по номеру (bill_plan/product_services и т.п.). */
+  async getLatestSnapshotForMsisdn(
+    rawMsisdn: string,
+    metric: MtsBusinessSnapshotMetric,
+  ): Promise<{ payload: unknown; capturedAt: string } | null> {
+    const hash = msisdnHash(rawMsisdn);
+    if (!hash) return null;
+    const row = await queryOne<{ payload: unknown; captured_at: string }>(
+      `SELECT payload, captured_at
+         FROM mts_business_metric_snapshot
+        WHERE scope = 'msisdn' AND metric = $2 AND msisdn_hash = $1
+        ORDER BY captured_at DESC
+        LIMIT 1`,
+      [hash, metric],
+    );
+    return row ? { payload: row.payload, capturedAt: row.captured_at } : null;
   }
 
   /** Обогащённая таблица «по сотрудникам»: тариф, кол-во/сумма платных услуг (per-номер метрики). */

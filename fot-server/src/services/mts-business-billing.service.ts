@@ -36,6 +36,24 @@ export interface IMtsPackageCounter {
   validTo: string | null;
 }
 
+export interface IMtsTariffFee {
+  amount: number | null;
+  currencyCode: string | null;
+}
+
+export interface IMtsPaymentEntry {
+  date: string | null;
+  amount: number | null;
+  method: string | null;
+  currencyCode: string | null;
+}
+
+export interface IMtsDeliveryMethod {
+  method: string | null;         // email / paper / ...
+  address: string | null;        // email или почтовый адрес
+  documentFormat: string | null; // Pdf / Html / ...
+}
+
 const toNumber = (v: unknown): number | null => {
   if (v == null) return null;
   const n = typeof v === 'string' ? Number.parseFloat(v) : Number(v);
@@ -105,6 +123,47 @@ const parsePackages = (resp: unknown): IMtsPackageCounter[] => {
       validTo: asString(validFor?.endDateTime),
     };
   });
+};
+
+// Контракты TariffRental/PaymentHistory/DocumentDeliveryMethod НЕ проверены
+// живым вызовом — парсеры толерантны (обход по нескольким вероятным ключам).
+// Перед боевым использованием свериться с сырым payload (probe-скрипт).
+const parseTariffFee = (resp: unknown): IMtsTariffFee => ({
+  amount: toNumber(deepFind(resp, ['taxIncludedAmount', 'dutyFreeAmount', 'amount', 'price', 'value'])),
+  currencyCode: asString(deepFind(resp, ['currencyCode', 'currencyName'])),
+});
+
+const parsePaymentHistory = (resp: unknown): IMtsPaymentEntry[] => {
+  const items = Array.isArray(resp) ? (resp as Record<string, unknown>[]) : collectByMarker(resp, 'amount');
+  return items
+    .map(raw => {
+      const r = raw as Record<string, unknown>;
+      const amount = toNumber(r.amount ?? deepFind(r, ['taxIncludedAmount', 'sum', 'value']));
+      const date = asString(r.date ?? r.paymentDate ?? r.dateTime) ?? asString(deepFind(r, ['date', 'paymentDate', 'dateTime']));
+      if (amount == null && !date) return null;
+      return {
+        date,
+        amount,
+        method: asString(r.paymentMethod ?? r.method ?? r.type ?? r.name),
+        currencyCode: asString(r.currencyCode ?? r.currencyName),
+      };
+    })
+    .filter((e): e is IMtsPaymentEntry => e !== null);
+};
+
+const parseDeliveryMethods = (resp: unknown): IMtsDeliveryMethod[] => {
+  const marked = Array.isArray(resp) ? (resp as Record<string, unknown>[]) : collectByMarker(resp, 'deliveryMethod');
+  const list = marked.length ? marked : (resp && typeof resp === 'object' ? [resp as Record<string, unknown>] : []);
+  return list
+    .map(raw => {
+      const r = raw as Record<string, unknown>;
+      const method = asString(r.deliveryMethod ?? r.method ?? r.type ?? r.name);
+      const address = asString(r.deliveryAddress ?? r.address ?? r.email) ?? asString(deepFind(r, ['emailAddress', 'address']));
+      const documentFormat = asString(r.documentFormat ?? r.format);
+      if (!method && !address && !documentFormat) return null;
+      return { method, address, documentFormat };
+    })
+    .filter((d): d is IMtsDeliveryMethod => d !== null);
 };
 
 // Не дробить на по-одному запросу на номер — это уже создавало проблему с
@@ -185,6 +244,37 @@ class MtsBusinessBillingService extends MtsBusinessServiceBase {
       },
     });
     return parsePackages(resp);
+  }
+
+  /** Плата по тарифу (абонплата) по номеру — дополняет BillPlanInfo (там только id/name). */
+  async getTariffRental(accountId: string, msisdn: string): Promise<IMtsTariffFee> {
+    const resp = await this.request<unknown>('get', '/Bills/TariffRental', {
+      accountId,
+      params: { msisdn },
+    });
+    return parseTariffFee(resp);
+  }
+
+  /** История платежей (пополнений) по номеру за период. dateFrom/dateTo — YYYY-MM-DD. */
+  async getPaymentHistoryByMsisdn(accountId: string, msisdn: string, dateFrom: string, dateTo: string): Promise<IMtsPaymentEntry[]> {
+    const resp = await this.request<unknown>('get', '/Bills/PaymentHistoryByMSISDN', {
+      accountId,
+      params: { msisdn, dateFrom, dateTo },
+    });
+    return parsePaymentHistory(resp);
+  }
+
+  /** Способ доставки счёта по номеру (email/бумага/формат). */
+  async getDocumentDeliveryMethod(accountId: string, msisdn: string): Promise<IMtsDeliveryMethod[]> {
+    const resp = await this.request<unknown>('get', '/Bills/DocumentDeliveryMethodByMSISDN', {
+      accountId,
+      params: {
+        'customer.relatedParty.characteristic.name': 'MSISDN',
+        'customer.relatedParty.characteristic.value': msisdn,
+        'productRelationship.productLine.name': 'BillDeliveries',
+      },
+    });
+    return parseDeliveryMethods(resp);
   }
 }
 

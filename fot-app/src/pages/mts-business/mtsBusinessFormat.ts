@@ -36,3 +36,21 @@ export const ACTION_TYPE_LABELS: Record<string, string> = {
   budget_rule_add: 'Добавить правило бюджета',
   budget_rule_remove: 'Удалить правило бюджета',
 };
+
+// Карточка номера
+export const EXPENSE_CATEGORY_LABELS: Record<string, string> = {
+  calls: 'Звонки',
+  sms: 'СМС',
+  internet: 'Интернет',
+  periodic: 'Периодические',
+  oneTime: 'Разовые',
+  topups: 'Пополнения',
+  other: 'Прочее',
+};
+
+export const FORWARDING_TYPE_LABELS: Record<string, string> = {
+  CFU: 'Безусловная',
+  CFB: 'При занятости',
+  CFNRY: 'Нет ответа',
+  CFNRC: 'Недоступен',
+};

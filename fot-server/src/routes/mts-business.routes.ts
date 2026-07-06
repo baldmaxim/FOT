@@ -4,6 +4,7 @@ import { mtsBusinessController } from '../controllers/mts-business.controller.js
 import { mtsBusinessBillingController } from '../controllers/mts-business-billing.controller.js';
 import { mtsBusinessCatalogController } from '../controllers/mts-business-catalog.controller.js';
 import { mtsBusinessBudgetController } from '../controllers/mts-business-budget.controller.js';
+import { mtsBusinessSubscriberController } from '../controllers/mts-business-subscriber.controller.js';
 import { authenticate, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 
@@ -111,6 +112,11 @@ router.post(
   mtsBusinessCatalogController.modifyService,
 );
 router.get('/actions', requirePageAccess('/mts-business', 'view'), mtsBusinessCatalogController.getActions);
+
+// Карточка номера (read-only): собирает по одному MSISDN идентификацию, баланс,
+// тариф, услуги/блокировки, переадресацию, роуминг, доставку счёта, начисления.
+router.get('/subscriber/:msisdn/card', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscriberController.getCard);
+router.get('/subscriber/:msisdn/expenses', requirePageAccess('/mts-business', 'view'), mtsBusinessSubscriberController.getExpenses);
 
 router.get('/budget/rules', requirePageAccess('/mts-business', 'view'), mtsBusinessBudgetController.getRulesByMsisdn);
 router.get('/budget/available-rules', requirePageAccess('/mts-business', 'view'), mtsBusinessBudgetController.getAvailableRules);

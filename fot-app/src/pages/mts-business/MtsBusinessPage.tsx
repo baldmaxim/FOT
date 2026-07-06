@@ -22,6 +22,7 @@ import { mtsBusinessService, type IMtsBusinessAccount } from '../../services/mts
 import type { IMtsBusinessBudgetRule } from '../../services/mtsBusinessActionsService';
 import { EmployeeFioPicker } from '../mts/EmployeeFioPicker';
 import { OverviewSection } from './OverviewSection';
+import { SubscriberCardModal } from './SubscriberCardModal';
 import { errText, toISODate, fmtDur, fmtLast, ACTION_TYPE_LABELS } from './mtsBusinessFormat';
 import styles from './MtsBusinessPage.module.css';
 
@@ -302,6 +303,7 @@ const NumberMapSection: FC = () => {
   const setMap = useSetMtsBusinessNumberMap();
   const autoLink = useAutoLinkMtsBusinessNumberMap();
   const [manualMsisdn, setManualMsisdn] = useState('');
+  const [cardMsisdn, setCardMsisdn] = useState<string | null>(null);
   const [msg, setMsg] = useState<Msg>(null);
   const rows = imported.data ?? [];
 
@@ -350,7 +352,11 @@ const NumberMapSection: FC = () => {
             <tbody>
               {rows.map((r, i) => (
                 <tr key={r.msisdn ?? `row-${i}`}>
-                  <td>{r.msisdn ?? '—'}</td>
+                  <td>
+                    {r.msisdn
+                      ? <button className={styles.linkBtn} onClick={() => setCardMsisdn(r.msisdn)}>{r.msisdn}</button>
+                      : '—'}
+                  </td>
                   <td>{r.mtsFio ?? '—'}</td>
                   <td>{r.calls}</td>
                   <td>{fmtDur(r.totalSeconds)}</td>
@@ -402,6 +408,7 @@ const NumberMapSection: FC = () => {
         </div>
       </div>
       {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
+      {cardMsisdn && <SubscriberCardModal msisdn={cardMsisdn} onClose={() => setCardMsisdn(null)} />}
     </section>
   );
 };
@@ -422,6 +429,7 @@ const ActionsSection: FC = () => {
   const [ruleProductCode, setRuleProductCode] = useState('');
   const [ruleVersionId, setRuleVersionId] = useState('');
   const [ruleLimit, setRuleLimit] = useState('');
+  const [cardOpen, setCardOpen] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
 
   const rules = useMtsBusinessBudgetRules(accountId, msisdn, Boolean(accountId && msisdn));
@@ -486,6 +494,10 @@ const ActionsSection: FC = () => {
               </option>
             ))}
           </select>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Карточка номера</label>
+          <button className={styles.btnSecondary} disabled={!msisdn} onClick={() => setCardOpen(true)}>Открыть карточку</button>
         </div>
       </div>
 
@@ -569,6 +581,7 @@ const ActionsSection: FC = () => {
           </table>
         </div>
       )}
+      {cardOpen && msisdn && <SubscriberCardModal msisdn={msisdn} onClose={() => setCardOpen(false)} />}
     </section>
   );
 };

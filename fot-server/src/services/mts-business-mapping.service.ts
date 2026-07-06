@@ -25,6 +25,15 @@ export interface IMtsBusinessImportedNumberRow {
   employeeTabNumber: string | null;
 }
 
+export interface IMtsSubscriberContext {
+  accountId: string;
+  accountNo: string | null;
+  fio: string | null;
+  employeeId: number | null;
+  employeeFullName: string | null;
+  employeeTabNumber: string | null;
+}
+
 class MtsBusinessMappingService {
   async getNumberMap(): Promise<IMtsBusinessNumberMapRow[]> {
     const rows = await query<{
@@ -192,6 +201,40 @@ class MtsBusinessMappingService {
       [hash],
     );
     return { needsFio: row != null && row.employee_id == null && !row.mts_fio };
+  }
+
+  /**
+   * Контекст номера для карточки: аккаунт (обязателен), ЛС, ФИО (сотрудник →
+   * иначе mts_fio), сотрудник. Возвращает null, если номер не в number_map или
+   * не привязан к аккаунту (без account_id живые вызовы МТС невозможны).
+   */
+  async getSubscriberContext(rawMsisdn: string): Promise<IMtsSubscriberContext | null> {
+    const hash = msisdnHash(rawMsisdn);
+    if (!hash) return null;
+    const row = await queryOne<{
+      account_id: string | null;
+      account_number: string | null;
+      mts_fio: string | null;
+      employee_id: number | null;
+      full_name: string | null;
+      tab_number: string | null;
+    }>(
+      `SELECT nm.account_id, a.account_number, nm.mts_fio, nm.employee_id, e.full_name, e.tab_number
+         FROM mts_business_number_map nm
+         LEFT JOIN mts_business_accounts a ON a.id = nm.account_id
+         LEFT JOIN employees e ON e.id = nm.employee_id
+        WHERE nm.msisdn_hash = $1`,
+      [hash],
+    );
+    if (!row || !row.account_id) return null;
+    return {
+      accountId: row.account_id,
+      accountNo: row.account_number,
+      fio: row.full_name ?? row.mts_fio,
+      employeeId: row.employee_id,
+      employeeFullName: row.full_name,
+      employeeTabNumber: row.tab_number,
+    };
   }
 
   /** Номера аккаунта, известные ТОЛЬКО через number_map (напр. из HierarchyStructure, без CDR-истории). */
