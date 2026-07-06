@@ -23,6 +23,7 @@ export interface IMtsBusinessImportedNumberRow {
   employeeId: number | null;
   employeeFullName: string | null;
   employeeTabNumber: string | null;
+  accountId: string | null;
 }
 
 export interface IMtsSubscriberContext {
@@ -71,11 +72,13 @@ class MtsBusinessMappingService {
       employee_id: number | null;
       full_name: string | null;
       tab_number: string | null;
+      account_id: string | null;
     }>(
       `SELECT MIN(c.msisdn_enc) AS msisdn_enc,
               COUNT(*)::text AS calls,
               COALESCE(SUM(c.duration_sec), 0)::text AS total_sec,
               MAX(c.started_at) AS last_call_at,
+              MAX(c.account_id::text) AS account_id,
               m.mts_fio,
               m.employee_id,
               e.full_name,
@@ -96,6 +99,7 @@ class MtsBusinessMappingService {
       employeeId: r.employee_id,
       employeeFullName: r.full_name,
       employeeTabNumber: r.tab_number,
+      accountId: r.account_id,
     }));
   }
 

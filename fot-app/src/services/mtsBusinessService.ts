@@ -53,6 +53,7 @@ export interface IMtsBusinessImportedNumberRow {
   employeeId: number | null;
   employeeFullName: string | null;
   employeeTabNumber: string | null;
+  accountId: string | null;
 }
 
 export interface IMtsBusinessTalkTimeRow {

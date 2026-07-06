@@ -21,6 +21,7 @@ import {
 import { mtsBusinessService, type IMtsBusinessAccount } from '../../services/mtsBusinessService';
 import type { IMtsBusinessBudgetRule } from '../../services/mtsBusinessActionsService';
 import { EmployeeFioPicker } from '../mts/EmployeeFioPicker';
+import { NumberFioPicker } from './NumberFioPicker';
 import { OverviewSection } from './OverviewSection';
 import { SubscriberCardModal } from './SubscriberCardModal';
 import { errText, toISODate, fmtDur, fmtLast, ACTION_TYPE_LABELS } from './mtsBusinessFormat';
@@ -186,19 +187,20 @@ const SyncSection: FC = () => {
   const now = useMemo(() => new Date(), []);
   const active = (accounts.data ?? []).filter(a => a.isActive);
   const [accountId, setAccountId] = useState('');
-  const [targets, setTargets] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth(), 1)));
   const [dateTo, setDateTo] = useState(toISODate(now));
   const [msg, setMsg] = useState<Msg>(null);
 
+  const effAccountId = accountId || active[0]?.id || '';
+
   const onFetch = async (): Promise<void> => {
     setMsg(null);
-    const acc = accountId || active[0]?.id;
+    const acc = effAccountId;
     if (!acc) { setMsg({ ok: false, text: 'Сначала добавьте аккаунт' }); return; }
-    const list = targets.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
-    if (list.length === 0) { setMsg({ ok: false, text: 'Укажите хотя бы один номер 7XXXXXXXXXX' }); return; }
+    if (selected.length === 0) { setMsg({ ok: false, text: 'Выберите хотя бы одного сотрудника' }); return; }
     try {
-      const r = await fetchSync.mutateAsync({ accountId: acc, msisdns: list, dateFrom, dateTo });
+      const r = await fetchSync.mutateAsync({ accountId: acc, msisdns: selected, dateFrom, dateTo });
       const failedText = r.failedNumbers.length ? `, ошибки по номерам: ${r.failedNumbers.join(', ')}` : '';
       setMsg({ ok: r.failedNumbers.length === 0, text: `Разобрано звонков: ${r.parsed}, добавлено: ${r.inserted}, пропущено (дубли): ${r.skipped}${failedText}` });
     } catch (e) {
@@ -217,7 +219,7 @@ const SyncSection: FC = () => {
       <div className={styles.row}>
         <div className={styles.field}>
           <label className={styles.label}>Аккаунт</label>
-          <select className={styles.select} value={accountId} onChange={e => setAccountId(e.target.value)}>
+          <select className={styles.select} value={accountId} onChange={e => { setAccountId(e.target.value); setSelected([]); }}>
             <option value="">{active.length ? '— выберите —' : 'нет аккаунтов'}</option>
             {active.map(a => <option key={a.id} value={a.id}>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>)}
           </select>
@@ -232,8 +234,8 @@ const SyncSection: FC = () => {
         </div>
       </div>
       <div className={styles.field}>
-        <label className={styles.label}>Номера 7XXXXXXXXXX (через запятую)</label>
-        <textarea className={styles.textarea} value={targets} onChange={e => setTargets(e.target.value)} placeholder="79001234567, 79007654321" />
+        <label className={styles.label}>Сотрудники / номера (по ФИО)</label>
+        <NumberFioPicker accountId={effAccountId} value={selected} onChange={setSelected} />
       </div>
       <div className={styles.actions}>
         <button className={styles.btn} onClick={onFetch} disabled={fetchSync.isPending || active.length === 0}>Загрузить за период</button>
