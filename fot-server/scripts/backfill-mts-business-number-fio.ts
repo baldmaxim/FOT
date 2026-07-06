@@ -16,17 +16,35 @@
  * По умолчанию — DRY-RUN (только чтение БД + чтение МТС, ничего не пишет).
  * Запись — только с флагом --apply.
  *
- * Запуск на проде (env корректен, БД на запись):
- *   cd /opt/fot-build && npx tsx fot-server/scripts/backfill-mts-business-number-fio.ts          # preview
- *   cd /opt/fot-build && npx tsx fot-server/scripts/backfill-mts-business-number-fio.ts --apply   # запись
+ * Запуск на проде (cwd PM2 = папка сайта, .env там же — грузим его явно):
+ *   cd /opt/fot-build/fot-server && npx tsx scripts/backfill-mts-business-number-fio.ts          # preview
+ *   cd /opt/fot-build/fot-server && npx tsx scripts/backfill-mts-business-number-fio.ts --apply   # запись
+ * Если .env в нестандартном месте: MTS_ENV_FILE=/путь/.env npx tsx scripts/...
  *
- * ПДн (ФИО/полный номер) в вывод не печатаются. Read-only из локальной сессии
- * НЕ пройдёт (--apply требует записи) — запускать в прод-контексте.
+ * ПДн (ФИО/полный номер) в вывод не печатаются.
  */
-import { query, execute } from '../src/config/postgres.js';
-import { encryptionService } from '../src/services/encryption.service.js';
-import { mtsBusinessCatalogService } from '../src/services/mts-business-catalog.service.js';
-import { mtsBusinessMappingService } from '../src/services/mts-business-mapping.service.js';
+import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// .env грузим ДО импорта app-модулей (env.ts валидирует при импорте, а из
+// /opt/fot-build его CWD-dotenv не найдёт — .env лежит в папке сайта).
+const envCandidates = [
+  process.env.MTS_ENV_FILE,
+  path.resolve(process.cwd(), '.env'),
+  '/srv/sites/fot.su10.ru/fot-server/.env',
+  path.resolve(__dirname, '../.env'),
+].filter((p): p is string => Boolean(p));
+const envPath = envCandidates.find(p => fs.existsSync(p));
+if (envPath) {
+  dotenv.config({ path: envPath });
+  console.log(`[env] загружен ${envPath}`);
+} else {
+  console.warn('[env] .env не найден — переменные должны быть уже в окружении');
+}
 
 const APPLY = process.argv.includes('--apply');
 const maskMsisdn = (m: string): string => (m.length >= 6 ? `${m.slice(0, 4)}***${m.slice(-2)}` : '***');
@@ -38,6 +56,12 @@ interface ICandidate {
 }
 
 const main = async (): Promise<void> => {
+  // Динамический импорт app-модулей — ПОСЛЕ загрузки .env выше.
+  const { query, execute } = await import('../src/config/postgres.js');
+  const { encryptionService } = await import('../src/services/encryption.service.js');
+  const { mtsBusinessCatalogService } = await import('../src/services/mts-business-catalog.service.js');
+  const { mtsBusinessMappingService } = await import('../src/services/mts-business-mapping.service.js');
+
   console.log(`Бэкфилл ФИО/account_id номеров МТС Бизнес — режим: ${APPLY ? 'APPLY (запись)' : 'DRY-RUN (только чтение)'}`);
 
   // --- A) account_id из CDR ---
@@ -64,8 +88,6 @@ const main = async (): Promise<void> => {
   }
 
   // --- B) ФИО через PersonalDataInfo ---
-  // account_id резолвим COALESCE'ом (number_map → CDR), чтобы dry-run и apply
-  // обрабатывали один и тот же набор кандидатов.
   const candidates = await query<ICandidate>(
     `SELECT nm.msisdn_hash, nm.msisdn_enc,
             COALESCE(nm.account_id,
@@ -101,7 +123,6 @@ const main = async (): Promise<void> => {
       }
       console.log(`  ${maskMsisdn(msisdn)} → ФИО получено${APPLY ? ' (сохранено)' : ''}`);
     } catch {
-      // Без ПДн в лог: только факт неудачи.
       failed++;
     }
   }

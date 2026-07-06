@@ -86,12 +86,19 @@ const deepFind = (body: unknown, keys: string[], depth = 0): unknown => {
   return undefined;
 };
 
-const parseBalance = (resp: unknown): IMtsBalance => ({
-  amount: toNumber(deepFind(resp, ['amount'])),
-  creditLimit: toNumber(deepFind(resp, ['creditLimit'])),
-  currencyCode: asString(deepFind(resp, ['unitOfMeasure', 'currencyCode', 'currencyName'])),
-  validUntil: asString(deepFind(resp, ['endDateTime'])),
-});
+const parseBalance = (resp: unknown): IMtsBalance => {
+  const creditLimit = toNumber(deepFind(resp, ['creditLimit']));
+  const validUntil = asString(deepFind(resp, ['endDateTime']));
+  const year = validUntil ? Number(validUntil.slice(0, 4)) : null;
+  return {
+    amount: toNumber(deepFind(resp, ['amount'])),
+    // -999999999 — служебная «заглушка без лимита» МТС → скрываем (null).
+    creditLimit: creditLimit != null && creditLimit <= -999_000_000 ? null : creditLimit,
+    currencyCode: asString(deepFind(resp, ['unitOfMeasure', 'currencyCode', 'currencyName'])),
+    // Дальняя дата (≥2037) = «бессрочно» → скрываем.
+    validUntil: year != null && year >= 2037 ? null : validUntil,
+  };
+};
 
 /** Глубокий обход в поисках ВСЕХ объектов, содержащих ключ-маркер (не первого, как deepFind). */
 const collectByMarker = (body: unknown, marker: string, depth = 0, out: Record<string, unknown>[] = []): Record<string, unknown>[] => {

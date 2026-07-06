@@ -147,11 +147,12 @@ export const SubscriberCardModal: FC<{ msisdn: string; onClose: () => void }> = 
                 <KV label="КПП" value={dash(id.kpp)} />
               </div>
 
-              <Section title="Баланс" state={data.balance} render={b => (
+              <Section title="Баланс ЛС" state={data.balance} render={b => (
                 <>
                   <KV label="Баланс" value={fmtMoney(b.amount)} />
                   <KV label="Кредитный лимит" value={fmtMoney(b.creditLimit)} />
                   <KV label="Действует до" value={fmtLast(b.validUntil)} />
+                  <p className={s.itemMuted}>Общий на лицевой счёт (у номера отдельного баланса нет)</p>
                 </>
               )} />
 

@@ -13,7 +13,10 @@ const MTS_BIZ_TIMEOUTS = {
   bulk: 30_000,
 } as const;
 
-const MTS_BIZ_MAX_CONCURRENCY = Math.max(1, Number(process.env.MTS_BUSINESS_MAX_CONCURRENCY) || 2);
+// 4 по умолчанию: карточка номера собирает ~9 разных эндпоинтов параллельно —
+// при 2 это 5 «волн» и заметная задержка. Rate-gate (60/300 в мин на аккаунт)
+// всё равно защищает от перегруза; concurrency лишь ограничивает одновременные.
+const MTS_BIZ_MAX_CONCURRENCY = Math.max(1, Number(process.env.MTS_BUSINESS_MAX_CONCURRENCY) || 4);
 const MTS_BIZ_RETRY_STATUSES = new Set([429, 502, 503, 504]);
 const MTS_BIZ_RETRY_CODES = new Set(['ECONNRESET', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN']);
 const MTS_BIZ_RETRY_ATTEMPTS = 3;
