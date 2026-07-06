@@ -39,6 +39,12 @@ const lastMonths = (n: number): { value: string; label: string }[] => {
 
 const dash = (v: string | number | null | undefined): string => (v == null || v === '' ? '—' : String(v));
 
+/** Число дней в месяце по строке YYYY-MM. */
+const daysInMonth = (ym: string): number => {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+};
+
 /** Объём события выписки: секунды → длительность, байты → МБ, штуки → как есть. */
 const fmtUnits = (units: number | null, code: string | null): string => {
   if (units == null) return '';
@@ -160,6 +166,9 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
         <div className={st.drawerTabs}>
           <button className={`${st.drawerTab} ${view === 'main' ? st.drawerTabActive : ''}`} onClick={() => setView('main')}>Управление</button>
           <button className={`${st.drawerTab} ${view === 'usage' ? st.drawerTabActive : ''}`} onClick={() => setView('usage')}>Использование</button>
+          <button className={st.itemBtn} style={{ marginLeft: 'auto' }} disabled={busy} onClick={() => { void onRefresh(); }}>
+            {refresh.isPending ? 'Обновление…' : 'Обновить данные из МТС'}
+          </button>
         </div>
 
         {view === 'main' && (<>
@@ -193,7 +202,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           <KV label="Лицевой счёт" value={dash(row.accountLabel)} />
           <KV
             label="Сотрудник ФОТ"
-            value={row.employeeFullName
+            value={(row.employeeId != null && !editLink)
               ? (
                 <>
                   {row.employeeFullName}{row.employeeTabNumber ? ` (таб. ${row.employeeTabNumber})` : ''}{row.departmentName ? ` · ${row.departmentName}` : ''}
@@ -208,29 +217,31 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
                   </button>
                 </>
               )
-              : 'не привязан'}
-          />
-          {(row.employeeId == null || editLink) && (
-            <div className={styles.actions} style={{ marginTop: 8, alignItems: 'center' }}>
-              <EmployeeFioPicker
-                disabled={busy}
-                placeholder={row.employeeId != null ? 'Сменить сотрудника…' : 'Привязать по ФИО…'}
-                onSelect={id => { void onLink(id); }}
-              />
-              {row.employeeId != null && (
-                <>
-                  <button className={styles.btnSecondary} disabled={busy} onClick={() => { void onLink(null); }}>Снять</button>
-                  <button className={styles.btnSecondary} disabled={busy} onClick={() => setEditLink(false)}>Отмена</button>
-                </>
+              : (
+                <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
+                  <EmployeeFioPicker
+                    disabled={busy}
+                    placeholder={row.employeeId != null ? 'Сменить сотрудника…' : 'Привязать по ФИО…'}
+                    onSelect={id => { void onLink(id); }}
+                  />
+                  {row.employeeId != null && (
+                    <>
+                      <button className={styles.btnSecondary} disabled={busy} onClick={() => { void onLink(null); }}>Снять</button>
+                      <button className={styles.btnSecondary} disabled={busy} onClick={() => setEditLink(false)}>Отмена</button>
+                    </>
+                  )}
+                </span>
               )}
-            </div>
-          )}
+          />
         </div>
 
         <div className={st.section}>
           <div className={st.sectionHead}>
             <h4 className={st.sectionTitle}>Персональные данные</h4>
-            <PersonalDataStatusBadge status={row.pdStatus} />
+            <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <PersonalDataStatusBadge status={row.pdStatus} />
+              <button className={styles.btn} style={{ padding: '4px 10px', fontSize: 12, minHeight: 0 }} onClick={() => setPdOpen(true)}>Изменить</button>
+            </span>
           </div>
           <KV label="ФИО по данным МТС" value={dash(row.mtsFio)} />
           <KV label="Статус" value={row.pdStatus ? (PD_STATUS_LABELS[row.pdStatus] ?? row.pdStatus) : 'не проверено — обновите данные'} />
@@ -239,21 +250,18 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
             Паспортные данные хранятся в зашифрованном виде и не отображаются. Внесение/изменение уходит в МТС;
             пользователь номера подтверждает данные через Госуслуги (придёт SMS).
           </p>
-          <div className={styles.actions} style={{ marginTop: 4 }}>
-            <button className={styles.btnSecondary} onClick={() => setPdOpen(true)}>Внести / изменить</button>
-          </div>
         </div>
 
         <div className={st.section}>
           <div className={st.sectionHead}>
             <h4 className={st.sectionTitle}>Финансы и тариф</h4>
-            <button className={st.itemBtn} disabled={busy || !accountId} onClick={() => setConnectKind('tariff')}>
+            <button className={styles.btn} style={{ padding: '4px 10px', fontSize: 12, minHeight: 0 }} disabled={busy || !accountId} onClick={() => setConnectKind('tariff')}>
               Сменить тариф
             </button>
           </div>
           <KV label="Начисления" value={d?.charges ? fmtMoney(d.charges.amount) : fmtMoney(row.chargesAmount)} />
           <KV label="Тариф" value={dash(d?.tariff.name ?? row.tariffName)} />
-          <KV label="Абонплата" value={d?.tariff.fee?.amount != null ? `${fmtMoney(d.tariff.fee.amount)}/мес` : '—'} />
+          <KV label="Абонентская плата" value={d?.tariff.fee?.amount != null ? `${fmtMoney(d.tariff.fee.amount)}/мес` : '—'} />
           {(d?.packages ?? []).length > 0 && (
             <KV label="Пакеты" value={(d?.packages ?? []).map(fmtPackage).join(' · ')} />
           )}
@@ -305,16 +313,16 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
                 >
                   {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                 </select>
-                <input
+                <select
                   className={st.monthSelect}
-                  type="date"
-                  value={usageDate}
-                  onChange={e => setUsageDate(e.target.value)}
-                  title="Показать использование за конкретную дату"
-                />
-                {usageDate && (
-                  <button className={st.itemBtn} onClick={() => setUsageDate('')}>За месяц</button>
-                )}
+                  value={usageDate ? usageDate.slice(8) : ''}
+                  onChange={e => setUsageDate(e.target.value ? `${month}-${e.target.value}` : '')}
+                  title="День внутри выбранного месяца"
+                >
+                  <option value="">Весь месяц</option>
+                  {Array.from({ length: daysInMonth(month) }, (_, i) => String(i + 1).padStart(2, '0'))
+                    .map(d => <option key={d} value={d}>{Number(d)}</option>)}
+                </select>
               </span>
             </div>
             {usage.isLoading && <p className={styles.hint}>Загрузка выписки из МТС…</p>}
@@ -355,9 +363,6 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
         )}
 
         <div className={st.drawerFooter}>
-          <button className={styles.btn} disabled={busy} onClick={() => { void onRefresh(); }}>
-            {refresh.isPending ? 'Обновление…' : 'Обновить данные из МТС'}
-          </button>
           <span className={st.capturedAt}>
             {d?.capturedAt ? `данные от ${fmtLast(d.capturedAt)}` : 'данные ещё не выгружались'}
           </span>
