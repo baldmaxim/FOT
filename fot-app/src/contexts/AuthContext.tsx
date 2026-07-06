@@ -327,6 +327,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return state.profile?.page_access?.['/timesheet']?.can_edit === true;
       case 'timesheet.workflow.review':
         return state.profile?.page_access?.['/timesheet-hr']?.can_edit === true;
+      case 'timesheet.workflow.reviewTimesheets':
+        // Как timesheet.workflow.review, но дополнительно пускает табельщицу (её скоуп
+        // ограничен своими бригадами на бэке) — не трогает CorrectionsTab/настройки согласования
+        // выходных, которые остаются на строгом timesheet.workflow.review.
+        return state.profile?.page_access?.['/timesheet-hr']?.can_edit === true
+          || (state.profile?.role_code === 'timekeeper'
+            && state.profile?.page_access?.['/timesheet-hr']?.can_view === true);
       case 'timesheet.workflow.monitor':
         // Кадровая служба (hr) видит режим «По участкам» в Табеле на чтение,
         // хотя страницы /timesheet-hr у неё нет (см. data.scope.all выше).

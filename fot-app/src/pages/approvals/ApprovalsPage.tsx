@@ -829,7 +829,7 @@ interface ITimesheetsTabProps {
 
 const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
   const { hasPermission } = useAuth();
-  const canReview = hasPermission('timesheet.workflow.review');
+  const canReview = hasPermission('timesheet.workflow.reviewTimesheets');
   const queryClient = useQueryClient();
   const toast = useToast();
 

@@ -12,10 +12,17 @@ vi.mock('../config/postgres.js', async (importActual) => ({
   queryOne: pgQueryOne,
 }));
 
-const { resolveScopeMock } = vi.hoisted(() => ({ resolveScopeMock: vi.fn(async () => 'all') }));
+const { resolveScopeMock, resolveScopedDeptMock } = vi.hoisted(() => ({
+  resolveScopeMock: vi.fn(async () => 'all'),
+  // approve() теперь проверяет ensureApprovalAccess (→ resolveScopedDepartmentId) ДО
+  // precheck pending-корректировок — эти тесты бьют по admin-сценарию (scope='all'),
+  // поэтому доступ к запрошенному отделу всегда есть.
+  resolveScopedDeptMock: vi.fn(async (_req: unknown, deptId: string | null) => deptId),
+}));
 vi.mock('../services/data-scope.service.js', async (importActual) => ({
   ...(await importActual<typeof import('../services/data-scope.service.js')>()),
   resolveRequestDataScope: resolveScopeMock,
+  resolveScopedDepartmentId: resolveScopedDeptMock,
 }));
 
 const { checkWeekendMock } = vi.hoisted(() => ({ checkWeekendMock: vi.fn() }));

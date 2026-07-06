@@ -1336,6 +1336,14 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   try {
     const approval = await loadApprovalById(req.params.id);
     if (approval) {
+      // Проверяем доступ ДО precheck pending-корректировок ниже — иначе узко-скоупленная
+      // роль (например, табельщица) могла бы дёрнуть чужой approvalId и получить факт
+      // существования табеля + число pending-корректировок раньше, чем сработает access-check
+      // внутри changeApprovalReviewState.
+      if (!(await ensureApprovalAccess(req, approval))) {
+        res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
+        return;
+      }
       // Для персональной подачи берём состав из снимка — иначе подцепим чужих сотрудников отдела.
       let employeeIds: number[];
       let membershipWindow: Map<number, IMembershipWindow> | null = null;
