@@ -8,9 +8,10 @@
  * печатает распарсенный результат — видно, заполнились ли поля / какая ошибка
  * (401/421 и т.п.), чтобы поправить params/парсер.
  *
- * Запуск на проде (.env берём из папки сайта, грузим явно):
- *   cd /opt/fot-build/fot-server && npx tsx scripts/probe-mts-business-subscriber.ts <accountId> <msisdn> [YYYY-MM]
- * Если .env в нестандартном месте: MTS_ENV_FILE=/путь/.env npx tsx scripts/...
+ * Запуск на проде (.env берём из папки сайта, грузим явно; accountId
+ * резолвится по номеру автоматически):
+ *   cd /opt/fot-build && npx tsx fot-server/scripts/probe-mts-business-subscriber.ts <msisdn> [YYYY-MM]
+ * Если .env в нестандартном месте: MTS_ENV_FILE=/путь/.env npx tsx ...
  *
  * Ничего не пишет в БД/МТС. ПДн (ФИО/email) в выводе маскируются. Дампы НЕ коммитить.
  */
@@ -54,15 +55,23 @@ const maskPii = (v: unknown, key?: string): unknown => {
 };
 
 const main = async (): Promise<void> => {
-  const [accountId, msisdn, month] = process.argv.slice(2);
-  if (!accountId || !msisdn) {
-    console.error('Использование: probe-mts-business-subscriber.ts <accountId> <msisdn> [YYYY-MM]');
+  const [msisdn, month] = process.argv.slice(2);
+  if (!msisdn) {
+    console.error('Использование: probe-mts-business-subscriber.ts <msisdn> [YYYY-MM]');
     process.exit(1);
   }
 
   const { mtsBusinessBillingService } = await import('../src/services/mts-business-billing.service.js');
   const { mtsBusinessCatalogService } = await import('../src/services/mts-business-catalog.service.js');
   const { mtsBusinessSubscriberCardService } = await import('../src/services/mts-business-subscriber-card.service.js');
+  const { mtsBusinessMappingService } = await import('../src/services/mts-business-mapping.service.js');
+
+  const ctx = await mtsBusinessMappingService.getSubscriberContext(msisdn);
+  if (!ctx) {
+    console.error('Номер не привязан к аккаунту (нет account_id) — сначала прогони backfill.');
+    process.exit(1);
+  }
+  const { accountId } = ctx;
 
   const show = async (label: string, fn: () => Promise<unknown>): Promise<void> => {
     try {
