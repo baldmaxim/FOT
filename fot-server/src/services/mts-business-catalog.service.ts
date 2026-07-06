@@ -400,6 +400,14 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
    * дата/место рождения, адрес регистрации) — сознательное решение: берём из
    * ответа ТОЛЬКО ФИО, остальные поля не парсим, никуда не пишем и не логируем
    * (см. suppressErrorBodyLog — тело ошибки этого эндпоинта тоже не в логах).
+   *
+   * Формат ответа (по офиц. документации МТС Бизнес API) — МАССИВ записей, ФИО
+   * лежит одной строкой в поле `name` = «Фамилия Имя Отчество»:
+   *   [{ "name": "Иванов Иван Иванович",
+   *      "characteristic": [{ "name": "PersonalDataConfirmation", "value": "Activated" }] }]
+   * Fallback (SurName/FirstName/SecondName) оставлен на случай иной схемы контура.
+   * ФИО приходит ТОЛЬКО когда персданные пользователя внесены/подтверждены на
+   * стороне МТС; для SIM без внесённых данных ответ пуст — ФИО берётся из XML (<tp u>).
    */
   async getPersonalDataFio(accountId: string, msisdn: string): Promise<string | null> {
     const resp = await this.request<unknown>('get', '/PersonalData/PersonalDataInfo', {
@@ -407,12 +415,18 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
       params: { 'contactMedium.phoneNumber': msisdn },
       suppressErrorBodyLog: true,
     });
-    const r = (resp ?? {}) as Record<string, unknown>;
-    const surName = asString(r.SurName) ?? asString(r.surName) ?? asString(r.LastName);
-    const firstName = asString(r.FirstName) ?? asString(r.firstName);
-    const secondName = asString(r.SecondName) ?? asString(r.secondName);
-    const fio = [surName, firstName, secondName].filter((v): v is string => Boolean(v)).join(' ');
-    return fio || null;
+    const records = (Array.isArray(resp) ? resp : [resp])
+      .filter((v): v is Record<string, unknown> => v != null && typeof v === 'object');
+    for (const r of records) {
+      const name = asString(r.name);
+      if (name) return name.trim();
+      const surName = asString(r.SurName) ?? asString(r.surName) ?? asString(r.LastName);
+      const firstName = asString(r.FirstName) ?? asString(r.firstName);
+      const secondName = asString(r.SecondName) ?? asString(r.secondName);
+      const fio = [surName, firstName, secondName].filter((v): v is string => Boolean(v)).join(' ');
+      if (fio) return fio;
+    }
+    return null;
   }
 }
 
