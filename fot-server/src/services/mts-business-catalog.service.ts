@@ -90,11 +90,19 @@ const collectByMarker = (body: unknown, marker: string, depth = 0, out: Record<s
 };
 
 const parseTariff = (resp: unknown): IMtsTariff => {
+  // Имя/id тарифа лежат в productOffering (объект/массив, возможно вложенно), а
+  // НЕ на верхнем уровне ответа — подтверждено probe 06.07.2026 (BillPlanInfo:
+  // productOffering.externalID=0495, name='Умный бизнес M (КОРП)'). Раньше парсер
+  // читал верхний уровень → tariffName=null во всех снапшотах. Ищем узел с
+  // externalID глубоким обходом, с фолбэком на верхний уровень.
   const first = Array.isArray(resp) ? resp[0] : resp;
   const r = (first ?? {}) as Record<string, unknown>;
+  const offer = collectByMarker(resp, 'externalID')[0]
+    ?? collectByMarker(resp, 'externalId')[0]
+    ?? r;
   return {
-    tariffId: asString(r.externalID) ?? asString(r.id),
-    tariffName: asString(r.name),
+    tariffId: asString(offer.externalID) ?? asString(offer.externalId) ?? asString(offer.id) ?? asString(r.id),
+    tariffName: asString(offer.name) ?? asString(r.name),
   };
 };
 
