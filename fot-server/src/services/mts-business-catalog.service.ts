@@ -97,25 +97,39 @@ const parseTariff = (resp: unknown): IMtsTariff => {
   };
 };
 
+// Проверено сырым ответом 06.07.2026: цена услуги — в productOfferingPrice[] под
+// name='PeriodicalPrice' (ежемесячная); у доступных тарифов — 'Price'. Отдельного
+// r.price нет. Берём taxIncludedAmount (иначе dutyFreeAmount).
+const priceFromPOP = (r: Record<string, unknown>): { amount: number | null; currency: string | null } => {
+  const pops = Array.isArray(r.productOfferingPrice) ? (r.productOfferingPrice as Record<string, unknown>[]) : [];
+  const entry = pops.find(p => asString(p.name) === 'PeriodicalPrice')
+    ?? pops.find(p => asString(p.name) === 'Price')
+    ?? pops.find(p => p.price && typeof p.price === 'object');
+  const price = (entry?.price ?? {}) as Record<string, unknown>;
+  return {
+    amount: toNumber(price.taxIncludedAmount) ?? toNumber(price.dutyFreeAmount),
+    currency: asString(price.currencyCode),
+  };
+};
+
 const parseServices = (resp: unknown): IMtsService[] => {
-  const items = Array.isArray(resp) ? resp : collectByMarker(resp, 'externalID');
+  const items = Array.isArray(resp) ? (resp as Record<string, unknown>[]) : collectByMarker(resp, 'externalID');
   return items
     .map(raw => {
       const r = raw as Record<string, unknown>;
-      const price = r.price as Record<string, unknown> | undefined;
-      const amount = toNumber(price?.taxIncludedAmount ?? price?.dutyFreeAmount)
-        ?? deepNumber(r, ['taxIncludedAmount', 'dutyFreeAmount', 'monthlyFee', 'periodicAmount', 'amount', 'value']);
       const name = asString(r.name);
-      const code = asString(r.externalID) ?? asString(r.code);
-      if (!name && !code && amount == null) return null;
+      const code = asString(r.externalID) ?? asString(r.code) ?? asString(r.id);
+      if (!name && !code) return null;
+      const { amount, currency } = priceFromPOP(r);
+      const validFor = r.validFor as Record<string, unknown> | undefined;
       return {
         code,
         name,
         status: asString(r.status),
         monthlyAmount: amount,
-        currencyCode: asString(price?.currencyCode) ?? asString(firstValue(r, ['currencyCode', 'currencyName'])),
-        startDateTime: asString(r.startDateTime),
-        endDateTime: asString(r.endDateTime),
+        currencyCode: currency,
+        startDateTime: asString(validFor?.startDateTime),
+        endDateTime: asString(validFor?.endDateTime),
       };
     })
     .filter((s): s is IMtsService => s !== null);

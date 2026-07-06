@@ -135,13 +135,20 @@ const parsePackages = (resp: unknown): IMtsPackageCounter[] => {
 // Контракты TariffRental/PaymentHistory/DocumentDeliveryMethod НЕ проверены
 // живым вызовом — парсеры толерантны (обход по нескольким вероятным ключам).
 // Перед боевым использованием свериться с сырым payload (probe-скрипт).
-const parseTariffFee = (resp: unknown): IMtsTariffFee => ({
-  amount: toNumber(deepFind(resp, [
-    'taxIncludedAmount', 'dutyFreeAmount', 'rentAmount', 'monthlyFee', 'periodicAmount',
-    'abonentFee', 'abonentPayment', 'rent', 'fee', 'cost', 'sum', 'amount', 'price', 'value',
-  ])),
-  currencyCode: asString(deepFind(resp, ['currencyCode', 'currencyName'])),
-});
+// Проверено сырым ответом 06.07.2026: абонплата — в productOfferingPrice[] под
+// name='CurrentPrimaryFee' → price.taxIncludedAmount (у '…WithTaxWithoutDiscount'
+// и '…Fee.Discount' там 0/скидка — их брать нельзя, потому не deepFind).
+const parseTariffFee = (resp: unknown): IMtsTariffFee => {
+  const r = (resp ?? {}) as Record<string, unknown>;
+  const pops = Array.isArray(r.productOfferingPrice) ? (r.productOfferingPrice as Record<string, unknown>[]) : [];
+  const entry = pops.find(p => asString(p.name) === 'CurrentPrimaryFee')
+    ?? pops.find(p => asString(p.name) === 'NextPrimaryFee');
+  const price = (entry?.price ?? {}) as Record<string, unknown>;
+  return {
+    amount: toNumber(price.taxIncludedAmount) ?? toNumber(price.dutyFreeAmount),
+    currencyCode: asString(price.currencyCode),
+  };
+};
 
 const parsePaymentHistory = (resp: unknown): IMtsPaymentEntry[] => {
   const items = Array.isArray(resp) ? (resp as Record<string, unknown>[]) : collectByMarker(resp, 'amount');
