@@ -12,6 +12,7 @@ import { query, queryOne, execute, withTransaction } from '../config/postgres.js
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { resolveCompanyScope } from '../services/data-scope.service.js';
+import { hasPageView, hasPageEdit } from '../services/access-control.service.js';
 import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import {
   getContractorOrgs,
@@ -89,6 +90,29 @@ const ensureSystemAdmin = async (
     return false;
   }
   return true;
+};
+
+const SUBMISSIONS_PAGE_KEY = '/admin/contractor-approvals/submissions';
+
+/**
+ * Гейт вкладки «Заявки на согласование». Пускает системного админа (как раньше —
+ * scope.roots==='all', чтобы не расширить доступ компанийным is_admin) ИЛИ роль
+ * с явным грантом на техническую вкладку (ОТиТБ). Проверяем именно грант роли,
+ * а не is_admin-байпас — иначе компанийный админ получил бы доступ помимо scope.
+ */
+const ensureSubmissionsAccess = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  action: 'view' | 'edit',
+): Promise<boolean> => {
+  const scope = await resolveCompanyScope(req);
+  if (scope.roots === 'all') return true;
+  const granted = action === 'edit'
+    ? await hasPageEdit(req.user.role_code, SUBMISSIONS_PAGE_KEY)
+    : await hasPageView(req.user.role_code, SUBMISSIONS_PAGE_KEY);
+  if (granted) return true;
+  res.status(403).json({ success: false, error: 'Недостаточно прав' });
+  return false;
 };
 
 /** Окно «использования» старых пропусков для статистики (последние N дней по СКУД). */
@@ -793,7 +817,7 @@ export const contractorAdminController = {
   /** GET /submissions/pending/count — счётчик pending-заявок для бейджа в меню. */
   async getPendingSubmissionsCount(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureSubmissionsAccess(req, res, 'view'))) return;
       const row = await queryOne<{ count: string }>(
         `SELECT COUNT(*)::text AS count
            FROM contractor_submissions s
@@ -910,7 +934,7 @@ export const contractorAdminController = {
   /** GET /submissions/pending — заявки на согласовании. */
   async getPendingSubmissions(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureSubmissionsAccess(req, res, 'view'))) return;
       const data = await query(
         `SELECT s.id,
                 s.org_department_id,
@@ -940,7 +964,7 @@ export const contractorAdminController = {
   /** GET /submissions/:id — детали заявки (пропуска с вписанным ФИО и поштучным статусом). */
   async getSubmissionDetail(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureSubmissionsAccess(req, res, 'view'))) return;
       const rows = await query(
         `SELECT p.id,
                 p.pass_number,
@@ -949,6 +973,7 @@ export const contractorAdminController = {
                 p.status AS pass_status,
                 p.approval_status,
                 p.is_active,
+                p.induction_passed,
                 p.access_point_names,
                 p.passport_series_number,
                 to_char(p.passport_issue_date, 'YYYY-MM-DD') AS passport_issue_date,
@@ -1009,6 +1034,63 @@ export const contractorAdminController = {
   },
 
   /**
+   * PATCH /submissions/passes/:passId/induction — отметка вводного инструктажа держателя.
+   * Единственное write-действие роли ОТиТБ. Меняем только у pending-пропусков.
+   */
+  async setPassInduction(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSubmissionsAccess(req, res, 'edit'))) return;
+      const passId = z.string().uuid().parse(req.params.passId);
+      const { passed } = z.object({ passed: z.boolean() }).parse(req.body);
+
+      // Текущее состояние — для аудита и понимания реального изменения.
+      const prev = await queryOne<{ induction_passed: boolean; pass_number: string; holder_name: string | null }>(
+        `SELECT p.induction_passed, p.pass_number,
+                COALESCE(h.holder_name, p.holder_name) AS holder_name
+           FROM contractor_passes p
+           LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
+          WHERE p.id = $1::uuid`,
+        [passId],
+      );
+
+      // Отмечать инструктаж можно только пока пропуск на согласовании.
+      const updated = await queryOne<{ id: string }>(
+        `UPDATE contractor_passes
+            SET induction_passed = $1,
+                induction_passed_at = CASE WHEN $1 THEN now() ELSE NULL END,
+                induction_passed_by = CASE WHEN $1 THEN $2::uuid ELSE NULL END
+          WHERE id = $3::uuid AND approval_status = 'pending'
+          RETURNING id`,
+        [passed, req.user.id, passId],
+      );
+      if (!updated) {
+        res.status(409).json({ success: false, error: 'Пропуск уже обработан или не найден' });
+        return;
+      }
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_INDUCTION_CHANGED, {
+        entityType: 'contractor_pass',
+        entityId: passId,
+        details: {
+          passed,
+          previousPassed: prev?.induction_passed ?? null,
+          passNumber: prev?.pass_number ?? null,
+          holderName: prev?.holder_name ?? null,
+        },
+      });
+
+      res.json({ success: true, data: { induction_passed: passed } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректные данные' });
+        return;
+      }
+      console.error('Contractor setPassInduction error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось сохранить инструктаж' });
+    }
+  },
+
+  /**
    * POST /submissions/:id/approve — применение к Sigur.
    * Sigur не транзакционен с PG: применяем по одному, каждый успех сразу
    * коммитим в PG, повторный апрув идемпотентно дозавершает остаток.
@@ -1027,6 +1109,27 @@ export const contractorAdminController = {
       }
       if (sub.status !== 'pending' && sub.status !== 'partially_applied') {
         res.status(409).json({ success: false, error: 'Заявка уже обработана' });
+        return;
+      }
+
+      // Enforcement: без пройденного вводного инструктажа пропуск не открываем.
+      // Проверяем ДО любых изменений (Шаг 1 — удаления) — либо открываем все, либо
+      // явная ошибка 422 со списком, без частичного применения.
+      const notInducted = await query<{ pass_number: string; holder_name: string | null }>(
+        `SELECT p.pass_number, COALESCE(h.holder_name, p.holder_name) AS holder_name
+           FROM contractor_passes p
+           LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
+          WHERE p.submission_id = $1::uuid
+            AND p.status IN ('submitted', 'blocked') AND p.holder_name IS NOT NULL
+            AND p.induction_passed = false`,
+        [submissionId],
+      );
+      if (notInducted.length > 0) {
+        res.status(422).json({
+          success: false,
+          error: 'Не пройден вводный инструктаж',
+          data: { without_induction: notInducted },
+        });
         return;
       }
 
@@ -1524,14 +1627,31 @@ export const contractorAdminController = {
         holder_name: string | null; submission_id: string | null;
         access_point_names: string[] | null;
         card_uid: string | null;
+        pass_number: string; induction_passed: boolean;
       }>(
         `SELECT id, status, sigur_employee_id, holder_name, submission_id, access_point_names,
-                card_uid
+                card_uid, pass_number, induction_passed
            FROM contractor_passes
           WHERE submission_id = $1::uuid AND id = ANY($2::uuid[])`,
         [submissionId, body.decisions.map(d => d.pass_id)],
       );
       const byId = new Map(passes.map(p => [p.id, p]));
+
+      // Enforcement: открыть (approved) можно только с пройденным инструктажом.
+      // Отказ (rejected) — без ограничений. Проверяем до обработки: либо все
+      // approved-пропуска с инструктажом, либо 422 со списком (без частичного применения).
+      const notInducted = body.decisions
+        .filter(d => d.decision === 'approved')
+        .map(d => byId.get(d.pass_id))
+        .filter((p): p is NonNullable<typeof p> => !!p && !p.induction_passed);
+      if (notInducted.length > 0) {
+        res.status(422).json({
+          success: false,
+          error: 'Не пройден вводный инструктаж',
+          data: { without_induction: notInducted.map(p => ({ pass_number: p.pass_number, holder_name: p.holder_name })) },
+        });
+        return;
+      }
 
       const applied: string[] = [];
       const rejected: string[] = [];

@@ -443,6 +443,35 @@
   font-weight: 700;
 }
 
+/* Кнопка «Прошёл» (вводный инструктаж) — зелёная, геометрия как .btn-secondary. */
+.inductionOk {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 20px;
+  min-height: 40px;
+  background: var(--success);
+  color: #fff;
+  border: 1px solid var(--success);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.inductionOk:hover {
+  filter: brightness(0.95);
+}
+
+.inductionOk:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Поле документа с дублирующимся номером — красная рамка + пояснение. */
 .docDupInput {
   border-color: var(--error) !important;

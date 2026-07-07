@@ -541,7 +541,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/admin/contractor-approvals" />}>
+        <Route element={<ProtectedRoute requiredPage={['/admin/contractor-approvals', '/admin/contractor-approvals/submissions']} />}>
           <Route
             path="/admin/contractor-approvals"
             element={

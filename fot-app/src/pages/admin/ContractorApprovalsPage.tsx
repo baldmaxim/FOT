@@ -18,12 +18,19 @@ import { RemovalRequestsTab } from '../../components/contractor/RemovalRequestsT
 import { usePendingContractorRemovalsCount } from '../../hooks/usePendingContractorRemovalsCount';
 import { useContractorSyncFailedCount } from '../../hooks/useContractorSyncFailedCount';
 import { contractorAdminService } from '../../services/contractorService';
+import { useAuth } from '../../contexts/AuthContext';
 import styles from '../contractor/Contractor.module.css';
 
 type Tab = 'pool' | 'sent' | 'submissions' | 'monitor' | 'removals';
 
 export const ContractorApprovalsPage: FC = () => {
-  const [tab, setTab] = useState<Tab>('pool');
+  const { isAdmin, canViewPage } = useAuth();
+  // Узкая роль ОТиТБ: есть только технический ключ вкладки «Заявки на согласование»,
+  // полного ключа раздела нет → показываем ей единственную вкладку.
+  const submissionsOnly = !isAdmin
+    && !canViewPage('/admin/contractor-approvals')
+    && canViewPage('/admin/contractor-approvals/submissions');
+  const [tab, setTab] = useState<Tab>(submissionsOnly ? 'submissions' : 'pool');
 
   const pendingSubsQuery = useQuery({
     queryKey: ['contractor-pending-subs'],
@@ -38,18 +45,22 @@ export const ContractorApprovalsPage: FC = () => {
   return (
     <div className={styles.page}>
       <div className={styles.tabs}>
-        <button
-          className={`${styles.tab} ${tab === 'pool' ? styles.tabActive : ''}`}
-          onClick={() => setTab('pool')}
-        >
-          Общий пул
-        </button>
-        <button
-          className={`${styles.tab} ${tab === 'sent' ? styles.tabActive : ''}`}
-          onClick={() => setTab('sent')}
-        >
-          Отправленные
-        </button>
+        {!submissionsOnly && (
+          <>
+            <button
+              className={`${styles.tab} ${tab === 'pool' ? styles.tabActive : ''}`}
+              onClick={() => setTab('pool')}
+            >
+              Общий пул
+            </button>
+            <button
+              className={`${styles.tab} ${tab === 'sent' ? styles.tabActive : ''}`}
+              onClick={() => setTab('sent')}
+            >
+              Отправленные
+            </button>
+          </>
+        )}
         <button
           className={`${styles.tab} ${tab === 'submissions' ? styles.tabActive : ''}`}
           onClick={() => setTab('submissions')}
@@ -57,27 +68,31 @@ export const ContractorApprovalsPage: FC = () => {
           Заявки на согласование
           {pendingCount > 0 && <span className={styles.tabBadge}>{pendingCount}</span>}
         </button>
-        <button
-          className={`${styles.tab} ${tab === 'monitor' ? styles.tabActive : ''}`}
-          onClick={() => setTab('monitor')}
-        >
-          Мониторинг
-          {syncFailedCount > 0 && <span className={styles.tabBadge}>{syncFailedCount}</span>}
-        </button>
-        <button
-          className={`${styles.tab} ${tab === 'removals' ? styles.tabActive : ''}`}
-          onClick={() => setTab('removals')}
-        >
-          Заявки на удаление сотрудников
-          {removalsCount > 0 && <span className={styles.tabBadge}>{removalsCount}</span>}
-        </button>
+        {!submissionsOnly && (
+          <>
+            <button
+              className={`${styles.tab} ${tab === 'monitor' ? styles.tabActive : ''}`}
+              onClick={() => setTab('monitor')}
+            >
+              Мониторинг
+              {syncFailedCount > 0 && <span className={styles.tabBadge}>{syncFailedCount}</span>}
+            </button>
+            <button
+              className={`${styles.tab} ${tab === 'removals' ? styles.tabActive : ''}`}
+              onClick={() => setTab('removals')}
+            >
+              Заявки на удаление сотрудников
+              {removalsCount > 0 && <span className={styles.tabBadge}>{removalsCount}</span>}
+            </button>
+          </>
+        )}
       </div>
 
-      {tab === 'pool' && <PoolTab />}
-      {tab === 'sent' && <SentTab />}
+      {tab === 'pool' && !submissionsOnly && <PoolTab />}
+      {tab === 'sent' && !submissionsOnly && <SentTab />}
       {tab === 'submissions' && <SubmissionsTab />}
-      {tab === 'monitor' && <MonitorTab />}
-      {tab === 'removals' && <RemovalRequestsTab />}
+      {tab === 'monitor' && !submissionsOnly && <MonitorTab />}
+      {tab === 'removals' && !submissionsOnly && <RemovalRequestsTab />}
     </div>
   );
 };

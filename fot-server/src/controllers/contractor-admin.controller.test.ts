@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   execute: vi.fn(),
   withTransaction: vi.fn(),
   resolveCompanyScope: vi.fn(),
+  hasPageView: vi.fn(),
+  hasPageEdit: vi.fn(),
   logFromRequest: vi.fn(),
   isDryRun: vi.fn(),
   bgConn: vi.fn(),
@@ -29,12 +31,17 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: h.withTransaction,
 }));
 vi.mock('../services/data-scope.service.js', () => ({ resolveCompanyScope: h.resolveCompanyScope }));
+vi.mock('../services/access-control.service.js', () => ({
+  hasPageView: h.hasPageView,
+  hasPageEdit: h.hasPageEdit,
+}));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest },
   AUDIT_ACTIONS: {
     CONTRACTOR_SUBMISSION_APPROVED: 'CONTRACTOR_SUBMISSION_APPROVED',
     CONTRACTOR_SUBMISSION_REJECTED: 'CONTRACTOR_SUBMISSION_REJECTED',
     CONTRACTOR_SUBMISSION_PASS_DECIDED: 'CONTRACTOR_SUBMISSION_PASS_DECIDED',
+    CONTRACTOR_INDUCTION_CHANGED: 'CONTRACTOR_INDUCTION_CHANGED',
   },
 }));
 vi.mock('../config/contractor.js', () => ({
@@ -128,6 +135,7 @@ describe('contractorAdminController.approveSubmission', () => {
 
   it('порядок: удаление → переименование; успех → approved', async () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check: все прошли инструктаж
     // toRemove
     h.query.mockResolvedValueOnce([{ id: 'r-rm', sigur_employee_id: 100 }]);
     // toRename
@@ -148,6 +156,7 @@ describe('contractorAdminController.approveSubmission', () => {
 
   it('частичный сбой rename → partially_applied + apply_error', async () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check: все прошли инструктаж
     h.query.mockResolvedValueOnce([]); // нет удалений
     h.query.mockResolvedValueOnce([
       { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: null, card_uid: '168,15956' },
@@ -170,6 +179,7 @@ describe('contractorAdminController.approveSubmission', () => {
 
   it('идемпотентность: pass уже applied → пропускается (updateSigurEmployee не зовётся)', async () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'partially_applied' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check: все прошли инструктаж
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
       { pass_id: 'p1', pass_status: 'applied', pass_sigur_id: 11, holder_name: 'A', access_point_names: null, card_uid: '168,15956' },
@@ -186,6 +196,7 @@ describe('contractorAdminController.approveSubmission', () => {
 
   it('Sigur "not found" при удалении трактуется как успех', async () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check: все прошли инструктаж
     h.query.mockResolvedValueOnce([{ id: 'r-rm', sigur_employee_id: 100 }]);
     h.query.mockResolvedValueOnce([]);
     h.delEmp.mockRejectedValueOnce(new Error('Employee not found (404)'));
@@ -199,6 +210,7 @@ describe('contractorAdminController.approveSubmission', () => {
 
   it('ЭТАП 2: объект на пропуске → бинд точек доступа, unmatched → warning (не блокирует)', async () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check: все прошли инструктаж
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
       { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: ['КПП 1', 'КПП X'], card_uid: '168,15956' },
@@ -217,6 +229,7 @@ describe('contractorAdminController.approveSubmission', () => {
 
   it('ЭТАП 2: сбой бинда точек доступа → partially_applied, pass не applied', async () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check: все прошли инструктаж
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
       { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: ['КПП 1'], card_uid: '168,15956' },
@@ -234,6 +247,7 @@ describe('contractorAdminController.approveSubmission', () => {
 
   it('гейт по карте: провал привязки → pass не applied, updateSigurEmployee не зовётся', async () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check: все прошли инструктаж
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
       { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: null, card_uid: '168,15956' },
@@ -253,6 +267,7 @@ describe('contractorAdminController.approveSubmission', () => {
 
   it('гейт по карте: нет card_uid → pass не applied', async () => {
     h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    h.query.mockResolvedValueOnce([]); // induction pre-check: все прошли инструктаж
     h.query.mockResolvedValueOnce([]);
     h.query.mockResolvedValueOnce([
       { pass_id: 'p1', pass_status: 'assigned', pass_sigur_id: 11, holder_name: 'A', access_point_names: null, card_uid: null },
@@ -301,7 +316,7 @@ describe('contractorAdminController.decideSubmission — срок действи
       .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' }); // counts
     h.query.mockResolvedValueOnce([
       { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
-        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956', induction_passed: true },
     ]);
 
     let txCalls: unknown[][] = [];
@@ -333,7 +348,7 @@ describe('contractorAdminController.decideSubmission — срок действи
       .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
     h.query.mockResolvedValueOnce([
       { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
-        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956', induction_passed: true },
     ]);
 
     const res = makeRes();
@@ -355,7 +370,7 @@ describe('contractorAdminController.decideSubmission — срок действи
       .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
     h.query.mockResolvedValueOnce([
       { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
-        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956', induction_passed: true },
     ]);
 
     const res = makeRes();
@@ -377,7 +392,7 @@ describe('contractorAdminController.decideSubmission — срок действи
       .mockResolvedValueOnce({ total: '1', pending: '1', approved: '0', rejected: '0' });
     h.query.mockResolvedValueOnce([
       { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
-        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956', induction_passed: true },
     ]);
 
     const res = makeRes();
@@ -400,7 +415,7 @@ describe('contractorAdminController.decideSubmission — срок действи
     h.query
       .mockResolvedValueOnce([ // passes заявки
         { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
-          submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+          submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956', induction_passed: true },
       ])
       .mockResolvedValueOnce([ // findDuplicatesForNames: подрядный дубль (bigint строкой)
         { pass_id: 'p-old', sigur_employee_id: '22', full_name: 'A', pass_number: '0050',
@@ -430,7 +445,7 @@ describe('contractorAdminController.decideSubmission — срок действи
       .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
     h.query.mockResolvedValueOnce([
       { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
-        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956', induction_passed: true },
     ]);
 
     const res = makeRes();
@@ -451,7 +466,7 @@ describe('contractorAdminController.decideSubmission — срок действи
       .mockResolvedValueOnce({ total: '1', pending: '0', approved: '1', rejected: '0' });
     h.query.mockResolvedValueOnce([
       { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
-        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956' },
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956', induction_passed: true },
     ]);
     h.resolveAP.mockResolvedValue({ accessPointIds: [], unmatchedNames: ['КПП X'] });
 
@@ -466,6 +481,147 @@ describe('contractorAdminController.decideSubmission — срок действи
     const body = res.body as { data: { applied: number; warnings: string[] } };
     expect(body.data.applied).toBe(1);
     expect(body.data.warnings.some(w => w.includes('КПП X'))).toBe(true);
+  });
+});
+
+describe('contractorAdminController.setPassInduction', () => {
+  const PASS_ID = '33333333-3333-3333-3333-333333333333';
+  const makeIndReq = (bodyObj: unknown) => ({
+    user: { id: 'admin-1', role_code: 'admin' },
+    params: { passId: PASS_ID },
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+    body: bodyObj,
+  }) as never;
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('ставит инструктаж (passed=true) → success + аудит', async () => {
+    // prev-состояние
+    h.queryOne.mockResolvedValueOnce({ induction_passed: false, pass_number: '001', holder_name: 'Иванов И.' });
+    // UPDATE ... RETURNING id
+    h.queryOne.mockResolvedValueOnce({ id: PASS_ID });
+    const res = makeRes();
+    await contractorAdminController.setPassInduction(makeIndReq({ passed: true }), res as never);
+
+    const upd = h.queryOne.mock.calls[1];
+    expect(String(upd[0])).toContain("approval_status = 'pending'");
+    expect(upd[1]).toEqual([true, 'admin-1', PASS_ID]);
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'CONTRACTOR_INDUCTION_CHANGED',
+      expect.objectContaining({ entityType: 'contractor_pass', entityId: PASS_ID }),
+    );
+    const body = res.body as { success: boolean; data: { induction_passed: boolean } };
+    expect(body.data.induction_passed).toBe(true);
+  });
+
+  it('пропуск уже не pending (rowCount=0) → 409, аудит не пишется', async () => {
+    h.queryOne.mockResolvedValueOnce({ induction_passed: false, pass_number: '001', holder_name: 'A' });
+    h.queryOne.mockResolvedValueOnce(null); // UPDATE ничего не затронул
+    const res = makeRes();
+    await contractorAdminController.setPassInduction(makeIndReq({ passed: true }), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('невалидное тело (passed не boolean) → 400', async () => {
+    const res = makeRes();
+    await contractorAdminController.setPassInduction(makeIndReq({ passed: 'yes' }), res as never);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('снятие (passed=false) очищает *_at/_by (параметры UPDATE)', async () => {
+    h.queryOne.mockResolvedValueOnce({ induction_passed: true, pass_number: '001', holder_name: 'A' });
+    h.queryOne.mockResolvedValueOnce({ id: PASS_ID });
+    const res = makeRes();
+    await contractorAdminController.setPassInduction(makeIndReq({ passed: false }), res as never);
+
+    const upd = h.queryOne.mock.calls[1];
+    expect(upd[1]).toEqual([false, 'admin-1', PASS_ID]);
+    expect(String(upd[0])).toContain('induction_passed_at = CASE WHEN $1 THEN now() ELSE NULL END');
+  });
+});
+
+describe('contractorAdminController — enforcement вводного инструктажа', () => {
+  const PASS_ID = '44444444-4444-4444-4444-444444444444';
+  const makeReqP = (bodyObj?: unknown) => ({
+    user: { id: 'admin-1', company_scope: { roots: 'all' } },
+    params: { id: 'sub-1' },
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+    body: bodyObj,
+  }) as never;
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.bgConn.mockResolvedValue('external');
+    h.isDryRun.mockReturnValue(false);
+    h.execute.mockResolvedValue(1);
+    h.logFromRequest.mockResolvedValue(undefined);
+    h.resolveAP.mockResolvedValue({ accessPointIds: [], unmatchedNames: [] });
+    h.assignCard.mockResolvedValue({ card: { cardId: 10 }, previousSigurEmployeeId: null, reassigned: false });
+    h.query.mockResolvedValue([]);
+    h.withTransaction.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) =>
+      fn({ query: vi.fn().mockResolvedValue({ rows: [] }) }),
+    );
+  });
+
+  it('approveSubmission: есть без инструктажа → 422, Sigur не трогаем', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending' });
+    // notInducted pre-check вернул непустой список
+    h.query.mockResolvedValueOnce([{ pass_number: '001', holder_name: 'Иванов И.' }]);
+    const res = makeRes();
+    await contractorAdminController.approveSubmission(makeReqP(), res as never);
+
+    expect(res.statusCode).toBe(422);
+    expect(h.delEmp).not.toHaveBeenCalled();
+    expect(h.updEmp).not.toHaveBeenCalled();
+    const body = res.body as { data: { without_induction: Array<{ pass_number: string }> } };
+    expect(body.data.without_induction[0].pass_number).toBe('001');
+  });
+
+  it('decideSubmission: approved без инструктажа → 422, активации нет', async () => {
+    h.queryOne.mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' });
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956',
+        pass_number: '002', induction_passed: false },
+    ]);
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeReqP({ decisions: [{ pass_id: PASS_ID, decision: 'approved' }] }), res as never,
+    );
+
+    expect(res.statusCode).toBe(422);
+    expect(h.assignCard).not.toHaveBeenCalled();
+    const body = res.body as { data: { without_induction: Array<{ pass_number: string }> } };
+    expect(body.data.without_induction[0].pass_number).toBe('002');
+  });
+
+  it('decideSubmission: rejected без инструктажа — разрешено (не 422)', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 'sub-1', status: 'pending', org_department_id: 'org-1' })
+      .mockResolvedValueOnce({ total: '1', pending: '0', approved: '0', rejected: '1' });
+    h.query.mockResolvedValueOnce([
+      { id: PASS_ID, status: 'submitted', sigur_employee_id: 11, holder_name: 'A',
+        submission_id: 'sub-1', access_point_names: null, card_uid: '168,15956',
+        pass_number: '003', induction_passed: false },
+    ]);
+    const res = makeRes();
+    await contractorAdminController.decideSubmission(
+      makeReqP({ decisions: [{ pass_id: PASS_ID, decision: 'rejected' }] }), res as never,
+    );
+
+    expect(res.statusCode).not.toBe(422);
+    expect(h.assignCard).not.toHaveBeenCalled();
   });
 });
 

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   contractorAdminService,
@@ -17,10 +18,15 @@ interface ISubmissionDetailProps {
   submissionId: string;
   selected: Set<string> | undefined;
   onChange: (next: Set<string>) => void;
+  /** Может ли пользователь отмечать вводный инструктаж (ОТиТБ/админ). */
+  canToggleInduction: boolean;
 }
 
-const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, onChange }) => {
+const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, onChange, canToggleInduction }) => {
+  const qc = useQueryClient();
+  const toast = useToast();
   const [docRow, setDocRow] = useState<ISubmissionDetailRow | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const detailQuery = useQuery({
     queryKey: ['contractor-sub-detail', submissionId],
     queryFn: () => contractorAdminService.getSubmissionDetail(submissionId),
@@ -29,17 +35,29 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
 
   const rows: ISubmissionDetailRow[] = detailQuery.data ?? [];
   const pendingRows = rows.filter(r => r.approval_status === 'pending');
+  // Выбрать для открытия можно только тех, кто прошёл вводный инструктаж.
+  const selectableIds = new Set(pendingRows.filter(r => r.induction_passed).map(r => r.id));
+  const selectableCount = selectableIds.size;
 
-  // Если parent ещё не инициализировал — по умолчанию выбраны все pending.
+  // Если parent ещё не инициализировал — по умолчанию выбраны все, прошедшие инструктаж.
   useEffect(() => {
     if (selected === undefined && pendingRows.length > 0) {
-      onChange(new Set(pendingRows.map(r => r.id)));
+      onChange(new Set(selectableIds));
     }
-  }, [selected, pendingRows.length, onChange, pendingRows]);
+  }, [selected, pendingRows.length, onChange, selectableIds]);
 
-  const effective = selected ?? new Set(pendingRows.map(r => r.id));
-  const allSelected = pendingRows.length > 0 && effective.size === pendingRows.length;
-  const someSelected = effective.size > 0 && effective.size < pendingRows.length;
+  // Если инструктаж сняли у уже выбранного — убираем его из выбора.
+  useEffect(() => {
+    if (selected === undefined) return;
+    let changed = false;
+    const next = new Set<string>();
+    selected.forEach(id => { if (selectableIds.has(id)) next.add(id); else changed = true; });
+    if (changed) onChange(next);
+  }, [selected, selectableIds, onChange]);
+
+  const effective = selected ?? new Set(selectableIds);
+  const allSelected = selectableCount > 0 && effective.size === selectableCount;
+  const someSelected = effective.size > 0 && effective.size < selectableCount;
 
   const togglePass = (passId: string) => {
     const next = new Set(effective);
@@ -48,7 +66,19 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
   };
   const toggleAll = () => {
     if (allSelected) onChange(new Set());
-    else onChange(new Set(pendingRows.map(r => r.id)));
+    else onChange(new Set(selectableIds));
+  };
+
+  const handleToggleInduction = async (row: ISubmissionDetailRow) => {
+    setTogglingId(row.id);
+    try {
+      await contractorAdminService.setPassInduction(row.id, !row.induction_passed);
+      await qc.invalidateQueries({ queryKey: ['contractor-sub-detail', submissionId] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось сохранить инструктаж');
+    } finally {
+      setTogglingId(null);
+    }
   };
 
   if (detailQuery.isLoading) return <div className={styles.detailRow}>Загрузка…</div>;
@@ -66,7 +96,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
               checked={allSelected}
               ref={el => { if (el) el.indeterminate = someSelected; }}
               onChange={toggleAll}
-              disabled={pendingRows.length === 0}
+              disabled={selectableCount === 0}
               title="Выделить всех / снять"
             />
           </th>
@@ -74,7 +104,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
           <th>ФИО</th>
           <th>Документы</th>
           <th>W26</th>
-          <th>Точки доступа</th>
+          <th>Вводный инструктаж</th>
           <th>Статус</th>
           <th>Согласование</th>
         </tr>
@@ -90,6 +120,8 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
                   type="checkbox"
                   checked={isChecked}
                   onChange={() => togglePass(r.id)}
+                  disabled={!r.induction_passed}
+                  title={!r.induction_passed ? 'Сначала отметьте вводный инструктаж' : undefined}
                 />
               </td>
               <td>{r.pass_number}</td>
@@ -105,7 +137,16 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
                 </button>
               </td>
               <td title={r.card_uid ?? ''}>{formatCardW26(r.card_uid)}</td>
-              <td>{(r.access_point_names ?? []).join(', ') || '—'}</td>
+              <td>
+                <button
+                  className={r.induction_passed ? styles.inductionOk : 'btn-secondary'}
+                  onClick={() => void handleToggleInduction(r)}
+                  disabled={!canToggleInduction || togglingId === r.id}
+                  title="Переключить статус вводного инструктажа"
+                >
+                  {r.induction_passed ? 'Прошёл' : 'Не прошёл'}
+                </button>
+              </td>
               <td>{passStatusLabel(r.pass_status)}</td>
               <td>{approvalStatusLabel(r.approval_status)}</td>
             </tr>
@@ -135,6 +176,11 @@ const PassDocumentsModalPortal: FC<{ row: ISubmissionDetailRow; onClose: () => v
 export const SubmissionsTab: FC = () => {
   const toast = useToast();
   const qc = useQueryClient();
+  const { canEditPage } = useAuth();
+  // Открывать/отклонять пропуска может только полный доступ к разделу (админ).
+  // ОТиТБ (только технический ключ вкладки) видит таблицу и отмечает инструктаж.
+  const canManage = canEditPage('/admin/contractor-approvals');
+  const canToggleInduction = canManage || canEditPage('/admin/contractor-approvals/submissions');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [rejectId, setRejectId] = useState<string | null>(null);
@@ -270,28 +316,32 @@ export const SubmissionsTab: FC = () => {
                     </span>
                   </td>
                   <td style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      className="btn-primary"
-                      onClick={() => setApproveSub(s)}
-                      disabled={busy || pending === 0 || selectedCount === 0}
-                    >
-                      Открыть пропуска ({selectedCount})
-                    </button>
-                    <button
-                      className="btn-secondary"
-                      onClick={() => { setRejectId(s.id); setRejectComment(''); }}
-                      disabled={busy || selectedCount === 0}
-                    >
-                      Отклонить выделенные ({selectedCount})
-                    </button>
-                    <button
-                      className="btn-secondary"
-                      onClick={() => void handleExport(s)}
-                      disabled={busy || total === 0}
-                      title="Скачать список людей в Excel"
-                    >
-                      Excel ↓
-                    </button>
+                    {canManage && (
+                      <>
+                        <button
+                          className="btn-primary"
+                          onClick={() => setApproveSub(s)}
+                          disabled={busy || pending === 0 || selectedCount === 0}
+                        >
+                          Открыть пропуска ({selectedCount})
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => { setRejectId(s.id); setRejectComment(''); }}
+                          disabled={busy || selectedCount === 0}
+                        >
+                          Отклонить выделенные ({selectedCount})
+                        </button>
+                        <button
+                          className="btn-secondary"
+                          onClick={() => void handleExport(s)}
+                          disabled={busy || total === 0}
+                          title="Скачать список людей в Excel"
+                        >
+                          Excel ↓
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
                 {isOpen && (
@@ -301,6 +351,7 @@ export const SubmissionsTab: FC = () => {
                         submissionId={s.id}
                         selected={selectedSet}
                         onChange={next => setSelectedFor(s.id, next)}
+                        canToggleInduction={canToggleInduction}
                       />
                     </td>
                   </tr>

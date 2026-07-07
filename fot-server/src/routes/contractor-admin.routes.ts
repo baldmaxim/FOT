@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { contractorAdminController } from '../controllers/contractor-admin.controller.js';
 import { contractorPoolController } from '../controllers/contractor-pool.controller.js';
-import { authenticate, requirePageAccess, requireCritical2FA } from '../middleware/auth.js';
+import { authenticate, requirePageAccess, requireAnyPageAccess, requireCritical2FA } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -16,6 +16,11 @@ const usersView = requirePageAccess('/admin/users', 'view');
 const usersEdit = requirePageAccess('/admin/users', 'edit');
 const apprView = requirePageAccess('/admin/contractor-approvals', 'view');
 const apprEdit = requirePageAccess('/admin/contractor-approvals', 'edit');
+// Вкладка «Заявки на согласование» доступна и узкой роли ОТиТБ по техническому
+// ключу (полный ключ раздела ей не даём). Контроллер дополнительно проверяет
+// доступ (ensureSubmissionsAccess).
+const submView = requireAnyPageAccess(['/admin/contractor-approvals', '/admin/contractor-approvals/submissions'], 'view');
+const submEdit = requireAnyPageAccess(['/admin/contractor-approvals', '/admin/contractor-approvals/submissions'], 'edit');
 
 router.get('/orgs', apprView, contractorAdminController.listOrgs);
 
@@ -36,10 +41,13 @@ router.put('/users/:id/org', usersEdit, contractorAdminController.replaceUserOrg
 
 // Заявки на согласование.
 router.get('/sigur-access-points', apprView, contractorAdminController.listSigurAccessPoints);
-router.get('/submissions/pending/count', apprView, contractorAdminController.getPendingSubmissionsCount);
-router.get('/submissions/pending', apprView, contractorAdminController.getPendingSubmissions);
+// submView/submEdit — доступно ОТиТБ (техническая вкладка) и полному раздел-доступу.
+router.get('/submissions/pending/count', submView, contractorAdminController.getPendingSubmissionsCount);
+router.get('/submissions/pending', submView, contractorAdminController.getPendingSubmissions);
 router.get('/submissions/:id/export', apprView, contractorAdminController.exportSubmission);
-router.get('/submissions/:id', apprView, contractorAdminController.getSubmissionDetail);
+router.get('/submissions/:id', submView, contractorAdminController.getSubmissionDetail);
+// Отметка вводного инструктажа держателя пропуска (единственное write-действие ОТиТБ).
+router.patch('/submissions/passes/:passId/induction', submEdit, contractorAdminController.setPassInduction);
 router.post('/submissions/:id/approve', apprEdit, requireCritical2FA, contractorAdminController.approveSubmission);
 router.post('/submissions/:id/reject', apprEdit, contractorAdminController.rejectSubmission);
 // Отклонить выделенные пропуска: возврат в пул подрядчика пустыми (ФИО очищается).

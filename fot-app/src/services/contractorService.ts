@@ -100,6 +100,8 @@ export interface ISubmissionDetailRow {
   pass_status: ContractorPassStatus;
   approval_status: ContractorPassApprovalStatus;
   is_active: boolean;
+  /** Пройден ли вводный инструктаж (ОТиТБ). Без него пропуск нельзя открыть. */
+  induction_passed: boolean;
   access_point_names: string[] | null;
   object_label: string;
   passport_series_number: string | null;
@@ -606,6 +608,14 @@ export const contractorAdminService = {
   async getSubmissionDetail(id: string): Promise<ISubmissionDetailRow[]> {
     const r = await apiClient.get<ApiResponse<ISubmissionDetailRow[]>>(`/admin/contractor/submissions/${id}`);
     return r.data ?? [];
+  },
+  /** Отметить/снять вводный инструктаж держателя пропуска (ОТиТБ). */
+  async setPassInduction(passId: string, passed: boolean): Promise<{ induction_passed: boolean }> {
+    const r = await apiClient.patch<ApiResponse<{ induction_passed: boolean }>>(
+      `/admin/contractor/submissions/passes/${passId}/induction`,
+      { passed },
+    );
+    return r.data;
   },
   async approveSubmission(id: string): Promise<{ status: string; applied: number; failed: number; errors: string[] }> {
     const r = await apiClient.post<ApiResponse<{ status: string; applied: number; failed: number; errors: string[] }>>(
