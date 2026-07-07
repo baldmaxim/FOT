@@ -108,19 +108,6 @@ const expandSelectedIdsToSubtree = (
   return expanded;
 };
 
-const hasSelectedAncestor = (
-  id: number,
-  selectedIds: Set<number>,
-  parentIdById: Map<number, number | null>,
-): boolean => {
-  let currentId = parentIdById.get(id) ?? null;
-  while (currentId !== null) {
-    if (selectedIds.has(currentId)) return true;
-    currentId = parentIdById.get(currentId) ?? null;
-  }
-  return false;
-};
-
 const getMatchingIdsWithAncestors = (depts: ISigurDepartment[], query: string): Set<number> | null => {
   if (!query.trim()) return null;
   const q = query.toLowerCase();
@@ -148,7 +135,6 @@ interface ITreeNodeRowProps {
   depth: number;
   selectedIds: Set<number>;
   expandedIds: Set<number>;
-  parentIdById: Map<number, number | null>;
   canEdit: boolean;
   visibleIds: Set<number> | null;
   onToggleSelect: (id: number, descendants: number[]) => void;
@@ -160,7 +146,6 @@ const TreeNodeRow = ({
   depth,
   selectedIds,
   expandedIds,
-  parentIdById,
   canEdit,
   visibleIds,
   onToggleSelect,
@@ -170,7 +155,6 @@ const TreeNodeRow = ({
   const hasChildren = children.length > 0;
   const isExpanded = expandedIds.has(dept.id);
   const isSelected = selectedIds.has(dept.id);
-  const isLockedByAncestor = hasSelectedAncestor(dept.id, selectedIds, parentIdById);
 
   if (visibleIds && !visibleIds.has(dept.id)) return null;
 
@@ -178,7 +162,7 @@ const TreeNodeRow = ({
   const someChildrenSelected = hasChildren && allDescendants.some(id => selectedIds.has(id));
 
   const handleToggleSelect = () => {
-    if (!canEdit || isLockedByAncestor) return;
+    if (!canEdit) return;
     onToggleSelect(dept.id, allDescendants);
   };
 
@@ -197,7 +181,6 @@ const TreeNodeRow = ({
         className={`sync-tree-row ${isSelected ? 'selected' : ''}`}
         style={{ paddingLeft: `${12 + depth * 24}px` }}
         onClick={handleToggleSelect}
-        title={isLockedByAncestor ? 'Отдел уже включён через выбранную родительскую папку' : undefined}
       >
         <span className="sync-tree-expand" onClick={hasChildren ? handleExpandClick : undefined}>
           {hasChildren ? (
@@ -213,7 +196,7 @@ const TreeNodeRow = ({
             if (el) el.indeterminate = !isSelected && hasChildren && someChildrenSelected;
           }}
           onChange={handleToggleSelect}
-          disabled={!canEdit || isLockedByAncestor}
+          disabled={!canEdit}
           onClick={e => e.stopPropagation()}
         />
 
@@ -234,7 +217,6 @@ const TreeNodeRow = ({
           depth={depth + 1}
           selectedIds={selectedIds}
           expandedIds={expandedIds}
-          parentIdById={parentIdById}
           canEdit={canEdit}
           visibleIds={visibleIds}
           onToggleSelect={onToggleSelect}
@@ -330,18 +312,37 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
 
   const handleToggleSelect = (id: number, descendants: number[]) => {
     setSelectedIds(prev => {
-      if (hasSelectedAncestor(id, prev, hierarchy.parentIdById)) {
-        return prev;
-      }
       const next = new Set(prev);
       if (next.has(id)) {
-        // Deselect this + all descendants
+        // Снятие: убираем узел + всех потомков + всех предков.
+        // Предки удаляются, чтобы ни один сохранённый предок не «покрывал»
+        // исключённый узел через раскрытие в поддерево на бэкенде.
         next.delete(id);
         for (const d of descendants) next.delete(d);
+        let ancestorId = hierarchy.parentIdById.get(id) ?? null;
+        const visited = new Set<number>();
+        while (ancestorId !== null && !visited.has(ancestorId)) {
+          visited.add(ancestorId);
+          next.delete(ancestorId);
+          ancestorId = hierarchy.parentIdById.get(ancestorId) ?? null;
+        }
       } else {
-        // Select this + all descendants
+        // Выбор: добавляем узел + всех потомков, затем поднимаемся по предкам —
+        // если у предка все прямые дети выбраны, отмечаем и его (bubble-up).
         next.add(id);
         for (const d of descendants) next.add(d);
+        let ancestorId = hierarchy.parentIdById.get(id) ?? null;
+        const visited = new Set<number>();
+        while (ancestorId !== null && !visited.has(ancestorId)) {
+          visited.add(ancestorId);
+          const childIds = hierarchy.childIdsByParentId.get(ancestorId) ?? [];
+          if (childIds.length > 0 && childIds.every(c => next.has(c))) {
+            next.add(ancestorId);
+          } else {
+            break;
+          }
+          ancestorId = hierarchy.parentIdById.get(ancestorId) ?? null;
+        }
       }
       return next;
     });
@@ -507,7 +508,6 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
               depth={0}
               selectedIds={selectedIds}
               expandedIds={expandedIds}
-              parentIdById={hierarchy.parentIdById}
               canEdit={canEdit}
               visibleIds={visibleIds}
               onToggleSelect={handleToggleSelect}
