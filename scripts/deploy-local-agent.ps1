@@ -1,0 +1,17 @@
+param(
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [string[]]$Args
+)
+
+$ErrorActionPreference = 'Stop'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+$sshPkg = Join-Path $repoRoot 'scripts\fot-ssh'
+if (-not (Test-Path (Join-Path $sshPkg 'node_modules\ssh2'))) {
+  Push-Location $sshPkg
+  npm install --omit=dev 2>&1 | Out-Null
+  Pop-Location
+}
+
+node (Join-Path $repoRoot 'scripts\deploy-local-agent.mjs') @Args
+exit $LASTEXITCODE

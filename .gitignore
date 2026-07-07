@@ -34,6 +34,9 @@ __pycache__/
 .venv/
 venv/
 
+# Local SSH credentials (keys, passwords) — never commit
+.ssh/
+
 # Environment variables (IMPORTANT - contains secrets!)
 .env
 .env.local

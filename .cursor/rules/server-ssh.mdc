@@ -1,0 +1,55 @@
+---
+description: SSH на production-сервер fot.su10.ru для задач агента
+alwaysApply: true
+---
+
+# SSH на production
+
+Агент **сам** подключается к серверу и выполняет команды через обёртку `scripts/fot-ssh`.
+
+## Как подключаться
+
+Из корня репо (PowerShell или bash):
+
+```bash
+node scripts/fot-ssh/run.mjs --check
+node scripts/fot-ssh/run.mjs "pm2 list"
+```
+
+PowerShell:
+
+```powershell
+.\scripts\fot-ssh.ps1 --check
+.\scripts\fot-ssh.ps1 "pm2 list"
+```
+
+Первый раз (если ключ не на сервере):
+
+```bash
+node scripts/fot-ssh/run.mjs --bootstrap
+```
+
+## Креды
+
+- `.ssh/.env` — `login`, `password`, `key_passphrase` (пароль от ключа, если зашифрован)
+- `.ssh/selectel_ed25519` — приватный ключ (gitignored)
+- Хост: `45.80.128.254`, пользователь по умолчанию `root`
+
+После `--bootstrap` используется ключ; пароль — fallback.
+
+## Пути на сервере
+
+| Что | Путь |
+|-----|------|
+| Build-контекст | `/opt/fot-build` |
+| Сайт + runtime | `/srv/sites/fot.su10.ru` |
+| Деплой | `bash scripts/deploy-server.sh` из `/opt/fot-build` |
+
+Подробности — `DEPLOY.md`, шпаргалка — `DEPLOY_CHEATSHEET.md`.
+
+## Правила
+
+- Не менять `.env` на сервере без явной просьбы пользователя.
+- Деструктивные команды — только по запросу.
+- Для деплоя предпочитать `scripts/deploy-server.sh`, не ручной копипаст.
+- OpenSSH `ssh fot-prod` — опционально (`.ssh/config`), основной путь агента — `fot-ssh/run.mjs`.

@@ -1,0 +1,51 @@
+---
+description: Локальный деплой на production — pull, миграции, сборка фронта, SSH
+alwaysApply: false
+---
+
+# Деплой-агент FOT
+
+Для выката на `fot.su10.ru` с локальной машины используй **один скрипт**:
+
+```powershell
+.\scripts\deploy-local-agent.ps1
+```
+
+или
+
+```bash
+node scripts/deploy-local-agent.mjs
+```
+
+## Что делает
+
+1. `git fetch` + `reset --hard` на `personal/main` (или `origin/main`)
+2. SSH → `bash scripts/deploy-server.sh migrate` в `/opt/fot-build`
+3. Локальная сборка `fot-app` с prod `VITE_*` с сервера
+4. Загрузка `dist/` на сервер (tar + SFTP, атомарный swap в `/srv/sites/fot.su10.ru/fot-app/dist`)
+
+## Флаги
+
+| Флаг | Действие |
+|------|----------|
+| `--migrate-only` | Только миграции |
+| `--migrate-dry-run` | Отчёт по миграциям без наката |
+| `--skip-pull` | Без git pull |
+| `--skip-migrate` | Без миграций |
+| `--skip-build` | Залить уже собранный `dist/` |
+
+## Предусловия
+
+- Закоммичено и запушено в `personal`/`origin` `main` (миграции тянут код с git на сервере)
+- `.ssh/.env` + `.ssh/selectel_ed25519` (см. `server-ssh.mdc`)
+- Node.js + npm локально
+
+## Порядок при схеме БД
+
+По умолчанию: **сначала migrate, потом build+upload**. Не деплоить backend через этот скрипт — только фронт.
+
+Для backend/data-api: `bash scripts/deploy-production.sh both` (сборка на сервере).
+
+## После деплоя
+
+Hard refresh (Ctrl+Shift+R), проверить `https://fot.su10.ru`, `pm2 list` на сервере при необходимости.
