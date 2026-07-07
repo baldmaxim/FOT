@@ -5,6 +5,7 @@ import { useMyEmployee } from '../../hooks/useMyEmployee';
 import { usePendingLeaveRequestsCount } from '../../hooks/usePendingLeaveRequestsCount';
 import { usePendingContractorSubmissionsCount } from '../../hooks/usePendingContractorSubmissionsCount';
 import { formatFioShort } from '../../utils/formatFio';
+import { getLandingPath } from '../../utils/landingPath';
 import styles from './Sidebar.module.css';
 import {
   GridIcon,
@@ -163,19 +164,23 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
   const isCompanyAdmin = !!profile?.is_admin
     && Array.isArray(profile?.company_scope?.roots);
 
+  // «Домой» — первая доступная страница роли (не хардкод /dashboard: узкие роли
+  // без «Обзора», напр. ОТиТБ, иначе попадают в /unauthorized).
+  const homePath = getLandingPath(canViewPage, employeeVariant);
+
   return (
     <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''} ${isCollapsed ? styles.collapsed : ''}`}>
       <div className={styles.logo}>
         <a
-          href="/dashboard"
+          href={homePath}
           className={styles.logoLink}
           onClick={(e) => {
             if (e.metaKey || e.ctrlKey || e.button === 1) return;
             e.preventDefault();
-            navigate('/dashboard');
+            navigate(homePath);
             onClose?.();
           }}
-          aria-label="На главную (Обзор)"
+          aria-label="На главную"
         >
           <img src={logoSrc} alt="FOT" className={styles.logoImage} />
           <img src="/fot-favicon-32.svg" alt="FOT" className={styles.logoMini} />

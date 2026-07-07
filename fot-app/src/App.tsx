@@ -19,6 +19,7 @@ import { TooltipHost } from './components/ui/Tooltip';
 import { AppUpdateBanner } from './components/ui/AppUpdateBanner';
 import { ErrorFallback } from './components/ErrorFallback';
 import { clearStaleChunkReloadFlag, tryAutoReloadOnStaleChunk } from './utils/staleChunkReload';
+import { getLandingPath } from './utils/landingPath';
 import './App.css';
 
 const StructureRealtimeMount: FC = () => {
@@ -120,24 +121,7 @@ const SystemAdminPage = lazy(() => import('./pages/hubs/SystemAdminPage').then(m
 // Компонент для умного редиректа на основе должности
 const PositionBasedRedirect = () => {
   const { canViewPage, employeeVariant } = useAuth();
-  // Тип кабинета «Подрядчик» — всегда лендинг на /contractor.
-  if (employeeVariant === 'contractor') {
-    return <Navigate to="/contractor" replace />;
-  }
-  if (canViewPage('/dashboard')) {
-    return <Navigate to="/dashboard" replace />;
-  }
-  if (canViewPage('/employee')) {
-    return <Navigate to="/employee" replace />;
-  }
-  if (canViewPage('/contractor')) {
-    return <Navigate to="/contractor" replace />;
-  }
-  // Табельщица: единственная доступная страница — «Табель».
-  if (canViewPage('/timesheet')) {
-    return <Navigate to="/timesheet" replace />;
-  }
-  return <Navigate to="/unauthorized" replace />;
+  return <Navigate to={getLandingPath(canViewPage, employeeVariant)} replace />;
 };
 
 const EmployeeHomeRoute = () => {
