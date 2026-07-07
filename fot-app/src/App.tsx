@@ -133,15 +133,19 @@ const EmployeeHomeRoute = () => {
     return <ObjectWorkerDashboardPage />;
   }
 
-  if (employeeVariant === 'office' || isAdmin) {
-    return (
-      <EmployeeLayout title="Личный кабинет">
-        <EmployeeDashboardPage />
-      </EmployeeLayout>
-    );
+  // Подрядчик — свой кабинет (/contractor), не офисный, даже при случайном гранте /employee.
+  if (employeeVariant === 'contractor') {
+    return <Navigate to="/contractor" replace />;
   }
 
-  return <Navigate to="/unauthorized" replace />;
+  // office / admin / любая роль с грантом /employee (напр. ОТиТБ) → офисный кабинет.
+  // Доступ уже проверен внешним ProtectedRoute (requiredPage="/employee"); employeeVariant
+  // здесь выбирает только ВИД кабинета.
+  return (
+    <EmployeeLayout title="Личный кабинет">
+      <EmployeeDashboardPage />
+    </EmployeeLayout>
+  );
 };
 
 const AppRoutes = () => {
