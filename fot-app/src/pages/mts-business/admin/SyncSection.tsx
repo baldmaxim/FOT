@@ -131,22 +131,20 @@ export const SyncSection: FC = () => {
         Ежедневный полный прогон всех активных аккаунтов (номера, комментарии, балансы, детализация,
         профили абонентов). Если в этот час идёт ручной прогон — автозапуск отложится до его завершения.
       </p>
-      <div className={styles.row}>
-        <div className={styles.field}>
-          <label className={styles.label}>
-            <input
-              type="checkbox"
-              checked={schedEnabled}
-              onChange={e => setSchedEnabledDraft(e.target.checked)}
-              disabled={schedule.isLoading}
-            />{' '}
-            Запускать ежедневно
-          </label>
-        </div>
+      <div className={styles.rowCompact}>
+        <label className={styles.checkField}>
+          <input
+            type="checkbox"
+            checked={schedEnabled}
+            onChange={e => setSchedEnabledDraft(e.target.checked)}
+            disabled={schedule.isLoading}
+          />
+          Запускать ежедневно
+        </label>
         <div className={styles.field}>
           <label className={styles.label}>Час запуска (МСК)</label>
           <select
-            className={styles.select}
+            className={`${styles.select} ${styles.selectSm}`}
             value={schedHour}
             onChange={e => setSchedHourDraft(Number(e.target.value))}
             disabled={schedule.isLoading}
@@ -156,12 +154,9 @@ export const SyncSection: FC = () => {
             ))}
           </select>
         </div>
-        <div className={styles.field}>
-          <label className={styles.label}>&nbsp;</label>
-          <button className={styles.btnSecondary} onClick={() => { void onSaveSchedule(); }} disabled={setSchedule.isPending || schedule.isLoading}>
-            {setSchedule.isPending ? 'Сохранение…' : 'Сохранить'}
-          </button>
-        </div>
+        <button className={styles.btnSecondary} onClick={() => { void onSaveSchedule(); }} disabled={setSchedule.isPending || schedule.isLoading}>
+          {setSchedule.isPending ? 'Сохранение…' : 'Сохранить'}
+        </button>
       </div>
       {schedMsg && <p className={schedMsg.ok ? styles.ok : styles.err}>{schedMsg.text}</p>}
 
@@ -180,21 +175,26 @@ export const SyncSection: FC = () => {
         Автообновление — раз в сутки без участия. Здесь — разовая загрузка за произвольный период
         (например, для нового номера или досрочной проверки).
       </p>
-      <div className={styles.row}>
+      <div className={styles.rowCompact}>
         <div className={styles.field}>
           <label className={styles.label}>Аккаунт</label>
-          <select className={styles.select} value={accountId} onChange={e => { setAccountId(e.target.value); setSelected([]); }}>
+          <select
+            className={`${styles.select} ${styles.selectSm}`}
+            style={{ minWidth: 200 }}
+            value={accountId}
+            onChange={e => { setAccountId(e.target.value); setSelected([]); }}
+          >
             <option value="">{active.length ? '— выберите —' : 'нет аккаунтов'}</option>
             {active.map(a => <option key={a.id} value={a.id}>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>)}
           </select>
         </div>
         <div className={styles.field}>
           <label className={styles.label}>Период с</label>
-          <input className={styles.input} type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+          <input className={`${styles.input} ${styles.inputSm}`} type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
         </div>
         <div className={styles.field}>
           <label className={styles.label}>по</label>
-          <input className={styles.input} type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+          <input className={`${styles.input} ${styles.inputSm}`} type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
         </div>
       </div>
       <div className={styles.field}>

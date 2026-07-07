@@ -40,12 +40,23 @@
 
 .input {
   width: 100%;
-  font-size: 16px;
-  padding: 8px 10px;
+  font-size: 14px;
+  padding: 6px 10px;
+  min-height: 34px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   color: var(--text-primary);
+  box-sizing: border-box;
+}
+
+/* На мобиле обратно ≥16px (анти-зум Chrome/Safari) и полноценная тап-цель. */
+@media (max-width: 480px) {
+  .input {
+    font-size: 16px;
+    padding: 10px 12px;
+    min-height: 44px;
+  }
 }
 
 .dropdown {

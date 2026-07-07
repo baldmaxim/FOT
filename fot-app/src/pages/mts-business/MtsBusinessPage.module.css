@@ -150,6 +150,37 @@
   margin-top: 8px;
 }
 
+/* Компактная строка контролов: поля по контенту, выравнивание по нижней кромке
+   (лейблы сверху разной высоты, а инпуты/кнопки — в одну линию). */
+.rowCompact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-end;
+}
+.rowCompact > .field { flex: 0 1 auto; margin-bottom: 0; }
+
+/* Компактные контролы под высоту кнопок (34px). */
+.inputSm,
+.selectSm {
+  padding: 6px 10px;
+  font-size: 14px;
+  min-height: 34px;
+  width: auto;
+}
+
+/* Чекбокс с подписью той же высоты, что компактные контролы и кнопки. */
+.checkField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
 .btn,
 .btnSecondary {
   padding: 6px 12px;
@@ -266,4 +297,8 @@
   /* На мобиле возвращаем полноценную тап-цель ≥44px. */
   .btn,
   .btnSecondary { min-height: 44px; padding: 10px 16px; font-size: 14px; }
+  /* Компактные контролы: обратно ≥16px (анти-зум) и ≥44px, поля в столбик. */
+  .inputSm,
+  .selectSm { font-size: 16px; min-height: 44px; padding: 10px 12px; }
+  .rowCompact > .field { flex: 1 1 100%; }
 }
