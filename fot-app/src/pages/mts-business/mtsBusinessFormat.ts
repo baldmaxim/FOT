@@ -27,6 +27,24 @@ export const fmtPhone = (msisdn: string | null | undefined): string => {
   return msisdn;
 };
 
+/** Подтип события выписки для ярлыка: «(_Мобильная)»→«Мобильная», «…трафик 4G»→«4G»; иначе null. */
+export const parseUsageSubtype = (label: string | null): string | null => {
+  if (!label) return null;
+  const paren = label.match(/\(([^)]*)\)/);
+  if (paren) return paren[1].replace(/^[_\s]+/, '').trim() || null;
+  const traf = label.match(/трафик\s+(.+)$/i);
+  if (traf) return traf[1].trim() || null;
+  return null;
+};
+
+/** Стабильный цвет-метка контакта по хэшу строки (номер/имя) — одинаковый собеседник даёт один цвет. */
+export const usageContactColor = (key: string | null | undefined): string => {
+  if (!key) return 'var(--text-tertiary)';
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (Math.imul(h, 31) + key.charCodeAt(i)) | 0;
+  return `hsl(${Math.abs(h) % 360} 65% 55%)`;
+};
+
 export const UNIT_LABELS: Record<string, string> = { BYTE: 'интернет', MINUTE: 'минуты', SECOND: 'минуты', ITEM: 'SMS', MONEY: 'деньги' };
 export const fmtPackage = (p: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }): string => {
   const label = (p.unitOfMeasure && UNIT_LABELS[p.unitOfMeasure]) || p.unitOfMeasure || '—';

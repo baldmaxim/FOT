@@ -217,30 +217,115 @@
 .usagePeerNum { color: var(--text-secondary); font-size: 12px; }
 .usageControls { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
-/* Сводка использования SIM (плитки над списком выписки) */
+/* Сводка использования SIM (компактные плитки над списком выписки) */
 .usageStats {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 6px;
 }
 .usageStat {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px;
+  gap: 1px;
+  padding: 8px 10px;
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-left: 3px solid var(--border-subtle);
+  border-radius: 8px;
   background: var(--surface);
   cursor: help;
 }
-.usageStatTotal { border-color: var(--primary); cursor: default; }
-.usageStatLabel { font-size: 12px; color: var(--text-secondary); }
-.usageStatValue { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
-.usageStatSub { font-size: 12px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.usageStat[data-g="calls"] { border-left-color: #3b82f6; }
+.usageStat[data-g="internet"] { border-left-color: #8b5cf6; }
+.usageStat[data-g="sms"] { border-left-color: #f59e0b; }
+.usageStat[data-g="other"] { border-left-color: var(--text-tertiary); }
+.usageStatTotal { border-color: var(--primary); border-left-color: var(--primary); cursor: default; }
+.usageStatLabel { font-size: 11px; color: var(--text-secondary); }
+.usageStatValue { font-size: 15px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.usageStatSub { font-size: 11px; color: var(--text-tertiary); overflow-wrap: anywhere; }
 
-@media (max-width: 480px) {
-  .usageStats { grid-template-columns: 1fr; }
+/* Под-вкладки детализации (Звонки / Интернет / СМС / Прочее) */
+.usageTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
 }
+.usageTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  min-height: 40px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.usageTab:hover { border-color: var(--primary); }
+.usageTabActive { color: #fff; background: var(--primary); border-color: var(--primary); }
+.usageTabCount {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--border-subtle);
+}
+.usageTabActive .usageTabCount { background: rgba(255, 255, 255, 0.25); }
+
+/* Строки детализации выписки */
+.usageRowList { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.usageRow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.usageRow:last-child { border-bottom: none; }
+
+.usageIco {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--border-subtle);
+}
+.usageIcoOut { color: #2563eb; background: rgba(37, 99, 235, 0.12); }
+.usageIcoIn { color: #16a34a; background: rgba(22, 163, 74, 0.14); }
+.usageIcoNet { color: #7c3aed; background: rgba(124, 58, 237, 0.13); }
+.usageIcoSms { color: #d97706; background: rgba(217, 119, 6, 0.14); }
+.usageIcoOther { color: var(--text-secondary); background: var(--border-subtle); }
+
+.usageMain { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.usagePrimary { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
+.usageDot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--text-tertiary)); }
+.usageName { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+
+.usageMeta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; color: var(--text-tertiary); }
+.usageChip {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--border-subtle);
+  color: var(--text-secondary);
+}
+.usageSubtype { color: var(--text-secondary); font-weight: 500; }
+.usageTime { font-variant-numeric: tabular-nums; }
+
+.usageValueBox { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.usageValue { font-size: 13px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.usageAmt { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
 
 /* Модалка подключения услуг/блокировок/тарифов (поверх панели) */
 .connectOverlay {
