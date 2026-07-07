@@ -962,7 +962,7 @@ export const contractorAdminController = {
                 (p.passport_series_number IS NOT NULL AND p.passport_issue_date IS NOT NULL
                    AND p.birth_date IS NOT NULL AND p.citizenship IS NOT NULL
                    AND (upper(trim(p.citizenship)) NOT IN
-                          ('УЗБЕКИСТАН','ТАДЖИКИСТАН','УКРАИНА','АЗЕРБАЙДЖАН','МОЛДОВА')
+                          ('УЗБЕКИСТАН','ТАДЖИКИСТАН','УКРАИНА','АЗЕРБАЙДЖАН','МОЛДОВА','ТУРКМЕНИСТАН')
                         OR (p.patent_number IS NOT NULL AND p.patent_issue_date IS NOT NULL
                             AND p.patent_blank_number IS NOT NULL)))
                   AS documents_complete,

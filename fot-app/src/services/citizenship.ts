@@ -27,6 +27,7 @@ export const CITIZENSHIP_OPTIONS: ICitizenshipOption[] = [
   { value: 'Украина', requiresPatent: true },
   { value: 'Азербайджан', requiresPatent: true },
   { value: 'Молдова', requiresPatent: true },
+  { value: 'Туркменистан', requiresPatent: true },
   // Прочие (визовые и т.п.) — патент не запрашиваем.
   { value: 'Другое', requiresPatent: false },
 ];

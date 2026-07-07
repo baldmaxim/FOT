@@ -5,6 +5,7 @@ import {
   isDocsComplete,
   findOrgDocDuplicate,
   duplicateMessage,
+  citizenshipRequiresPatent,
   type IDocRow,
 } from './contractor-docs.service.js';
 
@@ -52,6 +53,18 @@ describe('contractor-docs isDocsComplete', () => {
   it('гражданство не выбрано → false (обязательное поле)', () => {
     expect(isDocsComplete({ ...fullDocs, citizenship: null })).toBe(false);
     expect(isDocsComplete({ ...fullDocs, citizenship: '' })).toBe(false);
+  });
+  it('Туркменистан — патентное гражданство: без патента → false', () => {
+    const base = { ...fullDocs, patent_number: null, patent_issue_date: null, patent_blank_number: null };
+    expect(isDocsComplete({ ...base, citizenship: 'Туркменистан' })).toBe(false);
+    expect(isDocsComplete({ ...fullDocs, citizenship: 'Туркменистан' })).toBe(true);
+  });
+});
+
+describe('contractor-docs citizenshipRequiresPatent', () => {
+  it('Туркменистан требует патент (регистронезависимо)', () => {
+    expect(citizenshipRequiresPatent('Туркменистан')).toBe(true);
+    expect(citizenshipRequiresPatent(' туркменистан ')).toBe(true);
   });
 });
 
