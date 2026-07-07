@@ -136,6 +136,14 @@
 
 .textarea { min-height: 72px; resize: vertical; font-family: inherit; }
 
+.input:focus,
+.textarea:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
 .row {
   display: flex;
   flex-wrap: wrap;
@@ -183,7 +191,8 @@
 }
 
 .btn,
-.btnSecondary {
+.btnSecondary,
+.btnTinted {
   padding: 6px 12px;
   border-radius: 8px;
   font-size: 13px;
@@ -202,6 +211,38 @@
   color: var(--text-primary);
 }
 .btnSecondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Тонированная кнопка — второстепенные действия, выделенные цветом
+   (мягкий синий фон вместо заливки или прозрачности). */
+.btnTinted {
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--primary);
+  border-color: transparent;
+}
+.btnTinted:hover:not(:disabled) { background: rgba(37, 99, 235, 0.18); }
+.btnTinted:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Файл-пикер: нативный input скрыт, кнопка + имя выбранного файла. */
+.fileControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+.fileBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.fileName {
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .linkBtn {
   background: none;
@@ -297,7 +338,8 @@
   .card { padding: 12px; }
   /* На мобиле возвращаем полноценную тап-цель ≥44px. */
   .btn,
-  .btnSecondary { min-height: 44px; padding: 10px 16px; font-size: 14px; }
+  .btnSecondary,
+  .btnTinted { min-height: 44px; padding: 10px 16px; font-size: 14px; }
   /* Компактные контролы: обратно ≥16px (анти-зум) и ≥44px, поля в столбик. */
   .inputSm,
   .selectSm { font-size: 16px; min-height: 44px; padding: 10px 12px; }

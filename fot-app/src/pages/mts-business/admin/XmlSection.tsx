@@ -212,13 +212,19 @@ export const XmlSection: FC = () => {
       <div className={styles.rowCompact}>
         <div className={styles.field}>
           <label className={styles.label}>Файл</label>
-          <input
-            key={fileInputKey}
-            className={`${styles.input} ${styles.inputSm}`}
-            type="file"
-            accept=".xls,.xlsx,.xml,application/vnd.ms-excel,text/xml,application/xml"
-            onChange={e => setFile(e.target.files?.[0] ?? null)}
-          />
+          <span className={styles.fileControl}>
+            <label className={`${styles.btnTinted} ${styles.fileBtn}`}>
+              Выбрать файл…
+              <input
+                key={fileInputKey}
+                type="file"
+                hidden
+                accept=".xls,.xlsx,.xml,application/vnd.ms-excel,text/xml,application/xml"
+                onChange={e => setFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <span className={styles.fileName}>{file ? file.name : 'файл не выбран'}</span>
+          </span>
         </div>
         <div className={styles.field}>
           <label className={styles.label}>Лицевой счёт (аккаунт)</label>
