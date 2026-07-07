@@ -213,6 +213,13 @@ export const SubmissionsTab: FC<{ search?: string }> = ({ search = '' }) => {
   // selectedByPass: на каждую заявку — её выбор; undefined = ещё не трогали (дефолт-все).
   const [selectedByPass, setSelectedByPass] = useState<Map<string, Set<string>>>(new Map());
 
+  // При смене/очистке поиска сбрасываем материализованный выбор: видимый набор изменился,
+  // прежний per-submission выбор устарел (иначе после очистки остаётся «залипший» одиночный).
+  // Гард `prev.size > 0 ? … : prev` избегает лишнего рендера на первом маунте (Map уже пуст).
+  useEffect(() => {
+    setSelectedByPass(prev => (prev.size > 0 ? new Map() : prev));
+  }, [searchQuery]);
+
   const overlay = useOverlayDismiss(() => setRejectId(null));
 
   const subsQuery = useQuery({
@@ -329,7 +336,9 @@ export const SubmissionsTab: FC<{ search?: string }> = ({ search = '' }) => {
             const pending = Number(s.pending) || 0;
             const isOpen = searchActive || expanded === s.id;
             const selectedSet = selectedByPass.get(s.id);
-            const selectedCount = selectedSet?.size ?? pending;
+            // При активном поиске, пока выбор не материализован, честнее показать 0
+            // (кнопка на кадр disabled), а не полный pending — совпавший набор ещё неизвестен.
+            const selectedCount = selectedSet?.size ?? (searchActive ? 0 : pending);
             return (
               <Fragment key={s.id}>
                 <tr>
