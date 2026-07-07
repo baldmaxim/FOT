@@ -4,6 +4,7 @@ import { encryptionService } from './encryption.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
 import { mtsBusinessPersonalDataService, type IMtsPersonalDataFull } from './mts-business-personal-data.service.js';
+import { extractTariffNameFromServices } from './mts-business-catalog.service.js';
 import type { IMtsService, IMtsTariff, IMtsForwardingRule, IMtsRoaming } from './mts-business-catalog.service.js';
 import type { IMtsTariffFee, IMtsPaymentEntry, IMtsDeliveryMethod, IMtsPackageCounter } from './mts-business-billing.service.js';
 
@@ -168,7 +169,7 @@ class MtsBusinessSubscribersService {
 
     return rows.map(r => {
       const billPlan = this.parseJson<IMtsTariff>(r.bill_plan);
-      const services = this.parseJson<Array<{ monthlyAmount?: number | null }>>(r.product_services);
+      const services = this.parseJson<Array<{ name?: string | null; monthlyAmount?: number | null }>>(r.product_services);
       const list = Array.isArray(services) ? services : [];
       return {
         msisdn: encryptionService.decryptField(r.msisdn_enc),
@@ -188,7 +189,7 @@ class MtsBusinessSubscribersService {
         lastCallAt: r.last_call_at,
         balance: r.balance != null ? Number(r.balance) : null,
         chargesAmount: r.charges_amount != null ? Number(r.charges_amount) : null,
-        tariffName: billPlan?.tariffName ?? null,
+        tariffName: billPlan?.tariffName ?? extractTariffNameFromServices(list),
         servicesCount: list.length,
         servicesMonthlyTotal: list.reduce((a, s) => a + (s.monthlyAmount ?? 0), 0),
         capturedAt: r.captured_at,
@@ -214,6 +215,7 @@ class MtsBusinessSubscribersService {
     ]);
 
     const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+    const services = arr<IMtsService>(snaps.get('product_services')?.payload);
     const balance = daily.get('balance');
     const capturedAt = [...snaps.values()].reduce<string | null>(
       (max, s) => (max == null || s.capturedAt > max ? s.capturedAt : max),
@@ -226,10 +228,11 @@ class MtsBusinessSubscribersService {
       balance: balance ? { amount: balance.amount, capturedAt: balance.capturedAt } : null,
       charges: charges ? { amount: charges.amount, capturedAt: charges.capturedAt } : null,
       tariff: {
-        name: (snaps.get('bill_plan')?.payload as IMtsTariff | undefined)?.tariffName ?? null,
+        name: (snaps.get('bill_plan')?.payload as IMtsTariff | undefined)?.tariffName
+          ?? extractTariffNameFromServices(services),
         fee: (snaps.get('tariff_fee')?.payload as IMtsTariffFee | undefined) ?? null,
       },
-      services: arr<IMtsService>(snaps.get('product_services')?.payload),
+      services,
       blocks: arr<IMtsService>(snaps.get('connected_blocks')?.payload),
       forwarding: arr<IMtsForwardingRule>(snaps.get('forwarding')?.payload),
       roaming: (snaps.get('roaming')?.payload as IMtsRoaming | undefined) ?? null,

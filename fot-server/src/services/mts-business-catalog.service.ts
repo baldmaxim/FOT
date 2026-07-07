@@ -144,6 +144,31 @@ const parseServices = (resp: unknown): IMtsService[] => {
     .filter((s): s is IMtsService => s !== null);
 };
 
+/**
+ * Имя текущего тарифа из списка подключённых услуг: МТС кладёт тариф отдельной
+ * позицией «Ежемесячная плата <Тариф>» с ненулевой абонплатой (нулевые «…Скидка»
+ * и «Ежемесячная плата за тариф» — не тариф). BillPlanInfo почти всегда отдаёт
+ * пустой оффер (tariffName=null у 1486/1487), поэтому это основной источник имени
+ * тарифа. Берём позицию с максимальной абонплатой; возвращаем name без префикса.
+ */
+export const extractTariffNameFromServices = (
+  services: ReadonlyArray<{ name?: string | null; monthlyAmount?: number | null }>,
+): string | null => {
+  const PREFIX = /^Ежемесячная плата\s+/i;
+  let best: { name: string; amount: number } | null = null;
+  for (const s of services) {
+    const name = typeof s?.name === 'string' ? s.name : '';
+    const amount = s?.monthlyAmount ?? 0;
+    if (amount <= 0 || !PREFIX.test(name) || /скидк/i.test(name)) continue;
+    const stripped = name.replace(PREFIX, '').trim();
+    // «…за тариф», «…за обслуживание порта VPN» и пр. — это плата за услугу, а не
+    // название тарифа (реальные тарифы МТС — «Умный бизнес …», без «за»).
+    if (!stripped || /^за\s/i.test(stripped)) continue;
+    if (!best || amount > best.amount) best = { name: stripped, amount };
+  }
+  return best?.name ?? null;
+};
+
 /** Первое значение по одному из ключей-маркеров (глубокий обход). */
 const firstValue = (node: unknown, keys: string[]): unknown => {
   for (const k of keys) {

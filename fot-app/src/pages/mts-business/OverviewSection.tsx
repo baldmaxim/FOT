@@ -32,6 +32,9 @@ const STATUS_BADGE: Record<string, { cls: string; label: string }> = {
 
 const ACCENT_PALETTE = ['var(--primary)', 'var(--success)', 'var(--warning)', 'var(--purple)', 'var(--text-tertiary)'];
 
+/** Максимум из двух ISO-меток (одинаковый формат — сравнение строк корректно). */
+const maxIso = (a: string | null, b: string | null): string | null => (a && b ? (a > b ? a : b) : (a ?? b));
+
 const Seg: FC<{ options: { v: string; label: string }[]; value: string; onChange: (v: string) => void }> = ({ options, value, onChange }) => (
   <div className={styles.segment}>
     {options.map(o => (
@@ -103,6 +106,8 @@ export const OverviewSection: FC = () => {
   const [trendMetric, setTrendMetric] = useState<MtsBusinessDailyMetric>('balance');
   const [topMetric, setTopMetric] = useState<'time' | 'cost'>('time');
   const [showRestEmployees, setShowRestEmployees] = useState(false);
+  const [empSearch, setEmpSearch] = useState('');
+  const [empPageState, setEmpPageState] = useState<{ key: string; page: number }>({ key: '', page: 1 });
 
   const accountsMeta = useMtsBusinessAccounts();
   const accSummary = useMtsBusinessAccountsSummary(callsFrom, callsTo, true);
@@ -137,14 +142,15 @@ export const OverviewSection: FC = () => {
   const inProgressCount = (actions.data ?? []).filter(a => a.status === 'in_progress').length;
 
   const catalogByEmployee = useMemo(() => {
-    const map = new Map<string, { tariffNames: Set<string>; servicesCount: number; servicesMonthlyTotal: number }>();
+    const map = new Map<string, { tariffNames: Set<string>; servicesCount: number; servicesMonthlyTotal: number; maxCapturedAt: string | null }>();
     for (const c of employeesCatalog.data ?? []) {
       const key = c.employeeId != null ? String(c.employeeId) : `unmapped-${c.employeeFullName ?? ''}`;
       let g = map.get(key);
-      if (!g) { g = { tariffNames: new Set(), servicesCount: 0, servicesMonthlyTotal: 0 }; map.set(key, g); }
+      if (!g) { g = { tariffNames: new Set(), servicesCount: 0, servicesMonthlyTotal: 0, maxCapturedAt: null }; map.set(key, g); }
       if (c.tariffName) g.tariffNames.add(c.tariffName);
       g.servicesCount += c.servicesCount;
       g.servicesMonthlyTotal += c.servicesMonthlyTotal;
+      g.maxCapturedAt = maxIso(g.maxCapturedAt, c.capturedAt);
     }
     return map;
   }, [employeesCatalog.data]);
@@ -152,8 +158,28 @@ export const OverviewSection: FC = () => {
   const billingEmployeesEnriched = billingEmployees.map(r => {
     const key = r.employeeId != null ? String(r.employeeId) : `unmapped-${r.employeeFullName ?? ''}`;
     const c = catalogByEmployee.get(key);
-    return { ...r, tariffName: c ? [...c.tariffNames].join(', ') || null : null, servicesCount: c?.servicesCount ?? 0, servicesMonthlyTotal: c?.servicesMonthlyTotal ?? 0 };
+    return {
+      ...r,
+      tariffName: c ? [...c.tariffNames].join(', ') || null : null,
+      servicesCount: c?.servicesCount ?? 0,
+      servicesMonthlyTotal: c?.servicesMonthlyTotal ?? 0,
+      // «Обновлено» — свежесть любого из источников (начисления/тариф/услуги).
+      capturedAt: maxIso(r.capturedAt, c?.maxCapturedAt ?? null),
+    };
   });
+
+  // Таблица «По сотрудникам»: поиск по ФИО/табельному + пагинация по 50.
+  const EMP_PAGE_SIZE = 50;
+  const empQuery = empSearch.trim().toLowerCase();
+  const empFiltered = empQuery
+    ? billingEmployeesEnriched.filter(r =>
+        `${r.employeeFullName ?? ''} ${r.employeeTabNumber ?? ''}`.toLowerCase().includes(empQuery))
+    : billingEmployeesEnriched;
+  const empPage = empPageState.key === empSearch ? empPageState.page : 1;
+  const setEmpPage = (p: number): void => setEmpPageState({ key: empSearch, page: p });
+  const empPageCount = Math.max(1, Math.ceil(empFiltered.length / EMP_PAGE_SIZE));
+  const empSafePage = Math.min(empPage, empPageCount);
+  const empPageRows = empFiltered.slice((empSafePage - 1) * EMP_PAGE_SIZE, empSafePage * EMP_PAGE_SIZE);
 
   const TOP_N = 10;
   const timeItems = (report.data ?? [])
@@ -383,29 +409,54 @@ export const OverviewSection: FC = () => {
       </div>
 
       <section className={styles.card}>
-        <div className={styles.cardTitleText} style={{ marginBottom: 12 }}>По сотрудникам</div>
-        {billingSummary.isLoading ? <p className={styles.hint}>Загрузка…</p> : billingEmployeesEnriched.length === 0 ? (
+        <div className={styles.cardTitle}>
+          <div className={styles.cardTitleText}>По сотрудникам</div>
+          {billingEmployees.length > 0 && (
+            <input
+              className={styles.search}
+              type="search"
+              placeholder="Поиск: ФИО, табельный…"
+              value={empSearch}
+              onChange={e => setEmpSearch(e.target.value)}
+            />
+          )}
+        </div>
+        {billingSummary.isLoading ? (
+          <p className={styles.hint}>Загрузка…</p>
+        ) : billingEmployees.length === 0 ? (
           stepUnavailable('billing')
             ? <UnavailableNotice />
             : <p className={styles.hint}>Нет данных — привяжите номера к сотрудникам на вкладке «Администрирование».</p>
+        ) : empFiltered.length === 0 ? (
+          <p className={styles.hint}>Ничего не найдено.</p>
         ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead><tr><th>Сотрудник</th><th>Тариф</th><th>Баланс</th><th>Начисления</th><th>Услуги</th><th>Обновлено</th></tr></thead>
-              <tbody>
-                {billingEmployeesEnriched.map((r, i) => (
-                  <tr key={r.employeeId ?? `unmapped-${i}`}>
-                    <td>{r.employeeFullName ?? 'Не привязан'}{r.employeeTabNumber ? ` (таб. ${r.employeeTabNumber})` : ''}</td>
-                    <td>{r.tariffName ?? '—'}</td>
-                    <td>{fmtMoney(r.balance)}</td>
-                    <td>{fmtMoney(r.chargesAmount)}</td>
-                    <td>{r.servicesCount > 0 ? `${r.servicesCount} · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : '—'}</td>
-                    <td>{fmtLast(r.capturedAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead><tr><th>Сотрудник</th><th>Тариф</th><th>Начисления</th><th>Услуги</th><th>Обновлено</th></tr></thead>
+                <tbody>
+                  {empPageRows.map((r, i) => (
+                    <tr key={r.employeeId ?? `unmapped-${i}`}>
+                      <td>{r.employeeFullName ?? 'Не привязан'}{r.employeeTabNumber ? ` (таб. ${r.employeeTabNumber})` : ''}</td>
+                      <td>{r.tariffName ?? '—'}</td>
+                      <td>{fmtMoney(r.chargesAmount)}</td>
+                      <td>{r.servicesCount > 0 ? `${r.servicesCount} · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : '—'}</td>
+                      <td>{fmtLast(r.capturedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {empPageCount > 1 && (
+              <div className={styles.pager}>
+                <button className={styles.btnSecondary} disabled={empSafePage <= 1} onClick={() => setEmpPage(empSafePage - 1)}>‹ Назад</button>
+                <span className={styles.pagerInfo}>
+                  {empSafePage} / {empPageCount} · строки {(empSafePage - 1) * EMP_PAGE_SIZE + 1}–{Math.min(empSafePage * EMP_PAGE_SIZE, empFiltered.length)}
+                </span>
+                <button className={styles.btnSecondary} disabled={empSafePage >= empPageCount} onClick={() => setEmpPage(empSafePage + 1)}>Вперёд ›</button>
+              </div>
+            )}
+          </>
         )}
       </section>
 

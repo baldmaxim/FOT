@@ -298,6 +298,27 @@
 }
 .table th { color: var(--text-secondary); font-weight: 600; }
 
+/* Поиск + пагинация в таблице «По сотрудникам» */
+.search {
+  flex: 1 1 220px;
+  max-width: 360px;
+  padding: 8px 12px;
+  font-size: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.pagerInfo { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
+
 @media (max-width: 480px) {
   .card { padding: 12px 14px; }
 }

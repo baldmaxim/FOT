@@ -1,5 +1,6 @@
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
+import { extractTariffNameFromServices } from './mts-business-catalog.service.js';
 
 // Персист и чтение скалярных дневных метрик МТС «Бизнес» (mts_business_metric_daily).
 // Один ряд/сутки/метрику/цель (идемпотентный upsert) — вызывается и из
@@ -415,11 +416,14 @@ class MtsBusinessMetricsStoreService {
       if (!g.capturedAt || r.captured_at > g.capturedAt) g.capturedAt = r.captured_at;
       if (r.metric === 'bill_plan') {
         const p = r.payload as { tariffName?: string | null };
-        g.tariffName = p?.tariffName ?? null;
+        // bill_plan приоритетнее, но почти всегда пуст — не затираем имя из услуг.
+        g.tariffName = p?.tariffName ?? g.tariffName;
       } else if (r.metric === 'product_services') {
-        const services = Array.isArray(r.payload) ? (r.payload as { monthlyAmount?: number | null }[]) : [];
+        const services = Array.isArray(r.payload) ? (r.payload as { name?: string | null; monthlyAmount?: number | null }[]) : [];
         g.servicesCount = services.length;
         g.servicesMonthlyTotal = services.reduce((a, s) => a + (s.monthlyAmount ?? 0), 0);
+        // Фолбэк имени тарифа: строка «Ежемесячная плата <Тариф>» в услугах.
+        g.tariffName = g.tariffName ?? extractTariffNameFromServices(services);
       }
     }
     return [...byNumber.values()];
