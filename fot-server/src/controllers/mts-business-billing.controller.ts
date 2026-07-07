@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import * as Sentry from '@sentry/node';
 import type { AuthenticatedRequest } from '../types/index.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { mtsBusinessAccountsService } from '../services/mts-business-accounts.service.js';
 import { mtsBusinessMetricsStoreService, type MtsBusinessDailyMetric } from '../services/mts-business-metrics-store.service.js';
 import { refreshAccountMetrics } from '../services/mts-business-metrics-daily-scheduler.service.js';
@@ -30,14 +31,25 @@ const fail = (res: Response, error: unknown, fallback: string): void => {
 };
 
 export const mtsBusinessBillingController = {
-  /** Последний известный срез по всем активным ЛС и привязанным номерам. */
-  async getSummary(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  /**
+   * Сводка: последний срез по ЛС (баланс/лимит/неоплаченные) + начисления по
+   * сотрудникам ЗА ПЕРИОД ?from/?to (YYYY-MM-DD; по умолчанию — с 1-го числа
+   * текущего месяца МСК по сегодня).
+   */
+  async getSummary(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const today = moscowTodayIso();
+      const from = String(req.query.from || `${today.slice(0, 7)}-01`);
+      const to = String(req.query.to || today);
+      if (!DATE_RE.test(from) || !DATE_RE.test(to) || from > to) {
+        res.status(400).json({ success: false, error: 'Параметры from/to должны быть в формате YYYY-MM-DD, from ≤ to' });
+        return;
+      }
       const [accounts, employees] = await Promise.all([
         mtsBusinessMetricsStoreService.getAccountsSummary(),
-        mtsBusinessMetricsStoreService.getEmployeesSummary(),
+        mtsBusinessMetricsStoreService.getEmployeesSummary(null, from, to),
       ]);
-      res.json({ success: true, data: { accounts, employees } });
+      res.json({ success: true, data: { accounts, employees, period: { from, to } } });
     } catch (error) {
       fail(res, error, 'Ошибка получения сводки по балансам');
     }

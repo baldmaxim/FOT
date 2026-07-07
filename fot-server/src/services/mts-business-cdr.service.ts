@@ -46,6 +46,7 @@ export type MtsExpenseCategory = 'calls' | 'sms' | 'internet' | 'periodic' | 'on
 export interface IStatementUsageEvent {
   category: MtsExpenseCategory;
   amount: number; // рубли, ≥0 (расход)
+  date: string | null; // YYYY-MM-DD дня расхода (из Usages[].date)
 }
 
 /** Строка детальной выписки по использованию SIM (для вкладки «Использование»). */
@@ -394,7 +395,8 @@ class MtsBusinessCdrService {
       const category = classifyUsage(c);
       if (category === 'topups') continue;
       const amount = pickAmount(c) ?? pickAmount(u) ?? 0;
-      out.push({ category, amount: Math.abs(amount) });
+      const date = typeof u.date === 'string' && u.date.length >= 10 ? u.date.slice(0, 10) : null;
+      out.push({ category, amount: Math.abs(amount), date });
     }
     return out;
   }
@@ -404,6 +406,19 @@ class MtsBusinessCdrService {
    *  для начислений не годится). fromDate — нижняя граница окна (YYYY-MM-DD). */
   sumStatementCharges(data: unknown, fromDate?: string): number {
     return this.parseStatementUsages(data, fromDate).reduce((sum, row) => sum + row.amount, 0);
+  }
+
+  /** Суммы расходов по выписке, сгруппированные по дню (YYYY-MM-DD → ₽) — для
+   *  по-дневного хранения charges_amount. Строки без даты падают в fallbackDate
+   *  (конец окна), чтобы не терять начисления. */
+  sumStatementChargesByDay(data: unknown, fromDate: string, fallbackDate: string): Map<string, number> {
+    const perDay = new Map<string, number>();
+    for (const row of this.parseStatementUsages(data, fromDate)) {
+      if (row.amount <= 0) continue;
+      const day = row.date ?? fallbackDate;
+      perDay.set(day, (perDay.get(day) ?? 0) + row.amount);
+    }
+    return perDay;
   }
 
   /**

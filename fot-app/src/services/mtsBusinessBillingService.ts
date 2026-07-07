@@ -44,8 +44,13 @@ interface ApiResponse<T> {
 }
 
 export const mtsBusinessBillingService = {
-  getSummary: async (): Promise<IMtsBusinessBillingSummary> => {
-    const res = await apiClient.get<ApiResponse<IMtsBusinessBillingSummary>>('/mts-business/billing/summary');
+  /** from/to — период начислений (YYYY-MM-DD); без них бэк берёт текущий месяц МСК. */
+  getSummary: async (from?: string, to?: string): Promise<IMtsBusinessBillingSummary> => {
+    const qs = new URLSearchParams();
+    if (from) qs.set('from', from);
+    if (to) qs.set('to', to);
+    const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
+    const res = await apiClient.get<ApiResponse<IMtsBusinessBillingSummary>>(`/mts-business/billing/summary${suffix}`);
     return res.data;
   },
 

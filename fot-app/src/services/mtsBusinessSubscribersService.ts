@@ -66,7 +66,7 @@ export interface IMtsSubscriberDetails {
   msisdn: string;
   accountId: string;
   balance: { amount: number; capturedAt: string } | null;
-  charges: { amount: number; capturedAt: string } | null;
+  charges: { amount: number; capturedAt: string | null } | null; // сумма за текущий месяц МСК
   tariff: { name: string | null; fee: IMtsSubTariffFee | null };
   services: IMtsSubServiceItem[];
   blocks: IMtsSubServiceItem[];

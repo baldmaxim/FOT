@@ -1,4 +1,5 @@
 import { query } from '../config/postgres.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { encryptionService } from './encryption.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
@@ -41,7 +42,7 @@ export interface IMtsSubscriberDetails {
   msisdn: string;
   accountId: string;
   balance: { amount: number; capturedAt: string } | null;
-  charges: { amount: number; capturedAt: string } | null;
+  charges: { amount: number; capturedAt: string | null } | null; // сумма за текущий месяц МСК
   tariff: { name: string | null; fee: IMtsTariffFee | null };
   services: IMtsService[];
   blocks: IMtsService[];
@@ -93,14 +94,23 @@ class MtsBusinessSubscribersService {
        metrics AS (
          SELECT msisdn_hash,
                 MAX(amount) FILTER (WHERE metric = 'balance') AS balance,
-                MAX(amount) FILTER (WHERE metric = 'charges_amount') AS charges_amount,
                 MAX(captured_at) AS captured_at
            FROM (
              SELECT DISTINCT ON (msisdn_hash, metric) msisdn_hash, metric, amount, captured_at
                FROM mts_business_metric_daily
               WHERE scope = 'msisdn' AND msisdn_hash IS NOT NULL
+                AND metric <> 'charges_amount'
               ORDER BY msisdn_hash, metric, captured_at DESC
            ) t
+          GROUP BY msisdn_hash
+       ),
+       -- Начисления по дням (captured_date = день расхода) → сумма за текущий месяц МСК.
+       charges AS (
+         SELECT msisdn_hash, SUM(amount) AS charges_amount, MAX(captured_at) AS captured_at
+           FROM mts_business_metric_daily
+          WHERE scope = 'msisdn' AND msisdn_hash IS NOT NULL
+            AND metric = 'charges_amount'
+            AND captured_date >= date_trunc('month', (NOW() AT TIME ZONE 'Europe/Moscow'))::date
           GROUP BY msisdn_hash
        ),
        snaps AS (
@@ -133,13 +143,14 @@ class MtsBusinessSubscribersService {
               e.org_department_id::text AS department_id,
               od.name AS department_name,
               mt.balance::text AS balance,
-              mt.charges_amount::text AS charges_amount,
+              ch.charges_amount::text AS charges_amount,
               s.bill_plan,
               s.product_services,
-              GREATEST(mt.captured_at, s.captured_at) AS captured_at
+              GREATEST(mt.captured_at, ch.captured_at, s.captured_at) AS captured_at
          FROM mts_business_number_map m
          FULL OUTER JOIN cdr c ON c.msisdn_hash = m.msisdn_hash
          LEFT JOIN metrics mt ON mt.msisdn_hash = COALESCE(m.msisdn_hash, c.msisdn_hash)
+         LEFT JOIN charges ch ON ch.msisdn_hash = COALESCE(m.msisdn_hash, c.msisdn_hash)
          LEFT JOIN snaps s ON s.msisdn_hash = COALESCE(m.msisdn_hash, c.msisdn_hash)
          LEFT JOIN employees e ON e.id = m.employee_id
          LEFT JOIN org_departments od ON od.id = e.org_department_id
@@ -190,18 +201,20 @@ class MtsBusinessSubscribersService {
     const ctx = await mtsBusinessMappingService.getSubscriberContext(rawMsisdn);
     if (!ctx) return null;
 
-    const [snaps, daily, personalData] = await Promise.all([
+    const monthTo = moscowTodayIso();
+    const monthFrom = `${monthTo.slice(0, 7)}-01`;
+    const [snaps, daily, charges, personalData] = await Promise.all([
       mtsBusinessMetricsStoreService.getLatestSnapshotsForMsisdn(rawMsisdn, [
         'bill_plan', 'tariff_fee', 'product_services', 'connected_blocks',
         'forwarding', 'roaming', 'delivery_method', 'payments', 'validity_msisdn',
       ]),
       mtsBusinessMetricsStoreService.getLatestDailyForMsisdn(rawMsisdn),
+      mtsBusinessMetricsStoreService.getMsisdnChargesForPeriod(rawMsisdn, monthFrom, monthTo),
       mtsBusinessPersonalDataService.getStoredFull(rawMsisdn),
     ]);
 
     const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
     const balance = daily.get('balance');
-    const charges = daily.get('charges_amount');
     const capturedAt = [...snaps.values()].reduce<string | null>(
       (max, s) => (max == null || s.capturedAt > max ? s.capturedAt : max),
       null,

@@ -128,7 +128,7 @@ export const SubscribersTab: FC = () => {
             <thead>
               <tr>
                 <th>Номер</th><th>ФИО (МТС)</th><th>Сотрудник ФОТ</th><th>Отдел</th><th>ЛС</th><th>Тариф</th>
-                <th>Начисления</th><th>Услуги</th><th>Звонки</th><th>Время</th><th>Персданные</th>
+                <th>Начисления (месяц)</th><th>Услуги</th><th>Звонки</th><th>Время</th><th>Персданные</th>
               </tr>
             </thead>
             <tbody>

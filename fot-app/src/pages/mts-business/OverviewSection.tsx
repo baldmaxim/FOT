@@ -91,8 +91,9 @@ const ChartTooltip: FC<{ active?: boolean; payload?: { value: number }[]; label?
 export const OverviewSection: FC = () => {
   const now = useMemo(() => new Date(), []);
   const [accountId, setAccountId] = useState('');
+  // Дефолт периода — текущий месяц (с 1-го числа по сегодня).
   const defaultCallsFrom = useMemo(
-    () => toISODate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30)),
+    () => toISODate(new Date(now.getFullYear(), now.getMonth(), 1)),
     [now],
   );
   const [callsFrom, setCallsFrom] = useState(defaultCallsFrom);
@@ -106,7 +107,7 @@ export const OverviewSection: FC = () => {
   const accountsMeta = useMtsBusinessAccounts();
   const accSummary = useMtsBusinessAccountsSummary(callsFrom, callsTo, true);
   const report = useMtsBusinessReport(callsFrom, callsTo, true, accountId || undefined);
-  const billingSummary = useMtsBusinessBillingSummary();
+  const billingSummary = useMtsBusinessBillingSummary(callsFrom, callsTo);
   const trend = useMtsBusinessBillingTrend(trendMetric, trendFrom, trendTo, accountId || undefined);
   const employeesCatalog = useMtsBusinessEmployeesCatalog(accountId || undefined);
   const accountsPackages = useMtsBusinessAccountsPackages();
@@ -238,7 +239,7 @@ export const OverviewSection: FC = () => {
       <section className={styles.card}>
         <div className={styles.kpiGrid}>
           <div className={styles.kpi}>
-            <div className={styles.kpiLabel}>Начисления (последний снимок)</div>
+            <div className={styles.kpiLabel}>Начисления за период</div>
             <div className={styles.kpiValue}>{fmtMoney(totalCharges)}</div>
           </div>
           <div className={styles.kpi}>

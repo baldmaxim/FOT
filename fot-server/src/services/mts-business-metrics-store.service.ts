@@ -1,4 +1,4 @@
-import { execute, query, queryOne } from '../config/postgres.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
 
 // Персист и чтение скалярных дневных метрик МТС «Бизнес» (mts_business_metric_daily).
@@ -112,6 +112,76 @@ class MtsBusinessMetricsStoreService {
     );
   }
 
+  /**
+   * По-дневные начисления номера за окно [fromYmd..toYmd]: старые строки окна
+   * удаляются, дни с расходами вставляются заново. captured_date = ДЕНЬ РАСХОДА
+   * из выписки (не день снятия) — сумма за произвольный период считается как
+   * SUM(amount) по captured_date. Дни без расходов строк не имеют (= 0).
+   */
+  async replaceMsisdnDailyCharges(
+    accountId: string,
+    rawMsisdn: string,
+    fromYmd: string,
+    toYmd: string,
+    perDay: Map<string, number>,
+  ): Promise<void> {
+    const hash = msisdnHash(rawMsisdn);
+    if (!hash) return;
+    // Дни за пределами окна прижимаются к границе (иначе потеряем сумму при
+    // расхождении дат выписки с запрошенным окном), затем ре-агрегация.
+    const normalized = new Map<string, number>();
+    for (const [day, amount] of perDay) {
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      const clamped = day < fromYmd ? fromYmd : day > toYmd ? toYmd : day;
+      normalized.set(clamped, (normalized.get(clamped) ?? 0) + amount);
+    }
+    await withTransaction(async client => {
+      await client.query(
+        `DELETE FROM mts_business_metric_daily
+          WHERE scope = 'msisdn' AND metric = 'charges_amount' AND msisdn_hash = $1
+            AND captured_date >= $2::date AND captured_date <= $3::date`,
+        [hash, fromYmd, toYmd],
+      );
+      if (normalized.size === 0) return;
+      const values: string[] = [];
+      const params: unknown[] = [accountId, hash];
+      for (const [day, amount] of normalized) {
+        const dayIdx = params.push(day);
+        const amountIdx = params.push(amount);
+        values.push(`($1, 'msisdn', $2, 'charges_amount', $${amountIdx}, $${dayIdx}::date, $${dayIdx}::date, $${dayIdx}::date, NOW())`);
+      }
+      // ON CONFLICT — на случай параллельного синка того же номера (refresh-all
+      // и «Обновить данные» из карточки не делят один lease).
+      await client.query(
+        `INSERT INTO mts_business_metric_daily
+           (account_id, scope, msisdn_hash, metric, amount, captured_date, valid_from, valid_to, captured_at)
+         VALUES ${values.join(', ')}
+         ON CONFLICT (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, captured_date)
+         DO UPDATE SET amount = EXCLUDED.amount, valid_from = EXCLUDED.valid_from,
+           valid_to = EXCLUDED.valid_to, captured_at = NOW()`,
+        params,
+      );
+    });
+  }
+
+  /** Сумма начислений номера за период (по-дневные строки charges_amount). */
+  async getMsisdnChargesForPeriod(
+    rawMsisdn: string,
+    fromYmd: string,
+    toYmd: string,
+  ): Promise<{ amount: number; capturedAt: string | null } | null> {
+    const hash = msisdnHash(rawMsisdn);
+    if (!hash) return null;
+    const row = await queryOne<{ amount: string | null; captured_at: string | null }>(
+      `SELECT SUM(amount)::text AS amount, MAX(captured_at) AS captured_at
+         FROM mts_business_metric_daily
+        WHERE scope = 'msisdn' AND metric = 'charges_amount' AND msisdn_hash = $1
+          AND captured_date >= $2::date AND captured_date <= $3::date`,
+      [hash, fromYmd, toYmd],
+    );
+    return row?.amount != null ? { amount: Number(row.amount), capturedAt: row.captured_at } : null;
+  }
+
   /** Последний известный срез по каждому активному ЛС (баланс/кредитный лимит/неоплаченные). */
   async getAccountsSummary(): Promise<IAccountMetricsSummaryRow[]> {
     const rows = await query<{
@@ -151,8 +221,12 @@ class MtsBusinessMetricsStoreService {
     }));
   }
 
-  /** Последний известный срез по каждому привязанному к сотруднику номеру (баланс/начисления). */
-  async getEmployeesSummary(accountId?: string | null): Promise<IEmployeeMetricsSummaryRow[]> {
+  /** Сумма начислений за период [fromYmd..toYmd] по каждому привязанному к сотруднику номеру. */
+  async getEmployeesSummary(
+    accountId: string | null | undefined,
+    fromYmd: string,
+    toYmd: string,
+  ): Promise<IEmployeeMetricsSummaryRow[]> {
     const rows = await query<{
       employee_id: number | null;
       full_name: string | null;
@@ -161,25 +235,26 @@ class MtsBusinessMetricsStoreService {
       charges_amount: string | null;
       captured_at: string | null;
     }>(
-      `WITH latest AS (
-         SELECT DISTINCT ON (msisdn_hash, metric) msisdn_hash, metric, amount, captured_at
+      `WITH period AS (
+         SELECT msisdn_hash, SUM(amount) AS amount, MAX(captured_at) AS captured_at
            FROM mts_business_metric_daily
           WHERE scope = 'msisdn' AND msisdn_hash IS NOT NULL
-            AND metric IN ('charges_amount')
+            AND metric = 'charges_amount'
+            AND captured_date >= $2::date AND captured_date <= $3::date
             AND ($1::uuid IS NULL OR account_id = $1::uuid)
-          ORDER BY msisdn_hash, metric, captured_at DESC
+          GROUP BY msisdn_hash
        )
        SELECT nm.employee_id, e.full_name, e.tab_number,
               NULL::text AS balance,
-              SUM(l.amount) FILTER (WHERE l.metric = 'charges_amount')::text AS charges_amount,
+              SUM(l.amount)::text AS charges_amount,
               MAX(l.captured_at) AS captured_at
          FROM mts_business_number_map nm
-         LEFT JOIN latest l ON l.msisdn_hash = nm.msisdn_hash
+         LEFT JOIN period l ON l.msisdn_hash = nm.msisdn_hash
          LEFT JOIN employees e ON e.id = nm.employee_id
         WHERE ($1::uuid IS NULL OR nm.account_id = $1)
         GROUP BY nm.employee_id, e.full_name, e.tab_number
         ORDER BY e.full_name NULLS LAST`,
-      [accountId ?? null],
+      [accountId ?? null, fromYmd, toYmd],
     );
     return rows.map(r => ({
       employeeId: r.employee_id,
@@ -191,22 +266,25 @@ class MtsBusinessMetricsStoreService {
     }));
   }
 
-  /** Тренд метрики по дням: по конкретному ЛС (accountId) или сумма по всем активным ЛС. */
+  /** Тренд метрики по дням: по конкретному ЛС (accountId) или сумма по всем активным ЛС.
+   *  charges_amount хранится per-номер (scope='msisdn', день расхода) — для него
+   *  тренд = сумма расходов всех номеров ЛС за день. */
   async getAccountMetricTrend(
     metric: MtsBusinessDailyMetric,
     accountId: string | null,
     from: string,
     to: string,
   ): Promise<IMetricTrendPoint[]> {
+    const scope = metric === 'charges_amount' ? 'msisdn' : 'account';
     const rows = await query<{ date: string; amount: string }>(
       `SELECT captured_date::text AS date, SUM(amount)::text AS amount
          FROM mts_business_metric_daily
-        WHERE scope = 'account' AND metric = $1
+        WHERE scope = $5 AND metric = $1
           AND captured_date >= $2::date AND captured_date <= $3::date
           AND ($4::uuid IS NULL OR account_id = $4::uuid)
         GROUP BY captured_date
         ORDER BY captured_date`,
-      [metric, from, to, accountId ?? null],
+      [metric, from, to, accountId ?? null, scope],
     );
     return rows.map(r => ({ date: r.date, amount: Number(r.amount) }));
   }

@@ -15,6 +15,7 @@ import {
   type IMtsForwardingRule,
   type IMtsRoaming,
 } from './mts-business-catalog.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { mtsBusinessDataService } from './mts-business-data.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
@@ -143,13 +144,16 @@ class MtsBusinessSubscriberCardService {
     const billPlanSnap = await mtsBusinessMetricsStoreService.getLatestSnapshotForMsisdn(msisdn, 'bill_plan');
     const tariffName = (billPlanSnap?.payload as IMtsTariff | undefined)?.tariffName ?? null;
 
-    // Начисления берём из сохранённой выписки (metric_daily), а НЕ живым
-    // CheckCharges: его remainedAmount — остаток по лицевому счёту (сотни тысяч ₽),
-    // а не начисление на номер. Правильное значение пишет syncMsisdnStatement.
-    const dailyCharge = (await mtsBusinessMetricsStoreService.getLatestDailyForMsisdn(msisdn)).get('charges_amount');
+    // Начисления берём из сохранённой выписки (metric_daily, по-дневные строки),
+    // а НЕ живым CheckCharges: его remainedAmount — остаток по лицевому счёту
+    // (сотни тысяч ₽), а не начисление на номер. Пишет их syncMsisdnStatement;
+    // здесь — сумма за текущий месяц МСК.
+    const chargesTo = moscowTodayIso();
+    const chargesFrom = `${chargesTo.slice(0, 7)}-01`;
+    const monthCharges = await mtsBusinessMetricsStoreService.getMsisdnChargesForPeriod(msisdn, chargesFrom, chargesTo);
     const currentCharges: Section<IMtsCharge | null> = {
-      data: dailyCharge
-        ? { msisdn, amount: dailyCharge.amount, periodStart: dailyCharge.validFrom, periodEnd: dailyCharge.validTo }
+      data: monthCharges
+        ? { msisdn, amount: monthCharges.amount, periodStart: chargesFrom, periodEnd: chargesTo }
         : null,
     };
 

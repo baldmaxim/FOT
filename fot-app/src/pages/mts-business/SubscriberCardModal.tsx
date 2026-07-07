@@ -14,7 +14,7 @@ import type {
 import { UnavailableNotice } from './common/UnavailableNotice';
 import { PersonalDataModal } from './personal-data/PersonalDataModal';
 import { PersonalDataStatusBadge } from './personal-data/PersonalDataStatusBadge';
-import { fmtMoney, fmtLast, EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS } from './mtsBusinessFormat';
+import { fmtMoney, fmtLast, fmtDay, EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS } from './mtsBusinessFormat';
 import s from './SubscriberCardModal.module.css';
 
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -198,11 +198,11 @@ export const SubscriberCardModal: FC<{ msisdn: string; onClose: () => void }> = 
                 </>
               )} />
 
-              <Section title="Начисления (текущие)" state={data.currentCharges} render={c => (
+              <Section title="Начисления (текущий месяц)" state={data.currentCharges} render={c => (
                 c ? (
                   <>
                     <KV label="Сумма" value={fmtMoney(c.amount)} />
-                    <KV label="Период" value={c.periodStart ? `${fmtLast(c.periodStart)} — ${fmtLast(c.periodEnd)}` : '—'} />
+                    <KV label="Период" value={c.periodStart ? `${fmtDay(c.periodStart)} — ${fmtDay(c.periodEnd)}` : '—'} />
                   </>
                 ) : <p className={s.itemMuted}>Нет начислений</p>
               )} />

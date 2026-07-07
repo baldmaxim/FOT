@@ -427,7 +427,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
               Сменить тариф
             </button>
           </div>
-          <KV label="Начисления" value={d?.charges ? fmtMoney(d.charges.amount) : fmtMoney(row.chargesAmount)} />
+          <KV label="Начисления (месяц)" value={d?.charges ? fmtMoney(d.charges.amount) : fmtMoney(row.chargesAmount)} />
           <KV label="Тариф" value={dash(d?.tariff.name ?? row.tariffName)} />
           <KV label="Абонентская плата" value={d?.tariff.fee?.amount != null ? `${fmtMoney(d.tariff.fee.amount)}/мес` : '—'} />
           {(d?.packages ?? []).length > 0 && (

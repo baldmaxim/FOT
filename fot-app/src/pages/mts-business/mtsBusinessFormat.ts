@@ -15,6 +15,10 @@ export const fmtDur = (sec: number): string => {
 export const fmtLast = (iso: string | null): string => iso
   ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
   : '—';
+/** Дата без времени: 'YYYY-MM-DD' → «07.07.26» (без сдвига таймзоны). */
+export const fmtDay = (ymd: string | null): string => ymd
+  ? new Date(`${ymd.slice(0, 10)}T00:00:00`).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
+  : '—';
 export const fmtMoney = (v: number | null): string => v == null ? '—' : `${v.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
 
 /** 79151204230 → «+7 (915) 120-42-30»; иное — как есть. */
