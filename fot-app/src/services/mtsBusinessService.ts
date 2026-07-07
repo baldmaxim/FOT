@@ -172,7 +172,25 @@ export const mtsBusinessService = {
     if (opts.accountId) form.append('accountId', opts.accountId);
     if (opts.sourceMessageId) form.append('sourceMessageId', opts.sourceMessageId);
     if (opts.msisdn) form.append('msisdn', opts.msisdn);
-    const res = await apiClient.post<ApiResponse<IMtsBusinessUploadResult>>('/mts-business/detalization/upload', form);
+    // Файлы детализации до 300 МБ: дефолтный таймаут клиента (30с) оборвёт
+    // передачу — даём 10 минут на аплоад + серверный парсинг.
+    const res = await apiClient.post<ApiResponse<IMtsBusinessUploadResult>>(
+      '/mts-business/detalization/upload', form, { timeoutMs: 600_000 },
+    );
+    return res.data;
+  },
+
+  /** Число CDR-записей, загруженных из файлов вручную (метка 'upload:%'). */
+  getUploadsCount: async (): Promise<{ count: number }> => {
+    const res = await apiClient.get<ApiResponse<{ count: number }>>('/mts-business/detalization/uploads/count');
+    return res.data;
+  },
+
+  /** Отладочная очистка ручных загрузок XML/XLS (API-записи не задеваются). */
+  clearUploads: async (): Promise<{ deleted: number }> => {
+    const res = await apiClient.delete<ApiResponse<{ deleted: number }>>(
+      '/mts-business/detalization/uploads', { body: JSON.stringify({ confirmed: true }) },
+    );
     return res.data;
   },
 

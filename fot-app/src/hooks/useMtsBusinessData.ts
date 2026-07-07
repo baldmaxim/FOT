@@ -122,6 +122,29 @@ export const useUploadMtsBusinessDetalization = () => {
       void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
       void qc.invalidateQueries({ queryKey: ['mts-business', 'accounts-summary'] });
       void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessUploadsCountKey() });
+    },
+  });
+};
+
+export const getMtsBusinessUploadsCountKey = () => ['mts-business', 'uploads-count'] as const;
+
+export const useMtsBusinessUploadsCount = (enabled: boolean) => useQuery({
+  queryKey: getMtsBusinessUploadsCountKey(),
+  queryFn: () => mtsBusinessService.getUploadsCount(),
+  staleTime: 30_000,
+  enabled,
+});
+
+export const useClearMtsBusinessUploads = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => mtsBusinessService.clearUploads(),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: getMtsBusinessUploadsCountKey() });
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'accounts-summary'] });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
     },
   });
 };

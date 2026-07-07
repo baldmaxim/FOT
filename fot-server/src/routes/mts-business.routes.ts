@@ -101,13 +101,27 @@ router.post(
   mtsBusinessController.refreshStatus,
 );
 
-// Загрузка XML-детализации (файл с email) → парсинг → CDR.
+// Загрузка XML-детализации (файл с email) → парсинг → CDR. Файлы до 300 МБ
+// (лимит multer выше); nginx client_max_body_size на проде — не меньше 300m.
 router.post(
   '/detalization/upload',
   requirePageAccess('/mts-business', 'edit'),
   requireCritical2FA,
   upload.single('file'),
   mtsBusinessController.uploadDetalization,
+);
+// Отладочная очистка ручных загрузок: удаляются только записи с
+// source_message_id LIKE 'upload:%' — API-синки не задеваются.
+router.get(
+  '/detalization/uploads/count',
+  requirePageAccess('/mts-business', 'view'),
+  mtsBusinessController.getUploadedDetalizationCount,
+);
+router.delete(
+  '/detalization/uploads',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessController.clearUploadedDetalization,
 );
 
 // Привязка номеров к сотрудникам

@@ -2,6 +2,7 @@ import { type FC, type ReactNode } from 'react';
 import { useMtsBusinessAccounts } from '../../../hooks/useMtsBusinessData';
 import { AccountsSection } from './AccountsSection';
 import { SyncSection } from './SyncSection';
+import { XmlSection } from './XmlSection';
 import styles from '../MtsBusinessPage.module.css';
 
 const AdminCard: FC<{ title: string; desc: string; badge?: ReactNode; children: ReactNode }> = ({
@@ -18,10 +19,10 @@ const AdminCard: FC<{ title: string; desc: string; badge?: ReactNode; children: 
 );
 
 /**
- * Вкладка «Администрирование»: аккаунты API и синхронизация. Все действия с
- * номерами (услуги/блокировки/тарифы/персданные/привязки) — в боковой панели
- * абонента (вкладка «Абоненты»). Блок «Импорт файлов» (XML/XLS) скрыт —
- * загрузка файлов не используется, компонент сохранён в admin/UploadSection.tsx.
+ * Вкладка «Администрирование»: аккаунты API, синхронизация и XML-детализация
+ * (заказ на почту + загрузка файла). Все действия с номерами (услуги/
+ * блокировки/тарифы/персданные/привязки) — в боковой панели абонента
+ * (вкладка «Абоненты»).
  */
 export const AdminTab: FC = () => {
   const accounts = useMtsBusinessAccounts();
@@ -42,6 +43,13 @@ export const AdminTab: FC = () => {
         desc="Фоновые планировщики, точечное обновление финансов/каталога и ручная загрузка детализации за период."
       >
         <SyncSection />
+      </AdminCard>
+
+      <AdminCard
+        title="Детализация XML (email)"
+        desc="Заказ XML-детализации на почту по счёту, статусы заявок и загрузка файла (до 300 МБ) с дедупликацией против БД."
+      >
+        <XmlSection />
       </AdminCard>
     </div>
   );

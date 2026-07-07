@@ -492,6 +492,23 @@ class MtsBusinessCdrService {
     return { inserted, skipped: calls.length - inserted };
   }
 
+  // Записи ручных загрузок файлов помечаются source_message_id с префиксом
+  // 'upload:' (см. uploadDetalization) — только их и трогает отладочная очистка.
+  // Записи API-синков (source_message_id IS NULL) и автозабора заявок не задеваются.
+
+  /** Число CDR-записей, загруженных из файлов вручную. */
+  async countUploadedCalls(): Promise<number> {
+    const rows = await query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM mts_business_cdr WHERE source_message_id LIKE 'upload:%'`,
+    );
+    return Number.parseInt(rows[0]?.count ?? '0', 10);
+  }
+
+  /** Удалить CDR-записи ручных загрузок (отладка). Возвращает число удалённых. */
+  async deleteUploadedCalls(): Promise<number> {
+    return execute(`DELETE FROM mts_business_cdr WHERE source_message_id LIKE 'upload:%'`);
+  }
+
   /**
    * Агрегация «время разговоров» по сотрудникам за период [from, to] (YYYY-MM-DD,
    * включительно). accountId — опциональный фильтр по лицевому счёту.

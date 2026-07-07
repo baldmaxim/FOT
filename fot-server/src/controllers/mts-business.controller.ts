@@ -304,10 +304,15 @@ export const mtsBusinessController = {
         return;
       }
       const { sourceMessageId, msisdn, accountId } = req.body as { sourceMessageId?: string; msisdn?: string; accountId?: string };
+      // Пустой sourceMessageId → метка 'upload:<ts>:<файл>': по префиксу 'upload:%'
+      // записи ручных загрузок отличимы от API-синков (NULL) — это опора кнопки
+      // «Очистить загруженный XML» (clearUploadedDetalization).
+      const effectiveSourceId = sourceMessageId?.trim()
+        || `upload:${new Date().toISOString()}:${(file.originalname || 'upload').slice(0, 80)}`;
       const result = await mtsBusinessCdrService.parseFileAndStore(
         file.buffer,
         file.originalname || 'upload.xls',
-        sourceMessageId?.trim() || null,
+        effectiveSourceId,
         msisdn?.trim() || null,
         accountId?.trim() || null,
       );
@@ -334,6 +339,33 @@ export const mtsBusinessController = {
       res.json({ success: true, data: { ...result, mtsNames: names.saved, autoLinked: names.autoLinked } });
     } catch (error) {
       fail(res, error, 'Ошибка обработки файла детализации');
+    }
+  },
+
+  /** Число CDR-записей из ручных загрузок файлов (для кнопки очистки). */
+  async getUploadedDetalizationCount(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      res.json({ success: true, data: { count: await mtsBusinessCdrService.countUploadedCalls() } });
+    } catch (error) {
+      fail(res, error, 'Ошибка подсчёта загруженных записей');
+    }
+  },
+
+  /** Отладочная очистка: удалить CDR-записи ручных загрузок ('upload:%'). */
+  async clearUploadedDetalization(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { confirmed } = req.body as { confirmed?: boolean };
+      if (confirmed !== true) {
+        res.status(400).json({ success: false, error: 'Требуется подтверждение (confirmed=true)' });
+        return;
+      }
+      const deleted = await mtsBusinessCdrService.deleteUploadedCalls();
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_DETALIZATION_UPLOADS_CLEARED, {
+        details: { deleted },
+      });
+      res.json({ success: true, data: { deleted } });
+    } catch (error) {
+      fail(res, error, 'Ошибка очистки загруженных записей');
     }
   },
 
