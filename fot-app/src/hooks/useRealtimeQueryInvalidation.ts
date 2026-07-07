@@ -83,6 +83,15 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
     ['production-calendar'],
     timesheetKeys.page(),
   ],
+  // Отметка вводного инструктажа (ОТиТБ/админ): у всех открытых зрителей вкладки
+  // «Заявки на согласование» деталь заявки и список обновляются сразу.
+  'contractor_induction:changed': (payload) => {
+    const keys: QueryKey[] = [['contractor-pending-subs']];
+    if (payload.submissionId != null && payload.submissionId !== '') {
+      keys.push(['contractor-sub-detail', String(payload.submissionId)]);
+    }
+    return keys;
+  },
 };
 
 export interface IUseRealtimeQueryInvalidationOptions {

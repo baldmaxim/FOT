@@ -13,6 +13,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { resolveCompanyScope } from '../services/data-scope.service.js';
 import { hasPageView, hasPageEdit } from '../services/access-control.service.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import {
   getContractorOrgs,
@@ -1044,8 +1045,8 @@ export const contractorAdminController = {
       const { passed } = z.object({ passed: z.boolean() }).parse(req.body);
 
       // Текущее состояние — для аудита и понимания реального изменения.
-      const prev = await queryOne<{ induction_passed: boolean; pass_number: string; holder_name: string | null }>(
-        `SELECT p.induction_passed, p.pass_number,
+      const prev = await queryOne<{ induction_passed: boolean; pass_number: string; holder_name: string | null; submission_id: string | null }>(
+        `SELECT p.induction_passed, p.pass_number, p.submission_id,
                 COALESCE(h.holder_name, p.holder_name) AS holder_name
            FROM contractor_passes p
            LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
@@ -1078,6 +1079,16 @@ export const contractorAdminController = {
           holderName: prev?.holder_name ?? null,
         },
       });
+
+      // Realtime: другие открытые пользователи (админ) увидят смену статуса сразу.
+      // Payload минимальный, без ПДн. Эмитим только при наличии submission_id.
+      if (prev?.submission_id) {
+        emitDomainChange({
+          event: 'contractor_induction:changed',
+          broadcast: true,
+          payload: { entityId: passId, submissionId: String(prev.submission_id), passed },
+        });
+      }
 
       res.json({ success: true, data: { induction_passed: passed } });
     } catch (error) {

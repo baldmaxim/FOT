@@ -17,6 +17,7 @@ export const DOMAIN_EVENTS = [
   'payment:changed',
   'patent_receipt:changed',
   'production_calendar:changed',
+  'contractor_induction:changed',
 ] as const;
 
 export type DomainEvent = typeof DOMAIN_EVENTS[number];
