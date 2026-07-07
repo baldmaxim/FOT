@@ -1,4 +1,5 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import multer from 'multer';
 import { sigurController } from '../controllers/sigur.controller.js';
 import { sigurMonitorController } from '../controllers/sigur-monitor.controller.js';
 import { sigurSyncController } from '../controllers/sigur-sync.controller.js';
@@ -6,12 +7,50 @@ import { sigurAdminController } from '../controllers/sigur-admin.controller.js';
 import { sigurFilterController } from '../controllers/sigur-filter.controller.js';
 import { sigurCardReaderController } from '../controllers/sigur-card-reader.controller.js';
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
+import { importLimiter } from '../middleware/rateLimit.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
 import { serverTiming } from '../middleware/serverTiming.js';
+import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import { notifySigurStructureChanged } from '../services/skud-realtime.service.js';
 
 const router = Router();
+
+// Загрузка Excel в память (для временного импорта табельных номеров).
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 МБ
+  fileFilter: (_req, file, cb) => {
+    const allowedMimes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'application/octet-stream',
+      '',
+    ];
+    const hasExcelExt = /\.(xlsx|xls)$/i.test(file.originalname || '');
+    if (allowedMimes.includes(file.mimetype) || hasExcelExt) {
+      cb(null, true);
+    } else {
+      cb(new Error('Недопустимый формат файла. Разрешены только .xlsx и .xls'));
+    }
+  },
+});
+
+function validateExcelUpload(req: Request, res: Response, next: NextFunction): void {
+  const file = (req as Request & { file?: Express.Multer.File }).file;
+  if (file) {
+    if (!isExcelBuffer(file.buffer)) {
+      res.status(400).json({
+        success: false,
+        error: 'Файл не является корректным Excel-документом (.xlsx/.xls).',
+      });
+      return;
+    }
+    file.originalname = sanitizeFileName(decodeMulterFilename(file.originalname));
+  }
+  next();
+}
 
 // Все роуты требуют аутентификации и page access на настройки СКУД
 router.use(authenticate);
@@ -214,6 +253,16 @@ router.post(
   requirePageAccess('/skud-settings', 'edit'),
   requireCritical2FA,
   sigurAdminController.batchMoveEmployeesStream,
+);
+// ВРЕМЕННЫЙ импорт табельных номеров из Excel.
+router.post(
+  '/admin/import-tab-numbers',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  importLimiter,
+  excelUpload.single('file'),
+  validateExcelUpload,
+  sigurAdminController.importTabNumbers,
 );
 router.post(
   '/admin/employees/bulk-access-points-stream',

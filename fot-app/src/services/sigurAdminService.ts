@@ -111,6 +111,26 @@ export interface SigurDepartmentUpsertInput {
   connection?: SigurConnectionScope;
 }
 
+export interface ImportTabNumbersResult {
+  updated: Array<{ name: string; tab: string }>;
+  conflicts: Array<{ name: string; existing: string; fromFile: string }>;
+  alreadySet: number;
+  emptyInFile: string[];
+  ambiguousFile: string[];
+  ambiguousSigur: string[];
+  notInFile: string[];
+  unmatchedFileRows: Array<{ fio: string; tab: string }>;
+  failed: Array<{ name: string; error: string }>;
+  stats: {
+    sigurTotal: number;
+    fileRows: number;
+    updated: number;
+    conflicts: number;
+    notInFile: number;
+    unmatched: number;
+  };
+}
+
 export const sigurAdminService = {
   async getDepartmentsTree(
     connection?: SigurConnectionScope,
@@ -298,6 +318,17 @@ export const sigurAdminService = {
     const response = await apiClient.put<ApiResponse<SigurLiveEmployeeProfile>>(
       `/sigur/admin/employees/${sigurEmployeeId}`,
       payload,
+    );
+    return response.data;
+  },
+
+  // ВРЕМЕННЫЙ импорт табельных номеров из Excel.
+  async importTabNumbers(file: File): Promise<ImportTabNumbersResult> {
+    const form = new FormData();
+    form.append('file', file);
+    const response = await apiClient.post<ApiResponse<ImportTabNumbersResult>>(
+      '/sigur/admin/import-tab-numbers',
+      form,
     );
     return response.data;
   },

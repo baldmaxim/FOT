@@ -44,6 +44,8 @@ import { bulkAddEmployeeAccessPointsStreaming } from '../services/sigur-bulk-acc
 import {
   seedPositionsLogic,
 } from '../services/sigur-sync.service.js';
+import { readExcelRows } from '../utils/excel-reader.js';
+import { normalizeFullName } from '../utils/fio.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 function parseConnection(value: unknown): 'external' | 'internal' | undefined {
@@ -1099,6 +1101,178 @@ export const sigurAdminController = {
       const status = getErrorStatus(error);
       console.error('Sigur admin deleteEmployeeCardBinding error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка удаления карты Sigur') });
+    }
+  },
+
+  /**
+   * ВРЕМЕННЫЙ импорт табельных номеров из Excel.
+   * Формат файла жёстко: данные с 9-й строки, ФИО в объединённых колонках 1-3
+   * (значение в row[0]), табельный номер в 4-й колонке (row[3]).
+   * Матч по нормализованному ФИО. Пишем в Sigur только ОТСУТСТВУЮЩИЕ tabId.
+   */
+  async importTabNumbers(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const file = (req as AuthenticatedRequest & { file?: Express.Multer.File }).file;
+      if (!file) {
+        res.status(400).json({ success: false, error: 'Файл обязателен' });
+        return;
+      }
+
+      const rows = await readExcelRows(file.buffer);
+
+      // Строим карту из файла: normFio -> { tab, count, rawFio }.
+      // Данные начинаются с 9-й строки (0-based индекс 8).
+      const DATA_START_INDEX = 8;
+      const fileMap = new Map<string, { tab: string; count: number; rawFio: string }>();
+      let fileRows = 0;
+      for (let i = DATA_START_INDEX; i < rows.length; i++) {
+        const row = rows[i] || [];
+        const rawFio = String(row[0] ?? '').trim();
+        if (!rawFio) continue;
+        const tab = String(row[3] ?? '').trim();
+        fileRows++;
+        const key = normalizeFullName(rawFio, { collapseYo: true });
+        if (!key) continue;
+        const existing = fileMap.get(key);
+        if (existing) {
+          existing.count++;
+        } else {
+          fileMap.set(key, { tab, count: 1, rawFio });
+        }
+      }
+
+      // Загружаем всех сотрудников Sigur.
+      const emps = await sigurService.getEmployeesCached();
+
+      // Карта одинаковых ФИО в Sigur (для детекта неоднозначности).
+      const sigurFioMap = new Map<string, number>();
+      for (const emp of emps) {
+        const name = typeof emp.name === 'string' ? emp.name : '';
+        if (!name) continue;
+        const key = normalizeFullName(name, { collapseYo: true });
+        if (!key) continue;
+        sigurFioMap.set(key, (sigurFioMap.get(key) || 0) + 1);
+      }
+
+      const updated: Array<{ name: string; tab: string }> = [];
+      const conflicts: Array<{ name: string; existing: string; fromFile: string }> = [];
+      const emptyInFile: string[] = [];
+      const ambiguousFile: string[] = [];
+      const ambiguousSigur: string[] = [];
+      const notInFile: string[] = [];
+      const failed: Array<{ name: string; error: string }> = [];
+      let alreadySet = 0;
+      const matchedKeys = new Set<string>();
+
+      // Задачи на запись отсутствующих номеров (ограниченная конкуррентность).
+      const toWrite: Array<{ id: number; name: string; tab: string }> = [];
+
+      for (const emp of emps) {
+        const name = typeof emp.name === 'string' ? emp.name : '';
+        if (!name) continue;
+        const key = normalizeFullName(name, { collapseYo: true });
+        if (!key) continue;
+
+        const entry = fileMap.get(key);
+        if (!entry) {
+          notInFile.push(name);
+          continue;
+        }
+        matchedKeys.add(key);
+
+        if ((sigurFioMap.get(key) || 0) > 1) {
+          ambiguousSigur.push(name);
+          continue;
+        }
+        if (entry.count > 1) {
+          ambiguousFile.push(name);
+          continue;
+        }
+        if (!entry.tab) {
+          emptyInFile.push(name);
+          continue;
+        }
+
+        const currentTab = typeof emp.tabId === 'string' ? emp.tabId.trim() : '';
+        if (currentTab) {
+          if (currentTab === entry.tab) {
+            alreadySet++;
+          } else {
+            conflicts.push({ name, existing: currentTab, fromFile: entry.tab });
+          }
+          continue;
+        }
+
+        const id = typeof emp.id === 'number' ? emp.id : Number(emp.id);
+        if (!Number.isFinite(id) || id <= 0) {
+          failed.push({ name, error: 'Некорректный id сотрудника Sigur' });
+          continue;
+        }
+        toWrite.push({ id, name, tab: entry.tab });
+      }
+
+      // Строки файла, не сопоставленные ни с одним сотрудником Sigur.
+      const unmatchedFileRows: Array<{ fio: string; tab: string }> = [];
+      for (const [key, entry] of fileMap) {
+        if (!matchedKeys.has(key)) {
+          unmatchedFileRows.push({ fio: entry.rawFio, tab: entry.tab });
+        }
+      }
+
+      // Запись отсутствующих номеров в Sigur с пулом конкуррентности 6.
+      const CONCURRENCY = 6;
+      for (let i = 0; i < toWrite.length; i += CONCURRENCY) {
+        const chunk = toWrite.slice(i, i + CONCURRENCY);
+        const results = await Promise.allSettled(
+          chunk.map(item => updateSigurEmployee(item.id, { tabId: item.tab })),
+        );
+        results.forEach((result, idx) => {
+          const item = chunk[idx];
+          if (result.status === 'fulfilled') {
+            updated.push({ name: item.name, tab: item.tab });
+          } else {
+            failed.push({ name: item.name, error: getErrorMessage(result.reason, 'Ошибка записи в Sigur') });
+          }
+        });
+      }
+
+      await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
+        entityType: 'sigur_employee',
+        entityId: 'import-tab-numbers',
+        details: {
+          action: 'import_tab_numbers',
+          updated: updated.length,
+          conflicts: conflicts.length,
+          failed: failed.length,
+        },
+      });
+
+      res.json({
+        success: true,
+        data: {
+          updated,
+          conflicts,
+          alreadySet,
+          emptyInFile,
+          ambiguousFile,
+          ambiguousSigur,
+          notInFile,
+          unmatchedFileRows,
+          failed,
+          stats: {
+            sigurTotal: emps.length,
+            fileRows,
+            updated: updated.length,
+            conflicts: conflicts.length,
+            notInFile: notInFile.length,
+            unmatched: unmatchedFileRows.length,
+          },
+        },
+      });
+    } catch (error) {
+      const status = getErrorStatus(error);
+      console.error('Sigur admin importTabNumbers error:', error);
+      res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка импорта табельных номеров') });
     }
   },
 };

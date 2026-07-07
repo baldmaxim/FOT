@@ -30,6 +30,7 @@ import {
   EmployeeMoveDialog,
 } from './SigurEmployeeDialogs';
 import { BulkAccessPointsModal } from './BulkAccessPointsModal';
+import { ImportTabNumbersModal } from './ImportTabNumbersModal';
 import {
   buildDepartmentNodeMap,
   collectDepartmentIds,
@@ -133,6 +134,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const [triedSubmitEmployee, setTriedSubmitEmployee] = useState(false);
   const [employeeMoveDialog, setEmployeeMoveDialog] = useState<EmployeeMoveDialogState>(null);
   const [bulkAccessPointsEmployeeIds, setBulkAccessPointsEmployeeIds] = useState<number[] | null>(null);
+  const [importTabsOpen, setImportTabsOpen] = useState(false);
   const [newEmployeePositionName, setNewEmployeePositionName] = useState('');
   const [employeeNameSuggestionsQuery, setEmployeeNameSuggestionsQuery] = useState('');
   const [loadingSelectedSuggestion, setLoadingSelectedSuggestion] = useState(false);
@@ -1053,6 +1055,11 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <span>Новый сотрудник</span>
               </button>
             )}
+            {canEdit && (
+              <button className="ep-toolbar-btn secondary" onClick={() => setImportTabsOpen(true)}>
+                <span>Импорт таб. № (врем.)</span>
+              </button>
+            )}
             {headerActionSlot}
           </div>
         </div>
@@ -1594,6 +1601,12 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
             setSelectedEmployeeIds(new Set());
             void refreshData();
           }}
+        />
+      )}
+      {importTabsOpen && (
+        <ImportTabNumbersModal
+          onClose={() => setImportTabsOpen(false)}
+          onDone={() => { void refreshData(); }}
         />
       )}
     </div>
