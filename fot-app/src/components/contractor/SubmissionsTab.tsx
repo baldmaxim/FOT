@@ -70,11 +70,21 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
   };
 
   const handleToggleInduction = async (row: ISubmissionDetailRow) => {
+    const next = !row.induction_passed;
+    const key = ['contractor-sub-detail', submissionId] as const;
+    const prev = qc.getQueryData<ISubmissionDetailRow[]>(key);
     setTogglingId(row.id);
+    // Оптимистично меняем цвет кнопки сразу (не ждём round-trip и не зависим от HTTP-кэша).
+    qc.setQueryData<ISubmissionDetailRow[]>(key, old =>
+      old?.map(r => (r.id === row.id ? { ...r, induction_passed: next } : r)));
     try {
-      await contractorAdminService.setPassInduction(row.id, !row.induction_passed);
-      await qc.invalidateQueries({ queryKey: ['contractor-sub-detail', submissionId] });
+      const res = await contractorAdminService.setPassInduction(row.id, next);
+      // Фиксируем серверное значение, затем реконсиляция (рефетч теперь свежий — bypass кэша).
+      qc.setQueryData<ISubmissionDetailRow[]>(key, old =>
+        old?.map(r => (r.id === row.id ? { ...r, induction_passed: res.induction_passed } : r)));
+      await qc.invalidateQueries({ queryKey: key });
     } catch (e) {
+      if (prev) qc.setQueryData(key, prev); // откат при ошибке
       toast.error(e instanceof Error ? e.message : 'Не удалось сохранить инструктаж');
     } finally {
       setTogglingId(null);

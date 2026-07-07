@@ -153,6 +153,11 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // до перезагрузки страницы, хотя React Query уже инвалидировал ['contractor-pool-*'].
     || path === '/admin/contractor/pool/matrix'
     || path === '/admin/contractor/pool/anomalies'
+    // Заявки на согласование: после отметки вводного инструктажа (PATCH) refetch
+    // деталей должен идти на сервер. Иначе HTTP-кэш max-age=30 отдавал старое тело —
+    // кнопка «Прошёл/Не прошёл» не меняла цвет ~30 сек, хотя БД уже обновлена.
+    // Префикс покрывает /submissions/pending, /submissions/pending/count, /submissions/:id.
+    || path.startsWith('/admin/contractor/submissions')
     // МТС Бизнес: статус фонового «Обновить всё» опрашивается каждые 3с, журнал
     // заявок персданных — каждые 15с; браузерный max-age=30 ломал бы polling.
     || path === '/mts-business/refresh-all/status'
