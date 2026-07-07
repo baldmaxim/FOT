@@ -38,8 +38,9 @@ export interface ISimName {
   fio: string;
 }
 
-// Категории для сводки расходов (карточка номера, §4). topups — только из
-// PaymentHistory, здесь не появляются.
+// Категории для сводки расходов (карточка номера, §4). topups — пополнения:
+// в сводку берутся из PaymentHistory; в выписке ими помечаются строки-платежи
+// (видны в детальных строках, из расходов исключаются).
 export type MtsExpenseCategory = 'calls' | 'sms' | 'internet' | 'periodic' | 'oneTime' | 'topups' | 'other';
 
 export interface IStatementUsageEvent {
@@ -109,6 +110,10 @@ const classifyUsage = (c: Record<string, unknown>): MtsExpenseCategory => {
   const ne = String(c.networkEvent ?? '').toLowerCase();
   const unit = String(c.factUnitCode ?? '').toUpperCase();
   const cat = String(c.categoryId ?? c.category ?? '').toLowerCase();
+  // Пополнение ЛС (categoryId='payment', «Регистрация платежа: Безналичный
+  // платёж…») попадает в выписку КАЖДОГО номера контракта — это приход на
+  // счёт, не расход номера.
+  if (cat === 'payment' || /пополнени|регистрация платеж/i.test(String(c.label ?? ''))) return 'topups';
   if (ne === 'call' || unit === 'SECOND' || /call|voice|голос/.test(cat)) return 'calls';
   if (unit === 'ITEM' || ne === 'sms' || /sms|смс/.test(cat)) return 'sms';
   if (unit === 'BYTE' || ne === 'gprs' || ne === 'data' || /gprs|internet|интернет|data/.test(cat)) return 'internet';
@@ -370,27 +375,35 @@ class MtsBusinessCdrService {
   }
 
   /**
-   * Категоризированные строки расхода из выписки (Bills/BillingStatement*) —
+   * Категоризированные строки РАСХОДА из выписки (Bills/BillingStatement*) —
    * для сводки расходов карточки номера. В отличие от parseBillingStatementResponse
-   * (только голос для CDR), берёт ВСЕ строки Usages с суммой списания.
-   * Имена денежных полей не проверены живым вызовом — сверить probe-скриптом.
+   * (только голос для CDR), берёт все строки Usages с суммой списания, КРОМЕ
+   * пополнений (type='income' / categoryId='payment'): платёж на ЛС дублируется
+   * в выписке каждого номера контракта (434 700 ₽ у 1460 номеров, 07.07.2026)
+   * и расходом не является. Опциональный fromDate (YYYY-MM-DD, включительно)
+   * отсекает строки раньше даты — для месячного окна начислений.
    */
-  parseStatementUsages(data: unknown): IStatementUsageEvent[] {
+  parseStatementUsages(data: unknown, fromDate?: string): IStatementUsageEvent[] {
     const usages = data && typeof data === 'object' ? (data as Record<string, unknown>).Usages : null;
     const out: IStatementUsageEvent[] = [];
     for (const raw of asArray(usages as Record<string, unknown>[] | undefined)) {
       const u = raw as { Characteristics?: Record<string, unknown> } & Record<string, unknown>;
       const c = u.Characteristics ?? {};
+      if (u.type === 'income') continue;
+      if (fromDate && typeof u.date === 'string' && u.date.slice(0, 10) < fromDate) continue;
+      const category = classifyUsage(c);
+      if (category === 'topups') continue;
       const amount = pickAmount(c) ?? pickAmount(u) ?? 0;
-      out.push({ category: classifyUsage(c), amount: Math.abs(amount) });
+      out.push({ category, amount: Math.abs(amount) });
     }
     return out;
   }
 
-  /** Сумма расходов по выписке — первичный источник charges_amount на номер
-   *  (CheckCharges.remainedAmount = остаток по ЛС, для начислений не годится). */
-  sumStatementCharges(data: unknown): number {
-    return this.parseStatementUsages(data).reduce((sum, row) => sum + row.amount, 0);
+  /** Сумма расходов по выписке (без пополнений) — первичный источник
+   *  charges_amount на номер (CheckCharges.remainedAmount = остаток по ЛС,
+   *  для начислений не годится). fromDate — нижняя граница окна (YYYY-MM-DD). */
+  sumStatementCharges(data: unknown, fromDate?: string): number {
+    return this.parseStatementUsages(data, fromDate).reduce((sum, row) => sum + row.amount, 0);
   }
 
   /**

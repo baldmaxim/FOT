@@ -1,8 +1,6 @@
 import { hostname } from 'node:os';
 import * as Sentry from '@sentry/node';
 import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
-import { mtsBusinessDataService } from './mts-business-data.service.js';
-import { mtsBusinessCdrService } from './mts-business-cdr.service.js';
 import { mtsBusinessCatalogService } from './mts-business-catalog.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { isFeatureUnavailable } from './mts-business-base.service.js';
@@ -13,6 +11,7 @@ import {
   refreshAccountMetrics,
 } from './mts-business-metrics-daily-scheduler.service.js';
 import { syncAccountSubscribers, runPool } from './mts-business-subscriber-sync.service.js';
+import { syncMsisdnStatement } from './mts-business-statement-sync.service.js';
 import {
   tryAcquireSigurRuntimeLease,
   releaseSigurRuntimeLease,
@@ -203,21 +202,18 @@ async function runStep(
       }
       let failed = 0;
       let unavailable = 0;
-      const allCalls: Parameters<typeof mtsBusinessCdrService.storeCalls>[0] = [];
+      let inserted = 0;
+      // syncMsisdnStatement пишет и звонки, и начисления (charges_amount с
+      // 1-го числа месяца) — «Обновить всё» освежает колонку «Начисления».
       await runPool(msisdns, STEP_POOL, async msisdn => {
         try {
-          const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(accountId, {
-            msisdn, dateFrom: window.dateFrom, dateTo: window.dateTo,
-          });
-          allCalls.push(...mtsBusinessCdrService.parseBillingStatementResponse(resp, msisdn));
+          const res = await syncMsisdnStatement(accountId, msisdn, window.dateFrom, window.dateTo);
+          inserted += res.callsInserted;
         } catch (error) {
           if (isFeatureUnavailable(error)) unavailable++;
           else failed++;
         }
       });
-      const { inserted } = allCalls.length > 0
-        ? await mtsBusinessCdrService.storeCalls(allCalls, null, accountId)
-        : { inserted: 0 };
       const status = stepStatusFromCounters({
         failed, unavailable, hadAnySuccess: unavailable + failed < msisdns.length,
       });
