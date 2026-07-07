@@ -2,6 +2,7 @@ import { query } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
+import { mtsBusinessPersonalDataService, type IMtsPersonalDataFull } from './mts-business-personal-data.service.js';
 import type { IMtsService, IMtsTariff, IMtsForwardingRule, IMtsRoaming } from './mts-business-catalog.service.js';
 import type { IMtsTariffFee, IMtsPaymentEntry, IMtsDeliveryMethod, IMtsPackageCounter } from './mts-business-billing.service.js';
 
@@ -9,7 +10,8 @@ import type { IMtsTariffFee, IMtsPaymentEntry, IMtsDeliveryMethod, IMtsPackageCo
 // number_map (инвентарь/ФИО/привязка) + агрегат CDR + дневные метрики
 // (баланс/начисления) + снапшоты (тариф/услуги/…). Живые вызовы — только в
 // syncSubscriberFull (кнопки «Обновить») и в /available (каталог подключаемого).
-// pd_data_enc (паспорт и пр.) здесь СОЗНАТЕЛЬНО не читается — наружу не отдаётся.
+// pd_data_enc (паспорт/ДР) расшифровывается в getSubscriberDetails для карточки
+// абонента (под гардом страницы /mts-business); в список и в логи не идёт.
 
 export interface IMtsSubscriberRow {
   msisdn: string | null;
@@ -48,6 +50,7 @@ export interface IMtsSubscriberDetails {
   deliveryMethod: IMtsDeliveryMethod[];
   payments: IMtsPaymentEntry[];
   packages: IMtsPackageCounter[];
+  personalData: IMtsPersonalDataFull | null; // расшифровка pd_data_enc (ФИО/ДР/паспорт)
   capturedAt: string | null; // самый свежий из снапшотов
 }
 
@@ -187,12 +190,13 @@ class MtsBusinessSubscribersService {
     const ctx = await mtsBusinessMappingService.getSubscriberContext(rawMsisdn);
     if (!ctx) return null;
 
-    const [snaps, daily] = await Promise.all([
+    const [snaps, daily, personalData] = await Promise.all([
       mtsBusinessMetricsStoreService.getLatestSnapshotsForMsisdn(rawMsisdn, [
         'bill_plan', 'tariff_fee', 'product_services', 'connected_blocks',
         'forwarding', 'roaming', 'delivery_method', 'payments', 'validity_msisdn',
       ]),
       mtsBusinessMetricsStoreService.getLatestDailyForMsisdn(rawMsisdn),
+      mtsBusinessPersonalDataService.getStoredFull(rawMsisdn),
     ]);
 
     const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
@@ -219,6 +223,7 @@ class MtsBusinessSubscribersService {
       deliveryMethod: arr<IMtsDeliveryMethod>(snaps.get('delivery_method')?.payload),
       payments: arr<IMtsPaymentEntry>(snaps.get('payments')?.payload),
       packages: arr<IMtsPackageCounter>(snaps.get('validity_msisdn')?.payload),
+      personalData,
       capturedAt,
     };
   }

@@ -4,7 +4,26 @@ import type { IMtsSubServiceItem, IMtsSubForwardingRule, IMtsSubRoaming, IMtsSub
 
 // Вкладка «Абоненты МТС»: список/детали из БД (снапшоты полного профиля),
 // точечный полный синк, живой каталог подключаемого, смена тарифа.
-// Особые данные (паспорт и пр.) бэкенд НЕ отдаёт — только ФИО и статус.
+// Полный профиль ПДн (ФИО/ДР/паспорт) приходит в details.personalData —
+// расшифровка pd_data_enc из кэша (без живого вызова); в списке его нет.
+
+/** Документ пользователя номера (из identifiedBy[] PersonalDataInfo). */
+export interface IMtsPdDocument {
+  documentType: string | null;
+  documentSeries: string | null;
+  documentNo: string | null;
+  issuedBy: string | null;
+  issuedDate: string | null;
+  issuingCountry: string | null;
+}
+
+/** Полный профиль ПДн абонента для карточки (адреса в ответе МТС нет). */
+export interface IMtsPersonalDataFull {
+  fullName: string | null;
+  birthDate: string | null;
+  confirmationStatus: string | null;
+  documents: IMtsPdDocument[];
+}
 
 export interface IMtsSubscriberRow {
   msisdn: string | null;
@@ -56,6 +75,7 @@ export interface IMtsSubscriberDetails {
   deliveryMethod: IMtsSubDeliveryMethod[];
   payments: IMtsPaymentRow[];
   packages: IMtsPackageRow[];
+  personalData: IMtsPersonalDataFull | null;
   capturedAt: string | null;
 }
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildChangePersonalDataBody,
   parsePersonalDataInfo,
+  parsePersonalDataFull,
   normalizePersonalDataStatus,
   type IPersonalDataInput,
 } from './mts-business-personal-data.service.js';
@@ -135,6 +136,59 @@ describe('parsePersonalDataInfo', () => {
   it('статус без ФИО (Anonymous)', () => {
     const resp = [{ characteristic: [{ name: 'PersonalDataConfirmation', value: 'Anonymous' }] }];
     expect(parsePersonalDataInfo(resp)).toEqual({ fullName: null, confirmationStatus: 'Anonymous' });
+  });
+
+  it('плейсхолдер «null null» из МТС (корп. SIM без владельца) → fullName null', () => {
+    expect(parsePersonalDataInfo([{ name: 'null null' }]).fullName).toBeNull();
+    expect(parsePersonalDataInfo([{ name: 'NULL' }]).fullName).toBeNull();
+    expect(parsePersonalDataInfo([{ name: '  undefined   undefined ' }]).fullName).toBeNull();
+    // реальное имя не трогаем
+    expect(parsePersonalDataInfo([{ name: 'Нуллинов Пётр' }]).fullName).toBe('Нуллинов Пётр');
+  });
+});
+
+describe('parsePersonalDataFull', () => {
+  it('форма ответа PersonalDataInfo: ФИО, дата рождения, документ, статус', () => {
+    const resp = [{
+      name: 'Иванов Иван Иванович',
+      birthDate: '1990-01-01',
+      identifiedBy: [{
+        type: 'IdentityDocument',
+        documentType: 'Паспорт РФ',
+        documentSeries: '1234',
+        documentNo: '567890',
+        issuedBy: 'ОВД Тест',
+        issuedDate: '2010-01-01',
+        issuingCountry: 'RU',
+      }],
+      characteristic: [{ name: 'PersonalDataConfirmation', value: 'Activated' }],
+    }];
+    expect(parsePersonalDataFull(resp)).toEqual({
+      fullName: 'Иванов Иван Иванович',
+      birthDate: '1990-01-01',
+      confirmationStatus: 'Activated',
+      documents: [{
+        documentType: 'Паспорт РФ',
+        documentSeries: '1234',
+        documentNo: '567890',
+        issuedBy: 'ОВД Тест',
+        issuedDate: '2010-01-01',
+        issuingCountry: 'RU',
+      }],
+    });
+  });
+
+  it('корп. SIM без владельца («null null», без документов) → пустой профиль', () => {
+    const resp = [{ name: 'null null', characteristic: [{ name: 'PersonalDataConfirmation', value: 'Anonymous' }] }];
+    expect(parsePersonalDataFull(resp)).toEqual({
+      fullName: null, birthDate: null, confirmationStatus: 'Anonymous', documents: [],
+    });
+  });
+
+  it('пустой ответ — все поля пустые, не ошибка', () => {
+    expect(parsePersonalDataFull([])).toEqual({
+      fullName: null, birthDate: null, confirmationStatus: null, documents: [],
+    });
   });
 });
 

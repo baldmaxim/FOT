@@ -92,6 +92,23 @@ export interface IPersonalDataRequestRow {
 const asString = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
 
 /**
+ * МТС для корпоративных SIM без владельца возвращает в `name` литеральную строку
+ * «null null» (склейка пустых firstName/lastName на своей стороне). Такое «имя»
+ * НЕ должно попадать в mts_fio. Отсекаем пустое-после-trim и строки только из
+ * токенов null/undefined (в любом регистре, любое количество через пробел).
+ */
+const isPlaceholderName = (s: string): boolean =>
+  s.trim().length === 0 || /^(null|undefined)( +(null|undefined))*$/i.test(s.trim());
+
+/** Значение имени с отсевом плейсхолдеров МТС; null — если имени по сути нет. */
+const cleanName = (v: unknown): string | null => {
+  const s = asString(v);
+  if (!s) return null;
+  const t = s.trim();
+  return isPlaceholderName(t) ? null : t;
+};
+
+/**
  * Разбор ответа PersonalDataInfo: массив записей, ФИО одной строкой в `name`
  * (fallback SurName/FirstName/SecondName для иной схемы контура), статус — в
  * characteristic[name=PersonalDataConfirmation].value. Остальные поля ответа
@@ -104,14 +121,15 @@ export const parsePersonalDataInfo = (resp: unknown): IMtsPersonalDataInfo => {
   let confirmationStatus: string | null = null;
   for (const r of records) {
     if (!fullName) {
-      const name = asString(r.name);
+      const name = cleanName(r.name);
       if (name) {
-        fullName = name.trim();
+        fullName = name;
       } else {
         const surName = asString(r.SurName) ?? asString(r.surName) ?? asString(r.LastName);
         const firstName = asString(r.FirstName) ?? asString(r.firstName);
         const secondName = asString(r.SecondName) ?? asString(r.secondName);
-        const fio = [surName, firstName, secondName].filter((v): v is string => Boolean(v)).join(' ');
+        const joined = [surName, firstName, secondName].filter((v): v is string => Boolean(v)).join(' ');
+        const fio = joined && !isPlaceholderName(joined) ? joined : null;
         if (fio) fullName = fio;
       }
     }
@@ -125,6 +143,58 @@ export const parsePersonalDataInfo = (resp: unknown): IMtsPersonalDataInfo => {
     }
   }
   return { fullName, confirmationStatus };
+};
+
+/** Документ из ответа PersonalDataInfo (identifiedBy[]). */
+export interface IMtsPdDocument {
+  documentType: string | null;
+  documentSeries: string | null;
+  documentNo: string | null;
+  issuedBy: string | null;
+  issuedDate: string | null;
+  issuingCountry: string | null;
+}
+
+/**
+ * Полный профиль ПДн для отображения в карточке абонента: ФИО + дата рождения +
+ * документы. Собирается из РАСШИФРОВАННОГО pd_data_enc (сырой ответ
+ * PersonalDataInfo). Адреса в ответе МТС нет — не выводим.
+ */
+export interface IMtsPersonalDataFull {
+  fullName: string | null;
+  birthDate: string | null;
+  confirmationStatus: MtsPersonalDataConfirmationStatus | null;
+  documents: IMtsPdDocument[];
+}
+
+/**
+ * Разбор полного ответа PersonalDataInfo: ФИО (с отсевом «null null»), дата
+ * рождения, все документы из identifiedBy[], статус подтверждения. Толерантен к
+ * форме — берёт первую запись массива с данными.
+ */
+export const parsePersonalDataFull = (resp: unknown): IMtsPersonalDataFull => {
+  const records = (Array.isArray(resp) ? resp : [resp])
+    .filter((v): v is Record<string, unknown> => v != null && typeof v === 'object');
+  const base = parsePersonalDataInfo(resp);
+  let birthDate: string | null = null;
+  const documents: IMtsPdDocument[] = [];
+  for (const r of records) {
+    if (!birthDate) birthDate = asString(r.birthDate) ?? asString(r.BirthDate) ?? asString(r.birthday);
+    const ids = Array.isArray(r.identifiedBy) ? (r.identifiedBy as Array<Record<string, unknown> | null>) : [];
+    for (const d of ids) {
+      if (!d || typeof d !== 'object') continue;
+      const doc: IMtsPdDocument = {
+        documentType: asString(d.documentType) ?? asString(d.DocumentType),
+        documentSeries: asString(d.documentSeries) ?? asString(d.DocumentSeries),
+        documentNo: asString(d.documentNo) ?? asString(d.DocumentNumber) ?? asString(d.documentNumber),
+        issuedBy: asString(d.issuedBy) ?? asString(d.IssuedBy) ?? asString(d.issuer),
+        issuedDate: asString(d.issuedDate) ?? asString(d.IssuedDate),
+        issuingCountry: asString(d.issuingCountry) ?? asString(d.IssuingCountry),
+      };
+      if (doc.documentNo || doc.documentSeries || doc.issuedBy) documents.push(doc);
+    }
+  }
+  return { fullName: base.fullName, birthDate, confirmationStatus: base.confirmationStatus, documents };
 };
 
 /**
@@ -246,7 +316,8 @@ class MtsBusinessPersonalDataService extends MtsBusinessServiceBase {
   /**
    * Полная выгрузка PersonalDataInfo: ФИО/статус — в открытые поля, сырой ответ
    * (паспорт/дата рождения и пр.) — ТОЛЬКО шифром в pd_data_enc (миграция 207).
-   * Наружу расшифровка не отдаётся ни одним endpoint'ом.
+   * Расшифровка отдаётся наружу единственным путём — getStoredFull → карточка
+   * абонента под гардом страницы /mts-business; в логи/аудит по-прежнему не идёт.
    */
   async fetchAndStoreFull(accountId: string, rawMsisdn: string): Promise<IMtsPersonalDataInfo> {
     const msisdn = normalizeMsisdn(rawMsisdn);
@@ -266,6 +337,22 @@ class MtsBusinessPersonalDataService extends MtsBusinessServiceBase {
       hasData ? encryptionService.encrypt(JSON.stringify(resp)) : null,
     );
     return info;
+  }
+
+  /**
+   * Полный профиль ПДн ИЗ КЭША (расшифровка pd_data_enc) для карточки абонента —
+   * без живого вызова МТС. null, если blob пуст или не расшифровался.
+   */
+  async getStoredFull(rawMsisdn: string): Promise<IMtsPersonalDataFull | null> {
+    const enc = await mtsBusinessMappingService.getPersonalDataBlob(rawMsisdn);
+    if (!enc) return null;
+    const raw = encryptionService.decryptField(enc);
+    if (!raw) return null;
+    try {
+      return parsePersonalDataFull(JSON.parse(raw));
+    } catch {
+      return null;
+    }
   }
 
   /**

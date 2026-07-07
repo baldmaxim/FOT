@@ -159,20 +159,14 @@ class MtsBusinessMappingService {
       );
       saved++;
 
-      const matches = await query<{ id: number }>(
-        `SELECT id FROM employees
-          WHERE LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
-              = LOWER(REPLACE($1, 'ё', 'е'))
-          LIMIT 2`,
-        [fioClean],
-      );
-      if (matches.length !== 1) continue;
+      const targetId = await this.resolveEmployeeIdByFio(fioClean);
+      if (targetId === null) continue;
 
       const updated = await execute(
         `UPDATE mts_business_number_map
             SET employee_id = $2, linked_by = $3, linked_at = NOW()
           WHERE msisdn_hash = $1 AND employee_id IS NULL`,
-        [hash, matches[0].id, userId],
+        [hash, targetId, userId],
       );
       autoLinked += updated;
     }
@@ -232,8 +226,8 @@ class MtsBusinessMappingService {
 
   /**
    * Полный ответ PersonalDataInfo (паспорт/дата рождения и пр.) — ТОЛЬКО
-   * шифром (AES-256-GCM). Ни один endpoint его не отдаёт; колонка существует
-   * ради полноты выгрузки по требованию бизнеса (миграция 207).
+   * шифром (AES-256-GCM). Отдаётся наружу единственным путём — getPersonalDataBlob
+   * → расшифровка в карточке абонента под гардом страницы (миграция 207).
    */
   async setPersonalDataBlob(rawMsisdn: string, ciphertext: string | null): Promise<void> {
     const hash = msisdnHash(rawMsisdn);
@@ -244,6 +238,17 @@ class MtsBusinessMappingService {
         WHERE msisdn_hash = $1`,
       [hash, ciphertext],
     );
+  }
+
+  /** Шифртекст полного профиля ПДн (pd_data_enc) по номеру; null — если нет. */
+  async getPersonalDataBlob(rawMsisdn: string): Promise<string | null> {
+    const hash = msisdnHash(rawMsisdn);
+    if (!hash) return null;
+    const row = await queryOne<{ pd_data_enc: string | null }>(
+      `SELECT pd_data_enc FROM mts_business_number_map WHERE msisdn_hash = $1`,
+      [hash],
+    );
+    return row?.pd_data_enc ?? null;
   }
 
   /**
@@ -259,19 +264,13 @@ class MtsBusinessMappingService {
     );
     let linked = 0;
     for (const row of unlinked) {
-      const matches = await query<{ id: number }>(
-        `SELECT id FROM employees
-          WHERE LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
-              = LOWER(REPLACE($1, 'ё', 'е'))
-          LIMIT 2`,
-        [row.mts_fio],
-      );
-      if (matches.length !== 1) continue;
+      const targetId = await this.resolveEmployeeIdByFio(row.mts_fio);
+      if (targetId === null) continue;
       const updated = await execute(
         `UPDATE mts_business_number_map
             SET employee_id = $2, linked_by = $3, linked_at = NOW()
           WHERE msisdn_hash = $1 AND employee_id IS NULL`,
-        [row.msisdn_hash, matches[0].id, userId],
+        [row.msisdn_hash, targetId, userId],
       );
       linked += updated;
     }

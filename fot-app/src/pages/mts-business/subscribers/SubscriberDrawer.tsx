@@ -333,13 +333,46 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
               <button className={styles.btn} style={{ padding: '4px 10px', fontSize: 12, minHeight: 0 }} onClick={() => setPdOpen(true)}>Изменить</button>
             </span>
           </div>
-          <KV label="ФИО по данным МТС" value={dash(row.mtsFio)} />
-          <KV label="Статус" value={row.pdStatus ? (PD_STATUS_LABELS[row.pdStatus] ?? row.pdStatus) : 'не проверено — обновите данные'} />
-          <KV label="Проверено" value={fmtLast(row.pdSyncedAt)} />
-          <p className={styles.hint}>
-            Паспортные данные хранятся в зашифрованном виде и не отображаются. Внесение/изменение уходит в МТС;
-            пользователь номера подтверждает данные через Госуслуги (придёт SMS).
-          </p>
+          {(() => {
+            const pd = details.data?.personalData ?? null;
+            const statusVal = row.pdStatus ? (PD_STATUS_LABELS[row.pdStatus] ?? row.pdStatus) : 'не проверено — обновите данные';
+            if (!pd) {
+              return (
+                <>
+                  <KV label="ФИО по данным МТС" value={dash(row.mtsFio)} />
+                  <KV label="Статус" value={statusVal} />
+                  <KV label="Проверено" value={fmtLast(row.pdSyncedAt)} />
+                  <p className={styles.hint}>
+                    Полные персональные данные (паспорт, дата рождения) появятся после «Обновить данные из МТС»,
+                    если внесены на стороне МТС. Внесение/изменение уходит в МТС; пользователь подтверждает через
+                    Госуслуги (придёт SMS).
+                  </p>
+                </>
+              );
+            }
+            return (
+              <>
+                <KV label="ФИО" value={dash(pd.fullName ?? row.mtsFio)} />
+                <KV label="Дата рождения" value={dash(pd.birthDate)} />
+                {pd.documents.length === 0 && <KV label="Документ" value="—" />}
+                {pd.documents.map((doc, i) => {
+                  const seriesNo = [doc.documentSeries, doc.documentNo].filter(Boolean).join(' ') || null;
+                  const docLabel = pd.documents.length > 1 ? `Документ ${i + 1}` : 'Документ';
+                  return (
+                    <div key={`doc-${i}`}>
+                      <KV label={docLabel} value={dash(doc.documentType)} />
+                      <KV label="Серия / номер" value={dash(seriesNo)} />
+                      <KV label="Кем выдан" value={dash(doc.issuedBy)} />
+                      <KV label="Дата выдачи" value={dash(doc.issuedDate)} />
+                      {doc.issuingCountry && <KV label="Страна" value={dash(doc.issuingCountry)} />}
+                    </div>
+                  );
+                })}
+                <KV label="Статус" value={statusVal} />
+                <KV label="Проверено" value={fmtLast(row.pdSyncedAt)} />
+              </>
+            );
+          })()}
         </div>
 
         <div className={st.section}>
