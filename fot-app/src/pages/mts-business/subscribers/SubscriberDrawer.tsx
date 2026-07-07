@@ -2,15 +2,14 @@ import { type FC, type ReactNode, useMemo, useState } from 'react';
 import { useOverlayDismiss } from '../../../hooks/useOverlayDismiss';
 import {
   useMtsBusinessSubscriberDetails,
-  useMtsBusinessSubscriberUsage,
   useRefreshMtsBusinessSubscriber,
 } from '../../../hooks/useMtsBusinessSubscribers';
 import { useMtsBusinessSubscriberExpenses } from '../../../hooks/useMtsBusinessSubscriberData';
 import { useModifyMtsBusinessService } from '../../../hooks/useMtsBusinessActionsData';
 import { useSetMtsBusinessNumberMap } from '../../../hooks/useMtsBusinessData';
-import type { IMtsSubscriberRow, IMtsSubscriberSyncResult, IMtsUsageRow } from '../../../services/mtsBusinessSubscribersService';
+import type { IMtsSubscriberRow, IMtsSubscriberSyncResult } from '../../../services/mtsBusinessSubscribersService';
 import type { IMtsSubServiceItem } from '../../../services/mtsBusinessSubscriberService';
-import { UnavailableNotice } from '../common/UnavailableNotice';
+import { UsageTab } from './UsageTab';
 import { ConnectModal, type ConnectKind } from './ConnectModal';
 import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
@@ -77,113 +76,16 @@ const lastMonths = (n: number): { value: string; label: string }[] => {
 
 const dash = (v: string | number | null | undefined): string => (v == null || v === '' ? '—' : String(v));
 
-/** Число дней в месяце по строке YYYY-MM. */
-const daysInMonth = (ym: string): number => {
-  const [y, m] = ym.split('-').map(Number);
-  return new Date(y, m, 0).getDate();
-};
-
-/** Объём события выписки: секунды → длительность, байты → МБ, штуки → как есть. */
-const fmtUnits = (units: number | null, code: string | null): string => {
-  if (units == null) return '';
-  if (code === 'SECOND') return fmtDur(units);
-  if (code === 'BYTE') return `${(units / 1_000_000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`;
-  return String(units);
+/** Дата ПДн из МТС (ISO/«YYYY-MM-DDThh:mm…») → «DD.MM.YYYY»; иной формат — как есть. */
+const fmtPdDate = (v: string | null | undefined): string | null => {
+  if (!v) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : v;
 };
 
 /** Платные услуги сверху (по убыванию абонплаты), затем бесплатные. */
 const sortPaidFirst = (items: IMtsSubServiceItem[]): IMtsSubServiceItem[] =>
   [...items].sort((a, b) => (b.monthlyAmount ?? 0) - (a.monthlyAmount ?? 0));
-
-const USAGE_ROWS_CAP = 1500;
-
-/* ---- Сводка использования SIM (агрегация строк выписки на клиенте) ---- */
-
-type UsageGroupKey = 'calls' | 'internet' | 'sms' | 'other';
-
-interface IUsageLabelStat { label: string; count: number; seconds: number; bytes: number; amount: number }
-interface IUsageGroup {
-  key: UsageGroupKey;
-  count: number;
-  seconds: number;
-  bytes: number;
-  amount: number;
-  byLabel: Map<string, IUsageLabelStat>;
-  byDir: { in: { count: number; seconds: number }; out: { count: number; seconds: number } };
-}
-
-const USAGE_GROUP_OF: Record<string, UsageGroupKey> = {
-  calls: 'calls', internet: 'internet', sms: 'sms',
-  periodic: 'other', oneTime: 'other', topups: 'other', other: 'other',
-};
-const USAGE_GROUP_LABELS: Record<UsageGroupKey, string> = {
-  calls: 'Звонки', internet: 'Интернет', sms: 'SMS', other: 'Прочее',
-};
-const USAGE_GROUP_ORDER: UsageGroupKey[] = ['calls', 'internet', 'sms', 'other'];
-
-/** Раскладывает строки выписки по группам (звонки/интернет/SMS/прочее) с разбивкой для тултипов. */
-const summarizeUsage = (rows: IMtsUsageRow[]): Map<UsageGroupKey, IUsageGroup> => {
-  const groups = new Map<UsageGroupKey, IUsageGroup>();
-  const ensure = (k: UsageGroupKey): IUsageGroup => {
-    let g = groups.get(k);
-    if (!g) {
-      g = {
-        key: k, count: 0, seconds: 0, bytes: 0, amount: 0, byLabel: new Map(),
-        byDir: { in: { count: 0, seconds: 0 }, out: { count: 0, seconds: 0 } },
-      };
-      groups.set(k, g);
-    }
-    return g;
-  };
-  for (const r of rows) {
-    const g = ensure(USAGE_GROUP_OF[r.category] ?? 'other');
-    const units = r.units ?? 0;
-    const sec = r.unitCode === 'SECOND' ? units : 0;
-    const byt = r.unitCode === 'BYTE' ? units : 0;
-    g.count += 1; g.seconds += sec; g.bytes += byt; g.amount += r.amount;
-    if (r.direction === 'in') { g.byDir.in.count += 1; g.byDir.in.seconds += sec; }
-    else if (r.direction === 'out') { g.byDir.out.count += 1; g.byDir.out.seconds += sec; }
-    const lk = r.label ?? r.networkEvent ?? '—';
-    let ls = g.byLabel.get(lk);
-    if (!ls) { ls = { label: lk, count: 0, seconds: 0, bytes: 0, amount: 0 }; g.byLabel.set(lk, ls); }
-    ls.count += 1; ls.seconds += sec; ls.bytes += byt; ls.amount += r.amount;
-  }
-  return groups;
-};
-
-/** Главное значение плитки: звонки → длительность, интернет → объём, SMS → штуки, прочее → ₽. */
-const usageGroupValue = (g: IUsageGroup): string => {
-  if (g.key === 'calls') return fmtDur(g.seconds);
-  if (g.key === 'internet') return fmtUnits(g.bytes, 'BYTE');
-  if (g.key === 'sms') return `${g.count} шт`;
-  return fmtMoney(g.amount);
-};
-
-/** Подстрока плитки: число событий + сумма (если есть). */
-const usageGroupSub = (g: IUsageGroup): string =>
-  `${g.count} соб.${g.amount > 0 ? ` · ${fmtMoney(g.amount)}` : ''}`;
-
-/** Многострочный текст тултипа с разбивкой группы. */
-const usageTooltip = (g: IUsageGroup): string => {
-  if (g.key === 'calls') {
-    const lines: string[] = [];
-    if (g.byDir.in.count) lines.push(`Входящие: ${g.byDir.in.count} · ${fmtDur(g.byDir.in.seconds)}`);
-    if (g.byDir.out.count) lines.push(`Исходящие: ${g.byDir.out.count} · ${fmtDur(g.byDir.out.seconds)}`);
-    return lines.join('\n') || 'Нет данных';
-  }
-  const items = [...g.byLabel.values()];
-  const weight = (x: IUsageLabelStat): number => (g.key === 'internet' ? x.bytes : (x.amount || x.count));
-  items.sort((a, b) => weight(b) - weight(a));
-  const top = items.slice(0, 8);
-  const rest = items.length - top.length;
-  const line = (x: IUsageLabelStat): string => {
-    const vol = g.key === 'internet' ? fmtUnits(x.bytes, 'BYTE') : `${x.count} шт`;
-    return `${x.label} — ${vol}${x.amount > 0 ? ` · ${fmtMoney(x.amount)}` : ''}`;
-  };
-  const lines = top.map(line);
-  if (rest > 0) lines.push(`…и ещё ${rest}`);
-  return lines.join('\n') || 'Нет данных';
-};
 
 const KV: FC<{ label: string; value: ReactNode }> = ({ label, value }) => (
   <div className={st.kv}>
@@ -212,12 +114,8 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
   const [pdOpen, setPdOpen] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const [view, setView] = useState<'main' | 'usage'>('main');
-  const [usageDate, setUsageDate] = useState(''); // пусто = весь месяц
-  const [showDetail, setShowDetail] = useState(false); // список выписки скрыт по умолчанию
   const [editLink, setEditLink] = useState(false); // редактирование привязки к сотруднику (карандаш)
   const [connectKind, setConnectKind] = useState<ConnectKind | null>(null); // модалка «+» / смены тарифа
-  const usage = useMtsBusinessSubscriberUsage(msisdn, month, usageDate, view === 'usage');
-  const usageSummary = useMemo(() => summarizeUsage(usage.data?.rows ?? []), [usage.data?.rows]);
 
   const accountId = details.data?.accountId ?? row.accountId ?? '';
   const busy = modify.isPending || refresh.isPending || setMap.isPending;
@@ -391,7 +289,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
             return (
               <>
                 <KV label="ФИО" value={dash(pd.fullName ?? row.mtsFio)} />
-                <KV label="Дата рождения" value={dash(pd.birthDate)} />
+                <KV label="Дата рождения" value={dash(fmtPdDate(pd.birthDate))} />
                 {pd.documents.length === 0 && <KV label="Документ" value="—" />}
                 {pd.documents.map((doc, i) => {
                   const seriesNo = [doc.documentSeries, doc.documentNo].filter(Boolean).join(' ') || null;
@@ -401,7 +299,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
                       <KV label={docLabel} value={dash(doc.documentType)} />
                       <KV label="Серия / номер" value={dash(seriesNo)} />
                       <KV label="Кем выдан" value={dash(doc.issuedBy)} />
-                      <KV label="Дата выдачи" value={dash(doc.issuedDate)} />
+                      <KV label="Дата выдачи" value={dash(fmtPdDate(doc.issuedDate))} />
                       {doc.issuingCountry && <KV label="Страна" value={dash(doc.issuingCountry)} />}
                     </div>
                   );
@@ -463,92 +361,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
         </>)}
 
         {view === 'usage' && (
-          <div className={st.section}>
-            <div className={st.sectionHead}>
-              <h4 className={st.sectionTitle}>Использование SIM — детальная выписка</h4>
-              <span className={st.usageControls}>
-                <select
-                  className={st.monthSelect}
-                  value={month}
-                  onChange={e => { setMonth(e.target.value); setUsageDate(''); setShowDetail(false); }}
-                >
-                  {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                </select>
-                <select
-                  className={st.monthSelect}
-                  value={usageDate ? usageDate.slice(8) : ''}
-                  onChange={e => { setUsageDate(e.target.value ? `${month}-${e.target.value}` : ''); setShowDetail(false); }}
-                  title="День внутри выбранного месяца"
-                >
-                  <option value="">Весь месяц</option>
-                  {Array.from({ length: daysInMonth(month) }, (_, i) => String(i + 1).padStart(2, '0'))
-                    .map(d => <option key={d} value={d}>{Number(d)}</option>)}
-                </select>
-              </span>
-            </div>
-            {usage.isLoading && <p className={styles.hint}>Загрузка выписки из МТС…</p>}
-            {usage.isError && <p className={styles.err}>Не удалось загрузить выписку.</p>}
-            {usage.data?.unavailable && <UnavailableNotice message="Детализация не активирована для этого лицевого счёта." />}
-            {usage.data?.rows && (
-              usage.data.rows.length === 0
-                ? <p className={styles.hint}>{usageDate ? `За ${usageDate} событий нет.` : 'За выбранный месяц событий нет.'}</p>
-                : (
-                  <>
-                    <div className={st.usageStats}>
-                      {USAGE_GROUP_ORDER.map(k => {
-                        const g = usageSummary.get(k);
-                        if (!g || (g.count === 0 && g.amount === 0)) return null;
-                        return (
-                          <div key={k} className={st.usageStat} data-tooltip={usageTooltip(g)}>
-                            <span className={st.usageStatLabel}>{USAGE_GROUP_LABELS[k]}</span>
-                            <span className={st.usageStatValue}>{usageGroupValue(g)}</span>
-                            <span className={st.usageStatSub}>{usageGroupSub(g)}</span>
-                          </div>
-                        );
-                      })}
-                      <div className={`${st.usageStat} ${st.usageStatTotal}`}>
-                        <span className={st.usageStatLabel}>Итого</span>
-                        <span className={st.usageStatValue}>{fmtMoney(usage.data.total ?? 0)}</span>
-                        <span className={st.usageStatSub}>{usage.data.rows.length} событий за {usageDate || 'месяц'}</span>
-                      </div>
-                    </div>
-
-                    <button
-                      className={st.itemBtn}
-                      style={{ width: '100%', marginTop: 10 }}
-                      onClick={() => setShowDetail(v => !v)}
-                    >
-                      {showDetail ? '▴ Скрыть детализацию' : `▾ Детализация (${usage.data.rows.length})`}
-                    </button>
-
-                    {showDetail && (<>
-                      <ul className={st.list} style={{ marginTop: 8 }}>
-                        {usage.data.rows.slice(0, USAGE_ROWS_CAP).map((u, i) => (
-                          <li key={`u-${i}`} className={st.listItem}>
-                            <span className={st.usageDate}>{fmtLast(u.date)}</span>
-                            <span className={st.listName}>
-                              {u.label ?? u.networkEvent ?? '—'}
-                              {(u.peerName || u.peer) && (
-                                <> · {u.direction === 'in' ? 'от ' : u.direction === 'out' ? '→ ' : ''}
-                                  {u.peerName
-                                    ? <>{u.peerName}<span className={st.usagePeerNum}> ({fmtPhone(u.peer)})</span></>
-                                    : fmtPhone(u.peer)}
-                                </>
-                              )}
-                            </span>
-                            <span className={st.listPrice}>{fmtUnits(u.units, u.unitCode)}</span>
-                            <span className={st.usageAmount}>{u.amount > 0 ? fmtMoney(u.amount) : ''}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      {usage.data.rows.length > USAGE_ROWS_CAP && (
-                        <p className={styles.hint}>Показаны первые {USAGE_ROWS_CAP} из {usage.data.rows.length} событий.</p>
-                      )}
-                    </>)}
-                  </>
-                )
-            )}
-          </div>
+          <UsageTab msisdn={msisdn} month={month} months={months} setMonth={setMonth} />
         )}
 
         <div className={st.drawerFooter}>
