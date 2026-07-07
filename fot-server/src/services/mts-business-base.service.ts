@@ -45,6 +45,47 @@ export class MtsBusinessApiError extends Error {
 export const isFeatureUnavailable = (error: unknown): boolean =>
   error instanceof MtsBusinessApiError && error.status === 403 && error.code === '1010';
 
+// 421/3003 — «Сервис Foris временно недоступен»: транзиентный сбой апстрима МТС,
+// не «не в тарифе» и не баг портала. Ретраим; в sync считаем transient, не failed.
+export const isTransientMtsError = (error: unknown): boolean =>
+  error instanceof MtsBusinessApiError && error.status === 421 && error.code === '3003';
+
+type IMtsErrorBody = {
+  code?: string | number;
+  errorCode?: string | number;
+  description?: string;
+  message?: string;
+  errorMessage?: string;
+  error_description?: string;
+};
+
+/** Разбор тела ошибки МТС (errorCode приоритетнее code). Экспорт для тестов. */
+export const mtsBusinessApiErrorFromAxios = (error: unknown, suppressBodyLog = false): MtsBusinessApiError => {
+  if (error instanceof MtsBusinessApiError) return error;
+  if (error instanceof AxiosError) {
+    const status = error.response?.status ?? 0;
+    const body = error.response?.data as IMtsErrorBody | undefined;
+    const code = body?.errorCode != null
+      ? String(body.errorCode)
+      : body?.code != null
+        ? String(body.code)
+        : undefined;
+    const message = body?.errorMessage
+      || body?.message
+      || body?.error_description
+      || body?.description
+      || error.message
+      || 'Ошибка вызова МТС Бизнес API';
+    if (!suppressBodyLog && error.response?.data !== undefined) {
+      let snippet = '';
+      try { snippet = JSON.stringify(error.response.data); } catch { snippet = String(error.response.data); }
+      console.error(`[mts-biz] upstream ${status} body: ${snippet.slice(0, 500)}`);
+    }
+    return new MtsBusinessApiError(message, status, code, body?.description);
+  }
+  return new MtsBusinessApiError(error instanceof Error ? error.message : String(error), 0);
+};
+
 class MtsBusinessRequestLimiter {
   private active = 0;
   private queue: Array<() => void> = [];
@@ -133,6 +174,10 @@ export class MtsBusinessServiceBase {
     if (!(error instanceof AxiosError)) return false;
     if (error.response?.status && MTS_BIZ_RETRY_STATUSES.has(error.response.status)) return true;
     if (error.code && MTS_BIZ_RETRY_CODES.has(error.code)) return true;
+    // Foris временно недоступен — ретраим с backoff (до MTS_BIZ_RETRY_ATTEMPTS).
+    const body = error.response?.data as IMtsErrorBody | undefined;
+    const errCode = body?.errorCode ?? body?.code;
+    if (error.response?.status === 421 && errCode != null && String(errCode) === '3003') return true;
     return false;
   }
 
@@ -141,25 +186,7 @@ export class MtsBusinessServiceBase {
   }
 
   private toApiError(error: unknown, suppressBodyLog = false): MtsBusinessApiError {
-    if (error instanceof MtsBusinessApiError) return error;
-    if (error instanceof AxiosError) {
-      const status = error.response?.status ?? 0;
-      const body = error.response?.data as
-        | { code?: string | number; description?: string; message?: string; error_description?: string }
-        | undefined;
-      const code = body?.code != null ? String(body.code) : undefined;
-      const message = body?.message || body?.error_description || body?.description || error.message || 'Ошибка вызова МТС Бизнес API';
-      // Тело ошибки апстрима (усечённое) — единственный источник причины,
-      // когда МТС отвечает 4xx/5xx без стандартных полей. ПДн там нет — КРОМЕ
-      // PersonalData/* (паспорт/адрес), там suppressBodyLog=true (см. request()).
-      if (!suppressBodyLog && error.response?.data !== undefined) {
-        let snippet = '';
-        try { snippet = JSON.stringify(error.response.data); } catch { snippet = String(error.response.data); }
-        console.error(`[mts-biz] upstream ${status} body: ${snippet.slice(0, 500)}`);
-      }
-      return new MtsBusinessApiError(message, status, code, body?.description);
-    }
-    return new MtsBusinessApiError(error instanceof Error ? error.message : String(error), 0);
+    return mtsBusinessApiErrorFromAxios(error, suppressBodyLog);
   }
 
   protected async request<T>(

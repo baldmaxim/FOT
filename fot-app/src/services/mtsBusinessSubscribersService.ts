@@ -113,12 +113,21 @@ export interface IMtsUsageResult {
   reason?: string;
 }
 
+export interface IMtsSubscriberSyncSectionError {
+  section: string;
+  status: number;
+  code?: string;
+  kind: 'transient' | 'failed';
+}
+
 export interface IMtsSubscriberSyncResult {
   msisdn: string;
   sections: number;
   stored: number;
   unavailable: number;
   failed: number;
+  transient: number;
+  errors: IMtsSubscriberSyncSectionError[];
 }
 
 interface ApiResponse<T> {

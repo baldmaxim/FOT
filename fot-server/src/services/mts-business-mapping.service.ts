@@ -135,9 +135,10 @@ class MtsBusinessMappingService {
   /**
    * Пары «номер → ФИО» (из XML МТС или PersonalData/PersonalDataInfo): сохранить
    * ФИО в привязку и автопривязать к сотруднику при ТОЧНОМ однозначном совпадении
-   * нормализованного ФИО (регистр/ё/пробелы). Ручные привязки не перетираются
-   * (employee_id IS NULL). userId=null — источник не привязан к конкретному
-   * админу (фоновый планировщик, а не ручное действие в UI).
+   * нормализованного ФИО среди активных сотрудников (регистр/ё/пробелы).
+   * Уволенные дубли в «Уволенные» не участвуют в автопривязке.
+   * Ручные привязки не перетираются (employee_id IS NULL). userId=null —
+   * источник не привязан к конкретному админу (фоновый планировщик).
    */
   async syncMtsNames(pairs: ISimName[], userId: string | null): Promise<{ saved: number; autoLinked: number }> {
     let saved = 0;
@@ -159,8 +160,16 @@ class MtsBusinessMappingService {
       );
       saved++;
 
-      const targetId = await this.resolveEmployeeIdByFio(fioClean);
-      if (targetId === null) continue;
+      const matches = await query<{ id: number }>(
+        `SELECT id FROM employees
+          WHERE employment_status = 'active'
+            AND LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
+                = LOWER(REPLACE($1, 'ё', 'е'))
+          LIMIT 2`,
+        [fioClean],
+      );
+      if (matches.length !== 1) continue;
+      const targetId = matches[0].id;
 
       const updated = await execute(
         `UPDATE mts_business_number_map
@@ -255,7 +264,7 @@ class MtsBusinessMappingService {
    * Пере-проверка автопривязки для уже сохранённых номеров: те, что ещё без
    * сотрудника, но уже имеют mts_fio (из прошлых XML-загрузок) — например,
    * ФИО пришло раньше, чем сотрудник появился в ФОТ, или коллизия ФИО с тех
-   * пор разрешилась. Та же логика точного совпадения, что в syncMtsNames.
+   * пор разрешилась. Только активные сотрудники; уволенные дубли игнорируются.
    */
   async autoLinkByFio(userId: string): Promise<{ checked: number; linked: number }> {
     const unlinked = await query<{ msisdn_hash: string; mts_fio: string }>(
@@ -264,8 +273,16 @@ class MtsBusinessMappingService {
     );
     let linked = 0;
     for (const row of unlinked) {
-      const targetId = await this.resolveEmployeeIdByFio(row.mts_fio);
-      if (targetId === null) continue;
+      const matches = await query<{ id: number }>(
+        `SELECT id FROM employees
+          WHERE employment_status = 'active'
+            AND LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
+                = LOWER(REPLACE($1, 'ё', 'е'))
+          LIMIT 2`,
+        [row.mts_fio],
+      );
+      if (matches.length !== 1) continue;
+      const targetId = matches[0].id;
       const updated = await execute(
         `UPDATE mts_business_number_map
             SET employee_id = $2, linked_by = $3, linked_at = NOW()

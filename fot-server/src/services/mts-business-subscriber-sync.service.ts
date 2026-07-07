@@ -4,7 +4,7 @@ import { mtsBusinessMetricsStoreService, type MtsBusinessSnapshotMetric } from '
 import { mtsBusinessPersonalDataService } from './mts-business-personal-data.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
-import { isFeatureUnavailable } from './mts-business-base.service.js';
+import { isFeatureUnavailable, isTransientMtsError, MtsBusinessApiError } from './mts-business-base.service.js';
 
 // Полная выгрузка профиля абонента (как probe-mts-number-all.ts, но в БД).
 // Два режима — бюджет вызовов критичен (rate-limit 60/300 в мин на аккаунт,
@@ -17,12 +17,21 @@ import { isFeatureUnavailable } from './mts-business-base.service.js';
 // Баланс по номеру НЕ выгружается вовсе: у номера нет своего баланса, метод
 // возвращает общий баланс ЛС (он снимается в шаге «Балансы и начисления»).
 
+export interface ISubscriberSyncSectionError {
+  section: string;
+  status: number;
+  code?: string;
+  kind: 'transient' | 'failed';
+}
+
 export interface ISubscriberSyncResult {
   msisdn: string;
   sections: number;
   stored: number;
   unavailable: number; // 403/1010 — не подключено в тарифе МТС
   failed: number;
+  transient: number; // 421/3003 — Foris временно недоступен
+  errors: ISubscriberSyncSectionError[];
 }
 
 export interface ISubscriberSyncOptions {
@@ -56,15 +65,31 @@ export async function syncSubscriberFull(
   options: ISubscriberSyncOptions = {},
 ): Promise<ISubscriberSyncResult> {
   const mode = options.mode ?? 'full';
-  const result: ISubscriberSyncResult = { msisdn, sections: 0, stored: 0, unavailable: 0, failed: 0 };
-  const settle = async (fn: () => Promise<void>): Promise<void> => {
+  const result: ISubscriberSyncResult = {
+    msisdn, sections: 0, stored: 0, unavailable: 0, failed: 0, transient: 0, errors: [],
+  };
+  const settle = async (section: string, fn: () => Promise<void>): Promise<void> => {
     result.sections++;
     try {
       await fn();
       result.stored++;
     } catch (e) {
-      if (isFeatureUnavailable(e)) result.unavailable++;
-      else result.failed++;
+      const apiErr = e instanceof MtsBusinessApiError ? e : null;
+      if (isFeatureUnavailable(e)) {
+        result.unavailable++;
+      } else if (isTransientMtsError(e)) {
+        result.transient++;
+        result.errors.push({ section, status: apiErr!.status, code: apiErr!.code, kind: 'transient' });
+        console.warn(
+          `[mts-biz-subscribers] section=${section} msisdn=${msisdn} http=${apiErr!.status} code=${apiErr!.code ?? '-'} transient`,
+        );
+      } else {
+        result.failed++;
+        result.errors.push({ section, status: apiErr?.status ?? 0, code: apiErr?.code, kind: 'failed' });
+        console.warn(
+          `[mts-biz-subscribers] section=${section} msisdn=${msisdn} http=${apiErr?.status ?? 0} code=${apiErr?.code ?? '-'} failed`,
+        );
+      }
     }
   };
   const snap = (metric: MtsBusinessSnapshotMetric, payload: unknown): Promise<void> =>
@@ -73,28 +98,28 @@ export async function syncSubscriberFull(
   // Персональные данные: ФИО → mts_fio (+автопривязка), статус → pd_status,
   // полный ответ (паспорт и пр.) → pd_data_enc шифром, наружу не отдаётся.
   if (!options.skipPd) {
-    await settle(async () => {
+    await settle('personal_data', async () => {
       const info = await mtsBusinessPersonalDataService.fetchAndStoreFull(accountId, msisdn);
       if (info.fullName) await mtsBusinessMappingService.syncMtsNames([{ msisdn, fio: info.fullName }], null);
     });
   }
 
-  await settle(async () => snap('bill_plan', await mtsBusinessCatalogService.getBillPlanInfo(accountId, msisdn)));
-  await settle(async () => snap('tariff_fee', await mtsBusinessBillingService.getTariffRental(accountId, msisdn)));
-  await settle(async () => snap('product_services', await mtsBusinessCatalogService.getProductInfo(accountId, msisdn)));
-  await settle(async () => snap('connected_blocks', await mtsBusinessCatalogService.getConnectedBlocks(accountId, msisdn)));
+  await settle('bill_plan', async () => snap('bill_plan', await mtsBusinessCatalogService.getBillPlanInfo(accountId, msisdn)));
+  await settle('tariff_fee', async () => snap('tariff_fee', await mtsBusinessBillingService.getTariffRental(accountId, msisdn)));
+  await settle('product_services', async () => snap('product_services', await mtsBusinessCatalogService.getProductInfo(accountId, msisdn)));
+  await settle('connected_blocks', async () => snap('connected_blocks', await mtsBusinessCatalogService.getConnectedBlocks(accountId, msisdn)));
 
   if (mode === 'full') {
     // Начисления (charges_amount) здесь НЕ снимаем через CheckCharges: его
     // remainedAmount — остаток по ЛС, а не начисление на номер. Значение
     // charges_amount пишет выписка (syncMsisdnStatement → sumStatementCharges).
-    await settle(async () => snap('forwarding', await mtsBusinessCatalogService.getCallForwarding(accountId, msisdn)));
-    await settle(async () => snap('roaming', await mtsBusinessCatalogService.getCurrentSubscriberLocation(accountId, msisdn)));
-    await settle(async () => snap('delivery_method', await mtsBusinessBillingService.getDocumentDeliveryMethod(accountId, msisdn)));
-    await settle(async () => snap('payments', await mtsBusinessBillingService.getPaymentHistoryByMsisdn(accountId, msisdn, isoDay(-30), isoDay(0))));
+    await settle('forwarding', async () => snap('forwarding', await mtsBusinessCatalogService.getCallForwarding(accountId, msisdn)));
+    await settle('roaming', async () => snap('roaming', await mtsBusinessCatalogService.getCurrentSubscriberLocation(accountId, msisdn)));
+    await settle('delivery_method', async () => snap('delivery_method', await mtsBusinessBillingService.getDocumentDeliveryMethod(accountId, msisdn)));
+    await settle('payments', async () => snap('payments', await mtsBusinessBillingService.getPaymentHistoryByMsisdn(accountId, msisdn, isoDay(-30), isoDay(0))));
     // Остатки пакетов ПО НОМЕРУ: тот же ValidityInfo, но в customerAccount.accountNo
     // передаётся MSISDN (подтверждено probe 06.07.2026: по номеру — данные, по ЛС — 401).
-    await settle(async () => snap('validity_msisdn', await mtsBusinessBillingService.getValidityInfo(accountId, msisdn)));
+    await settle('validity_msisdn', async () => snap('validity_msisdn', await mtsBusinessBillingService.getValidityInfo(accountId, msisdn)));
   }
 
   return result;

@@ -8,7 +8,7 @@ import {
 import { useMtsBusinessSubscriberExpenses } from '../../../hooks/useMtsBusinessSubscriberData';
 import { useModifyMtsBusinessService } from '../../../hooks/useMtsBusinessActionsData';
 import { useSetMtsBusinessNumberMap } from '../../../hooks/useMtsBusinessData';
-import type { IMtsSubscriberRow, IMtsUsageRow } from '../../../services/mtsBusinessSubscribersService';
+import type { IMtsSubscriberRow, IMtsSubscriberSyncResult, IMtsUsageRow } from '../../../services/mtsBusinessSubscribersService';
 import type { IMtsSubServiceItem } from '../../../services/mtsBusinessSubscriberService';
 import { UnavailableNotice } from '../common/UnavailableNotice';
 import { ConnectModal, type ConnectKind } from './ConnectModal';
@@ -22,7 +22,45 @@ import {
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
 
-type Msg = { ok: boolean; text: string } | null;
+type Msg = { ok: boolean; warn?: boolean; text: string } | null;
+
+const SYNC_SECTION_LABELS: Record<string, string> = {
+  personal_data: 'Персональные данные',
+  bill_plan: 'Тариф',
+  tariff_fee: 'Абонплата',
+  product_services: 'Услуги',
+  connected_blocks: 'Блокировки',
+  charges: 'Начисления',
+  forwarding: 'Переадресация',
+  roaming: 'Роуминг',
+  delivery_method: 'Доставка счетов',
+  payments: 'Платежи',
+  validity_msisdn: 'Остатки пакетов',
+};
+
+const sectionLabel = (section: string): string => SYNC_SECTION_LABELS[section] ?? section;
+
+const formatSyncResultMsg = (r: IMtsSubscriberSyncResult): Msg => {
+  const parts = [`Обновлено секций: ${r.stored} из ${r.sections}`];
+  if (r.unavailable) parts.push(`не подключено в тарифе: ${r.unavailable}`);
+
+  const failedNames = r.errors.filter(e => e.kind === 'failed').map(e => sectionLabel(e.section));
+  const transientNames = r.errors.filter(e => e.kind === 'transient').map(e => sectionLabel(e.section));
+
+  if (r.failed > 0) {
+    const errPart = failedNames.length ? failedNames.join(', ') : `${r.failed}`;
+    return { ok: false, text: `${parts.join(', ')}, ошибки: ${errPart}` };
+  }
+  if (r.transient > 0) {
+    const names = transientNames.join(', ');
+    return {
+      ok: true,
+      warn: true,
+      text: `${parts.join(', ')}. ${names}: МТС временно недоступен — повторите позже`,
+    };
+  }
+  return { ok: true, text: parts.join(', ') };
+};
 
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const lastMonths = (n: number): { value: string; label: string }[] => {
@@ -213,7 +251,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
     setMsg(null);
     try {
       const r = await refresh.mutateAsync(msisdn);
-      setMsg({ ok: r.failed === 0, text: `Обновлено секций: ${r.stored} из ${r.sections}${r.unavailable ? `, не подключено в тарифе: ${r.unavailable}` : ''}${r.failed ? `, ошибок: ${r.failed}` : ''}` });
+      setMsg(formatSyncResultMsg(r));
     } catch (e) {
       setMsg({ ok: false, text: errText(e, 'Ошибка обновления (возможно нужен 2FA)') });
     }
@@ -251,7 +289,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           <button className={st.drawerClose} onClick={onClose} aria-label="Закрыть">×</button>
         </div>
 
-        {msg && <p className={msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
+        {msg && <p className={msg.warn ? styles.warn : msg.ok ? styles.ok : styles.err}>{msg.text}</p>}
 
         <div className={st.drawerTabs}>
           <button className={`${st.drawerTab} ${view === 'main' ? st.drawerTabActive : ''}`} onClick={() => setView('main')}>Управление</button>
