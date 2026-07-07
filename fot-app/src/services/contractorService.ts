@@ -593,8 +593,11 @@ export const contractorAdminService = {
   async setUserOrg(userId: string, orgDepartmentId: string | null): Promise<void> {
     await apiClient.put(`/admin/contractor/users/${userId}/org`, { org_department_id: orgDepartmentId });
   },
-  async getPendingSubmissions(): Promise<IPendingSubmission[]> {
-    const r = await apiClient.get<ApiResponse<IPendingSubmission[]>>('/admin/contractor/submissions/pending');
+  async getPendingSubmissions(q?: string): Promise<IPendingSubmission[]> {
+    const qs = q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
+    const r = await apiClient.get<ApiResponse<IPendingSubmission[]>>(
+      `/admin/contractor/submissions/pending${qs}`,
+    );
     return r.data ?? [];
   },
   async getPendingSubmissionsCount(): Promise<{ count: number }> {

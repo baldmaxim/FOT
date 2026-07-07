@@ -936,6 +936,10 @@ export const contractorAdminController = {
   async getPendingSubmissions(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureSubmissionsAccess(req, res, 'view'))) return;
+      // Опциональный поиск по ФИО держателя пропуска. Метасимволы LIKE экранируются,
+      // чтобы % / _ из поля не превращались в wildcard (буквальный поиск).
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      const like = q ? `%${q.replace(/[\\%_]/g, '\\$&')}%` : null;
       const data = await query(
         `SELECT s.id,
                 s.org_department_id,
@@ -950,10 +954,16 @@ export const contractorAdminController = {
            JOIN org_departments d ON d.id = s.org_department_id
            LEFT JOIN contractor_passes p ON p.submission_id = s.id
           WHERE s.status IN ('pending', 'partially_applied')
-            AND EXISTS (SELECT 1 FROM contractor_passes p2
-                         WHERE p2.submission_id = s.id AND p2.approval_status = 'pending')
+            AND EXISTS (
+              SELECT 1 FROM contractor_passes p2
+              LEFT JOIN contractor_pass_holders h2 ON h2.pass_id = p2.id AND h2.valid_until IS NULL
+               WHERE p2.submission_id = s.id
+                 AND p2.approval_status = 'pending'
+                 AND ($1::text IS NULL
+                      OR COALESCE(h2.holder_name, p2.holder_name) ILIKE $1 ESCAPE '\\'))
           GROUP BY s.id, d.name
           ORDER BY s.submitted_at ASC`,
+        [like],
       );
       res.json({ success: true, data });
     } catch (error) {

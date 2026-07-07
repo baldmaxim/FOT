@@ -33,6 +33,14 @@
   flex-wrap: wrap;
 }
 
+/* Поле поиска по ФИО справа в строке вкладок (вкладка «Заявки на согласование»). */
+.tabsSearch {
+  margin-left: auto;
+  align-self: center;
+  min-width: 220px;
+  max-width: 260px;
+}
+
 .tab {
   appearance: none;
   background: transparent;

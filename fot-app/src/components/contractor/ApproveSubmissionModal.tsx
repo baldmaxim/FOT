@@ -34,6 +34,8 @@ interface IProps {
   submissionId: string;
   orgName: string;
   orgDepartmentId: string;
+  /** Активный поиск по ФИО — показываем/открываем только совпавшие строки. */
+  filterName?: string;
   initialSelected?: Set<string>;
   onSelectedChange?: (next: Set<string>) => void;
   onClose: () => void;
@@ -44,6 +46,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
   submissionId,
   orgName,
   orgDepartmentId,
+  filterName,
   initialSelected,
   onSelectedChange,
   onClose,
@@ -79,10 +82,12 @@ export const ApproveSubmissionModal: FC<IProps> = ({
     }
   };
 
-  const pendingRows = useMemo<ISubmissionDetailRow[]>(
-    () => (detailQuery.data ?? []).filter(r => r.approval_status === 'pending'),
-    [detailQuery.data],
-  );
+  const pendingRows = useMemo<ISubmissionDetailRow[]>(() => {
+    const rows = (detailQuery.data ?? []).filter(r => r.approval_status === 'pending');
+    const q = (filterName ?? '').trim().toLocaleLowerCase('ru');
+    // Под активным поиском модалка открывает только совпавших по ФИО (не всю заявку).
+    return q ? rows.filter(r => (r.holder_name ?? '').toLocaleLowerCase('ru').includes(q)) : rows;
+  }, [detailQuery.data, filterName]);
 
   const minDate = useMemo(() => {
     const d = new Date();
@@ -145,9 +150,10 @@ export const ApproveSubmissionModal: FC<IProps> = ({
     setSelectedPasses(prev => {
       if (prev.size > 0) return prev;
       if (initialSelected && initialSelected.size > 0) return new Set(initialSelected);
-      return new Set(detailQuery.data.filter(r => r.approval_status === 'pending').map(r => r.id));
+      // Дефолт-выбор — только видимые (под поиском отфильтрованные) pending-строки.
+      return new Set(pendingRows.map(r => r.id));
     });
-  }, [detailQuery.data, initialSelected, defaultExpiry]);
+  }, [detailQuery.data, initialSelected, defaultExpiry, pendingRows]);
 
   const togglePassSelected = (passId: string) => {
     setSelectedPasses(prev => {

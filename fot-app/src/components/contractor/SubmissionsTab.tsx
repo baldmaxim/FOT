@@ -20,9 +20,11 @@ interface ISubmissionDetailProps {
   onChange: (next: Set<string>) => void;
   /** Может ли пользователь отмечать вводный инструктаж (ОТиТБ/админ). */
   canToggleInduction: boolean;
+  /** Активный поиск по ФИО — показываем только совпавшие строки. */
+  filterName?: string;
 }
 
-const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, onChange, canToggleInduction }) => {
+const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, onChange, canToggleInduction, filterName }) => {
   const qc = useQueryClient();
   const toast = useToast();
   const [docRow, setDocRow] = useState<ISubmissionDetailRow | null>(null);
@@ -35,8 +37,13 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
 
   const rows: ISubmissionDetailRow[] = detailQuery.data ?? [];
   const pendingRows = rows.filter(r => r.approval_status === 'pending');
-  // Выбрать для открытия можно только тех, кто прошёл вводный инструктаж.
-  const selectableIds = new Set(pendingRows.filter(r => r.induction_passed).map(r => r.id));
+  // При активном поиске показываем и оперируем только совпавшими по ФИО строками.
+  const q = (filterName ?? '').toLocaleLowerCase('ru');
+  const displayRows = q
+    ? pendingRows.filter(r => (r.holder_name ?? '').toLocaleLowerCase('ru').includes(q))
+    : pendingRows;
+  // Выбрать для открытия можно только тех, кто прошёл вводный инструктаж (и виден в поиске).
+  const selectableIds = new Set(displayRows.filter(r => r.induction_passed).map(r => r.id));
   const selectableCount = selectableIds.size;
 
   // Если parent ещё не инициализировал — по умолчанию выбраны все, прошедшие инструктаж.
@@ -94,6 +101,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
   if (detailQuery.isLoading) return <div className={styles.detailRow}>Загрузка…</div>;
   // Показываем только пропуска на согласовании (уже активные/одобренные скрыты).
   if (pendingRows.length === 0) return <div className={styles.detailRow}>Нет пропусков на согласовании</div>;
+  if (displayRows.length === 0) return <div className={styles.detailRow}>Никого не найдено</div>;
 
   return (
     <>
@@ -120,7 +128,7 @@ const SubmissionDetail: FC<ISubmissionDetailProps> = ({ submissionId, selected, 
         </tr>
       </thead>
       <tbody>
-        {pendingRows.map(r => {
+        {displayRows.map(r => {
           const isChecked = effective.has(r.id);
           const dup = hasDocDuplicate(r);
           return (
@@ -183,7 +191,7 @@ const PassDocumentsModalPortal: FC<{ row: ISubmissionDetailRow; onClose: () => v
   />
 );
 
-export const SubmissionsTab: FC = () => {
+export const SubmissionsTab: FC<{ search?: string }> = ({ search = '' }) => {
   const toast = useToast();
   const qc = useQueryClient();
   const { canEditPage } = useAuth();
@@ -191,6 +199,12 @@ export const SubmissionsTab: FC = () => {
   // ОТиТБ (только технический ключ вкладки) видит таблицу и отмечает инструктаж.
   const canManage = canEditPage('/admin/contractor-approvals');
   const canToggleInduction = canManage || canEditPage('/admin/contractor-approvals/submissions');
+  // Поиск по ФИО (значение приходит уже дебаунснутым со страницы). Порог 2 символа,
+  // чтобы на одну букву не раскрывать и не грузить detail десятков заявок сразу.
+  const searchActive = search.trim().length >= 2;
+  const searchQuery = searchActive ? search.trim() : '';
+  const holderMatches = (r: ISubmissionDetailRow): boolean =>
+    !searchActive || (r.holder_name ?? '').toLocaleLowerCase('ru').includes(searchQuery.toLocaleLowerCase('ru'));
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [rejectId, setRejectId] = useState<string | null>(null);
@@ -202,8 +216,8 @@ export const SubmissionsTab: FC = () => {
   const overlay = useOverlayDismiss(() => setRejectId(null));
 
   const subsQuery = useQuery({
-    queryKey: ['contractor-pending-subs'],
-    queryFn: contractorAdminService.getPendingSubmissions,
+    queryKey: ['contractor-pending-subs', searchQuery],
+    queryFn: () => contractorAdminService.getPendingSubmissions(searchQuery),
     staleTime: 15_000,
   });
 
@@ -245,10 +259,16 @@ export const SubmissionsTab: FC = () => {
     setBusy(true);
     try {
       let passIds = sel ? Array.from(sel) : [];
-      // Выбор не материализован (строка не раскрывалась) → берём все pending из детали.
-      if (sel === undefined) {
+      // Выбор не материализован (строка не раскрывалась) ЛИБО активен поиск → берём деталь и
+      // строго ограничиваем набор видимыми (совпавшими по ФИО) pending-строками. Защищает от
+      // гонки: клик мог случиться до того, как эффект авто-выбора сузил selectedByPass.
+      if (sel === undefined || searchActive) {
         const detail = await contractorAdminService.getSubmissionDetail(submissionId);
-        passIds = detail.filter(r => r.approval_status === 'pending').map(r => r.id);
+        const visiblePending = detail
+          .filter(r => r.approval_status === 'pending' && holderMatches(r))
+          .map(r => r.id);
+        const visibleSet = new Set(visiblePending);
+        passIds = sel ? Array.from(sel).filter(id => visibleSet.has(id)) : visiblePending;
       }
       if (passIds.length === 0) {
         toast.warning('Не выбрано ни одного пропуска');
@@ -281,7 +301,13 @@ export const SubmissionsTab: FC = () => {
   const subs = subsQuery.data ?? [];
 
   if (subsQuery.isLoading) return <div className={styles.empty}>Загрузка…</div>;
-  if (subs.length === 0) return <div className={styles.empty}>Нет заявок на согласовании</div>;
+  if (subs.length === 0) {
+    return (
+      <div className={styles.empty}>
+        {searchActive ? 'Никого не найдено' : 'Нет заявок на согласовании'}
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -301,7 +327,7 @@ export const SubmissionsTab: FC = () => {
             const total = Number(s.passes) || 0;
             const applied = Number(s.applied) || 0;
             const pending = Number(s.pending) || 0;
-            const isOpen = expanded === s.id;
+            const isOpen = searchActive || expanded === s.id;
             const selectedSet = selectedByPass.get(s.id);
             const selectedCount = selectedSet?.size ?? pending;
             return (
@@ -362,6 +388,7 @@ export const SubmissionsTab: FC = () => {
                         selected={selectedSet}
                         onChange={next => setSelectedFor(s.id, next)}
                         canToggleInduction={canToggleInduction}
+                        filterName={searchActive ? searchQuery : undefined}
                       />
                     </td>
                   </tr>
@@ -415,6 +442,7 @@ export const SubmissionsTab: FC = () => {
           submissionId={approveSub.id}
           orgName={approveSub.org_name}
           orgDepartmentId={approveSub.org_department_id}
+          filterName={searchActive ? searchQuery : undefined}
           initialSelected={selectedByPass.get(approveSub.id)}
           onSelectedChange={next => setSelectedFor(approveSub.id, next)}
           onClose={() => setApproveSub(null)}
