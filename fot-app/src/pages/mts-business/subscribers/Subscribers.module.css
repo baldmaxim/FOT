@@ -217,6 +217,31 @@
 .usagePeerNum { color: var(--text-secondary); font-size: 12px; }
 .usageControls { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
+/* Сводка использования SIM (плитки над списком выписки) */
+.usageStats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.usageStat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: help;
+}
+.usageStatTotal { border-color: var(--primary); cursor: default; }
+.usageStatLabel { font-size: 12px; color: var(--text-secondary); }
+.usageStatValue { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.usageStatSub { font-size: 12px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+
+@media (max-width: 480px) {
+  .usageStats { grid-template-columns: 1fr; }
+}
+
 /* Модалка подключения услуг/блокировок/тарифов (поверх панели) */
 .connectOverlay {
   position: fixed;
