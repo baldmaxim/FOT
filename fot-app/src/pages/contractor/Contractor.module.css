@@ -443,6 +443,19 @@
   font-weight: 700;
 }
 
+/* Строка-чекбокс «Есть ВНЖ» в модалке документов. */
+.vnzhRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+.vnzhRow span {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
 /* Кнопка «Прошёл» (вводный инструктаж) — зелёная, геометрия как .btn-secondary. */
 .inductionOk {
   display: inline-flex;

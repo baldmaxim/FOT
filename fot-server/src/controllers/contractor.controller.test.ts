@@ -46,12 +46,14 @@ vi.mock('../services/contractor-documents.service.js', () => ({
   listOrgDocuments: vi.fn(),
   uploadOrgDocument: vi.fn(),
 }));
+const PATENT_SET = new Set(['УЗБЕКИСТАН', 'ТАДЖИКИСТАН', 'УКРАИНА', 'АЗЕРБАЙДЖАН', 'МОЛДОВА', 'ТУРКМЕНИСТАН']);
 vi.mock('../services/contractor-docs.service.js', () => ({
   CONTRACTOR_DOCUMENT_DUPLICATE: 'CONTRACTOR_DOCUMENT_DUPLICATE',
   CONTRACTOR_DOCUMENTS_INCOMPLETE: 'CONTRACTOR_DOCUMENTS_INCOMPLETE',
   duplicateMessage: () => 'dup',
   findOrgDocDuplicate: h.findDup,
   isDocsComplete: h.isDocsComplete,
+  citizenshipRequiresPatent: (c: string | null | undefined) => !!c && PATENT_SET.has(c.trim().toUpperCase()),
 }));
 vi.mock('../utils/multer-filename.utils.js', () => ({ decodeMulterFilename: (s: string) => s }));
 
@@ -70,16 +72,21 @@ const makeRes = () => {
   return res;
 };
 
-const runSave = async (passRow: { status: string; approval_status: string }) => {
+const runSave = async (
+  passRow: { status: string; approval_status: string },
+  bodyOverride?: Record<string, unknown>,
+) => {
   const updateCalls: string[] = [];
+  const updateParams: unknown[][] = [];
   h.resolveOrg.mockResolvedValue(ORG);
   h.findDup.mockResolvedValue(null);
   h.isDocsComplete.mockReturnValue(true);
   h.withTransaction.mockImplementation(async (cb: (c: unknown) => Promise<unknown>) => {
     const client = {
-      query: vi.fn(async (sql: string) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
         if (/UPDATE contractor_passes/i.test(sql)) {
           updateCalls.push(sql);
+          updateParams.push(params ?? []);
           return { rows: [], rowCount: 1 };
         }
         return { rows: [{ id: PASS, ...passRow }], rowCount: 1 };
@@ -91,11 +98,11 @@ const runSave = async (passRow: { status: string; approval_status: string }) => 
   const req = {
     user: { id: 'user-1' },
     params: { id: PASS },
-    body: { passport_series_number: '1234 567890', citizenship: 'Россия', passport_issue_date: '2020-01-01', birth_date: '1990-01-01' },
+    body: bodyOverride ?? { passport_series_number: '1234 567890', citizenship: 'Россия', passport_issue_date: '2020-01-01', birth_date: '1990-01-01' },
   } as never;
   const res = makeRes();
   await contractorController.savePassDocuments(req, res as never);
-  return { res, updateCalls };
+  return { res, updateCalls, updateParams };
 };
 
 describe('savePassDocuments — read-only гард по статусу', () => {
@@ -126,5 +133,36 @@ describe('savePassDocuments — read-only гард по статусу', () => {
     const { res, updateCalls } = await runSave({ status: 'applied', approval_status: 'approved' });
     expect(res.statusCode).toBe(409);
     expect(updateCalls).toHaveLength(0);
+  });
+});
+
+// Порядок параметров UPDATE: $5 patent_number, $8 has_residence_permit, $9 residence_permit_number.
+describe('savePassDocuments — ВНЖ / патент взаимоисключение', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('патентная страна + ВНЖ → has_residence_permit=true, номер сохранён, патент обнулён', async () => {
+    const { res, updateParams } = await runSave(
+      { status: 'assigned', approval_status: 'not_submitted' },
+      { passport_series_number: '1234 567890', passport_issue_date: '2020-01-01', birth_date: '1990-01-01',
+        citizenship: 'Узбекистан', patent_number: '77 №2600295204',
+        has_residence_permit: true, residence_permit_number: '82№1234567' },
+    );
+    expect(res.statusCode).toBe(200);
+    const p = updateParams[0];
+    expect(p[4]).toBeNull();            // patent_number обнулён
+    expect(p[7]).toBe(true);            // has_residence_permit
+    expect(p[8]).toBe('82№1234567');    // residence_permit_number
+  });
+
+  it('смена гражданства на непатентное (Беларусь) сбрасывает ВНЖ (effHasVnzh)', async () => {
+    const { res, updateParams } = await runSave(
+      { status: 'assigned', approval_status: 'not_submitted' },
+      { passport_series_number: '1234 567890', passport_issue_date: '2020-01-01', birth_date: '1990-01-01',
+        citizenship: 'Беларусь', has_residence_permit: true, residence_permit_number: '82№1234567' },
+    );
+    expect(res.statusCode).toBe(200);
+    const p = updateParams[0];
+    expect(p[7]).toBe(false);           // has_residence_permit сброшен
+    expect(p[8]).toBeNull();            // residence_permit_number обнулён
   });
 });

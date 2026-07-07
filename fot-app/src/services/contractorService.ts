@@ -52,9 +52,11 @@ export interface IPassRow {
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
+  has_residence_permit: boolean;
+  residence_permit_number: string | null;
 }
 
-/** Персональные документы держателя пропуска (паспорт/патент). */
+/** Персональные документы держателя пропуска (паспорт/патент/ВНЖ). */
 export interface IPassDocuments {
   passport_series_number: string | null;
   passport_issue_date: string | null;
@@ -63,6 +65,9 @@ export interface IPassDocuments {
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
+  /** ВНЖ отменяет требование патента (для патентных гражданств). */
+  has_residence_permit: boolean;
+  residence_permit_number: string | null;
 }
 
 export interface ISubmissionRow {
@@ -111,6 +116,9 @@ export interface ISubmissionDetailRow {
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
+  /** ВНЖ отменяет требование патента (для патентных гражданств). */
+  has_residence_permit: boolean;
+  residence_permit_number: string | null;
   documents_complete: boolean;
   /** Другие держатели той же орг с таким же номером патента. */
   dup_patent: IPassDocDuplicate[];
@@ -220,6 +228,8 @@ export interface IMonitorPassRow {
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
+  has_residence_permit: boolean;
+  residence_permit_number: string | null;
 }
 
 export interface IContractorPassStat {

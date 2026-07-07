@@ -29,6 +29,13 @@ export const CITIZENSHIP_PATENT_SET = new Set([
 export const citizenshipRequiresPatent = (c: string | null | undefined): boolean =>
   !!c && CITIZENSHIP_PATENT_SET.has(c.trim().toUpperCase());
 
+/**
+ * Нужен ли фактически комплект патентных полей: гражданство патентное И нет ВНЖ.
+ * ВНЖ (вид на жительство) отменяет требование патента — вместо него нужен номер ВНЖ.
+ */
+export const needsPatentDoc = (row: Partial<IDocRow> | null | undefined): boolean =>
+  !!row && citizenshipRequiresPatent(row.citizenship) && !row.has_residence_permit;
+
 /** Базовые поля комплекта (нужны всегда, независимо от гражданства). */
 export const BASE_DOC_FIELDS = [
   'passport_series_number',
@@ -37,14 +44,20 @@ export const BASE_DOC_FIELDS = [
   'citizenship',
 ] as const;
 
-/** Поля патента — обязательны только для патентных гражданств. */
+/** Поля патента — обязательны только для патентных гражданств без ВНЖ. */
 export const PATENT_DOC_FIELDS = [
   'patent_number',
   'patent_issue_date',
   'patent_blank_number',
 ] as const;
 
-export type DocField = (typeof BASE_DOC_FIELDS)[number] | (typeof PATENT_DOC_FIELDS)[number];
+/** Поля ВНЖ — заменяют патент для патентных гражданств с ВНЖ. */
+export const RESIDENCE_DOC_FIELDS = ['residence_permit_number'] as const;
+
+export type DocField =
+  | (typeof BASE_DOC_FIELDS)[number]
+  | (typeof PATENT_DOC_FIELDS)[number]
+  | (typeof RESIDENCE_DOC_FIELDS)[number];
 
 export interface IDocRow {
   passport_series_number: string | null;
@@ -54,6 +67,8 @@ export interface IDocRow {
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
+  has_residence_permit?: boolean;
+  residence_permit_number?: string | null;
 }
 
 /**
@@ -70,14 +85,19 @@ export const normalizeDocSql = (col: string): string =>
   `NULLIF(lower(regexp_replace(coalesce(${col},''), '[^0-9A-Za-zА-Яа-яЁё]', '', 'g')), '')`;
 
 /**
- * Комплект полный: базовые поля заполнены всегда; поля патента — только если
- * гражданство требует патента (ЕАЭС/«Другое» обходятся без патента).
+ * Комплект полный: базовые поля заполнены всегда. Для патентных гражданств —
+ * либо патент (три поля), либо ВНЖ (номер ВНЖ). ЕАЭС/«Другое» — только базовые.
  */
 export const isDocsComplete = (row: Partial<IDocRow> | null | undefined): boolean => {
   if (!row) return false;
-  const fields: readonly DocField[] = citizenshipRequiresPatent(row.citizenship)
-    ? [...BASE_DOC_FIELDS, ...PATENT_DOC_FIELDS]
-    : BASE_DOC_FIELDS;
+  let fields: readonly DocField[];
+  if (!citizenshipRequiresPatent(row.citizenship)) {
+    fields = BASE_DOC_FIELDS;
+  } else if (row.has_residence_permit) {
+    fields = [...BASE_DOC_FIELDS, ...RESIDENCE_DOC_FIELDS];
+  } else {
+    fields = [...BASE_DOC_FIELDS, ...PATENT_DOC_FIELDS];
+  }
   return fields.every(f => {
     const v = (row as Record<string, unknown>)[f];
     return typeof v === 'string' ? v.trim().length > 0 : v != null;

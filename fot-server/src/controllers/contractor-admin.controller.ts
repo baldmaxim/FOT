@@ -983,14 +983,19 @@ export const contractorAdminController = {
                 p.patent_number,
                 to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
                 p.patent_blank_number,
+                p.has_residence_permit,
+                p.residence_permit_number,
                 -- Список патентных гражданств продублирован из CITIZENSHIP_PATENT_SET
-                -- (contractor-docs.service) — держать в синхроне.
+                -- (contractor-docs.service) — держать в синхроне. Патент ИЛИ ВНЖ(номер).
                 (p.passport_series_number IS NOT NULL AND p.passport_issue_date IS NOT NULL
                    AND p.birth_date IS NOT NULL AND p.citizenship IS NOT NULL
                    AND (upper(trim(p.citizenship)) NOT IN
                           ('УЗБЕКИСТАН','ТАДЖИКИСТАН','УКРАИНА','АЗЕРБАЙДЖАН','МОЛДОВА','ТУРКМЕНИСТАН')
-                        OR (p.patent_number IS NOT NULL AND p.patent_issue_date IS NOT NULL
-                            AND p.patent_blank_number IS NOT NULL)))
+                        OR (p.has_residence_permit AND btrim(coalesce(p.residence_permit_number,'')) <> '')
+                        OR (NOT p.has_residence_permit
+                            AND btrim(coalesce(p.patent_number,'')) <> ''
+                            AND p.patent_issue_date IS NOT NULL
+                            AND btrim(coalesce(p.patent_blank_number,'')) <> '')))
                   AS documents_complete,
                 COALESCE((
                   SELECT jsonb_agg(jsonb_build_object(
@@ -1375,6 +1380,8 @@ export const contractorAdminController = {
                p.patent_number,
                to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
                p.patent_blank_number,
+               p.has_residence_permit,
+               p.residence_permit_number,
                COALESCE(
                  (SELECT string_agg(o.name, ', ' ORDER BY o.name)
                     FROM skud_objects o WHERE o.id = ANY(p.object_ids)),

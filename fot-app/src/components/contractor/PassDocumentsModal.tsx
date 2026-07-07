@@ -63,10 +63,23 @@ export const PassDocumentsModal: FC<IProps> = ({
     patent_number: documents.patent_number ?? '',
     patent_issue_date: (documents.patent_issue_date ?? '').slice(0, 10),
     patent_blank_number: documents.patent_blank_number ?? '',
+    has_residence_permit: documents.has_residence_permit ?? false,
+    residence_permit_number: documents.residence_permit_number ?? '',
   });
 
-  // Патент нужен только гражданам визово-безвизовых не-ЕАЭС стран.
-  const needsPatent = citizenshipRequiresPatent(form.citizenship);
+  // Патент нужен гражданам визово-безвизовых не-ЕАЭС стран, НО ВНЖ его отменяет.
+  const isPatentCountry = citizenshipRequiresPatent(form.citizenship);
+  const hasVnzh = isPatentCountry && form.has_residence_permit;
+  const needsPatent = isPatentCountry && !hasVnzh;
+  // Номер ВНЖ обязателен, когда галочка стоит — подсвечиваем пустое поле.
+  const residenceMissing = hasVnzh && form.residence_permit_number.trim().length === 0;
+
+  // Смена гражданства: очищаем ВНЖ, если страна стала непатентной (нет скрытого состояния).
+  const changeCitizenship = (value: string) => {
+    setForm(prev => citizenshipRequiresPatent(value)
+      ? { ...prev, citizenship: value }
+      : { ...prev, citizenship: value, has_residence_permit: false, residence_permit_number: '' });
+  };
 
   const passportDup = dupNote(duplicates?.passport);
   const patentDup = dupNote(duplicates?.patent);
@@ -85,6 +98,9 @@ export const PassDocumentsModal: FC<IProps> = ({
       patent_number: needsPatent ? form.patent_number.trim() || null : null,
       patent_issue_date: needsPatent ? form.patent_issue_date || null : null,
       patent_blank_number: needsPatent ? form.patent_blank_number.trim() || null : null,
+      // ВНЖ уходит только для патентной страны с отметкой; иначе — сброс.
+      has_residence_permit: hasVnzh,
+      residence_permit_number: hasVnzh ? form.residence_permit_number.trim() || null : null,
     });
   };
 
@@ -124,7 +140,7 @@ export const PassDocumentsModal: FC<IProps> = ({
             className={`${styles.input} ${styles.fullInput}`}
             value={form.citizenship}
             disabled={readOnly}
-            onChange={e => setForm(prev => ({ ...prev, citizenship: e.target.value }))}
+            onChange={e => changeCitizenship(e.target.value)}
           >
             <option value="">Выберите…</option>
             {CITIZENSHIP_OPTIONS.map(o => (
@@ -155,6 +171,32 @@ export const PassDocumentsModal: FC<IProps> = ({
             />
           </div>
         </div>
+
+        {isPatentCountry && (
+          <label className={styles.vnzhRow}>
+            <input
+              type="checkbox"
+              checked={form.has_residence_permit}
+              disabled={readOnly}
+              onChange={e => setForm(prev => ({ ...prev, has_residence_permit: e.target.checked }))}
+            />
+            <span>Есть ВНЖ (вид на жительство) — патент не требуется</span>
+          </label>
+        )}
+
+        {hasVnzh && (
+          <div className={styles.field}>
+            <span className={styles.label}>Номер ВНЖ</span>
+            <input
+              className={`${styles.input} ${styles.fullInput} ${residenceMissing ? styles.docDupInput : ''}`}
+              value={form.residence_permit_number}
+              disabled={readOnly}
+              placeholder="Номер вида на жительство"
+              onChange={e => setForm(prev => ({ ...prev, residence_permit_number: e.target.value }))}
+            />
+            {residenceMissing && <span className={styles.docDupNote}>Укажите номер ВНЖ</span>}
+          </div>
+        )}
 
         {needsPatent && (
           <>

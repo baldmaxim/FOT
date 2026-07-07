@@ -59,6 +59,15 @@ describe('contractor-docs isDocsComplete', () => {
     expect(isDocsComplete({ ...base, citizenship: 'Туркменистан' })).toBe(false);
     expect(isDocsComplete({ ...fullDocs, citizenship: 'Туркменистан' })).toBe(true);
   });
+  it('ВНЖ отменяет патент: патентная страна + ВНЖ с номером → true (без патента)', () => {
+    const noPatent = { ...fullDocs, patent_number: null, patent_issue_date: null, patent_blank_number: null };
+    expect(isDocsComplete({ ...noPatent, has_residence_permit: true, residence_permit_number: '82№1234567' })).toBe(true);
+  });
+  it('ВНЖ без номера → false (номер ВНЖ обязателен)', () => {
+    const noPatent = { ...fullDocs, patent_number: null, patent_issue_date: null, patent_blank_number: null };
+    expect(isDocsComplete({ ...noPatent, has_residence_permit: true, residence_permit_number: '' })).toBe(false);
+    expect(isDocsComplete({ ...noPatent, has_residence_permit: true, residence_permit_number: null })).toBe(false);
+  });
 });
 
 describe('contractor-docs citizenshipRequiresPatent', () => {

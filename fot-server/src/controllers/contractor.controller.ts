@@ -25,6 +25,7 @@ import {
   duplicateMessage,
   findOrgDocDuplicate,
   isDocsComplete,
+  citizenshipRequiresPatent,
 } from '../services/contractor-docs.service.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 
@@ -445,6 +446,8 @@ export const contractorController = {
         patent_number: z.string().trim().max(50).nullable().optional(),
         patent_issue_date: dateField,
         patent_blank_number: z.string().trim().max(50).nullable().optional(),
+        has_residence_permit: z.boolean().optional(),
+        residence_permit_number: z.string().trim().max(50).nullable().optional(),
       }).parse(req.body);
 
       const norm = (v: string | null | undefined): string | null => {
@@ -452,15 +455,24 @@ export const contractorController = {
         return s.length > 0 ? s : null;
       };
 
-      // Нормализованный набор сохраняемых значений.
+      const citizenship = norm(parsed.citizenship);
+      // ВНЖ имеет смысл только для патентной страны. Серверная страховка от скрытого
+      // состояния: если гражданство непатентное (или сменилось на такое), ВНЖ сбрасываем,
+      // даже если клиент прислал has_residence_permit=true.
+      const effHasVnzh = citizenshipRequiresPatent(citizenship) && !!parsed.has_residence_permit;
+
+      // Нормализованный набор сохраняемых значений. Патент и ВНЖ взаимоисключающие:
+      // при ВНЖ обнуляем поля патента, иначе — номер ВНЖ; чтобы не копились устаревшие значения.
       const next = {
         passport_series_number: norm(parsed.passport_series_number),
         passport_issue_date: parsed.passport_issue_date ?? null,
         birth_date: parsed.birth_date ?? null,
-        citizenship: norm(parsed.citizenship),
-        patent_number: norm(parsed.patent_number),
-        patent_issue_date: parsed.patent_issue_date ?? null,
-        patent_blank_number: norm(parsed.patent_blank_number),
+        citizenship,
+        patent_number: effHasVnzh ? null : norm(parsed.patent_number),
+        patent_issue_date: effHasVnzh ? null : (parsed.patent_issue_date ?? null),
+        patent_blank_number: effHasVnzh ? null : norm(parsed.patent_blank_number),
+        has_residence_permit: effHasVnzh,
+        residence_permit_number: effHasVnzh ? norm(parsed.residence_permit_number) : null,
       };
 
       // Конфликт уникальности (CONTRACTOR_DOCUMENT_DUPLICATE) или read-only/неполнота —
@@ -532,8 +544,10 @@ export const contractorController = {
                   patent_number = $5,
                   patent_issue_date = $6,
                   patent_blank_number = $7,
+                  has_residence_permit = $8,
+                  residence_permit_number = $9,
                   updated_at = now()
-            WHERE id = $8::uuid`,
+            WHERE id = $10::uuid`,
           [
             next.passport_series_number,
             next.passport_issue_date,
@@ -542,6 +556,8 @@ export const contractorController = {
             next.patent_number,
             next.patent_issue_date,
             next.patent_blank_number,
+            next.has_residence_permit,
+            next.residence_permit_number,
             passId,
           ],
         );

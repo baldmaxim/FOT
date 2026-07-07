@@ -53,6 +53,8 @@ export interface IContractorPassRow {
   patent_number: string | null;
   patent_issue_date: string | null;
   patent_blank_number: string | null;
+  has_residence_permit: boolean;
+  residence_permit_number: string | null;
 }
 
 const PAGE_SIZE = 500;
@@ -160,6 +162,8 @@ export const getPasses = async (orgDepartmentId: string): Promise<IContractorPas
             p.patent_number,
             to_char(p.patent_issue_date, 'YYYY-MM-DD') AS patent_issue_date,
             p.patent_blank_number,
+            p.has_residence_permit,
+            p.residence_permit_number,
             COALESCE(
               (SELECT string_agg(o.name, ', ' ORDER BY o.name)
                  FROM skud_objects o WHERE o.id = ANY(p.object_ids)),
