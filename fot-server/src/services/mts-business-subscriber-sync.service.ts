@@ -85,16 +85,9 @@ export async function syncSubscriberFull(
   await settle(async () => snap('connected_blocks', await mtsBusinessCatalogService.getConnectedBlocks(accountId, msisdn)));
 
   if (mode === 'full') {
-    await settle(async () => {
-      const charges = await mtsBusinessBillingService.checkChargesBulk(accountId, [msisdn]);
-      const c = charges[0];
-      if (c?.amount != null) {
-        await mtsBusinessMetricsStoreService.upsertDaily({
-          accountId, scope: 'msisdn', msisdn, metric: 'charges_amount',
-          amount: c.amount, validFrom: c.periodStart, validTo: c.periodEnd,
-        });
-      }
-    });
+    // Начисления (charges_amount) здесь НЕ снимаем через CheckCharges: его
+    // remainedAmount — остаток по ЛС, а не начисление на номер. Значение
+    // charges_amount пишет выписка (syncMsisdnStatement → sumStatementCharges).
     await settle(async () => snap('forwarding', await mtsBusinessCatalogService.getCallForwarding(accountId, msisdn)));
     await settle(async () => snap('roaming', await mtsBusinessCatalogService.getCurrentSubscriberLocation(accountId, msisdn)));
     await settle(async () => snap('delivery_method', await mtsBusinessBillingService.getDocumentDeliveryMethod(accountId, msisdn)));

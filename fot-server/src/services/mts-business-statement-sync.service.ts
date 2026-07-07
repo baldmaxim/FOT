@@ -30,7 +30,8 @@ export async function countCdrTotal(): Promise<number> {
 
 /**
  * Загрузить выписку по номеру: звонки → mts_business_cdr, сумма расходов →
- * metric_daily.charges_amount (fallback, если CheckCharges недоступен).
+ * metric_daily.charges_amount. Это ПЕРВИЧНЫЙ (и единственный) источник начислений
+ * на номер: CheckCharges.remainedAmount — остаток по ЛС, а не начисление номера.
  */
 export async function syncMsisdnStatement(
   accountId: string,

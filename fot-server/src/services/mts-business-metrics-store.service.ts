@@ -277,18 +277,18 @@ class MtsBusinessMetricsStoreService {
   /** Последние скалярные метрики по одному номеру (баланс/начисления) — для деталей абонента. */
   async getLatestDailyForMsisdn(
     rawMsisdn: string,
-  ): Promise<Map<MtsBusinessDailyMetric, { amount: number; capturedAt: string }>> {
-    const out = new Map<MtsBusinessDailyMetric, { amount: number; capturedAt: string }>();
+  ): Promise<Map<MtsBusinessDailyMetric, { amount: number; capturedAt: string; validFrom: string | null; validTo: string | null }>> {
+    const out = new Map<MtsBusinessDailyMetric, { amount: number; capturedAt: string; validFrom: string | null; validTo: string | null }>();
     const hash = msisdnHash(rawMsisdn);
     if (!hash) return out;
-    const rows = await query<{ metric: MtsBusinessDailyMetric; amount: string; captured_at: string }>(
-      `SELECT DISTINCT ON (metric) metric, amount::text AS amount, captured_at
+    const rows = await query<{ metric: MtsBusinessDailyMetric; amount: string; captured_at: string; valid_from: string | null; valid_to: string | null }>(
+      `SELECT DISTINCT ON (metric) metric, amount::text AS amount, captured_at, valid_from, valid_to
          FROM mts_business_metric_daily
         WHERE scope = 'msisdn' AND msisdn_hash = $1
         ORDER BY metric, captured_at DESC`,
       [hash],
     );
-    for (const r of rows) out.set(r.metric, { amount: Number(r.amount), capturedAt: r.captured_at });
+    for (const r of rows) out.set(r.metric, { amount: Number(r.amount), capturedAt: r.captured_at, validFrom: r.valid_from, validTo: r.valid_to });
     return out;
   }
 

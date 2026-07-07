@@ -387,7 +387,8 @@ class MtsBusinessCdrService {
     return out;
   }
 
-  /** Сумма расходов по выписке — fallback для charges_amount, если CheckCharges недоступен. */
+  /** Сумма расходов по выписке — первичный источник charges_amount на номер
+   *  (CheckCharges.remainedAmount = остаток по ЛС, для начислений не годится). */
   sumStatementCharges(data: unknown): number {
     return this.parseStatementUsages(data).reduce((sum, row) => sum + row.amount, 0);
   }

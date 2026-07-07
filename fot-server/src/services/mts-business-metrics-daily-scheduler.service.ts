@@ -128,22 +128,13 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
 
   // Баланс по каждому номеру НЕ снимаем: у номера нет своего баланса — метод
   // возвращает общий баланс ЛС (уже снят выше). Экономия ~N вызовов на прогон.
+  //
+  // Начисления на номер (charges_amount) здесь тоже НЕ снимаем. Раньше брали
+  // CheckCharges.remainedAmount — но это остаток по лицевому счёту, размноженный
+  // по номерам (сотни тысяч ₽ на каждого, бессмысленная сумма-итог). Правильный
+  // источник — сумма собственной выписки номера (syncMsisdnStatement →
+  // sumStatementCharges), её пишет CDR-планировщик / «Обновить всё».
   const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
-  if (msisdns.length > 0) {
-    try {
-      const charges = await mtsBusinessBillingService.checkChargesBulk(accountId, msisdns);
-      for (const c of charges) {
-        if (c.amount == null) continue;
-        await mtsBusinessMetricsStoreService.upsertDaily({
-          accountId, scope: 'msisdn', msisdn: c.msisdn, metric: 'charges_amount',
-          amount: c.amount, validFrom: c.periodStart, validTo: c.periodEnd,
-        });
-      }
-    } catch (error) {
-      bump(error);
-      logSkip(`account=${accountId} начисления (bulk)`, error);
-    }
-  }
 
   return { accountId, numbers: msisdns.length, failed, unavailable };
 }

@@ -143,12 +143,21 @@ class MtsBusinessSubscriberCardService {
     const billPlanSnap = await mtsBusinessMetricsStoreService.getLatestSnapshotForMsisdn(msisdn, 'bill_plan');
     const tariffName = (billPlanSnap?.payload as IMtsTariff | undefined)?.tariffName ?? null;
 
+    // Начисления берём из сохранённой выписки (metric_daily), а НЕ живым
+    // CheckCharges: его remainedAmount — остаток по лицевому счёту (сотни тысяч ₽),
+    // а не начисление на номер. Правильное значение пишет syncMsisdnStatement.
+    const dailyCharge = (await mtsBusinessMetricsStoreService.getLatestDailyForMsisdn(msisdn)).get('charges_amount');
+    const currentCharges: Section<IMtsCharge | null> = {
+      data: dailyCharge
+        ? { msisdn, amount: dailyCharge.amount, periodStart: dailyCharge.validFrom, periodEnd: dailyCharge.validTo }
+        : null,
+    };
+
     // Живые секции — параллельно, каждая отказоустойчива.
-    const [balance, feeSec, currentCharges, availableServices, connectedBlocks, availableBlocks, forwarding, roaming, deliveryMethod] =
+    const [balance, feeSec, availableServices, connectedBlocks, availableBlocks, forwarding, roaming, deliveryMethod] =
       await Promise.all([
         settleSection(() => mtsBusinessBillingService.checkBalanceByMsisdn(accountId, msisdn)),
         settleSection(() => mtsBusinessBillingService.getTariffRental(accountId, msisdn)),
-        settleSection(async () => (await mtsBusinessBillingService.checkChargesBulk(accountId, [msisdn]))[0] ?? null),
         settleSection(() => mtsBusinessCatalogService.getAvailableServices(accountId, msisdn)),
         settleSection(() => mtsBusinessCatalogService.getConnectedBlocks(accountId, msisdn)),
         settleSection(() => mtsBusinessCatalogService.getAvailableBlocks(accountId, msisdn)),
