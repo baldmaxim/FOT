@@ -8,6 +8,7 @@ import {
   buildUnified1CWorkbookFromTemplate,
   listObjectExportTargets,
   writeTimesheetWorkbookBuffer,
+  ONE_C_ABSENT_LABEL,
   type IOneCExportRow,
   type IUnifiedOneCRow,
 } from './timesheet-excel.service.js';
@@ -144,6 +145,19 @@ const buildRowsForDepartment = (
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
 
+  // Уволенные в единый файл не попадают вовсе (даже отработанные до увольнения дни):
+  // их расчёт в 1С идёт отдельным документом при увольнении.
+  const firedIds = new Set<number>(
+    data.employees.filter(e => e.employment_status === 'fired').map(e => e.id),
+  );
+  const visibleData: IDepartmentTimesheetData = firedIds.size === 0
+    ? data
+    : {
+      ...data,
+      employees: data.employees.filter(e => !firedIds.has(e.id)),
+      objectEntries: data.objectEntries.filter(e => !firedIds.has(e.employee_id)),
+    };
+
   // Сотрудники в режиме «текущая деятельность». Персональное назначение объекта
   // полностью переопределяет отдел: есть персональные объекты → смотрим только их;
   // иначе — назначение его отдела/бригады. Их строки не дробятся по объектам —
@@ -154,22 +168,22 @@ const buildRowsForDepartment = (
       : Boolean(e.org_department_id && currentActivityDeptIds.has(e.org_department_id));
 
   const currentActivityEmpIds = new Set<number>(
-    data.employees.filter(isCurrentActivityEmp).map(e => e.id),
+    visibleData.employees.filter(isCurrentActivityEmp).map(e => e.id),
   );
 
   // Данные для обычной разбивки по объектам — исключаем сотрудников «текущей
   // деятельности» из объектных строк и из статус-fallback.
   const splitData: IDepartmentTimesheetData = currentActivityEmpIds.size === 0
-    ? data
+    ? visibleData
     : {
-      ...data,
-      employees: data.employees.filter(e => !currentActivityEmpIds.has(e.id)),
-      objectEntries: data.objectEntries.filter(e => !currentActivityEmpIds.has(e.employee_id)),
+      ...visibleData,
+      employees: visibleData.employees.filter(e => !currentActivityEmpIds.has(e.id)),
+      objectEntries: visibleData.objectEntries.filter(e => !currentActivityEmpIds.has(e.employee_id)),
     };
 
-  const nameToId = new Map<string, number>(data.employees.map(e => [e.full_name, e.id]));
+  const nameToId = new Map<string, number>(visibleData.employees.map(e => [e.full_name, e.id]));
   const positionByEmpId = new Map<number, string>(
-    data.employees.map(e => [e.id, e.position_id ? (data.posMap.get(e.position_id) ?? '') : '']),
+    visibleData.employees.map(e => [e.id, e.position_id ? (data.posMap.get(e.position_id) ?? '') : '']),
   );
   const positionForEmpId = (empId: number | undefined): string =>
     empId != null ? (positionByEmpId.get(empId) ?? '') : '';
@@ -222,8 +236,8 @@ const buildRowsForDepartment = (
   // Исключаем при экспорте по конкретным объектам — там должны быть только реальные события.
   if (!excludeCurrentActivity && currentActivityEmpIds.size > 0) {
     const currentActivityData: IDepartmentTimesheetData = {
-      ...data,
-      employees: data.employees.filter(e => currentActivityEmpIds.has(e.id)),
+      ...visibleData,
+      employees: visibleData.employees.filter(e => currentActivityEmpIds.has(e.id)),
     };
     for (const employeeRow of buildEmployeeRowsForOneC(currentActivityData)) {
       if (isOneCRowEmpty(employeeRow)) continue;
@@ -284,6 +298,14 @@ export async function buildUnified1CWorkbook(
     if (byFio !== 0) return byFio;
     return a.objectNameSort.localeCompare(b.objectNameSort, 'ru');
   });
+
+  // «Н» (прогул) в единый файл не выводим: клетка остаётся пустой. Чистим ПОСЛЕ
+  // проверок isOneCRowEmpty — сотрудник с одними «Н» сохраняет пустую строку.
+  for (const row of rows) {
+    for (const [day, value] of row.oneCRow.dayValues) {
+      if (value.label === ONE_C_ABSENT_LABEL) row.oneCRow.dayValues.delete(day);
+    }
+  }
 
   return buildUnified1CWorkbookFromTemplate('Табель 1С', rows);
 }

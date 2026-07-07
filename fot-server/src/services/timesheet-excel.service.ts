@@ -12,6 +12,9 @@ const STATUS_LABELS: Record<string, string> = {
   dayoff: 'В', remote: 'УУ', unpaid: 'С', educational_leave: 'У', manual: '',
 };
 
+// «Н» (прогул) — единый файл для 1С выводит вместо него пустую клетку.
+export const ONE_C_ABSENT_LABEL = STATUS_LABELS.absent;
+
 const thinBorder: Partial<ExcelJS.Borders> = {
   top: { style: 'thin' }, left: { style: 'thin' },
   bottom: { style: 'thin' }, right: { style: 'thin' },

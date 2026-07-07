@@ -27,6 +27,8 @@ export interface IExportEmployee {
   position_id: string | null;
   org_department_id: string | null;
   sigur_employee_id: number | null;
+  // 'fired' → уволенный: единый файл для 1С исключает его целиком.
+  employment_status?: string | null;
 }
 
 export interface IDepartmentTimesheetData {
@@ -217,6 +219,7 @@ export async function fetchTimesheetDataForDepartment(
     position_id: (e.position_id as string | null),
     org_department_id: (e.org_department_id as string | null),
     sigur_employee_id: (e.sigur_employee_id as number | null),
+    employment_status: (e.employment_status as string | null),
   }));
   // Дата выхода (cutoff) ТОЛЬКО для уволенных: дни >= cutoff не считаются в Excel
   // (норма/факт/ячейка), как в онлайн-табеле. Активных не трогаем.
@@ -402,6 +405,7 @@ export async function fetchTimesheetDataForEmployees(
     position_id: (e.position_id as string | null),
     org_department_id: (e.org_department_id as string | null),
     sigur_employee_id: (e.sigur_employee_id as number | null),
+    employment_status: (e.employment_status as string | null),
   }));
   const cutoffByEmployeeId = buildFiredCutoffMap(employees, startDate);
 
