@@ -114,7 +114,8 @@ async function runDailyCycle(ymd: string, hourMsk: number): Promise<void> {
           await mergeSigurRuntimeState({
             key: DAILY_STATE_KEY,
             meta: summary.ok
-              ? { lastSuccessAt: new Date().toISOString(), lastResult: summary.result }
+              // lastError чистим: старый сбой не должен всплывать рядом со свежим успехом.
+              ? { lastSuccessAt: new Date().toISOString(), lastError: null, lastResult: summary.result }
               : { lastFailureAt: new Date().toISOString(), lastError: summary.error ?? 'unknown', lastResult: summary.result },
           }).catch(err => console.error('[mts-biz-refresh-all-daily] merge result state error:', (err as Error).message));
           console.log(`[mts-biz-refresh-all-daily] прогон завершён: ok=${summary.ok} steps=${JSON.stringify(summary.result)}`);

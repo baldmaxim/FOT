@@ -369,6 +369,7 @@ class MtsBusinessPersonalDataService extends MtsBusinessServiceBase {
       data: buildChangePersonalDataBody(msisdn, data, messageId),
       headers: { 'x-soap-action': SOAP_ACTION_CHANGE, 'X-MTS-MSISDN': msisdn },
       suppressErrorBodyLog: true,
+      retryOn500: false,
     });
     return { messageId };
   }
@@ -383,6 +384,7 @@ class MtsBusinessPersonalDataService extends MtsBusinessServiceBase {
       data: buildChangePersonalDataBody(msisdn, null, messageId),
       headers: { 'x-soap-action': SOAP_ACTION_CHANGE, 'X-MTS-MSISDN': msisdn },
       suppressErrorBodyLog: true,
+      retryOn500: false,
     });
     return { messageId };
   }

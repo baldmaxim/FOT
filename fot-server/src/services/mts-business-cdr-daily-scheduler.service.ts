@@ -2,12 +2,12 @@ import * as Sentry from '@sentry/node';
 import { env } from '../config/env.js';
 import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
-import { MtsBusinessApiError, isFeatureUnavailable } from './mts-business-base.service.js';
 import {
   countCdrByAccount,
   countCdrTotal,
-  syncMsisdnStatement,
+  syncMsisdnsBatch,
   verifyCdrStore,
+  type ISyncMsisdnsBatchResult,
 } from './mts-business-statement-sync.service.js';
 import {
   tryAcquireSigurRuntimeLease,
@@ -76,33 +76,15 @@ function addDaysYmd(ymd: string, days: number): string {
   return `${yy}-${mm}-${dd}`;
 }
 
-async function syncAccount(accountId: string, dateFrom: string, dateTo: string): Promise<{ numbers: number; inserted: number; failed: number; unavailable: number }> {
+// Пул как в шаге детализации refresh-all: упираемся в rate-gate, а не в RTT.
+const SYNC_POOL = 3;
+
+async function syncAccount(accountId: string, dateFrom: string, dateTo: string): Promise<ISyncMsisdnsBatchResult> {
   const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
-  let inserted = 0;
-  let failed = 0;
-  let unavailable = 0;
   const dbTotalBefore = await countCdrByAccount(accountId);
-
-  for (const msisdn of msisdns) {
-    try {
-      const res = await syncMsisdnStatement(accountId, msisdn, dateFrom, dateTo);
-      inserted += res.callsInserted;
-    } catch (error) {
-      if (isFeatureUnavailable(error)) {
-        unavailable++;
-      } else {
-        failed++;
-      }
-      if (error instanceof MtsBusinessApiError) {
-        console.error(`[mts-biz-cdr-daily] account=${accountId} номер — ошибка http=${error.status} code=${error.code ?? '-'}`);
-      } else {
-        console.error(`[mts-biz-cdr-daily] account=${accountId} номер — ошибка:`, error instanceof Error ? error.message : 'unknown');
-      }
-    }
-  }
-
-  await verifyCdrStore(accountId, inserted, dbTotalBefore);
-  return { numbers: msisdns.length, inserted, failed, unavailable };
+  const res = await syncMsisdnsBatch(accountId, msisdns, dateFrom, dateTo, SYNC_POOL);
+  await verifyCdrStore(accountId, res.inserted, dbTotalBefore);
+  return res;
 }
 
 async function runDailySyncCycle(ymd: string): Promise<void> {
@@ -140,13 +122,23 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
             let totalInserted = 0;
             let totalFailed = 0;
             let totalUnavailable = 0;
+            let totalNoAccess = 0;
+            let totalTransient = 0;
+            let totalRetriedOk = 0;
+            const totalBreakdown: Record<string, number> = {};
             for (const account of accounts) {
               const res = await syncAccount(account.id, dateFrom, dateTo);
               totalNumbers += res.numbers;
               totalInserted += res.inserted;
               totalFailed += res.failed;
               totalUnavailable += res.unavailable;
-              console.log(`[mts-biz-cdr-daily] account="${account.label}" numbers=${res.numbers} inserted=${res.inserted} failed=${res.failed} unavailable=${res.unavailable}`);
+              totalNoAccess += res.noAccess;
+              totalTransient += res.transient;
+              totalRetriedOk += res.retriedOk;
+              for (const [bucket, count] of Object.entries(res.errorBreakdown)) {
+                totalBreakdown[bucket] = (totalBreakdown[bucket] ?? 0) + count;
+              }
+              console.log(`[mts-biz-cdr-daily] account="${account.label}" numbers=${res.numbers} inserted=${res.inserted} failed=${res.failed} unavailable=${res.unavailable} noAccess=${res.noAccess} transient=${res.transient} retriedOk=${res.retriedOk}`);
             }
 
             lastRunYmdMsk = ymd;
@@ -157,7 +149,20 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
                 lastSuccessAt: new Date().toISOString(),
                 lastStartedAt: startedAtIso,
                 lastWindow: { dateFrom, dateTo },
-                lastResult: { accounts: accounts.length, numbers: totalNumbers, inserted: totalInserted, failed: totalFailed, unavailable: totalUnavailable },
+                // lastError чистим: значение прошлых сбоев не должно всплывать
+                // в панели рядом со свежим успешным прогоном.
+                lastError: null,
+                lastResult: {
+                  accounts: accounts.length,
+                  numbers: totalNumbers,
+                  inserted: totalInserted,
+                  failed: totalFailed,
+                  unavailable: totalUnavailable,
+                  noAccess: totalNoAccess,
+                  transient: totalTransient,
+                  retriedOk: totalRetriedOk,
+                  errorBreakdown: totalBreakdown,
+                },
               },
             }).catch(err => console.error('[mts-biz-cdr-daily] mergeSigurRuntimeState error:', (err as Error).message));
           } catch (error) {

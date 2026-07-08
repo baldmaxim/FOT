@@ -15,8 +15,22 @@ import {
   MtsBusinessApiError,
   isFeatureUnavailable,
   isTransientMtsError,
+  isRetryableMtsAxiosError,
   mtsBusinessApiErrorFromAxios,
+  mtsErrorBucket,
+  mtsPermanentErrorKind,
+  mtsRetryDelayMs,
+  formatMtsErrorBreakdown,
 } from './mts-business-base.service.js';
+
+const axiosErrorWithStatus = (status: number, headers: Record<string, string> = {}, data: unknown = {}): AxiosError =>
+  new AxiosError('Request failed', 'ERR_BAD_RESPONSE', undefined, undefined, {
+    status,
+    statusText: 'x',
+    headers,
+    config: { headers: new AxiosHeaders() },
+    data,
+  });
 
 describe('МТС Бизнес: разбор ошибок апстрима', () => {
   it('извлекает errorCode из тела ответа', () => {
@@ -46,5 +60,71 @@ describe('МТС Бизнес: разбор ошибок апстрима', () =
     expect(isTransientMtsError(new MtsBusinessApiError('нет в тарифе', 403, '1010'))).toBe(false);
     expect(isTransientMtsError(new MtsBusinessApiError('другое', 421, '9999'))).toBe(false);
     expect(isFeatureUnavailable(new MtsBusinessApiError('нет в тарифе', 403, '1010'))).toBe(true);
+  });
+});
+
+describe('МТС Бизнес: решение о ретрае', () => {
+  it('500 ретраится только при retryOn500 (read-only вызовы)', () => {
+    const err = axiosErrorWithStatus(500);
+    expect(isRetryableMtsAxiosError(err, true)).toBe(true);
+    expect(isRetryableMtsAxiosError(err, false)).toBe(false);
+  });
+
+  it('429/502/503/504 и сетевые обрывы ретраятся независимо от retryOn500', () => {
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(429), false)).toBe(true);
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(503), false)).toBe(true);
+    const netErr = new AxiosError('timeout', 'ECONNABORTED');
+    expect(isRetryableMtsAxiosError(netErr, false)).toBe(true);
+  });
+
+  it('421/3003 (Foris) ретраится, 400 и не-Axios — нет', () => {
+    const foris = axiosErrorWithStatus(421, {}, { errorCode: '3003' });
+    expect(isRetryableMtsAxiosError(foris, false)).toBe(true);
+    expect(isRetryableMtsAxiosError(axiosErrorWithStatus(400), true)).toBe(false);
+    expect(isRetryableMtsAxiosError(new Error('обычная ошибка'), true)).toBe(false);
+  });
+});
+
+describe('МТС Бизнес: пауза перед ретраем', () => {
+  it('429 без Retry-After — 20с (окно лимита 60с)', () => {
+    expect(mtsRetryDelayMs(axiosErrorWithStatus(429), 0)).toBe(20_000);
+  });
+
+  it('429 с Retry-After — берём заголовок с потолком 60с', () => {
+    expect(mtsRetryDelayMs(axiosErrorWithStatus(429, { 'retry-after': '5' }), 0)).toBe(5_000);
+    expect(mtsRetryDelayMs(axiosErrorWithStatus(429, { 'retry-after': '999' }), 0)).toBe(60_000);
+  });
+
+  it('прочие ошибки — экспонента 0.5с·2^attempt', () => {
+    expect(mtsRetryDelayMs(axiosErrorWithStatus(503), 0)).toBe(500);
+    expect(mtsRetryDelayMs(axiosErrorWithStatus(503), 2)).toBe(2_000);
+  });
+});
+
+describe('МТС Бизнес: стабильные состояния номера (не сбой прогона)', () => {
+  it('401/1014 → no_access, 422/2005 → no_binding, 404 → no_data', () => {
+    expect(mtsPermanentErrorKind(new MtsBusinessApiError('unauthorized', 401, '1014'))).toBe('no_access');
+    expect(mtsPermanentErrorKind(new MtsBusinessApiError('нет связки', 422, '2005'))).toBe('no_binding');
+    expect(mtsPermanentErrorKind(new MtsBusinessApiError('not found', 404))).toBe('no_data');
+  });
+
+  it('прочие 401/422 и не-API ошибки — null (обычная обработка)', () => {
+    expect(mtsPermanentErrorKind(new MtsBusinessApiError('токен протух', 401))).toBeNull();
+    expect(mtsPermanentErrorKind(new MtsBusinessApiError('validation', 422, '9999'))).toBeNull();
+    expect(mtsPermanentErrorKind(new Error('ошибка БД'))).toBeNull();
+  });
+});
+
+describe('МТС Бизнес: сводка классов ошибок', () => {
+  it('mtsErrorBucket: http-статус с кодом и без, сеть, не-API', () => {
+    expect(mtsErrorBucket(new MtsBusinessApiError('EJB', 500, '9999'))).toBe('http 500/9999');
+    expect(mtsErrorBucket(new MtsBusinessApiError('bad gateway', 502))).toBe('http 502');
+    expect(mtsErrorBucket(new MtsBusinessApiError('timeout', 0))).toBe('сеть/таймаут');
+    expect(mtsErrorBucket(new Error('ошибка БД'))).toBe('другое');
+  });
+
+  it('formatMtsErrorBreakdown: по убыванию частоты', () => {
+    expect(formatMtsErrorBreakdown({ 'http 500': 2, 'сеть/таймаут': 5 })).toBe('сеть/таймаут×5, http 500×2');
+    expect(formatMtsErrorBreakdown({})).toBe('');
   });
 });

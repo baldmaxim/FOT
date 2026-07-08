@@ -4,7 +4,13 @@ import { mtsBusinessMetricsStoreService, type MtsBusinessSnapshotMetric } from '
 import { mtsBusinessPersonalDataService } from './mts-business-personal-data.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
-import { isFeatureUnavailable, isTransientMtsError, MtsBusinessApiError } from './mts-business-base.service.js';
+import {
+  isFeatureUnavailable,
+  isTransientMtsError,
+  MtsBusinessApiError,
+  mtsErrorBucket,
+  mtsPermanentErrorKind,
+} from './mts-business-base.service.js';
 
 // Полная выгрузка профиля абонента (как probe-mts-number-all.ts, но в БД).
 // Два режима — бюджет вызовов критичен (rate-limit 60/300 в мин на аккаунт,
@@ -22,6 +28,8 @@ export interface ISubscriberSyncSectionError {
   status: number;
   code?: string;
   kind: 'transient' | 'failed';
+  /** Класс ошибки для сводок (mtsErrorBucket): «http 500/9999», «сеть/таймаут», «другое». */
+  bucket: string;
 }
 
 export interface ISubscriberSyncResult {
@@ -31,6 +39,10 @@ export interface ISubscriberSyncResult {
   unavailable: number; // 403/1010 — не подключено в тарифе МТС
   failed: number;
   transient: number; // 421/3003 — Foris временно недоступен
+  /** Секций со стабильным состоянием номера: 401/1014, 422/2005, 404. */
+  noAccess: number;
+  noBinding: number;
+  noData: number;
   errors: ISubscriberSyncSectionError[];
 }
 
@@ -38,6 +50,8 @@ export interface ISubscriberSyncOptions {
   mode?: 'bulk' | 'full';
   /** Пропустить PersonalDataInfo (статус свежий — жалеем rate-limit). */
   skipPd?: boolean;
+  /** Выполнить только эти секции (повтор упавших — не жжём лимит на успешных). */
+  onlySections?: ReadonlySet<string>;
 }
 
 const isoDay = (offsetDays: number): string => {
@@ -66,26 +80,35 @@ export async function syncSubscriberFull(
 ): Promise<ISubscriberSyncResult> {
   const mode = options.mode ?? 'full';
   const result: ISubscriberSyncResult = {
-    msisdn, sections: 0, stored: 0, unavailable: 0, failed: 0, transient: 0, errors: [],
+    msisdn, sections: 0, stored: 0, unavailable: 0, failed: 0, transient: 0,
+    noAccess: 0, noBinding: 0, noData: 0, errors: [],
   };
   const settle = async (section: string, fn: () => Promise<void>): Promise<void> => {
+    if (options.onlySections && !options.onlySections.has(section)) return;
     result.sections++;
     try {
       await fn();
       result.stored++;
     } catch (e) {
       const apiErr = e instanceof MtsBusinessApiError ? e : null;
+      const permanent = mtsPermanentErrorKind(e);
       if (isFeatureUnavailable(e)) {
         result.unavailable++;
+      } else if (permanent === 'no_access') {
+        result.noAccess++;
+      } else if (permanent === 'no_binding') {
+        result.noBinding++;
+      } else if (permanent === 'no_data') {
+        result.noData++;
       } else if (isTransientMtsError(e)) {
         result.transient++;
-        result.errors.push({ section, status: apiErr!.status, code: apiErr!.code, kind: 'transient' });
+        result.errors.push({ section, status: apiErr!.status, code: apiErr!.code, kind: 'transient', bucket: mtsErrorBucket(e) });
         console.warn(
           `[mts-biz-subscribers] section=${section} msisdn=${msisdn} http=${apiErr!.status} code=${apiErr!.code ?? '-'} transient`,
         );
       } else {
         result.failed++;
-        result.errors.push({ section, status: apiErr?.status ?? 0, code: apiErr?.code, kind: 'failed' });
+        result.errors.push({ section, status: apiErr?.status ?? 0, code: apiErr?.code, kind: 'failed', bucket: mtsErrorBucket(e) });
         console.warn(
           `[mts-biz-subscribers] section=${section} msisdn=${msisdn} http=${apiErr?.status ?? 0} code=${apiErr?.code ?? '-'} failed`,
         );
@@ -131,7 +154,18 @@ export interface IAccountSubscribersSyncResult {
   stored: number;
   unavailable: number;
   failed: number;
+  transient: number; // секций 421/3003 даже после повтора
   pdSkipped: number; // персданные свежие — вызов сэкономлен
+  retriedNumbers: number; // номеров ушло на второй проход
+  retriedOk: number; // из них полностью добрано повтором
+  /** НОМЕРОВ со стабильным состоянием (не сбой прогона): вне доступа
+   *  портального пользователя (401/1014), без связки региона/ТП (422/2005),
+   *  без заведённых персданных (404). */
+  noAccessNumbers: number;
+  noBindingNumbers: number;
+  noPdNumbers: number;
+  /** Класс ошибки → количество, только окончательно упавшие секции (kind=failed). */
+  errorBreakdown: Record<string, number>;
 }
 
 const PD_FRESH_HOURS = 24;
@@ -140,23 +174,64 @@ const SYNC_POOL = 3;
 /**
  * Bulk-синк всех известных номеров аккаунта (шаг «Полные профили абонентов»).
  * Пул из 3 воркеров: упираемся в rate-gate аккаунта, а не в RTT последовательных
- * вызовов; персданные со свежим статусом (<24ч) пропускаются.
+ * вызовов; персданные со свежим статусом (<24ч) пропускаются. По номерам с
+ * упавшими секциями — ВТОРОЙ проход (последовательно, только упавшие секции):
+ * ночные 500/таймауты МТС обычно добираются повтором. 403/1010 не повторяем.
  */
 export async function syncAccountSubscribers(accountId: string): Promise<IAccountSubscribersSyncResult> {
   const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
   const freshPd = await mtsBusinessMappingService.getFreshPdHashes(PD_FRESH_HOURS);
-  const out: IAccountSubscribersSyncResult = { accountId, numbers: msisdns.length, stored: 0, unavailable: 0, failed: 0, pdSkipped: 0 };
+  const out: IAccountSubscribersSyncResult = {
+    accountId, numbers: msisdns.length, stored: 0, unavailable: 0, failed: 0, transient: 0,
+    pdSkipped: 0, retriedNumbers: 0, retriedOk: 0,
+    noAccessNumbers: 0, noBindingNumbers: 0, noPdNumbers: 0, errorBreakdown: {},
+  };
 
+  const results = new Map<string, ISubscriberSyncResult>();
   await runPool(msisdns, SYNC_POOL, async msisdn => {
     const hash = msisdnHash(msisdn);
     const skipPd = hash != null && freshPd.has(hash);
     if (skipPd) out.pdSkipped++;
-    const r = await syncSubscriberFull(accountId, msisdn, { mode: 'bulk', skipPd });
+    results.set(msisdn, await syncSubscriberFull(accountId, msisdn, { mode: 'bulk', skipPd }));
+  });
+
+  for (const [msisdn, first] of results) {
+    const retrySections = new Set(first.errors.map(e => e.section));
+    if (retrySections.size === 0) continue;
+    out.retriedNumbers++;
+    const retry = await syncSubscriberFull(accountId, msisdn, {
+      mode: 'bulk',
+      skipPd: !retrySections.has('personal_data'),
+      onlySections: retrySections,
+    });
+    // Итог номера: успехи обоих проходов, ошибки — только со второго
+    // (повторялись ровно упавшие секции, их прежний исход перекрыт).
+    first.stored += retry.stored;
+    first.unavailable += retry.unavailable;
+    first.failed = retry.failed;
+    first.transient = retry.transient;
+    first.errors = retry.errors;
+    if (retry.failed === 0 && retry.transient === 0) out.retriedOk++;
+  }
+
+  for (const r of results.values()) {
     out.stored += r.stored;
     out.unavailable += r.unavailable;
     out.failed += r.failed;
-  });
+    out.transient += r.transient;
+    if (r.noAccess > 0) out.noAccessNumbers++;
+    if (r.noBinding > 0) out.noBindingNumbers++;
+    if (r.noData > 0) out.noPdNumbers++;
+    for (const e of r.errors) {
+      if (e.kind !== 'failed') continue;
+      out.errorBreakdown[e.bucket] = (out.errorBreakdown[e.bucket] ?? 0) + 1;
+    }
+  }
 
-  console.log(`[mts-biz-subscribers] account=${accountId} numbers=${out.numbers} stored=${out.stored} unavailable=${out.unavailable} failed=${out.failed} pdSkipped=${out.pdSkipped}`);
+  console.log(
+    `[mts-biz-subscribers] account=${accountId} numbers=${out.numbers} stored=${out.stored} unavailable=${out.unavailable}`
+    + ` failed=${out.failed} transient=${out.transient} noAccess=${out.noAccessNumbers} noBinding=${out.noBindingNumbers}`
+    + ` noPd=${out.noPdNumbers} retried=${out.retriedNumbers} retriedOk=${out.retriedOk} pdSkipped=${out.pdSkipped}`,
+  );
   return out;
 }

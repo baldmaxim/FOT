@@ -3,15 +3,15 @@ import * as Sentry from '@sentry/node';
 import { mtsBusinessAccountsService } from './mts-business-accounts.service.js';
 import { mtsBusinessCatalogService } from './mts-business-catalog.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
-import { isFeatureUnavailable } from './mts-business-base.service.js';
+import { isFeatureUnavailable, formatMtsErrorBreakdown } from './mts-business-base.service.js';
 import {
   refreshHierarchy,
   refreshFioForNumbers,
   refreshTariffAndServices,
   refreshAccountMetrics,
 } from './mts-business-metrics-daily-scheduler.service.js';
-import { syncAccountSubscribers, runPool } from './mts-business-subscriber-sync.service.js';
-import { syncMsisdnStatement } from './mts-business-statement-sync.service.js';
+import { syncAccountSubscribers } from './mts-business-subscriber-sync.service.js';
+import { syncMsisdnsBatch } from './mts-business-statement-sync.service.js';
 import {
   tryAcquireSigurRuntimeLease,
   releaseSigurRuntimeLease,
@@ -200,31 +200,26 @@ async function runStep(
       if (msisdns.length === 0) {
         return { status: 'ok', count: 0, message: 'нет известных номеров — сначала обновите структуру' };
       }
-      let failed = 0;
-      let unavailable = 0;
-      let inserted = 0;
-      // syncMsisdnStatement пишет и звонки, и начисления (charges_amount с
+      // syncMsisdnsBatch пишет и звонки, и начисления (charges_amount с
       // 1-го числа месяца) — «Обновить всё» освежает колонку «Начисления».
-      await runPool(msisdns, STEP_POOL, async msisdn => {
-        try {
-          const res = await syncMsisdnStatement(accountId, msisdn, window.dateFrom, window.dateTo);
-          inserted += res.callsInserted;
-        } catch (error) {
-          if (isFeatureUnavailable(error)) unavailable++;
-          else failed++;
-        }
-      });
+      // Упавшие номера добираются вторым проходом внутри helper'а.
+      const res = await syncMsisdnsBatch(accountId, msisdns, window.dateFrom, window.dateTo, STEP_POOL);
       const status = stepStatusFromCounters({
-        failed, unavailable, hadAnySuccess: unavailable + failed < msisdns.length,
+        failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.unavailable + res.failed < msisdns.length,
       });
+      const breakdown = formatMtsErrorBreakdown(res.errorBreakdown);
+      const notes = [
+        res.noAccess ? `нет доступа: ${res.noAccess}` : null,
+        res.transient ? `МТС временно недоступен: ${res.transient}` : null,
+      ].filter(Boolean).join(', ');
       return {
         status,
-        count: inserted,
+        count: res.inserted,
         message: status === 'unavailable'
           ? UNAVAILABLE_MESSAGE
           : status === 'error'
-            ? `${failed} из ${msisdns.length} номеров с ошибкой`
-            : `новых звонков: ${inserted}`,
+            ? `${res.failed} из ${msisdns.length} номеров с ошибкой${breakdown ? ` (${breakdown})` : ''}${notes ? `, ${notes}` : ''}`
+            : `новых звонков: ${res.inserted}${notes ? `, ${notes}` : ''}`,
       };
     }
     case 'catalog': {
@@ -254,14 +249,23 @@ async function runStep(
       const status = stepStatusFromCounters({
         failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.stored > 0,
       });
+      const breakdown = formatMtsErrorBreakdown(res.errorBreakdown);
+      // Стабильные состояния номеров — информация для админа, не сбой прогона.
+      const notes = [
+        res.noAccessNumbers ? `нет доступа: ${res.noAccessNumbers}` : null,
+        res.noBindingNumbers ? `без связки ТП: ${res.noBindingNumbers}` : null,
+        res.noPdNumbers ? `без персданных: ${res.noPdNumbers}` : null,
+        res.unavailable ? `не в тарифе: ${res.unavailable}` : null,
+        res.transient ? `МТС временно недоступен: ${res.transient}` : null,
+      ].filter(Boolean).join(', ');
       return {
         status,
         count: res.numbers,
         message: status === 'unavailable'
           ? UNAVAILABLE_MESSAGE
           : status === 'error'
-            ? `${res.failed} секций с ошибкой`
-            : `секций сохранено: ${res.stored}${res.pdSkipped ? `, персданные свежие: ${res.pdSkipped}` : ''}${res.unavailable ? `, не в тарифе: ${res.unavailable}` : ''}`,
+            ? `${res.failed} секций с ошибкой${breakdown ? ` (${breakdown})` : ''}${notes ? `, ${notes}` : ''}`
+            : `секций сохранено: ${res.stored}${res.pdSkipped ? `, персданные свежие: ${res.pdSkipped}` : ''}${notes ? `, ${notes}` : ''}`,
       };
     }
   }

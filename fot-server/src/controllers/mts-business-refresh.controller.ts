@@ -36,7 +36,7 @@ interface ISchedulerStatusRow {
   id: string;
   label: string;
   lastRunAt: string | null;
-  lastStatus: 'ok' | 'error' | null;
+  lastStatus: 'ok' | 'partial' | 'error' | null;
   lastMessage: string | null;
   lastResult: Record<string, unknown> | null;
 }
@@ -46,7 +46,11 @@ const metaString = (meta: Record<string, unknown> | undefined, key: string): str
   return typeof v === 'string' ? v : null;
 };
 
-/** Сводка последнего прогона планировщика из sigur_runtime_state.meta. */
+/**
+ * Сводка последнего прогона планировщика из sigur_runtime_state.meta.
+ * Прогон, завершившийся с per-номерными ошибками (lastResult.failed > 0),
+ * помечается 'partial' — раньше он выглядел «ок» и скрывал ежедневные сбои.
+ */
 const schedulerRowFromState = (
   id: string,
   label: string,
@@ -58,13 +62,20 @@ const schedulerRowFromState = (
   const failedAfterSuccess = lastFailureAt != null
     && (lastSuccessAt == null || Date.parse(lastFailureAt) > Date.parse(lastSuccessAt));
   const result = meta?.[resultKey];
+  const lastResult = result && typeof result === 'object' ? (result as Record<string, unknown>) : null;
+  const failedCount = typeof lastResult?.failed === 'number' ? lastResult.failed : 0;
+  const partial = !failedAfterSuccess && lastSuccessAt != null && failedCount > 0;
   return {
     id,
     label,
     lastRunAt: failedAfterSuccess ? lastFailureAt : lastSuccessAt,
-    lastStatus: lastSuccessAt == null && lastFailureAt == null ? null : failedAfterSuccess ? 'error' : 'ok',
-    lastMessage: failedAfterSuccess ? metaString(meta, 'lastError') : null,
-    lastResult: result && typeof result === 'object' ? (result as Record<string, unknown>) : null,
+    lastStatus: lastSuccessAt == null && lastFailureAt == null
+      ? null
+      : failedAfterSuccess ? 'error' : partial ? 'partial' : 'ok',
+    lastMessage: failedAfterSuccess
+      ? metaString(meta, 'lastError')
+      : partial ? `ошибок: ${failedCount}` : null,
+    lastResult,
   };
 };
 

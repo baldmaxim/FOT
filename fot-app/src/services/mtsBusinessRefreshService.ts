@@ -34,7 +34,8 @@ export interface IMtsSchedulerStatusRow {
   id: string;
   label: string;
   lastRunAt: string | null;
-  lastStatus: 'ok' | 'error' | null;
+  /** 'partial' — прогон завершился, но часть номеров/секций с ошибкой. */
+  lastStatus: 'ok' | 'partial' | 'error' | null;
   lastMessage: string | null;
   lastResult: Record<string, unknown> | null;
 }

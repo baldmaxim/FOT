@@ -356,6 +356,8 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
                 lastWeeklyRunYmdMsk,
                 lastSuccessAt: new Date().toISOString(),
                 lastStartedAt: startedAtIso,
+                // lastError чистим: старый сбой не должен всплывать рядом со свежим успехом.
+                lastError: null,
                 lastResult: { accounts: accounts.length, numbers: totalNumbers, failed: totalFailed },
                 ...(dueWeekly ? { lastCatalogResult: { accounts: accounts.length, numbers: totalCatalogNumbers, discovered: totalDiscovered, failed: totalCatalogFailed } } : {}),
               },

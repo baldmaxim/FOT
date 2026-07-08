@@ -79,14 +79,19 @@ export const SyncSection: FC = () => {
                 {row.lastStatus === 'error' && row.lastMessage && (
                   <span className={styles.err} style={{ marginLeft: 6 }}>{row.lastMessage}</span>
                 )}
+                {row.lastStatus === 'partial' && row.lastMessage && (
+                  <span className={styles.warn} style={{ marginLeft: 6 }}>{row.lastMessage}</span>
+                )}
               </span>
               <span className={styles.schedMeta}>
                 {row.lastStatus == null
                   ? 'ещё не выполнялся'
                   : <>
                       {fmtLast(row.lastRunAt)}{' '}
-                      <span className={`${styles.badge} ${row.lastStatus === 'ok' ? styles.badgeOk : styles.badgeErr}`}>
-                        {row.lastStatus === 'ok' ? 'ок' : 'ошибка'}
+                      <span className={`${styles.badge} ${
+                        row.lastStatus === 'ok' ? styles.badgeOk : row.lastStatus === 'partial' ? styles.badgeWait : styles.badgeErr
+                      }`}>
+                        {row.lastStatus === 'ok' ? 'ок' : row.lastStatus === 'partial' ? 'частично' : 'ошибка'}
                       </span>
                     </>}
               </span>
