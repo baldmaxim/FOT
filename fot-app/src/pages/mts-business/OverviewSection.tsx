@@ -18,7 +18,6 @@ import {
 import { useMtsBusinessActions } from '../../hooks/useMtsBusinessActionsData';
 import { useMtsBusinessRefreshAllStatus } from '../../hooks/useMtsBusinessRefreshAll';
 import type { MtsBusinessDailyMetric } from '../../services/mtsBusinessBillingService';
-import { RefreshAllPanel } from './overview/RefreshAllPanel';
 import { UnavailableNotice } from './common/UnavailableNotice';
 import { toISODate, fmtDur, fmtLast, fmtMoney, fmtPackage, ACTION_TYPE_LABELS, lastMonths, monthRange } from './mtsBusinessFormat';
 import styles from './OverviewSection.module.css';
@@ -245,8 +244,6 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
           <input className={styles.dateInput} type="date" value={callsTo} onChange={e => setCallsTo(e.target.value)} />
         </span>
       </div>
-
-      <RefreshAllPanel />
 
       <section className={styles.card}>
         <div className={styles.cardTitleText} style={{ marginBottom: 12 }}>По лицевым счетам</div>

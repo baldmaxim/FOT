@@ -1,4 +1,4 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, useEffect, useRef, useState } from 'react';
 import {
   useMtsBusinessRefreshAllStatus,
   useStartMtsBusinessRefreshAll,
@@ -9,18 +9,6 @@ import type { IMtsRefreshStep } from '../../../services/mtsBusinessRefreshServic
 import { UnavailableNotice } from '../common/UnavailableNotice';
 import { errText, fmtLast } from '../mtsBusinessFormat';
 import s from './RefreshAllPanel.module.css';
-
-// Персист «Скрыть»: startedAt скрытого прогона в localStorage, чтобы карточка
-// не возвращалась после рефреша/деплоя (новый прогон = новый startedAt → снова видна).
-const DISMISSED_KEY = 'mts-refresh-all-dismissed-started-at';
-
-const readDismissed = (): string | null => {
-  try { return localStorage.getItem(DISMISSED_KEY); } catch { return null; }
-};
-
-const writeDismissed = (startedAt: string): void => {
-  try { localStorage.setItem(DISMISSED_KEY, startedAt); } catch { /* приватный режим/недоступно */ }
-};
 
 const StepIcon: FC<{ status: IMtsRefreshStep['status'] }> = ({ status }) => {
   switch (status) {
@@ -36,7 +24,7 @@ const StepIcon: FC<{ status: IMtsRefreshStep['status'] }> = ({ status }) => {
  * Кнопка «Обновить» (строка вкладок страницы): запуск фонового полного
  * обновления. Без accountId — все активные ЛС; с accountId (фильтр ЛС на
  * «Основном») — точечный прогон одного ЛС, подпись показывает какого.
- * Прогресс — в RefreshAllPanel на «Основном» (общий react-query кэш статуса).
+ * Дата и статистика последнего прогона — в поповере значка «i» рядом.
  */
 export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
   const status = useMtsBusinessRefreshAllStatus();
@@ -60,6 +48,7 @@ export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
   return (
     <span className={s.controls}>
       {startError && <span className={s.err}>{startError}</span>}
+      <RefreshAllInfo />
       <button className={s.btn} onClick={() => { void onStart(); }} disabled={running || start.isPending}>
         {running || start.isPending
           ? <><span className={s.spinnerLight} /> Обновление…</>
@@ -70,66 +59,84 @@ export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
 };
 
 /**
- * Панель прогресса фонового полного обновления. Состояние живёт на бэке
- * (переживает уход со страницы/рестарт): polling раз в 3с пока идёт прогон;
- * по завершении инвалидируются все запросы модуля.
+ * Значок «i» рядом с кнопкой: поповер с последним/текущим прогоном «Обновить
+ * всё» — когда запущен/завершён, окно детализации и статус каждого шага.
+ * Пока прогон идёт, статус обновляется живьём (общий polling-кэш раз в 3с).
  */
-export const RefreshAllPanel: FC = () => {
+const RefreshAllInfo: FC = () => {
   const status = useMtsBusinessRefreshAllStatus();
-  const [dismissedStartedAt, setDismissedStartedAt] = useState<string | null>(() => readDismissed());
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+
+  // Закрытие по клику вне поповера и по Esc (это поповер, не модалка с overlay).
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent): void => {
+      if (wrapRef.current && e.target instanceof Node && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
 
   const data = status.data;
   const running = data?.running === true;
-
-  const multiAccount = useMemo(
-    () => new Set((data?.steps ?? []).map(st => st.accountId)).size > 1,
-    [data?.steps],
-  );
-
-  const showPanel = data != null
-    && data.startedAt != null
-    && (running || (data.finishedAt != null && dismissedStartedAt !== data.startedAt));
+  const hasRun = data?.startedAt != null;
+  const multiAccount = new Set((data?.steps ?? []).map(st => st.accountId)).size > 1;
 
   return (
-    <div className={s.wrap}>
-      {showPanel && data && (
-        <div className={s.panel}>
-          <div className={s.panelHead}>
-            <span className={s.panelTitle}>
-              {running ? 'Идёт полное обновление из МТС' : 'Последнее обновление из МТС'}
-            </span>
-            <span className={s.panelMeta}>
-              {data.window ? `детализация ${data.window.dateFrom} — ${data.window.dateTo} · ` : ''}
-              запущено {fmtLast(data.startedAt)}
-            </span>
-            {!running && (
-              <button
-                className={s.hideBtn}
-                onClick={() => {
-                  if (data.startedAt) { writeDismissed(data.startedAt); setDismissedStartedAt(data.startedAt); }
-                }}
-              >Скрыть</button>
-            )}
-          </div>
-          {data.error && <p className={s.err}>{data.error}</p>}
-          <div className={s.steps}>
-            {data.steps.map(st => (
-              <div key={`${st.accountId}-${st.step}`} className={s.stepRow}>
-                <StepIcon status={st.status} />
-                <span className={s.stepLabel}>
-                  {multiAccount ? `${st.accountLabel} · ` : ''}{st.label}
-                </span>
-                <span className={s.stepMeta}>
-                  {st.status === 'unavailable'
-                    ? <UnavailableNotice compact message={st.message ?? undefined} />
-                    : [st.count != null && st.status === 'ok' ? String(st.count) : null, st.message]
-                        .filter(Boolean).join(' · ') || null}
+    <span className={s.infoWrap} ref={wrapRef}>
+      <button
+        className={`${s.infoBtn} ${open ? s.infoBtnActive : ''}`}
+        onClick={() => setOpen(v => !v)}
+        aria-label="Последнее обновление из МТС"
+        title="Последнее обновление из МТС"
+      >
+        i
+      </button>
+      {open && (
+        <div className={s.popover}>
+          {!hasRun || !data ? (
+            <p className={s.popoverEmpty}>Обновление ещё не запускалось.</p>
+          ) : (
+            <>
+              <div className={s.panelHead}>
+                <span className={s.panelTitle}>
+                  {running ? 'Идёт полное обновление из МТС' : 'Последнее обновление из МТС'}
                 </span>
               </div>
-            ))}
-          </div>
+              <div className={s.panelMeta}>
+                {data.window ? `детализация ${data.window.dateFrom} — ${data.window.dateTo} · ` : ''}
+                запущено {fmtLast(data.startedAt)}
+                {!running && data.finishedAt ? ` · завершено ${fmtLast(data.finishedAt)}` : ''}
+              </div>
+              {data.error && <p className={s.err}>{data.error}</p>}
+              <div className={s.steps}>
+                {data.steps.map(st => (
+                  <div key={`${st.accountId}-${st.step}`} className={s.stepRow}>
+                    <StepIcon status={st.status} />
+                    <span className={s.stepLabel}>
+                      {multiAccount ? `${st.accountLabel} · ` : ''}{st.label}
+                    </span>
+                    <span className={s.stepMeta}>
+                      {st.status === 'unavailable'
+                        ? <UnavailableNotice compact message={st.message ?? undefined} />
+                        : [st.count != null && st.status === 'ok' ? String(st.count) : null, st.message]
+                            .filter(Boolean).join(' · ') || null}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
-    </div>
+    </span>
   );
 };
