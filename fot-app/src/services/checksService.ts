@@ -5,8 +5,8 @@ interface ApiResponse<T> {
   data: T;
 }
 
-export type CheckType = 'rkl' | 'patent';
-export type CheckStatus = 'clean' | 'found' | 'invalid' | 'error' | 'not_applicable';
+export type CheckType = 'rkl' | 'patent_msk';
+export type CheckStatus = 'clean' | 'found' | 'invalid' | 'error' | 'not_applicable' | 'pending';
 
 export interface NewdbConnectionSettings {
   baseUrl: string;
@@ -52,9 +52,9 @@ export interface CheckPassRow {
   last_rkl_status: CheckStatus | null;
   last_rkl_at: string | null;
   last_rkl_summary: string | null;
-  last_patent_status: CheckStatus | null;
-  last_patent_at: string | null;
-  last_patent_summary: string | null;
+  last_patent_msk_status: CheckStatus | null;
+  last_patent_msk_at: string | null;
+  last_patent_msk_summary: string | null;
 }
 
 export interface CheckResult {

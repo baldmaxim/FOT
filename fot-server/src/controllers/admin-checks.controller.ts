@@ -22,12 +22,12 @@ const saveSettingsSchema = z.object({
 
 const runSchema = z.object({
   passId: z.string().uuid(),
-  types: z.array(z.enum(['rkl', 'patent'])).min(1),
+  types: z.array(z.enum(['rkl', 'patent_msk'])).min(1),
 });
 
 const runBulkSchema = z.object({
   passIds: z.array(z.string().uuid()).min(1).max(BULK_LIMIT),
-  types: z.array(z.enum(['rkl', 'patent'])).min(1),
+  types: z.array(z.enum(['rkl', 'patent_msk'])).min(1),
 });
 
 function handleZodError(error: unknown, res: Response): boolean {

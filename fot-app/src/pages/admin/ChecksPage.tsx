@@ -1,6 +1,6 @@
 import { useState, type FC } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldCheck, RefreshCw, Loader2, Eye, CheckCircle2, XCircle, Minus, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, RefreshCw, Loader2, Eye, CheckCircle2, XCircle, Minus, AlertTriangle, Clock } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
@@ -18,18 +18,20 @@ const STATUS_LABEL: Record<CheckStatus, string> = {
   invalid: 'Недействителен',
   error: 'Ошибка',
   not_applicable: 'Не требуется',
+  pending: 'В обработке',
 };
 
 // Иконка + цвет + aria-label (не полагаемся только на цвет/символ).
 const StatusIcon: FC<{ kind: CheckType; status: CheckStatus | null; at: string | null; summary: string | null }> = ({ kind, status, at, summary }) => {
   if (!status) return <span className={styles.badgeMuted} aria-label="Не проверялось">—</span>;
   const date = at ? new Date(at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '';
-  const label = kind === 'patent' && status === 'clean' ? 'Патент действителен' : STATUS_LABEL[status];
-  const title = summary ? `${label} · ${summary}` : label;
+  const label = kind === 'patent_msk' && status === 'clean' ? 'Патент действителен' : STATUS_LABEL[status];
+  let title = summary ? `${label} · ${summary}` : label;
 
   let icon;
   if (status === 'clean') icon = <CheckCircle2 size={18} className={styles.icClean} aria-label={label} />;
   else if (status === 'found' || status === 'invalid') icon = <XCircle size={18} className={styles.icBad} aria-label={label} />;
+  else if (status === 'pending') { icon = <Clock size={18} className={styles.icPending} aria-label={label} />; title = 'В обработке. Обновление статуса добавим после подключения polling.'; }
   else if (status === 'not_applicable') icon = <Minus size={18} className={styles.icMuted} aria-label={label} />;
   else icon = <AlertTriangle size={18} className={styles.icWarn} aria-label={label} />;
 
@@ -91,10 +93,10 @@ export const ChecksPage: FC = () => {
   });
 
   const runOne = useMutation({
-    mutationFn: (passId: string) => checksService.run(passId, ['rkl', 'patent'] as CheckType[]),
+    mutationFn: (passId: string) => checksService.run(passId, ['rkl', 'patent_msk'] as CheckType[]),
     onMutate: (passId) => setRunningRow(passId),
     onSuccess: (results) => {
-      const summary = results.map(r => `${r.check_type === 'rkl' ? 'РКЛ' : 'Патент'}: ${STATUS_LABEL[r.status]}`).join(' · ');
+      const summary = results.map(r => `${r.check_type === 'rkl' ? 'РКЛ' : 'Патент Мск'}: ${STATUS_LABEL[r.status]}`).join(' · ');
       showToast('success', summary);
       queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', orgId] });
     },
@@ -103,7 +105,7 @@ export const ChecksPage: FC = () => {
   });
 
   const runBulk = useMutation({
-    mutationFn: (ids: string[]) => checksService.runBulk(ids, ['rkl', 'patent'] as CheckType[]),
+    mutationFn: (ids: string[]) => checksService.runBulk(ids, ['rkl', 'patent_msk'] as CheckType[]),
     onSuccess: ({ items, skipped }) => {
       const errors = items.filter(i => i.error).length;
       let msg = `Проверено: ${items.length}`;
@@ -142,9 +144,10 @@ export const ChecksPage: FC = () => {
     prev.size === passes.length ? new Set() : new Set(passes.map(p => p.id)),
   );
 
-  // «Без результата»: хотя бы один из статусов (РКЛ / патент) пуст.
+  // «Без результата»: хотя бы один из активных статусов (РКЛ / Патент Мск)
+  // реально пуст (null). pending считается результатом — не переотмечаем.
   const selectWithoutResult = () => {
-    const ids = passes.filter(p => !p.last_rkl_status || !p.last_patent_status).map(p => p.id);
+    const ids = passes.filter(p => p.last_rkl_status === null || p.last_patent_msk_status === null).map(p => p.id);
     setSelected(new Set(ids.slice(0, BULK_LIMIT)));
     if (ids.length > BULK_LIMIT) showToast('info', `Отмечено первых ${BULK_LIMIT} (лимит за один прогон)`);
   };
@@ -258,7 +261,8 @@ export const ChecksPage: FC = () => {
                     <th>Гражданство</th>
                     <th>Паспорт</th>
                     <th>РКЛ</th>
-                    <th>Патент</th>
+                    <th>Патент Мск</th>
+                    <th>Патент МО</th>
                     <th />
                   </tr>
                 </thead>
@@ -273,7 +277,8 @@ export const ChecksPage: FC = () => {
                       <td>{p.citizenship ?? '—'}</td>
                       <td className={styles.mono}>{p.passport_series_number ?? '—'}</td>
                       <td><StatusIcon kind="rkl" status={p.last_rkl_status} at={p.last_rkl_at} summary={p.last_rkl_summary} /></td>
-                      <td><StatusIcon kind="patent" status={p.last_patent_status} at={p.last_patent_at} summary={p.last_patent_summary} /></td>
+                      <td><StatusIcon kind="patent_msk" status={p.last_patent_msk_status} at={p.last_patent_msk_at} summary={p.last_patent_msk_summary} /></td>
+                      <td><span className={styles.badgeMuted} title="Требуется ИНН физлица (в системе не собирается)">—</span></td>
                       <td>
                         <div className={styles.rowActions}>
                           <button

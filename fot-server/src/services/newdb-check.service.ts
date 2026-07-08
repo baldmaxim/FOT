@@ -16,8 +16,11 @@ import { query, queryOne, execute } from '../config/postgres.js';
 import { newdbBaseService, NewdbApiError } from './newdb-base.service.js';
 import { citizenshipRequiresPatent } from './contractor-docs.service.js';
 
-export type CheckType = 'rkl' | 'patent';
-export type CheckStatus = 'clean' | 'found' | 'invalid' | 'error' | 'not_applicable';
+// Активные типы проверок. patent_mo зарезервирован в схеме БД, но НЕ вызывается
+// (нужен ИНН физлица, которого в системе нет) — отвергается на входе.
+export type CheckType = 'rkl' | 'patent_msk' | 'patent_mo';
+export const ACTIVE_CHECK_TYPES: CheckType[] = ['rkl', 'patent_msk'];
+export type CheckStatus = 'clean' | 'found' | 'invalid' | 'error' | 'not_applicable' | 'pending';
 
 // Повторный платный запуск той же (pass, type) в пределах окна — отклоняем.
 const ANTI_DOUBLE_WINDOW_MS = 30_000;
@@ -43,6 +46,7 @@ interface ICheckOutcome {
   raw: unknown;
   qid: string | null;
   balance: number | null;
+  requestId: string | null;   // newdb requestId — для матчинга async-результата
   errorMessage: string | null;
   requestSent: boolean;
 }
@@ -97,34 +101,49 @@ export const toYyyyMmDd = (iso: string | null | undefined): string => {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
 };
 
-// ─── Маппинг ответов провайдера ─────────────────────────────────────────────
+// ─── Разбор ответа провайдера (sync/async) ──────────────────────────────────
 
-const mapRklResponse = (data: any): { status: CheckStatus; providerStatus: string | null; summary: string | null } => {
-  const item = data?.results?.rkl?.result?.data?.[0];
-  const registryStatus: string | null = item?.registry_status ?? null;
-  const title: string | null = item?.title ?? null;
+interface IInterpreted {
+  status: CheckStatus;
+  providerStatus: string | null;
+  summary: string | null;
+  requestId: string | null;
+}
 
+/**
+ * Единый разбор ответа newdb. Ключевое: ответ может быть АСИНХРОННЫМ —
+ * `state:"queued"` без блока `results` (баланс уже списан). Такой ответ — НЕ
+ * ошибка: помечаем `pending` и сохраняем `requestId` для будущего polling.
+ * Только при `state:"complete"` c непустым `results[method]` парсим результат.
+ */
+const interpretNewdbResponse = (method: 'rkl' | 'patent_msk', data: any): IInterpreted => {
+  const state: string | null = data?.state ?? null;
+  const requestId: string | null = data?.requestId ?? null;
+  const item = data?.results?.[method]?.result?.data?.[0];
+
+  if (state !== 'complete' || !item) {
+    // queued / processing / нет результата — ждём (часики), не ошибка.
+    return { status: 'pending', providerStatus: state, summary: 'В обработке (запрос принят)', requestId };
+  }
+
+  if (method === 'rkl') {
+    const registryStatus: string | null = item?.registry_status ?? null;
+    let status: CheckStatus;
+    if (registryStatus === 'not_found') status = 'clean';
+    else if (registryStatus === 'found') status = 'found';
+    else status = 'error'; // unknown — сырой смысл сохраняем в providerStatus
+    return { status, providerStatus: registryStatus, summary: item?.title ?? null, requestId };
+  }
+
+  // patent_msk — консервативный маппинг: неизвестный статус → error.
+  const docStatus: string | null = item?.status ?? null;
+  const message: string | null = item?.message ?? null;
+  const n = (docStatus || '').toLowerCase();
   let status: CheckStatus;
-  if (registryStatus === 'not_found') status = 'clean';
-  else if (registryStatus === 'found') status = 'found';
-  else status = 'error'; // unknown / отсутствует — не теряем сырой смысл в providerStatus
-
-  return { status, providerStatus: registryStatus, summary: title };
-};
-
-const mapPatentResponse = (data: any): { status: CheckStatus; providerStatus: string | null; summary: string | null } => {
-  const item = data?.results?.foreign_patent?.result?.data?.[0];
-  const docStatus: string | null = item?.doc_status ?? null;
-  const normalized = (docStatus || '').toLowerCase();
-
-  // TODO: уточнить точные строки doc_status на первом реальном ответе.
-  let status: CheckStatus;
-  if (!docStatus) status = 'error';
-  else if (normalized.includes('действ') || normalized.includes('оформлен')) status = 'clean';
-  else if (normalized.includes('не найден') || normalized.includes('не действ') || normalized.includes('аннул')) status = 'invalid';
-  else status = 'found'; // неизвестная формулировка — показываем как есть в summary
-
-  return { status, providerStatus: docStatus, summary: docStatus };
+  if (n === 'valid' || n === 'active' || n.includes('действ')) status = 'clean';
+  else if (n === 'expired' || n === 'not_found' || n === 'annulled' || n.includes('аннул') || n.includes('истёк') || n.includes('истек')) status = 'invalid';
+  else status = 'error'; // спорный/неизвестный статус — не трактуем как «чисто»/«плохо»
+  return { status, providerStatus: docStatus, summary: message ?? docStatus, requestId };
 };
 
 // ─── Валидация + вызовы ─────────────────────────────────────────────────────
@@ -146,7 +165,7 @@ const runRkl = async (pass: IPassDataRow, taskId: string, checkId: string): Prom
   if (!number) missing.push('номер паспорта');
   if (!issueDate) missing.push('дата выдачи паспорта');
   if (missing.length) {
-    return { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestSent: false, errorMessage: `Недостаточно данных для РКЛ: ${missing.join(', ')}` };
+    return { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: `Недостаточно данных для РКЛ: ${missing.join(', ')}` };
   }
 
   const body = {
@@ -166,73 +185,59 @@ const runRkl = async (pass: IPassDataRow, taskId: string, checkId: string): Prom
 
   await markSent(checkId);
   const data = await newdbBaseService.post<any>(body);
-  const mapped = mapRklResponse(data);
+  const r = interpretNewdbResponse('rkl', data);
   return {
-    status: mapped.status,
-    providerStatus: mapped.providerStatus,
-    summary: mapped.summary,
+    status: r.status,
+    providerStatus: r.providerStatus,
+    summary: r.summary,
     raw: data,
     qid: data?.params?.params?.newdb_qid ?? data?.params?.newdb_qid ?? null,
     balance: typeof data?.balance === 'number' ? data.balance : null,
+    requestId: r.requestId,
     errorMessage: null,
     requestSent: true,
   };
 };
 
-// taskId в теле патента не участвует (API использует requestId); принимаем для
-// единообразия сигнатуры с runRkl — он пишется в newdb_task_id снаружи.
-const runPatent = async (pass: IPassDataRow, _taskId: string, checkId: string): Promise<ICheckOutcome> => {
+// Патент Москва (patent_msk): проверка по паспорту (удостоверение личности) +
+// гражданство. Патент/бланк НЕ нужны. taskId в этом методе не участвует.
+const runPatentMsk = async (pass: IPassDataRow, _taskId: string, checkId: string): Promise<ICheckOutcome> => {
   // Патент не требуется: гражданство РФ / есть ВНЖ / непатентное гражданство.
   if (!citizenshipRequiresPatent(pass.citizenship)) {
-    return { status: 'not_applicable', providerStatus: null, summary: 'Патент не требуется: гражданство РФ или непатентное', raw: null, qid: null, balance: null, requestSent: false, errorMessage: null };
+    return { status: 'not_applicable', providerStatus: null, summary: 'Патент не требуется: гражданство РФ или непатентное', raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: null };
   }
   if (pass.has_residence_permit) {
-    return { status: 'not_applicable', providerStatus: null, summary: 'Патент не требуется: указан ВНЖ', raw: null, qid: null, balance: null, requestSent: false, errorMessage: null };
+    return { status: 'not_applicable', providerStatus: null, summary: 'Патент не требуется: указан ВНЖ', raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: null };
   }
 
-  const { lastName, firstName, secondName } = splitFullName(pass.holder_name);
   const id = splitDocSeriaNumber(pass.passport_series_number);
-  const doc = splitDocSeriaNumber(pass.patent_number);
-  const blank = splitDocSeriaNumber(pass.patent_blank_number);
-  const dob = toYyyyMmDd(pass.birth_date);
-
   const missing: string[] = [];
-  if (!lastName || !firstName) missing.push('ФИО');
-  if (!dob) missing.push('дата рождения');
   if (!id.number) missing.push('паспорт');
-  if (!blank.number) missing.push('бланк патента');
   if (missing.length) {
-    return { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestSent: false, errorMessage: `Недостаточно данных для патента: ${missing.join(', ')}` };
+    return { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: `Недостаточно данных для патента (Москва): ${missing.join(', ')}` };
   }
 
   const body = {
     params: {
-      method: 'foreign_patent',
-      doctype: 'patent',
-      firstname: firstName,
-      lastname: lastName,
-      secondname: secondName,
-      doc_seria: doc.seria,
-      doc_number: doc.number,
+      method: 'patent_msk',
       id_doc_seria: id.seria,
       id_doc_number: id.number,
-      blank_seria: blank.seria,
-      blank_number: blank.number,
-      dob,
+      citizenship: pass.citizenship || undefined,
       country: 'ru',
     },
   };
 
   await markSent(checkId);
   const data = await newdbBaseService.post<any>(body);
-  const mapped = mapPatentResponse(data);
+  const r = interpretNewdbResponse('patent_msk', data);
   return {
-    status: mapped.status,
-    providerStatus: mapped.providerStatus,
-    summary: mapped.summary,
+    status: r.status,
+    providerStatus: r.providerStatus,
+    summary: r.summary,
     raw: data,
     qid: data?.params?.newdb_qid ?? null,
     balance: typeof data?.balance === 'number' ? data.balance : null,
+    requestId: r.requestId,
     errorMessage: null,
     requestSent: true,
   };
@@ -271,8 +276,21 @@ const getPassData = async (passId: string): Promise<IPassDataRow | null> =>
     [passId],
   );
 
-/** Есть ли недавняя ОТПРАВЛЕННАЯ проверка (анти-даблклик по платным запросам). */
-const hasRecentSentCheck = async (passId: string, type: CheckType): Promise<boolean> => {
+/**
+ * Блокировать повторный платный запуск. Учитываем и request_sent=true (недавно
+ * отправленный), и status='pending' (queued-запись висит в обработке) — иначе
+ * можно насоздавать платных дублей поверх незавершённого async-запроса.
+ * pending-записи блокируют бессрочно (пока не завершатся); отправленные — окно.
+ */
+const hasBlockingCheck = async (passId: string, type: CheckType): Promise<boolean> => {
+  const pendingRow = await queryOne<{ id: string }>(
+    `SELECT id FROM newdb_checks
+      WHERE contractor_pass_id = $1::uuid AND check_type = $2 AND status = 'pending'
+      LIMIT 1`,
+    [passId, type],
+  );
+  if (pendingRow) return true;
+
   const row = await queryOne<{ created_at: string }>(
     `SELECT created_at FROM newdb_checks
       WHERE contractor_pass_id = $1::uuid AND check_type = $2 AND request_sent = true
@@ -298,8 +316,11 @@ export const runChecksForPass = async (
   const results: INewdbCheckResult[] = [];
 
   for (const type of types) {
-    if (await hasRecentSentCheck(passId, type)) {
-      throw new NewdbApiError(`Проверка ${type} уже запускалась только что — подождите`, 429);
+    if (type === 'patent_mo') {
+      throw new NewdbApiError('Патент МО пока не поддерживается: нужен ИНН физлица', 400);
+    }
+    if (await hasBlockingCheck(passId, type)) {
+      throw new NewdbApiError(`Проверка ${type} уже выполняется/выполнялась только что — подождите`, 429);
     }
 
     // 1. INSERT снимок ПД, request_sent=false
@@ -321,14 +342,14 @@ export const runChecksForPass = async (
     try {
       // Валидация внутри run; при успехе run сам метит request_sent=true
       // (markSent) ровно перед внешним вызовом — обрыв остаётся в аудите.
-      const run = type === 'rkl' ? runRkl : runPatent;
+      const run = type === 'rkl' ? runRkl : runPatentMsk;
       outcome = await run(pass, taskId, checkId);
     } catch (error) {
       // markSent (если дошли до вызова) уже выставил request_sent=true в БД;
       // если упали до вызова (напр. токен не задан) — там false. Не трогаем
       // request_sent в UPDATE, читаем фактическое значение через RETURNING.
       const apiErr = error instanceof NewdbApiError ? error : new NewdbApiError(error instanceof Error ? error.message : String(error), 0);
-      outcome = { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestSent: false, errorMessage: `Ошибка newdb (${apiErr.status}): ${apiErr.message}` };
+      outcome = { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: `Ошибка newdb (${apiErr.status}): ${apiErr.message}` };
     }
 
     // 3. UPDATE результата (request_sent не трогаем — им владеет markSent)
@@ -336,12 +357,12 @@ export const runChecksForPass = async (
       `UPDATE newdb_checks
           SET status = $2, newdb_task_id = $3,
               provider_status = $4, result_summary = $5, raw_response = $6::jsonb,
-              newdb_qid = $7, balance = $8, error_message = $9
+              newdb_qid = $7, balance = $8, error_message = $9, newdb_request_id = $10
         WHERE id = $1::uuid
       RETURNING request_sent`,
       [checkId, outcome.status, taskId, outcome.providerStatus,
         outcome.summary, outcome.raw != null ? JSON.stringify(outcome.raw) : null,
-        outcome.qid, outcome.balance, outcome.errorMessage],
+        outcome.qid, outcome.balance, outcome.errorMessage, outcome.requestId],
     );
 
     results.push({
@@ -422,9 +443,9 @@ interface IPassListRow {
   last_rkl_status: CheckStatus | null;
   last_rkl_at: string | null;
   last_rkl_summary: string | null;
-  last_patent_status: CheckStatus | null;
-  last_patent_at: string | null;
-  last_patent_summary: string | null;
+  last_patent_msk_status: CheckStatus | null;
+  last_patent_msk_at: string | null;
+  last_patent_msk_summary: string | null;
 }
 
 /** Пропуска отдела (со вложенными subtree) + раздельные последние статусы. */
@@ -443,9 +464,9 @@ export const listPassesForDepartment = async (orgDepartmentId: string): Promise<
             rkl.status  AS last_rkl_status,
             rkl.created_at AS last_rkl_at,
             rkl.result_summary AS last_rkl_summary,
-            pat.status  AS last_patent_status,
-            pat.created_at AS last_patent_at,
-            pat.result_summary AS last_patent_summary
+            pat.status  AS last_patent_msk_status,
+            pat.created_at AS last_patent_msk_at,
+            pat.result_summary AS last_patent_msk_summary
        FROM contractor_passes p
        LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
        LEFT JOIN LATERAL (
@@ -455,7 +476,7 @@ export const listPassesForDepartment = async (orgDepartmentId: string): Promise<
        ) rkl ON true
        LEFT JOIN LATERAL (
          SELECT status, created_at, result_summary FROM newdb_checks c
-          WHERE c.contractor_pass_id = p.id AND c.check_type = 'patent'
+          WHERE c.contractor_pass_id = p.id AND c.check_type = 'patent_msk'
           ORDER BY c.created_at DESC LIMIT 1
        ) pat ON true
       WHERE p.org_department_id IN (SELECT id FROM subtree)
