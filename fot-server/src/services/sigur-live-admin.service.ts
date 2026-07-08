@@ -13,6 +13,7 @@ import {
   normalizeAccessPointKey,
   type IAccessPointObjectMeta,
 } from './sigur-access-point-meta.service.js';
+import { deriveCardW26, type ICardW26 } from './sigur-card-w26.util.js';
 
 export interface IAccessPointBinding {
   accessPointId: number;
@@ -69,6 +70,7 @@ export interface ISigurEmployeeCardAccessStatus {
   state: SigurEmployeeCardAccessState;
   expirationDate: string | null;
   hasCard: boolean;
+  w26: string | null;
 }
 
 export interface ISigurDepartmentCountsResult {
@@ -236,11 +238,14 @@ export function toAccessRuleBinding(raw: Record<string, unknown>): { employeeId:
 
 function toEmployeeCardBinding(raw: Record<string, unknown>): {
   employeeId: number;
+  cardId: number | null;
   expirationDate: string | null;
   startDate: string | null;
 } | null {
   const employeeId = normalizeInt(resolveField(raw, 'employeeId', 'employee_id'));
   if (!employeeId) return null;
+
+  const cardId = normalizeInt(resolveField(raw, 'cardId', 'card_id', 'cardID', 'cardid'));
 
   const expirationDate = String(
     resolveField<string>(raw, 'expirationDate', 'expiration_date', 'validTo')
@@ -253,14 +258,112 @@ function toEmployeeCardBinding(raw: Record<string, unknown>): {
 
   return {
     employeeId,
+    cardId,
     expirationDate,
     startDate,
   };
 }
 
+/** Стабильный формат W26 для таблицы/тестов: FFF,NNNNN (3 цифры facility + 5 цифр number). */
+export function formatW26(decoded: ICardW26): string {
+  return `${String(decoded.facility).padStart(3, '0')},${String(decoded.number).padStart(5, '0')}`;
+}
+
+/**
+ * Распознаёт W26-поисковый ввод. Сначала строгая валидация формата "facility,number"
+ * (наличие запятой), только потом декодирование через deriveCardW26 (он сам нормализует
+ * ведущие нули через Number() и проверяет диапазоны). Возвращает null, если ввод не W26-формата.
+ */
+export function normalizeW26Search(search: string): ICardW26 | null {
+  const trimmed = (search || '').trim();
+  if (!/^\d{1,3}\s*,\s*\d{1,5}$/.test(trimmed)) return null;
+  try {
+    return deriveCardW26(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Точное совпадение карты Sigur с декодированным W26. Sigur `?value=` даёт ПРЕФИКСНЫЙ матч,
+ * поэтому сверяем полный 3-байтовый value ИЛИ нормализованный W26 из formattedValue.
+ * Так 35,30723 / 035,30723 / 237803 сходятся к одной карте, а префиксные — отсекаются.
+ */
+export function isExactW26(rawCard: Record<string, unknown>, decoded: ICardW26): boolean {
+  const normVal = (s: string): string => s.toUpperCase().replace(/^0+/, '');
+  const value = normVal(String(resolveField(rawCard, 'value', 'cardValue', 'card_value') ?? ''));
+  if (value && value === normVal(decoded.value)) return true;
+
+  const normW26 = (s: string): string => {
+    const m = s.replace(/\s/g, '').match(/^(\d+),(\d+)$/);
+    return m ? `${Number(m[1])},${Number(m[2])}` : '';
+  };
+  const fmt = normW26(String(resolveField(rawCard, 'formattedValue', 'formatted_value') ?? ''));
+  return !!fmt && fmt === normW26(decoded.w26);
+}
+
+/**
+ * Выбор «активной» карты сотрудника для колонки W26. Приоритет: привязка с наибольшей
+ * НЕистёкшей expirationDate; иначе — самая поздняя по дате; иначе — первая с резолвящейся картой.
+ * Ключ cardW26ById — String(cardId). Возвращает W26-строку или null.
+ */
+export function selectPrimaryCardBinding(
+  bindings: Array<{ cardId: number | null; expirationDate: string | null }>,
+  cardW26ById: Map<string, string>,
+): string | null {
+  const resolvable = bindings.filter(b => b.cardId != null && cardW26ById.has(String(b.cardId)));
+  if (resolvable.length === 0) return null;
+
+  const now = Date.now();
+  const withDate = resolvable
+    .map(b => ({ b, time: b.expirationDate ? new Date(b.expirationDate).getTime() : NaN }))
+    .filter(x => !Number.isNaN(x.time));
+
+  const notExpired = withDate.filter(x => x.time >= now).sort((l, r) => r.time - l.time);
+  const chosen = notExpired[0]
+    ?? withDate.sort((l, r) => r.time - l.time)[0]
+    ?? { b: resolvable[0] };
+
+  return cardW26ById.get(String(chosen.b.cardId)) ?? null;
+}
+
+/**
+ * Каталог карт Sigur → Map<String(cardId) → W26 в формате FFF,NNNNN>. Строим из `value`
+ * (deriveCardW26 + formatW26), fallback — сырой formattedValue. Ключ строковый, чтобы 123 vs "123"
+ * не давали промах. Каталог кэширован (getCardsCached, TTL ~60c).
+ */
+async function buildCardW26ById(connection?: ConnectionType): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  let catalog: Record<string, unknown>[];
+  try {
+    catalog = await sigurService.getCardsCached(connection) as Record<string, unknown>[];
+  } catch (error) {
+    console.warn('Sigur cards catalog warning (W26 map):', error);
+    return map;
+  }
+
+  for (const rawCard of catalog) {
+    const cardId = normalizeInt(resolveField(rawCard, 'cardId', 'card_id', 'cardID', 'cardid', 'id', 'ID', 'Id'));
+    if (cardId == null) continue;
+    const value = String(resolveField(rawCard, 'value', 'cardValue', 'card_value') ?? '').trim();
+    let w26: string | null = null;
+    if (value) {
+      try { w26 = formatW26(deriveCardW26(value)); } catch { /* игнор — попробуем formattedValue */ }
+    }
+    if (!w26) {
+      const fmt = String(resolveField(rawCard, 'formattedValue', 'formatted_value') ?? '').trim();
+      w26 = fmt || null;
+    }
+    if (w26) map.set(String(cardId), w26);
+  }
+
+  return map;
+}
+
 function deriveEmployeeCardAccessStatus(
   employeeId: number,
-  bindings: Array<{ expirationDate: string | null; startDate: string | null }>,
+  bindings: Array<{ cardId: number | null; expirationDate: string | null; startDate: string | null }>,
+  cardW26ById: Map<string, string>,
 ): ISigurEmployeeCardAccessStatus {
   if (bindings.length === 0) {
     return {
@@ -268,9 +371,11 @@ function deriveEmployeeCardAccessStatus(
       state: 'no_card',
       expirationDate: null,
       hasCard: false,
+      w26: null,
     };
   }
 
+  const w26 = selectPrimaryCardBinding(bindings, cardW26ById);
   const now = Date.now();
   const validExpirations = bindings
     .map(binding => binding.expirationDate ? new Date(binding.expirationDate) : null)
@@ -283,6 +388,7 @@ function deriveEmployeeCardAccessStatus(
       state: 'no_expiration',
       expirationDate: null,
       hasCard: true,
+      w26,
     };
   }
 
@@ -293,6 +399,7 @@ function deriveEmployeeCardAccessStatus(
       state: 'unknown',
       expirationDate: null,
       hasCard: true,
+      w26,
     };
   }
 
@@ -301,6 +408,7 @@ function deriveEmployeeCardAccessStatus(
     state: latestExpiration.getTime() >= now ? 'active' : 'expired',
     expirationDate: latestExpiration.toISOString(),
     hasCard: true,
+    w26,
   };
 }
 
@@ -619,6 +727,84 @@ function buildSearchHaystack(employee: ISigurEmployeeSummary): string {
     .toLocaleLowerCase('ru');
 }
 
+/**
+ * Поиск сотрудников по W26 (номеру карты Sigur). Возвращает:
+ *  - null      — строка НЕ W26-формата (обычный поиск должен работать как раньше);
+ *  - []        — строка W26-формата, но карта/держатель не найдены (без fallback);
+ *  - список    — держатели найденной карты (дедуп по employeeId; несколько — важный сигнал).
+ */
+async function resolveEmployeesByW26(
+  search: string,
+  departmentNameMap: Map<number, string>,
+  connection?: ConnectionType,
+  departmentId?: number | null,
+  blocked?: boolean | null,
+): Promise<ISigurEmployeeSummary[] | null> {
+  const decoded = normalizeW26Search(search);
+  if (!decoded) return null;
+
+  const ownerOf = (raw: Record<string, unknown>): number | null => {
+    const direct = normalizeInt(resolveField(raw, 'employeeId', 'employee_id'));
+    if (direct) return direct;
+    const holder = raw.holder as Record<string, unknown> | undefined;
+    if (holder && typeof holder === 'object') {
+      const type = typeof holder.type === 'string' ? holder.type.toUpperCase() : '';
+      if (!type || type === 'EMP' || type === 'EMPLOYEE') {
+        return normalizeInt(resolveField(holder, 'holderId', 'holder_id', 'id'));
+      }
+    }
+    return null;
+  };
+
+  let cards: Record<string, unknown>[] = [];
+  try {
+    const { matches } = await sigurService.findCardByCandidates([decoded.value, decoded.w26], connection);
+    cards = (matches as Record<string, unknown>[]).filter(card => isExactW26(card, decoded));
+  } catch (error) {
+    console.warn('Sigur W26 search card lookup warning:', error);
+    return [];
+  }
+
+  const cardIds = [...new Set(
+    cards
+      .map(card => normalizeInt(resolveField(card, 'cardId', 'card_id', 'cardID', 'cardid', 'id', 'ID', 'Id')))
+      .filter((id): id is number => id != null),
+  )];
+  if (cardIds.length === 0) return [];
+
+  const employeeIds = new Set<number>();
+  for (const cardId of cardIds) {
+    try {
+      const binds = await sigurService.getCardBindings({ cardId }, connection) as Record<string, unknown>[];
+      for (const bind of binds) {
+        const owner = ownerOf(bind);
+        if (owner) employeeIds.add(owner);
+      }
+    } catch (error) {
+      console.warn(`Sigur W26 search bindings warning (card ${cardId}):`, error);
+    }
+  }
+  if (employeeIds.size === 0) return [];
+
+  const items: ISigurEmployeeSummary[] = [];
+  for (const employeeId of employeeIds) {
+    try {
+      const raw = await sigurService.getEmployeeById(employeeId, connection) as Record<string, unknown>;
+      const summary = normalizeSigurEmployeeSummary(raw, departmentNameMap);
+      if (!summary) continue;
+      if (departmentId != null && summary.departmentId !== departmentId) continue;
+      if (blocked != null && summary.blocked !== blocked) continue;
+      items.push(summary);
+    } catch (error) {
+      console.warn(`Sigur W26 search employee warning (${employeeId}):`, error);
+    }
+  }
+
+  items.sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+  await attachContractorPassNumbers(items);
+  return items;
+}
+
 async function searchEmployeesDirectly(
   search: string,
   departmentNameMap: Map<number, string>,
@@ -630,6 +816,18 @@ async function searchEmployeesDirectly(
   const safePageSize = Math.min(500, Math.max(1, pagination.pageSize || 200));
   const safePage = Math.max(1, pagination.page || 1);
   const offset = (safePage - 1) * safePageSize;
+
+  // Поиск по W26 (номеру карты Sigur) — только при W26-формате; при отсутствии карты вернём пусто.
+  const w26Matches = await resolveEmployeesByW26(search, departmentNameMap, connection, departmentId ?? null, blocked ?? null);
+  if (w26Matches !== null) {
+    return {
+      items: w26Matches.slice(offset, offset + safePageSize),
+      total: w26Matches.length,
+      page: safePage,
+      pageSize: safePageSize,
+    };
+  }
+
   const variants = buildEmployeeSearchVariants(search);
   const commonFilters = {
     ...(departmentId != null ? { departmentId } : {}),
@@ -995,12 +1193,13 @@ export async function getSigurEmployeeProfile(
 async function fetchCardBindingsForEmployee(
   employeeId: number,
   connection?: ConnectionType,
-): Promise<Array<{ expirationDate: string | null; startDate: string | null }>> {
+): Promise<Array<{ cardId: number | null; expirationDate: string | null; startDate: string | null }>> {
   const raw = await sigurService.getCardBindings({ employeeId }, connection) as Record<string, unknown>[];
   return raw
     .map(item => toEmployeeCardBinding(item))
     .filter((item): item is NonNullable<ReturnType<typeof toEmployeeCardBinding>> => !!item && item.employeeId === employeeId)
     .map(item => ({
+      cardId: item.cardId,
       expirationDate: item.expirationDate,
       startDate: item.startDate,
     }));
@@ -1034,23 +1233,24 @@ export async function getSigurEmployeeCardStatuses(
 
   if (missingIds.length > 0) {
     const unresolvedIds = new Set<number>(missingIds);
+    const cardW26ById = await buildCardW26ById(connection);
 
     try {
       const batchedRaw = await sigurService.getCardBindings({ employeeId: missingIds.join(',') }, connection) as Record<string, unknown>[];
-      const grouped = new Map<number, Array<{ expirationDate: string | null; startDate: string | null }>>();
+      const grouped = new Map<number, Array<{ cardId: number | null; expirationDate: string | null; startDate: string | null }>>();
 
       batchedRaw
         .map(item => toEmployeeCardBinding(item))
         .filter((item): item is NonNullable<ReturnType<typeof toEmployeeCardBinding>> => !!item && unresolvedIds.has(item.employeeId))
         .forEach(item => {
           const bucket = grouped.get(item.employeeId) || [];
-          bucket.push({ expirationDate: item.expirationDate, startDate: item.startDate });
+          bucket.push({ cardId: item.cardId, expirationDate: item.expirationDate, startDate: item.startDate });
           grouped.set(item.employeeId, bucket);
         });
 
       if (grouped.size > 1 || (grouped.size === 1 && missingIds.length === 1)) {
         for (const employeeId of missingIds) {
-          const status = deriveEmployeeCardAccessStatus(employeeId, grouped.get(employeeId) || []);
+          const status = deriveEmployeeCardAccessStatus(employeeId, grouped.get(employeeId) || [], cardW26ById);
           byEmployeeId.set(employeeId, status);
           employeeCardStatusCache.set(buildEmployeeCardStatusCacheKey(employeeId, connection), status);
           unresolvedIds.delete(employeeId);
@@ -1068,7 +1268,7 @@ export async function getSigurEmployeeCardStatuses(
       const statuses = await Promise.all(chunk.map(async employeeId => {
         try {
           const bindings = await fetchCardBindingsForEmployee(employeeId, connection);
-          return deriveEmployeeCardAccessStatus(employeeId, bindings);
+          return deriveEmployeeCardAccessStatus(employeeId, bindings, cardW26ById);
         } catch (error) {
           console.warn(`Sigur employee card status fetch warning for ${employeeId}:`, error);
           return {
@@ -1076,6 +1276,7 @@ export async function getSigurEmployeeCardStatuses(
             state: 'unknown' as const,
             expirationDate: null,
             hasCard: false,
+            w26: null,
           };
         }
       }));
@@ -1093,6 +1294,7 @@ export async function getSigurEmployeeCardStatuses(
       state: 'unknown',
       expirationDate: null,
       hasCard: false,
+      w26: null,
     }
   ));
 }

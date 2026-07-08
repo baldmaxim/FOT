@@ -234,6 +234,7 @@ export interface SigurEmployeeCardAccessStatus {
   state: SigurEmployeeCardAccessState;
   expirationDate: string | null;
   hasCard: boolean;
+  w26: string | null;
 }
 
 export interface SigurLiveEmployeeProfile {
