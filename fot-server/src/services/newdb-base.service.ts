@@ -57,7 +57,7 @@ class NewdbServiceBase {
   private async getClient(): Promise<AxiosInstance> {
     const config = await settingsService.getResolvedNewdbConfig();
     if (!config) {
-      throw new NewdbApiError('newdb: токен не задан (Система → Проверки → Настройки)', 0);
+      throw new NewdbApiError('Токен newdb.net не настроен — задайте его в разделе «Настройки»', 0);
     }
     const baseURL = config.baseUrl.replace(/\/+$/, '');
     assertNewdbBaseUrlAllowed(baseURL);

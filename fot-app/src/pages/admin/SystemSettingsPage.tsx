@@ -21,6 +21,7 @@ import {
   useDashboardSettings,
 } from '../../hooks/useSettingsData';
 import { OpenRouterSettingsSection } from '../../components/admin/OpenRouterSettingsSection';
+import { NewdbSettingsSection } from '../../components/admin/NewdbSettingsSection';
 import styles from './SystemSettingsPage.module.css';
 
 export const SystemSettingsPage: FC = () => {
@@ -701,6 +702,8 @@ export const SystemSettingsPage: FC = () => {
       </div>
 
       <OpenRouterSettingsSection />
+
+      <NewdbSettingsSection />
 
     </div>
   );

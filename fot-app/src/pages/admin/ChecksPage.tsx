@@ -1,6 +1,6 @@
 import { useState, type FC } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldCheck, RefreshCw, Loader2, Eye, CheckCircle2, XCircle, Minus, AlertTriangle, Clock, RotateCw } from 'lucide-react';
+import { RefreshCw, Loader2, Eye, CheckCircle2, XCircle, Minus, AlertTriangle, Clock, RotateCw } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
@@ -47,19 +47,12 @@ export const ChecksPage: FC = () => {
   const { showToast } = useToast();
   const queryClient = useQueryClient();
 
-  const [token, setToken] = useState('');
   const [orgId, setOrgId] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [rawFor, setRawFor] = useState<unknown | null>(null);
   const [runningRow, setRunningRow] = useState<string | null>(null);
   const [refreshingRow, setRefreshingRow] = useState<string | null>(null);
   const [confirmBulk, setConfirmBulk] = useState<{ ids: string[] } | null>(null);
-
-  const settingsQuery = useQuery({
-    queryKey: ['newdb', 'settings'],
-    queryFn: () => checksService.getConnectionSettings(),
-    staleTime: 30_000,
-  });
 
   const orgsQuery = useQuery({
     queryKey: ['newdb', 'orgs'],
@@ -72,25 +65,6 @@ export const ChecksPage: FC = () => {
     queryFn: () => checksService.listPasses(orgId),
     enabled: !!orgId,
     staleTime: 15_000,
-  });
-
-  const saveToken = useMutation({
-    mutationFn: () => checksService.saveConnectionSettings({ token }),
-    onSuccess: () => {
-      setToken('');
-      showToast('success', 'Токен сохранён');
-      queryClient.invalidateQueries({ queryKey: ['newdb', 'settings'] });
-    },
-    onError: (e: Error) => showToast('error', e.message || 'Ошибка сохранения'),
-  });
-
-  const validate = useMutation({
-    mutationFn: () => checksService.validateConnection(),
-    onSuccess: (r) => {
-      if (r.ok) showToast('success', `Настройки в порядке · ${r.baseUrl}`);
-      else showToast('error', `Проблемы: ${r.problems.join('; ')}`);
-    },
-    onError: (e: Error) => showToast('error', e.message || 'Ошибка валидации'),
   });
 
   const runOne = useMutation({
@@ -194,38 +168,7 @@ export const ChecksPage: FC = () => {
 
   return (
     <div className={styles.page}>
-      {/* Настройки токена */}
-      <section className={styles.card}>
-        <div className={styles.cardHeader}>
-          <ShieldCheck size={18} />
-          <h3>Подключение newdb.net</h3>
-          <span className={settingsQuery.data?.hasToken ? styles.pillOk : styles.pillWarn}>
-            {settingsQuery.data?.hasToken ? 'Токен задан' : 'Токен не задан'}
-          </span>
-        </div>
-        <p className={styles.hint}>
-          Проверка РКЛ и патентов через API newdb.net. Токен (X-API-KEY) хранится в зашифрованном виде.
-          Базовый URL: <code>{settingsQuery.data?.baseUrl ?? '—'}</code>
-        </p>
-        <div className={styles.settingsRow}>
-          <input
-            type="password"
-            className={styles.input}
-            placeholder="Вставьте API-токен (X-API-KEY)"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            autoComplete="off"
-          />
-          <button className={styles.btnPrimary} disabled={!token.trim() || saveToken.isPending} onClick={() => saveToken.mutate()}>
-            Сохранить
-          </button>
-          <button className={styles.btnSecondary} disabled={validate.isPending} onClick={() => validate.mutate()}>
-            Проверить настройки
-          </button>
-        </div>
-      </section>
-
-      {/* Выбор организации + проверки */}
+      {/* Выбор организации + проверки. Настройки токена — во вкладке «Настройки». */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h3>Сотрудники подрядчика</h3>
