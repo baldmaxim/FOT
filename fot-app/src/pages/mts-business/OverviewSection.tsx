@@ -91,9 +91,14 @@ const ChartTooltip: FC<{ active?: boolean; payload?: { value: number }[]; label?
   );
 };
 
-export const OverviewSection: FC = () => {
+interface IOverviewSectionProps {
+  /** Выбранный ЛС ('' — все); стейт живёт в MtsBusinessPage — им же пользуется кнопка «Обновить». */
+  accountId: string;
+  onAccountChange: (id: string) => void;
+}
+
+export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccountChange }) => {
   const now = useMemo(() => new Date(), []);
-  const [accountId, setAccountId] = useState('');
   // Дефолт периода — текущий месяц (с 1-го числа по сегодня).
   const defaultCallsFrom = useMemo(
     () => toISODate(new Date(now.getFullYear(), now.getMonth(), 1)),
@@ -227,7 +232,7 @@ export const OverviewSection: FC = () => {
       <div className={styles.header}>
         <Seg
           value={accountId}
-          onChange={setAccountId}
+          onChange={onAccountChange}
           options={[{ v: '', label: 'Все ЛС' }, ...(accountsMeta.data ?? []).map(a => ({ v: a.id, label: a.label }))]}
         />
         <span className={styles.headerDates}>

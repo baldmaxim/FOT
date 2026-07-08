@@ -4,6 +4,7 @@ import {
   useStartMtsBusinessRefreshAll,
   useMtsBusinessRefreshAllCompletion,
 } from '../../../hooks/useMtsBusinessRefreshAll';
+import { useMtsBusinessAccounts } from '../../../hooks/useMtsBusinessData';
 import type { IMtsRefreshStep } from '../../../services/mtsBusinessRefreshService';
 import { UnavailableNotice } from '../common/UnavailableNotice';
 import { errText, fmtLast } from '../mtsBusinessFormat';
@@ -33,15 +34,19 @@ const StepIcon: FC<{ status: IMtsRefreshStep['status'] }> = ({ status }) => {
 
 /**
  * Кнопка «Обновить» (строка вкладок страницы): запуск фонового полного
- * обновления всех активных ЛС. Прогресс — в RefreshAllPanel на «Основном»
- * (общий react-query кэш статуса, один polling на страницу).
+ * обновления. Без accountId — все активные ЛС; с accountId (фильтр ЛС на
+ * «Основном») — точечный прогон одного ЛС, подпись показывает какого.
+ * Прогресс — в RefreshAllPanel на «Основном» (общий react-query кэш статуса).
  */
 export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
   const status = useMtsBusinessRefreshAllStatus();
   const start = useStartMtsBusinessRefreshAll();
+  const accounts = useMtsBusinessAccounts();
   const [startError, setStartError] = useState<string | null>(null);
   const running = status.data?.running === true;
   useMtsBusinessRefreshAllCompletion(status.data?.running);
+
+  const accountLabel = accountId ? accounts.data?.find(a => a.id === accountId)?.label : undefined;
 
   const onStart = async (): Promise<void> => {
     setStartError(null);
@@ -56,7 +61,9 @@ export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
     <span className={s.controls}>
       {startError && <span className={s.err}>{startError}</span>}
       <button className={s.btn} onClick={() => { void onStart(); }} disabled={running || start.isPending}>
-        {running || start.isPending ? <><span className={s.spinnerLight} /> Обновление…</> : 'Обновить'}
+        {running || start.isPending
+          ? <><span className={s.spinnerLight} /> Обновление…</>
+          : accountLabel ? `Обновить ${accountLabel}` : 'Обновить'}
       </button>
     </span>
   );

@@ -1,4 +1,4 @@
-import { type FC } from 'react';
+import { type FC, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { OverviewSection } from './OverviewSection';
 import { SubscribersTab } from './subscribers/SubscribersTab';
@@ -30,6 +30,9 @@ export const MtsBusinessPage: FC = () => {
   const navigate = useNavigate();
   const tab = pathToTab(location.pathname);
   const go = (t: Tab): void => { if (t !== tab) navigate(TAB_PATHS[t]); };
+  // Выбранный ЛС общий для фильтра «Основного» и кнопки «Обновить»:
+  // конкретный ЛС → точечный прогон только по нему, '' («Все ЛС») → все активные.
+  const [accountId, setAccountId] = useState('');
 
   return (
     <div className={styles.page}>
@@ -37,10 +40,10 @@ export const MtsBusinessPage: FC = () => {
         <button className={`${styles.tab} ${tab === 'main' ? styles.tabActive : ''}`} onClick={() => go('main')}>Основное</button>
         <button className={`${styles.tab} ${tab === 'subscribers' ? styles.tabActive : ''}`} onClick={() => go('subscribers')}>Абоненты</button>
         <button className={`${styles.tab} ${tab === 'admin' ? styles.tabActive : ''}`} onClick={() => go('admin')}>Администрирование</button>
-        <span className={styles.tabsRight}><RefreshAllButton /></span>
+        <span className={styles.tabsRight}><RefreshAllButton accountId={accountId || undefined} /></span>
       </div>
 
-      {tab === 'main' && <OverviewSection />}
+      {tab === 'main' && <OverviewSection accountId={accountId} onAccountChange={setAccountId} />}
       {tab === 'subscribers' && <SubscribersTab />}
       {tab === 'admin' && <AdminTab />}
     </div>
