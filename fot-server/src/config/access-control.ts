@@ -71,6 +71,7 @@ export const PAGE_PATHS = {
   ADMIN_PATENT_RECEIPTS: '/admin/patent-receipts',
   ADMIN_TIMESHEET_TRANSFERS: '/admin/timesheet-transfers',
   ADMIN_DATA_API: '/admin/data-api',
+  ADMIN_CHECKS: '/admin/checks',
   TIMESHEET_TEAM_MANAGEMENT: 'timesheet-team-management',
 } as const;
 
@@ -121,6 +122,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/admin/action-history',       label: 'Система — История действий',           group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: false, sort_order: 253, is_active: true },
   { key: '/admin/settings',             label: 'Система — Системные настройки',        group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 254, is_active: true },
   { key: '/admin/data-api',             label: 'Система — API-доступ к данным',        group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 255, is_active: true },
+  { key: '/admin/checks',               label: 'Система — Проверки (РКЛ / Патент)',    group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 256, is_active: true },
   { key: '/admin/payslips',             label: 'Управление расчётными листками',       group_code: 'admin', group_label: 'Администрирование',    surface: 'page',      supports_edit: true,  sort_order: 260, is_active: true },
   // Технический ключ без route-страницы
   { key: 'timesheet-team-management',   label: 'Управление составом табеля',           group_code: 'technical', group_label: 'Технические доступы', surface: 'technical', supports_edit: true, sort_order: 285, is_active: true },

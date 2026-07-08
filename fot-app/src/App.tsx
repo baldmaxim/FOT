@@ -644,7 +644,7 @@ const AppRoutes = () => {
         <Route path="/skud" element={<Navigate to="/skud-settings" replace />} />
         <Route path="/admin/payroll" element={<Navigate to="/admin/schedules" replace />} />
 
-        <Route element={<ProtectedRoute requiredPage={['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api']} />}>
+        <Route element={<ProtectedRoute requiredPage={['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api', '/admin/checks']} />}>
           <Route
             path="/admin/system"
             element={

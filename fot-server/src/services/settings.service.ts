@@ -192,6 +192,48 @@ export const assertMtsBusinessBaseUrlAllowed = (raw: string): void => {
   }
 };
 
+/** newdb.net — проверка физлиц по РКЛ и патентам. Единый POST-эндпоинт v2. */
+export const DEFAULT_NEWDB_BASE_URL = 'https://api.newdb.net/v2';
+
+/**
+ * Allow-list хостов newdb.net. Та же защита от SSRF/увода токена, что у МТС:
+ * даже админ с edit-доступом не может направить интеграцию на чужой хост.
+ */
+export const NEWDB_ALLOWED_HOSTS = ['api.newdb.net'] as const;
+
+/** Проверяет URL newdb: https + хост из allow-list + без userinfo. */
+export const assertNewdbBaseUrlAllowed = (raw: string): void => {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('newdb base URL: невалидный URL');
+  }
+  if (url.protocol !== 'https:') {
+    throw new Error('newdb base URL: разрешён только https://');
+  }
+  if (url.username || url.password) {
+    throw new Error('newdb base URL: userinfo в URL запрещён');
+  }
+  if (!(NEWDB_ALLOWED_HOSTS as readonly string[]).includes(url.hostname)) {
+    throw new Error(
+      `newdb base URL: хост "${url.hostname}" не в allow-list (разрешены: ${NEWDB_ALLOWED_HOSTS.join(', ')})`,
+    );
+  }
+};
+
+export interface INewdbConnectionPublicSettings {
+  baseUrl: string;
+  hasToken: boolean;
+  source: 'system_settings' | 'env' | 'unset';
+}
+
+export interface INewdbResolvedConfig {
+  baseUrl: string;
+  token: string;
+  source: 'system_settings' | 'env';
+}
+
 export const DEFAULT_SIGUR_MONITOR_SETTINGS: ISigurMonitorSettings = {
   enabled: true,
   failureThreshold: 2,
@@ -999,6 +1041,94 @@ export const settingsService = {
     }
 
     return this.getMtsConnectionSettings();
+  },
+
+  /** Публичные настройки newdb (без токена). baseUrl — из БД, фоллбэк .env/дефолт. */
+  async getNewdbConnectionSettings(): Promise<INewdbConnectionPublicSettings> {
+    await loadCache();
+
+    const settingsBaseUrl = (cache.get('newdb_api_base_url') || '').trim();
+    const settingsToken = cache.get('newdb_api_token') || '';
+    const envBaseUrl = (process.env.NEWDB_API_BASE_URL || '').trim();
+    const envToken = process.env.NEWDB_API_TOKEN || '';
+
+    const source: INewdbConnectionPublicSettings['source'] = settingsToken
+      ? 'system_settings'
+      : envToken
+        ? 'env'
+        : 'unset';
+
+    return {
+      baseUrl: settingsBaseUrl || envBaseUrl || DEFAULT_NEWDB_BASE_URL,
+      hasToken: Boolean(settingsToken || envToken),
+      source,
+    };
+  },
+
+  /** Резолв конфига для бэк-вызовов newdb. Токен в system_settings зашифрован. */
+  async getResolvedNewdbConfig(): Promise<INewdbResolvedConfig | null> {
+    await loadCache();
+
+    const settingsBaseUrl = (cache.get('newdb_api_base_url') || '').trim();
+    const settingsTokenEnc = cache.get('newdb_api_token') || '';
+
+    if (settingsTokenEnc) {
+      const encryptionService = await getEncryption();
+      const token = encryptionService.decryptField(settingsTokenEnc);
+      if (token) {
+        return {
+          baseUrl: settingsBaseUrl || process.env.NEWDB_API_BASE_URL || DEFAULT_NEWDB_BASE_URL,
+          token,
+          source: 'system_settings',
+        };
+      }
+    }
+
+    const envToken = process.env.NEWDB_API_TOKEN || '';
+    if (envToken) {
+      return {
+        baseUrl: settingsBaseUrl || process.env.NEWDB_API_BASE_URL || DEFAULT_NEWDB_BASE_URL,
+        token: envToken,
+        source: 'env',
+      };
+    }
+
+    return null;
+  },
+
+  /** Сохранить настройки newdb. Токен шифруется ПЕРЕД записью в system_settings. */
+  async setNewdbConnectionSettings(
+    config: { baseUrl?: string | null; token?: string | null },
+    userId: string,
+  ): Promise<INewdbConnectionPublicSettings> {
+    const entries: { key: string; value: string | null; description?: string }[] = [];
+
+    if (config.baseUrl !== undefined) {
+      const trimmedUrl = config.baseUrl?.trim() || null;
+      if (trimmedUrl) assertNewdbBaseUrlAllowed(trimmedUrl);
+      entries.push({
+        key: 'newdb_api_base_url',
+        value: trimmedUrl,
+        description: 'newdb.net — base URL API (allow-list)',
+      });
+    }
+
+    if (config.token !== undefined) {
+      const trimmed = config.token?.trim() || null;
+      const encryptionService = await getEncryption();
+      entries.push({
+        key: 'newdb_api_token',
+        value: trimmed ? encryptionService.encrypt(trimmed) : null,
+        description: 'newdb.net — API-токен X-API-KEY (зашифрован)',
+      });
+    }
+
+    if (entries.length > 0) {
+      await this.setMultiple(entries, userId);
+      this.invalidateCache();
+    }
+
+    return this.getNewdbConnectionSettings();
   },
 
   /** Расписание ежедневного автопрогона «Обновить всё» МТС Бизнес. */

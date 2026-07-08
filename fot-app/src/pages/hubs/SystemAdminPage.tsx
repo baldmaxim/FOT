@@ -1,5 +1,5 @@
 import { lazy, useMemo, type FC } from 'react';
-import { Users, Shield, ClipboardCheck, Settings, History, KeyRound, Activity, HardHat } from 'lucide-react';
+import { Users, Shield, ClipboardCheck, Settings, History, KeyRound, Activity, HardHat, ShieldCheck } from 'lucide-react';
 import { HubShell, type IHubTab } from '../../components/hub/HubShell';
 
 const UserManagementPage = lazy(() => import('../admin/UserManagementPage').then(m => ({ default: m.UserManagementPage })));
@@ -10,6 +10,7 @@ const ActionHistoryPage = lazy(() => import('../admin/ActionHistoryPage').then(m
 const SystemSettingsPage = lazy(() => import('../admin/SystemSettingsPage').then(m => ({ default: m.SystemSettingsPage })));
 const SystemResourcesPage = lazy(() => import('../admin/SystemResourcesPage').then(m => ({ default: m.SystemResourcesPage })));
 const DataApiPage = lazy(() => import('../admin/DataApiPage').then(m => ({ default: m.DataApiPage })));
+const ChecksPage = lazy(() => import('../admin/ChecksPage').then(m => ({ default: m.ChecksPage })));
 
 export const SystemAdminPage: FC = () => {
   const tabs = useMemo<IHubTab[]>(() => [
@@ -68,6 +69,13 @@ export const SystemAdminPage: FC = () => {
       accessPath: '/admin/data-api',
       icon: KeyRound,
       render: () => <DataApiPage />,
+    },
+    {
+      key: 'checks',
+      label: 'Проверки',
+      accessPath: '/admin/checks',
+      icon: ShieldCheck,
+      render: () => <ChecksPage />,
     },
   ], []);
 
