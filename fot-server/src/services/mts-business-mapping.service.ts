@@ -133,10 +133,30 @@ class MtsBusinessMappingService {
   }
 
   /**
+   * Однозначный сотрудник ФОТ по нормализованному ФИО (регистр/ё/пробелы).
+   * Ровно одно совпадение → он. Несколько → предпочитаем единственного
+   * активного (не уволен, не архив); если активных не ровно один — null
+   * (неоднозначно, оставляем ручной привязке). Дубль-«уволенный» больше
+   * не ломает автосвязь при живой активной записи.
+   */
+  private async resolveEmployeeIdByFio(fio: string): Promise<number | null> {
+    const matches = await query<{ id: number; employment_status: string | null; is_archived: boolean }>(
+      `SELECT id, employment_status, is_archived FROM employees
+        WHERE LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
+            = LOWER(REPLACE($1, 'ё', 'е'))`,
+      [fio],
+    );
+    if (matches.length === 1) return matches[0].id;
+    if (matches.length === 0) return null;
+    const active = matches.filter((m) => m.employment_status !== 'fired' && !m.is_archived);
+    return active.length === 1 ? active[0].id : null;
+  }
+
+  /**
    * Пары «номер → ФИО» (из XML МТС или PersonalData/PersonalDataInfo): сохранить
-   * ФИО в привязку и автопривязать к сотруднику при ТОЧНОМ однозначном совпадении
-   * нормализованного ФИО среди активных сотрудников (регистр/ё/пробелы).
-   * Уволенные дубли в «Уволенные» не участвуют в автопривязке.
+   * ФИО в привязку и автопривязать к сотруднику при однозначном совпадении
+   * нормализованного ФИО (см. resolveEmployeeIdByFio: единственное совпадение
+   * либо единственный активный среди дублей с уволенными/архивными).
    * Ручные привязки не перетираются (employee_id IS NULL). userId=null —
    * источник не привязан к конкретному админу (фоновый планировщик).
    */
@@ -160,16 +180,8 @@ class MtsBusinessMappingService {
       );
       saved++;
 
-      const matches = await query<{ id: number }>(
-        `SELECT id FROM employees
-          WHERE employment_status = 'active'
-            AND LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
-                = LOWER(REPLACE($1, 'ё', 'е'))
-          LIMIT 2`,
-        [fioClean],
-      );
-      if (matches.length !== 1) continue;
-      const targetId = matches[0].id;
+      const targetId = await this.resolveEmployeeIdByFio(fioClean);
+      if (targetId == null) continue;
 
       const updated = await execute(
         `UPDATE mts_business_number_map
