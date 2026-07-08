@@ -41,6 +41,13 @@ export interface BulkRunResult {
 
 export const BULK_LIMIT = 15;
 
+export interface RefreshSummary {
+  updated: number;
+  stillPending: number;
+  errors: number;
+  skipped: number;
+}
+
 export interface CheckPassRow {
   id: string;
   pass_number: string;
@@ -104,6 +111,11 @@ export const checksService = {
 
   async runBulk(passIds: string[], types: CheckType[]): Promise<BulkRunResult> {
     const res = await apiClient.post<ApiResponse<BulkRunResult>>(`${BASE}/run-bulk`, { passIds, types });
+    return res.data;
+  },
+
+  async refresh(passId: string): Promise<RefreshSummary> {
+    const res = await apiClient.post<ApiResponse<RefreshSummary>>(`${BASE}/refresh`, { passId });
     return res.data;
   },
 

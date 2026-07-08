@@ -549,3 +549,93 @@ export const getRawResponse = async (checkId: string): Promise<unknown | null> =
   );
   return row?.raw_response ?? null;
 };
+
+// ─── Polling: забор результата queued-проверки по requestId ──────────────────
+
+const POLL_LIMIT = BULK_LIMIT;
+
+export interface IRefreshSummary {
+  updated: number;      // получен финальный результат
+  stillPending: number; // проверено, но всё ещё в обработке
+  errors: number;       // сетевая/API ошибка при попытке (осталось pending)
+  skipped: number;      // pending без requestId — обновить нечем
+}
+
+interface IPendingRow {
+  id: string;
+  check_type: 'rkl' | 'patent_msk';
+  newdb_request_id: string | null;
+  saved_params: Record<string, unknown> | null;
+}
+
+/**
+ * Опросить одну pending-проверку: повторный POST того же метода с тем же
+ * requestId (polling по доке newdb — is_repeat, без нового списания).
+ * Тело берём из сохранённых raw_response.params (ровно то, что newdb принял).
+ * Возвращает исход для сводки.
+ */
+const pollPending = async (row: IPendingRow): Promise<'updated' | 'stillPending' | 'error' | 'skipped'> => {
+  if (!row.newdb_request_id || !row.saved_params) return 'skipped';
+
+  const body = { params: row.saved_params, requestId: row.newdb_request_id };
+
+  let data: any;
+  try {
+    data = await newdbBaseService.post<any>(body);
+  } catch (error) {
+    // Сетевая/таймаут/5xx — НЕ ошибка результата: оставляем pending, метим попытку.
+    const msg = error instanceof Error ? error.message : String(error);
+    await execute(
+      `UPDATE newdb_checks SET error_message = $2 WHERE id = $1::uuid`,
+      [row.id, `последняя попытка обновления не удалась: ${msg}`.slice(0, 500)],
+    );
+    return 'error';
+  }
+
+  const r = interpretNewdbResponse(row.check_type, data);
+  const balance = typeof data?.balance === 'number' ? data.balance : null;
+
+  if (r.status === 'pending') {
+    // Всё ещё в очереди — обновим только сырой ответ/баланс, статус не трогаем.
+    await execute(
+      `UPDATE newdb_checks
+          SET raw_response = $2::jsonb, provider_status = $3, balance = COALESCE($4, balance), error_message = NULL
+        WHERE id = $1::uuid`,
+      [row.id, JSON.stringify(data), r.providerStatus, balance],
+    );
+    return 'stillPending';
+  }
+
+  // Финальный результат.
+  await execute(
+    `UPDATE newdb_checks
+        SET status = $2, provider_status = $3, result_summary = $4,
+            raw_response = $5::jsonb, balance = COALESCE($6, balance), error_message = NULL
+      WHERE id = $1::uuid`,
+    [row.id, r.status, r.providerStatus, r.summary, JSON.stringify(data), balance],
+  );
+  return 'updated';
+};
+
+/** Обновить все pending-проверки пропуска через polling. Последовательно, с лимитом. */
+export const refreshPendingForPass = async (passId: string): Promise<IRefreshSummary> => {
+  const rows = await query<IPendingRow>(
+    `SELECT id, check_type, newdb_request_id, raw_response->'params' AS saved_params
+       FROM newdb_checks
+      WHERE contractor_pass_id = $1::uuid AND status = 'pending'
+        AND check_type IN ('rkl', 'patent_msk')
+      ORDER BY created_at ASC
+      LIMIT ${POLL_LIMIT}`,
+    [passId],
+  );
+
+  const summary: IRefreshSummary = { updated: 0, stillPending: 0, errors: 0, skipped: 0 };
+  for (const row of rows) {
+    const outcome = await pollPending(row);
+    if (outcome === 'updated') summary.updated++;
+    else if (outcome === 'stillPending') summary.stillPending++;
+    else if (outcome === 'error') summary.errors++;
+    else summary.skipped++;
+  }
+  return summary;
+};

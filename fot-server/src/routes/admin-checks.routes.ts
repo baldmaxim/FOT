@@ -19,6 +19,7 @@ router.get('/orgs', view, adminChecksController.listOrgs);
 router.get('/passes', view, adminChecksController.listPasses);
 router.post('/run', edit, adminChecksController.run);
 router.post('/run-bulk', edit, adminChecksController.runBulk);
+router.post('/refresh', edit, adminChecksController.refresh);
 router.get('/results', view, adminChecksController.getResults);
 router.get('/results/:id/raw', edit, adminChecksController.getRaw);
 

@@ -1,6 +1,6 @@
 import { useState, type FC } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldCheck, RefreshCw, Loader2, Eye, CheckCircle2, XCircle, Minus, AlertTriangle, Clock } from 'lucide-react';
+import { ShieldCheck, RefreshCw, Loader2, Eye, CheckCircle2, XCircle, Minus, AlertTriangle, Clock, RotateCw } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
@@ -31,7 +31,7 @@ const StatusIcon: FC<{ kind: CheckType; status: CheckStatus | null; at: string |
   let icon;
   if (status === 'clean') icon = <CheckCircle2 size={18} className={styles.icClean} aria-label={label} />;
   else if (status === 'found' || status === 'invalid') icon = <XCircle size={18} className={styles.icBad} aria-label={label} />;
-  else if (status === 'pending') { icon = <Clock size={18} className={styles.icPending} aria-label={label} />; title = 'В обработке. Обновление статуса добавим после подключения polling.'; }
+  else if (status === 'pending') { icon = <Clock size={18} className={styles.icPending} aria-label={label} />; title = 'Ожидает результата — нажмите «Обновить»'; }
   else if (status === 'not_applicable') icon = <Minus size={18} className={styles.icMuted} aria-label={label} />;
   else icon = <AlertTriangle size={18} className={styles.icWarn} aria-label={label} />;
 
@@ -52,6 +52,7 @@ export const ChecksPage: FC = () => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [rawFor, setRawFor] = useState<unknown | null>(null);
   const [runningRow, setRunningRow] = useState<string | null>(null);
+  const [refreshingRow, setRefreshingRow] = useState<string | null>(null);
   const [confirmBulk, setConfirmBulk] = useState<{ ids: string[] } | null>(null);
 
   const settingsQuery = useQuery({
@@ -119,6 +120,35 @@ export const ChecksPage: FC = () => {
     onSettled: () => setConfirmBulk(null),
   });
 
+  // Обновить (polling) pending-проверки одного пропуска.
+  const refreshOne = useMutation({
+    mutationFn: (passId: string) => checksService.refresh(passId),
+    onMutate: (passId) => setRefreshingRow(passId),
+    onSuccess: (s) => {
+      showToast(s.errors ? 'warning' : 'info', `Обновлено: ${s.updated} · ещё в обработке: ${s.stillPending} · ошибок: ${s.errors}${s.skipped ? ` · без requestId: ${s.skipped}` : ''}`);
+      queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', orgId] });
+    },
+    onError: (e: Error) => showToast('error', e.message || 'Ошибка обновления'),
+    onSettled: () => setRefreshingRow(null),
+  });
+
+  // Обновить pending по всем видимым строкам (последовательно, лимит как bulk).
+  const refreshAll = useMutation({
+    mutationFn: async (passIds: string[]) => {
+      const agg = { updated: 0, stillPending: 0, errors: 0, skipped: 0 };
+      for (const id of passIds) {
+        const s = await checksService.refresh(id);
+        agg.updated += s.updated; agg.stillPending += s.stillPending; agg.errors += s.errors; agg.skipped += s.skipped;
+      }
+      return agg;
+    },
+    onSuccess: (s) => {
+      showToast(s.errors ? 'warning' : 'info', `Обновлено: ${s.updated} · ещё в обработке: ${s.stillPending} · ошибок: ${s.errors}`);
+      queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', orgId] });
+    },
+    onError: (e: Error) => showToast('error', e.message || 'Ошибка обновления'),
+  });
+
   const openLatestRaw = async (passId: string) => {
     try {
       const results = await checksService.getResults(passId);
@@ -133,6 +163,9 @@ export const ChecksPage: FC = () => {
 
   const passes = passesQuery.data ?? [];
   const orgs = orgsQuery.data ?? [];
+  const pendingIds = passes
+    .filter(p => p.last_rkl_status === 'pending' || p.last_patent_msk_status === 'pending')
+    .map(p => p.id);
 
   const toggleRow = (id: string) => setSelected(prev => {
     const next = new Set(prev);
@@ -240,6 +273,18 @@ export const ChecksPage: FC = () => {
                   ? <><Loader2 size={14} className={styles.spin} /> Проверка…</>
                   : `Проверить выбранных (${selected.size})`}
               </button>
+              {pendingIds.length > 0 && (
+                <button
+                  className={styles.btnSecondary}
+                  disabled={refreshAll.isPending}
+                  onClick={() => refreshAll.mutate(pendingIds.slice(0, BULK_LIMIT))}
+                  title="Забрать результаты по requestId (без нового списания)"
+                >
+                  {refreshAll.isPending
+                    ? <><Loader2 size={14} className={styles.spin} /> Обновляю…</>
+                    : `Обновить в обработке (${pendingIds.length})`}
+                </button>
+              )}
               {selected.size > BULK_LIMIT && <span className={styles.limitWarn}>макс {BULK_LIMIT} за раз</span>}
             </div>
 
@@ -288,6 +333,16 @@ export const ChecksPage: FC = () => {
                           >
                             {runningRow === p.id ? <Loader2 size={14} className={styles.spin} /> : 'Проверить'}
                           </button>
+                          {(p.last_rkl_status === 'pending' || p.last_patent_msk_status === 'pending') && (
+                            <button
+                              className={styles.iconBtn}
+                              title="Обновить результат (по requestId, без списания)"
+                              disabled={refreshingRow === p.id}
+                              onClick={() => refreshOne.mutate(p.id)}
+                            >
+                              {refreshingRow === p.id ? <Loader2 size={15} className={styles.spin} /> : <RotateCw size={15} />}
+                            </button>
+                          )}
                           <button className={styles.iconBtn} title="Сырой ответ" onClick={() => openLatestRaw(p.id)}>
                             <Eye size={15} />
                           </button>

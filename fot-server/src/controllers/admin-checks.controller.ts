@@ -6,6 +6,7 @@ import { assertNewdbBaseUrlAllowed } from '../services/settings.service.js';
 import {
   runChecksForPass,
   runChecksBulk,
+  refreshPendingForPass,
   listPassesForDepartment,
   listContractorOrgs,
   getResultsForPass,
@@ -148,6 +149,21 @@ export const adminChecksController = {
       const status = (error as { status?: number })?.status;
       const message = error instanceof Error ? error.message : 'Ошибка массовой проверки';
       res.status(status && status >= 400 && status < 600 ? status : 500).json({ success: false, error: message });
+    }
+  },
+
+  async refresh(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const passId = String(req.body?.passId || '').trim();
+      if (!passId) {
+        res.status(400).json({ success: false, error: 'passId обязателен' });
+        return;
+      }
+      const summary = await refreshPendingForPass(passId);
+      res.json({ success: true, data: summary });
+    } catch (error) {
+      console.error('newdb refresh error:', error);
+      res.status(500).json({ success: false, error: 'Ошибка обновления результатов' });
     }
   },
 

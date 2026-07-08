@@ -129,7 +129,7 @@
 .icBad { color: #dc2626; }
 .icMuted { color: #94a3b8; }
 .icWarn { color: #d97706; }
-.icPending { color: #64748b; animation: spin 2.4s linear infinite; }
+.icPending { color: #64748b; }
 
 .confirmText {
   padding: 16px;
