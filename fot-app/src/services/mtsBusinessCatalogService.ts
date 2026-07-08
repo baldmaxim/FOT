@@ -44,8 +44,11 @@ export const mtsBusinessCatalogService = {
     return res.data;
   },
 
-  getAccountsPackages: async (): Promise<IMtsBusinessAccountPackages[]> => {
-    const res = await apiClient.get<ApiResponse<IMtsBusinessAccountPackages[]>>('/mts-business/catalog/accounts-packages');
+  getAccountsPackages: async (accountId?: string): Promise<IMtsBusinessAccountPackages[]> => {
+    const qs = new URLSearchParams();
+    if (accountId) qs.set('accountId', accountId);
+    const suffix = qs.size > 0 ? `?${qs.toString()}` : '';
+    const res = await apiClient.get<ApiResponse<IMtsBusinessAccountPackages[]>>(`/mts-business/catalog/accounts-packages${suffix}`);
     return res.data;
   },
 

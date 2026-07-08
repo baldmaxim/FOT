@@ -437,11 +437,12 @@ export const mtsBusinessController = {
     try {
       const from = String(req.query.from || '');
       const to = String(req.query.to || '');
+      const accountId = req.query.accountId ? String(req.query.accountId) : null;
       if (!DATE_RE.test(from) || !DATE_RE.test(to)) {
         res.status(400).json({ success: false, error: 'Параметры from/to должны быть в формате YYYY-MM-DD' });
         return;
       }
-      res.json({ success: true, data: await mtsBusinessCdrService.getAccountsSummary(from, to) });
+      res.json({ success: true, data: await mtsBusinessCdrService.getAccountsSummary(from, to, accountId) });
     } catch (error) {
       fail(res, error, 'Ошибка формирования сводки по лицевым счетам');
     }

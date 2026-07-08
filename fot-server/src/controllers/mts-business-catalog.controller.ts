@@ -39,9 +39,10 @@ export const mtsBusinessCatalogController = {
   },
 
   /** Остатки пакетов минут/SMS/интернета по каждому активному ЛС. */
-  async getAccountsPackages(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  async getAccountsPackages(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const data = await mtsBusinessMetricsStoreService.getAccountsPackagesSummary();
+      const accountId = req.query.accountId ? String(req.query.accountId) : null;
+      const data = await mtsBusinessMetricsStoreService.getAccountsPackagesSummary(accountId);
       res.json({ success: true, data });
     } catch (error) {
       fail(res, error, 'Ошибка получения остатков пакетов');

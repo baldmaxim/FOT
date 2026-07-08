@@ -606,8 +606,9 @@ class MtsBusinessCdrService {
     return out;
   }
 
-  /** Сводка по лицевым счетам за период: звонки/время/кол-во номеров на аккаунт. */
-  async getAccountsSummary(from: string, to: string): Promise<IAccountSummaryRow[]> {
+  /** Сводка по лицевым счетам за период: звонки/время/кол-во номеров на аккаунт.
+   *  accountId — фильтр по конкретному ЛС (null/undefined = все ЛС). */
+  async getAccountsSummary(from: string, to: string, accountId?: string | null): Promise<IAccountSummaryRow[]> {
     const rows = await query<{
       account_id: string | null;
       label: string | null;
@@ -626,9 +627,10 @@ class MtsBusinessCdrService {
          LEFT JOIN mts_business_accounts a ON a.id = c.account_id
         WHERE c.started_at >= $1::date
           AND c.started_at < ($2::date + INTERVAL '1 day')
+          AND ($3::uuid IS NULL OR c.account_id = $3::uuid)
         GROUP BY c.account_id, a.label, a.account_number
         ORDER BY SUM(c.duration_sec) DESC NULLS LAST`,
-      [from, to],
+      [from, to, accountId ?? null],
     );
     return rows.map(r => ({
       accountId: r.account_id,

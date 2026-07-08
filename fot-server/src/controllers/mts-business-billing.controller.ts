@@ -41,13 +41,14 @@ export const mtsBusinessBillingController = {
       const today = moscowTodayIso();
       const from = String(req.query.from || `${today.slice(0, 7)}-01`);
       const to = String(req.query.to || today);
+      const accountId = req.query.accountId ? String(req.query.accountId) : null;
       if (!DATE_RE.test(from) || !DATE_RE.test(to) || from > to) {
         res.status(400).json({ success: false, error: 'Параметры from/to должны быть в формате YYYY-MM-DD, from ≤ to' });
         return;
       }
       const [accounts, employees] = await Promise.all([
-        mtsBusinessMetricsStoreService.getAccountsSummary(),
-        mtsBusinessMetricsStoreService.getEmployeesSummary(null, from, to),
+        mtsBusinessMetricsStoreService.getAccountsSummary(accountId),
+        mtsBusinessMetricsStoreService.getEmployeesSummary(accountId, from, to),
       ]);
       res.json({ success: true, data: { accounts, employees, period: { from, to } } });
     } catch (error) {

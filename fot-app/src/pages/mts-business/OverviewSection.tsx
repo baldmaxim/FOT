@@ -121,12 +121,12 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
   const [empPageState, setEmpPageState] = useState<{ key: string; page: number }>({ key: '', page: 1 });
 
   const accountsMeta = useMtsBusinessAccounts();
-  const accSummary = useMtsBusinessAccountsSummary(callsFrom, callsTo, true);
+  const accSummary = useMtsBusinessAccountsSummary(callsFrom, callsTo, true, accountId || undefined);
   const report = useMtsBusinessReport(callsFrom, callsTo, true, accountId || undefined);
-  const billingSummary = useMtsBusinessBillingSummary(callsFrom, callsTo);
+  const billingSummary = useMtsBusinessBillingSummary(callsFrom, callsTo, accountId || undefined);
   const trend = useMtsBusinessBillingTrend(trendMetric, trendFrom, trendTo, accountId || undefined);
   const employeesCatalog = useMtsBusinessEmployeesCatalog(accountId || undefined);
-  const accountsPackages = useMtsBusinessAccountsPackages();
+  const accountsPackages = useMtsBusinessAccountsPackages(accountId || undefined);
   const actions = useMtsBusinessActions(true);
   const refreshAllStatus = useMtsBusinessRefreshAllStatus();
 

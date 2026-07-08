@@ -183,8 +183,9 @@ class MtsBusinessMetricsStoreService {
     return row?.amount != null ? { amount: Number(row.amount), capturedAt: row.captured_at } : null;
   }
 
-  /** Последний известный срез по каждому активному ЛС (баланс/кредитный лимит/неоплаченные). */
-  async getAccountsSummary(): Promise<IAccountMetricsSummaryRow[]> {
+  /** Последний известный срез по каждому активному ЛС (баланс/кредитный лимит/неоплаченные).
+   *  accountId — фильтр по конкретному ЛС (null/undefined = все активные ЛС). */
+  async getAccountsSummary(accountId?: string | null): Promise<IAccountMetricsSummaryRow[]> {
     const rows = await query<{
       account_id: string;
       label: string;
@@ -208,8 +209,10 @@ class MtsBusinessMetricsStoreService {
          FROM mts_business_accounts a
          LEFT JOIN latest l ON l.account_id = a.id
         WHERE a.is_active
+          AND ($1::uuid IS NULL OR a.id = $1::uuid)
         GROUP BY a.id, a.label, a.account_number
         ORDER BY a.label`,
+      [accountId ?? null],
     );
     return rows.map(r => ({
       accountId: r.account_id,
@@ -429,8 +432,9 @@ class MtsBusinessMetricsStoreService {
     return [...byNumber.values()];
   }
 
-  /** Остатки пакетов минут/SMS/интернета по каждому активному ЛС (metric='validity_info', scope='account'). */
-  async getAccountsPackagesSummary(): Promise<IAccountPackagesRow[]> {
+  /** Остатки пакетов минут/SMS/интернета по каждому активному ЛС (metric='validity_info', scope='account').
+   *  accountId — фильтр по конкретному ЛС (null/undefined = все активные ЛС). */
+  async getAccountsPackagesSummary(accountId?: string | null): Promise<IAccountPackagesRow[]> {
     const rows = await query<{
       account_id: string;
       label: string;
@@ -448,7 +452,9 @@ class MtsBusinessMetricsStoreService {
          FROM mts_business_accounts a
          LEFT JOIN latest l ON l.account_id = a.id
         WHERE a.is_active
+          AND ($1::uuid IS NULL OR a.id = $1::uuid)
         ORDER BY a.label`,
+      [accountId ?? null],
     );
     return rows.map(r => ({
       accountId: r.account_id,

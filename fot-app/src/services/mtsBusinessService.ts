@@ -223,8 +223,9 @@ export const mtsBusinessService = {
     return res.data;
   },
 
-  getAccountsSummary: async (from: string, to: string): Promise<IMtsBusinessAccountSummaryRow[]> => {
+  getAccountsSummary: async (from: string, to: string, accountId?: string): Promise<IMtsBusinessAccountSummaryRow[]> => {
     const qs = new URLSearchParams({ from, to });
+    if (accountId) qs.set('accountId', accountId);
     const res = await apiClient.get<ApiResponse<IMtsBusinessAccountSummaryRow[]>>(`/mts-business/report/accounts-summary?${qs.toString()}`);
     return res.data;
   },

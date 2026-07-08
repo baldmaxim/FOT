@@ -7,8 +7,8 @@ export const getMtsBusinessNumberMapKey = () => ['mts-business', 'number-map'] a
 export const getMtsBusinessImportedNumbersKey = () => ['mts-business', 'imported-numbers'] as const;
 export const getMtsBusinessReportKey = (from: string, to: string, accountId?: string) =>
   ['mts-business', 'report', from, to, accountId ?? 'all'] as const;
-export const getMtsBusinessAccountsSummaryKey = (from: string, to: string) =>
-  ['mts-business', 'accounts-summary', from, to] as const;
+export const getMtsBusinessAccountsSummaryKey = (from: string, to: string, accountId?: string) =>
+  ['mts-business', 'accounts-summary', from, to, accountId ?? 'all'] as const;
 
 export const useMtsBusinessAccounts = () => useQuery({
   queryKey: getMtsBusinessAccountsKey(),
@@ -44,9 +44,9 @@ export const useMtsBusinessReport = (from: string, to: string, enabled: boolean,
   enabled,
 });
 
-export const useMtsBusinessAccountsSummary = (from: string, to: string, enabled: boolean) => useQuery({
-  queryKey: getMtsBusinessAccountsSummaryKey(from, to),
-  queryFn: () => mtsBusinessService.getAccountsSummary(from, to),
+export const useMtsBusinessAccountsSummary = (from: string, to: string, enabled: boolean, accountId?: string) => useQuery({
+  queryKey: getMtsBusinessAccountsSummaryKey(from, to, accountId),
+  queryFn: () => mtsBusinessService.getAccountsSummary(from, to, accountId),
   staleTime: 30_000,
   enabled,
 });
