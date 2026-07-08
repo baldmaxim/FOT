@@ -14,22 +14,8 @@ import type {
 import { UnavailableNotice } from './common/UnavailableNotice';
 import { PersonalDataModal } from './personal-data/PersonalDataModal';
 import { PersonalDataStatusBadge } from './personal-data/PersonalDataStatusBadge';
-import { fmtMoney, fmtLast, fmtDay, EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS } from './mtsBusinessFormat';
+import { fmtMoney, fmtLast, fmtDay, lastMonths, EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS } from './mtsBusinessFormat';
 import s from './SubscriberCardModal.module.css';
-
-const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-
-const lastMonths = (n: number): { value: string; label: string }[] => {
-  const out: { value: string; label: string }[] = [];
-  const d = new Date();
-  for (let i = 0; i < n; i++) {
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    out.push({ value: `${y}-${String(m + 1).padStart(2, '0')}`, label: `${MONTH_NAMES[m]} ${y}` });
-    d.setMonth(m - 1);
-  }
-  return out;
-};
 
 const dash = (v: string | number | null | undefined): string => (v == null || v === '' ? '—' : String(v));
 

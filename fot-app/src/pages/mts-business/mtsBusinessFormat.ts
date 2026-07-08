@@ -7,6 +7,30 @@ export const errText = (e: unknown, fallback: string): string => (e instanceof A
 
 export const pad = (n: number): string => String(n).padStart(2, '0');
 export const toISODate = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+export const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+/** Последние n месяцев, свежие сверху: [{ value:'YYYY-MM', label:'Июль 2026' }]. */
+export const lastMonths = (n: number, base: Date = new Date()): { value: string; label: string }[] => {
+  const out: { value: string; label: string }[] = [];
+  const d = new Date(base.getFullYear(), base.getMonth(), 1);
+  for (let i = 0; i < n; i++) {
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    out.push({ value: `${y}-${pad(m + 1)}`, label: `${MONTH_NAMES[m]} ${y}` });
+    d.setMonth(m - 1);
+  }
+  return out;
+};
+
+/** Диапазон месяца 'YYYY-MM' → { from:'YYYY-MM-01', to: min(последний день месяца, today) }. */
+export const monthRange = (ym: string, today: Date = new Date()): { from: string; to: string } => {
+  const [y, m] = ym.split('-').map(Number);
+  const first = new Date(y, m - 1, 1);
+  const last = new Date(y, m, 0);
+  const to = last > today ? today : last;
+  return { from: toISODate(first), to: toISODate(to) };
+};
 export const fmtDur = (sec: number): string => {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);

@@ -20,7 +20,7 @@ import { useMtsBusinessRefreshAllStatus } from '../../hooks/useMtsBusinessRefres
 import type { MtsBusinessDailyMetric } from '../../services/mtsBusinessBillingService';
 import { RefreshAllPanel } from './overview/RefreshAllPanel';
 import { UnavailableNotice } from './common/UnavailableNotice';
-import { toISODate, fmtDur, fmtLast, fmtMoney, fmtPackage, ACTION_TYPE_LABELS } from './mtsBusinessFormat';
+import { toISODate, fmtDur, fmtLast, fmtMoney, fmtPackage, ACTION_TYPE_LABELS, lastMonths, monthRange } from './mtsBusinessFormat';
 import styles from './OverviewSection.module.css';
 
 const STATUS_BADGE: Record<string, { cls: string; label: string }> = {
@@ -101,6 +101,13 @@ export const OverviewSection: FC = () => {
   );
   const [callsFrom, setCallsFrom] = useState(defaultCallsFrom);
   const [callsTo, setCallsTo] = useState(toISODate(now));
+  const months = useMemo(() => lastMonths(12, now), [now]);
+  const selectedMonth = callsFrom.slice(0, 7);
+  const onPickMonth = (ym: string): void => {
+    const { from, to } = monthRange(ym, now);
+    setCallsFrom(from);
+    setCallsTo(to);
+  };
   const [trendFrom, setTrendFrom] = useState(toISODate(new Date(now.getFullYear(), now.getMonth() - 2, now.getDate())));
   const [trendTo, setTrendTo] = useState(toISODate(now));
   const [trendMetric, setTrendMetric] = useState<MtsBusinessDailyMetric>('balance');
@@ -224,6 +231,10 @@ export const OverviewSection: FC = () => {
           options={[{ v: '', label: 'Все ЛС' }, ...(accountsMeta.data ?? []).map(a => ({ v: a.id, label: a.label }))]}
         />
         <span className={styles.headerDates}>
+          <select className={styles.monthSelect} value={selectedMonth} onChange={e => onPickMonth(e.target.value)}>
+            {!months.some(m => m.value === selectedMonth) && <option value={selectedMonth}>Период…</option>}
+            {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
           <input className={styles.dateInput} type="date" value={callsFrom} onChange={e => setCallsFrom(e.target.value)} />
           <span className={styles.headerDatesSep}>—</span>
           <input className={styles.dateInput} type="date" value={callsTo} onChange={e => setCallsTo(e.target.value)} />
