@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 
 // Моки внешних зависимостей контроллера подрядчика. Цель тестов — гард read-only
 // документов в savePassDocuments: поданный пропуск (status='submitted') нельзя править,
@@ -164,5 +164,63 @@ describe('savePassDocuments — ВНЖ / патент взаимоисключе
     const p = updateParams[0];
     expect(p[7]).toBe(false);           // has_residence_permit сброшен
     expect(p[8]).toBeNull();            // residence_permit_number обнулён
+  });
+});
+
+// Регрессия: submit-гейт полноты должен видеть ВНЖ. Раньше SELECT eligibleRows не
+// доставал has_residence_permit / residence_permit_number, и isDocsComplete для
+// патентной страны требовал патент — держатель с ВНЖ не мог отправить заявку.
+// Тест гоняет submit с НАСТОЯЩИМ isDocsComplete (не мок), чтобы проверить именно гейт.
+describe('submit — гейт полноты учитывает ВНЖ', () => {
+  type DocsModule = typeof import('../services/contractor-docs.service.js');
+  let realIsDocsComplete: DocsModule['isDocsComplete'];
+
+  beforeAll(async () => {
+    const actual = await vi.importActual<DocsModule>('../services/contractor-docs.service.js');
+    realIsDocsComplete = actual.isDocsComplete;
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.isDocsComplete.mockImplementation((r: unknown) => realIsDocsComplete(r as never));
+  });
+
+  // Готовый к отправке пропуск: патентная страна + ВНЖ + номер, патент пустой.
+  const vnzhRow = (residence_permit_number: string | null) => ({
+    pass_number: '2857', holder_name: 'Розлован Генадие',
+    passport_series_number: 'АР 0020125', passport_issue_date: '2023-04-13', birth_date: '1984-12-26',
+    citizenship: 'Молдова',
+    patent_number: null, patent_issue_date: null, patent_blank_number: null,
+    has_residence_permit: true, residence_permit_number,
+  });
+
+  const runSubmit = async (rows: Array<Record<string, unknown>>) => {
+    h.resolveOrg.mockResolvedValue(ORG);
+    h.queryOne.mockResolvedValue(null);        // нет pending-заявки
+    h.query.mockResolvedValue(rows);           // eligibleRows
+    h.withTransaction.mockImplementation(async (cb: (c: unknown) => Promise<unknown>) => {
+      const client = { query: vi.fn(async () => ({ rows: [{ id: 'sub-1' }], rowCount: 1 })) };
+      return cb(client);
+    });
+    const req = { user: { id: 'user-1' }, params: {}, body: {} } as never;
+    const res = makeRes();
+    await contractorController.submit(req, res as never);
+    return { res };
+  };
+
+  it('ВНЖ-пропуск с номером считается полным → заявка уходит (200)', async () => {
+    const { res } = await runSubmit([vnzhRow('83 1242720')]);
+    expect(res.statusCode).toBe(200);
+    expect((res.body as { success?: boolean }).success).toBe(true);
+    // Гард против регрессии SELECT: колонки ВНЖ обязаны попасть в выборку.
+    const sql = h.query.mock.calls[0][0] as string;
+    expect(sql).toContain('has_residence_permit');
+    expect(sql).toContain('residence_permit_number');
+  });
+
+  it('ВНЖ отмечен, но номер пуст → комплект неполный, заявка отклонена (409)', async () => {
+    const { res } = await runSubmit([vnzhRow(null)]);
+    expect(res.statusCode).toBe(409);
+    expect((res.body as { code?: string }).code).toBe('CONTRACTOR_DOCUMENTS_INCOMPLETE');
   });
 });

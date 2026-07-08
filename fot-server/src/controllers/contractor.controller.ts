@@ -676,10 +676,13 @@ export const contractorController = {
         patent_number: string | null;
         patent_issue_date: string | null;
         patent_blank_number: string | null;
+        has_residence_permit: boolean;
+        residence_permit_number: string | null;
       }>(
         `SELECT pass_number, holder_name,
                 passport_series_number, passport_issue_date, birth_date, citizenship,
-                patent_number, patent_issue_date, patent_blank_number
+                patent_number, patent_issue_date, patent_blank_number,
+                has_residence_permit, residence_permit_number
            FROM contractor_passes
           WHERE org_department_id = $1::uuid AND submission_id IS NULL
             AND status = 'assigned' AND holder_name IS NOT NULL`,
