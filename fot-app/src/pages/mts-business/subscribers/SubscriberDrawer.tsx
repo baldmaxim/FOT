@@ -16,7 +16,7 @@ import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
 import { EmployeeFioPicker } from '../../mts/EmployeeFioPicker';
 import {
-  errText, fmtDur, fmtLast, fmtMoney, fmtPackage, fmtPhone, lastMonths,
+  errText, fmtDur, fmtLast, fmtMoney, fmtPackage, packageHasData, fmtPhone, lastMonths,
   EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS, PD_STATUS_LABELS,
 } from '../mtsBusinessFormat';
 import st from './Subscribers.module.css';
@@ -186,7 +186,8 @@ const KV: FC<{ label: string; value: ReactNode }> = ({ label, value }) => (
   </div>
 );
 
-const EXPENSE_ORDER = ['calls', 'sms', 'internet', 'periodic', 'oneTime', 'topups', 'other'] as const;
+// Пополнения (topups) — приход на ЛС фирмы, а не расход номера: в панель абонента не выводим.
+const EXPENSE_ORDER = ['calls', 'sms', 'internet', 'periodic', 'oneTime', 'other'] as const;
 
 /**
  * Боковая панель абонента (40% экрана): данные из сохранённых снапшотов,
@@ -417,9 +418,12 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           <KV label="Начисления (месяц)" value={d?.charges ? fmtMoney(d.charges.amount) : fmtMoney(row.chargesAmount)} />
           <KV label="Тариф" value={dash(d?.tariff.name ?? row.tariffName)} />
           <KV label="Абонентская плата" value={d?.tariff.fee?.amount != null ? `${fmtMoney(d.tariff.fee.amount)}/мес` : '—'} />
-          {(d?.packages ?? []).length > 0 && (
-            <KV label="Пакеты" value={(d?.packages ?? []).map(fmtPackage).join(' · ')} />
-          )}
+          {(() => {
+            const lines = [...new Set((d?.packages ?? []).filter(packageHasData).map(fmtPackage))];
+            return lines.length > 0
+              ? lines.map((t, i) => <KV key={`pkg-${i}`} label={i === 0 ? 'Пакеты' : ''} value={t} />)
+              : null;
+          })()}
         </div>
 
         <div className={st.section}>
@@ -438,12 +442,9 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           {details.isLoading ? <p className={styles.hint}>Загрузка…</p> : serviceList(d?.blocks ?? [], 'block', 'remove', 'Блокировок нет')}
         </div>
 
-        {((d?.payments ?? []).length > 0 || (d?.forwarding ?? []).length > 0 || d?.roaming || (d?.deliveryMethod ?? []).length > 0) && (
+        {((d?.forwarding ?? []).length > 0 || d?.roaming || (d?.deliveryMethod ?? []).length > 0) && (
           <div className={st.section}>
             <div className={st.sectionHead}><h4 className={st.sectionTitle}>Прочее</h4></div>
-            {(d?.payments ?? []).slice(0, 5).map((p, i) => (
-              <KV key={`pay-${i}`} label={`Пополнение ${fmtLast(p.date)}`} value={`${fmtMoney(p.amount)}${p.method ? ` · ${p.method}` : ''}`} />
-            ))}
             {(d?.forwarding ?? []).map((f, i) => (
               <KV key={`fw-${i}`} label={`Переадресация ${(f.forwardingType && FORWARDING_TYPE_LABELS[f.forwardingType]) ?? f.forwardingType ?? ''}`} value={dash(f.forwardingAddress)} />
             ))}

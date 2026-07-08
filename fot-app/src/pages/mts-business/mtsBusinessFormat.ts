@@ -74,6 +74,9 @@ export const usageContactColor = (key: string | null | undefined): string => {
 };
 
 export const UNIT_LABELS: Record<string, string> = { BYTE: 'интернет', MINUTE: 'минуты', SECOND: 'минуты', ITEM: 'SMS', MONEY: 'деньги' };
+/** Пакет несёт данные, если задан остаток или квота (иначе строка «— из —» — мусор). */
+export const packageHasData = (p: { quota: number | null; remainder: number | null }): boolean =>
+  p.quota != null || p.remainder != null;
 export const fmtPackage = (p: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }): string => {
   const label = (p.unitOfMeasure && UNIT_LABELS[p.unitOfMeasure]) || p.unitOfMeasure || '—';
   const unit = p.unitOfMeasure === 'BYTE' ? 'МБ' : '';

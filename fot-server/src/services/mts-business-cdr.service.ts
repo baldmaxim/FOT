@@ -433,11 +433,17 @@ class MtsBusinessCdrService {
     for (const raw of asArray(usages as Record<string, unknown>[] | undefined)) {
       const u = raw as { Characteristics?: Record<string, unknown> } & Record<string, unknown>;
       const c = u.Characteristics ?? {};
+      // Платёж на ЛС («Регистрация платежа: Безналичный платёж…») дублируется в
+      // выписке каждого номера контракта — расходом номера не является, отсекаем
+      // (как в parseStatementUsages), иначе раздувает «Прочее»/«Итого» абонента.
+      if (u.type === 'income') continue;
+      const category = classifyUsage(c);
+      if (category === 'topups') continue;
       const amount = pickAmount(c) ?? pickAmount(u) ?? 0;
       const factUnits = Number(c.factUnits);
       out.push({
         date: typeof u.date === 'string' ? u.date : null,
-        category: classifyUsage(c),
+        category,
         label: typeof c.label === 'string' && c.label ? c.label : null,
         networkEvent: typeof c.networkEvent === 'string' ? c.networkEvent : null,
         direction: c.direction === 'I' ? 'in' : c.direction === 'O' ? 'out' : null,
