@@ -45,13 +45,17 @@ const fmtDate = (iso: string | null): string => {
 
 /**
  * Все документы держателя заполнены (для зелёной галочки на кнопке).
- * Паспорт, даты и гражданство — всегда; патент — только для патентных гражданств.
+ * Паспорт, даты и гражданство — всегда; для патентных гражданств — патент,
+ * НО ВНЖ его отменяет: с отметкой ВНЖ достаточно номера ВНЖ вместо патента.
+ * Зеркало isDocsComplete на бэке (contractor-docs.service) — держать в синхроне.
  */
 const hasAllDocs = (p: IPassRow): boolean => {
   const base = !!(p.passport_series_number?.trim() && p.passport_issue_date
     && p.birth_date && p.citizenship?.trim());
   if (!base) return false;
   if (!citizenshipRequiresPatent(p.citizenship)) return true;
+  // ВНЖ отменяет патент: для патентной страны с ВНЖ нужен номер ВНЖ.
+  if (p.has_residence_permit) return !!p.residence_permit_number?.trim();
   return !!(p.patent_number?.trim() && p.patent_issue_date && p.patent_blank_number?.trim());
 };
 
