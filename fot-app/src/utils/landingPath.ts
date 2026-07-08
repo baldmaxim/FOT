@@ -21,6 +21,7 @@ export const getLandingPath = (
   if (
     canViewPage('/admin/contractor-approvals')
     || canViewPage('/admin/contractor-approvals/submissions')
+    || canViewPage('/admin/contractor-approvals/otitb')
   ) {
     return '/admin/contractor-approvals';
   }

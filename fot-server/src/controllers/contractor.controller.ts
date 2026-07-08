@@ -90,6 +90,29 @@ export const contractorController = {
     }
   },
 
+  /**
+   * GET /inducted-persons — сотрудники организации подрядчика, прошедшие вводный
+   * инструктаж (реестр ОТиТБ). Источник для выпадающего списка ФИО при заполнении
+   * нового пропуска. Стабильная сортировка, чтобы datalist не «прыгал».
+   */
+  async getInductedPersons(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgId = await resolveOrgOr403(req, res);
+      if (!orgId) return;
+      const data = await query<{ id: string; full_name: string }>(
+        `SELECT id, full_name
+           FROM contractor_inducted_persons
+          WHERE org_department_id = $1::uuid
+          ORDER BY full_name ASC, inducted_on DESC`,
+        [orgId],
+      );
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Contractor getInductedPersons error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить список сотрудников' });
+    }
+  },
+
   async addPerson(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const orgId = await resolveOrgOr403(req, res);

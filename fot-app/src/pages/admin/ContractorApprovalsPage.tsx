@@ -15,6 +15,7 @@ import { SentTab } from '../../components/contractor/SentTab';
 import { SubmissionsTab } from '../../components/contractor/SubmissionsTab';
 import { MonitorTab } from '../../components/contractor/MonitorTab';
 import { RemovalRequestsTab } from '../../components/contractor/RemovalRequestsTab';
+import { OtitbTab } from '../../components/contractor/OtitbTab';
 import { usePendingContractorRemovalsCount } from '../../hooks/usePendingContractorRemovalsCount';
 import { useContractorSyncFailedCount } from '../../hooks/useContractorSyncFailedCount';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
@@ -22,16 +23,19 @@ import { contractorAdminService } from '../../services/contractorService';
 import { useAuth } from '../../contexts/AuthContext';
 import styles from '../contractor/Contractor.module.css';
 
-type Tab = 'pool' | 'sent' | 'submissions' | 'monitor' | 'removals';
+type Tab = 'pool' | 'sent' | 'submissions' | 'monitor' | 'removals' | 'otitb';
 
 export const ContractorApprovalsPage: FC = () => {
   const { isAdmin, canViewPage } = useAuth();
-  // Узкая роль ОТиТБ: есть только технический ключ вкладки «Заявки на согласование»,
-  // полного ключа раздела нет → показываем ей единственную вкладку.
-  const submissionsOnly = !isAdmin
-    && !canViewPage('/admin/contractor-approvals')
-    && canViewPage('/admin/contractor-approvals/submissions');
-  const [tab, setTab] = useState<Tab>(submissionsOnly ? 'submissions' : 'pool');
+  const hasFullSection = isAdmin || canViewPage('/admin/contractor-approvals');
+  // Узкая роль ОТиТБ: только технические ключи вкладок, полного ключа раздела нет.
+  // Показываем ей лишь доступные вкладки (ОТиТБ и/или «Заявки на согласование»).
+  const canOtitb = hasFullSection || canViewPage('/admin/contractor-approvals/otitb');
+  const canSubmissions = hasFullSection || canViewPage('/admin/contractor-approvals/submissions');
+  const narrowRole = !hasFullSection;
+  // Начальная вкладка: для полного доступа — пул, для узкой роли — первая доступная.
+  const initialTab: Tab = hasFullSection ? 'pool' : (canOtitb ? 'otitb' : 'submissions');
+  const [tab, setTab] = useState<Tab>(initialTab);
   // Поиск по ФИО во вкладке «Заявки на согласование» (состояние поднято на страницу,
   // поле живёт в строке вкладок). Сбрасывается при реальной смене вкладки.
   const [search, setSearch] = useState('');
@@ -54,7 +58,7 @@ export const ContractorApprovalsPage: FC = () => {
   return (
     <div className={styles.page}>
       <div className={styles.tabs}>
-        {!submissionsOnly && (
+        {!narrowRole && (
           <>
             <button
               className={`${styles.tab} ${tab === 'pool' ? styles.tabActive : ''}`}
@@ -70,14 +74,24 @@ export const ContractorApprovalsPage: FC = () => {
             </button>
           </>
         )}
-        <button
-          className={`${styles.tab} ${tab === 'submissions' ? styles.tabActive : ''}`}
-          onClick={() => changeTab('submissions')}
-        >
-          Заявки на согласование
-          {pendingCount > 0 && <span className={styles.tabBadge}>{pendingCount}</span>}
-        </button>
-        {!submissionsOnly && (
+        {canOtitb && (
+          <button
+            className={`${styles.tab} ${tab === 'otitb' ? styles.tabActive : ''}`}
+            onClick={() => changeTab('otitb')}
+          >
+            ОТиТБ
+          </button>
+        )}
+        {canSubmissions && (
+          <button
+            className={`${styles.tab} ${tab === 'submissions' ? styles.tabActive : ''}`}
+            onClick={() => changeTab('submissions')}
+          >
+            Заявки на согласование
+            {pendingCount > 0 && <span className={styles.tabBadge}>{pendingCount}</span>}
+          </button>
+        )}
+        {!narrowRole && (
           <>
             <button
               className={`${styles.tab} ${tab === 'monitor' ? styles.tabActive : ''}`}
@@ -107,11 +121,12 @@ export const ContractorApprovalsPage: FC = () => {
         )}
       </div>
 
-      {tab === 'pool' && !submissionsOnly && <PoolTab />}
-      {tab === 'sent' && !submissionsOnly && <SentTab />}
-      {tab === 'submissions' && <SubmissionsTab search={debouncedSearch} />}
-      {tab === 'monitor' && !submissionsOnly && <MonitorTab />}
-      {tab === 'removals' && !submissionsOnly && <RemovalRequestsTab />}
+      {tab === 'pool' && !narrowRole && <PoolTab />}
+      {tab === 'sent' && !narrowRole && <SentTab />}
+      {tab === 'otitb' && canOtitb && <OtitbTab />}
+      {tab === 'submissions' && canSubmissions && <SubmissionsTab search={debouncedSearch} />}
+      {tab === 'monitor' && !narrowRole && <MonitorTab />}
+      {tab === 'removals' && !narrowRole && <RemovalRequestsTab />}
     </div>
   );
 };

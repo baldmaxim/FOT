@@ -21,6 +21,11 @@ const apprEdit = requirePageAccess('/admin/contractor-approvals', 'edit');
 // доступ (ensureSubmissionsAccess).
 const submView = requireAnyPageAccess(['/admin/contractor-approvals', '/admin/contractor-approvals/submissions'], 'view');
 const submEdit = requireAnyPageAccess(['/admin/contractor-approvals', '/admin/contractor-approvals/submissions'], 'edit');
+// Вкладка «ОТиТБ» (реестр прошедших вводный инструктаж) — доступна узкой роли ОТиТБ
+// по техническому ключу /otitb и полному раздел-доступу. Контроллер дополнительно
+// проверяет доступ (ensureOtitbAccess).
+const otitbView = requireAnyPageAccess(['/admin/contractor-approvals', '/admin/contractor-approvals/otitb'], 'view');
+const otitbEdit = requireAnyPageAccess(['/admin/contractor-approvals', '/admin/contractor-approvals/otitb'], 'edit');
 
 router.get('/orgs', apprView, contractorAdminController.listOrgs);
 
@@ -48,6 +53,12 @@ router.get('/submissions/:id/export', apprView, contractorAdminController.export
 router.get('/submissions/:id', submView, contractorAdminController.getSubmissionDetail);
 // Отметка вводного инструктажа держателя пропуска (единственное write-действие ОТиТБ).
 router.patch('/submissions/passes/:passId/induction', submEdit, contractorAdminController.setPassInduction);
+// Реестр ОТиТБ: прошедшие вводный инструктаж сотрудники подрядчиков.
+router.get('/induction/orgs', otitbView, contractorAdminController.listInductionOrgs);
+router.get('/induction', otitbView, contractorAdminController.listInductedPersons);
+router.post('/induction', otitbEdit, contractorAdminController.addInductedPerson);
+router.delete('/induction/:id', otitbEdit, contractorAdminController.deleteInductedPerson);
+
 router.post('/submissions/:id/approve', apprEdit, requireCritical2FA, contractorAdminController.approveSubmission);
 router.post('/submissions/:id/reject', apprEdit, contractorAdminController.rejectSubmission);
 // Отклонить выделенные пропуска: возврат в пул подрядчика пустыми (ФИО очищается).

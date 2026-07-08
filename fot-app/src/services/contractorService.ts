@@ -11,6 +11,18 @@ export interface IContractorOrg {
   sigur_department_id: number | null;
 }
 
+/** Организация подрядчика + счётчик сотрудников в реестре ОТиТБ (прошедших инструктаж). */
+export interface IInductionOrg extends IContractorOrg {
+  inducted_count: number;
+}
+
+/** Запись реестра ОТиТБ (сотрудник, прошедший вводный инструктаж). */
+export interface IInductedPerson {
+  id: string;
+  full_name: string;
+  inducted_on: string;
+}
+
 export interface IRosterRow {
   id: string;
   full_name: string;
@@ -494,6 +506,13 @@ export const contractorService = {
     const r = await apiClient.get<ApiResponse<IPassRow[]>>('/contractor/passes');
     return r.data ?? [];
   },
+  /** Сотрудники организации, прошедшие вводный инструктаж (реестр ОТиТБ) — для выбора ФИО. */
+  async getInductedPersons(): Promise<Array<{ id: string; full_name: string }>> {
+    const r = await apiClient.get<ApiResponse<Array<{ id: string; full_name: string }>>>(
+      '/contractor/inducted-persons',
+    );
+    return r.data ?? [];
+  },
   async setPassHolder(passId: string, fullName: string | null): Promise<void> {
     await apiClient.post(`/contractor/passes/${passId}/holder`, { full_name: fullName });
   },
@@ -555,6 +574,27 @@ export const contractorAdminService = {
   async listOrgs(): Promise<IContractorOrg[]> {
     const r = await apiClient.get<ApiResponse<IContractorOrg[]>>('/admin/contractor/orgs');
     return r.data ?? [];
+  },
+  // Реестр ОТиТБ: прошедшие вводный инструктаж сотрудники подрядчиков.
+  async getInductionOrgs(): Promise<IInductionOrg[]> {
+    const r = await apiClient.get<ApiResponse<IInductionOrg[]>>('/admin/contractor/induction/orgs');
+    return r.data ?? [];
+  },
+  async listInducted(orgId: string): Promise<IInductedPerson[]> {
+    const r = await apiClient.get<ApiResponse<IInductedPerson[]>>(
+      `/admin/contractor/induction?org_department_id=${encodeURIComponent(orgId)}`,
+    );
+    return r.data ?? [];
+  },
+  async addInducted(orgId: string, fullName: string): Promise<IInductedPerson> {
+    const r = await apiClient.post<ApiResponse<IInductedPerson>>('/admin/contractor/induction', {
+      org_department_id: orgId,
+      full_name: fullName,
+    });
+    return r.data;
+  },
+  async removeInducted(id: string): Promise<void> {
+    await apiClient.delete(`/admin/contractor/induction/${id}`);
   },
   async listIssueObjects(): Promise<ISkudObjectOption[]> {
     const r = await apiClient.get<ApiResponse<ISkudObjectOption[]>>('/admin/contractor/objects');

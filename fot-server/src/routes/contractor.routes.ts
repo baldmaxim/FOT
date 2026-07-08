@@ -20,6 +20,7 @@ router.get('/roster', view, contractorController.getRoster);
 router.post('/roster/person', edit, contractorController.addPerson);
 router.post('/roster/:id/remove', edit, contractorController.markPersonRemoval);
 router.post('/roster/:id/unmark', edit, contractorController.unmarkPerson);
+router.get('/inducted-persons', view, contractorController.getInductedPersons);
 router.get('/passes', view, contractorController.getPasses);
 router.post('/passes/:id/holder', edit, contractorController.setPassHolder);
 router.post('/passes/:id/change-holder', edit, contractorController.changeHolder);

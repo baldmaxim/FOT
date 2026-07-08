@@ -76,7 +76,10 @@ export const ContractorPage: FC = () => {
   const rosterQuery = useQuery({ queryKey: ['contractor-roster'], queryFn: contractorService.getRoster, staleTime: 30_000 });
   const passesQuery = useQuery({ queryKey: ['contractor-passes'], queryFn: contractorService.getPasses, staleTime: 30_000, refetchInterval: 60_000, refetchOnWindowFocus: true });
   const subsQuery = useQuery({ queryKey: ['contractor-subs'], queryFn: contractorService.getSubmissions, staleTime: 30_000, refetchInterval: 60_000, refetchOnWindowFocus: true });
+  // Сотрудники, прошедшие вводный инструктаж (реестр ОТиТБ) — подсказки ФИО для новых пропусков.
+  const inductedQuery = useQuery({ queryKey: ['contractor-inducted'], queryFn: contractorService.getInductedPersons, staleTime: 60_000 });
 
+  const inducted = inductedQuery.data ?? [];
   const roster = rosterQuery.data ?? [];
   const passes = passesQuery.data ?? [];
   const subs = subsQuery.data ?? [];
@@ -316,6 +319,14 @@ export const ContractorPage: FC = () => {
               ) : passes.length === 0 ? (
                 <div className={styles.empty}>Пропуска ещё не выпущены администратором</div>
               ) : (
+                <>
+                {/* Подсказки ФИО из реестра ОТиТБ (прошедшие вводный инструктаж). Не ограничивает
+                    ручной ввод — только подставляет заранее заведённых сотрудников. */}
+                <datalist id="contractor-inducted-list">
+                  {inducted.map(pers => (
+                    <option key={pers.id} value={pers.full_name} />
+                  ))}
+                </datalist>
                 <table className={styles.table}>
                   <thead>
                     <tr>
@@ -342,6 +353,7 @@ export const ContractorPage: FC = () => {
                                 className={`${styles.input} ${styles.fullInput}`}
                                 value={value}
                                 placeholder="Фамилия Имя Отчество"
+                                list="contractor-inducted-list"
                                 disabled={busy}
                                 onChange={e => setEdited(prev => ({ ...prev, [p.id]: e.target.value }))}
                                 onBlur={() => void saveHolder(p)}
@@ -388,6 +400,7 @@ export const ContractorPage: FC = () => {
                     })}
                   </tbody>
                 </table>
+                </>
               )}
             </>
           )}

@@ -94,6 +94,7 @@ const ensureSystemAdmin = async (
 };
 
 const SUBMISSIONS_PAGE_KEY = '/admin/contractor-approvals/submissions';
+const OTITB_PAGE_KEY = '/admin/contractor-approvals/otitb';
 
 /**
  * Гейт вкладки «Заявки на согласование». Пускает системного админа (как раньше —
@@ -111,6 +112,26 @@ const ensureSubmissionsAccess = async (
   const granted = action === 'edit'
     ? await hasPageEdit(req.user.role_code, SUBMISSIONS_PAGE_KEY)
     : await hasPageView(req.user.role_code, SUBMISSIONS_PAGE_KEY);
+  if (granted) return true;
+  res.status(403).json({ success: false, error: 'Недостаточно прав' });
+  return false;
+};
+
+/**
+ * Гейт вкладки «ОТиТБ» (реестр прошедших вводный инструктаж). Аналогично
+ * ensureSubmissionsAccess: системный админ (scope.roots==='all') ИЛИ роль ОТиТБ
+ * с грантом на технический ключ /admin/contractor-approvals/otitb.
+ */
+const ensureOtitbAccess = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  action: 'view' | 'edit',
+): Promise<boolean> => {
+  const scope = await resolveCompanyScope(req);
+  if (scope.roots === 'all') return true;
+  const granted = action === 'edit'
+    ? await hasPageEdit(req.user.role_code, OTITB_PAGE_KEY)
+    : await hasPageView(req.user.role_code, OTITB_PAGE_KEY);
   if (granted) return true;
   res.status(403).json({ success: false, error: 'Недостаточно прав' });
   return false;
@@ -1113,6 +1134,118 @@ export const contractorAdminController = {
       }
       console.error('Contractor setPassInduction error:', error);
       res.status(500).json({ success: false, error: 'Не удалось сохранить инструктаж' });
+    }
+  },
+
+  /**
+   * GET /induction/orgs — все подрядные организации + счётчик заведённых в реестр
+   * ОТиТБ (прошедших вводный инструктаж) сотрудников. Для внешнего списка вкладки.
+   */
+  async listInductionOrgs(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureOtitbAccess(req, res, 'view'))) return;
+      const orgs = await getContractorOrgs();
+      const counts = await query<{ org_department_id: string; cnt: string }>(
+        `SELECT org_department_id, COUNT(*)::text AS cnt
+           FROM contractor_inducted_persons
+          GROUP BY org_department_id`,
+      );
+      const byOrg = new Map(counts.map(c => [c.org_department_id, Number(c.cnt)]));
+      const data = orgs.map(o => ({ ...o, inducted_count: byOrg.get(o.id) ?? 0 }));
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Contractor listInductionOrgs error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить организации' });
+    }
+  },
+
+  /** GET /induction?org_department_id= — реестр сотрудников организации. */
+  async listInductedPersons(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureOtitbAccess(req, res, 'view'))) return;
+      const orgId = z.string().uuid().parse(req.query.org_department_id);
+      const data = await query<{ id: string; full_name: string; inducted_on: string }>(
+        `SELECT id, full_name, inducted_on
+           FROM contractor_inducted_persons
+          WHERE org_department_id = $1::uuid
+          ORDER BY inducted_on DESC, created_at DESC`,
+        [orgId],
+      );
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректные данные' });
+        return;
+      }
+      console.error('Contractor listInductedPersons error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить список' });
+    }
+  },
+
+  /** POST /induction — добавить сотрудника в реестр. Body: { org_department_id, full_name }. */
+  async addInductedPerson(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureOtitbAccess(req, res, 'edit'))) return;
+      const { org_department_id, full_name } = z.object({
+        org_department_id: z.string().uuid(),
+        full_name: z.string().trim().min(2).max(200),
+      }).parse(req.body);
+
+      // Организация должна быть подрядной (источник истины — getContractorOrgs).
+      const orgs = await getContractorOrgs();
+      if (!orgs.some(o => o.id === org_department_id)) {
+        res.status(404).json({ success: false, error: 'Подрядная организация не найдена' });
+        return;
+      }
+
+      const row = await queryOne<{ id: string; full_name: string; inducted_on: string }>(
+        `INSERT INTO contractor_inducted_persons (org_department_id, full_name, created_by)
+         VALUES ($1::uuid, $2, $3::uuid)
+         RETURNING id, full_name, inducted_on`,
+        [org_department_id, full_name, req.user.id],
+      );
+      res.json({ success: true, data: row });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректные данные' });
+        return;
+      }
+      console.error('Contractor addInductedPerson error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось добавить сотрудника' });
+    }
+  },
+
+  /** DELETE /induction/:id — удалить запись реестра (только в пределах подрядных орг). */
+  async deleteInductedPerson(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureOtitbAccess(req, res, 'edit'))) return;
+      const id = z.string().uuid().parse(req.params.id);
+
+      // Граница scope: удаляем только записи подрядных организаций.
+      const orgs = await getContractorOrgs();
+      const orgIds = orgs.map(o => o.id);
+      if (orgIds.length === 0) {
+        res.status(404).json({ success: false, error: 'Запись не найдена' });
+        return;
+      }
+      const deleted = await queryOne<{ id: string }>(
+        `DELETE FROM contractor_inducted_persons
+          WHERE id = $1::uuid AND org_department_id = ANY($2::uuid[])
+          RETURNING id`,
+        [id, orgIds],
+      );
+      if (!deleted) {
+        res.status(404).json({ success: false, error: 'Запись не найдена' });
+        return;
+      }
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректные данные' });
+        return;
+      }
+      console.error('Contractor deleteInductedPerson error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось удалить запись' });
     }
   },
 
