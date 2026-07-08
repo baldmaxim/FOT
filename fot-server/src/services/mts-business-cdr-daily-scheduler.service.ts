@@ -142,16 +142,21 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
             }
 
             lastRunYmdMsk = ymd;
+            // 401 по ВСЕМ номерам = умерли креды аккаунта, а не свойство номеров —
+            // день помечаем выполненным (иначе ретрай каждый тик), но строку — ошибкой.
+            const allNoAccess = totalNumbers > 0 && totalNoAccess === totalNumbers;
+            if (allNoAccess) cronStatus = 'error';
             await mergeSigurRuntimeState({
               key: DAILY_STATE_KEY,
               meta: {
                 lastRunYmdMsk: ymd,
-                lastSuccessAt: new Date().toISOString(),
                 lastStartedAt: startedAtIso,
                 lastWindow: { dateFrom, dateTo },
-                // lastError чистим: значение прошлых сбоев не должно всплывать
-                // в панели рядом со свежим успешным прогоном.
-                lastError: null,
+                ...(allNoAccess
+                  ? { lastFailureAt: new Date().toISOString(), lastError: '401 по всем номерам — проверьте логин/пароль аккаунта МТС' }
+                  // lastError чистим: значение прошлых сбоев не должно всплывать
+                  // в панели рядом со свежим успешным прогоном.
+                  : { lastSuccessAt: new Date().toISOString(), lastError: null }),
                 lastResult: {
                   accounts: accounts.length,
                   numbers: totalNumbers,

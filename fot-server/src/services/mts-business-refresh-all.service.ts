@@ -204,6 +204,11 @@ async function runStep(
       // 1-го числа месяца) — «Обновить всё» освежает колонку «Начисления».
       // Упавшие номера добираются вторым проходом внутри helper'а.
       const res = await syncMsisdnsBatch(accountId, msisdns, window.dateFrom, window.dateTo, STEP_POOL);
+      // «Нет доступа» точечно — свойство номеров; 401 по ВСЕМ номерам — почти
+      // наверняка умерли креды аккаунта, маскировать это «ок»-статусом нельзя.
+      if (res.noAccess === msisdns.length) {
+        return { status: 'error', count: 0, message: '401 по всем номерам — проверьте логин/пароль аккаунта МТС' };
+      }
       const status = stepStatusFromCounters({
         failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.unavailable + res.failed < msisdns.length,
       });
@@ -245,6 +250,9 @@ async function runStep(
       const res = await syncAccountSubscribers(accountId);
       if (res.numbers === 0) {
         return { status: 'ok', count: 0, message: 'нет известных номеров' };
+      }
+      if (res.noAccessNumbers === res.numbers) {
+        return { status: 'error', count: 0, message: '401 по всем номерам — проверьте логин/пароль аккаунта МТС' };
       }
       const status = stepStatusFromCounters({
         failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.stored > 0,

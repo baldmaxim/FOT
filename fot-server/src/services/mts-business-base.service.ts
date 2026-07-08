@@ -67,7 +67,10 @@ export type MtsPermanentErrorKind = 'no_access' | 'no_binding' | 'no_data';
 
 export const mtsPermanentErrorKind = (error: unknown): MtsPermanentErrorKind | null => {
   if (!(error instanceof MtsBusinessApiError)) return null;
-  if (error.status === 401 && error.code === '1014') return 'no_access';
+  // 401 без кода — тоже no_access: гейт МТС отдаёт часть 401 телом, из которого
+  // код не извлекается; настоящий сбой токена не бывает точечным (падали бы все
+  // номера подряд — этот случай ловит гвард «401 по всем номерам» на уровне шага).
+  if (error.status === 401 && (error.code == null || error.code === '1014')) return 'no_access';
   if (error.status === 422 && error.code === '2005') return 'no_binding';
   if (error.status === 404) return 'no_data';
   return null;
@@ -102,12 +105,22 @@ type IMtsErrorBody = {
   error_description?: string;
 };
 
+// Гейт МТС отдаёт часть ошибок (401 в т.ч.) строкой, а не разобранным JSON —
+// axios оставляет data как есть, и плоский разбор не видит errorCode
+// (в логах это «http=401 code=-» при теле с errorCode 1014). Допарсиваем сами.
+const parseMtsErrorBody = (data: unknown): IMtsErrorBody | undefined => {
+  if (typeof data === 'string') {
+    try { return JSON.parse(data) as IMtsErrorBody; } catch { return undefined; }
+  }
+  return data != null && typeof data === 'object' ? (data as IMtsErrorBody) : undefined;
+};
+
 /** Разбор тела ошибки МТС (errorCode приоритетнее code). Экспорт для тестов. */
 export const mtsBusinessApiErrorFromAxios = (error: unknown, suppressBodyLog = false): MtsBusinessApiError => {
   if (error instanceof MtsBusinessApiError) return error;
   if (error instanceof AxiosError) {
     const status = error.response?.status ?? 0;
-    const body = error.response?.data as IMtsErrorBody | undefined;
+    const body = parseMtsErrorBody(error.response?.data);
     const code = body?.errorCode != null
       ? String(body.errorCode)
       : body?.code != null
@@ -142,7 +155,7 @@ export const isRetryableMtsAxiosError = (error: unknown, retryOn500: boolean): b
   if (status && MTS_BIZ_RETRY_STATUSES.has(status)) return true;
   if (status === 500 && retryOn500) return true;
   if (error.code && MTS_BIZ_RETRY_CODES.has(error.code)) return true;
-  const body = error.response?.data as IMtsErrorBody | undefined;
+  const body = parseMtsErrorBody(error.response?.data);
   const errCode = body?.errorCode ?? body?.code;
   if (status === 421 && errCode != null && String(errCode) === '3003') return true;
   return false;
@@ -254,7 +267,7 @@ export class MtsBusinessServiceBase {
     // 401/1014 — ресурсный unauthorized (номер вне доступа портального
     // пользователя), токен живой: реавторизация не лечит (проверено логами
     // ночного прогона), а сброс кэша токена на каждом таком номере вреден.
-    const body = error.response?.data as IMtsErrorBody | undefined;
+    const body = parseMtsErrorBody(error.response?.data);
     const code = body?.errorCode ?? body?.code;
     if (status === 401 && code != null && String(code) === '1014') return false;
     return true;
