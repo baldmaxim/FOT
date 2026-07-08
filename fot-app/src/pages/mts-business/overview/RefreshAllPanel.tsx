@@ -21,6 +21,37 @@ const StepIcon: FC<{ status: IMtsRefreshStep['status'] }> = ({ status }) => {
 };
 
 /**
+ * Доля выполнения прогона по шагам: завершённые (ok/error/unavailable) — 1,
+ * идущий — 0.5 (внутришагового прогресса бэк не отдаёт). 0..1.
+ */
+const refreshProgress = (steps: IMtsRefreshStep[]): number => {
+  if (steps.length === 0) return 0;
+  const done = steps.filter(st => st.status === 'ok' || st.status === 'error' || st.status === 'unavailable').length;
+  const running = steps.filter(st => st.status === 'running').length;
+  return Math.min(1, (done + running * 0.5) / steps.length);
+};
+
+/** Заполняющееся кольцо прогресса на кнопке (вместо неопределённого спиннера). */
+const ProgressRing: FC<{ progress: number }> = ({ progress }) => {
+  const r = 5.5;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg className={s.progressRing} viewBox="0 0 14 14" role="img" aria-label={`Выполнено ${Math.round(progress * 100)}%`}>
+      <circle className={s.progressTrack} cx="7" cy="7" r={r} />
+      <circle
+        className={s.progressFill}
+        cx="7"
+        cy="7"
+        r={r}
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - progress)}
+        transform="rotate(-90 7 7)"
+      />
+    </svg>
+  );
+};
+
+/**
  * Кнопка «Обновить» (строка вкладок страницы): запуск фонового полного
  * обновления. Без accountId — все активные ЛС; с accountId (фильтр ЛС на
  * «Основном») — точечный прогон одного ЛС, подпись показывает какого.
@@ -35,6 +66,8 @@ export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
   useMtsBusinessRefreshAllCompletion(status.data?.running);
 
   const accountLabel = accountId ? accounts.data?.find(a => a.id === accountId)?.label : undefined;
+  const progress = running ? refreshProgress(status.data?.steps ?? []) : 0;
+  const progressPct = Math.round(progress * 100);
 
   const onStart = async (): Promise<void> => {
     setStartError(null);
@@ -49,10 +82,17 @@ export const RefreshAllButton: FC<{ accountId?: string }> = ({ accountId }) => {
     <span className={s.controls}>
       {startError && <span className={s.err}>{startError}</span>}
       <RefreshAllInfo />
-      <button className={s.btn} onClick={() => { void onStart(); }} disabled={running || start.isPending}>
-        {running || start.isPending
-          ? <><span className={s.spinnerLight} /> Обновление…</>
-          : accountLabel ? `Обновить ${accountLabel}` : 'Обновить'}
+      <button
+        className={s.btn}
+        onClick={() => { void onStart(); }}
+        disabled={running || start.isPending}
+        title={running ? `Обновление: ${progressPct}%` : undefined}
+      >
+        {running
+          ? <><ProgressRing progress={progress} /> Обновление…</>
+          : start.isPending
+            ? <><span className={s.spinnerLight} /> Обновление…</>
+            : accountLabel ? `Обновить ${accountLabel}` : 'Обновить'}
       </button>
     </span>
   );

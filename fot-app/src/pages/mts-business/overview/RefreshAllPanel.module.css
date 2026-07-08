@@ -87,6 +87,17 @@
 .iconWarn { color: var(--warning); font-weight: 700; width: 16px; text-align: center; }
 .iconPending { color: var(--text-tertiary); font-weight: 700; width: 16px; text-align: center; }
 
+/* Кольцо прогресса на кнопке: заполняется долей завершённых шагов прогона */
+.progressRing { width: 14px; height: 14px; flex: 0 0 auto; }
+.progressTrack { fill: none; stroke: rgba(255, 255, 255, 0.35); stroke-width: 2.5; }
+.progressFill {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.5s ease;
+}
+
 .spinner,
 .spinnerLight {
   display: inline-block;
