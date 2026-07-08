@@ -15,8 +15,10 @@ router.get('/connection-settings', view, adminChecksController.getConnectionSett
 router.put('/connection-settings', edit, requireCritical2FA, adminChecksController.saveConnectionSettings);
 router.post('/connection-settings/validate', edit, adminChecksController.validateConnection);
 
+router.get('/orgs', view, adminChecksController.listOrgs);
 router.get('/passes', view, adminChecksController.listPasses);
 router.post('/run', edit, adminChecksController.run);
+router.post('/run-bulk', edit, adminChecksController.runBulk);
 router.get('/results', view, adminChecksController.getResults);
 router.get('/results/:id/raw', edit, adminChecksController.getRaw);
 

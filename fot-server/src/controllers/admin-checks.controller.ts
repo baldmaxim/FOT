@@ -5,9 +5,12 @@ import { settingsService } from '../services/settings.service.js';
 import { assertNewdbBaseUrlAllowed } from '../services/settings.service.js';
 import {
   runChecksForPass,
+  runChecksBulk,
   listPassesForDepartment,
+  listContractorOrgs,
   getResultsForPass,
   getRawResponse,
+  BULK_LIMIT,
   type CheckType,
 } from '../services/newdb-check.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -19,6 +22,11 @@ const saveSettingsSchema = z.object({
 
 const runSchema = z.object({
   passId: z.string().uuid(),
+  types: z.array(z.enum(['rkl', 'patent'])).min(1),
+});
+
+const runBulkSchema = z.object({
+  passIds: z.array(z.string().uuid()).min(1).max(BULK_LIMIT),
   types: z.array(z.enum(['rkl', 'patent'])).min(1),
 });
 
@@ -82,6 +90,16 @@ export const adminChecksController = {
     }
   },
 
+  async listOrgs(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const orgs = await listContractorOrgs();
+      res.json({ success: true, data: orgs });
+    } catch (error) {
+      console.error('newdb listOrgs error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось получить список организаций' });
+    }
+  },
+
   async listPasses(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const orgDepartmentId = String(req.query.orgDepartmentId || '').trim();
@@ -111,6 +129,24 @@ export const adminChecksController = {
       if (handleZodError(error, res)) return;
       const status = (error as { status?: number })?.status;
       const message = error instanceof Error ? error.message : 'Ошибка запуска проверки';
+      res.status(status && status >= 400 && status < 600 ? status : 500).json({ success: false, error: message });
+    }
+  },
+
+  async runBulk(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const payload = runBulkSchema.parse(req.body);
+      const { items, skipped } = await runChecksBulk(payload.passIds, payload.types as CheckType[], req.user.id);
+      await auditService.logFromRequest(req, req.user.id, 'NEWDB_CHECK_RUN', {
+        entityType: 'contractor_pass',
+        entityId: 'bulk',
+        details: { requested: payload.passIds.length, processed: items.length, skipped: skipped.length, types: payload.types },
+      });
+      res.json({ success: true, data: { items, skipped } });
+    } catch (error) {
+      if (handleZodError(error, res)) return;
+      const status = (error as { status?: number })?.status;
+      const message = error instanceof Error ? error.message : 'Ошибка массовой проверки';
       res.status(status && status >= 400 && status < 600 ? status : 500).json({ success: false, error: message });
     }
   },

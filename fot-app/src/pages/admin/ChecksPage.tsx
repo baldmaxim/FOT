@@ -1,12 +1,11 @@
-import { useMemo, useState, type FC } from 'react';
+import { useState, type FC } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldCheck, RefreshCw, Loader2, Eye } from 'lucide-react';
+import { ShieldCheck, RefreshCw, Loader2, Eye, CheckCircle2, XCircle, Minus, AlertTriangle } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import { useStructureTree } from '../../hooks/useStructure';
-import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
 import {
   checksService,
+  BULK_LIMIT,
   type CheckPassRow,
   type CheckStatus,
   type CheckType,
@@ -21,13 +20,23 @@ const STATUS_LABEL: Record<CheckStatus, string> = {
   not_applicable: 'Не требуется',
 };
 
-const StatusBadge: FC<{ status: CheckStatus | null; at: string | null; summary: string | null }> = ({ status, at, summary }) => {
-  if (!status) return <span className={styles.badgeMuted}>—</span>;
-  const cls = styles[`badge_${status}`] ?? styles.badgeMuted;
-  const date = at ? new Date(at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '';
+// Иконка + цвет + aria-label (не полагаемся только на цвет/символ).
+const StatusIcon: FC<{ kind: CheckType; status: CheckStatus | null; at: string | null; summary: string | null }> = ({ kind, status, at, summary }) => {
+  if (!status) return <span className={styles.badgeMuted} aria-label="Не проверялось">—</span>;
+  const date = at ? new Date(at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '';
+  const label = kind === 'patent' && status === 'clean' ? 'Патент действителен' : STATUS_LABEL[status];
+  const title = summary ? `${label} · ${summary}` : label;
+
+  let icon;
+  if (status === 'clean') icon = <CheckCircle2 size={18} className={styles.icClean} aria-label={label} />;
+  else if (status === 'found' || status === 'invalid') icon = <XCircle size={18} className={styles.icBad} aria-label={label} />;
+  else if (status === 'not_applicable') icon = <Minus size={18} className={styles.icMuted} aria-label={label} />;
+  else icon = <AlertTriangle size={18} className={styles.icWarn} aria-label={label} />;
+
   return (
-    <span className={`${styles.badge} ${cls}`} title={summary ?? ''}>
-      {STATUS_LABEL[status]}{date ? <span className={styles.badgeDate}> · {date}</span> : null}
+    <span className={styles.statusCell} title={title}>
+      {icon}
+      {date ? <span className={styles.statusDate}>{date}</span> : null}
     </span>
   );
 };
@@ -37,11 +46,11 @@ export const ChecksPage: FC = () => {
   const queryClient = useQueryClient();
 
   const [token, setToken] = useState('');
-  const [deptId, setDeptId] = useState('');
-  const [rawFor, setRawFor] = useState<{ checkId: string; data: unknown } | null>(null);
+  const [orgId, setOrgId] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [rawFor, setRawFor] = useState<unknown | null>(null);
   const [runningRow, setRunningRow] = useState<string | null>(null);
-
-  const structure = useStructureTree();
+  const [confirmBulk, setConfirmBulk] = useState<{ ids: string[] } | null>(null);
 
   const settingsQuery = useQuery({
     queryKey: ['newdb', 'settings'],
@@ -49,10 +58,16 @@ export const ChecksPage: FC = () => {
     staleTime: 30_000,
   });
 
+  const orgsQuery = useQuery({
+    queryKey: ['newdb', 'orgs'],
+    queryFn: () => checksService.listOrgs(),
+    staleTime: 60_000,
+  });
+
   const passesQuery = useQuery({
-    queryKey: ['newdb', 'passes', deptId],
-    queryFn: () => checksService.listPasses(deptId),
-    enabled: !!deptId,
+    queryKey: ['newdb', 'passes', orgId],
+    queryFn: () => checksService.listPasses(orgId),
+    enabled: !!orgId,
     staleTime: 15_000,
   });
 
@@ -75,36 +90,71 @@ export const ChecksPage: FC = () => {
     onError: (e: Error) => showToast('error', e.message || 'Ошибка валидации'),
   });
 
-  const runCheck = useMutation({
+  const runOne = useMutation({
     mutationFn: (passId: string) => checksService.run(passId, ['rkl', 'patent'] as CheckType[]),
     onMutate: (passId) => setRunningRow(passId),
     onSuccess: (results) => {
       const summary = results.map(r => `${r.check_type === 'rkl' ? 'РКЛ' : 'Патент'}: ${STATUS_LABEL[r.status]}`).join(' · ');
       showToast('success', summary);
-      queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', deptId] });
+      queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', orgId] });
     },
     onError: (e: Error) => showToast('error', e.message || 'Ошибка проверки'),
     onSettled: () => setRunningRow(null),
   });
 
-  // Открыть сырой ответ последней ОТПРАВЛЕННОЙ проверки по пропуску.
+  const runBulk = useMutation({
+    mutationFn: (ids: string[]) => checksService.runBulk(ids, ['rkl', 'patent'] as CheckType[]),
+    onSuccess: ({ items, skipped }) => {
+      const errors = items.filter(i => i.error).length;
+      let msg = `Проверено: ${items.length}`;
+      if (errors) msg += ` · ошибок: ${errors}`;
+      if (skipped.length) msg += ` · пропущено: ${skipped.length}`;
+      showToast(errors ? 'warning' : 'success', msg);
+      setSelected(new Set());
+      queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', orgId] });
+    },
+    onError: (e: Error) => showToast('error', e.message || 'Ошибка массовой проверки'),
+    onSettled: () => setConfirmBulk(null),
+  });
+
   const openLatestRaw = async (passId: string) => {
     try {
       const results = await checksService.getResults(passId);
       const latest = results.find(r => r.request_sent);
-      if (!latest) {
-        showToast('info', 'Нет отправленных проверок с ответом');
-        return;
-      }
+      if (!latest) { showToast('info', 'Нет отправленных проверок с ответом'); return; }
       const data = await checksService.getRaw(latest.id);
-      setRawFor({ checkId: latest.id, data });
+      setRawFor(data);
     } catch (e) {
       showToast('error', e instanceof Error ? e.message : 'Ошибка');
     }
   };
 
-  const departments = useMemo(() => structure.data?.departments ?? [], [structure.data]);
   const passes = passesQuery.data ?? [];
+  const orgs = orgsQuery.data ?? [];
+
+  const toggleRow = (id: string) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const toggleAll = () => setSelected(prev =>
+    prev.size === passes.length ? new Set() : new Set(passes.map(p => p.id)),
+  );
+
+  // «Без результата»: хотя бы один из статусов (РКЛ / патент) пуст.
+  const selectWithoutResult = () => {
+    const ids = passes.filter(p => !p.last_rkl_status || !p.last_patent_status).map(p => p.id);
+    setSelected(new Set(ids.slice(0, BULK_LIMIT)));
+    if (ids.length > BULK_LIMIT) showToast('info', `Отмечено первых ${BULK_LIMIT} (лимит за один прогон)`);
+  };
+
+  const startBulk = () => {
+    const ids = [...selected];
+    if (ids.length === 0) { showToast('info', 'Ничего не выбрано'); return; }
+    if (ids.length > BULK_LIMIT) { showToast('error', `Максимум ${BULK_LIMIT} за раз`); return; }
+    setConfirmBulk({ ids });
+  };
 
   return (
     <div className={styles.page}>
@@ -139,14 +189,14 @@ export const ChecksPage: FC = () => {
         </div>
       </section>
 
-      {/* Выбор отдела + проверки */}
+      {/* Выбор организации + проверки */}
       <section className={styles.card}>
         <div className={styles.cardHeader}>
           <h3>Сотрудники подрядчика</h3>
           <button
             className={styles.iconBtn}
-            disabled={!deptId || passesQuery.isFetching}
-            onClick={() => queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', deptId] })}
+            disabled={!orgId || passesQuery.isFetching}
+            onClick={() => queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', orgId] })}
             title="Обновить список"
           >
             <RefreshCw size={16} className={passesQuery.isFetching ? styles.spin : ''} />
@@ -154,70 +204,130 @@ export const ChecksPage: FC = () => {
         </div>
 
         <div className={styles.selectWrap}>
-          <DepartmentTreeSelect
-            departments={departments}
-            value={deptId}
-            onChange={setDeptId}
-            isLoading={structure.isLoading}
-            isError={structure.isError}
-            onRetry={() => structure.refetch()}
-            showAllOption={false}
-            placeholder="Выберите отдел / подрядчика…"
-          />
+          <select
+            className={styles.select}
+            value={orgId}
+            onChange={(e) => { setOrgId(e.target.value); setSelected(new Set()); }}
+          >
+            <option value="">
+              {orgsQuery.isLoading ? 'Загрузка организаций…' : 'Выберите подрядную организацию…'}
+            </option>
+            {orgs.map(o => (
+              <option key={o.id} value={o.id}>{o.name} ({o.with_fio})</option>
+            ))}
+          </select>
         </div>
 
-        {!deptId ? (
-          <div className={styles.empty}>Выберите отдел, чтобы увидеть сотрудников.</div>
+        {!orgId ? (
+          <div className={styles.empty}>Выберите подрядную организацию, чтобы увидеть сотрудников.</div>
         ) : passesQuery.isLoading ? (
           <div className={styles.empty}><Loader2 size={18} className={styles.spin} /> Загрузка…</div>
         ) : passes.length === 0 ? (
-          <div className={styles.empty}>В выбранном отделе нет сотрудников с ФИО.</div>
+          <div className={styles.empty}>В выбранной организации нет сотрудников с ФИО.</div>
         ) : (
-          <div className={styles.tableWrap}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th>№</th>
-                  <th>ФИО</th>
-                  <th>Гражданство</th>
-                  <th>Паспорт</th>
-                  <th>РКЛ</th>
-                  <th>Патент</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {passes.map((p: CheckPassRow) => (
-                  <tr key={p.id}>
-                    <td className={styles.mono}>{p.pass_number}</td>
-                    <td>{p.holder_name ?? '—'}</td>
-                    <td>{p.citizenship ?? '—'}</td>
-                    <td className={styles.mono}>{p.passport_series_number ?? '—'}</td>
-                    <td><StatusBadge status={p.last_rkl_status} at={p.last_rkl_at} summary={p.last_rkl_summary} /></td>
-                    <td><StatusBadge status={p.last_patent_status} at={p.last_patent_at} summary={p.last_patent_summary} /></td>
-                    <td>
-                      <div className={styles.rowActions}>
-                        <button
-                          className={styles.btnCheck}
-                          disabled={runningRow === p.id}
-                          onClick={() => runCheck.mutate(p.id)}
-                        >
-                          {runningRow === p.id ? <Loader2 size={14} className={styles.spin} /> : 'Проверить'}
-                        </button>
-                        <button className={styles.iconBtn} title="Сырой ответ" onClick={() => openLatestRaw(p.id)}>
-                          <Eye size={15} />
-                        </button>
-                      </div>
-                    </td>
+          <>
+            <div className={styles.bulkBar}>
+              <button className={styles.btnSecondary} onClick={selectWithoutResult}>Выбрать без результата</button>
+              <button
+                className={styles.btnPrimary}
+                disabled={selected.size === 0 || runBulk.isPending}
+                onClick={startBulk}
+              >
+                {runBulk.isPending
+                  ? <><Loader2 size={14} className={styles.spin} /> Проверка…</>
+                  : `Проверить выбранных (${selected.size})`}
+              </button>
+              {selected.size > BULK_LIMIT && <span className={styles.limitWarn}>макс {BULK_LIMIT} за раз</span>}
+            </div>
+
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th className={styles.checkCol}>
+                      <input
+                        type="checkbox"
+                        checked={selected.size > 0 && selected.size === passes.length}
+                        ref={el => { if (el) el.indeterminate = selected.size > 0 && selected.size < passes.length; }}
+                        onChange={toggleAll}
+                        aria-label="Выбрать всех"
+                      />
+                    </th>
+                    <th>№</th>
+                    <th>ФИО</th>
+                    <th>Гражданство</th>
+                    <th>Паспорт</th>
+                    <th>РКЛ</th>
+                    <th>Патент</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {passes.map((p: CheckPassRow) => (
+                    <tr key={p.id} className={selected.has(p.id) ? styles.rowSel : ''}>
+                      <td className={styles.checkCol}>
+                        <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleRow(p.id)} aria-label={`Выбрать ${p.holder_name ?? p.pass_number}`} />
+                      </td>
+                      <td className={styles.mono}>{p.pass_number}</td>
+                      <td>{p.holder_name ?? '—'}</td>
+                      <td>{p.citizenship ?? '—'}</td>
+                      <td className={styles.mono}>{p.passport_series_number ?? '—'}</td>
+                      <td><StatusIcon kind="rkl" status={p.last_rkl_status} at={p.last_rkl_at} summary={p.last_rkl_summary} /></td>
+                      <td><StatusIcon kind="patent" status={p.last_patent_status} at={p.last_patent_at} summary={p.last_patent_summary} /></td>
+                      <td>
+                        <div className={styles.rowActions}>
+                          <button
+                            className={styles.btnCheck}
+                            disabled={runningRow === p.id || runBulk.isPending}
+                            onClick={() => runOne.mutate(p.id)}
+                          >
+                            {runningRow === p.id ? <Loader2 size={14} className={styles.spin} /> : 'Проверить'}
+                          </button>
+                          <button className={styles.iconBtn} title="Сырой ответ" onClick={() => openLatestRaw(p.id)}>
+                            <Eye size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
 
-      {rawFor && <RawModal data={rawFor.data} onClose={() => setRawFor(null)} />}
+      {confirmBulk && (
+        <ConfirmBulkModal
+          count={confirmBulk.ids.length}
+          pending={runBulk.isPending}
+          onCancel={() => setConfirmBulk(null)}
+          onConfirm={() => runBulk.mutate(confirmBulk.ids)}
+        />
+      )}
+      {rawFor !== null && <RawModal data={rawFor} onClose={() => setRawFor(null)} />}
+    </div>
+  );
+};
+
+const ConfirmBulkModal: FC<{ count: number; pending: boolean; onCancel: () => void; onConfirm: () => void }> = ({ count, pending, onCancel, onConfirm }) => {
+  const overlay = useOverlayDismiss(onCancel);
+  return (
+    <div className={styles.overlay} {...overlay}>
+      <div className={styles.modalSm}>
+        <div className={styles.modalHeader}><AlertTriangle size={16} /> <span>Подтверждение</span></div>
+        <p className={styles.confirmText}>
+          Будет проверено <b>{count}</b> сотрудников — до <b>{count * 2}</b> внешних запросов
+          (РКЛ + Патент по каждому; часть может стать «не требуется» или отсеяться валидацией).
+          Это платная операция. Продолжить?
+        </p>
+        <div className={styles.confirmActions}>
+          <button className={styles.btnSecondary} disabled={pending} onClick={onCancel}>Отмена</button>
+          <button className={styles.btnPrimary} disabled={pending} onClick={onConfirm}>
+            {pending ? <><Loader2 size={14} className={styles.spin} /> Проверка…</> : 'Проверить'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

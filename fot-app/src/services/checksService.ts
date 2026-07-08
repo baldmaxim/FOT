@@ -21,6 +21,26 @@ export interface NewdbValidateResult {
   problems: string[];
 }
 
+export interface ContractorOrg {
+  id: string;
+  name: string;
+  with_fio: number;
+  total: number;
+}
+
+export interface BulkItemResult {
+  passId: string;
+  results?: CheckResult[];
+  error?: string;
+}
+
+export interface BulkRunResult {
+  items: BulkItemResult[];
+  skipped: string[];
+}
+
+export const BULK_LIMIT = 15;
+
 export interface CheckPassRow {
   id: string;
   pass_number: string;
@@ -67,6 +87,11 @@ export const checksService = {
     return res.data;
   },
 
+  async listOrgs(): Promise<ContractorOrg[]> {
+    const res = await apiClient.get<ApiResponse<ContractorOrg[]>>(`${BASE}/orgs`);
+    return res.data ?? [];
+  },
+
   async listPasses(orgDepartmentId: string): Promise<CheckPassRow[]> {
     const res = await apiClient.get<ApiResponse<CheckPassRow[]>>(`${BASE}/passes?orgDepartmentId=${encodeURIComponent(orgDepartmentId)}`);
     return res.data ?? [];
@@ -75,6 +100,11 @@ export const checksService = {
   async run(passId: string, types: CheckType[]): Promise<CheckResult[]> {
     const res = await apiClient.post<ApiResponse<CheckResult[]>>(`${BASE}/run`, { passId, types });
     return res.data ?? [];
+  },
+
+  async runBulk(passIds: string[], types: CheckType[]): Promise<BulkRunResult> {
+    const res = await apiClient.post<ApiResponse<BulkRunResult>>(`${BASE}/run-bulk`, { passIds, types });
+    return res.data;
   },
 
   async getResults(contractorPassId: string): Promise<CheckResult[]> {

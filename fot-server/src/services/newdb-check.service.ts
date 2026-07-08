@@ -360,6 +360,57 @@ export const runChecksForPass = async (
   return results;
 };
 
+export const BULK_LIMIT = 15;
+
+export interface IBulkItemResult {
+  passId: string;
+  results?: INewdbCheckResult[];
+  error?: string;
+}
+
+/**
+ * Массовый прогон: серверная валидация passIds (не доверяем фронту),
+ * последовательное выполнение (платно + rate-limit), ошибка одного пропуска
+ * не роняет остальные. Лимит BULK_LIMIT против HTTP-таймаута.
+ */
+export const runChecksBulk = async (
+  passIds: string[],
+  types: CheckType[],
+  userId: string,
+): Promise<{ items: IBulkItemResult[]; skipped: string[] }> => {
+  const unique = [...new Set(passIds)];
+  if (unique.length > BULK_LIMIT) {
+    throw new NewdbApiError(`Слишком много пропусков за раз (макс ${BULK_LIMIT}). Сузьте выбор.`, 400);
+  }
+
+  // Валидируем на сервере: существуют, не revoked, есть ФИО.
+  const valid = await query<{ id: string }>(
+    `SELECT p.id
+       FROM contractor_passes p
+       LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
+      WHERE p.id = ANY($1::uuid[])
+        AND p.status <> 'revoked'
+        AND NULLIF(trim(COALESCE(h.holder_name, p.holder_name)), '') IS NOT NULL`,
+    [unique],
+  );
+  const validIds = new Set(valid.map(r => r.id));
+  const skipped = unique.filter(id => !validIds.has(id));
+
+  const items: IBulkItemResult[] = [];
+  for (const passId of unique) {
+    if (!validIds.has(passId)) continue;
+    try {
+      const results = await runChecksForPass(passId, types, userId);
+      items.push({ passId, results });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      items.push({ passId, error: msg });
+    }
+  }
+
+  return { items, skipped };
+};
+
 interface IPassListRow {
   id: string;
   pass_number: string;
@@ -409,9 +460,53 @@ export const listPassesForDepartment = async (orgDepartmentId: string): Promise<
        ) pat ON true
       WHERE p.org_department_id IN (SELECT id FROM subtree)
         AND p.status <> 'revoked'
-        AND COALESCE(h.holder_name, p.holder_name) IS NOT NULL
+        AND NULLIF(trim(COALESCE(h.holder_name, p.holder_name)), '') IS NOT NULL
       ORDER BY p.pass_number ASC`,
     [orgDepartmentId],
+  );
+
+export interface IContractorOrg {
+  id: string;
+  name: string;
+  with_fio: number;
+  total: number;
+}
+
+/**
+ * Подрядные организации с ≥1 сотрудником с ФИО (для селектора вкладки «Проверки»).
+ * Скоуп — ветка «Подрядные организации» (get_descendant_department_ids от неё);
+ * если узел не найден — фолбэк на все org с contractor_passes (не отдать пусто).
+ */
+export const listContractorOrgs = async (): Promise<IContractorOrg[]> =>
+  query<IContractorOrg>(
+    `WITH contractor_root AS (
+       SELECT id FROM public.org_departments
+        WHERE name = 'Подрядные организации' AND parent_id IS NOT NULL
+        LIMIT 1
+     ),
+     scope AS (
+       SELECT id FROM public.get_descendant_department_ids(
+         ARRAY(SELECT id FROM contractor_root)::uuid[]
+       )
+     )
+     SELECT od.id, od.name,
+            count(DISTINCT p.id) FILTER (
+              WHERE NULLIF(trim(COALESCE(h.holder_name, p.holder_name)), '') IS NOT NULL
+            )::int AS with_fio,
+            count(DISTINCT p.id)::int AS total
+       FROM contractor_passes p
+       JOIN org_departments od ON od.id = p.org_department_id
+       LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
+      WHERE p.status <> 'revoked'
+        AND (
+          NOT EXISTS (SELECT 1 FROM contractor_root)   -- фолбэк: узел не найден
+          OR p.org_department_id IN (SELECT id FROM scope)
+        )
+      GROUP BY od.id, od.name
+     HAVING count(DISTINCT p.id) FILTER (
+              WHERE NULLIF(trim(COALESCE(h.holder_name, p.holder_name)), '') IS NOT NULL
+            ) > 0
+      ORDER BY with_fio DESC, od.name ASC`,
   );
 
 /** История проверок пропуска (без raw_response). */
