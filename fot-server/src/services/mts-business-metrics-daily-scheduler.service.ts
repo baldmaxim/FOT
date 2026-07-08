@@ -141,8 +141,10 @@ export async function refreshAccountMetrics(accountId: string): Promise<IRefresh
 
 export interface IRefreshHierarchyResult {
   accountId: string;
-  totalNumbers: number; // номеров в структуре абонента
-  discovered: number;   // из них заведено новых в number_map
+  totalNumbers: number; // номеров СВОЕГО ЛС (accountNo = account_number аккаунта)
+  orgNumbers: number;   // номеров во всей организации (токен видит все ЛС сразу)
+  foreignNumbers: number; // номеров ЛС, не заведённых в FOT — пропускаются
+  discovered: number;   // заведено новых в number_map (только настроенные ЛС)
   needsFio: string[];   // номера без сотрудника и без ФИО — кандидаты на PersonalDataInfo
   failed: number;
   unavailable: number;
@@ -156,7 +158,7 @@ export interface IRefreshHierarchyResult {
  */
 export async function refreshHierarchy(accountId: string): Promise<IRefreshHierarchyResult> {
   const result: IRefreshHierarchyResult = {
-    accountId, totalNumbers: 0, discovered: 0, needsFio: [], failed: 0, unavailable: 0,
+    accountId, totalNumbers: 0, orgNumbers: 0, foreignNumbers: 0, discovered: 0, needsFio: [], failed: 0, unavailable: 0,
   };
   const accounts = await mtsBusinessAccountsService.list();
   const account = accounts.find(a => a.id === accountId);
@@ -174,8 +176,19 @@ export async function refreshHierarchy(accountId: string): Promise<IRefreshHiera
     });
     for (const n of hierarchy.numbers) {
       if (!n.msisdn) continue;
-      result.totalNumbers++;
+      result.orgNumbers++;
       const ownerAccountId = n.accountNo ? byAccountNo.get(n.accountNo) ?? null : null;
+      // Номера ЛС, не заведённых в FOT, пропускаем целиком: заводить их с
+      // account_id синкующего аккаунта = пылесосить чужие ЛС в наши списки
+      // (union-инвентарь) и потом гонять по ним детализацию/профили под 401.
+      // В организации таких ЛС 12 (~306 номеров на 08.07.2026).
+      if (n.accountNo && ownerAccountId == null) {
+        result.foreignNumbers++;
+        continue;
+      }
+      // «Свои» для счётчика шага: номера ЭТОГО аккаунта + номера без accountNo
+      // (аномалия парсинга — не теряем, fallback на синкующий аккаунт).
+      if (ownerAccountId === accountId || ownerAccountId == null) result.totalNumbers++;
       const { needsFio, created } = await mtsBusinessMappingService.ensureNumberDiscovered(
         n.msisdn,
         ownerAccountId ?? accountId,

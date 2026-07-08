@@ -132,8 +132,15 @@ async function runStep(
     case 'hierarchy': {
       const res = await refreshHierarchy(accountId);
       const status = stepStatusFromCounters({
-        failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.totalNumbers > 0,
+        failed: res.failed, unavailable: res.unavailable, hadAnySuccess: res.orgNumbers > 0,
       });
+      // count — номера СВОЕГО ЛС; вся организация и чужие ЛС — справкой в message
+      // (токен видит все ЛС организации сразу, раньше цифра была одинаковой у всех).
+      const notes = [
+        res.discovered > 0 ? `новых: ${res.discovered}` : null,
+        `в организации: ${res.orgNumbers}`,
+        res.foreignNumbers > 0 ? `другие ЛС: ${res.foreignNumbers}` : null,
+      ].filter(Boolean).join(', ');
       return {
         status,
         count: res.totalNumbers,
@@ -141,7 +148,7 @@ async function runStep(
           ? UNAVAILABLE_MESSAGE
           : status === 'error'
             ? 'Ошибка запроса структуры абонента'
-            : res.discovered > 0 ? `новых номеров: ${res.discovered}` : null,
+            : notes,
       };
     }
     case 'fio': {
