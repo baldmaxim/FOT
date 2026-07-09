@@ -2500,4 +2500,187 @@ export const contractorAdminController = {
       res.status(500).json({ success: false, error: 'Не удалось отклонить выделенные пропуска' });
     }
   },
+
+  /**
+   * Освободить пропуск: обнулить ФИО держателя, персональные документы и параметры
+   * выдачи (объекты/точки/срок), вернуть пропуск в состояние пустого assigned-слота
+   * того же подрядчика и заблокировать профиль ушедшего в Sigur. Нужно, когда человек
+   * уволился, чтобы подрядчик мог выдать этот номер заново.
+   *
+   * Безопасность данных: Sigur блокируется ВНУТРИ транзакции под FOR UPDATE по одному
+   * пропуску — если Sigur упал, БД откатывается (не бывает «свободен в БД, но доступ жив»).
+   * Сохраняем только контейнер слота: card_uid / sigur_employee_id / org_department_id /
+   * pass_number. object_ids / access_point_names / expires_at и персональные документы —
+   * это данные конкретного держателя, их обязательно очищаем, иначе новый человек
+   * унаследует чужие права/документы.
+   */
+  async clearPassHolder(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureSystemAdmin(req, res))) return;
+      const passId = z.string().uuid().parse(req.params.id);
+
+      type SaveError = { http: number; message: string };
+      const failWith = (e: SaveError): never => {
+        throw Object.assign(new Error(e.message), { __save: e });
+      };
+
+      const dryRun = isContractorSigurDryRun();
+
+      const snapshot = await withTransaction(async client => {
+        const passRes = await client.query<{
+          id: string;
+          pass_number: string;
+          status: string;
+          is_active: boolean;
+          holder_name: string | null;
+          sigur_employee_id: number | null;
+          submission_id: string | null;
+          has_open_holder: boolean;
+        }>(
+          `SELECT p.id, p.pass_number, p.status, p.is_active, p.holder_name,
+                  p.sigur_employee_id, p.submission_id,
+                  EXISTS(SELECT 1 FROM contractor_pass_holders h
+                          WHERE h.pass_id = p.id AND h.valid_until IS NULL) AS has_open_holder
+             FROM contractor_passes p
+            WHERE p.id = $1::uuid
+            FOR UPDATE`,
+          [passId],
+        );
+        const pass = passRes.rows[0];
+        if (!pass) failWith({ http: 404, message: 'Пропуск не найден' });
+        if (pass.status === 'revoked' || pass.status === 'in_pool') {
+          failWith({ http: 409, message: 'Пропуск уже свободен или отозван' });
+        }
+        if (!pass.holder_name && !pass.has_open_holder) {
+          failWith({ http: 409, message: 'У пропуска нет держателя — освобождать нечего' });
+        }
+        // Data-safety: активный/выданный пропуск без Sigur-профиля нельзя освободить
+        // автоматически — доступ ушедшего гарантированно отрезать нечем, нужна ручная проверка.
+        if ((pass.is_active || pass.status === 'applied') && pass.sigur_employee_id == null && !dryRun) {
+          failWith({
+            http: 409,
+            message: 'У активного пропуска нет Sigur-профиля — освободить автоматически нельзя, нужна ручная проверка',
+          });
+        }
+
+        // Sigur под локом: нейтрализуем профиль ушедшего («Пропуск N» + blocked).
+        // Ошибка Sigur → откат всей транзакции (БД не тронута).
+        if (!dryRun && pass.sigur_employee_id != null) {
+          const connection = await sigurService.getBackgroundConnectionType();
+          try {
+            await updateSigurEmployee(
+              pass.sigur_employee_id,
+              { name: `Пропуск ${pass.pass_number}`, blocked: true },
+              connection,
+            );
+          } catch (sigurError) {
+            failWith({
+              http: 502,
+              message: `Не удалось заблокировать профиль в Sigur — пропуск не освобождён: ${sigurError instanceof Error ? sigurError.message : String(sigurError)}`,
+            });
+          }
+        }
+
+        // Сброс ФИО + персональных документов + параметров выдачи + статуса + sync-флагов.
+        await client.query(
+          `UPDATE contractor_passes
+              SET status='assigned', approval_status='not_submitted',
+                  holder_name=NULL, submission_id=NULL, is_active=false,
+                  passport_series_number=NULL, passport_issue_date=NULL, birth_date=NULL,
+                  citizenship=NULL, patent_number=NULL, patent_issue_date=NULL,
+                  patent_blank_number=NULL, has_residence_permit=false, residence_permit_number=NULL,
+                  object_ids=NULL, access_point_names=NULL, expires_at=NULL,
+                  sigur_sync_state='synced', sigur_sync_error=NULL, sigur_sync_attempts=0,
+                  sigur_sync_updated_at=now(), updated_at=now()
+            WHERE id=$1::uuid`,
+          [passId],
+        );
+
+        // Закрыть открытую строку истории владельца (не DELETE — сохраняем историю).
+        await client.query(
+          `UPDATE contractor_pass_holders SET valid_until = now()
+            WHERE pass_id = $1::uuid AND valid_until IS NULL`,
+          [passId],
+        );
+
+        // Пропуск мог быть привязан к заявке — пересчитать её агрегатный статус.
+        // UPDATE строго по pending/partially_applied: исторически approved-заявку не трогаем.
+        if (pass.submission_id) {
+          const agg = await client.query<{
+            current: string; total: string; pending: string; approved: string; rejected: string;
+          }>(
+            `SELECT s.status AS current,
+                    COUNT(p.*)::text                                                AS total,
+                    COUNT(p.*) FILTER (WHERE p.approval_status = 'pending')::text   AS pending,
+                    COUNT(p.*) FILTER (WHERE p.approval_status = 'approved')::text  AS approved,
+                    COUNT(p.*) FILTER (WHERE p.approval_status = 'rejected')::text  AS rejected
+               FROM contractor_submissions s
+               LEFT JOIN contractor_passes p ON p.submission_id = s.id
+              WHERE s.id = $1::uuid
+              GROUP BY s.status`,
+            [pass.submission_id],
+          );
+          const row = agg.rows[0];
+          if (row) {
+            const counts = {
+              total: Number(row.total),
+              pending: Number(row.pending),
+              approved: Number(row.approved),
+              rejected: Number(row.rejected),
+            };
+            const next = computeSubmissionStatus(row.current, counts);
+            if (next !== row.current) {
+              const stampReviewed = counts.pending === 0;
+              await client.query(
+                `UPDATE contractor_submissions
+                    SET status = $1,
+                        reviewed_by = $2::uuid,
+                        reviewed_at = ${stampReviewed ? 'COALESCE(reviewed_at, now())' : 'reviewed_at'}
+                  WHERE id = $3::uuid AND status IN ('pending', 'partially_applied')`,
+                [next, req.user.id, pass.submission_id],
+              );
+            }
+          }
+        }
+
+        return {
+          pass_number: pass.pass_number,
+          old_status: pass.status,
+          old_holder_name: pass.holder_name,
+          old_submission_id: pass.submission_id,
+          sigur_employee_id: pass.sigur_employee_id,
+        };
+      });
+
+      // Audit — только после успешного commit (по снапшоту из транзакции), чтобы не было
+      // «успешного» лога при упавшем коммите.
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_PASS_HOLDER_CHANGED, {
+        entityType: 'contractor_pass',
+        entityId: passId,
+        details: {
+          cleared: true,
+          pass_number: snapshot.pass_number,
+          old_status: snapshot.old_status,
+          old_holder_name: snapshot.old_holder_name,
+          sigur_employee_id: snapshot.sigur_employee_id,
+          old_submission_id: snapshot.old_submission_id,
+        },
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный идентификатор пропуска' });
+        return;
+      }
+      const save = (error as { __save?: { http: number; message: string } }).__save;
+      if (save) {
+        res.status(save.http).json({ success: false, error: save.message });
+        return;
+      }
+      console.error('Contractor clearPassHolder error:', error);
+      Sentry.captureException(error, { tags: { route: 'contractor.clearPassHolder' } });
+      res.status(500).json({ success: false, error: 'Не удалось освободить пропуск' });
+    }
+  },
 };

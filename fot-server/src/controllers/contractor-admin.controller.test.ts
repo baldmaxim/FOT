@@ -42,6 +42,7 @@ vi.mock('../services/audit.service.js', () => ({
     CONTRACTOR_SUBMISSION_REJECTED: 'CONTRACTOR_SUBMISSION_REJECTED',
     CONTRACTOR_SUBMISSION_PASS_DECIDED: 'CONTRACTOR_SUBMISSION_PASS_DECIDED',
     CONTRACTOR_INDUCTION_CHANGED: 'CONTRACTOR_INDUCTION_CHANGED',
+    CONTRACTOR_PASS_HOLDER_CHANGED: 'CONTRACTOR_PASS_HOLDER_CHANGED',
   },
 }));
 vi.mock('../config/contractor.js', () => ({
@@ -921,5 +922,173 @@ describe('contractorAdminController.rejectSubmissionPasses', () => {
     );
 
     expect(h.updEmp).not.toHaveBeenCalled();
+  });
+});
+
+describe('contractorAdminController.clearPassHolder', () => {
+  const PASS = '55555555-5555-5555-5555-555555555555';
+
+  type PassRow = {
+    id: string; pass_number: string; status: string; is_active: boolean;
+    holder_name: string | null; sigur_employee_id: number | null;
+    submission_id: string | null; has_open_holder: boolean;
+  };
+
+  const makeClearReq = () => ({
+    user: { id: 'admin-1', company_scope: { roots: 'all' } },
+    params: { id: PASS },
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+  }) as never;
+
+  // Транзакция: маршрутизируем client.query по фрагменту SQL. clientQuery доступен снаружи
+  // (даже если fn бросил) — для ассертов, что БД не тронута при сбое Sigur.
+  let clientQuery: ReturnType<typeof vi.fn>;
+  const wireTx = (passRow: PassRow | null, aggRow?: Record<string, string>) => {
+    h.withTransaction.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      clientQuery = vi.fn(async (sql: string) => {
+        if (String(sql).includes('FOR UPDATE')) return { rows: passRow ? [passRow] : [] };
+        if (String(sql).includes('LEFT JOIN contractor_passes')) return { rows: aggRow ? [aggRow] : [] };
+        return { rows: [] };
+      });
+      return fn({ query: clientQuery });
+    });
+  };
+
+  const basePass = (over: Partial<PassRow>): PassRow => ({
+    id: PASS, pass_number: '1124', status: 'applied', is_active: true,
+    holder_name: 'Жумабаев Б.', sigur_employee_id: 11, submission_id: null,
+    has_open_holder: true, ...over,
+  });
+
+  const findCall = (frag: string) => clientQuery.mock.calls.find(c => String(c[0]).includes(frag));
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.bgConn.mockResolvedValue('external');
+    h.isDryRun.mockReturnValue(false);
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('data-safety: Sigur упал → БД не тронута (нет UPDATE), история не закрыта, 502', async () => {
+    wireTx(basePass({}));
+    h.updEmp.mockRejectedValueOnce(new Error('Sigur down'));
+
+    const res = makeRes();
+    await contractorAdminController.clearPassHolder(makeClearReq(), res as never);
+
+    expect(res.statusCode).toBe(502);
+    // После SELECT FOR UPDATE никаких UPDATE не выполнено.
+    expect(findCall('UPDATE contractor_passes')).toBeUndefined();
+    expect(findCall('UPDATE contractor_pass_holders')).toBeUndefined();
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('успех (applied): Sigur заблокирован ПЕРЕД UPDATE; чистятся ФИО, документы, выдача', async () => {
+    wireTx(basePass({}));
+    h.updEmp.mockResolvedValueOnce(undefined);
+
+    const res = makeRes();
+    await contractorAdminController.clearPassHolder(makeClearReq(), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect((res.body as { success: boolean }).success).toBe(true);
+
+    // Sigur вызван с нейтрализацией профиля.
+    expect(h.updEmp).toHaveBeenCalledWith(11, { name: 'Пропуск 1124', blocked: true }, 'external');
+
+    const upd = findCall('UPDATE contractor_passes');
+    expect(upd).toBeTruthy();
+    const sql = String(upd?.[0]);
+    // ФИО + статус + персональные документы + параметры выдачи очищаются.
+    expect(sql).toContain("status='assigned'");
+    expect(sql).toContain('holder_name=NULL');
+    expect(sql).toContain('citizenship=NULL');
+    expect(sql).toContain('has_residence_permit=false');
+    expect(sql).toContain('object_ids=NULL');
+    expect(sql).toContain('access_point_names=NULL');
+    expect(sql).toContain('expires_at=NULL');
+    // Контейнер слота (карта/профиль) НЕ трогаем.
+    expect(sql).not.toContain('card_uid');
+    expect(sql).not.toContain('sigur_employee_id');
+
+    // Sigur — раньше UPDATE.
+    const updIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('UPDATE contractor_passes'));
+    expect(h.updEmp.mock.invocationCallOrder[0]).toBeLessThan(clientQuery.mock.invocationCallOrder[updIdx]);
+
+    // История закрыта.
+    const holderClose = findCall('UPDATE contractor_pass_holders');
+    expect(holderClose).toBeTruthy();
+    expect(holderClose?.[1]?.[0]).toBe(PASS);
+
+    // Audit после commit.
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'CONTRACTOR_PASS_HOLDER_CHANGED',
+      expect.objectContaining({ entityType: 'contractor_pass', entityId: PASS }),
+    );
+  });
+
+  it('guard: revoked → 409, Sigur и БД не трогаются', async () => {
+    wireTx(basePass({ status: 'revoked', is_active: false }));
+
+    const res = makeRes();
+    await contractorAdminController.clearPassHolder(makeClearReq(), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.updEmp).not.toHaveBeenCalled();
+    expect(findCall('UPDATE contractor_passes')).toBeUndefined();
+  });
+
+  it('идемпотентность: нет ФИО и нет открытой истории → 409', async () => {
+    wireTx(basePass({ status: 'assigned', is_active: false, holder_name: null, has_open_holder: false }));
+
+    const res = makeRes();
+    await contractorAdminController.clearPassHolder(makeClearReq(), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(findCall('UPDATE contractor_passes')).toBeUndefined();
+  });
+
+  it('guard: активный пропуск без Sigur-профиля → 409, БД не тронута, история не закрыта', async () => {
+    wireTx(basePass({ status: 'applied', is_active: true, sigur_employee_id: null }));
+
+    const res = makeRes();
+    await contractorAdminController.clearPassHolder(makeClearReq(), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.updEmp).not.toHaveBeenCalled();
+    expect(findCall('UPDATE contractor_passes')).toBeUndefined();
+    expect(findCall('UPDATE contractor_pass_holders')).toBeUndefined();
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('dry-run: активный без Sigur-профиля — guard не срабатывает, БД чистится, Sigur не зовётся', async () => {
+    h.isDryRun.mockReturnValue(true);
+    wireTx(basePass({ status: 'applied', is_active: true, sigur_employee_id: null }));
+
+    const res = makeRes();
+    await contractorAdminController.clearPassHolder(makeClearReq(), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.updEmp).not.toHaveBeenCalled();
+    expect(findCall('UPDATE contractor_passes')).toBeTruthy();
+  });
+
+  it('привязка к заявке: пересчёт статуса строго по pending/partially_applied', async () => {
+    wireTx(
+      basePass({ status: 'submitted', is_active: false, submission_id: 'sub-9' }),
+      { current: 'pending', total: '0', pending: '0', approved: '0', rejected: '0' },
+    );
+    h.updEmp.mockResolvedValueOnce(undefined);
+
+    const res = makeRes();
+    await contractorAdminController.clearPassHolder(makeClearReq(), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const subUpd = findCall('UPDATE contractor_submissions');
+    expect(subUpd).toBeTruthy();
+    expect(String(subUpd?.[0])).toContain("status IN ('pending', 'partially_applied')");
   });
 });

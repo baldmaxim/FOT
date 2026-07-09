@@ -164,11 +164,67 @@ const PassHistoryModal: FC<{ passId: string; onClose: () => void }> = ({ passId,
   );
 };
 
+/** Подтверждение «Освободить пропуск»: обнулить ФИО/документы/выдачу + заблокировать Sigur. */
+const ClearHolderModal: FC<{ pass: IMonitorPassRow; onClose: () => void; onDone: () => void }> = ({
+  pass,
+  onClose,
+  onDone,
+}) => {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const overlay = useOverlayDismiss(() => {
+    if (!busy) onClose();
+  });
+
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      await contractorAdminService.clearPassHolder(pass.id);
+      toast.success('Пропуск освобождён');
+      onDone();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось освободить пропуск');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className={styles.overlay}
+      onMouseDown={overlay.onMouseDown}
+      onMouseUp={overlay.onMouseUp}
+      onMouseLeave={overlay.onMouseLeave}
+      onTouchStart={overlay.onTouchStart}
+      onTouchEnd={overlay.onTouchEnd}
+    >
+      <div className={styles.modal} style={{ maxWidth: 460 }}>
+        <h2 className={styles.modalTitle}>Освободить пропуск № {pass.pass_number}?</h2>
+        <div className={styles.detailRow}>Держатель: {pass.holder_name ?? '—'}</div>
+        <ul className={styles.statusNote} style={{ margin: '8px 0', paddingLeft: 18 }}>
+          <li>ФИО и документы держателя будут удалены.</li>
+          <li>Профиль в Sigur будет заблокирован — доступ ушедшего прекратится сразу.</li>
+          <li>Номер пропуска и карта останутся у слота — подрядчик сможет выдать пропуск заново.</li>
+        </ul>
+        <div className={styles.modalActions}>
+          <button className="btn-secondary" onClick={onClose} disabled={busy}>
+            Отмена
+          </button>
+          <button className="btn-primary" onClick={() => void confirm()} disabled={busy}>
+            {busy ? 'Освобождаем…' : 'Освободить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const MonitorTab: FC = () => {
+  const qc = useQueryClient();
   const [orgId, setOrgId] = useState('');
   const [search, setSearch] = useState('');
   const [historyPassId, setHistoryPassId] = useState<string | null>(null);
   const [docRow, setDocRow] = useState<IMonitorPassRow | null>(null);
+  const [clearRow, setClearRow] = useState<IMonitorPassRow | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
 
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
@@ -287,6 +343,16 @@ export const MonitorTab: FC = () => {
                   <button className="btn-secondary" onClick={() => setHistoryPassId(p.id)}>
                     История
                   </button>
+                  {p.holder_name && p.status !== 'revoked' && (
+                    <button
+                      className="btn-secondary"
+                      style={{ marginLeft: 8, color: 'var(--error)' }}
+                      onClick={() => setClearRow(p)}
+                      title="Обнулить ФИО и освободить пропуск для повторной выдачи"
+                    >
+                      Освободить
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -305,6 +371,18 @@ export const MonitorTab: FC = () => {
           passNumber={docRow.pass_number}
           readOnly
           onClose={() => setDocRow(null)}
+        />
+      )}
+
+      {clearRow && (
+        <ClearHolderModal
+          pass={clearRow}
+          onClose={() => setClearRow(null)}
+          onDone={() => {
+            void qc.invalidateQueries({ queryKey: ['contractor-monitor'] });
+            void qc.invalidateQueries({ queryKey: ['contractor-monitor-search'] });
+            setClearRow(null);
+          }}
         />
       )}
 

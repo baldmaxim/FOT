@@ -76,6 +76,9 @@ router.get('/passes/sync-failed', apprView, contractorPoolController.syncFailed)
 router.get('/passes/:id/history', apprView, contractorAdminController.getPassHistoryAdmin);
 router.post('/passes/:id/revoke', apprEdit, requireCritical2FA, contractorPoolController.revokePass);
 router.post('/passes/:id/retry-sync', apprEdit, contractorPoolController.retrySync);
+// Освободить пропуск: обнулить ФИО/документы/выдачу, вернуть пустой assigned-слот подрядчику,
+// заблокировать профиль ушедшего в Sigur (для повторной выдачи после увольнения).
+router.post('/passes/:id/clear-holder', apprEdit, contractorAdminController.clearPassHolder);
 
 // Общий пул свободных пропусков.
 router.get('/pool/settings', apprView, contractorPoolController.getSettings);

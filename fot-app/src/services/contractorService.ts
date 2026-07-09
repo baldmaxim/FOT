@@ -871,6 +871,10 @@ export const contractorAdminService = {
     const r = await apiClient.get<ApiResponse<IPassHistory>>(`/admin/contractor/passes/${passId}/history`);
     return r.data ?? { holders: [], decisions: [] };
   },
+  /** Освободить пропуск: обнулить ФИО/документы/выдачу + заблокировать профиль в Sigur. */
+  async clearPassHolder(passId: string): Promise<void> {
+    await apiClient.post(`/admin/contractor/passes/${passId}/clear-holder`, {});
+  },
 
   // Статистика пропусков (новые номерные vs старые белые)
   async getPassStats(): Promise<IContractorPassStat[]> {
