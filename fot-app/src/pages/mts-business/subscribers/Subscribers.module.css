@@ -395,3 +395,52 @@
 @media (max-width: 480px) {
   .itemBtn { min-height: 40px; }
 }
+
+/* Модалка разрешения конфликтов автосвязи */
+.conflictModal {
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px calc(16px + env(safe-area-inset-bottom));
+  width: 100%;
+  max-width: 720px;
+  max-height: 88dvh;
+  overflow-y: auto;
+}
+.conflictHint { font-size: 13px; color: var(--text-secondary); margin: 0 0 12px; }
+.conflictList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.conflictRow {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conflictHead { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.conflictFio { font-weight: 600; overflow-wrap: anywhere; }
+.conflictReason {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--border-subtle);
+  color: var(--text-secondary);
+}
+.conflictMeta { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.conflictActions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.conflictCandidate {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  min-height: 32px;
+}
+.conflictCandidate:hover { border-color: var(--primary); color: var(--primary); }
+.conflictCandidate:disabled { opacity: 0.5; cursor: not-allowed; }

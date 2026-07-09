@@ -4,6 +4,8 @@ import { useMtsBusinessSubscribers } from '../../../hooks/useMtsBusinessSubscrib
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
 import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { SubscriberDrawer } from './SubscriberDrawer';
+import { AutoLinkConflictsModal } from './AutoLinkConflictsModal';
+import type { IMtsAutoLinkConflict } from '../../../services/mtsBusinessService';
 import { errText, fmtDur, fmtLast, fmtMoney, fmtPhone } from '../mtsBusinessFormat';
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
@@ -34,6 +36,7 @@ export const SubscribersTab: FC = () => {
   const [drawerMsisdn, setDrawerMsisdn] = useState<string | null>(null);
   const [pdMsisdn, setPdMsisdn] = useState<string | null>(null);
   const [msg, setMsg] = useState<Msg>(null);
+  const [conflicts, setConflicts] = useState<IMtsAutoLinkConflict[]>([]);
 
   const rows = useMemo(() => (subscribers.data ?? []).filter(r => r.msisdn != null), [subscribers.data]);
 
@@ -77,7 +80,10 @@ export const SubscribersTab: FC = () => {
     setMsg(null);
     try {
       const r = await autoLink.mutateAsync();
-      setMsg({ ok: true, text: `Проверено непривязанных с ФИО: ${r.checked}, привязано автоматически: ${r.linked}` });
+      const parts = [`Проверено с ФИО: ${r.checked}`, `привязано: ${r.linked}`, `перепривязано: ${r.relinked}`, `снято: ${r.cleared}`];
+      if (r.conflicts.length > 0) parts.push(`конфликтов: ${r.conflicts.length}`);
+      setMsg({ ok: true, text: parts.join(', ') });
+      setConflicts(r.conflicts);
     } catch (e) {
       setMsg({ ok: false, text: errText(e, 'Ошибка автопривязки (возможно нужен 2FA)') });
     }
@@ -191,6 +197,9 @@ export const SubscribersTab: FC = () => {
         <SubscriberDrawer row={drawerRow} onClose={() => setDrawerMsisdn(null)} />
       )}
       {pdMsisdn && <PersonalDataModal msisdn={pdMsisdn} onClose={() => setPdMsisdn(null)} />}
+      {conflicts.length > 0 && (
+        <AutoLinkConflictsModal conflicts={conflicts} onClose={() => setConflicts([])} />
+      )}
     </section>
   );
 };

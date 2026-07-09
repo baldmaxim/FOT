@@ -51,6 +51,23 @@ export interface IMtsBusinessNumberMapRow {
   linkedAt: string | null;
 }
 
+export interface IMtsAutoLinkConflict {
+  msisdn: string;
+  mtsFio: string;
+  currentEmployeeId: number | null;
+  currentEmployeeName: string | null;
+  reason: 'ambiguous' | 'no_match';
+  candidates: Array<{ id: number; fullName: string; tabNumber: string | null }>;
+}
+
+export interface IMtsAutoLinkResult {
+  checked: number;
+  linked: number;
+  relinked: number;
+  cleared: number;
+  conflicts: IMtsAutoLinkConflict[];
+}
+
 export interface IMtsBusinessImportedNumberRow {
   msisdn: string | null;
   calls: number;
@@ -210,8 +227,8 @@ export const mtsBusinessService = {
     return res.data;
   },
 
-  autoLinkNumberMap: async (): Promise<{ checked: number; linked: number }> => {
-    const res = await apiClient.post<ApiResponse<{ checked: number; linked: number }>>('/mts-business/number-map/auto-link', {});
+  autoLinkNumberMap: async (): Promise<IMtsAutoLinkResult> => {
+    const res = await apiClient.post<ApiResponse<IMtsAutoLinkResult>>('/mts-business/number-map/auto-link', {});
     return res.data;
   },
 

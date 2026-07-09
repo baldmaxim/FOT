@@ -405,9 +405,15 @@ export const mtsBusinessController = {
   async autoLinkNumberMap(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const result = await mtsBusinessMappingService.autoLinkByFio(req.user.id);
-      if (result.linked > 0) {
+      if (result.linked + result.relinked + result.cleared > 0) {
         await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_NUMBER_MAP_UPDATED, {
-          details: { autoLinked: result.linked, checked: result.checked },
+          details: {
+            autoLinked: result.linked,
+            relinked: result.relinked,
+            cleared: result.cleared,
+            checked: result.checked,
+            conflicts: result.conflicts.length,
+          },
         });
       }
       res.json({ success: true, data: result });

@@ -80,3 +80,111 @@ describe('syncMtsNames: автопривязка по ФИО (resolveEmployeeIdB
     expect(res).toEqual({ saved: 1, autoLinked: 0 });
   });
 });
+
+type NumberRow = {
+  msisdn_hash: string;
+  msisdn_enc: string | null;
+  mts_fio: string;
+  employee_id: number | null;
+  current_name: string | null;
+};
+type EmpMatch = { id: number; full_name: string; tab_number: string | null; employment_status: string | null; is_archived: boolean };
+
+/** Мок для autoLinkByFio: строки number_map + совпадения employees по ФИО. */
+const setupAutoLink = (numberRows: NumberRow[], employeeMatches: EmpMatch[]): void => {
+  queryMock.mockImplementation(async (sql: string) => {
+    const s = String(sql);
+    if (s.includes('mts_business_number_map')) return numberRows as never;
+    if (s.includes('FROM employees')) return employeeMatches as never;
+    return [] as never;
+  });
+};
+
+/** Все UPDATE-привязки: [msisdn_hash, targetId|null]. Снятие (employee_id = NULL) → null. */
+const linkUpdates = (): Array<[string, number | null]> =>
+  executeMock.mock.calls
+    .filter(([sql]) => String(sql).includes('SET employee_id'))
+    .map(([sql, params]) => {
+      const p = params as unknown[];
+      const target = String(sql).includes('employee_id = NULL') ? null : (p[1] as number);
+      return [p[0] as string, target];
+    });
+
+describe('autoLinkByFio: пересвязка по всем + конфликты', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    executeMock.mockResolvedValue(1);
+  });
+
+  it('несовпадающая привязка + единственный активный → relinked, сотрудник заменён', async () => {
+    setupAutoLink(
+      [{ msisdn_hash: 'h1', msisdn_enc: '+79000000001', mts_fio: 'Смолина Ольга Викторовна', employee_id: 100, current_name: 'Сычёв Игорь Алексеевич' }],
+      [{ id: 50, full_name: 'Смолина Ольга Викторовна', tab_number: 'T50', employment_status: 'active', is_archived: false }],
+    );
+    const res = await mtsBusinessMappingService.autoLinkByFio('u1');
+    expect(res).toMatchObject({ checked: 1, linked: 0, relinked: 1, cleared: 0 });
+    expect(res.conflicts).toHaveLength(0);
+    expect(linkUpdates()).toEqual([['h1', 50]]);
+  });
+
+  it('совпадающая привязка → не тронута, БД не пишем', async () => {
+    setupAutoLink(
+      [{ msisdn_hash: 'h1', msisdn_enc: '+79000000001', mts_fio: 'Иванов Иван', employee_id: 7, current_name: 'Иванов Иван' }],
+      [],
+    );
+    const res = await mtsBusinessMappingService.autoLinkByFio('u1');
+    expect(res).toMatchObject({ checked: 1, linked: 0, relinked: 0, cleared: 0 });
+    expect(res.conflicts).toHaveLength(0);
+    expect(executeMock).not.toHaveBeenCalled();
+  });
+
+  it('чужая привязка + 0 совпадений → cleared + конфликт no_match', async () => {
+    setupAutoLink(
+      [{ msisdn_hash: 'h1', msisdn_enc: '+79000000001', mts_fio: 'Боровик Александра Петровна', employee_id: 100, current_name: 'Сычёв Игорь Алексеевич' }],
+      [],
+    );
+    const res = await mtsBusinessMappingService.autoLinkByFio('u1');
+    expect(res).toMatchObject({ checked: 1, linked: 0, relinked: 0, cleared: 1 });
+    expect(linkUpdates()).toEqual([['h1', null]]);
+    expect(res.conflicts).toHaveLength(1);
+    expect(res.conflicts[0]).toMatchObject({ msisdn: '+79000000001', reason: 'no_match', currentEmployeeId: 100, candidates: [] });
+  });
+
+  it('чужая привязка + несколько однофамильцев → cleared + конфликт ambiguous с кандидатами', async () => {
+    setupAutoLink(
+      [{ msisdn_hash: 'h1', msisdn_enc: '+79000000001', mts_fio: 'Иванов Иван', employee_id: 100, current_name: 'Сычёв Игорь' }],
+      [
+        { id: 5, full_name: 'Иванов Иван', tab_number: 'T5', employment_status: 'active', is_archived: false },
+        { id: 9, full_name: 'Иванов Иван', tab_number: 'T9', employment_status: 'active', is_archived: false },
+      ],
+    );
+    const res = await mtsBusinessMappingService.autoLinkByFio('u1');
+    expect(res).toMatchObject({ cleared: 1 });
+    expect(linkUpdates()).toEqual([['h1', null]]);
+    expect(res.conflicts).toHaveLength(1);
+    expect(res.conflicts[0].reason).toBe('ambiguous');
+    expect(res.conflicts[0].candidates).toHaveLength(2);
+  });
+
+  it('не привязан + единственный активный → linked (прежнее поведение)', async () => {
+    setupAutoLink(
+      [{ msisdn_hash: 'h1', msisdn_enc: '+79000000001', mts_fio: 'Петров Пётр', employee_id: null, current_name: null }],
+      [{ id: 42, full_name: 'Петров Пётр', tab_number: null, employment_status: 'active', is_archived: false }],
+    );
+    const res = await mtsBusinessMappingService.autoLinkByFio('u1');
+    expect(res).toMatchObject({ checked: 1, linked: 1, relinked: 0, cleared: 0 });
+    expect(res.conflicts).toHaveLength(0);
+    expect(linkUpdates()).toEqual([['h1', 42]]);
+  });
+
+  it('не привязан + 0 совпадений → без конфликта и без записи', async () => {
+    setupAutoLink(
+      [{ msisdn_hash: 'h1', msisdn_enc: '+79000000001', mts_fio: 'Неизвестный Абонент', employee_id: null, current_name: null }],
+      [],
+    );
+    const res = await mtsBusinessMappingService.autoLinkByFio('u1');
+    expect(res).toMatchObject({ checked: 1, linked: 0, relinked: 0, cleared: 0 });
+    expect(res.conflicts).toHaveLength(0);
+    expect(executeMock).not.toHaveBeenCalled();
+  });
+});

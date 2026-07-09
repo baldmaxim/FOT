@@ -37,6 +37,26 @@ export interface IMtsSubscriberContext {
   employeeTabNumber: string | null;
 }
 
+export interface IAutoLinkConflict {
+  msisdn: string; // расшифрованный номер — для показа и ручной привязки
+  mtsFio: string;
+  currentEmployeeId: number | null;
+  currentEmployeeName: string | null;
+  reason: 'ambiguous' | 'no_match';
+  candidates: Array<{ id: number; fullName: string; tabNumber: string | null }>;
+}
+
+export interface IAutoLinkResult {
+  checked: number; // просмотрено строк с mts_fio
+  linked: number; // впервые привязано (было NULL)
+  relinked: number; // исправлена несовпадающая привязка
+  cleared: number; // снята заведомо чужая привязка (ушло в конфликты)
+  conflicts: IAutoLinkConflict[];
+}
+
+/** Нормализация ФИО для сравнения: регистр, ё→е, схлопывание пробелов. */
+const normFio = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+
 class MtsBusinessMappingService {
   async getNumberMap(): Promise<IMtsBusinessNumberMapRow[]> {
     const rows = await query<{
@@ -273,37 +293,95 @@ class MtsBusinessMappingService {
   }
 
   /**
-   * Пере-проверка автопривязки для уже сохранённых номеров: те, что ещё без
-   * сотрудника, но уже имеют mts_fio (из прошлых XML-загрузок) — например,
-   * ФИО пришло раньше, чем сотрудник появился в ФОТ, или коллизия ФИО с тех
-   * пор разрешилась. Только активные сотрудники; уволенные дубли игнорируются.
+   * Пере-проверка автопривязки по ФИО для ВСЕХ номеров с mts_fio (не только
+   * без сотрудника): чинит устаревшие/неверные привязки (напр. корпоративные
+   * SIM, массово привязанные к держателю контракта, когда mts_fio позже
+   * исправился по-номерно). Правило (см. решения в плане):
+   *  - привязка совпадает с mts_fio → не трогаем (сюда попадают верные и ручные);
+   *  - не совпадает / нет привязки, но ФИО даёт единственного активного → (пере)привязываем;
+   *  - привязан явно чужой, а ФИО неоднозначно (0 / несколько активных) → снимаем и в конфликты;
+   *  - не привязан и ФИО неоднозначно: конфликт только при однофамильцах (>1 активных), 0 совпадений — молча пропускаем.
    */
-  async autoLinkByFio(userId: string): Promise<{ checked: number; linked: number }> {
-    const unlinked = await query<{ msisdn_hash: string; mts_fio: string }>(
-      `SELECT msisdn_hash, mts_fio FROM mts_business_number_map
-        WHERE employee_id IS NULL AND mts_fio IS NOT NULL AND mts_fio <> ''`,
+  async autoLinkByFio(userId: string): Promise<IAutoLinkResult> {
+    const rows = await query<{
+      msisdn_hash: string;
+      msisdn_enc: string | null;
+      mts_fio: string;
+      employee_id: number | null;
+      current_name: string | null;
+    }>(
+      `SELECT m.msisdn_hash, m.msisdn_enc, m.mts_fio, m.employee_id, e.full_name AS current_name
+         FROM mts_business_number_map m
+         LEFT JOIN employees e ON e.id = m.employee_id
+        WHERE m.mts_fio IS NOT NULL AND m.mts_fio <> ''`,
     );
+
     let linked = 0;
-    for (const row of unlinked) {
-      const matches = await query<{ id: number }>(
-        `SELECT id FROM employees
-          WHERE employment_status = 'active'
-            AND LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
-                = LOWER(REPLACE($1, 'ё', 'е'))
-          LIMIT 2`,
+    let relinked = 0;
+    let cleared = 0;
+    const conflicts: IAutoLinkConflict[] = [];
+
+    for (const row of rows) {
+      const consistent =
+        row.employee_id != null &&
+        row.current_name != null &&
+        normFio(row.current_name) === normFio(row.mts_fio);
+      if (consistent) continue;
+
+      const matches = await query<{
+        id: number;
+        full_name: string;
+        tab_number: string | null;
+        employment_status: string | null;
+        is_archived: boolean;
+      }>(
+        `SELECT id, full_name, tab_number, employment_status, is_archived FROM employees
+          WHERE LOWER(REPLACE(regexp_replace(full_name, '\\s+', ' ', 'g'), 'ё', 'е'))
+              = LOWER(REPLACE($1, 'ё', 'е'))`,
         [row.mts_fio],
       );
-      if (matches.length !== 1) continue;
-      const targetId = matches[0].id;
-      const updated = await execute(
-        `UPDATE mts_business_number_map
-            SET employee_id = $2, linked_by = $3, linked_at = NOW()
-          WHERE msisdn_hash = $1 AND employee_id IS NULL`,
-        [row.msisdn_hash, targetId, userId],
-      );
-      linked += updated;
+      const active = matches.filter((m) => m.employment_status !== 'fired' && !m.is_archived);
+      const desiredId = active.length === 1 ? active[0].id : null;
+
+      if (desiredId != null) {
+        await execute(
+          `UPDATE mts_business_number_map
+              SET employee_id = $2, linked_by = $3, linked_at = NOW()
+            WHERE msisdn_hash = $1`,
+          [row.msisdn_hash, desiredId, userId],
+        );
+        if (row.employee_id == null) linked++;
+        else relinked++;
+        continue;
+      }
+
+      // ФИО неоднозначно (0 или несколько активных)
+      const isConflict = row.employee_id != null || active.length > 1;
+      if (!isConflict) continue; // не привязан и нет совпадений — не шумим
+
+      if (row.employee_id != null) {
+        await execute(
+          `UPDATE mts_business_number_map
+              SET employee_id = NULL, linked_by = $2, linked_at = NOW()
+            WHERE msisdn_hash = $1`,
+          [row.msisdn_hash, userId],
+        );
+        cleared++;
+      }
+
+      const msisdn = encryptionService.decryptField(row.msisdn_enc);
+      if (!msisdn) continue;
+      conflicts.push({
+        msisdn,
+        mtsFio: row.mts_fio,
+        currentEmployeeId: row.employee_id,
+        currentEmployeeName: row.current_name,
+        reason: active.length > 1 ? 'ambiguous' : 'no_match',
+        candidates: active.map((m) => ({ id: m.id, fullName: m.full_name, tabNumber: m.tab_number })),
+      });
     }
-    return { checked: unlinked.length, linked };
+
+    return { checked: rows.length, linked, relinked, cleared, conflicts };
   }
 
   /**
