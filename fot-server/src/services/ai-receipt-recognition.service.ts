@@ -292,6 +292,20 @@ const updateDocumentStatus = async (
   await execute(`UPDATE documents SET ${setParts.join(', ')} WHERE id = ${idPlaceholder}`, params);
 };
 
+// 403 от OpenRouter — конфигурационная проблема (data-policy/ограничение ключа),
+// повторяется на КАЖДОМ чеке (сотни handled-событий в Sentry). Шлём не чаще
+// раза в 10 минут, чтобы группа не забивалась, но причина оставалась видимой.
+let last403CaptureAt = 0;
+const FORBIDDEN_CAPTURE_INTERVAL_MS = 10 * 60_000;
+const shouldCapture403 = (): boolean => {
+  const now = Date.now();
+  if (now - last403CaptureAt >= FORBIDDEN_CAPTURE_INTERVAL_MS) {
+    last403CaptureAt = now;
+    return true;
+  }
+  return false;
+};
+
 export const aiReceiptRecognitionService = {
   /**
    * Запустить распознавание чека. Идемпотентно — UPSERT по document_id.
@@ -469,15 +483,27 @@ export const aiReceiptRecognitionService = {
       };
     } catch (err) {
       console.error('[ai-receipt-recognition]', err);
-      const isRateLimit = err instanceof OpenRouterError && err.status === 429;
-      const errorMessage = isRateLimit
-        ? `Лимит OpenRouter исчерпан${(err as OpenRouterError).retryAfterSec ? ` (попробуйте через ${(err as OpenRouterError).retryAfterSec} сек)` : ''}. Бесплатные модели OpenRouter ограничены по числу запросов в минуту/сутки — подождите и повторите, либо настройте платный ключ.`
-        : err instanceof Error ? err.message : 'unknown error';
-      if (!isRateLimit) {
+      const orErr = err instanceof OpenRouterError ? err : null;
+      const isRateLimit = orErr?.status === 429;
+      const isForbidden = orErr?.status === 403;
+      let errorMessage: string;
+      if (isRateLimit) {
+        errorMessage = `Лимит OpenRouter исчерпан${orErr?.retryAfterSec ? ` (попробуйте через ${orErr.retryAfterSec} сек)` : ''}. Бесплатные модели OpenRouter ограничены по числу запросов в минуту/сутки — подождите и повторите, либо настройте платный ключ.`;
+      } else if (isForbidden) {
+        errorMessage = `OpenRouter отклонил запрос (403): распознавание недоступно для текущей модели или ключа. Проверьте настройки приватности OpenRouter (Settings → Privacy) и лимиты ключа.${orErr?.body ? ` Ответ: ${orErr.body}` : ''}`;
+      } else {
+        errorMessage = err instanceof Error ? err.message : 'unknown error';
+      }
+      // 429 — ожидаемый транзиент, не шумим. 403 — конфиг-проблема, шлём с троттлингом
+      // (иначе сотни handled-событий). Остальное — всегда.
+      const shouldCapture = !isRateLimit && (!isForbidden || shouldCapture403());
+      if (shouldCapture) {
         Sentry.captureException(err, {
           tags: { service: 'ai-receipt-recognition', stage: 'recognize' },
           extra: {
             documentId,
+            openRouterStatus: orErr?.status ?? null,
+            openRouterBody: orErr?.body ?? null,
             rawLlmContent: rawLlmContent ? rawLlmContent.slice(0, 4000) : null,
           },
         });

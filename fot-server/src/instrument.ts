@@ -37,7 +37,20 @@ if (dsn) {
     environment: process.env.NODE_ENV ?? 'development',
     release: process.env.SENTRY_RELEASE,
     integrations: [],
-    tracesSampleRate: 0.1,
+    // Динамический семплинг спанов: держим базовые 0.03, а шумные/фоновые
+    // транзакции дропаем в 0 — они переполняли квоту спанов (6.7M/5M).
+    tracesSampler: (samplingContext) => {
+      const name = samplingContext.name || '';
+      const op = samplingContext.attributes?.['sentry.op'];
+      // Health-чек и CORS-префлайты — нулевая ценность для трейсинга.
+      if (/\bhealth\b/.test(name)) return 0;
+      if (/^OPTIONS\b/.test(name)) return 0;
+      // Высокочастотный фоновый поллинг фронта — не трейсим.
+      if (/leave-requests\/pending-count|\/notifications|\/chat\b/.test(name)) return 0;
+      // Фоновые cron-джобы (presence-polling, планировщики) — оставляем 1%.
+      if (op === 'function') return 0.01;
+      return samplingContext.inheritOrSampleWith(0.03);
+    },
     sendDefaultPii: false,
     beforeSend(event) {
       // Defense-in-depth: CORS-отказ чужого Origin — это ожидаемое

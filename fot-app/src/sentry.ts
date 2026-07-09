@@ -34,9 +34,19 @@ if (dsn && import.meta.env.PROD) {
     integrations: [
       Sentry.browserTracingIntegration(),
     ],
-    tracesSampleRate: 0.1,
+    tracesSampleRate: 0.03,
     sendDefaultPii: false,
     beforeSend(event) {
+      // Транзиентная недоступность бэка (502/503/504) и офлайн-сеть — инфра-шум,
+      // а не баг конкретного роута; куст «Ошибка сервера» забивал проект.
+      // Сохраняем видимость крупных outage-окон, но шлём только ~2%.
+      const status = event.tags?.status;
+      const isTransient5xx = status === '502' || status === '503' || status === '504';
+      const excVal = event.exception?.values?.[0]?.value ?? '';
+      const isOfflineNet = /Failed to fetch|NetworkError|Load failed/i.test(excVal);
+      if ((isTransient5xx || isOfflineNet) && Math.random() >= 0.02) {
+        return null;
+      }
       if (event.request) {
         if (event.request.headers) {
           event.request.headers = scrubHeaders(event.request.headers as Record<string, unknown>) as typeof event.request.headers;

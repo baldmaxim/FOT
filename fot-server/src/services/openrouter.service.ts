@@ -12,11 +12,14 @@ const RETRY_MAX_MS = 30_000;
 export class OpenRouterError extends Error {
   status: number | null;
   retryAfterSec: number | null;
-  constructor(message: string, status: number | null, retryAfterSec: number | null = null) {
+  /** Сырое тело ответа OpenRouter (усечённое) — реальная причина 4xx для Sentry. */
+  body: string | null;
+  constructor(message: string, status: number | null, retryAfterSec: number | null = null, body: string | null = null) {
     super(message);
     this.name = 'OpenRouterError';
     this.status = status;
     this.retryAfterSec = retryAfterSec;
+    this.body = body;
   }
 }
 
@@ -159,7 +162,17 @@ export const openRouterService = {
         const msg = (data && typeof data === 'object' && 'error' in data && (data as { error: { message?: string } }).error?.message)
           || axErr.message
           || 'OpenRouter request failed';
-        throw new OpenRouterError(`OpenRouter error${status ? ` ${status}` : ''}: ${msg}`, status, retryAfter);
+        // Тело ответа целиком (усечённое) — при 403/иных 4xx без error.message
+        // это единственный способ увидеть настоящую причину (data-policy, ключ и т.п.).
+        let body: string | null = null;
+        if (data != null) {
+          try {
+            body = (typeof data === 'string' ? data : JSON.stringify(data)).slice(0, 600);
+          } catch {
+            body = null;
+          }
+        }
+        throw new OpenRouterError(`OpenRouter error${status ? ` ${status}` : ''}: ${msg}`, status, retryAfter, body);
       }
     }
 
