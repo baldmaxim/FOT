@@ -54,7 +54,9 @@ router.get('/submissions/:id', submView, contractorAdminController.getSubmission
 // Отметка вводного инструктажа держателя пропуска (единственное write-действие ОТиТБ).
 router.patch('/submissions/passes/:passId/induction', submEdit, contractorAdminController.setPassInduction);
 // Реестр ОТиТБ: прошедшие вводный инструктаж сотрудники подрядчиков.
+// Статические GET (/induction/orgs, /induction/all) — ДО параметрического /induction/:id.
 router.get('/induction/orgs', otitbView, contractorAdminController.listInductionOrgs);
+router.get('/induction/all', otitbView, contractorAdminController.listAllInducted);
 router.get('/induction', otitbView, contractorAdminController.listInductedPersons);
 router.post('/induction', otitbEdit, contractorAdminController.addInductedPerson);
 router.delete('/induction/:id', otitbEdit, contractorAdminController.deleteInductedPerson);

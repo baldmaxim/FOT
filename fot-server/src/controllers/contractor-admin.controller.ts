@@ -1164,8 +1164,9 @@ export const contractorAdminController = {
     try {
       if (!(await ensureOtitbAccess(req, res, 'view'))) return;
       const orgId = z.string().uuid().parse(req.query.org_department_id);
+      // Дату отдаём строкой YYYY-MM-DD (to_char — не зависит от DateStyle), без Date-преобразований.
       const data = await query<{ id: string; full_name: string; inducted_on: string }>(
-        `SELECT id, full_name, inducted_on
+        `SELECT id, full_name, to_char(inducted_on, 'YYYY-MM-DD') AS inducted_on
            FROM contractor_inducted_persons
           WHERE org_department_id = $1::uuid
           ORDER BY inducted_on DESC, created_at DESC`,
@@ -1182,13 +1183,18 @@ export const contractorAdminController = {
     }
   },
 
-  /** POST /induction — добавить сотрудника в реестр. Body: { org_department_id, full_name }. */
+  /**
+   * POST /induction — добавить сотрудника в реестр.
+   * Body: { org_department_id, full_name, inducted_on? }. Дата — строка YYYY-MM-DD
+   * (реальная календарная, .date() отсекает 2026-99-99); по умолчанию — сегодня.
+   */
   async addInductedPerson(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureOtitbAccess(req, res, 'edit'))) return;
-      const { org_department_id, full_name } = z.object({
+      const { org_department_id, full_name, inducted_on } = z.object({
         org_department_id: z.string().uuid(),
         full_name: z.string().trim().min(2).max(200),
+        inducted_on: z.string().date().optional(),
       }).parse(req.body);
 
       // Организация должна быть подрядной (источник истины — getContractorOrgs).
@@ -1198,16 +1204,24 @@ export const contractorAdminController = {
         return;
       }
 
+      // Дату передаём строкой в $4::date без Date-преобразований (иначе сдвиг дня по TZ).
+      // COALESCE — при отсутствии даты берём CURRENT_DATE (прежнее поведение).
       const row = await queryOne<{ id: string; full_name: string; inducted_on: string }>(
-        `INSERT INTO contractor_inducted_persons (org_department_id, full_name, created_by)
-         VALUES ($1::uuid, $2, $3::uuid)
-         RETURNING id, full_name, inducted_on`,
-        [org_department_id, full_name, req.user.id],
+        `INSERT INTO contractor_inducted_persons (org_department_id, full_name, inducted_on, created_by)
+         VALUES ($1::uuid, $2, COALESCE($3::date, CURRENT_DATE), $4::uuid)
+         RETURNING id, full_name, to_char(inducted_on, 'YYYY-MM-DD') AS inducted_on`,
+        [org_department_id, full_name, inducted_on ?? null, req.user.id],
       );
       res.json({ success: true, data: row });
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ success: false, error: 'Некорректные данные' });
+        return;
+      }
+      // Защита: неверная дата на уровне PG (22007/22008) → 400, а не 500.
+      const code = (error as { code?: string })?.code;
+      if (code === '22007' || code === '22008') {
+        res.status(400).json({ success: false, error: 'Некорректная дата' });
         return;
       }
       console.error('Contractor addInductedPerson error:', error);
@@ -1246,6 +1260,37 @@ export const contractorAdminController = {
       }
       console.error('Contractor deleteInductedPerson error:', error);
       res.status(500).json({ success: false, error: 'Не удалось удалить запись' });
+    }
+  },
+
+  /**
+   * GET /induction/all — плоский список всех прошедших вводный инструктаж по всем
+   * подрядным организациям (для режима «показать всех» на вкладке ОТиТБ).
+   */
+  async listAllInducted(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureOtitbAccess(req, res, 'view'))) return;
+      const orgs = await getContractorOrgs();
+      const orgIds = orgs.map(o => o.id);
+      if (orgIds.length === 0) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+      const data = await query<{
+        id: string; org_department_id: string; org_name: string; full_name: string; inducted_on: string;
+      }>(
+        `SELECT cip.id, cip.org_department_id, od.name AS org_name, cip.full_name,
+                to_char(cip.inducted_on, 'YYYY-MM-DD') AS inducted_on
+           FROM contractor_inducted_persons cip
+           JOIN org_departments od ON od.id = cip.org_department_id
+          WHERE cip.org_department_id = ANY($1::uuid[])
+          ORDER BY cip.inducted_on DESC, od.name ASC, cip.full_name ASC`,
+        [orgIds],
+      );
+      res.json({ success: true, data });
+    } catch (error) {
+      console.error('Contractor listAllInducted error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить список' });
     }
   },
 

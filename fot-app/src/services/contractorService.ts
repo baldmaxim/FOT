@@ -23,6 +23,12 @@ export interface IInductedPerson {
   inducted_on: string;
 }
 
+/** Запись реестра ОТиТБ + организация (для плоского списка «показать всех»). */
+export interface IInductedPersonFull extends IInductedPerson {
+  org_department_id: string;
+  org_name: string;
+}
+
 export interface IRosterRow {
   id: string;
   full_name: string;
@@ -586,10 +592,16 @@ export const contractorAdminService = {
     );
     return r.data ?? [];
   },
-  async addInducted(orgId: string, fullName: string): Promise<IInductedPerson> {
+  /** Плоский список всех прошедших инструктаж по всем подрядным организациям. */
+  async listAllInducted(): Promise<IInductedPersonFull[]> {
+    const r = await apiClient.get<ApiResponse<IInductedPersonFull[]>>('/admin/contractor/induction/all');
+    return r.data ?? [];
+  },
+  async addInducted(orgId: string, fullName: string, inductedOn?: string): Promise<IInductedPerson> {
     const r = await apiClient.post<ApiResponse<IInductedPerson>>('/admin/contractor/induction', {
       org_department_id: orgId,
       full_name: fullName,
+      inducted_on: inductedOn,
     });
     return r.data;
   },
