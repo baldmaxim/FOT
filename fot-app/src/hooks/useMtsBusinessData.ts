@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { mtsBusinessService } from '../services/mtsBusinessService';
+import { getMtsBusinessSubscribersKey } from './useMtsBusinessSubscribers';
 
 export const getMtsBusinessAccountsKey = () => ['mts-business', 'accounts'] as const;
 export const getMtsBusinessRequestsKey = () => ['mts-business', 'requests'] as const;
@@ -157,6 +158,7 @@ export const useSetMtsBusinessNumberMap = () => {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: getMtsBusinessNumberMapKey() });
       void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessSubscribersKey() });
       void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
     },
   });
@@ -169,6 +171,7 @@ export const useAutoLinkMtsBusinessNumberMap = () => {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: getMtsBusinessNumberMapKey() });
       void qc.invalidateQueries({ queryKey: getMtsBusinessImportedNumbersKey() });
+      void qc.invalidateQueries({ queryKey: getMtsBusinessSubscribersKey() });
       void qc.invalidateQueries({ queryKey: ['mts-business', 'report'] });
       void qc.invalidateQueries({ queryKey: ['mts-business', 'billing'] });
     },
