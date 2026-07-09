@@ -271,6 +271,7 @@ async function runStep(
         res.noBindingNumbers ? `без связки ТП: ${res.noBindingNumbers}` : null,
         res.noPdNumbers ? `без персданных: ${res.noPdNumbers}` : null,
         res.unavailable ? `не в тарифе: ${res.unavailable}` : null,
+        res.mtsErrorSections ? `МТС-ошибка: ${res.mtsErrorSections}` : null,
         res.transient ? `МТС временно недоступен: ${res.transient}` : null,
       ].filter(Boolean).join(', ');
       return {

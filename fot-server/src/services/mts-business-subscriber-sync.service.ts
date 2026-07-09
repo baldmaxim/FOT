@@ -6,6 +6,7 @@ import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
 import {
   isFeatureUnavailable,
+  isMtsUpstreamSoftError,
   isTransientMtsError,
   MtsBusinessApiError,
   mtsErrorBucket,
@@ -43,6 +44,8 @@ export interface ISubscriberSyncResult {
   noAccess: number;
   noBinding: number;
   noData: number;
+  /** Секций с точечным сбоем бэкенда МТС (400/IL.*) — не наша вина, не сбой прогона. */
+  mtsError: number;
   errors: ISubscriberSyncSectionError[];
 }
 
@@ -81,7 +84,7 @@ export async function syncSubscriberFull(
   const mode = options.mode ?? 'full';
   const result: ISubscriberSyncResult = {
     msisdn, sections: 0, stored: 0, unavailable: 0, failed: 0, transient: 0,
-    noAccess: 0, noBinding: 0, noData: 0, errors: [],
+    noAccess: 0, noBinding: 0, noData: 0, mtsError: 0, errors: [],
   };
   const settle = async (section: string, fn: () => Promise<void>): Promise<void> => {
     if (options.onlySections && !options.onlySections.has(section)) return;
@@ -100,6 +103,13 @@ export async function syncSubscriberFull(
         result.noBinding++;
       } else if (permanent === 'no_data') {
         result.noData++;
+      } else if (isMtsUpstreamSoftError(e)) {
+        // 400/IL.* — точечный сбой биллинга МТС. В errors НЕ кладём: повтор
+        // бесполезен (400 стабилен), второй проход его не трогает.
+        result.mtsError++;
+        console.warn(
+          `[mts-biz-subscribers] section=${section} msisdn=${msisdn} http=${apiErr!.status} code=${apiErr!.code ?? '-'} mts-error`,
+        );
       } else if (isTransientMtsError(e)) {
         result.transient++;
         result.errors.push({ section, status: apiErr!.status, code: apiErr!.code, kind: 'transient', bucket: mtsErrorBucket(e) });
@@ -164,6 +174,8 @@ export interface IAccountSubscribersSyncResult {
   noAccessNumbers: number;
   noBindingNumbers: number;
   noPdNumbers: number;
+  /** Секций с точечным сбоем бэкенда МТС (400/IL.*) — не сбой прогона. */
+  mtsErrorSections: number;
   /** Класс ошибки → количество, только окончательно упавшие секции (kind=failed). */
   errorBreakdown: Record<string, number>;
 }
@@ -184,7 +196,7 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
   const out: IAccountSubscribersSyncResult = {
     accountId, numbers: msisdns.length, stored: 0, unavailable: 0, failed: 0, transient: 0,
     pdSkipped: 0, retriedNumbers: 0, retriedOk: 0,
-    noAccessNumbers: 0, noBindingNumbers: 0, noPdNumbers: 0, errorBreakdown: {},
+    noAccessNumbers: 0, noBindingNumbers: 0, noPdNumbers: 0, mtsErrorSections: 0, errorBreakdown: {},
   };
 
   const results = new Map<string, ISubscriberSyncResult>();
@@ -210,6 +222,9 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
     first.unavailable += retry.unavailable;
     first.failed = retry.failed;
     first.transient = retry.transient;
+    // mtsError-секции первого прохода не повторялись (не в errors) — их счётчик
+    // сохраняем; повтор мог дать новые 400/IL.* на ранее упавших секциях.
+    first.mtsError += retry.mtsError;
     first.errors = retry.errors;
     if (retry.failed === 0 && retry.transient === 0) out.retriedOk++;
   }
@@ -222,6 +237,7 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
     if (r.noAccess > 0) out.noAccessNumbers++;
     if (r.noBinding > 0) out.noBindingNumbers++;
     if (r.noData > 0) out.noPdNumbers++;
+    out.mtsErrorSections += r.mtsError;
     for (const e of r.errors) {
       if (e.kind !== 'failed') continue;
       out.errorBreakdown[e.bucket] = (out.errorBreakdown[e.bucket] ?? 0) + 1;
@@ -230,7 +246,7 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
 
   console.log(
     `[mts-biz-subscribers] account=${accountId} numbers=${out.numbers} stored=${out.stored} unavailable=${out.unavailable}`
-    + ` failed=${out.failed} transient=${out.transient} noAccess=${out.noAccessNumbers} noBinding=${out.noBindingNumbers}`
+    + ` failed=${out.failed} transient=${out.transient} mtsError=${out.mtsErrorSections} noAccess=${out.noAccessNumbers} noBinding=${out.noBindingNumbers}`
     + ` noPd=${out.noPdNumbers} retried=${out.retriedNumbers} retriedOk=${out.retriedOk} pdSkipped=${out.pdSkipped}`,
   );
   return out;

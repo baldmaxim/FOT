@@ -77,6 +77,19 @@ export const mtsPermanentErrorKind = (error: unknown): MtsPermanentErrorKind | n
 };
 
 /**
+ * Точечный сбой бэкенда МТС по конкретному номеру/секции: HTTP 400 с кодом IL.*
+ * (IL.UnknownError, IL.ErrorGetSubscriptionFee и т.п.) — внутренняя ошибка
+ * биллинга МТС. Это не транзиент (повтор в пределах прогона не лечит) и не наша
+ * вина — данные для отображения не теряются (тариф есть фолбэком из услуг).
+ * Считаем отдельным счётчиком «МТС-ошибка», шаг не роняем (как 401/1014 и др.).
+ */
+export const isMtsUpstreamSoftError = (error: unknown): boolean =>
+  error instanceof MtsBusinessApiError
+  && error.status === 400
+  && error.code != null
+  && error.code.startsWith('IL.');
+
+/**
  * Короткая метка класса ошибки для сводок в статусах прогонов: «http 500/9999»,
  * «сеть/таймаут» (обрыв без ответа), «другое» (не-API, например ошибка БД).
  * Без ПДн — только статус и код МТС.

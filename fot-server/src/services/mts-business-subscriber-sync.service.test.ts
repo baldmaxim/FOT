@@ -113,6 +113,23 @@ describe('syncAccountSubscribers: второй проход по упавшим 
     expect(getBillPlanInfo).toHaveBeenCalledTimes(2); // повтора по «без доступа» нет
   });
 
+  it('400/IL.* — mtsErrorSections, не failed, без повтора и не в разбивке', async () => {
+    // Остальные секции — успех (clearAllMocks не сбрасывает impl из прошлых тестов).
+    getTariffRental.mockImplementation((async () => ({})) as typeof mtsBusinessBillingService.getTariffRental);
+    vi.mocked(mtsBusinessCatalogService.getProductInfo).mockImplementation((async () => ({})) as typeof mtsBusinessCatalogService.getProductInfo);
+    vi.mocked(mtsBusinessCatalogService.getConnectedBlocks).mockImplementation((async () => ({})) as typeof mtsBusinessCatalogService.getConnectedBlocks);
+    vi.mocked(mtsBusinessPersonalDataService.fetchAndStoreFull).mockImplementation((async () => ({ fullName: null })) as typeof mtsBusinessPersonalDataService.fetchAndStoreFull);
+    getBillPlanInfo.mockImplementation((async (_a: string, msisdn: string) => {
+      if (msisdn === '79002222222') throw new MtsBusinessApiError('unknown', 400, 'IL.UnknownError');
+      return {};
+    }) as typeof mtsBusinessCatalogService.getBillPlanInfo);
+
+    const res = await syncAccountSubscribers('acc');
+    expect(res).toMatchObject({ failed: 0, transient: 0, mtsErrorSections: 1, retriedNumbers: 0, stored: 9 });
+    expect(res.errorBreakdown).toEqual({});
+    expect(getBillPlanInfo).toHaveBeenCalledTimes(2); // повтора по 400/IL.* нет
+  });
+
   it('422/2005 «нет связки ТП» — noBindingNumbers; 404 персданных — noPdNumbers', async () => {
     failBillPlanTimes('79002222222', 99, new MtsBusinessApiError('нет связки', 422, '2005'));
     vi.mocked(mtsBusinessPersonalDataService.fetchAndStoreFull).mockImplementation((async (_a: string, msisdn: string) => {

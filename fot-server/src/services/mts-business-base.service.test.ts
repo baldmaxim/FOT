@@ -14,6 +14,7 @@ vi.mock('./mts-business-auth.service.js', () => ({
 import {
   MtsBusinessApiError,
   isFeatureUnavailable,
+  isMtsUpstreamSoftError,
   isTransientMtsError,
   isRetryableMtsAxiosError,
   mtsBusinessApiErrorFromAxios,
@@ -116,6 +117,26 @@ describe('МТС Бизнес: стабильные состояния номе�
     expect(mtsPermanentErrorKind(new MtsBusinessApiError('другое', 401, '9999'))).toBeNull();
     expect(mtsPermanentErrorKind(new MtsBusinessApiError('validation', 422, '9999'))).toBeNull();
     expect(mtsPermanentErrorKind(new Error('ошибка БД'))).toBeNull();
+  });
+});
+
+describe('МТС Бизнес: точечный сбой бэкенда МТС (400/IL.*)', () => {
+  it('400 с кодом IL.* → soft (не роняет шаг)', () => {
+    expect(isMtsUpstreamSoftError(new MtsBusinessApiError('unknown', 400, 'IL.UnknownError'))).toBe(true);
+    expect(isMtsUpstreamSoftError(new MtsBusinessApiError('fee', 400, 'IL.ErrorGetSubscriptionFee'))).toBe(true);
+  });
+
+  it('не soft: 400 без IL.*, IL.* на другом статусе, не-API', () => {
+    expect(isMtsUpstreamSoftError(new MtsBusinessApiError('validation', 400, '9999'))).toBe(false);
+    expect(isMtsUpstreamSoftError(new MtsBusinessApiError('без кода', 400))).toBe(false);
+    expect(isMtsUpstreamSoftError(new MtsBusinessApiError('IL на 500', 500, 'IL.UnknownError'))).toBe(false);
+    expect(isMtsUpstreamSoftError(new Error('ошибка БД'))).toBe(false);
+  });
+
+  it('400/IL.* не транзиент и не ретраится', () => {
+    const err = new MtsBusinessApiError('unknown', 400, 'IL.UnknownError');
+    expect(isTransientMtsError(err)).toBe(false);
+    expect(mtsPermanentErrorKind(err)).toBeNull();
   });
 });
 
