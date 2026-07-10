@@ -268,21 +268,27 @@ export const findSubscriberInHierarchy = (h: IMtsHierarchy | null, rawMsisdn: st
   return h.numbers.find(n => normalizeMsisdn(n.msisdn) === norm) ?? null;
 };
 
-const parseAvailableTariffs = (resp: unknown): IMtsAvailableTariff[] => {
+export const parseAvailableTariffs = (resp: unknown): IMtsAvailableTariff[] => {
+  // Контракт подтверждён probe 10.07.2026 (ЛС СУ-10, вариант params
+  // category.name=AvailibleTariffPlann → 200, массив из 12 тарифов). Форма узла:
+  //   { id: '0495', name: 'Умный бизнес M (КОРП) (SS)', productOfferingPrice: [
+  //     { name: 'Price', price: { dutyFreeAmount: 122.95, taxIncludedAmount: 0 } } ] }
+  // id тарифа — в поле `id` (НЕ externalID, как искал прежний парсер → count=0);
+  // абонплата — в price.dutyFreeAmount (taxIncludedAmount приходит 0 = скидка).
   const items = Array.isArray(resp)
     ? (resp as Record<string, unknown>[])
-    : [...collectByMarker(resp, 'externalID'), ...collectByMarker(resp, 'externalId')];
+    : [...collectByMarker(resp, 'productOfferingPrice'), ...collectByMarker(resp, 'externalID'), ...collectByMarker(resp, 'externalId')];
   const seen = new Set<string>();
   const out: IMtsAvailableTariff[] = [];
   for (const raw of items) {
     const r = raw as Record<string, unknown>;
-    const tariffId = asString(r.externalID) ?? asString(r.externalId);
+    const tariffId = asString(r.id) ?? asString(r.externalID) ?? asString(r.externalId);
     if (!tariffId || seen.has(tariffId)) continue;
     seen.add(tariffId);
     out.push({
       tariffId,
       name: asString(r.name) ?? asString(firstValue(r, ['name'])),
-      price: deepNumber(r, ['taxIncludedAmount', 'dutyFreeAmount', 'amount', 'price', 'value']),
+      price: deepNumber(r, ['dutyFreeAmount', 'taxIncludedAmount', 'amount', 'price', 'value']),
     });
   }
   return out;
