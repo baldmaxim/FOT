@@ -157,9 +157,10 @@ const UsageRow: FC<{ u: IMtsUsageRow }> = ({ u }) => {
   const hasPeer = !!(u.peerName || u.peer);
   const primary = name ?? numberText ?? u.label ?? '—';
   const value = fmtUnits(u.units, u.unitCode);
+  const paid = u.amount > 0; // событие оказалось платным (было списание)
   const dotStyle = { ['--c']: usageContactColor(u.peer ?? u.peerName) } as CSSProperties;
   return (
-    <li className={st.usageRow}>
+    <li className={`${st.usageRow} ${paid ? st.usageRowPaid : ''}`}>
       <UsageIcon group={group} direction={u.direction} />
       <div className={st.usageMain}>
         <div className={st.usagePrimary}>
@@ -170,12 +171,13 @@ const UsageRow: FC<{ u: IMtsUsageRow }> = ({ u }) => {
         <div className={st.usageMeta}>
           <span className={st.usageChip}>{USAGE_TYPE_WORD[group]}</span>
           {subtype && <span className={st.usageSubtype}>{subtype}</span>}
+          {paid && <span className={st.usagePaidChip}>платно</span>}
           <span className={st.usageTime}>{fmtLast(u.date)}</span>
         </div>
       </div>
       <div className={st.usageValueBox}>
         {value && <span className={st.usageValue}>{value}</span>}
-        {u.amount > 0 && <span className={st.usageAmt}>{fmtMoney(u.amount)}</span>}
+        {paid && <span className={`${st.usageAmt} ${st.usageAmtPaid}`}>{fmtMoney(u.amount)}</span>}
       </div>
     </li>
   );
@@ -193,6 +195,7 @@ export const UsageTab: FC<{
 }> = ({ msisdn, month, months, setMonth }) => {
   const [usageDate, setUsageDate] = useState(''); // пусто = весь месяц
   const [showDetail, setShowDetail] = useState(false); // список выписки скрыт по умолчанию
+  const [onlyPaid, setOnlyPaid] = useState(false); // фильтр: только события с суммой > 0
   const [detailTab, setDetailTab] = useState<UsageGroupKey>('calls');
   const usage = useMtsBusinessSubscriberUsage(msisdn, month, usageDate, true);
   const rows = usage.data?.rows;
@@ -204,9 +207,10 @@ export const UsageTab: FC<{
   );
   const activeTab = availableTabs.includes(detailTab) ? detailTab : (availableTabs[0] ?? 'calls');
   const tabRows = useMemo(
-    () => (rows ?? []).filter(u => groupOf(u.category) === activeTab),
-    [rows, activeTab],
+    () => (rows ?? []).filter(u => groupOf(u.category) === activeTab && (!onlyPaid || u.amount > 0)),
+    [rows, activeTab, onlyPaid],
   );
+  const paidCount = useMemo(() => (rows ?? []).filter(u => u.amount > 0).length, [rows]);
 
   const onMonth = (v: string): void => { setMonth(v); setUsageDate(''); setShowDetail(false); };
   const onDay = (v: string): void => { setUsageDate(v ? `${month}-${v}` : ''); setShowDetail(false); };
@@ -280,11 +284,25 @@ export const UsageTab: FC<{
                       <span className={st.usageTabCount}>{summary.get(k)?.count ?? 0}</span>
                     </button>
                   ))}
+                  {paidCount > 0 && (
+                    <button
+                      className={`${st.usageTab} ${st.usagePaidToggle} ${onlyPaid ? st.usageTabActive : ''}`}
+                      onClick={() => setOnlyPaid(v => !v)}
+                      title="Показать только платные события"
+                    >
+                      ₽ Только платные
+                      <span className={st.usageTabCount}>{paidCount}</span>
+                    </button>
+                  )}
                 </div>
 
-                <ul className={st.usageRowList}>
-                  {tabRows.slice(0, USAGE_ROWS_CAP).map((u, i) => <UsageRow key={`u-${i}`} u={u} />)}
-                </ul>
+                {tabRows.length === 0
+                  ? <p className={styles.hint}>{onlyPaid ? 'В этой категории нет платных событий.' : 'Событий нет.'}</p>
+                  : (
+                    <ul className={st.usageRowList}>
+                      {tabRows.slice(0, USAGE_ROWS_CAP).map((u, i) => <UsageRow key={`u-${i}`} u={u} />)}
+                    </ul>
+                  )}
                 {tabRows.length > USAGE_ROWS_CAP && (
                   <p className={styles.hint}>Показаны первые {USAGE_ROWS_CAP} из {tabRows.length} событий.</p>
                 )}

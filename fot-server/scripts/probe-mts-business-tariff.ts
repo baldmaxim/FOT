@@ -14,7 +14,9 @@
  *   [2] Product/ProductInfo с productSpecificationType.name=tariff|ratePlan,
  *       actionAllowed=none — подключённый тариф как позиция (имя + PeriodicalPrice);
  *   [3] Bills/TariffRental — причина падения (сырое тело ошибки);
- *   [4] Bills/CheckCharges — начисления по номеру (bulk на 1 номер).
+ *   [4] Bills/CheckCharges — начисления по номеру (bulk на 1 номер);
+ *   [5] Product/ProductInfo (ДОСТУПНЫЕ тарифы для перехода) — варианты params,
+ *       т.к. в модалке «Сменить тариф» список пуст, а контракт не проверен живьём.
  *
  * Запуск на проде (accountId резолвится по номеру, .env берётся из папки сайта):
  *   cd /opt/fot-build && MTS_PROBE_RAW=1 npx tsx fot-server/scripts/probe-mts-business-tariff.ts <msisdn>
@@ -140,6 +142,82 @@ const main = async (): Promise<void> => {
     const charges = await mtsBusinessBillingService.checkChargesBulk(accountId, [msisdn]);
     console.log('checkChargesBulk →', short(charges));
   } catch (e) { console.log('checkChargesBulk ОШИБКА:', errMsg(e)); }
+
+  // [5] ДОСТУПНЫЕ тарифы для перехода — ProductInfo, разные варианты params.
+  //     Цель: найти рабочий контракт (список тарифов в модалке «Сменить тариф» пуст).
+  //     getAvailableTariffs использует category.name=AvailibleTariffPlann (опечатка
+  //     из доков) + fields=productOffering.externalId — ни разу не проверялось живьём.
+  console.log('\n=== [5] Product/ProductInfo — ДОСТУПНЫЕ тарифы (варианты) ===');
+  try {
+    const parsed = await mtsBusinessCatalogService.getAvailableTariffs(accountId, msisdn);
+    console.log(`парсер getAvailableTariffs → count=${Array.isArray(parsed) ? parsed.length : '?'} ${short(parsed)}`);
+  } catch (e) { console.log('getAvailableTariffs ОШИБКА:', errMsg(e)); }
+
+  const tariffVariants: Array<{ label: string; params: Record<string, unknown> }> = [
+    {
+      label: 'docs: AvailibleTariffPlann + fields externalId',
+      params: {
+        'marketSegment.characteristic.name': 'MSISDN',
+        'marketSegment.characteristic.value': msisdn,
+        'category.name': 'AvailibleTariffPlann',
+        fields: 'productOffering.externalId,productOffering.productOfferingPrice.price',
+      },
+    },
+    {
+      label: 'исправл. написание: AvailableTariffPlan',
+      params: {
+        'marketSegment.characteristic.name': 'MSISDN',
+        'marketSegment.characteristic.value': msisdn,
+        'category.name': 'AvailableTariffPlan',
+        fields: 'productOffering.externalID,productOffering.name,productOffering.productOfferingPrice.price',
+      },
+    },
+    {
+      label: 'исправл. написание: AvailableTariffPlann',
+      params: {
+        'marketSegment.characteristic.name': 'MSISDN',
+        'marketSegment.characteristic.value': msisdn,
+        'category.name': 'AvailableTariffPlann',
+        fields: 'productOffering.externalID,productOffering.name',
+      },
+    },
+    {
+      label: 'AvailibleTariffPlann без fields (голый ответ)',
+      params: {
+        'marketSegment.characteristic.name': 'MSISDN',
+        'marketSegment.characteristic.value': msisdn,
+        'category.name': 'AvailibleTariffPlann',
+      },
+    },
+    {
+      label: 'как услуги: MobileConnectivity + actionAllowed=create + specType=tariff',
+      params: {
+        'category.name': 'MobileConnectivity',
+        'marketSegment.characteristic.name': 'MSISDN',
+        'marketSegment.characteristic.value': msisdn,
+        'productOffering.actionAllowed': 'create',
+        'productSpecificationType.name': 'tariff',
+        fields: 'CalculatePrices',
+      },
+    },
+    {
+      label: 'как услуги: specType=ratePlan',
+      params: {
+        'category.name': 'MobileConnectivity',
+        'marketSegment.characteristic.name': 'MSISDN',
+        'marketSegment.characteristic.value': msisdn,
+        'productOffering.actionAllowed': 'create',
+        'productSpecificationType.name': 'ratePlan',
+        fields: 'CalculatePrices',
+      },
+    },
+  ];
+  for (const v of tariffVariants) {
+    try {
+      const r = await probe.raw('/Product/ProductInfo', accountId, v.params);
+      console.log(`  [${v.label}] → тип=${Array.isArray(r) ? `array(${r.length})` : typeof r} ${short(r, 3500)}`);
+    } catch (e) { console.log(`  [${v.label}] ОШИБКА:`, errMsg(e)); }
+  }
 
   process.exit(0);
 };
