@@ -22,6 +22,8 @@ interface TimesheetFilters {
   from?: string; // YYYY-MM-DD (приоритетнее half)
   to?: string;
   include_objects?: boolean;
+  // include_empty: показывать членов ростера без активности за период (тумблер «Все сотрудники»).
+  include_empty?: boolean;
   schedule_payload?: 'full' | 'compact';
 }
 
@@ -199,6 +201,7 @@ export const timesheetService = {
       params.append('half', filters.half);
     }
     params.append('include_objects', filters.include_objects ? '1' : '0');
+    if (filters.include_empty) params.append('include_empty', '1');
     params.append('schedule_payload', filters.schedule_payload ?? 'compact');
     const res = await apiClient.get<ApiResponse<TimesheetResponse>>(`/timesheet?${params.toString()}`);
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки табеля');

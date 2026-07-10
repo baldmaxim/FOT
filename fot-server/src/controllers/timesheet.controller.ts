@@ -1297,6 +1297,10 @@ export const timesheetController = {
     try {
       const month = typeof req.query.month === 'string' ? req.query.month : null;
       const includeObjectDetails = req.query.include_objects === '1';
+      // include_empty=1 отключает скрытие членов ростера без активности за период
+      // (тумблер «Все сотрудники»). Скоуп уже ограничен resolveTimesheetScope — флаг
+      // лишь снимает пост-фильтрацию внутри уже авторизованного набора.
+      const includeEmpty = req.query.include_empty === '1';
       const compactSchedulePayload = req.query.schedule_payload === 'compact';
       const scope = await resolveTimesheetScope(req);
       if (!scope) {
@@ -1626,7 +1630,7 @@ export const timesheetController = {
       // Больничный/отпуск/удалёнка-по-заявке — настоящие adjustment-записи (id != null),
       // такие сотрудники под фильтр не попадают. Self-карточка руководителя и строка(и)
       // «Начальник участка» исключены из фильтрации явно.
-      if (shouldApplyDeptFilter || isDirectReportsOnlyScope) {
+      if ((shouldApplyDeptFilter || isDirectReportsOnlyScope) && !includeEmpty) {
         const hasRealActivity = (entry: IAttendanceEntry): boolean =>
           entry.id != null ||
           entry.is_correction ||

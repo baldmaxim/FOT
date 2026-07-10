@@ -140,6 +140,26 @@ export const TimesheetPage: FC = () => {
   const isTimekeeperRole = profile?.role_code === 'timekeeper';
   const canUseAssignedMode = isTimekeeperRole
     || (!isTimesheetDepartmentScope && (hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review')));
+  // Тумблер «Все сотрудники»: показывать членов ростера без активности за период.
+  // Роль-гейт отдельно от UI-гейта — сохранённое localStorage='1' не должно влиять на
+  // запрос после смены роли, когда сам чип скрыт (см. includeEmptyEmployees ниже).
+  const canUseShowAllEmployees = isAdmin
+    || isTimekeeperRole
+    || canEditTimesheet
+    || hasPermission('timesheet.workflow.monitor')
+    || hasPermission('timesheet.workflow.review');
+  const showAllStorageKey = `ts:showAllEmployees:${profile?.id ?? 'anon'}`;
+  const [showAllEmployees, setShowAllEmployees] = useState<boolean>(
+    () => localStorage.getItem(showAllStorageKey) === '1',
+  );
+  const includeEmptyEmployees = canUseShowAllEmployees && showAllEmployees;
+  const handleToggleShowAll = useCallback(() => {
+    setShowAllEmployees(prev => {
+      const next = !prev;
+      localStorage.setItem(showAllStorageKey, next ? '1' : '0');
+      return next;
+    });
+  }, [showAllStorageKey]);
   const timesheetMode: 'department' | 'assigned' =
     (canUseAssignedMode && (queryMode === 'assigned' || (isTimekeeperRole && queryMode !== 'department')))
       ? 'assigned'
@@ -304,13 +324,14 @@ export const TimesheetPage: FC = () => {
   // «по сотрудникам» — для per-object корректировок в дневной модалке.
   const includeObjectDetails = true;
   const timesheetQuery = useQuery({
-    queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', 'with-objects'],
+    queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none', 'with-objects', includeEmptyEmployees],
     queryFn: () => timesheetService.getAll({
       month: monthStr,
       department_id: (activeGridDeptId && !isDirectReportsMarker) ? activeGridDeptId : undefined,
       from: rangeStart,
       to: rangeEnd,
       include_objects: includeObjectDetails,
+      include_empty: includeEmptyEmployees,
       schedule_payload: 'compact',
     }),
     enabled: Boolean(activeGridDeptId),
@@ -1899,6 +1920,24 @@ export const TimesheetPage: FC = () => {
     </section>
   ) : null;
 
+  // Тумблер «Все сотрудники» — показывает членов ростера без активности за период.
+  // Оборачиваем в ts-view-switch (flex-контейнер), чтобы на мобильном чип не растянулся
+  // на всю ширину. Подпись постоянная, состояние — оформлением + aria-pressed.
+  const canShowAllEmployees = Boolean(hasActiveScope) && canUseShowAllEmployees;
+  const showAllControl = canShowAllEmployees ? (
+    <section className="ts-view-switch">
+      <button
+        type="button"
+        className={`ts-view-chip ${includeEmptyEmployees ? ' ts-view-chip--active' : ''}`}
+        onClick={handleToggleShowAll}
+        aria-pressed={includeEmptyEmployees}
+        title="Показывать сотрудников без активности за период"
+      >
+        Все сотрудники
+      </button>
+    </section>
+  ) : null;
+
   const correctionsChip = hasActiveScope ? (
     <button
       type="button"
@@ -2025,6 +2064,7 @@ export const TimesheetPage: FC = () => {
             <div className="ts-header-toolbar">
               <div className="ts-header-toolbar-left">
                 {viewControlPrimary}
+                {showAllControl}
               </div>
               <div className="ts-header-toolbar-right">
                 <button
@@ -2086,6 +2126,7 @@ export const TimesheetPage: FC = () => {
 
         {isMobile && segmentControl}
         {isMobile && viewControl}
+        {isMobile && showAllControl}
       </div>
 
       {!isMobile && bulkModeEnabled && activeGridDeptId && (
