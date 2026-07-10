@@ -1,7 +1,9 @@
 import axios from 'axios';
+import sharp from 'sharp';
 import * as Sentry from '@sentry/node';
 import { query, queryOne, execute } from '../config/postgres.js';
 import { r2Service } from './r2.service.js';
+import { ensureBrowserFriendlyImage, isHeicBuffer } from './image-normalize.service.js';
 import { openRouterService, OpenRouterError, type IChatMessage } from './openrouter.service.js';
 import { encryptReceiptFields, encryptRawResponse } from './patent-receipt-encryption.helper.js';
 import {
@@ -240,22 +242,100 @@ interface IDocumentRow {
   r2_key: string;
 }
 
-const buildImagePart = async (doc: IDocumentRow): Promise<{ type: 'image_url'; image_url: { url: string } }> => {
-  const presignedUrl = await r2Service.generateDownloadUrl(doc.r2_key);
+// Форматы изображений, которые vision-модель (Gemini через OpenRouter) принимает
+// напрямую. HEIC/HEIF среди них НЕТ — их нужно конвертировать в JPEG.
+const SUPPORTED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
-  // PDF и крупные изображения — отдаём base64, иначе передаём URL напрямую.
-  const useBase64 = doc.mime_type === 'application/pdf' || doc.file_size > MAX_INLINE_BYTES;
-  if (!useBase64) {
-    return { type: 'image_url', image_url: { url: presignedUrl } };
+/**
+ * Формат чека, который не удалось привести к поддерживаемому для vision-модели.
+ * Отдельный класс, чтобы наверху не спутать с транзиентной ошибкой OpenRouter.
+ */
+export class UnsupportedReceiptFormatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnsupportedReceiptFormatError';
   }
+}
 
+const downloadR2Bytes = async (r2Key: string): Promise<Buffer> => {
+  const presignedUrl = await r2Service.generateDownloadUrl(r2Key);
   const fileRes = await axios.get<ArrayBuffer>(presignedUrl, {
     responseType: 'arraybuffer',
     timeout: 30_000,
   });
-  const b64 = Buffer.from(fileRes.data).toString('base64');
-  return { type: 'image_url', image_url: { url: `data:${doc.mime_type};base64,${b64}` } };
+  return Buffer.from(fileRes.data);
 };
+
+const toDataUrl = (mime: string, buffer: Buffer): string =>
+  `data:${mime};base64,${buffer.toString('base64')}`;
+
+/**
+ * Собрать image-part для vision-модели. Гарантирует, что в модель уходит либо PDF
+ * (своим base64-путём), либо реально поддерживаемый формат изображения. HEIC/HEIF и
+ * прочие неподдерживаемые форматы конвертируются в JPEG в памяти — оригинал в R2 не
+ * трогается. Тип определяется по фактическим байтам (isHeicBuffer), а не по mime/имени.
+ *
+ * forceNormalize=true — принудительно скачать и нормализовать. Нужен для «самолечения»
+ * HEIC, замаскированного под .jpg: первый вызов уходит быстрым URL-путём и получает 400
+ * Unsupported image format, затем повтор с forceNormalize конвертирует и отправляет JPEG.
+ */
+export const buildImagePart = async (
+  doc: IDocumentRow,
+  opts?: { forceNormalize?: boolean },
+): Promise<{ type: 'image_url'; image_url: { url: string } }> => {
+  // PDF — своим путём (base64). В нормализацию/sharp не попадает никогда.
+  if (doc.mime_type === 'application/pdf') {
+    const bytes = await downloadR2Bytes(doc.r2_key);
+    return { type: 'image_url', image_url: { url: toDataUrl('application/pdf', bytes) } };
+  }
+
+  const forceNormalize = opts?.forceNormalize ?? false;
+  const looksSupported = SUPPORTED_IMAGE_MIME.has(doc.mime_type.toLowerCase());
+
+  // Быстрый путь: заявлен поддерживаемый формат, небольшой файл, без принуждения —
+  // отдаём presigned-URL R2 без скачивания (как и раньше).
+  if (looksSupported && !forceNormalize && doc.file_size <= MAX_INLINE_BYTES) {
+    const presignedUrl = await r2Service.generateDownloadUrl(doc.r2_key);
+    return { type: 'image_url', image_url: { url: presignedUrl } };
+  }
+
+  // Иначе скачиваем байты и решаем по факту.
+  const bytes = await downloadR2Bytes(doc.r2_key);
+
+  // HEIC определяем по реальным байтам — ловим и image/heic, и замаскированный .jpg.
+  if (isHeicBuffer(bytes)) {
+    // HEIC конвертируем ТОЛЬКО через heic-convert: sharp в prebuilt не имеет HEVC-декодера.
+    const normalized = await ensureBrowserFriendlyImage(bytes, doc.mime_type, doc.file_name);
+    // ensureBrowserFriendlyImage при ошибке возвращает исходный HEIC — метить его jpeg нельзя.
+    if (normalized.mimeType !== 'image/jpeg') {
+      throw new UnsupportedReceiptFormatError(
+        `HEIC не удалось конвертировать в JPEG (документ ${doc.id}); исходный HEIC модель не поддерживает`,
+      );
+    }
+    return { type: 'image_url', image_url: { url: toDataUrl('image/jpeg', normalized.buffer) } };
+  }
+
+  // Не-HEIC и формат уже поддерживается → base64 с фактическим mime.
+  if (looksSupported) {
+    return { type: 'image_url', image_url: { url: toDataUrl(doc.mime_type, bytes) } };
+  }
+
+  // Прочий неподдерживаемый не-HEIC формат → пытаемся перекодировать в JPEG через sharp.
+  try {
+    const jpeg = await sharp(bytes).jpeg().toBuffer();
+    return { type: 'image_url', image_url: { url: toDataUrl('image/jpeg', jpeg) } };
+  } catch (err) {
+    throw new UnsupportedReceiptFormatError(
+      `Формат "${doc.mime_type}" (документ ${doc.id}) не удалось привести к JPEG: ${err instanceof Error ? err.message : 'unknown'}`,
+    );
+  }
+};
+
+/** 400 от OpenRouter именно про неподдерживаемый формат изображения → повод один раз нормализовать и повторить. */
+const isUnsupportedImageFormatError = (err: unknown): err is OpenRouterError =>
+  err instanceof OpenRouterError &&
+  err.status === 400 &&
+  /unsupported image format/i.test(`${err.message} ${err.body ?? ''}`);
 
 const updateDocumentStatus = async (
   documentId: number,
@@ -334,33 +414,48 @@ export const aiReceiptRecognitionService = {
     let rawLlmContent: string | null = null;
 
     try {
-      const imagePart = await buildImagePart(doc as IDocumentRow);
-
-      const messages: IChatMessage[] = [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'Извлеки поля из чека ниже строго в JSON.' },
-            imagePart,
-          ],
-        },
-      ];
-
-      const completion = await openRouterService.chatCompletion(
-        {
-          messages,
-          response_format: {
-            type: 'json_schema',
-            json_schema: { name: 'patent_receipt', strict: true, schema: RECEIPT_JSON_SCHEMA },
+      const runCompletion = (imagePart: { type: 'image_url'; image_url: { url: string } }) => {
+        const messages: IChatMessage[] = [
+          { role: 'system', content: SYSTEM_PROMPT },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Извлеки поля из чека ниже строго в JSON.' },
+              imagePart,
+            ],
           },
-          temperature: 0,
-          // 1500 не хватало на чеки с длинным payment_purpose (кириллица = больше
-          // токенов) → ответ обрезался и JSON.parse падал (FOT-SERVER-1Y).
-          max_tokens: 3000,
-        },
-        { modelOverride: opts?.modelOverride },
-      );
+        ];
+        return openRouterService.chatCompletion(
+          {
+            messages,
+            response_format: {
+              type: 'json_schema',
+              json_schema: { name: 'patent_receipt', strict: true, schema: RECEIPT_JSON_SCHEMA },
+            },
+            temperature: 0,
+            // 1500 не хватало на чеки с длинным payment_purpose (кириллица = больше
+            // токенов) → ответ обрезался и JSON.parse падал (FOT-SERVER-1Y).
+            max_tokens: 3000,
+          },
+          { modelOverride: opts?.modelOverride },
+        );
+      };
+
+      // Первый вызов — во внутреннем try, ДО внешнего catch: документ не должен получить
+      // failed между попытками. Ровно один повтор — только при 400 «Unsupported image
+      // format» и не для PDF (sharp его не рендерит) — с принудительной нормализацией
+      // (лечит HEIC под маской .jpg). После второй ошибки третьего запроса нет.
+      let completion: Awaited<ReturnType<typeof runCompletion>>;
+      try {
+        completion = await runCompletion(await buildImagePart(doc as IDocumentRow));
+      } catch (err) {
+        if (isUnsupportedImageFormatError(err) && doc.mime_type !== 'application/pdf') {
+          const normalizedPart = await buildImagePart(doc as IDocumentRow, { forceNormalize: true });
+          completion = await runCompletion(normalizedPart);
+        } else {
+          throw err;
+        }
+      }
 
       const choice = completion.choices?.[0];
       const content = choice?.message?.content;
