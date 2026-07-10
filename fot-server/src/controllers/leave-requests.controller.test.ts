@@ -1,6 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
+
+// Годовые границы validateLeaveRequestPeriod ([тек−1, тек+5]) зависят от «сейчас».
+// Фиксируем только Date (setTimeout остаётся настоящим, чтобы async-моки не ломались),
+// иначе тесты с датами 2026 стали бы хрупкими после 2031.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-06-29T00:00:00Z'));
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 const { pgQuery, pgQueryOne, pgExecute, pgTx, txClient } = vi.hoisted(() => {
   const txClient = { query: vi.fn() };
@@ -69,7 +80,11 @@ import { resolveAccessibleDepartmentIds, resolveManagedDepartmentIds } from '../
 vi.mock('../services/employee-skud-object-access.service.js', () => ({ listSelectableObjectsForEmployee: vi.fn(async () => []) }));
 vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object' }));
 
-import { leaveRequestsController } from './leave-requests.controller.js';
+import {
+  leaveRequestsController,
+  validateLeaveRequestPeriod,
+  MAX_MATERIALIZED_LEAVE_DAYS,
+} from './leave-requests.controller.js';
 import { notificationService } from '../services/notification.service.js';
 
 function makeReq(overrides: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest {
@@ -416,6 +431,136 @@ describe('leaveRequestsController.approve (маршрутизация прав)'
 
     expect(res._status).toBe(403);
     expect(upsertSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('validateLeaveRequestPeriod (сейчас = 2026, диапазон годов 2025–2031)', () => {
+  it('обычный однодневный отпуск в пределах — ok', () => {
+    expect(validateLeaveRequestPeriod('2026-07-31', '2026-07-31')).toEqual({ ok: true });
+  });
+
+  it('битый год 0026 (диапазон) — отклоняется', () => {
+    const r = validateLeaveRequestPeriod('0026-07-31', '2026-07-31');
+    expect(r.ok).toBe(false);
+  });
+
+  it('битый год 0026 (одиночная 0026→0026) — отклоняется, хотя span=1', () => {
+    const r = validateLeaveRequestPeriod('0026-07-31', '0026-07-31');
+    expect(r.ok).toBe(false);
+  });
+
+  it('несуществующая календарная дата 2026-02-31 — отклоняется', () => {
+    expect(validateLeaveRequestPeriod('2026-02-31', '2026-02-31').ok).toBe(false);
+  });
+
+  it('start > end — отклоняется', () => {
+    expect(validateLeaveRequestPeriod('2026-08-10', '2026-08-01').ok).toBe(false);
+  });
+
+  it(`ровно ${MAX_MATERIALIZED_LEAVE_DAYS} дней — ok, +1 — отклоняется`, () => {
+    // 2026-01-01 → 2027-01-01 включительно = 366 дней; +1 день = 367.
+    expect(validateLeaveRequestPeriod('2026-01-01', '2027-01-01').ok).toBe(true);
+    expect(validateLeaveRequestPeriod('2026-01-01', '2027-01-02').ok).toBe(false);
+  });
+
+  it('selected_dates > лимита (после дедупа) — отклоняется', () => {
+    const many = Array.from({ length: MAX_MATERIALIZED_LEAVE_DAYS + 1 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 0, 1 + i));
+      return d.toISOString().slice(0, 10);
+    });
+    const r = validateLeaveRequestPeriod(many[0], many[many.length - 1], many);
+    expect(r.ok).toBe(false);
+  });
+
+  it('дата из selected_dates вне периода — отклоняется', () => {
+    const r = validateLeaveRequestPeriod('2026-07-01', '2026-07-31', ['2026-07-10', '2026-08-15']);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe('leaveRequestsController.approve (валидация периода до транзакции)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]])); // зритель 7 — ответственный
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    txClient.query.mockResolvedValue({ rows: [{ id: 708, status: 'approved' }], rowCount: 1 });
+  });
+
+  const mockVacationRow = (over: Record<string, unknown>) => {
+    pgQueryOne
+      .mockResolvedValueOnce({
+        id: 708, employee_id: 247, status: 'pending', request_type: 'vacation',
+        start_date: '2026-07-31', end_date: '2026-07-31', selected_dates: null,
+        correction_date: null, correction_status: null, correction_hours: null,
+        correction_object_id: null, correction_object_name: null, reason: null,
+        ...over,
+      })
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' }); // canManageLeaveRequest
+  };
+
+  it('заявка с годом 0026 (диапазон) → 400, без транзакции и без материализации', async () => {
+    mockVacationRow({ start_date: '0026-07-31', end_date: '2026-07-31' });
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('одиночная заявка 0026→0026 → 400, без транзакции и без материализации', async () => {
+    mockVacationRow({ start_date: '0026-07-31', end_date: '0026-07-31' });
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('корректная однодневная заявка (год в пределах) → 200, ровно одна корректировка', async () => {
+    mockVacationRow({ start_date: '2026-07-31', end_date: '2026-07-31' });
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    expect(upsertSpy.mock.calls[0][0]).toMatchObject({ employee_id: 247, work_date: '2026-07-31', source_id: '708' });
+  });
+});
+
+describe('leaveRequestsController.create (валидация периода)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+  });
+
+  const createReq = (body: Record<string, unknown>) =>
+    makeReq({ body, user: { ...makeReq().user, employee_id: 247 } } as Partial<AuthenticatedRequest>);
+
+  it('год 0026 → 400, без вставки', async () => {
+    const res = makeRes();
+    await leaveRequestsController.create(createReq({ request_type: 'vacation', start_date: '0026-07-31', end_date: '0026-07-31' }), res);
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('start > end → 400, без вставки', async () => {
+    const res = makeRes();
+    await leaveRequestsController.create(createReq({ request_type: 'vacation', start_date: '2026-08-10', end_date: '2026-08-01' }), res);
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('слишком большой период (367 дней) → 400, без вставки', async () => {
+    const res = makeRes();
+    await leaveRequestsController.create(createReq({ request_type: 'vacation', start_date: '2026-01-01', end_date: '2027-01-02' }), res);
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
   });
 });
 

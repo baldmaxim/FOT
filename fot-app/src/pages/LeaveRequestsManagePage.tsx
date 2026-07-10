@@ -13,6 +13,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
@@ -69,6 +70,7 @@ interface IEventsPanelState {
 
 export const LeaveRequestsManagePage: FC = () => {
   const { hasPermission, profile } = useAuth();
+  const { showToast } = useToast();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
   const scope = isDepartmentScope ? 'department' : 'all';
   const queryClient = useQueryClient();
@@ -167,6 +169,7 @@ export const LeaveRequestsManagePage: FC = () => {
       ]);
     } catch (err) {
       console.error('Approve error:', err);
+      showToast('error', err instanceof Error ? err.message : 'Не удалось согласовать заявление');
       // Откат оптимистичного удаления через рефетч
       await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
     }
@@ -184,6 +187,7 @@ export const LeaveRequestsManagePage: FC = () => {
       ]);
     } catch (err) {
       console.error('Reject error:', err);
+      showToast('error', err instanceof Error ? err.message : 'Не удалось отклонить заявление');
       await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
     }
   };

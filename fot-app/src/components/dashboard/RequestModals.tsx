@@ -13,6 +13,23 @@ const ALLOWED_MIMES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 МБ
 const ACCEPT_ATTR = '.pdf,application/pdf,image/jpeg,image/png';
 
+// Границы года для дат заявления — синхронно с бэком (validateLeaveRequestPeriod):
+// [текущий−1, текущий+5]. Отсекает опечатку года в нативном date-input (напр. «26» → 0026).
+const LEAVE_YEAR_MIN = new Date().getFullYear() - 1;
+const LEAVE_YEAR_MAX = new Date().getFullYear() + 5;
+const LEAVE_DATE_MIN = `${LEAVE_YEAR_MIN}-01-01`;
+const LEAVE_DATE_MAX = `${LEAVE_YEAR_MAX}-12-31`;
+
+// Реальная календарная дата 'YYYY-MM-DD' с правдоподобным годом (round-trip):
+// '2026-02-31' → false, '0026-07-31' → false (год вне диапазона).
+const isValidLeaveDate = (iso: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+    && y >= LEAVE_YEAR_MIN && y <= LEAVE_YEAR_MAX;
+};
+
 const formatBytes = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} Б`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
@@ -143,6 +160,11 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
       if (!correctionObjectId) return showToast('error', 'Выберите объект для корректировки');
     } else if (isRangeType) {
       if (!rangeStart || !rangeEnd) return showToast('error', 'Укажите период (с — по)');
+      // Календарная валидность + правдоподобный год (иначе строковое сравнение ниже
+      // пропускало опечатки вроде 0026: '2026-…' < '0026-…' = false).
+      if (!isValidLeaveDate(rangeStart) || !isValidLeaveDate(rangeEnd)) {
+        return showToast('error', `Проверьте даты: год должен быть в диапазоне ${LEAVE_YEAR_MIN}–${LEAVE_YEAR_MAX}`);
+      }
       if (rangeEnd < rangeStart) return showToast('error', 'Дата окончания раньше даты начала');
       if (requestType === 'sick_leave' && files.length === 0) return showToast('error', 'Для больничного приложите файл');
     } else {
@@ -262,6 +284,8 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
                   type="date"
                   className={styles.formInput}
                   value={rangeStart}
+                  min={LEAVE_DATE_MIN}
+                  max={LEAVE_DATE_MAX}
                   onChange={e => setRangeStart(e.target.value)}
                 />
               </div>
@@ -271,7 +295,8 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
                   type="date"
                   className={styles.formInput}
                   value={rangeEnd}
-                  min={rangeStart || undefined}
+                  min={rangeStart || LEAVE_DATE_MIN}
+                  max={LEAVE_DATE_MAX}
                   onChange={e => setRangeEnd(e.target.value)}
                 />
               </div>

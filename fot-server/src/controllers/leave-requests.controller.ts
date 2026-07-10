@@ -248,6 +248,80 @@ function isPendingWorkRoutedToApprovals(
     && pendingWorkRequestIds.has(Number(request.id));
 }
 
+// Максимум материализуемых дней на одну заявку. Страхует от runaway-цикла в
+// collectMaterializedLeaveDates: заявка с годом 0026 давала span ~730 000 дней и
+// подвешивала approve (по upsert на каждый день внутри одной транзакции).
+export const MAX_MATERIALIZED_LEAVE_DAYS = 366;
+
+const LEAVE_DATE_ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MS_PER_DAY = 86_400_000;
+
+// Разбирает 'YYYY-MM-DD' в UTC-полночь и подтверждает, что дата реально существует.
+// Round-trip отсеивает regex-валидные, но несуществующие даты ('2026-02-31'
+// нормализовалась бы в март). pg отдаёт DATE как строку (postgres.ts, OID 1082),
+// поэтому и из БД, и из тела запроса сюда приходит 'YYYY-MM-DD'.
+export function parseStrictUtcLeaveDate(input: string): Date | null {
+  if (typeof input !== 'string') return null;
+  const iso = input.slice(0, 10);
+  if (!LEAVE_DATE_ISO_RE.test(iso)) return null;
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return dt;
+}
+
+// Единая валидация периода заявки для create и approve: реальная календарная дата,
+// год в пределах [текущий−1, текущий+5], start ≤ end и итоговое число материализуемых
+// дат ≤ MAX_MATERIALIZED_LEAVE_DAYS (для selected_dates считаем уникальный набор и
+// проверяем, что каждая дата лежит внутри [start, end]). Возвращает 400-совместимую
+// ошибку — вызывать ДО транзакции.
+export function validateLeaveRequestPeriod(
+  startDate: string,
+  endDate: string,
+  selectedDates?: string[] | null,
+): { ok: true } | { ok: false; error: string } {
+  const start = parseStrictUtcLeaveDate(startDate);
+  const end = parseStrictUtcLeaveDate(endDate);
+  if (!start || !end) {
+    return { ok: false, error: 'Некорректная дата заявления (ожидается формат ГГГГ-ММ-ДД)' };
+  }
+
+  const currentYear = new Date().getUTCFullYear();
+  const minYear = currentYear - 1;
+  const maxYear = currentYear + 5;
+  for (const dt of [start, end]) {
+    const y = dt.getUTCFullYear();
+    if (y < minYear || y > maxYear) {
+      return { ok: false, error: `Год заявления вне допустимого диапазона (${minYear}–${maxYear}) — проверьте дату` };
+    }
+  }
+
+  if (start.getTime() > end.getTime()) {
+    return { ok: false, error: 'Дата окончания раньше даты начала' };
+  }
+
+  if (Array.isArray(selectedDates) && selectedDates.length > 0) {
+    const uniq = Array.from(new Set(selectedDates.map(String))).sort();
+    for (const raw of uniq) {
+      const d = parseStrictUtcLeaveDate(raw);
+      if (!d) return { ok: false, error: 'Список дат содержит некорректную дату' };
+      if (d.getTime() < start.getTime() || d.getTime() > end.getTime()) {
+        return { ok: false, error: 'Список дат содержит дату вне периода заявления' };
+      }
+    }
+    if (uniq.length > MAX_MATERIALIZED_LEAVE_DAYS) {
+      return { ok: false, error: `Слишком много дат в заявлении (максимум ${MAX_MATERIALIZED_LEAVE_DAYS})` };
+    }
+  } else {
+    const spanDays = Math.round((end.getTime() - start.getTime()) / MS_PER_DAY) + 1;
+    if (spanDays > MAX_MATERIALIZED_LEAVE_DAYS) {
+      return { ok: false, error: `Слишком большой период заявления (максимум ${MAX_MATERIALIZED_LEAVE_DAYS} дней)` };
+    }
+  }
+
+  return { ok: true };
+}
+
 function collectMaterializedLeaveDates(request: {
   request_type: string;
   start_date: string;
@@ -265,10 +339,16 @@ function collectMaterializedLeaveDates(request: {
       if (iso) isoDates.push(iso);
     }
   } else {
-    const startDate = new Date(request.start_date);
-    const endDate = new Date(request.end_date);
-    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-      const dayOfWeek = d.getDay();
+    // Перебор в UTC (getUTCDate/setUTCDate/getUTCDay), чтобы не зависеть от локальной
+    // таймзоны/DST. Второй рубеж защиты после validateLeaveRequestPeriod: если сюда
+    // всё же попал огромный диапазон (легаси-данные) — не разворачиваем 730к дней.
+    const startDate = parseStrictUtcLeaveDate(request.start_date) ?? new Date(request.start_date);
+    const endDate = parseStrictUtcLeaveDate(request.end_date) ?? new Date(request.end_date);
+    for (let d = new Date(startDate); d <= endDate; d.setUTCDate(d.getUTCDate() + 1)) {
+      if (isoDates.length > MAX_MATERIALIZED_LEAVE_DAYS) {
+        throw new Error('Слишком большой период заявления для материализации');
+      }
+      const dayOfWeek = d.getUTCDay();
       if (skipWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) continue;
       isoDates.push(d.toISOString().split('T')[0]);
     }
@@ -344,6 +424,15 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
     if (!LEAVE_REQUEST_TYPES.includes(request_type)) {
       res.status(400).json({ success: false, error: 'Недопустимый тип заявления' });
+      return;
+    }
+
+    // Единая валидация периода для ВСЕХ типов (не только диапазонных): дискретный тип
+    // без selected_dates тоже уходит в диапазонный цикл материализации. Отсекает битый
+    // год (0026), несуществующую дату, start>end и слишком большой период на входе.
+    const periodCheck = validateLeaveRequestPeriod(start_date, end_date, selected_dates);
+    if (!periodCheck.ok) {
+      res.status(400).json({ success: false, error: periodCheck.error });
       return;
     }
 
@@ -962,6 +1051,15 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
     if (!(await canManageLeaveRequest(req, request.employee_id, request.request_type, 'edit'))) {
       res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
+      return;
+    }
+
+    // Валидация периода ДО транзакции: битые легаси-заявки (напр. год 0026 → span
+    // ~730к дней) иначе подвесили бы материализацию. Явный 400 — внешний catch иначе
+    // превратил бы throw в 500, а транзакция/upsert не должны стартовать вовсе.
+    const periodCheck = validateLeaveRequestPeriod(request.start_date, request.end_date, request.selected_dates);
+    if (!periodCheck.ok) {
+      res.status(400).json({ success: false, error: `Некорректный период заявления: ${periodCheck.error}` });
       return;
     }
 
