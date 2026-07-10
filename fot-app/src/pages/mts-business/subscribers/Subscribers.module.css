@@ -59,12 +59,102 @@
 .pager {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 12px;
   margin-top: 12px;
   flex-wrap: wrap;
 }
 .pagerInfo { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
+
+.pageSizeLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.pageSizeSelect {
+  padding: 6px 8px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.pageNums {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.pageNum {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.pageNum:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.pageNum:disabled { opacity: 0.45; cursor: not-allowed; }
+.pageNumActive {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 700;
+}
+.pageNumActive:hover { color: #fff; }
+.pagerEllipsis { padding: 0 4px; color: var(--text-tertiary); user-select: none; }
+
+/* ===== Таблица абонентов: влезает в окно без горизонтального скролла ===== */
+.subsTable { table-layout: fixed; width: 100%; }
+.subsTable th,
+.subsTable td {
+  padding: 6px 8px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+/* Узкие числовые колонки — не переносить, выравнивание по правому краю.
+   9=Звонки, 10=Время, 7=Начисления. */
+.subsTable th:nth-child(7), .subsTable td:nth-child(7),
+.subsTable th:nth-child(9), .subsTable td:nth-child(9),
+.subsTable th:nth-child(10), .subsTable td:nth-child(10) {
+  white-space: nowrap;
+  text-align: right;
+}
+/* Номер — не переносить (телефон одной строкой). */
+.subsTable th:nth-child(1), .subsTable td:nth-child(1) { white-space: nowrap; }
+
+/* Ширины колонок (сумма = 100%). */
+.colNum { width: 10%; }
+.colFio { width: 12%; }
+.colEmp { width: 14%; }
+.colDept { width: 11%; }
+.colAcc { width: 7%; }
+.colTariff { width: 11%; }
+.colCharges { width: 8%; }
+.colServices { width: 9%; }
+.colCalls { width: 5%; }
+.colTime { width: 6%; }
+.colPd { width: 7%; }
+
+/* Узкий экран: 11 колонок не помещаются — прячем низкоприоритетные
+   (5=ЛС, 8=Услуги, 10=Время), остальные раздаются по ширине. */
+@media (max-width: 640px) {
+  .subsTable { table-layout: auto; font-size: 12px; }
+  .subsTable th:nth-child(5), .subsTable td:nth-child(5),
+  .subsTable th:nth-child(8), .subsTable td:nth-child(8),
+  .subsTable th:nth-child(10), .subsTable td:nth-child(10) {
+    display: none;
+  }
+}
 
 /* ===== Боковая панель (40% экрана) ===== */
 .drawerOverlay {
@@ -326,6 +416,24 @@
 .usageValueBox { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .usageValue { font-size: 13px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .usageAmt { font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+
+/* Пометка платного события в детализации (было списание > 0).
+   Янтарный тон #d97706 — как у .usageIcoSms, читается в обеих темах. */
+.usageRowPaid { background: rgba(217, 119, 6, 0.07); border-radius: 6px; }
+.usagePaidChip {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.16);
+}
+.usageAmtPaid { color: #d97706; font-weight: 700; }
+.usagePaidToggle { color: #d97706; }
+.usagePaidToggle:hover { border-color: #d97706; }
+.usagePaidToggle.usageTabActive { color: #fff; background: #d97706; border-color: #d97706; }
 
 /* Модалка подключения услуг/блокировок/тарифов (поверх панели) */
 .connectOverlay {

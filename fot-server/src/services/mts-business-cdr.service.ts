@@ -83,6 +83,21 @@ export interface IAccountSummaryRow {
 
 const sha256 = (s: string): string => crypto.createHash('sha256').update(s).digest('hex');
 
+/**
+ * Пересобрать роллап CDR (materialized view mts_business_cdr_rollup) — источник
+ * агрегата звонков (кол-во/время/последний звонок) для списка абонентов.
+ * CONCURRENTLY не блокирует читателей списка. Вызывается после ночного синка
+ * CDR и после «Обновить всё». Если матвью ещё не создана (миграция 214 не
+ * применена) — тихо выходим, чтобы не ронять синк.
+ */
+export async function refreshCdrRollup(): Promise<void> {
+  try {
+    await execute('REFRESH MATERIALIZED VIEW CONCURRENTLY mts_business_cdr_rollup');
+  } catch (error) {
+    console.warn('[mts-biz-cdr] refreshCdrRollup skipped:', error instanceof Error ? error.message : 'unknown');
+  }
+}
+
 // Длительность звонка: М:СС (XML из API) либо Ч:ММ:СС (XLS-отчёт). Так отличаем
 // голос от трафика («…Kb»/«…Mb») и SMS (штуки) и от du="1" (ожидание/сервис).
 const DURATION_RE = /^\d{1,3}:\d{2}(:\d{2})?$/;

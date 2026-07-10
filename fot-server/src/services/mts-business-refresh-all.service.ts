@@ -12,6 +12,7 @@ import {
 } from './mts-business-metrics-daily-scheduler.service.js';
 import { syncAccountSubscribers } from './mts-business-subscriber-sync.service.js';
 import { syncMsisdnsBatch } from './mts-business-statement-sync.service.js';
+import { refreshCdrRollup } from './mts-business-cdr.service.js';
 import {
   tryAcquireSigurRuntimeLease,
   releaseSigurRuntimeLease,
@@ -334,6 +335,9 @@ async function runRefreshAll(
     console.error('[mts-biz-refresh-all] прогон упал:', status.error);
     Sentry.captureException(error, { tags: { module: 'mts-business', kind: 'refresh-all' } });
   } finally {
+    // Детализация могла добавить звонки — пересобираем роллап CDR, чтобы список
+    // абонентов сразу отдавал свежие «Звонки/Время» (см. миграцию 214).
+    await refreshCdrRollup();
     status.running = false;
     status.finishedAt = new Date().toISOString();
     // Незавершённые шаги (прогон упал целиком) не должны остаться «pending/running».

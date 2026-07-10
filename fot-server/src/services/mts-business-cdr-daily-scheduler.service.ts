@@ -9,6 +9,7 @@ import {
   verifyCdrStore,
   type ISyncMsisdnsBatchResult,
 } from './mts-business-statement-sync.service.js';
+import { refreshCdrRollup } from './mts-business-cdr.service.js';
 import {
   tryAcquireSigurRuntimeLease,
   releaseSigurRuntimeLease,
@@ -140,6 +141,10 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
               }
               console.log(`[mts-biz-cdr-daily] account="${account.label}" numbers=${res.numbers} inserted=${res.inserted} failed=${res.failed} unavailable=${res.unavailable} noAccess=${res.noAccess} transient=${res.transient} retriedOk=${res.retriedOk}`);
             }
+
+            // Ночной синк добавил звонки — пересобираем роллап CDR (источник
+            // «Звонки/Время» в списке абонентов, см. миграцию 214).
+            await refreshCdrRollup();
 
             lastRunYmdMsk = ymd;
             // 401 по ВСЕМ номерам = умерли креды аккаунта, а не свойство номеров —

@@ -81,16 +81,12 @@ class MtsBusinessSubscribersService {
       product_services: unknown;
       captured_at: string | null;
     }>(
+      // Агрегат звонков берём из роллапа (materialized view, ~700 строк), а не
+      // полным сканом mts_business_cdr (267k строк) — см. миграцию 214.
+      // Обновляется ночным синком CDR и «Обновить всё» (refreshCdrRollup).
       `WITH cdr AS (
-         SELECT msisdn_hash,
-                MIN(msisdn_enc) AS msisdn_enc,
-                COUNT(*) AS calls,
-                COALESCE(SUM(duration_sec), 0) AS total_sec,
-                MAX(started_at) AS last_call_at,
-                MAX(account_id::text) AS account_id
-           FROM mts_business_cdr
-          WHERE msisdn_hash IS NOT NULL
-          GROUP BY msisdn_hash
+         SELECT msisdn_hash, msisdn_enc, calls, total_sec, last_call_at, account_id
+           FROM mts_business_cdr_rollup
        ),
        metrics AS (
          SELECT msisdn_hash,

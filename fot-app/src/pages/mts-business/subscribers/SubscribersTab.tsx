@@ -13,8 +13,21 @@ import styles from '../MtsBusinessPage.module.css';
 type Msg = { ok: boolean; text: string } | null;
 
 const norm = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
-const PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 const NO_DEPT = '__none__';
+
+/** Компактный ряд номеров страниц с усечением: 1 … 4 5 [6] 7 8 … 20. */
+const buildPageList = (total: number, current: number): (number | '…')[] => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages: (number | '…')[] = [1];
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  if (start > 2) pages.push('…');
+  for (let p = start; p <= end; p++) pages.push(p);
+  if (end < total - 1) pages.push('…');
+  pages.push(total);
+  return pages;
+};
 
 /**
  * Вкладка «Абоненты МТС» (/mts-business/subscribers): все номера из инвентаря
@@ -30,8 +43,9 @@ export const SubscribersTab: FC = () => {
   const [accountId, setAccountId] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [onlyUnlinked, setOnlyUnlinked] = useState(false);
+  const [pageSize, setPageSize] = useState(50);
   // Страница хранится вместе с «подписью» фильтров: смена любого фильтра
-  // возвращает на первую страницу без setState-в-эффекте.
+  // (в т.ч. размера страницы) возвращает на первую страницу без setState-в-эффекте.
   const [pageState, setPageState] = useState<{ key: string; page: number }>({ key: '', page: 1 });
   const [drawerMsisdn, setDrawerMsisdn] = useState<string | null>(null);
   const [pdMsisdn, setPdMsisdn] = useState<string | null>(null);
@@ -66,12 +80,12 @@ export const SubscribersTab: FC = () => {
     });
   }, [rows, search, accountId, departmentId, onlyUnlinked]);
 
-  const filtersKey = `${search}|${accountId}|${departmentId}|${onlyUnlinked}`;
+  const filtersKey = `${search}|${accountId}|${departmentId}|${onlyUnlinked}|${pageSize}`;
   const page = pageState.key === filtersKey ? pageState.page : 1;
   const setPage = (p: number): void => setPageState({ key: filtersKey, page: p });
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, pageCount);
-  const pageRows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const pageRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const linkedCount = rows.filter(r => r.employeeId != null).length;
   const drawerRow = drawerMsisdn ? rows.find(r => r.msisdn === drawerMsisdn) ?? null : null;
@@ -130,7 +144,20 @@ export const SubscribersTab: FC = () => {
 
       {pageRows.length > 0 && (
         <div className={styles.tableWrap}>
-          <table className={styles.table}>
+          <table className={`${styles.table} ${st.subsTable}`}>
+            <colgroup>
+              <col className={st.colNum} />
+              <col className={st.colFio} />
+              <col className={st.colEmp} />
+              <col className={st.colDept} />
+              <col className={st.colAcc} />
+              <col className={st.colTariff} />
+              <col className={st.colCharges} />
+              <col className={st.colServices} />
+              <col className={st.colCalls} />
+              <col className={st.colTime} />
+              <col className={st.colPd} />
+            </colgroup>
             <thead>
               <tr>
                 <th>Номер</th><th>ФИО (МТС)</th><th>Сотрудник ФОТ</th><th>Отдел</th><th>ЛС</th><th>Тариф</th>
@@ -178,13 +205,38 @@ export const SubscribersTab: FC = () => {
         <p className={styles.hint}>Ничего не найдено по заданным фильтрам.</p>
       )}
 
-      {pageCount > 1 && (
+      {filtered.length > 0 && (
         <div className={st.pager}>
-          <button className={styles.btnSecondary} disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>‹ Назад</button>
+          <label className={st.pageSizeLabel}>
+            Показывать
+            <select
+              className={st.pageSizeSelect}
+              value={pageSize}
+              onChange={e => setPageSize(Number(e.target.value))}
+            >
+              {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+
+          {pageCount > 1 && (
+            <div className={st.pageNums}>
+              <button className={st.pageNum} disabled={safePage <= 1} onClick={() => setPage(safePage - 1)} aria-label="Назад">‹</button>
+              {buildPageList(pageCount, safePage).map((p, i) => (
+                p === '…'
+                  ? <span key={`gap-${i}`} className={st.pagerEllipsis}>…</span>
+                  : <button
+                      key={p}
+                      className={`${st.pageNum} ${p === safePage ? st.pageNumActive : ''}`}
+                      onClick={() => setPage(p)}
+                    >{p}</button>
+              ))}
+              <button className={st.pageNum} disabled={safePage >= pageCount} onClick={() => setPage(safePage + 1)} aria-label="Вперёд">›</button>
+            </div>
+          )}
+
           <span className={st.pagerInfo}>
-            {safePage} / {pageCount} · строки {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, filtered.length)}
+            строки {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filtered.length)} из {filtered.length}
           </span>
-          <button className={styles.btnSecondary} disabled={safePage >= pageCount} onClick={() => setPage(safePage + 1)}>Вперёд ›</button>
         </div>
       )}
 
