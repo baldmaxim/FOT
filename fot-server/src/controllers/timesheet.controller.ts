@@ -33,10 +33,10 @@ import {
   buildAttendanceEntries,
   deleteAttendanceAdjustmentBySource,
   getAttendanceAdjustmentById,
+  hasRealActivity,
   loadAttendanceAdjustmentsWithAuthors,
   updateAttendanceAdjustmentById,
   upsertAttendanceAdjustment,
-  type IAttendanceEntry,
 } from '../services/attendance.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE, resolveDayObjectForAdjustment } from '../services/timesheet-object.service.js';
@@ -1292,10 +1292,12 @@ export const timesheetController = {
     try {
       const month = typeof req.query.month === 'string' ? req.query.month : null;
       const includeObjectDetails = req.query.include_objects === '1';
-      // include_empty=1 отключает скрытие членов ростера без активности за период
-      // (тумблер «Все сотрудники»). Скоуп уже ограничен resolveTimesheetScope — флаг
-      // лишь снимает пост-фильтрацию внутри уже авторизованного набора.
-      const includeEmpty = req.query.include_empty === '1';
+      // Скрытие членов ростера без активности за период — только по явному
+      // include_empty=0 (тумблер «Все сотрудники» выключен). По умолчанию (параметра
+      // нет) показываем полный состав: СКУД-проходы не влияют на членство в табеле.
+      // Скоуп уже ограничен resolveTimesheetScope — флаг лишь управляет
+      // пост-фильтрацией внутри уже авторизованного набора.
+      const includeEmpty = req.query.include_empty !== '0';
       const compactSchedulePayload = req.query.schedule_payload === 'compact';
       const scope = await resolveTimesheetScope(req);
       if (!scope) {
@@ -1626,15 +1628,6 @@ export const timesheetController = {
       // такие сотрудники под фильтр не попадают. Self-карточка руководителя и строка(и)
       // «Начальник участка» исключены из фильтрации явно.
       if ((shouldApplyDeptFilter || isDirectReportsOnlyScope) && !includeEmpty) {
-        const hasRealActivity = (entry: IAttendanceEntry): boolean =>
-          entry.id != null ||
-          entry.is_correction ||
-          entry.first_entry != null ||
-          entry.last_exit != null ||
-          (entry.hours_worked ?? 0) > 0 ||
-          (entry.base_hours_worked ?? 0) > 0 ||
-          (entry.travel_segments_count ?? 0) > 0;
-
         const rosterMemberIds = new Set<number>([...departmentEmployeeIds, ...directReportIds]);
         const exemptIds = new Set<number>([
           ...(selfTimesheetId != null ? [selfTimesheetId] : []),

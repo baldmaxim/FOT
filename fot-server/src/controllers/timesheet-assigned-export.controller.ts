@@ -447,6 +447,36 @@ export async function listBrigadeSupervisorEmployeeIds(departmentId: string): Pr
 }
 
 /**
+ * Bulk-версия listBrigadeSupervisorEmployeeIds: начальники участков всех бригад
+ * списка одним запросом (не-бригады отсекаются по od.kind). Для 1С-экспортов —
+ * exemptEmployeeIds фильтра «пустых»: строка начальника не должна выпадать,
+ * даже если сам он не проходил по СКУДу.
+ */
+export async function listBrigadeSupervisorEmployeeIdsForDepartments(
+  departmentIds: string[],
+): Promise<Set<number>> {
+  if (departmentIds.length === 0) return new Set();
+  const rows = await query<{ id: number }>(
+    `SELECT DISTINCT e.id
+       FROM employee_department_access eda
+       INNER JOIN employees e        ON e.id = eda.employee_id
+       INNER JOIN org_departments od ON od.id = eda.department_id
+       INNER JOIN user_profiles up   ON up.employee_id = e.id
+       INNER JOIN system_roles sr    ON sr.id = up.system_role_id
+      WHERE eda.department_id = ANY($1::uuid[])
+        AND od.kind = 'brigade'
+        AND eda.is_active = true
+        AND eda.source <> 'sigur_sync'
+        AND e.employment_status = 'active'
+        AND e.is_archived = false
+        AND od.is_active = true
+        AND sr.code = 'site_supervisor'`,
+    [departmentIds],
+  );
+  return new Set(rows.map(row => Number(row.id)).filter(Number.isFinite));
+}
+
+/**
  * GET /api/timesheet/department-supervisor?department_id=UUID
  * Начальник участка (site_supervisor), за которым закреплена бригада через
  * employee_department_access. Возвращает kind отдела и supervisor (или null).

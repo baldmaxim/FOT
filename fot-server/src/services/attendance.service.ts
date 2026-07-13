@@ -172,6 +172,22 @@ export interface IAttendanceBuildResult {
   skudMap: Map<number, Map<string, { hours: number; corrected: boolean }>>;
 }
 
+// «Реальный сигнал» дня: корректировка/adjustment (id), явный is_correction,
+// СКУД-присутствие (first_entry/last_exit), часы > 0 или зачтённые travel-сегменты.
+// Синтетические заглушки status='absent' (id: null, без СКУД, 0 часов), которыми
+// buildAttendanceEntries дозаполняет рабочие по графику дни, сигналом не считаются.
+// Единый критерий «сотрудник без активности за период» для фильтра нулевой
+// активности в GET /api/timesheet и для 1С-экспортов (excludeZeroActivity).
+export function hasRealActivity(entry: IAttendanceEntry): boolean {
+  return entry.id != null ||
+    entry.is_correction ||
+    entry.first_entry != null ||
+    entry.last_exit != null ||
+    (entry.hours_worked ?? 0) > 0 ||
+    (entry.base_hours_worked ?? 0) > 0 ||
+    (entry.travel_segments_count ?? 0) > 0;
+}
+
 interface IObjectAttendanceData {
   objectEntries: IAttendanceObjectEntry[];
   objectEntriesByEmployeeDate: Map<number, Map<string, IAttendanceObjectEntry[]>>;

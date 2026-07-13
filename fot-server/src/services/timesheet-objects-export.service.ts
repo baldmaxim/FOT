@@ -205,6 +205,13 @@ export async function fetchTimesheetDataForObjectIds(
   const managerMap = await fetchManagerIdsForDepartments(appearingDeptIds);
   mergeManagerIdsIntoGroups(deptGroups, managerMap);
 
+  // Руководители добавлены сознательно БЕЗ СКУД-проходов — фильтр «пустых»
+  // (excludeZeroActivity ниже) не должен их выбрасывать.
+  const managerExemptIds = new Set<number>();
+  for (const ids of managerMap.values()) {
+    for (const id of ids) managerExemptIds.add(id);
+  }
+
   // Фильтруем отделы если задан фильтр
   if (departmentIdFilter && departmentIdFilter.length > 0) {
     const allowedDeptIds = new Set(departmentIdFilter);
@@ -220,6 +227,10 @@ export async function fetchTimesheetDataForObjectIds(
   const results: IDepartmentTimesheetData[] = [];
 
   for (const [, group] of deptGroups) {
+    // Единый файл для 1С по объектам: не проходящие по СКУДу (без единого сигнала
+    // за период) в файл не попадают. Состав групп и так строится от активности на
+    // объектах, поэтому фильтр в основном страхует от «пустых» членов; руководители —
+    // exempt (см. managerExemptIds выше).
     const data = await fetchTimesheetDataForEmployees(
       month,
       group.ids,
@@ -227,6 +238,7 @@ export async function fetchTimesheetDataForObjectIds(
       rangeArg,
       'actual',
       true,
+      { excludeZeroActivity: true, exemptEmployeeIds: managerExemptIds },
     );
 
     // Фильтруем objectEntries только к выбранным объектам

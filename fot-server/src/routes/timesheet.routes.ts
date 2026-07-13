@@ -5,6 +5,7 @@ import { timesheetTeamManagementController as tm } from '../controllers/timeshee
 import { exportTimesheetObjectsUnified } from '../controllers/timesheet-mass-export.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
+import { buildTimesheetCacheKey, buildTimesheetTodayCacheKey } from './timesheet-cache-keys.js';
 import { cacheWithShortTtlForToday } from '../middleware/skipCacheForToday.js';
 import { serverTiming } from '../middleware/serverTiming.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -30,42 +31,17 @@ router.use((req, res, next) => {
 // req.user.show_actual_hours включён в ключ: переключение per-role флага меняет
 // effectiveDisplayMode в timesheet.controller, поэтому два режима должны храниться
 // в разных bucket'ах, иначе после refreshProfile старый ответ переживает TTL.
+// Сами key-builder'ы — в timesheet-cache-keys.ts (тестируются напрямую).
 const timesheetCache = registerCache(
   'timesheet',
-  (req) =>
-    [
-      'ts',
-      req.query.month ?? '',
-      req.query.department_id ?? 'all',
-      req.query.employee_id ?? '',
-      req.query.from ?? '',
-      req.query.to ?? '',
-      req.query.half ?? '',
-      req.query.include_objects ?? '',
-      req.query.schedule_payload ?? '',
-      req.user.id,
-      req.user.show_actual_hours ? '1' : '0',
-    ].join(':'),
+  buildTimesheetCacheKey,
   5 * 60_000,
   500,
 );
 
 const timesheetTodayCache = registerCache(
   'timesheet:today',
-  (req) =>
-    [
-      'ts-today',
-      req.query.month ?? '',
-      req.query.department_id ?? 'all',
-      req.query.employee_id ?? '',
-      req.query.from ?? '',
-      req.query.to ?? '',
-      req.query.half ?? '',
-      req.query.include_objects ?? '',
-      req.query.schedule_payload ?? '',
-      req.user.id,
-      req.user.show_actual_hours ? '1' : '0',
-    ].join(':'),
+  buildTimesheetTodayCacheKey,
   8_000,
   300,
 );

@@ -30,6 +30,7 @@ import {
 } from '../services/timesheet-excel.service.js';
 import { buildUnified1CWorkbook } from '../services/timesheet-1c-unified.service.js';
 import { fetchTimesheetDataForObjectIds } from '../services/timesheet-objects-export.service.js';
+import { listBrigadeSupervisorEmployeeIdsForDepartments } from './timesheet-assigned-export.controller.js';
 import { isDepartmentMonthAllowed, monthAccessFromUser, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
@@ -121,6 +122,16 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
     const archive = archiver('zip', { zlib: { level: 5 } });
     archive.pipe(res);
 
+    // «Как в 1С»: не проходящие по СКУДу (без единого сигнала за период) в файл
+    // не попадают; начальники участков — exempt (их строка сохраняется). Обычные
+    // выгрузки (Факт/урезанный/утверждённые без галочки) — полный состав.
+    const rosterOptions = exportAs1C
+      ? {
+          excludeZeroActivity: true,
+          exemptEmployeeIds: await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDepartmentIds),
+        }
+      : undefined;
+
     // Обрабатываем по 5 отделов параллельно
     const CONCURRENCY = 5;
     const usedNames = new Set<string>();
@@ -129,7 +140,7 @@ export async function exportTimesheetMass(req: AuthenticatedRequest, res: Respon
       const batch = scopedDepartmentIds.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
         batch.map((deptId: string) => fetchTimesheetDataForDepartment(
-          month, deptId, rangeArg, displayMode, displayMode === 'actual',
+          month, deptId, rangeArg, displayMode, displayMode === 'actual', rosterOptions,
         )),
       );
 
@@ -284,9 +295,17 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
     const allEmployeeIds = [...memberByEmp.keys()];
 
     // Один bulk-прогон на всех сотрудников выбранных отделов (один attendance/skud-скан).
+    // Единый файл для 1С: не проходящие по СКУДу исключаются ещё в bulk; exempt —
+    // объединение начальников участков ВСЕХ выбранных бригад (до нарезки по отделам,
+    // иначе «пустой» начальник выпал бы из среза своей бригады). Exempt только
+    // сохраняет уже загруженных членов — ростер не расширяет.
     const tFetch = Date.now();
     const bulk = await fetchTimesheetDataForEmployees(
       month, allEmployeeIds, 'Сводный 1С', rangeArg, 'actual', true,
+      {
+        excludeZeroActivity: true,
+        exemptEmployeeIds: await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDepartmentIds),
+      },
     );
 
     // Нарезаем bulk обратно в поотдельские данные — формат итогового файла не меняется.

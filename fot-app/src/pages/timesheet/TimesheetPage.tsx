@@ -141,8 +141,9 @@ export const TimesheetPage: FC = () => {
   const canUseAssignedMode = isTimekeeperRole
     || (!isTimesheetDepartmentScope && (hasPermission('timesheet.workflow.monitor') || hasPermission('timesheet.workflow.review')));
   // Тумблер «Все сотрудники»: показывать членов ростера без активности за период.
-  // Роль-гейт отдельно от UI-гейта — сохранённое localStorage='1' не должно влиять на
-  // запрос после смены роли, когда сам чип скрыт (см. includeEmptyEmployees ниже).
+  // Включён по умолчанию (СКУД-проходы не влияют на состав табеля); явное '0'
+  // в localStorage — осознанный выбор пользователя скрывать «пустых».
+  // Роль-гейт отдельно от UI-гейта: роли без чипа всегда видят полный состав.
   const canUseShowAllEmployees = isAdmin
     || isTimekeeperRole
     || canEditTimesheet
@@ -150,9 +151,9 @@ export const TimesheetPage: FC = () => {
     || hasPermission('timesheet.workflow.review');
   const showAllStorageKey = `ts:showAllEmployees:${profile?.id ?? 'anon'}`;
   const [showAllEmployees, setShowAllEmployees] = useState<boolean>(
-    () => localStorage.getItem(showAllStorageKey) === '1',
+    () => localStorage.getItem(showAllStorageKey) !== '0',
   );
-  const includeEmptyEmployees = canUseShowAllEmployees && showAllEmployees;
+  const includeEmptyEmployees = !canUseShowAllEmployees || showAllEmployees;
   const handleToggleShowAll = useCallback(() => {
     setShowAllEmployees(prev => {
       const next = !prev;

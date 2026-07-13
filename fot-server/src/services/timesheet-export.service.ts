@@ -1,7 +1,7 @@
 import { query, queryOne } from '../config/postgres.js';
 import { isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
-import { buildAttendanceEntries, type IAttendanceEntry } from './attendance.service.js';
+import { buildAttendanceEntries, hasRealActivity, type IAttendanceEntry } from './attendance.service.js';
 import { computeMandatoryExemptions } from './timesheet-mandatory-weekend.service.js';
 import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
 import {
@@ -57,6 +57,43 @@ export interface IDepartmentTimesheetData {
   // Заполняется ТОЛЬКО для уволенных (employment_status='fired'): min(excluded_from_timesheet_date,
   // dismissal_date+1). Для активных не задаётся → их выгрузка не меняется. Аналог cutoff онлайн-табеля.
   cutoffByEmployeeId?: Map<number, string | null>;
+}
+
+export interface IExportRosterOptions {
+  // Исключить из выгрузки сотрудников без единого реального сигнала за период
+  // (критерий hasRealActivity по entries + любая объектная запись). Используется
+  // ТОЛЬКО 1С-выгрузками раздела «Табели HR»: «не проходящие по СКУДу не должны
+  // попадать в 1С». Сотрудник с отпуском/больничным/корректировкой имеет
+  // adjustment-запись и остаётся.
+  excludeZeroActivity?: boolean;
+  // Сотрудники, которых фильтр сохраняет даже без активности (строка «Начальник
+  // участка» — как exempt в getAll). Только СОХРАНЯЕТ уже загруженных, ростер
+  // не расширяет. Резолвит вызывающий контроллер: bulk-функция не знает отдела.
+  exemptEmployeeIds?: Set<number>;
+}
+
+/**
+ * Пост-фильтр «пустых» сотрудников для 1С-выгрузок. Активность считается по
+ * entries (hasRealActivity) И objectEntries совместно — экспорт строит attendance
+ * без synthesizeObjectOnlyDays, поэтому сотрудник только с объектной корректировкой
+ * виден лишь в objectEntries. Фильтрация — через sliceTimesheetDataByEmployees.
+ */
+function applyZeroActivityFilter(
+  data: IDepartmentTimesheetData,
+  options: IExportRosterOptions | undefined,
+): IDepartmentTimesheetData {
+  if (!options?.excludeZeroActivity) return data;
+  const exempt = options.exemptEmployeeIds ?? new Set<number>();
+  const active = new Set<number>();
+  for (const entry of data.entries) {
+    if (hasRealActivity(entry)) active.add(entry.employee_id);
+  }
+  for (const entry of data.objectEntries) active.add(entry.employee_id);
+  const keptIds = data.employees
+    .map(e => e.id)
+    .filter(id => active.has(id) || exempt.has(id));
+  if (keptIds.length === data.employees.length) return data;
+  return sliceTimesheetDataByEmployees(data, keptIds, data.departmentName, data.departmentId);
 }
 
 export const resolveTimesheetExportDays = (
@@ -147,6 +184,7 @@ export async function fetchTimesheetDataForDepartment(
   rangeArg: TimesheetExportRangeArg = 'FULL',
   displayMode: 'actual' | 'capped_to_schedule' = 'actual',
   showActualHours = false,
+  options?: IExportRosterOptions,
 ): Promise<IDepartmentTimesheetData> {
   // Per-role show_actual_hours форсит «фактические часы по СКУД» во всех
   // визуальных представлениях. При этом capped_to_schedule перетирает
@@ -292,7 +330,7 @@ export async function fetchTimesheetDataForDepartment(
     positions.forEach(p => posMap.set(p.id, p.name));
   }
 
-  return {
+  return applyZeroActivityFilter({
     departmentName,
     departmentId,
     isBrigade: departmentName.toLowerCase().startsWith('бр.'),
@@ -312,7 +350,7 @@ export async function fetchTimesheetDataForDepartment(
     exportDays,
     showActualHours,
     cutoffByEmployeeId,
-  };
+  }, options);
 }
 
 /**
@@ -366,6 +404,7 @@ export async function fetchTimesheetDataForEmployees(
   rangeArg: TimesheetExportRangeArg = 'FULL',
   displayMode: 'actual' | 'capped_to_schedule' = 'actual',
   showActualHours = false,
+  options?: IExportRosterOptions,
 ): Promise<IDepartmentTimesheetData> {
   const effectiveDisplayMode = showActualHours ? 'actual' : displayMode;
   const periodRange = isExportRange(rangeArg)
@@ -473,7 +512,7 @@ export async function fetchTimesheetDataForEmployees(
     positions.forEach(p => posMap.set(p.id, p.name));
   }
 
-  return {
+  return applyZeroActivityFilter({
     departmentName: virtualName,
     departmentId: null,
     isBrigade: false,
@@ -493,7 +532,7 @@ export async function fetchTimesheetDataForEmployees(
     exportDays,
     showActualHours,
     cutoffByEmployeeId,
-  };
+  }, options);
 }
 
 /**
