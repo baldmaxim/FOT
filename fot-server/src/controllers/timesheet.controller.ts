@@ -26,7 +26,7 @@ import {
   resolveEffectiveDirectSubordinates,
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
-import { isTimekeeper, resolveTimekeeperEditableLiIds, resolveTimekeeperLiObshestroyPresenceIds, LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
+import { isTimekeeper, resolveTimekeeperEditableLiIds, resolveTimekeeperLiObshestroyPresenceIds, LI_OBSHESTROY_DEPARTMENT_ID, TIMEKEEPER_ROLE_CODE } from '../services/timekeeper-scope.service.js';
 import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
 import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
 import {
@@ -541,8 +541,8 @@ export async function reapproveAdjustmentsForRange(
         `SELECT up.id
            FROM user_profiles up
            JOIN system_roles sr ON sr.id = up.system_role_id
-          WHERE up.id = ANY($1::uuid[]) AND sr.code = 'timekeeper'`,
-        [authorIds],
+          WHERE up.id = ANY($1::uuid[]) AND sr.code = $2`,
+        [authorIds, TIMEKEEPER_ROLE_CODE],
       );
       for (const r of authorRows) timekeeperAuthorIds.add(String(r.id));
     }
