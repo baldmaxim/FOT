@@ -331,7 +331,7 @@ export const DashboardPage: React.FC = () => {
               className={`dash-tab ${activeTab === 'mts' ? 'dash-tab--active' : ''}`}
               onClick={() => selectTab('mts')}
             >
-              МТС
+              Звонки
             </button>
           </div>
 
