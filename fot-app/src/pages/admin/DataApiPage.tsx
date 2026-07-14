@@ -77,7 +77,7 @@ const CreateKeyModal: FC<ICreateModalProps> = ({ onClose, onCreated }) => {
     }),
     onSuccess: result => {
       toast.success('Ключ создан');
-      queryClient.invalidateQueries({ queryKey: KEYS_QUERY_KEY });
+      queryClient.refetchQueries({ queryKey: KEYS_QUERY_KEY });
       onCreated(result);
     },
     onError: error => toast.error(error instanceof Error ? error.message : 'Ошибка создания ключа'),
@@ -395,6 +395,15 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
                   <span className={styles.muted}>
                     Выбрано таблиц: {effectiveSelection.size} из {schemaQuery.data?.length ?? 0}
                   </span>
+                  <span className={styles.spacer} />
+                  <button
+                    type="button"
+                    className={`${styles.btn} ${styles.btnPrimary}`}
+                    onClick={() => saveMutation.mutate()}
+                    disabled={saveMutation.isPending}
+                  >
+                    {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
+                  </button>
                 </div>
                 <div className={styles.bulkHint}>
                   «Полный доступ» отмечает все таблицы и поля, доступные публичному API, на текущий момент.
@@ -551,16 +560,22 @@ export const DataApiPage: FC = () => {
     mutationFn: (id: string) => dataApiService.revokeKey(id),
     onSuccess: () => {
       toast.success('Ключ отозван');
-      queryClient.invalidateQueries({ queryKey: KEYS_QUERY_KEY });
+      queryClient.refetchQueries({ queryKey: KEYS_QUERY_KEY });
     },
     onError: error => toast.error(error instanceof Error ? error.message : 'Не удалось отозвать ключ'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => dataApiService.deleteKey(id),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       toast.success('Ключ удалён');
-      queryClient.invalidateQueries({ queryKey: KEYS_QUERY_KEY });
+      // Убираем строку из кэша сразу: invalidateQueries сам по себе оставлял
+      // удалённый ключ в таблице до ручного обновления страницы.
+      queryClient.setQueryData<DataApiKey[]>(KEYS_QUERY_KEY, prev =>
+        (prev ?? []).filter(k => k.id !== id),
+      );
+      queryClient.removeQueries({ queryKey: ['data-api-key', id] });
+      queryClient.refetchQueries({ queryKey: KEYS_QUERY_KEY });
     },
     onError: error => toast.error(error instanceof Error ? error.message : 'Не удалось удалить ключ'),
   });
