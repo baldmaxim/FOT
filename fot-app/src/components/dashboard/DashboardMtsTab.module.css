@@ -1,0 +1,248 @@
+/* Вкладка «МТС» на «Обзоре»: KPI отдела + «Топ» сотрудников (бар-полосы). */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 16px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* Панель периода */
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.select {
+  padding: 8px 10px;
+  /* 16px — иначе iOS/Android Chrome зумят страницу при фокусе */
+  font-size: 16px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.synced {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* KPI-плитки */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 12px;
+}
+
+.kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+  min-width: 0;
+}
+
+.kpiLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.kpiValue {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.kpiSub {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpiSubMuted {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Карточка «Топ» */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.cardTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.segment {
+  display: inline-flex;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.segBtn {
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  min-height: 32px;
+}
+
+.segBtnActive {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* Строки-бары */
+.barRow {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 96px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.barRow:first-of-type {
+  border-top: none;
+}
+
+.barMain {
+  min-width: 0;
+}
+
+.barIndex {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.barLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barSub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+.barTrack {
+  height: 5px;
+  margin-top: 4px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--primary);
+}
+
+.barValue {
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.moreBtn {
+  margin-top: 10px;
+  width: 100%;
+  min-height: 44px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.empty {
+  padding: 24px 4px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .card {
+    padding: 14px;
+  }
+
+  .cardHead .segment {
+    width: 100%;
+  }
+
+  .cardHead .segBtn {
+    flex: 1;
+    min-height: 44px;
+  }
+
+  .select {
+    width: 100%;
+  }
+
+  /* Прячем колонку номера строки — экономим ширину под ФИО (приём из OverviewSection). */
+  .barRow {
+    grid-template-columns: minmax(0, 1fr) 88px;
+  }
+
+  .barIndex {
+    display: none;
+  }
+}

@@ -105,14 +105,20 @@ export interface IUsageTotals {
 /**
  * Категории строк выписки (`category`) → 4 группы сводки. Держать в одном
  * порядке с USAGE_GROUP_OF на фронте (fot-app/src/pages/mts-business/usageSummary.ts).
+ * Параметр — имя колонки: в запросах с JOIN нужен префикс таблицы.
  */
-const GROUP_OF_CATEGORY_SQL = `
-  CASE category
+export const groupOfCategorySql = (column = 'category'): string => `
+  CASE ${column}
     WHEN 'calls' THEN 'calls'
     WHEN 'internet' THEN 'internet'
     WHEN 'sms' THEN 'sms'
     ELSE 'other'
   END`;
+
+const GROUP_OF_CATEGORY_SQL = groupOfCategorySql();
+
+/** Порядок групп в ответе — фронт рендерит как пришло, пустые не скрывает сам. */
+export const USAGE_GROUP_ORDER: UsageGroupKey[] = ['calls', 'internet', 'sms', 'other'];
 
 const emptyGroup = (key: UsageGroupKey): IUsageGroupTotal => ({
   key, count: 0, seconds: 0, bytes: 0, amount: 0, inCount: 0, inSeconds: 0, outCount: 0, outSeconds: 0,
@@ -285,9 +291,7 @@ class MtsBusinessStatementRowsService {
         outSeconds: Number(r.out_seconds),
       });
     }
-    // Порядок групп фиксированный — фронт рендерит как пришло, пустые не скрывает сам.
-    const groups: IUsageGroupTotal[] = (['calls', 'internet', 'sms', 'other'] as UsageGroupKey[])
-      .map(k => byKey.get(k) ?? emptyGroup(k));
+    const groups: IUsageGroupTotal[] = USAGE_GROUP_ORDER.map(k => byKey.get(k) ?? emptyGroup(k));
     return { groups, total: groups.reduce((sum, g) => sum + g.amount, 0) };
   }
 

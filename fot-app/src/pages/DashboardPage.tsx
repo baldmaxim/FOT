@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState, memo } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
-import { ChevronDown, ChevronLeft, ChevronRight, Building2, LogOut, Users, Clock, ArrowDownRight, ArrowUpRight, X, RefreshCw } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Building2, LogOut, Users, Clock, ArrowDownRight, ArrowUpRight, RefreshCw } from 'lucide-react';
 import { usePresence } from '../hooks/usePresence';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import { usePresenceRealtime } from '../hooks/usePresenceRealtime';
@@ -9,13 +9,18 @@ import { useTimesheetMonthAccess } from '../hooks/useTimesheetMonthAccess';
 import type { DashboardPeriod } from '../types';
 import { filterDepartmentTreeByIds, findDepartmentName } from '../utils/departmentUtils';
 import { DepartmentTreeSelect } from '../components/staff/DepartmentTreeSelect';
+import { LateRatingModal } from '../components/dashboard/LateRatingModal';
 import '../styles/DashboardPage.css';
 
 const ActivityList = lazy(() => import('../components/dashboard/ActivityList').then(m => ({ default: m.ActivityList })));
+// Вкладка «МТС» — lazy: бандл /dashboard не растёт для тех, кто её не открывает.
+const DashboardMtsTab = lazy(() => import('../components/dashboard/DashboardMtsTab').then(m => ({ default: m.DashboardMtsTab })));
 const PunctualityCard = lazy(() => import('../components/dashboard/AnalyticsRow').then(m => ({ default: m.PunctualityCard })));
 const AvgArrivalCard = lazy(() => import('../components/dashboard/AnalyticsRow').then(m => ({ default: m.AvgArrivalCard })));
 const ComparisonCard = lazy(() => import('../components/dashboard/DashboardSidebar').then(m => ({ default: m.ComparisonCard })));
 const LiveEventsCard = lazy(() => import('../components/dashboard/stats/LiveEventsCard').then(m => ({ default: m.LiveEventsCard })));
+
+type DashboardTab = 'overview' | 'mts';
 
 const formatClock = (): string => {
   const now = new Date();
@@ -206,8 +211,16 @@ export const DashboardPage: React.FC = () => {
   );
 
   const [lateModalOpen, setLateModalOpen] = useState(false);
-  const [expandedLateId, setExpandedLateId] = useState<number | null>(null);
-  const navigate = useNavigate();
+
+  // Вкладка живёт в URL (?tab=), как dept/period: оба useEffect выше копируют
+  // существующие параметры через new URLSearchParams(searchParams) и её не затрут.
+  const activeTab: DashboardTab = searchParams.get('tab') === 'mts' ? 'mts' : 'overview';
+  const selectTab = useCallback((tab: DashboardTab) => {
+    const next = new URLSearchParams(searchParams);
+    if (tab === 'overview') next.delete('tab');
+    else next.set('tab', tab);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const handleDeptSelect = (deptId: string) => {
     const next = new URLSearchParams(searchParams);
@@ -301,6 +314,38 @@ export const DashboardPage: React.FC = () => {
             {deptSelector}
           </div>
 
+          <div className="dash-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'overview'}
+              className={`dash-tab ${activeTab === 'overview' ? 'dash-tab--active' : ''}`}
+              onClick={() => selectTab('overview')}
+            >
+              Обзор
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'mts'}
+              className={`dash-tab ${activeTab === 'mts' ? 'dash-tab--active' : ''}`}
+              onClick={() => selectTab('mts')}
+            >
+              МТС
+            </button>
+          </div>
+
+          {activeTab === 'mts' && effectiveSelectedDeptId && (
+            <Suspense fallback={<DashboardSectionFallback />}>
+              <DashboardMtsTab
+                departmentId={effectiveSelectedDeptId}
+                minMonth={isWindowEnforced ? prevMonthLimit || null : null}
+                maxMonth={isWindowEnforced ? nextMonthLimit || null : null}
+              />
+            </Suspense>
+          )}
+
+          {activeTab === 'overview' && (
           <div className="dashboard-columns">
             <div className="col-activity">
               <Suspense fallback={<DashboardSectionFallback />}>
@@ -428,66 +473,16 @@ export const DashboardPage: React.FC = () => {
               )}
             </div>
           </div>
+          )}
         </div>
       )}
-      {/* Late rating modal */}
       {lateModalOpen && stats && (
-        <div className="dash-modal-overlay" onClick={() => setLateModalOpen(false)}>
-          <div className={`dash-modal ${period !== 'today' ? 'dash-modal--period' : ''}`} onClick={e => e.stopPropagation()}>
-            <div className="dash-modal-header">
-              <span>Опоздания за {period === 'today' ? 'сегодня' : period === 'week' ? 'неделю' : 'месяц'}</span>
-              <button className="dash-modal-close" onClick={() => setLateModalOpen(false)}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="dash-modal-body">
-              {stats.topLate.length === 0 ? (
-                <div className="dash-modal-empty">Опозданий нет</div>
-              ) : (
-                stats.topLate.map((item, i) => {
-                  const isExpanded = expandedLateId === item.employee_id;
-                  return (
-                    <div key={item.employee_id} className="dash-late-group">
-                      <div
-                        className="dash-late-row"
-                        onClick={() => setExpandedLateId(isExpanded ? null : item.employee_id)}
-                      >
-                        <span className="dash-late-rank">{i + 1}</span>
-                        <div className="dash-late-info">
-                          <div className="dash-late-name">{item.full_name}</div>
-                          <div className="dash-late-avg">~{item.avgArrival}</div>
-                        </div>
-                        <span className="dash-late-count">{item.lateCount}</span>
-                        <ChevronDown size={14} className={`dash-late-chevron ${isExpanded ? 'dash-late-chevron--open' : ''}`} />
-                      </div>
-                      {isExpanded && (
-                        <div className="dash-late-details">
-                          {(item.lateDetails || []).map(d => (
-                            <div key={d.date} className="dash-late-detail-row">
-                              <span className="dash-late-detail-date">
-                                {new Date(d.date + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', weekday: 'short' })}
-                              </span>
-                              <span className="dash-late-detail-time">{d.arrival}</span>
-                            </div>
-                          ))}
-                          <div
-                            className="dash-late-detail-link"
-                            onClick={() => {
-                              setLateModalOpen(false);
-                              navigate(`/employees/${item.employee_id}`, { state: employeeCardBackState });
-                            }}
-                          >
-                            Открыть карточку →
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </div>
+        <LateRatingModal
+          topLate={stats.topLate}
+          period={period}
+          backState={employeeCardBackState}
+          onClose={() => setLateModalOpen(false)}
+        />
       )}
     </>
   );

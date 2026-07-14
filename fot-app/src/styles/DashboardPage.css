@@ -249,6 +249,43 @@
   }
 }
 
+/* Вкладки страницы «Обзор»: Обзор | МТС */
+.dash-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dash-tab {
+  min-height: 44px;
+  padding: 0 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.dash-tab:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.dash-tab--active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+@media (max-width: 430px) {
+  .dash-tab {
+    flex: 1;
+    padding: 0 8px;
+  }
+}
+
 /* 3-column dashboard layout */
 .dashboard-columns {
   display: grid;
