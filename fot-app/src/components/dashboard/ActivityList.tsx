@@ -74,6 +74,15 @@ const formatOutsideTime = (minutes: number): string => {
   return h > 0 ? `${h}ч ${m}м` : `${m}м`;
 };
 
+const getAwayElapsedMin = (employee: IEmployeePresence): number | null => {
+  if (employee.status !== 'offline' || !employee.since) return null;
+  const [h, m] = employee.since.split(':').map(Number);
+  const exit = new Date();
+  exit.setHours(h, m, 0, 0);
+  const diffMin = Math.floor((Date.now() - exit.getTime()) / 60_000);
+  return diffMin > 0 ? diffMin : null;
+};
+
 const EmployeeRow = memo<{
   employee: IEmployeePresence;
   isFavorite: boolean;
@@ -85,12 +94,15 @@ const EmployeeRow = memo<{
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const workTime = useMemo(() => getWorkElapsed(employee), [employee, tick]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const awayMin = useMemo(() => getAwayElapsedMin(employee), [employee, tick]);
 
   const isOnline = employee.status === 'online';
   const isOffline = employee.status === 'offline';
   const timelineWidth = getTimelinePercent(employee);
   const arrivalTime = employee.first_entry ? employee.first_entry.slice(0, 5) : null;
   const isLate = arrivalTime ? arrivalTime > '09:00' : false;
+  const departureTime = isOffline && employee.since ? employee.since.slice(0, 5) : null;
   const outsideMin = employee.time_outside_minutes || 0;
   const outsideWarning = outsideMin > 60;
 
@@ -118,11 +130,19 @@ const EmployeeRow = memo<{
         </div>
       </div>
 
-      {/* Приход */}
+      {/* Приход / уход */}
       <div className={styles.arrivalBlock}>
         {arrivalTime && (
           <span className={`${styles.arrivalTime} ${isLate ? styles.arrivalLate : ''}`}>
             → {arrivalTime}
+          </span>
+        )}
+        {departureTime && (
+          <span
+            className={styles.departureTime}
+            title={awayMin ? `Ушёл ${formatOutsideTime(awayMin)} назад` : 'Время последнего выхода'}
+          >
+            ← {departureTime}
           </span>
         )}
       </div>

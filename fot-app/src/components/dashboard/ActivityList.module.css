@@ -279,6 +279,15 @@
   color: #f59e0b;
 }
 
+.departureTime {
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  cursor: help;
+}
+
 /* Таймлайн */
 .timeline {
   width: 100px;
@@ -398,12 +407,16 @@
 
 @media (max-width: 430px) {
   .timeline { display: none; }
-  .arrivalBlock { display: none; }
+  /* На узких экранах приход скрыт (виден с утра в другом месте), но уход показываем;
+     min-width: 0 — у оставшихся «На месте» блок не занимает ширину, ФИО не сжимается */
+  .arrivalBlock { min-width: 0; }
+  .arrivalTime { display: none; }
+  .departureTime { font-size: 11px; }
   .locationBadge { display: none; }
   .item { padding: 10px 12px; gap: 8px; }
   .name { font-size: 12px; }
   .meta { font-size: 11px; }
-  .times { min-width: 50px; }
+  .times { min-width: 44px; }
   .time { font-size: 11px; }
   .outsideTime { font-size: 10px; }
   .exitInfo { font-size: 10px; }
