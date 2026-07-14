@@ -1,8 +1,8 @@
 import { useMemo, useState, type FC, type ReactElement } from 'react';
-import { Phone, Wifi, MessageSquare, Users } from 'lucide-react';
+import { Phone, Wifi, MessageSquare, Users, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useDashboardMtsUsage } from '../../hooks/useDashboardMtsUsage';
 import type { IMtsDeptEmployee, IMtsUsageGroup, MtsUsageGroupKey } from '../../services/dashboardMtsService';
-import { fmtDur, fmtLast, lastMonths } from '../../pages/mts-business/mtsBusinessFormat';
+import { fmtDur, fmtLast, MONTH_NAMES } from '../../pages/mts-business/mtsBusinessFormat';
 import styles from './DashboardMtsTab.module.css';
 
 // Вкладка «МТС» на «Обзоре»: использование связи сотрудниками отдела за месяц.
@@ -31,6 +31,36 @@ const EMPTY_GROUP: IMtsUsageGroup = {
 const groupOf = (groups: IMtsUsageGroup[], key: MtsUsageGroupKey): IMtsUsageGroup =>
   groups.find(g => g.key === key) ?? { ...EMPTY_GROUP, key };
 
+/**
+ * Статус сотрудника за месяц. Категории НЕ пересекаются и в сумме дают весь отдел —
+ * руководителю должно быть видно не только «кто больше всех говорит», но и кто молчит
+ * и кому SIM вообще не выдана.
+ */
+type EmployeeState = 'talked' | 'noCalls' | 'silent' | 'noSim';
+
+const STATE_LABELS: Record<EmployeeState, string> = {
+  talked: 'разговаривали',
+  noCalls: 'без звонков, есть трафик',
+  silent: 'связью не пользуются',
+  noSim: 'без SIM',
+};
+
+/**
+ * Активность — это только то, что сотрудник делает сам: звонки, интернет, СМС.
+ * Группа `other` (абонплата, разовые списания) есть почти у каждого номера, и
+ * если считать её активностью, «молчуны» исчезнут — окажется, что все «что-то делали».
+ */
+const USAGE_GROUPS: MtsUsageGroupKey[] = ['calls', 'internet', 'sms'];
+
+const stateOf = (employee: IMtsDeptEmployee): EmployeeState => {
+  if (!employee.hasSim) return 'noSim';
+  if (!USAGE_GROUPS.some(k => groupOf(employee.groups, k).count > 0)) return 'silent';
+  return groupOf(employee.groups, 'calls').count === 0 ? 'noCalls' : 'talked';
+};
+
+/** Порядок бейджей/разбивки — от «работает» к «ничего нет». */
+const STATE_ORDER: EmployeeState[] = ['talked', 'noCalls', 'silent', 'noSim'];
+
 const fmtNum = (n: number): string => n.toLocaleString('ru-RU');
 
 /** Байты → ГБ в десятичных единицах (как считает МТС в выписке). */
@@ -47,18 +77,40 @@ const clampMonth = (month: string, min: string | null, max: string | null): stri
   return month;
 };
 
+/** 'YYYY-MM' ± n месяцев. */
+const addMonths = (month: string, delta: number): string => {
+  const [y, m] = month.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const monthLabelOf = (month: string): string => {
+  const [y, m] = month.split('-').map(Number);
+  return `${MONTH_NAMES[m - 1] ?? month} ${y}`;
+};
+
 export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMonth, maxMonth }) => {
   const [month, setMonth] = useState(() => clampMonth(currentMonth(), minMonth, maxMonth));
   const [metric, setMetric] = useState<TopMetric>('time');
 
   const { data, isLoading, isError, error } = useDashboardMtsUsage(departmentId, month);
 
-  const monthOptions = useMemo(
-    () => lastMonths(12).filter(m => (!minMonth || m.value >= minMonth) && (!maxMonth || m.value <= maxMonth)),
-    [minMonth, maxMonth],
-  );
+  // Границы листания = окно месяцев роли. Вперёд дальше текущего месяца не пускаем:
+  // будущей выписки не существует, а пустой экран читался бы как «данные пропали».
+  const upperMonth = useMemo(() => {
+    const now = currentMonth();
+    return maxMonth && maxMonth < now ? maxMonth : now;
+  }, [maxMonth]);
 
-  const monthLabel = monthOptions.find(m => m.value === month)?.label ?? month;
+  const prevMonth = !minMonth || addMonths(month, -1) >= minMonth ? addMonths(month, -1) : null;
+  const nextMonth = addMonths(month, 1) <= upperMonth ? addMonths(month, 1) : null;
+
+  const shiftMonth = (delta: number): void => {
+    const target = delta < 0 ? prevMonth : nextMonth;
+    if (target) setMonth(target);
+  };
+
+  const monthLabel = monthLabelOf(month);
 
   const metricValue = useMemo(() => (employee: IMtsDeptEmployee): number => {
     if (metric === 'internet') return groupOf(employee.groups, 'internet').bytes;
@@ -71,15 +123,27 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
     return metric === 'time' ? fmtDur(value) : `${fmtNum(value)} зв.`;
   };
 
-  // Показываем ВЕСЬ отдел, без отсечки топ-N: сначала по метрике, затем те, у кого
-  // за месяц ноль, и в самом низу — кому SIM не выдана (ростер уже отсортирован по ФИО).
+  // Показываем ВЕСЬ отдел, без отсечки топ-N: сначала «говорящие» по убыванию метрики,
+  // затем те, кто не звонит, потом молчащие и в самом низу — кому SIM не выдана
+  // (внутри группы порядок ростера — по ФИО).
   const ranked = useMemo(() => {
     const rows = [...(data?.employees ?? [])];
     return rows.sort((a, b) => {
-      if (a.hasSim !== b.hasSim) return a.hasSim ? -1 : 1;
+      const byState = STATE_ORDER.indexOf(stateOf(a)) - STATE_ORDER.indexOf(stateOf(b));
+      if (byState !== 0) return byState;
       return metricValue(b) - metricValue(a);
     });
   }, [data?.employees, metricValue]);
+
+  // Разбивка отдела по статусам — складывается в общее число сотрудников.
+  const breakdown = useMemo(() => {
+    const counts = new Map<EmployeeState, number>(STATE_ORDER.map(s => [s, 0]));
+    for (const employee of data?.employees ?? []) {
+      const state = stateOf(employee);
+      counts.set(state, (counts.get(state) ?? 0) + 1);
+    }
+    return STATE_ORDER.map(state => ({ state, count: counts.get(state) ?? 0 }));
+  }, [data?.employees]);
 
   const topMax = Math.max(1, ...ranked.map(metricValue));
 
@@ -104,6 +168,7 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
 
   const renderRow = (employee: IMtsDeptEmployee, index: number): ReactElement => {
     const value = metricValue(employee);
+    const state = stateOf(employee);
     const employeeCalls = groupOf(employee.groups, 'calls');
     const sub = [
       employee.tabNumber ? `таб. ${employee.tabNumber}` : null,
@@ -114,13 +179,14 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
     ].filter(Boolean).join(' · ');
 
     return (
-      <div key={employee.employeeId} className={`${styles.barRow} ${employee.hasSim ? '' : styles.barRowMuted}`}>
+      <div key={employee.employeeId} className={`${styles.barRow} ${state === 'talked' ? '' : styles.barRowMuted}`}>
         <span className={styles.barIndex}>{index + 1}</span>
         <div className={styles.barMain}>
           <div className={styles.barLabel}>
             {employee.fullName}
             {sub && <span className={styles.barSub}> · {sub}</span>}
-            {!employee.hasSim && <span className={styles.barBadge}>нет SIM</span>}
+            {/* Каждому не-«говорящему» — явный ярлык, чтобы ноль не читался как сбой данных. */}
+            {state !== 'talked' && <span className={styles.barBadge}>{STATE_LABELS[state]}</span>}
           </div>
           <div className={styles.barTrack}>
             <div className={styles.barFill} style={{ width: `${Math.round((value / topMax) * 100)}%` }} />
@@ -133,17 +199,31 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
 
   return (
     <div className={styles.wrap}>
+      {/* Месяц — по центру, листаем стрелками. Границы = окно месяцев роли. */}
       <div className={styles.toolbar}>
-        <select
-          className={styles.select}
-          value={month}
-          onChange={e => setMonth(e.target.value)}
-          aria-label="Месяц"
-        >
-          {monthOptions.map(m => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
+        <div className={styles.monthPager}>
+          <button
+            type="button"
+            className={styles.monthNav}
+            onClick={() => shiftMonth(-1)}
+            disabled={!prevMonth}
+            title={prevMonth ? 'Предыдущий месяц' : 'Дальше назад роль не пускает'}
+            aria-label="Предыдущий месяц"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span className={styles.monthLabel}>{monthLabel}</span>
+          <button
+            type="button"
+            className={styles.monthNav}
+            onClick={() => shiftMonth(1)}
+            disabled={!nextMonth}
+            title={nextMonth ? 'Следующий месяц' : 'Дальше вперёд роль не пускает'}
+            aria-label="Следующий месяц"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
         {data?.syncedAt && (
           <span className={styles.synced}>данные на {fmtLast(data.syncedAt)}</span>
         )}
@@ -196,6 +276,17 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
             ))}
           </div>
         </div>
+
+        {/* Разбивка по статусам: категории не пересекаются и в сумме дают весь отдел. */}
+        {ranked.length > 0 && (
+          <div className={styles.breakdown}>
+            {breakdown.filter(b => b.count > 0).map(b => (
+              <span key={b.state} className={styles.breakdownItem}>
+                <b>{fmtNum(b.count)}</b> {STATE_LABELS[b.state]}
+              </span>
+            ))}
+          </div>
+        )}
 
         {ranked.length === 0 ? (
           <div className={styles.empty}>В отделе нет активных сотрудников.</div>

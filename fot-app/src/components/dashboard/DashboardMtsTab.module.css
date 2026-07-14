@@ -17,26 +17,61 @@
   text-align: center;
 }
 
-/* Панель периода */
+/* Панель периода: листалка месяца по центру, подпись свежести справа. */
 .toolbar {
+  position: relative;
   display: flex;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 10px;
+  min-height: 44px;
 }
 
-.select {
-  padding: 8px 10px;
-  /* 16px — иначе iOS/Android Chrome зумят страницу при фокусе */
-  font-size: 16px;
-  min-height: 44px;
+.monthPager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-primary);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.monthNav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-height: 38px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.monthNav:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.monthNav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.monthLabel {
+  min-width: 132px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
 .synced {
+  position: absolute;
+  right: 0;
   font-size: 12px;
   color: var(--text-tertiary);
 }
@@ -144,6 +179,27 @@
   color: var(--text-primary);
 }
 
+/* Разбивка отдела по статусам */
+.breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.breakdownItem {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.breakdownItem b {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 /* Строки-бары */
 .barRow {
   display: grid;
@@ -242,8 +298,18 @@
     min-height: 44px;
   }
 
-  .select {
-    width: 100%;
+  /* Подпись свежести уводим под листалку — иначе наезжает на неё на узких экранах. */
+  .toolbar {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .synced {
+    position: static;
+  }
+
+  .monthNav {
+    min-height: 44px;
   }
 
   /* Прячем колонку номера строки — экономим ширину под ФИО (приём из OverviewSection). */
