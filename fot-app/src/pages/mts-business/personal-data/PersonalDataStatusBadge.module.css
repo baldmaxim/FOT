@@ -1,10 +1,16 @@
+/* Перенос разрешён: длинные статусы («ожидает SMS-подтверждения») не влезают
+   в узкую колонку таблицы абонентов и раньше обрезались (td { overflow: hidden }).
+   Радиус 10px вместо пилюли 999px — на двух строках пилюля выглядит сломанной. */
 .badge {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: 10px;
   font-size: 12px;
   font-weight: 600;
-  white-space: nowrap;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .ok { background: rgba(34, 197, 94, 0.14); color: var(--success); }

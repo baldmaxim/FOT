@@ -3,6 +3,7 @@ import * as Sentry from '@sentry/node';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { startRefreshAll, getRefreshAllStatus } from '../services/mts-business-refresh-all.service.js';
+import { getRollingStatus } from '../services/mts-business-statement-rolling.service.js';
 import { getSigurRuntimeState } from '../services/sigur-runtime-state.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { settingsService } from '../services/settings.service.js';
@@ -23,6 +24,15 @@ const startSchema = z.object({
 const scheduleSchema = z.object({
   enabled: z.boolean(),
   hourMsk: z.number().int().min(0).max(23),
+});
+
+// Доля лимита 10–90%: 100% съели бы весь пакет запросов и живые вызовы карточки
+// абонента ждали бы освобождения окна.
+const rollingSchema = z.object({
+  enabled: z.boolean(),
+  budgetSharePercent: z.number().int().min(10).max(90).optional(),
+  hotMinutes: z.number().int().min(5).max(240).optional(),
+  coldHours: z.number().int().min(1).max(72).optional(),
 });
 
 const fail = (res: Response, error: unknown, fallback: string): void => {
@@ -168,6 +178,33 @@ export const mtsBusinessRefreshController = {
       res.json({ success: true, data: next });
     } catch (error) {
       fail(res, error, 'Ошибка сохранения настройки автообновления');
+    }
+  },
+
+  /** Непрерывный конвейер свежести: статус + глубина очереди по лицевым счетам. */
+  async getRolling(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      res.json({ success: true, data: await getRollingStatus() });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения статуса непрерывного обновления');
+    }
+  },
+
+  /** Настройка конвейера: вкл/выкл, доля лимита, интервалы свежести. */
+  async setRolling(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = rollingSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректный запрос', details: parsed.error.flatten() });
+        return;
+      }
+      const next = await settingsService.setMtsBusinessRolling(parsed.data, req.user.id);
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_REFRESH_ALL_SCHEDULE_UPDATED, {
+        details: { rolling: next },
+      });
+      res.json({ success: true, data: next });
+    } catch (error) {
+      fail(res, error, 'Ошибка сохранения настройки непрерывного обновления');
     }
   },
 };

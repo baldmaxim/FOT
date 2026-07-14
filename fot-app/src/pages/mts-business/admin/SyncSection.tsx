@@ -5,6 +5,8 @@ import {
   useMtsBusinessSchedulersStatus,
   useMtsBusinessRefreshAllSchedule,
   useSetMtsBusinessRefreshAllSchedule,
+  useMtsBusinessRolling,
+  useSetMtsBusinessRolling,
 } from '../../../hooks/useMtsBusinessRefreshAll';
 import { errText, fmtLast } from '../mtsBusinessFormat';
 import styles from '../MtsBusinessPage.module.css';
@@ -46,6 +48,44 @@ export const SyncSection: FC = () => {
       });
     } catch (e) {
       setSchedMsg({ ok: false, text: errText(e, 'Ошибка сохранения настройки (возможно нужен 2FA)') });
+    }
+  };
+
+  // Непрерывный конвейер свежести: те же «черновики поверх сохранённого», что и
+  // у расписания — после сохранения источником снова становится запрос.
+  const rolling = useMtsBusinessRolling(true);
+  const setRolling = useSetMtsBusinessRolling();
+  const [rollingEnabledDraft, setRollingEnabledDraft] = useState<boolean | null>(null);
+  const [hotDraft, setHotDraft] = useState<number | null>(null);
+  const [coldDraft, setColdDraft] = useState<number | null>(null);
+  const [shareDraft, setShareDraft] = useState<number | null>(null);
+  const [rollingMsg, setRollingMsg] = useState<Msg>(null);
+  const rollingEnabled = rollingEnabledDraft ?? rolling.data?.enabled ?? false;
+  const hotMinutes = hotDraft ?? rolling.data?.settings?.hotMinutes ?? 15;
+  const coldHours = coldDraft ?? rolling.data?.settings?.coldHours ?? 6;
+  const budgetShare = shareDraft ?? rolling.data?.settings?.budgetSharePercent ?? 70;
+
+  const onSaveRolling = async (): Promise<void> => {
+    setRollingMsg(null);
+    try {
+      const next = await setRolling.mutateAsync({
+        enabled: rollingEnabled,
+        hotMinutes,
+        coldHours,
+        budgetSharePercent: budgetShare,
+      });
+      setRollingEnabledDraft(null);
+      setHotDraft(null);
+      setColdDraft(null);
+      setShareDraft(null);
+      setRollingMsg({
+        ok: true,
+        text: next.enabled
+          ? `Непрерывное обновление включено: активные номера — раз в ${next.hotMinutes} мин, остальные — раз в ${next.coldHours} ч`
+          : 'Непрерывное обновление выключено',
+      });
+    } catch (e) {
+      setRollingMsg({ ok: false, text: errText(e, 'Ошибка сохранения настройки (возможно нужен 2FA)') });
     }
   };
 
@@ -100,7 +140,84 @@ export const SyncSection: FC = () => {
         </div>
       )}
 
-      <h3 className={styles.cardTitle} style={{ fontSize: 14, marginTop: 0 }}>Автообновление «Обновить всё»</h3>
+      <h3 className={styles.cardTitle} style={{ fontSize: 14, marginTop: 0 }}>Непрерывное обновление (звонки и начисления)</h3>
+      <p className={styles.hint}>
+        Фоновый конвейер постоянно догружает свежую выписку по всем лицевым счетам: номера
+        обновляются по очереди «кого дольше всех не обновляли». МТС отдаёт звонок в выписке через
+        6–12 минут после разговора, поэтому данные почти живые. Тратится только указанная доля
+        лимита запросов — остаток остаётся карточкам абонентов и личным кабинетам.
+        Профили (тариф, услуги, персданные) сюда не входят — они обновляются ночным «Обновить всё».
+      </p>
+      <div className={styles.rowCompact}>
+        <div className={styles.field}>
+          <label className={styles.label}>Активные номера, раз в</label>
+          <select
+            className={`${styles.select} ${styles.selectSm}`}
+            value={hotMinutes}
+            onChange={e => setHotDraft(Number(e.target.value))}
+            disabled={rolling.isLoading}
+          >
+            {[10, 15, 20, 30, 60].map(m => <option key={m} value={m}>{m} мин</option>)}
+          </select>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Остальные, раз в</label>
+          <select
+            className={`${styles.select} ${styles.selectSm}`}
+            value={coldHours}
+            onChange={e => setColdDraft(Number(e.target.value))}
+            disabled={rolling.isLoading}
+          >
+            {[3, 6, 12, 24].map(h => <option key={h} value={h}>{h} ч</option>)}
+          </select>
+        </div>
+        <div className={styles.field}>
+          <label className={styles.label}>Доля лимита МТС</label>
+          <select
+            className={`${styles.select} ${styles.selectSm}`}
+            value={budgetShare}
+            onChange={e => setShareDraft(Number(e.target.value))}
+            disabled={rolling.isLoading}
+          >
+            {[30, 50, 70, 90].map(p => <option key={p} value={p}>{p}%</option>)}
+          </select>
+        </div>
+        <label className={styles.checkField}>
+          <input
+            type="checkbox"
+            checked={rollingEnabled}
+            onChange={e => setRollingEnabledDraft(e.target.checked)}
+            disabled={rolling.isLoading}
+          />
+          Включить
+        </label>
+        <button className={styles.btn} onClick={() => { void onSaveRolling(); }} disabled={setRolling.isPending || rolling.isLoading}>
+          {setRolling.isPending ? 'Сохранение…' : 'Сохранить'}
+        </button>
+      </div>
+      {rollingMsg && <p className={rollingMsg.ok ? styles.ok : styles.err}>{rollingMsg.text}</p>}
+      {rolling.data?.dryRun && (
+        <p className={styles.warn}>Режим DRY-RUN (MTS_ROLLING_DRY_RUN=1): очередь строится, но запросы в МТС не уходят.</p>
+      )}
+      {rolling.data?.enabled && (
+        <div style={{ marginTop: 8 }}>
+          <p className={styles.hint}>
+            Последний тик: {fmtLast(rolling.data.lastTickAt)} · обновлено за час: {rolling.data.syncedLastHour}
+          </p>
+          {rolling.data.accounts.map(a => (
+            <div key={a.accountId} className={styles.schedRow}>
+              <span>{a.accountLabel}</span>
+              <span className={styles.schedMeta}>
+                в очереди: {a.pending} · обновлено: {a.synced}
+                {a.noAccess > 0 && ` · нет доступа: ${a.noAccess}`}
+                {a.failed > 0 && <span className={styles.err}> · ошибок: {a.failed}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h3 className={styles.cardTitle} style={{ fontSize: 14, marginTop: 20 }}>Автообновление «Обновить всё»</h3>
       <p className={styles.hint}>
         Ежедневный полный прогон всех активных аккаунтов (номера, комментарии, балансы, детализация,
         профили абонентов). Если в этот час идёт ручной прогон — автозапуск отложится до его завершения.

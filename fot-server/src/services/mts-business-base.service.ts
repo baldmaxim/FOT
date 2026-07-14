@@ -214,29 +214,55 @@ class MtsBusinessRequestLimiter {
 
 const limiter = new MtsBusinessRequestLimiter(MTS_BIZ_MAX_CONCURRENCY);
 
+/**
+ * Секундный суб-лимит пакета запросов МТС: пакет 60 — «не более 60/мин И не более
+ * 3 запросов/сек», пакет 300 — 300/мин и 10/сек (MTS_BUSINESS_API_INTEGRATION.md).
+ * Минутного окна мало: непрерывный конвейер + карточка абонента могут выдать
+ * всплеск в пределах минуты и словить 429/1011.
+ */
+export const mtsPerSecondLimit = (limitPerMin: number): number => (limitPerMin >= 300 ? 10 : 3);
+
 // Гейт на тариф пакета запросов МТС (60 или 300/мин, задаётся per-аккаунт в
-// mts_business_accounts.rate_limit_per_min). Скользящее окно 60с: при
-// исчерпании — не ошибка, а ожидание освобождения окна (не роняем запрос).
+// mts_business_accounts.rate_limit_per_min). Два скользящих окна — минута и
+// секунда; при исчерпании любого — не ошибка, а ожидание освобождения окна
+// (не роняем запрос).
 class MtsBusinessRateGate {
-  private timestamps = new Map<string, number[]>();
+  private minute = new Map<string, number[]>();
+  private second = new Map<string, number[]>();
+
+  private static sweep(map: Map<string, number[]>, accountId: string, now: number, windowMs: number): number[] {
+    let arr = map.get(accountId);
+    if (!arr) {
+      arr = [];
+      map.set(accountId, arr);
+    }
+    while (arr.length && now - arr[0] >= windowMs) arr.shift();
+    return arr;
+  }
 
   async acquire(accountId: string, limitPerMin: number): Promise<void> {
-    const windowMs = 60_000;
+    const minuteMs = 60_000;
+    const secondMs = 1_000;
+    const limitPerSec = mtsPerSecondLimit(limitPerMin);
     for (;;) {
       const now = Date.now();
-      let arr = this.timestamps.get(accountId);
-      if (!arr) {
-        arr = [];
-        this.timestamps.set(accountId, arr);
+      const perMinute = MtsBusinessRateGate.sweep(this.minute, accountId, now, minuteMs);
+      const perSecond = MtsBusinessRateGate.sweep(this.second, accountId, now, secondMs);
+
+      if (perMinute.length >= limitPerMin) {
+        const waitMs = minuteMs - (now - perMinute[0]) + 10;
+        console.warn(`[mts-biz] rate-limit ${limitPerMin}/мин account=${accountId} — жду ${waitMs}ms`);
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+        continue;
       }
-      while (arr.length && now - arr[0] >= windowMs) arr.shift();
-      if (arr.length < limitPerMin) {
-        arr.push(now);
-        return;
+      if (perSecond.length >= limitPerSec) {
+        const waitMs = secondMs - (now - perSecond[0]) + 5;
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+        continue;
       }
-      const waitMs = windowMs - (now - arr[0]) + 10;
-      console.warn(`[mts-biz] rate-limit ${limitPerMin}/мин account=${accountId} — жду ${waitMs}ms`);
-      await new Promise(resolve => setTimeout(resolve, waitMs));
+      perMinute.push(now);
+      perSecond.push(now);
+      return;
     }
   }
 }

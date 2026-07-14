@@ -136,6 +136,27 @@ export const DEFAULT_MTS_BUSINESS_REFRESH_ALL_SCHEDULE: IMtsBusinessRefreshAllSc
   hourMsk: 23,
 };
 
+/**
+ * Непрерывный конвейер свежести выписки (mts-business-statement-rolling).
+ * budgetSharePercent — доля rate-limit аккаунта, которую можно тратить фоново
+ * (остальное остаётся живым вызовам UI: карточка абонента, «Загрузить доступные»).
+ */
+export interface IMtsBusinessRollingSettings {
+  enabled: boolean;
+  budgetSharePercent: number; // 10..90
+  hotMinutes: number;         // как часто обновлять «горячие» номера
+  coldHours: number;          // как часто обновлять «молчунов»
+}
+
+// enabled=false по умолчанию: после деплоя конвейер не стартует сам —
+// включают в админке МТС Бизнес, убедившись, что миграция 220 применена.
+export const DEFAULT_MTS_BUSINESS_ROLLING: IMtsBusinessRollingSettings = {
+  enabled: false,
+  budgetSharePercent: 70,
+  hotMinutes: 15,
+  coldHours: 6,
+};
+
 export const DEFAULT_MTS_BASE_URL = 'https://api.mpoisk.ru/v6/api';
 
 /** МТС «Бизнес» (Business API) — база v1. Детализация звонков.
@@ -1169,6 +1190,64 @@ export const settingsService = {
 
     this.invalidateCache();
     return this.getMtsBusinessRefreshAllSchedule();
+  },
+
+  /** Настройки непрерывного конвейера свежести выписки МТС Бизнес. */
+  async getMtsBusinessRolling(): Promise<IMtsBusinessRollingSettings> {
+    const values = await this.getMultiple([
+      'mts_business_rolling_enabled',
+      'mts_business_rolling_budget_share',
+      'mts_business_rolling_hot_minutes',
+      'mts_business_rolling_cold_hours',
+    ]);
+    const share = parsePositiveInt(values.mts_business_rolling_budget_share, DEFAULT_MTS_BUSINESS_ROLLING.budgetSharePercent);
+    return {
+      enabled: parseBoolean(values.mts_business_rolling_enabled, DEFAULT_MTS_BUSINESS_ROLLING.enabled),
+      // Клампим здесь, а не только в UI: 100% съели бы весь лимит, и живые
+      // вызовы карточки абонента вставали бы в очередь ожидания окна.
+      budgetSharePercent: Math.min(90, Math.max(10, share)),
+      hotMinutes: Math.max(5, parsePositiveInt(values.mts_business_rolling_hot_minutes, DEFAULT_MTS_BUSINESS_ROLLING.hotMinutes)),
+      coldHours: Math.max(1, parsePositiveInt(values.mts_business_rolling_cold_hours, DEFAULT_MTS_BUSINESS_ROLLING.coldHours)),
+    };
+  },
+
+  async setMtsBusinessRolling(
+    config: Partial<IMtsBusinessRollingSettings>,
+    userId: string,
+  ): Promise<IMtsBusinessRollingSettings> {
+    const current = await this.getMtsBusinessRolling();
+    const next: IMtsBusinessRollingSettings = {
+      enabled: config.enabled ?? current.enabled,
+      budgetSharePercent: config.budgetSharePercent ?? current.budgetSharePercent,
+      hotMinutes: config.hotMinutes ?? current.hotMinutes,
+      coldHours: config.coldHours ?? current.coldHours,
+    };
+
+    await this.setMultiple([
+      {
+        key: 'mts_business_rolling_enabled',
+        value: String(next.enabled),
+        description: 'МТС Бизнес: непрерывное обновление выписки (звонки/начисления)',
+      },
+      {
+        key: 'mts_business_rolling_budget_share',
+        value: String(next.budgetSharePercent),
+        description: 'МТС Бизнес: доля лимита запросов под конвейер, % (10–90)',
+      },
+      {
+        key: 'mts_business_rolling_hot_minutes',
+        value: String(next.hotMinutes),
+        description: 'МТС Бизнес: как часто обновлять активные номера, мин',
+      },
+      {
+        key: 'mts_business_rolling_cold_hours',
+        value: String(next.coldHours),
+        description: 'МТС Бизнес: как часто обновлять неактивные номера, ч',
+      },
+    ], userId);
+
+    this.invalidateCache();
+    return this.getMtsBusinessRolling();
   },
 
   invalidateCache() {

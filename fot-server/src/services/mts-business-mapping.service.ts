@@ -568,6 +568,66 @@ class MtsBusinessMappingService {
   }
 
   /**
+   * Очередь непрерывного конвейера свежести (миграция 220): номера аккаунта,
+   * которым пора обновить выписку, «самый несвежий первым».
+   *
+   * Горячие (событие в выписке за последние activeDays) обновляются раз в
+   * hotMinutes, остальные — раз в coldHours. Номера с 3+ подряд неудачами
+   * (401/1014 «вне доступа», 403/1010 «не в тарифе») считаются холодными в любом
+   * случае: повторы по ним бессмысленны и жгут лимит 60 запросов/мин.
+   */
+  async getStatementQueue(params: {
+    accountId: string;
+    hotMinutes: number;
+    coldHours: number;
+    activeDays: number;
+    limit: number;
+  }): Promise<Array<{ msisdn: string; msisdnHash: string }>> {
+    const rows = await query<{ msisdn_hash: string; msisdn_enc: string | null }>(
+      `SELECT msisdn_hash, msisdn_enc
+         FROM mts_business_number_map
+        WHERE account_id = $1
+          AND msisdn_enc IS NOT NULL
+          AND (
+            (last_usage_at > NOW() - ($4 * INTERVAL '1 day')
+             AND statement_fail_count < 3
+             AND (statement_synced_at IS NULL OR statement_synced_at < NOW() - ($2 * INTERVAL '1 minute')))
+            OR (statement_synced_at IS NULL OR statement_synced_at < NOW() - ($3 * INTERVAL '1 hour'))
+          )
+        ORDER BY statement_synced_at ASC NULLS FIRST
+        LIMIT $5`,
+      [params.accountId, params.hotMinutes, params.coldHours, params.activeDays, params.limit],
+    );
+    const out: Array<{ msisdn: string; msisdnHash: string }> = [];
+    for (const r of rows) {
+      const msisdn = encryptionService.decryptField(r.msisdn_enc);
+      if (msisdn) out.push({ msisdn, msisdnHash: r.msisdn_hash });
+    }
+    return out;
+  }
+
+  /**
+   * Отметка попытки синка выписки. Успех — сбрасывает счётчик неудач и двигает
+   * last_usage_at (если в выписке было событие свежее сохранённого). Неудача,
+   * которая не лечится повтором (свойство номера), тоже двигает
+   * statement_synced_at — иначе номер вечно оставался бы первым в очереди.
+   */
+  async markStatementSynced(params: {
+    msisdnHash: string;
+    ok: boolean;
+    lastUsageAt: Date | null;
+  }): Promise<void> {
+    await execute(
+      `UPDATE mts_business_number_map
+          SET statement_synced_at = NOW(),
+              statement_fail_count = CASE WHEN $2 THEN 0 ELSE statement_fail_count + 1 END,
+              last_usage_at = GREATEST(last_usage_at, $3::timestamptz)
+        WHERE msisdn_hash = $1`,
+      [params.msisdnHash, params.ok, params.lastUsageAt],
+    );
+  }
+
+  /**
    * Карта «хэш номера → имя» по всем известным номерам (сотрудник ФОТ → иначе
    * ФИО из МТС → иначе комментарий из ЛК). Используется для подписи
    * собеседников в детальной выписке: звонок «на номер» превращается в звонок

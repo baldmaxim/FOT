@@ -14,6 +14,7 @@ import {
   summarizeUsage,
   usageGroupSub,
   usageGroupValue,
+  usageGroupsFromTotals,
   usageTooltip,
 } from '../usageSummary';
 import st from './Subscribers.module.css';
@@ -106,7 +107,13 @@ export const UsageTab: FC<{
   const [detailTab, setDetailTab] = useState<UsageGroupKey>('calls');
   const usage = useMtsBusinessSubscriberUsage(msisdn, month, usageDate, true);
   const rows = usage.data?.rows;
-  const summary = useMemo(() => summarizeUsage(rows ?? []), [rows]);
+  const totals = usage.data?.totals;
+  // Плитки — по серверному агрегату (все строки периода), список — по rows
+  // (может быть обрезан). Так админка, «Статистика» и ЛК дают одни цифры.
+  const summary = useMemo(
+    () => (totals ? usageGroupsFromTotals(totals, rows ?? []) : summarizeUsage(rows ?? [])),
+    [totals, rows],
+  );
 
   const availableTabs = useMemo(
     () => USAGE_GROUP_ORDER.filter(k => (summary.get(k)?.count ?? 0) > 0),
@@ -118,6 +125,11 @@ export const UsageTab: FC<{
     [rows, activeTab, onlyPaid],
   );
   const paidCount = useMemo(() => (rows ?? []).filter(u => u.amount > 0).length, [rows]);
+  // Событий за период — по агрегату (rows могут быть обрезаны лимитом сервера).
+  const eventsTotal = useMemo(
+    () => [...summary.values()].reduce((sum, g) => sum + g.count, 0),
+    [summary],
+  );
 
   const onMonth = (v: string): void => { setMonth(v); setUsageDate(''); setShowDetail(false); };
   const onDay = (v: string): void => { setUsageDate(v ? `${month}-${v}` : ''); setShowDetail(false); };
@@ -166,7 +178,7 @@ export const UsageTab: FC<{
               <div className={`${st.usageStat} ${st.usageStatTotal}`} data-g="total">
                 <span className={st.usageStatLabel}>Итого</span>
                 <span className={st.usageStatValue}>{fmtMoney(usage.data?.total ?? 0)}</span>
-                <span className={st.usageStatSub}>{rows.length} событий за {usageDate || 'месяц'}</span>
+                <span className={st.usageStatSub}>{eventsTotal} событий за {usageDate || 'месяц'}</span>
               </div>
             </div>
 

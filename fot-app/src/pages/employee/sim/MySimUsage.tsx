@@ -11,6 +11,7 @@ import {
   summarizeUsage,
   usageGroupSub,
   usageGroupValue,
+  usageGroupsFromTotals,
   usageTooltip,
 } from '../../mts-business/usageSummary';
 import {
@@ -94,8 +95,16 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
     [usage.data, msisdn],
   );
   const rows = usage.data ? my?.rows ?? [] : undefined;
-  // Плитки-сводка — всегда за месяц.
-  const summary = useMemo(() => summarizeUsage(my?.rows ?? []), [my]);
+  // Плитки-сводка — всегда за месяц, по серверному агрегату (все строки периода,
+  // без обрезки лимитом): те же числа показывает админка на вкладке «Абоненты».
+  const summary = useMemo(
+    () => (my?.totals ? usageGroupsFromTotals(my.totals, my.rows) : summarizeUsage(my?.rows ?? [])),
+    [my],
+  );
+  const eventsTotal = useMemo(
+    () => [...summary.values()].reduce((sum, g) => sum + g.count, 0),
+    [summary],
+  );
 
   // База детализации: выбранный день либо весь месяц; табы и счётчики — от неё.
   const dayRows = useMemo(
@@ -149,7 +158,7 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
               <div className={`${styles.stat} ${styles.statTotal}`}>
                 <span className={styles.statLabel}>Итого</span>
                 <span className={styles.statValue}>{fmtMoney(my?.total ?? 0)}</span>
-                <span className={styles.statSub}>{rows.length} событий</span>
+                <span className={styles.statSub}>{eventsTotal} событий</span>
               </div>
             </div>
 

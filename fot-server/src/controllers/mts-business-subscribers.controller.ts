@@ -6,7 +6,7 @@ import { mtsBusinessSubscribersService } from '../services/mts-business-subscrib
 import { syncSubscriberFull } from '../services/mts-business-subscriber-sync.service.js';
 import { syncMsisdnStatement } from '../services/mts-business-statement-sync.service.js';
 import { defaultDetalizationWindow } from '../services/mts-business-refresh-all.service.js';
-import { mtsBusinessStatementRowsService, parseUsagePeriod } from '../services/mts-business-statement-rows.service.js';
+import { mtsBusinessStatementRowsService, parseUsagePeriod, USAGE_ROWS_LIMIT } from '../services/mts-business-statement-rows.service.js';
 import { mtsBusinessMappingService } from '../services/mts-business-mapping.service.js';
 import { mtsBusinessCatalogService } from '../services/mts-business-catalog.service.js';
 import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
@@ -94,15 +94,31 @@ export const mtsBusinessSubscribersController = {
 
       const hash = msisdnHash(msisdn);
       if (hash) {
-        const stored = await mtsBusinessStatementRowsService.getUsageRows(hash, period.dateFrom, period.dateTo);
+        // totals — SQL-агрегат по ВСЕМ строкам периода; rows — детализация с cap'ом.
+        // Плитки/статистика считаются по totals, иначе на «тяжёлых» номерах цифры
+        // разъезжались бы с ЛК (там итог всегда по агрегату).
+        const [stored, totals, days] = await Promise.all([
+          mtsBusinessStatementRowsService.getUsageRows(hash, period.dateFrom, period.dateTo),
+          mtsBusinessStatementRowsService.getUsageTotals(hash, period.dateFrom, period.dateTo),
+          mtsBusinessStatementRowsService.getDailyStats(hash, period.dateFrom, period.dateTo),
+        ]);
         if (stored.length > 0) {
           const names = await mtsBusinessMappingService.getNamesByMsisdnHash();
           const rows = stored.map(({ peerHash, ...r }) => ({
             ...r,
             peerName: peerHash ? names.get(peerHash) ?? null : null,
           }));
-          const total = rows.reduce((a, r) => a + r.amount, 0);
-          res.json({ success: true, data: { month: period.period, rows, total } });
+          res.json({
+            success: true,
+            data: {
+              month: period.period,
+              rows,
+              totals,
+              days,
+              total: totals.total,
+              truncated: rows.length >= USAGE_ROWS_LIMIT,
+            },
+          });
           return;
         }
       }
@@ -118,14 +134,32 @@ export const mtsBusinessSubscribersController = {
         });
         const parsed = mtsBusinessCdrService.parseStatementUsageRows(resp);
         await mtsBusinessStatementRowsService.storeRows(ctx.accountId, msisdn, parsed, 'backfill');
+        // Строки сохранены — сводки берём тем же SQL-агрегатом, что и в основной
+        // ветке, чтобы бэкфилл-ответ не считался по другой методике.
+        const hashAfter = msisdnHash(msisdn);
+        const [totals, days] = hashAfter
+          ? await Promise.all([
+            mtsBusinessStatementRowsService.getUsageTotals(hashAfter, period.dateFrom, period.dateTo),
+            mtsBusinessStatementRowsService.getDailyStats(hashAfter, period.dateFrom, period.dateTo),
+          ])
+          : [{ groups: [], total: 0 }, []];
         // Собеседник — конкретный абонент, если его номер есть в нашей базе.
         const names = await mtsBusinessMappingService.getNamesByMsisdnHash();
-        const rows = parsed.map(r => {
+        const rows = parsed.slice(0, USAGE_ROWS_LIMIT).map(r => {
           const peerHash = r.peer ? msisdnHash(r.peer) : null;
           return { ...r, peerName: peerHash ? names.get(peerHash) ?? null : null };
         });
-        const total = rows.reduce((a, r) => a + r.amount, 0);
-        res.json({ success: true, data: { month: period.period, rows, total } });
+        res.json({
+          success: true,
+          data: {
+            month: period.period,
+            rows,
+            totals,
+            days,
+            total: totals.total,
+            truncated: parsed.length > USAGE_ROWS_LIMIT,
+          },
+        });
       } catch (error) {
         if (isFeatureUnavailable(error)) {
           res.json({ success: true, data: { month: period.period, unavailable: true, reason: 'MTS_FEATURE_NOT_CONNECTED' } });

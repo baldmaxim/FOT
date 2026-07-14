@@ -105,10 +105,43 @@ export interface IMtsUsageRow {
   amount: number;
 }
 
+/** Итоги группы за период — SQL-агрегат бэкенда (getUsageTotals). */
+export interface IUsageTotalsGroup {
+  key: 'calls' | 'internet' | 'sms' | 'other';
+  count: number;
+  seconds: number;
+  bytes: number;
+  amount: number;
+  inCount: number;
+  inSeconds: number;
+  outCount: number;
+  outSeconds: number;
+}
+
+export interface IUsageTotals {
+  groups: IUsageTotalsGroup[];
+  total: number;
+}
+
+export interface IMtsUsageDay {
+  date: string;
+  events: number;
+  calls: number;
+  callsSeconds: number;
+  smsCount: number;
+  internetBytes: number;
+  amount: number;
+}
+
 export interface IMtsUsageResult {
   month: string;
   rows?: IMtsUsageRow[];
+  /** SQL-агрегат по ВСЕМ строкам периода — источник плиток и «Итого». */
+  totals?: IUsageTotals;
+  days?: IMtsUsageDay[];
   total?: number;
+  /** Строки детализации обрезаны лимитом (сводки от этого не страдают). */
+  truncated?: boolean;
   unavailable?: true;
   reason?: string;
 }

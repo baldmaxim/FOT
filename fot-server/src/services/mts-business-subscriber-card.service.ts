@@ -16,11 +16,11 @@ import {
   type IMtsRoaming,
 } from './mts-business-catalog.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
-import { mtsBusinessDataService } from './mts-business-data.service.js';
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
-import { mtsBusinessCdrService, normalizeMsisdn, type IStatementUsageEvent } from './mts-business-cdr.service.js';
-import { summarizeMonthExpenses, type IMonthExpenseSummary } from './mts-business-expenses.service.js';
+import { msisdnHash, normalizeMsisdn, type MtsExpenseCategory } from './mts-business-cdr.service.js';
+import { mtsBusinessStatementRowsService } from './mts-business-statement-rows.service.js';
+import { expenseSummaryFromTotals, type IMonthExpenseSummary } from './mts-business-expenses.service.js';
 import { isFeatureUnavailable, MtsBusinessApiError } from './mts-business-base.service.js';
 
 // Оркестратор «карточки номера» (read-only). Собирает по одному MSISDN всё, что
@@ -189,28 +189,34 @@ class MtsBusinessSubscriberCardService {
     };
   }
 
-  /** Ленивая сводка расходов за месяц (YYYY-MM): выписка + пополнения → категории. */
+  /**
+   * Ленивая сводка расходов за месяц (YYYY-MM): категории — из СОХРАНЁННЫХ строк
+   * выписки (mts_business_statement_rows, ответ BillingStatementExtd), пополнения —
+   * живой PaymentHistory (в выписке их нет, они отсекаются при парсинге).
+   *
+   * Раньше категории считались живым BillingStatementByMSISDN (НЕ Extd) — другой
+   * эндпоинт, другой набор строк, без дедупа → цифры расходились с вкладкой
+   * «Использование» и ЛК. Теперь источник один на все три экрана.
+   */
   async getExpenses(msisdn: string, month: string): Promise<{ month: string; summary: IMonthExpenseSummary }> {
     const ctx = await mtsBusinessMappingService.getSubscriberContext(msisdn);
     if (!ctx) throw new SubscriberNotLinkedError();
     const { accountId } = ctx;
     const { from, to } = monthRange(month);
 
-    let usages: IStatementUsageEvent[] = [];
+    const hash = msisdnHash(msisdn);
+    const totals = hash
+      ? await mtsBusinessStatementRowsService.getCategoryTotals(hash, from, to)
+      : new Map<MtsExpenseCategory, { count: number; amount: number }>();
+
     let payments: IMtsPaymentEntry[] = [];
-    try {
-      const stmt = await mtsBusinessDataService.getBillingStatementByMsisdn(accountId, { msisdn, dateFrom: from, dateTo: to });
-      usages = mtsBusinessCdrService.parseStatementUsages(stmt);
-    } catch (e) {
-      if (!isFeatureUnavailable(e)) console.warn('[mts-biz-card] выписка расходов недоступна');
-    }
     try {
       payments = await mtsBusinessBillingService.getPaymentHistoryByMsisdn(accountId, msisdn, from, to);
     } catch (e) {
       if (!isFeatureUnavailable(e)) console.warn('[mts-biz-card] история платежей недоступна');
     }
 
-    return { month, summary: summarizeMonthExpenses(usages, payments) };
+    return { month, summary: expenseSummaryFromTotals(totals, payments) };
   }
 }
 

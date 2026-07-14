@@ -2,9 +2,9 @@ import { type FC, type ReactNode, useMemo, useState } from 'react';
 import { useOverlayDismiss } from '../../../hooks/useOverlayDismiss';
 import {
   useMtsBusinessSubscriberDetails,
+  useMtsBusinessSubscriberUsage,
   useRefreshMtsBusinessSubscriber,
 } from '../../../hooks/useMtsBusinessSubscribers';
-import { useMtsBusinessSubscriberExpenses } from '../../../hooks/useMtsBusinessSubscriberData';
 import { useModifyMtsBusinessService } from '../../../hooks/useMtsBusinessActionsData';
 import { useSetMtsBusinessNumberMap } from '../../../hooks/useMtsBusinessData';
 import type { IMtsSubscriberRow, IMtsSubscriberSyncResult } from '../../../services/mtsBusinessSubscribersService';
@@ -13,10 +13,20 @@ import { ConnectModal, type ConnectKind } from './ConnectModal';
 import { UsageTab } from './UsageTab';
 import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
+import { UnavailableNotice } from '../common/UnavailableNotice';
 import { EmployeeFioPicker } from '../../mts/EmployeeFioPicker';
 import {
+  type IUsageGroup,
+  type UsageGroupKey,
+  USAGE_GROUP_LABELS,
+  USAGE_GROUP_ORDER,
+  fmtUnits,
+  usageGroupsFromTotals,
+  usageTooltip,
+} from '../usageSummary';
+import {
   errText, fmtDur, fmtLast, fmtMoney, fmtPackage, packageHasData, fmtPhone, lastMonths,
-  EXPENSE_CATEGORY_LABELS, FORWARDING_TYPE_LABELS, PD_STATUS_LABELS,
+  FORWARDING_TYPE_LABELS, PD_STATUS_LABELS,
 } from '../mtsBusinessFormat';
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
@@ -81,8 +91,17 @@ const KV: FC<{ label: string; value: ReactNode }> = ({ label, value }) => (
   </div>
 );
 
-// Пополнения (topups) — приход на ЛС фирмы, а не расход номера: в панель абонента не выводим.
-const EXPENSE_ORDER = ['calls', 'sms', 'internet', 'periodic', 'oneTime', 'other'] as const;
+/**
+ * Объём группы в её собственных единицах: звонки — длительность, интернет — МБ,
+ * СМС — штуки, прочее — объёма нет (только расход). Те же единицы, что у плиток
+ * «Использования» и ЛК (usageGroupValue), чтобы не было «Интернет 284» без единиц.
+ */
+const statsVolume = (g: IUsageGroup): string => {
+  if (g.key === 'calls') return fmtDur(g.seconds);
+  if (g.key === 'internet') return fmtUnits(g.bytes, 'BYTE');
+  if (g.key === 'sms') return `${g.count} шт`;
+  return '—';
+};
 
 /**
  * Боковая панель абонента (40% экрана): данные из сохранённых снапшотов,
@@ -98,7 +117,19 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
   const setMap = useSetMtsBusinessNumberMap();
   const months = useMemo(() => lastMonths(6), []);
   const [month, setMonth] = useState(months[0].value);
-  const expenses = useMtsBusinessSubscriberExpenses(msisdn, month, true);
+  // Статистика и вкладка «Использование» читают ОДИН запрос (тот же queryKey —
+  // React Query отдаёт из кэша) и один серверный агрегат: цифры совпадают
+  // с «Использованием» и с ЛК сотрудника по построению.
+  const usage = useMtsBusinessSubscriberUsage(msisdn, month, '', true);
+  const statsGroups = useMemo(
+    () => (usage.data?.totals ? usageGroupsFromTotals(usage.data.totals, usage.data.rows ?? []) : new Map<UsageGroupKey, IUsageGroup>()),
+    [usage.data],
+  );
+  const statsEvents = useMemo(
+    () => [...statsGroups.values()].reduce((sum, g) => sum + g.count, 0),
+    [statsGroups],
+  );
+  const monthLabel = months.find(m => m.value === month)?.label ?? month;
   const [pdOpen, setPdOpen] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const [view, setView] = useState<'main' | 'usage'>('main');
@@ -189,24 +220,58 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
 
         <div className={st.section}>
           <div className={st.sectionHead}>
-            <h4 className={st.sectionTitle}>Статистика</h4>
+            <h4 className={st.sectionTitle}>Статистика за {monthLabel}</h4>
             <select className={st.monthSelect} value={month} onChange={e => setMonth(e.target.value)}>
               {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </div>
-          <KV label="Звонки (всего в базе)" value={`${row.calls} · ${fmtDur(row.totalSeconds)}`} />
-          <KV label="Последний звонок" value={fmtLast(row.lastCallAt)} />
-          {expenses.isLoading && <p className={styles.hint}>Загрузка расходов…</p>}
-          {expenses.data && (
-            <>
-              {EXPENSE_ORDER.map(cat => {
-                const b = expenses.data.summary[cat];
-                if (!b || (b.count === 0 && b.amount === 0)) return null;
-                return <KV key={cat} label={EXPENSE_CATEGORY_LABELS[cat]} value={`${b.count ? `${b.count} · ` : ''}${fmtMoney(b.amount)}`} />;
-              })}
-              <KV label="Итого расходов" value={<b>{fmtMoney(expenses.data.summary.total)}</b>} />
-            </>
+
+          {usage.isLoading && <p className={styles.hint}>Загрузка статистики…</p>}
+          {usage.isError && <p className={styles.err}>Не удалось загрузить статистику.</p>}
+          {usage.data?.unavailable && <UnavailableNotice message="Детализация не активирована для этого лицевого счёта." />}
+
+          {usage.data?.totals && (usage.data.totals.groups.some(g => g.count > 0)
+            ? (
+              <table className={st.statsTable}>
+                <thead>
+                  <tr>
+                    <th>Категория</th>
+                    <th>Событий</th>
+                    <th>Объём</th>
+                    <th>Расход</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {USAGE_GROUP_ORDER.map(k => {
+                    const g = statsGroups.get(k);
+                    if (!g || (g.count === 0 && g.amount === 0)) return null;
+                    return (
+                      <tr key={k}>
+                        <td>{USAGE_GROUP_LABELS[k]}</td>
+                        <td className={st.numCell}>{g.count}</td>
+                        <td className={st.numCell} title={k === 'calls' ? usageTooltip(g) : undefined}>
+                          {statsVolume(g)}
+                        </td>
+                        <td className={st.numCell}>{g.amount > 0 ? fmtMoney(g.amount) : '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td>Итого</td>
+                    <td className={st.numCell}>{statsEvents}</td>
+                    <td className={st.numCell}>—</td>
+                    <td className={st.numCell}><b>{fmtMoney(usage.data.total ?? 0)}</b></td>
+                  </tr>
+                </tfoot>
+              </table>
+            )
+            : <p className={styles.hint}>За выбранный месяц событий нет.</p>
           )}
+
+          <KV label="За всё время (звонки)" value={`${row.calls} · ${fmtDur(row.totalSeconds)}`} />
+          <KV label="Последний звонок" value={fmtLast(row.lastCallAt)} />
         </div>
 
         <div className={st.section}>

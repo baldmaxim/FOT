@@ -40,6 +40,38 @@ export interface IMtsSchedulerStatusRow {
   lastResult: Record<string, unknown> | null;
 }
 
+/** Настройки непрерывного конвейера свежести (звонки/начисления). */
+export interface IMtsRollingSettings {
+  enabled: boolean;
+  /** Доля лимита запросов МТС под фоновое обновление, % (10–90). */
+  budgetSharePercent: number;
+  /** Как часто обновлять активные номера (мин). */
+  hotMinutes: number;
+  /** Как часто обновлять неактивные номера (ч). */
+  coldHours: number;
+}
+
+export interface IMtsRollingAccountStat {
+  accountId: string;
+  accountLabel: string;
+  pending: number;
+  synced: number;
+  failed: number;
+  noAccess: number;
+  unavailable: number;
+  transient: number;
+}
+
+export interface IMtsRollingStatus {
+  enabled: boolean;
+  running: boolean;
+  dryRun: boolean;
+  settings: IMtsRollingSettings | null;
+  lastTickAt: string | null;
+  syncedLastHour: number;
+  accounts: IMtsRollingAccountStat[];
+}
+
 interface ApiResponse<T> {
   success: boolean;
   data: T;
@@ -68,6 +100,16 @@ export const mtsBusinessRefreshService = {
 
   setSchedule: async (input: IMtsRefreshAllSchedule): Promise<IMtsRefreshAllSchedule> => {
     const res = await apiClient.put<ApiResponse<IMtsRefreshAllSchedule>>('/mts-business/refresh-all/schedule', input);
+    return res.data;
+  },
+
+  getRolling: async (): Promise<IMtsRollingStatus> => {
+    const res = await apiClient.get<ApiResponse<IMtsRollingStatus>>('/mts-business/rolling');
+    return res.data;
+  },
+
+  setRolling: async (input: Partial<IMtsRollingSettings> & { enabled: boolean }): Promise<IMtsRollingSettings> => {
+    const res = await apiClient.put<ApiResponse<IMtsRollingSettings>>('/mts-business/rolling', input);
     return res.data;
   },
 };

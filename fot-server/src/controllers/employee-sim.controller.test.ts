@@ -26,6 +26,7 @@ vi.mock('../services/mts-business-statement-rows.service.js', async (importOrigi
     mtsBusinessStatementRowsService: {
       getUsageRows: vi.fn(async () => []),
       getDailyStats: vi.fn(async () => []),
+      getUsageTotals: vi.fn(async () => ({ groups: [], total: 0 })),
       getMonthsWithData: vi.fn(async () => []),
       storeRows: vi.fn(async () => ({ inserted: 0, skipped: 0, noDate: 0 })),
     },
@@ -148,7 +149,7 @@ describe('employeeSimController.getMyUsage', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('peerName резолвится по peer_hash, сам peerHash наружу не уходит; total из дневных агрегатов', async () => {
+  it('peerName резолвится по peer_hash, сам peerHash наружу не уходит; total и плитки — из SQL-агрегата', async () => {
     mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce(['79150000001']);
     mapping.getNamesByMsisdnHash.mockResolvedValueOnce(new Map([['PEER_HASH', 'Иванов Иван']]));
     stmtRows.getUsageRows.mockResolvedValueOnce([{
@@ -159,18 +160,36 @@ describe('employeeSimController.getMyUsage', () => {
       { date: '2026-07-06', events: 1, calls: 1, callsSeconds: 60, smsCount: 0, internetBytes: 0, amount: 12.5 },
       { date: '2026-07-07', events: 2, calls: 0, callsSeconds: 0, smsCount: 2, internetBytes: 0, amount: 4.5 },
     ]);
+    // Итог берётся из getUsageTotals, а НЕ из суммы отданных строк: строки
+    // капятся лимитом, агрегат — нет (ЛК и админка обязаны показывать одно число).
+    stmtRows.getUsageTotals.mockResolvedValueOnce({
+      groups: [
+        { key: 'calls', count: 1, seconds: 60, bytes: 0, amount: 12.5, inCount: 0, inSeconds: 0, outCount: 1, outSeconds: 60 },
+        { key: 'sms', count: 2, seconds: 0, bytes: 0, amount: 4.5, inCount: 0, inSeconds: 0, outCount: 0, outSeconds: 0 },
+      ],
+      total: 17,
+    });
     const res = mockRes();
     await employeeSimController.getMyUsage(mockReq(42, { month: '2026-07' }), res);
 
     expect(stmtRows.getUsageRows).toHaveBeenCalledWith(expect.any(String), '2026-07-01', '2026-07-31');
+    expect(stmtRows.getUsageTotals).toHaveBeenCalledWith(expect.any(String), '2026-07-01', '2026-07-31');
     const payload = res.json.mock.calls[0][0] as {
-      data: { month: string; numbers: Array<{ rows: Array<Record<string, unknown>>; total: number }> };
+      data: {
+        month: string;
+        numbers: Array<{
+          rows: Array<Record<string, unknown>>;
+          total: number;
+          totals: { groups: Array<{ key: string; count: number }>; total: number };
+        }>;
+      };
     };
     expect(payload.data.month).toBe('2026-07');
     const num = payload.data.numbers[0];
     expect(num.rows[0].peerName).toBe('Иванов Иван');
     expect(num.rows[0]).not.toHaveProperty('peerHash');
     expect(num.total).toBe(17);
+    expect(num.totals.groups.find(g => g.key === 'sms')?.count).toBe(2);
   });
 
   it('нет employee_id → пустой ответ без обращений к данным', async () => {

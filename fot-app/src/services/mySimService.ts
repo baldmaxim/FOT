@@ -1,5 +1,5 @@
 import { apiClient } from '../api/client';
-import type { IMtsUsageRow } from './mtsBusinessSubscribersService';
+import type { IMtsUsageRow, IUsageTotals } from './mtsBusinessSubscribersService';
 import type { IMtsSubTariffFee } from './mtsBusinessSubscriberService';
 
 // ЛК сотрудника: «Моя SIM» (/my-sim — данные только по своим номерам, из БД,
@@ -26,8 +26,13 @@ export interface IUsageDayStat {
 export interface IMySimUsageNumber {
   msisdn: string;
   rows: IMtsUsageRow[];
+  /** Итог по SQL-агрегату периода (не по обрезанным лимитом строкам). */
   total: number;
   days: IUsageDayStat[];
+  /** Сводка по группам — тот же агрегат, что у админской вкладки «Абоненты». */
+  totals: IUsageTotals;
+  /** Строки детализации обрезаны лимитом сервера (на сводки не влияет). */
+  truncated?: boolean;
 }
 
 export interface IMySimUsageResult {

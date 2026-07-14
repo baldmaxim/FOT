@@ -167,6 +167,9 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // МТС Бизнес: статус фонового «Обновить всё» опрашивается каждые 3с, журнал
     // заявок персданных — каждые 15с; браузерный max-age=30 ломал бы polling.
     || path === '/mts-business/refresh-all/status'
+    // Статус непрерывного конвейера опрашивается каждые 30с — ровно на границе
+    // max-age=30: без no-cache панель показывала бы прошлый тик.
+    || path === '/mts-business/rolling'
     || path === '/mts-business/personal-data/requests';
 };
 

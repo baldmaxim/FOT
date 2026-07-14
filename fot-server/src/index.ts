@@ -25,6 +25,7 @@ import { startMtsBusinessCdrDailyScheduler, stopMtsBusinessCdrDailyScheduler } f
 import { startMtsBusinessMetricsDailyScheduler, stopMtsBusinessMetricsDailyScheduler } from './services/mts-business-metrics-daily-scheduler.service.js';
 import { startMtsBusinessRefreshAllDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler } from './services/mts-business-refresh-all-daily-scheduler.service.js';
 import { reconcileInterruptedRefreshAll } from './services/mts-business-refresh-all.service.js';
+import { startMtsBusinessStatementRollingWorker, stopMtsBusinessStatementRollingWorker } from './services/mts-business-statement-rolling.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
 import { getPresenceByObject } from './services/skud-presence-by-object.service.js';
@@ -113,6 +114,9 @@ httpServer.listen(PORT, HOST, () => {
   void startMtsBusinessCdrDailyScheduler();
   void startMtsBusinessMetricsDailyScheduler();
   void startMtsBusinessRefreshAllDailyScheduler();
+  // Непрерывный конвейер свежести выписки. Сам по себе не работает: включается
+  // в админке (system_settings.mts_business_rolling_enabled, по умолчанию false).
+  startMtsBusinessStatementRollingWorker();
   // Прогон «Обновить всё», убитый рестартом/деплоем, сразу помечаем прерванным —
   // иначе кнопка блокируется до истечения lease (до 10 минут).
   void reconcileInterruptedRefreshAll();
@@ -149,6 +153,7 @@ const gracefulShutdown = (signal: string): void => {
     stopContractorPassSyncScheduler, stopMtsLocationPoller, stopMtsGeofenceMonitor,
     stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
     stopMtsBusinessMetricsDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler,
+    stopMtsBusinessStatementRollingWorker,
   ];
   for (const stop of stoppers) {
     try {

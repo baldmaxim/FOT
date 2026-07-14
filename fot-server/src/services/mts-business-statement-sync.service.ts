@@ -54,9 +54,17 @@ export async function syncMsisdnStatement(
   dateTo: string,
   sourceMessageId: string | null = null,
   rowsSource: StatementRowsSource = 'nightly',
+  /**
+   * false — НЕ расширять окно до 1-го числа месяца: запрашиваем ровно
+   * [dateFrom..dateTo]. Нужно непрерывному конвейеру (rolling), который ходит по
+   * каждому номеру раз в 15 минут: тянуть месячную выписку каждый раз — лишний
+   * трафик и парсинг. Начисления при этом переписываются только за дни окна
+   * (replaceMsisdnDailyCharges), а месячную сверку делает ночной прогон.
+   */
+  widenChargesToMonth = true,
 ): Promise<ISyncMsisdnStatementResult> {
   const monthStart = `${dateTo.slice(0, 7)}-01`;
-  const chargesFrom = dateFrom < monthStart ? dateFrom : monthStart;
+  const chargesFrom = widenChargesToMonth && dateFrom > monthStart ? monthStart : dateFrom;
   const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(accountId, { msisdn, dateFrom: chargesFrom, dateTo });
   const calls = mtsBusinessCdrService.parseBillingStatementResponse(resp, msisdn);
   let callsInserted = 0;

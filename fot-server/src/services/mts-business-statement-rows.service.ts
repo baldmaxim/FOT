@@ -17,7 +17,13 @@ import {
 // ПДн (номер собеседника) — шифром peer_enc; числа/даты/категории plain,
 // по ним SQL-агрегируется дневная статистика.
 
-export type StatementRowsSource = 'nightly' | 'manual' | 'backfill';
+export type StatementRowsSource = 'nightly' | 'manual' | 'backfill' | 'rolling';
+
+/**
+ * Потолок строк детализации в ответе (список событий). Сводки (getUsageTotals,
+ * getDailyStats) считаются в SQL по всем строкам — cap на них не влияет.
+ */
+export const USAGE_ROWS_LIMIT = 3000;
 
 export interface IStoredUsageRow extends IStatementUsageRow {
   peerHash: string | null;
@@ -73,6 +79,44 @@ export interface IUsagePeriod {
   dateTo: string;
   period: string; // YYYY-MM либо YYYY-MM-DD — эхо в ответ
 }
+
+/** Группа сводки использования: те же 4 группы, что и на фронте (usageSummary.ts). */
+export type UsageGroupKey = 'calls' | 'internet' | 'sms' | 'other';
+
+export interface IUsageGroupTotal {
+  key: UsageGroupKey;
+  count: number;
+  seconds: number;
+  bytes: number;
+  amount: number;
+  /** Разбивка по направлению — только для звонков. */
+  inCount: number;
+  inSeconds: number;
+  outCount: number;
+  outSeconds: number;
+}
+
+export interface IUsageTotals {
+  groups: IUsageGroupTotal[];
+  /** Итог расходов за период (₽) — сумма всех групп. */
+  total: number;
+}
+
+/**
+ * Категории строк выписки (`category`) → 4 группы сводки. Держать в одном
+ * порядке с USAGE_GROUP_OF на фронте (fot-app/src/pages/mts-business/usageSummary.ts).
+ */
+const GROUP_OF_CATEGORY_SQL = `
+  CASE category
+    WHEN 'calls' THEN 'calls'
+    WHEN 'internet' THEN 'internet'
+    WHEN 'sms' THEN 'sms'
+    ELSE 'other'
+  END`;
+
+const emptyGroup = (key: UsageGroupKey): IUsageGroupTotal => ({
+  key, count: 0, seconds: 0, bytes: 0, amount: 0, inCount: 0, inSeconds: 0, outCount: 0, outSeconds: 0,
+});
 
 /** Период выписки из query-параметров: ?date=YYYY-MM-DD (день) или ?month=YYYY-MM. */
 export const parseUsagePeriod = (month: string, date: string): IUsagePeriod | null => {
@@ -155,7 +199,7 @@ class MtsBusinessStatementRowsService {
     msisdnHashValue: string,
     dateFrom: string,
     dateTo: string,
-    limit = 3000,
+    limit = USAGE_ROWS_LIMIT,
   ): Promise<IStoredUsageRow[]> {
     const rows = await query<{
       usage_date: string;
@@ -190,6 +234,84 @@ class MtsBusinessStatementRowsService {
       amount: r.amount != null ? Number(r.amount) : 0,
       peerHash: r.peer_hash,
     }));
+  }
+
+  /**
+   * ЕДИНЫЙ источник сводки использования за период: SQL-агрегат по группам
+   * (звонки/интернет/СМС/прочее). Считается по ВСЕМ строкам периода, без cap'а
+   * getUsageRows — поэтому «Статистика» в панели абонента, плитки «Использования»
+   * и ЛК «Моя SIM» показывают одни и те же числа. Единицы сырые: секунды (звонки),
+   * байты (интернет), штуки (СМС), рубли (amount).
+   */
+  async getUsageTotals(msisdnHashValue: string, dateFrom: string, dateTo: string): Promise<IUsageTotals> {
+    const rows = await query<{
+      grp: string;
+      count: string;
+      seconds: string;
+      bytes: string;
+      amount: string;
+      in_count: string;
+      in_seconds: string;
+      out_count: string;
+      out_seconds: string;
+    }>(
+      `SELECT ${GROUP_OF_CATEGORY_SQL} AS grp,
+              COUNT(*)::text AS count,
+              COALESCE(SUM(units) FILTER (WHERE unit_code = 'SECOND'), 0)::text AS seconds,
+              COALESCE(SUM(units) FILTER (WHERE unit_code = 'BYTE'), 0)::text   AS bytes,
+              COALESCE(SUM(amount), 0)::text AS amount,
+              COUNT(*) FILTER (WHERE direction = 'in')::text  AS in_count,
+              COALESCE(SUM(units) FILTER (WHERE direction = 'in'  AND unit_code = 'SECOND'), 0)::text AS in_seconds,
+              COUNT(*) FILTER (WHERE direction = 'out')::text AS out_count,
+              COALESCE(SUM(units) FILTER (WHERE direction = 'out' AND unit_code = 'SECOND'), 0)::text AS out_seconds
+         FROM mts_business_statement_rows
+        WHERE msisdn_hash = $1 AND usage_date BETWEEN $2 AND $3
+        GROUP BY 1`,
+      [msisdnHashValue, dateFrom, dateTo],
+    );
+
+    const byKey = new Map<UsageGroupKey, IUsageGroupTotal>();
+    for (const r of rows) {
+      const key = r.grp as UsageGroupKey;
+      byKey.set(key, {
+        key,
+        count: Number(r.count),
+        seconds: Number(r.seconds),
+        bytes: Number(r.bytes),
+        amount: Number(r.amount),
+        inCount: Number(r.in_count),
+        inSeconds: Number(r.in_seconds),
+        outCount: Number(r.out_count),
+        outSeconds: Number(r.out_seconds),
+      });
+    }
+    // Порядок групп фиксированный — фронт рендерит как пришло, пустые не скрывает сам.
+    const groups: IUsageGroupTotal[] = (['calls', 'internet', 'sms', 'other'] as UsageGroupKey[])
+      .map(k => byKey.get(k) ?? emptyGroup(k));
+    return { groups, total: groups.reduce((sum, g) => sum + g.amount, 0) };
+  }
+
+  /**
+   * Итоги по КАТЕГОРИЯМ выписки (calls/sms/internet/periodic/oneTime/other) —
+   * SQL-агрегат по всем строкам периода. Источник сводки расходов карточки
+   * (getExpenses): та же таблица, что у «Использования», без живых вызовов МТС.
+   */
+  async getCategoryTotals(
+    msisdnHashValue: string,
+    dateFrom: string,
+    dateTo: string,
+  ): Promise<Map<MtsExpenseCategory, { count: number; amount: number }>> {
+    const rows = await query<{ category: string; count: string; amount: string }>(
+      `SELECT category, COUNT(*)::text AS count, COALESCE(SUM(amount), 0)::text AS amount
+         FROM mts_business_statement_rows
+        WHERE msisdn_hash = $1 AND usage_date BETWEEN $2 AND $3
+        GROUP BY category`,
+      [msisdnHashValue, dateFrom, dateTo],
+    );
+    return new Map(rows.map(r => [
+      r.category as MtsExpenseCategory,
+      { count: Number(r.count), amount: Number(r.amount) },
+    ]));
   }
 
   /** Дневная статистика за период — SQL-агрегат (отдельной таблицы агрегатов нет). */

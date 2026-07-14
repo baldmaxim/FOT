@@ -49,6 +49,15 @@ router.put(
 );
 router.get('/schedulers/status', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getSchedulersStatus);
 
+// Непрерывный конвейер свежести выписки (звонки/начисления каждые N минут).
+router.get('/rolling', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getRolling);
+router.put(
+  '/rolling',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessRefreshController.setRolling,
+);
+
 // Персональные данные пользователя номера. Порядок важен: /personal-data/requests
 // должен регистрироваться ДО /personal-data/:msisdn. Запись — critical 2FA;
 // тело формы транзитом уходит в МТС и нигде не сохраняется.

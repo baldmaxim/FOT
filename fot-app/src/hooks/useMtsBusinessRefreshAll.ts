@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { mtsBusinessRefreshService, type IMtsRefreshAllSchedule } from '../services/mtsBusinessRefreshService';
+import {
+  mtsBusinessRefreshService,
+  type IMtsRefreshAllSchedule,
+  type IMtsRollingSettings,
+} from '../services/mtsBusinessRefreshService';
 
 // Хуки «Обновить всё»: запуск фонового прогона, polling статуса (3с пока
 // running; возврат на страницу подхватывает идущий прогон), детект завершения
@@ -69,6 +73,28 @@ export const useSetMtsBusinessRefreshAllSchedule = () => {
     onSuccess: next => {
       qc.setQueryData(getMtsBusinessRefreshAllScheduleKey(), next);
       void qc.invalidateQueries({ queryKey: getMtsBusinessSchedulersStatusKey() });
+    },
+  });
+};
+
+export const getMtsBusinessRollingKey = () => ['mts-business', 'rolling'] as const;
+
+/** Статус конвейера свежести: пока включён — обновляем раз в 30с (тик воркера). */
+export const useMtsBusinessRolling = (enabled: boolean) => useQuery({
+  queryKey: getMtsBusinessRollingKey(),
+  queryFn: () => mtsBusinessRefreshService.getRolling(),
+  refetchInterval: q => (q.state.data?.enabled ? 30_000 : false),
+  staleTime: 10_000,
+  enabled,
+});
+
+export const useSetMtsBusinessRolling = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: Partial<IMtsRollingSettings> & { enabled: boolean }) =>
+      mtsBusinessRefreshService.setRolling(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: getMtsBusinessRollingKey() });
     },
   });
 };

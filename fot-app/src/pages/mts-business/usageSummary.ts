@@ -1,4 +1,4 @@
-import type { IMtsUsageRow } from '../../services/mtsBusinessSubscribersService';
+import type { IMtsUsageRow, IUsageTotals } from '../../services/mtsBusinessSubscribersService';
 import { fmtDur, fmtMoney } from './mtsBusinessFormat';
 
 // Чистая логика сводки детальной выписки (группировка Звонки/Интернет/СМС/Прочее,
@@ -43,6 +43,32 @@ export const fmtUnits = (units: number | null, code: string | null): string => {
   if (code === 'SECOND') return fmtDur(units);
   if (code === 'BYTE') return `${(units / 1_000_000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`;
   return String(units);
+};
+
+/**
+ * Группы для плиток: ЧИСЛА берутся из серверного агрегата (totals), а разбивка
+ * по типам (byLabel, для тултипа) — из загруженных строк. Строки могут быть
+ * обрезаны лимитом, агрегат — нет, поэтому плитки и «Итого» считаем только по
+ * totals: иначе на «тяжёлых» номерах админка и ЛК показали бы разные суммы.
+ */
+export const usageGroupsFromTotals = (totals: IUsageTotals, rows: IMtsUsageRow[]): Map<UsageGroupKey, IUsageGroup> => {
+  const fromRows = summarizeUsage(rows);
+  const groups = new Map<UsageGroupKey, IUsageGroup>();
+  for (const t of totals.groups) {
+    groups.set(t.key, {
+      key: t.key,
+      count: t.count,
+      seconds: t.seconds,
+      bytes: t.bytes,
+      amount: t.amount,
+      byLabel: fromRows.get(t.key)?.byLabel ?? new Map(),
+      byDir: {
+        in: { count: t.inCount, seconds: t.inSeconds },
+        out: { count: t.outCount, seconds: t.outSeconds },
+      },
+    });
+  }
+  return groups;
 };
 
 /** Раскладывает строки выписки по группам с разбивкой для тултипов плиток. */

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { mtsBusinessMappingService } from '../services/mts-business-mapping.service.js';
 import { mtsBusinessSubscribersService, type IMySimNumber } from '../services/mts-business-subscribers.service.js';
-import { mtsBusinessStatementRowsService, parseUsagePeriod } from '../services/mts-business-statement-rows.service.js';
+import { mtsBusinessStatementRowsService, parseUsagePeriod, USAGE_ROWS_LIMIT } from '../services/mts-business-statement-rows.service.js';
 import { mtsBusinessMetricsStoreService } from '../services/mts-business-metrics-store.service.js';
 import { mtsBusinessCatalogService, type IMtsForwardingRule } from '../services/mts-business-catalog.service.js';
 import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
@@ -148,16 +148,18 @@ export const employeeSimController = {
       for (const msisdn of msisdns) {
         const hash = msisdnHash(msisdn);
         if (!hash) continue;
-        const [stored, days] = await Promise.all([
+        const [stored, days, totals] = await Promise.all([
           mtsBusinessStatementRowsService.getUsageRows(hash, period.dateFrom, period.dateTo),
           mtsBusinessStatementRowsService.getDailyStats(hash, period.dateFrom, period.dateTo),
+          mtsBusinessStatementRowsService.getUsageTotals(hash, period.dateFrom, period.dateTo),
         ]);
         const rows = stored.map(({ peerHash, ...r }) => ({
           ...r,
           peerName: peerHash ? names.get(peerHash) ?? null : null,
         }));
-        const total = days.reduce((a, d) => a + d.amount, 0);
-        numbers.push({ msisdn, rows, total, days });
+        // total и плитки — по SQL-агрегату (не по обрезанным cap'ом строкам):
+        // ровно те же числа отдаёт админский /subscribers/:msisdn/usage.
+        numbers.push({ msisdn, rows, total: totals.total, days, totals, truncated: rows.length >= USAGE_ROWS_LIMIT });
       }
       res.json({ success: true, data: { month: period.period, numbers } });
     } catch (error) {
