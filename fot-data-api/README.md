@@ -43,6 +43,17 @@ Swagger UI: <http://localhost:4001/external/v1/docs>
 | GET | `/external/v1/tables/{name}/schema` | Список полей таблицы (только разрешённые). |
 | GET | `/external/v1/tables/{name}` | Чтение данных таблицы. |
 
+Расчётные endpoints на основном FOT backend используют тот же Bearer-токен:
+
+| Метод | Путь | Capability | Описание |
+|---|---|---|---|
+| GET | `/api/public/v1/timesheet` | `employees` | Табель отдела за период. |
+| GET | `/api/public/v1/employee-events` | `skud_events` | Безопасные события входа/выхода конкретного сотрудника. |
+
+Для `employee-events` обязательны `employee_id`, `from=YYYY-MM-DD` и
+`to=YYYY-MM-DD`; доступны `limit` (1..1000) и `offset`. Максимальный период —
+366 дней. Endpoint намеренно не возвращает ФИО и номер карты.
+
 Поддерживаемые query-параметры для чтения:
 
 - `limit` (1..1000, default 100)

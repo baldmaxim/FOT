@@ -64,13 +64,14 @@ const buildSsl = (): PoolConfig['ssl'] => {
   if (!parseBool(env.DATABASE_SSL, true)) {
     return false;
   }
+  const rejectUnauthorized = parseBool(env.DATABASE_SSL_REJECT_UNAUTHORIZED, true);
   if (env.DATABASE_SSL_CA_PATH) {
     return {
-      rejectUnauthorized: true,
+      rejectUnauthorized,
       ca: fs.readFileSync(env.DATABASE_SSL_CA_PATH, 'utf8'),
     };
   }
-  return { rejectUnauthorized: true };
+  return { rejectUnauthorized };
 };
 
 /**

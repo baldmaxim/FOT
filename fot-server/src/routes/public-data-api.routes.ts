@@ -12,6 +12,7 @@ const router = Router();
 router.use(dataApiRequestLog);
 router.use(dataApiAuth);
 
+router.get('/employee-events', publicDataApiController.getEmployeeEvents);
 router.get('/timesheet', publicDataApiController.getDepartmentTimesheet);
 
 export default router;

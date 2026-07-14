@@ -122,6 +122,7 @@ const envSchema = z.object({
   DATABASE_POOL_MAX: z.string().regex(/^\d+$/).default('10'),
   DATABASE_STATEMENT_TIMEOUT_MS: z.string().regex(/^\d+$/).default('30000'),
   DATABASE_SSL: z.string().default('true'),
+  DATABASE_SSL_REJECT_UNAUTHORIZED: z.string().default('true'),
   DATABASE_SSL_CA_PATH: optionalString,
 
   // Object Storage (S3-compatible — Cloudflare R2 / Yandex Object Storage)
