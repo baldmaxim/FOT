@@ -130,7 +130,7 @@ remote_env=(
   "FOT_BRANCH=$(shell_quote "$FOT_BRANCH")"
   "DEPLOY_SCOPE=$(shell_quote "$SCOPE")"
   "DEPLOY_MODE_ARG=$(shell_quote "$MODE_ARG")"
-  "DEPLOY_EXTRA_ARGS=$(shell_quote "${EXTRA_ARGS[*]}")"
+  "DEPLOY_EXTRA_ARGS=$(shell_quote "${EXTRA_ARGS[*]-}")"
 )
 
 forward_if_set() {
