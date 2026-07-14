@@ -67,12 +67,48 @@ export const splitFullName = (fullName: string | null | undefined): {
   };
 };
 
+// Кириллические двойники латиницы: в сериях иностранных паспортов операторы
+// набирают визуально одинаковые буквы русской раскладкой (FК, FВ, РР…) —
+// провайдер такие серии не находит.
+const CYRILLIC_LOOKALIKES: Record<string, string> = {
+  'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H',
+  'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'У': 'Y', 'Х': 'X',
+};
+
+/**
+ * Нормализовать строку паспорта из ручного ввода:
+ *  - хвост « от DD.MM.YYYY…» отрезается, дата возвращается отдельно
+ *    (фолбэк для issue_date, когда passport_issue_date не заполнен);
+ *  - ведущая/хвостовая пунктуация убирается («FB1695900,»);
+ *  - кириллические двойники латиницы транслитерируются.
+ */
+export const normalizePassport = (raw: string | null | undefined): { doc: string; issueDate: string | null } => {
+  let s = (raw || '').trim();
+  if (!s) return { doc: '', issueDate: null };
+
+  let issueDate: string | null = null;
+  const m = s.match(/\s+от\s+(\d{2}\.\d{2}\.\d{4}).*$/i);
+  if (m && typeof m.index === 'number') {
+    issueDate = m[1];
+    s = s.slice(0, m.index);
+  }
+
+  s = s.replace(/^[\s,;.]+|[\s,;.]+$/g, '');
+  s = s.replace(/[А-Яа-я]/g, (ch) => {
+    const lat = CYRILLIC_LOOKALIKES[ch.toUpperCase()];
+    if (!lat) return ch;
+    return ch === ch.toUpperCase() ? lat : lat.toLowerCase();
+  });
+
+  return { doc: s, issueDate };
+};
+
 /**
  * Разбить документ на серию и номер. РФ-паспорт: ровно 10 цифр → серия=4, номер=6.
  * Иначе fallback: буквенный/пробельный префикс = серия, хвост цифр = номер.
  */
 export const splitDocSeriaNumber = (raw: string | null | undefined): { seria: string; number: string } => {
-  const cleaned = (raw || '').replace(/\s+/g, '').trim();
+  const cleaned = normalizePassport(raw).doc.replace(/\s+/g, '');
   if (!cleaned) return { seria: '', number: '' };
 
   const digitsOnly = cleaned.replace(/\D/g, '');
@@ -108,6 +144,7 @@ interface IInterpreted {
   providerStatus: string | null;
   summary: string | null;
   requestId: string | null;
+  errorMessage: string | null;
 }
 
 /**
@@ -115,15 +152,45 @@ interface IInterpreted {
  * `state:"queued"` без блока `results` (баланс уже списан). Такой ответ — НЕ
  * ошибка: помечаем `pending` и сохраняем `requestId` для будущего polling.
  * Только при `state:"complete"` c непустым `results[method]` парсим результат.
+ *
+ * Финальный `error` (не pending): errors_info (запрос отвергнут валидацией,
+ * баланс не списан), явный state:"error", ошибка результата вне restart,
+ * complete без данных. При state:"restart" провайдер сам повторяет задачу —
+ * остаёмся pending, его ошибку показываем в summary.
  */
-const interpretNewdbResponse = (method: 'rkl' | 'patent_msk', data: any): IInterpreted => {
+export const interpretNewdbResponse = (method: 'rkl' | 'patent_msk', data: any): IInterpreted => {
   const state: string | null = data?.state ?? null;
   const requestId: string | null = data?.requestId ?? null;
-  const item = data?.results?.[method]?.result?.data?.[0];
 
-  if (state !== 'complete' || !item) {
-    // queued / processing / нет результата — ждём (часики), не ошибка.
-    return { status: 'pending', providerStatus: state, summary: 'В обработке (запрос принят)', requestId };
+  if (Array.isArray(data?.errors_info) && data.errors_info.length > 0) {
+    const msg = data.errors_info.map((e: any) => e?.error).filter(Boolean).join('; ')
+      || 'запрос отвергнут провайдером (errors_info)';
+    return { status: 'error', providerStatus: 'errors_info', summary: null, requestId, errorMessage: msg };
+  }
+
+  const result = data?.results?.[method]?.result;
+  const resultError: string | null = typeof result?.error === 'string' ? result.error : null;
+
+  if (state === 'error') {
+    return { status: 'error', providerStatus: state, summary: null, requestId, errorMessage: resultError || 'провайдер вернул state=error' };
+  }
+  if (resultError && state !== 'restart') {
+    return { status: 'error', providerStatus: state, summary: null, requestId, errorMessage: `ошибка провайдера: ${resultError}` };
+  }
+
+  const item = result?.data?.[0];
+
+  if (state === 'complete' && !item) {
+    // complete без данных — ждать больше нечего, это не pending.
+    return { status: 'error', providerStatus: state, summary: null, requestId, errorMessage: 'провайдер вернул complete без результата' };
+  }
+
+  if (state !== 'complete') {
+    // queued / processing / restart / нет результата — ждём (часики), не ошибка.
+    const summary = state === 'restart' && resultError
+      ? `Провайдер повторяет проверку: ${resultError}`
+      : 'В обработке (запрос принят)';
+    return { status: 'pending', providerStatus: state, summary, requestId, errorMessage: null };
   }
 
   if (method === 'rkl') {
@@ -132,7 +199,7 @@ const interpretNewdbResponse = (method: 'rkl' | 'patent_msk', data: any): IInter
     if (registryStatus === 'not_found') status = 'clean';
     else if (registryStatus === 'found') status = 'found';
     else status = 'error'; // unknown — сырой смысл сохраняем в providerStatus
-    return { status, providerStatus: registryStatus, summary: item?.title ?? null, requestId };
+    return { status, providerStatus: registryStatus, summary: item?.title ?? null, requestId, errorMessage: null };
   }
 
   // patent_msk — консервативный маппинг: неизвестный статус → error.
@@ -143,7 +210,7 @@ const interpretNewdbResponse = (method: 'rkl' | 'patent_msk', data: any): IInter
   if (n === 'valid' || n === 'active' || n.includes('действ')) status = 'clean';
   else if (n === 'expired' || n === 'not_found' || n === 'annulled' || n.includes('аннул') || n.includes('истёк') || n.includes('истек')) status = 'invalid';
   else status = 'error'; // спорный/неизвестный статус — не трактуем как «чисто»/«плохо»
-  return { status, providerStatus: docStatus, summary: message ?? docStatus, requestId };
+  return { status, providerStatus: docStatus, summary: message ?? docStatus, requestId, errorMessage: null };
 };
 
 // ─── Валидация + вызовы ─────────────────────────────────────────────────────
@@ -153,11 +220,31 @@ const markSent = async (checkId: string): Promise<void> => {
   await execute(`UPDATE newdb_checks SET request_sent = true WHERE id = $1::uuid`, [checkId]);
 };
 
+// РКЛ (реестр контролируемых лиц МВД) содержит только иностранцев.
+const isRussianCitizenship = (c: string | null | undefined): boolean => {
+  const n = (c || '').trim().toUpperCase();
+  return n === 'РОССИЯ' || n === 'РФ' || n === 'РОССИЙСКАЯ ФЕДЕРАЦИЯ';
+};
+
+// Гражданство, по которому нельзя судить о патенте: не заполнено или «Другое».
+const isUnknownCitizenship = (c: string | null | undefined): boolean => {
+  const n = (c || '').trim().toUpperCase();
+  return n === '' || n === 'ДРУГОЕ';
+};
+
 const runRkl = async (pass: IPassDataRow, taskId: string, checkId: string): Promise<ICheckOutcome> => {
+  if (isRussianCitizenship(pass.citizenship)) {
+    return { status: 'not_applicable', providerStatus: null, summary: 'РКЛ не применим: гражданство РФ', raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: null };
+  }
+
   const { lastName, firstName, secondName } = splitFullName(pass.holder_name);
   const { seria, number } = splitDocSeriaNumber(pass.passport_series_number);
   const dob = toDdMmYyyy(pass.birth_date);
-  const issueDate = toDdMmYyyy(pass.passport_issue_date);
+  // Дата выдачи: из поля, а при его пустоте — из хвоста «… от DD.MM.YYYY»
+  // в строке паспорта (частый способ ручного ввода).
+  const issueDate = toDdMmYyyy(pass.passport_issue_date)
+    || normalizePassport(pass.passport_series_number).issueDate
+    || '';
 
   const missing: string[] = [];
   if (!lastName || !firstName) missing.push('ФИО');
@@ -168,23 +255,23 @@ const runRkl = async (pass: IPassDataRow, taskId: string, checkId: string): Prom
     return { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: `Недостаточно данных для РКЛ: ${missing.join(', ')}` };
   }
 
-  const body = {
-    params: {
-      method: 'rkl',
-      country: 'ru',
-      lastname: lastName,
-      firstname: firstName,
-      secondname: secondName,
-      dob_info: dob,
-      issue_date: issueDate,
-      id_doc_seria: seria,
-      id_doc_number: number,
-      taskId,
-    },
+  // Опциональные поля с пустым значением НЕ отправляем: провайдер отвечает
+  // 400 «… must be non-empty» на пустую строку (наблюдалось для id_doc_seria).
+  const params: Record<string, string> = {
+    method: 'rkl',
+    country: 'ru',
+    lastname: lastName,
+    firstname: firstName,
+    dob_info: dob,
+    issue_date: issueDate,
+    id_doc_number: number,
+    taskId,
   };
+  if (secondName) params.secondname = secondName;
+  if (seria) params.id_doc_seria = seria;
 
   await markSent(checkId);
-  const data = await newdbBaseService.post<any>(body);
+  const data = await newdbBaseService.post<any>({ params });
   const r = interpretNewdbResponse('rkl', data);
   return {
     status: r.status,
@@ -194,7 +281,7 @@ const runRkl = async (pass: IPassDataRow, taskId: string, checkId: string): Prom
     qid: data?.params?.params?.newdb_qid ?? data?.params?.newdb_qid ?? null,
     balance: typeof data?.balance === 'number' ? data.balance : null,
     requestId: r.requestId,
-    errorMessage: null,
+    errorMessage: r.errorMessage,
     requestSent: true,
   };
 };
@@ -202,8 +289,11 @@ const runRkl = async (pass: IPassDataRow, taskId: string, checkId: string): Prom
 // Патент Москва (patent_msk): проверка по паспорту (удостоверение личности) +
 // гражданство. Патент/бланк НЕ нужны. taskId в этом методе не участвует.
 const runPatentMsk = async (pass: IPassDataRow, _taskId: string, checkId: string): Promise<ICheckOutcome> => {
-  // Патент не требуется: гражданство РФ / есть ВНЖ / непатентное гражданство.
-  if (!citizenshipRequiresPatent(pass.citizenship)) {
+  // «Не требуется» — только когда гражданство ИЗВЕСТНО и непатентное, либо ВНЖ.
+  // Пустое/«Другое» гражданство — проверяем без параметра citizenship: провайдер
+  // тогда сам ищет патент по трём странам (Узбекистан/Таджикистан/Кыргызстан).
+  const citizenshipKnown = !isUnknownCitizenship(pass.citizenship);
+  if (citizenshipKnown && !citizenshipRequiresPatent(pass.citizenship)) {
     return { status: 'not_applicable', providerStatus: null, summary: 'Патент не требуется: гражданство РФ или непатентное', raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: null };
   }
   if (pass.has_residence_permit) {
@@ -217,18 +307,17 @@ const runPatentMsk = async (pass: IPassDataRow, _taskId: string, checkId: string
     return { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: `Недостаточно данных для патента (Москва): ${missing.join(', ')}` };
   }
 
-  const body = {
-    params: {
-      method: 'patent_msk',
-      id_doc_seria: id.seria,
-      id_doc_number: id.number,
-      citizenship: pass.citizenship || undefined,
-      country: 'ru',
-    },
+  // Пустые опциональные поля не отправляем (400 «… must be non-empty»).
+  const params: Record<string, string> = {
+    method: 'patent_msk',
+    id_doc_number: id.number,
+    country: 'ru',
   };
+  if (id.seria) params.id_doc_seria = id.seria;
+  if (citizenshipKnown && pass.citizenship) params.citizenship = pass.citizenship.trim();
 
   await markSent(checkId);
-  const data = await newdbBaseService.post<any>(body);
+  const data = await newdbBaseService.post<any>({ params });
   const r = interpretNewdbResponse('patent_msk', data);
   return {
     status: r.status,
@@ -238,7 +327,7 @@ const runPatentMsk = async (pass: IPassDataRow, _taskId: string, checkId: string
     qid: data?.params?.newdb_qid ?? null,
     balance: typeof data?.balance === 'number' ? data.balance : null,
     requestId: r.requestId,
-    errorMessage: null,
+    errorMessage: r.errorMessage,
     requestSent: true,
   };
 };
@@ -276,16 +365,37 @@ const getPassData = async (passId: string): Promise<IPassDataRow | null> =>
     [passId],
   );
 
+// Сколько ждём результата async-проверки, прежде чем счесть её умершей.
+const PENDING_TTL_HOURS = 24;
+
+/**
+ * Явно закрыть просроченные pending (старше TTL) как timeout-ошибку — ПЕРЕД
+ * новым платным запуском. История исправляется, а не просто перестаёт
+ * учитываться: «вечный» pending иначе навсегда останется ложными часиками.
+ */
+const closeExpiredPending = async (passId: string, type: CheckType): Promise<void> => {
+  await execute(
+    `UPDATE newdb_checks
+        SET status = 'error',
+            error_message = 'истёк срок ожидания результата (timeout ${PENDING_TTL_HOURS} ч)'
+      WHERE contractor_pass_id = $1::uuid AND check_type = $2 AND status = 'pending'
+        AND created_at <= now() - interval '${PENDING_TTL_HOURS} hours'`,
+    [passId, type],
+  );
+};
+
 /**
  * Блокировать повторный платный запуск. Учитываем и request_sent=true (недавно
  * отправленный), и status='pending' (queued-запись висит в обработке) — иначе
  * можно насоздавать платных дублей поверх незавершённого async-запроса.
- * pending-записи блокируют бессрочно (пока не завершатся); отправленные — окно.
+ * pending блокирует в пределах TTL (просроченные закрывает closeExpiredPending;
+ * фильтр по возрасту здесь — страховка от гонок); отправленные — окно.
  */
 const hasBlockingCheck = async (passId: string, type: CheckType): Promise<boolean> => {
   const pendingRow = await queryOne<{ id: string }>(
     `SELECT id FROM newdb_checks
       WHERE contractor_pass_id = $1::uuid AND check_type = $2 AND status = 'pending'
+        AND created_at > now() - interval '${PENDING_TTL_HOURS} hours'
       LIMIT 1`,
     [passId, type],
   );
@@ -319,6 +429,7 @@ export const runChecksForPass = async (
     if (type === 'patent_mo') {
       throw new NewdbApiError('Патент МО пока не поддерживается: нужен ИНН физлица', 400);
     }
+    await closeExpiredPending(passId, type);
     if (await hasBlockingCheck(passId, type)) {
       throw new NewdbApiError(`Проверка ${type} уже выполняется/выполнялась только что — подождите`, 429);
     }
@@ -470,12 +581,16 @@ export const listPassesForDepartment = async (orgDepartmentId: string): Promise<
        FROM contractor_passes p
        LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
        LEFT JOIN LATERAL (
-         SELECT status, created_at, result_summary FROM newdb_checks c
+         SELECT status, created_at,
+                COALESCE(result_summary, error_message) AS result_summary
+           FROM newdb_checks c
           WHERE c.contractor_pass_id = p.id AND c.check_type = 'rkl'
           ORDER BY c.created_at DESC LIMIT 1
        ) rkl ON true
        LEFT JOIN LATERAL (
-         SELECT status, created_at, result_summary FROM newdb_checks c
+         SELECT status, created_at,
+                COALESCE(result_summary, error_message) AS result_summary
+           FROM newdb_checks c
           WHERE c.contractor_pass_id = p.id AND c.check_type = 'patent_msk'
           ORDER BY c.created_at DESC LIMIT 1
        ) pat ON true
@@ -565,7 +680,7 @@ interface IPendingRow {
   id: string;
   check_type: 'rkl' | 'patent_msk';
   newdb_request_id: string | null;
-  saved_params: Record<string, unknown> | null;
+  saved_raw: any;
 }
 
 /**
@@ -575,9 +690,24 @@ interface IPendingRow {
  * Возвращает исход для сводки.
  */
 const pollPending = async (row: IPendingRow): Promise<'updated' | 'stillPending' | 'error' | 'skipped'> => {
-  if (!row.newdb_request_id || !row.saved_params) return 'skipped';
+  // Сначала перечитываем СОХРАНЁННЫЙ ответ: если он уже финальный (errors_info,
+  // state=error…) — запись зависла из-за старой классификации. Завершаем
+  // локально, провайдера не трогаем (опрашивать нечего, запрос не был принят).
+  const saved = interpretNewdbResponse(row.check_type, row.saved_raw);
+  if (saved.status !== 'pending') {
+    await execute(
+      `UPDATE newdb_checks
+          SET status = $2, provider_status = $3, result_summary = $4, error_message = $5
+        WHERE id = $1::uuid`,
+      [row.id, saved.status, saved.providerStatus, saved.summary, saved.errorMessage?.slice(0, 500) ?? null],
+    );
+    return 'updated';
+  }
 
-  const body = { params: row.saved_params, requestId: row.newdb_request_id };
+  const savedParams = row.saved_raw?.params ?? null;
+  if (!row.newdb_request_id || !savedParams) return 'skipped';
+
+  const body = { params: savedParams, requestId: row.newdb_request_id };
 
   let data: any;
   try {
@@ -596,23 +726,25 @@ const pollPending = async (row: IPendingRow): Promise<'updated' | 'stillPending'
   const balance = typeof data?.balance === 'number' ? data.balance : null;
 
   if (r.status === 'pending') {
-    // Всё ещё в очереди — обновим только сырой ответ/баланс, статус не трогаем.
+    // Всё ещё в очереди — статус не трогаем; summary сохраняем (причина
+    // restart должна дойти до тултипа в UI).
     await execute(
       `UPDATE newdb_checks
-          SET raw_response = $2::jsonb, provider_status = $3, balance = COALESCE($4, balance), error_message = NULL
+          SET raw_response = $2::jsonb, provider_status = $3, result_summary = $4,
+              balance = COALESCE($5, balance), error_message = NULL
         WHERE id = $1::uuid`,
-      [row.id, JSON.stringify(data), r.providerStatus, balance],
+      [row.id, JSON.stringify(data), r.providerStatus, r.summary, balance],
     );
     return 'stillPending';
   }
 
-  // Финальный результат.
+  // Финальный результат (error_message не затираем NULL'ом — там причина).
   await execute(
     `UPDATE newdb_checks
         SET status = $2, provider_status = $3, result_summary = $4,
-            raw_response = $5::jsonb, balance = COALESCE($6, balance), error_message = NULL
+            raw_response = $5::jsonb, balance = COALESCE($6, balance), error_message = $7
       WHERE id = $1::uuid`,
-    [row.id, r.status, r.providerStatus, r.summary, JSON.stringify(data), balance],
+    [row.id, r.status, r.providerStatus, r.summary, JSON.stringify(data), balance, r.errorMessage?.slice(0, 500) ?? null],
   );
   return 'updated';
 };
@@ -620,7 +752,7 @@ const pollPending = async (row: IPendingRow): Promise<'updated' | 'stillPending'
 /** Обновить все pending-проверки пропуска через polling. Последовательно, с лимитом. */
 export const refreshPendingForPass = async (passId: string): Promise<IRefreshSummary> => {
   const rows = await query<IPendingRow>(
-    `SELECT id, check_type, newdb_request_id, raw_response->'params' AS saved_params
+    `SELECT id, check_type, newdb_request_id, raw_response AS saved_raw
        FROM newdb_checks
       WHERE contractor_pass_id = $1::uuid AND status = 'pending'
         AND check_type IN ('rkl', 'patent_msk')

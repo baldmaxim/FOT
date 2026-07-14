@@ -31,7 +31,11 @@ const StatusIcon: FC<{ kind: CheckType; status: CheckStatus | null; at: string |
   let icon;
   if (status === 'clean') icon = <CheckCircle2 size={18} className={styles.icClean} aria-label={label} />;
   else if (status === 'found' || status === 'invalid') icon = <XCircle size={18} className={styles.icBad} aria-label={label} />;
-  else if (status === 'pending') { icon = <Clock size={18} className={styles.icPending} aria-label={label} />; title = 'Ожидает результата — нажмите «Обновить»'; }
+  else if (status === 'pending') {
+    icon = <Clock size={18} className={styles.icPending} aria-label={label} />;
+    // Причина ожидания (например «Провайдер повторяет проверку: …») — в тултип.
+    title = `Ожидает результата — нажмите «Обновить»${summary ? ` · ${summary}` : ''}`;
+  }
   else if (status === 'not_applicable') icon = <Minus size={18} className={styles.icMuted} aria-label={label} />;
   else icon = <AlertTriangle size={18} className={styles.icWarn} aria-label={label} />;
 
