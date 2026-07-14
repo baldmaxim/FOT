@@ -418,6 +418,50 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     return parseForwarding(resp);
   }
 
+  /**
+   * Включить (create) или снять (delete) правило переадресации по номеру —
+   * POST /Product/ChangeCallForwarding (док §5.6). Асинхронно: ответ с eventID,
+   * статус — через Product/CheckRequestStatus (как у ModifyProduct).
+   * Контракт НЕ проверен живым вызовом, только по докам support.mts.ru.
+   * retryOn500=false — мутация, исход первой попытки неизвестен.
+   */
+  async changeCallForwarding(
+    accountId: string,
+    msisdn: string,
+    action: 'create' | 'delete',
+    opts: { forwardingType: string; forwardingAddress?: string; noReplyTimer?: number; numType?: string },
+  ): Promise<{ eventId: string }> {
+    const productCharacteristic: Array<{ name: string; value: string }> = [
+      { name: 'ForwardingType', value: opts.forwardingType },
+    ];
+    if (opts.forwardingAddress) {
+      productCharacteristic.push({ name: 'ForwardingAddress', value: opts.forwardingAddress });
+    }
+    if (opts.noReplyTimer != null) {
+      productCharacteristic.push({ name: 'NoReplyTimer', value: String(opts.noReplyTimer) });
+    }
+    productCharacteristic.push({ name: 'NumType', value: opts.numType ?? 'Regular' });
+
+    const resp = await this.request<unknown>('post', '/Product/ChangeCallForwarding', {
+      accountId,
+      retryOn500: false,
+      data: {
+        characteristic: [{ name: 'MSISDN', value: msisdn }],
+        item: [{
+          action,
+          product: {
+            productLine: { name: 'CallForwarding' },
+            productCharacteristic,
+          },
+        }],
+      },
+    });
+    const r = (resp ?? {}) as Record<string, unknown>;
+    const eventId = asString(r.eventID) ?? asString(r.eventId);
+    if (!eventId) throw new Error('МТС Бизнес: ответ ChangeCallForwarding без eventID');
+    return { eventId };
+  }
+
   /** Текущая локация/роуминг абонента. */
   async getCurrentSubscriberLocation(accountId: string, msisdn: string): Promise<IMtsRoaming> {
     const resp = await this.request<unknown>('get', '/Service/CurrentSubscriberLocation', {

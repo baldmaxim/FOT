@@ -2,6 +2,7 @@ import { type FC, useState } from 'react';
 import { useMySim } from '../../hooks/useMySim';
 import type { IMySimNumber } from '../../services/mySimService';
 import { fmtLast, fmtMoney, fmtPhone } from '../mts-business/mtsBusinessFormat';
+import { MySimForwarding } from './sim/MySimForwarding';
 import { MySimUsage } from './sim/MySimUsage';
 import styles from './MySimPage.module.css';
 
@@ -85,6 +86,7 @@ export const MySimPage: FC = () => {
       )}
 
       <SimCard sim={active} />
+      <MySimForwarding key={`fwd-${active.msisdn}`} msisdn={active.msisdn} />
       <MySimUsage key={active.msisdn} msisdn={active.msisdn} months={active.months} />
     </div>
   );

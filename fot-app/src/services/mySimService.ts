@@ -43,6 +43,25 @@ export interface IPhonebookRow {
   departmentName: string | null;
 }
 
+/** Тип правила: всегда / нет ответа (таймер) / недоступен. CFB (занято) — не поддерживаем. */
+export type ForwardingType = 'CFU' | 'CFNRY' | 'CFNRC';
+
+export interface IForwardingRule {
+  forwardingType: string | null;
+  forwardingAddress: string | null;
+  noReplyTimer: number | null;
+  numType: string | null;
+  status: string | null;
+}
+
+export interface IMyForwardingNumber {
+  msisdn: string;
+  rules: IForwardingRule[];
+  capturedAt: string | null;
+}
+
+export type ForwardingStatus = 'completed' | 'in_progress' | 'faulted' | 'unknown';
+
 interface ApiResponse<T> {
   success: boolean;
   data: T;
@@ -70,5 +89,29 @@ export const mySimService = {
   getPhonebook: async (): Promise<IPhonebookRow[]> => {
     const res = await apiClient.get<ApiResponse<{ rows: IPhonebookRow[] }>>('/phonebook');
     return res.data.rows;
+  },
+
+  /** Переадресация: текущие правила по своим номерам (из ночного снапшота). */
+  getForwarding: async (): Promise<IMyForwardingNumber[]> => {
+    const res = await apiClient.get<ApiResponse<{ numbers: IMyForwardingNumber[] }>>('/my-sim/forwarding');
+    return res.data.numbers;
+  },
+
+  /** Включить/изменить переадресацию. Ответ асинхронный — eventId для поллинга статуса. */
+  setForwarding: async (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }): Promise<string> => {
+    const res = await apiClient.post<ApiResponse<{ eventId: string }>>('/my-sim/forwarding', input);
+    return res.data.eventId;
+  },
+
+  deleteForwarding: async (input: { msisdn: string; type: ForwardingType }): Promise<string> => {
+    const res = await apiClient.post<ApiResponse<{ eventId: string }>>('/my-sim/forwarding/delete', input);
+    return res.data.eventId;
+  },
+
+  getForwardingStatus: async (eventId: string): Promise<ForwardingStatus> => {
+    const res = await apiClient.get<ApiResponse<{ status: ForwardingStatus }>>(
+      `/my-sim/forwarding/status?eventId=${encodeURIComponent(eventId)}`,
+    );
+    return res.data.status;
   },
 };

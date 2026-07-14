@@ -1,21 +1,85 @@
 import type { Response } from 'express';
 import * as Sentry from '@sentry/node';
+import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { mtsBusinessMappingService } from '../services/mts-business-mapping.service.js';
 import { mtsBusinessSubscribersService, type IMySimNumber } from '../services/mts-business-subscribers.service.js';
 import { mtsBusinessStatementRowsService, parseUsagePeriod } from '../services/mts-business-statement-rows.service.js';
-import { msisdnHash } from '../services/mts-business-cdr.service.js';
+import { mtsBusinessMetricsStoreService } from '../services/mts-business-metrics-store.service.js';
+import { mtsBusinessCatalogService, type IMtsForwardingRule } from '../services/mts-business-catalog.service.js';
+import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
+import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
+import { msisdnHash, normalizeMsisdn } from '../services/mts-business-cdr.service.js';
 
 // ЛК сотрудника: «Моя SIM» + «Телефонная книга». Номер резолвится ТОЛЬКО из
 // req.user.employee_id (msisdn в параметрах не принимается) — сотрудник видит
 // только свои номера. Всё из БД (ночное «Обновить всё»), живых вызовов МТС нет.
 // ПДн (паспорт/ДР/юр.ФИО) и баланс лицевого счёта компании не отдаются
 // (getMySimSummary эти поля физически не читает).
+//
+// Единственное исключение из read-only — переадресация: сотрудник сам включает
+// её на своём номере (write-вызов МТС ChangeCallForwarding). Защита: право edit
+// на /employee/sim (рубильник у админа), forwardingLimiter, аудит, и msisdn из
+// запроса обязан принадлежать этому сотруднику.
 
 const fail = (res: Response, error: unknown, fallback: string): void => {
   console.error(`[employee-sim] ${fallback}:`, error instanceof Error ? error.message : 'unknown');
   Sentry.captureException(error, { tags: { module: 'mts-business', kind: 'employee-sim' } });
   res.status(500).json({ success: false, error: fallback });
+};
+
+/** Тип переадресации: всегда / нет ответа (таймер) / недоступен. CFB (занято) — вне MVP. */
+const FORWARDING_TYPES = ['CFU', 'CFNRY', 'CFNRC'] as const;
+const DEFAULT_NO_REPLY_TIMER = 20;
+
+const setForwardingSchema = z.object({
+  msisdn: z.string().trim().min(1).optional(),
+  type: z.enum(FORWARDING_TYPES),
+  target: z.string().trim().min(1),
+  timer: z.coerce.number().int().min(5).max(30).optional(),
+});
+
+const deleteForwardingSchema = z.object({
+  msisdn: z.string().trim().min(1).optional(),
+  type: z.enum(FORWARDING_TYPES),
+});
+
+/** Номер назначения: только российский мобильный/городской 11-значный (7XXXXXXXXXX). */
+const validateTarget = (raw: string, ownMsisdn: string): { ok: true; value: string } | { ok: false; error: string } => {
+  const target = normalizeMsisdn(raw);
+  if (!target || target.length !== 11 || !target.startsWith('7')) {
+    return { ok: false, error: 'Укажите российский номер в формате +7 XXX XXX-XX-XX' };
+  }
+  // 7-8XX… — это 8-800/8-809 и прочие платные/сервисные линии (после нормализации 8→7).
+  if (target[1] === '8') {
+    return { ok: false, error: 'Переадресация на платные и сервисные номера запрещена' };
+  }
+  if (target === normalizeMsisdn(ownMsisdn)) {
+    return { ok: false, error: 'Нельзя переадресовать номер сам на себя' };
+  }
+  return { ok: true, value: target };
+};
+
+/** Номера сотрудника + проверка, что запрошенный msisdn — его. Иначе 403/400. */
+const resolveOwnMsisdn = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  requested?: string,
+): Promise<string | null> => {
+  const employeeId = req.user.employee_id;
+  const own = employeeId ? await mtsBusinessMappingService.getMsisdnsByEmployeeId(employeeId) : [];
+  if (own.length === 0) {
+    res.status(400).json({ success: false, error: 'За вами не закреплён корпоративный номер' });
+    return null;
+  }
+  if (!requested) return own[0];
+  const norm = normalizeMsisdn(requested);
+  const match = own.find(m => normalizeMsisdn(m) === norm);
+  if (!match) {
+    res.status(403).json({ success: false, error: 'Номер не закреплён за вами' });
+    return null;
+  }
+  return match;
 };
 
 export const employeeSimController = {
@@ -98,6 +162,130 @@ export const employeeSimController = {
       res.json({ success: true, data: { month: period.period, numbers } });
     } catch (error) {
       fail(res, error, 'Ошибка получения выписки');
+    }
+  },
+
+  /** Текущие правила переадресации по своим номерам — из ночного снапшота (без живых вызовов). */
+  async getMyForwarding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = req.user.employee_id;
+      if (!employeeId) {
+        res.json({ success: true, data: { numbers: [] } });
+        return;
+      }
+      const msisdns = await mtsBusinessMappingService.getMsisdnsByEmployeeId(employeeId);
+      const numbers = [];
+      for (const msisdn of msisdns) {
+        const snap = await mtsBusinessMetricsStoreService.getLatestSnapshotForMsisdn(msisdn, 'forwarding');
+        const rules = Array.isArray(snap?.payload) ? (snap.payload as IMtsForwardingRule[]) : [];
+        numbers.push({ msisdn, rules, capturedAt: snap?.capturedAt ?? null });
+      }
+      res.json({ success: true, data: { numbers } });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения переадресации');
+    }
+  },
+
+  /** Включить/изменить переадресацию своего номера (write-вызов МТС, асинхронный — вернём eventId). */
+  async setMyForwarding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = setForwardingSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректный запрос', details: parsed.error.flatten() });
+        return;
+      }
+      const msisdn = await resolveOwnMsisdn(req, res, parsed.data.msisdn);
+      if (!msisdn) return;
+
+      const target = validateTarget(parsed.data.target, msisdn);
+      if (!target.ok) {
+        res.status(400).json({ success: false, error: target.error });
+        return;
+      }
+      const type = parsed.data.type;
+      const timer = type === 'CFNRY' ? parsed.data.timer ?? DEFAULT_NO_REPLY_TIMER : undefined;
+
+      const accountId = (await mtsBusinessMappingService.getSubscriberContext(msisdn))?.accountId ?? null;
+      if (!accountId) {
+        res.status(400).json({ success: false, error: 'Не удалось определить лицевой счёт номера' });
+        return;
+      }
+
+      const { eventId } = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'create', {
+        forwardingType: type,
+        forwardingAddress: target.value,
+        noReplyTimer: timer,
+        numType: 'Regular',
+      });
+      await mtsBusinessActionsService.create({
+        eventId, accountId, scope: 'msisdn', msisdn, actionType: 'forwarding_set',
+        payload: { type, target: target.value, timer }, requestedBy: req.user.id,
+      });
+      // В аудит номера не пишем целиком — только тип правила и хвост номера.
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_SET_REQUESTED, {
+        details: { accountId, type, timer, targetTail: target.value.slice(-4) },
+      });
+      res.json({ success: true, data: { eventId } });
+    } catch (error) {
+      fail(res, error, 'Ошибка включения переадресации');
+    }
+  },
+
+  /** Отключить переадресацию своего номера. */
+  async deleteMyForwarding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = deleteForwardingSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректный запрос', details: parsed.error.flatten() });
+        return;
+      }
+      const msisdn = await resolveOwnMsisdn(req, res, parsed.data.msisdn);
+      if (!msisdn) return;
+
+      const accountId = (await mtsBusinessMappingService.getSubscriberContext(msisdn))?.accountId ?? null;
+      if (!accountId) {
+        res.status(400).json({ success: false, error: 'Не удалось определить лицевой счёт номера' });
+        return;
+      }
+
+      const { eventId } = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'delete', {
+        forwardingType: parsed.data.type,
+        numType: 'Regular',
+      });
+      await mtsBusinessActionsService.create({
+        eventId, accountId, scope: 'msisdn', msisdn, actionType: 'forwarding_remove',
+        payload: { type: parsed.data.type }, requestedBy: req.user.id,
+      });
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_REMOVE_REQUESTED, {
+        details: { accountId, type: parsed.data.type },
+      });
+      res.json({ success: true, data: { eventId } });
+    } catch (error) {
+      fail(res, error, 'Ошибка отключения переадресации');
+    }
+  },
+
+  /** Статус своей заявки на переадресацию (поллинг из UI до completed). */
+  async getMyForwardingStatus(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const eventId = String(req.query.eventId || '').trim();
+      if (!eventId) {
+        res.status(400).json({ success: false, error: 'Укажите eventId' });
+        return;
+      }
+      const employeeId = req.user.employee_id;
+      const own = employeeId ? await mtsBusinessMappingService.getMsisdnsByEmployeeId(employeeId) : [];
+      const ownHashes = new Set(own.map(m => msisdnHash(m)).filter((h): h is string => Boolean(h)));
+
+      const row = await mtsBusinessActionsService.getByEventId(eventId);
+      // Заявка чужая (или не по номеру сотрудника) — не подтверждаем её существование.
+      if (!row || !row.msisdnHash || !ownHashes.has(row.msisdnHash)) {
+        res.status(404).json({ success: false, error: 'Заявка не найдена' });
+        return;
+      }
+      res.json({ success: true, data: { eventId: row.eventId, status: row.status, actionType: row.actionType } });
+    } catch (error) {
+      fail(res, error, 'Ошибка получения статуса заявки');
     }
   },
 

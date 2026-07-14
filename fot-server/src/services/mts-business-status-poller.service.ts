@@ -69,6 +69,9 @@ async function pollActionRequests(): Promise<{ pending: number; updated: number 
         } else if (row.actionType === 'tariff_change') {
           const tariff = await mtsBusinessCatalogService.getBillPlanInfo(row.accountId, msisdn);
           await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId: row.accountId, scope: 'msisdn', msisdn, metric: 'bill_plan', payload: tariff });
+        } else if (row.actionType === 'forwarding_set' || row.actionType === 'forwarding_remove') {
+          const rules = await mtsBusinessCatalogService.getCallForwarding(row.accountId, msisdn);
+          await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId: row.accountId, scope: 'msisdn', msisdn, metric: 'forwarding', payload: rules });
         } else if (isBudget) {
           const rules = await mtsBusinessBudgetService.getProvidedRulesByMsisdn(row.accountId, msisdn);
           await mtsBusinessMetricsStoreService.upsertSnapshot({ accountId: row.accountId, scope: 'msisdn', msisdn, metric: 'budget_rules', payload: rules });

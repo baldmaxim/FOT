@@ -1,4 +1,4 @@
-import { execute, query } from '../config/postgres.js';
+import { execute, query, queryOne } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
 
@@ -7,7 +7,7 @@ import { msisdnHash } from './mts-business-cdr.service.js';
 // mts-business-catalog.service.ts (услуги/блокировки) и mts-business-budget.service.ts
 // (правила бюджета); здесь только персист заявки + статус-поллинг.
 
-export type MtsBusinessActionType = 'service_add' | 'service_remove' | 'block_add' | 'block_remove' | 'budget_rule_add' | 'budget_rule_remove' | 'tariff_change';
+export type MtsBusinessActionType = 'service_add' | 'service_remove' | 'block_add' | 'block_remove' | 'budget_rule_add' | 'budget_rule_remove' | 'tariff_change' | 'forwarding_set' | 'forwarding_remove';
 
 export interface IActionRequestCreate {
   eventId: string;
@@ -100,6 +100,31 @@ class MtsBusinessActionsService {
         msisdnEnc: r.msisdn_enc,
         actionType: r.action_type as MtsBusinessActionType,
       }));
+  }
+
+  /**
+   * Одна заявка по eventId — для ЛК сотрудника: отдаём статус только по СВОЕЙ
+   * заявке, поэтому наружу идёт msisdnHash (вызывающий сверяет его с хэшами
+   * своих номеров) и actionType.
+   */
+  async getByEventId(eventId: string): Promise<{ eventId: string; status: string; msisdnHash: string | null; actionType: string; requestedBy: string | null } | null> {
+    const row = await queryOne<{
+      event_id: string; status: string; msisdn_hash: string | null; action_type: string; requested_by: string | null;
+    }>(
+      `SELECT event_id, status, msisdn_hash, action_type, requested_by
+         FROM mts_business_action_requests
+        WHERE event_id = $1`,
+      [eventId],
+    );
+    return row
+      ? {
+        eventId: row.event_id,
+        status: row.status,
+        msisdnHash: row.msisdn_hash,
+        actionType: row.action_type,
+        requestedBy: row.requested_by,
+      }
+      : null;
   }
 
   async updateStatus(eventId: string, status: string): Promise<void> {

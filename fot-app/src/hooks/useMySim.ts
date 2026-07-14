@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { mySimService } from '../services/mySimService';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { mySimService, type ForwardingType } from '../services/mySimService';
 
 // Хуки ЛК сотрудника: «Моя SIM» и «Телефонная книга». Данные из БД (обновляются
 // ночным прогоном МТС) — длинные staleTime уместны.
@@ -29,3 +29,29 @@ export const usePhonebook = () => useQuery({
   queryFn: () => mySimService.getPhonebook(),
   staleTime: 10 * 60_000,
 });
+
+// Переадресация: правило показываем из снапшота, после применения заявки
+// (статус completed) поллер обновит снапшот — инвалидируем кэш.
+export const useMyForwarding = (enabled = true) => useQuery({
+  queryKey: ['my-sim', 'forwarding'] as const,
+  queryFn: () => mySimService.getForwarding(),
+  staleTime: 60_000,
+  enabled,
+});
+
+export const useSetForwarding = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }) =>
+      mySimService.setForwarding(input),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['my-sim', 'forwarding'] }); },
+  });
+};
+
+export const useDeleteForwarding = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { msisdn: string; type: ForwardingType }) => mySimService.deleteForwarding(input),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['my-sim', 'forwarding'] }); },
+  });
+};

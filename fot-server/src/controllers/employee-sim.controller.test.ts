@@ -11,6 +11,7 @@ vi.mock('../services/mts-business-mapping.service.js', () => ({
     getMsisdnsByEmployeeId: vi.fn(async () => []),
     getPhonebook: vi.fn(async () => []),
     getNamesByMsisdnHash: vi.fn(async () => new Map()),
+    getSubscriberContext: vi.fn(async () => null),
   },
 }));
 vi.mock('../services/mts-business-subscribers.service.js', () => ({
@@ -31,18 +32,54 @@ vi.mock('../services/mts-business-statement-rows.service.js', async (importOrigi
   };
 });
 
+vi.mock('../services/mts-business-metrics-store.service.js', () => ({
+  mtsBusinessMetricsStoreService: {
+    getLatestSnapshotForMsisdn: vi.fn(async () => null),
+  },
+}));
+vi.mock('../services/mts-business-catalog.service.js', () => ({
+  mtsBusinessCatalogService: {
+    changeCallForwarding: vi.fn(async () => ({ eventId: 'EV-1' })),
+  },
+}));
+vi.mock('../services/mts-business-actions.service.js', () => ({
+  mtsBusinessActionsService: {
+    create: vi.fn(async () => undefined),
+    getByEventId: vi.fn(async () => null),
+  },
+}));
+vi.mock('../services/audit.service.js', () => ({
+  auditService: { logFromRequest: vi.fn(async () => undefined) },
+  AUDIT_ACTIONS: {
+    MTS_BUSINESS_FORWARDING_SET_REQUESTED: 'MTS_BUSINESS_FORWARDING_SET_REQUESTED',
+    MTS_BUSINESS_FORWARDING_REMOVE_REQUESTED: 'MTS_BUSINESS_FORWARDING_REMOVE_REQUESTED',
+  },
+}));
+
 import { employeeSimController } from './employee-sim.controller.js';
 import { mtsBusinessMappingService } from '../services/mts-business-mapping.service.js';
 import { mtsBusinessSubscribersService } from '../services/mts-business-subscribers.service.js';
 import { mtsBusinessStatementRowsService } from '../services/mts-business-statement-rows.service.js';
+import { mtsBusinessCatalogService } from '../services/mts-business-catalog.service.js';
+import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
+import { mtsBusinessMetricsStoreService } from '../services/mts-business-metrics-store.service.js';
+import { auditService } from '../services/audit.service.js';
+import { msisdnHash } from '../services/mts-business-cdr.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const mapping = vi.mocked(mtsBusinessMappingService);
 const subscribers = vi.mocked(mtsBusinessSubscribersService);
 const stmtRows = vi.mocked(mtsBusinessStatementRowsService);
+const catalog = vi.mocked(mtsBusinessCatalogService);
+const actions = vi.mocked(mtsBusinessActionsService);
+const metrics = vi.mocked(mtsBusinessMetricsStoreService);
+const audit = vi.mocked(auditService);
 
 const mockReq = (employeeId: number | null, query: Record<string, string> = {}): AuthenticatedRequest =>
-  ({ user: { employee_id: employeeId }, query, params: {} } as unknown as AuthenticatedRequest);
+  ({ user: { id: 'u-1', employee_id: employeeId }, query, params: {} } as unknown as AuthenticatedRequest);
+
+const mockReqBody = (employeeId: number | null, body: Record<string, unknown>): AuthenticatedRequest =>
+  ({ user: { id: 'u-1', employee_id: employeeId }, body, query: {}, params: {} } as unknown as AuthenticatedRequest);
 
 const mockRes = () => {
   const res = { status: vi.fn(), json: vi.fn() };
@@ -141,6 +178,108 @@ describe('employeeSimController.getMyUsage', () => {
     await employeeSimController.getMyUsage(mockReq(null, { month: '2026-07' }), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, data: { month: '2026-07', numbers: [] } });
     expect(stmtRows.getUsageRows).not.toHaveBeenCalled();
+  });
+});
+
+describe('employeeSimController — переадресация', () => {
+  const OWN = '79150000001';
+
+  it('setMyForwarding: чужой номер → 403, вызова в МТС нет', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    const res = mockRes();
+    await employeeSimController.setMyForwarding(
+      mockReqBody(42, { msisdn: '79159999999', type: 'CFU', target: '79161234567' }), res,
+    );
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(catalog.changeCallForwarding).not.toHaveBeenCalled();
+  });
+
+  it('setMyForwarding: переадресация на свой же номер → 400', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    const res = mockRes();
+    await employeeSimController.setMyForwarding(mockReqBody(42, { type: 'CFU', target: '89150000001' }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(catalog.changeCallForwarding).not.toHaveBeenCalled();
+  });
+
+  it('setMyForwarding: платный/сервисный номер (8-800) → 400', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    const res = mockRes();
+    await employeeSimController.setMyForwarding(mockReqBody(42, { type: 'CFU', target: '88001234567' }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(catalog.changeCallForwarding).not.toHaveBeenCalled();
+  });
+
+  it('setMyForwarding: короткий номер → 400', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    const res = mockRes();
+    await employeeSimController.setMyForwarding(mockReqBody(42, { type: 'CFU', target: '0890' }), res);
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('setMyForwarding: happy-path — вызов МТС, заявка и аудит; CFNRY без таймера → дефолт 20 сек', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
+    const res = mockRes();
+    await employeeSimController.setMyForwarding(
+      mockReqBody(42, { msisdn: OWN, type: 'CFNRY', target: '+7 (916) 123-45-67' }), res,
+    );
+
+    expect(catalog.changeCallForwarding).toHaveBeenCalledWith('acc-1', OWN, 'create', {
+      forwardingType: 'CFNRY', forwardingAddress: '79161234567', noReplyTimer: 20, numType: 'Regular',
+    });
+    expect(actions.create).toHaveBeenCalledWith(expect.objectContaining({
+      eventId: 'EV-1', actionType: 'forwarding_set', scope: 'msisdn', msisdn: OWN, requestedBy: 'u-1',
+    }));
+    expect(audit.logFromRequest).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { eventId: 'EV-1' } });
+  });
+
+  it('deleteMyForwarding: снимает правило действием delete', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
+    const res = mockRes();
+    await employeeSimController.deleteMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU' }), res);
+
+    expect(catalog.changeCallForwarding).toHaveBeenCalledWith('acc-1', OWN, 'delete', {
+      forwardingType: 'CFU', numType: 'Regular',
+    });
+    expect(actions.create).toHaveBeenCalledWith(expect.objectContaining({ actionType: 'forwarding_remove' }));
+  });
+
+  it('getMyForwarding: правило берётся из снапшота, живых вызовов МТС нет', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    metrics.getLatestSnapshotForMsisdn.mockResolvedValueOnce({
+      payload: [{ forwardingType: 'CFU', forwardingAddress: '79161234567', noReplyTimer: null, numType: 'Regular', status: 'active' }],
+      capturedAt: '2026-07-13T23:10:00.000Z',
+    });
+    const res = mockRes();
+    await employeeSimController.getMyForwarding(mockReq(42), res);
+
+    const payload = res.json.mock.calls[0][0] as { data: { numbers: Array<{ rules: unknown[] }> } };
+    expect(payload.data.numbers[0].rules).toHaveLength(1);
+    expect(catalog.changeCallForwarding).not.toHaveBeenCalled();
+  });
+
+  it('getMyForwardingStatus: чужая заявка → 404, статус не раскрываем', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    actions.getByEventId.mockResolvedValueOnce({
+      eventId: 'EV-9', status: 'completed', msisdnHash: 'ЧУЖОЙ_ХЭШ', actionType: 'forwarding_set', requestedBy: 'u-2',
+    });
+    const res = mockRes();
+    await employeeSimController.getMyForwardingStatus(mockReq(42, { eventId: 'EV-9' }), res);
+    expect(res.status).toHaveBeenCalledWith(404);
+  });
+
+  it('getMyForwardingStatus: своя заявка → статус отдаётся', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    actions.getByEventId.mockResolvedValueOnce({
+      eventId: 'EV-1', status: 'in_progress', msisdnHash: msisdnHash(OWN), actionType: 'forwarding_set', requestedBy: 'u-1',
+    });
+    const res = mockRes();
+    await employeeSimController.getMyForwardingStatus(mockReq(42, { eventId: 'EV-1' }), res);
+    const payload = res.json.mock.calls[0][0] as { data: { status: string } };
+    expect(payload.data.status).toBe('in_progress');
   });
 });
 

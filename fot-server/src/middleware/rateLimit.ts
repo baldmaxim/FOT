@@ -15,6 +15,7 @@ const AUTH_RATE_LIMIT_MAX = readLimit('AUTH_RATE_LIMIT_MAX', IS_PRODUCTION ? 100
 const REFRESH_RATE_LIMIT_MAX = readLimit('REFRESH_RATE_LIMIT_MAX', IS_PRODUCTION ? 1000 : 300);
 const TWO_FACTOR_RATE_LIMIT_MAX = readLimit('TWO_FACTOR_RATE_LIMIT_MAX', IS_PRODUCTION ? 30 : 20);
 const IMPORT_RATE_LIMIT_MAX = readLimit('IMPORT_RATE_LIMIT_MAX', IS_PRODUCTION ? 5 : 10);
+const FORWARDING_RATE_LIMIT_MAX = readLimit('FORWARDING_RATE_LIMIT_MAX', IS_PRODUCTION ? 5 : 20);
 const LOGIN_PER_EMAIL_RATE_LIMIT_MAX = readLimit('LOGIN_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 12 : 20);
 const FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX = readLimit('FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 3 : 10);
 
@@ -64,6 +65,21 @@ export const twoFactorLimiter = rateLimit({
   skip: skipInDev,
   skipSuccessfulRequests: true,
   message: { success: false, error: 'Слишком много попыток 2FA, попробуйте через 5 минут' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Переадресация в ЛК: каждая запись — реальный write-вызов в МТС. Ключ — сам
+// пользователь (роут под authenticate), а не IP: за NAT офиса один IP на всех.
+export const forwardingLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: FORWARDING_RATE_LIMIT_MAX,
+  skip: skipInDev,
+  keyGenerator: (req: Request): string => {
+    const userId = (req as Request & { user?: { id?: string } }).user?.id;
+    return userId ? `user:${userId}` : `ip:${req.ip ?? 'unknown'}`;
+  },
+  message: { success: false, error: 'Слишком много изменений переадресации, попробуйте через час' },
   standardHeaders: true,
   legacyHeaders: false,
 });
