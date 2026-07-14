@@ -33,10 +33,19 @@ const aggRow = (over: Record<string, unknown>) => ({
   ...over,
 });
 
-/** query вызывается дважды (агрегат + счётчик SIM) — отвечаем по порядку. */
-const mockQueries = (usageRows: unknown[], sim = { employees_with_sim: '1' }): void => {
+/** Строка ростера отдела (список строится от него, а не от агрегата). */
+const rosterRow = (over: Record<string, unknown> = {}) => ({
+  employee_id: '7',
+  full_name: 'Иванов Иван',
+  tab_number: '0042',
+  has_sim: true,
+  ...over,
+});
+
+/** query вызывается дважды (агрегат + ростер отдела) — отвечаем по порядку. */
+const mockQueries = (usageRows: unknown[], roster: unknown[] = [rosterRow()]): void => {
   q.mockResolvedValueOnce(usageRows as never[]);
-  q.mockResolvedValueOnce([sim] as never[]);
+  q.mockResolvedValueOnce(roster as never[]);
 };
 
 describe('getDepartmentUsageByEmployee', () => {
@@ -79,7 +88,7 @@ describe('getDepartmentUsageByEmployee', () => {
       aggRow({ employee_id: '7', grp: 'calls', count: '10', seconds: '600', in_seconds: '200', out_seconds: '400' }),
       aggRow({ employee_id: '9', full_name: 'Петров Пётр', grp: 'calls', count: '4', seconds: '120', in_seconds: '20', out_seconds: '100' }),
       aggRow({ employee_id: '9', full_name: 'Петров Пётр', grp: 'internet', count: '2', bytes: '5000000000' }),
-    ], { employees_with_sim: '2' });
+    ], [rosterRow(), rosterRow({ employee_id: '9', full_name: 'Петров Пётр' })]);
 
     const result = await mtsBusinessDeptUsageService.getDepartmentUsageByEmployee(DEPTS, '2026-07-01', '2026-07-31', null);
 
@@ -120,23 +129,46 @@ describe('getDepartmentUsageByEmployee', () => {
     expect(q.mock.calls[1][1]).toEqual([DEPTS, [7, 9]]);
   });
 
+  it('весь отдел в списке: нулевая активность и «нет SIM» не отсекаются', async () => {
+    mockQueries(
+      [aggRow({ employee_id: '7', grp: 'calls', count: '3', seconds: '180' })],
+      [
+        rosterRow({ employee_id: '7', full_name: 'Иванов Иван', has_sim: true }),
+        rosterRow({ employee_id: '9', full_name: 'Петров Пётр', has_sim: true }),   // SIM есть, но за месяц ноль
+        rosterRow({ employee_id: '11', full_name: 'Сидоров Сидор', has_sim: false }), // SIM не выдана
+      ],
+    );
+
+    const result = await mtsBusinessDeptUsageService.getDepartmentUsageByEmployee(DEPTS, '2026-07-01', '2026-07-31', null);
+
+    expect(result.employees).toHaveLength(3);
+    const zero = result.employees.find(e => e.employeeId === 9);
+    expect(zero?.hasSim).toBe(true);
+    expect(zero?.groups.every(g => g.count === 0)).toBe(true);
+    const noSim = result.employees.find(e => e.employeeId === 11);
+    expect(noSim?.hasSim).toBe(false);
+    // Знаменатель KPI считает только тех, кому SIM выдана.
+    expect(result.employeesWithSim).toBe(2);
+  });
+
   it('syncedAt = самая свежая загрузка строк, ISO-строкой («данные на …»)', async () => {
     mockQueries([
       aggRow({ grp: 'calls', count: '1', last_sync: new Date('2026-07-14T01:00:00.000Z') }),
       aggRow({ grp: 'sms', count: '1', last_sync: new Date('2026-07-14T03:12:44.000Z') }),
-    ], { employees_with_sim: '3' });
+    ]);
 
     const result = await mtsBusinessDeptUsageService.getDepartmentUsageByEmployee(DEPTS, '2026-07-01', '2026-07-31', null);
 
     expect(result.syncedAt).toBe('2026-07-14T03:12:44.000Z');
   });
 
-  it('строк нет → syncedAt = null (подпись «данные на …» не рисуем)', async () => {
-    mockQueries([], { employees_with_sim: '3' });
+  it('строк нет → syncedAt = null, но сотрудники отдела всё равно в списке', async () => {
+    mockQueries([], [rosterRow(), rosterRow({ employee_id: '9', full_name: 'Петров Пётр' })]);
 
     const result = await mtsBusinessDeptUsageService.getDepartmentUsageByEmployee(DEPTS, '2026-07-01', '2026-07-31', null);
 
     expect(result.syncedAt).toBeNull();
-    expect(result.employeesWithSim).toBe(3);
+    expect(result.employees).toHaveLength(2);
+    expect(result.employeesWithSim).toBe(2);
   });
 });

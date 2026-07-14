@@ -15,10 +15,8 @@ interface IDashboardMtsTabProps {
   maxMonth: string | null;
 }
 
-/** Метрика «Топа» — по чему ранжируем сотрудников. */
+/** Метрика рейтинга — по чему ранжируем сотрудников. */
 type TopMetric = 'time' | 'calls' | 'internet';
-
-const TOP_N = 10;
 
 const METRICS: { key: TopMetric; label: string }[] = [
   { key: 'time', label: 'Время' },
@@ -52,7 +50,6 @@ const clampMonth = (month: string, min: string | null, max: string | null): stri
 export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMonth, maxMonth }) => {
   const [month, setMonth] = useState(() => clampMonth(currentMonth(), minMonth, maxMonth));
   const [metric, setMetric] = useState<TopMetric>('time');
-  const [expanded, setExpanded] = useState(false);
 
   const { data, isLoading, isError, error } = useDashboardMtsUsage(departmentId, month);
 
@@ -74,14 +71,17 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
     return metric === 'time' ? fmtDur(value) : `${fmtNum(value)} зв.`;
   };
 
+  // Показываем ВЕСЬ отдел, без отсечки топ-N: сначала по метрике, затем те, у кого
+  // за месяц ноль, и в самом низу — кому SIM не выдана (ростер уже отсортирован по ФИО).
   const ranked = useMemo(() => {
-    const rows = (data?.employees ?? []).filter(e => metricValue(e) > 0);
-    return rows.sort((a, b) => metricValue(b) - metricValue(a));
+    const rows = [...(data?.employees ?? [])];
+    return rows.sort((a, b) => {
+      if (a.hasSim !== b.hasSim) return a.hasSim ? -1 : 1;
+      return metricValue(b) - metricValue(a);
+    });
   }, [data?.employees, metricValue]);
 
   const topMax = Math.max(1, ...ranked.map(metricValue));
-  const visible = expanded ? ranked : ranked.slice(0, TOP_N);
-  const restCount = ranked.length - visible.length;
 
   if (isLoading) {
     return (
@@ -100,7 +100,7 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
   const calls = groupOf(data?.totals ?? [], 'calls');
   const internet = groupOf(data?.totals ?? [], 'internet');
   const sms = groupOf(data?.totals ?? [], 'sms');
-  const hasData = ranked.length > 0 || calls.count > 0 || internet.count > 0 || sms.count > 0;
+  const activeCount = ranked.filter(e => metricValue(e) > 0).length;
 
   const renderRow = (employee: IMtsDeptEmployee, index: number): ReactElement => {
     const value = metricValue(employee);
@@ -114,18 +114,19 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
     ].filter(Boolean).join(' · ');
 
     return (
-      <div key={employee.employeeId} className={styles.barRow}>
+      <div key={employee.employeeId} className={`${styles.barRow} ${employee.hasSim ? '' : styles.barRowMuted}`}>
         <span className={styles.barIndex}>{index + 1}</span>
         <div className={styles.barMain}>
           <div className={styles.barLabel}>
             {employee.fullName}
             {sub && <span className={styles.barSub}> · {sub}</span>}
+            {!employee.hasSim && <span className={styles.barBadge}>нет SIM</span>}
           </div>
           <div className={styles.barTrack}>
             <div className={styles.barFill} style={{ width: `${Math.round((value / topMax) * 100)}%` }} />
           </div>
         </div>
-        <div className={styles.barValue}>{fmtMetric(value)}</div>
+        <div className={styles.barValue}>{employee.hasSim ? fmtMetric(value) : '—'}</div>
       </div>
     );
   };
@@ -172,20 +173,23 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
         <div className={styles.kpi}>
           <div className={styles.kpiLabel}><Users size={13} /> Сотрудники с SIM</div>
           <div className={styles.kpiValue}>{fmtNum(data?.employeesWithSim ?? 0)}</div>
-          <div className={styles.kpiSubMuted}>{fmtNum(ranked.length)} с активностью</div>
+          <div className={styles.kpiSubMuted}>{fmtNum(activeCount)} с активностью</div>
         </div>
       </div>
 
       <div className={styles.card}>
         <div className={styles.cardHead}>
-          <span className={styles.cardTitle}>Топ сотрудников</span>
+          <span className={styles.cardTitle}>
+            Сотрудники отдела
+            <span className={styles.cardTitleExtra}> · {fmtNum(ranked.length)}</span>
+          </span>
           <div className={styles.segment}>
             {METRICS.map(m => (
               <button
                 key={m.key}
                 type="button"
                 className={`${styles.segBtn} ${metric === m.key ? styles.segBtnActive : ''}`}
-                onClick={() => { setMetric(m.key); setExpanded(false); }}
+                onClick={() => setMetric(m.key)}
               >
                 {m.label}
               </button>
@@ -193,21 +197,17 @@ export const DashboardMtsTab: FC<IDashboardMtsTabProps> = ({ departmentId, minMo
           </div>
         </div>
 
-        {!hasData ? (
-          <div className={styles.empty}>
-            За {monthLabel} нет данных МТС по сотрудникам отдела.
-            {data?.employeesWithSim === 0 && ' Ни один номер не привязан к сотрудникам отдела.'}
-          </div>
-        ) : ranked.length === 0 ? (
-          <div className={styles.empty}>Нет активности по выбранной метрике за {monthLabel}.</div>
+        {ranked.length === 0 ? (
+          <div className={styles.empty}>В отделе нет активных сотрудников.</div>
         ) : (
           <>
-            {visible.map(renderRow)}
-            {restCount > 0 && (
-              <button type="button" className={styles.moreBtn} onClick={() => setExpanded(true)}>
-                Остальные · {restCount}
-              </button>
+            {activeCount === 0 && (
+              <div className={styles.empty}>
+                За {monthLabel} активности по выбранной метрике нет.
+                {data?.employeesWithSim === 0 && ' Ни один номер МТС не привязан к сотрудникам отдела.'}
+              </div>
             )}
+            {ranked.map(renderRow)}
           </>
         )}
       </div>

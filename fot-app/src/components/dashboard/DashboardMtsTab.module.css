@@ -112,6 +112,13 @@
   color: var(--text-primary);
 }
 
+.cardTitleExtra {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 .segment {
   display: inline-flex;
   background: var(--bg-tertiary);
@@ -149,6 +156,21 @@
 
 .barRow:first-of-type {
   border-top: none;
+}
+
+/* Сотрудник без корпоративной SIM — в списке есть, но приглушён. */
+.barRowMuted .barLabel {
+  color: var(--text-tertiary);
+}
+
+.barBadge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .barMain {
@@ -196,19 +218,6 @@
   font-weight: 600;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
-}
-
-.moreBtn {
-  margin-top: 10px;
-  width: 100%;
-  min-height: 44px;
-  border-radius: 8px;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--bg-tertiary);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
 }
 
 .empty {

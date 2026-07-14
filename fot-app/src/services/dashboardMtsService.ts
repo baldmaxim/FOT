@@ -28,6 +28,8 @@ export interface IMtsDeptEmployee {
   employeeId: number;
   fullName: string;
   tabNumber: string | null;
+  /** false — корпоративная SIM не выдана (в списке помечаем «нет SIM»). */
+  hasSim: boolean;
   /** Всегда 4 группы: calls, internet, sms, other. */
   groups: IMtsUsageGroup[];
 }
@@ -40,6 +42,7 @@ export interface IDashboardMtsUsage {
   employeesWithSim: number;
   syncedAt: string | null;
   totals: IMtsUsageGroup[];
+  /** ВЕСЬ отдел: включая нулевую активность и сотрудников без SIM. */
   employees: IMtsDeptEmployee[];
 }
 

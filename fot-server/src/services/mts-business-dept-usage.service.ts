@@ -21,12 +21,15 @@ export interface IDeptEmployeeUsage {
   employeeId: number;
   fullName: string;
   tabNumber: string | null;
+  /** false — корпоративная SIM не выдана (в списке помечаем «нет SIM»). */
+  hasSim: boolean;
   /** Всегда 4 группы в порядке USAGE_GROUP_ORDER (отсутствующие — нулями). */
   groups: IUsageGroupUsage[];
 }
 
 export interface IDeptUsageResult {
   totals: IUsageGroupUsage[];
+  /** ВЕСЬ отдел, а не топ-N: включая нулевую активность и сотрудников без SIM. */
   employees: IDeptEmployeeUsage[];
   /** Сколько сотрудников отдела вообще имеют SIM — знаменатель KPI. */
   employeesWithSim: number;
@@ -86,7 +89,7 @@ class MtsBusinessDeptUsageService {
     };
     if (deptIds.length === 0) return empty;
 
-    const [usageRows, simRows] = await Promise.all([
+    const [usageRows, rosterRows] = await Promise.all([
       query<IUsageAggRow>(
         `SELECT e.id::text AS employee_id,
                 e.full_name,
@@ -111,21 +114,37 @@ class MtsBusinessDeptUsageService {
           GROUP BY 1, 2, 3, 4`,
         [deptIds, dateFrom, dateTo, allowedEmployeeIds],
       ),
-      query<{ employees_with_sim: string }>(
-        `SELECT COUNT(DISTINCT e.id)::text AS employees_with_sim
-           FROM mts_business_number_map m
-           JOIN employees e ON e.id = m.employee_id
+      // Ростер отдела целиком: список не режется до топ-N, поэтому нужны и те,
+      // кто за период ничего не наговорил, и те, кому SIM вообще не выдана.
+      query<{ employee_id: string; full_name: string; tab_number: string | null; has_sim: boolean }>(
+        `SELECT e.id::text AS employee_id,
+                e.full_name,
+                e.tab_number,
+                EXISTS (SELECT 1 FROM mts_business_number_map m WHERE m.employee_id = e.id) AS has_sim
+           FROM employees e
           WHERE e.org_department_id = ANY($1::uuid[])
             AND e.is_archived = false
             AND e.employment_status = 'active'
-            AND ($2::bigint[] IS NULL OR e.id = ANY($2::bigint[]))`,
+            AND ($2::bigint[] IS NULL OR e.id = ANY($2::bigint[]))
+          ORDER BY e.full_name`,
         [deptIds, allowedEmployeeIds],
       ),
     ]);
 
-    // Раскладка «сотрудник × группа» → сотрудник с полным набором из 4 групп,
-    // параллельно суммируем итог по отделу.
+    // Список строится ОТ РОСТЕРА (весь отдел), агрегаты лишь подмешиваются в него:
+    // сотрудник с нулевой активностью и сотрудник без SIM всё равно попадают в ответ.
     const byEmployee = new Map<number, IDeptEmployeeUsage>();
+    for (const r of rosterRows) {
+      const employeeId = Number(r.employee_id);
+      byEmployee.set(employeeId, {
+        employeeId,
+        fullName: r.full_name,
+        tabNumber: r.tab_number,
+        hasSim: r.has_sim,
+        groups: USAGE_GROUP_ORDER.map(emptyUsageGroup),
+      });
+    }
+
     const totals = new Map<UsageGroupKey, IUsageGroupUsage>(
       USAGE_GROUP_ORDER.map(k => [k, emptyUsageGroup(k)]),
     );
@@ -136,12 +155,15 @@ class MtsBusinessDeptUsageService {
         lastSync = Math.max(lastSync, new Date(r.last_sync).getTime());
       }
       const employeeId = Number(r.employee_id);
+      // Ростер и агрегат берут сотрудников одним и тем же фильтром, поэтому
+      // строка без пары в ростере — аномалия; на всякий случай добавляем.
       let employee = byEmployee.get(employeeId);
       if (!employee) {
         employee = {
           employeeId,
           fullName: r.full_name,
           tabNumber: r.tab_number,
+          hasSim: true,
           groups: USAGE_GROUP_ORDER.map(emptyUsageGroup),
         };
         byEmployee.set(employeeId, employee);
@@ -165,11 +187,11 @@ class MtsBusinessDeptUsageService {
       add(total);
     }
 
-    const sim = simRows[0];
+    const employees = [...byEmployee.values()];
     return {
       totals: USAGE_GROUP_ORDER.map(k => totals.get(k) ?? emptyUsageGroup(k)),
-      employees: [...byEmployee.values()],
-      employeesWithSim: sim ? Number(sim.employees_with_sim) : 0,
+      employees,
+      employeesWithSim: employees.filter(e => e.hasSim).length,
       syncedAt: lastSync > 0 ? new Date(lastSync).toISOString() : null,
     };
   }
