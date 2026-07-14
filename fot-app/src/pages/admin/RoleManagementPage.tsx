@@ -893,7 +893,7 @@ export const RoleManagementPage: FC = () => {
                 <tbody>
                   {sortedRoles.map(role => (
                     <tr key={role.code} className={!role.is_active ? styles.rowInactive : ''}>
-                      <td><code className={styles.code}>{role.code}</code></td>
+                      <td><code className={styles.code} title={role.code}>{role.code}</code></td>
                       <td>
                         {editState?.code === role.code ? (
                           <input

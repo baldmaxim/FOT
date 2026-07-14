@@ -291,16 +291,16 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 720px;
+  min-width: 860px;
   table-layout: fixed;
 }
 
-.colCode { width: 7%; }
-.colName { width: 18%; }
+.colCode { width: 11%; }
+.colName { width: 17%; }
 .colAdmin { width: 6%; }
 .colHours { width: 7%; }
-.colCabinet { width: 13%; }
-.colWindow { width: 7%; }
+.colCabinet { width: 12%; }
+.colWindow { width: 6%; }
 .colFull { width: 7%; }
 .colStatus { width: 9%; }
 .colActions { width: 19%; }
@@ -365,16 +365,24 @@
   opacity: 0.58;
 }
 
+/* Бейдж кода роли. Таблица — table-layout: fixed, поэтому длинный код
+   (site_supervisor) обязан обрезаться, иначе наезжает на «Название».
+   inline-block вместо inline-flex — ради работающего text-overflow. */
 .code {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  line-height: 24px;
   padding: 0 8px;
   border-radius: 999px;
   background: var(--surface-hover);
   color: var(--text-secondary);
   font-family: monospace;
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
 }
 
 .badgeSystem,
