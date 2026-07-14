@@ -10,6 +10,7 @@ import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse } from '../types/index.js';
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
+import { isAdminAreaPageKey } from '../config/access-control.js';
 import { getRolePageAccess } from '../services/access-control.service.js';
 import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
 import { listManagedDepartmentIdsForUser } from '../services/department-access.service.js';
@@ -111,21 +112,37 @@ async function buildProfileResponse(
     ? await isActiveWeekendResponsible(profile.employee_id)
     : false;
 
-  if (!role.is_admin && role.code !== TIMEKEEPER_ROLE_CODE && managed_department_ids.length > 0 && !page_access['/staff-control']?.can_view) {
+  // Роль без доступа в админку заперта в личном кабинете: режем админ-ключи, выданные
+  // ролью (в т.ч. оставшиеся от прежних настроек). Делается ДО авто-грантов — они
+  // гейтятся отдельным флагом manager_auto_access и не должны попадать под нож
+  // (иначе офисный рекрутер потерял бы «Заявки на поиск сотрудников»). Миграция 221.
+  const has_admin_access = !!role.is_admin || !!role.admin_access;
+  if (!has_admin_access) {
+    for (const key of Object.keys(page_access)) {
+      if (isAdminAreaPageKey(key)) delete page_access[key];
+    }
+  }
+
+  // Авто-выдача «руководительских» страниц отключается флагом роли (миграция 221):
+  // узкие роли (например «Менеджер МТС») не должны получать «Управление кадрами»
+  // только из-за того, что человеку назначен отдел.
+  const managerAutoAccess = role.manager_auto_access !== false;
+
+  if (managerAutoAccess && !role.is_admin && role.code !== TIMEKEEPER_ROLE_CODE && managed_department_ids.length > 0 && !page_access['/staff-control']?.can_view) {
     page_access['/staff-control'] = { can_view: true, can_edit: true };
   }
 
   // Руководитель без managed-отделов, но с прямыми подчинёнными (employee_direct_reports)
   // ведёт их табель — даём доступ к странице, если роль его не выдала (бэк всё равно
   // ограничивает выборку/редактирование только его подчинёнными + им самим).
-  if (!role.is_admin && managed_department_ids.length === 0 && has_direct_reports && !page_access['/timesheet']?.can_view) {
+  if (managerAutoAccess && !role.is_admin && managed_department_ids.length === 0 && has_direct_reports && !page_access['/timesheet']?.can_view) {
     page_access['/timesheet'] = { can_view: true, can_edit: true };
   }
 
   // Вкладка «Заявки на поиск сотрудников»: роли-заявители (руководитель/руководитель
   // строительства) видят вкладку и подают заявки; рекрутеры пула, руководитель отдела
   // кадров (по должности) и активные ответственные — авто-доступ без ручного гранта роли.
-  if (!role.is_admin && !page_access['/staff-control/hiring']?.can_view
+  if (managerAutoAccess && !role.is_admin && !page_access['/staff-control/hiring']?.can_view
       && (isHiringRequesterRole(role.code) || await hasHiringAutoAccess(profile.employee_id, role.is_admin))) {
     page_access['/staff-control/hiring'] = { can_view: true, can_edit: false };
   }
@@ -138,6 +155,7 @@ async function buildProfileResponse(
     role_name: role.name,
     position_type: role.code,
     is_admin: role.is_admin,
+    has_admin_access,
     employee_variant: role.employee_variant,
     show_actual_hours: !!role.show_actual_hours,
     hide_sidebar: !!role.hide_sidebar,

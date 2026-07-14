@@ -1,5 +1,9 @@
 import { query } from '../config/postgres.js';
-import { DEFAULT_ACCESS_PAGE_CATALOG, type PageCatalogItem } from '../config/access-control.js';
+import {
+  DEFAULT_ACCESS_PAGE_CATALOG,
+  isPersonalPageKey,
+  type PageCatalogItem,
+} from '../config/access-control.js';
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
 import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
@@ -74,9 +78,11 @@ function mergePageCatalog(dbPages: PageCatalogItem[] | null): PageCatalogItem[] 
   for (const page of dbPages || []) {
     merged.set(page.key, { ...page });
   }
-  return [...merged.values()].sort(
-    (l, r) => l.sort_order - r.sort_order || l.label.localeCompare(r.label, 'ru'),
-  );
+  // Область (ЛК / админка) считаем в коде, а не берём из БД: от неё зависит гейт
+  // admin_access, и она не должна расходиться с ключом страницы.
+  return [...merged.values()]
+    .map((page) => ({ ...page, area: isPersonalPageKey(page.key) ? 'personal' as const : 'admin' as const }))
+    .sort((l, r) => l.sort_order - r.sort_order || l.label.localeCompare(r.label, 'ru'));
 }
 
 async function loadPageCatalogFromDatabase(): Promise<PageCatalogItem[] | null> {
@@ -133,11 +139,32 @@ async function hasManagerAutoAccess(req: AuthenticatedRequest, pagePath: string)
   return accessible !== 'all' && accessible.length > 0;
 }
 
+/** Роль вообще имеет доступ в админку (см. system_roles.admin_access, миграция 221). */
+export async function roleHasAdminAccess(roleRef: string): Promise<boolean> {
+  const role = await resolveRole(roleRef);
+  if (!role) return false;
+  return !!role.is_admin || !!role.admin_access;
+}
+
+/** Авто-выдача «руководительских» страниц включена для роли (system_roles.manager_auto_access). */
+export async function roleHasManagerAutoAccess(roleRef: string): Promise<boolean> {
+  const role = await resolveRole(roleRef);
+  if (!role) return false;
+  return role.manager_auto_access !== false;
+}
+
 /**
  * Эффективная проверка доступа к странице: bypass для is_admin (симметрично
  * фронту, где canViewPage возвращает true для админа), role-based по
  * role_page_access + авто-доступ «руководителя» (не-админ с назначенными
  * отделами) к страницам из MANAGER_AUTO_ACCESS_PAGES.
+ *
+ * Гейт admin_access (миграция 221) режет только права, выданные РОЛЬЮ: роль без
+ * доступа в админку не пускает по своим админ-строкам, даже если они остались в
+ * role_page_access. Авто-доступ он не трогает — иначе офисные рекрутеры (роль
+ * office без единой админ-страницы) потеряли бы «Заявки на поиск сотрудников»,
+ * которые им и выдаются авто-грантом. Узкие роли отключают авто-выдачу флагом
+ * manager_auto_access.
  */
 export async function resolveEffectivePageAccess(
   req: AuthenticatedRequest,
@@ -145,15 +172,21 @@ export async function resolveEffectivePageAccess(
   action: 'view' | 'edit',
 ): Promise<boolean> {
   if (req.user.is_admin) return true;
-  const byRole = action === 'edit'
-    ? await hasPageEdit(req.user.role_code, pagePath)
-    : await hasPageView(req.user.role_code, pagePath);
-  if (byRole) return true;
-  if (await hasManagerAutoAccess(req, pagePath)) return true;
+
+  const roleGrantAllowed = isPersonalPageKey(pagePath) || await roleHasAdminAccess(req.user.role_code);
+  if (roleGrantAllowed) {
+    const byRole = action === 'edit'
+      ? await hasPageEdit(req.user.role_code, pagePath)
+      : await hasPageView(req.user.role_code, pagePath);
+    if (byRole) return true;
+  }
+
+  const autoAccessEnabled = await roleHasManagerAutoAccess(req.user.role_code);
+  if (autoAccessEnabled && await hasManagerAutoAccess(req, pagePath)) return true;
   // Авто-доступ к вкладке «Заявки на поиск сотрудников» (view-only): роли-заявители
   // (руководитель/руководитель строительства), рекрутеры пула, руководитель отдела
   // кадров (по должности) и активные ответственные за заявку. Edit намеренно не выдаём.
-  if (pagePath === '/staff-control/hiring' && action === 'view') {
+  if (autoAccessEnabled && pagePath === '/staff-control/hiring' && action === 'view') {
     if (isHiringRequesterRole(req.user.role_code)) return true;
     return hasHiringAutoAccess(req.user.employee_id, req.user.is_admin);
   }

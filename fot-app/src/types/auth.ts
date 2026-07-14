@@ -12,6 +12,10 @@ export interface SystemRole {
   name: string;
   description: string | null;
   is_admin: boolean;
+  /** true → роль имеет доступ в админку, а не только в личный кабинет (миграция 221). Для is_admin всегда true. */
+  admin_access: boolean;
+  /** true → «Управление кадрами» / «Табель» выдаются автоматически пользователям с назначенными отделами или прямыми подчинёнными (миграция 221). */
+  manager_auto_access: boolean;
   employee_variant: EmployeeVariant | null;
   is_active: boolean;
   show_actual_hours: boolean;
@@ -66,6 +70,8 @@ export interface UserProfile {
   // Алиас role_code — сохраняем для обратной совместимости UI.
   position_type: EmployeePositionType;
   is_admin: boolean;
+  /** true → роль видит админку (страницы вне личного кабинета). Может отсутствовать в старом JWT. */
+  has_admin_access?: boolean;
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;
   hide_sidebar: boolean;

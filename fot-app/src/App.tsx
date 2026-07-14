@@ -20,6 +20,7 @@ import { AppUpdateBanner } from './components/ui/AppUpdateBanner';
 import { ErrorFallback } from './components/ErrorFallback';
 import { clearStaleChunkReloadFlag, tryAutoReloadOnStaleChunk } from './utils/staleChunkReload';
 import { getLandingPath } from './utils/landingPath';
+import { useNavContext } from './hooks/useNavContext';
 import './App.css';
 
 const StructureRealtimeMount: FC = () => {
@@ -123,7 +124,8 @@ const SystemAdminPage = lazy(() => import('./pages/hubs/SystemAdminPage').then(m
 // Компонент для умного редиректа на основе должности
 const PositionBasedRedirect = () => {
   const { canViewPage, employeeVariant } = useAuth();
-  return <Navigate to={getLandingPath(canViewPage, employeeVariant)} replace />;
+  const navContext = useNavContext();
+  return <Navigate to={getLandingPath(canViewPage, employeeVariant, navContext)} replace />;
 };
 
 const EmployeeHomeRoute = () => {
@@ -441,7 +443,9 @@ const AppRoutes = () => {
           />
         </Route>
 
-<Route element={<ProtectedRoute requiredPage="/staff-control" />}>
+{/* Хаб сам фильтрует вкладки по правам (HubShell), поэтому пускаем и тех, у кого
+            есть только «Заявки на поиск сотрудников» — иначе пункт меню виден, а страница 403. */}
+        <Route element={<ProtectedRoute requiredPage={['/staff-control', '/staff-control/hiring']} />}>
           <Route
             path="/staff-control"
             element={

@@ -41,6 +41,8 @@ interface AuthContextType extends AuthState {
   token: string | null;
   roles: RoleLabel[];
   isAdmin: boolean;
+  /** true → роль видит админку (не только личный кабинет). Заменяет прежнюю проверку canViewPage('/dashboard'). */
+  hasAdminAccess: boolean;
   employeeVariant: EmployeeVariant | null;
   // true → роль настроена показывать фактические часы по СКУД
   // (hours_worked); false → текущее поведение, т.е. урезанные по графику.
@@ -285,6 +287,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [roles]);
 
   const isAdmin = !!state.profile?.is_admin;
+  // Доступ в админку (system_roles.admin_access, миграция 221). Старый JWT/кэш без поля:
+  // считаем по наличию «Обзора» — прежнего де-факто ключа от админки.
+  const hasAdminAccess = isAdmin
+    || (typeof state.profile?.has_admin_access === 'boolean'
+      ? state.profile.has_admin_access
+      : state.profile?.page_access?.['/dashboard']?.can_view === true);
   const employeeVariant = state.profile?.employee_variant ?? null;
   const showActualHours = !!state.profile?.show_actual_hours;
   // Защита от самоблокировки: админ всегда видит меню, даже если в его роли стоит флаг.
@@ -355,6 +363,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     token,
     roles,
     isAdmin,
+    hasAdminAccess,
     employeeVariant,
     showActualHours,
     hideSidebar,

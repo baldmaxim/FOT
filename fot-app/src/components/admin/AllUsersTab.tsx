@@ -698,6 +698,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
         name: getRoleLabel(user.position_type),
         description: null,
         is_admin: false,
+        admin_access: false,
+        manager_auto_access: true,
         employee_variant: null,
         is_active: false,
         show_actual_hours: false,

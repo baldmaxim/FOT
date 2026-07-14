@@ -3,7 +3,7 @@ import type { FC } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, X } from 'lucide-react';
 import { rolesService } from '../../services/rolesService';
-import type { AccessMode, PageCatalogItem } from '../../services/rolesService';
+import type { AccessMode, AccessPageArea, PageCatalogItem } from '../../services/rolesService';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
@@ -27,6 +27,7 @@ interface INewRoleForm extends ICorrectionRestrictionsForm {
   code: string;
   name: string;
   is_admin: boolean;
+  admin_access: boolean;
   employee_variant: EmployeeVariant | '';
   show_actual_hours: boolean;
   hide_sidebar: boolean;
@@ -40,6 +41,7 @@ interface ICloneRoleForm extends ICorrectionRestrictionsForm {
   name: string;
   description: string;
   is_admin: boolean;
+  admin_access: boolean;
   employee_variant: EmployeeVariant | '';
   show_actual_hours: boolean;
   hide_sidebar: boolean;
@@ -106,6 +108,18 @@ interface IPageGroup {
   label: string;
   pages: PageCatalogItem[];
 }
+
+/** Страницы одной области (ЛК / админка), сгруппированные по блокам каталога. */
+const groupPagesByArea = (pages: PageCatalogItem[], area: AccessPageArea): IPageGroup[] => {
+  const groups = new Map<string, IPageGroup>();
+  for (const page of pages.filter(p => p.surface === 'page' && p.area === area)) {
+    if (!groups.has(page.group_code)) {
+      groups.set(page.group_code, { code: page.group_code, label: page.group_label, pages: [] });
+    }
+    groups.get(page.group_code)!.pages.push(page);
+  }
+  return [...groups.values()];
+};
 
 const EMPTY_ROLES: SystemRole[] = [];
 const ACCESS_OPTIONS: AccessMode[] = ['none', 'view', 'edit'];
@@ -253,6 +267,7 @@ export const RoleManagementPage: FC = () => {
     code: '',
     name: '',
     is_admin: false,
+    admin_access: false,
     employee_variant: '',
     show_actual_hours: false,
     hide_sidebar: false,
@@ -279,6 +294,7 @@ export const RoleManagementPage: FC = () => {
     name: '',
     description: '',
     is_admin: false,
+    admin_access: false,
     employee_variant: '',
     show_actual_hours: false,
     hide_sidebar: false,
@@ -340,17 +356,9 @@ export const RoleManagementPage: FC = () => {
     setDraftPageAccess(accessProfileQuery.data.page_access ?? {});
   }, [accessProfileQuery.data]);
 
-  const pages = catalogQuery.data?.pages ?? [];
-  const groupedPages = useMemo<IPageGroup[]>(() => {
-    const groups = new Map<string, IPageGroup>();
-    for (const page of pages.filter(p => p.surface === 'page')) {
-      if (!groups.has(page.group_code)) {
-        groups.set(page.group_code, { code: page.group_code, label: page.group_label, pages: [] });
-      }
-      groups.get(page.group_code)!.pages.push(page);
-    }
-    return [...groups.values()];
-  }, [pages]);
+  const pages = useMemo<PageCatalogItem[]>(() => catalogQuery.data?.pages ?? [], [catalogQuery.data]);
+  const personalGroups = useMemo<IPageGroup[]>(() => groupPagesByArea(pages, 'personal'), [pages]);
+  const adminGroups = useMemo<IPageGroup[]>(() => groupPagesByArea(pages, 'admin'), [pages]);
 
   const technicalPages = useMemo(() => pages.filter(p => p.surface === 'technical'), [pages]);
 
@@ -361,6 +369,13 @@ export const RoleManagementPage: FC = () => {
     const techCount = technicalPages.filter(p => (draftPageAccess[p.key] ?? 'none') !== 'none').length;
     return { totalPages: visible.length, viewCount, editCount, technicalCount: techCount };
   }, [draftPageAccess, pages, technicalPages]);
+
+  // Админ-роль всегда в админке; для остальных решает флаг admin_access (миграция 221).
+  const roleHasAdminArea = !!selectedRole?.is_admin || !!selectedRole?.admin_access;
+  const adminAccessCount = useMemo(
+    () => pages.filter(p => p.area === 'admin' && (draftPageAccess[p.key] ?? 'none') !== 'none').length,
+    [draftPageAccess, pages],
+  );
 
   const isAccessDirty = useMemo(() => {
     if (!accessProfileQuery.data) return false;
@@ -393,6 +408,7 @@ export const RoleManagementPage: FC = () => {
         code: newForm.code,
         name: newForm.name,
         is_admin: newForm.is_admin,
+        admin_access: newForm.admin_access,
         employee_variant: newForm.employee_variant || null,
         show_actual_hours: newForm.show_actual_hours,
         hide_sidebar: newForm.hide_sidebar,
@@ -403,7 +419,7 @@ export const RoleManagementPage: FC = () => {
       });
       toast.success('Роль создана');
       setNewForm({
-        code: '', name: '', is_admin: false, employee_variant: '',
+        code: '', name: '', is_admin: false, admin_access: false, employee_variant: '',
         show_actual_hours: false, hide_sidebar: false,
         timesheet_months_back: 1, timesheet_months_forward: 1,
         timesheet_show_full_period: true,
@@ -488,6 +504,66 @@ export const RoleManagementPage: FC = () => {
       queryClient.invalidateQueries({ queryKey: ['timesheet-page'] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка изменения периода роли');
+    }
+  };
+
+  // Доступ в админку. Выключение — жёсткое: бэк вырезает все админ-ключи роли,
+  // пользователь остаётся в личном кабинете.
+  const handleToggleAdminAccess = async (role: SystemRole, next: boolean) => {
+    if (!next) {
+      const adminPages = pages.filter(p => p.area === 'admin' && (draftPageAccess[p.key] ?? 'none') !== 'none');
+      const confirmed = confirm(
+        adminPages.length > 0
+          ? `Роль потеряет доступ ко всем страницам админки (${adminPages.length} шт.) и останется только с личным кабинетом. Продолжить?`
+          : 'Закрыть роли доступ в админку?',
+      );
+      if (!confirmed) return;
+    }
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: role.show_actual_hours,
+        hide_sidebar: role.hide_sidebar,
+        admin_access: next,
+      });
+      if (!next) {
+        // Локально гасим админ-галки, чтобы черновик не расходился с тем, что сохранит бэк.
+        setDraftPageAccess(current => Object.fromEntries(
+          Object.entries(current).filter(([key]) => pages.find(p => p.key === key)?.area !== 'admin'),
+        ));
+      }
+      toast.success(next ? 'Роль получила доступ в админку' : 'Роль заперта в личном кабинете');
+      upsertRoleInCache(updated);
+      await queryClient.invalidateQueries({ queryKey: ['roles', 'access-profile', role.code] });
+      await refreshProfile();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения доступа в админку');
+    }
+  };
+
+  const handleToggleManagerAutoAccess = async (role: SystemRole, next: boolean) => {
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: role.show_actual_hours,
+        hide_sidebar: role.hide_sidebar,
+        manager_auto_access: next,
+      });
+      toast.success(next
+        ? 'Авто-доступ руководителя включён'
+        : 'Авто-доступ руководителя выключен: страницы выдаёт только роль');
+      upsertRoleInCache(updated);
+      await refreshProfile();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения авто-доступа');
     }
   };
 
@@ -587,7 +663,13 @@ export const RoleManagementPage: FC = () => {
     if (!selectedRoleCode) return;
     setSavingAccess(true);
     try {
-      await rolesService.updateAccessProfile(selectedRoleCode, { page_access: draftPageAccess });
+      // Роль без доступа в админку сохраняет только права личного кабинета.
+      const payload = roleHasAdminArea
+        ? draftPageAccess
+        : Object.fromEntries(
+          Object.entries(draftPageAccess).filter(([key]) => pages.find(p => p.key === key)?.area !== 'admin'),
+        );
+      await rolesService.updateAccessProfile(selectedRoleCode, { page_access: payload });
       toast.success('Профиль доступа сохранён');
       await queryClient.invalidateQueries({ queryKey: ['roles', 'access-profile', selectedRoleCode] });
       await refreshProfile();
@@ -605,6 +687,7 @@ export const RoleManagementPage: FC = () => {
       name: `${selectedRole.name} (копия)`,
       description: selectedRole.description ?? '',
       is_admin: selectedRole.is_admin,
+      admin_access: !!selectedRole.admin_access,
       employee_variant: selectedRole.employee_variant ?? '',
       show_actual_hours: selectedRole.show_actual_hours,
       hide_sidebar: selectedRole.hide_sidebar,
@@ -629,6 +712,7 @@ export const RoleManagementPage: FC = () => {
         name: cloneForm.name,
         description: cloneForm.description || null,
         is_admin: cloneForm.is_admin,
+        admin_access: cloneForm.admin_access,
         employee_variant: cloneForm.employee_variant || null,
         show_actual_hours: cloneForm.show_actual_hours,
         hide_sidebar: cloneForm.hide_sidebar,
@@ -651,12 +735,15 @@ export const RoleManagementPage: FC = () => {
   const renderAccessControl = (page: PageCatalogItem) => {
     const currentMode = draftPageAccess[page.key] ?? 'none';
     const options = page.supports_edit ? ACCESS_OPTIONS : ACCESS_OPTIONS.filter(m => m !== 'edit');
+    // Пока у роли нет доступа в админку, её админ-права не редактируются (бэк их всё равно вырежет).
+    const locked = page.area === 'admin' && !roleHasAdminArea;
     return (
       <div className={styles.segmentedControl}>
         {options.map(mode => (
           <button
             key={`${page.key}-${mode}`}
             type="button"
+            disabled={locked}
             className={`${styles.segmentedButton} ${currentMode === mode ? styles.segmentedButtonActive : ''}`}
             onClick={() => handlePageModeChange(page, mode)}
           >
@@ -740,6 +827,15 @@ export const RoleManagementPage: FC = () => {
                   onChange={e => setNewForm(s => ({ ...s, is_admin: e.target.checked }))}
                 />
                 <span>Админ (видит все данные)</span>
+              </label>
+              <label className={styles.inlineCheckbox} title="Роль видит разделы вне личного кабинета. Без этого флага пользователь остаётся только в ЛК.">
+                <input
+                  type="checkbox"
+                  checked={newForm.is_admin || newForm.admin_access}
+                  disabled={newForm.is_admin}
+                  onChange={e => setNewForm(s => ({ ...s, admin_access: e.target.checked }))}
+                />
+                <span>Доступ в админку</span>
               </label>
               <HoursToggle
                 checked={newForm.show_actual_hours}
@@ -1163,6 +1259,15 @@ export const RoleManagementPage: FC = () => {
                               />
                               <span>Админ</span>
                             </label>
+                            <label className={styles.inlineCheckbox} title="Роль видит разделы вне личного кабинета.">
+                              <input
+                                type="checkbox"
+                                checked={cloneForm.is_admin || cloneForm.admin_access}
+                                disabled={cloneForm.is_admin}
+                                onChange={e => setCloneForm(s => ({ ...s, admin_access: e.target.checked }))}
+                              />
+                              <span>Доступ в админку</span>
+                            </label>
                             <HoursToggle
                               checked={cloneForm.show_actual_hours}
                               onChange={v => setCloneForm(s => ({ ...s, show_actual_hours: v }))}
@@ -1245,79 +1350,139 @@ export const RoleManagementPage: FC = () => {
                   </div>
                 </div>
 
-                <div className={styles.accessSections}>
-                  {groupedPages.map(group => (
-                    <div key={group.code} className={styles.card}>
-                      <div className={styles.cardHeader}>
-                        <h3 className={styles.cardTitle}>{group.label}</h3>
-                      </div>
-                      <div className={styles.pageRows}>
-                        {group.code === 'mine' && (
-                          <div className={styles.pageRow}>
-                            <div className={styles.pageInfo}>
-                              <div className={styles.pageLabelRow}>
-                                <span className={styles.pageLabel}>Боковое меню (Sidebar)</span>
-                                {selectedRole.is_admin && (
-                                  <span className={styles.readOnlyBadge}>Для админа игнорируется</span>
-                                )}
-                              </div>
-                              <code className={styles.pagePath}>system_roles.hide_sidebar</code>
-                            </div>
-                            <div className={styles.segmentedControl}>
-                              <button
-                                type="button"
-                                className={`${styles.segmentedButton} ${!selectedRole.hide_sidebar ? styles.segmentedButtonActive : ''}`}
-                                onClick={() => { if (selectedRole.hide_sidebar) void handleToggleHideSidebar(selectedRole, false); }}
-                              >Видно</button>
-                              <button
-                                type="button"
-                                className={`${styles.segmentedButton} ${selectedRole.hide_sidebar ? styles.segmentedButtonActive : ''}`}
-                                onClick={() => { if (!selectedRole.hide_sidebar) void handleToggleHideSidebar(selectedRole, true); }}
-                              >Скрыто</button>
-                            </div>
-                          </div>
-                        )}
-                        {group.pages.map(page => (
-                          <div key={page.key} className={styles.pageRow}>
-                            <div className={styles.pageInfo}>
-                              <div className={styles.pageLabelRow}>
-                                <span className={styles.pageLabel}>{page.label}</span>
-                                {!page.supports_edit && <span className={styles.readOnlyBadge}>Только просмотр</span>}
-                              </div>
-                              <code className={styles.pagePath}>{page.key}</code>
-                            </div>
-                            {renderAccessControl(page)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                <div className={styles.roleSwitchBar}>
+                  <label className={styles.roleSwitch} title="Роль видит админку: разделы вне личного кабинета. Выключено — пользователь остаётся в ЛК, все админ-права роли снимаются.">
+                    <input
+                      type="checkbox"
+                      checked={roleHasAdminArea}
+                      disabled={selectedRole.is_admin}
+                      onChange={e => void handleToggleAdminAccess(selectedRole, e.target.checked)}
+                    />
+                    <span className={styles.roleSwitchTrack} />
+                    <span className={styles.roleSwitchText}>
+                      <strong>Доступ в админку</strong>
+                      <small>
+                        {selectedRole.is_admin
+                          ? 'Роль помечена «Админ» — админка открыта всегда'
+                          : roleHasAdminArea
+                            ? `Открыто страниц админки: ${adminAccessCount}`
+                            : 'Роль работает только в личном кабинете'}
+                      </small>
+                    </span>
+                  </label>
 
-                  {technicalPages.length > 0 && (
-                    <details className={styles.card}>
-                      <summary className={styles.technicalSummary}>
-                        Технические доступы
-                        <span className={styles.technicalSummaryHint}>
-                          {accessSummary.technicalCount > 0
-                            ? `${accessSummary.technicalCount} активн.`
-                            : 'скрыты по умолчанию'}
-                        </span>
-                      </summary>
-                      <div className={styles.pageRows}>
-                        {technicalPages.map(page => (
-                          <div key={page.key} className={styles.pageRow}>
-                            <div className={styles.pageInfo}>
-                              <div className={styles.pageLabelRow}>
-                                <span className={styles.pageLabel}>{page.label}</span>
-                                <span className={styles.technicalBadge}>Технический ключ</span>
+                  <label className={styles.roleSwitch} title="«Управление кадрами» и «Табель» выдаются автоматически пользователям с назначенными отделами или прямыми подчинёнными — минуя матрицу роли. Выключите для узких ролей (например «Менеджер МТС»).">
+                    <input
+                      type="checkbox"
+                      checked={selectedRole.manager_auto_access !== false}
+                      disabled={selectedRole.is_admin}
+                      onChange={e => void handleToggleManagerAutoAccess(selectedRole, e.target.checked)}
+                    />
+                    <span className={styles.roleSwitchTrack} />
+                    <span className={styles.roleSwitchText}>
+                      <strong>Авто-доступ руководителя</strong>
+                      <small>«Управление кадрами» и «Табель» по назначенным отделам</small>
+                    </span>
+                  </label>
+
+                  <label className={styles.roleSwitch} title="Скрыть боковое меню у пользователей роли. Для админа игнорируется.">
+                    <input
+                      type="checkbox"
+                      checked={!selectedRole.hide_sidebar}
+                      onChange={e => void handleToggleHideSidebar(selectedRole, !e.target.checked)}
+                    />
+                    <span className={styles.roleSwitchTrack} />
+                    <span className={styles.roleSwitchText}>
+                      <strong>Боковое меню</strong>
+                      <small>{selectedRole.hide_sidebar ? 'Скрыто' : 'Видно'}</small>
+                    </span>
+                  </label>
+                </div>
+
+                <div className={styles.accessSections}>
+                  <div className={styles.areaBlock}>
+                    <div className={styles.areaHeader}>
+                      <h3 className={styles.areaTitle}>Личный кабинет</h3>
+                      <span className={styles.areaHint}>Страницы сотрудника: свои заявления, документы, задачи</span>
+                    </div>
+                    {personalGroups.map(group => (
+                      <div key={group.code} className={styles.card}>
+                        <div className={styles.pageRows}>
+                          {group.pages.map(page => (
+                            <div key={page.key} className={styles.pageRow}>
+                              <div className={styles.pageInfo}>
+                                <div className={styles.pageLabelRow}>
+                                  <span className={styles.pageLabel}>{page.label}</span>
+                                  {!page.supports_edit && <span className={styles.readOnlyBadge}>Только просмотр</span>}
+                                </div>
+                                <code className={styles.pagePath}>{page.key}</code>
                               </div>
+                              {renderAccessControl(page)}
                             </div>
-                            {renderAccessControl(page)}
-                          </div>
-                        ))}
+                          ))}
+                        </div>
                       </div>
-                    </details>
-                  )}
+                    ))}
+                  </div>
+
+                  <div className={`${styles.areaBlock} ${roleHasAdminArea ? '' : styles.areaBlockDisabled}`}>
+                    <div className={styles.areaHeader}>
+                      <h3 className={styles.areaTitle}>Админка</h3>
+                      <span className={styles.areaHint}>
+                        {roleHasAdminArea
+                          ? 'Разделы вне личного кабинета'
+                          : 'Включите «Доступ в админку», чтобы выдать роли эти страницы'}
+                      </span>
+                    </div>
+
+                    {adminGroups.map(group => (
+                      <div key={group.code} className={styles.card}>
+                        <div className={styles.cardHeader}>
+                          <h3 className={styles.cardTitle}>{group.label}</h3>
+                        </div>
+                        <div className={styles.pageRows}>
+                          {group.pages.map(page => (
+                            <div key={page.key} className={styles.pageRow}>
+                              <div className={styles.pageInfo}>
+                                <div className={styles.pageLabelRow}>
+                                  <span className={styles.pageLabel}>{page.label}</span>
+                                  {!page.supports_edit && <span className={styles.readOnlyBadge}>Только просмотр</span>}
+                                </div>
+                                <code className={styles.pagePath}>{page.key}</code>
+                              </div>
+                              {renderAccessControl(page)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+
+                    {technicalPages.length > 0 && (
+                      <details className={styles.card}>
+                        <summary className={styles.technicalSummary}>
+                          Технические доступы
+                          <span className={styles.technicalSummaryHint}>
+                            {accessSummary.technicalCount > 0
+                              ? `${accessSummary.technicalCount} активн.`
+                              : 'скрыты по умолчанию'}
+                          </span>
+                        </summary>
+                        <div className={styles.pageRows}>
+                          {technicalPages.map(page => (
+                            <div key={page.key} className={styles.pageRow}>
+                              <div className={styles.pageInfo}>
+                                <div className={styles.pageLabelRow}>
+                                  <span className={styles.pageLabel}>{page.label}</span>
+                                  <span className={styles.technicalBadge}>Технический ключ</span>
+                                </div>
+                              </div>
+                              {renderAccessControl(page)}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
                 </div>
               </>
             )}

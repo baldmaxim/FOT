@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMyPresence } from '../../hooks/useMyPresence';
 import { useMyEmployee } from '../../hooks/useMyEmployee';
+import { useAdminEntryPath } from '../../hooks/useNavContext';
 import { formatFioShort } from '../../utils/formatFio';
 import styles from './EmployeeSidebar.module.css';
 
@@ -140,6 +141,10 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
   const navigate = useNavigate();
   const location = useLocation();
   const { profile, logout, canViewPage } = useAuth();
+  // Вход в админку: первая доступная админ-страница роли. Раньше блок «Управление»
+  // показывался только при праве на «Обзор» (/dashboard), и узкие роли (напр.
+  // «Менеджер МТС») не могли попасть в свой раздел из личного кабинета.
+  const adminEntryPath = useAdminEntryPath();
   const { status: presenceStatus } = useMyPresence();
   const { data: myEmployee } = useMyEmployee(!profile?.imported_position);
   const positionLabel = profile?.imported_position
@@ -242,13 +247,13 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
       </div>
 
       <nav className={styles.nav}>
-        {canViewPage('/dashboard') && (
+        {adminEntryPath && (
           <div className={styles.navGroup}>
             <div className={styles.navLabel}>Управление</div>
             <div
-              className={`${styles.navItem} ${location.pathname === '/dashboard' ? styles.active : ''}`}
+              className={`${styles.navItem} ${location.pathname === adminEntryPath ? styles.active : ''}`}
               title="Панель управления"
-              onClick={() => { navigate('/dashboard'); onClose?.(); }}
+              onClick={() => { navigate(adminEntryPath); onClose?.(); }}
             >
               <div className={styles.navIcon}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

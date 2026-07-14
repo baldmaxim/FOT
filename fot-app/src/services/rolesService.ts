@@ -8,12 +8,15 @@ interface ApiResponse<T> {
 
 export type AccessMode = 'none' | 'view' | 'edit';
 export type AccessPageSurface = 'page' | 'technical';
+/** Область права: личный кабинет сотрудника или админка (миграция 221). */
+export type AccessPageArea = 'personal' | 'admin';
 
 export interface PageCatalogItem {
   key: string;
   label: string;
   group_code: string;
   group_label: string;
+  area: AccessPageArea;
   surface: AccessPageSurface;
   supports_edit: boolean;
   sort_order: number;
@@ -52,6 +55,10 @@ export interface CreateRoleData extends CorrectionRestrictionFields {
   name: string;
   description?: string | null;
   is_admin?: boolean;
+  /** Доступ в админку (system_roles.admin_access). */
+  admin_access?: boolean;
+  /** Авто-выдача «Управление кадрами» / «Табель» руководителям (system_roles.manager_auto_access). */
+  manager_auto_access?: boolean;
   employee_variant?: EmployeeVariant | null;
   show_actual_hours?: boolean;
   hide_sidebar?: boolean;
@@ -64,6 +71,10 @@ export interface UpdateRoleData extends CorrectionRestrictionFields {
   name: string;
   description?: string | null;
   is_admin?: boolean;
+  /** Доступ в админку (system_roles.admin_access). */
+  admin_access?: boolean;
+  /** Авто-выдача «Управление кадрами» / «Табель» руководителям (system_roles.manager_auto_access). */
+  manager_auto_access?: boolean;
   employee_variant?: EmployeeVariant | null;
   is_active?: boolean;
   show_actual_hours?: boolean;
@@ -78,6 +89,10 @@ export interface CloneRoleData extends CorrectionRestrictionFields {
   name: string;
   description?: string | null;
   is_admin?: boolean;
+  /** Доступ в админку (system_roles.admin_access). */
+  admin_access?: boolean;
+  /** Авто-выдача «Управление кадрами» / «Табель» руководителям (system_roles.manager_auto_access). */
+  manager_auto_access?: boolean;
   employee_variant?: EmployeeVariant | null;
   is_active?: boolean;
   show_actual_hours?: boolean;

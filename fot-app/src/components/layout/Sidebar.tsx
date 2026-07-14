@@ -6,84 +6,9 @@ import { usePendingLeaveRequestsCount } from '../../hooks/usePendingLeaveRequest
 import { usePendingContractorSubmissionsCount } from '../../hooks/usePendingContractorSubmissionsCount';
 import { formatFioShort } from '../../utils/formatFio';
 import { getLandingPath } from '../../utils/landingPath';
+import { isNavItemVisible } from '../../utils/adminEntry';
+import { navGroups } from './navConfig';
 import styles from './Sidebar.module.css';
-import {
-  GridIcon,
-  UsersIcon,
-  CalendarIcon,
-  ClipboardCheckIcon,
-  DatabaseIcon,
-  UserIcon,
-  BarChartIcon,
-  ShieldIcon,
-  DollarIcon,
-  FileTextIcon,
-  KeyIcon,
-  MapPinIcon,
-  PhoneIcon,
-} from '../ui/Icons';
-
-interface INavItem {
-  id: string;
-  path: string;
-  label: string;
-  icon: FC<{ className?: string }>;
-  badge?: number;
-  requiredPage?: string | string[];
-  /**
-   * Если true — пункт скрыт для админа компании (is_admin со скоупом).
-   * Системный админ (company_scope.roots === 'all') всегда видит пункт.
-   */
-  systemAdminOnly?: boolean;
-  /**
-   * Пункт — личный кабинет конкретного типа. Виден только если у роли
-   * выбран этот тип кабинета (system_roles.employee_variant), а не по
-   * page-access (админ обходит page-access и иначе видел бы ЛК подрядчика).
-   */
-  personalCabinet?: 'contractor';
-}
-
-interface INavGroup {
-  label: string;
-  items: INavItem[];
-}
-
-const navGroups: INavGroup[] = [
-  {
-    label: 'Моё',
-    items: [
-      { id: 'my-cabinet', path: '/employee', label: 'Личный кабинет', icon: UserIcon, requiredPage: '/employee' },
-      { id: 'overview', path: '/', label: 'Обзор', icon: GridIcon, requiredPage: '/dashboard' },
-      { id: 'leave-requests', path: '/leave-requests', label: 'Заявления', icon: ClipboardCheckIcon, requiredPage: ['/leave-requests', '/salary-raise-review', '/leave-vacations'] },
-      { id: 'skud-presence', path: '/skud-presence', label: 'Сотрудники на объектах', icon: MapPinIcon, requiredPage: '/skud-presence' },
-      { id: 'contractor', path: '/contractor', label: 'Пропуска', icon: KeyIcon, requiredPage: '/contractor', personalCabinet: 'contractor' },
-    ]
-  },
-  {
-    label: 'Управление',
-    items: [
-      { id: 'staff-control', path: '/staff-control', label: 'Управление кадрами', icon: UsersIcon, requiredPage: ['/staff-control', '/staff-control/hiring'] },
-      { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon, requiredPage: '/timesheet' },
-      { id: 'approvals', path: '/approvals', label: 'Согласования', icon: CalendarIcon, requiredPage: '/timesheet-hr' },
-      { id: 'timesheet-hr', path: '/timesheet-hr', label: 'Табели HR', icon: CalendarIcon, requiredPage: '/timesheet-hr' },
-      { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPage: '/discipline' },
-    ]
-  },
-  {
-    label: 'Администрирование',
-    items: [
-      { id: 'payroll-hub', path: '/admin/schedules', label: 'Графики работы', icon: DollarIcon, requiredPage: ['/admin/schedules', '/admin/schedules/templates'] },
-      { id: 'patent-receipts', path: '/admin/patent-receipts', label: 'Чеки за патент', icon: FileTextIcon, requiredPage: '/admin/patent-receipts' },
-      { id: 'timesheet-transfers', path: '/admin/timesheet-transfers', label: 'Переводы и исключения', icon: CalendarIcon, requiredPage: '/admin/timesheet-transfers' },
-      { id: 'skud-hub', path: '/skud-settings', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },
-      { id: 'sigur', path: '/sigur', label: 'SIGUR', icon: UsersIcon, requiredPage: '/skud-settings' },
-      { id: 'card-reader', path: '/skud-card-reader', label: 'Пропуск', icon: KeyIcon, requiredPage: '/skud-card-reader' },
-      { id: 'contractor-approvals', path: '/admin/contractor-approvals', label: 'Подрядчики', icon: ClipboardCheckIcon, requiredPage: ['/admin/contractor-approvals', '/admin/contractor-approvals/submissions', '/admin/contractor-approvals/otitb'] },
-      { id: 'mts-business', path: '/mts-business', label: 'МТС Бизнес', icon: PhoneIcon, requiredPage: '/mts-business' },
-      { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api'], systemAdminOnly: true },
-    ]
-  }
-];
 
 interface ISidebarProps {
   theme?: 'light' | 'dark';
@@ -166,9 +91,16 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
   const isCompanyAdmin = !!profile?.is_admin
     && Array.isArray(profile?.company_scope?.roots);
 
+  const navContext = {
+    canViewPage,
+    employeeVariant,
+    isCompanyAdmin,
+    isWeekendResponsible: profile?.is_weekend_responsible === true,
+  };
+
   // «Домой» — первая доступная страница роли (не хардкод /dashboard: узкие роли
   // без «Обзора», напр. ОТиТБ, иначе попадают в /unauthorized).
-  const homePath = getLandingPath(canViewPage, employeeVariant);
+  const homePath = getLandingPath(canViewPage, employeeVariant, navContext);
 
   return (
     <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''} ${isCollapsed ? styles.collapsed : ''}`}>
@@ -207,17 +139,7 @@ export const Sidebar: FC<ISidebarProps> = ({ theme = 'dark', isOpen, onClose, is
           const visibleItems = group.items
             .map(item => item.id === 'leave-requests' ? { ...item, badge: leaveRequestsBadge } : item)
             .map(item => item.id === 'contractor-approvals' ? { ...item, badge: contractorBadge } : item)
-            .filter(item => {
-              if (item.systemAdminOnly && isCompanyAdmin) return false;
-              // ЛК подрядчика виден только если у роли тип кабинета = contractor
-              // (админ обходит page-access, поэтому не по canViewPage).
-              if (item.personalCabinet === 'contractor') return employeeVariant === 'contractor';
-              // «Согласования» доступны и назначенным ответственным за выходные (decision 10).
-              if (item.id === 'approvals' && profile?.is_weekend_responsible === true) return true;
-              const pages = item.requiredPage ?? item.path;
-              const pageList = Array.isArray(pages) ? pages : [pages];
-              return pageList.some(page => canViewPage(page));
-            });
+            .filter(item => isNavItemVisible(item, navContext));
 
           if (visibleItems.length === 0) return null;
 

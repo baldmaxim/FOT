@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { z } from 'zod';
 import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
-import type { AccessMode } from '../config/access-control.js';
+import { isAdminAreaPageKey, type AccessMode } from '../config/access-control.js';
 import type { AuthenticatedRequest, SystemRole } from '../types/index.js';
 import {
   invalidateRoleListCache,
@@ -47,6 +47,8 @@ const createRoleSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).nullable().optional(),
   is_admin: z.boolean().optional().default(false),
+  admin_access: z.boolean().optional().default(false),
+  manager_auto_access: z.boolean().optional().default(true),
   employee_variant: employeeVariantSchema,
   show_actual_hours: z.boolean().optional().default(false),
   hide_sidebar: z.boolean().optional().default(false),
@@ -66,6 +68,8 @@ const updateRoleSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).nullable().optional(),
   is_admin: z.boolean().optional(),
+  admin_access: z.boolean().optional(),
+  manager_auto_access: z.boolean().optional(),
   employee_variant: employeeVariantSchema,
   is_active: z.boolean().optional(),
   show_actual_hours: z.boolean().optional(),
@@ -91,6 +95,8 @@ const cloneRoleSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).nullable().optional(),
   is_admin: z.boolean().optional(),
+  admin_access: z.boolean().optional(),
+  manager_auto_access: z.boolean().optional(),
   employee_variant: employeeVariantSchema,
   is_active: z.boolean().optional(),
   show_actual_hours: z.boolean().optional(),
@@ -287,6 +293,8 @@ export const rolesController = {
       name,
       description,
       is_admin,
+      admin_access,
+      manager_auto_access,
       employee_variant,
       show_actual_hours,
       hide_sidebar,
@@ -311,8 +319,8 @@ export const rolesController = {
             corrections_anomalies_only, corrections_cap_by_schedule_norm,
             corrections_allow_zero_short_attendance, corrections_disable_bulk,
             max_corrections_per_month, weekend_memo_required,
-            corrections_disable_object_entries, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, true)
+            corrections_disable_object_entries, admin_access, manager_auto_access, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, true)
          RETURNING *`,
         [
           code,
@@ -332,6 +340,8 @@ export const rolesController = {
           max_corrections_per_month ?? null,
           !!weekend_memo_required,
           !!corrections_disable_object_entries,
+          !!is_admin || !!admin_access,
+          manager_auto_access !== false,
         ],
       );
     } catch (error) {
@@ -388,8 +398,8 @@ export const rolesController = {
               corrections_anomalies_only, corrections_cap_by_schedule_norm,
               corrections_allow_zero_short_attendance, corrections_disable_bulk,
               max_corrections_per_month, weekend_memo_required, is_active,
-              corrections_disable_object_entries)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+              corrections_disable_object_entries, admin_access, manager_auto_access)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
            RETURNING *`,
           [
             targetCode,
@@ -414,6 +424,9 @@ export const rolesController = {
             parsed.data.weekend_memo_required ?? sourceRole.weekend_memo_required ?? false,
             parsed.data.is_active ?? true,
             parsed.data.corrections_disable_object_entries ?? sourceRole.corrections_disable_object_entries ?? false,
+            (parsed.data.is_admin ?? sourceRole.is_admin)
+              || (parsed.data.admin_access ?? sourceRole.admin_access ?? false),
+            (parsed.data.manager_auto_access ?? sourceRole.manager_auto_access) !== false,
           ],
         );
       } catch (createError) {
@@ -485,6 +498,13 @@ export const rolesController = {
     setClauses.push(`updated_at = ${addParam(new Date().toISOString())}`);
     if (parsed.data.is_active !== undefined) setClauses.push(`is_active = ${addParam(parsed.data.is_active)}`);
     if (parsed.data.is_admin !== undefined) setClauses.push(`is_admin = ${addParam(parsed.data.is_admin)}`);
+    // Админ по определению имеет доступ в админку — флаг не даём рассинхронизировать.
+    const nextIsAdmin = parsed.data.is_admin ?? currentRole.is_admin;
+    if (parsed.data.admin_access !== undefined || parsed.data.is_admin !== undefined) {
+      const nextAdminAccess = nextIsAdmin || (parsed.data.admin_access ?? currentRole.admin_access ?? false);
+      setClauses.push(`admin_access = ${addParam(nextAdminAccess)}`);
+    }
+    if (parsed.data.manager_auto_access !== undefined) setClauses.push(`manager_auto_access = ${addParam(parsed.data.manager_auto_access)}`);
     if (parsed.data.employee_variant !== undefined) setClauses.push(`employee_variant = ${addParam(parsed.data.employee_variant)}`);
     if (parsed.data.show_actual_hours !== undefined) setClauses.push(`show_actual_hours = ${addParam(parsed.data.show_actual_hours)}`);
     if (parsed.data.hide_sidebar !== undefined) setClauses.push(`hide_sidebar = ${addParam(parsed.data.hide_sidebar)}`);
@@ -498,6 +518,32 @@ export const rolesController = {
     if (parsed.data.corrections_disable_object_entries !== undefined) setClauses.push(`corrections_disable_object_entries = ${addParam(parsed.data.corrections_disable_object_entries)}`);
     if (parsed.data.max_corrections_per_month !== undefined) setClauses.push(`max_corrections_per_month = ${addParam(parsed.data.max_corrections_per_month)}`);
     if (parsed.data.weekend_memo_required !== undefined) setClauses.push(`weekend_memo_required = ${addParam(parsed.data.weekend_memo_required)}`);
+
+    // Выключение доступа в админку физически убирает админ-строки роли: иначе они
+    // остались бы «спящими» и сработали бы на путях, которые читают role_page_access
+    // напрямую, а также вернулись бы при обратном включении флага.
+    const nextAdminAccess = nextIsAdmin || (parsed.data.admin_access ?? currentRole.admin_access ?? false);
+    const revokingAdminArea = !nextAdminAccess && (currentRole.is_admin || currentRole.admin_access);
+    let personalOnlyAccess: Record<string, AccessMode> | null = null;
+    if (revokingAdminArea) {
+      const currentModes = await loadRoleAccessModes(code);
+      personalOnlyAccess = Object.fromEntries(
+        Object.entries(currentModes).filter(([pageKey]) => !isAdminAreaPageKey(pageKey)),
+      );
+      if (currentRole.is_active) {
+        try {
+          await ensureCriticalAdminAccess({ rolePageAccessByCode: { [code]: personalOnlyAccess } });
+        } catch (error) {
+          res.status(400).json({
+            success: false,
+            error: error instanceof Error
+              ? error.message
+              : 'Нельзя закрыть админку последней роли с критичными правами',
+          });
+          return;
+        }
+      }
+    }
 
     const codePlaceholder = addParam(code);
 
@@ -521,7 +567,12 @@ export const rolesController = {
       return;
     }
 
+    if (personalOnlyAccess) {
+      await persistAccessProfile(code, personalOnlyAccess);
+    }
+
     invalidateRoleListCache();
+    invalidateRolePageAccessCache();
     invalidateCorrectionRestrictionsCache(data.id);
     await emitRoleAccessChanged(data.id);
     res.json({ success: true, data });
@@ -542,8 +593,13 @@ export const rolesController = {
         return;
       }
 
+      // Роль без доступа в админку хранит только ключи личного кабинета —
+      // иначе выключенный тумблер оставлял бы «спящие» админ-права в БД.
+      const roleHasAdminArea = !!role.is_admin || !!role.admin_access;
       const page_access = Object.fromEntries(
-        Object.entries(parsed.data.page_access || {}).map(([pageKey, mode]) => [pageKey, mode as AccessMode]),
+        Object.entries(parsed.data.page_access || {})
+          .filter(([pageKey]) => roleHasAdminArea || !isAdminAreaPageKey(pageKey))
+          .map(([pageKey, mode]) => [pageKey, mode as AccessMode]),
       );
 
       const pageError = await validatePageAccessModes(page_access);

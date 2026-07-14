@@ -7,7 +7,7 @@ const SERVER_ROOT = path.resolve(__dirname, '..', '..');
 const REPO_ROOT = path.resolve(SERVER_ROOT, '..');
 const FRONTEND_FILES = [
   path.join(REPO_ROOT, 'fot-app', 'src', 'App.tsx'),
-  path.join(REPO_ROOT, 'fot-app', 'src', 'components', 'layout', 'Sidebar.tsx'),
+  path.join(REPO_ROOT, 'fot-app', 'src', 'components', 'layout', 'navConfig.ts'),
   path.join(REPO_ROOT, 'fot-app', 'src', 'components', 'layout', 'EmployeeSidebar.tsx'),
 ];
 const ROUTES_ROOT = path.join(SERVER_ROOT, 'src', 'routes');

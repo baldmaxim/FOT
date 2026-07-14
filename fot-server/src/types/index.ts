@@ -14,6 +14,10 @@ export interface SystemRole {
   employee_variant: EmployeeVariant | null;
   is_active: boolean;
   show_actual_hours: boolean;
+  /** true → роль имеет доступ в админку, а не только в личный кабинет (миграция 221). Для is_admin всегда true. */
+  admin_access: boolean;
+  /** true → «Управление кадрами» / «Табель» выдаются автоматически пользователям с назначенными отделами или прямыми подчинёнными (миграция 221). Дефолт true. */
+  manager_auto_access: boolean;
   /** true → у пользователей роли полностью скрывается боковое меню. Для is_admin игнорируется на фронте. */
   hide_sidebar: boolean;
   /** Окно доступных месяцев табеля: сколько месяцев назад от текущего. Применяется когда is_admin=false. Дефолт 1. */
@@ -55,6 +59,8 @@ export interface UserProfileResponse {
   role_name: string;
   position_type: string;
   is_admin: boolean;
+  /** true → роль видит админку (сайдбар и страницы вне личного кабинета). is_admin ⇒ всегда true. */
+  has_admin_access: boolean;
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;
   hide_sidebar: boolean;

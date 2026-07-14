@@ -24,7 +24,8 @@ async function loadRolesCache(): Promise<void> {
   rolesCacheInflight = (async () => {
     try {
       const rows = await query<SystemRole>(
-        `SELECT id, code, name, description, is_admin, employee_variant, is_active,
+        `SELECT id, code, name, description, is_admin, admin_access, manager_auto_access,
+                employee_variant, is_active,
                 show_actual_hours, hide_sidebar, timesheet_months_back, timesheet_months_forward,
                 timesheet_show_full_period, weekend_memo_required, corrections_disable_object_entries,
                 created_at, updated_at
