@@ -163,6 +163,7 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
                         <tr>
                           <th>День</th>
                           <th>Звонки</th>
+                          <th>Длительность</th>
                           <th>СМС</th>
                           <th>Интернет</th>
                           <th>Сумма</th>
@@ -177,7 +178,8 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
                             title={selectedDay === d.date ? 'Показать весь месяц' : `Детализация за ${fmtDay(d.date)}`}
                           >
                             <td className={styles.daysDate}>{fmtDay(d.date)}</td>
-                            <td>{d.calls > 0 ? `${d.calls} зв · ${fmtDur(d.callsSeconds)}` : '—'}</td>
+                            <td>{d.calls > 0 ? d.calls : '—'}</td>
+                            <td>{d.callsSeconds > 0 ? fmtDur(d.callsSeconds) : '—'}</td>
                             <td>{d.smsCount > 0 ? `${d.smsCount} шт` : '—'}</td>
                             <td>{d.internetBytes > 0 ? fmtUnits(d.internetBytes, 'BYTE') : '—'}</td>
                             <td>{d.amount > 0 ? fmtMoney(d.amount) : '—'}</td>
