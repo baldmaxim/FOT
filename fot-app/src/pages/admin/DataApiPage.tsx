@@ -453,24 +453,44 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
                               </button>
                             </div>
                             {isOpen && (
-                              <div className={styles.fieldsGrid}>
-                                {table.columns.map(column => {
-                                  const checked = selectedFields?.has(column.name) ?? false;
-                                  return (
-                                    <label key={column.name}>
-                                      <input
-                                        type="checkbox"
-                                        checked={checked}
-                                        onChange={e => setTableField(table.name, column.name, e.target.checked)}
-                                      />
-                                      <span className={styles.fieldText}>
-                                        <span className={styles.fieldName}>{column.name}</span>
-                                        <span className={styles.fieldType}>{column.data_type}</span>
-                                      </span>
-                                    </label>
-                                  );
-                                })}
-                              </div>
+                              <>
+                                <div className={styles.fieldsBar}>
+                                  <button
+                                    type="button"
+                                    className={styles.btn}
+                                    disabled={allChecked}
+                                    onClick={() => toggleAllFields(table.name, table.columns.map(c => c.name), true)}
+                                  >
+                                    Выделить все
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={styles.btn}
+                                    disabled={!selectedFields || selectedFields.size === 0}
+                                    onClick={() => toggleAllFields(table.name, [], false)}
+                                  >
+                                    Снять все
+                                  </button>
+                                </div>
+                                <div className={styles.fieldsGrid}>
+                                  {table.columns.map(column => {
+                                    const checked = selectedFields?.has(column.name) ?? false;
+                                    return (
+                                      <label key={column.name}>
+                                        <input
+                                          type="checkbox"
+                                          checked={checked}
+                                          onChange={e => setTableField(table.name, column.name, e.target.checked)}
+                                        />
+                                        <span className={styles.fieldText}>
+                                          <span className={styles.fieldName}>{column.name}</span>
+                                          <span className={styles.fieldType}>{column.data_type}</span>
+                                        </span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </>
                             )}
                           </div>
                         );
