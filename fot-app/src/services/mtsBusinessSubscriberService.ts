@@ -61,6 +61,26 @@ export interface IMtsSubForwardingRule {
   status: string | null;
 }
 
+/**
+ * Типы переадресации, которыми УМЕЕМ управлять (МТС может вернуть и CFB —
+ * показываем, но не редактируем). Совпадает с FORWARDING_TYPES на бэкенде.
+ */
+export const MTS_FORWARDING_TYPES = ['CFU', 'CFNRY', 'CFNRC'] as const;
+
+export type MtsForwardingType = (typeof MTS_FORWARDING_TYPES)[number];
+
+/** Таймер «нет ответа» по умолчанию, сек (только CFNRY). */
+export const MTS_DEFAULT_NO_REPLY_TIMER = 20;
+
+export const isMtsForwardingType = (v: string | null | undefined): v is MtsForwardingType =>
+  v != null && (MTS_FORWARDING_TYPES as readonly string[]).includes(v);
+
+/** Активное правило = первое с управляемым типом и непустым адресом (МТС отдаёт и заглушки). */
+export const pickMtsForwardingRule = (
+  rules: IMtsSubForwardingRule[] | null | undefined,
+): IMtsSubForwardingRule | null =>
+  rules?.find(r => isMtsForwardingType(r.forwardingType) && Boolean(r.forwardingAddress)) ?? null;
+
 export interface IMtsSubRoaming {
   countryId: string | null;
   countryName: string | null;

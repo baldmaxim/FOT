@@ -13,10 +13,17 @@ import { mtsBusinessActionsService } from '../services/mts-business-actions.serv
 import { mtsBusinessDataService } from '../services/mts-business-data.service.js';
 import { mtsBusinessCdrService, msisdnHash } from '../services/mts-business-cdr.service.js';
 import { MtsBusinessApiError, isFeatureUnavailable } from '../services/mts-business-base.service.js';
+import {
+  FORWARDING_TYPES,
+  validateForwardingTarget,
+  resolveNoReplyTimer,
+} from '../services/mts-forwarding.shared.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 
 // Вкладка «Абоненты»: список/детали из БД, точечный полный синк одного номера,
-// живой каталог подключаемого (услуги/блокировки/тарифы) и смена тарифа.
+// живой каталог подключаемого (услуги/блокировки/тарифы), смена тарифа и
+// переадресация за абонента (те же write-вызовы МТС, что в ЛК «Моя SIM», но по
+// edit-праву на /mts-business — админ может снять переадресацию у уволенного).
 
 const fail = (res: Response, error: unknown, fallback: string): void => {
   if (error instanceof MtsBusinessApiError) {
@@ -37,6 +44,32 @@ const tariffSchema = z.object({
   externalID: z.string().trim().min(1).max(40),
   confirmed: z.literal(true),
 });
+
+const setForwardingSchema = z.object({
+  accountId: z.string().uuid().optional(),
+  msisdn: z.string().min(10).max(20),
+  type: z.enum(FORWARDING_TYPES),
+  target: z.string().trim().min(1),
+  timer: z.coerce.number().int().min(5).max(30).optional(),
+  confirmed: z.literal(true),
+});
+
+const deleteForwardingSchema = z.object({
+  accountId: z.string().uuid().optional(),
+  msisdn: z.string().min(10).max(20),
+  type: z.enum(FORWARDING_TYPES),
+  confirmed: z.literal(true),
+});
+
+/** ЛС номера: из запроса либо из маппинга. Отвечает 400 и возвращает null, если не определить. */
+const resolveAccountId = async (res: Response, fromBody: string | undefined, msisdn: string): Promise<string | null> => {
+  const accountId = fromBody ?? (await mtsBusinessMappingService.getSubscriberContext(msisdn))?.accountId ?? null;
+  if (!accountId) {
+    res.status(400).json({ success: false, error: 'Не удалось определить лицевой счёт номера' });
+    return null;
+  }
+  return accountId;
+};
 
 type Section<T> = { data: T } | { unavailable: true; reason: 'MTS_FEATURE_NOT_CONNECTED' } | { error: string };
 
@@ -249,6 +282,78 @@ export const mtsBusinessSubscribersController = {
       res.json({ success: true, data: { eventId } });
     } catch (error) {
       fail(res, error, 'Ошибка смены тарифа');
+    }
+  },
+
+  /**
+   * Включить/изменить переадресацию ЗА абонента (админ). Тот же write-вызов МТС,
+   * что и в самообслуживании ЛК «Моя SIM», но без проверки «номер мой» — скоуп
+   * даёт edit-право на /mts-business + critical-2FA. Асинхронно: вернём eventId,
+   * снапшот правил перепишет статус-поллер по completed.
+   */
+  async setForwarding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = setForwardingSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректный запрос', details: parsed.error.flatten() });
+        return;
+      }
+      const { msisdn, type } = parsed.data;
+      const target = validateForwardingTarget(parsed.data.target, msisdn);
+      if (!target.ok) {
+        res.status(400).json({ success: false, error: target.error });
+        return;
+      }
+      const accountId = await resolveAccountId(res, parsed.data.accountId, msisdn);
+      if (!accountId) return;
+      const timer = resolveNoReplyTimer(type, parsed.data.timer);
+
+      const { eventId } = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'create', {
+        forwardingType: type,
+        forwardingAddress: target.value,
+        noReplyTimer: timer,
+        numType: 'Regular',
+      });
+      await mtsBusinessActionsService.create({
+        eventId, accountId, scope: 'msisdn', msisdn, actionType: 'forwarding_set',
+        payload: { type, target: target.value, timer }, requestedBy: req.user.id,
+      });
+      // В аудит номер назначения целиком не пишем — только тип правила и хвост.
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_SET_REQUESTED, {
+        details: { accountId, type, timer, targetTail: target.value.slice(-4) },
+      });
+      res.json({ success: true, data: { eventId } });
+    } catch (error) {
+      fail(res, error, 'Ошибка включения переадресации');
+    }
+  },
+
+  /** Снять переадресацию за абонента (напр. у уволенного сотрудника). */
+  async deleteForwarding(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = deleteForwardingSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректный запрос', details: parsed.error.flatten() });
+        return;
+      }
+      const { msisdn, type } = parsed.data;
+      const accountId = await resolveAccountId(res, parsed.data.accountId, msisdn);
+      if (!accountId) return;
+
+      const { eventId } = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'delete', {
+        forwardingType: type,
+        numType: 'Regular',
+      });
+      await mtsBusinessActionsService.create({
+        eventId, accountId, scope: 'msisdn', msisdn, actionType: 'forwarding_remove',
+        payload: { type }, requestedBy: req.user.id,
+      });
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_REMOVE_REQUESTED, {
+        details: { accountId, type },
+      });
+      res.json({ success: true, data: { eventId } });
+    } catch (error) {
+      fail(res, error, 'Ошибка отключения переадресации');
     }
   },
 };

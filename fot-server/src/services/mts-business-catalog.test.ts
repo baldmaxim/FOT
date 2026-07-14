@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseAvailableTariffs } from './mts-business-catalog.service.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { parseAvailableTariffs, mtsBusinessCatalogService } from './mts-business-catalog.service.js';
 
 // Контракт снят живым probe 10.07.2026 (ЛС СУ-10, msisdn 7915…230):
 // GET /Product/ProductInfo?category.name=AvailibleTariffPlann → 200, массив тарифов.
@@ -48,5 +48,68 @@ describe('МТС Бизнес: parseAvailableTariffs (доступные тар�
     expect(parseAvailableTariffs(null)).toEqual([]);
     expect(parseAvailableTariffs([])).toEqual([]);
     expect(parseAvailableTariffs({})).toEqual([]);
+  });
+});
+
+// Регресс на Sentry FOT-SERVER-4D: msisdn лежал в теле ModifyProduct, а гейт МТС
+// ждёт его в query (док §5.4) — отвечал 401, управление услугами не работало.
+interface IRequestOptions {
+  accountId: string;
+  params?: Record<string, unknown>;
+  data?: unknown;
+  retryOn500?: boolean;
+}
+type CatalogInternals = {
+  request: (method: string, endpoint: string, options: IRequestOptions) => Promise<unknown>;
+};
+
+describe('МТС Бизнес: modifyProduct (подключение/отключение услуги и блокировки)', () => {
+  const internals = mtsBusinessCatalogService as unknown as CatalogInternals;
+  const ACCOUNT = 'a1b2c3d4-0000-0000-0000-000000000001';
+  const MSISDN = '79151204230';
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('шлёт msisdn в query, а не в теле; тело — характеристика + item', async () => {
+    const spy = vi.spyOn(internals, 'request').mockResolvedValue({ eventID: 'evt-1' });
+
+    const out = await mtsBusinessCatalogService.modifyProduct(ACCOUNT, MSISDN, 'create', 'PE1234');
+
+    expect(out).toEqual({ eventId: 'evt-1' });
+    const [method, endpoint, options] = spy.mock.calls[0];
+    expect(method).toBe('post');
+    expect(endpoint).toBe('/Product/ModifyProduct');
+    expect(options.params).toEqual({ msisdn: MSISDN });
+    expect(options.retryOn500).toBe(false); // мутация: исход первой попытки неизвестен
+    expect(options.data).toEqual({
+      characteristic: [{ name: 'MobileConnectivity' }],
+      item: [{
+        action: 'create',
+        product: {
+          externalID: 'PE1234',
+          productCharacteristic: [{ name: 'ResourceServiceRequestItemType', value: 'ResourceServiceRequestItem' }],
+        },
+      }],
+    });
+    expect(JSON.stringify(options.data)).not.toContain(MSISDN);
+  });
+
+  it('отключение шлёт action=delete', async () => {
+    const spy = vi.spyOn(internals, 'request').mockResolvedValue({ eventID: 'evt-2' });
+
+    await mtsBusinessCatalogService.modifyProduct(ACCOUNT, MSISDN, 'delete', 'BL0001');
+
+    const body = spy.mock.calls[0][2].data as { item: Array<{ action: string; product: { externalID: string } }> };
+    expect(body.item[0].action).toBe('delete');
+    expect(body.item[0].product.externalID).toBe('BL0001');
+  });
+
+  it('ответ без eventID — ошибка (заявку нельзя отследить)', async () => {
+    vi.spyOn(internals, 'request').mockResolvedValue({ status: 'ok' });
+
+    await expect(mtsBusinessCatalogService.modifyProduct(ACCOUNT, MSISDN, 'create', 'PE1234'))
+      .rejects.toThrow(/без eventID/);
   });
 });

@@ -200,6 +200,19 @@ router.post(
   requireCritical2FA,
   mtsBusinessSubscribersController.changeTariff,
 );
+// Переадресация за абонента — тот же ChangeCallForwarding, что в ЛК «Моя SIM».
+router.post(
+  '/subscribers/forwarding',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessSubscribersController.setForwarding,
+);
+router.post(
+  '/subscribers/forwarding/delete',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessSubscribersController.deleteForwarding,
+);
 
 // Карточка номера (read-only): собирает по одному MSISDN идентификацию, баланс,
 // тариф, услуги/блокировки, переадресацию, роуминг, доставку счёта, начисления.

@@ -10,6 +10,7 @@ import { useSetMtsBusinessNumberMap } from '../../../hooks/useMtsBusinessData';
 import type { IMtsSubscriberRow, IMtsSubscriberSyncResult } from '../../../services/mtsBusinessSubscribersService';
 import type { IMtsSubServiceItem } from '../../../services/mtsBusinessSubscriberService';
 import { ConnectModal, type ConnectKind } from './ConnectModal';
+import { SubscriberForwardingModal } from './SubscriberForwardingModal';
 import { UsageTab } from './UsageTab';
 import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
@@ -135,6 +136,7 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
   const [view, setView] = useState<'main' | 'usage'>('main');
   const [editLink, setEditLink] = useState(false); // редактирование привязки к сотруднику (карандаш)
   const [connectKind, setConnectKind] = useState<ConnectKind | null>(null); // модалка «+» / смены тарифа
+  const [fwdOpen, setFwdOpen] = useState(false); // модалка переадресации
 
   const accountId = details.data?.accountId ?? row.accountId ?? '';
   const busy = modify.isPending || refresh.isPending || setMap.isPending;
@@ -398,12 +400,36 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           {details.isLoading ? <p className={styles.hint}>Загрузка…</p> : serviceList(d?.blocks ?? [], 'block', 'remove', 'Блокировок нет')}
         </div>
 
-        {((d?.forwarding ?? []).length > 0 || d?.roaming || (d?.deliveryMethod ?? []).length > 0) && (
+        {/* Переадресация — своя секция (видна всегда, даже когда правил нет):
+            админ должен видеть, что звонки уходят на другой номер, и уметь снять
+            правило за сотрудника (напр. у уволенного). */}
+        <div className={st.section}>
+          <div className={st.sectionHead}>
+            <h4 className={st.sectionTitle}>Переадресация</h4>
+            <button
+              className={st.itemBtn}
+              disabled={busy || !accountId || details.isLoading}
+              onClick={() => setFwdOpen(true)}
+            >
+              Изменить
+            </button>
+          </div>
+          {details.isLoading ? <p className={styles.hint}>Загрузка…</p> : (d?.forwarding ?? []).length === 0 ? (
+            <p className={styles.hint}>Не настроена — звонки приходят только на эту SIM.</p>
+          ) : (
+            (d?.forwarding ?? []).map((f, i) => (
+              <KV
+                key={`fw-${i}`}
+                label={(f.forwardingType && FORWARDING_TYPE_LABELS[f.forwardingType]) ?? f.forwardingType ?? 'Правило'}
+                value={`${dash(f.forwardingAddress)}${f.forwardingType === 'CFNRY' && f.noReplyTimer ? ` · через ${f.noReplyTimer} сек` : ''}`}
+              />
+            ))
+          )}
+        </div>
+
+        {(d?.roaming || (d?.deliveryMethod ?? []).length > 0) && (
           <div className={st.section}>
             <div className={st.sectionHead}><h4 className={st.sectionTitle}>Прочее</h4></div>
-            {(d?.forwarding ?? []).map((f, i) => (
-              <KV key={`fw-${i}`} label={`Переадресация ${(f.forwardingType && FORWARDING_TYPE_LABELS[f.forwardingType]) ?? f.forwardingType ?? ''}`} value={dash(f.forwardingAddress)} />
-            ))}
             {d?.roaming && <KV label="Роуминг" value={d.roaming.isInternational ? `международный (${dash(d.roaming.countryName ?? d.roaming.countryId)})` : 'нет'} />}
             {(d?.deliveryMethod ?? []).map((dm, i) => (
               <KV key={`dm-${i}`} label="Доставка счетов" value={`${dash(dm.method)}${dm.address ? ` · ${dm.address}` : ''}`} />
@@ -426,6 +452,14 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
         {pdOpen && <PersonalDataModal msisdn={msisdn} onClose={() => setPdOpen(false)} />}
         {connectKind && accountId && (
           <ConnectModal msisdn={msisdn} accountId={accountId} kind={connectKind} onClose={() => setConnectKind(null)} />
+        )}
+        {fwdOpen && accountId && (
+          <SubscriberForwardingModal
+            msisdn={msisdn}
+            accountId={accountId}
+            rules={d?.forwarding ?? []}
+            onClose={() => setFwdOpen(false)}
+          />
         )}
       </div>
     </div>

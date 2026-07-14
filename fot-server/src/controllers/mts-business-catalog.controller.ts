@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { z } from 'zod';
 import * as Sentry from '@sentry/node';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { mtsBusinessAccountsService } from '../services/mts-business-accounts.service.js';
@@ -25,6 +26,15 @@ const fail = (res: Response, error: unknown, fallback: string): void => {
   Sentry.captureException(error, { tags: { module: 'mts-business-catalog', kind: 'generic' } });
   res.status(500).json({ success: false, error: fallback, internal: msg });
 };
+
+const modifyServiceSchema = z.object({
+  accountId: z.string().uuid(),
+  msisdn: z.string().min(10).max(20),
+  externalID: z.string().trim().min(1).max(40),
+  kind: z.enum(['service', 'block']),
+  mode: z.enum(['add', 'remove']),
+  confirmed: z.literal(true),
+});
 
 export const mtsBusinessCatalogController = {
   /** Тариф/кол-во и сумма платных услуг по каждому привязанному к сотруднику номеру. */
@@ -94,15 +104,12 @@ export const mtsBusinessCatalogController = {
   /** Добавить/удалить услугу или добровольную блокировку — общий ModifyProduct, различаются action_type для аудита/статуса. */
   async modifyService(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { accountId, msisdn, externalID, kind, mode, confirmed } = req.body as {
-        accountId?: string; msisdn?: string; externalID?: string;
-        kind?: 'service' | 'block'; mode?: 'add' | 'remove'; confirmed?: boolean;
-      };
-      if (confirmed !== true) { res.status(400).json({ success: false, error: 'Требуется подтверждение (confirmed=true)' }); return; }
-      if (!accountId || !msisdn || !externalID || (kind !== 'service' && kind !== 'block') || (mode !== 'add' && mode !== 'remove')) {
-        res.status(400).json({ success: false, error: 'Укажите accountId, msisdn, externalID, kind (service|block) и mode (add|remove)' });
+      const parsed = modifyServiceSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Укажите accountId, msisdn, externalID, kind (service|block), mode (add|remove) и confirmed=true' });
         return;
       }
+      const { accountId, msisdn, externalID, kind, mode } = parsed.data;
       const { eventId } = await mtsBusinessCatalogService.modifyProduct(accountId, msisdn, mode === 'add' ? 'create' : 'delete', externalID);
       const actionType = `${kind}_${mode}` as const;
       await mtsBusinessActionsService.create({

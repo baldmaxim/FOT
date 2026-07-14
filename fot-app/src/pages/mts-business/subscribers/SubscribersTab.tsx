@@ -7,7 +7,7 @@ import { SubscriberDrawer } from './SubscriberDrawer';
 import { AutoLinkConflictsModal } from './AutoLinkConflictsModal';
 import type { IMtsAutoLinkConflict } from '../../../services/mtsBusinessService';
 import type { IMtsSubscriberRow } from '../../../services/mtsBusinessSubscribersService';
-import { errText, fmtDur, fmtLast, fmtMoney, fmtPhone } from '../mtsBusinessFormat';
+import { errText, fmtDur, fmtLast, fmtMoney, fmtPhone, FORWARDING_TYPE_LABELS } from '../mtsBusinessFormat';
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
 
@@ -18,7 +18,7 @@ const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 const NO_DEPT = '__none__';
 const COLS_STORAGE_KEY = 'mts-subscribers-columns';
 
-type ColKey = 'num' | 'name' | 'dept' | 'acc' | 'tariff' | 'charges' | 'services' | 'calls' | 'time' | 'pd';
+type ColKey = 'num' | 'name' | 'dept' | 'acc' | 'tariff' | 'charges' | 'services' | 'fwd' | 'calls' | 'time' | 'pd';
 
 interface IColumn {
   key: ColKey;
@@ -41,6 +41,7 @@ const COLUMNS: IColumn[] = [
   { key: 'tariff', label: 'Тариф', weight: 15 },
   { key: 'charges', label: 'Начисления', weight: 10, numeric: true },
   { key: 'services', label: 'Услуги', weight: 11, offByDefault: true },
+  { key: 'fwd', label: 'Переадресация', weight: 8 },
   { key: 'calls', label: 'Звонки', weight: 7, numeric: true },
   { key: 'time', label: 'Время', weight: 8, numeric: true, offByDefault: true },
   { key: 'pd', label: 'Персданные', weight: 10, pinned: true },
@@ -98,6 +99,7 @@ export const SubscribersTab: FC = () => {
   const [accountId, setAccountId] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [onlyUnlinked, setOnlyUnlinked] = useState(false);
+  const [onlyForwarded, setOnlyForwarded] = useState(false);
   const [pageSize, setPageSize] = useState(50);
   // Страница хранится вместе с «подписью» фильтров: смена любого фильтра
   // (в т.ч. размера страницы) возвращает на первую страницу без setState-в-эффекте.
@@ -153,6 +155,7 @@ export const SubscribersTab: FC = () => {
       if (departmentId === NO_DEPT && r.departmentId != null) return false;
       if (departmentId && departmentId !== NO_DEPT && r.departmentId !== departmentId) return false;
       if (onlyUnlinked && r.employeeId != null) return false;
+      if (onlyForwarded && r.forwardingType == null) return false;
       if (!q) return true;
       const hay = norm([
         r.msisdn, r.mtsFio, r.mtsComment, r.employeeFullName, r.employeeTabNumber,
@@ -160,9 +163,9 @@ export const SubscribersTab: FC = () => {
       ].filter(Boolean).join(' '));
       return hay.includes(q);
     });
-  }, [rows, search, accountId, departmentId, onlyUnlinked]);
+  }, [rows, search, accountId, departmentId, onlyUnlinked, onlyForwarded]);
 
-  const filtersKey = `${search}|${accountId}|${departmentId}|${onlyUnlinked}|${pageSize}`;
+  const filtersKey = `${search}|${accountId}|${departmentId}|${onlyUnlinked}|${onlyForwarded}|${pageSize}`;
   const page = pageState.key === filtersKey ? pageState.page : 1;
   const setPage = (p: number): void => setPageState({ key: filtersKey, page: p });
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -226,6 +229,12 @@ export const SubscribersTab: FC = () => {
             {r.servicesCount > 0 ? `${r.servicesCount} · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : '—'}
           </span>
         );
+      case 'fwd':
+        return r.forwardingType ? (
+          <span className={st.fwdBadge} title={`Переадресация: ${FORWARDING_TYPE_LABELS[r.forwardingType] ?? r.forwardingType}`}>
+            ↪ {FORWARDING_TYPE_LABELS[r.forwardingType] ?? r.forwardingType}
+          </span>
+        ) : <>—</>;
       case 'calls':
         return <>{r.calls}</>;
       case 'time':
@@ -265,6 +274,10 @@ export const SubscribersTab: FC = () => {
         <label className={st.checkLabel}>
           <input type="checkbox" checked={onlyUnlinked} onChange={e => setOnlyUnlinked(e.target.checked)} />
           только непривязанные
+        </label>
+        <label className={st.checkLabel}>
+          <input type="checkbox" checked={onlyForwarded} onChange={e => setOnlyForwarded(e.target.checked)} />
+          только с переадресацией
         </label>
         <button className={styles.btnSecondary} onClick={() => { void onAutoLink(); }} disabled={autoLink.isPending}>
           Автосвязать по ФИО

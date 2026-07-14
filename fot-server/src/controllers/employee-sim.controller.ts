@@ -10,6 +10,11 @@ import { mtsBusinessCatalogService, type IMtsForwardingRule } from '../services/
 import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { msisdnHash, normalizeMsisdn } from '../services/mts-business-cdr.service.js';
+import {
+  FORWARDING_TYPES,
+  validateForwardingTarget,
+  resolveNoReplyTimer,
+} from '../services/mts-forwarding.shared.js';
 
 // ЛК сотрудника: «Моя SIM» + «Телефонная книга». Номер резолвится ТОЛЬКО из
 // req.user.employee_id (msisdn в параметрах не принимается) — сотрудник видит
@@ -28,10 +33,6 @@ const fail = (res: Response, error: unknown, fallback: string): void => {
   res.status(500).json({ success: false, error: fallback });
 };
 
-/** Тип переадресации: всегда / нет ответа (таймер) / недоступен. CFB (занято) — вне MVP. */
-const FORWARDING_TYPES = ['CFU', 'CFNRY', 'CFNRC'] as const;
-const DEFAULT_NO_REPLY_TIMER = 20;
-
 const setForwardingSchema = z.object({
   msisdn: z.string().trim().min(1).optional(),
   type: z.enum(FORWARDING_TYPES),
@@ -43,22 +44,6 @@ const deleteForwardingSchema = z.object({
   msisdn: z.string().trim().min(1).optional(),
   type: z.enum(FORWARDING_TYPES),
 });
-
-/** Номер назначения: только российский мобильный/городской 11-значный (7XXXXXXXXXX). */
-const validateTarget = (raw: string, ownMsisdn: string): { ok: true; value: string } | { ok: false; error: string } => {
-  const target = normalizeMsisdn(raw);
-  if (!target || target.length !== 11 || !target.startsWith('7')) {
-    return { ok: false, error: 'Укажите российский номер в формате +7 XXX XXX-XX-XX' };
-  }
-  // 7-8XX… — это 8-800/8-809 и прочие платные/сервисные линии (после нормализации 8→7).
-  if (target[1] === '8') {
-    return { ok: false, error: 'Переадресация на платные и сервисные номера запрещена' };
-  }
-  if (target === normalizeMsisdn(ownMsisdn)) {
-    return { ok: false, error: 'Нельзя переадресовать номер сам на себя' };
-  }
-  return { ok: true, value: target };
-};
 
 /** Номера сотрудника + проверка, что запрошенный msisdn — его. Иначе 403/400. */
 const resolveOwnMsisdn = async (
@@ -199,13 +184,13 @@ export const employeeSimController = {
       const msisdn = await resolveOwnMsisdn(req, res, parsed.data.msisdn);
       if (!msisdn) return;
 
-      const target = validateTarget(parsed.data.target, msisdn);
+      const target = validateForwardingTarget(parsed.data.target, msisdn);
       if (!target.ok) {
         res.status(400).json({ success: false, error: target.error });
         return;
       }
       const type = parsed.data.type;
-      const timer = type === 'CFNRY' ? parsed.data.timer ?? DEFAULT_NO_REPLY_TIMER : undefined;
+      const timer = resolveNoReplyTimer(type, parsed.data.timer);
 
       const accountId = (await mtsBusinessMappingService.getSubscriberContext(msisdn))?.accountId ?? null;
       if (!accountId) {

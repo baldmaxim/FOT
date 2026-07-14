@@ -7,6 +7,7 @@ import { mtsBusinessPersonalDataService, type IMtsPersonalDataFull } from './mts
 import { extractTariffNameFromServices } from './mts-business-catalog.service.js';
 import type { IMtsService, IMtsTariff, IMtsForwardingRule, IMtsRoaming } from './mts-business-catalog.service.js';
 import type { IMtsTariffFee, IMtsPaymentEntry, IMtsDeliveryMethod, IMtsPackageCounter } from './mts-business-billing.service.js';
+import { pickActiveForwardingType, type ForwardingType } from './mts-forwarding.shared.js';
 
 // Вкладка «Абоненты»: сборка списка и деталей ИЗ БД (0 живых вызовов МТС) —
 // number_map (инвентарь/ФИО/привязка) + агрегат CDR + дневные метрики
@@ -36,6 +37,8 @@ export interface IMtsSubscriberRow {
   tariffName: string | null;
   servicesCount: number;
   servicesMonthlyTotal: number;
+  /** Активное правило переадресации (первое) — только тип; адрес в списке не отдаём (лишняя PII, он виден в дровере). */
+  forwardingType: ForwardingType | null;
   capturedAt: string | null;
 }
 
@@ -91,6 +94,7 @@ class MtsBusinessSubscribersService {
       charges_amount: string | null;
       bill_plan: unknown;
       product_services: unknown;
+      forwarding: unknown;
       captured_at: string | null;
     }>(
       // Агрегат звонков берём из роллапа (materialized view, ~700 строк), а не
@@ -126,12 +130,13 @@ class MtsBusinessSubscribersService {
          SELECT msisdn_hash,
                 MAX(payload::text) FILTER (WHERE metric = 'bill_plan') AS bill_plan,
                 MAX(payload::text) FILTER (WHERE metric = 'product_services') AS product_services,
+                MAX(payload::text) FILTER (WHERE metric = 'forwarding') AS forwarding,
                 MAX(captured_at) AS captured_at
            FROM (
              SELECT DISTINCT ON (msisdn_hash, metric) msisdn_hash, metric, payload, captured_at
                FROM mts_business_metric_snapshot
               WHERE scope = 'msisdn' AND msisdn_hash IS NOT NULL
-                AND metric IN ('bill_plan', 'product_services')
+                AND metric IN ('bill_plan', 'product_services', 'forwarding')
               ORDER BY msisdn_hash, metric, captured_at DESC
            ) t
           GROUP BY msisdn_hash
@@ -155,6 +160,7 @@ class MtsBusinessSubscribersService {
               ch.charges_amount::text AS charges_amount,
               s.bill_plan,
               s.product_services,
+              s.forwarding,
               GREATEST(mt.captured_at, ch.captured_at, s.captured_at) AS captured_at
          FROM mts_business_number_map m
          FULL OUTER JOIN cdr c ON c.msisdn_hash = m.msisdn_hash
@@ -179,6 +185,7 @@ class MtsBusinessSubscribersService {
       const billPlan = this.parseJson<IMtsTariff>(r.bill_plan);
       const services = this.parseJson<Array<{ name?: string | null; monthlyAmount?: number | null }>>(r.product_services);
       const list = Array.isArray(services) ? services : [];
+      const forwarding = this.parseJson<IMtsForwardingRule[]>(r.forwarding);
       return {
         msisdn: encryptionService.decryptField(r.msisdn_enc),
         accountId: r.account_id ?? fallbackAccount?.id ?? null,
@@ -200,6 +207,7 @@ class MtsBusinessSubscribersService {
         tariffName: billPlan?.tariffName ?? extractTariffNameFromServices(list),
         servicesCount: list.length,
         servicesMonthlyTotal: list.reduce((a, s) => a + (s.monthlyAmount ?? 0), 0),
+        forwardingType: pickActiveForwardingType(forwarding),
         capturedAt: r.captured_at,
       };
     });

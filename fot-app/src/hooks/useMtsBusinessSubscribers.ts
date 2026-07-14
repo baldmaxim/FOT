@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { mtsBusinessSubscribersService } from '../services/mtsBusinessSubscribersService';
+import type { MtsForwardingType } from '../services/mtsBusinessSubscriberService';
 
 // Хуки вкладки «Абоненты МТС».
 
@@ -56,6 +57,33 @@ export const useChangeMtsBusinessTariff = () => {
   return useMutation({
     mutationFn: (input: { accountId?: string; msisdn: string; externalID: string }) =>
       mtsBusinessSubscribersService.changeTariff(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'actions'] });
+    },
+  });
+};
+
+/**
+ * Переадресация за абонента. Заявка асинхронная: правила в details обновятся не
+ * сразу, а когда статус-поллер бэкенда увидит completed и перечитает снапшот —
+ * поэтому инвалидируем журнал заявок, а details дровер перезапросит по completed.
+ */
+export const useSetMtsBusinessForwarding = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { accountId?: string; msisdn: string; type: MtsForwardingType; target: string; timer?: number }) =>
+      mtsBusinessSubscribersService.setForwarding(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['mts-business', 'actions'] });
+    },
+  });
+};
+
+export const useDeleteMtsBusinessForwarding = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { accountId?: string; msisdn: string; type: MtsForwardingType }) =>
+      mtsBusinessSubscribersService.deleteForwarding(input),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['mts-business', 'actions'] });
     },

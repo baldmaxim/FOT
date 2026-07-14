@@ -525,14 +525,19 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
   /**
    * Добавить/удалить услугу ИЛИ добровольную блокировку — один и тот же
    * эндпоинт (различаются только externalID: PEXXXX — услуга, BLXXXX —
-   * блокировка). Контракт (тело запроса, eventID-ответ) — НЕ проверен живым
-   * вызовом, только по докам support.mts.ru.
+   * блокировка). Контракт по докам §5.4: msisdn — В QUERY (?msisdn=), в теле
+   * только characteristic+item. Раньше msisdn лежал в теле — гейт МТС не мог
+   * привязать запрос к абоненту и отвечал 401 (Sentry FOT-SERVER-4D), т.е.
+   * управление услугами не работало никогда. Тот же контракт — в changeBillPlan
+   * и в probe-mts-number-all.ts --check-manage.
+   * retryOn500=false — мутация, исход первой попытки неизвестен.
    */
   async modifyProduct(accountId: string, msisdn: string, action: 'create' | 'delete', externalID: string): Promise<{ eventId: string }> {
     const resp = await this.request<unknown>('post', '/Product/ModifyProduct', {
       accountId,
+      params: { msisdn },
+      retryOn500: false,
       data: {
-        msisdn,
         characteristic: [{ name: 'MobileConnectivity' }],
         item: [{
           action,

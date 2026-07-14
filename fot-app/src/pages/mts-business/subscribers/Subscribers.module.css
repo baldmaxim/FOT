@@ -644,3 +644,94 @@
 }
 .conflictCandidate:hover { border-color: var(--primary); color: var(--primary); }
 .conflictCandidate:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Переадресация: секция в панели абонента, бейдж в таблице, форма в модалке.
+   Инпуты 16px — иначе iOS/Android-Chrome зумят страницу при фокусе. */
+.fwdState {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.fwdState strong { color: var(--text-primary); }
+
+.fwdBadge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover, transparent);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fwdRadios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+.fwdRadio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.fwdFields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.fwdField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.fwdFieldLabel { font-size: 12px; color: var(--text-secondary); }
+.fwdInput {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 16px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
+.fwdInput:disabled { opacity: 0.6; }
+
+.fwdActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.fwdPrimary {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  min-height: 40px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fwdPrimary:hover:not(:disabled) { opacity: 0.9; }
+.fwdPrimary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+@media (max-width: 430px) {
+  .fwdFields { flex-direction: column; }
+  .fwdActions > * { flex: 1 1 auto; }
+}
