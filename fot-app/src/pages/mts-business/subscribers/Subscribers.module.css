@@ -112,48 +112,110 @@
 .pageNumActive:hover { color: #fff; }
 .pagerEllipsis { padding: 0 4px; color: var(--text-tertiary); user-select: none; }
 
+/* ===== Меню выбора колонок «⋯» ===== */
+.colsMenu { position: relative; display: inline-flex; }
+.colsBtn {
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.colsBtn:hover { border-color: var(--primary); color: var(--primary); }
+.colsDropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 200px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.colsTitle { margin: 0 0 4px; font-size: 12px; font-weight: 700; color: var(--text-secondary); }
+.colsItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  min-height: 32px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.colsItem input:disabled { cursor: not-allowed; }
+.colsItem:has(input:disabled) { color: var(--text-tertiary); cursor: not-allowed; }
+.colsReset {
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  min-height: 32px;
+  cursor: pointer;
+}
+.colsReset:hover { border-color: var(--primary); color: var(--primary); }
+
 /* ===== Таблица абонентов: влезает в окно без горизонтального скролла ===== */
-.subsTable { table-layout: fixed; width: 100%; }
-.subsTable th,
-.subsTable td {
-  padding: 6px 8px;
+/* Двойной класс — чтобы перебить `.table td { white-space: nowrap }` из
+   MtsBusinessPage.module.css (иначе текст вылезает за фиксированные колонки). */
+.subsTable.subsTable { table-layout: fixed; width: 100%; }
+.subsTable.subsTable th,
+.subsTable.subsTable td {
+  padding: 8px;
   white-space: normal;
-  overflow-wrap: anywhere;
-  vertical-align: top;
+  overflow: hidden;
+  vertical-align: middle;
 }
-/* Узкие числовые колонки — не переносить, выравнивание по правому краю.
-   9=Звонки, 10=Время, 7=Начисления. */
-.subsTable th:nth-child(7), .subsTable td:nth-child(7),
-.subsTable th:nth-child(9), .subsTable td:nth-child(9),
-.subsTable th:nth-child(10), .subsTable td:nth-child(10) {
+.subsTable.subsTable .numCell { white-space: nowrap; text-align: right; }
+.subsTable.subsTable td[data-col='num'],
+.subsTable.subsTable th[data-col='num'] { white-space: nowrap; }
+
+/* Однострочная обрезка с многоточием; полный текст — в title. */
+.clip {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: right;
 }
-/* Номер — не переносить (телефон одной строкой). */
-.subsTable th:nth-child(1), .subsTable td:nth-child(1) { white-space: nowrap; }
 
-/* Ширины колонок (сумма = 100%). */
-.colNum { width: 10%; }
-.colFio { width: 12%; }
-.colEmp { width: 14%; }
-.colDept { width: 11%; }
-.colAcc { width: 7%; }
-.colTariff { width: 11%; }
-.colCharges { width: 8%; }
-.colServices { width: 9%; }
-.colCalls { width: 5%; }
-.colTime { width: 6%; }
-.colPd { width: 7%; }
+/* Ячейка «Абонент»: ФИО (МТС) + при расхождении — сотрудник ФОТ второй строкой. */
+.nameCell { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.nameMain { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nameSub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.nameBadge { align-self: flex-start; margin-top: 2px; }
 
-/* Узкий экран: 11 колонок не помещаются — прячем низкоприоритетные
-   (5=ЛС, 8=Услуги, 10=Время), остальные раздаются по ширине. */
-@media (max-width: 640px) {
-  .subsTable { table-layout: auto; font-size: 12px; }
-  .subsTable th:nth-child(5), .subsTable td:nth-child(5),
-  .subsTable th:nth-child(8), .subsTable td:nth-child(8),
-  .subsTable th:nth-child(10), .subsTable td:nth-child(10) {
+/* Узкий экран: оставляем только опорные колонки. */
+@media (max-width: 900px) {
+  .subsTable.subsTable { font-size: 12px; }
+  .subsTable.subsTable th[data-col='acc'], .subsTable.subsTable td[data-col='acc'],
+  .subsTable.subsTable th[data-col='services'], .subsTable.subsTable td[data-col='services'],
+  .subsTable.subsTable th[data-col='time'], .subsTable.subsTable td[data-col='time'],
+  .subsTable.subsTable th[data-col='dept'], .subsTable.subsTable td[data-col='dept'] {
     display: none;
   }
+}
+@media (max-width: 640px) {
+  .subsTable.subsTable th[data-col='tariff'], .subsTable.subsTable td[data-col='tariff'],
+  .subsTable.subsTable th[data-col='calls'], .subsTable.subsTable td[data-col='calls'] {
+    display: none;
+  }
+  .colsDropdown { left: auto; right: 0; }
 }
 
 /* ===== Боковая панель (40% экрана) ===== */

@@ -1,4 +1,4 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useMtsBusinessAccounts, useAutoLinkMtsBusinessNumberMap } from '../../../hooks/useMtsBusinessData';
 import { useMtsBusinessSubscribers } from '../../../hooks/useMtsBusinessSubscribers';
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
@@ -6,6 +6,7 @@ import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { SubscriberDrawer } from './SubscriberDrawer';
 import { AutoLinkConflictsModal } from './AutoLinkConflictsModal';
 import type { IMtsAutoLinkConflict } from '../../../services/mtsBusinessService';
+import type { IMtsSubscriberRow } from '../../../services/mtsBusinessSubscribersService';
 import { errText, fmtDur, fmtLast, fmtMoney, fmtPhone } from '../mtsBusinessFormat';
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
@@ -15,6 +16,50 @@ type Msg = { ok: boolean; text: string } | null;
 const norm = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 const NO_DEPT = '__none__';
+const COLS_STORAGE_KEY = 'mts-subscribers-columns';
+
+type ColKey = 'num' | 'name' | 'dept' | 'acc' | 'tariff' | 'charges' | 'services' | 'calls' | 'time' | 'pd';
+
+interface IColumn {
+  key: ColKey;
+  label: string;
+  /** Доля ширины (нормируется до 100%). */
+  weight: number;
+  /** Нельзя скрыть через меню «⋯». */
+  pinned?: boolean;
+  /** Скрыта по умолчанию. */
+  offByDefault?: boolean;
+  /** Числовая: без переноса, выравнивание по правому краю. */
+  numeric?: boolean;
+}
+
+const COLUMNS: IColumn[] = [
+  { key: 'num', label: 'Номер', weight: 11, pinned: true },
+  { key: 'name', label: 'Абонент', weight: 22, pinned: true },
+  { key: 'dept', label: 'Отдел', weight: 15 },
+  { key: 'acc', label: 'ЛС', weight: 8, offByDefault: true },
+  { key: 'tariff', label: 'Тариф', weight: 15 },
+  { key: 'charges', label: 'Начисления', weight: 10, numeric: true },
+  { key: 'services', label: 'Услуги', weight: 11, offByDefault: true },
+  { key: 'calls', label: 'Звонки', weight: 7, numeric: true },
+  { key: 'time', label: 'Время', weight: 8, numeric: true, offByDefault: true },
+  { key: 'pd', label: 'Персданные', weight: 10, pinned: true },
+];
+
+const DEFAULT_VISIBLE = COLUMNS.filter(c => !c.offByDefault).map(c => c.key);
+
+const loadVisible = (): ColKey[] => {
+  try {
+    const raw = localStorage.getItem(COLS_STORAGE_KEY);
+    if (!raw) return DEFAULT_VISIBLE;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_VISIBLE;
+    const keys = COLUMNS.filter(c => c.pinned || parsed.includes(c.key)).map(c => c.key);
+    return keys.length > 0 ? keys : DEFAULT_VISIBLE;
+  } catch {
+    return DEFAULT_VISIBLE;
+  }
+};
 
 /** Компактный ряд номеров страниц с усечением: 1 … 4 5 [6] 7 8 … 20. */
 const buildPageList = (total: number, current: number): (number | '…')[] => {
@@ -27,6 +72,16 @@ const buildPageList = (total: number, current: number): (number | '…')[] => {
   if (end < total - 1) pages.push('…');
   pages.push(total);
   return pages;
+};
+
+/** ФИО сотрудника ФОТ показываем второй строкой только если оно отличается от ФИО в МТС. */
+const secondaryName = (r: IMtsSubscriberRow): string | null => {
+  if (!r.employeeFullName) return null;
+  const mts = r.mtsFio ?? r.mtsComment ?? '';
+  const same = mts !== '' && norm(mts) === norm(r.employeeFullName);
+  const tab = r.employeeTabNumber ? `таб. ${r.employeeTabNumber}` : '';
+  if (same) return tab || null;
+  return tab ? `${r.employeeFullName} (${tab})` : r.employeeFullName;
 };
 
 /**
@@ -51,6 +106,33 @@ export const SubscribersTab: FC = () => {
   const [pdMsisdn, setPdMsisdn] = useState<string | null>(null);
   const [msg, setMsg] = useState<Msg>(null);
   const [conflicts, setConflicts] = useState<IMtsAutoLinkConflict[]>([]);
+  const [visibleCols, setVisibleCols] = useState<ColKey[]>(loadVisible);
+  const [colsOpen, setColsOpen] = useState(false);
+  const colsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(visibleCols));
+  }, [visibleCols]);
+
+  useEffect(() => {
+    if (!colsOpen) return;
+    const onDown = (e: MouseEvent): void => {
+      if (colsRef.current && !colsRef.current.contains(e.target as Node)) setColsOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [colsOpen]);
+
+  const cols = useMemo(() => COLUMNS.filter(c => visibleCols.includes(c.key)), [visibleCols]);
+  const totalWeight = cols.reduce((s, c) => s + c.weight, 0);
+
+  const toggleCol = (key: ColKey): void => {
+    setVisibleCols(prev => (
+      prev.includes(key)
+        ? prev.filter(k => k !== key)
+        : COLUMNS.filter(c => prev.includes(c.key) || c.key === key).map(c => c.key)
+    ));
+  };
 
   const rows = useMemo(() => (subscribers.data ?? []).filter(r => r.msisdn != null), [subscribers.data]);
 
@@ -103,6 +185,62 @@ export const SubscribersTab: FC = () => {
     }
   };
 
+  const renderCell = (col: IColumn, r: IMtsSubscriberRow): ReactNode => {
+    switch (col.key) {
+      case 'num':
+        return (
+          <a
+            className={st.phoneLink}
+            href={`tel:+${(r.msisdn ?? '').replace(/\D/g, '')}`}
+            onClick={e => e.stopPropagation()}
+            title="Позвонить"
+          >
+            {fmtPhone(r.msisdn)}
+          </a>
+        );
+      case 'name': {
+        const primary = r.mtsFio ?? r.mtsComment ?? '—';
+        const sub = secondaryName(r);
+        return (
+          <div className={st.nameCell}>
+            <span className={st.nameMain} title={primary}>{primary}</span>
+            {sub
+              ? <span className={st.nameSub} title={sub}>{sub}</span>
+              : r.employeeId == null
+                ? <span className={`${styles.badge} ${styles.badgeMuted} ${st.nameBadge}`}>не привязан</span>
+                : null}
+          </div>
+        );
+      }
+      case 'dept':
+        return <span className={st.clip} title={r.departmentName ?? ''}>{r.departmentName ?? '—'}</span>;
+      case 'acc':
+        return <span className={st.clip} title={r.accountLabel ?? ''}>{r.accountLabel ?? '—'}</span>;
+      case 'tariff':
+        return <span className={st.clip} title={r.tariffName ?? ''}>{r.tariffName ?? '—'}</span>;
+      case 'charges':
+        return <>{fmtMoney(r.chargesAmount)}</>;
+      case 'services':
+        return (
+          <span className={st.clip} title={r.servicesCount > 0 ? `${r.servicesCount} услуг · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : ''}>
+            {r.servicesCount > 0 ? `${r.servicesCount} · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : '—'}
+          </span>
+        );
+      case 'calls':
+        return <>{r.calls}</>;
+      case 'time':
+        return <>{r.totalSeconds > 0 ? fmtDur(r.totalSeconds) : '—'}</>;
+      case 'pd':
+        return (
+          <button className={styles.linkBtn} onClick={() => setPdMsisdn(r.msisdn)} title="Персональные данные пользователя номера">
+            <PersonalDataStatusBadge status={r.pdStatus} />
+          </button>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <section className={styles.card}>
       <div className={st.toolbar}>
@@ -131,6 +269,35 @@ export const SubscribersTab: FC = () => {
         <button className={styles.btnSecondary} onClick={() => { void onAutoLink(); }} disabled={autoLink.isPending}>
           Автосвязать по ФИО
         </button>
+
+        <div className={st.colsMenu} ref={colsRef}>
+          <button
+            className={st.colsBtn}
+            onClick={() => setColsOpen(o => !o)}
+            title="Колонки таблицы"
+            aria-expanded={colsOpen}
+          >
+            ⋯
+          </button>
+          {colsOpen && (
+            <div className={st.colsDropdown}>
+              <p className={st.colsTitle}>Колонки</p>
+              {COLUMNS.map(c => (
+                <label key={c.key} className={st.colsItem}>
+                  <input
+                    type="checkbox"
+                    checked={visibleCols.includes(c.key)}
+                    disabled={c.pinned}
+                    onChange={() => toggleCol(c.key)}
+                  />
+                  {c.label}
+                </label>
+              ))}
+              <button className={st.colsReset} onClick={() => setVisibleCols(DEFAULT_VISIBLE)}>По умолчанию</button>
+            </div>
+          )}
+        </div>
+
         <span className={st.counts}>
           {filtered.length} из {rows.length} · привязано {linkedCount}
         </span>
@@ -146,55 +313,28 @@ export const SubscribersTab: FC = () => {
         <div className={styles.tableWrap}>
           <table className={`${styles.table} ${st.subsTable}`}>
             <colgroup>
-              <col className={st.colNum} />
-              <col className={st.colFio} />
-              <col className={st.colEmp} />
-              <col className={st.colDept} />
-              <col className={st.colAcc} />
-              <col className={st.colTariff} />
-              <col className={st.colCharges} />
-              <col className={st.colServices} />
-              <col className={st.colCalls} />
-              <col className={st.colTime} />
-              <col className={st.colPd} />
+              {cols.map(c => <col key={c.key} style={{ width: `${(c.weight / totalWeight) * 100}%` }} />)}
             </colgroup>
             <thead>
               <tr>
-                <th>Номер</th><th>ФИО (МТС)</th><th>Сотрудник ФОТ</th><th>Отдел</th><th>ЛС</th><th>Тариф</th>
-                <th>Начисления (месяц)</th><th>Услуги</th><th>Звонки</th><th>Время</th><th>Персданные</th>
+                {cols.map(c => (
+                  <th key={c.key} data-col={c.key} className={c.numeric ? st.numCell : undefined}>{c.label}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {pageRows.map(r => (
                 <tr key={r.msisdn} className={st.rowClickable} onClick={() => setDrawerMsisdn(r.msisdn)}>
-                  <td>
-                    <a
-                      className={st.phoneLink}
-                      href={`tel:+${(r.msisdn ?? '').replace(/\D/g, '')}`}
-                      onClick={e => e.stopPropagation()}
-                      title="Позвонить"
+                  {cols.map(c => (
+                    <td
+                      key={c.key}
+                      data-col={c.key}
+                      className={c.numeric ? st.numCell : undefined}
+                      onClick={c.key === 'pd' ? e => e.stopPropagation() : undefined}
                     >
-                      {fmtPhone(r.msisdn)}
-                    </a>
-                  </td>
-                  <td>{r.mtsFio ?? r.mtsComment ?? '—'}</td>
-                  <td>
-                    {r.employeeFullName
-                      ? <>{r.employeeFullName}{r.employeeTabNumber ? ` (таб. ${r.employeeTabNumber})` : ''}</>
-                      : <span className={`${styles.badge} ${styles.badgeMuted}`}>не привязан</span>}
-                  </td>
-                  <td>{r.departmentName ?? '—'}</td>
-                  <td>{r.accountLabel ?? '—'}</td>
-                  <td>{r.tariffName ?? '—'}</td>
-                  <td>{fmtMoney(r.chargesAmount)}</td>
-                  <td>{r.servicesCount > 0 ? `${r.servicesCount} · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : '—'}</td>
-                  <td>{r.calls}</td>
-                  <td>{r.totalSeconds > 0 ? fmtDur(r.totalSeconds) : '—'}</td>
-                  <td onClick={e => e.stopPropagation()}>
-                    <button className={styles.linkBtn} onClick={() => setPdMsisdn(r.msisdn)} title="Персональные данные пользователя номера">
-                      <PersonalDataStatusBadge status={r.pdStatus} />
-                    </button>
-                  </td>
+                      {renderCell(c, r)}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
