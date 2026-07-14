@@ -153,12 +153,43 @@ const applyFrozenAssignmentTx = async (
   }
 };
 
+/**
+ * Чтение назначений ЧЕРЕЗ client транзакции: глобальный query() уходит в другой
+ * коннект пула и не видит незакоммиченные изменения этой же транзакции — снапшот
+ * считался бы по устаревшей истории.
+ */
+const listAssignmentsForSnapshotTx = async (
+  client: PoolClient,
+  employeeId: number,
+): Promise<Array<{
+  org_department_id: string | null;
+  position_id: string | null;
+  effective_from: string;
+  effective_to: string | null;
+}>> => {
+  const result = await client.query<{
+    org_department_id: string | null;
+    position_id: string | null;
+    effective_from: string;
+    effective_to: string | null;
+  }>(
+    `SELECT org_department_id, position_id,
+            effective_from::text AS effective_from,
+            effective_to::text AS effective_to
+       FROM employee_assignments
+      WHERE employee_id = $1
+      ORDER BY effective_from ASC, created_at ASC`,
+    [employeeId],
+  );
+  return result.rows;
+};
+
 const syncEmployeeAssignmentSnapshotTx = async (
   client: PoolClient,
   employeeId: number,
   referenceDate = today(),
 ): Promise<void> => {
-  const assignments = await getEmployeeAssignments(employeeId);
+  const assignments = await listAssignmentsForSnapshotTx(client, employeeId);
   const activeAssignment = [...assignments]
     .reverse()
     .find(assignment => isAssignmentActiveOnDateInclusive(
@@ -457,6 +488,86 @@ export const employeeChangesService = {
             opts.createdBy || null,
           ],
         );
+      }
+
+      // Бэкдейт-перевод заполняет только период до следующего существующего
+      // назначения. Если «сегодня» сотрудник после этого остаётся в другом
+      // отделе (позднее назначение, например от синка Sigur), доводим перевод
+      // до сегодняшнего дня — иначе история навсегда расходится со снапшотом
+      // employees.org_department_id, а фоновый синк расхождение уже не видит
+      // (возвраты Тендерный↔ОСА 08.07.2026: назначения ОСА остались открытыми).
+      const todayIso = today();
+      if (date < todayIso) {
+        const activeTodayResult = await client.query<{
+          id: string;
+          org_department_id: string | null;
+          effective_from: string;
+        }>(
+          `SELECT id, org_department_id, effective_from::text AS effective_from
+             FROM employee_assignments
+            WHERE employee_id = $1
+              AND effective_from <= $2
+              AND (effective_to IS NULL OR effective_to >= $2)
+            ORDER BY effective_from DESC
+            LIMIT 1`,
+          [employeeId, todayIso],
+        );
+        const activeToday = activeTodayResult.rows[0] ?? null;
+
+        if (activeToday && activeToday.org_department_id !== departmentId) {
+          if (activeToday.effective_from === todayIso) {
+            // Назначение стартует сегодня: закрытие в today-1 дало бы to < from.
+            await client.query(
+              `UPDATE employee_assignments
+                  SET org_department_id = $1,
+                      change_reason = $2,
+                      created_by = $3,
+                      updated_at = $4
+                WHERE id = $5 AND employee_id = $6`,
+              [
+                departmentId,
+                opts.reason || 'Перевод в другой отдел',
+                opts.createdBy || null,
+                new Date().toISOString(),
+                activeToday.id,
+                employeeId,
+              ],
+            );
+          } else {
+            await client.query(
+              `UPDATE employee_assignments
+                  SET effective_to = $1, updated_at = $2
+                WHERE id = $3 AND employee_id = $4`,
+              [formatDateShift(todayIso, -1), new Date().toISOString(), activeToday.id, employeeId],
+            );
+
+            const nextAfterTodayResult = await client.query<{ effective_from: string }>(
+              `SELECT effective_from::text AS effective_from
+                 FROM employee_assignments
+                WHERE employee_id = $1 AND effective_from > $2
+                ORDER BY effective_from ASC
+                LIMIT 1`,
+              [employeeId, todayIso],
+            );
+            const nextAfterToday = nextAfterTodayResult.rows[0]?.effective_from ?? null;
+
+            await client.query(
+              `INSERT INTO employee_assignments
+                 (employee_id, org_department_id, position_id, effective_from,
+                  effective_to, is_primary, assignment_type, change_reason, created_by)
+               VALUES ($1, $2, $3, $4, $5, true, 'main', $6, $7)`,
+              [
+                employeeId,
+                departmentId,
+                emp?.position_id || null,
+                todayIso,
+                nextAfterToday ? formatDateShift(nextAfterToday, -1) : null,
+                opts.reason || 'Перевод в другой отдел',
+                opts.createdBy || null,
+              ],
+            );
+          }
+        }
       }
 
       const updateData: Record<string, unknown> = {

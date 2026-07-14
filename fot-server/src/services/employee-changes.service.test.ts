@@ -41,6 +41,7 @@ vi.mock('./timesheet-transfers.service.js', () => ({
 }));
 
 import { employeeChangesService } from './employee-changes.service.js';
+import { formatDateShift } from './timesheet-department-assignments.service.js';
 
 interface IExecutedQuery {
   sql: string;
@@ -239,5 +240,347 @@ describe('employee-changes.service.changeDepartment — overlap regression', () 
 
     const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
     expect(inserts).toHaveLength(0);
+  });
+});
+
+describe('employee-changes.service.changeDepartment — бэкдейт-перевод доводится до сегодня', () => {
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+    mockGetEmployeeAssignments.mockReset();
+    mockGetTransferConfig.mockReset();
+  });
+
+  it('позднее назначение в другом отделе: закрывает его в today-1 и открывает целевой отдел с today', async () => {
+    // Сценарий возвратов из ОСА 08.07.2026: перевод задним числом (01.04) при
+    // существующем открытом назначении в другом отделе (ОСА с 28.04). Раньше
+    // ОСА оставался открытым навсегда — сотрудник числился в двух отделах.
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const yesterday = formatDateShift(todayIso, -1);
+
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2010-01-01', effective_to: '2026-04-27' },
+      { id: 'a-osa', effective_from: '2026-04-28', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
+      }
+      if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
+        return { rows: [{ id: 'a-osa', org_department_id: 'osa-dept', effective_from: '2026-04-28' }] };
+      }
+      if (/effective_from > \$2/i.test(sql)) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'tender-dept', {
+      reason: 'Перевод в другой отдел',
+      effectiveDate: '2026-04-01',
+    });
+
+    const closeUpdates = fake.queries.filter(q =>
+      /UPDATE employee_assignments\s+SET effective_to = \$1, updated_at = \$2\s+WHERE id = \$3/i.test(q.sql),
+    );
+    // Закрытие активного на дату перевода (a-1 в 31.03) + закрытие позднего (a-osa в today-1).
+    expect(closeUpdates.map(q => [q.params?.[0], q.params?.[2]])).toEqual([
+      ['2026-03-31', 'a-1'],
+      [yesterday, 'a-osa'],
+    ]);
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(2);
+    // Бэкдейт-вставка закрыта началом позднего назначения.
+    expect(inserts[0].params?.[1]).toBe('tender-dept');
+    expect(inserts[0].params?.[3]).toBe('2026-04-01');
+    expect(inserts[0].params?.[4]).toBe('2026-04-27');
+    // Довод до сегодня: открытое назначение в целевом отделе с today.
+    expect(inserts[1].params?.[1]).toBe('tender-dept');
+    expect(inserts[1].params?.[3]).toBe(todayIso);
+    expect(inserts[1].params?.[4]).toBeNull();
+  });
+
+  it('активное сегодня назначение уже в целевом отделе: лишних записей не создаёт', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2024-01-01', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'old-dept' }] };
+      }
+      if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
+        // Основной блок уже вставил открытое назначение целевого отдела с 13.05.
+        return { rows: [{ id: 'a-new', org_department_id: 'new-dept', effective_from: '2026-05-13' }] };
+      }
+      return { rows: [] };
+    });
+
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'new-dept', {
+      effectiveDate: '2026-05-13',
+    });
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].params?.[3]).toBe('2026-05-13');
+
+    // Позднее назначение не трогали.
+    const touchedANew = fake.queries.find(q => (q.params || []).includes('a-new') && /UPDATE/i.test(q.sql));
+    expect(touchedANew).toBeFalsy();
+  });
+
+  it('позднее назначение стартует сегодня: обновляет его отдел вместо нулевого периода', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2010-01-01', effective_to: '2026-03-31' },
+      { id: 'a-today', effective_from: todayIso, effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
+      }
+      if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
+        return { rows: [{ id: 'a-today', org_department_id: 'osa-dept', effective_from: todayIso }] };
+      }
+      return { rows: [] };
+    });
+
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'tender-dept', {
+      effectiveDate: '2026-04-01',
+    });
+
+    // Бэкдейт-вставка закрыта днём перед сегодняшним назначением.
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].params?.[3]).toBe('2026-04-01');
+    expect(inserts[0].params?.[4]).toBe(formatDateShift(todayIso, -1));
+
+    const deptUpdate = fake.queries.find(q =>
+      /UPDATE employee_assignments\s+SET org_department_id = \$1,\s+change_reason = \$2/i.test(q.sql),
+    );
+    expect(deptUpdate).toBeTruthy();
+    expect(deptUpdate?.params?.[0]).toBe('tender-dept');
+    expect(deptUpdate?.params?.[4]).toBe('a-today');
+
+    // Закрытия в today-1 для a-today быть не должно (нулевой период to < from).
+    const zeroDayClose = fake.queries.find(q =>
+      /SET effective_to = \$1, updated_at = \$2\s+WHERE id = \$3/i.test(q.sql) && q.params?.[2] === 'a-today',
+    );
+    expect(zeroDayClose).toBeFalsy();
+  });
+
+  it('существует будущее назначение: довод до сегодня закрывается перед ним, пересечения нет', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const futureFrom = formatDateShift(todayIso, 10);
+
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2010-01-01', effective_to: '2026-04-27' },
+      { id: 'a-osa', effective_from: '2026-04-28', effective_to: formatDateShift(futureFrom, -1) },
+      { id: 'a-future', effective_from: futureFrom, effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
+      }
+      if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
+        return { rows: [{ id: 'a-osa', org_department_id: 'osa-dept', effective_from: '2026-04-28' }] };
+      }
+      if (/effective_from > \$2/i.test(sql)) {
+        return { rows: [{ effective_from: futureFrom }] };
+      }
+      return { rows: [] };
+    });
+
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'tender-dept', {
+      effectiveDate: '2026-04-01',
+    });
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(2);
+    // Довод до сегодня НЕ открытый: закрыт днём перед будущим назначением.
+    expect(inserts[1].params?.[3]).toBe(todayIso);
+    expect(inserts[1].params?.[4]).toBe(formatDateShift(futureFrom, -1));
+
+    // Будущее назначение не тронуто.
+    const touchedFuture = fake.queries.find(q =>
+      /UPDATE employee_assignments/i.test(q.sql) && (q.params || []).includes('a-future'),
+    );
+    expect(touchedFuture).toBeFalsy();
+  });
+
+  it('промежуточные исторические назначения между датой перевода и сегодня не трогаются', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const yesterday = formatDateShift(todayIso, -1);
+
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1',    effective_from: '2010-01-01', effective_to: '2026-04-21' },
+      { id: 'a-mid1', effective_from: '2026-04-22', effective_to: '2026-05-06' },
+      { id: 'a-mid2', effective_from: '2026-05-07', effective_to: '2026-06-30' },
+      { id: 'a-osa',  effective_from: '2026-07-01', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
+      }
+      if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
+        return { rows: [{ id: 'a-osa', org_department_id: 'osa-dept', effective_from: '2026-07-01' }] };
+      }
+      if (/effective_from > \$2/i.test(sql)) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'tender-dept', {
+      effectiveDate: '2026-04-01',
+    });
+
+    // Изменяются ровно два назначения: активное на 01.04 (a-1) и активное сегодня (a-osa).
+    const closeUpdates = fake.queries.filter(q =>
+      /UPDATE employee_assignments\s+SET effective_to = \$1, updated_at = \$2\s+WHERE id = \$3/i.test(q.sql),
+    );
+    expect(closeUpdates.map(q => [q.params?.[0], q.params?.[2]])).toEqual([
+      ['2026-03-31', 'a-1'],
+      [yesterday, 'a-osa'],
+    ]);
+
+    // Промежуточная история цела.
+    const touchedMid = fake.queries.find(q =>
+      /UPDATE employee_assignments/i.test(q.sql)
+        && ((q.params || []).includes('a-mid1') || (q.params || []).includes('a-mid2')),
+    );
+    expect(touchedMid).toBeFalsy();
+  });
+
+  it('граница суток (UTC vs локальная TZ): закрытие и открытие согласованы от одних часов', async () => {
+    // 22:30 UTC = 01:30 следующего дня по Москве (setup ставит TZ=Europe/Moscow).
+    // Инвариант: сравнение date<today, закрытие today-1 и открытие today берутся
+    // от одного источника времени — стык без дыры и без пересечения.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-14T22:30:00Z'));
+    try {
+      mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+
+      mockGetEmployeeAssignments.mockResolvedValue([
+        { id: 'a-1', effective_from: '2010-01-01', effective_to: '2026-04-27' },
+        { id: 'a-osa', effective_from: '2026-04-28', effective_to: null },
+      ]);
+
+      const fake = createFakeClient((sql) => {
+        if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+          return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
+        }
+        if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
+          return { rows: [{ id: 'a-osa', org_department_id: 'osa-dept', effective_from: '2026-04-28' }] };
+        }
+        if (/effective_from > \$2/i.test(sql)) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      });
+
+      pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+      await employeeChangesService.changeDepartment(2521, 'tender-dept', {
+        effectiveDate: '2026-04-01',
+      });
+
+      const closeOsa = fake.queries.find(q =>
+        /SET effective_to = \$1, updated_at = \$2\s+WHERE id = \$3/i.test(q.sql) && q.params?.[2] === 'a-osa',
+      );
+      const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+      const catchUp = inserts[1];
+
+      // today() в сервисе — UTC-дата: 2026-07-14, хотя в Москве уже 15.07.
+      expect(catchUp?.params?.[3]).toBe('2026-07-14');
+      expect(closeOsa?.params?.[0]).toBe('2026-07-13');
+      // Стык согласован независимо от TZ: закрытие = открытие - 1 день.
+      expect(closeOsa?.params?.[0]).toBe(formatDateShift(String(catchUp?.params?.[3]), -1));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('снапшот в конце транзакции читается через client транзакции и получает целевой отдел', async () => {
+    // Защита от гонки с фоновым синком: снапшот считается по данным ЭТОЙ транзакции
+    // (глобальный query() ушёл бы в другой коннект и не увидел бы незакоммиченное).
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2010-01-01', effective_to: '2026-04-27' },
+      { id: 'a-osa', effective_from: '2026-04-28', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
+      }
+      if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
+        return { rows: [{ id: 'a-osa', org_department_id: 'osa-dept', effective_from: '2026-04-28' }] };
+      }
+      if (/effective_from > \$2/i.test(sql)) {
+        return { rows: [] };
+      }
+      if (/SELECT org_department_id, position_id,\s+effective_from::text/i.test(sql)) {
+        // Состояние ВНУТРИ транзакции после правок: ОСА закрыт, целевой открыт с today.
+        return {
+          rows: [
+            { org_department_id: 'osa-dept', position_id: null, effective_from: '2026-04-28', effective_to: formatDateShift(todayIso, -1) },
+            { org_department_id: 'tender-dept', position_id: 'pos-9', effective_from: todayIso, effective_to: null },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'tender-dept', {
+      effectiveDate: '2026-04-01',
+    });
+
+    // Чтение назначений для снапшота прошло через client транзакции.
+    const snapshotRead = fake.queries.find(q =>
+      /SELECT org_department_id, position_id,\s+effective_from::text/i.test(q.sql),
+    );
+    expect(snapshotRead).toBeTruthy();
+
+    // Снапшот employees выставлен по активному-сегодня назначению из транзакции.
+    const snapshotWrite = fake.queries.find(q =>
+      /UPDATE employees\s+SET position_id = \$1,\s+org_department_id = \$2/i.test(q.sql),
+    );
+    expect(snapshotWrite).toBeTruthy();
+    expect(snapshotWrite?.params?.[0]).toBe('pos-9');
+    expect(snapshotWrite?.params?.[1]).toBe('tender-dept');
   });
 });
