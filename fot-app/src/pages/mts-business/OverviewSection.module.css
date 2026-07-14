@@ -145,13 +145,35 @@
   background: var(--error);
 }
 
-/* Контролы секции «Сотрудники»/«Динамика» (метрика + отдел + поиск/даты) */
+/* Контролы секции «Динамика» (метрика + даты) */
 .empControls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
+}
+
+/* Шапка секции «Сотрудники»: заголовок + переключатель метрики справа */
+.empHead {
+  align-items: center;
+  margin-bottom: 10px;
+}
+.empHead .segment {
+  margin-left: auto;
+}
+
+/* Строка фильтров секции «Сотрудники»: поиск (растягивается) + отдел */
+.empToolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 14px;
+}
+.empToolbar .select {
+  flex: 0 0 auto;
 }
 
 /* Строки-бары */
@@ -301,6 +323,33 @@
 
   .empControls {
     width: 100%;
+  }
+
+  /* «Сотрудники»: метрика во всю ширину под заголовком, фильтры — колонкой */
+  .empHead {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .empHead .segment {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .empHead .segBtn {
+    flex: 1;
+    min-height: 44px;
+  }
+
+  .empToolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .empToolbar .select {
+    width: 100%;
+    min-height: 44px;
   }
 
   .search {

@@ -411,22 +411,22 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
       {/* Объединённая секция: топ по времени/начислениям + справочник по сотрудникам.
           Клик по строке открывает карточку абонента (как на вкладке «Абоненты»). */}
       <section className={styles.card}>
-        <div className={styles.cardTitle}>
+        <div className={`${styles.cardTitle} ${styles.empHead}`}>
           <span className={styles.cardTitleText}>Сотрудники</span>
-          <div className={styles.empControls}>
-            <Seg value={topMetric} onChange={v => setTopMetric(v as 'time' | 'cost')} options={[{ v: 'time', label: 'По времени' }, { v: 'cost', label: 'По начислениям' }]} />
-            <select className={styles.select} value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
-              <option value="">Все отделы</option>
-              {departments.map(d => <option key={d} value={d}>{d}</option>)}
-            </select>
-            <input
-              className={styles.search}
-              type="search"
-              placeholder="Поиск: ФИО, табельный…"
-              value={empSearch}
-              onChange={e => setEmpSearch(e.target.value)}
-            />
-          </div>
+          <Seg value={topMetric} onChange={v => setTopMetric(v as 'time' | 'cost')} options={[{ v: 'time', label: 'По времени' }, { v: 'cost', label: 'По начислениям' }]} />
+        </div>
+        <div className={styles.empToolbar}>
+          <input
+            className={styles.search}
+            type="search"
+            placeholder="Поиск: ФИО, табельный…"
+            value={empSearch}
+            onChange={e => setEmpSearch(e.target.value)}
+          />
+          <select className={styles.select} value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
+            <option value="">Все отделы</option>
+            {departments.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
         </div>
         {(report.isLoading || billingSummary.isLoading) ? (
           <p className={styles.hint}>Загрузка…</p>
