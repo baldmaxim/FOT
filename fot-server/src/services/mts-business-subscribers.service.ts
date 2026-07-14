@@ -56,6 +56,21 @@ export interface IMtsSubscriberDetails {
   capturedAt: string | null; // самый свежий из снапшотов
 }
 
+/**
+ * Данные SIM для ЛК сотрудника — урезанный вариант деталей абонента:
+ * БЕЗ personalData (pd_data_enc не читается вовсе), БЕЗ баланса (это остаток
+ * лицевого счёта КОМПАНИИ, не номера), БЕЗ платежей/переадресации/роуминга.
+ */
+export interface IMySimNumber {
+  msisdn: string;
+  tariff: { name: string | null; fee: IMtsTariffFee | null };
+  services: IMtsService[];
+  blocks: IMtsService[];
+  packages: IMtsPackageCounter[];
+  charges: { amount: number; capturedAt: string | null } | null; // начисления номера за текущий месяц МСК
+  capturedAt: string | null;
+}
+
 class MtsBusinessSubscribersService {
   /** Список абонентов для таблицы — всё из БД одним заходом. */
   async listSubscribers(): Promise<IMtsSubscriberRow[]> {
@@ -236,6 +251,42 @@ class MtsBusinessSubscribersService {
       payments: arr<IMtsPaymentEntry>(snaps.get('payments')?.payload),
       packages: arr<IMtsPackageCounter>(snaps.get('validity_msisdn')?.payload),
       personalData,
+      capturedAt,
+    };
+  }
+
+  /**
+   * Данные SIM для ЛК сотрудника — из тех же снапшотов, что карточка абонента,
+   * но только «безопасные» секции (см. IMySimNumber). ПДн-поля не читаются.
+   */
+  async getMySimSummary(rawMsisdn: string): Promise<IMySimNumber | null> {
+    const monthTo = moscowTodayIso();
+    const monthFrom = `${monthTo.slice(0, 7)}-01`;
+    const [snaps, charges] = await Promise.all([
+      mtsBusinessMetricsStoreService.getLatestSnapshotsForMsisdn(rawMsisdn, [
+        'bill_plan', 'tariff_fee', 'product_services', 'connected_blocks', 'validity_msisdn',
+      ]),
+      mtsBusinessMetricsStoreService.getMsisdnChargesForPeriod(rawMsisdn, monthFrom, monthTo),
+    ]);
+
+    const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+    const services = arr<IMtsService>(snaps.get('product_services')?.payload);
+    const capturedAt = [...snaps.values()].reduce<string | null>(
+      (max, s) => (max == null || s.capturedAt > max ? s.capturedAt : max),
+      null,
+    );
+
+    return {
+      msisdn: rawMsisdn,
+      tariff: {
+        name: (snaps.get('bill_plan')?.payload as IMtsTariff | undefined)?.tariffName
+          ?? extractTariffNameFromServices(services),
+        fee: (snaps.get('tariff_fee')?.payload as IMtsTariffFee | undefined) ?? null,
+      },
+      services,
+      blocks: arr<IMtsService>(snaps.get('connected_blocks')?.payload),
+      packages: arr<IMtsPackageCounter>(snaps.get('validity_msisdn')?.payload),
+      charges: charges ? { amount: charges.amount, capturedAt: charges.capturedAt } : null,
       capturedAt,
     };
   }

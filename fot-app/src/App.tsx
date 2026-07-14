@@ -110,6 +110,8 @@ const DailyTasksPage = lazy(() => import('./pages/employee/DailyTasksPage').then
 const SalaryRaisePage = lazy(() => import('./pages/employee/SalaryRaisePage').then(m => ({ default: m.SalaryRaisePage })));
 const SalaryRaiseFormPage = lazy(() => import('./pages/employee/SalaryRaiseFormPage').then(m => ({ default: m.SalaryRaiseFormPage })));
 const SalaryRaiseViewPage = lazy(() => import('./pages/employee/SalaryRaiseViewPage').then(m => ({ default: m.SalaryRaiseViewPage })));
+const MySimPage = lazy(() => import('./pages/employee/MySimPage').then(m => ({ default: m.MySimPage })));
+const PhonebookPage = lazy(() => import('./pages/employee/PhonebookPage').then(m => ({ default: m.PhonebookPage })));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
 // Salary raise review (header/hr/admin) — используется в /salary-raise-review/:id
 const SalaryRaiseReviewPage = lazy(() => import('./pages/SalaryRaiseReviewPage').then(m => ({ default: m.SalaryRaiseReviewPage })));
@@ -284,6 +286,28 @@ const AppRoutes = () => {
             element={
               <EmployeeLayout title="Редактирование заявки">
                 <SalaryRaiseFormPage />
+              </EmployeeLayout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/employee/sim" />}>
+          <Route
+            path="/employee/sim"
+            element={
+              <EmployeeLayout title="Моя SIM">
+                <MySimPage />
+              </EmployeeLayout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/employee/phonebook" />}>
+          <Route
+            path="/employee/phonebook"
+            element={
+              <EmployeeLayout title="Телефонная книга">
+                <PhonebookPage />
               </EmployeeLayout>
             }
           />

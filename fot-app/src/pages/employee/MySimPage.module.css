@@ -1,0 +1,473 @@
+/* ЛК «Моя SIM»: карточка тарифа + статистика использования. Адаптив от 360px. */
+
+.page {
+  padding: 24px;
+  width: 100%;
+  max-width: 980px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hint {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0;
+}
+
+.err {
+  color: var(--error);
+  font-size: 14px;
+  margin: 0;
+}
+
+/* Заглушка «SIM не закреплена» */
+.empty {
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.emptyIcon {
+  display: block;
+  margin: 0 auto 10px;
+  color: var(--text-tertiary);
+}
+
+/* Переключатель номеров (если их несколько) */
+.numTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.numTab {
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border-radius: 20px;
+  padding: 10px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.numTabActive {
+  border-color: var(--primary);
+  color: var(--text-primary);
+  background: var(--primary-light);
+}
+
+/* Карточка SIM */
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.msisdn {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.updatedAt {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.kvGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 16px;
+}
+
+.kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kvLabel {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.kvVal {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.chip {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Свёрнутый список услуг */
+.servicesToggle {
+  margin-top: 12px;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.serviceList {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.serviceRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.serviceRow:last-child {
+  border-bottom: none;
+}
+
+.serviceName {
+  overflow-wrap: anywhere;
+}
+
+.servicePrice {
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* --- Использование --- */
+
+.usageHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.usageTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.usageControls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.select {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 16px; /* ≥16px — без автозума на мобильных */
+  min-height: 44px;
+}
+
+/* Плитки-сводка */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.stat {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.statTotal {
+  border-color: var(--primary);
+}
+
+.statLabel {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.statValue {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.statSub {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Таблица «По дням» */
+.daysWrap {
+  margin-top: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.daysTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 460px;
+}
+
+.daysTable th {
+  text-align: left;
+  padding: 8px 10px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+}
+
+.daysTable td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.daysTable tr:last-child td {
+  border-bottom: none;
+}
+
+.daysNum {
+  text-align: right;
+}
+
+.daysTable td.daysNum {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Детализация */
+.detailToggle {
+  margin-top: 12px;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.groupTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.groupTab {
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: 16px;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.groupTabActive {
+  border-color: var(--primary);
+  color: var(--text-primary);
+  background: var(--primary-light);
+}
+
+.groupTabCount {
+  margin-left: 6px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.rowList {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.rowDir {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+}
+
+.rowDirIn {
+  color: var(--success);
+}
+
+.rowDirOut {
+  color: var(--primary);
+}
+
+.rowMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rowPrimary {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.rowPeerNum {
+  margin-left: 6px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.rowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.rowChip {
+  background: var(--bg-tertiary);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+
+.rowPaidChip {
+  background: var(--warning-muted);
+  color: var(--warning);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+
+.rowValueBox {
+  flex: none;
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rowValue {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rowAmt {
+  font-size: 12px;
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .page {
+    padding: 16px 12px;
+    gap: 12px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+
+  .msisdn {
+    font-size: 18px;
+  }
+
+  .usageControls {
+    width: 100%;
+  }
+
+  .select {
+    flex: 1;
+  }
+}

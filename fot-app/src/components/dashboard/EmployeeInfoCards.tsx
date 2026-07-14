@@ -2,6 +2,7 @@ import type { FC } from 'react';
 import type { Employee } from '../../types';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { formatRhythmShort } from '../../utils/scheduleRhythm';
+import { fmtPhone } from '../../pages/mts-business/mtsBusinessFormat';
 import styles from '../../pages/employee/EmployeeDashboard.module.css';
 
 interface IEmployeeInfoCardProps {
@@ -9,6 +10,8 @@ interface IEmployeeInfoCardProps {
   employee: Employee | null;
   importedPosition: string | undefined;
   schedule: IResolvedSchedule | undefined;
+  /** Корпоративные номера МТС сотрудника (обычно один); пусто/undefined → «—». */
+  phones?: string[];
 }
 
 interface ISecurityCardProps {
@@ -52,6 +55,7 @@ export const EmployeeInfoCard: FC<IEmployeeInfoCardProps> = ({
   employee,
   importedPosition,
   schedule,
+  phones,
 }) => (
   <div className={styles.infoCard}>
     <div className={styles.infoCardHeader}>
@@ -90,6 +94,12 @@ export const EmployeeInfoCard: FC<IEmployeeInfoCardProps> = ({
         <div className={styles.vacationDetail}>
           <span className={styles.vacationDetailLabel}>Таб. номер</span>
           <span className={styles.vacationDetailValue}>{employee.tab_number || '—'}</span>
+        </div>
+        <div className={styles.vacationDetail}>
+          <span className={styles.vacationDetailLabel}>Телефон</span>
+          <span className={styles.vacationDetailValue}>
+            {phones && phones.length > 0 ? phones.map(p => fmtPhone(p)).join(', ') : '—'}
+          </span>
         </div>
       </div>
     ) : (

@@ -1,0 +1,152 @@
+/* ЛК «Телефонная книга»: поиск + таблица номер/ФИО/должность/отдел. Адаптив от 360px. */
+
+.page {
+  padding: 24px;
+  width: 100%;
+  max-width: 980px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hint {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0;
+}
+
+.err {
+  color: var(--error);
+  font-size: 14px;
+  margin: 0;
+}
+
+.searchWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.search {
+  flex: 1;
+  min-width: 220px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 16px; /* ≥16px — без автозума на мобильных */
+  min-height: 44px;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.counter {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  min-width: 640px;
+}
+
+.table th {
+  text-align: left;
+  padding: 10px 14px;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+}
+
+.table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.phoneCell {
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.nameCell {
+  color: var(--text-primary);
+}
+
+/* Мобильный вид: строки-карточки вместо широкой таблицы */
+.cards {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cardRow {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cardPhone {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.cardName {
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.cardMeta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .page {
+    padding: 16px 12px;
+  }
+
+  .tableWrap {
+    display: none;
+  }
+
+  .cards {
+    display: flex;
+  }
+}

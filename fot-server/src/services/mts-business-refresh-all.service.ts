@@ -97,9 +97,21 @@ const getMoscowYmd = (now: Date): string => {
   return `${get('year')}-${get('month')}-${get('day')}`;
 };
 
-/** Окно детализации по умолчанию: с 1-го числа текущего месяца (МСК) по сегодня. */
+/**
+ * Окно детализации по умолчанию: с 1-го числа текущего месяца (МСК) по сегодня.
+ * В первые 3 дня месяца окно расширяется на прошлый месяц: прогон 23:00
+ * последнего дня не видит событий 23:00–24:00, а прогон 1-го числа взял бы
+ * окно уже нового месяца — хвост терялся бы навсегда (заодно добираются
+ * поздние корректировки начислений прошлого месяца).
+ */
 export const defaultDetalizationWindow = (now: Date = new Date()): { dateFrom: string; dateTo: string } => {
   const today = getMoscowYmd(now);
+  const day = Number(today.slice(8, 10));
+  if (day <= 3) {
+    const [y, m] = [Number(today.slice(0, 4)), Number(today.slice(5, 7))];
+    const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+    return { dateFrom: `${prev}-01`, dateTo: today };
+  }
   return { dateFrom: `${today.slice(0, 7)}-01`, dateTo: today };
 };
 
@@ -232,7 +244,7 @@ async function runStep(
           ? UNAVAILABLE_MESSAGE
           : status === 'error'
             ? `${res.failed} из ${msisdns.length} номеров с ошибкой${breakdown ? ` (${breakdown})` : ''}${notes ? `, ${notes}` : ''}`
-            : `новых звонков: ${res.inserted}${notes ? `, ${notes}` : ''}`,
+            : `новых звонков: ${res.inserted}, строк выписки: ${res.usageRowsInserted}${notes ? `, ${notes}` : ''}`,
       };
     }
     case 'catalog': {

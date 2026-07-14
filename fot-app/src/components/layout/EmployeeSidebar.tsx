@@ -80,6 +80,37 @@ const navGroups: INavGroup[] = [
     ],
   },
   {
+    label: 'МТС',
+    items: [
+      {
+        id: 'sim',
+        path: '/employee/sim',
+        label: 'Моя SIM',
+        requiredPage: '/employee/sim',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="6" y="2" width="12" height="20" rx="2"/>
+            <line x1="12" y1="18" x2="12" y2="18.01"/>
+          </svg>
+        ),
+      },
+      {
+        id: 'phonebook',
+        path: '/employee/phonebook',
+        label: 'Телефонная книга',
+        requiredPage: '/employee/phonebook',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            <path d="M12 8a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/>
+            <path d="M9 15c.5-1.2 1.6-2 3-2s2.5.8 3 2"/>
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
     label: 'Документы',
     items: [
       {

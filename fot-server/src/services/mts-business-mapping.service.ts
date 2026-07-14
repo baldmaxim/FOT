@@ -37,6 +37,15 @@ export interface IMtsSubscriberContext {
   employeeTabNumber: string | null;
 }
 
+/** Строка «Телефонной книги» в ЛК: только номер + ФИО/должность/отдел. */
+export interface IPhonebookRow {
+  msisdn: string | null;
+  employeeId: number;
+  fullName: string;
+  positionName: string | null;
+  departmentName: string | null;
+}
+
 export interface IAutoLinkConflict {
   msisdn: string; // расшифрованный номер — для показа и ручной привязки
   mtsFio: string;
@@ -476,6 +485,58 @@ class MtsBusinessMappingService {
       employeeFullName: nm?.full_name ?? null,
       employeeTabNumber: nm?.tab_number ?? null,
     };
+  }
+
+  /** Номера, привязанные к сотруднику (ЛК «Моя SIM»). Обычно один, бывает несколько. */
+  async getMsisdnsByEmployeeId(employeeId: number): Promise<string[]> {
+    const rows = await query<{ msisdn_enc: string | null }>(
+      `SELECT msisdn_enc FROM mts_business_number_map
+        WHERE employee_id = $1 AND msisdn_enc IS NOT NULL
+        ORDER BY linked_at NULLS LAST`,
+      [employeeId],
+    );
+    const out: string[] = [];
+    for (const r of rows) {
+      const msisdn = encryptionService.decryptField(r.msisdn_enc);
+      if (msisdn) out.push(msisdn);
+    }
+    return out;
+  }
+
+  /**
+   * «Телефонная книга» ЛК: привязанные номера АКТИВНЫХ сотрудников (уволенные и
+   * архивные исключены; их привязки в number_map остаются, но не отдаются).
+   * Только номер/ФИО/должность/отдел — без mts_fio, ПДн и статистики.
+   */
+  async getPhonebook(): Promise<IPhonebookRow[]> {
+    const rows = await query<{
+      msisdn_enc: string | null;
+      employee_id: number;
+      full_name: string;
+      position_name: string | null;
+      department_name: string | null;
+    }>(
+      `SELECT nm.msisdn_enc,
+              e.id AS employee_id,
+              e.full_name,
+              p.name AS position_name,
+              od.name AS department_name
+         FROM mts_business_number_map nm
+         JOIN employees e ON e.id = nm.employee_id
+         LEFT JOIN positions p ON p.id = e.position_id
+         LEFT JOIN org_departments od ON od.id = e.org_department_id
+        WHERE nm.msisdn_enc IS NOT NULL
+          AND e.employment_status = 'active'
+          AND NOT COALESCE(e.is_archived, false)
+        ORDER BY e.full_name, nm.linked_at NULLS LAST`,
+    );
+    return rows.map(r => ({
+      msisdn: encryptionService.decryptField(r.msisdn_enc),
+      employeeId: r.employee_id,
+      fullName: r.full_name,
+      positionName: r.position_name,
+      departmentName: r.department_name,
+    }));
   }
 
   /** Номера аккаунта, известные ТОЛЬКО через number_map (напр. из HierarchyStructure, без CDR-истории). */

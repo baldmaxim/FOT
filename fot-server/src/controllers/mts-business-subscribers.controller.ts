@@ -4,6 +4,9 @@ import { z } from 'zod';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { mtsBusinessSubscribersService } from '../services/mts-business-subscribers.service.js';
 import { syncSubscriberFull } from '../services/mts-business-subscriber-sync.service.js';
+import { syncMsisdnStatement } from '../services/mts-business-statement-sync.service.js';
+import { defaultDetalizationWindow } from '../services/mts-business-refresh-all.service.js';
+import { mtsBusinessStatementRowsService, parseUsagePeriod } from '../services/mts-business-statement-rows.service.js';
 import { mtsBusinessMappingService } from '../services/mts-business-mapping.service.js';
 import { mtsBusinessCatalogService } from '../services/mts-business-catalog.service.js';
 import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
@@ -73,35 +76,35 @@ export const mtsBusinessSubscribersController = {
   },
 
   /**
-   * Детальная выписка по использованию SIM (вкладка «Использование»): живой
-   * вызов Bills/BillingStatementExtdByMSISDN → события с датой/типом/объёмом/
-   * деньгами. Период: ?month=YYYY-MM (весь месяц) или ?date=YYYY-MM-DD (один
-   * день). Собеседники резолвятся в имена абонентов из нашей базы (peerName).
-   * При 403/1010 — {unavailable:true}.
+   * Детальная выписка по использованию SIM (вкладка «Использование») — из БД
+   * (mts_business_statement_rows, пишется ночным «Обновить всё»). Период:
+   * ?month=YYYY-MM (весь месяц) или ?date=YYYY-MM-DD (один день). Собеседники
+   * резолвятся в имена абонентов из нашей базы (peerName). Если строк за период
+   * в БД нет (месяцы до внедрения) — одноразовый живой fallback с автосохранением
+   * (backfill по требованию); при 403/1010 — {unavailable:true}.
    */
   async usage(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const msisdn = String(req.params.msisdn || '').trim();
-      const month = String(req.query.month || '').trim();
-      const date = String(req.query.date || '').trim();
+      const period = parseUsagePeriod(String(req.query.month || '').trim(), String(req.query.date || '').trim());
+      if (!period) {
+        res.status(400).json({ success: false, error: 'Укажите month=YYYY-MM или date=YYYY-MM-DD' });
+        return;
+      }
 
-      let dateFrom: string;
-      let dateTo: string;
-      let period: string;
-      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        dateFrom = date;
-        dateTo = date;
-        period = date;
-      } else {
-        const m = /^(\d{4})-(\d{2})$/.exec(month);
-        if (!m) {
-          res.status(400).json({ success: false, error: 'Укажите month=YYYY-MM или date=YYYY-MM-DD' });
+      const hash = msisdnHash(msisdn);
+      if (hash) {
+        const stored = await mtsBusinessStatementRowsService.getUsageRows(hash, period.dateFrom, period.dateTo);
+        if (stored.length > 0) {
+          const names = await mtsBusinessMappingService.getNamesByMsisdnHash();
+          const rows = stored.map(({ peerHash, ...r }) => ({
+            ...r,
+            peerName: peerHash ? names.get(peerHash) ?? null : null,
+          }));
+          const total = rows.reduce((a, r) => a + r.amount, 0);
+          res.json({ success: true, data: { month: period.period, rows, total } });
           return;
         }
-        const lastDay = new Date(Number(m[1]), Number(m[2]), 0).getDate();
-        dateFrom = `${month}-01`;
-        dateTo = `${month}-${String(lastDay).padStart(2, '0')}`;
-        period = month;
       }
 
       const ctx = await mtsBusinessMappingService.getSubscriberContext(msisdn);
@@ -110,19 +113,22 @@ export const mtsBusinessSubscribersController = {
         return;
       }
       try {
-        const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(ctx.accountId, { msisdn, dateFrom, dateTo });
+        const resp = await mtsBusinessDataService.getBillingStatementExtdByMsisdn(ctx.accountId, {
+          msisdn, dateFrom: period.dateFrom, dateTo: period.dateTo,
+        });
         const parsed = mtsBusinessCdrService.parseStatementUsageRows(resp);
+        await mtsBusinessStatementRowsService.storeRows(ctx.accountId, msisdn, parsed, 'backfill');
         // Собеседник — конкретный абонент, если его номер есть в нашей базе.
         const names = await mtsBusinessMappingService.getNamesByMsisdnHash();
         const rows = parsed.map(r => {
-          const hash = r.peer ? msisdnHash(r.peer) : null;
-          return { ...r, peerName: hash ? names.get(hash) ?? null : null };
+          const peerHash = r.peer ? msisdnHash(r.peer) : null;
+          return { ...r, peerName: peerHash ? names.get(peerHash) ?? null : null };
         });
         const total = rows.reduce((a, r) => a + r.amount, 0);
-        res.json({ success: true, data: { month: period, rows, total } });
+        res.json({ success: true, data: { month: period.period, rows, total } });
       } catch (error) {
         if (isFeatureUnavailable(error)) {
-          res.json({ success: true, data: { month: period, unavailable: true, reason: 'MTS_FEATURE_NOT_CONNECTED' } });
+          res.json({ success: true, data: { month: period.period, unavailable: true, reason: 'MTS_FEATURE_NOT_CONNECTED' } });
           return;
         }
         throw error;
@@ -167,6 +173,14 @@ export const mtsBusinessSubscribersController = {
         return;
       }
       const result = await syncSubscriberFull(ctx.accountId, msisdn);
+      // Освежаем и выписку (звонки/строки/начисления) за текущий месяц — кнопка
+      // «Обновить данные» должна обновлять вкладку «Использование». Не фатально.
+      try {
+        const w = defaultDetalizationWindow();
+        await syncMsisdnStatement(ctx.accountId, msisdn, w.dateFrom, w.dateTo, null, 'manual');
+      } catch (e) {
+        console.warn(`[mts-biz-subscribers] refresh statement failed: ${e instanceof Error ? e.message : 'unknown'}`);
+      }
       res.json({ success: true, data: result });
     } catch (error) {
       fail(res, error, 'Ошибка обновления данных абонента');

@@ -6,6 +6,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { apiClient } from '../../api/client';
 import { employeeService } from '../../services/employeeService';
 import { useMyLeaveRequests } from '../../hooks/usePortalData';
+import { useMySimNumbers } from '../../hooks/useMySim';
 import type { Employee } from '../../types';
 import { useEmployeeTimesheetMonths } from '../../hooks/useEmployeeTimesheet';
 import styles from './EmployeeDashboard.module.css';
@@ -84,6 +85,8 @@ export const EmployeeDashboardPage: React.FC = () => {
   });
 
   const timesheetQuery = useEmployeeTimesheetMonths(employeeId, timesheetMonthKeys, !!employeeId);
+  // Корпоративный номер МТС — строка «Телефон» в блоке «Информация».
+  const mySimNumbersQuery = useMySimNumbers(!!employeeId);
 
   const employee = employeeQuery.data ?? null;
   // Расписание сотрудника берём из первого месяца окна, где оно присутствует (для ритма графика).
@@ -226,6 +229,7 @@ export const EmployeeDashboardPage: React.FC = () => {
               employee={employee}
               importedPosition={profile?.imported_position ?? undefined}
               schedule={schedule}
+              phones={mySimNumbersQuery.data}
             />
           </Suspense>
           <Suspense fallback={null}>

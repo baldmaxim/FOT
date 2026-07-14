@@ -3,16 +3,22 @@ import { queryOne } from '../config/postgres.js';
 import { mtsBusinessDataService } from './mts-business-data.service.js';
 import { mtsBusinessCdrService } from './mts-business-cdr.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
+import { mtsBusinessStatementRowsService, type StatementRowsSource } from './mts-business-statement-rows.service.js';
 import { isFeatureUnavailable, isTransientMtsError, mtsErrorBucket, mtsPermanentErrorKind } from './mts-business-base.service.js';
 import { runPool } from './mts-business-subscriber-sync.service.js';
 
-// Синхронная выписка Bills/BillingStatementExtdByMSISDN → CDR + начисления.
-// Единая точка для cdr-daily, refresh-all и backfill-скрипта.
+// Синхронная выписка Bills/BillingStatementExtdByMSISDN → CDR + начисления +
+// полные строки выписки (mts_business_statement_rows — источник вкладки
+// «Использование» и ЛК «Моя SIM»). Единая точка для cdr-daily, refresh-all и
+// backfill-скрипта: все три пишут строки без дополнительных вызовов МТС —
+// ответ выписки уже в руках.
 
 export interface ISyncMsisdnStatementResult {
   callsParsed: number;
   callsInserted: number;
   chargesAmount: number;
+  usageRowsParsed: number;
+  usageRowsInserted: number;
 }
 
 /** Количество строк CDR по лицевому счёту (для верификации после storeCalls). */
@@ -47,6 +53,7 @@ export async function syncMsisdnStatement(
   dateFrom: string,
   dateTo: string,
   sourceMessageId: string | null = null,
+  rowsSource: StatementRowsSource = 'nightly',
 ): Promise<ISyncMsisdnStatementResult> {
   const monthStart = `${dateTo.slice(0, 7)}-01`;
   const chargesFrom = dateFrom < monthStart ? dateFrom : monthStart;
@@ -57,6 +64,9 @@ export async function syncMsisdnStatement(
     const stored = await mtsBusinessCdrService.storeCalls(calls, sourceMessageId, accountId);
     callsInserted = stored.inserted;
   }
+  // Полные строки выписки (все категории) — из того же ответа, без новых вызовов.
+  const usageRows = mtsBusinessCdrService.parseStatementUsageRows(resp);
+  const rowsStored = await mtsBusinessStatementRowsService.storeRows(accountId, msisdn, usageRows, rowsSource);
   const perDay = mtsBusinessCdrService.sumStatementChargesByDay(resp, chargesFrom, dateTo);
   await mtsBusinessMetricsStoreService.replaceMsisdnDailyCharges(accountId, msisdn, chargesFrom, dateTo, perDay);
   const chargesAmount = [...perDay.values()].reduce((sum, v) => sum + v, 0);
@@ -64,12 +74,16 @@ export async function syncMsisdnStatement(
     callsParsed: calls.length,
     callsInserted,
     chargesAmount,
+    usageRowsParsed: usageRows.length,
+    usageRowsInserted: rowsStored.inserted,
   };
 }
 
 export interface ISyncMsisdnsBatchResult {
   numbers: number;
   inserted: number;
+  /** Новых строк полной выписки (mts_business_statement_rows). */
+  usageRowsInserted: number;
   /** Ошибки ПОСЛЕ второго прохода (транзиенты 421/3003 — отдельно). */
   failed: number;
   unavailable: number; // 403/1010 — не подключено в тарифе
@@ -98,7 +112,7 @@ export async function syncMsisdnsBatch(
   pool: number,
 ): Promise<ISyncMsisdnsBatchResult> {
   const out: ISyncMsisdnsBatchResult = {
-    numbers: msisdns.length, inserted: 0, failed: 0, unavailable: 0, noAccess: 0, transient: 0, retriedOk: 0, errorBreakdown: {},
+    numbers: msisdns.length, inserted: 0, usageRowsInserted: 0, failed: 0, unavailable: 0, noAccess: 0, transient: 0, retriedOk: 0, errorBreakdown: {},
   };
   const retryQueue: string[] = [];
 
@@ -106,6 +120,7 @@ export async function syncMsisdnsBatch(
     try {
       const res = await syncMsisdnStatement(accountId, msisdn, dateFrom, dateTo);
       out.inserted += res.callsInserted;
+      out.usageRowsInserted += res.usageRowsInserted;
     } catch (error) {
       if (isFeatureUnavailable(error)) out.unavailable++;
       else if (mtsPermanentErrorKind(error) === 'no_access') out.noAccess++;
@@ -118,6 +133,7 @@ export async function syncMsisdnsBatch(
     try {
       const res = await syncMsisdnStatement(accountId, msisdn, dateFrom, dateTo);
       out.inserted += res.callsInserted;
+      out.usageRowsInserted += res.usageRowsInserted;
       out.retriedOk++;
     } catch (error) {
       if (isFeatureUnavailable(error)) {

@@ -20,10 +20,16 @@ vi.mock('./mts-business-cdr.service.js', () => ({
     parseBillingStatementResponse: vi.fn(() => []),
     storeCalls: vi.fn(async () => ({ inserted: 0 })),
     sumStatementChargesByDay: vi.fn(() => new Map()),
+    parseStatementUsageRows: vi.fn(() => []),
   },
 }));
 vi.mock('./mts-business-metrics-store.service.js', () => ({
   mtsBusinessMetricsStoreService: { replaceMsisdnDailyCharges: vi.fn(async () => undefined) },
+}));
+vi.mock('./mts-business-statement-rows.service.js', () => ({
+  mtsBusinessStatementRowsService: {
+    storeRows: vi.fn(async () => ({ inserted: 0, skipped: 0, noDate: 0 })),
+  },
 }));
 // Полный subscriber-sync тянет billing/catalog/personal-data — для батча нужен только пул.
 vi.mock('./mts-business-subscriber-sync.service.js', () => ({
