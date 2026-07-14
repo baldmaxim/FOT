@@ -78,9 +78,6 @@ describe('employeeSimController.getMySim', () => {
     subscribers.getMySimSummary.mockResolvedValueOnce({
       msisdn: '79150000001',
       tariff: { name: 'Умный бизнес', fee: { amount: 750, currencyCode: 'RUB' } },
-      services: [],
-      blocks: [],
-      packages: [],
       charges: { amount: 123.45, capturedAt: '2026-07-13' },
       capturedAt: '2026-07-13',
     });
@@ -95,6 +92,8 @@ describe('employeeSimController.getMySim', () => {
     expect(sim).not.toHaveProperty('personalData');
     expect(sim).not.toHaveProperty('balance');
     expect(sim).not.toHaveProperty('payments');
+    expect(sim).not.toHaveProperty('services');
+    expect(sim).not.toHaveProperty('blocks');
   });
 
   it('SIM не привязана → numbers: []', async () => {

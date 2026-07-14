@@ -1,85 +1,41 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, useState } from 'react';
 import { useMySim } from '../../hooks/useMySim';
 import type { IMySimNumber } from '../../services/mySimService';
-import type { IMtsSubServiceItem } from '../../services/mtsBusinessSubscriberService';
-import { fmtLast, fmtMoney, fmtPackage, fmtPhone, packageHasData } from '../mts-business/mtsBusinessFormat';
+import { fmtLast, fmtMoney, fmtPhone } from '../mts-business/mtsBusinessFormat';
 import { MySimUsage } from './sim/MySimUsage';
 import styles from './MySimPage.module.css';
 
-/** Платные услуги сверху (по убыванию абонплаты), затем бесплатные. */
-const sortPaidFirst = (items: IMtsSubServiceItem[]): IMtsSubServiceItem[] =>
-  [...items].sort((a, b) => (b.monthlyAmount ?? 0) - (a.monthlyAmount ?? 0));
-
-/** Карточка одного номера: тариф, абонплата, начисления, пакеты, услуги. */
-const SimCard: FC<{ sim: IMySimNumber }> = ({ sim }) => {
-  const [showServices, setShowServices] = useState(false);
-  const packages = sim.packages.filter(packageHasData);
-  const services = useMemo(() => sortPaidFirst(sim.services), [sim.services]);
-  const activeBlocks = sim.blocks.filter(b => b.name);
-
-  return (
-    <div className={styles.card}>
-      <div className={styles.cardHead}>
-        <span className={styles.msisdn}>{fmtPhone(sim.msisdn)}</span>
-        {sim.capturedAt && <span className={styles.updatedAt}>обновлено {fmtLast(sim.capturedAt)}</span>}
-      </div>
-
-      <div className={styles.kvGrid}>
-        <div className={styles.kv}>
-          <span className={styles.kvLabel}>Тариф</span>
-          <span className={styles.kvVal}>{sim.tariff.name || '—'}</span>
-        </div>
-        <div className={styles.kv}>
-          <span className={styles.kvLabel}>Абонентская плата</span>
-          <span className={styles.kvVal}>
-            {sim.tariff.fee?.amount != null ? `${fmtMoney(sim.tariff.fee.amount)}/мес` : '—'}
-          </span>
-        </div>
-        <div className={styles.kv}>
-          <span className={styles.kvLabel}>Начисления за месяц</span>
-          <span className={styles.kvVal}>{sim.charges ? fmtMoney(sim.charges.amount) : '—'}</span>
-        </div>
-      </div>
-
-      {packages.length > 0 && (
-        <div className={styles.chips}>
-          {packages.map((p, i) => <span key={i} className={styles.chip}>{fmtPackage(p)}</span>)}
-        </div>
-      )}
-
-      {activeBlocks.length > 0 && (
-        <div className={styles.chips}>
-          {activeBlocks.map((b, i) => <span key={i} className={styles.chip}>Блокировка: {b.name}</span>)}
-        </div>
-      )}
-
-      {services.length > 0 && (
-        <>
-          <button className={styles.servicesToggle} onClick={() => setShowServices(v => !v)}>
-            {showServices ? '▴ Скрыть услуги' : `▾ Подключённые услуги (${services.length})`}
-          </button>
-          {showServices && (
-            <ul className={styles.serviceList}>
-              {services.map((s, i) => (
-                <li key={s.code ?? i} className={styles.serviceRow}>
-                  <span className={styles.serviceName}>{s.name ?? s.code ?? '—'}</span>
-                  {(s.monthlyAmount ?? 0) > 0 && (
-                    <span className={styles.servicePrice}>{fmtMoney(s.monthlyAmount)}/мес</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
-      )}
+/** Карточка одного номера: тариф, абонентская плата, начисления. */
+const SimCard: FC<{ sim: IMySimNumber }> = ({ sim }) => (
+  <div className={styles.card}>
+    <div className={styles.cardHead}>
+      <span className={styles.msisdn}>{fmtPhone(sim.msisdn)}</span>
+      {sim.capturedAt && <span className={styles.updatedAt}>обновлено {fmtLast(sim.capturedAt)}</span>}
     </div>
-  );
-};
+
+    <div className={styles.kvGrid}>
+      <div className={styles.kv}>
+        <span className={styles.kvLabel}>Тариф</span>
+        <span className={styles.kvVal}>{sim.tariff.name || '—'}</span>
+      </div>
+      <div className={styles.kv}>
+        <span className={styles.kvLabel}>Абонентская плата</span>
+        <span className={styles.kvVal}>
+          {sim.tariff.fee?.amount != null ? `${fmtMoney(sim.tariff.fee.amount)}/мес` : '—'}
+        </span>
+      </div>
+      <div className={styles.kv}>
+        <span className={styles.kvLabel}>Начисления за месяц</span>
+        <span className={styles.kvVal}>{sim.charges ? fmtMoney(sim.charges.amount) : '—'}</span>
+      </div>
+    </div>
+  </div>
+);
 
 /**
- * ЛК «Моя SIM»: корпоративный номер сотрудника — тариф, абонплата, пакеты,
- * услуги, начисления и статистика использования (звонки/СМС/интернет по дням
- * и построчная детализация). Данные из БД, обновляются ночным прогоном МТС.
+ * ЛК «Моя SIM»: корпоративный номер сотрудника — тариф, абонентская плата,
+ * начисления и статистика использования (звонки/СМС/интернет по дням и
+ * построчная детализация). Данные из БД, обновляются ночным прогоном МТС.
  * Персональные данные и баланс лицевого счёта компании сюда не попадают.
  */
 export const MySimPage: FC = () => {

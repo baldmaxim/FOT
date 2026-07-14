@@ -57,16 +57,13 @@ export interface IMtsSubscriberDetails {
 }
 
 /**
- * Данные SIM для ЛК сотрудника — урезанный вариант деталей абонента:
+ * Данные SIM для ЛК сотрудника — только тариф/абонплата/начисления:
  * БЕЗ personalData (pd_data_enc не читается вовсе), БЕЗ баланса (это остаток
- * лицевого счёта КОМПАНИИ, не номера), БЕЗ платежей/переадресации/роуминга.
+ * лицевого счёта КОМПАНИИ, не номера), БЕЗ услуг/блокировок/пакетов/платежей.
  */
 export interface IMySimNumber {
   msisdn: string;
   tariff: { name: string | null; fee: IMtsTariffFee | null };
-  services: IMtsService[];
-  blocks: IMtsService[];
-  packages: IMtsPackageCounter[];
   charges: { amount: number; capturedAt: string | null } | null; // начисления номера за текущий месяц МСК
   capturedAt: string | null;
 }
@@ -257,14 +254,17 @@ class MtsBusinessSubscribersService {
 
   /**
    * Данные SIM для ЛК сотрудника — из тех же снапшотов, что карточка абонента,
-   * но только «безопасные» секции (см. IMySimNumber). ПДн-поля не читаются.
+   * но только «безопасные» секции (см. IMySimNumber). product_services читается
+   * лишь для fallback-имени тарифа (BillPlanInfo бывает пуст — тогда тариф
+   * берётся из услуги «Ежемесячная плата»), сам список наружу не отдаётся.
+   * ПДн-поля не читаются.
    */
   async getMySimSummary(rawMsisdn: string): Promise<IMySimNumber | null> {
     const monthTo = moscowTodayIso();
     const monthFrom = `${monthTo.slice(0, 7)}-01`;
     const [snaps, charges] = await Promise.all([
       mtsBusinessMetricsStoreService.getLatestSnapshotsForMsisdn(rawMsisdn, [
-        'bill_plan', 'tariff_fee', 'product_services', 'connected_blocks', 'validity_msisdn',
+        'bill_plan', 'tariff_fee', 'product_services',
       ]),
       mtsBusinessMetricsStoreService.getMsisdnChargesForPeriod(rawMsisdn, monthFrom, monthTo),
     ]);
@@ -283,9 +283,6 @@ class MtsBusinessSubscribersService {
           ?? extractTariffNameFromServices(services),
         fee: (snaps.get('tariff_fee')?.payload as IMtsTariffFee | undefined) ?? null,
       },
-      services,
-      blocks: arr<IMtsService>(snaps.get('connected_blocks')?.payload),
-      packages: arr<IMtsPackageCounter>(snaps.get('validity_msisdn')?.payload),
       charges: charges ? { amount: charges.amount, capturedAt: charges.capturedAt } : null,
       capturedAt,
     };

@@ -1,22 +1,13 @@
 import { apiClient } from '../api/client';
 import type { IMtsUsageRow } from './mtsBusinessSubscribersService';
-import type { IMtsSubServiceItem, IMtsSubTariffFee } from './mtsBusinessSubscriberService';
+import type { IMtsSubTariffFee } from './mtsBusinessSubscriberService';
 
 // ЛК сотрудника: «Моя SIM» (/my-sim — данные только по своим номерам, из БД,
 // без ПДн и баланса ЛС) и «Телефонная книга» (/phonebook).
 
-export interface IMySimPackage {
-  unitOfMeasure: string | null;
-  quota: number | null;
-  remainder: number | null;
-}
-
 export interface IMySimNumber {
   msisdn: string;
   tariff: { name: string | null; fee: IMtsSubTariffFee | null };
-  services: IMtsSubServiceItem[];
-  blocks: IMtsSubServiceItem[];
-  packages: IMySimPackage[];
   charges: { amount: number; capturedAt: string | null } | null;
   capturedAt: string | null;
   months: string[]; // месяцы, за которые в БД есть выписка (YYYY-MM, свежие сверху)
