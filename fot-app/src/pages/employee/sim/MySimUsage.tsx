@@ -45,10 +45,16 @@ const UsageRow: FC<{ u: IMtsUsageRow }> = ({ u }) => {
   const primary = u.peerName ?? numberText ?? u.label ?? '—';
   const value = fmtUnits(u.units, u.unitCode);
   const paid = u.amount > 0;
-  const dirArrow = u.direction === 'in' ? '↓' : u.direction === 'out' ? '↑' : '·';
-  const dirCls = u.direction === 'in' ? styles.rowDirIn : u.direction === 'out' ? styles.rowDirOut : '';
+  // Глиф и цвет бейджа — как иконки в админке МТС Бизнес: входящий зелёный,
+  // исходящий синий, интернет фиолетовый, СМС янтарный.
+  const dirArrow = group === 'calls'
+    ? (u.direction === 'in' ? '↓' : u.direction === 'out' ? '↑' : '·')
+    : group === 'internet' ? '⇄' : group === 'sms' ? '✉' : '·';
+  const dirCls = group === 'calls'
+    ? (u.direction === 'in' ? styles.rowDirIn : u.direction === 'out' ? styles.rowDirOut : '')
+    : group === 'internet' ? styles.rowIcoNet : group === 'sms' ? styles.rowIcoSms : '';
   return (
-    <li className={styles.row}>
+    <li className={`${styles.row} ${paid ? styles.rowPaid : ''}`}>
       <span className={`${styles.rowDir} ${dirCls}`} aria-hidden="true">{dirArrow}</span>
       <div className={styles.rowMain}>
         <div className={styles.rowPrimary}>
@@ -79,7 +85,6 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
   const monthOptions = months.length > 0 ? months : [currentYm()];
   const [month, setMonth] = useState(monthOptions[0]);
   const [usageDate, setUsageDate] = useState(''); // пусто = весь месяц
-  const [showDetail, setShowDetail] = useState(false);
   const [detailTab, setDetailTab] = useState<UsageGroupKey>('calls');
 
   const usage = useMySimUsage(month, usageDate);
@@ -100,8 +105,8 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
     [my, activeTab],
   );
 
-  const onMonth = (v: string): void => { setMonth(v); setUsageDate(''); setShowDetail(false); };
-  const onDay = (v: string): void => { setUsageDate(v ? `${month}-${v}` : ''); setShowDetail(false); };
+  const onMonth = (v: string): void => { setMonth(v); setUsageDate(''); };
+  const onDay = (v: string): void => { setUsageDate(v ? `${month}-${v}` : ''); };
 
   return (
     <div className={styles.card}>
@@ -140,7 +145,7 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
                 const g = summary.get(k);
                 if (!g || (g.count === 0 && g.amount === 0)) return null;
                 return (
-                  <div key={k} className={styles.stat} title={usageTooltip(g)}>
+                  <div key={k} className={styles.stat} data-g={k} title={usageTooltip(g)}>
                     <span className={styles.statLabel}>{USAGE_GROUP_LABELS[k]}</span>
                     <span className={styles.statValue}>{usageGroupValue(g)}</span>
                     <span className={styles.statSub}>{usageGroupSub(g)}</span>
@@ -154,39 +159,39 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
               </div>
             </div>
 
-            {!usageDate && (my?.days.length ?? 0) > 1 && (
-              <div className={styles.daysWrap}>
-                <table className={styles.daysTable}>
-                  <thead>
-                    <tr>
-                      <th>День</th>
-                      <th className={styles.daysNum}>Звонки</th>
-                      <th className={styles.daysNum}>СМС</th>
-                      <th className={styles.daysNum}>Интернет</th>
-                      <th className={styles.daysNum}>Сумма</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {my?.days.map(d => (
-                      <tr key={d.date}>
-                        <td>{fmtDay(d.date)}</td>
-                        <td className={styles.daysNum}>{d.calls > 0 ? `${d.calls} · ${fmtDur(d.callsSeconds)}` : '—'}</td>
-                        <td className={styles.daysNum}>{d.smsCount > 0 ? `${d.smsCount} шт` : '—'}</td>
-                        <td className={styles.daysNum}>{d.internetBytes > 0 ? fmtUnits(d.internetBytes, 'BYTE') : '—'}</td>
-                        <td className={styles.daysNum}>{d.amount > 0 ? fmtMoney(d.amount) : '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <div className={!usageDate && (my?.days.length ?? 0) > 1 ? styles.usageGrid : styles.usageGridSingle}>
+              {!usageDate && (my?.days.length ?? 0) > 1 && (
+                <div className={styles.daysWrap}>
+                  <div className={styles.panelTitle}>По дням</div>
+                  <div className={styles.daysScroll}>
+                    <table className={styles.daysTable}>
+                      <thead>
+                        <tr>
+                          <th>День</th>
+                          <th>Звонки</th>
+                          <th>СМС</th>
+                          <th>Интернет</th>
+                          <th>Сумма</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {my?.days.map(d => (
+                          <tr key={d.date}>
+                            <td className={styles.daysDate}>{fmtDay(d.date)}</td>
+                            <td>{d.calls > 0 ? `${d.calls} зв · ${fmtDur(d.callsSeconds)}` : '—'}</td>
+                            <td>{d.smsCount > 0 ? `${d.smsCount} шт` : '—'}</td>
+                            <td>{d.internetBytes > 0 ? fmtUnits(d.internetBytes, 'BYTE') : '—'}</td>
+                            <td>{d.amount > 0 ? fmtMoney(d.amount) : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
-            <button className={styles.detailToggle} onClick={() => setShowDetail(v => !v)}>
-              {showDetail ? '▴ Скрыть детализацию' : `▾ Детализация (${rows.length})`}
-            </button>
-
-            {showDetail && (
-              <>
+              <div className={styles.detailPanel}>
+                <div className={styles.panelTitle}>Детализация ({rows.length})</div>
                 <div className={styles.groupTabs}>
                   {availableTabs.map(k => (
                     <button
@@ -199,14 +204,16 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
                     </button>
                   ))}
                 </div>
-                <ul className={styles.rowList}>
-                  {tabRows.slice(0, ROWS_CAP).map((u, i) => <UsageRow key={`u-${i}`} u={u} />)}
-                </ul>
+                <div className={styles.rowScroll}>
+                  <ul className={styles.rowList}>
+                    {tabRows.slice(0, ROWS_CAP).map((u, i) => <UsageRow key={`u-${i}`} u={u} />)}
+                  </ul>
+                </div>
                 {tabRows.length > ROWS_CAP && (
                   <p className={styles.hint}>Показаны первые {ROWS_CAP} из {tabRows.length} событий.</p>
                 )}
-              </>
-            )}
+              </div>
+            </div>
           </>
         )
       )}
