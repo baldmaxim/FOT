@@ -32,13 +32,39 @@ const currentYm = (): string => {
   const d = new Date();
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
 };
+const todayIso = (): string => {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
 const monthLabel = (ym: string): string => {
   const [y, m] = ym.split('-').map(Number);
   return `${MONTH_NAMES[m - 1]} ${y}`;
 };
 
+/**
+ * Интернет-сессий за день бывают десятки одинаковых строк — сворачиваем их в одну
+ * по (день + описание + единица измерения): объём и сумма суммируются, счётчик
+ * сессий показывается чипом. Остальные группы остаются построчно.
+ */
+const mergeInternet = (rows: IMtsUsageRow[]): Array<{ u: IMtsUsageRow; count: number }> => {
+  const acc = new Map<string, { u: IMtsUsageRow; count: number }>();
+  for (const r of rows) {
+    const day = r.date?.slice(0, 10) ?? '';
+    const key = `${day}|${r.label ?? ''}|${r.unitCode ?? ''}`;
+    const hit = acc.get(key);
+    if (!hit) {
+      acc.set(key, { u: { ...r, date: day || r.date }, count: 1 });
+      continue;
+    }
+    hit.count += 1;
+    hit.u.units = (hit.u.units ?? 0) + (r.units ?? 0);
+    hit.u.amount += r.amount;
+  }
+  return [...acc.values()];
+};
+
 /** Одна строка детализации: направление, собеседник/описание, тип, время, объём, сумма. */
-const UsageRow: FC<{ u: IMtsUsageRow }> = ({ u }) => {
+const UsageRow: FC<{ u: IMtsUsageRow; mergedCount?: number }> = ({ u, mergedCount }) => {
   const group = groupOf(u.category);
   const subtype = parseUsageSubtype(u.label);
   const numberText = u.peer ? fmtPhone(u.peer) : null;
@@ -65,7 +91,8 @@ const UsageRow: FC<{ u: IMtsUsageRow }> = ({ u }) => {
           <span className={styles.rowChip}>{USAGE_TYPE_WORD[group]}</span>
           {subtype && <span>{subtype}</span>}
           {paid && <span className={styles.rowPaidChip}>платно</span>}
-          <span>{fmtLast(u.date)}</span>
+          {mergedCount && mergedCount > 1 ? <span className={styles.rowChip}>{mergedCount} сессий</span> : null}
+          <span>{mergedCount ? fmtDay(u.date) : fmtLast(u.date)}</span>
         </div>
       </div>
       <div className={styles.rowValueBox}>
@@ -117,10 +144,14 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
     [detailSummary],
   );
   const activeTab = availableTabs.includes(detailTab) ? detailTab : (availableTabs[0] ?? 'calls');
-  const tabRows = useMemo(
-    () => dayRows.filter(u => groupOf(u.category) === activeTab),
-    [dayRows, activeTab],
-  );
+  const tabRows = useMemo(() => {
+    const list = dayRows.filter(u => groupOf(u.category) === activeTab);
+    return activeTab === 'internet'
+      ? mergeInternet(list).sort((a, b) => (b.u.date ?? '').localeCompare(a.u.date ?? ''))
+      : list.map(u => ({ u, count: 1 }));
+  }, [dayRows, activeTab]);
+
+  const today = todayIso();
 
   const onMonth = (v: string): void => { setMonth(v); setSelectedDay(null); };
   const toggleDay = (date: string): void => { setSelectedDay(d => (d === date ? null : date)); };
@@ -182,7 +213,10 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
                         {my?.days.map(d => (
                           <tr
                             key={d.date}
-                            className={selectedDay === d.date ? styles.dayRowActive : undefined}
+                            className={[
+                              selectedDay === d.date ? styles.dayRowActive : '',
+                              d.date === today ? styles.dayRowToday : '',
+                            ].filter(Boolean).join(' ') || undefined}
                             onClick={() => toggleDay(d.date)}
                             title={selectedDay === d.date ? 'Показать весь месяц' : `Детализация за ${fmtDay(d.date)}`}
                           >
@@ -225,7 +259,13 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
                 </div>
                 <div className={styles.rowScroll}>
                   <ul className={styles.rowList}>
-                    {tabRows.slice(0, ROWS_CAP).map((u, i) => <UsageRow key={`u-${i}`} u={u} />)}
+                    {tabRows.slice(0, ROWS_CAP).map((r, i) => (
+                      <UsageRow
+                        key={`u-${i}`}
+                        u={r.u}
+                        mergedCount={activeTab === 'internet' ? r.count : undefined}
+                      />
+                    ))}
                   </ul>
                 </div>
                 {tabRows.length > ROWS_CAP && (

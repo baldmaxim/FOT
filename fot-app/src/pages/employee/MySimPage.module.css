@@ -141,20 +141,24 @@
 }
 
 .fwdBtn {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-secondary);
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #fff;
   border-radius: 8px;
   padding: 8px 12px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   min-height: 40px;
+  transition: filter 0.15s ease;
 }
 
 .fwdBtn:hover {
-  border-color: var(--primary);
-  color: var(--primary);
+  filter: brightness(1.08);
+}
+
+.fwdBtn:active {
+  filter: brightness(0.94);
 }
 
 /* --- Модалка переадресации --- */
@@ -521,6 +525,23 @@
 
 .daysDate {
   color: var(--text-secondary);
+}
+
+/* Текущий день выделен целиком: подложка, жирный шрифт, акцентная полоса слева */
+.daysTable tbody tr.dayRowToday td {
+  background: var(--primary-light);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.daysTable tbody tr.dayRowToday td:first-child {
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.daysTable tbody tr.dayRowToday.dayRowActive td,
+.daysTable tbody tr.dayRowToday:hover td {
+  background: var(--primary-light);
+  filter: brightness(0.97);
 }
 
 /* Детализация (правая колонка) */
