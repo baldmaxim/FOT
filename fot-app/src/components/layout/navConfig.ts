@@ -91,7 +91,7 @@ export const navGroups: INavGroup[] = [
       { id: 'sigur', path: '/sigur', label: 'SIGUR', icon: UsersIcon, requiredPage: '/skud-settings' },
       { id: 'card-reader', path: '/skud-card-reader', label: 'Пропуск', icon: KeyIcon, requiredPage: '/skud-card-reader' },
       { id: 'contractor-approvals', path: '/admin/contractor-approvals', label: 'Подрядчики', icon: ClipboardCheckIcon, requiredPage: ['/admin/contractor-approvals', '/admin/contractor-approvals/submissions', '/admin/contractor-approvals/otitb'] },
-      { id: 'mts', path: '/mts', label: 'МТС', icon: MapPinIcon, requiredPage: '/mts' },
+      // «МТС» (/mts) временно скрыт из сайдбара — вернуть по запросу.
       { id: 'mts-business', path: '/mts-business', label: 'МТС Бизнес', icon: PhoneIcon, requiredPage: '/mts-business' },
       { id: 'system-hub', path: '/admin/system', label: 'Система', icon: ShieldIcon, requiredPage: ['/admin/users', '/admin/roles', '/admin/audit', '/admin/action-history', '/admin/settings', '/admin/data-api'], systemAdminOnly: true },
     ]
