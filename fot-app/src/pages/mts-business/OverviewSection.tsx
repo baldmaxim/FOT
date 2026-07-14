@@ -1,4 +1,4 @@
-import { type FC, useMemo, useState } from 'react';
+import { type FC, type ReactElement, useMemo, useState } from 'react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts';
@@ -17,17 +17,13 @@ import {
 } from '../../hooks/useMtsBusinessCatalogData';
 import { useMtsBusinessActions } from '../../hooks/useMtsBusinessActionsData';
 import { useMtsBusinessRefreshAllStatus } from '../../hooks/useMtsBusinessRefreshAll';
+import { useMtsBusinessSubscribers } from '../../hooks/useMtsBusinessSubscribers';
+import type { IMtsSubscriberRow } from '../../services/mtsBusinessSubscribersService';
 import type { MtsBusinessDailyMetric } from '../../services/mtsBusinessBillingService';
+import { SubscriberDrawer } from './subscribers/SubscriberDrawer';
 import { UnavailableNotice } from './common/UnavailableNotice';
-import { toISODate, fmtDur, fmtLast, fmtMoney, fmtPackage, ACTION_TYPE_LABELS, lastMonths, monthRange } from './mtsBusinessFormat';
+import { toISODate, fmtDur, fmtLast, fmtMoney, fmtPackage, lastMonths, monthRange } from './mtsBusinessFormat';
 import styles from './OverviewSection.module.css';
-
-const STATUS_BADGE: Record<string, { cls: string; label: string }> = {
-  completed: { cls: styles.badgeOk, label: 'готово' },
-  in_progress: { cls: styles.badgeWait, label: 'в обработке' },
-  faulted: { cls: styles.badgeErr, label: 'ошибка' },
-  unknown: { cls: styles.badgeMuted, label: '—' },
-};
 
 const ACCENT_PALETTE = ['var(--primary)', 'var(--success)', 'var(--warning)', 'var(--purple)', 'var(--text-tertiary)'];
 
@@ -48,35 +44,6 @@ const Seg: FC<{ options: { v: string; label: string }[]; value: string; onChange
   </div>
 );
 
-const Bars: FC<{
-  items: { key: string; label: string; sub?: string; badge?: string; value: number; active?: boolean; onClick?: () => void }[];
-  formatValue: (v: number) => string;
-}> = ({ items, formatValue }) => {
-  const max = Math.max(1, ...items.map(i => i.value));
-  return (
-    <div>
-      {items.map((it, i) => (
-        <div
-          key={it.key}
-          className={`${styles.barRow} ${it.onClick ? styles.barRowClickable : ''} ${it.active ? styles.barRowActive : ''}`}
-          onClick={it.onClick}
-        >
-          <span className={styles.barIndex}>{i + 1}</span>
-          <div style={{ minWidth: 0 }}>
-            <div className={styles.barLabel}>
-              {it.label}
-              {it.sub && <span className={styles.barSub}> · {it.sub}</span>}
-              {it.badge && <span className={styles.barBadge}>{it.badge}</span>}
-            </div>
-            <div className={styles.barTrack}><div className={styles.barFill} style={{ width: `${Math.round((it.value / max) * 100)}%` }} /></div>
-          </div>
-          <div className={styles.barValue}>{formatValue(it.value)}</div>
-        </div>
-      ))}
-    </div>
-  );
-};
-
 const ChartTooltip: FC<{ active?: boolean; payload?: { value: number }[]; label?: string }> = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -89,6 +56,21 @@ const ChartTooltip: FC<{ active?: boolean; payload?: { value: number }[]; label?
     </div>
   );
 };
+
+/** Объединённая строка «Сотрудники»: время разговоров (период) + начисления/тариф/услуги. */
+interface IEmployeeStatRow {
+  key: string;
+  employeeId: number | null;
+  label: string;
+  tabNumber: string | null;
+  departmentName: string | null;
+  calls: number;
+  totalSeconds: number;
+  chargesAmount: number | null;
+  tariffName: string | null;
+  servicesCount: number;
+  servicesMonthlyTotal: number;
+}
 
 interface IOverviewSectionProps {
   /** Выбранный ЛС ('' — все); стейт живёт в MtsBusinessPage — им же пользуется кнопка «Обновить». */
@@ -118,7 +100,8 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
   const [topMetric, setTopMetric] = useState<'time' | 'cost'>('time');
   const [showRestEmployees, setShowRestEmployees] = useState(false);
   const [empSearch, setEmpSearch] = useState('');
-  const [empPageState, setEmpPageState] = useState<{ key: string; page: number }>({ key: '', page: 1 });
+  const [deptFilter, setDeptFilter] = useState('');
+  const [drawerRow, setDrawerRow] = useState<IMtsSubscriberRow | null>(null);
 
   const accountsMeta = useMtsBusinessAccounts();
   const accSummary = useMtsBusinessAccountsSummary(callsFrom, callsTo, true, accountId || undefined);
@@ -129,6 +112,8 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
   const accountsPackages = useMtsBusinessAccountsPackages(accountId || undefined);
   const actions = useMtsBusinessActions(true);
   const refreshAllStatus = useMtsBusinessRefreshAllStatus();
+  // Номера с привязками/отделами — источник фильтра по отделам и клика в карточку абонента.
+  const subscribers = useMtsBusinessSubscribers(true);
 
   // Секция «не подключена в тарифе МТС», если в последнем прогоне «Обновить всё»
   // соответствующий шаг завершился unavailable (403/1010). Данные обзора идут из
@@ -144,7 +129,7 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
   const totalCalls = accRows.reduce((a, r) => a + r.calls, 0);
   const totalSec = accRows.reduce((a, r) => a + r.totalSeconds, 0);
   const billingAccounts = billingSummary.data?.accounts ?? [];
-  const billingEmployees = billingSummary.data?.employees ?? [];
+  const billingEmployees = useMemo(() => billingSummary.data?.employees ?? [], [billingSummary.data]);
   const hasChargesData = billingEmployees.some(r => r.chargesAmount != null);
   const totalCharges = hasChargesData
     ? billingEmployees.reduce((a, r) => a + (r.chargesAmount ?? 0), 0)
@@ -166,65 +151,149 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
     return map;
   }, [employeesCatalog.data]);
 
-  const billingEmployeesEnriched = billingEmployees.map(r => {
-    const key = r.employeeId != null ? String(r.employeeId) : `unmapped-${r.employeeFullName ?? ''}`;
-    const c = catalogByEmployee.get(key);
-    return {
-      ...r,
-      tariffName: c ? [...c.tariffNames].join(', ') || null : null,
-      servicesCount: c?.servicesCount ?? 0,
-      servicesMonthlyTotal: c?.servicesMonthlyTotal ?? 0,
-      // «Обновлено» — свежесть любого из источников (начисления/тариф/услуги).
-      capturedAt: maxIso(r.capturedAt, c?.maxCapturedAt ?? null),
-    };
-  });
+  // Номера каждого сотрудника (для открытия карточки абонента) и список отделов.
+  const employeeNumbers = useMemo(() => {
+    const m = new Map<number, IMtsSubscriberRow[]>();
+    for (const r of subscribers.data ?? []) {
+      if (r.employeeId == null || !r.msisdn) continue;
+      const list = m.get(r.employeeId) ?? [];
+      list.push(r);
+      m.set(r.employeeId, list);
+    }
+    return m;
+  }, [subscribers.data]);
 
-  // Таблица «По сотрудникам»: поиск по ФИО/табельному + пагинация по 50.
-  const EMP_PAGE_SIZE = 50;
-  const empQuery = empSearch.trim().toLowerCase();
-  const empFiltered = empQuery
-    ? billingEmployeesEnriched.filter(r =>
-        `${r.employeeFullName ?? ''} ${r.employeeTabNumber ?? ''}`.toLowerCase().includes(empQuery))
-    : billingEmployeesEnriched;
-  const empPage = empPageState.key === empSearch ? empPageState.page : 1;
-  const setEmpPage = (p: number): void => setEmpPageState({ key: empSearch, page: p });
-  const empPageCount = Math.max(1, Math.ceil(empFiltered.length / EMP_PAGE_SIZE));
-  const empSafePage = Math.min(empPage, empPageCount);
-  const empPageRows = empFiltered.slice((empSafePage - 1) * EMP_PAGE_SIZE, empSafePage * EMP_PAGE_SIZE);
+  const departments = useMemo(
+    () => [...new Set((subscribers.data ?? [])
+      .filter(r => r.employeeId != null)
+      .map(r => r.departmentName)
+      .filter((d): d is string => !!d))].sort((a, b) => a.localeCompare(b, 'ru')),
+    [subscribers.data],
+  );
+
+  // Объединение «Топ сотрудников» (время за период) и «По сотрудникам»
+  // (начисления/тариф/услуги) в один список.
+  const employeeStats = useMemo(() => {
+    const map = new Map<string, IEmployeeStatRow>();
+    const deptOf = (employeeId: number | null): string | null =>
+      employeeId != null
+        ? employeeNumbers.get(employeeId)?.find(r => r.departmentName)?.departmentName ?? null
+        : null;
+    const ensure = (employeeId: number | null, label: string | null, tab: string | null): IEmployeeStatRow => {
+      const key = employeeId != null ? String(employeeId) : `unmapped-${label ?? ''}`;
+      let row = map.get(key);
+      if (!row) {
+        row = {
+          key,
+          employeeId,
+          label: label ?? 'Не привязанные номера',
+          tabNumber: tab,
+          departmentName: deptOf(employeeId),
+          calls: 0,
+          totalSeconds: 0,
+          chargesAmount: null,
+          tariffName: null,
+          servicesCount: 0,
+          servicesMonthlyTotal: 0,
+        };
+        map.set(key, row);
+      }
+      return row;
+    };
+    for (const r of report.data ?? []) {
+      if (r.employeeId == null && r.calls === 0) continue;
+      const row = ensure(r.employeeId, r.employeeFullName, r.employeeTabNumber);
+      row.calls += r.calls;
+      row.totalSeconds += r.totalSeconds;
+    }
+    for (const r of billingEmployees) {
+      const row = ensure(r.employeeId, r.employeeFullName, r.employeeTabNumber);
+      if (r.chargesAmount != null) row.chargesAmount = (row.chargesAmount ?? 0) + r.chargesAmount;
+      const key = r.employeeId != null ? String(r.employeeId) : `unmapped-${r.employeeFullName ?? ''}`;
+      const c = catalogByEmployee.get(key);
+      if (c) {
+        row.tariffName = [...c.tariffNames].join(', ') || null;
+        row.servicesCount = c.servicesCount;
+        row.servicesMonthlyTotal = c.servicesMonthlyTotal;
+      }
+    }
+    return [...map.values()];
+  }, [report.data, billingEmployees, catalogByEmployee, employeeNumbers]);
 
   const TOP_N = 10;
-  const timeItems = (report.data ?? [])
-    .filter(r => r.employeeId != null || r.calls > 0)
-    .slice()
-    .sort((a, b) => b.totalSeconds - a.totalSeconds)
-    .map((r, i) => ({
-      key: r.employeeId != null ? String(r.employeeId) : `unmapped-${i}`,
-      label: r.employeeFullName ?? 'Не привязанные номера',
-      sub: [r.employeeTabNumber, `${r.calls} зв.`].filter(Boolean).join(' · '),
-      value: r.totalSeconds,
-    }));
-  const costItems = billingEmployeesEnriched
-    .filter(r => (r.chargesAmount ?? 0) > 0)
-    .slice()
-    .sort((a, b) => (b.chargesAmount ?? 0) - (a.chargesAmount ?? 0))
-    .map((r, i) => ({
-      key: r.employeeId != null ? String(r.employeeId) : `unmapped-${i}`,
-      label: r.employeeFullName ?? 'Не привязан',
-      sub: r.employeeTabNumber ?? undefined,
-      badge: r.tariffName ?? undefined,
-      value: r.chargesAmount ?? 0,
-    }));
-  const topItems = topMetric === 'time' ? timeItems : costItems;
-  const topTop = topItems.slice(0, TOP_N);
-  const topRest = topItems.slice(TOP_N);
+  const empQuery = empSearch.trim().toLowerCase();
+  const metricValue = (r: IEmployeeStatRow): number => (topMetric === 'time' ? r.totalSeconds : r.chargesAmount ?? 0);
+  const topItems = useMemo(() => {
+    const filtered = employeeStats.filter(r => {
+      if (deptFilter && r.departmentName !== deptFilter) return false;
+      if (empQuery && !`${r.label} ${r.tabNumber ?? ''}`.toLowerCase().includes(empQuery)) return false;
+      // Нулевые по выбранной метрике прячем, но при активном поиске показываем
+      // всё найденное — секция заменяет и справочную таблицу «По сотрудникам».
+      if (!empQuery && metricValue(r) <= 0) return false;
+      return true;
+    });
+    return filtered.sort((a, b) => metricValue(b) - metricValue(a));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeeStats, deptFilter, empQuery, topMetric]);
+  // Поиск/фильтр отдела показывают весь результат сразу; без них — топ-10 + «Остальные».
+  const collapsible = !empQuery && !deptFilter;
+  const topTop = collapsible ? topItems.slice(0, TOP_N) : topItems;
+  const topRest = collapsible ? topItems.slice(TOP_N) : [];
+  const topMax = Math.max(1, ...topItems.map(metricValue));
+
+  const openEmployeeDrawer = (employeeId: number | null): void => {
+    if (employeeId == null) return;
+    const numbers = employeeNumbers.get(employeeId);
+    if (!numbers || numbers.length === 0) return;
+    // Несколько номеров — открываем самый «разговорчивый».
+    const best = [...numbers].sort((a, b) => b.totalSeconds - a.totalSeconds)[0];
+    setDrawerRow(best);
+  };
+
+  const renderEmployeeRow = (r: IEmployeeStatRow, index: number): ReactElement => {
+    const value = metricValue(r);
+    const clickable = r.employeeId != null && (employeeNumbers.get(r.employeeId)?.length ?? 0) > 0;
+    const sub = [
+      r.tabNumber ? `таб. ${r.tabNumber}` : null,
+      r.departmentName,
+      r.calls > 0 ? `${r.calls} зв.` : null,
+      r.servicesCount > 0 ? `${r.servicesCount} усл. · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : null,
+    ].filter(Boolean).join(' · ');
+    const primary = topMetric === 'time' ? fmtDur(r.totalSeconds) : fmtMoney(r.chargesAmount ?? 0);
+    const secondary = topMetric === 'time'
+      ? (r.chargesAmount != null ? fmtMoney(r.chargesAmount) : '')
+      : (r.totalSeconds > 0 ? fmtDur(r.totalSeconds) : '');
+    return (
+      <div
+        key={r.key}
+        className={`${styles.barRow} ${clickable ? styles.barRowClickable : ''}`}
+        onClick={clickable ? () => openEmployeeDrawer(r.employeeId) : undefined}
+        title={clickable ? 'Открыть карточку абонента' : undefined}
+      >
+        <span className={styles.barIndex}>{index + 1}</span>
+        <div style={{ minWidth: 0 }}>
+          <div className={styles.barLabel}>
+            {r.label}
+            {sub && <span className={styles.barSub}> · {sub}</span>}
+            {r.tariffName && <span className={styles.barBadge}>{r.tariffName}</span>}
+          </div>
+          <div className={styles.barTrack}>
+            <div className={styles.barFill} style={{ width: `${Math.round((value / topMax) * 100)}%` }} />
+          </div>
+        </div>
+        <div className={styles.barValueBox}>
+          <div className={styles.barValue}>{primary}</div>
+          {secondary && <div className={styles.barValueSub}>{secondary}</div>}
+        </div>
+      </div>
+    );
+  };
 
   const accountsOverview = accRows.map(r => {
     const billing = billingAccounts.find(b => b.accountId === r.accountId);
     return { ...r, balance: billing?.balance ?? null, unpaidAmount: billing?.unpaidAmount ?? null };
   }).filter(r => r.accountId);
   const accountsOverviewTotal = accountsOverview.reduce((a, r) => a + r.totalSeconds, 0);
-
-  const recentActions = (actions.data ?? []).slice(0, 6);
 
   return (
     <div className={styles.page}>
@@ -339,92 +408,17 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
               </>}
       </section>
 
-      <div className={styles.grid2}>
-        <section className={styles.card}>
-          <div className={styles.cardTitle}>
-            <span className={styles.cardTitleText}>Топ сотрудников</span>
-            <Seg value={topMetric} onChange={v => setTopMetric(v as 'time' | 'cost')} options={[{ v: 'time', label: 'По времени' }, { v: 'cost', label: 'По начислениям' }]} />
-          </div>
-          {(topMetric === 'time' ? report.isLoading : billingSummary.isLoading) ? (
-            <p className={styles.hint}>Загрузка…</p>
-          ) : topItems.length === 0 ? (
-            stepUnavailable(topMetric === 'time' ? 'detalization' : 'billing')
-              ? <UnavailableNotice />
-              : <p className={styles.hint}>Нет данных. Нажмите «Обновить» вверху страницы и привяжите номера к сотрудникам.</p>
-          ) : (
-            <>
-              <Bars items={topTop} formatValue={topMetric === 'time' ? fmtDur : v => fmtMoney(v)} />
-              {topRest.length > 0 && (
-                <>
-                  <button className={styles.moreBtn} onClick={() => setShowRestEmployees(!showRestEmployees)}>
-                    {showRestEmployees ? 'Свернуть' : `Остальные · ${topRest.length}`}
-                  </button>
-                  {showRestEmployees && <Bars items={topRest} formatValue={topMetric === 'time' ? fmtDur : v => fmtMoney(v)} />}
-                </>
-              )}
-            </>
-          )}
-        </section>
-
-        <div className={styles.stack}>
-          <section className={styles.card}>
-            <div className={styles.cardTitle}>
-              <span className={styles.cardTitleText}>Динамика</span>
-              <Seg value={trendMetric} onChange={v => setTrendMetric(v as MtsBusinessDailyMetric)} options={[{ v: 'balance', label: 'Баланс' }, { v: 'unpaid_amount', label: 'Неоплаченные' }]} />
-            </div>
-            <div className={styles.actions} style={{ marginBottom: 12 }}>
-              <input className={styles.dateInput} type="date" value={trendFrom} onChange={e => setTrendFrom(e.target.value)} />
-              <input className={styles.dateInput} type="date" value={trendTo} onChange={e => setTrendTo(e.target.value)} />
-            </div>
-            {trend.isLoading ? <p className={styles.hint}>Загрузка…</p>
-              : (trend.data ?? []).length === 0 && stepUnavailable('billing') ? <UnavailableNotice />
-              : (
-              <div className={styles.chartWrap}>
-                <ResponsiveContainer>
-                  <AreaChart data={trend.data ?? []} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="mtsOverviewTrend" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.22} />
-                        <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid vertical={false} stroke="var(--border-subtle)" />
-                    <XAxis dataKey="date" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--text-tertiary)' }} dy={6} />
-                    <YAxis tickLine={false} axisLine={false} width={44} tick={{ fontSize: 11, fill: 'var(--text-tertiary)' }} tickFormatter={v => `${Math.round(v / 1000)}к`} />
-                    <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'var(--text-tertiary)', strokeDasharray: '3 3' }} />
-                    <Area dataKey="amount" stroke="var(--primary)" strokeWidth={2} fill="url(#mtsOverviewTrend)" dot={{ r: 2.5, fill: 'var(--primary)', strokeWidth: 0 }} activeDot={{ r: 4 }} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </section>
-
-          <section className={styles.card}>
-            <div className={styles.cardTitle}>
-              <span className={styles.cardTitleText}>Последние заявки</span>
-            </div>
-            {recentActions.length === 0 ? (
-              <p className={styles.hint}>Заявок нет.</p>
-            ) : recentActions.map(a => {
-              const badge = STATUS_BADGE[a.status] ?? STATUS_BADGE.unknown;
-              return (
-                <div key={a.eventId} className={styles.eventRow}>
-                  <div style={{ minWidth: 0 }}>
-                    <div className={styles.eventTitle}>{ACTION_TYPE_LABELS[a.actionType] ?? a.actionType}</div>
-                    <div className={styles.eventMeta}>{fmtLast(a.requestedAt)}</div>
-                  </div>
-                  <span className={`${styles.badge} ${badge.cls}`}>{badge.label}</span>
-                </div>
-              );
-            })}
-          </section>
-        </div>
-      </div>
-
+      {/* Объединённая секция: топ по времени/начислениям + справочник по сотрудникам.
+          Клик по строке открывает карточку абонента (как на вкладке «Абоненты»). */}
       <section className={styles.card}>
         <div className={styles.cardTitle}>
-          <div className={styles.cardTitleText}>По сотрудникам</div>
-          {billingEmployees.length > 0 && (
+          <span className={styles.cardTitleText}>Сотрудники</span>
+          <div className={styles.empControls}>
+            <Seg value={topMetric} onChange={v => setTopMetric(v as 'time' | 'cost')} options={[{ v: 'time', label: 'По времени' }, { v: 'cost', label: 'По начислениям' }]} />
+            <select className={styles.select} value={deptFilter} onChange={e => setDeptFilter(e.target.value)}>
+              <option value="">Все отделы</option>
+              {departments.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
             <input
               className={styles.search}
               type="search"
@@ -432,44 +426,60 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
               value={empSearch}
               onChange={e => setEmpSearch(e.target.value)}
             />
-          )}
+          </div>
         </div>
-        {billingSummary.isLoading ? (
+        {(report.isLoading || billingSummary.isLoading) ? (
           <p className={styles.hint}>Загрузка…</p>
-        ) : billingEmployees.length === 0 ? (
-          stepUnavailable('billing')
-            ? <UnavailableNotice />
-            : <p className={styles.hint}>Нет данных — привяжите номера к сотрудникам на вкладке «Администрирование».</p>
-        ) : empFiltered.length === 0 ? (
-          <p className={styles.hint}>Ничего не найдено.</p>
+        ) : topItems.length === 0 ? (
+          empQuery || deptFilter
+            ? <p className={styles.hint}>Ничего не найдено.</p>
+            : (stepUnavailable(topMetric === 'time' ? 'detalization' : 'billing')
+              ? <UnavailableNotice />
+              : <p className={styles.hint}>Нет данных. Нажмите «Обновить» вверху страницы и привяжите номера к сотрудникам.</p>)
         ) : (
           <>
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead><tr><th>Сотрудник</th><th>Тариф</th><th>Начисления</th><th>Услуги</th><th>Обновлено</th></tr></thead>
-                <tbody>
-                  {empPageRows.map((r, i) => (
-                    <tr key={r.employeeId ?? `unmapped-${i}`}>
-                      <td>{r.employeeFullName ?? 'Не привязан'}{r.employeeTabNumber ? ` (таб. ${r.employeeTabNumber})` : ''}</td>
-                      <td>{r.tariffName ?? '—'}</td>
-                      <td>{fmtMoney(r.chargesAmount)}</td>
-                      <td>{r.servicesCount > 0 ? `${r.servicesCount} · ${fmtMoney(r.servicesMonthlyTotal)}/мес` : '—'}</td>
-                      <td>{fmtLast(r.capturedAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {empPageCount > 1 && (
-              <div className={styles.pager}>
-                <button className={styles.btnSecondary} disabled={empSafePage <= 1} onClick={() => setEmpPage(empSafePage - 1)}>‹ Назад</button>
-                <span className={styles.pagerInfo}>
-                  {empSafePage} / {empPageCount} · строки {(empSafePage - 1) * EMP_PAGE_SIZE + 1}–{Math.min(empSafePage * EMP_PAGE_SIZE, empFiltered.length)}
-                </span>
-                <button className={styles.btnSecondary} disabled={empSafePage >= empPageCount} onClick={() => setEmpPage(empSafePage + 1)}>Вперёд ›</button>
-              </div>
+            <div>{topTop.map((r, i) => renderEmployeeRow(r, i))}</div>
+            {topRest.length > 0 && (
+              <>
+                <button className={styles.moreBtn} onClick={() => setShowRestEmployees(!showRestEmployees)}>
+                  {showRestEmployees ? 'Свернуть' : `Остальные · ${topRest.length}`}
+                </button>
+                {showRestEmployees && <div>{topRest.map((r, i) => renderEmployeeRow(r, TOP_N + i))}</div>}
+              </>
             )}
           </>
+        )}
+      </section>
+
+      <section className={styles.card}>
+        <div className={styles.cardTitle}>
+          <span className={styles.cardTitleText}>Динамика</span>
+          <div className={styles.empControls}>
+            <Seg value={trendMetric} onChange={v => setTrendMetric(v as MtsBusinessDailyMetric)} options={[{ v: 'balance', label: 'Баланс' }, { v: 'unpaid_amount', label: 'Неоплаченные' }]} />
+            <input className={styles.dateInput} type="date" value={trendFrom} onChange={e => setTrendFrom(e.target.value)} />
+            <input className={styles.dateInput} type="date" value={trendTo} onChange={e => setTrendTo(e.target.value)} />
+          </div>
+        </div>
+        {trend.isLoading ? <p className={styles.hint}>Загрузка…</p>
+          : (trend.data ?? []).length === 0 && stepUnavailable('billing') ? <UnavailableNotice />
+          : (
+          <div className={styles.chartWrap}>
+            <ResponsiveContainer>
+              <AreaChart data={trend.data ?? []} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="mtsOverviewTrend" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.22} />
+                    <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} stroke="var(--border-subtle)" />
+                <XAxis dataKey="date" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'var(--text-tertiary)' }} dy={6} minTickGap={24} />
+                <YAxis tickLine={false} axisLine={false} width={44} tick={{ fontSize: 11, fill: 'var(--text-tertiary)' }} tickFormatter={v => `${Math.round(v / 1000)}к`} />
+                <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'var(--text-tertiary)', strokeDasharray: '3 3' }} />
+                <Area dataKey="amount" stroke="var(--primary)" strokeWidth={2} fill="url(#mtsOverviewTrend)" dot={false} activeDot={{ r: 4 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         )}
       </section>
 
@@ -496,6 +506,8 @@ export const OverviewSection: FC<IOverviewSectionProps> = ({ accountId, onAccoun
           </div>
         )}
       </section>
+
+      {drawerRow && <SubscriberDrawer row={drawerRow} onClose={() => setDrawerRow(null)} />}
     </div>
   );
 };

@@ -145,33 +145,27 @@
   background: var(--error);
 }
 
-/* Сетка «топ сотрудников» + правая колонка */
-.grid2 {
-  display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-  gap: 12px;
-}
-@media (max-width: 900px) {
-  .grid2 { grid-template-columns: 1fr; }
-}
-
-.stack {
+/* Контролы секции «Сотрудники»/«Динамика» (метрика + отдел + поиск/даты) */
+.empControls {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
 }
 
 /* Строки-бары */
 .barRow {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 96px;
+  grid-template-columns: 22px minmax(0, 1fr) 112px;
   align-items: center;
   gap: 10px;
-  padding: 8px 0;
+  padding: 8px 4px;
   border-top: 1px solid var(--border-subtle);
 }
 .barRow:first-child { border-top: none; }
 .barRowClickable { cursor: pointer; }
+.barRowClickable:hover { background: var(--surface-hover); border-radius: 8px; }
 .barRowActive { background: var(--primary-light); }
 .barIndex { font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .barLabel {
@@ -194,7 +188,9 @@
 }
 .barTrack { height: 5px; border-radius: 3px; background: var(--bg-tertiary); margin-top: 4px; overflow: hidden; }
 .barFill { height: 5px; border-radius: 3px; background: var(--primary); }
+.barValueBox { text-align: right; min-width: 0; }
 .barValue { font-size: 13px; font-weight: 600; color: var(--text-primary); text-align: right; font-variant-numeric: tabular-nums; }
+.barValueSub { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 
 .moreBtn {
   margin-top: 10px;
@@ -234,26 +230,6 @@
 .legendDot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
 .legendValue { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* Журнал заявок */
-.eventRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 9px 0;
-  border-top: 1px solid var(--border-subtle);
-}
-.eventRow:first-child { border-top: none; }
-.eventTitle {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.eventMeta { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-
 .badge {
   flex-shrink: 0;
   display: inline-block;
@@ -262,10 +238,7 @@
   font-size: 11px;
   font-weight: 600;
 }
-.badgeOk { background: var(--success-muted); color: var(--success); }
-.badgeWait { background: var(--warning-muted); color: var(--warning); }
 .badgeErr { background: var(--error-muted); color: var(--error); }
-.badgeMuted { background: var(--bg-tertiary); color: var(--text-tertiary); }
 
 .hint {
   color: var(--text-secondary);
@@ -296,7 +269,11 @@
 .btnSecondary { background: transparent; border-color: var(--border); color: var(--text-primary); }
 .btnSecondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.chartWrap { height: 220px; }
+/* Компактный график «Динамика»: пониже на десктопе, ещё ниже на мобильных */
+.chartWrap { height: 190px; }
+@media (max-width: 480px) {
+  .chartWrap { height: 150px; }
+}
 
 .tableWrap { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -319,18 +296,25 @@
   background: var(--bg-primary);
   color: var(--text-primary);
 }
-.pager {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-}
-.pagerInfo { font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
-
 @media (max-width: 480px) {
   .card { padding: 12px 14px; }
+
+  .empControls {
+    width: 100%;
+  }
+
+  .search {
+    max-width: none;
+  }
+
+  /* На узких экранах прячем колонку номера строки — экономим ширину под ФИО. */
+  .barRow {
+    grid-template-columns: minmax(0, 1fr) 96px;
+  }
+
+  .barIndex {
+    display: none;
+  }
 }
 
 /* Период в шапке (рядом с переключателем ЛС) */
