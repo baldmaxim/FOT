@@ -13,6 +13,8 @@ router.get('/keys', view, adminDataApiController.listKeys);
 router.post('/keys', edit, adminDataApiController.createKey);
 router.patch('/keys/:id', edit, adminDataApiController.updateKey);
 router.delete('/keys/:id', edit, adminDataApiController.revokeKey);
+// Безвозвратное удаление (только отозванный/истёкший ключ) — вместе с логами и доступами.
+router.delete('/keys/:id/purge', edit, adminDataApiController.deleteKey);
 
 router.get('/keys/:id/tables', view, adminDataApiController.getKeyTables);
 router.put('/keys/:id/tables', edit, adminDataApiController.updateKeyTables);

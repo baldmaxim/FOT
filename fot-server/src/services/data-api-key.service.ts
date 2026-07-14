@@ -214,6 +214,23 @@ export const dataApiKeyService = {
     }
   },
 
+  /**
+   * Безвозвратное удаление ключа вместе с его логами и доступами.
+   * Разрешено только для отозванных/истёкших ключей — гейт в контроллере.
+   * data_api_key_tables уходит каскадом по FK, логи удаляем явно (FK там SET NULL).
+   */
+  async deleteKey(id: string): Promise<void> {
+    try {
+      await withTransaction(async client => {
+        await client.query('DELETE FROM data_api_request_logs WHERE key_id = $1', [id]);
+        await client.query('DELETE FROM data_api_keys WHERE id = $1', [id]);
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`Failed to delete API key: ${msg}`);
+    }
+  },
+
   async getKeyTables(keyId: string): Promise<Array<{ table_name: string; allowed_fields: string[] }>> {
     try {
       return await query<{ table_name: string; allowed_fields: string[] }>(
@@ -253,6 +270,41 @@ export const dataApiKeyService = {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown';
       throw new Error(`Failed to replace key tables: ${msg}`);
+    }
+  },
+
+  /**
+   * Best-effort запись строки лога — зеркало fot-data-api/app/services/logging.py.
+   * Ошибки глотаем: логирование не должно ломать основной запрос.
+   */
+  async writeRequestLog(input: {
+    key_id: string | null;
+    table_name: string | null;
+    ip: string | null;
+    status_code: number;
+    latency_ms: number | null;
+    query_params: unknown;
+    error_message?: string | null;
+  }): Promise<void> {
+    try {
+      await execute(
+        `INSERT INTO data_api_request_logs
+           (key_id, table_name, ip, status_code, latency_ms, query_params, error_message)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+        [
+          input.key_id,
+          input.table_name,
+          input.ip,
+          input.status_code,
+          input.latency_ms,
+          input.query_params === null || input.query_params === undefined
+            ? null
+            : JSON.stringify(input.query_params),
+          input.error_message ?? null,
+        ],
+      );
+    } catch (err) {
+      console.error('Data API writeRequestLog error:', err);
     }
   },
 

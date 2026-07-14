@@ -127,6 +127,41 @@ export const adminDataApiController = {
     }
   },
 
+  /**
+   * Безвозвратное удаление ключа вместе с логами и доступами.
+   * Только для отозванных/истёкших: действующий ключ сначала нужно отозвать —
+   * иначе одним кликом можно оборвать боевую интеграцию 1С.
+   */
+  async deleteKey(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const existing = await dataApiKeyService.getKey(id);
+      if (!existing) {
+        res.status(404).json({ success: false, error: 'API key not found' });
+        return;
+      }
+      const isExpired = !!existing.expires_at && new Date(existing.expires_at).getTime() <= Date.now();
+      if (!existing.revoked_at && !isExpired) {
+        res.status(400).json({
+          success: false,
+          error: 'Удалить можно только отозванный или истёкший ключ — сначала отзовите его',
+        });
+        return;
+      }
+
+      await dataApiKeyService.deleteKey(id);
+      await auditService.logFromRequest(req, req.user.id, 'DATA_API_KEY_DELETED', {
+        entityType: 'data_api_key',
+        entityId: id,
+        details: { name: existing.name, key_prefix: existing.key_prefix },
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Data API deleteKey error:', error);
+      res.status(500).json({ success: false, error: 'Failed to delete API key' });
+    }
+  },
+
   async getKeyTables(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;

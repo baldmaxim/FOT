@@ -267,6 +267,23 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
     setSelection(next);
   };
 
+  /**
+   * Полный доступ: все таблицы и все поля из каталога схемы (он уже отфильтрован
+   * deny-list'ом на бэкенде — пароли, TOTP, токены туда не попадают).
+   * Снимок на текущий состав таблиц: после новых миграций нужно нажать повторно.
+   * Берём весь schemaQuery.data, а не filteredGroups — поиск не должен урезать выбор.
+   */
+  const selectFullAccess = () => {
+    const next = new Map<string, Set<string>>();
+    for (const table of schemaQuery.data ?? []) {
+      if (table.columns.length === 0) continue;
+      next.set(table.name, new Set(table.columns.map(c => c.name)));
+    }
+    setSelection(next);
+  };
+
+  const clearAllAccess = () => setSelection(new Map());
+
   const toggleExpand = (tableName: string) => {
     const next = new Set(expanded);
     if (next.has(tableName)) next.delete(tableName);
@@ -368,6 +385,21 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
               <div className={styles.loading}>Загрузка…</div>
             ) : (
               <>
+                <div className={styles.bulkBar}>
+                  <button type="button" className={styles.btn} onClick={selectFullAccess}>
+                    Полный доступ
+                  </button>
+                  <button type="button" className={styles.btn} onClick={clearAllAccess}>
+                    Снять всё
+                  </button>
+                  <span className={styles.muted}>
+                    Выбрано таблиц: {effectiveSelection.size} из {schemaQuery.data?.length ?? 0}
+                  </span>
+                </div>
+                <div className={styles.bulkHint}>
+                  «Полный доступ» отмечает все таблицы и поля, доступные публичному API, на текущий момент.
+                  После появления новых таблиц нажмите повторно.
+                </div>
                 <input
                   className={styles.toolbarSearch}
                   placeholder="Поиск по таблице или полю"
@@ -524,10 +556,24 @@ export const DataApiPage: FC = () => {
     onError: error => toast.error(error instanceof Error ? error.message : 'Не удалось отозвать ключ'),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => dataApiService.deleteKey(id),
+    onSuccess: () => {
+      toast.success('Ключ удалён');
+      queryClient.invalidateQueries({ queryKey: KEYS_QUERY_KEY });
+    },
+    onError: error => toast.error(error instanceof Error ? error.message : 'Не удалось удалить ключ'),
+  });
+
   const handleRevoke = (key: DataApiKey) => {
     if (key.revoked_at) return;
     if (!confirm(`Отозвать ключ «${key.name}»? Это действие нельзя отменить.`)) return;
     revokeMutation.mutate(key.id);
+  };
+
+  const handleDelete = (key: DataApiKey) => {
+    if (!confirm(`Удалить ключ «${key.name}» безвозвратно? Вместе с ним удалятся его доступы и лог запросов.`)) return;
+    deleteMutation.mutate(key.id);
   };
 
   return (
@@ -570,6 +616,9 @@ export const DataApiPage: FC = () => {
             <tbody>
               {keysQuery.data.map(key => {
                 const status = getKeyStatus(key);
+                // Удалять безвозвратно можно только неработающий ключ — иначе одним
+                // кликом обрывается боевая интеграция.
+                const isInactive = status.label !== 'Активен';
                 return (
                   <tr key={key.id}>
                     <td>
@@ -602,6 +651,16 @@ export const DataApiPage: FC = () => {
                             onClick={() => handleRevoke(key)}
                           >
                             Отозвать
+                          </button>
+                        )}
+                        {isInactive && (
+                          <button
+                            type="button"
+                            className={`${styles.btn} ${styles.btnDanger}`}
+                            onClick={() => handleDelete(key)}
+                            disabled={deleteMutation.isPending}
+                          >
+                            Удалить
                           </button>
                         )}
                       </div>

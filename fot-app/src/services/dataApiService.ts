@@ -87,6 +87,11 @@ export const dataApiService = {
     await apiClient.delete(`${BASE}/keys/${id}`);
   },
 
+  /** Безвозвратное удаление (только отозванный/истёкший ключ) — вместе с логами. */
+  async deleteKey(id: string): Promise<void> {
+    await apiClient.delete(`${BASE}/keys/${id}/purge`);
+  },
+
   async getKeyTables(id: string): Promise<DataApiKeyTable[]> {
     const res = await apiClient.get<ApiResponse<DataApiKeyTable[]>>(`${BASE}/keys/${id}/tables`);
     return res.data ?? [];

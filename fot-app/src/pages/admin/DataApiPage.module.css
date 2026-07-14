@@ -384,12 +384,30 @@
   width: 220px;
 }
 
+.bulkBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.bulkHint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: -2px 0 2px;
+}
+
 @media (max-width: 768px) {
   .toolbar {
     flex-wrap: wrap;
   }
   .toolbarSearch {
     width: 100%;
+  }
+  .bulkBar button {
+    min-height: 44px;
   }
   .modal {
     padding: 14px;

@@ -164,6 +164,8 @@ export const publicDataApiController = {
       });
     } catch (err) {
       console.error('publicDataApi.getDepartmentTimesheet error:', err);
+      // Текст ошибки уходит в data_api_request_logs через dataApiRequestLog.
+      res.locals.dataApiError = err instanceof Error ? err.message : String(err);
       if (!res.headersSent) {
         res.status(500).json({ success: false, error: 'Failed to build timesheet' });
       }
