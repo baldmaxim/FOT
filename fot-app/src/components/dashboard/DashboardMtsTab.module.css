@@ -1,9 +1,28 @@
 /* Вкладка «МТС» на «Обзоре»: KPI отдела + «Топ» сотрудников (бар-полосы). */
 
+/*
+ * Родитель (.dashboard-wrap) — колонка фиксированной высоты с overflow:hidden:
+ * он рассчитан на 3 колонки «Обзора», которые скроллятся внутри себя. Наш список
+ * длиннее экрана (весь отдел), поэтому вкладка обязана скроллиться сама —
+ * иначе строки за пределами экрана просто срезаются, без полосы прокрутки.
+ */
 .wrap {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.wrap::-webkit-scrollbar {
+  width: 6px;
+}
+
+.wrap::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
 }
 
 .state {
