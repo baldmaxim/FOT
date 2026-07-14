@@ -54,14 +54,31 @@
   50% { opacity: 0.55; }
 }
 
+/* Метки времени под полосой: вход/выход каждого сегмента, привязаны к его краям. */
 .scale {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  position: relative;
+  height: 14px;
   font-family: 'Space Mono', monospace;
   font-size: 11px;
-  color: var(--text-tertiary);
+}
+
+/* Метки со слишком коротким перерывом уводятся на вторую строку. */
+.scaleTall {
+  height: 28px;
+}
+
+.mark {
+  position: absolute;
   white-space: nowrap;
+  line-height: 14px;
+}
+
+.markEntry {
+  color: var(--success);
+}
+
+.markExit {
+  color: var(--primary);
 }
 
 @media (max-width: 430px) {

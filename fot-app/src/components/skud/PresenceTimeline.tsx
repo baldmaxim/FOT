@@ -1,4 +1,4 @@
-import { type FC, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, type FC, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { skudService } from '../../services/skudService';
 import { buildPresenceIntervals, isToday } from '../../utils/skudDisplay';
@@ -11,6 +11,10 @@ interface IPresenceTimelineProps {
   date: string;
   className?: string;
 }
+
+/** Минимальный зазор между метками одной строки, % ширины полосы (метка «08:35» ≈ 5%). */
+const MARK_MIN_GAP_PCT = 7;
+const MARK_ROW_HEIGHT = 14;
 
 const formatClock = (totalSeconds: number): string => {
   const h = Math.floor(totalSeconds / 3600);
@@ -60,6 +64,29 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
   const span = Math.max(windowEnd - windowStart, 1);
   const totalSeconds = intervals.reduce((sum, i) => sum + (i.endSec - i.startSec), 0);
 
+  // Метки под полосой: вход и выход каждого сегмента, привязаны к его краям.
+  // Соседние метки при коротком перерыве наезжают друг на друга — уводим их на вторую строку.
+  const marks = intervals
+    .flatMap(iv => [
+      { sec: iv.startSec, kind: 'entry' as const, isOpen: false },
+      { sec: iv.endSec, kind: 'exit' as const, isOpen: iv.isOpen },
+    ])
+    .map(m => ({ ...m, pct: ((m.sec - windowStart) / span) * 100 }));
+
+  const positioned: Array<(typeof marks)[number] & { row: number }> = [];
+  for (let i = 0, prevRowPct = -Infinity; i < marks.length; i += 1) {
+    const m = marks[i];
+    const row = m.pct - prevRowPct < MARK_MIN_GAP_PCT ? 1 : 0;
+    if (row === 0) prevRowPct = m.pct;
+    positioned.push({ ...m, row });
+  }
+  const twoRows = positioned.some(m => m.row === 1);
+
+  const markStyle = (pct: number, row: number): CSSProperties => {
+    const shift = pct <= 0 ? '0' : pct >= 100 ? '-100%' : '-50%';
+    return { left: `${pct}%`, top: `${row * MARK_ROW_HEIGHT}px`, transform: `translateX(${shift})` };
+  };
+
   return (
     <div className={className ? `${styles.wrap} ${className}` : styles.wrap}>
       <div className={styles.head}>
@@ -81,9 +108,16 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
         ))}
       </div>
 
-      <div className={styles.scale}>
-        <span>{formatClock(windowStart)}</span>
-        <span>{formatClock(windowEnd)}</span>
+      <div className={twoRows ? `${styles.scale} ${styles.scaleTall}` : styles.scale}>
+        {positioned.map(m => (
+          <span
+            key={`${m.kind}-${m.sec}`}
+            className={`${styles.mark} ${m.kind === 'entry' ? styles.markEntry : styles.markExit}`}
+            style={markStyle(m.pct, m.row)}
+          >
+            {m.isOpen ? 'сейчас' : formatClock(m.sec)}
+          </span>
+        ))}
       </div>
     </div>
   );
