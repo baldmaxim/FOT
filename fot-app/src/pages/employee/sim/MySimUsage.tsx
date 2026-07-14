@@ -6,7 +6,6 @@ import {
   USAGE_GROUP_LABELS,
   USAGE_GROUP_ORDER,
   USAGE_TYPE_WORD,
-  daysInMonth,
   fmtUnits,
   groupOf,
   summarizeUsage,
@@ -80,33 +79,42 @@ const UsageRow: FC<{ u: IMtsUsageRow }> = ({ u }) => {
  * Использование SIM в ЛК: плитки-сводка (Звонки/Интернет/СМС/Прочее), таблица
  * «По дням» и построчная детализация. Данные из БД (обновляются ночным прогоном
  * МТС) — селектор месяцев ограничен месяцами, за которые есть выписка.
+ * Клик по строке дня фильтрует детализацию этим днём (фильтр на клиенте —
+ * месяц уже загружен целиком), повторный клик возвращает весь месяц.
  */
 export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, months }) => {
   const monthOptions = months.length > 0 ? months : [currentYm()];
   const [month, setMonth] = useState(monthOptions[0]);
-  const [usageDate, setUsageDate] = useState(''); // пусто = весь месяц
+  const [selectedDay, setSelectedDay] = useState<string | null>(null); // YYYY-MM-DD, null = весь месяц
   const [detailTab, setDetailTab] = useState<UsageGroupKey>('calls');
 
-  const usage = useMySimUsage(month, usageDate);
+  const usage = useMySimUsage(month, '');
   const my = useMemo(
     () => usage.data?.numbers.find(n => n.msisdn === msisdn) ?? null,
     [usage.data, msisdn],
   );
   const rows = usage.data ? my?.rows ?? [] : undefined;
+  // Плитки-сводка — всегда за месяц.
   const summary = useMemo(() => summarizeUsage(my?.rows ?? []), [my]);
 
+  // База детализации: выбранный день либо весь месяц; табы и счётчики — от неё.
+  const dayRows = useMemo(
+    () => (selectedDay ? (my?.rows ?? []).filter(u => u.date?.slice(0, 10) === selectedDay) : my?.rows ?? []),
+    [my, selectedDay],
+  );
+  const detailSummary = useMemo(() => summarizeUsage(dayRows), [dayRows]);
   const availableTabs = useMemo(
-    () => USAGE_GROUP_ORDER.filter(k => (summary.get(k)?.count ?? 0) > 0),
-    [summary],
+    () => USAGE_GROUP_ORDER.filter(k => (detailSummary.get(k)?.count ?? 0) > 0),
+    [detailSummary],
   );
   const activeTab = availableTabs.includes(detailTab) ? detailTab : (availableTabs[0] ?? 'calls');
   const tabRows = useMemo(
-    () => (my?.rows ?? []).filter(u => groupOf(u.category) === activeTab),
-    [my, activeTab],
+    () => dayRows.filter(u => groupOf(u.category) === activeTab),
+    [dayRows, activeTab],
   );
 
-  const onMonth = (v: string): void => { setMonth(v); setUsageDate(''); };
-  const onDay = (v: string): void => { setUsageDate(v ? `${month}-${v}` : ''); };
+  const onMonth = (v: string): void => { setMonth(v); setSelectedDay(null); };
+  const toggleDay = (date: string): void => { setSelectedDay(d => (d === date ? null : date)); };
 
   return (
     <div className={styles.card}>
@@ -116,16 +124,6 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
           <select className={styles.select} value={month} onChange={e => onMonth(e.target.value)}>
             {monthOptions.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
           </select>
-          <select
-            className={styles.select}
-            value={usageDate ? usageDate.slice(8) : ''}
-            onChange={e => onDay(e.target.value)}
-            title="День внутри выбранного месяца"
-          >
-            <option value="">Весь месяц</option>
-            {Array.from({ length: daysInMonth(month) }, (_, i) => pad2(i + 1))
-              .map(d => <option key={d} value={d}>{Number(d)}</option>)}
-          </select>
         </span>
       </div>
 
@@ -133,11 +131,7 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
       {usage.isError && <p className={styles.err}>Не удалось загрузить данные.</p>}
 
       {rows && (rows.length === 0
-        ? (
-          <p className={styles.hint}>
-            {usageDate ? `За ${fmtDay(usageDate)} событий нет.` : 'За выбранный месяц данных нет — выписка обновляется каждую ночь.'}
-          </p>
-        )
+        ? <p className={styles.hint}>За выбранный месяц данных нет — выписка обновляется каждую ночь.</p>
         : (
           <>
             <div className={styles.stats}>
@@ -159,8 +153,8 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
               </div>
             </div>
 
-            <div className={!usageDate && (my?.days.length ?? 0) > 1 ? styles.usageGrid : styles.usageGridSingle}>
-              {!usageDate && (my?.days.length ?? 0) > 1 && (
+            <div className={(my?.days.length ?? 0) > 0 ? styles.usageGrid : styles.usageGridSingle}>
+              {(my?.days.length ?? 0) > 0 && (
                 <div className={styles.daysWrap}>
                   <div className={styles.panelTitle}>По дням</div>
                   <div className={styles.daysScroll}>
@@ -176,7 +170,12 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
                       </thead>
                       <tbody>
                         {my?.days.map(d => (
-                          <tr key={d.date}>
+                          <tr
+                            key={d.date}
+                            className={selectedDay === d.date ? styles.dayRowActive : undefined}
+                            onClick={() => toggleDay(d.date)}
+                            title={selectedDay === d.date ? 'Показать весь месяц' : `Детализация за ${fmtDay(d.date)}`}
+                          >
                             <td className={styles.daysDate}>{fmtDay(d.date)}</td>
                             <td>{d.calls > 0 ? `${d.calls} зв · ${fmtDur(d.callsSeconds)}` : '—'}</td>
                             <td>{d.smsCount > 0 ? `${d.smsCount} шт` : '—'}</td>
@@ -191,7 +190,16 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
               )}
 
               <div className={styles.detailPanel}>
-                <div className={styles.panelTitle}>Детализация ({rows.length})</div>
+                <div className={styles.panelTitle}>
+                  <span>
+                    {selectedDay ? `Детализация за ${fmtDay(selectedDay)} (${dayRows.length})` : `Детализация (${rows.length})`}
+                  </span>
+                  {selectedDay && (
+                    <button className={styles.panelReset} onClick={() => setSelectedDay(null)}>
+                      ✕ весь месяц
+                    </button>
+                  )}
+                </div>
                 <div className={styles.groupTabs}>
                   {availableTabs.map(k => (
                     <button
@@ -200,7 +208,7 @@ export const MySimUsage: FC<{ msisdn: string; months: string[] }> = ({ msisdn, m
                       onClick={() => setDetailTab(k)}
                     >
                       {USAGE_GROUP_LABELS[k]}
-                      <span className={styles.groupTabCount}>{summary.get(k)?.count ?? 0}</span>
+                      <span className={styles.groupTabCount}>{detailSummary.get(k)?.count ?? 0}</span>
                     </button>
                   ))}
                 </div>

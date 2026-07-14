@@ -213,11 +213,32 @@
 }
 
 .panelTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
   padding: 10px 12px 8px;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Сброс фильтра дня в заголовке детализации */
+.panelReset {
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.panelReset:hover {
+  color: var(--primary);
+  background: var(--primary-light);
 }
 
 /* Таблица «По дням» */
@@ -264,6 +285,20 @@
 
 .daysTable tr:last-child td {
   border-bottom: none;
+}
+
+/* Строка дня кликабельна: фильтрует детализацию справа этим днём */
+.daysTable tbody tr {
+  cursor: pointer;
+}
+
+.daysTable tbody tr:hover td {
+  background: var(--surface-hover);
+}
+
+.dayRowActive td,
+.daysTable tbody tr.dayRowActive:hover td {
+  background: var(--primary-light);
 }
 
 .daysDate {
