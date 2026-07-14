@@ -3960,6 +3960,12 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Полоса «Интервалы присутствия» под шапкой модалки. */
+.ts-modal-presence {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
 .ts-modal-title {
   font-size: 16px;
   font-weight: 600;

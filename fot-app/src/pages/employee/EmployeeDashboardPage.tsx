@@ -23,6 +23,7 @@ const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals')
 const UnifiedRequestModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.UnifiedRequestModal })));
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
 const DayDetailPanel = lazy(() => import('../../components/dashboard/DayDetailPanel').then(m => ({ default: m.DayDetailPanel })));
+const PresenceTimeline = lazy(() => import('../../components/skud/PresenceTimeline').then(m => ({ default: m.PresenceTimeline })));
 
 const todayLocalIso = (): string => new Date().toLocaleDateString('en-CA');
 
@@ -162,6 +163,13 @@ export const EmployeeDashboardPage: React.FC = () => {
 
   return (
     <div className={styles.content}>
+      {/* Интервалы присутствия — всегда за текущий день, поверх всех блоков */}
+      {employeeId && (
+        <Suspense fallback={null}>
+          <PresenceTimeline employeeId={employeeId} date={todayLocalIso()} className={styles.presencePane} />
+        </Suspense>
+      )}
+
       {/* Content Grid: Calendar | Day detail | Form */}
       <div className={styles.contentGrid}>
         {/* Верхний ряд: Проходы | Календарь | Заявления */}

@@ -127,6 +127,15 @@
 }
 
 /* Content Grid: левая зона (Проходы | Календарь | Заявления) + узкая правая колонка. */
+/* Полоса «Интервалы присутствия» за сегодня — над всеми блоками, во всю ширину. */
+.presencePane {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+
 .contentGrid {
   display: grid;
   grid-template-columns: 4fr 1fr;

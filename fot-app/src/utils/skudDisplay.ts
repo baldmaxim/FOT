@@ -111,6 +111,53 @@ export const calculateWorkSeconds = (
   return total;
 };
 
+export interface IPresenceInterval {
+  startSec: number;
+  endSec: number;
+  /** Вход без выхода: сотрудник на месте прямо сейчас (только для сегодняшнего дня). */
+  isOpen: boolean;
+}
+
+/**
+ * Интервалы присутствия за день: внешние пары вход→выход в секундах от полуночи.
+ * Правила спаривания те же, что в calculateWorkSeconds (миграция 163).
+ * Незакрытый вход за сегодня закрывается по now, за прошлый день — отбрасывается.
+ */
+export const buildPresenceIntervals = (
+  events: SkudEvent[],
+  internalPoints: Set<string>,
+  dateStr: string,
+): IPresenceInterval[] => {
+  const sorted = events
+    .filter(e => !isInternalEvent(e, internalPoints))
+    .sort((a, b) => a.event_time.localeCompare(b.event_time));
+
+  const intervals: IPresenceInterval[] = [];
+  let entryTime: number | null = null;
+  let entryPoint: string | null = null;
+
+  for (const ev of sorted) {
+    if (ev.direction === 'entry') {
+      if (entryTime === null || ev.access_point === entryPoint) {
+        entryTime = timeToSeconds(ev.event_time);
+        entryPoint = ev.access_point;
+      }
+    } else if (ev.direction === 'exit' && entryTime !== null) {
+      const endSec = timeToSeconds(ev.event_time);
+      if (endSec > entryTime) intervals.push({ startSec: entryTime, endSec, isOpen: false });
+      entryTime = null;
+      entryPoint = null;
+    }
+  }
+
+  if (entryTime !== null && isToday(dateStr)) {
+    const now = nowSeconds();
+    if (now > entryTime) intervals.push({ startSec: entryTime, endSec: now, isOpen: true });
+  }
+
+  return intervals;
+};
+
 /** Первый внешний entry за день. */
 export const findFirstExternalEntry = (events: SkudEvent[], internalPoints: Set<string>): SkudEvent | null => {
   for (const ev of events) {

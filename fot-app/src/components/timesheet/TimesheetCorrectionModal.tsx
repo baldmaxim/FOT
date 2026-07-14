@@ -19,6 +19,7 @@ import {
 } from '../../utils/skudDisplay';
 import { formatFailureType } from '../../utils/skudFailureTypes';
 import { AccessPointTrigger } from '../skud/AccessPointTrigger';
+import { PresenceTimeline } from '../skud/PresenceTimeline';
 import { getDayStatus, STATUS_LABEL_RU, STATUS_TO_DETAIL_HOURS_CLASS } from '../../utils/dayStatus';
 import { CREATABLE_STATUS_META, getStatusMeta, HOURS_EDITABLE_STATUSES } from '../../utils/correctionStatus';
 
@@ -1668,6 +1669,10 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
           <X size={18} />
         </button>
       </div>
+
+      {employeeId && workDate && (
+        <PresenceTimeline employeeId={employeeId} date={workDate} className="ts-modal-presence" />
+      )}
 
       {showTravelTab && (
         <div className="ts-modal-tabs">
