@@ -1,17 +1,31 @@
-import { type FC, useState } from 'react';
-import { useMySim } from '../../hooks/useMySim';
-import type { IMySimNumber } from '../../services/mySimService';
+import { type FC, useMemo, useState } from 'react';
+import { useMySim, useMyForwarding } from '../../hooks/useMySim';
+import type { ForwardingType, IForwardingRule, IMySimNumber } from '../../services/mySimService';
 import { fmtLast, fmtMoney, fmtPhone } from '../mts-business/mtsBusinessFormat';
-import { MySimForwarding } from './sim/MySimForwarding';
+import { FORWARDING_TYPE_SHORT, pickForwardingRule } from './sim/forwarding';
+import { MySimForwardingModal } from './sim/MySimForwardingModal';
 import { MySimUsage } from './sim/MySimUsage';
 import styles from './MySimPage.module.css';
 
-/** Карточка одного номера: тариф, абонентская плата, начисления. */
-const SimCard: FC<{ sim: IMySimNumber }> = ({ sim }) => (
+/** Карточка одного номера: тариф, абонентская плата, начисления + переадресация. */
+const SimCard: FC<{ sim: IMySimNumber; rule: IForwardingRule | null; onForwarding: () => void }> = ({
+  sim, rule, onForwarding,
+}) => (
   <div className={styles.card}>
     <div className={styles.cardHead}>
       <span className={styles.msisdn}>{fmtPhone(sim.msisdn)}</span>
-      {sim.capturedAt && <span className={styles.updatedAt}>обновлено {fmtLast(sim.capturedAt)}</span>}
+      <div className={styles.cardHeadRight}>
+        {rule && (
+          <span className={styles.fwdBadge} title={`Переадресация на ${fmtPhone(rule.forwardingAddress)}`}>
+            ↪ Переадресация: {FORWARDING_TYPE_SHORT[rule.forwardingType as ForwardingType]} →{' '}
+            {fmtPhone(rule.forwardingAddress)}
+          </span>
+        )}
+        <button className={styles.fwdBtn} onClick={onForwarding}>
+          {rule ? 'Настроить переадресацию' : 'Переадресация'}
+        </button>
+        {sim.capturedAt && <span className={styles.updatedAt}>обновлено {fmtLast(sim.capturedAt)}</span>}
+      </div>
     </div>
 
     <div className={styles.kvGrid}>
@@ -38,10 +52,21 @@ const SimCard: FC<{ sim: IMySimNumber }> = ({ sim }) => (
  * начисления и статистика использования (звонки/СМС/интернет по дням и
  * построчная детализация). Данные из БД, обновляются ночным прогоном МТС.
  * Персональные данные и баланс лицевого счёта компании сюда не попадают.
+ * Переадресация — единственное управляющее действие (кнопка → модалка).
  */
 export const MySimPage: FC = () => {
   const { data: sims, isLoading, isError } = useMySim();
+  const { data: forwarding } = useMyForwarding();
   const [activeIdx, setActiveIdx] = useState(0);
+  const [fwdOpen, setFwdOpen] = useState(false);
+
+  const list = sims ?? [];
+  const active = list.length > 0 ? list[Math.min(activeIdx, list.length - 1)] : null;
+
+  const rule = useMemo(() => {
+    const entry = forwarding?.find(n => n.msisdn === active?.msisdn);
+    return pickForwardingRule(entry?.rules ?? []);
+  }, [forwarding, active]);
 
   if (isLoading) {
     return <div className={styles.page}><p className={styles.hint}>Загрузка…</p></div>;
@@ -50,8 +75,7 @@ export const MySimPage: FC = () => {
     return <div className={styles.page}><p className={styles.err}>Не удалось загрузить данные SIM.</p></div>;
   }
 
-  const list = sims ?? [];
-  if (list.length === 0) {
+  if (!active) {
     return (
       <div className={styles.page}>
         <div className={styles.empty}>
@@ -66,8 +90,6 @@ export const MySimPage: FC = () => {
       </div>
     );
   }
-
-  const active = list[Math.min(activeIdx, list.length - 1)];
 
   return (
     <div className={styles.page}>
@@ -85,9 +107,10 @@ export const MySimPage: FC = () => {
         </div>
       )}
 
-      <SimCard sim={active} />
-      <MySimForwarding key={`fwd-${active.msisdn}`} msisdn={active.msisdn} />
+      <SimCard sim={active} rule={rule} onForwarding={() => setFwdOpen(true)} />
       <MySimUsage key={active.msisdn} msisdn={active.msisdn} months={active.months} />
+
+      {fwdOpen && <MySimForwardingModal msisdn={active.msisdn} onClose={() => setFwdOpen(false)} />}
     </div>
   );
 };
