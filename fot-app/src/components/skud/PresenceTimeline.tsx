@@ -1,5 +1,6 @@
 import { type CSSProperties, type FC, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { LogIn, LogOut } from 'lucide-react';
 import { skudService } from '../../services/skudService';
 import { buildPresenceIntervals, isToday } from '../../utils/skudDisplay';
 import { formatSecondsLabel } from '../../utils/hoursDisplay';
@@ -13,7 +14,9 @@ interface IPresenceTimelineProps {
 }
 
 /** Минимальный зазор центр-центр между метками, % ширины полосы (метка «08:35» ≈ 5%). */
-const MARK_MIN_GAP_PCT = 7;
+const MARK_MIN_GAP_PCT = 8;
+/** Высота зоны выносок над метками, px. */
+const MARK_CONN_H = 10;
 
 const formatClock = (totalSeconds: number): string => {
   const h = Math.floor(totalSeconds / 3600);
@@ -94,6 +97,7 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
 
   const markStyle = (center: number): CSSProperties => ({
     left: `${center}%`,
+    top: `${MARK_CONN_H}px`,
     transform: 'translateX(-50%)',
   });
 
@@ -119,12 +123,34 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
       </div>
 
       <div className={styles.scale}>
+        {/* Выноски: тонкая линия от реальной точки на полосе к сдвинутой метке. */}
+        <svg
+          className={styles.leaders}
+          viewBox="0 0 100 10"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          {positioned.map(m => (
+            <line
+              key={`lead-${m.kind}-${m.sec}`}
+              x1={m.pct}
+              y1={0}
+              x2={m.center}
+              y2={10}
+              stroke={m.kind === 'entry' ? 'var(--success)' : 'var(--primary)'}
+              strokeWidth={1}
+              strokeOpacity={0.45}
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+        </svg>
         {positioned.map(m => (
           <span
             key={`${m.kind}-${m.sec}`}
             className={`${styles.mark} ${m.kind === 'entry' ? styles.markEntry : styles.markExit}`}
             style={markStyle(m.center)}
           >
+            {m.kind === 'entry' ? <LogIn size={11} /> : <LogOut size={11} />}
             {m.isOpen ? 'сейчас' : formatClock(m.sec)}
           </span>
         ))}

@@ -55,18 +55,37 @@
 }
 
 /* Метки времени под полосой: вход/выход каждого сегмента. Идут в один ряд;
-   при коротком перерыве раздвигаются по горизонтали, не наезжая друг на друга. */
+   при коротком перерыве раздвигаются по горизонтали, не наезжая друг на друга.
+   Тонкая выноска связывает метку с её реальной точкой на полосе. */
 .scale {
   position: relative;
-  height: 14px;
+  height: 26px;
   font-family: 'Space Mono', monospace;
   font-size: 11px;
 }
 
+/* Зона выносок над метками. */
+.leaders {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 10px;
+  overflow: visible;
+  pointer-events: none;
+}
+
 .mark {
   position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   white-space: nowrap;
   line-height: 14px;
+}
+
+.mark svg {
+  flex-shrink: 0;
 }
 
 .markEntry {
