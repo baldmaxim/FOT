@@ -12,9 +12,8 @@ interface IPresenceTimelineProps {
   className?: string;
 }
 
-/** Минимальный зазор между метками одной строки, % ширины полосы (метка «08:35» ≈ 5%). */
+/** Минимальный зазор центр-центр между метками, % ширины полосы (метка «08:35» ≈ 5%). */
 const MARK_MIN_GAP_PCT = 7;
-const MARK_ROW_HEIGHT = 14;
 
 const formatClock = (totalSeconds: number): string => {
   const h = Math.floor(totalSeconds / 3600);
@@ -65,7 +64,8 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
   const totalSeconds = intervals.reduce((sum, i) => sum + (i.endSec - i.startSec), 0);
 
   // Метки под полосой: вход и выход каждого сегмента, привязаны к его краям.
-  // Соседние метки при коротком перерыве наезжают друг на друга — уводим их на вторую строку.
+  // Соседние метки при коротком перерыве наезжают друг на друга — раздвигаем их
+  // по горизонтали в один ряд, чтобы центры шли не ближе MARK_MIN_GAP_PCT.
   const marks = intervals
     .flatMap(iv => [
       { sec: iv.startSec, kind: 'entry' as const, isOpen: false },
@@ -73,19 +73,29 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
     ])
     .map(m => ({ ...m, pct: ((m.sec - windowStart) / span) * 100 }));
 
-  const positioned: Array<(typeof marks)[number] & { row: number }> = [];
-  for (let i = 0, prevRowPct = -Infinity; i < marks.length; i += 1) {
-    const m = marks[i];
-    const row = m.pct - prevRowPct < MARK_MIN_GAP_PCT ? 1 : 0;
-    if (row === 0) prevRowPct = m.pct;
-    positioned.push({ ...m, row });
+  const GAP = MARK_MIN_GAP_PCT;
+  const HALF = GAP / 2; // держим крайние метки внутри полосы
+  const centers = marks.map(m => m.pct);
+  // прямой проход — раздвигаем вправо
+  for (let i = 1; i < centers.length; i += 1) {
+    centers[i] = Math.max(centers[i], centers[i - 1] + GAP);
   }
-  const twoRows = positioned.some(m => m.row === 1);
+  // если уехали за правый край — тянем назад
+  const maxC = 100 - HALF;
+  if (centers.length && centers[centers.length - 1] > maxC) {
+    centers[centers.length - 1] = maxC;
+    for (let i = centers.length - 2; i >= 0; i -= 1) {
+      centers[i] = Math.min(centers[i], centers[i + 1] - GAP);
+    }
+  }
+  if (centers.length) centers[0] = Math.max(centers[0], HALF);
 
-  const markStyle = (pct: number, row: number): CSSProperties => {
-    const shift = pct <= 0 ? '0' : pct >= 100 ? '-100%' : '-50%';
-    return { left: `${pct}%`, top: `${row * MARK_ROW_HEIGHT}px`, transform: `translateX(${shift})` };
-  };
+  const positioned = marks.map((m, i) => ({ ...m, center: centers[i] }));
+
+  const markStyle = (center: number): CSSProperties => ({
+    left: `${center}%`,
+    transform: 'translateX(-50%)',
+  });
 
   return (
     <div className={className ? `${styles.wrap} ${className}` : styles.wrap}>
@@ -108,12 +118,12 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
         ))}
       </div>
 
-      <div className={twoRows ? `${styles.scale} ${styles.scaleTall}` : styles.scale}>
+      <div className={styles.scale}>
         {positioned.map(m => (
           <span
             key={`${m.kind}-${m.sec}`}
             className={`${styles.mark} ${m.kind === 'entry' ? styles.markEntry : styles.markExit}`}
-            style={markStyle(m.pct, m.row)}
+            style={markStyle(m.center)}
           >
             {m.isOpen ? 'сейчас' : formatClock(m.sec)}
           </span>
