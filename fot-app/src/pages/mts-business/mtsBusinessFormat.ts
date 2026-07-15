@@ -74,17 +74,29 @@ export const usageContactColor = (key: string | null | undefined): string => {
 };
 
 export const UNIT_LABELS: Record<string, string> = { BYTE: 'интернет', MINUTE: 'минуты', SECOND: 'минуты', ITEM: 'SMS', MONEY: 'деньги' };
+/** Цвет полосы остатка по типу трафика — палитра модуля (минуты/интернет/SMS). */
+export const PACKAGE_COLORS: Record<string, string> = {
+  MINUTE: '#3b82f6', SECOND: '#3b82f6', BYTE: '#7c3aed', ITEM: '#f59e0b', MONEY: '#16a34a',
+};
 /** Пакет несёт данные, если задан остаток или квота (иначе строка «— из —» — мусор). */
 export const packageHasData = (p: { quota: number | null; remainder: number | null }): boolean =>
   p.quota != null || p.remainder != null;
-export const fmtPackage = (p: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }): string => {
-  const label = (p.unitOfMeasure && UNIT_LABELS[p.unitOfMeasure]) || p.unitOfMeasure || '—';
-  const unit = p.unitOfMeasure === 'BYTE' ? 'МБ' : '';
-  const toUnit = (v: number | null): string => {
-    if (v == null) return '—';
-    return p.unitOfMeasure === 'BYTE' ? Math.round(v / 1_000_000).toLocaleString('ru-RU') : Math.round(v).toLocaleString('ru-RU');
-  };
-  return `${label}: ${toUnit(p.remainder)}${unit ? ` ${unit}` : ''} из ${toUnit(p.quota)}${unit ? ` ${unit}` : ''}`;
+/** Одно значение пакета в его единицах: BYTE→МБ, иначе штуки/минуты. */
+export const fmtPackageValue = (p: { unitOfMeasure: string | null }, v: number | null): string => {
+  if (v == null) return '—';
+  const unit = p.unitOfMeasure === 'BYTE' ? ' МБ' : '';
+  const n = p.unitOfMeasure === 'BYTE' ? Math.round(v / 1_000_000) : Math.round(v);
+  return `${n.toLocaleString('ru-RU')}${unit}`;
+};
+/** Метка пакета: «интернет» / «минуты» / «SMS» по unitOfMeasure. */
+export const packageLabel = (p: { unitOfMeasure: string | null }): string =>
+  (p.unitOfMeasure && UNIT_LABELS[p.unitOfMeasure]) || p.unitOfMeasure || '—';
+export const fmtPackage = (p: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }): string =>
+  `${packageLabel(p)}: ${fmtPackageValue(p, p.remainder)} из ${fmtPackageValue(p, p.quota)}`;
+/** Доля остатка пакета (0..1) для полосы заполнения; null если квота неизвестна. */
+export const packagePercent = (p: { quota: number | null; remainder: number | null }): number | null => {
+  if (p.quota == null || p.quota <= 0 || p.remainder == null) return null;
+  return Math.max(0, Math.min(1, p.remainder / p.quota));
 };
 
 export const ACTION_TYPE_LABELS: Record<string, string> = {

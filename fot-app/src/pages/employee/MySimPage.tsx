@@ -2,6 +2,7 @@ import { type FC, useMemo, useState } from 'react';
 import { useMySim, useMyForwarding } from '../../hooks/useMySim';
 import type { ForwardingType, IForwardingRule, IMySimNumber } from '../../services/mySimService';
 import { fmtLast, fmtMoney, fmtPhone } from '../mts-business/mtsBusinessFormat';
+import { PackageMeters } from '../mts-business/PackageMeters';
 import { FORWARDING_TYPE_SHORT, pickForwardingRule } from './sim/forwarding';
 import { MySimForwardingModal } from './sim/MySimForwardingModal';
 import { MySimUsage } from './sim/MySimUsage';
@@ -44,6 +45,13 @@ const SimCard: FC<{ sim: IMySimNumber; rule: IForwardingRule | null; onForwardin
         <span className={styles.kvVal}>{sim.charges ? fmtMoney(sim.charges.amount) : '—'}</span>
       </div>
     </div>
+
+    {(sim.packages?.length ?? 0) > 0 && (
+      <div className={styles.packages}>
+        <span className={styles.packagesTitle}>Остатки пакетов</span>
+        <PackageMeters packages={sim.packages} />
+      </div>
+    )}
   </div>
 );
 

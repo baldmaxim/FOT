@@ -292,6 +292,7 @@
 .kv { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; padding: 2px 0; }
 .kvLabel { color: var(--text-secondary); flex: 0 0 auto; }
 .kvVal { text-align: right; overflow-wrap: anywhere; }
+.packages { display: flex; flex-direction: column; gap: 8px; padding: 8px 0 2px; }
 
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .listItem {

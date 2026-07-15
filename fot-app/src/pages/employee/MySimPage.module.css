@@ -118,6 +118,22 @@
   overflow-wrap: anywhere;
 }
 
+/* Остатки пакетов (минуты/SMS/интернет) с полосой заполнения */
+.packages {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.packagesTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
 /* --- Переадресация: ярлык и кнопка в шапке карточки --- */
 
 .cardHeadRight {

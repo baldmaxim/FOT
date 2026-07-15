@@ -60,14 +60,16 @@ export interface IMtsSubscriberDetails {
 }
 
 /**
- * Данные SIM для ЛК сотрудника — только тариф/абонплата/начисления:
+ * Данные SIM для ЛК сотрудника — тариф/абонплата/начисления + остатки пакетов:
  * БЕЗ personalData (pd_data_enc не читается вовсе), БЕЗ баланса (это остаток
- * лицевого счёта КОМПАНИИ, не номера), БЕЗ услуг/блокировок/пакетов/платежей.
+ * лицевого счёта КОМПАНИИ, не номера), БЕЗ услуг/блокировок/платежей.
+ * packages — счётчики самого номера (квота/остаток минут/SMS/интернета), не ПДн.
  */
 export interface IMySimNumber {
   msisdn: string;
   tariff: { name: string | null; fee: IMtsTariffFee | null };
   charges: { amount: number; capturedAt: string | null } | null; // начисления номера за текущий месяц МСК
+  packages: IMtsPackageCounter[]; // остатки пакетов по номеру (validity_msisdn)
   capturedAt: string | null;
 }
 
@@ -272,7 +274,7 @@ class MtsBusinessSubscribersService {
     const monthFrom = `${monthTo.slice(0, 7)}-01`;
     const [snaps, charges] = await Promise.all([
       mtsBusinessMetricsStoreService.getLatestSnapshotsForMsisdn(rawMsisdn, [
-        'bill_plan', 'tariff_fee', 'product_services',
+        'bill_plan', 'tariff_fee', 'product_services', 'validity_msisdn',
       ]),
       mtsBusinessMetricsStoreService.getMsisdnChargesForPeriod(rawMsisdn, monthFrom, monthTo),
     ]);
@@ -292,6 +294,7 @@ class MtsBusinessSubscribersService {
         fee: (snaps.get('tariff_fee')?.payload as IMtsTariffFee | undefined) ?? null,
       },
       charges: charges ? { amount: charges.amount, capturedAt: charges.capturedAt } : null,
+      packages: arr<IMtsPackageCounter>(snaps.get('validity_msisdn')?.payload),
       capturedAt,
     };
   }

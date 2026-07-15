@@ -1,5 +1,5 @@
 import { apiClient } from '../api/client';
-import type { IMtsUsageRow, IUsageTotals } from './mtsBusinessSubscribersService';
+import type { IMtsUsageRow, IUsageTotals, IMtsPackageRow } from './mtsBusinessSubscribersService';
 import type { IMtsSubTariffFee } from './mtsBusinessSubscriberService';
 
 // ЛК сотрудника: «Моя SIM» (/my-sim — данные только по своим номерам, из БД,
@@ -9,6 +9,7 @@ export interface IMySimNumber {
   msisdn: string;
   tariff: { name: string | null; fee: IMtsSubTariffFee | null };
   charges: { amount: number; capturedAt: string | null } | null;
+  packages: IMtsPackageRow[]; // остатки пакетов по номеру (минуты/SMS/интернет)
   capturedAt: string | null;
   months: string[]; // месяцы, за которые в БД есть выписка (YYYY-MM, свежие сверху)
 }

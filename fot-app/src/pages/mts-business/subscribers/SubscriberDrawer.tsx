@@ -26,9 +26,10 @@ import {
   usageTooltip,
 } from '../usageSummary';
 import {
-  errText, fmtDur, fmtLast, fmtMoney, fmtPackage, packageHasData, fmtPhone, lastMonths,
+  errText, fmtDur, fmtLast, fmtMoney, fmtPhone, lastMonths,
   FORWARDING_TYPE_LABELS, PD_STATUS_LABELS,
 } from '../mtsBusinessFormat';
+import { PackageMeters } from '../PackageMeters';
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
 
@@ -376,12 +377,12 @@ export const SubscriberDrawer: FC<{ row: IMtsSubscriberRow; onClose: () => void 
           <KV label="Начисления (месяц)" value={d?.charges ? fmtMoney(d.charges.amount) : fmtMoney(row.chargesAmount)} />
           <KV label="Тариф" value={dash(d?.tariff.name ?? row.tariffName)} />
           <KV label="Абонентская плата" value={d?.tariff.fee?.amount != null ? `${fmtMoney(d.tariff.fee.amount)}/мес` : '—'} />
-          {(() => {
-            const lines = [...new Set((d?.packages ?? []).filter(packageHasData).map(fmtPackage))];
-            return lines.length > 0
-              ? lines.map((t, i) => <KV key={`pkg-${i}`} label={i === 0 ? 'Пакеты' : ''} value={t} />)
-              : null;
-          })()}
+          {(d?.packages?.length ?? 0) > 0 && (
+            <div className={st.packages}>
+              <span className={st.kvLabel}>Остатки пакетов</span>
+              <PackageMeters packages={d?.packages ?? []} />
+            </div>
+          )}
         </div>
 
         <div className={st.section}>

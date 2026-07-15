@@ -141,6 +141,11 @@ export async function syncSubscriberFull(
   await settle('tariff_fee', async () => snap('tariff_fee', await mtsBusinessBillingService.getTariffRental(accountId, msisdn)));
   await settle('product_services', async () => snap('product_services', await mtsBusinessCatalogService.getProductInfo(accountId, msisdn)));
   await settle('connected_blocks', async () => snap('connected_blocks', await mtsBusinessCatalogService.getConnectedBlocks(accountId, msisdn)));
+  // Остатки пакетов ПО НОМЕРУ: тот же ValidityInfo, но в customerAccount.accountNo
+  // передаётся MSISDN (подтверждено probe 06.07.2026: по номеру — данные, по ЛС — 401).
+  // Снимаем и в bulk-режиме (ночной прогон), чтобы остатки минут/SMS/интернета
+  // были у ВСЕХ номеров, а не только у обновлённых вручную — +1 вызов на номер.
+  await settle('validity_msisdn', async () => snap('validity_msisdn', await mtsBusinessBillingService.getValidityInfo(accountId, msisdn)));
 
   if (mode === 'full') {
     // Начисления (charges_amount) здесь НЕ снимаем через CheckCharges: его
@@ -150,9 +155,6 @@ export async function syncSubscriberFull(
     await settle('roaming', async () => snap('roaming', await mtsBusinessCatalogService.getCurrentSubscriberLocation(accountId, msisdn)));
     await settle('delivery_method', async () => snap('delivery_method', await mtsBusinessBillingService.getDocumentDeliveryMethod(accountId, msisdn)));
     await settle('payments', async () => snap('payments', await mtsBusinessBillingService.getPaymentHistoryByMsisdn(accountId, msisdn, isoDay(-30), isoDay(0))));
-    // Остатки пакетов ПО НОМЕРУ: тот же ValidityInfo, но в customerAccount.accountNo
-    // передаётся MSISDN (подтверждено probe 06.07.2026: по номеру — данные, по ЛС — 401).
-    await settle('validity_msisdn', async () => snap('validity_msisdn', await mtsBusinessBillingService.getValidityInfo(accountId, msisdn)));
   }
 
   return result;
