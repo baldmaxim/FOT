@@ -17,6 +17,7 @@ import { startPatentExpiryReminderScheduler, stopPatentExpiryReminderScheduler }
 import { startDailyTasksReminderScheduler, stopDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
 import { startDismissalScheduler, stopDismissalScheduler } from './services/dismissal-scheduler.service.js';
 import { startContractorPassSyncScheduler, stopContractorPassSyncScheduler } from './services/contractor-pass-sync.scheduler.js';
+import { startNewdbPendingPoller, stopNewdbPendingPoller } from './services/newdb-pending-poller.service.js';
 import { startMtsLocationPoller, stopMtsLocationPoller } from './services/mts-location-poller.service.js';
 import { startMtsGeofenceMonitor, stopMtsGeofenceMonitor } from './services/mts-geofence-monitor.service.js';
 import { startMtsBusinessStatusPoller, stopMtsBusinessStatusPoller } from './services/mts-business-status-poller.service.js';
@@ -107,6 +108,7 @@ httpServer.listen(PORT, HOST, () => {
   startDailyTasksReminderScheduler();
   startDismissalScheduler();
   startContractorPassSyncScheduler();
+  startNewdbPendingPoller();
   startMtsLocationPoller();
   startMtsGeofenceMonitor();
   startMtsBusinessStatusPoller();
@@ -150,7 +152,7 @@ const gracefulShutdown = (signal: string): void => {
     stopSigurEventsDailyScheduler, stopSkudSummaryReconcileScheduler,
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopDismissalScheduler,
-    stopContractorPassSyncScheduler, stopMtsLocationPoller, stopMtsGeofenceMonitor,
+    stopContractorPassSyncScheduler, stopNewdbPendingPoller, stopMtsLocationPoller, stopMtsGeofenceMonitor,
     stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
     stopMtsBusinessMetricsDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler,
     stopMtsBusinessStatementRollingWorker,

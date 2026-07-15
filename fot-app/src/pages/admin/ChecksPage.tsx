@@ -34,7 +34,7 @@ const StatusIcon: FC<{ kind: CheckType; status: CheckStatus | null; at: string |
   else if (status === 'pending') {
     icon = <Clock size={18} className={styles.icPending} aria-label={label} />;
     // Причина ожидания (например «Провайдер повторяет проверку: …») — в тултип.
-    title = `Ожидает результата — нажмите «Обновить»${summary ? ` · ${summary}` : ''}`;
+    title = `Ожидает результата — обновится автоматически${summary ? ` · ${summary}` : ''}`;
   }
   else if (status === 'not_applicable') icon = <Minus size={18} className={styles.icMuted} aria-label={label} />;
   else icon = <AlertTriangle size={18} className={styles.icWarn} aria-label={label} />;
@@ -69,6 +69,14 @@ export const ChecksPage: FC = () => {
     queryFn: () => checksService.listPasses(orgId),
     enabled: !!orgId,
     staleTime: 15_000,
+    // Пока есть «В обработке» — бэкенд-поллер добирает результаты сам;
+    // перечитываем список, чтобы часики исчезали без ручного «Обновить».
+    refetchInterval: query =>
+      (query.state.data ?? []).some(
+        p => p.last_rkl_status === 'pending' || p.last_patent_msk_status === 'pending',
+      )
+        ? 15_000
+        : false,
   });
 
   const runOne = useMutation({

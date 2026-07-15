@@ -27,8 +27,15 @@ vi.mock('./newdb-base.service.js', () => {
   return { NewdbApiError, newdbBaseService: { post: vi.fn() } };
 });
 
+vi.mock('./newdb-pending-poller.service.js', () => ({
+  kickNewdbPendingPoller: vi.fn(),
+  startNewdbPendingPoller: vi.fn(),
+  stopNewdbPendingPoller: vi.fn(),
+}));
+
 import { query, queryOne, execute } from '../config/postgres.js';
 import { newdbBaseService } from './newdb-base.service.js';
+import { kickNewdbPendingPoller } from './newdb-pending-poller.service.js';
 import {
   normalizePassport,
   splitDocSeriaNumber,
@@ -36,6 +43,7 @@ import {
   interpretNewdbResponse,
   runChecksForPass,
   refreshPendingForPass,
+  pollAllPending,
 } from './newdb-check.service.js';
 
 const mockPost = newdbBaseService.post as Mock;
@@ -249,18 +257,19 @@ describe('runChecksForPass — что уходит (и не уходит) про
   });
 
   it('пустое гражданство: патент проверяется, в body нет ключа citizenship', async () => {
-    mockPassFlow({ ...basePass, citizenship: null });
+    mockPassFlow({ ...basePass, citizenship: null, passport_series_number: 'FA1904758' });
     mockPost.mockResolvedValue(completePatent);
     const results = await runChecksForPass(basePass.id, ['patent_msk'], 'user-1');
     expect(mockPost).toHaveBeenCalledTimes(1);
     const body = mockPost.mock.calls[0][0];
     expect(body.params).not.toHaveProperty('citizenship');
-    expect(body.params).not.toHaveProperty('id_doc_seria');
+    expect(body.params.id_doc_seria).toBe('FA');
+    expect(body.params.id_doc_number).toBe('1904758');
     expect(results[0].status).toBe('clean');
   });
 
   it('гражданство «Другое»: патент проверяется без citizenship', async () => {
-    mockPassFlow({ ...basePass, citizenship: 'Другое' });
+    mockPassFlow({ ...basePass, citizenship: 'Другое', passport_series_number: 'FA1904758' });
     mockPost.mockResolvedValue(completePatent);
     await runChecksForPass(basePass.id, ['patent_msk'], 'user-1');
     expect(mockPost).toHaveBeenCalledTimes(1);
@@ -268,10 +277,30 @@ describe('runChecksForPass — что уходит (и не уходит) про
   });
 
   it('патентное гражданство: citizenship передаётся', async () => {
-    mockPassFlow(basePass); // Таджикистан
+    mockPassFlow({ ...basePass, passport_series_number: 'FA1904758' }); // Таджикистан
     mockPost.mockResolvedValue(completePatent);
     await runChecksForPass(basePass.id, ['patent_msk'], 'user-1');
     expect(mockPost.mock.calls[0][0].params.citizenship).toBe('Таджикистан');
+  });
+
+  it('патент без серии паспорта: внешний вызов НЕ выполняется, ошибка «серия паспорта»', async () => {
+    mockPassFlow(basePass); // паспорт 405995877 — без серии
+    const results = await runChecksForPass(basePass.id, ['patent_msk'], 'user-1');
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(results[0].status).toBe('error');
+    expect(results[0].error_message).toContain('серия паспорта');
+  });
+
+  it('kick поллера: вызывается при pending-результате, не вызывается без него', async () => {
+    mockPassFlow(basePass);
+    mockPost.mockResolvedValue({ state: 'queued', requestId: 'req-q' });
+    await runChecksForPass(basePass.id, ['rkl'], 'user-1');
+    expect(kickNewdbPendingPoller).toHaveBeenCalledTimes(1);
+
+    vi.mocked(kickNewdbPendingPoller).mockClear();
+    mockPost.mockResolvedValue(completeRkl);
+    await runChecksForPass(basePass.id, ['rkl'], 'user-1');
+    expect(kickNewdbPendingPoller).not.toHaveBeenCalled();
   });
 
   it('issue_date-фолбэк из строки паспорта «… от DD.MM.YYYY»', async () => {
@@ -378,7 +407,7 @@ describe('refreshPendingForPass — polling', () => {
     expect(params[6]).toContain('permanent failure');      // error_message
   });
 
-  it('pending без requestId и без финального сохранённого ответа → skipped', async () => {
+  it('pending без requestId: закрывается ошибкой «нет requestId», провайдер не вызывается', async () => {
     mockQuery.mockResolvedValue([{
       id: CHECK_ID,
       check_type: 'rkl',
@@ -388,6 +417,52 @@ describe('refreshPendingForPass — polling', () => {
 
     const summary = await refreshPendingForPass(basePass.id);
     expect(summary.skipped).toBe(1);
+    expect(mockPost).not.toHaveBeenCalled();
+    const closeCall = mockExecute.mock.calls.find(
+      ([sql]) => typeof sql === 'string' && sql.includes('невозможно обновить: нет requestId'),
+    );
+    expect(closeCall).toBeTruthy();
+  });
+});
+
+// ─── Поведенческие: pollAllPending (фоновый поллер) ──────────────────────────
+
+describe('pollAllPending', () => {
+  it('сначала глобально закрывает просроченные pending, затем обходит выборку', async () => {
+    mockQuery.mockResolvedValue([{
+      id: CHECK_ID,
+      check_type: 'rkl',
+      newdb_request_id: 'req-1',
+      saved_raw: { state: 'queued', params: { method: 'rkl' }, requestId: 'req-1' },
+    }]);
+    mockPost.mockResolvedValue({
+      state: 'complete',
+      requestId: 'req-1',
+      results: { rkl: { result: { data: [{ registry_status: 'not_found', title: 'ok' }] } } },
+    });
+
+    const summary = await pollAllPending(15);
+
+    // 1-й execute — глобальный timeout-UPDATE (без фильтра по пропуску).
+    const [timeoutSql, timeoutParams] = mockExecute.mock.calls[0];
+    expect(timeoutSql).toContain('истёк срок ожидания');
+    expect(timeoutSql).not.toContain('contractor_pass_id');
+    expect(timeoutSql).toContain('24 hours');
+    expect(timeoutParams).toBeUndefined();
+
+    // Выборка глобальная, с лимитом.
+    const [selectSql, selectParams] = mockQuery.mock.calls[0];
+    expect(selectSql).not.toContain('contractor_pass_id');
+    expect(selectParams).toEqual([15]);
+
+    expect(summary.updated).toBe(1);
+    expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('пустая выборка: только timeout-UPDATE, провайдер не вызывается', async () => {
+    mockQuery.mockResolvedValue([]);
+    const summary = await pollAllPending();
+    expect(summary).toEqual({ updated: 0, stillPending: 0, errors: 0, skipped: 0 });
     expect(mockPost).not.toHaveBeenCalled();
   });
 });

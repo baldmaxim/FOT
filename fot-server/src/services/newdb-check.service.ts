@@ -15,6 +15,7 @@
 import { query, queryOne, execute } from '../config/postgres.js';
 import { newdbBaseService, NewdbApiError } from './newdb-base.service.js';
 import { citizenshipRequiresPatent } from './contractor-docs.service.js';
+import { kickNewdbPendingPoller } from './newdb-pending-poller.service.js';
 
 // Активные типы проверок. patent_mo зарезервирован в схеме БД, но НЕ вызывается
 // (нужен ИНН физлица, которого в системе нет) — отвергается на входе.
@@ -303,6 +304,9 @@ const runPatentMsk = async (pass: IPassDataRow, _taskId: string, checkId: string
   const id = splitDocSeriaNumber(pass.passport_series_number);
   const missing: string[] = [];
   if (!id.number) missing.push('паспорт');
+  // Серия для patent_msk обязательна (провайдер: «Отсутствует обязательный
+  // параметр: id_doc_seria») — без неё платный вызов бессмысленен.
+  if (id.number && !id.seria) missing.push('серия паспорта');
   if (missing.length) {
     return { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: `Недостаточно данных для патента (Москва): ${missing.join(', ')}` };
   }
@@ -487,6 +491,12 @@ export const runChecksForPass = async (
       balance: outcome.balance,
       created_at: inserted.created_at,
     });
+  }
+
+  // Запрос принят в очередь провайдера — ускоряем фоновый добор результата,
+  // чтобы часики исчезали без ручного «Обновить».
+  if (results.some(r => r.status === 'pending')) {
+    kickNewdbPendingPoller();
   }
 
   return results;
@@ -705,7 +715,17 @@ const pollPending = async (row: IPendingRow): Promise<'updated' | 'stillPending'
   }
 
   const savedParams = row.saved_raw?.params ?? null;
-  if (!row.newdb_request_id || !savedParams) return 'skipped';
+  if (!row.newdb_request_id || !savedParams) {
+    // Опросить невозможно НИКОГДА (нечем матчить результат) — закрываем
+    // ошибкой, иначе запись вечно занимает лимит выборки поллера.
+    await execute(
+      `UPDATE newdb_checks
+          SET status = 'error', error_message = 'невозможно обновить: нет requestId'
+        WHERE id = $1::uuid`,
+      [row.id],
+    );
+    return 'skipped';
+  }
 
   const body = { params: savedParams, requestId: row.newdb_request_id };
 
@@ -759,6 +779,44 @@ export const refreshPendingForPass = async (passId: string): Promise<IRefreshSum
       ORDER BY created_at ASC
       LIMIT ${POLL_LIMIT}`,
     [passId],
+  );
+
+  const summary: IRefreshSummary = { updated: 0, stillPending: 0, errors: 0, skipped: 0 };
+  for (const row of rows) {
+    const outcome = await pollPending(row);
+    if (outcome === 'updated') summary.updated++;
+    else if (outcome === 'stillPending') summary.stillPending++;
+    else if (outcome === 'error') summary.errors++;
+    else summary.skipped++;
+  }
+  return summary;
+};
+
+/**
+ * Глобальный обход pending-проверок для фонового поллера.
+ *
+ * Порядок важен: сначала закрываем просроченные (>TTL) как timeout — иначе
+ * выборка `ORDER BY created_at ASC LIMIT n` навсегда застрянет на мёртвых
+ * старых строках и свежие проверки до polling не дойдут (TTL-очистка в
+ * runChecksForPass срабатывает только перед новым платным запуском по
+ * конкретному пропуску).
+ */
+export const pollAllPending = async (limit = POLL_LIMIT): Promise<IRefreshSummary> => {
+  await execute(
+    `UPDATE newdb_checks
+        SET status = 'error',
+            error_message = 'истёк срок ожидания результата (timeout ${PENDING_TTL_HOURS} ч)'
+      WHERE status = 'pending' AND check_type IN ('rkl', 'patent_msk')
+        AND created_at <= now() - interval '${PENDING_TTL_HOURS} hours'`,
+  );
+
+  const rows = await query<IPendingRow>(
+    `SELECT id, check_type, newdb_request_id, raw_response AS saved_raw
+       FROM newdb_checks
+      WHERE status = 'pending' AND check_type IN ('rkl', 'patent_msk')
+      ORDER BY created_at ASC
+      LIMIT $1`,
+    [limit],
   );
 
   const summary: IRefreshSummary = { updated: 0, stillPending: 0, errors: 0, skipped: 0 };
