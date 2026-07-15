@@ -13,10 +13,8 @@ interface IPresenceTimelineProps {
   className?: string;
 }
 
-/** Минимальный зазор центр-центр между метками, % ширины полосы (метка «08:35» ≈ 5%). */
+/** Минимальный зазор между показанными метками, % ширины полосы (метка «08:35» ≈ 5-6%). */
 const MARK_MIN_GAP_PCT = 8;
-/** Высота зоны выносок над метками, px. */
-const MARK_CONN_H = 10;
 
 const formatClock = (totalSeconds: number): string => {
   const h = Math.floor(totalSeconds / 3600);
@@ -67,8 +65,6 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
   const totalSeconds = intervals.reduce((sum, i) => sum + (i.endSec - i.startSec), 0);
 
   // Метки под полосой: вход и выход каждого сегмента, привязаны к его краям.
-  // Соседние метки при коротком перерыве наезжают друг на друга — раздвигаем их
-  // по горизонтали в один ряд, чтобы центры шли не ближе MARK_MIN_GAP_PCT.
   const marks = intervals
     .flatMap(iv => [
       { sec: iv.startSec, kind: 'entry' as const, isOpen: false },
@@ -76,30 +72,31 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
     ])
     .map(m => ({ ...m, pct: ((m.sec - windowStart) / span) * 100 }));
 
+  // Прореживаем: метки идут в один ряд, привязаны к своим точкам. Если очередная
+  // ближе MARK_MIN_GAP_PCT к последней показанной — прячем её (на коротких
+  // сегментах/перерывах цифры входа-выхода не загромождают полосу). Края дня —
+  // первый вход и последний выход — не прячем.
   const GAP = MARK_MIN_GAP_PCT;
-  const HALF = GAP / 2; // держим крайние метки внутри полосы
-  const centers = marks.map(m => m.pct);
-  // прямой проход — раздвигаем вправо
-  for (let i = 1; i < centers.length; i += 1) {
-    centers[i] = Math.max(centers[i], centers[i - 1] + GAP);
-  }
-  // если уехали за правый край — тянем назад
-  const maxC = 100 - HALF;
-  if (centers.length && centers[centers.length - 1] > maxC) {
-    centers[centers.length - 1] = maxC;
-    for (let i = centers.length - 2; i >= 0; i -= 1) {
-      centers[i] = Math.min(centers[i], centers[i + 1] - GAP);
+  const positioned: typeof marks = [];
+  let lastKeptPct = -Infinity;
+  for (const m of marks) {
+    if (m.pct - lastKeptPct >= GAP) {
+      positioned.push(m);
+      lastKeptPct = m.pct;
     }
   }
-  if (centers.length) centers[0] = Math.max(centers[0], HALF);
+  const lastMark = marks[marks.length - 1];
+  if (positioned[positioned.length - 1] !== lastMark) {
+    while (positioned.length && lastMark.pct - positioned[positioned.length - 1].pct < GAP) {
+      positioned.pop();
+    }
+    positioned.push(lastMark);
+  }
 
-  const positioned = marks.map((m, i) => ({ ...m, center: centers[i] }));
-
-  const markStyle = (center: number): CSSProperties => ({
-    left: `${center}%`,
-    top: `${MARK_CONN_H}px`,
-    transform: 'translateX(-50%)',
-  });
+  const markStyle = (pct: number): CSSProperties => {
+    const shift = pct <= 0 ? '0' : pct >= 100 ? '-100%' : '-50%';
+    return { left: `${pct}%`, transform: `translateX(${shift})` };
+  };
 
   return (
     <div className={className ? `${styles.wrap} ${className}` : styles.wrap}>
@@ -123,32 +120,11 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
       </div>
 
       <div className={styles.scale}>
-        {/* Выноски: тонкая линия от реальной точки на полосе к сдвинутой метке. */}
-        <svg
-          className={styles.leaders}
-          viewBox="0 0 100 10"
-          preserveAspectRatio="none"
-          aria-hidden="true"
-        >
-          {positioned.map(m => (
-            <line
-              key={`lead-${m.kind}-${m.sec}`}
-              x1={m.pct}
-              y1={0}
-              x2={m.center}
-              y2={10}
-              stroke={m.kind === 'entry' ? 'var(--success)' : 'var(--primary)'}
-              strokeWidth={1}
-              strokeOpacity={0.45}
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-        </svg>
         {positioned.map(m => (
           <span
             key={`${m.kind}-${m.sec}`}
             className={`${styles.mark} ${m.kind === 'entry' ? styles.markEntry : styles.markExit}`}
-            style={markStyle(m.center)}
+            style={markStyle(m.pct)}
           >
             {m.kind === 'entry' ? <LogIn size={11} /> : <LogOut size={11} />}
             {m.isOpen ? 'сейчас' : formatClock(m.sec)}
