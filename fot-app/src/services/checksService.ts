@@ -5,7 +5,9 @@ interface ApiResponse<T> {
   data: T;
 }
 
-export type CheckType = 'rkl' | 'patent_msk';
+// 'patent' — федеральный патент (метод newdb foreign_patent, ищет по номеру
+// патента + бланку). patent_msk — московский реестр, ищет по паспорту.
+export type CheckType = 'rkl' | 'patent_msk' | 'patent';
 export type CheckStatus = 'clean' | 'found' | 'invalid' | 'error' | 'not_applicable' | 'pending';
 
 export interface NewdbConnectionSettings {
@@ -62,6 +64,14 @@ export interface CheckPassRow {
   last_patent_msk_status: CheckStatus | null;
   last_patent_msk_at: string | null;
   last_patent_msk_summary: string | null;
+  last_patent_rf_status: CheckStatus | null;
+  last_patent_rf_at: string | null;
+  last_patent_rf_summary: string | null;
+  // Сводный итог (Москва + РФ): действителен, если валиден хотя бы один метод.
+  // at/summary — от источника, определившего итог (считает бэкенд).
+  last_patent_overall_status: CheckStatus | null;
+  last_patent_overall_at: string | null;
+  last_patent_overall_summary: string | null;
 }
 
 export interface CheckResult {

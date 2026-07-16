@@ -44,6 +44,10 @@ import {
   runChecksForPass,
   refreshPendingForPass,
   pollAllPending,
+  combinePatentStatus,
+  listPassesForDepartment,
+  splitPatentDoc,
+  type CheckStatus,
 } from './newdb-check.service.js';
 
 const mockPost = newdbBaseService.post as Mock;
@@ -222,6 +226,24 @@ const completePatent = {
   requestId: 'req-ok',
   results: { patent_msk: { result: { data: [{ status: 'valid', message: 'ok' }] } } },
 };
+
+/**
+ * Пропуск с полным набором данных для федерального патента.
+ * Форматы — как в проде: патент «77 №2400123456», бланк «ФМ1234567».
+ */
+const federalPass = {
+  ...basePass,
+  passport_series_number: 'FA7726115',
+  citizenship: 'Узбекистан',
+  patent_number: '77 №2400123456',
+  patent_blank_number: 'ФМ1234567',
+};
+
+const completeFederal = (docStatus: string) => ({
+  state: 'complete',
+  requestId: 'req-fed',
+  results: { foreign_patent: { result: { data: [{ doc_status: docStatus }] } } },
+});
 
 describe('runChecksForPass — что уходит (и не уходит) провайдеру', () => {
   it('РКЛ для гражданства «Россия»: внешний вызов НЕ выполняется, статус not_applicable', async () => {
@@ -464,5 +486,241 @@ describe('pollAllPending', () => {
     const summary = await pollAllPending();
     expect(summary).toEqual({ updated: 0, stillPending: 0, errors: 0, skipped: 0 });
     expect(mockPost).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Федеральный патент (foreign_patent) ────────────────────────────────────
+
+describe('splitPatentDoc — форматы патента/бланка из прода', () => {
+  it('патент «77 №2400123456»: серия = код региона, № в серию не попадает', () => {
+    expect(splitPatentDoc('77 №2400123456')).toEqual({ seria: '77', number: '2400123456' });
+  });
+  it('бланк «ФМ1234567»: кириллическая серия сохраняется (не латинизируется)', () => {
+    expect(splitPatentDoc('ФМ1234567')).toEqual({ seria: 'ФМ', number: '1234567' });
+  });
+  it('бланк «АА 9999999» с пробелом', () => {
+    expect(splitPatentDoc('АА 9999999')).toEqual({ seria: 'АА', number: '9999999' });
+  });
+  it('бланк из одних цифр: серии нет', () => {
+    expect(splitPatentDoc('7654321')).toEqual({ seria: '', number: '7654321' });
+  });
+  it('пусто/null → пустые поля', () => {
+    expect(splitPatentDoc(null)).toEqual({ seria: '', number: '' });
+    expect(splitPatentDoc('  ')).toEqual({ seria: '', number: '' });
+  });
+});
+
+describe('interpretNewdbResponse — foreign_patent (doc_status)', () => {
+  const interp = (docStatus: string) => interpretNewdbResponse('patent', completeFederal(docStatus));
+
+  it('«Действителен» → clean', () => {
+    expect(interp('Действителен').status).toBe('clean');
+  });
+  it('«Оформлен» → clean', () => {
+    expect(interp('Оформлен').status).toBe('clean');
+  });
+
+  // Регрессия: в первой реализации позитивная проверка includes('действ') стояла
+  // ПЕРВОЙ, поэтому «не действителен» ложно становился clean.
+  it('«Не действителен» → invalid (негатив проверяется раньше позитива)', () => {
+    expect(interp('Не действителен').status).toBe('invalid');
+  });
+  it('«Недействителен» → invalid', () => {
+    expect(interp('Недействителен').status).toBe('invalid');
+  });
+  it('«Аннулирован» → invalid', () => {
+    expect(interp('Аннулирован').status).toBe('invalid');
+  });
+  it('«Не найден» → invalid', () => {
+    expect(interp('Не найден').status).toBe('invalid');
+  });
+
+  it('неизвестная формулировка → error, сырьё в summary (не «чисто» и не ❌)', () => {
+    const r = interp('Ожидает решения');
+    expect(r.status).toBe('error');
+    expect(r.summary).toBe('Ожидает решения');
+    expect(r.providerStatus).toBe('Ожидает решения');
+  });
+  it('пустой doc_status → error', () => {
+    expect(interp('').status).toBe('error');
+  });
+
+  it('queued → pending (async как у остальных методов)', () => {
+    const r = interpretNewdbResponse('patent', { state: 'queued', requestId: 'req-fed' });
+    expect(r.status).toBe('pending');
+    expect(r.requestId).toBe('req-fed');
+  });
+
+  // Ключевое: наш check_type 'patent' ↔ метод провайдера foreign_patent.
+  it('результат читается из results.foreign_patent, а не results.patent', () => {
+    const wrongKey = { state: 'complete', results: { patent: { result: { data: [{ doc_status: 'Действителен' }] } } } };
+    expect(interpretNewdbResponse('patent', wrongKey).status).toBe('error');
+    expect(interpretNewdbResponse('patent', completeFederal('Действителен')).status).toBe('clean');
+  });
+});
+
+describe('runChecksForPass — федеральный патент', () => {
+  it('в body уходят паспорт + номер патента + бланк + dob (YYYY-MM-DD)', async () => {
+    mockPassFlow(federalPass);
+    mockPost.mockResolvedValue(completeFederal('Действителен'));
+    const results = await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+
+    const body = mockPost.mock.calls[0][0];
+    expect(body.params.method).toBe('foreign_patent');
+    expect(body.params.doctype).toBe('patent');
+    expect(body.params.id_doc_seria).toBe('FA');
+    expect(body.params.id_doc_number).toBe('7726115');
+    expect(body.params.doc_seria).toBe('77');          // код региона до «№»
+    expect(body.params.doc_number).toBe('2400123456');
+    expect(body.params.blank_seria).toBe('ФМ');        // кириллица НЕ латинизируется
+    expect(body.params.blank_number).toBe('1234567');
+    expect(body.params.dob).toBe('1992-11-07');
+    expect(results[0].status).toBe('clean');
+  });
+
+  it('нет номера патента: платного вызова и markSent нет', async () => {
+    mockPassFlow({ ...federalPass, patent_number: null });
+    const results = await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(results[0].status).toBe('error');
+    expect(results[0].error_message).toContain('номер патента');
+    // request_sent в результате читается из UPDATE...RETURNING (в моке всегда true),
+    // поэтому проверяем факт: markSent не выставлял флаг.
+    const markSentCall = mockExecute.mock.calls.find(([sql]) => String(sql).includes('SET request_sent = true'));
+    expect(markSentCall).toBeUndefined();
+  });
+
+  it('нет бланка патента: отдельная ошибка, платного вызова нет', async () => {
+    mockPassFlow({ ...federalPass, patent_blank_number: null });
+    const results = await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(results[0].status).toBe('error');
+    expect(results[0].error_message).toContain('бланк патента');
+    expect(results[0].error_message).not.toContain('номер патента');
+  });
+
+  it('гражданство РФ → not_applicable, вызова нет', async () => {
+    mockPassFlow({ ...federalPass, citizenship: 'Россия' });
+    const results = await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(results[0].status).toBe('not_applicable');
+  });
+
+  it('аудит: INSERT сохраняет и patent_number, и patent_blank_number', async () => {
+    mockPassFlow(federalPass);
+    mockPost.mockResolvedValue(completeFederal('Действителен'));
+    await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+
+    const insert = mockQueryOne.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO newdb_checks'));
+    expect(insert).toBeTruthy();
+    expect(String(insert![0])).toContain('patent_blank_number');
+    expect(insert![1]).toContain('77 №2400123456'); // patent_number
+    expect(insert![1]).toContain('ФМ1234567');      // patent_blank_number
+  });
+
+  it('dispatch: тип patent идёт в foreign_patent, а не в patent_msk', async () => {
+    mockPassFlow(federalPass);
+    mockPost.mockResolvedValue(completeFederal('Действителен'));
+    await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+    expect(mockPost.mock.calls[0][0].params.method).toBe('foreign_patent');
+  });
+});
+
+describe('async-цикл для patent: queued → polling → complete', () => {
+  it('поллер по check_type=patent опрашивает и завершает через results.foreign_patent', async () => {
+    // Первый ответ — queued: запись остаётся pending с сохранённым requestId.
+    mockPassFlow(federalPass);
+    mockPost.mockResolvedValue({ state: 'queued', requestId: 'req-fed', params: { method: 'foreign_patent' } });
+    const first = await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+    expect(first[0].status).toBe('pending');
+    expect(kickNewdbPendingPoller).toHaveBeenCalled();
+
+    // Поллер добирает результат: важно, что check_type='patent' резолвится в
+    // foreign_patent — иначе complete-ответ не распарсился бы.
+    mockQuery.mockResolvedValue([{
+      id: CHECK_ID,
+      check_type: 'patent',
+      newdb_request_id: 'req-fed',
+      saved_raw: { state: 'queued', params: { method: 'foreign_patent' }, requestId: 'req-fed' },
+    }]);
+    mockPost.mockResolvedValue(completeFederal('Действителен'));
+
+    const summary = await pollAllPending();
+    expect(summary.updated).toBe(1);
+    const finalUpdate = mockExecute.mock.calls.find(([sql]) => String(sql).includes('raw_response'));
+    expect(finalUpdate![1]).toContain('clean');
+  });
+
+  it('SQL-выборки поллера включают тип patent', async () => {
+    mockQuery.mockResolvedValue([]);
+    await pollAllPending();
+    const selects = mockQuery.mock.calls.map(([sql]) => String(sql));
+    expect(selects.some(s => s.includes("'patent'"))).toBe(true);
+    const timeouts = mockExecute.mock.calls.map(([sql]) => String(sql));
+    expect(timeouts.some(s => s.includes("'patent'"))).toBe(true);
+  });
+});
+
+// ─── Сводный статус патента ─────────────────────────────────────────────────
+
+describe('combinePatentStatus', () => {
+  const cases: Array<[CheckStatus | null, CheckStatus | null, CheckStatus | null, string]> = [
+    ['invalid', 'clean', 'clean', 'кейс Нормуминова: Москва истекла, РФ жив'],
+    ['clean', 'invalid', 'clean', 'clean выигрывает с любой стороны'],
+    ['invalid', 'error', 'error', 'РФ неизвестен → НЕ красим красным'],
+    ['invalid', 'found', 'error', 'found = неизвестная формулировка (старые строки)'],
+    ['invalid', null, null, 'РФ не проверялся → проверено не полностью'],
+    ['invalid', 'not_applicable', 'invalid', 'все применимые завершены и отрицательны'],
+    ['invalid', 'invalid', 'invalid', 'оба отрицательны'],
+    ['pending', 'invalid', 'pending', 'ещё может стать clean'],
+    ['clean', 'pending', 'clean', 'clean важнее pending'],
+    ['not_applicable', null, null, 'не проверялось'],
+    ['not_applicable', 'not_applicable', 'not_applicable', 'патент не требуется'],
+    [null, null, null, 'не проверялось вовсе'],
+  ];
+
+  it.each(cases)('msk=%s + rf=%s → %s (%s)', (msk, rf, expected) => {
+    expect(combinePatentStatus(msk, rf)).toBe(expected);
+  });
+
+  it('никогда не даёт invalid, если есть неопределённость', () => {
+    for (const unknown of ['error', 'found', null] as (CheckStatus | null)[]) {
+      expect(combinePatentStatus('invalid', unknown)).not.toBe('invalid');
+    }
+  });
+});
+
+describe('listPassesForDepartment — сводный статус подключён', () => {
+  it('строка отдаёт overall + at/summary от источника, определившего итог', async () => {
+    mockQuery.mockResolvedValue([{
+      id: 'p1',
+      pass_number: '2065',
+      holder_name: 'Нормуминов Ойбек Бахтиярович',
+      citizenship: 'Узбекистан',
+      passport_series_number: 'FA7726115',
+      patent_number: '77 2400123456',
+      has_residence_permit: false,
+      last_rkl_status: 'clean',
+      last_rkl_at: '2026-07-15T08:00:00Z',
+      last_rkl_summary: 'ok',
+      last_patent_msk_status: 'invalid',
+      last_patent_msk_at: '2026-07-15T08:10:00Z',
+      last_patent_msk_summary: 'истёк 28.03.2026',
+      last_patent_rf_status: 'clean',
+      last_patent_rf_at: '2026-07-15T08:20:00Z',
+      last_patent_rf_summary: 'Действителен',
+    }]);
+
+    const [row] = await listPassesForDepartment('dep-1');
+    expect(row.last_patent_overall_status).toBe('clean');
+    // at/summary — от РФ (он определил итог), а не от Москвы.
+    expect(row.last_patent_overall_at).toBe('2026-07-15T08:20:00Z');
+    expect(row.last_patent_overall_summary).toBe('Действителен');
+  });
+
+  it('запрос содержит LATERAL по check_type=patent', async () => {
+    mockQuery.mockResolvedValue([]);
+    await listPassesForDepartment('dep-1');
+    expect(String(mockQuery.mock.calls[0][0])).toContain("c.check_type = 'patent'");
   });
 });

@@ -25,7 +25,7 @@ const STATUS_LABEL: Record<CheckStatus, string> = {
 const StatusIcon: FC<{ kind: CheckType; status: CheckStatus | null; at: string | null; summary: string | null }> = ({ kind, status, at, summary }) => {
   if (!status) return <span className={styles.badgeMuted} aria-label="Не проверялось">—</span>;
   const date = at ? new Date(at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '';
-  const label = kind === 'patent_msk' && status === 'clean' ? 'Патент действителен' : STATUS_LABEL[status];
+  const label = kind !== 'rkl' && status === 'clean' ? 'Патент действителен' : STATUS_LABEL[status];
   let title = summary ? `${label} · ${summary}` : label;
 
   let icon;
@@ -45,6 +45,41 @@ const StatusIcon: FC<{ kind: CheckType; status: CheckStatus | null; at: string |
       {date ? <span className={styles.statusDate}>{date}</span> : null}
     </span>
   );
+};
+
+// Все проверки, которые запускаем и ждём. Один источник — иначе легко забыть
+// новый тип в одном из мест (pending-опрос, кнопки, «без результата»).
+const RUN_TYPES: CheckType[] = ['rkl', 'patent_msk', 'patent'];
+
+const CHECK_LABEL: Record<CheckType, string> = {
+  rkl: 'РКЛ',
+  patent_msk: 'Патент Мск',
+  patent: 'Патент РФ',
+};
+
+/** Есть ли у строки хоть одна проверка «в обработке». */
+const hasPending = (p: CheckPassRow): boolean =>
+  p.last_rkl_status === 'pending'
+  || p.last_patent_msk_status === 'pending'
+  || p.last_patent_rf_status === 'pending';
+
+/** Хоть одна проверка ни разу не запускалась. */
+const hasNoResult = (p: CheckPassRow): boolean =>
+  p.last_rkl_status === null
+  || p.last_patent_msk_status === null
+  || p.last_patent_rf_status === null;
+
+// Тултип сводной колонки: показываем ОБЕ стороны, иначе непонятно, почему итог
+// зелёный при красной Москве (частый кейс: московский патент истёк, федеральный жив).
+const overallPatentTooltip = (p: CheckPassRow): string => {
+  const side = (label: string, status: CheckStatus | null, summary: string | null): string => {
+    if (!status) return `${label}: не проверялся`;
+    return `${label}: ${summary || STATUS_LABEL[status]}`;
+  };
+  return [
+    side('Москва', p.last_patent_msk_status, p.last_patent_msk_summary),
+    side('РФ', p.last_patent_rf_status, p.last_patent_rf_summary),
+  ].join(' · ');
 };
 
 export const ChecksPage: FC = () => {
@@ -71,19 +106,14 @@ export const ChecksPage: FC = () => {
     staleTime: 15_000,
     // Пока есть «В обработке» — бэкенд-поллер добирает результаты сам;
     // перечитываем список, чтобы часики исчезали без ручного «Обновить».
-    refetchInterval: query =>
-      (query.state.data ?? []).some(
-        p => p.last_rkl_status === 'pending' || p.last_patent_msk_status === 'pending',
-      )
-        ? 15_000
-        : false,
+    refetchInterval: query => ((query.state.data ?? []).some(hasPending) ? 15_000 : false),
   });
 
   const runOne = useMutation({
-    mutationFn: (passId: string) => checksService.run(passId, ['rkl', 'patent_msk'] as CheckType[]),
+    mutationFn: (passId: string) => checksService.run(passId, RUN_TYPES),
     onMutate: (passId) => setRunningRow(passId),
     onSuccess: (results) => {
-      const summary = results.map(r => `${r.check_type === 'rkl' ? 'РКЛ' : 'Патент Мск'}: ${STATUS_LABEL[r.status]}`).join(' · ');
+      const summary = results.map(r => `${CHECK_LABEL[r.check_type]}: ${STATUS_LABEL[r.status]}`).join(' · ');
       showToast('success', summary);
       queryClient.invalidateQueries({ queryKey: ['newdb', 'passes', orgId] });
     },
@@ -92,7 +122,7 @@ export const ChecksPage: FC = () => {
   });
 
   const runBulk = useMutation({
-    mutationFn: (ids: string[]) => checksService.runBulk(ids, ['rkl', 'patent_msk'] as CheckType[]),
+    mutationFn: (ids: string[]) => checksService.runBulk(ids, RUN_TYPES),
     onSuccess: ({ items, skipped }) => {
       const errors = items.filter(i => i.error).length;
       let msg = `Проверено: ${items.length}`;
@@ -149,9 +179,7 @@ export const ChecksPage: FC = () => {
 
   const passes = passesQuery.data ?? [];
   const orgs = orgsQuery.data ?? [];
-  const pendingIds = passes
-    .filter(p => p.last_rkl_status === 'pending' || p.last_patent_msk_status === 'pending')
-    .map(p => p.id);
+  const pendingIds = passes.filter(hasPending).map(p => p.id);
 
   const toggleRow = (id: string) => setSelected(prev => {
     const next = new Set(prev);
@@ -166,7 +194,7 @@ export const ChecksPage: FC = () => {
   // «Без результата»: хотя бы один из активных статусов (РКЛ / Патент Мск)
   // реально пуст (null). pending считается результатом — не переотмечаем.
   const selectWithoutResult = () => {
-    const ids = passes.filter(p => p.last_rkl_status === null || p.last_patent_msk_status === null).map(p => p.id);
+    const ids = passes.filter(hasNoResult).map(p => p.id);
     setSelected(new Set(ids.slice(0, BULK_LIMIT)));
     if (ids.length > BULK_LIMIT) showToast('info', `Отмечено первых ${BULK_LIMIT} (лимит за один прогон)`);
   };
@@ -261,8 +289,9 @@ export const ChecksPage: FC = () => {
                     <th>Гражданство</th>
                     <th>Паспорт</th>
                     <th>РКЛ</th>
+                    <th>Патент</th>
                     <th>Патент Мск</th>
-                    <th>Патент МО</th>
+                    <th>Патент РФ</th>
                     <th />
                   </tr>
                 </thead>
@@ -277,8 +306,16 @@ export const ChecksPage: FC = () => {
                       <td>{p.citizenship ?? '—'}</td>
                       <td className={styles.mono}>{p.passport_series_number ?? '—'}</td>
                       <td><StatusIcon kind="rkl" status={p.last_rkl_status} at={p.last_rkl_at} summary={p.last_rkl_summary} /></td>
+                      <td>
+                        <StatusIcon
+                          kind="patent_msk"
+                          status={p.last_patent_overall_status}
+                          at={p.last_patent_overall_at}
+                          summary={overallPatentTooltip(p)}
+                        />
+                      </td>
                       <td><StatusIcon kind="patent_msk" status={p.last_patent_msk_status} at={p.last_patent_msk_at} summary={p.last_patent_msk_summary} /></td>
-                      <td><span className={styles.badgeMuted} title="Требуется ИНН физлица (в системе не собирается)">—</span></td>
+                      <td><StatusIcon kind="patent" status={p.last_patent_rf_status} at={p.last_patent_rf_at} summary={p.last_patent_rf_summary} /></td>
                       <td>
                         <div className={styles.rowActions}>
                           <button
@@ -288,7 +325,7 @@ export const ChecksPage: FC = () => {
                           >
                             {runningRow === p.id ? <Loader2 size={14} className={styles.spin} /> : 'Проверить'}
                           </button>
-                          {(p.last_rkl_status === 'pending' || p.last_patent_msk_status === 'pending') && (
+                          {hasPending(p) && (
                             <button
                               className={styles.iconBtn}
                               title="Обновить результат (по requestId, без списания)"
@@ -332,9 +369,9 @@ const ConfirmBulkModal: FC<{ count: number; pending: boolean; onCancel: () => vo
       <div className={styles.modalSm}>
         <div className={styles.modalHeader}><AlertTriangle size={16} /> <span>Подтверждение</span></div>
         <p className={styles.confirmText}>
-          Будет проверено <b>{count}</b> сотрудников — до <b>{count * 2}</b> внешних запросов
-          (РКЛ + Патент по каждому; часть может стать «не требуется» или отсеяться валидацией).
-          Это платная операция. Продолжить?
+          Будет проверено <b>{count}</b> сотрудников — до <b>{count * RUN_TYPES.length}</b> внешних
+          запросов (по каждому: {RUN_TYPES.map(t => CHECK_LABEL[t]).join(' + ')}; часть может стать
+          «не требуется» или отсеяться валидацией). Это платная операция. Продолжить?
         </p>
         <div className={styles.confirmActions}>
           <button className={styles.btnSecondary} disabled={pending} onClick={onCancel}>Отмена</button>
