@@ -153,16 +153,20 @@ export const LeaveRequestsManagePage: FC = () => {
   const showGroupHeaders = scope === 'all' ? grouped.length >= 1 : grouped.length > 1;
 
   useEffect(() => {
-    // При первой загрузке (или смене фильтра) — если групп > 2, свернуть все,
-    // иначе развернуть. Не трогаем явно изменённые пользователем состояния
-    // при добавлении/удалении карточек — пересчитываем только при смене ключей.
-    if (grouped.length > 2) {
-      setCollapsedDepts(new Set(grouped.map(([key]) => key)));
-    } else {
-      setCollapsedDepts(new Set());
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, grouped.length]);
+    // Дефолтное сворачивание (>2 групп — свернуть все) — только при смене
+    // данных: загрузка списка, переключатель «Ожидающие/Все» (входит в
+    // baseRequests). Клиентские фильтры (тип/отдел/поиск) состояние
+    // сворачивания не трогают — пользователь управляет им сам.
+    const keys = new Set(baseRequests.map(groupKeyOf));
+    setCollapsedDepts(keys.size > 2 ? keys : new Set());
+  }, [baseRequests]);
+
+  const queryActive = query !== '';
+  useEffect(() => {
+    // Начало поиска раскрывает группы, чтобы совпадения были видны;
+    // свернуть обратно можно вручную — доввод символов не раскрывает повторно.
+    if (queryActive) setCollapsedDepts(new Set());
+  }, [queryActive]);
 
   const toggleDept = (key: string) => {
     setCollapsedDepts(prev => {
@@ -574,9 +578,7 @@ export const LeaveRequestsManagePage: FC = () => {
         ) : (
           <div className="lrm-list">
             {grouped.map(([department, items]) => {
-              // При активном поиске/фильтрах группы раскрыты принудительно,
-              // иначе совпадения прячутся за свёрнутыми по умолчанию шапками.
-              const isCollapsed = !isFiltering && collapsedDepts.has(department);
+              const isCollapsed = collapsedDepts.has(department);
               const isDirectReports = department === DIRECT_REPORTS_KEY;
               const label = isDirectReports ? DIRECT_REPORTS_TITLE : department;
               return (

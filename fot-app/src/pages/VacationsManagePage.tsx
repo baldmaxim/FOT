@@ -104,12 +104,19 @@ export const VacationsManagePage: FC = () => {
   }, [filtered]);
 
   useEffect(() => {
-    if (grouped.length > 2) {
-      setCollapsedDepts(new Set(grouped.map(([key]) => key)));
-    } else {
-      setCollapsedDepts(new Set());
-    }
-  }, [grouped.length]);
+    // Дефолтное сворачивание (>2 групп — свернуть все) — только при смене
+    // данных: загрузка списка, под-вкладка «Не ознакомлен/Ознакомлен» (входит
+    // в ackFiltered). Поиск/фильтр по отделам состояние сворачивания не трогают.
+    const keys = new Set(ackFiltered.map(deptKeyOf));
+    setCollapsedDepts(keys.size > 2 ? keys : new Set());
+  }, [ackFiltered]);
+
+  const queryActive = query !== '';
+  useEffect(() => {
+    // Начало поиска раскрывает группы, чтобы совпадения были видны;
+    // свернуть обратно можно вручную — доввод символов не раскрывает повторно.
+    if (queryActive) setCollapsedDepts(new Set());
+  }, [queryActive]);
 
   const toggleDept = (key: string) => {
     setCollapsedDepts(prev => {
@@ -283,9 +290,7 @@ export const VacationsManagePage: FC = () => {
             ) : (
               <div className="lrm-list">
                 {grouped.map(([department, items]) => {
-              // При активном поиске/фильтре группы раскрыты принудительно,
-              // иначе совпадения прячутся за свёрнутыми по умолчанию шапками.
-              const isCollapsed = !isFiltering && collapsedDepts.has(department);
+              const isCollapsed = collapsedDepts.has(department);
               return (
                 <div
                   key={department}
