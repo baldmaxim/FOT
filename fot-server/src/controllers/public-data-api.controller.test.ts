@@ -1,9 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
-const { pgQuery, getKeyTables } = vi.hoisted(() => ({
+const {
+  pgQuery,
+  getKeyTables,
+  fetchTimesheetDataForEmployees,
+  listScopedMembersByDepartment,
+  resolveTimesheetPeriodRange,
+} = vi.hoisted(() => ({
   pgQuery: vi.fn(),
   getKeyTables: vi.fn(),
+  fetchTimesheetDataForEmployees: vi.fn(),
+  listScopedMembersByDepartment: vi.fn(),
+  resolveTimesheetPeriodRange: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -17,13 +26,25 @@ vi.mock('../services/data-api-key.service.js', () => ({
 }));
 
 vi.mock('../services/timesheet-export.service.js', () => ({
-  fetchTimesheetDataForEmployees: vi.fn(),
+  fetchTimesheetDataForEmployees,
 }));
 
 vi.mock('../services/timesheet-department-assignments.service.js', () => ({
-  listScopedMembersByDepartment: vi.fn(),
+  listScopedMembersByDepartment,
   resolveTimesheetDateRange: vi.fn(),
-  resolveTimesheetPeriodRange: vi.fn(),
+  resolveTimesheetPeriodRange,
+}));
+
+vi.mock('../services/schedule.service.js', () => ({
+  getDayNormHours: vi.fn(() => 9),
+  getFullDayThresholdHoursForDate: vi.fn(() => 8),
+  getScheduleForDate: vi.fn(() => ({
+    work_start: '09:00:00',
+    work_end: '19:00:00',
+    work_hours: 9,
+    lunch_minutes: 60,
+  })),
+  isWorkingDay: vi.fn(() => true),
 }));
 
 import { publicDataApiController } from './public-data-api.controller.js';
@@ -172,5 +193,92 @@ describe('publicDataApiController.getEmployeeEvents', () => {
 
     expect(res.statusCode).toBe(404);
     expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('publicDataApiController.getDepartmentTimesheet', () => {
+  beforeEach(() => {
+    pgQuery.mockReset();
+    getKeyTables.mockReset();
+    fetchTimesheetDataForEmployees.mockReset();
+    listScopedMembersByDepartment.mockReset();
+    resolveTimesheetPeriodRange.mockReset();
+    getKeyTables.mockResolvedValue([{ table_name: 'employees', allowed_fields: ['id'] }]);
+    resolveTimesheetPeriodRange.mockReturnValue({
+      year: 2026,
+      month: 7,
+      daysInMonth: 31,
+      startDate: '2026-07-01',
+      endDate: '2026-07-01',
+    });
+  });
+
+  it('возвращает рассчитанный план дня и метаданные корректировки', async () => {
+    const schedule = {
+      schedule_id: 'schedule-1',
+      name: 'Основной',
+      schedule_type: 'office',
+      source: 'employee',
+    };
+    pgQuery
+      .mockResolvedValueOnce([{ id: '11111111-1111-1111-1111-111111111111', name: 'Отдел' }])
+      .mockResolvedValueOnce([{ id: 42, tab_number: 'T-42' }]);
+    listScopedMembersByDepartment.mockResolvedValue(new Map([
+      [42, '11111111-1111-1111-1111-111111111111'],
+    ]));
+    fetchTimesheetDataForEmployees.mockResolvedValue({
+      employees: [{ id: 42, full_name: 'Иванов Иван', position_id: null, sigur_employee_id: 7 }],
+      dataMap: new Map([[42, new Map([['2026-07-01', {
+        status: 'work', hours: 9, corrected: true, hoursOverridden: true,
+      }]])]]),
+      dailySchedulesMap: new Map([[42, new Map([['2026-07-01', schedule]])]]),
+      calendarMonth: null,
+      entries: [{
+        employee_id: 42,
+        work_date: '2026-07-01',
+        reason: 'Исправлены часы',
+        corrected_by_name: 'Руководитель',
+        corrected_at: '2026-07-01T18:00:00.000Z',
+        approval_status: 'approved',
+        source_type: 'manual',
+      }],
+      posMap: new Map(),
+    });
+
+    const res = makeRes();
+    await publicDataApiController.getDepartmentTimesheet(makeReq({
+      department_id: '11111111-1111-1111-1111-111111111111',
+      month: '2026-07',
+      half: 'FULL',
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    const payload = res.payload as { departments: Array<{ employees: Array<Record<string, unknown>> }> };
+    expect(payload.departments[0].employees[0]).toMatchObject({
+      days: {
+        '2026-07-01': {
+          corrected: true,
+          correction: {
+            reason: 'Исправлены часы',
+            corrected_by_name: 'Руководитель',
+            approval_status: 'approved',
+          },
+        },
+      },
+      plans: {
+        '2026-07-01': {
+          schedule_id: 'schedule-1',
+          schedule_name: 'Основной',
+          schedule_type: 'office',
+          schedule_source: 'employee',
+          is_working_day: true,
+          planned_hours: 9,
+          full_day_threshold_hours: 8,
+          work_start: '09:00:00',
+          work_end: '19:00:00',
+          lunch_minutes: 60,
+        },
+      },
+    });
   });
 });

@@ -7,6 +7,12 @@ import {
   type TimesheetExportRangeArg,
 } from '../services/timesheet-export.service.js';
 import {
+  getDayNormHours,
+  getFullDayThresholdHoursForDate,
+  getScheduleForDate,
+  isWorkingDay,
+} from '../services/schedule.service.js';
+import {
   listScopedMembersByDepartment,
   resolveTimesheetDateRange,
   resolveTimesheetPeriodRange,
@@ -24,6 +30,26 @@ interface IDayValue {
   hours: number;
   corrected: boolean;
   hours_overridden: boolean;
+  correction: {
+    reason: string | null;
+    corrected_by_name: string | null;
+    corrected_at: string | null;
+    approval_status: string | null;
+    source_type: string | null;
+  } | null;
+}
+
+interface IDayPlanValue {
+  schedule_id: string;
+  schedule_name: string | null;
+  schedule_type: string;
+  schedule_source: string;
+  is_working_day: boolean;
+  planned_hours: number;
+  full_day_threshold_hours: number;
+  work_start: string | null;
+  work_end: string | null;
+  lunch_minutes: number;
 }
 
 function parsePositiveInt(value: unknown): number | null {
@@ -44,6 +70,17 @@ function getInclusiveRangeDays(from: string, to: string): number {
   const end = Date.parse(`${to}T00:00:00.000Z`);
   if (!Number.isFinite(start) || !Number.isFinite(end)) return Number.POSITIVE_INFINITY;
   return Math.floor((end - start) / 86_400_000) + 1;
+}
+
+function listIsoDates(from: string, to: string): string[] {
+  const dates: string[] = [];
+  const cursor = new Date(`${from}T00:00:00.000Z`);
+  const end = new Date(`${to}T00:00:00.000Z`);
+  while (cursor <= end) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
 }
 
 export const publicDataApiController = {
@@ -268,6 +305,10 @@ export const publicDataApiController = {
         : [];
       const tabById = new Map(tabRows.map(r => [r.id, r.tab_number]));
       const empById = new Map(bulk.employees.map(e => [e.id, e]));
+      const entryByEmployeeDate = new Map(
+        bulk.entries.map(entry => [`${entry.employee_id}|${entry.work_date}`, entry]),
+      );
+      const periodDates = listIsoDates(startDate, endDate);
 
       const departments = deptIds.map(deptId => {
         const empIds = empIdsByDept.get(deptId) ?? [];
@@ -275,17 +316,49 @@ export const publicDataApiController = {
           const e = empById.get(id);
           const dayMap = bulk.dataMap.get(id);
           const days: Record<string, IDayValue> = {};
+          const plans: Record<string, IDayPlanValue> = {};
           let total = 0;
           if (dayMap) {
             for (const [date, v] of dayMap) {
+              const entry = entryByEmployeeDate.get(`${id}|${date}`);
               days[date] = {
                 status: v.status,
                 hours: v.hours,
                 corrected: Boolean(v.corrected),
                 hours_overridden: Boolean(v.hoursOverridden),
+                correction: v.corrected ? {
+                  reason: entry?.reason ?? entry?.notes ?? null,
+                  corrected_by_name: entry?.corrected_by_name ?? null,
+                  corrected_at: entry?.corrected_at ?? null,
+                  approval_status: entry?.approval_status ?? null,
+                  source_type: entry?.source_type ?? null,
+                } : null,
               };
               if (typeof v.hours === 'number') total += v.hours;
             }
+          }
+          const employeeSchedules = bulk.dailySchedulesMap.get(id);
+          for (const date of periodDates) {
+            const schedule = employeeSchedules?.get(date);
+            if (!schedule) continue;
+            const [dateYear, dateMonth, dateDay] = date.split('-').map(Number);
+            const dateObject = new Date(dateYear, dateMonth - 1, dateDay);
+            const isWorking = isWorkingDay(schedule, dateObject, bulk.calendarMonth);
+            const daySchedule = getScheduleForDate(schedule, dateObject);
+            plans[date] = {
+              schedule_id: schedule.schedule_id,
+              schedule_name: schedule.name ?? null,
+              schedule_type: schedule.schedule_type,
+              schedule_source: schedule.source,
+              is_working_day: isWorking,
+              planned_hours: getDayNormHours(schedule, dateObject, bulk.calendarMonth),
+              full_day_threshold_hours: isWorking
+                ? getFullDayThresholdHoursForDate(schedule, dateObject, bulk.calendarMonth)
+                : 0,
+              work_start: isWorking ? daySchedule.work_start : null,
+              work_end: isWorking ? daySchedule.work_end : null,
+              lunch_minutes: isWorking ? daySchedule.lunch_minutes : 0,
+            };
           }
           return {
             id,
@@ -295,6 +368,7 @@ export const publicDataApiController = {
             position: e?.position_id ? (bulk.posMap.get(e.position_id) ?? null) : null,
             total_hours: Math.round(total * 100) / 100,
             days,
+            plans,
           };
         });
         return { id: deptId, name: deptNameById.get(deptId) ?? null, employees };
