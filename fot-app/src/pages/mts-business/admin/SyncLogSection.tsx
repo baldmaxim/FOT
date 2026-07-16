@@ -1,6 +1,6 @@
 import { type FC, useState } from 'react';
 import { useMtsBusinessSyncLogRuns, useMtsBusinessSyncLogEntries } from '../../../hooks/useMtsBusinessSyncLog';
-import { type IMtsSyncLogEntry, type IMtsSyncRun } from '../../../services/mtsBusinessSyncLogService';
+import { mtsBusinessSyncLogService, type IMtsSyncLogEntry, type IMtsSyncRun } from '../../../services/mtsBusinessSyncLogService';
 import { copyTextToClipboard } from '../../../utils/clipboard';
 import { fmtLast, fmtPhone } from '../mtsBusinessFormat';
 import pageStyles from '../MtsBusinessPage.module.css';
@@ -50,20 +50,24 @@ const entryText = (e: IMtsSyncLogEntry): string => [
   e.message + (entryDiff(e) ? `: ${entryDiff(e)}` : ''),
 ].filter(Boolean).join(' | ');
 
-const CopyButton: FC<{ getText: () => string; title: string; label?: string }> = ({ getText, title, label }) => {
+const CopyButton: FC<{ getText: () => string | Promise<string>; title: string; label?: string }> = ({ getText, title, label }) => {
   const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
   const onCopy = async (): Promise<void> => {
+    setBusy(true);
     try {
-      await copyTextToClipboard(getText());
+      await copyTextToClipboard(await getText());
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // clipboard недоступен (http/старый браузер) — молча, кнопка не критична
+    } finally {
+      setBusy(false);
     }
   };
   return (
-    <button type="button" className={styles.copyBtn} title={title} onClick={() => { void onCopy(); }}>
-      {copied ? '✓ Скопировано' : (label ?? 'Копировать')}
+    <button type="button" className={styles.copyBtn} title={title} disabled={busy} onClick={() => { void onCopy(); }}>
+      {copied ? '✓ Скопировано' : busy ? '…' : (label ?? 'Копировать')}
     </button>
   );
 };
@@ -137,6 +141,35 @@ export const SyncLogSection: FC = () => {
   const list = runs.data?.runs ?? [];
   const total = runs.data?.total ?? 0;
 
+  // Весь видимый лог одним текстом: строка на прогон, у проблемных прогонов —
+  // их записи (подгружаются на клик), в конце — ошибки rolling-конвейера.
+  const copyWholeLog = async (): Promise<string> => {
+    const problemRuns = list.filter(r => r.status !== 'ok');
+    const [entriesByRun, standalone] = await Promise.all([
+      Promise.all(problemRuns.map(async r => {
+        try {
+          const { entries } = await mtsBusinessSyncLogService.listEntries(r.id);
+          return [r.id, entries] as const;
+        } catch {
+          return [r.id, null] as const;
+        }
+      })).then(pairs => new Map(pairs)),
+      mtsBusinessSyncLogService.listEntries('standalone').catch(() => null),
+    ]);
+    const lines: string[] = [];
+    for (const run of list) {
+      lines.push(runHeaderText(run));
+      const entries = entriesByRun.get(run.id);
+      if (entries === null) lines.push('  (записи не загрузились)');
+      for (const e of entries ?? []) lines.push(`  ${entryText(e)}`);
+    }
+    if (standalone && standalone.entries.length > 0) {
+      lines.push('Конвейер выписки — ошибки вне прогонов:');
+      for (const e of standalone.entries) lines.push(`  ${entryText(e)}`);
+    }
+    return lines.join('\n') || 'Лог пуст';
+  };
+
   return (
     <>
       <div className={styles.filters}>
@@ -165,6 +198,13 @@ export const SyncLogSection: FC = () => {
         >
           {expandedId === 'standalone' ? 'Скрыть ошибки конвейера' : 'Ошибки конвейера (вне прогонов)'}
         </button>
+        {list.length > 0 && (
+          <CopyButton
+            getText={copyWholeLog}
+            title="Скопировать весь видимый лог: прогоны + записи проблемных прогонов + ошибки конвейера"
+            label="Скопировать лог"
+          />
+        )}
       </div>
 
       {expandedId === 'standalone' && (
