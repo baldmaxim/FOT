@@ -162,7 +162,9 @@
       "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python build_xlsx.py)",
       "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python -c ' *)",
       "Bash(npx tsc *)",
-      "Bash(echo \"EXIT: $?\")"
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(head -3 /c/Users/Usrr/.claude/projects/c--Users-Usrr-VSCode-Odintsov-FOT/af27118e-cad5-4121-96e1-9711ebad6a4f.jsonl)",
+      "Bash(echo \"EXIT_$?\")"
     ],
     "defaultMode": "bypassPermissions",
     "additionalDirectories": [
