@@ -329,6 +329,8 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
       return;
     }
 
+    await mtsBusinessSyncLogService.closeOrphanRunningRuns('metrics_daily');
+    await mtsBusinessSyncLogService.closeOrphanRunningRuns('catalog_weekly');
     const runLog = await mtsBusinessSyncLogService.startRun({ job: 'metrics_daily', initiator: 'schedule' });
     try {
       await runWithCronMonitor(

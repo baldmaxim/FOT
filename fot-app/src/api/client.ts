@@ -170,7 +170,10 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // Статус непрерывного конвейера опрашивается каждые 30с — ровно на границе
     // max-age=30: без no-cache панель показывала бы прошлый тик.
     || path === '/mts-business/rolling'
-    || path === '/mts-business/personal-data/requests';
+    || path === '/mts-business/personal-data/requests'
+    // Лог синхронизации: у идущего прогона записи подтягиваются каждые 15с,
+    // список прогонов — каждые 30с; max-age=30 показывал бы устаревший лог.
+    || path.startsWith('/mts-business/sync-log');
 };
 
 const refreshSession = async (): Promise<boolean> => {

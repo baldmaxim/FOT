@@ -447,6 +447,9 @@ export async function startRefreshAll(opts: {
   await persistStatus(currentStatus);
 
   console.log(`[mts-biz-refresh-all] старт accounts=${accounts.length} window=${window.dateFrom}..${window.dateTo} initiator=${currentStatus.initiator}`);
+  // Lease наш → другие инстансы refresh-all не гонят: висящие «running»-прогоны
+  // в логе — сироты убитого деплоем процесса, закрываем перед новым стартом.
+  await mtsBusinessSyncLogService.closeOrphanRunningRuns('refresh_all');
   const runLog = await mtsBusinessSyncLogService.startRun({
     job: 'refresh_all',
     initiator: opts.initiator ?? 'manual',
@@ -539,6 +542,8 @@ export async function reconcileInterruptedRefreshAll(): Promise<void> {
     if (owner) {
       await releaseSigurRuntimeLease({ key: LEASE_KEY, owner }).catch(() => undefined);
     }
+    // Прогон убит — его строка в «Логе синхронизации» не должна висеть «выполняется».
+    await mtsBusinessSyncLogService.closeOrphanRunningRuns('refresh_all');
     console.log('[mts-biz-refresh-all] незавершённый прогон помечен прерванным (рестарт сервера)');
   } catch (e) {
     console.error('[mts-biz-refresh-all] reconcile failed:', e instanceof Error ? e.message : 'unknown');

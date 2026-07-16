@@ -247,6 +247,26 @@ class MtsBusinessSyncLogService {
     }
   }
 
+  /**
+   * Закрыть осиротевшие running-прогоны джоба. Вызывается сразу после захвата
+   * lease этого джоба: раз lease взят — никакой другой инстанс этот джоб сейчас
+   * не выполняет, значит все его «running»-прогоны убиты рестартом/деплоем.
+   */
+  async closeOrphanRunningRuns(job: MtsSyncJob): Promise<void> {
+    try {
+      const n = await execute(
+        `UPDATE mts_business_sync_runs
+            SET status = 'interrupted', finished_at = now(),
+                error = COALESCE(error, 'Прерван (рестарт сервера или деплой)')
+          WHERE job = $1 AND status = 'running'`,
+        [job],
+      );
+      if (n > 0) console.warn(`[mts-biz-sync-log] job=${job}: закрыто осиротевших прогонов: ${n}`);
+    } catch (error) {
+      console.error('[mts-biz-sync-log] closeOrphanRunningRuns не удался:', error);
+    }
+  }
+
   /** На старте сервера: зависшие running-прогоны (>2 ч) → interrupted. */
   async reconcileInterruptedRuns(): Promise<void> {
     try {

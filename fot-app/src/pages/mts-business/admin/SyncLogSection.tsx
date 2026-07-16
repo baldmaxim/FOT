@@ -90,8 +90,9 @@ const EntryRow: FC<{ entry: IMtsSyncLogEntry }> = ({ entry }) => {
 };
 
 /** Записи раскрытого прогона (грузятся лениво) + «скопировать все ошибки». */
-const RunEntries: FC<{ runId: string; runHeader: string }> = ({ runId, runHeader }) => {
-  const entries = useMtsBusinessSyncLogEntries(runId);
+const RunEntries: FC<{ runId: string; runHeader: string; runStatus?: string }> = ({ runId, runHeader, runStatus }) => {
+  // У идущего прогона записи прибывают по мере обработки — подтягиваем каждые 15с.
+  const entries = useMtsBusinessSyncLogEntries(runId, runStatus === 'running' ? 15_000 : false);
   const list = entries.data?.entries ?? [];
   const problems = list.filter(e => e.level !== 'info');
   const allText = (): string => [runHeader, ...list.map(entryText)].join('\n');
@@ -99,7 +100,19 @@ const RunEntries: FC<{ runId: string; runHeader: string }> = ({ runId, runHeader
 
   if (entries.isLoading) return <p className={pageStyles.hint}>Загрузка записей…</p>;
   if (entries.isError) return <p className={pageStyles.err}>Не удалось загрузить записи прогона</p>;
-  if (list.length === 0) return <p className={pageStyles.hint}>Записей нет — прогон прошёл без ошибок и изменений данных.</p>;
+  if (list.length === 0) {
+    return (
+      <p className={pageStyles.hint}>
+        {runStatus === 'running'
+          ? 'Записей пока нет — прогон ещё идёт, ошибки и изменения данных появляются по мере обработки.'
+          : runStatus === 'interrupted'
+            ? 'Записей нет — прогон был прерван (рестарт сервера или деплой).'
+            : runId === 'standalone'
+              ? 'Ошибок конвейера нет.'
+              : 'Записей нет — прогон прошёл без ошибок и изменений данных.'}
+      </p>
+    );
+  }
 
   return (
     <div className={styles.entries}>
@@ -247,7 +260,7 @@ export const SyncLogSection: FC = () => {
                 {run.error ? <span className={pageStyles.err}>{run.error}</span> : run.summary}
               </div>
             )}
-            {expanded && <RunEntries runId={run.id} runHeader={runHeaderText(run)} />}
+            {expanded && <RunEntries runId={run.id} runHeader={runHeaderText(run)} runStatus={run.status} />}
           </div>
         );
       })}

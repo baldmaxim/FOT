@@ -11,12 +11,15 @@ export const useMtsBusinessSyncLogRuns = (filters: IMtsSyncRunFilters, enabled: 
   queryKey: getMtsBusinessSyncLogRunsKey(filters),
   queryFn: () => mtsBusinessSyncLogService.listRuns(filters),
   staleTime: 30_000,
+  // Пока какой-то прогон «выполняется» — обновляем список сами (статус/итог).
+  refetchInterval: q => (q.state.data?.runs.some(r => r.status === 'running') ? 30_000 : false),
   enabled,
 });
 
-export const useMtsBusinessSyncLogEntries = (runId: string | null) => useQuery({
+export const useMtsBusinessSyncLogEntries = (runId: string | null, refetchMs: number | false = false) => useQuery({
   queryKey: ['mts-business', 'sync-log', 'entries', runId] as const,
   queryFn: () => mtsBusinessSyncLogService.listEntries(runId as string),
   staleTime: 30_000,
+  refetchInterval: refetchMs,
   enabled: runId != null,
 });
