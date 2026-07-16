@@ -190,10 +190,16 @@ interface IInterpreted {
  * ошибка: помечаем `pending` и сохраняем `requestId` для будущего polling.
  * Только при `state:"complete"` c непустым `results[method]` парсим результат.
  *
- * Финальный `error` (не pending): errors_info (запрос отвергнут валидацией,
- * баланс не списан), явный state:"error", ошибка результата вне restart,
- * complete без данных. При state:"restart" провайдер сам повторяет задачу —
- * остаёмся pending, его ошибку показываем в summary.
+ * Терминальным считаем ТОЛЬКО `complete` (и явный `state:"error"`). Финальный
+ * `error`: errors_info (запрос отвергнут валидацией, баланс не списан),
+ * state:"error", ошибка результата ПРИ complete, complete без данных.
+ *
+ * Почему ошибка в `results` при нетерминальном state — НЕ финал: блок `results`
+ * несёт СВОЙ `taskId` и может относиться к ПРЕДЫДУЩЕЙ задаче. Реальный кейс:
+ * top-level `taskId` новый + `state:"in progress"`, а в `results` лежит старый
+ * провал («Ошибка входа», 500) от прошлой попытки. Раньше это давало
+ * преждевременный `error` поверх живой задачи, и поллер её больше не подбирал.
+ * Поэтому queued / in progress / restart → pending, причина уходит в summary.
  */
 export const interpretNewdbResponse = (method: PollableCheckType, data: any): IInterpreted => {
   const state: string | null = data?.state ?? null;
@@ -212,7 +218,9 @@ export const interpretNewdbResponse = (method: PollableCheckType, data: any): II
   if (state === 'error') {
     return { status: 'error', providerStatus: state, summary: null, requestId, errorMessage: resultError || 'провайдер вернул state=error' };
   }
-  if (resultError && state !== 'restart') {
+  // Ошибка результата финальна ТОЛЬКО при терминальном state: при queued /
+  // in progress / restart блок results может быть от предыдущей задачи.
+  if (resultError && state === 'complete') {
     return { status: 'error', providerStatus: state, summary: null, requestId, errorMessage: `ошибка провайдера: ${resultError}` };
   }
 
@@ -224,8 +232,10 @@ export const interpretNewdbResponse = (method: PollableCheckType, data: any): II
   }
 
   if (state !== 'complete') {
-    // queued / processing / restart / нет результата — ждём (часики), не ошибка.
-    const summary = state === 'restart' && resultError
+    // queued / in progress / restart / нет результата — ждём (часики), не ошибка.
+    // Если в results лежит ошибка прошлой попытки — показываем её как причину
+    // ожидания, но статус остаётся pending (задача провайдера ещё живая).
+    const summary = resultError
       ? `Провайдер повторяет проверку: ${resultError}`
       : 'В обработке (запрос принят)';
     return { status: 'pending', providerStatus: state, summary, requestId, errorMessage: null };

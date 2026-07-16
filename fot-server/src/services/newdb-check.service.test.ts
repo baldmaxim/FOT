@@ -143,13 +143,50 @@ describe('interpretNewdbResponse', () => {
     expect(r.errorMessage).toBeTruthy();
   });
 
-  it('ошибка результата вне restart → финальная ошибка', () => {
+  // Терминальным считаем только complete: при queued/in progress блок results
+  // может относиться к ПРЕДЫДУЩЕЙ задаче, поэтому ошибка в нём — не финал.
+  it('ошибка результата при queued → pending (не финал: задача ещё живая)', () => {
     const r = interpretNewdbResponse('patent_msk', {
       state: 'queued',
       results: { patent_msk: { result: { error: 'internal failure' } } },
     });
+    expect(r.status).toBe('pending');
+    expect(r.errorMessage).toBeNull();
+    expect(r.summary).toContain('internal failure');
+  });
+
+  it('ошибка результата при complete → финальная ошибка', () => {
+    const r = interpretNewdbResponse('patent_msk', {
+      state: 'complete',
+      results: { patent_msk: { result: { error: 'internal failure' } } },
+    });
     expect(r.status).toBe('error');
     expect(r.errorMessage).toContain('internal failure');
+  });
+
+  // Регрессия по Рауфову (1074): провайдер перезапустил задачу — top-level taskId
+  // новый и state='in progress', а в results висит провал ПРЕДЫДУЩЕЙ задачи со
+  // своим taskId. Раньше это закрывалось как error поверх живой задачи, и поллер
+  // её больше не подбирал (опрашивает только pending).
+  it('in progress + протухшая ошибка от прошлой задачи → pending, не error', () => {
+    const r = interpretNewdbResponse('patent', {
+      state: 'in progress',
+      tasks: 4,
+      taskId: 'fa3e8716-6bcd-49ac-b33d-d3a211f36c16',
+      requestId: 'b5a3a183-093b-4fe8-a2fb-4f4a7b7865e5',
+      results: {
+        foreign_patent: {
+          taskId: '604daa4a-366e-4dc9-877b-d0028569367d',
+          result: { error: 'Ошибка входа', status: 500 },
+          dateupdated: '2026-07-16 14:52:31',
+        },
+      },
+    });
+    expect(r.status).toBe('pending');
+    expect(r.providerStatus).toBe('in progress');
+    expect(r.errorMessage).toBeNull();
+    expect(r.summary).toContain('Ошибка входа');
+    expect(r.requestId).toBe('b5a3a183-093b-4fe8-a2fb-4f4a7b7865e5');
   });
 
   it('complete без данных → финальная ошибка, не pending', () => {
@@ -405,6 +442,40 @@ describe('refreshPendingForPass — polling', () => {
     expect(sql).toContain('result_summary');
     expect(params).toEqual(expect.arrayContaining([
       expect.stringContaining('spider system error'),
+    ]));
+  });
+
+  // Прямое закрепление исходного дефекта: поллер получал «in progress» с
+  // ошибкой прошлой задачи и закрывал запись как error — после чего сам её
+  // больше не подбирал (выбирает только pending). Теперь остаётся stillPending.
+  it('stillPending (in progress со старой ошибкой): запись НЕ закрывается', async () => {
+    mockQuery.mockResolvedValue([{
+      id: CHECK_ID,
+      check_type: 'patent',
+      newdb_request_id: 'req-fed',
+      saved_raw: { state: 'queued', params: { method: 'foreign_patent' }, requestId: 'req-fed' },
+    }]);
+    mockPost.mockResolvedValue({
+      state: 'in progress',
+      taskId: 'new-task',
+      requestId: 'req-fed',
+      results: {
+        foreign_patent: {
+          taskId: 'old-task',
+          result: { error: 'Ошибка входа', status: 500 },
+        },
+      },
+    });
+
+    const summary = await refreshPendingForPass(basePass.id);
+
+    expect(summary.stillPending).toBe(1);
+    expect(summary.updated).toBe(0);
+    // UPDATE не должен переводить статус в error.
+    const [sql, params] = mockExecute.mock.calls[0];
+    expect(String(sql)).not.toContain('SET status =');
+    expect(params).toEqual(expect.arrayContaining([
+      expect.stringContaining('Ошибка входа'),
     ]));
   });
 
