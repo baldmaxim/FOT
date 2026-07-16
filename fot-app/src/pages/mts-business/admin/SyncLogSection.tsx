@@ -1,14 +1,15 @@
-import { type FC, useState } from 'react';
-import { useMtsBusinessSyncLogRuns, useMtsBusinessSyncLogEntries } from '../../../hooks/useMtsBusinessSyncLog';
-import { mtsBusinessSyncLogService, type IMtsSyncLogEntry, type IMtsSyncRun } from '../../../services/mtsBusinessSyncLogService';
+import { type FC, useMemo, useState } from 'react';
+import { useMtsBusinessSyncLogRuns, useMtsBusinessSyncLogFeed } from '../../../hooks/useMtsBusinessSyncLog';
+import { type IMtsSyncLogEntry, type IMtsSyncRun } from '../../../services/mtsBusinessSyncLogService';
 import { copyTextToClipboard } from '../../../utils/clipboard';
 import { fmtLast, fmtPhone } from '../mtsBusinessFormat';
 import pageStyles from '../MtsBusinessPage.module.css';
 import styles from './SyncLogSection.module.css';
 
-// «Лог синхронизации»: история прогонов всех фоновых синков МТС (миграция 222).
-// Клик по прогону раскрывает записи (ошибки по номерам, изменения ФИО и т.п.);
-// каждую запись и все ошибки прогона можно скопировать — для отладки ночных сбоев.
+// «Лог синхронизации» — единая лента без фильтров и раскрытий: строки прогонов
+// (старт/итог) и все записи (ошибки по номерам, изменения ФИО/комментариев,
+// персданные) вперемешку по времени, свежие сверху. Кнопка «Скопировать лог»
+// кладёт видимую ленту plain-текстом — чтобы кидать в чат для отладки.
 
 // «refresh_all» — это кнопка «Обновить» на вкладке «Основное» (полный прогон).
 const JOB_LABELS: Record<string, string> = {
@@ -33,7 +34,8 @@ const statusBadgeClass = (status: string): string => {
   return pageStyles.badgeErr;
 };
 
-const PAGE_SIZE = 20;
+const FEED_PAGE = 150;
+const FEED_MAX = 500;
 
 /** Диф из details: «Иванов → Петров» (ФИО/комментарий), иначе null. */
 const entryDiff = (e: IMtsSyncLogEntry): string | null => {
@@ -41,9 +43,10 @@ const entryDiff = (e: IMtsSyncLogEntry): string | null => {
   return d ? `${d.old} → ${d.new}` : null;
 };
 
-/** Plain-текст записи для копирования (время | уровень | номер | шаг | код | сообщение). */
+/** Plain-текст записи для копирования. */
 const entryText = (e: IMtsSyncLogEntry): string => [
   fmtLast(e.at),
+  JOB_LABELS[e.job] ?? e.job,
   e.level,
   e.msisdn ?? '',
   e.step ?? '',
@@ -51,24 +54,30 @@ const entryText = (e: IMtsSyncLogEntry): string => [
   e.message + (entryDiff(e) ? `: ${entryDiff(e)}` : ''),
 ].filter(Boolean).join(' | ');
 
-const CopyButton: FC<{ getText: () => string | Promise<string>; title: string; label?: string }> = ({ getText, title, label }) => {
+const runText = (r: IMtsSyncRun): string => [
+  fmtLast(r.startedAt),
+  `${JOB_LABELS[r.job] ?? r.job} (${r.initiator === 'schedule' ? 'авто' : 'вручную'})`,
+  STATUS_LABELS[r.status] ?? r.status,
+  r.summary ?? '',
+  r.error ? `Ошибка: ${r.error}` : '',
+].filter(Boolean).join(' | ');
+
+type FeedItem = { at: string; run?: IMtsSyncRun; entry?: IMtsSyncLogEntry };
+
+const CopyButton: FC<{ getText: () => string }> = ({ getText }) => {
   const [copied, setCopied] = useState(false);
-  const [busy, setBusy] = useState(false);
   const onCopy = async (): Promise<void> => {
-    setBusy(true);
     try {
-      await copyTextToClipboard(await getText());
+      await copyTextToClipboard(getText());
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // clipboard недоступен (http/старый браузер) — молча, кнопка не критична
-    } finally {
-      setBusy(false);
     }
   };
   return (
-    <button type="button" className={styles.copyBtn} title={title} disabled={busy} onClick={() => { void onCopy(); }}>
-      {copied ? '✓ Скопировано' : busy ? '…' : (label ?? 'Копировать')}
+    <button type="button" className={pageStyles.btn} onClick={() => { void onCopy(); }}>
+      {copied ? '✓ Скопировано' : 'Скопировать лог'}
     </button>
   );
 };
@@ -84,196 +93,80 @@ const EntryRow: FC<{ entry: IMtsSyncLogEntry }> = ({ entry }) => {
         {entry.errorCode && <span className={styles.entryCode}>{entry.errorCode}</span>}
         <span>{entry.message}{diff && <>: <b>{diff}</b></>}</span>
       </span>
-      <CopyButton getText={() => entryText(entry)} title="Скопировать запись" label="⧉" />
     </div>
   );
 };
 
-/** Записи раскрытого прогона (грузятся лениво) + «скопировать все ошибки». */
-const RunEntries: FC<{ runId: string; runHeader: string; runStatus?: string }> = ({ runId, runHeader, runStatus }) => {
-  // У идущего прогона записи прибывают по мере обработки — подтягиваем каждые 15с.
-  const entries = useMtsBusinessSyncLogEntries(runId, runStatus === 'running' ? 15_000 : false);
-  const list = entries.data?.entries ?? [];
-  const problems = list.filter(e => e.level !== 'info');
-  const allText = (): string => [runHeader, ...list.map(entryText)].join('\n');
-  const problemsText = (): string => [runHeader, ...problems.map(entryText)].join('\n');
-
-  if (entries.isLoading) return <p className={pageStyles.hint}>Загрузка записей…</p>;
-  if (entries.isError) return <p className={pageStyles.err}>Не удалось загрузить записи прогона</p>;
-  if (list.length === 0) {
-    return (
-      <p className={pageStyles.hint}>
-        {runStatus === 'running'
-          ? 'Записей пока нет — прогон ещё идёт, ошибки и изменения данных появляются по мере обработки.'
-          : runStatus === 'interrupted'
-            ? 'Записей нет — прогон был прерван (рестарт сервера или деплой).'
-            : runId === 'standalone'
-              ? 'Ошибок конвейера нет.'
-              : 'Записей нет — прогон прошёл без ошибок и изменений данных.'}
-      </p>
-    );
-  }
-
-  return (
-    <div className={styles.entries}>
-      <div className={styles.entriesToolbar}>
-        <span className={pageStyles.hint}>
-          Записей: {entries.data?.total ?? list.length}
-          {(entries.data?.total ?? 0) > list.length && ` (показаны первые ${list.length})`}
-        </span>
-        {problems.length > 0 && (
-          <CopyButton getText={problemsText} title="Скопировать все ошибки и предупреждения" label="Скопировать все ошибки" />
-        )}
-        <CopyButton getText={allText} title="Скопировать все записи прогона" label="Скопировать всё" />
-      </div>
-      {list.map(e => <EntryRow key={e.id} entry={e} />)}
-    </div>
-  );
-};
-
-const runHeaderText = (run: IMtsSyncRun): string => {
-  const parts = [
-    `${JOB_LABELS[run.job] ?? run.job} · ${run.initiator === 'schedule' ? 'авто' : 'вручную'}`,
-    `${fmtLast(run.startedAt)} → ${fmtLast(run.finishedAt)}`,
-    STATUS_LABELS[run.status] ?? run.status,
-  ];
-  if (run.summary) parts.push(run.summary);
-  if (run.error) parts.push(`Ошибка: ${run.error}`);
-  return parts.join(' | ');
-};
+const RunRow: FC<{ run: IMtsSyncRun }> = ({ run }) => (
+  <div className={styles.feedRunRow}>
+    <span className={styles.entryTime}>{fmtLast(run.startedAt)}</span>
+    <span className={styles.feedRunTitle}>
+      {JOB_LABELS[run.job] ?? run.job}
+      <span className={styles.runInitiator}>{run.initiator === 'schedule' ? 'авто' : 'вручную'}</span>
+    </span>
+    <span className={`${pageStyles.badge} ${statusBadgeClass(run.status)}`}>
+      {STATUS_LABELS[run.status] ?? run.status}
+    </span>
+    {(run.error || run.summary) && (
+      <span className={run.error ? styles.feedRunError : styles.feedRunSummary}>
+        {run.error ?? run.summary}
+      </span>
+    )}
+  </div>
+);
 
 export const SyncLogSection: FC = () => {
-  const [job, setJob] = useState('');
-  const [onlyProblems, setOnlyProblems] = useState(false);
-  const [limit, setLimit] = useState(PAGE_SIZE);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [limit, setLimit] = useState(FEED_PAGE);
+  const runs = useMtsBusinessSyncLogRuns({ limit: 100, offset: 0 }, true);
+  const feed = useMtsBusinessSyncLogFeed(limit);
 
-  const runs = useMtsBusinessSyncLogRuns(
-    { limit, offset: 0, job: job || undefined, onlyProblems: onlyProblems || undefined },
-    true,
-  );
-  const list = runs.data?.runs ?? [];
-  const total = runs.data?.total ?? 0;
+  // Лента: строки прогонов и записи вперемешку, по времени, свежие сверху.
+  const items = useMemo<FeedItem[]>(() => {
+    const out: FeedItem[] = [
+      ...(runs.data?.runs ?? []).map(run => ({ at: run.startedAt, run })),
+      ...(feed.data?.entries ?? []).map(entry => ({ at: entry.at, entry })),
+    ];
+    return out.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  }, [runs.data, feed.data]);
 
-  // Весь видимый лог одним текстом: строка на прогон, у проблемных прогонов —
-  // их записи (подгружаются на клик), в конце — ошибки rolling-конвейера.
-  const copyWholeLog = async (): Promise<string> => {
-    const problemRuns = list.filter(r => r.status !== 'ok');
-    const [entriesByRun, standalone] = await Promise.all([
-      Promise.all(problemRuns.map(async r => {
-        try {
-          const { entries } = await mtsBusinessSyncLogService.listEntries(r.id);
-          return [r.id, entries] as const;
-        } catch {
-          return [r.id, null] as const;
-        }
-      })).then(pairs => new Map(pairs)),
-      mtsBusinessSyncLogService.listEntries('standalone').catch(() => null),
-    ]);
-    const lines: string[] = [];
-    for (const run of list) {
-      lines.push(runHeaderText(run));
-      const entries = entriesByRun.get(run.id);
-      if (entries === null) lines.push('  (записи не загрузились)');
-      for (const e of entries ?? []) lines.push(`  ${entryText(e)}`);
-    }
-    if (standalone && standalone.entries.length > 0) {
-      lines.push('Конвейер выписки — ошибки вне прогонов:');
-      for (const e of standalone.entries) lines.push(`  ${entryText(e)}`);
-    }
-    return lines.join('\n') || 'Лог пуст';
-  };
+  const copyAll = (): string =>
+    items.map(i => (i.run ? runText(i.run) : entryText(i.entry as IMtsSyncLogEntry))).join('\n') || 'Лог пуст';
+
+  const totalEntries = feed.data?.total ?? 0;
+  const loadedEntries = feed.data?.entries.length ?? 0;
 
   return (
     <>
-      <div className={styles.filters}>
-        <select
-          className={`${pageStyles.select} ${pageStyles.selectSm}`}
-          value={job}
-          onChange={e => { setJob(e.target.value); setLimit(PAGE_SIZE); setExpandedId(null); }}
-        >
-          <option value="">Все синхронизации</option>
-          {Object.entries(JOB_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>{label}</option>
-          ))}
-        </select>
-        <label className={pageStyles.checkField}>
-          <input
-            type="checkbox"
-            checked={onlyProblems}
-            onChange={e => { setOnlyProblems(e.target.checked); setLimit(PAGE_SIZE); setExpandedId(null); }}
-          />
-          Только с ошибками
-        </label>
-        <button
-          type="button"
-          className={styles.rollingLink}
-          onClick={() => setExpandedId(prev => (prev === 'standalone' ? null : 'standalone'))}
-        >
-          {expandedId === 'standalone' ? 'Скрыть ошибки конвейера' : 'Ошибки конвейера (вне прогонов)'}
-        </button>
-        {list.length > 0 && (
-          <CopyButton
-            getText={copyWholeLog}
-            title="Скопировать весь видимый лог: прогоны + записи проблемных прогонов + ошибки конвейера"
-            label="Скопировать лог"
-          />
-        )}
+      <div className={styles.toolbar}>
+        <span className={pageStyles.hint}>
+          {feed.isLoading || runs.isLoading
+            ? 'Загрузка лога…'
+            : `Записей: ${totalEntries}${totalEntries > loadedEntries ? ` (показаны последние ${loadedEntries})` : ''}`}
+        </span>
+        {items.length > 0 && <CopyButton getText={copyAll} />}
       </div>
 
-      {expandedId === 'standalone' && (
-        <div className={styles.runBox}>
-          <RunEntries runId="standalone" runHeader="Конвейер выписки — ошибки вне прогонов" />
-        </div>
+      {(feed.isError || runs.isError) && <p className={pageStyles.err}>Не удалось загрузить лог синхронизации</p>}
+      {!feed.isLoading && !runs.isLoading && !feed.isError && !runs.isError && items.length === 0 && (
+        <p className={pageStyles.hint}>Лог пуст — наполнится ближайшими синхронизациями (ручными и ночными).</p>
       )}
 
-      {runs.isLoading && <p className={pageStyles.hint}>Загрузка лога…</p>}
-      {runs.isError && <p className={pageStyles.err}>Не удалось загрузить лог синхронизации</p>}
-      {!runs.isLoading && !runs.isError && list.length === 0 && (
-        <p className={pageStyles.hint}>Прогонов ещё не было — лог наполняется ночными и ручными синхронизациями.</p>
-      )}
+      <div className={styles.feed}>
+        {items.map((i, idx) => (i.run
+          ? <RunRow key={`run-${i.run.id}`} run={i.run} />
+          : <EntryRow key={`e-${(i.entry as IMtsSyncLogEntry).id}-${idx}`} entry={i.entry as IMtsSyncLogEntry} />
+        ))}
+      </div>
 
-      {list.map(run => {
-        const expanded = expandedId === run.id;
-        return (
-          <div key={run.id} className={styles.runBox}>
-            <button
-              type="button"
-              className={styles.runRow}
-              onClick={() => setExpandedId(expanded ? null : run.id)}
-              aria-expanded={expanded}
-            >
-              <span className={styles.runChevron}>{expanded ? '▾' : '▸'}</span>
-              <span className={styles.runTitle}>
-                {JOB_LABELS[run.job] ?? run.job}
-                <span className={styles.runInitiator}>{run.initiator === 'schedule' ? 'авто' : 'вручную'}</span>
-              </span>
-              <span className={styles.runMeta}>
-                {fmtLast(run.startedAt)}
-                <span className={`${pageStyles.badge} ${statusBadgeClass(run.status)}`}>
-                  {STATUS_LABELS[run.status] ?? run.status}
-                </span>
-              </span>
-            </button>
-            {(run.summary || run.error) && (
-              <div className={styles.runSummary}>
-                {run.error ? <span className={pageStyles.err}>{run.error}</span> : run.summary}
-              </div>
-            )}
-            {expanded && <RunEntries runId={run.id} runHeader={runHeaderText(run)} runStatus={run.status} />}
-          </div>
-        );
-      })}
-
-      {list.length < total && (
+      {loadedEntries < totalEntries && (
         <button
           type="button"
           className={pageStyles.btn}
           style={{ marginTop: 8 }}
-          onClick={() => setLimit(l => Math.min(l + PAGE_SIZE, 100))}
-          disabled={runs.isFetching || limit >= 100}
+          onClick={() => setLimit(l => Math.min(l + FEED_PAGE, FEED_MAX))}
+          disabled={feed.isFetching || limit >= FEED_MAX}
         >
-          {limit >= 100 ? 'Показаны первые 100' : `Показать ещё (всего: ${total})`}
+          {limit >= FEED_MAX ? `Показаны последние ${FEED_MAX}` : 'Показать ещё'}
         </button>
       )}
     </>

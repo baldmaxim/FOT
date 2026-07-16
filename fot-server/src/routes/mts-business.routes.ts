@@ -53,6 +53,8 @@ router.get('/schedulers/status', requirePageAccess('/mts-business', 'view'), mts
 // «Лог синхронизации» — история прогонов и ошибок всех МТС-синков (миграция 222).
 // Только чтение (view): записи делают сами синки/планировщики.
 router.get('/sync-log', requirePageAccess('/mts-business', 'view'), mtsBusinessSyncLogController.listRuns);
+// Порядок важен: /sync-log/entries регистрируется ДО /sync-log/:runId/entries.
+router.get('/sync-log/entries', requirePageAccess('/mts-business', 'view'), mtsBusinessSyncLogController.listAllEntries);
 router.get('/sync-log/:runId/entries', requirePageAccess('/mts-business', 'view'), mtsBusinessSyncLogController.listEntries);
 
 // Непрерывный конвейер свежести выписки (звонки/начисления каждые N минут).

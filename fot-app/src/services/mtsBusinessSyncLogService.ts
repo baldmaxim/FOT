@@ -72,6 +72,16 @@ export const mtsBusinessSyncLogService = {
     return res.data;
   },
 
+  /** Все записи подряд (все прогоны + конвейер), свежие сверху — лента лога. */
+  listAllEntries: async (
+    opts: { limit?: number; offset?: number } = {},
+  ): Promise<{ entries: IMtsSyncLogEntry[]; total: number }> => {
+    const res = await apiClient.get<ApiResponse<{ entries: IMtsSyncLogEntry[]; total: number }>>(
+      `/mts-business/sync-log/entries${qs({ limit: opts.limit ?? 200, offset: opts.offset ?? 0 })}`,
+    );
+    return res.data;
+  },
+
   /** runId='standalone' — ошибки rolling-конвейера вне прогонов. */
   listEntries: async (
     runId: string,

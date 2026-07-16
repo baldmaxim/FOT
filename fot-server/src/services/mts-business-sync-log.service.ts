@@ -342,12 +342,25 @@ class MtsBusinessSyncLogService {
       params.push(opts.level);
       where.push(`level = $${params.length}`);
     }
-    const whereSql = `WHERE ${where.join(' AND ')}`;
+    return this.selectEntries(`WHERE ${where.join(' AND ')}`, params, opts, runId == null ? 'DESC' : 'ASC');
+  }
+
+  /** Все записи подряд (все прогоны + конвейер), свежие сверху — лента лога. */
+  async listAllEntries(opts: { limit: number; offset: number }): Promise<{ entries: IMtsSyncLogRow[]; total: number }> {
+    return this.selectEntries('', [], opts, 'DESC');
+  }
+
+  private async selectEntries(
+    whereSql: string,
+    params: unknown[],
+    opts: { limit: number; offset: number },
+    order: 'ASC' | 'DESC',
+  ): Promise<{ entries: IMtsSyncLogRow[]; total: number }> {
     const totalRow = await queryOne<{ count: string }>(
       `SELECT COUNT(*)::text AS count FROM mts_business_sync_log ${whereSql}`,
       params,
     );
-    params.push(opts.limit, opts.offset);
+    params = [...params, opts.limit, opts.offset];
     const rows = await query<{
       id: number; run_id: string | null; at: string; level: string; job: string;
       step: string | null; account_id: string | null; msisdn_enc: string | null;
@@ -356,7 +369,7 @@ class MtsBusinessSyncLogService {
     }>(
       `SELECT id, run_id, at, level, job, step, account_id, msisdn_enc, error_code, bucket, message, details
          FROM mts_business_sync_log ${whereSql}
-        ORDER BY id ${runId == null ? 'DESC' : 'ASC'}
+        ORDER BY id ${order}
         LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );

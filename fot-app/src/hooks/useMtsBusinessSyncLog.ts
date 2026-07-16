@@ -23,3 +23,11 @@ export const useMtsBusinessSyncLogEntries = (runId: string | null, refetchMs: nu
   refetchInterval: refetchMs,
   enabled: runId != null,
 });
+
+/** Лента лога: все записи подряд, свежие сверху; обновляется каждые 30с. */
+export const useMtsBusinessSyncLogFeed = (limit: number) => useQuery({
+  queryKey: ['mts-business', 'sync-log', 'feed', limit] as const,
+  queryFn: () => mtsBusinessSyncLogService.listAllEntries({ limit }),
+  staleTime: 15_000,
+  refetchInterval: 30_000,
+});

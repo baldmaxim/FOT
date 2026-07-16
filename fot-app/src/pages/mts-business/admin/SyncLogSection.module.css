@@ -1,56 +1,45 @@
-/* «Лог синхронизации» МТС Бизнес: список прогонов с раскрытием записей. */
+/* «Лог синхронизации»: единая лента прогонов и записей, свежие сверху. */
 
-.filters {
+.toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
-.rollingLink {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--primary);
-  font-size: 13px;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.runBox {
+.feed {
+  max-height: 420px;
+  overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 6px 10px;
-  margin-bottom: 6px;
+  padding: 4px 10px;
 }
 
-.runRow {
+.feed:empty {
+  display: none;
+}
+
+/* Строка прогона — «жирная» граница ленты. */
+.feedRunRow {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
-  width: 100%;
-  min-height: 32px;
-  background: none;
-  border: none;
-  padding: 2px 0;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-primary);
-  text-align: left;
+  flex-wrap: wrap;
+  padding: 5px 0 3px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
 }
 
-.runChevron {
-  color: var(--text-tertiary);
-  flex: 0 0 auto;
+.feedRunRow:first-child {
+  border-top: none;
 }
 
-.runTitle {
+.feedRunTitle {
   font-weight: 600;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 13px;
 }
 
 .runInitiator {
@@ -60,44 +49,23 @@
   font-size: 12px;
 }
 
-.runMeta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
+.feedRunSummary {
   color: var(--text-secondary);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.runSummary {
-  font-size: 12px;
-  color: var(--text-secondary);
-  padding: 0 0 4px 20px;
   overflow-wrap: anywhere;
 }
 
-.entries {
-  border-top: 1px dashed var(--border-color);
-  margin-top: 4px;
-  padding-top: 6px;
-}
-
-.entriesToolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
+.feedRunError {
+  color: var(--error);
+  overflow-wrap: anywhere;
 }
 
 .entryRow {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 3px 0;
+  padding: 3px 0 3px 14px;
   font-size: 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 40%, transparent);
 }
 
 .entryRow:last-child {
@@ -138,42 +106,11 @@
   margin-right: 6px;
 }
 
-.copyBtn {
-  flex: 0 0 auto;
-  background: none;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 2px 8px;
-  min-height: 24px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.copyBtn:hover {
-  color: var(--text-primary);
-  border-color: var(--text-tertiary);
-}
-
-.copyBtn:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-
 /* Узкие экраны (Android 360px+): записи стеком, без горизонтального скролла. */
 @media (max-width: 560px) {
-  .runRow {
-    flex-wrap: wrap;
-  }
-
-  .runMeta {
-    width: 100%;
-    padding-left: 20px;
-    white-space: normal;
-  }
-
   .entryRow {
     flex-wrap: wrap;
+    padding-left: 8px;
   }
 
   .entryBody {

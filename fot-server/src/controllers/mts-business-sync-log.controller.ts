@@ -45,6 +45,21 @@ export const mtsBusinessSyncLogController = {
     }
   },
 
+  /** Все записи подряд (все прогоны + конвейер), свежие сверху — лента лога. */
+  async listAllEntries(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = entriesSchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ success: false, error: 'Некорректный запрос', details: parsed.error.flatten() });
+        return;
+      }
+      const data = await mtsBusinessSyncLogService.listAllEntries(parsed.data);
+      res.json({ success: true, data });
+    } catch (error) {
+      fail(res, error, 'Ошибка чтения ленты лога синхронизации');
+    }
+  },
+
   /** Записи прогона; runId='standalone' — строки rolling-конвейера без прогона. */
   async listEntries(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
