@@ -434,12 +434,19 @@ const runPatentFederal = async (pass: IPassDataRow, _taskId: string, checkId: st
 
   // Полная валидация контракта ДО платного вызова. Номер патента и бланк —
   // раздельно: это разные поля карточки, и правит их пользователь по-разному.
+  //
+  // Серии: провайдер требует id_doc_seria и blank_seria (наблюдалось «Отсутствует
+  // обязательный параметр: blank_seria»). Пустые поля мы не шлём, поэтому без
+  // серии запрос заведомо отвергается — ловим локально, с понятным текстом.
+  // doc_seria не проверяем: все патенты хранятся как «77 №…», серия есть всегда.
   const missing: string[] = [];
   if (!lastName || !firstName) missing.push('ФИО');
   if (!dob) missing.push('дата рождения');
   if (!id.number) missing.push('номер паспорта');
+  if (id.number && !id.seria) missing.push('серия паспорта');
   if (!doc.number) missing.push('номер патента');
   if (!blank.number) missing.push('бланк патента');
+  if (blank.number && !blank.seria) missing.push('серия бланка патента');
   if (missing.length) {
     return { status: 'error', providerStatus: null, summary: null, raw: null, qid: null, balance: null, requestId: null, requestSent: false, errorMessage: `Недостаточно данных для патента (РФ): ${missing.join(', ')}` };
   }

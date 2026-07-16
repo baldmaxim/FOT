@@ -599,6 +599,29 @@ describe('runChecksForPass — федеральный патент', () => {
     expect(results[0].error_message).not.toContain('номер патента');
   });
 
+  // Кейс Нормуминова (2065): бланк хранится как 7 цифр без букв — серии нет.
+  // Провайдер отвечал «Отсутствует обязательный параметр: blank_seria»;
+  // теперь ловим локально, до списания и с понятным текстом.
+  it('бланк без серии (одни цифры): платного вызова и markSent нет', async () => {
+    mockPassFlow({ ...federalPass, patent_blank_number: '7654321' });
+    const results = await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(results[0].status).toBe('error');
+    expect(results[0].error_message).toContain('серия бланка патента');
+    const markSentCall = mockExecute.mock.calls.find(([sql]) => String(sql).includes('SET request_sent = true'));
+    expect(markSentCall).toBeUndefined();
+  });
+
+  it('паспорт без буквенной серии: платного вызова и markSent нет', async () => {
+    mockPassFlow({ ...federalPass, passport_series_number: '405512294' });
+    const results = await runChecksForPass(federalPass.id, ['patent'], 'user-1');
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(results[0].status).toBe('error');
+    expect(results[0].error_message).toContain('серия паспорта');
+    const markSentCall = mockExecute.mock.calls.find(([sql]) => String(sql).includes('SET request_sent = true'));
+    expect(markSentCall).toBeUndefined();
+  });
+
   it('гражданство РФ → not_applicable, вызова нет', async () => {
     mockPassFlow({ ...federalPass, citizenship: 'Россия' });
     const results = await runChecksForPass(federalPass.id, ['patent'], 'user-1');
