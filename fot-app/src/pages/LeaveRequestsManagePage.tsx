@@ -22,9 +22,11 @@ import {
   type ILeaveRequest,
   type ILeaveRequestAttachment,
   type LeaveRequestStatus,
+  type LeaveRequestType,
 } from '../services/leaveRequestService';
 import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
+import { SearchInput } from '../components/ui/SearchInput';
 import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
 import { formatLeaveRequestDatesCompact, leaveRequestMinDate } from '../utils/leaveRequestDates';
 import { displayFileName } from '../utils/fileNameDisplay';
@@ -50,6 +52,19 @@ const VACATION_TYPES = new Set(['vacation', 'unpaid', 'educational_leave']);
 const NO_DEPARTMENT_KEY = 'Без отдела';
 const DIRECT_REPORTS_KEY = '__direct_reports__';
 const DIRECT_REPORTS_TITLE = 'Непосредственные подчинённые';
+
+// Единый ключ группы отдела — и для группировки списка, и для фильтра по отделам.
+const groupKeyOf = (r: ILeaveRequest) =>
+  (r.is_direct_subordinate ? DIRECT_REPORTS_KEY : (r.department_name?.trim() || NO_DEPARTMENT_KEY));
+
+// «Без отдела» и «Непосредственные подчинённые» — в конце, остальные по алфавиту.
+const compareGroupKeys = (a: string, b: string) => {
+  if (a === DIRECT_REPORTS_KEY) return 1;
+  if (b === DIRECT_REPORTS_KEY) return -1;
+  if (a === NO_DEPARTMENT_KEY) return 1;
+  if (b === NO_DEPARTMENT_KEY) return -1;
+  return a.localeCompare(b, 'ru');
+};
 
 // Старые вложения (до Unicode-фикса sanitizeFileName) хранятся в БД как
 // «________.pdf» или с двойной UTF-8→latin1 кодировкой. Показываем им
@@ -79,6 +94,9 @@ export const LeaveRequestsManagePage: FC = () => {
   const todayIso = useMemo(() => new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' }), []);
 
   const [filter, setFilter] = useState<'pending' | 'all'>('pending');
+  const [search, setSearch] = useState('');
+  const [deptFilter, setDeptFilter] = useState<string>('all');
+  const [typeFilter, setTypeFilter] = useState<LeaveRequestType | 'all'>('all');
   const [commentId, setCommentId] = useState<number | null>(null);
   const [comment, setComment] = useState('');
   const [revokeId, setRevokeId] = useState<number | null>(null);
@@ -93,29 +111,39 @@ export const LeaveRequestsManagePage: FC = () => {
   const { data, isLoading } = useLeaveRequestsManage(scope, filter);
   const requests = data ?? EMPTY_REQUESTS;
 
-  const filteredRequests = filter === 'pending' && isDepartmentScope
-    ? requests.filter(r => r.status === 'pending')
-    : requests;
+  const baseRequests = useMemo(
+    () => (filter === 'pending' && isDepartmentScope ? requests.filter(r => r.status === 'pending') : requests),
+    [filter, isDepartmentScope, requests],
+  );
+
+  // Опции фильтра по отделам — из списка ДО поиска/фильтров, чтобы селект не сужался при фильтрации.
+  const deptOptions = useMemo(
+    () => Array.from(new Set(baseRequests.map(groupKeyOf))).sort(compareGroupKeys),
+    [baseRequests],
+  );
+
+  const query = search.trim().toLowerCase();
+  const isFiltering = query !== '' || deptFilter !== 'all' || typeFilter !== 'all';
+
+  const filteredRequests = useMemo(() => {
+    if (!isFiltering) return baseRequests;
+    return baseRequests.filter(r =>
+      (typeFilter === 'all' || r.request_type === typeFilter)
+      && (deptFilter === 'all' || groupKeyOf(r) === deptFilter)
+      && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
+  }, [baseRequests, isFiltering, typeFilter, deptFilter, query]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, ILeaveRequest[]>();
     for (const r of filteredRequests) {
       // Непосредственные подчинённые (вне subtree отдела руководителя) — в
       // отдельную псевдо-группу в конце списка.
-      const key = r.is_direct_subordinate
-        ? DIRECT_REPORTS_KEY
-        : (r.department_name?.trim() || NO_DEPARTMENT_KEY);
+      const key = groupKeyOf(r);
       const list = map.get(key) ?? [];
       list.push(r);
       map.set(key, list);
     }
-    return Array.from(map.entries()).sort(([a], [b]) => {
-      if (a === DIRECT_REPORTS_KEY) return 1;
-      if (b === DIRECT_REPORTS_KEY) return -1;
-      if (a === NO_DEPARTMENT_KEY) return 1;
-      if (b === NO_DEPARTMENT_KEY) return -1;
-      return a.localeCompare(b, 'ru');
-    });
+    return Array.from(map.entries()).sort(([a], [b]) => compareGroupKeys(a, b));
   }, [filteredRequests]);
 
   // Для админа (scope='all') заголовки отделов показываем всегда — даже если
@@ -500,6 +528,35 @@ export const LeaveRequestsManagePage: FC = () => {
     <div className={`lrm-shell${eventsPanel ? ' lrm-shell--with-panel' : ''}`}>
       <div className="lrm-page">
         <div className="lrm-header">
+          {scope === 'all' && (
+            <>
+              <SearchInput value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
+              <select
+                className="lrm-filter-select"
+                value={deptFilter}
+                onChange={e => setDeptFilter(e.target.value)}
+                aria-label="Фильтр по отделу"
+              >
+                <option value="all">Все отделы</option>
+                {deptOptions.map(key => (
+                  <option key={key} value={key}>
+                    {key === DIRECT_REPORTS_KEY ? DIRECT_REPORTS_TITLE : key}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="lrm-filter-select"
+                value={typeFilter}
+                onChange={e => setTypeFilter(e.target.value as LeaveRequestType | 'all')}
+                aria-label="Фильтр по типу заявления"
+              >
+                <option value="all">Все типы</option>
+                {Object.entries(REQUEST_TYPE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </>
+          )}
           <div className="lrm-filter">
             <button className={`lrm-filter-btn ${filter === 'pending' ? 'active' : ''}`} onClick={() => setFilter('pending')}>
               Ожидающие
@@ -513,11 +570,13 @@ export const LeaveRequestsManagePage: FC = () => {
         {isLoading ? (
           <div className="lrm-loading">Загрузка...</div>
         ) : filteredRequests.length === 0 ? (
-          <div className="lrm-empty">Нет заявлений</div>
+          <div className="lrm-empty">{isFiltering ? 'Ничего не найдено' : 'Нет заявлений'}</div>
         ) : (
           <div className="lrm-list">
             {grouped.map(([department, items]) => {
-              const isCollapsed = collapsedDepts.has(department);
+              // При активном поиске/фильтрах группы раскрыты принудительно,
+              // иначе совпадения прячутся за свёрнутыми по умолчанию шапками.
+              const isCollapsed = !isFiltering && collapsedDepts.has(department);
               const isDirectReports = department === DIRECT_REPORTS_KEY;
               const label = isDirectReports ? DIRECT_REPORTS_TITLE : department;
               return (

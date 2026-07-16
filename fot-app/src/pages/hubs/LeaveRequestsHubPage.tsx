@@ -17,19 +17,19 @@ export const LeaveRequestsHubPage: FC = () => {
       render: () => <LeaveRequestsManagePage />,
     },
     {
-      key: 'feedback',
-      label: 'Обратная связь',
-      accessPath: '/feedback-review',
-      icon: MessageSquare,
-      render: () => <FeedbackReviewPage />,
-    },
-    {
       // Доступ к вкладке «Отпуска» — только админ и отдел кадров (маркер /leave-vacations).
       key: 'vacations',
       label: 'Отпуска',
       accessPath: '/leave-vacations',
       icon: Plane,
       render: () => <VacationsManagePage />,
+    },
+    {
+      key: 'feedback',
+      label: 'Обратная связь',
+      accessPath: '/feedback-review',
+      icon: MessageSquare,
+      render: () => <FeedbackReviewPage />,
     },
   ], []);
 

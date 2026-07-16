@@ -18,8 +18,40 @@
 .lrm-header {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 16px;
+}
+
+/* Переключатель («Ожидающие/Все», «Не ознакомлен/Ознакомлен») прижат вправо,
+   даже когда слева нет поиска/фильтров (department-скоуп руководителя). */
+.lrm-header .lrm-filter {
+  margin-left: auto;
+}
+
+.lrm-filter-select {
+  height: 36px;
+  padding: 0 10px;
+  max-width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  text-overflow: ellipsis;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.lrm-filter-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
+[data-theme="light"] .lrm-filter-select:focus {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
 .lrm-filter {
@@ -55,7 +87,7 @@
 .lrm-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .lrm-card {
@@ -275,16 +307,12 @@
   gap: 8px;
 }
 
-.lrm-group + .lrm-group {
-  margin-top: 16px;
-}
-
 .lrm-group-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 4px;
-  padding: 8px 12px;
+  margin: 0;
+  padding: 6px 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -377,11 +405,6 @@
 
 .lrm-ack-btn.lrm-ack-btn--pending:hover:not(:disabled) {
   background: rgba(249, 115, 22, 0.25);
-}
-
-/* Отступ под-вкладок «Не ознакомлен / Ознакомлен» над списком отделов (вкладка «Отпуска»). */
-.lrm-subtabs {
-  margin-bottom: 12px;
 }
 
 .lrm-action-row {
@@ -495,10 +518,12 @@
     padding-right: 16px;
   }
 
-  .lrm-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
+  /* Поиск (100% ширины из SearchInput.module.css) занимает первую строку,
+     селекты делят вторую, переключатель уходит вправо на следующей. */
+  .lrm-filter-select {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
   }
 }
 
@@ -532,6 +557,12 @@
   .lrm-filter-btn {
     padding: 5px 10px;
     font-size: 12px;
+  }
+
+  .lrm-filter-select {
+    height: 32px;
+    font-size: 12px;
+    padding: 0 8px;
   }
 
   .lrm-group-name {

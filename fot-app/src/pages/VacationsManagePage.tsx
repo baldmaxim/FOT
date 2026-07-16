@@ -20,6 +20,7 @@ import {
 } from '../services/leaveRequestService';
 import { useVacationLeaveRequests, getVacationLeaveRequestsQueryKey } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
+import { SearchInput } from '../components/ui/SearchInput';
 import { formatLeaveRequestDatesCompact } from '../utils/leaveRequestDates';
 import { displayFileName } from '../utils/fileNameDisplay';
 import { formatFioShort } from '../utils/formatFio';
@@ -42,6 +43,15 @@ const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
 const NO_DEPARTMENT_KEY = 'Без отдела';
 
+// Единый ключ группы отдела — и для группировки списка, и для фильтра по отделам.
+const deptKeyOf = (r: ILeaveRequest) => r.department_name?.trim() || NO_DEPARTMENT_KEY;
+
+const compareDeptKeys = (a: string, b: string) => {
+  if (a === NO_DEPARTMENT_KEY) return 1;
+  if (b === NO_DEPARTMENT_KEY) return -1;
+  return a.localeCompare(b, 'ru');
+};
+
 interface IPreviewState {
   documentId: number;
   fileName: string;
@@ -58,25 +68,39 @@ export const VacationsManagePage: FC = () => {
   const [acking, setAcking] = useState<Set<number>>(new Set());
   // Под-вкладки: «Не ознакомлен» (hr_acknowledged_at пусто) / «Ознакомлен».
   const [ackFilter, setAckFilter] = useState<'unacked' | 'acked'>('unacked');
+  const [search, setSearch] = useState('');
+  const [deptFilter, setDeptFilter] = useState<string>('all');
 
-  const filtered = useMemo(
+  const ackFiltered = useMemo(
     () => requests.filter(r => (ackFilter === 'acked' ? !!r.hr_acknowledged_at : !r.hr_acknowledged_at)),
     [requests, ackFilter],
   );
 
+  // Опции фильтра по отделам — из списка ДО поиска/фильтра, чтобы селект не сужался при фильтрации.
+  const deptOptions = useMemo(
+    () => Array.from(new Set(ackFiltered.map(deptKeyOf))).sort(compareDeptKeys),
+    [ackFiltered],
+  );
+
+  const query = search.trim().toLowerCase();
+  const isFiltering = query !== '' || deptFilter !== 'all';
+
+  const filtered = useMemo(() => {
+    if (!isFiltering) return ackFiltered;
+    return ackFiltered.filter(r =>
+      (deptFilter === 'all' || deptKeyOf(r) === deptFilter)
+      && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
+  }, [ackFiltered, isFiltering, deptFilter, query]);
+
   const grouped = useMemo(() => {
     const map = new Map<string, ILeaveRequest[]>();
     for (const r of filtered) {
-      const key = r.department_name?.trim() || NO_DEPARTMENT_KEY;
+      const key = deptKeyOf(r);
       const list = map.get(key) ?? [];
       list.push(r);
       map.set(key, list);
     }
-    return Array.from(map.entries()).sort(([a], [b]) => {
-      if (a === NO_DEPARTMENT_KEY) return 1;
-      if (b === NO_DEPARTMENT_KEY) return -1;
-      return a.localeCompare(b, 'ru');
-    });
+    return Array.from(map.entries()).sort(([a], [b]) => compareDeptKeys(a, b));
   }, [filtered]);
 
   useEffect(() => {
@@ -222,28 +246,46 @@ export const VacationsManagePage: FC = () => {
           <div className="lrm-empty">Нет отпусков</div>
         ) : (
           <>
-            <div className="lrm-filter lrm-subtabs">
-              <button
-                className={`lrm-filter-btn ${ackFilter === 'unacked' ? 'active' : ''}`}
-                onClick={() => setAckFilter('unacked')}
+            <div className="lrm-header">
+              <SearchInput value={search} onValueChange={setSearch} placeholder="Поиск по ФИО..." />
+              <select
+                className="lrm-filter-select"
+                value={deptFilter}
+                onChange={e => setDeptFilter(e.target.value)}
+                aria-label="Фильтр по отделу"
               >
-                Не ознакомлен
-              </button>
-              <button
-                className={`lrm-filter-btn ${ackFilter === 'acked' ? 'active' : ''}`}
-                onClick={() => setAckFilter('acked')}
-              >
-                Ознакомлен
-              </button>
+                <option value="all">Все отделы</option>
+                {deptOptions.map(key => (
+                  <option key={key} value={key}>{key}</option>
+                ))}
+              </select>
+              <div className="lrm-filter">
+                <button
+                  className={`lrm-filter-btn ${ackFilter === 'unacked' ? 'active' : ''}`}
+                  onClick={() => setAckFilter('unacked')}
+                >
+                  Не ознакомлен
+                </button>
+                <button
+                  className={`lrm-filter-btn ${ackFilter === 'acked' ? 'active' : ''}`}
+                  onClick={() => setAckFilter('acked')}
+                >
+                  Ознакомлен
+                </button>
+              </div>
             </div>
             {grouped.length === 0 ? (
               <div className="lrm-empty">
-                {ackFilter === 'acked' ? 'Нет ознакомленных отпусков' : 'Все отпуска обработаны'}
+                {isFiltering
+                  ? 'Ничего не найдено'
+                  : ackFilter === 'acked' ? 'Нет ознакомленных отпусков' : 'Все отпуска обработаны'}
               </div>
             ) : (
               <div className="lrm-list">
                 {grouped.map(([department, items]) => {
-              const isCollapsed = collapsedDepts.has(department);
+              // При активном поиске/фильтре группы раскрыты принудительно,
+              // иначе совпадения прячутся за свёрнутыми по умолчанию шапками.
+              const isCollapsed = !isFiltering && collapsedDepts.has(department);
               return (
                 <div
                   key={department}
