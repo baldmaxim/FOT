@@ -147,7 +147,7 @@ export const mtsBusinessRefreshController = {
           ...schedulerRowFromState('catalog-weekly', 'Каталог: номера, тарифы, услуги (раз в 7 дней)', metricsState?.meta, 'lastCatalogResult'),
           lastRunAt: metaString(metricsState?.meta, 'lastWeeklyRunYmdMsk'),
         },
-        schedulerRowFromState('refresh-all-daily', 'Полное обновление «Обновить всё» (ежедневно, авто)', refreshAllDailyState?.meta),
+        schedulerRowFromState('refresh-all-daily', 'Полное обновление «Обновить» (ежедневно, авто)', refreshAllDailyState?.meta),
       ];
       res.json({ success: true, data });
     } catch (error) {

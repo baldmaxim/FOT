@@ -253,6 +253,32 @@ export async function syncAccountSubscribers(accountId: string, log?: IMtsSyncRu
     if (r.noBinding > 0) out.noBindingNumbers++;
     if (r.noData > 0) out.noPdNumbers++;
     out.mtsErrorSections += r.mtsError;
+    // Без фильтрации: стабильные состояния номера и мягкие сбои МТС тоже в лог
+    // (по одной warn-записи на номер, не на секцию — иначе ×5 дублей).
+    if (r.noAccess > 0) {
+      await log?.log({
+        level: 'warn', step: 'subscribers:no_access', msisdn, accountId,
+        errorCode: '401/1014', message: `Номер вне доступа портального пользователя (секций: ${r.noAccess})`,
+      });
+    }
+    if (r.noBinding > 0) {
+      await log?.log({
+        level: 'warn', step: 'subscribers:no_binding', msisdn, accountId,
+        errorCode: '422/2005', message: `Нет связки региона/ТП у номера (секций: ${r.noBinding})`,
+      });
+    }
+    if (r.noData > 0) {
+      await log?.log({
+        level: 'warn', step: 'subscribers:no_data', msisdn, accountId,
+        errorCode: '404', message: `Данных нет — например, персданные не заведены (секций: ${r.noData})`,
+      });
+    }
+    if (r.mtsError > 0) {
+      await log?.log({
+        level: 'warn', step: 'subscribers:mts_error', msisdn, accountId,
+        errorCode: '400/IL.*', message: `Точечный сбой биллинга МТС (секций: ${r.mtsError})`,
+      });
+    }
     for (const e of r.errors) {
       if (e.kind !== 'failed') {
         // transient после повтора — не сбой прогона, но заметить полезно.

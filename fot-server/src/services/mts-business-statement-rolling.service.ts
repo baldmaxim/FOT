@@ -177,18 +177,24 @@ async function runAccountBatch(
       if (isFeatureUnavailable(error)) stat.unavailable++;
       else if (permanent === 'no_access') stat.noAccess++;
       else if (isTransientMtsError(error)) stat.transient++;
-      else {
-        stat.failed++;
-        // Реальный сбой (не транзиент/не свойство номера) — в «Лог синхронизации»
-        // standalone-записью: у конвейера нет прогонов. Объём ограничен tickBudget.
+      else stat.failed++;
+      // Всё, кроме транзиентов, — в «Лог синхронизации» standalone-записью
+      // (у конвейера нет прогонов; объём ограничен tickBudget). Транзиент
+      // 421/3003 не пишем: номер повторится следующим тиком — иначе одна и та же
+      // ошибка дублировалась бы каждые 30 секунд, пока МТС не оживёт.
+      if (!isTransientMtsError(error)) {
         await mtsBusinessSyncLogService.logStandalone('rolling', {
-          level: 'error',
+          level: permanent === 'no_access' || isFeatureUnavailable(error) ? 'warn' : 'error',
           step: 'statement',
           accountId: account.id,
           msisdn: item.msisdn,
           errorCode: mtsErrorCodeOf(error),
           bucket: mtsErrorBucket(error),
-          message: `${account.label}: ошибка синка выписки номера`,
+          message: isFeatureUnavailable(error)
+            ? `${account.label}: выписка не подключена в тарифе МТС`
+            : permanent === 'no_access'
+              ? `${account.label}: номер вне доступа портального пользователя`
+              : `${account.label}: ошибка синка выписки номера`,
         });
       }
 

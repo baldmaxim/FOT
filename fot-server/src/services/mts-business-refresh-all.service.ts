@@ -232,7 +232,7 @@ async function runStep(
       // syncMsisdnsBatch пишет и звонки, и начисления (charges_amount с
       // 1-го числа месяца) — «Обновить всё» освежает колонку «Начисления».
       // Упавшие номера добираются вторым проходом внутри helper'а.
-      const res = await syncMsisdnsBatch(accountId, msisdns, window.dateFrom, window.dateTo, STEP_POOL);
+      const res = await syncMsisdnsBatch(accountId, msisdns, window.dateFrom, window.dateTo, STEP_POOL, runLog);
       // «Нет доступа» точечно — свойство номеров; 401 по ВСЕМ номерам — почти
       // наверняка умерли креды аккаунта, маскировать это «ок»-статусом нельзя.
       if (res.noAccess === msisdns.length) {

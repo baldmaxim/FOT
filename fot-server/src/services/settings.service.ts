@@ -1179,12 +1179,12 @@ export const settingsService = {
       {
         key: 'mts_business_refresh_all_enabled',
         value: String(next.enabled),
-        description: 'МТС Бизнес: включить ежедневный автопрогон «Обновить всё»',
+        description: 'МТС Бизнес: включить ежедневный автопрогон «Обновить»',
       },
       {
         key: 'mts_business_refresh_all_hour_msk',
         value: String(next.hourMsk),
-        description: 'МТС Бизнес: час запуска автопрогона «Обновить всё» (МСК, 0–23)',
+        description: 'МТС Бизнес: час запуска автопрогона «Обновить» (МСК, 0–23)',
       },
     ], userId);
 

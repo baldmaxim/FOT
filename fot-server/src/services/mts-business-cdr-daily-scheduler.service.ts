@@ -19,7 +19,7 @@ import {
 } from './sigur-runtime-state.service.js';
 import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 import { formatMtsErrorBreakdown } from './mts-business-base.service.js';
-import { mtsBusinessSyncLogService } from './mts-business-sync-log.service.js';
+import { mtsBusinessSyncLogService, type IMtsSyncRunLogger } from './mts-business-sync-log.service.js';
 
 // Ежедневное автообновление детализации звонков через синхронный
 // Bills/BillingStatementExtdByMSISDN (без email/IMAP) — по одному номеру на
@@ -82,10 +82,10 @@ function addDaysYmd(ymd: string, days: number): string {
 // Пул как в шаге детализации refresh-all: упираемся в rate-gate, а не в RTT.
 const SYNC_POOL = 3;
 
-async function syncAccount(accountId: string, dateFrom: string, dateTo: string): Promise<ISyncMsisdnsBatchResult> {
+async function syncAccount(accountId: string, dateFrom: string, dateTo: string, log?: IMtsSyncRunLogger): Promise<ISyncMsisdnsBatchResult> {
   const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
   const dbTotalBefore = await countCdrByAccount(accountId);
-  const res = await syncMsisdnsBatch(accountId, msisdns, dateFrom, dateTo, SYNC_POOL);
+  const res = await syncMsisdnsBatch(accountId, msisdns, dateFrom, dateTo, SYNC_POOL, log);
   await verifyCdrStore(accountId, res.inserted, dbTotalBefore);
   return res;
 }
@@ -131,7 +131,7 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
             let totalRetriedOk = 0;
             const totalBreakdown: Record<string, number> = {};
             for (const account of accounts) {
-              const res = await syncAccount(account.id, dateFrom, dateTo);
+              const res = await syncAccount(account.id, dateFrom, dateTo, runLog);
               totalNumbers += res.numbers;
               totalInserted += res.inserted;
               totalFailed += res.failed;

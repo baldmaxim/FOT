@@ -6,6 +6,7 @@ import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.ser
 import { mtsBusinessStatementRowsService, type StatementRowsSource } from './mts-business-statement-rows.service.js';
 import { isFeatureUnavailable, isTransientMtsError, mtsErrorBucket, mtsPermanentErrorKind } from './mts-business-base.service.js';
 import { runPool } from './mts-business-subscriber-sync.service.js';
+import { mtsErrorCodeOf, type IMtsSyncRunLogger } from './mts-business-sync-log.service.js';
 
 // Синхронная выписка Bills/BillingStatementExtdByMSISDN → CDR + начисления +
 // полные строки выписки (mts_business_statement_rows — источник вкладки
@@ -118,11 +119,21 @@ export async function syncMsisdnsBatch(
   dateFrom: string,
   dateTo: string,
   pool: number,
+  log?: IMtsSyncRunLogger,
 ): Promise<ISyncMsisdnsBatchResult> {
   const out: ISyncMsisdnsBatchResult = {
     numbers: msisdns.length, inserted: 0, usageRowsInserted: 0, failed: 0, unavailable: 0, noAccess: 0, transient: 0, retriedOk: 0, errorBreakdown: {},
   };
   const retryQueue: string[] = [];
+
+  // Пер-номерная запись в «Лог синхронизации» — без фильтрации: стабильные
+  // состояния номера тоже видны (warn), реальные сбои после повтора — error.
+  const logSkipped = async (msisdn: string, error: unknown, message: string): Promise<void> => {
+    await log?.log({
+      level: 'warn', step: 'detalization', msisdn, accountId,
+      errorCode: mtsErrorCodeOf(error), bucket: mtsErrorBucket(error), message,
+    });
+  };
 
   await runPool(msisdns, pool, async msisdn => {
     try {
@@ -130,9 +141,13 @@ export async function syncMsisdnsBatch(
       out.inserted += res.callsInserted;
       out.usageRowsInserted += res.usageRowsInserted;
     } catch (error) {
-      if (isFeatureUnavailable(error)) out.unavailable++;
-      else if (mtsPermanentErrorKind(error) === 'no_access') out.noAccess++;
-      else retryQueue.push(msisdn);
+      if (isFeatureUnavailable(error)) {
+        out.unavailable++;
+        await logSkipped(msisdn, error, 'Выписка не подключена в тарифе МТС (403/1010)');
+      } else if (mtsPermanentErrorKind(error) === 'no_access') {
+        out.noAccess++;
+        await logSkipped(msisdn, error, 'Номер вне доступа портального пользователя (401/1014)');
+      } else retryQueue.push(msisdn);
     }
   });
 
@@ -146,10 +161,12 @@ export async function syncMsisdnsBatch(
     } catch (error) {
       if (isFeatureUnavailable(error)) {
         out.unavailable++;
+        await logSkipped(msisdn, error, 'Выписка не подключена в тарифе МТС (403/1010)');
         continue;
       }
       if (mtsPermanentErrorKind(error) === 'no_access') {
         out.noAccess++;
+        await logSkipped(msisdn, error, 'Номер вне доступа портального пользователя (401/1014)');
         continue;
       }
       if (isTransientMtsError(error)) out.transient++;
@@ -157,6 +174,14 @@ export async function syncMsisdnsBatch(
       const bucket = mtsErrorBucket(error);
       out.errorBreakdown[bucket] = (out.errorBreakdown[bucket] ?? 0) + 1;
       console.error(`[mts-biz-statement-batch] account=${accountId} номер — ошибка после повтора: ${bucket}`);
+      await log?.log({
+        level: isTransientMtsError(error) ? 'warn' : 'error',
+        step: 'detalization', msisdn, accountId,
+        errorCode: mtsErrorCodeOf(error), bucket,
+        message: isTransientMtsError(error)
+          ? 'Выписка номера: МТС временно недоступен даже после повтора (421/3003)'
+          : 'Выписка номера не выгрузилась (после повтора)',
+      });
     }
   }
   if (retryQueue.length > 0) {
