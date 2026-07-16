@@ -15,9 +15,10 @@ vi.mock('./mts-business-cdr.service.js', () => ({
 }));
 
 import { mtsBusinessMappingService } from './mts-business-mapping.service.js';
-import { query, execute } from '../config/postgres.js';
+import { query, queryOne, execute } from '../config/postgres.js';
 
 const queryMock = vi.mocked(query);
+const queryOneMock = vi.mocked(queryOne);
 const executeMock = vi.mocked(execute);
 
 type EmployeeRow = { id: number; employment_status: string | null; is_archived: boolean };
@@ -43,7 +44,7 @@ describe('syncMtsNames: автопривязка по ФИО (resolveEmployeeIdB
   it('единственный активный — привязывается', async () => {
     employeesByFio([{ id: 7, employment_status: 'active', is_archived: false }]);
     const res = await mtsBusinessMappingService.syncMtsNames([{ msisdn: '79001112233', fio: 'Иванов Иван' }], null);
-    expect(res).toEqual({ saved: 1, autoLinked: 1 });
+    expect(res).toEqual({ saved: 1, autoLinked: 1, changes: [] });
     expect(linkedEmployeeId()).toBe(7);
   });
 
@@ -63,7 +64,7 @@ describe('syncMtsNames: автопривязка по ФИО (resolveEmployeeIdB
       { id: 9, employment_status: 'active', is_archived: false },
     ]);
     const res = await mtsBusinessMappingService.syncMtsNames([{ msisdn: '79001112233', fio: 'Иванов Иван' }], null);
-    expect(res).toEqual({ saved: 1, autoLinked: 0 });
+    expect(res).toEqual({ saved: 1, autoLinked: 0, changes: [] });
     expect(linkedEmployeeId()).toBeNull();
   });
 
@@ -77,7 +78,75 @@ describe('syncMtsNames: автопривязка по ФИО (resolveEmployeeIdB
   it('совпадений нет — сохраняем ФИО без привязки', async () => {
     employeesByFio([]);
     const res = await mtsBusinessMappingService.syncMtsNames([{ msisdn: '79001112233', fio: 'Неизвестный' }], null);
-    expect(res).toEqual({ saved: 1, autoLinked: 0 });
+    expect(res).toEqual({ saved: 1, autoLinked: 0, changes: [] });
+  });
+});
+
+describe('syncMtsNames / syncMtsComments: diff для «Лога синхронизации»', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    executeMock.mockResolvedValue(1);
+  });
+
+  const prevNames = (rows: Array<{ msisdn_hash: string; mts_fio: string | null; employee_id: number | null }>): void => {
+    queryMock.mockImplementation(async (sql: string) =>
+      (String(sql).includes('mts_business_number_map') ? rows : []) as never);
+  };
+
+  it('старое ФИО отличается → change со старым/новым и привязкой', async () => {
+    prevNames([{ msisdn_hash: 'h79001112233', mts_fio: 'Старов Стар', employee_id: 42 }]);
+    const res = await mtsBusinessMappingService.syncMtsNames([{ msisdn: '79001112233', fio: 'Новиков Новый' }], null);
+    expect(res.changes).toEqual([
+      { msisdn: '79001112233', oldFio: 'Старов Стар', newFio: 'Новиков Новый', linkedEmployeeId: 42 },
+    ]);
+  });
+
+  it('первичное заполнение (старого ФИО нет) и совпадение — не изменение', async () => {
+    prevNames([
+      { msisdn_hash: 'h79001112233', mts_fio: null, employee_id: null },
+      { msisdn_hash: 'h79004445566', mts_fio: 'Иванов Иван', employee_id: null },
+    ]);
+    const res = await mtsBusinessMappingService.syncMtsNames([
+      { msisdn: '79001112233', fio: 'Первый Раз' },
+      { msisdn: '79004445566', fio: 'Иванов  Иван' }, // лишний пробел нормализуется
+    ], null);
+    expect(res.changes).toEqual([]);
+  });
+
+  it('syncMtsComments: изменение комментария попадает в changes', async () => {
+    queryMock.mockImplementation(async (sql: string) =>
+      (String(sql).includes('mts_business_number_map')
+        ? [{ msisdn_hash: 'h79001112233', mts_comment: 'старый' }]
+        : []) as never);
+    const res = await mtsBusinessMappingService.syncMtsComments([{ msisdn: '79001112233', comment: 'новый' }], 'acc');
+    expect(res.changes).toEqual([{ msisdn: '79001112233', oldComment: 'старый', newComment: 'новый' }]);
+  });
+});
+
+describe('setPersonalDataBlob: детект изменения ПДн по хэшу plaintext', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    executeMock.mockResolvedValue(1);
+  });
+
+  it('старый хэш есть и отличается → changed=true, UPDATE пишет новый хэш', async () => {
+    queryOneMock.mockResolvedValue({ pd_data_hash: 'oldhash' } as never);
+    const res = await mtsBusinessMappingService.setPersonalDataBlob('79001112233', 'cipher', 'newhash');
+    expect(res).toEqual({ changed: true });
+    const upd = executeMock.mock.calls.find(([sql]) => String(sql).includes('SET pd_data_enc'));
+    expect(upd![1]).toEqual(['h79001112233', 'cipher', 'newhash']);
+  });
+
+  it('первичное заполнение (старого хэша нет) → changed=false', async () => {
+    queryOneMock.mockResolvedValue({ pd_data_hash: null } as never);
+    const res = await mtsBusinessMappingService.setPersonalDataBlob('79001112233', 'cipher', 'newhash');
+    expect(res).toEqual({ changed: false });
+  });
+
+  it('хэш совпадает → changed=false', async () => {
+    queryOneMock.mockResolvedValue({ pd_data_hash: 'same' } as never);
+    const res = await mtsBusinessMappingService.setPersonalDataBlob('79001112233', 'cipher', 'same');
+    expect(res).toEqual({ changed: false });
   });
 });
 

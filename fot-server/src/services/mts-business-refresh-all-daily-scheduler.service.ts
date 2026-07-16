@@ -3,6 +3,7 @@ import { startRefreshAll, type IRefreshAllStatus } from './mts-business-refresh-
 import { getSigurRuntimeState, mergeSigurRuntimeState } from './sigur-runtime-state.service.js';
 import { auditService, AUDIT_ACTIONS } from './audit.service.js';
 import { runWithCronMonitor } from '../utils/sentry-cron.js';
+import { mtsBusinessSyncLogService } from './mts-business-sync-log.service.js';
 
 // Ежедневный автозапуск полного прогона «Обновить всё» модуля МТС Бизнес
 // (все шаги: иерархия, комментарии, биллинг, детализация, абоненты) — данные
@@ -132,8 +133,15 @@ async function runDailyCycle(ymd: string, hourMsk: number): Promise<void> {
       );
     } catch (error) {
       // Сюда попадает только «прогон не стартовал» (нет активных аккаунтов,
-      // ошибка БД): день не помечен → ретрай следующими тиками.
+      // ошибка БД): день не помечен → ретрай следующими тиками. Сам прогон
+      // run в «Логе синхронизации» создаёт startRefreshAll — здесь фиксируем
+      // только «не взлетел вовсе», иначе ночной сбой старта был бы невидим.
       console.error('[mts-biz-refresh-all-daily] error:', error instanceof Error ? error.message : 'unknown');
+      const failLog = await mtsBusinessSyncLogService.startRun({ job: 'refresh_all', initiator: 'schedule' });
+      await failLog.finish('error', {
+        summary: 'Ночной прогон не стартовал',
+        error: error instanceof Error ? error.message : 'unknown',
+      });
       await mergeSigurRuntimeState({
         key: DAILY_STATE_KEY,
         meta: { lastFailureAt: new Date().toISOString(), lastError: error instanceof Error ? error.message : 'unknown' },

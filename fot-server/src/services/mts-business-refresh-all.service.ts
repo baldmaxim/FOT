@@ -13,6 +13,7 @@ import {
 import { syncAccountSubscribers } from './mts-business-subscriber-sync.service.js';
 import { syncMsisdnsBatch } from './mts-business-statement-sync.service.js';
 import { refreshCdrRollup } from './mts-business-cdr.service.js';
+import { mtsBusinessSyncLogService, type IMtsSyncRunLogger } from './mts-business-sync-log.service.js';
 import {
   tryAcquireSigurRuntimeLease,
   releaseSigurRuntimeLease,
@@ -140,6 +141,7 @@ async function runStep(
   step: RefreshAllStepId,
   accountId: string,
   window: { dateFrom: string; dateTo: string },
+  runLog?: IMtsSyncRunLogger,
 ): Promise<IStepOutcome> {
   switch (step) {
     case 'hierarchy': {
@@ -191,7 +193,14 @@ async function runStep(
       try {
         const comments = await mtsBusinessCatalogService.getCommentsByMsisdn(accountId, msisdns);
         const pairs = [...comments.entries()].map(([msisdn, comment]) => ({ msisdn, comment }));
-        const { saved } = await mtsBusinessMappingService.syncMtsComments(pairs, accountId);
+        const { saved, changes } = await mtsBusinessMappingService.syncMtsComments(pairs, accountId);
+        for (const c of changes ?? []) {
+          await runLog?.log({
+            level: 'info', step: 'comment_diff', msisdn: c.msisdn, accountId,
+            message: 'Комментарий номера в ЛК МТС изменился',
+            details: { comment: { old: c.oldComment, new: c.newComment } },
+          });
+        }
         return { status: 'ok', count: saved, message: `комментариев: ${saved}` };
       } catch (error) {
         if (isFeatureUnavailable(error)) return { status: 'unavailable', count: null, message: UNAVAILABLE_MESSAGE };
@@ -267,7 +276,7 @@ async function runStep(
       // Bulk-профиль каждого номера (~5 вызовов/номер: персданные со skip по
       // свежести, тариф, абонплата, услуги, блокировки) — самый тяжёлый шаг,
       // идёт последним; питает вкладку «Абоненты».
-      const res = await syncAccountSubscribers(accountId);
+      const res = await syncAccountSubscribers(accountId, runLog);
       if (res.numbers === 0) {
         return { status: 'ok', count: 0, message: 'нет известных номеров' };
       }
@@ -304,6 +313,7 @@ async function runRefreshAll(
   accounts: Array<{ id: string; label: string }>,
   window: { dateFrom: string; dateTo: string },
   owner: string,
+  runLog: IMtsSyncRunLogger,
 ): Promise<void> {
   const status = currentStatus;
   if (!status) return;
@@ -325,7 +335,7 @@ async function runRefreshAll(
         entry.status = 'running';
         await persistStatus(status);
         try {
-          const outcome = await runStep(stepId, account.id, window);
+          const outcome = await runStep(stepId, account.id, window, runLog);
           entry.status = outcome.status;
           entry.count = outcome.count;
           entry.message = outcome.message;
@@ -337,6 +347,14 @@ async function runRefreshAll(
           if (entry.status === 'error') {
             console.error(`[mts-biz-refresh-all] step=${stepId} account="${account.label}" —`, error instanceof Error ? error.message : 'unknown');
           }
+        }
+        if (entry.status === 'error' || entry.status === 'unavailable') {
+          await runLog.log({
+            level: entry.status === 'error' ? 'error' : 'warn',
+            step: stepId,
+            accountId: account.id,
+            message: `${account.label} · ${entry.label}: ${entry.message ?? entry.status}`,
+          });
         }
         await persistStatus(status);
         console.log(`[mts-biz-refresh-all] account="${account.label}" step=${stepId} → ${entry.status}${entry.count != null ? ` count=${entry.count}` : ''}`);
@@ -360,6 +378,20 @@ async function runRefreshAll(
       }
     }
     await persistStatus(status);
+    // Итог прогона — в «Лог синхронизации» (persist-история, миграция 222).
+    const okSteps = status.steps.filter(s => s.status === 'ok').length;
+    const errSteps = status.steps.filter(s => s.status === 'error').length;
+    const unavailSteps = status.steps.filter(s => s.status === 'unavailable').length;
+    const runStatus = status.error != null
+      ? 'error'
+      : errSteps > 0
+        ? (okSteps > 0 ? 'partial' : 'error')
+        : 'ok';
+    await runLog.finish(runStatus, {
+      summary: `Шагов: ок ${okSteps}, ошибок ${errSteps}${unavailSteps ? `, не в тарифе ${unavailSteps}` : ''} (аккаунтов: ${accounts.length})`,
+      stats: { accounts: accounts.length, okSteps, errSteps, unavailSteps, window },
+      error: status.error,
+    });
     stopHeartbeat();
     await releaseSigurRuntimeLease({ key: LEASE_KEY, owner }).catch(err =>
       console.error('[mts-biz-refresh-all] release lease failed:', (err as Error).message),
@@ -415,11 +447,16 @@ export async function startRefreshAll(opts: {
   await persistStatus(currentStatus);
 
   console.log(`[mts-biz-refresh-all] старт accounts=${accounts.length} window=${window.dateFrom}..${window.dateTo} initiator=${currentStatus.initiator}`);
+  const runLog = await mtsBusinessSyncLogService.startRun({
+    job: 'refresh_all',
+    initiator: opts.initiator ?? 'manual',
+    accountId: opts.accountId ?? null,
+  });
   // runRefreshAll мутирует статус in-place и никогда не бросает (всё в finally),
   // поэтому completion резолвится итоговым статусом. Ручной контроллер его
   // игнорирует, планировщик — ждёт для записи итога прогона.
   const statusRef = currentStatus;
-  const completion = runRefreshAll(accounts, window, owner)
+  const completion = runRefreshAll(accounts, window, owner, runLog)
     .catch(err => console.error('[mts-biz-refresh-all] runRefreshAll rejected:', (err as Error).message))
     .then(() => statusRef);
   return { started: true, completion };

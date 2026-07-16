@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execute, query } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 import { MtsBusinessServiceBase } from './mts-business-base.service.js';
@@ -285,6 +285,27 @@ const deepPickString = (body: unknown, keys: string[], depth = 0): string | null
   return null;
 };
 
+/**
+ * Канонизация JSON для хэша ПДн-блоба: рекурсивная сортировка ключей, чтобы
+ * перестановка полей в ответе МТС не давала ложных «ПДн изменились».
+ * Экспорт для тестов.
+ */
+export const stableStringify = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value != null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+};
+
+/** SHA-256 канонизированного JSON — для pd_data_hash (детект изменений без ПДн). */
+export const personalDataPlainHash = (resp: unknown): string =>
+  createHash('sha256').update(stableStringify(resp), 'utf8').digest('hex');
+
 export const normalizePersonalDataStatus = (raw: string | null): MtsPersonalDataRequestStatus => {
   const s = (raw || '').toLowerCase();
   if (s.includes('complet') || s.includes('success') || s.includes('done') || s.includes('готов') || s.includes('выполн')) return 'completed';
@@ -319,7 +340,7 @@ class MtsBusinessPersonalDataService extends MtsBusinessServiceBase {
    * Расшифровка отдаётся наружу единственным путём — getStoredFull → карточка
    * абонента под гардом страницы /mts-business; в логи/аудит по-прежнему не идёт.
    */
-  async fetchAndStoreFull(accountId: string, rawMsisdn: string): Promise<IMtsPersonalDataInfo> {
+  async fetchAndStoreFull(accountId: string, rawMsisdn: string): Promise<IMtsPersonalDataInfo & { pdChanged: boolean }> {
     const msisdn = normalizeMsisdn(rawMsisdn);
     if (!msisdn) throw new Error('МТС Бизнес: некорректный номер телефона');
     const resp = await this.request<unknown>('get', '/PersonalData/PersonalDataInfo', {
@@ -332,11 +353,12 @@ class MtsBusinessPersonalDataService extends MtsBusinessServiceBase {
     const hasData = Array.isArray(resp)
       ? resp.length > 0
       : resp != null && typeof resp === 'object' && Object.keys(resp as Record<string, unknown>).length > 0;
-    await mtsBusinessMappingService.setPersonalDataBlob(
+    const { changed } = await mtsBusinessMappingService.setPersonalDataBlob(
       msisdn,
       hasData ? encryptionService.encrypt(JSON.stringify(resp)) : null,
+      hasData ? personalDataPlainHash(resp) : null,
     );
-    return info;
+    return { ...info, pdChanged: changed };
   }
 
   /**

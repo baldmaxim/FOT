@@ -8,6 +8,7 @@ import { mtsBusinessSubscriberController } from '../controllers/mts-business-sub
 import { mtsBusinessRefreshController } from '../controllers/mts-business-refresh.controller.js';
 import { mtsBusinessPersonalDataController } from '../controllers/mts-business-personal-data.controller.js';
 import { mtsBusinessSubscribersController } from '../controllers/mts-business-subscribers.controller.js';
+import { mtsBusinessSyncLogController } from '../controllers/mts-business-sync-log.controller.js';
 import { authenticate, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 
@@ -48,6 +49,11 @@ router.put(
   mtsBusinessRefreshController.setSchedule,
 );
 router.get('/schedulers/status', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getSchedulersStatus);
+
+// «Лог синхронизации» — история прогонов и ошибок всех МТС-синков (миграция 222).
+// Только чтение (view): записи делают сами синки/планировщики.
+router.get('/sync-log', requirePageAccess('/mts-business', 'view'), mtsBusinessSyncLogController.listRuns);
+router.get('/sync-log/:runId/entries', requirePageAccess('/mts-business', 'view'), mtsBusinessSyncLogController.listEntries);
 
 // Непрерывный конвейер свежести выписки (звонки/начисления каждые N минут).
 router.get('/rolling', requirePageAccess('/mts-business', 'view'), mtsBusinessRefreshController.getRolling);

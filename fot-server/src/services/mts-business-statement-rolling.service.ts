@@ -19,6 +19,7 @@ import {
   getSigurRuntimeState,
   mergeSigurRuntimeState,
 } from './sigur-runtime-state.service.js';
+import { mtsBusinessSyncLogService, mtsErrorCodeOf } from './mts-business-sync-log.service.js';
 
 // Непрерывный конвейер свежести выписки МТС Бизнес.
 //
@@ -176,7 +177,20 @@ async function runAccountBatch(
       if (isFeatureUnavailable(error)) stat.unavailable++;
       else if (permanent === 'no_access') stat.noAccess++;
       else if (isTransientMtsError(error)) stat.transient++;
-      else stat.failed++;
+      else {
+        stat.failed++;
+        // Реальный сбой (не транзиент/не свойство номера) — в «Лог синхронизации»
+        // standalone-записью: у конвейера нет прогонов. Объём ограничен tickBudget.
+        await mtsBusinessSyncLogService.logStandalone('rolling', {
+          level: 'error',
+          step: 'statement',
+          accountId: account.id,
+          msisdn: item.msisdn,
+          errorCode: mtsErrorCodeOf(error),
+          bucket: mtsErrorBucket(error),
+          message: `${account.label}: ошибка синка выписки номера`,
+        });
+      }
 
       const bucket = mtsErrorBucket(error);
       stat.errorBreakdown[bucket] = (stat.errorBreakdown[bucket] ?? 0) + 1;

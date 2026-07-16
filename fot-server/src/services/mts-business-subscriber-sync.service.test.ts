@@ -10,7 +10,10 @@ vi.mock('./mts-business-auth.service.js', () => ({
   mtsBusinessAuthService: {},
 }));
 vi.mock('./mts-business-billing.service.js', () => ({
-  mtsBusinessBillingService: { getTariffRental: vi.fn(async () => ({})) },
+  mtsBusinessBillingService: {
+    getTariffRental: vi.fn(async () => ({})),
+    getValidityInfo: vi.fn(async () => ({})),
+  },
 }));
 vi.mock('./mts-business-catalog.service.js', () => ({
   mtsBusinessCatalogService: {
@@ -64,15 +67,15 @@ describe('syncAccountSubscribers: второй проход по упавшим 
 
   it('без ошибок — повторов нет, все секции сохранены', async () => {
     const res = await syncAccountSubscribers('acc');
-    // 2 номера × (персданные + 4 секции)
-    expect(res).toMatchObject({ numbers: 2, stored: 10, failed: 0, transient: 0, retriedNumbers: 0 });
+    // 2 номера × (персданные + 5 секций, включая validity_msisdn)
+    expect(res).toMatchObject({ numbers: 2, stored: 12, failed: 0, transient: 0, retriedNumbers: 0 });
     expect(getBillPlanInfo).toHaveBeenCalledTimes(2);
   });
 
   it('упавшая секция добирается повтором, успешные секции не перевызываются', async () => {
     failBillPlanTimes('79002222222', 1, new MtsBusinessApiError('EJB', 500, '9999'));
     const res = await syncAccountSubscribers('acc');
-    expect(res).toMatchObject({ failed: 0, retriedNumbers: 1, retriedOk: 1, stored: 10 });
+    expect(res).toMatchObject({ failed: 0, retriedNumbers: 1, retriedOk: 1, stored: 12 });
     expect(res.errorBreakdown).toEqual({});
     expect(getBillPlanInfo).toHaveBeenCalledTimes(3); // два номера + повтор одного
     expect(getTariffRental).toHaveBeenCalledTimes(2); // повтор НЕ трогает успешную секцию
@@ -81,7 +84,7 @@ describe('syncAccountSubscribers: второй проход по упавшим 
   it('секция упала и после повтора — failed с разбивкой по классам', async () => {
     failBillPlanTimes('79002222222', 2, new MtsBusinessApiError('EJB', 500, '9999'));
     const res = await syncAccountSubscribers('acc');
-    expect(res).toMatchObject({ failed: 1, retriedNumbers: 1, retriedOk: 0, stored: 9 });
+    expect(res).toMatchObject({ failed: 1, retriedNumbers: 1, retriedOk: 0, stored: 11 });
     expect(res.errorBreakdown).toEqual({ 'http 500/9999': 1 });
   });
 
@@ -100,6 +103,7 @@ describe('syncAccountSubscribers: второй проход по упавшим 
     };
     getBillPlanInfo.mockImplementation(failFor('79002222222') as typeof mtsBusinessCatalogService.getBillPlanInfo);
     getTariffRental.mockImplementation(failFor('79002222222') as typeof mtsBusinessBillingService.getTariffRental);
+    vi.mocked(mtsBusinessBillingService.getValidityInfo).mockImplementation(failFor('79002222222') as typeof mtsBusinessBillingService.getValidityInfo);
     vi.mocked(mtsBusinessCatalogService.getProductInfo).mockImplementation(failFor('79002222222') as typeof mtsBusinessCatalogService.getProductInfo);
     vi.mocked(mtsBusinessCatalogService.getConnectedBlocks).mockImplementation(failFor('79002222222') as typeof mtsBusinessCatalogService.getConnectedBlocks);
     vi.mocked(mtsBusinessPersonalDataService.fetchAndStoreFull).mockImplementation((async (_a: string, msisdn: string) => {
@@ -108,7 +112,7 @@ describe('syncAccountSubscribers: второй проход по упавшим 
     }) as typeof mtsBusinessPersonalDataService.fetchAndStoreFull);
 
     const res = await syncAccountSubscribers('acc');
-    expect(res).toMatchObject({ failed: 0, noAccessNumbers: 1, retriedNumbers: 0, stored: 5 });
+    expect(res).toMatchObject({ failed: 0, noAccessNumbers: 1, retriedNumbers: 0, stored: 6 });
     expect(res.errorBreakdown).toEqual({});
     expect(getBillPlanInfo).toHaveBeenCalledTimes(2); // повтора по «без доступа» нет
   });
@@ -116,6 +120,7 @@ describe('syncAccountSubscribers: второй проход по упавшим 
   it('400/IL.* — mtsErrorSections, не failed, без повтора и не в разбивке', async () => {
     // Остальные секции — успех (clearAllMocks не сбрасывает impl из прошлых тестов).
     getTariffRental.mockImplementation((async () => ({})) as typeof mtsBusinessBillingService.getTariffRental);
+    vi.mocked(mtsBusinessBillingService.getValidityInfo).mockImplementation((async () => ({})) as typeof mtsBusinessBillingService.getValidityInfo);
     vi.mocked(mtsBusinessCatalogService.getProductInfo).mockImplementation((async () => ({})) as typeof mtsBusinessCatalogService.getProductInfo);
     vi.mocked(mtsBusinessCatalogService.getConnectedBlocks).mockImplementation((async () => ({})) as typeof mtsBusinessCatalogService.getConnectedBlocks);
     vi.mocked(mtsBusinessPersonalDataService.fetchAndStoreFull).mockImplementation((async () => ({ fullName: null })) as typeof mtsBusinessPersonalDataService.fetchAndStoreFull);
@@ -125,7 +130,7 @@ describe('syncAccountSubscribers: второй проход по упавшим 
     }) as typeof mtsBusinessCatalogService.getBillPlanInfo);
 
     const res = await syncAccountSubscribers('acc');
-    expect(res).toMatchObject({ failed: 0, transient: 0, mtsErrorSections: 1, retriedNumbers: 0, stored: 9 });
+    expect(res).toMatchObject({ failed: 0, transient: 0, mtsErrorSections: 1, retriedNumbers: 0, stored: 11 });
     expect(res.errorBreakdown).toEqual({});
     expect(getBillPlanInfo).toHaveBeenCalledTimes(2); // повтора по 400/IL.* нет
   });

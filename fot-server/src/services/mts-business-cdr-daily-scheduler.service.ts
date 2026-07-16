@@ -18,6 +18,8 @@ import {
   mergeSigurRuntimeState,
 } from './sigur-runtime-state.service.js';
 import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
+import { formatMtsErrorBreakdown } from './mts-business-base.service.js';
+import { mtsBusinessSyncLogService } from './mts-business-sync-log.service.js';
 
 // Ежедневное автообновление детализации звонков через синхронный
 // Bills/BillingStatementExtdByMSISDN (без email/IMAP) — по одному номеру на
@@ -111,6 +113,7 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
       return;
     }
 
+    const runLog = await mtsBusinessSyncLogService.startRun({ job: 'cdr_daily', initiator: 'schedule' });
     try {
       await runWithCronMonitor(
         'mts-business-cdr-daily',
@@ -140,6 +143,14 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
                 totalBreakdown[bucket] = (totalBreakdown[bucket] ?? 0) + count;
               }
               console.log(`[mts-biz-cdr-daily] account="${account.label}" numbers=${res.numbers} inserted=${res.inserted} failed=${res.failed} unavailable=${res.unavailable} noAccess=${res.noAccess} transient=${res.transient} retriedOk=${res.retriedOk}`);
+              if (res.failed > 0) {
+                const breakdown = formatMtsErrorBreakdown(res.errorBreakdown);
+                await runLog.log({
+                  level: 'warn', step: 'detalization', accountId: account.id,
+                  message: `${account.label}: ${res.failed} из ${res.numbers} номеров с ошибкой${breakdown ? ` (${breakdown})` : ''}`,
+                  details: { numbers: res.numbers, failed: res.failed, noAccess: res.noAccess, transient: res.transient, errorBreakdown: res.errorBreakdown },
+                });
+              }
             }
 
             // Ночной синк добавил звонки — пересобираем роллап CDR (источник
@@ -151,6 +162,22 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
             // день помечаем выполненным (иначе ретрай каждый тик), но строку — ошибкой.
             const allNoAccess = totalNumbers > 0 && totalNoAccess === totalNumbers;
             if (allNoAccess) cronStatus = 'error';
+            if (allNoAccess) {
+              await runLog.log({
+                level: 'error', step: 'detalization',
+                message: '401 по всем номерам — проверьте логин/пароль аккаунта МТС',
+              });
+            }
+            await runLog.finish(allNoAccess ? 'error' : totalFailed > 0 ? 'partial' : 'ok', {
+              summary: `Детализация ${dateFrom}..${dateTo}: номеров ${totalNumbers}, новых звонков ${totalInserted}, упало ${totalFailed}`,
+              stats: {
+                accounts: accounts.length, numbers: totalNumbers, inserted: totalInserted,
+                failed: totalFailed, unavailable: totalUnavailable, noAccess: totalNoAccess,
+                transient: totalTransient, retriedOk: totalRetriedOk, errorBreakdown: totalBreakdown,
+                window: { dateFrom, dateTo },
+              },
+              error: allNoAccess ? '401 по всем номерам — проверьте логин/пароль аккаунта МТС' : null,
+            });
             await mergeSigurRuntimeState({
               key: DAILY_STATE_KEY,
               meta: {
@@ -180,6 +207,7 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
             lastRunYmdMsk = null;
             console.error('[mts-biz-cdr-daily] error:', error instanceof Error ? error.message : 'unknown');
             Sentry.captureException(error);
+            await runLog.finish('error', { error: error instanceof Error ? error.message : 'unknown' });
             await mergeSigurRuntimeState({
               key: DAILY_STATE_KEY,
               meta: { lastFailureAt: new Date().toISOString(), lastError: error instanceof Error ? error.message : 'unknown' },

@@ -26,6 +26,7 @@ import { startMtsBusinessCdrDailyScheduler, stopMtsBusinessCdrDailyScheduler } f
 import { startMtsBusinessMetricsDailyScheduler, stopMtsBusinessMetricsDailyScheduler } from './services/mts-business-metrics-daily-scheduler.service.js';
 import { startMtsBusinessRefreshAllDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler } from './services/mts-business-refresh-all-daily-scheduler.service.js';
 import { reconcileInterruptedRefreshAll } from './services/mts-business-refresh-all.service.js';
+import { mtsBusinessSyncLogService } from './services/mts-business-sync-log.service.js';
 import { startMtsBusinessStatementRollingWorker, stopMtsBusinessStatementRollingWorker } from './services/mts-business-statement-rolling.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
@@ -122,6 +123,8 @@ httpServer.listen(PORT, HOST, () => {
   // Прогон «Обновить всё», убитый рестартом/деплоем, сразу помечаем прерванным —
   // иначе кнопка блокируется до истечения lease (до 10 минут).
   void reconcileInterruptedRefreshAll();
+  // Зависшие «running»-прогоны в «Логе синхронизации» (>2 ч) → interrupted.
+  void mtsBusinessSyncLogService.reconcileInterruptedRuns();
   void aiReceiptRecognitionService.resumePendingRecognitions().then(count => {
     if (count > 0) console.log(`[ai-receipt-recognition] возобновлено задач: ${count}`);
   });

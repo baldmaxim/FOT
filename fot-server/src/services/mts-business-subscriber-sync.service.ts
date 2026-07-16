@@ -12,6 +12,7 @@ import {
   mtsErrorBucket,
   mtsPermanentErrorKind,
 } from './mts-business-base.service.js';
+import { logFioChanges, type IMtsSyncRunLogger } from './mts-business-sync-log.service.js';
 
 // Полная выгрузка профиля абонента (как probe-mts-number-all.ts, но в БД).
 // Два режима — бюджет вызовов критичен (rate-limit 60/300 в мин на аккаунт,
@@ -55,6 +56,8 @@ export interface ISubscriberSyncOptions {
   skipPd?: boolean;
   /** Выполнить только эти секции (повтор упавших — не жжём лимит на успешных). */
   onlySections?: ReadonlySet<string>;
+  /** Run-логгер «Лога синхронизации»: diff-события ФИО/ПДн (никогда не бросает). */
+  log?: IMtsSyncRunLogger;
 }
 
 const isoDay = (offsetDays: number): string => {
@@ -133,7 +136,16 @@ export async function syncSubscriberFull(
   if (!options.skipPd) {
     await settle('personal_data', async () => {
       const info = await mtsBusinessPersonalDataService.fetchAndStoreFull(accountId, msisdn);
-      if (info.fullName) await mtsBusinessMappingService.syncMtsNames([{ msisdn, fio: info.fullName }], null);
+      if (info.pdChanged) {
+        await options.log?.log({
+          level: 'info', step: 'pd_changed', msisdn, accountId,
+          message: 'Персональные данные номера изменились (содержимое не логируется)',
+        });
+      }
+      if (info.fullName) {
+        const { changes } = await mtsBusinessMappingService.syncMtsNames([{ msisdn, fio: info.fullName }], null);
+        await logFioChanges(options.log, accountId, changes);
+      }
     });
   }
 
@@ -192,7 +204,7 @@ const SYNC_POOL = 3;
  * упавшими секциями — ВТОРОЙ проход (последовательно, только упавшие секции):
  * ночные 500/таймауты МТС обычно добираются повтором. 403/1010 не повторяем.
  */
-export async function syncAccountSubscribers(accountId: string): Promise<IAccountSubscribersSyncResult> {
+export async function syncAccountSubscribers(accountId: string, log?: IMtsSyncRunLogger): Promise<IAccountSubscribersSyncResult> {
   const msisdns = await mtsBusinessMappingService.getAllKnownMsisdnsByAccount(accountId);
   const freshPd = await mtsBusinessMappingService.getFreshPdHashes(PD_FRESH_HOURS);
   const out: IAccountSubscribersSyncResult = {
@@ -206,7 +218,7 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
     const hash = msisdnHash(msisdn);
     const skipPd = hash != null && freshPd.has(hash);
     if (skipPd) out.pdSkipped++;
-    results.set(msisdn, await syncSubscriberFull(accountId, msisdn, { mode: 'bulk', skipPd }));
+    results.set(msisdn, await syncSubscriberFull(accountId, msisdn, { mode: 'bulk', skipPd, log }));
   });
 
   for (const [msisdn, first] of results) {
@@ -217,6 +229,7 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
       mode: 'bulk',
       skipPd: !retrySections.has('personal_data'),
       onlySections: retrySections,
+      log,
     });
     // Итог номера: успехи обоих проходов, ошибки — только со второго
     // (повторялись ровно упавшие секции, их прежний исход перекрыт).
@@ -231,7 +244,7 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
     if (retry.failed === 0 && retry.transient === 0) out.retriedOk++;
   }
 
-  for (const r of results.values()) {
+  for (const [msisdn, r] of results) {
     out.stored += r.stored;
     out.unavailable += r.unavailable;
     out.failed += r.failed;
@@ -241,8 +254,23 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
     if (r.noData > 0) out.noPdNumbers++;
     out.mtsErrorSections += r.mtsError;
     for (const e of r.errors) {
-      if (e.kind !== 'failed') continue;
+      if (e.kind !== 'failed') {
+        // transient после повтора — не сбой прогона, но заметить полезно.
+        await log?.log({
+          level: 'warn', step: `subscribers:${e.section}`, msisdn, accountId,
+          errorCode: e.code ? `${e.status}/${e.code}` : String(e.status), bucket: e.bucket,
+          message: 'Секция не добралась повтором (транзиентный сбой МТС)',
+        });
+        continue;
+      }
       out.errorBreakdown[e.bucket] = (out.errorBreakdown[e.bucket] ?? 0) + 1;
+      // errors здесь — итог ПОСЛЕ повтора (retry перезаписал first.errors):
+      // транзиенты первого прохода лог не мусорят.
+      await log?.log({
+        level: 'error', step: `subscribers:${e.section}`, msisdn, accountId,
+        errorCode: e.code ? `${e.status}/${e.code}` : String(e.status), bucket: e.bucket,
+        message: 'Секция профиля не выгрузилась (после повтора)',
+      });
     }
   }
 
@@ -251,5 +279,17 @@ export async function syncAccountSubscribers(accountId: string): Promise<IAccoun
     + ` failed=${out.failed} transient=${out.transient} mtsError=${out.mtsErrorSections} noAccess=${out.noAccessNumbers} noBinding=${out.noBindingNumbers}`
     + ` noPd=${out.noPdNumbers} retried=${out.retriedNumbers} retriedOk=${out.retriedOk} pdSkipped=${out.pdSkipped}`,
   );
+  await log?.log({
+    level: out.failed > 0 ? 'warn' : 'info', step: 'subscribers:summary', accountId,
+    message: `Профили абонентов: номеров ${out.numbers}, секций сохранено ${out.stored}, упало ${out.failed}, `
+      + `транзиентных ${out.transient}, вне доступа ${out.noAccessNumbers}, без связки ${out.noBindingNumbers}, без ПДн ${out.noPdNumbers}`,
+    details: {
+      numbers: out.numbers, stored: out.stored, failed: out.failed, transient: out.transient,
+      unavailable: out.unavailable, mtsErrorSections: out.mtsErrorSections,
+      noAccessNumbers: out.noAccessNumbers, noBindingNumbers: out.noBindingNumbers, noPdNumbers: out.noPdNumbers,
+      retriedNumbers: out.retriedNumbers, retriedOk: out.retriedOk, pdSkipped: out.pdSkipped,
+      errorBreakdown: out.errorBreakdown,
+    },
+  });
   return out;
 }

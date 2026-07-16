@@ -37,6 +37,21 @@ export interface IMtsSubscriberContext {
   employeeTabNumber: string | null;
 }
 
+/** Изменение ФИО из МТС (old≠new, первичное заполнение — не изменение). */
+export interface IMtsFioChange {
+  msisdn: string;
+  oldFio: string;
+  newFio: string;
+  linkedEmployeeId: number | null;
+}
+
+/** Изменение комментария номера из ЛК МТС. */
+export interface IMtsCommentChange {
+  msisdn: string;
+  oldComment: string;
+  newComment: string;
+}
+
 /** Строка «Телефонной книги» в ЛК: только номер + ФИО/должность/отдел. */
 export interface IPhonebookRow {
   msisdn: string | null;
@@ -189,15 +204,32 @@ class MtsBusinessMappingService {
    * Ручные привязки не перетираются (employee_id IS NULL). userId=null —
    * источник не привязан к конкретному админу (фоновый планировщик).
    */
-  async syncMtsNames(pairs: ISimName[], userId: string | null): Promise<{ saved: number; autoLinked: number }> {
+  async syncMtsNames(pairs: ISimName[], userId: string | null): Promise<{ saved: number; autoLinked: number; changes: IMtsFioChange[] }> {
     let saved = 0;
     let autoLinked = 0;
+    const changes: IMtsFioChange[] = [];
+    // Старые значения батчем — чтобы вернуть реальные изменения ФИО (старое→новое)
+    // для «Лога синхронизации»; первичное заполнение (old=null) изменением не считаем.
+    const hashes = pairs.map(p => msisdnHash(p.msisdn)).filter((h): h is string => !!h);
+    const prev = new Map<string, { fio: string | null; employeeId: number | null }>();
+    if (hashes.length > 0) {
+      const rows = await query<{ msisdn_hash: string; mts_fio: string | null; employee_id: number | null }>(
+        `SELECT msisdn_hash, mts_fio, employee_id FROM mts_business_number_map WHERE msisdn_hash = ANY($1)`,
+        [hashes],
+      );
+      for (const r of rows) prev.set(r.msisdn_hash, { fio: r.mts_fio, employeeId: r.employee_id });
+    }
     for (const { msisdn, fio } of pairs) {
       const hash = msisdnHash(msisdn);
       const norm = normalizeMsisdn(msisdn);
       if (!hash || !norm) continue;
       const fioClean = fio.replace(/\s+/g, ' ').trim();
       if (!fioClean) continue;
+
+      const old = prev.get(hash);
+      if (old != null && old.fio != null && old.fio !== fioClean) {
+        changes.push({ msisdn: norm, oldFio: old.fio, newFio: fioClean, linkedEmployeeId: old.employeeId });
+      }
 
       await execute(
         `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, mts_fio, linked_by, linked_at)
@@ -220,7 +252,7 @@ class MtsBusinessMappingService {
       );
       autoLinked += updated;
     }
-    return { saved, autoLinked };
+    return { saved, autoLinked, changes };
   }
 
   /**
@@ -232,14 +264,28 @@ class MtsBusinessMappingService {
   async syncMtsComments(
     pairs: Array<{ msisdn: string; comment: string }>,
     accountId: string | null,
-  ): Promise<{ saved: number }> {
+  ): Promise<{ saved: number; changes: IMtsCommentChange[] }> {
     let saved = 0;
+    const changes: IMtsCommentChange[] = [];
+    const hashes = pairs.map(p => msisdnHash(p.msisdn)).filter((h): h is string => !!h);
+    const prev = new Map<string, string | null>();
+    if (hashes.length > 0) {
+      const rows = await query<{ msisdn_hash: string; mts_comment: string | null }>(
+        `SELECT msisdn_hash, mts_comment FROM mts_business_number_map WHERE msisdn_hash = ANY($1)`,
+        [hashes],
+      );
+      for (const r of rows) prev.set(r.msisdn_hash, r.mts_comment);
+    }
     for (const { msisdn, comment } of pairs) {
       const hash = msisdnHash(msisdn);
       const norm = normalizeMsisdn(msisdn);
       if (!hash || !norm) continue;
       const clean = comment.replace(/\s+/g, ' ').trim();
       if (!clean) continue;
+      const old = prev.get(hash);
+      if (old != null && old !== clean) {
+        changes.push({ msisdn: norm, oldComment: old, newComment: clean });
+      }
       await execute(
         `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, account_id, mts_comment, linked_at)
          VALUES ($1, $2, $3, $4, NOW())
@@ -251,7 +297,7 @@ class MtsBusinessMappingService {
       );
       saved++;
     }
-    return { saved };
+    return { saved, changes };
   }
 
   /**
@@ -279,15 +325,28 @@ class MtsBusinessMappingService {
    * шифром (AES-256-GCM). Отдаётся наружу единственным путём — getPersonalDataBlob
    * → расшифровка в карточке абонента под гардом страницы (миграция 207).
    */
-  async setPersonalDataBlob(rawMsisdn: string, ciphertext: string | null): Promise<void> {
+  async setPersonalDataBlob(
+    rawMsisdn: string,
+    ciphertext: string | null,
+    plainHash: string | null,
+  ): Promise<{ changed: boolean }> {
     const hash = msisdnHash(rawMsisdn);
-    if (!hash) return;
+    if (!hash) return { changed: false };
+    // pd_data_hash — SHA-256 канонизированного plaintext: детект «ПДн изменились»
+    // без расшифровки старого блоба (AES-GCM ciphertext не сравним — случайный IV).
+    // Первичное заполнение (old=null) изменением не считаем.
+    const old = await queryOne<{ pd_data_hash: string | null }>(
+      `SELECT pd_data_hash FROM mts_business_number_map WHERE msisdn_hash = $1`,
+      [hash],
+    );
     await execute(
       `UPDATE mts_business_number_map
-          SET pd_data_enc = $2, pd_synced_at = NOW()
+          SET pd_data_enc = $2, pd_data_hash = $3, pd_synced_at = NOW()
         WHERE msisdn_hash = $1`,
-      [hash, ciphertext],
+      [hash, ciphertext, plainHash],
     );
+    const changed = old?.pd_data_hash != null && plainHash != null && old.pd_data_hash !== plainHash;
+    return { changed };
   }
 
   /** Шифртекст полного профиля ПДн (pd_data_enc) по номеру; null — если нет. */

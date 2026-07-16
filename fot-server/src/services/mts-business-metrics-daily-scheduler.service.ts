@@ -15,6 +15,7 @@ import {
   mergeSigurRuntimeState,
 } from './sigur-runtime-state.service.js';
 import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
+import { logFioChanges, mtsBusinessSyncLogService, type IMtsSyncRunLogger } from './mts-business-sync-log.service.js';
 
 // Ежедневный снимок баланса/неоплаченных счетов (по лицевым счетам) и
 // баланса/начислений (по известным номерам) — история для тренд-графиков
@@ -217,13 +218,14 @@ export interface IRefreshFioResult {
 }
 
 /** ФИО из PersonalData/PersonalDataInfo по списку номеров (+ кэш статуса подтверждения). */
-export async function refreshFioForNumbers(accountId: string, msisdns: string[]): Promise<IRefreshFioResult> {
+export async function refreshFioForNumbers(accountId: string, msisdns: string[], log?: IMtsSyncRunLogger): Promise<IRefreshFioResult> {
   const result: IRefreshFioResult = { accountId, requested: msisdns.length, fetched: 0, failed: 0, unavailable: 0 };
   for (const msisdn of msisdns) {
     try {
       const info = await mtsBusinessPersonalDataService.fetchAndCacheInfo(accountId, msisdn);
       if (info.fullName) {
-        await mtsBusinessMappingService.syncMtsNames([{ msisdn, fio: info.fullName }], null);
+        const { changes } = await mtsBusinessMappingService.syncMtsNames([{ msisdn, fio: info.fullName }], null);
+        await logFioChanges(log, accountId, changes);
         result.fetched++;
       }
     } catch (error) {
@@ -300,9 +302,9 @@ export interface IRefreshCatalogResult {
  * планировщика и ручным «Обновить каталог»; оркестратор «Обновить всё» вызывает
  * шаги по отдельности (раздельные статусы).
  */
-export async function refreshAccountCatalog(accountId: string): Promise<IRefreshCatalogResult> {
+export async function refreshAccountCatalog(accountId: string, log?: IMtsSyncRunLogger): Promise<IRefreshCatalogResult> {
   const hier = await refreshHierarchy(accountId);
-  const fio = await refreshFioForNumbers(accountId, hier.needsFio);
+  const fio = await refreshFioForNumbers(accountId, hier.needsFio, log);
   const cat = await refreshTariffAndServices(accountId);
   return {
     accountId,
@@ -327,6 +329,7 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
       return;
     }
 
+    const runLog = await mtsBusinessSyncLogService.startRun({ job: 'metrics_daily', initiator: 'schedule' });
     try {
       await runWithCronMonitor(
         'mts-business-metrics-daily',
@@ -342,7 +345,18 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
               totalNumbers += res.numbers;
               totalFailed += res.failed;
               console.log(`[mts-biz-metrics] account="${account.label}" numbers=${res.numbers} failed=${res.failed}`);
+              if (res.failed > 0) {
+                await runLog.log({
+                  level: 'warn', step: 'billing', accountId: account.id,
+                  message: `${account.label}: ${res.failed} запросов финансов с ошибкой`,
+                  details: { failed: res.failed, unavailable: res.unavailable },
+                });
+              }
             }
+            await runLog.finish(totalFailed > 0 ? 'partial' : 'ok', {
+              summary: `Финансы: аккаунтов ${accounts.length}, номеров ${totalNumbers}, ошибок ${totalFailed}`,
+              stats: { accounts: accounts.length, numbers: totalNumbers, failed: totalFailed },
+            });
 
             // Каталог (тариф/услуги/пакеты/структура) — реже, раз в 7 суток:
             // меняется редко, не стоит гонять по rate-gate каждый день.
@@ -351,13 +365,25 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
             let totalDiscovered = 0;
             let totalCatalogFailed = 0;
             if (dueWeekly) {
+              const catalogLog = await mtsBusinessSyncLogService.startRun({ job: 'catalog_weekly', initiator: 'schedule' });
               for (const account of accounts) {
-                const res = await refreshAccountCatalog(account.id);
+                const res = await refreshAccountCatalog(account.id, catalogLog);
                 totalCatalogNumbers += res.numbers;
                 totalDiscovered += res.discovered;
                 totalCatalogFailed += res.failed;
                 console.log(`[mts-biz-metrics] catalog account="${account.label}" numbers=${res.numbers} discovered=${res.discovered} failed=${res.failed}`);
+                if (res.failed > 0) {
+                  await catalogLog.log({
+                    level: 'warn', step: 'catalog', accountId: account.id,
+                    message: `${account.label}: ${res.failed} запросов каталога с ошибкой`,
+                    details: { numbers: res.numbers, discovered: res.discovered, failed: res.failed, unavailable: res.unavailable },
+                  });
+                }
               }
+              await catalogLog.finish(totalCatalogFailed > 0 ? 'partial' : 'ok', {
+                summary: `Каталог: номеров ${totalCatalogNumbers}, новых ${totalDiscovered}, ошибок ${totalCatalogFailed}`,
+                stats: { accounts: accounts.length, numbers: totalCatalogNumbers, discovered: totalDiscovered, failed: totalCatalogFailed },
+              });
               lastWeeklyRunYmdMsk = ymd;
             }
 
@@ -380,6 +406,7 @@ async function runDailySyncCycle(ymd: string): Promise<void> {
             lastRunYmdMsk = null;
             console.error('[mts-biz-metrics] error:', error instanceof Error ? error.message : 'unknown');
             Sentry.captureException(error);
+            await runLog.finish('error', { error: error instanceof Error ? error.message : 'unknown' });
             await mergeSigurRuntimeState({
               key: DAILY_STATE_KEY,
               meta: { lastFailureAt: new Date().toISOString(), lastError: error instanceof Error ? error.message : 'unknown' },
