@@ -422,8 +422,10 @@ export const employeeChangesService = {
     const date = opts.effectiveDate || today();
 
     await withTransaction(async (client) => {
-      const empRes = await client.query<{ position_id: string | null; org_department_id: string | null }>(
-        `SELECT position_id, org_department_id FROM employees WHERE id = $1`,
+      // FOR UPDATE: сериализуем параллельные переводы одного сотрудника — второй ждёт
+      // коммита первого, поэтому getEmployeeAssignments ниже читает уже согласованную историю.
+      const empRes = await client.query<{ position_id: string | null; org_department_id: string | null; hire_date: string | null }>(
+        `SELECT position_id, org_department_id, hire_date FROM employees WHERE id = $1 FOR UPDATE`,
         [employeeId],
       );
       const emp = empRes.rows[0] ?? null;
@@ -448,6 +450,36 @@ export const employeeChangesService = {
       }
 
       const nextEffectiveTo = nextAssignment ? formatDateShift(nextAssignment.effective_from, -1) : null;
+
+      // Snapshot-only перевод: истории назначений нет, значит прежний отдел (snapshot) не
+      // записан строкой. Синтезируем закрытый период прежнего отдела [hire_date .. date-1],
+      // иначе прошлые месяцы табеля потеряют старую бригаду, а snapshot «протечёт» в новую.
+      // Узкий guard (assignments.length === 0) не задевает исключённых из табеля — у них есть
+      // закрытая история. Порядок вставки (старый → новый) не нарушает триггер пересечений.
+      if (assignments.length === 0 && emp?.org_department_id && emp.org_department_id !== departmentId) {
+        const hireDate = emp.hire_date ? String(emp.hire_date).slice(0, 10) : null;
+        if (hireDate && hireDate > date) {
+          throw new DomainValidationError('Дата перевода раньше даты найма сотрудника');
+        }
+        if (hireDate && hireDate < date) {
+          await client.query(
+            `INSERT INTO employee_assignments
+               (employee_id, org_department_id, position_id, effective_from,
+                effective_to, is_primary, assignment_type, change_reason, created_by)
+             VALUES ($1, $2, $3, $4, $5, true, 'main', $6, $7)`,
+            [
+              employeeId,
+              emp.org_department_id,
+              emp.position_id || null,
+              hireDate,
+              previousDay,
+              'Автозапись прежнего отдела при переводе',
+              opts.createdBy || null,
+            ],
+          );
+        }
+        // hireDate === date → прежнего периода нет; hireDate отсутствует → старт неизвестен, пропускаем.
+      }
 
       if (sameDayAssignment) {
         await client.query(

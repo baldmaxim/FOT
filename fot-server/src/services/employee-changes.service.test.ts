@@ -145,7 +145,7 @@ describe('employee-changes.service.changeDepartment — overlap regression', () 
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: 'pos-1', org_department_id: 'old-dept' }] };
       }
       return { rows: [] };
@@ -177,7 +177,7 @@ describe('employee-changes.service.changeDepartment — overlap regression', () 
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: 'pos-1', org_department_id: 'real-dept' }] };
       }
       return { rows: [] };
@@ -218,7 +218,7 @@ describe('employee-changes.service.changeDepartment — overlap regression', () 
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: null, org_department_id: 'archive-dept' }] };
       }
       return { rows: [] };
@@ -268,7 +268,7 @@ describe('employee-changes.service.changeDepartment — бэкдейт-пере�
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
       }
       if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
@@ -316,7 +316,7 @@ describe('employee-changes.service.changeDepartment — бэкдейт-пере�
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: null, org_department_id: 'old-dept' }] };
       }
       if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
@@ -352,7 +352,7 @@ describe('employee-changes.service.changeDepartment — бэкдейт-пере�
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
       }
       if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
@@ -400,7 +400,7 @@ describe('employee-changes.service.changeDepartment — бэкдейт-пере�
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
       }
       if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
@@ -445,7 +445,7 @@ describe('employee-changes.service.changeDepartment — бэкдейт-пере�
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
       }
       if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
@@ -495,7 +495,7 @@ describe('employee-changes.service.changeDepartment — бэкдейт-пере�
       ]);
 
       const fake = createFakeClient((sql) => {
-        if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+        if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
           return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
         }
         if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
@@ -542,7 +542,7 @@ describe('employee-changes.service.changeDepartment — бэкдейт-пере�
     ]);
 
     const fake = createFakeClient((sql) => {
-      if (/SELECT position_id, org_department_id FROM employees/i.test(sql)) {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
         return { rows: [{ position_id: null, org_department_id: 'osa-dept' }] };
       }
       if (/SELECT id, org_department_id, effective_from::text/i.test(sql)) {
@@ -582,5 +582,115 @@ describe('employee-changes.service.changeDepartment — бэкдейт-пере�
     expect(snapshotWrite).toBeTruthy();
     expect(snapshotWrite?.params?.[0]).toBe('pos-9');
     expect(snapshotWrite?.params?.[1]).toBe('tender-dept');
+  });
+});
+
+describe('employee-changes.service.changeDepartment — snapshot-only: синтез прежнего отдела', () => {
+  const SYNTH_REASON = 'Автозапись прежнего отдела при переводе';
+
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+    mockGetEmployeeAssignments.mockReset();
+    mockGetTransferConfig.mockReset();
+  });
+
+  const makeFake = (hireDate: string | null) =>
+    createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: 'pos-1', org_department_id: 'old-dept', hire_date: hireDate }] };
+      }
+      return { rows: [] };
+    });
+
+  it('backdate: нет истории → создаёт пару (старый [hire..date-1] + новый с date)', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([]);
+    const fake = makeFake('2026-05-01');
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'new-dept', {
+      effectiveDate: '2026-07-01',
+      createdBy: 'u1',
+    });
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(2);
+    // синтез прежнего отдела первым
+    expect(inserts[0].params?.[1]).toBe('old-dept');
+    expect(inserts[0].params?.[3]).toBe('2026-05-01');
+    expect(inserts[0].params?.[4]).toBe('2026-06-30'); // date-1
+    expect(inserts[0].params?.[5]).toBe(SYNTH_REASON);
+    // затем новый отдел с даты перевода
+    expect(inserts[1].params?.[1]).toBe('new-dept');
+    expect(inserts[1].params?.[3]).toBe('2026-07-01');
+  });
+
+  it('будущая дата: нет истории → пара (старый закрыт date-1, новый с date), без задвоения', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([]);
+    const fake = makeFake('2026-05-01');
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'new-dept', {
+      effectiveDate: '2026-12-01', // заведомо будущая относительно текущей даты
+    });
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0].params?.[1]).toBe('old-dept');
+    expect(inserts[0].params?.[4]).toBe('2026-11-30');
+    expect(inserts[1].params?.[1]).toBe('new-dept');
+    expect(inserts[1].params?.[3]).toBe('2026-12-01');
+  });
+
+  it('date === hire_date: прежнего периода нет → синтез не создаётся', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([]);
+    const fake = makeFake('2026-05-01');
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'new-dept', {
+      effectiveDate: '2026-05-01',
+    });
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    const synth = inserts.find(q => (q.params || []).includes(SYNTH_REASON));
+    expect(synth).toBeFalsy();
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].params?.[1]).toBe('new-dept');
+  });
+
+  it('date < hire_date: отклоняет как ошибку, ничего не пишет', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([]);
+    const fake = makeFake('2026-05-01');
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await expect(
+      employeeChangesService.changeDepartment(2521, 'new-dept', { effectiveDate: '2026-04-01' }),
+    ).rejects.toThrow(/раньше даты найма/i);
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(0);
+  });
+
+  it('есть закрытая история (исключённый) → синтез не срабатывает', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2026-05-01', effective_to: '2026-06-01' },
+    ]);
+    const fake = makeFake('2026-05-01');
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await employeeChangesService.changeDepartment(2521, 'new-dept', {
+      effectiveDate: '2026-07-01',
+    });
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    const synth = inserts.find(q => (q.params || []).includes(SYNTH_REASON));
+    expect(synth).toBeFalsy();
   });
 });

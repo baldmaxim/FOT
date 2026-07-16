@@ -283,6 +283,30 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
     }
   }
 
+  // Настоящий вход В поддерево ПОСЛЕ периода: есть пара назначений, где новое (cur) входит
+  // в поддерево с effective_from > endDate встык после закрытого периода в ДРУГОМ (вне поддерева)
+  // отделе. Значит за [startDate, endDate] сотрудника здесь ещё не было — его нельзя добавлять
+  // по snapshot (employees.org_department_id уже переписан на новый отдел при переводе).
+  // NULL-safe: переход `NULL → отдел` — тоже вход извне. Смена должности того же отдела
+  // (prev в поддереве) и артефакты freeze (нет prev-стыка) сюда НЕ попадают.
+  const transferredInAfter = await query<{ employee_id: number }>(
+    `SELECT DISTINCT cur.employee_id
+       FROM employee_assignments cur
+       JOIN employee_assignments prev
+         ON prev.employee_id = cur.employee_id
+        AND prev.effective_to = cur.effective_from - 1
+        AND (prev.org_department_id IS NULL
+             OR NOT (prev.org_department_id = ANY($1::uuid[])))
+      WHERE cur.org_department_id = ANY($1::uuid[])
+        AND cur.effective_from > $2::date`,
+    [deptIds, endDate],
+  );
+  const transferredInAfterPeriod = new Set<number>();
+  for (const row of transferredInAfter) {
+    const empId = Number(row.employee_id);
+    if (Number.isFinite(empId)) transferredInAfterPeriod.add(empId);
+  }
+
   // Также включаем тех, у кого employees.org_department_id уже указывает в поддерево
   // (snapshot), но assignment мог не успеть синхронизироваться — добавляем безопасным дефолтом.
   // Это основной источник членства: 70% активных живут только на snapshot.
@@ -293,6 +317,9 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   for (const row of snapshotEmployees) {
     const empId = Number(row.id);
     if (!Number.isFinite(empId)) continue;
+    // Вошёл в этот участок только ПОСЛЕ периода — за прошлый месяц он ещё в старом отделе,
+    // snapshot его сюда тянуть не должен (и не обнуляем transferred_out_date при возврате).
+    if (transferredInAfterPeriod.has(empId)) continue;
     if (!map.has(empId)) {
       map.set(empId, { employee_id: empId, transferred_out_date: null, joined_date: null });
     } else {
@@ -393,6 +420,21 @@ export async function listScopedMembersByDepartment(
          SELECT e.id, e.org_department_id, 2
            FROM employees e
           WHERE e.org_department_id = ANY($1::uuid[])
+            -- Исключаем тех, кто вошёл в поддерево ПОСЛЕ периода (snapshot переписан переводом,
+            -- но за [start, end] сотрудник ещё в старом отделе). NULL-safe; смены должности и
+            -- freeze-артефакты (нет prev-стыка вне поддерева) не отсекаются.
+            AND NOT EXISTS (
+              SELECT 1
+                FROM employee_assignments cur
+                JOIN employee_assignments prev
+                  ON prev.employee_id = cur.employee_id
+                 AND prev.effective_to = cur.effective_from - 1
+                 AND (prev.org_department_id IS NULL
+                      OR NOT (prev.org_department_id = ANY($1::uuid[])))
+               WHERE cur.employee_id = e.id
+                 AND cur.org_department_id = ANY($1::uuid[])
+                 AND cur.effective_from > $3::date
+            )
          UNION ALL
          SELECT de.employee_id, de.from_department_id, 3
            FROM employee_dismissal_events de

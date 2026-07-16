@@ -21,6 +21,7 @@ import {
   formatDateShift,
   isAssignmentActiveOnDateInclusive,
   isEmployeeAssignedToDepartmentOnDate,
+  listEmployeeMembershipsForDepartmentPeriod,
   listScopedMembersByDepartment,
   resolveTimesheetPeriodRange,
   buildMembershipWindowMap,
@@ -125,6 +126,82 @@ describe('timesheet-department-assignments.service', () => {
       expect(isWithinMembershipWindow(wReal, '2026-06-01', 'never')).toBe(true);
       // в окне (>= joined) — всегда true
       expect(isWithinMembershipWindow(wReal, '2026-06-05', 'viaTransferOnly')).toBe(true);
+    });
+  });
+
+  describe('listEmployeeMembershipsForDepartmentPeriod — snapshot с учётом периода', () => {
+    const DEPT = 'cac1f75d-f565-469f-ad40-b498ca5211aa'; // новый отдел (Макшанов)
+
+    it('вход в отдел ПОСЛЕ периода (пара prev→cur) → не член за прошлый месяц (не тянем по snapshot)', async () => {
+      pgQuery.mockReset();
+      collectDeptIdsMock.mockResolvedValue([DEPT]);
+      pgQuery
+        .mockResolvedValueOnce([])                     // assignments ∩ период — новое назначение (01.07) не пересекает июнь
+        .mockResolvedValueOnce([])                     // firedFromDept
+        .mockResolvedValueOnce([{ employee_id: 2495 }])// transferredInAfter — настоящий вход после периода
+        .mockResolvedValueOnce([{ id: 2495 }]);        // snapshotEmployees — snapshot уже указывает на новый отдел
+
+      const res = await listEmployeeMembershipsForDepartmentPeriod(DEPT, '2026-06-01', '2026-06-30');
+
+      expect(res).toEqual([]); // ранний выход: map пуст, activeRows/transferJoins не запрашиваются
+      expect(pgQuery).toHaveBeenCalledTimes(4);
+      // guard-запрос получает [deptIds, endDate]
+      expect(pgQuery.mock.calls[2][1]).toEqual([[DEPT], '2026-06-30']);
+    });
+
+    it('смена должности того же отдела (нет prev-стыка) → остаётся членом за прошлый месяц', async () => {
+      pgQuery.mockReset();
+      collectDeptIdsMock.mockResolvedValue([DEPT]);
+      pgQuery
+        .mockResolvedValueOnce([])                     // assignments ∩ период
+        .mockResolvedValueOnce([])                     // firedFromDept
+        .mockResolvedValueOnce([])                     // transferredInAfter — пары нет (смена должности)
+        .mockResolvedValueOnce([{ id: 500 }])          // snapshotEmployees
+        .mockResolvedValueOnce([])                     // transferJoins
+        .mockResolvedValueOnce([{ id: 500, excluded_from_timesheet: false, excluded_from_timesheet_date: null }]); // activeRows
+
+      const res = await listEmployeeMembershipsForDepartmentPeriod(DEPT, '2026-06-01', '2026-06-30');
+
+      expect(res).toEqual([
+        { employee_id: 500, transferred_out_date: null, joined_date: null, joined_via_transfer: false },
+      ]);
+    });
+
+    it('«выход-возврат»: source-A transferred_out_date НЕ обнуляется snapshot-веткой', async () => {
+      pgQuery.mockReset();
+      collectDeptIdsMock.mockResolvedValue([DEPT]);
+      pgQuery
+        // был в отделе до 30.06 (source A даёт transferred_out_date = 01.07)
+        .mockResolvedValueOnce([{ employee_id: 600, effective_from: '2026-05-01', effective_to: '2026-06-30', org_department_id: DEPT }])
+        .mockResolvedValueOnce([])                     // firedFromDept
+        .mockResolvedValueOnce([{ employee_id: 600 }])// transferredInAfter — вернулся после периода
+        .mockResolvedValueOnce([{ id: 600 }])          // snapshotEmployees — snapshot снова на этот отдел
+        .mockResolvedValueOnce([])                     // transferJoins
+        .mockResolvedValueOnce([{ id: 600, excluded_from_timesheet: false, excluded_from_timesheet_date: null }]); // activeRows
+
+      const res = await listEmployeeMembershipsForDepartmentPeriod(DEPT, '2026-06-01', '2026-06-30');
+
+      expect(res).toEqual([
+        { employee_id: 600, transferred_out_date: '2026-07-01', joined_date: '2026-05-01', joined_via_transfer: false },
+      ]);
+    });
+
+    it('snapshot-only без назначений → член (без регрессии)', async () => {
+      pgQuery.mockReset();
+      collectDeptIdsMock.mockResolvedValue([DEPT]);
+      pgQuery
+        .mockResolvedValueOnce([])                     // assignments
+        .mockResolvedValueOnce([])                     // firedFromDept
+        .mockResolvedValueOnce([])                     // transferredInAfter
+        .mockResolvedValueOnce([{ id: 700 }])          // snapshotEmployees
+        .mockResolvedValueOnce([])                     // transferJoins
+        .mockResolvedValueOnce([{ id: 700, excluded_from_timesheet: false, excluded_from_timesheet_date: null }]); // activeRows
+
+      const res = await listEmployeeMembershipsForDepartmentPeriod(DEPT, '2026-06-01', '2026-06-30');
+
+      expect(res).toEqual([
+        { employee_id: 700, transferred_out_date: null, joined_date: null, joined_via_transfer: false },
+      ]);
     });
   });
 
