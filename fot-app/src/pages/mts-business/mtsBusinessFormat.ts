@@ -81,16 +81,17 @@ export const PACKAGE_COLORS: Record<string, string> = {
 /** Пакет несёт данные, если задан остаток или квота (иначе строка «— из —» — мусор). */
 export const packageHasData = (p: { quota: number | null; remainder: number | null }): boolean =>
   p.quota != null || p.remainder != null;
-/** Одно значение пакета в его единицах: BYTE→МБ, SECOND→минуты, иначе штуки/минуты. */
+/** Одно значение пакета в его единицах: BYTE→МБ (от 1000 МБ — ГБ), SECOND→минуты, иначе штуки/минуты. */
 export const fmtPackageValue = (p: { unitOfMeasure: string | null }, v: number | null): string => {
   if (v == null) return '—';
-  const unit = p.unitOfMeasure === 'BYTE' ? ' МБ' : '';
-  const n = p.unitOfMeasure === 'BYTE'
-    ? Math.round(v / 1_000_000)
-    : p.unitOfMeasure === 'SECOND'
-      ? Math.round(v / 60)
-      : Math.round(v);
-  return `${n.toLocaleString('ru-RU')}${unit}`;
+  if (p.unitOfMeasure === 'BYTE') {
+    const mb = v / 1_000_000;
+    return mb >= 1000
+      ? `${(mb / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ГБ`
+      : `${Math.round(mb).toLocaleString('ru-RU')} МБ`;
+  }
+  const n = p.unitOfMeasure === 'SECOND' ? Math.round(v / 60) : Math.round(v);
+  return n.toLocaleString('ru-RU');
 };
 /** Метка пакета: «интернет» / «минуты» / «SMS» по unitOfMeasure. */
 export const packageLabel = (p: { unitOfMeasure: string | null }): string =>

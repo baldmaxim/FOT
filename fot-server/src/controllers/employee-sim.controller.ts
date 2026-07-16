@@ -10,6 +10,7 @@ import { mtsBusinessCatalogService, type IMtsForwardingRule } from '../services/
 import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { msisdnHash, normalizeMsisdn } from '../services/mts-business-cdr.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import {
   FORWARDING_TYPES,
   validateForwardingTarget,
@@ -26,6 +27,45 @@ import {
 // её на своём номере (write-вызов МТС ChangeCallForwarding). Защита: право edit
 // на /employee/sim (рубильник у админа), forwardingLimiter, аудит, и msisdn из
 // запроса обязан принадлежать этому сотруднику.
+
+/**
+ * Объём интернета тарифа для полосы остатка в «Моя SIM». В ValidityInfo МТС
+ * счётчика интернета у тарифов «Умный бизнес» нет вовсе (безлимит по факту
+ * ограничен пакетом) — объём задан вручную, остаток считаем как квота минус
+ * трафик из выписки за текущий биллинг-период номера.
+ */
+const MY_SIM_INTERNET_QUOTA_BYTES = 30_000_000_000; // 30 ГБ
+
+/**
+ * Псевдо-пакет «Интернет»: если у номера нет BYTE-счётчика с остатком,
+ * возвращаем строку «30 ГБ минус потрачено». Период — биллинг-цикл номера из
+ * validFrom тарифного пакета минут/SMS, fallback — календарный месяц.
+ */
+const buildInternetPackage = async (
+  summary: IMySimNumber,
+  hash: string,
+): Promise<IMySimNumber['packages'][number] | null> => {
+  const pkgs = summary.packages ?? [];
+  if (pkgs.some(p => p.unitOfMeasure === 'BYTE' && (p.remainder ?? 0) > 0)) return null;
+  const today = moscowTodayIso();
+  const cycle = pkgs.find(p =>
+    p.name != null && p.validFrom != null && p.validTo != null
+    && moscowTodayIso(new Date(p.validFrom)) <= today
+    && moscowTodayIso(new Date(p.validTo)) >= today);
+  const dateFrom = cycle?.validFrom ? moscowTodayIso(new Date(cycle.validFrom)) : `${today.slice(0, 7)}-01`;
+  const totals = await mtsBusinessStatementRowsService.getUsageTotals(hash, dateFrom, today);
+  const consumed = totals.groups.find(g => g.key === 'internet')?.bytes ?? 0;
+  return {
+    name: 'Интернет',
+    unitOfMeasure: 'BYTE',
+    quota: MY_SIM_INTERNET_QUOTA_BYTES,
+    remainder: Math.max(0, MY_SIM_INTERNET_QUOTA_BYTES - consumed),
+    consumption: consumed,
+    rotate: null,
+    validFrom: cycle?.validFrom ?? null,
+    validTo: cycle?.validTo ?? null,
+  };
+};
 
 const fail = (res: Response, error: unknown, fallback: string): void => {
   console.error(`[employee-sim] ${fallback}:`, error instanceof Error ? error.message : 'unknown');
@@ -98,6 +138,8 @@ export const employeeSimController = {
         if (!summary) continue;
         const hash = msisdnHash(msisdn);
         const months = hash ? await mtsBusinessStatementRowsService.getMonthsWithData(hash) : [];
+        const internet = hash ? await buildInternetPackage(summary, hash) : null;
+        if (internet) summary.packages = [...(summary.packages ?? []), internet];
         numbers.push({ ...summary, months });
       }
       res.json({ success: true, data: { numbers } });

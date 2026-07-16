@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Response } from 'express';
 
 vi.mock('../config/postgres.js', () => ({
@@ -139,6 +139,99 @@ describe('employeeSimController.getMySim', () => {
     const res = mockRes();
     await employeeSimController.getMySim(mockReq(42), res);
     expect(res.json).toHaveBeenCalledWith({ success: true, data: { numbers: [] } });
+  });
+});
+
+describe('employeeSimController.getMySim — псевдо-пакет «Интернет»', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-10T12:00:00+03:00'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const minutesPackage = {
+    name: 'Ежемесячная плата Умный бизнес M (мин)',
+    unitOfMeasure: 'SECOND',
+    quota: 60000,
+    remainder: 32340,
+    consumption: null,
+    rotate: null,
+    validFrom: '2026-06-16T21:00:00Z',
+    validTo: '2026-07-16T20:59:59Z',
+  };
+
+  it('нет BYTE-счётчика → добавляется «Интернет» 30 ГБ минус трафик за биллинг-период номера', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce(['79150000001']);
+    subscribers.getMySimSummary.mockResolvedValueOnce({
+      msisdn: '79150000001',
+      tariff: { name: 'Умный бизнес M', fee: null },
+      charges: null,
+      packages: [minutesPackage],
+      capturedAt: '2026-07-10',
+    });
+    stmtRows.getMonthsWithData.mockResolvedValueOnce(['2026-07']);
+    stmtRows.getUsageTotals.mockResolvedValueOnce({
+      groups: [{ key: 'internet', count: 10, seconds: 0, bytes: 5_000_000_000, amount: 0, inCount: 0, inSeconds: 0, outCount: 0, outSeconds: 0 }],
+      total: 0,
+    });
+    const res = mockRes();
+    await employeeSimController.getMySim(mockReq(42), res);
+
+    // Период трафика = биллинг-цикл номера (validFrom тарифного пакета по МСК) → сегодня.
+    expect(stmtRows.getUsageTotals).toHaveBeenCalledWith(expect.any(String), '2026-06-17', '2026-07-10');
+    const payload = res.json.mock.calls[0][0] as {
+      data: { numbers: Array<{ packages: Array<{ name: string | null; unitOfMeasure: string | null; quota: number | null; remainder: number | null }> }> };
+    };
+    const internet = payload.data.numbers[0].packages.find(p => p.unitOfMeasure === 'BYTE');
+    expect(internet).toBeDefined();
+    expect(internet?.name).toBe('Интернет');
+    expect(internet?.quota).toBe(30_000_000_000);
+    expect(internet?.remainder).toBe(25_000_000_000);
+  });
+
+  it('BYTE-счётчик с остатком уже есть → псевдо-пакет не добавляется, выписка не читается', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce(['79150000001']);
+    subscribers.getMySimSummary.mockResolvedValueOnce({
+      msisdn: '79150000001',
+      tariff: { name: 'Умный бизнес M', fee: null },
+      charges: null,
+      packages: [{ ...minutesPackage, name: 'Интернет-пакет 300', unitOfMeasure: 'BYTE', quota: null, remainder: 200_000_000 }],
+      capturedAt: '2026-07-10',
+    });
+    stmtRows.getMonthsWithData.mockResolvedValueOnce(['2026-07']);
+    const res = mockRes();
+    await employeeSimController.getMySim(mockReq(42), res);
+
+    expect(stmtRows.getUsageTotals).not.toHaveBeenCalled();
+    const payload = res.json.mock.calls[0][0] as {
+      data: { numbers: Array<{ packages: Array<{ unitOfMeasure: string | null }> }> };
+    };
+    expect(payload.data.numbers[0].packages.filter(p => p.unitOfMeasure === 'BYTE')).toHaveLength(1);
+  });
+
+  it('трафик превысил квоту → остаток 0, не отрицательный', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce(['79150000001']);
+    subscribers.getMySimSummary.mockResolvedValueOnce({
+      msisdn: '79150000001',
+      tariff: { name: 'Умный бизнес M', fee: null },
+      charges: null,
+      packages: [minutesPackage],
+      capturedAt: '2026-07-10',
+    });
+    stmtRows.getMonthsWithData.mockResolvedValueOnce(['2026-07']);
+    stmtRows.getUsageTotals.mockResolvedValueOnce({
+      groups: [{ key: 'internet', count: 10, seconds: 0, bytes: 31_000_000_000, amount: 0, inCount: 0, inSeconds: 0, outCount: 0, outSeconds: 0 }],
+      total: 0,
+    });
+    const res = mockRes();
+    await employeeSimController.getMySim(mockReq(42), res);
+
+    const payload = res.json.mock.calls[0][0] as {
+      data: { numbers: Array<{ packages: Array<{ unitOfMeasure: string | null; remainder: number | null }> }> };
+    };
+    expect(payload.data.numbers[0].packages.find(p => p.unitOfMeasure === 'BYTE')?.remainder).toBe(0);
   });
 });
 

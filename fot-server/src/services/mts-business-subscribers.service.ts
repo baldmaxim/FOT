@@ -262,6 +262,42 @@ class MtsBusinessSubscribersService {
     };
   }
 
+  private quotaCache: { map: Map<string, number>; expiresAt: number } | null = null;
+
+  /**
+   * Квоты пакетов, выведенные из данных: МТС ValidityInfo объёма пакета не
+   * отдаёт (quota всегда null), но у незадействованных SIM остаток равен
+   * полному пакету — поэтому самый частый остаток (mode) одинакового пакета
+   * по всем номерам = объём тарифа. Порог ≥3 номеров отсекает единичные
+   * служебные счётчики. Ключ — `name|unitOfMeasure`, кэш 1 час.
+   */
+  async getDerivedPackageQuotas(): Promise<Map<string, number>> {
+    const now = Date.now();
+    if (this.quotaCache && this.quotaCache.expiresAt > now) return this.quotaCache.map;
+    const rows = await query<{ name: string; uom: string | null; quota: string }>(
+      `WITH latest AS (
+         SELECT DISTINCT ON (msisdn_hash) payload
+           FROM mts_business_metric_snapshot
+          WHERE metric = 'validity_msisdn'
+          ORDER BY msisdn_hash, captured_at DESC
+       )
+       SELECT p->>'name' AS name, p->>'unitOfMeasure' AS uom,
+              mode() WITHIN GROUP (ORDER BY (p->>'remainder')::numeric) AS quota
+         FROM latest, jsonb_array_elements(payload) p
+        WHERE p->>'name' IS NOT NULL AND (p->>'remainder')::numeric > 0
+        GROUP BY 1, 2
+       HAVING count(*) >= 3`,
+    );
+    const map = new Map<string, number>();
+    for (const r of rows) {
+      const quota = Number(r.quota);
+      // quota ≤ 1 — служебные счётчики-флаги («Переадресация…»), не пакеты.
+      if (Number.isFinite(quota) && quota > 1) map.set(`${r.name}|${r.uom ?? ''}`, quota);
+    }
+    this.quotaCache = { map, expiresAt: now + 60 * 60 * 1000 };
+    return map;
+  }
+
   /**
    * Данные SIM для ЛК сотрудника — из тех же снапшотов, что карточка абонента,
    * но только «безопасные» секции (см. IMySimNumber). product_services читается
@@ -272,11 +308,12 @@ class MtsBusinessSubscribersService {
   async getMySimSummary(rawMsisdn: string): Promise<IMySimNumber | null> {
     const monthTo = moscowTodayIso();
     const monthFrom = `${monthTo.slice(0, 7)}-01`;
-    const [snaps, charges] = await Promise.all([
+    const [snaps, charges, quotas] = await Promise.all([
       mtsBusinessMetricsStoreService.getLatestSnapshotsForMsisdn(rawMsisdn, [
         'bill_plan', 'tariff_fee', 'product_services', 'validity_msisdn',
       ]),
       mtsBusinessMetricsStoreService.getMsisdnChargesForPeriod(rawMsisdn, monthFrom, monthTo),
+      this.getDerivedPackageQuotas().catch(() => new Map<string, number>()),
     ]);
 
     const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
@@ -294,7 +331,12 @@ class MtsBusinessSubscribersService {
         fee: (snaps.get('tariff_fee')?.payload as IMtsTariffFee | undefined) ?? null,
       },
       charges: charges ? { amount: charges.amount, capturedAt: charges.capturedAt } : null,
-      packages: arr<IMtsPackageCounter>(snaps.get('validity_msisdn')?.payload),
+      // Квота из данных (перенос остатков может дать remainder > quota — фронт кэпит полосу).
+      packages: arr<IMtsPackageCounter>(snaps.get('validity_msisdn')?.payload).map(p => (
+        p.quota == null && p.remainder != null
+          ? { ...p, quota: quotas.get(`${p.name}|${p.unitOfMeasure ?? ''}`) ?? null }
+          : p
+      )),
       capturedAt,
     };
   }
