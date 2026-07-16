@@ -270,11 +270,21 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const [positionDate, setPositionDate] = useState(() => getLocalISODate());
   const [positionReason, setPositionReason] = useState('');
   const [deptVal, setDeptVal] = useState(() => modalEmp?.org_department_id || '');
-  const [deptDate, setDeptDate] = useState(() => (
-    modalEmp?.excluded_from_timesheet && modalEmp.excluded_from_timesheet_at
-      ? new Date(modalEmp.excluded_from_timesheet_at).toLocaleDateString('en-CA')
-      : getLocalISODate()
-  ));
+  const [deptDate, setDeptDate] = useState(() => {
+    // Возврат в табель: старт = эффективная дата исключения (excluded_from_timesheet_date),
+    // а не время выполнения операции (excluded_from_timesheet_at), иначе новый сегмент
+    // назначения не состыкуется с закрытым при исключении и в истории появится разрыв.
+    if (modalEmp?.excluded_from_timesheet) {
+      return (
+        modalEmp.excluded_from_timesheet_date
+        ?? (modalEmp.excluded_from_timesheet_at
+          ? new Date(modalEmp.excluded_from_timesheet_at).toLocaleDateString('en-CA')
+          : null)
+        ?? getLocalISODate()
+      );
+    }
+    return getLocalISODate();
+  });
   const [deptReason, setDeptReason] = useState('');
   const [scheduleVal, setScheduleVal] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.scheduleId || '' : '');
   const [scheduleDate, setScheduleDate] = useState(() => currentSchedule?.source === 'employee' ? currentSchedule.effectiveFrom || getLocalISODate() : getLocalISODate());
@@ -835,7 +845,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
         </div>
         <div className="sc-modal-footer">
           <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
-          <button className="sc-btn apply" onClick={handleDepartment} disabled={!deptVal || deptVal === modalEmp.org_department_id || !deptDate || saving}>
+          <button className="sc-btn apply" onClick={handleDepartment} disabled={!deptVal || (!modalEmp.excluded_from_timesheet && deptVal === modalEmp.org_department_id) || !deptDate || saving}>
             {saving ? 'Сохранение...' : 'Применить'}
           </button>
         </div>

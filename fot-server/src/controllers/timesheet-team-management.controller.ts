@@ -13,6 +13,7 @@ import { execute, query, queryOne } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { employeeCache } from '../services/employee-cache.service.js';
+import { employeeChangesService } from '../services/employee-changes.service.js';
 import { hasPageEdit } from '../services/access-control.service.js';
 import {
   formatDateShift,
@@ -255,20 +256,44 @@ export const timesheetTeamManagementController = {
       if (employeeRow.employment_status !== 'active') {
         return res.status(409).json({ success: false, error: 'Можно добавлять только активных сотрудников' });
       }
-      if (await isEmployeeAssignedToDepartmentOnDate(parsed.employee_id, targetDepartmentId, parsed.effective_from)) {
+      const restoredFromExclusion = Boolean(excludedFlagRow?.excluded_from_timesheet);
+      // Возврат из исключения в ТОТ ЖЕ отдел: сотрудник по данным всё ещё числится в этом
+      // отделе (активное назначение или org_department_id), поэтому обычная проверка «уже в
+      // отделе» дала бы ложный 409. Для возврата её пропускаем и ниже создаём новый сегмент.
+      const isSameDeptReturn = restoredFromExclusion
+        && employeeRow.org_department_id === targetDepartmentId;
+
+      if (!isSameDeptReturn
+        && await isEmployeeAssignedToDepartmentOnDate(parsed.employee_id, targetDepartmentId, parsed.effective_from)) {
         return res.status(409).json({ success: false, error: 'Сотрудник уже находится в выбранном отделе' });
       }
 
       const fromDepartmentId = employeeRow.org_department_id;
-      const restoredFromExclusion = Boolean(excludedFlagRow?.excluded_from_timesheet);
 
-      const moveResult = await moveEmployeeToDepartmentInternal({
-        req,
-        employee: employeeRow,
-        targetDepartment,
-        reason: 'Перевод из табеля',
-        effectiveDate: parsed.effective_from,
-      });
+      let moveResult: 'sigur' | 'portal' | 'noop';
+      if (isSameDeptReturn) {
+        // Тот же отдел → moveEmployeeToDepartmentInternal вернул бы noop и не создал сегмент.
+        // Явно создаём новый сегмент employee_assignments от даты возврата (без Sigur — отдел
+        // в Sigur не меняется). forceHistory обходит freeze_history, чтобы не переоткрыть старый
+        // сегмент целиком. changeDepartment идемпотентна по effective_from (обновляет sameDay-
+        // сегмент вместо вставки дубля), поэтому повтор после сбоя не создаёт пересечений.
+        await employeeChangesService.changeDepartment(parsed.employee_id, targetDepartmentId, {
+          reason: 'Возврат в табель',
+          effectiveDate: parsed.effective_from,
+          createdBy: req.user.id,
+          forceHistory: true,
+          lockDepartment: false,
+        });
+        moveResult = 'portal';
+      } else {
+        moveResult = await moveEmployeeToDepartmentInternal({
+          req,
+          employee: employeeRow,
+          targetDepartment,
+          reason: 'Перевод из табеля',
+          effectiveDate: parsed.effective_from,
+        });
+      }
 
       if (restoredFromExclusion) {
         await execute(
