@@ -2,6 +2,7 @@ import { type FC, type ReactNode } from 'react';
 import { useMtsBusinessAccounts } from '../../../hooks/useMtsBusinessData';
 import { AccountsSection } from './AccountsSection';
 import { SyncSection } from './SyncSection';
+import { SyncLogSection } from './SyncLogSection';
 import { XmlSection } from './XmlSection';
 import styles from '../MtsBusinessPage.module.css';
 
@@ -50,6 +51,13 @@ export const AdminTab: FC = () => {
         desc="Заказ XML-детализации на почту по счёту, статусы заявок и загрузка файла (до 300 МБ) с дедупликацией против БД."
       >
         <XmlSection />
+      </AdminCard>
+
+      <AdminCard
+        title="Лог синхронизации"
+        desc="История прогонов всех фоновых синков МТС: ошибки по конкретным номерам, изменения ФИО/комментариев и персданных. Записи можно копировать для отладки."
+      >
+        <SyncLogSection />
       </AdminCard>
     </div>
   );

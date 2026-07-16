@@ -1,0 +1,178 @@
+/* «Лог синхронизации» МТС Бизнес: список прогонов с раскрытием записей. */
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.rollingLink {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.runBox {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+}
+
+.runRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.runChevron {
+  color: var(--text-tertiary);
+  flex: 0 0 auto;
+}
+
+.runTitle {
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.runInitiator {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.runMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.runSummary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 0 0 4px 20px;
+  overflow-wrap: anywhere;
+}
+
+.entries {
+  border-top: 1px dashed var(--border-color);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+.entriesToolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.entryRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 50%, transparent);
+}
+
+.entryRow:last-child {
+  border-bottom: none;
+}
+
+.entryErr .entryLevel { color: var(--error); }
+.entryWarn .entryLevel { color: var(--warning); }
+
+.entryTime {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.entryLevel {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  min-width: 62px;
+}
+
+.entryBody {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.entryMsisdn {
+  font-weight: 600;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+
+.entryCode {
+  font-family: ui-monospace, monospace;
+  color: var(--text-secondary);
+  margin-right: 6px;
+}
+
+.copyBtn {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 2px 8px;
+  min-height: 24px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.copyBtn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
+
+/* Узкие экраны (Android 360px+): записи стеком, без горизонтального скролла. */
+@media (max-width: 560px) {
+  .runRow {
+    flex-wrap: wrap;
+  }
+
+  .runMeta {
+    width: 100%;
+    padding-left: 20px;
+    white-space: normal;
+  }
+
+  .entryRow {
+    flex-wrap: wrap;
+  }
+
+  .entryBody {
+    flex-basis: 100%;
+    order: 3;
+  }
+}
