@@ -27,6 +27,11 @@
   overflow-wrap: anywhere;
 }
 
+.name {
+  color: var(--text-tertiary);
+  opacity: 0.8;
+}
+
 .value {
   font-size: 13px;
   color: var(--text-primary);

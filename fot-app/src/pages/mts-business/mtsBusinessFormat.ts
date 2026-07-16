@@ -81,18 +81,25 @@ export const PACKAGE_COLORS: Record<string, string> = {
 /** Пакет несёт данные, если задан остаток или квота (иначе строка «— из —» — мусор). */
 export const packageHasData = (p: { quota: number | null; remainder: number | null }): boolean =>
   p.quota != null || p.remainder != null;
-/** Одно значение пакета в его единицах: BYTE→МБ, иначе штуки/минуты. */
+/** Одно значение пакета в его единицах: BYTE→МБ, SECOND→минуты, иначе штуки/минуты. */
 export const fmtPackageValue = (p: { unitOfMeasure: string | null }, v: number | null): string => {
   if (v == null) return '—';
   const unit = p.unitOfMeasure === 'BYTE' ? ' МБ' : '';
-  const n = p.unitOfMeasure === 'BYTE' ? Math.round(v / 1_000_000) : Math.round(v);
+  const n = p.unitOfMeasure === 'BYTE'
+    ? Math.round(v / 1_000_000)
+    : p.unitOfMeasure === 'SECOND'
+      ? Math.round(v / 60)
+      : Math.round(v);
   return `${n.toLocaleString('ru-RU')}${unit}`;
 };
 /** Метка пакета: «интернет» / «минуты» / «SMS» по unitOfMeasure. */
 export const packageLabel = (p: { unitOfMeasure: string | null }): string =>
   (p.unitOfMeasure && UNIT_LABELS[p.unitOfMeasure]) || p.unitOfMeasure || '—';
+/** «минуты: 923 из 1000»; без квоты (ValidityInfo её не отдаёт) — «минуты: 923». */
 export const fmtPackage = (p: { unitOfMeasure: string | null; quota: number | null; remainder: number | null }): string =>
-  `${packageLabel(p)}: ${fmtPackageValue(p, p.remainder)} из ${fmtPackageValue(p, p.quota)}`;
+  p.quota != null
+    ? `${packageLabel(p)}: ${fmtPackageValue(p, p.remainder)} из ${fmtPackageValue(p, p.quota)}`
+    : `${packageLabel(p)}: ${fmtPackageValue(p, p.remainder)}`;
 /** Доля остатка пакета (0..1) для полосы заполнения; null если квота неизвестна. */
 export const packagePercent = (p: { quota: number | null; remainder: number | null }): number | null => {
   if (p.quota == null || p.quota <= 0 || p.remainder == null) return null;

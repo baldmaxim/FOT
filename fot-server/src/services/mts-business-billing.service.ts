@@ -27,7 +27,10 @@ export interface IMtsCharge {
 }
 
 export interface IMtsPackageCounter {
+  /** Название счётчика из productSpecification («Умный бизнес M (пакет минут)»). */
+  name: string | null;
   unitOfMeasure: string | null; // BYTE | MINUTE | SECOND | ITEM | MONEY
+  /** Квоты пакета в ответе ValidityInfo НЕТ (проверено probe 16.07.2026) — всегда null. */
   quota: number | null;
   remainder: number | null;
   consumption: number | null;
@@ -116,20 +119,47 @@ const collectByMarker = (body: unknown, marker: string, depth = 0, out: Record<s
   return out;
 };
 
-const parsePackages = (resp: unknown): IMtsPackageCounter[] => {
-  const items = collectByMarker(resp, 'unitOfMeasure');
-  return items.map(r => {
-    const validFor = r.validFor as Record<string, unknown> | undefined;
-    return {
-      unitOfMeasure: asString(r.unitOfMeasure),
-      quota: toNumber(r.BQ),
-      remainder: toNumber(r.reminder),
-      consumption: toNumber(r.Consumption),
-      rotate: asString(r.Rotate),
+/**
+ * Реальная форма ответа Bills/ValidityInfo (probe 16.07.2026, а не BQ/reminder
+ * как предполагалось по документации): счётчики лежат в
+ * customerAccount[].productRelationship[].product:
+ *   productPrice[0].unitOfMeasure, productSpecification.{id,name},
+ *   productSpecCharacteristic[].prodSpecCharacteristicValue[] c парами
+ *   {valueType:'CounterValueType', value:'Remainder'|'Accumulation'|'Unspecified'}
+ *   и {valueType:'CurrentValue', value:'60000'}.
+ * Остаток пакета = CurrentValue счётчиков типа Remainder (секунды/штуки/байты);
+ * Accumulation/Unspecified — служебные счётчики (факты услуг), не остатки.
+ * Квоты «из скольких» в ответе нет — quota всегда null. Экспорт для тестов.
+ */
+export const parsePackages = (resp: unknown): IMtsPackageCounter[] => {
+  const out: IMtsPackageCounter[] = [];
+  for (const p of collectByMarker(resp, 'productSpecification')) {
+    const spec = p.productSpecification as Record<string, unknown> | undefined;
+    const price = Array.isArray(p.productPrice) ? (p.productPrice[0] as Record<string, unknown> | undefined) : undefined;
+    const validFor = p.validFor as Record<string, unknown> | undefined;
+    let counterType: string | null = null;
+    let current: number | null = null;
+    for (const ch of (spec?.productSpecCharacteristic as unknown[] | undefined) ?? []) {
+      const vals = (ch as Record<string, unknown>).prodSpecCharacteristicValue;
+      if (!Array.isArray(vals)) continue;
+      for (const v of vals as Array<Record<string, unknown>>) {
+        if (v.valueType === 'CounterValueType') counterType = asString(v.value);
+        else if (v.valueType === 'CurrentValue') current = toNumber(v.value);
+      }
+    }
+    if (counterType !== 'Remainder') continue;
+    out.push({
+      name: asString(spec?.name),
+      unitOfMeasure: asString(price?.unitOfMeasure),
+      quota: null,
+      remainder: current,
+      consumption: null,
+      rotate: null,
       validFrom: asString(validFor?.startDateTime),
       validTo: asString(validFor?.endDateTime),
-    };
-  });
+    });
+  }
+  return out;
 };
 
 // Контракты TariffRental/PaymentHistory/DocumentDeliveryMethod НЕ проверены

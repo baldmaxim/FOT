@@ -59,7 +59,10 @@ export interface IMtsPaymentRow {
 }
 
 export interface IMtsPackageRow {
+  /** Название счётчика МТС («Умный бизнес M (пакет минут)»); у старых снимков отсутствует. */
+  name?: string | null;
   unitOfMeasure: string | null;
+  /** Квоты пакета ValidityInfo не отдаёт — обычно null («осталось X» без «из Y»). */
   quota: number | null;
   remainder: number | null;
 }
