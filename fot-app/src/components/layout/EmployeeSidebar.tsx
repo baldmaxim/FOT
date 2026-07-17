@@ -67,6 +67,19 @@ const navGroups: INavGroup[] = [
         ),
       },
       {
+        id: 'testing',
+        path: '/employee/testing',
+        label: 'Тестирование',
+        requiredPage: '/employee/testing',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M9.5 9.5a2.5 2.5 0 1 1 3.7 2.2c-.7.4-1.2 1-1.2 1.8v.5"/>
+            <line x1="12" y1="17" x2="12" y2="17.01"/>
+          </svg>
+        ),
+      },
+      {
         id: 'hiring',
         path: '/employee/hiring',
         label: 'Заявки на поиск',

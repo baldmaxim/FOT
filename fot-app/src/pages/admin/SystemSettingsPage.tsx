@@ -21,6 +21,7 @@ import {
   useDashboardSettings,
 } from '../../hooks/useSettingsData';
 import { OpenRouterSettingsSection } from '../../components/admin/OpenRouterSettingsSection';
+import { AdaptiveTestingSettingsSection } from '../../components/admin/AdaptiveTestingSettingsSection';
 import { NewdbSettingsSection } from '../../components/admin/NewdbSettingsSection';
 import styles from './SystemSettingsPage.module.css';
 
@@ -702,6 +703,8 @@ export const SystemSettingsPage: FC = () => {
       </div>
 
       <OpenRouterSettingsSection />
+
+      <AdaptiveTestingSettingsSection />
 
       <NewdbSettingsSection />
 

@@ -1,5 +1,5 @@
 import axios, { AxiosError } from 'axios';
-import { settingsService, ALLOWED_OPENROUTER_MODELS, isAllowedOpenRouterModel } from './settings.service.js';
+import { settingsService, ALLOWED_OPENROUTER_MODELS, isKnownOpenRouterModel } from './settings.service.js';
 
 const TIMEOUT_MS = 60_000;
 const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
@@ -62,6 +62,15 @@ export interface IChatCompletionRequest {
   };
   temperature?: number;
   max_tokens?: number;
+  seed?: number;
+  reasoning?: { effort: 'low' | 'medium' | 'high' };
+  /** OpenRouter provider routing (data_collection/zdr/fallbacks). */
+  provider?: {
+    data_collection?: 'deny' | 'allow';
+    zdr?: boolean;
+    require_parameters?: boolean;
+    allow_fallbacks?: boolean;
+  };
 }
 
 export interface IChatCompletionUsage {
@@ -102,47 +111,75 @@ export const openRouterService = {
 
   /**
    * Выполнить chat completion. Модель берётся из system_settings.
-   * Можно переопределить через opts.modelOverride (только из white-list).
+   * Можно переопределить через opts.modelOverride (только из каталога моделей).
+   *
+   * opts.configOverride — ключ/baseUrl вместо глобального OCR-конфига
+   * (адаптивное тестирование резолвит и валидирует свой конфиг само).
+   * opts.maxAttempts — СУММАРНОЕ число HTTP-попыток (не «ретраев сверх
+   * первой»); по умолчанию RETRY_ATTEMPTS.
    */
   async chatCompletion(
     payload: IChatCompletionRequest,
-    opts?: { modelOverride?: string },
+    opts?: {
+      modelOverride?: string;
+      configOverride?: { apiKey: string; baseUrl: string };
+      title?: string;
+      maxAttempts?: number;
+    },
   ): Promise<IChatCompletionResponse & { resolvedModel: string }> {
-    const config = await settingsService.getResolvedOpenRouterConfig();
-    if (!config) {
-      throw new Error('OpenRouter не настроен (нет API key или выключен)');
+    let apiKey: string;
+    let baseUrl: string;
+    let model: string | undefined;
+
+    if (opts?.configOverride) {
+      apiKey = opts.configOverride.apiKey;
+      baseUrl = opts.configOverride.baseUrl;
+    } else {
+      const config = await settingsService.getResolvedOpenRouterConfig();
+      if (!config) {
+        throw new Error('OpenRouter не настроен (нет API key или выключен)');
+      }
+      apiKey = config.apiKey;
+      baseUrl = config.baseUrl;
+      model = config.model;
     }
 
-    let model = config.model;
     if (opts?.modelOverride) {
-      if (!isAllowedOpenRouterModel(opts.modelOverride)) {
+      if (!isKnownOpenRouterModel(opts.modelOverride)) {
         throw new Error(`Модель "${opts.modelOverride}" не входит в список разрешённых`);
       }
       model = opts.modelOverride;
     }
+    if (!model) {
+      throw new Error('Модель OpenRouter не задана');
+    }
 
-    const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`;
+    const maxAttempts = Math.max(1, Math.min(opts?.maxAttempts ?? RETRY_ATTEMPTS, RETRY_ATTEMPTS));
+
+    const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
     const headers = {
-      Authorization: `Bearer ${config.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'HTTP-Referer': process.env.PUBLIC_URL || 'https://fot.local',
-      'X-Title': 'FOT Patent Receipts OCR',
+      'X-Title': opts?.title || 'FOT Patent Receipts OCR',
     };
 
     const body = { model, ...payload };
 
     let lastErr: unknown;
-    for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const res = await axios.post<IChatCompletionResponse>(url, body, {
           headers,
           timeout: TIMEOUT_MS,
+          // Redirect от шлюза = ошибка (anti-SSRF: не уходим с доверенного URL).
+          maxRedirects: 0,
         });
         return { ...res.data, resolvedModel: model };
       } catch (err) {
         lastErr = err;
         const axErr = err as AxiosError;
-        if (attempt < RETRY_ATTEMPTS && isRetryable(axErr)) {
+        if (attempt < maxAttempts && isRetryable(axErr)) {
           const status = axErr.response?.status;
           const retryAfter = parseRetryAfter(axErr.response?.headers?.['retry-after']);
           let delay: number;
@@ -152,7 +189,7 @@ export const openRouterService = {
           } else {
             delay = Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_MAX_MS);
           }
-          console.warn(`[openrouter] retry ${attempt}/${RETRY_ATTEMPTS} after ${delay}ms (${status || axErr.code}${retryAfter !== null ? `, retry-after=${retryAfter}s` : ''})`);
+          console.warn(`[openrouter] retry ${attempt}/${maxAttempts} after ${delay}ms (${status || axErr.code}${retryAfter !== null ? `, retry-after=${retryAfter}s` : ''})`);
           await sleep(delay);
           continue;
         }

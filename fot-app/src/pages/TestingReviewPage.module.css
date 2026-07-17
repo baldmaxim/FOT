@@ -1,0 +1,252 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.headTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.headTitle h2 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.headIcon {
+  color: var(--accent);
+}
+
+.viewSwitch {
+  display: flex;
+  gap: 6px;
+}
+
+.viewBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.viewActive {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-secondary);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 720px;
+}
+
+.table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.row {
+  cursor: pointer;
+}
+
+.row:hover td {
+  background: var(--bg-tertiary);
+}
+
+.scoreCell {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.weakCell {
+  max-width: 220px;
+  color: var(--text-secondary);
+}
+
+.chevronCell {
+  color: var(--text-tertiary);
+}
+
+.detailCell {
+  background: var(--bg-primary);
+}
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 6px 2px;
+}
+
+.detailLoading {
+  padding: 10px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.detailCols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.detailBlock h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.detailBlock ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.compList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 560px;
+}
+
+.compRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 2fr 40px;
+  align-items: center;
+  gap: 10px;
+}
+
+.compName {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.compTrack {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.compFill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--success, #2e9e54);
+}
+
+.compLow {
+  background: var(--error, #d9534f);
+}
+
+.compScore {
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.answers {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.answerRow {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-secondary);
+}
+
+.answerHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.answerScore {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.answerQuestion {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.answerText {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.answerCorrect {
+  font-size: 12px;
+  color: var(--success, #2e9e54);
+  margin: 0;
+}
+
+.answerMissed {
+  font-size: 12px;
+  color: var(--error, #d9534f);
+  margin: 0;
+}

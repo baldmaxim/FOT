@@ -47,6 +47,7 @@ import phonebookRoutes from './routes/phonebook.routes.js';
 import presenceRoutes from './routes/presence.routes.js';
 import feedbackRoutes from './routes/feedback.routes.js';
 import testsRoutes from './routes/tests.routes.js';
+import adaptiveTestingRoutes from './routes/adaptive-testing.routes.js';
 import hiringRequestsRoutes from './routes/hiring-requests.routes.js';
 import publicDataApiRoutes from './routes/public-data-api.routes.js';
 
@@ -145,6 +146,7 @@ app.use('/api/phonebook', phonebookRoutes);
 app.use('/api/presence', presenceRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/tests', testsRoutes);
+app.use('/api/adaptive-testing', adaptiveTestingRoutes);
 app.use('/api/public/v1', publicDataApiRoutes);
 
 // 404 handler

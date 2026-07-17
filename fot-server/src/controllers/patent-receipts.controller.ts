@@ -9,7 +9,7 @@ import { ensureBrowserFriendlyImage } from '../services/image-normalize.service.
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import type { PatentPaymentReceiptPatch } from '../types/patent-receipt.types.js';
-import { isAllowedOpenRouterModel } from '../services/settings.service.js';
+import { isAllowedOcrModel } from '../services/settings.service.js';
 import {
   decryptReceiptRow,
   decryptRawResponse,
@@ -631,7 +631,7 @@ const recognize = async (req: AuthenticatedRequest, res: Response): Promise<void
     }
 
     const { model } = (req.body || {}) as { model?: string };
-    if (model !== undefined && !isAllowedOpenRouterModel(String(model))) {
+    if (model !== undefined && !isAllowedOcrModel(String(model))) {
       res.status(400).json({ success: false, error: 'Модель не разрешена' });
       return;
     }

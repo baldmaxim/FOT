@@ -52,6 +52,10 @@ export interface IOpenRouterModelInfo {
   label: string;
   costPer1kReceiptsRub: number;
   supportsVision: boolean;
+  /** Разрешена для распознавания чеков (OCR). */
+  allowedForReceiptOcr: boolean;
+  /** Разрешена для адаптивного тестирования. */
+  allowedForAdaptiveTesting: boolean;
 }
 
 export interface IOpenRouterPublicSettings {
@@ -71,10 +75,11 @@ export interface IOpenRouterResolvedConfig {
 }
 
 export const ALLOWED_OPENROUTER_MODELS: IOpenRouterModelInfo[] = [
-  { id: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true },
-  { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true },
-  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (платно)', costPer1kReceiptsRub: 70, supportsVision: true },
-  { id: 'qwen/qwen3.7-plus', label: 'Qwen3.7 Plus (платно)', costPer1kReceiptsRub: 90, supportsVision: true },
+  { id: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
+  { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
+  { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (платно)', costPer1kReceiptsRub: 70, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
+  { id: 'qwen/qwen3.7-plus', label: 'Qwen3.7 Plus (платно)', costPer1kReceiptsRub: 90, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
+  { id: 'openai/gpt-5.6-luna', label: 'GPT-5.6 Luna (тестирование)', costPer1kReceiptsRub: 0, supportsVision: true, allowedForReceiptOcr: false, allowedForAdaptiveTesting: true },
 ];
 
 export const DEFAULT_OPENROUTER_SETTINGS = {
@@ -83,10 +88,61 @@ export const DEFAULT_OPENROUTER_SETTINGS = {
   baseUrl: 'https://openrouter.ai/api/v1',
 };
 
-export const isAllowedOpenRouterModel = (modelId: string): boolean => {
+/** Модель есть в каталоге (для override в openrouter.service). */
+export const isKnownOpenRouterModel = (modelId: string): boolean =>
+  ALLOWED_OPENROUTER_MODELS.some(x => x.id === modelId);
+
+/** Модель разрешена для распознавания чеков (OCR-конфиг и повторный прогон). */
+export const isAllowedOcrModel = (modelId: string): boolean => {
   const m = ALLOWED_OPENROUTER_MODELS.find(x => x.id === modelId);
-  return Boolean(m && m.supportsVision);
+  return Boolean(m && m.allowedForReceiptOcr);
 };
+
+/** Модель разрешена для адаптивного тестирования. */
+export const isAllowedTextModel = (modelId: string): boolean => {
+  const m = ALLOWED_OPENROUTER_MODELS.find(x => x.id === modelId);
+  return Boolean(m && m.allowedForAdaptiveTesting);
+};
+
+// ─── Адаптивное тестирование: конфигурация LLM ───────────────────────────────
+
+/**
+ * Anti-SSRF: LLM-вызовы уходят только на точные адреса из этого списка.
+ * Прямой openrouter.ai с сервера недоступен — трафик идёт через прокси.
+ * Расширение списка — только правкой кода (не через UI).
+ */
+export const TRUSTED_LLM_BASE_URLS = [
+  'https://proxyllm.fvds.ru/api/v1',
+];
+
+export const isTrustedLlmBaseUrl = (url: string): boolean => {
+  const normalized = url.trim().replace(/\/+$/, '');
+  return TRUSTED_LLM_BASE_URLS.some(t => t.replace(/\/+$/, '') === normalized);
+};
+
+export const DEFAULT_ADAPTIVE_TESTING_MODEL = 'openai/gpt-5.6-luna';
+
+export type AdaptiveConnectionMode = 'shared_proxy' | 'dedicated_proxy';
+
+export interface IAdaptiveTestingPublicSettings {
+  enabled: boolean;
+  model: string;
+  /** Сырое значение allowlist (CSV или '*'). */
+  allowedEmails: string;
+  dailySessionsLimit: number;
+  connectionMode: AdaptiveConnectionMode;
+  zdrRequired: boolean;
+  hasDedicatedApiKey: boolean;
+  dedicatedBaseUrl: string | null;
+  /** Итоговый base URL (для отображения), null если конфиг не собирается. */
+  effectiveBaseUrl: string | null;
+  trustedBaseUrls: string[];
+  allowedModels: IOpenRouterModelInfo[];
+}
+
+export type AdaptiveLlmConfigResult =
+  | { ok: true; apiKey: string; baseUrl: string; model: string; zdrRequired: boolean; connectionMode: AdaptiveConnectionMode }
+  | { ok: false; reason: 'disabled' | 'no_api_key' | 'invalid_base_url' | 'invalid_model' };
 
 export type SigurConnectionSettingsSource = 'system_settings' | 'env' | 'unset';
 
@@ -869,7 +925,7 @@ export const settingsService = {
         ? 'env'
         : 'unset';
 
-    const model = isAllowedOpenRouterModel(settingsModel)
+    const model = isAllowedOcrModel(settingsModel)
       ? settingsModel
       : DEFAULT_OPENROUTER_SETTINGS.model;
 
@@ -879,7 +935,8 @@ export const settingsService = {
       model,
       baseUrl: settingsBaseUrl || envBaseUrl || DEFAULT_OPENROUTER_SETTINGS.baseUrl,
       source,
-      allowedModels: ALLOWED_OPENROUTER_MODELS,
+      // Только OCR-модели: текстовая Luna не должна предлагаться для чеков.
+      allowedModels: ALLOWED_OPENROUTER_MODELS.filter(m => m.allowedForReceiptOcr),
     };
   },
 
@@ -896,7 +953,7 @@ export const settingsService = {
     if (!apiKey) return null;
 
     const settingsModel = cache.get('openrouter_model') || '';
-    const model = isAllowedOpenRouterModel(settingsModel)
+    const model = isAllowedOcrModel(settingsModel)
       ? settingsModel
       : DEFAULT_OPENROUTER_SETTINGS.model;
 
@@ -917,10 +974,10 @@ export const settingsService = {
     config: { enabled?: boolean; apiKey?: string | null; model?: string; baseUrl?: string | null },
     userId: string,
   ): Promise<IOpenRouterPublicSettings> {
-    if (config.model !== undefined && !isAllowedOpenRouterModel(config.model)) {
+    if (config.model !== undefined && !isAllowedOcrModel(config.model)) {
       const known = ALLOWED_OPENROUTER_MODELS.find(m => m.id === config.model);
-      const reason = known && !known.supportsVision
-        ? `Модель "${config.model}" не поддерживает изображения и не подходит для распознавания чеков`
+      const reason = known && !known.allowedForReceiptOcr
+        ? `Модель "${config.model}" не разрешена для распознавания чеков`
         : `Модель "${config.model}" не входит в список разрешённых`;
       throw new Error(reason);
     }
@@ -965,6 +1022,231 @@ export const settingsService = {
     }
 
     return this.getOpenRouterConfig();
+  },
+
+  // ─── Адаптивное тестирование ───────────────────────────────────────────────
+
+  /** Публичные настройки адаптивного тестирования (ключ никогда не отдаётся). */
+  async getAdaptiveTestingSettings(): Promise<IAdaptiveTestingPublicSettings> {
+    await loadCache();
+
+    const connectionMode: AdaptiveConnectionMode =
+      cache.get('adaptive_testing_connection_mode') === 'dedicated_proxy'
+        ? 'dedicated_proxy'
+        : 'shared_proxy';
+
+    const model = cache.get('adaptive_testing_model') || DEFAULT_ADAPTIVE_TESTING_MODEL;
+    const dedicatedBaseUrl = (cache.get('adaptive_testing_base_url') || '').trim() || null;
+
+    const resolved = await this.getResolvedAdaptiveLlmConfig();
+
+    return {
+      enabled: parseBoolean(cache.get('adaptive_testing_enabled'), false),
+      model,
+      allowedEmails: cache.get('adaptive_testing_allowed_emails') || '',
+      dailySessionsLimit: parsePositiveInt(cache.get('adaptive_testing_daily_sessions_limit'), 1),
+      connectionMode,
+      zdrRequired: parseBoolean(cache.get('adaptive_testing_zdr_required'), false),
+      hasDedicatedApiKey: Boolean(cache.get('adaptive_testing_api_key')),
+      dedicatedBaseUrl,
+      effectiveBaseUrl: resolved.ok ? resolved.baseUrl : null,
+      trustedBaseUrls: TRUSTED_LLM_BASE_URLS,
+      allowedModels: ALLOWED_OPENROUTER_MODELS.filter(m => m.allowedForAdaptiveTesting),
+    };
+  },
+
+  /**
+   * Итоговый LLM-конфиг адаптивного тестирования. Валидация base URL — здесь,
+   * на резолве (не только на PUT): shared-режим наследует openrouter_base_url,
+   * который исторически принимается без проверки. Не в allowlist → ok:false,
+   * вызов LLM не выполняется.
+   *
+   * ВАЖНО: kill switch adaptive_testing_enabled здесь НЕ проверяется —
+   * health-check должен работать и при выключенном тестировании. Гейт
+   * enabled — на уровне adaptive-testing.service.
+   */
+  async getResolvedAdaptiveLlmConfig(): Promise<AdaptiveLlmConfigResult> {
+    await loadCache();
+
+    const connectionMode: AdaptiveConnectionMode =
+      cache.get('adaptive_testing_connection_mode') === 'dedicated_proxy'
+        ? 'dedicated_proxy'
+        : 'shared_proxy';
+
+    const model = cache.get('adaptive_testing_model') || DEFAULT_ADAPTIVE_TESTING_MODEL;
+    if (!isAllowedTextModel(model)) return { ok: false, reason: 'invalid_model' };
+
+    let apiKey = '';
+    let baseUrl = '';
+
+    if (connectionMode === 'dedicated_proxy') {
+      const encrypted = cache.get('adaptive_testing_api_key') || '';
+      if (encrypted) {
+        const encryptionService = await getEncryption();
+        apiKey = encryptionService.decryptField(encrypted) || '';
+      }
+      baseUrl = (cache.get('adaptive_testing_base_url') || '').trim();
+    } else {
+      // shared_proxy: наследуются ТОЛЬКО ключ и base URL общего OpenRouter-конфига.
+      // openrouter_enabled и OCR-модель не наследуются: выключение распознавания
+      // чеков не должно останавливать тестирование.
+      apiKey = cache.get('openrouter_api_key') || process.env.OPENROUTER_API_KEY || '';
+      baseUrl = (
+        cache.get('openrouter_base_url')
+        || process.env.OPENROUTER_BASE_URL
+        || DEFAULT_OPENROUTER_SETTINGS.baseUrl
+      ).trim();
+    }
+
+    if (!apiKey) return { ok: false, reason: 'no_api_key' };
+    if (!isTrustedLlmBaseUrl(baseUrl)) return { ok: false, reason: 'invalid_base_url' };
+
+    return {
+      ok: true,
+      apiKey,
+      baseUrl: baseUrl.replace(/\/+$/, ''),
+      model,
+      zdrRequired: parseBoolean(cache.get('adaptive_testing_zdr_required'), false),
+      connectionMode,
+    };
+  },
+
+  /**
+   * Сохранить настройки адаптивного тестирования (PATCH-семантика: не переданные
+   * поля не трогаются; смена credentials требует ключ и URL одновременно).
+   */
+  async setAdaptiveTestingSettings(
+    patch: {
+      enabled?: boolean;
+      model?: string;
+      allowedEmails?: string;
+      dailySessionsLimit?: number;
+      connectionMode?: AdaptiveConnectionMode;
+      zdrRequired?: boolean;
+      /** Атомарная пара для dedicated_proxy; ключ шифруется перед записью. */
+      dedicated?: { apiKey: string; baseUrl: string } | null;
+    },
+    userId: string,
+  ): Promise<IAdaptiveTestingPublicSettings> {
+    await loadCache();
+
+    if (patch.model !== undefined && !isAllowedTextModel(patch.model)) {
+      throw new Error(`Модель "${patch.model}" не разрешена для адаптивного тестирования`);
+    }
+
+    if (patch.allowedEmails !== undefined && patch.allowedEmails.trim() === '*') {
+      // Массовый запуск ('*') — только после включения ZDR и успешной ZDR-проверки.
+      const zdrRequired = patch.zdrRequired ?? parseBoolean(cache.get('adaptive_testing_zdr_required'), false);
+      const zdrVerifiedAt = cache.get('adaptive_testing_zdr_verified_at');
+      if (!zdrRequired || !zdrVerifiedAt) {
+        throw new Error('Массовый доступ ("*") запрещён: сначала включите ZDR и выполните успешную проверку подключения с ZDR');
+      }
+    }
+
+    const targetMode: AdaptiveConnectionMode = patch.connectionMode
+      ?? (cache.get('adaptive_testing_connection_mode') === 'dedicated_proxy' ? 'dedicated_proxy' : 'shared_proxy');
+
+    if (patch.dedicated) {
+      const apiKey = patch.dedicated.apiKey.trim();
+      const baseUrl = patch.dedicated.baseUrl.trim();
+      if (!apiKey || !baseUrl) {
+        throw new Error('Для отдельного подключения нужны и API-ключ, и Base URL');
+      }
+      // Маска из UI никогда не сохраняется как ключ.
+      if (/^[•*]+$/.test(apiKey)) {
+        throw new Error('API-ключ не задан (получена маска)');
+      }
+      if (!isTrustedLlmBaseUrl(baseUrl)) {
+        throw new Error('Base URL не входит в список доверенных шлюзов');
+      }
+    } else if (targetMode === 'dedicated_proxy' && patch.connectionMode === 'dedicated_proxy') {
+      // Переключение на dedicated без передачи пары — допустимо только если
+      // ключ и URL уже сохранены ранее.
+      const hasKey = Boolean(cache.get('adaptive_testing_api_key'));
+      const hasUrl = Boolean((cache.get('adaptive_testing_base_url') || '').trim());
+      if (!hasKey || !hasUrl) {
+        throw new Error('Для режима dedicated_proxy задайте API-ключ и Base URL');
+      }
+    }
+
+    const entries: { key: string; value: string | null; description?: string }[] = [];
+
+    if (patch.enabled !== undefined) {
+      entries.push({
+        key: 'adaptive_testing_enabled',
+        value: String(patch.enabled),
+        description: 'Адаптивное тестирование: включено (kill switch)',
+      });
+    }
+    if (patch.model !== undefined) {
+      entries.push({
+        key: 'adaptive_testing_model',
+        value: patch.model,
+        description: 'Адаптивное тестирование: модель OpenRouter',
+      });
+    }
+    if (patch.allowedEmails !== undefined) {
+      entries.push({
+        key: 'adaptive_testing_allowed_emails',
+        value: patch.allowedEmails.trim(),
+        description: 'Адаптивное тестирование: email-allowlist (CSV; пусто = никому; * = всем с правом)',
+      });
+    }
+    if (patch.dailySessionsLimit !== undefined) {
+      const limit = Number.isFinite(patch.dailySessionsLimit) && patch.dailySessionsLimit >= 1
+        ? Math.floor(patch.dailySessionsLimit)
+        : 1;
+      entries.push({
+        key: 'adaptive_testing_daily_sessions_limit',
+        value: String(limit),
+        description: 'Адаптивное тестирование: сессий на сотрудника в сутки (МСК)',
+      });
+    }
+    if (patch.connectionMode !== undefined) {
+      entries.push({
+        key: 'adaptive_testing_connection_mode',
+        value: patch.connectionMode,
+        description: 'Адаптивное тестирование: shared_proxy | dedicated_proxy',
+      });
+    }
+    if (patch.zdrRequired !== undefined) {
+      entries.push({
+        key: 'adaptive_testing_zdr_required',
+        value: String(patch.zdrRequired),
+        description: 'Адаптивное тестирование: требовать ZDR-роутинг OpenRouter',
+      });
+    }
+    if (patch.dedicated) {
+      const encryptionService = await getEncryption();
+      entries.push({
+        key: 'adaptive_testing_api_key',
+        value: encryptionService.encrypt(patch.dedicated.apiKey.trim()),
+        description: 'Адаптивное тестирование: отдельный API-ключ (зашифрован)',
+      });
+      entries.push({
+        key: 'adaptive_testing_base_url',
+        value: patch.dedicated.baseUrl.trim(),
+        description: 'Адаптивное тестирование: отдельный Base URL (allowlist)',
+      });
+    }
+
+    if (entries.length > 0) {
+      await this.setMultiple(entries, userId);
+      this.invalidateCache();
+    }
+
+    return this.getAdaptiveTestingSettings();
+  },
+
+  /** Отметить успешную ZDR-проверку (вызывается health-check'ом с zdr:true). */
+  async markAdaptiveZdrVerified(userId: string): Promise<void> {
+    await this.set(
+      'adaptive_testing_zdr_verified_at',
+      new Date().toISOString(),
+      userId,
+      'Адаптивное тестирование: время успешной ZDR-проверки',
+    );
+    this.invalidateCache();
   },
 
   /**

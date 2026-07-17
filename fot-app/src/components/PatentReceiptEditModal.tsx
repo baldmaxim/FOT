@@ -214,9 +214,12 @@ export const PatentReceiptEditModal: FC<IProps> = ({ receiptId, onClose, onSaved
                 <div className={styles.recognizeBox}>
                   <select value={overrideModel} onChange={e => setOverrideModel(e.target.value)}>
                     <option value="">По умолчанию ({orSettingsQuery.data?.model || '—'})</option>
-                    {(orSettingsQuery.data?.allowedModels || []).map((m: IOpenRouterModelInfo) => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
+                    {(orSettingsQuery.data?.allowedModels || [])
+                      // Только OCR-модели: текстовые (Luna) для повторного распознавания не предлагаются.
+                      .filter((m: IOpenRouterModelInfo) => m.allowedForReceiptOcr !== false)
+                      .map((m: IOpenRouterModelInfo) => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
                   </select>
                   <button
                     className={styles.btnSecondary}

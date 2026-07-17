@@ -18,6 +18,8 @@ const IMPORT_RATE_LIMIT_MAX = readLimit('IMPORT_RATE_LIMIT_MAX', IS_PRODUCTION ?
 const FORWARDING_RATE_LIMIT_MAX = readLimit('FORWARDING_RATE_LIMIT_MAX', IS_PRODUCTION ? 5 : 20);
 const LOGIN_PER_EMAIL_RATE_LIMIT_MAX = readLimit('LOGIN_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 12 : 20);
 const FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX = readLimit('FORGOT_PASSWORD_PER_EMAIL_RATE_LIMIT_MAX', IS_PRODUCTION ? 3 : 10);
+const ADAPTIVE_TESTING_RATE_LIMIT_MAX = readLimit('ADAPTIVE_TESTING_RATE_LIMIT_MAX', IS_PRODUCTION ? 30 : 100);
+const ADAPTIVE_HEALTHCHECK_RATE_LIMIT_MAX = readLimit('ADAPTIVE_HEALTHCHECK_RATE_LIMIT_MAX', 5);
 
 // Ключ для per-email лимитеров: нормализованный email из тела запроса +
 // IP-fallback. Без email злоумышленник просто крутит (IP, login). С email
@@ -89,6 +91,35 @@ export const importLimiter = rateLimit({
   max: IMPORT_RATE_LIMIT_MAX,
   skip: skipInDev,
   message: { success: false, error: 'Слишком много импортов, попробуйте через час' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Адаптивное тестирование: мутации (start/answer/retry/cancel) — каждая
+// потенциально платный LLM-вызов. Ключ per-user (роуты под authenticate).
+export const adaptiveTestingLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: ADAPTIVE_TESTING_RATE_LIMIT_MAX,
+  skip: skipInDev,
+  keyGenerator: (req: Request): string => {
+    const userId = (req as Request & { user?: { id?: string } }).user?.id;
+    return userId ? `user:${userId}` : `ip:${req.ip ?? 'unknown'}`;
+  },
+  message: { success: false, error: 'Слишком много действий в тесте, попробуйте позже' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Health-check LLM — строгий лимит: каждый вызов платный и админский.
+export const adaptiveHealthcheckLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: ADAPTIVE_HEALTHCHECK_RATE_LIMIT_MAX,
+  skip: skipInDev,
+  keyGenerator: (req: Request): string => {
+    const userId = (req as Request & { user?: { id?: string } }).user?.id;
+    return userId ? `user:${userId}` : `ip:${req.ip ?? 'unknown'}`;
+  },
+  message: { success: false, error: 'Слишком много проверок подключения, попробуйте через 10 минут' },
   standardHeaders: true,
   legacyHeaders: false,
 });

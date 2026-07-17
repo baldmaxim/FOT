@@ -112,6 +112,7 @@ const SalaryRaisePage = lazy(() => import('./pages/employee/SalaryRaisePage').th
 const SalaryRaiseFormPage = lazy(() => import('./pages/employee/SalaryRaiseFormPage').then(m => ({ default: m.SalaryRaiseFormPage })));
 const SalaryRaiseViewPage = lazy(() => import('./pages/employee/SalaryRaiseViewPage').then(m => ({ default: m.SalaryRaiseViewPage })));
 const MySimPage = lazy(() => import('./pages/employee/MySimPage').then(m => ({ default: m.MySimPage })));
+const MyTestResultsPage = lazy(() => import('./pages/employee/MyTestResultsPage').then(m => ({ default: m.MyTestResultsPage })));
 const PhonebookPage = lazy(() => import('./pages/employee/PhonebookPage').then(m => ({ default: m.PhonebookPage })));
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
 // Salary raise review (header/hr/admin) — используется в /salary-raise-review/:id
@@ -304,6 +305,17 @@ const AppRoutes = () => {
           />
         </Route>
 
+        <Route element={<ProtectedRoute requiredPage="/employee/testing" />}>
+          <Route
+            path="/employee/testing"
+            element={
+              <EmployeeLayout title="Тестирование">
+                <MyTestResultsPage />
+              </EmployeeLayout>
+            }
+          />
+        </Route>
+
         <Route element={<ProtectedRoute requiredPage="/employee/phonebook" />}>
           <Route
             path="/employee/phonebook"
@@ -352,7 +364,14 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage={['/leave-requests', '/salary-raise-review', '/leave-vacations']} />}>
+        {/* Вкладка хаба живёт в ?tab= (HubShell) — право /testing-review само
+            маршрут не создаёт, нужен явный redirect. */}
+        <Route
+          path="/testing-review"
+          element={<Navigate to="/leave-requests?tab=testing" replace />}
+        />
+
+        <Route element={<ProtectedRoute requiredPage={['/leave-requests', '/salary-raise-review', '/leave-vacations', '/testing-review']} />}>
           <Route
             path="/leave-requests"
             element={

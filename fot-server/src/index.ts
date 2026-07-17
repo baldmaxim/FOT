@@ -29,6 +29,7 @@ import { reconcileInterruptedRefreshAll } from './services/mts-business-refresh-
 import { mtsBusinessSyncLogService } from './services/mts-business-sync-log.service.js';
 import { startMtsBusinessStatementRollingWorker, stopMtsBusinessStatementRollingWorker } from './services/mts-business-statement-rolling.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
+import { adaptiveTestingService } from './services/adaptive-testing.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
 import { getPresenceByObject } from './services/skud-presence-by-object.service.js';
 import { sigurService } from './services/sigur.service.js';
@@ -128,6 +129,10 @@ httpServer.listen(PORT, HOST, () => {
   void aiReceiptRecognitionService.resumePendingRecognitions().then(count => {
     if (count > 0) console.log(`[ai-receipt-recognition] возобновлено задач: ${count}`);
   });
+  // Адаптивное тестирование: подхват pending-работы и просроченных lease
+  // (живые lease не трогаем — rolling deploy), затем периодический sweeper.
+  void adaptiveTestingService.resumePendingAdaptiveTests();
+  adaptiveTestingService.startSweeper();
 });
 
 // Глобальные ловушки — без них необработанные rejection/exception теряются.

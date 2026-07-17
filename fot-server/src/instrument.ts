@@ -7,7 +7,7 @@ const dsn = process.env.SENTRY_DSN;
 
 // Поля, которые нельзя отдавать наружу даже при `sendDefaultPii: false`,
 // потому что Sentry собирает их явно через интеграции / setExtra / setContext.
-const SENSITIVE_KEY_RE = /^(password|password_confirmation|new_password|current_password|totp_code|totp_secret|recovery_code|recovery_codes|token|access_token|refresh_token|api_key|secret|private_key|encryption_key|jwt_secret|cookie|authorization)$/i;
+const SENSITIVE_KEY_RE = /^(password|password_confirmation|new_password|current_password|totp_code|totp_secret|recovery_code|recovery_codes|token|access_token|refresh_token|api_key|secret|private_key|encryption_key|jwt_secret|cookie|authorization|answer|question_text|questionText|raw_llm_content|rawLlmContent)$/i;
 const SENSITIVE_HEADER_RE = /^(authorization|cookie|set-cookie|x-csrf-token|x-api-key|x-auth-token)$/i;
 
 function scrubValue(value: unknown, depth = 0): unknown {
@@ -68,7 +68,11 @@ if (dsn) {
         if (event.request.cookies) {
           event.request.cookies = '[Filtered]' as unknown as typeof event.request.cookies;
         }
-        if (event.request.data && typeof event.request.data === 'object') {
+        // Адаптивное тестирование: в body — свободный ответ сотрудника,
+        // уходящий в LLM. Удаляем целиком, пофайловый скраббинг недостаточен.
+        if (typeof event.request.url === 'string' && event.request.url.includes('/adaptive-testing')) {
+          delete event.request.data;
+        } else if (event.request.data && typeof event.request.data === 'object') {
           event.request.data = scrubValue(event.request.data);
         }
       }

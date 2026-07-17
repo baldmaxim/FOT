@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Sun, Moon } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
+import { adaptiveTestingService } from '../../services/adaptiveTestingService';
 import { employeeService } from '../../services/employeeService';
 import { patentReceiptService, type IMyPatentReceipt, type RecognitionStatus } from '../../services/patentReceiptService';
 import type { Employee } from '../../types/employee';
@@ -16,6 +18,10 @@ import {
   useWorkerLocale,
   type WorkerLocale,
 } from '../../i18n/workerCabinet';
+
+const AdaptiveTestModal = lazy(() =>
+  import('../../components/adaptive-testing/AdaptiveTestModal').then(m => ({ default: m.AdaptiveTestModal })),
+);
 
 const pageStyle: CSSProperties = {
   // dvh — корректная высота при мобильном адресбаре / mini-app webview
@@ -468,11 +474,27 @@ const LanguageSwitcher: FC = () => {
 };
 
 const ObjectWorkerDashboardContent: FC = () => {
-  const { profile, logout, isAdmin } = useAuth();
+  const { profile, logout, isAdmin, canViewPage } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { t } = useWorkerLocale();
+  const queryClient = useQueryClient();
+  const [testModalOpen, setTestModalOpen] = useState(false);
+
+  // Адаптивное тестирование: availability запрашивается только при праве
+  // на страницу — роли без права не создают фоновые 403.
+  const hasTestingAccess = canViewPage('/employee/testing');
+  const testAvailabilityQuery = useQuery({
+    queryKey: ['adaptive-testing', 'availability'],
+    queryFn: adaptiveTestingService.getAvailability,
+    enabled: hasTestingAccess,
+    staleTime: 30_000,
+  });
+  const testAvailability = testAvailabilityQuery.data ?? null;
+  const hasActiveTest = Boolean(testAvailability?.activeSessionId);
+  // Вне allowlist без активной сессии блок скрыт; с активной — «Продолжить тест».
+  const showTestBlock = Boolean(testAvailability && (testAvailability.available || hasActiveTest));
 
   const isPreview = isAdmin && searchParams.get('preview') === 'worker';
   const employeeId = profile?.employee_id ?? null;
@@ -691,6 +713,29 @@ const ObjectWorkerDashboardContent: FC = () => {
           </div>
         </section>
 
+        {showTestBlock && (
+          <section style={cardStyle}>
+            <div style={labelStyle}>Тестирование</div>
+            <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+              10 вопросов по обязанностям вашей должности. Ответы обрабатывает ИИ — не указывайте персональные данные.
+            </div>
+            <button
+              type="button"
+              style={{
+                ...primaryButton,
+                ...(!hasActiveTest && !testAvailability?.canStartNew ? { opacity: 0.5, cursor: 'not-allowed' } : {}),
+              }}
+              disabled={!hasActiveTest && !testAvailability?.canStartNew}
+              onClick={() => setTestModalOpen(true)}
+            >
+              {hasActiveTest ? 'Продолжить тест' : 'Тест'}
+            </button>
+            {!hasActiveTest && !testAvailability?.canStartNew && (
+              <div style={labelStyle}>Дневной лимит тестирований исчерпан.</div>
+            )}
+          </section>
+        )}
+
         <section style={cardStyle}>
           <button
             type="button"
@@ -719,6 +764,17 @@ const ObjectWorkerDashboardContent: FC = () => {
           status={uploadStatus}
           onClose={() => setUploadStatus(null)}
         />
+      )}
+      {testModalOpen && (
+        <Suspense fallback={null}>
+          <AdaptiveTestModal
+            hasActiveSession={hasActiveTest}
+            onClose={() => {
+              setTestModalOpen(false);
+              void queryClient.invalidateQueries({ queryKey: ['adaptive-testing', 'availability'] });
+            }}
+          />
+        </Suspense>
       )}
     </div>
   );

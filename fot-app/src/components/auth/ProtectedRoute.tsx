@@ -51,10 +51,13 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   // Object-worker (рабочий на объекте) работает только через минималистичный
   // ObjectWorkerDashboardPage (/employee). Любые nested /employee/* страницы
   // ему недоступны — даже если в role_page_access случайно дали view.
+  // Исключение: /employee/testing (история тестирования) — доступен и
+  // объектовым рабочим; page-access проверка ниже сохраняется.
   if (
     employeeVariant === 'object'
     && !isAdmin
     && location.pathname !== '/employee'
+    && location.pathname !== '/employee/testing'
     && location.pathname.startsWith('/employee/')
   ) {
     return <Navigate to="/employee" replace />;

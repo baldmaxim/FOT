@@ -55,6 +55,8 @@ export interface IOpenRouterModelInfo {
   label: string;
   costPer1kReceiptsRub: number;
   supportsVision: boolean;
+  /** Разрешена для распознавания чеков (сервер отдаёт только такие, поле — защита в глубину). */
+  allowedForReceiptOcr?: boolean;
 }
 
 export interface IOpenRouterSettings {

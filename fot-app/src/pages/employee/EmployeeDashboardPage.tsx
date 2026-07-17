@@ -19,6 +19,7 @@ const SecurityCard = lazy(() => import('../../components/dashboard/EmployeeInfoC
 const DailyTasksCard = lazy(() => import('../../components/dashboard/DailyTasksCard').then(m => ({ default: m.DailyTasksCard })));
 const FeedbackCard = lazy(() => import('../../components/dashboard/FeedbackCard').then(m => ({ default: m.FeedbackCard })));
 const TestPromptCard = lazy(() => import('../../components/dashboard/TestPromptCard').then(m => ({ default: m.TestPromptCard })));
+const AdaptiveTestCard = lazy(() => import('../../components/dashboard/AdaptiveTestCard').then(m => ({ default: m.AdaptiveTestCard })));
 const TwoFAModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.TwoFAModal })));
 const UnifiedRequestModal = lazy(() => import('../../components/dashboard/RequestModals').then(m => ({ default: m.UnifiedRequestModal })));
 const MyMonthTimesheet = lazy(() => import('../../components/dashboard/MyMonthTimesheet').then(m => ({ default: m.MyMonthTimesheet })));
@@ -242,6 +243,9 @@ export const EmployeeDashboardPage: React.FC = () => {
           </Suspense>
           <Suspense fallback={null}>
             <TestPromptCard />
+          </Suspense>
+          <Suspense fallback={null}>
+            <AdaptiveTestCard />
           </Suspense>
           <Suspense fallback={DashboardCardFallback}>
             <DailyTasksCard />
