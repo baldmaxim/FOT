@@ -300,23 +300,27 @@ export const sanitizeSkillMd = (raw: string): string => {
   return out.trim();
 };
 
+// Сообщения — по-русски и с указанием поля: они доходят до пользователя как есть
+// (контроллер склеивает issues в текст тоста), а форма — не единственный вход.
 const competencyZod = z.object({
   key: z.string().min(1).max(60).regex(/^[a-z0-9_]+$/, 'key — латиница/цифры/подчёркивание'),
-  name: z.string().min(1).max(200),
-  description: z.string().max(1000).optional(),
+  name: z.string().min(1, 'У компетенции пустое название').max(200, 'Название компетенции — не больше 200 символов'),
+  description: z.string().max(1000, 'Описание компетенции — не больше 1000 символов').optional(),
 }).strict();
 
 export const profileInputZod = z.object({
   orgDepartmentId: z.string().uuid(),
   positionId: z.string().uuid().nullable(),
-  title: z.string().min(1).max(300),
+  title: z.string().min(1, 'Укажите название профиля').max(300, 'Название профиля — не больше 300 символов'),
   // Краткое описание. Развёрнутая методичка грузится .md-файлом (skillMd),
   // поэтому поле может быть пустым, если файл загружен.
-  dutiesText: z.string().max(8000),
-  competencies: z.array(competencyZod).min(1).max(15),
+  dutiesText: z.string().max(8000, 'Описание обязанностей — не больше 8000 символов'),
+  competencies: z.array(competencyZod)
+    .min(1, 'Добавьте хотя бы одну компетенцию — по ним строится подбор вопросов и разбивка результата')
+    .max(15, 'Компетенций не больше 15'),
   isPublished: z.boolean(),
-  skillMd: z.string().max(SKILL_MD_MAX_CHARS).nullable().optional(),
-  skillMdFilename: z.string().max(255).nullable().optional(),
+  skillMd: z.string().max(SKILL_MD_MAX_CHARS, `Файл скилла — не больше ${SKILL_MD_MAX_CHARS} символов`).nullable().optional(),
+  skillMdFilename: z.string().max(255, 'Слишком длинное имя файла').nullable().optional(),
 }).strict().superRefine((val, ctx) => {
   const keys = val.competencies.map(c => c.key);
   if (new Set(keys).size !== keys.length) {

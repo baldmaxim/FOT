@@ -74,6 +74,9 @@ const coverageToEditor = (row: IAdaptiveCoverageRow): IEditorState => ({
 
 const formatChars = (n: number): string => n.toLocaleString('ru-RU');
 
+/** Разделитель «название / описание» — тире, дефис или двоеточие. */
+const COMPETENCY_SEPARATOR = /\s[—–-]\s|:\s/;
+
 /** Строки «Название — описание» → компетенции с ключами c1..cN. */
 const parseCompetencies = (text: string): IAdaptiveProfileInput['competencies'] =>
   text
@@ -81,14 +84,51 @@ const parseCompetencies = (text: string): IAdaptiveProfileInput['competencies'] 
     .map(line => line.trim())
     .filter(Boolean)
     .map((line, i) => {
-      const [name, ...rest] = line.split('—');
-      const description = rest.join('—').trim();
+      const match = COMPETENCY_SEPARATOR.exec(line);
+      const name = (match ? line.slice(0, match.index) : line).trim();
+      const description = match ? line.slice(match.index + match[0].length).trim() : '';
       return {
         key: `c${i + 1}`,
-        name: name.trim(),
+        name,
         ...(description ? { description } : {}),
       };
     });
+
+const MAX_COMPETENCIES = 15;
+
+/**
+ * Проверка формы до отправки: сервер отдаёт ошибки Zod без привязки к полю,
+ * поэтому объясняем проблему на клиенте, пока данные ещё в модалке.
+ */
+const validateEditor = (state: IEditorState): string | null => {
+  if (!state.title.trim()) return 'Укажите название профиля';
+
+  const competencies = parseCompetencies(state.competenciesText);
+  if (competencies.length === 0) {
+    return 'Добавьте хотя бы одну компетенцию — по ним строится подбор вопросов и разбивка результата';
+  }
+  if (competencies.length > MAX_COMPETENCIES) {
+    return `Компетенций не больше ${MAX_COMPETENCIES}, сейчас ${competencies.length}`;
+  }
+  const tooLong = competencies.findIndex(c => c.name.length > 200);
+  if (tooLong >= 0) {
+    return `Слишком длинное название компетенции в строке ${tooLong + 1} — не больше 200 символов`;
+  }
+  const tooLongDescription = competencies.findIndex(c => (c.description?.length ?? 0) > 1000);
+  if (tooLongDescription >= 0) {
+    return `Слишком длинное описание компетенции в строке ${tooLongDescription + 1} — не больше 1000 символов`;
+  }
+
+  const hasDuties = state.dutiesText.trim().length >= 10;
+  const hasSkillMd = Boolean(state.skillMd && state.skillMd.trim());
+  if (state.isPublished && !hasDuties && !hasSkillMd) {
+    return 'Для публикации заполните «Обязанности» или загрузите файл скилла (.md)';
+  }
+  if (!hasDuties && !hasSkillMd && state.dutiesText.trim().length > 0) {
+    return 'Описание обязанностей — минимум 10 символов';
+  }
+  return null;
+};
 
 export const AdaptiveProfilesPanel: FC = () => {
   const queryClient = useQueryClient();
@@ -399,15 +439,19 @@ export const AdaptiveProfilesPanel: FC = () => {
                   )}
                 </div>
 
-                <label className={styles.field}>
-                  <span>Компетенции — одна на строку: «Название — описание» (до 15)</span>
+                <div className={styles.field}>
+                  <span>Компетенции — обязательно, одна на строку (до {MAX_COMPETENCIES})</span>
                   <textarea
                     value={editor.competenciesText}
                     onChange={e => setEditor({ ...editor, competenciesText: e.target.value })}
                     rows={6}
                     placeholder={'Оформление документов — порядок и сроки оформления\nВзаимодействие с подрядчиками — правила и эскалация'}
                   />
-                </label>
+                  <span className={styles.fieldHint}>
+                    Формат строки: «Название — описание» (подойдёт тире, дефис или двоеточие); без разделителя
+                    вся строка считается названием. По компетенциям подбираются вопросы и строится разбивка результата.
+                  </span>
+                </div>
                 <label className={styles.checkboxField}>
                   <input
                     type="checkbox"
@@ -431,7 +475,14 @@ export const AdaptiveProfilesPanel: FC = () => {
                   type="button"
                   className={styles.primaryBtn}
                   disabled={saveMutation.isPending}
-                  onClick={() => saveMutation.mutate({ state: editor, requestClose })}
+                  onClick={() => {
+                    const error = validateEditor(editor);
+                    if (error) {
+                      showToast('error', error);
+                      return;
+                    }
+                    saveMutation.mutate({ state: editor, requestClose });
+                  }}
                 >
                   {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
                 </button>

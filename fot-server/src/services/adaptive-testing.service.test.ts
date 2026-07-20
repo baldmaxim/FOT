@@ -284,6 +284,43 @@ describe('profileInputZod — файл скилла (.md)', () => {
   });
 });
 
+describe('profileInputZod — русские сообщения об ошибках', () => {
+  const base = {
+    orgDepartmentId: '11111111-1111-1111-1111-111111111111',
+    positionId: null,
+    title: 'Профиль',
+    dutiesText: 'Оформляет заявки, ведёт реестр закупок.',
+    isPublished: false,
+  };
+
+  // Пустое поле «Компетенции» — самая частая ошибка формы; сырое
+  // «Array must contain at least 1 element(s)» пользователю ничего не объясняло.
+  it('пустые компетенции — понятный текст про поле, не английский Zod', () => {
+    const res = profileInputZod.safeParse({ ...base, competencies: [] });
+    expect(res.success).toBe(false);
+    const message = res.success ? '' : res.error.issues.map(i => i.message).join('; ');
+    expect(message).toMatch(/хотя бы одну компетенцию/i);
+    expect(message).not.toMatch(/Array must contain/i);
+  });
+
+  it('больше 15 компетенций — понятный текст', () => {
+    const many = Array.from({ length: 16 }, (_, i) => ({ key: `c${i + 1}`, name: `Компетенция ${i + 1}` }));
+    const res = profileInputZod.safeParse({ ...base, competencies: many });
+    expect(res.success).toBe(false);
+    const message = res.success ? '' : res.error.issues.map(i => i.message).join('; ');
+    expect(message).toMatch(/не больше 15/i);
+  });
+
+  it('пустое название профиля — понятный текст', () => {
+    const res = profileInputZod.safeParse({
+      ...base, title: '', competencies: [{ key: 'docs', name: 'Документы' }],
+    });
+    expect(res.success).toBe(false);
+    const message = res.success ? '' : res.error.issues.map(i => i.message).join('; ');
+    expect(message).toMatch(/название профиля/i);
+  });
+});
+
 describe('saveProfile — дубль скоупа', () => {
   const input = {
     orgDepartmentId: '11111111-1111-1111-1111-111111111111',
