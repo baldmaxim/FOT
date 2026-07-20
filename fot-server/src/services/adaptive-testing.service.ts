@@ -1210,15 +1210,16 @@ export const adaptiveTestingService = {
     const skillMdFilename = hasSkillMd ? (input.skillMdFilename ?? null) : null;
     const skillMdChars = hasSkillMd ? skillMd.length : 0;
 
-    if (profileId) {
-      const existing = await queryOne<{ skill_md: string | null }>(
-        'SELECT skill_md FROM adaptive_skill_profiles WHERE id = $1',
-        [profileId],
-      );
-      if (!existing) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
-      const contentChanged = (existing.skill_md ?? '') !== skillMd;
+    try {
+      if (profileId) {
+        const existing = await queryOne<{ skill_md: string | null }>(
+          'SELECT skill_md FROM adaptive_skill_profiles WHERE id = $1',
+          [profileId],
+        );
+        if (!existing) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
+        const contentChanged = (existing.skill_md ?? '') !== skillMd;
 
-      const updated = await queryOne<{ id: string }>(
+        const updated = await queryOne<{ id: string }>(
         `UPDATE adaptive_skill_profiles
             SET org_department_id = $2, position_id = $3, title = $4, duties_text = $5,
                 competencies = $6, is_published = $7, updated_at = now(),
@@ -1233,32 +1234,43 @@ export const adaptiveTestingService = {
                   ELSE skill_md_uploaded_by END
           WHERE id = $1
           RETURNING id`,
+          [
+            profileId, input.orgDepartmentId, input.positionId, input.title,
+            input.dutiesText, JSON.stringify(input.competencies), input.isPublished,
+            hasSkillMd ? skillMd : null, skillMdFilename, skillMdChars,
+            contentChanged, userId,
+          ],
+        );
+        if (!updated) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
+        return updated;
+      }
+
+      const created = await queryOne<{ id: string }>(
+        `INSERT INTO adaptive_skill_profiles
+           (org_department_id, position_id, title, duties_text, competencies, is_published, created_by,
+            skill_md, skill_md_filename, skill_md_chars, skill_md_uploaded_at, skill_md_uploaded_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                 CASE WHEN $8 IS NULL THEN NULL ELSE now() END,
+                 CASE WHEN $8 IS NULL THEN NULL ELSE $7::uuid END)
+         RETURNING id`,
         [
-          profileId, input.orgDepartmentId, input.positionId, input.title,
-          input.dutiesText, JSON.stringify(input.competencies), input.isPublished,
+          input.orgDepartmentId, input.positionId, input.title, input.dutiesText,
+          JSON.stringify(input.competencies), input.isPublished, userId,
           hasSkillMd ? skillMd : null, skillMdFilename, skillMdChars,
-          contentChanged, userId,
         ],
       );
-      if (!updated) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
-      return updated;
+      return created!;
+    } catch (err) {
+      // Уникальность скоупа держит expression-индекс (отдел + должность/NULL):
+      // без этой ветки пользователь получал бы сырую ошибку БД.
+      if ((err as { code?: string }).code === '23505') {
+        throw Object.assign(
+          new Error('Профиль для этого отдела и должности уже существует — откройте его для редактирования'),
+          { httpStatus: 409, code: 'profile_exists' },
+        );
+      }
+      throw err;
     }
-
-    const created = await queryOne<{ id: string }>(
-      `INSERT INTO adaptive_skill_profiles
-         (org_department_id, position_id, title, duties_text, competencies, is_published, created_by,
-          skill_md, skill_md_filename, skill_md_chars, skill_md_uploaded_at, skill_md_uploaded_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-               CASE WHEN $8 IS NULL THEN NULL ELSE now() END,
-               CASE WHEN $8 IS NULL THEN NULL ELSE $7::uuid END)
-       RETURNING id`,
-      [
-        input.orgDepartmentId, input.positionId, input.title, input.dutiesText,
-        JSON.stringify(input.competencies), input.isPublished, userId,
-        hasSkillMd ? skillMd : null, skillMdFilename, skillMdChars,
-      ],
-    );
-    return created!;
   },
 
   /** Отчёт покрытия: отдел×должность активных сотрудников → статус профиля. */

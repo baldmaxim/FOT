@@ -29,7 +29,14 @@ interface IEditorState {
   /** Содержимое загруженного .md; null — файла нет. */
   skillMd: string | null;
   skillMdFilename: string | null;
+  /** Должность строки покрытия — чтобы вернуться к охвату «только должность». */
+  sourcePositionId: string | null;
+  sourcePositionName: string | null;
 }
+
+/** Название по умолчанию — зависит от охвата, поэтому меняется вместе с ним. */
+const autoTitle = (departmentName: string, positionName: string | null): string =>
+  `${departmentName || 'Отдел'}${positionName ? ` — ${positionName}` : ' — весь отдел'}`;
 
 const profileToEditor = (p: IAdaptiveProfile): IEditorState => ({
   profileId: p.id,
@@ -45,6 +52,8 @@ const profileToEditor = (p: IAdaptiveProfile): IEditorState => ({
   isPublished: p.isPublished,
   skillMd: p.skillMd,
   skillMdFilename: p.skillMdFilename,
+  sourcePositionId: p.positionId,
+  sourcePositionName: p.positionName,
 });
 
 const coverageToEditor = (row: IAdaptiveCoverageRow): IEditorState => ({
@@ -53,12 +62,14 @@ const coverageToEditor = (row: IAdaptiveCoverageRow): IEditorState => ({
   departmentName: row.departmentName ?? '',
   positionId: row.positionId,
   positionName: row.positionName,
-  title: `${row.departmentName ?? 'Отдел'}${row.positionName ? ` — ${row.positionName}` : ''}`,
+  title: autoTitle(row.departmentName ?? '', row.positionName),
   dutiesText: '',
   competenciesText: '',
   isPublished: false,
   skillMd: null,
   skillMdFilename: null,
+  sourcePositionId: row.positionId,
+  sourcePositionName: row.positionName,
 });
 
 const formatChars = (n: number): string => n.toLocaleString('ru-RU');
@@ -84,6 +95,23 @@ export const AdaptiveProfilesPanel: FC = () => {
   const { showToast } = useToast();
   const [editor, setEditor] = useState<IEditorState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Смена охвата: «только должность» ↔ «весь отдел» (positionId = null).
+   * Название подставляем заново, только если пользователь его не правил.
+   */
+  const handleScopeChange = (wholeDepartment: boolean) => {
+    if (!editor) return;
+    const nextPositionId = wholeDepartment ? null : editor.sourcePositionId;
+    const nextPositionName = wholeDepartment ? null : editor.sourcePositionName;
+    const wasAutoTitle = editor.title.trim() === autoTitle(editor.departmentName, editor.positionName).trim();
+    setEditor({
+      ...editor,
+      positionId: nextPositionId,
+      positionName: nextPositionName,
+      title: wasAutoTitle ? autoTitle(editor.departmentName, nextPositionName) : editor.title,
+    });
+  };
 
   /**
    * Чтение .md на клиенте: содержимое уходит строкой вместе с профилем
@@ -153,9 +181,13 @@ export const AdaptiveProfilesPanel: FC = () => {
     },
   });
 
+  /**
+   * Строгое совпадение по скоупу строки: кнопка в таблице всегда работает с
+   * профилем именно этой должности. Отделский профиль редактируется из списка
+   * «Skill-профили» выше — иначе «Изменить» открывало бы чужой по охвату профиль.
+   */
   const findProfileForCoverage = (row: IAdaptiveCoverageRow): IAdaptiveProfile | undefined =>
-    profiles.find(p => p.orgDepartmentId === row.departmentId
-      && (p.positionId === row.positionId || (p.positionId === null && !row.hasExactProfile)));
+    profiles.find(p => p.orgDepartmentId === row.departmentId && p.positionId === row.positionId);
 
   return (
     <div className={styles.panel}>
@@ -273,6 +305,33 @@ export const AdaptiveProfilesPanel: FC = () => {
               </div>
 
               <div className={styles.editorBody}>
+                {editor.sourcePositionId && (
+                  <div className={styles.field}>
+                    <span>Охват профиля</span>
+                    <div className={styles.scopeSwitch}>
+                      <button
+                        type="button"
+                        className={`${styles.scopeBtn} ${editor.positionId ? styles.scopeActive : ''}`}
+                        onClick={() => handleScopeChange(false)}
+                      >
+                        Только должность «{editor.sourcePositionName ?? '—'}»
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.scopeBtn} ${editor.positionId ? '' : styles.scopeActive}`}
+                        onClick={() => handleScopeChange(true)}
+                      >
+                        Весь отдел
+                      </button>
+                    </div>
+                    <span className={styles.fieldHint}>
+                      {editor.positionId
+                        ? 'Профиль применяется только к этой должности.'
+                        : 'Профиль применяется ко всем должностям отдела, у которых нет собственного профиля.'}
+                    </span>
+                  </div>
+                )}
+
                 <label className={styles.field}>
                   <span>Название</span>
                   <input

@@ -257,6 +257,40 @@
   cursor: pointer;
 }
 
+/* ── Охват профиля ── */
+
+.scopeSwitch {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scopeBtn {
+  flex: 1;
+  min-width: 160px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.scopeBtn:hover {
+  border-color: var(--accent);
+}
+
+.scopeActive {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
 /* ── Файл скилла (.md) ── */
 
 .hiddenFileInput {

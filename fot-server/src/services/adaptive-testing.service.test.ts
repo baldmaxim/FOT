@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const { pgQueryOne } = vi.hoisted(() => ({ pgQueryOne: vi.fn() }));
+
 vi.mock('../config/postgres.js', () => ({
   query: vi.fn(),
-  queryOne: vi.fn(),
+  queryOne: pgQueryOne,
   execute: vi.fn(),
   withTransaction: vi.fn(),
 }));
@@ -20,6 +22,7 @@ vi.mock('./adaptive-testing-llm.service.js', () => ({
 }));
 
 import {
+  adaptiveTestingService,
   adjustDifficulty,
   computeResultSummary,
   isEmailAllowed,
@@ -278,6 +281,31 @@ describe('profileInputZod — файл скилла (.md)', () => {
     expect(() => profileInputZod.parse({
       ...base, dutiesText: 'д'.repeat(8001),
     })).toThrow();
+  });
+});
+
+describe('saveProfile — дубль скоупа', () => {
+  const input = {
+    orgDepartmentId: '11111111-1111-1111-1111-111111111111',
+    positionId: null,
+    title: 'Профиль отдела',
+    dutiesText: 'Обязанности отдела, достаточно длинные.',
+    competencies: [{ key: 'docs', name: 'Документы' }],
+    isPublished: true,
+  };
+
+  it('нарушение уникальности превращается в понятную 409, а не в 500', async () => {
+    pgQueryOne.mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }));
+
+    await expect(adaptiveTestingService.saveProfile(input, 'user-1'))
+      .rejects.toMatchObject({ httpStatus: 409, code: 'profile_exists' });
+  });
+
+  it('прочие ошибки БД пробрасываются как есть', async () => {
+    pgQueryOne.mockRejectedValueOnce(Object.assign(new Error('connection lost'), { code: '08006' }));
+
+    await expect(adaptiveTestingService.saveProfile(input, 'user-1'))
+      .rejects.toThrow('connection lost');
   });
 });
 
