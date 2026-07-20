@@ -1,6 +1,7 @@
 import { type FC, useEffect, useRef, useState } from 'react';
 import { Check, X } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ApiError } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
@@ -21,6 +22,14 @@ const POLL_MS = 2000;
 const isBusyState = (state: IAdaptiveCurrent['state'] | undefined): boolean =>
   state === 'generating' || state === 'evaluating';
 
+/**
+ * Ответ ушёл на вопрос, который сервер уже закрыл: окно показывало устаревший
+ * вопрос (вторая вкладка, «Продолжить тест» из старого кэша). Это не ошибка
+ * пользователя — надо просто показать актуальный вопрос.
+ */
+const isStaleQuestionError = (err: unknown): boolean =>
+  err instanceof ApiError && (err.code === 'not_current_question' || err.code === 'already_answered');
+
 export const AdaptiveTestModal: FC<IProps> = ({ hasActiveSession, onClose }) => {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -40,6 +49,9 @@ export const AdaptiveTestModal: FC<IProps> = ({ hasActiveSession, onClose }) => 
     // Поллинг только пока сервер обрабатывает; поллинг LLM не перезапускает.
     refetchInterval: q => (isBusyState(q.state.data?.state) ? POLL_MS : false),
     refetchOnWindowFocus: true,
+    // Модалку могли открыть со старым кэшем (вторая вкладка, «Продолжить тест»):
+    // вопрос всегда берём с сервера, иначе ответ уйдёт на уже закрытый вопрос.
+    refetchOnMount: 'always',
   });
 
   // Старт новой сессии (идемпотентен: активная вернётся как resumed).
@@ -102,8 +114,13 @@ export const AdaptiveTestModal: FC<IProps> = ({ hasActiveSession, onClose }) => 
       await adaptiveTestingService.submitAnswer(current.sessionId, question.id, answer);
       await queryClient.invalidateQueries({ queryKey: CURRENT_QUERY_KEY });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Не удалось отправить ответ';
-      showToast('error', message);
+      if (isStaleQuestionError(err)) {
+        await queryClient.invalidateQueries({ queryKey: CURRENT_QUERY_KEY });
+        showToast('info', 'Этот вопрос уже отвечен — открываем текущий');
+      } else {
+        const message = err instanceof Error ? err.message : 'Не удалось отправить ответ';
+        showToast('error', message);
+      }
     } finally {
       setSubmitting(false);
     }
