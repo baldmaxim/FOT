@@ -303,6 +303,7 @@ export const LeaveRequestsManagePage: FC = () => {
         role={isCorrection ? 'button' : undefined}
         tabIndex={isCorrection ? 0 : undefined}
         onKeyDown={isCorrection ? (e) => {
+          if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             openEventsPanel(r);
