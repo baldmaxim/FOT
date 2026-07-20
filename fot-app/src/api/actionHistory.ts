@@ -1,7 +1,7 @@
 import { apiClient } from './client';
 
 export interface IActionLogEntry {
-  id: number;
+  id: string;
   user_id: string | null;
   user_name: string | null;
   action: string;
@@ -23,6 +23,7 @@ export interface IActionLogsResponse {
 export interface IActionLogsParams {
   action?: string;
   user_id?: string;
+  q?: string;
   date_from?: string;
   date_to?: string;
   page?: number;
@@ -34,6 +35,7 @@ export const actionHistoryApi = {
     const query = new URLSearchParams();
     if (params.action) query.set('action', params.action);
     if (params.user_id) query.set('user_id', params.user_id);
+    if (params.q) query.set('q', params.q);
     if (params.date_from) query.set('date_from', params.date_from);
     if (params.date_to) query.set('date_to', params.date_to);
     if (params.page) query.set('page', String(params.page));

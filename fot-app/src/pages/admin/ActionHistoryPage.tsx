@@ -1,6 +1,7 @@
-import { useState, type FC } from 'react';
+import { useEffect, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { actionHistoryApi } from '../../api/actionHistory';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import styles from './ActionHistoryPage.module.css';
 
 const ACTION_LABELS: Record<string, string> = {
@@ -332,14 +333,22 @@ function formatDetails(action: string, details: Record<string, unknown> | null):
 
 export const ActionHistoryPage: FC = () => {
   const [action, setAction] = useState('');
+  const [search, setSearch] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(1);
 
+  const debouncedSearch = useDebouncedValue(search.trim(), 300);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
+
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['action-history', action, dateFrom, dateTo, page],
+    queryKey: ['action-history', action, debouncedSearch, dateFrom, dateTo, page],
     queryFn: () => actionHistoryApi.getLogs({
       action: action || undefined,
+      q: debouncedSearch || undefined,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
       page,
@@ -374,6 +383,15 @@ export const ActionHistoryPage: FC = () => {
         </select>
 
         <input
+          type="search"
+          className={`${styles.input} ${styles.search}`}
+          value={search}
+          maxLength={64}
+          placeholder="Поиск: пользователь, подробности"
+          onChange={e => setSearch(e.target.value)}
+        />
+
+        <input
           type="date"
           className={styles.input}
           value={dateFrom}
@@ -388,10 +406,10 @@ export const ActionHistoryPage: FC = () => {
           title="По дату"
         />
 
-        {(action || dateFrom || dateTo) && (
+        {(action || search || dateFrom || dateTo) && (
           <button
             className={styles.btnClear}
-            onClick={() => { setAction(''); setDateFrom(''); setDateTo(''); setPage(1); }}
+            onClick={() => { setAction(''); setSearch(''); setDateFrom(''); setDateTo(''); setPage(1); }}
           >
             Сбросить
           </button>

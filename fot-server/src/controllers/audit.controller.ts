@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { query } from '../config/postgres.js';
+import { escapeLike } from '../utils/search.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 interface AuditIssue {
@@ -57,6 +58,16 @@ export const auditController = {
 
       if (action) whereParts.push(`action = ${addParam(action)}`);
       if (user_id) whereParts.push(`user_id = ${addParam(user_id)}`);
+      // q может прийти массивом (?q=a&q=b) — берём только строку
+      const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 64) : '';
+      if (q) {
+        // slice до экранирования, лимит 128 после — иначе escapeLike срезала бы удвоенные спецсимволы
+        const p = addParam(`%${escapeLike(q, 128)}%`);
+        whereParts.push(
+          `(details::text ILIKE ${p}
+            OR user_id IN (SELECT id FROM user_profiles WHERE full_name ILIKE ${p}))`,
+        );
+      }
       if (date_from) whereParts.push(`created_at >= ${addParam(date_from)}`);
       if (date_to) {
         const end = date_to.length === 10 ? `${date_to}T23:59:59.999Z` : date_to;

@@ -28,6 +28,12 @@
   min-width: 220px;
 }
 
+.search {
+  min-width: 220px;
+  flex: 1 1 200px;
+  max-width: 340px;
+}
+
 .btnClear {
   padding: 7px 12px;
   background: var(--bg-secondary);
@@ -202,6 +208,10 @@
   .input {
     min-width: unset;
     width: 100%;
+  }
+
+  .search {
+    max-width: unset;
   }
 
   .total {
