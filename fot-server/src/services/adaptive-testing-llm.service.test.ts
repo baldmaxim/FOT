@@ -126,6 +126,19 @@ describe('extractCompetencies', () => {
     expect(pgExecute).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['extract_competencies']));
   });
 
+  it('cached_tokens из usage пишется в ledger', async () => {
+    chatMock.mockResolvedValueOnce({
+      ...llmResponse(JSON.stringify({ competencies: [{ key: 'a1', name: 'Тема', description: 'Описание' }] })),
+      usage: { prompt_tokens: 4600, completion_tokens: 200, total_tokens: 4800, cost: 0.007, prompt_tokens_details: { cached_tokens: 3300 } },
+    });
+
+    await adaptiveTestingLlmService.extractCompetencies({ skillMd: '# Методичка', departmentName: null, positionName: null });
+
+    // Позиция cached_tokens в INSERT — индекс 5 (session, purpose, model, prompt, completion, cached, ...).
+    const okCall = pgExecute.mock.calls.find(c => (c[1] as unknown[])[7] === 'ok');
+    expect((okCall?.[1] as unknown[])[5]).toBe(3300);
+  });
+
   it('методичка уходит в запрос целиком', async () => {
     chatMock.mockResolvedValueOnce(llmResponse(JSON.stringify({
       competencies: [{ key: 'a1', name: 'Тема', description: 'Описание' }],
@@ -274,7 +287,8 @@ describe('generateQuestion', () => {
       gapTags: [],
     })).rejects.toThrow(/невалидный JSON/);
 
-    const statuses = pgExecute.mock.calls.map(c => (c[1] as unknown[])[6]);
+    // Порядок параметров INSERT: session, purpose, model, prompt, completion, cached, cost, status.
+    const statuses = pgExecute.mock.calls.map(c => (c[1] as unknown[])[7]);
     expect(statuses).toContain('ok'); // сам вызов оплачен и учтён
     expect(statuses).toContain('invalid_json');
   });

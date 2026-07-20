@@ -79,6 +79,10 @@ export interface IChatCompletionUsage {
   total_tokens: number;
   /** Стоимость в USD, OpenRouter присылает в поле cost (если генерация идёт через их прокси) */
   cost?: number;
+  /** Разбивка prompt-токенов; cached_tokens — сколько пришло из prefix-кэша провайдера. */
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+  };
 }
 
 export interface IChatCompletionResponse {

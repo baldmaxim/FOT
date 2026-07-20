@@ -33,14 +33,15 @@ const recordLlmCall = async (row: {
   model: string;
   promptTokens: number;
   completionTokens: number;
+  cachedTokens?: number;
   costUsd: number;
   status: LlmCallStatus;
 }): Promise<void> => {
   try {
     await execute(
-      `INSERT INTO adaptive_llm_calls (session_id, purpose, model, prompt_tokens, completion_tokens, cost_usd, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [row.sessionId, row.purpose, row.model, row.promptTokens, row.completionTokens, row.costUsd, row.status],
+      `INSERT INTO adaptive_llm_calls (session_id, purpose, model, prompt_tokens, completion_tokens, cached_tokens, cost_usd, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [row.sessionId, row.purpose, row.model, row.promptTokens, row.completionTokens, row.cachedTokens ?? 0, row.costUsd, row.status],
     );
   } catch (err) {
     // Ledger не должен ронять основной поток.
@@ -299,6 +300,7 @@ const callAdaptiveLlm = async (
     model: res.model || config.model,
     promptTokens: usage?.prompt_tokens ?? 0,
     completionTokens: usage?.completion_tokens ?? 0,
+    cachedTokens: usage?.prompt_tokens_details?.cached_tokens ?? 0,
     costUsd: usage?.cost ?? 0,
     status: 'ok',
   });
@@ -530,6 +532,7 @@ export const adaptiveTestingLlmService = {
         model: actualModel,
         promptTokens: res.usage?.prompt_tokens ?? 0,
         completionTokens: res.usage?.completion_tokens ?? 0,
+        cachedTokens: res.usage?.prompt_tokens_details?.cached_tokens ?? 0,
         costUsd: res.usage?.cost ?? 0,
         status: 'ok',
       });
