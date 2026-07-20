@@ -13,6 +13,7 @@ import { correctionApprovalSettingsService } from '../services/correction-approv
 import { reapproveAdjustmentsForRange } from './timesheet.controller.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+import { listRecentSkudObjectNamesByEmployee } from '../services/employee-skud-object-access.service.js';
 
 async function emitCorrectionChanged(params: {
   employeeIds: number[];
@@ -48,6 +49,8 @@ interface IPendingItem {
   created_by: string | null;
   created_by_name: string | null;
   created_at: string;
+  /** Объекты по СКУД-проходам за последние 2 недели — только в pending-очереди. */
+  skud_objects?: string[];
   approval_status?: 'pending' | 'approved' | 'rejected' | 'auto_approved';
   approved_by?: string | null;
   approved_by_name?: string | null;
@@ -245,6 +248,7 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
 
     const visibleDeptIds = new Set<string>();
     const visibleUserIds = new Set<string>();
+    const visibleEmployeeIds = new Set<number>();
     const decisions = new Map<number, { directOnly: boolean }>();
     for (const adj of adjustments) {
       const empInfo = empInfoMap.get(Number(adj.employee_id));
@@ -252,6 +256,7 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
       const d = decide(Number(adj.id), Number(adj.employee_id), empInfo.department_id);
       if (!d.visible) continue;
       decisions.set(Number(adj.id), { directOnly: d.directOnly });
+      visibleEmployeeIds.add(Number(adj.employee_id));
       if (!d.directOnly && empInfo.department_id) visibleDeptIds.add(empInfo.department_id);
       if (adj.created_by) visibleUserIds.add(String(adj.created_by));
     }
@@ -272,6 +277,14 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
         [[...visibleUserIds]],
       );
       for (const row of userRows) userNamesMap.set(String(row.id), String(row.full_name ?? ''));
+    }
+
+    // Обогащение объектами по СКУД — необязательное: при сбое очередь остаётся доступной.
+    let objectsMap = new Map<number, string[]>();
+    try {
+      objectsMap = await listRecentSkudObjectNamesByEmployee([...visibleEmployeeIds]);
+    } catch (error) {
+      console.error('[correction-approval] recent SKUD objects enrichment failed:', error);
     }
 
     const groups = new Map<string, IDepartmentGroup>();
@@ -307,6 +320,7 @@ const getPendingByDepartment = async (req: AuthenticatedRequest, res: Response):
         created_by: adj.created_by ? String(adj.created_by) : null,
         created_by_name: adj.created_by ? userNamesMap.get(String(adj.created_by)) ?? null : null,
         created_at: String(adj.created_at),
+        skud_objects: objectsMap.get(Number(adj.employee_id)) ?? [],
       });
     }
 

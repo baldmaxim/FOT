@@ -13,6 +13,8 @@ export interface ICorrectionPendingItem {
   created_by: string | null;
   created_by_name: string | null;
   created_at: string;
+  /** Объекты по СКУД-проходам за последние 2 недели — приходит только в pending-очереди. */
+  skud_objects?: string[];
   approval_status?: CorrectionApprovalStatus;
   approved_by?: string | null;
   approved_by_name?: string | null;

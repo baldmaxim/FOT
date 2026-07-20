@@ -262,7 +262,14 @@ export const CorrectionGroupsList: FC<ICorrectionGroupsListProps> = ({
                           <span className="cor-item-date-day">{dateParts.day}</span>
                           <span className="cor-item-date-wd">{dateParts.weekday}</span>
                         </span>
-                        <span className="cor-item-employee">{item.employee_name ?? `#${item.employee_id}`}</span>
+                        <span className="cor-item-employee">
+                          <span className="cor-item-employee-name">{item.employee_name ?? `#${item.employee_id}`}</span>
+                          {(item.skud_objects?.length ?? 0) > 0 && (
+                            <span className="cor-item-objects" title="Объекты по СКУД за последние 2 недели">
+                              {item.skud_objects!.join(', ')}
+                            </span>
+                          )}
+                        </span>
                         <div className="cor-item-task">
                           <span className="cor-item-task-caption">Формат</span>
                           <span className={`cor-item-status cor-item-status--${item.status}`}>

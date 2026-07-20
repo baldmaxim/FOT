@@ -56,6 +56,13 @@ vi.mock('../services/recipients.service.js', () => ({
   getUserIdsByEmployeeIds: vi.fn(async () => []),
 }));
 
+const { skudObjectsMock } = vi.hoisted(() => ({
+  skudObjectsMock: vi.fn(async (): Promise<Map<number, string[]>> => new Map()),
+}));
+vi.mock('../services/employee-skud-object-access.service.js', () => ({
+  listRecentSkudObjectNamesByEmployee: skudObjectsMock,
+}));
+
 import { correctionApprovalController } from './correction-approval.controller.js';
 
 function makeReq(employeeId: number): AuthenticatedRequest {
@@ -131,6 +138,46 @@ describe('correctionApprovalController.getPendingByDepartment routing visibility
     const data = (res._json as { data: Array<{ items: Array<{ id: number }> }> }).data;
     expect(data).toHaveLength(1);
     expect(data[0].items.map(i => i.id)).toEqual([10]);
+  });
+
+  it('объекты по СКУД: helper зовётся только по видимым сотрудникам, item получает skud_objects', async () => {
+    mockPendingQueries();
+    routeMock.mockResolvedValueOnce(new Map([[10, [100]]]));
+    pgQuery.mockResolvedValueOnce([{ id: 'D1', name: 'Цифровая трансформация' }]);
+    skudObjectsMock.mockResolvedValueOnce(new Map([[1, ['ЖК Северный', 'Офис']]]));
+    const res = makeRes();
+
+    await correctionApprovalController.getPendingByDepartment(makeReq(100), res);
+
+    expect(skudObjectsMock).toHaveBeenCalledWith([1]);
+    const data = (res._json as { data: Array<{ items: Array<{ skud_objects?: string[] }> }> }).data;
+    expect(data[0].items[0].skud_objects).toEqual(['ЖК Северный', 'Офис']);
+  });
+
+  it('объекты по СКУД: невидимые строки не попадают в helper, ошибка обогащения не валит очередь', async () => {
+    mockPendingQueries();
+    routeMock.mockResolvedValueOnce(new Map([[10, [100]]]));
+    const res = makeRes();
+
+    // viewer 999 не ответственный → строк нет → helper зовётся с пустым списком
+    await correctionApprovalController.getPendingByDepartment(makeReq(999), res);
+    expect(skudObjectsMock).toHaveBeenCalledWith([]);
+
+    // сбой обогащения → очередь всё равно 200, skud_objects пустой
+    vi.clearAllMocks();
+    accessibleMock.mockResolvedValue('all');
+    editableMock.mockResolvedValue('all');
+    mockPendingQueries();
+    routeMock.mockResolvedValueOnce(new Map([[10, [100]]]));
+    pgQuery.mockResolvedValueOnce([{ id: 'D1', name: 'Цифровая трансформация' }]);
+    skudObjectsMock.mockRejectedValueOnce(new Error('skud down'));
+    const res2 = makeRes();
+
+    await correctionApprovalController.getPendingByDepartment(makeReq(100), res2);
+
+    expect(res2._status).toBe(200);
+    const data = (res2._json as { data: Array<{ items: Array<{ skud_objects?: string[] }> }> }).data;
+    expect(data[0].items[0].skud_objects).toEqual([]);
   });
 
   it('назначенный ответственный видит routed-строку даже без department-scope', async () => {

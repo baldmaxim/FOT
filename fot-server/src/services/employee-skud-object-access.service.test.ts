@@ -11,7 +11,10 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: vi.fn(),
 }));
 
-import { resolveAccessibleObjectIdsForRequest } from './employee-skud-object-access.service.js';
+import {
+  listRecentSkudObjectNamesByEmployee,
+  resolveAccessibleObjectIdsForRequest,
+} from './employee-skud-object-access.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const makeReq = (overrides: {
@@ -94,5 +97,58 @@ describe('resolveAccessibleObjectIdsForRequest', () => {
 
     expect(second).toBe(first);
     expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('listRecentSkudObjectNamesByEmployee', () => {
+  beforeEach(() => {
+    pgQuery.mockReset();
+  });
+
+  it('группирует имена объектов по employee_id (bigint строкой тоже)', async () => {
+    pgQuery.mockResolvedValueOnce([
+      { employee_id: '1', object_name: 'Объект А' },
+      { employee_id: '1', object_name: 'Объект Б' },
+      { employee_id: 2, object_name: 'Объект В' },
+    ]);
+
+    const map = await listRecentSkudObjectNamesByEmployee([1, 2]);
+
+    expect(map.get(1)).toEqual(['Объект А', 'Объект Б']);
+    expect(map.get(2)).toEqual(['Объект В']);
+  });
+
+  it('дедуплицирует входные ID и отбрасывает невалидные, дубли имён не добавляет', async () => {
+    pgQuery.mockResolvedValueOnce([
+      { employee_id: 1, object_name: 'Объект А' },
+      { employee_id: 1, object_name: 'Объект А' },
+    ]);
+
+    const map = await listRecentSkudObjectNamesByEmployee([1, 1, 0, -5, 1.5, NaN]);
+
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+    expect(pgQuery.mock.calls[0][1]).toEqual([[1]]);
+    expect(map.get(1)).toEqual(['Объект А']);
+  });
+
+  it('пустой вход → пустая Map без запроса', async () => {
+    const map = await listRecentSkudObjectNamesByEmployee([]);
+
+    expect(map.size).toBe(0);
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('42P01 (нет таблицы) → пустая Map, не бросает', async () => {
+    pgQuery.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: '42P01' }));
+
+    const map = await listRecentSkudObjectNamesByEmployee([1]);
+
+    expect(map.size).toBe(0);
+  });
+
+  it('прочая ошибка пробрасывается', async () => {
+    pgQuery.mockRejectedValueOnce(new Error('boom'));
+
+    await expect(listRecentSkudObjectNamesByEmployee([1])).rejects.toThrow('boom');
   });
 });

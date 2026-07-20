@@ -86,6 +86,51 @@ export interface ISelectableObject {
 }
 
 /**
+ * Имена объектов, где у сотрудников были СКУД-проходы за последние 14
+ * календарных дат (включая сегодня; будущие ошибочные события отсекаются).
+ * Для показа берётся короткое name («ЖК Alia»), при пустом — alt_name
+ * (alt_name — полный адрес объекта, для UI слишком длинный). Только
+ * активные объекты. Read-only обогащение очереди согласования выходных.
+ */
+export async function listRecentSkudObjectNamesByEmployee(
+  employeeIds: number[],
+): Promise<Map<number, string[]>> {
+  const result = new Map<number, string[]>();
+  const ids = [...new Set(employeeIds.filter(id => Number.isSafeInteger(id) && id > 0))];
+  if (ids.length === 0) return result;
+  try {
+    const rows = await query<{ employee_id: number | string; object_name: string | null }>(
+      `SELECT DISTINCT se.employee_id,
+              COALESCE(NULLIF(BTRIM(so.name), ''), so.alt_name) AS object_name
+         FROM skud_events se
+         JOIN skud_object_access_points sap
+           ON BTRIM(sap.access_point_name) = BTRIM(se.access_point)
+         JOIN skud_objects so ON so.id = sap.object_id
+        WHERE se.employee_id = ANY($1::bigint[])
+          AND se.event_date BETWEEN CURRENT_DATE - 13 AND CURRENT_DATE
+          AND se.access_point IS NOT NULL
+          AND so.is_active = true
+        ORDER BY 1, 2`,
+      [ids],
+    );
+    for (const row of rows) {
+      const employeeId = Number(row.employee_id);
+      if (!Number.isSafeInteger(employeeId) || employeeId <= 0 || !row.object_name) continue;
+      const names = result.get(employeeId) ?? [];
+      if (!names.includes(row.object_name)) names.push(row.object_name);
+      result.set(employeeId, names);
+    }
+    return result;
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      warnMissingTable();
+      return result;
+    }
+    throw err;
+  }
+}
+
+/**
  * Объекты, доступные сотруднику для привязки корректировки табеля:
  *   1) приписка employee_skud_object_access (его «место работы»);
  *   2) фактические объекты по СКУД-проходам за последние 90 дней;
