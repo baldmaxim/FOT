@@ -150,20 +150,73 @@
   border-bottom: 1px solid var(--border);
 }
 
-.editor {
+/* Редактор профиля — модальное окно (ModalShell даёт только анимацию,
+   позиционирование и фон задаются здесь). */
+.editorOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.editorModal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 90dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.editorHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.editorBody {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--accent);
-  border-radius: 14px;
+  padding: 16px 20px;
+  overflow: auto;
+  flex: 1;
+}
+
+.editorClose {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.editorClose:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.editorClose:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .editorTitle {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .field {
@@ -208,6 +261,30 @@
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 480px) {
+  .editorOverlay {
+    padding: 8px;
+  }
+
+  .editorModal {
+    max-height: 96dvh;
+  }
+
+  .editorHead,
+  .editorBody,
+  .editorActions {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .editorActions .primaryBtn,
+  .editorActions .secondaryBtn {
+    flex: 1;
+  }
 }
 
 .primaryBtn {

@@ -1,7 +1,8 @@
 import { type FC, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, CircleAlert, Pencil, Plus } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Pencil, Plus, X } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
+import { ModalShell } from '../ui/ModalShell';
 import {
   adaptiveTestingService,
   type IAdaptiveCoverageRow,
@@ -80,7 +81,9 @@ export const AdaptiveProfilesPanel: FC = () => {
   const coverage = coverageQuery.data ?? [];
 
   const saveMutation = useMutation({
-    mutationFn: async (state: IEditorState) => {
+    // requestClose приходит из ModalShell — закрываем с exit-анимацией,
+    // размонтирование делает сам ModalShell через onClose.
+    mutationFn: async ({ state }: { state: IEditorState; requestClose: () => void }) => {
       const competencies = parseCompetencies(state.competenciesText);
       const input: IAdaptiveProfileInput = {
         orgDepartmentId: state.orgDepartmentId,
@@ -94,9 +97,9 @@ export const AdaptiveProfilesPanel: FC = () => {
         ? adaptiveTestingService.updateProfile(state.profileId, input)
         : adaptiveTestingService.createProfile(input);
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       showToast('success', 'Профиль сохранён');
-      setEditor(null);
+      variables.requestClose();
       void queryClient.invalidateQueries({ queryKey: PROFILES_KEY });
       void queryClient.invalidateQueries({ queryKey: COVERAGE_KEY });
     },
@@ -195,60 +198,89 @@ export const AdaptiveProfilesPanel: FC = () => {
       </div>
 
       {editor && (
-        <div className={styles.editor}>
-          <h3 className={styles.editorTitle}>
-            {editor.profileId ? 'Профиль: ' : 'Новый профиль: '}
-            {editor.departmentName}{editor.positionName ? ` · ${editor.positionName}` : ' · весь отдел'}
-          </h3>
-          <label className={styles.field}>
-            <span>Название</span>
-            <input
-              value={editor.title}
-              onChange={e => setEditor({ ...editor, title: e.target.value })}
-              maxLength={300}
-            />
-          </label>
-          <label className={styles.field}>
-            <span>Обязанности и знания (источник вопросов для LLM)</span>
-            <textarea
-              value={editor.dutiesText}
-              onChange={e => setEditor({ ...editor, dutiesText: e.target.value })}
-              rows={8}
-              maxLength={8000}
-              placeholder="Опишите обязанности, регламенты и знания, которыми должен владеть сотрудник…"
-            />
-          </label>
-          <label className={styles.field}>
-            <span>Компетенции — одна на строку: «Название — описание» (до 15)</span>
-            <textarea
-              value={editor.competenciesText}
-              onChange={e => setEditor({ ...editor, competenciesText: e.target.value })}
-              rows={6}
-              placeholder={'Оформление документов — порядок и сроки оформления\nВзаимодействие с подрядчиками — правила и эскалация'}
-            />
-          </label>
-          <label className={styles.checkboxField}>
-            <input
-              type="checkbox"
-              checked={editor.isPublished}
-              onChange={e => setEditor({ ...editor, isPublished: e.target.checked })}
-            />
-            <span>Опубликован (используется в тестировании)</span>
-          </label>
-          <div className={styles.editorActions}>
-            <button type="button" className={styles.secondaryBtn} onClick={() => setEditor(null)}>
-              Отмена
-            </button>
-            <button
-              type="button"
-              className={styles.primaryBtn}
-              disabled={saveMutation.isPending}
-              onClick={() => saveMutation.mutate(editor)}
-            >
-              {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
-            </button>
-          </div>
-        </div>
+        <ModalShell
+          onClose={() => setEditor(null)}
+          overlayClassName={styles.editorOverlay}
+          containerClassName={styles.editorModal}
+          aria-label="Профиль тестирования"
+        >
+          {({ requestClose }) => (
+            <>
+              <div className={styles.editorHead}>
+                <h3 className={styles.editorTitle}>
+                  {editor.profileId ? 'Профиль: ' : 'Новый профиль: '}
+                  {editor.departmentName}{editor.positionName ? ` · ${editor.positionName}` : ' · весь отдел'}
+                </h3>
+                <button
+                  type="button"
+                  className={styles.editorClose}
+                  onClick={requestClose}
+                  disabled={saveMutation.isPending}
+                  aria-label="Закрыть"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className={styles.editorBody}>
+                <label className={styles.field}>
+                  <span>Название</span>
+                  <input
+                    value={editor.title}
+                    onChange={e => setEditor({ ...editor, title: e.target.value })}
+                    maxLength={300}
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span>Обязанности и знания (источник вопросов для LLM)</span>
+                  <textarea
+                    value={editor.dutiesText}
+                    onChange={e => setEditor({ ...editor, dutiesText: e.target.value })}
+                    rows={8}
+                    maxLength={8000}
+                    placeholder="Опишите обязанности, регламенты и знания, которыми должен владеть сотрудник…"
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span>Компетенции — одна на строку: «Название — описание» (до 15)</span>
+                  <textarea
+                    value={editor.competenciesText}
+                    onChange={e => setEditor({ ...editor, competenciesText: e.target.value })}
+                    rows={6}
+                    placeholder={'Оформление документов — порядок и сроки оформления\nВзаимодействие с подрядчиками — правила и эскалация'}
+                  />
+                </label>
+                <label className={styles.checkboxField}>
+                  <input
+                    type="checkbox"
+                    checked={editor.isPublished}
+                    onChange={e => setEditor({ ...editor, isPublished: e.target.checked })}
+                  />
+                  <span>Опубликован (используется в тестировании)</span>
+                </label>
+              </div>
+
+              <div className={styles.editorActions}>
+                <button
+                  type="button"
+                  className={styles.secondaryBtn}
+                  onClick={requestClose}
+                  disabled={saveMutation.isPending}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  className={styles.primaryBtn}
+                  disabled={saveMutation.isPending}
+                  onClick={() => saveMutation.mutate({ state: editor, requestClose })}
+                >
+                  {saveMutation.isPending ? 'Сохранение…' : 'Сохранить'}
+                </button>
+              </div>
+            </>
+          )}
+        </ModalShell>
       )}
     </div>
   );
