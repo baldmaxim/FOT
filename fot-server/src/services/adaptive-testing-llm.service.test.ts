@@ -31,8 +31,10 @@ vi.mock('./openrouter.service.js', () => {
 
 import {
   adaptiveTestingLlmService,
+  normalizeExtractedCompetencies,
   redactPii,
   validateGeneratedQuestion,
+  MAX_EXTRACTED_COMPETENCIES,
 } from './adaptive-testing-llm.service.js';
 import type { IAdaptiveProfileSnapshot } from '../types/adaptive-testing.types.js';
 
@@ -66,6 +68,78 @@ beforeEach(() => {
   vi.clearAllMocks();
   resolvedConfigMock.mockResolvedValue(OK_CONFIG);
   pgExecute.mockResolvedValue(1);
+});
+
+describe('normalizeExtractedCompetencies', () => {
+  const comp = (key: string, name = 'Тема') => ({ key, name, description: 'Описание темы' });
+
+  it('валидные ключи сохраняются как есть', () => {
+    const res = normalizeExtractedCompetencies({ competencies: [comp('architecture'), comp('code_quality')] });
+    expect(res.map(c => c.key)).toEqual(['architecture', 'code_quality']);
+  });
+
+  // Ключ — идентификатор в competency_state сессии, кириллица и пробелы недопустимы.
+  it('непригодный ключ заменяется на позиционный c{i}', () => {
+    const res = normalizeExtractedCompetencies({
+      competencies: [comp('Архитектура'), comp('work flow'), comp('ok_key')],
+    });
+    expect(res.map(c => c.key)).toEqual(['c1', 'c2', 'ok_key']);
+  });
+
+  it('дубликаты ключей разводятся, иначе две темы схлопнулись бы в одну', () => {
+    const res = normalizeExtractedCompetencies({ competencies: [comp('llm'), comp('llm'), comp('llm')] });
+    expect(res.map(c => c.key)).toEqual(['llm', 'llm_2', 'llm_3']);
+  });
+
+  it('лишние темы сверх лимита отбрасываются', () => {
+    const many = Array.from({ length: 20 }, (_, i) => comp(`k${i}`));
+    expect(normalizeExtractedCompetencies({ competencies: many })).toHaveLength(MAX_EXTRACTED_COMPETENCIES);
+  });
+
+  it('пустое описание не попадает в профиль', () => {
+    const [c] = normalizeExtractedCompetencies({ competencies: [{ key: 'a1', name: 'Тема', description: '  ' }] });
+    expect(c.description).toBeUndefined();
+  });
+
+  it('пустой список отклоняется — тестировать было бы нечего', () => {
+    expect(() => normalizeExtractedCompetencies({ competencies: [] })).toThrow();
+  });
+});
+
+describe('extractCompetencies', () => {
+  it('разбирает ответ LLM и пишет вызов в ledger с назначением extract_competencies', async () => {
+    chatMock.mockResolvedValueOnce(llmResponse(JSON.stringify({
+      competencies: [
+        { key: 'architecture', name: 'Архитектура решений', description: 'Выбор подхода' },
+        { key: 'llm', name: 'Работа с LLM', description: 'Постановка задачи' },
+      ],
+    })));
+
+    const res = await adaptiveTestingLlmService.extractCompetencies({
+      skillMd: '# Методичка\n\nАрхитектура и LLM.',
+      departmentName: 'ОЦТ',
+      positionName: 'Разработчик',
+    });
+
+    expect(res).toHaveLength(2);
+    expect(res[0]).toMatchObject({ key: 'architecture', name: 'Архитектура решений' });
+    expect(pgExecute).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['extract_competencies']));
+  });
+
+  it('методичка уходит в запрос целиком', async () => {
+    chatMock.mockResolvedValueOnce(llmResponse(JSON.stringify({
+      competencies: [{ key: 'a1', name: 'Тема', description: 'Описание' }],
+    })));
+
+    await adaptiveTestingLlmService.extractCompetencies({
+      skillMd: '# УНИКАЛЬНЫЙ_МАРКЕР методички',
+      departmentName: null,
+      positionName: null,
+    });
+
+    const payload = chatMock.mock.calls[0][0] as { messages: { content: string }[] };
+    expect(payload.messages[1].content).toContain('УНИКАЛЬНЫЙ_МАРКЕР');
+  });
 });
 
 describe('validateGeneratedQuestion (cross-field)', () => {

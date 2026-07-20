@@ -122,16 +122,24 @@ export interface IAdaptiveProfile {
   skillMdUploadedAt: string | null;
 }
 
+/**
+ * Файл — единственный источник содержания профиля: обязанности и компетенции
+ * руками не вводятся, темы выделяет сервер из .md при сохранении.
+ */
 export interface IAdaptiveProfileInput {
   orgDepartmentId: string;
   positionId: string | null;
   title: string;
-  dutiesText: string;
-  competencies: IAdaptiveCompetencyInput[];
   isPublished: boolean;
-  /** null/пусто — удалить ранее загруженный файл. */
-  skillMd?: string | null;
-  skillMdFilename?: string | null;
+  skillMd: string;
+  skillMdFilename: string;
+}
+
+export interface IAdaptiveProfileSaveResult {
+  id: string;
+  competencies: IAdaptiveCompetencyInput[];
+  /** true — методичку не удалось разобрать, сохранена одна общая тема. */
+  competenciesFallback: boolean;
 }
 
 /** Лимит содержимого .md — синхронно с сервером (SKILL_MD_MAX_CHARS). */
@@ -238,12 +246,12 @@ export const adaptiveTestingService = {
     const res = await apiClient.get<ApiResponse<IAdaptiveProfile[]>>('/adaptive-testing/skill-profiles');
     return res.data;
   },
-  createProfile: async (input: IAdaptiveProfileInput): Promise<{ id: string }> => {
-    const res = await apiClient.post<ApiResponse<{ id: string }>>('/adaptive-testing/skill-profiles', input);
+  createProfile: async (input: IAdaptiveProfileInput): Promise<IAdaptiveProfileSaveResult> => {
+    const res = await apiClient.post<ApiResponse<IAdaptiveProfileSaveResult>>('/adaptive-testing/skill-profiles', input);
     return res.data;
   },
-  updateProfile: async (id: string, input: IAdaptiveProfileInput): Promise<{ id: string }> => {
-    const res = await apiClient.put<ApiResponse<{ id: string }>>(`/adaptive-testing/skill-profiles/${id}`, input);
+  updateProfile: async (id: string, input: IAdaptiveProfileInput): Promise<IAdaptiveProfileSaveResult> => {
+    const res = await apiClient.put<ApiResponse<IAdaptiveProfileSaveResult>>(`/adaptive-testing/skill-profiles/${id}`, input);
     return res.data;
   },
 

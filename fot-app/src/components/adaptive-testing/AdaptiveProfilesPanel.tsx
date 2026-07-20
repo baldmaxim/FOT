@@ -22,9 +22,6 @@ interface IEditorState {
   positionId: string | null;
   positionName: string | null;
   title: string;
-  dutiesText: string;
-  /** Одна компетенция на строку: «Название — описание». */
-  competenciesText: string;
   isPublished: boolean;
   /** Содержимое загруженного .md; null — файла нет. */
   skillMd: string | null;
@@ -45,10 +42,6 @@ const profileToEditor = (p: IAdaptiveProfile): IEditorState => ({
   positionId: p.positionId,
   positionName: p.positionName,
   title: p.title,
-  dutiesText: p.dutiesText,
-  competenciesText: p.competencies
-    .map(c => (c.description ? `${c.name} — ${c.description}` : c.name))
-    .join('\n'),
   isPublished: p.isPublished,
   skillMd: p.skillMd,
   skillMdFilename: p.skillMdFilename,
@@ -63,8 +56,6 @@ const coverageToEditor = (row: IAdaptiveCoverageRow): IEditorState => ({
   positionId: row.positionId,
   positionName: row.positionName,
   title: autoTitle(row.departmentName ?? '', row.positionName),
-  dutiesText: '',
-  competenciesText: '',
   isPublished: false,
   skillMd: null,
   skillMdFilename: null,
@@ -74,58 +65,14 @@ const coverageToEditor = (row: IAdaptiveCoverageRow): IEditorState => ({
 
 const formatChars = (n: number): string => n.toLocaleString('ru-RU');
 
-/** Разделитель «название / описание» — тире, дефис или двоеточие. */
-const COMPETENCY_SEPARATOR = /\s[—–-]\s|:\s/;
-
-/** Строки «Название — описание» → компетенции с ключами c1..cN. */
-const parseCompetencies = (text: string): IAdaptiveProfileInput['competencies'] =>
-  text
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map((line, i) => {
-      const match = COMPETENCY_SEPARATOR.exec(line);
-      const name = (match ? line.slice(0, match.index) : line).trim();
-      const description = match ? line.slice(match.index + match[0].length).trim() : '';
-      return {
-        key: `c${i + 1}`,
-        name,
-        ...(description ? { description } : {}),
-      };
-    });
-
-const MAX_COMPETENCIES = 15;
-
 /**
  * Проверка формы до отправки: сервер отдаёт ошибки Zod без привязки к полю,
  * поэтому объясняем проблему на клиенте, пока данные ещё в модалке.
  */
 const validateEditor = (state: IEditorState): string | null => {
   if (!state.title.trim()) return 'Укажите название профиля';
-
-  const competencies = parseCompetencies(state.competenciesText);
-  if (competencies.length === 0) {
-    return 'Добавьте хотя бы одну компетенцию — по ним строится подбор вопросов и разбивка результата';
-  }
-  if (competencies.length > MAX_COMPETENCIES) {
-    return `Компетенций не больше ${MAX_COMPETENCIES}, сейчас ${competencies.length}`;
-  }
-  const tooLong = competencies.findIndex(c => c.name.length > 200);
-  if (tooLong >= 0) {
-    return `Слишком длинное название компетенции в строке ${tooLong + 1} — не больше 200 символов`;
-  }
-  const tooLongDescription = competencies.findIndex(c => (c.description?.length ?? 0) > 1000);
-  if (tooLongDescription >= 0) {
-    return `Слишком длинное описание компетенции в строке ${tooLongDescription + 1} — не больше 1000 символов`;
-  }
-
-  const hasDuties = state.dutiesText.trim().length >= 10;
-  const hasSkillMd = Boolean(state.skillMd && state.skillMd.trim());
-  if (state.isPublished && !hasDuties && !hasSkillMd) {
-    return 'Для публикации заполните «Обязанности» или загрузите файл скилла (.md)';
-  }
-  if (!hasDuties && !hasSkillMd && state.dutiesText.trim().length > 0) {
-    return 'Описание обязанностей — минимум 10 символов';
+  if (!state.skillMd || !state.skillMd.trim() || !state.skillMdFilename) {
+    return 'Загрузите файл скилла (.md) — из него строятся вопросы';
   }
   return null;
 };
@@ -195,23 +142,24 @@ export const AdaptiveProfilesPanel: FC = () => {
     // requestClose приходит из ModalShell — закрываем с exit-анимацией,
     // размонтирование делает сам ModalShell через onClose.
     mutationFn: async ({ state }: { state: IEditorState; requestClose: () => void }) => {
-      const competencies = parseCompetencies(state.competenciesText);
       const input: IAdaptiveProfileInput = {
         orgDepartmentId: state.orgDepartmentId,
         positionId: state.positionId,
         title: state.title.trim(),
-        dutiesText: state.dutiesText.trim(),
-        competencies,
         isPublished: state.isPublished,
-        skillMd: state.skillMd,
-        skillMdFilename: state.skillMdFilename,
+        skillMd: state.skillMd ?? '',
+        skillMdFilename: state.skillMdFilename ?? '',
       };
       return state.profileId
         ? adaptiveTestingService.updateProfile(state.profileId, input)
         : adaptiveTestingService.createProfile(input);
     },
-    onSuccess: (_data, variables) => {
-      showToast('success', 'Профиль сохранён');
+    onSuccess: (data, variables) => {
+      if (data.competenciesFallback) {
+        showToast('error', 'Профиль сохранён, но разобрать файл не удалось — записана одна общая тема. Попробуйте сохранить ещё раз.');
+      } else {
+        showToast('success', `Профиль сохранён · тем определено: ${data.competencies.length}`);
+      }
       variables.requestClose();
       void queryClient.invalidateQueries({ queryKey: PROFILES_KEY });
       void queryClient.invalidateQueries({ queryKey: COVERAGE_KEY });
@@ -380,18 +328,8 @@ export const AdaptiveProfilesPanel: FC = () => {
                     maxLength={300}
                   />
                 </label>
-                <label className={styles.field}>
-                  <span>Обязанности и знания (источник вопросов для LLM)</span>
-                  <textarea
-                    value={editor.dutiesText}
-                    onChange={e => setEditor({ ...editor, dutiesText: e.target.value })}
-                    rows={8}
-                    maxLength={8000}
-                    placeholder="Опишите обязанности, регламенты и знания, которыми должен владеть сотрудник…"
-                  />
-                </label>
                 <div className={styles.field}>
-                  <span>Файл скилла (.md) — развёрнутое описание для ИИ</span>
+                  <span>Файл скилла (.md) — источник вопросов</span>
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -425,7 +363,8 @@ export const AdaptiveProfilesPanel: FC = () => {
                     </button>
                   )}
                   <span className={styles.fieldHint}>
-                    Файл целиком передаётся ИИ при составлении каждого вопроса. Не загружайте документы
+                    Проверяемые темы определяются по файлу автоматически при сохранении — вводить их вручную не нужно.
+                    Файл целиком передаётся ИИ при составлении каждого вопроса: не загружайте документы
                     с паролями, токенами и персональными данными. Максимум {formatChars(SKILL_MD_MAX_CHARS)} символов.
                   </span>
                   {editor.skillMd && (
@@ -439,19 +378,6 @@ export const AdaptiveProfilesPanel: FC = () => {
                   )}
                 </div>
 
-                <div className={styles.field}>
-                  <span>Компетенции — обязательно, одна на строку (до {MAX_COMPETENCIES})</span>
-                  <textarea
-                    value={editor.competenciesText}
-                    onChange={e => setEditor({ ...editor, competenciesText: e.target.value })}
-                    rows={6}
-                    placeholder={'Оформление документов — порядок и сроки оформления\nВзаимодействие с подрядчиками — правила и эскалация'}
-                  />
-                  <span className={styles.fieldHint}>
-                    Формат строки: «Название — описание» (подойдёт тире, дефис или двоеточие); без разделителя
-                    вся строка считается названием. По компетенциям подбираются вопросы и строится разбивка результата.
-                  </span>
-                </div>
                 <label className={styles.checkboxField}>
                   <input
                     type="checkbox"

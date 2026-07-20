@@ -300,48 +300,35 @@ export const sanitizeSkillMd = (raw: string): string => {
   return out.trim();
 };
 
-// Сообщения — по-русски и с указанием поля: они доходят до пользователя как есть
-// (контроллер склеивает issues в текст тоста), а форма — не единственный вход.
-const competencyZod = z.object({
-  key: z.string().min(1).max(60).regex(/^[a-z0-9_]+$/, 'key — латиница/цифры/подчёркивание'),
-  name: z.string().min(1, 'У компетенции пустое название').max(200, 'Название компетенции — не больше 200 символов'),
-  description: z.string().max(1000, 'Описание компетенции — не больше 1000 символов').optional(),
-}).strict();
-
+/**
+ * Вход профиля: единственный источник содержания — загруженный .md-файл.
+ * Обязанности и компетенции руками не вводятся: темы выделяет LLM из файла
+ * при сохранении. Сообщения — по-русски и с указанием поля: они доходят до
+ * пользователя как есть (контроллер склеивает issues в текст тоста).
+ */
 export const profileInputZod = z.object({
   orgDepartmentId: z.string().uuid(),
   positionId: z.string().uuid().nullable(),
   title: z.string().min(1, 'Укажите название профиля').max(300, 'Название профиля — не больше 300 символов'),
-  // Краткое описание. Развёрнутая методичка грузится .md-файлом (skillMd),
-  // поэтому поле может быть пустым, если файл загружен.
-  dutiesText: z.string().max(8000, 'Описание обязанностей — не больше 8000 символов'),
-  competencies: z.array(competencyZod)
-    .min(1, 'Добавьте хотя бы одну компетенцию — по ним строится подбор вопросов и разбивка результата')
-    .max(15, 'Компетенций не больше 15'),
   isPublished: z.boolean(),
-  skillMd: z.string().max(SKILL_MD_MAX_CHARS, `Файл скилла — не больше ${SKILL_MD_MAX_CHARS} символов`).nullable().optional(),
-  skillMdFilename: z.string().max(255, 'Слишком длинное имя файла').nullable().optional(),
+  skillMd: z.string({ required_error: 'Загрузите файл скилла (.md) — из него строятся вопросы' })
+    .min(1, 'Загрузите файл скилла (.md) — из него строятся вопросы')
+    .max(SKILL_MD_MAX_CHARS, `Файл скилла — не больше ${SKILL_MD_MAX_CHARS} символов`),
+  skillMdFilename: z.string({ required_error: 'Не передано имя загруженного файла' })
+    .min(1, 'Не передано имя загруженного файла')
+    .max(255, 'Слишком длинное имя файла'),
 }).strict().superRefine((val, ctx) => {
-  const keys = val.competencies.map(c => c.key);
-  if (new Set(keys).size !== keys.length) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Ключи компетенций должны быть уникальны' });
-  }
-  // Публиковать нечего, если нет ни описания, ни файла.
-  const hasDuties = val.dutiesText.trim().length >= 10;
-  const hasSkillMd = Boolean(val.skillMd && sanitizeSkillMd(val.skillMd).length > 0);
-  if (val.isPublished && !hasDuties && !hasSkillMd) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Для публикации заполните «Обязанности» или загрузите файл скилла (.md)',
-    });
-  }
-  if (!val.isPublished && !hasDuties && !hasSkillMd && val.dutiesText.trim().length > 0) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Описание обязанностей — минимум 10 символов' });
-  }
-  if (val.skillMd && !val.skillMdFilename) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Не передано имя загруженного файла' });
+  if (sanitizeSkillMd(val.skillMd).length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Файл скилла пустой' });
   }
 });
+
+/** Запасная тема, если методичку не удалось разобрать: профиль не теряется. */
+const FALLBACK_COMPETENCY: IAdaptiveCompetency = {
+  key: 'general',
+  name: 'Общие знания по профилю',
+  description: 'Знание содержания рабочего профиля целиком',
+};
 
 // ─── Сотрудник / доступность ─────────────────────────────────────────────────
 
@@ -1204,66 +1191,92 @@ export const adaptiveTestingService = {
     );
   },
 
-  async saveProfile(rawInput: unknown, userId: string, profileId?: string): Promise<{ id: string }> {
+  async saveProfile(
+    rawInput: unknown,
+    userId: string,
+    profileId?: string,
+  ): Promise<{ id: string; competencies: IAdaptiveCompetency[]; competenciesFallback: boolean }> {
     const input = profileInputZod.parse(rawInput);
 
-    // Файл: пустая строка/null = «удалить». Метаданные (имя, размер, кто и когда
-    // загрузил) обновляем только при фактической смене содержимого.
-    const skillMd = input.skillMd ? sanitizeSkillMd(input.skillMd) : '';
-    const hasSkillMd = skillMd.length > 0;
-    const skillMdFilename = hasSkillMd ? (input.skillMdFilename ?? null) : null;
-    const skillMdChars = hasSkillMd ? skillMd.length : 0;
+    const skillMd = sanitizeSkillMd(input.skillMd);
+    const skillMdFilename = input.skillMdFilename;
+    const skillMdChars = skillMd.length;
 
     try {
+      let existingProfile: { skill_md: string | null; competencies: IAdaptiveCompetency[] } | null = null;
       if (profileId) {
-        const existing = await queryOne<{ skill_md: string | null }>(
-          'SELECT skill_md FROM adaptive_skill_profiles WHERE id = $1',
+        existingProfile = await queryOne<{ skill_md: string | null; competencies: IAdaptiveCompetency[] }>(
+          'SELECT skill_md, competencies FROM adaptive_skill_profiles WHERE id = $1',
           [profileId],
         );
-        if (!existing) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
-        const contentChanged = (existing.skill_md ?? '') !== skillMd;
+        if (!existingProfile) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
+      }
 
+      const contentChanged = (existingProfile?.skill_md ?? '') !== skillMd;
+
+      // Темы переопределяем только при смене файла: правка названия или галочки
+      // «Опубликован» не должна стоить LLM-вызова и менять ключи компетенций.
+      let competencies: IAdaptiveCompetency[];
+      let competenciesFallback = false;
+      if (!contentChanged && existingProfile && existingProfile.competencies.length > 0) {
+        competencies = existingProfile.competencies;
+      } else {
+        const scope = await queryOne<{ departmentName: string | null; positionName: string | null }>(
+          `SELECT d.name AS "departmentName", p.name AS "positionName"
+             FROM org_departments d
+             LEFT JOIN positions p ON p.id = $2::uuid
+            WHERE d.id = $1::uuid`,
+          [input.orgDepartmentId, input.positionId],
+        );
+        try {
+          competencies = await adaptiveTestingLlmService.extractCompetencies({
+            skillMd,
+            departmentName: scope?.departmentName ?? null,
+            positionName: scope?.positionName ?? null,
+          });
+        } catch (err) {
+          // Сбой провайдера не должен терять загруженный файл: сохраняем профиль
+          // с одной общей темой и сообщаем об этом вызывающему.
+          console.error('[adaptive-testing] extractCompetencies failed:', err);
+          competencies = [FALLBACK_COMPETENCY];
+          competenciesFallback = true;
+        }
+      }
+
+      if (profileId) {
         const updated = await queryOne<{ id: string }>(
         `UPDATE adaptive_skill_profiles
-            SET org_department_id = $2, position_id = $3, title = $4, duties_text = $5,
-                competencies = $6, is_published = $7, updated_at = now(),
-                skill_md = $8, skill_md_filename = $9, skill_md_chars = $10,
-                skill_md_uploaded_at = CASE
-                  WHEN $11::boolean AND $8 IS NOT NULL THEN now()
-                  WHEN $8 IS NULL THEN NULL
-                  ELSE skill_md_uploaded_at END,
-                skill_md_uploaded_by = CASE
-                  WHEN $11::boolean AND $8 IS NOT NULL THEN $12::uuid
-                  WHEN $8 IS NULL THEN NULL
-                  ELSE skill_md_uploaded_by END
+            SET org_department_id = $2, position_id = $3, title = $4, duties_text = '',
+                competencies = $5, is_published = $6, updated_at = now(),
+                skill_md = $7, skill_md_filename = $8, skill_md_chars = $9,
+                skill_md_uploaded_at = CASE WHEN $10::boolean THEN now() ELSE skill_md_uploaded_at END,
+                skill_md_uploaded_by = CASE WHEN $10::boolean THEN $11::uuid ELSE skill_md_uploaded_by END
           WHERE id = $1
           RETURNING id`,
           [
             profileId, input.orgDepartmentId, input.positionId, input.title,
-            input.dutiesText, JSON.stringify(input.competencies), input.isPublished,
-            hasSkillMd ? skillMd : null, skillMdFilename, skillMdChars,
+            JSON.stringify(competencies), input.isPublished,
+            skillMd, skillMdFilename, skillMdChars,
             contentChanged, userId,
           ],
         );
         if (!updated) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
-        return updated;
+        return { id: updated.id, competencies, competenciesFallback };
       }
 
       const created = await queryOne<{ id: string }>(
         `INSERT INTO adaptive_skill_profiles
            (org_department_id, position_id, title, duties_text, competencies, is_published, created_by,
             skill_md, skill_md_filename, skill_md_chars, skill_md_uploaded_at, skill_md_uploaded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                 CASE WHEN $8 IS NULL THEN NULL ELSE now() END,
-                 CASE WHEN $8 IS NULL THEN NULL ELSE $7::uuid END)
+         VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8, $9, now(), $6::uuid)
          RETURNING id`,
         [
-          input.orgDepartmentId, input.positionId, input.title, input.dutiesText,
-          JSON.stringify(input.competencies), input.isPublished, userId,
-          hasSkillMd ? skillMd : null, skillMdFilename, skillMdChars,
+          input.orgDepartmentId, input.positionId, input.title,
+          JSON.stringify(competencies), input.isPublished, userId,
+          skillMd, skillMdFilename, skillMdChars,
         ],
       );
-      return created!;
+      return { id: created!.id, competencies, competenciesFallback };
     } catch (err) {
       // Уникальность скоупа держит expression-индекс (отдел + должность/NULL):
       // без этой ветки пользователь получал бы сырую ошибку БД.
