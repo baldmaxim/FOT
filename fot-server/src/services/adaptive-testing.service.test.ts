@@ -23,10 +23,13 @@ import {
   adjustDifficulty,
   computeResultSummary,
   isEmailAllowed,
+  profileInputZod,
   questionTypeForSeq,
+  sanitizeSkillMd,
   scoreClosedAnswer,
   selectNextQuestion,
   validateAnswerPayload,
+  SKILL_MD_MAX_CHARS,
 } from './adaptive-testing.service.js';
 import type { IAdaptiveCompetency, IAdaptiveCompetencyState } from '../types/adaptive-testing.types.js';
 
@@ -208,6 +211,73 @@ describe('selectNextQuestion', () => {
       5,
     );
     expect(spec.difficulty).toBe(2);
+  });
+});
+
+describe('sanitizeSkillMd', () => {
+  const BOM = String.fromCharCode(0xfeff);
+  const NUL = String.fromCharCode(0);
+
+  it('срезает BOM и нулевые байты, нормализует CRLF', () => {
+    const raw = BOM + '# Заголовок\r\nстрока' + NUL + ' два\r\n';
+    const clean = sanitizeSkillMd(raw);
+    expect(clean).toBe('# Заголовок\nстрока два');
+    expect(clean).not.toContain(BOM);
+    expect(clean).not.toContain(NUL);
+    expect(clean).not.toContain('\r');
+  });
+
+  it('сохраняет табуляцию и переводы строк внутри текста', () => {
+    expect(sanitizeSkillMd('a\tb\nc')).toBe('a\tb\nc');
+  });
+});
+
+describe('profileInputZod — файл скилла (.md)', () => {
+  const base = {
+    orgDepartmentId: '11111111-1111-1111-1111-111111111111',
+    positionId: null,
+    title: 'Профиль',
+    competencies: [{ key: 'docs', name: 'Документы' }],
+    isPublished: true,
+  };
+
+  it('файл предельного размера проходит, на символ больше — отклоняется', () => {
+    const atLimit = 'x'.repeat(SKILL_MD_MAX_CHARS);
+    expect(() => profileInputZod.parse({
+      ...base, dutiesText: '', skillMd: atLimit, skillMdFilename: 'skill.md',
+    })).not.toThrow();
+
+    expect(() => profileInputZod.parse({
+      ...base, dutiesText: '', skillMd: `${atLimit}x`, skillMdFilename: 'skill.md',
+    })).toThrow();
+  });
+
+  it('публикация без обязанностей, но с файлом — проходит', () => {
+    expect(() => profileInputZod.parse({
+      ...base, dutiesText: '', skillMd: '# Методичка отдела', skillMdFilename: 'skill.md',
+    })).not.toThrow();
+  });
+
+  it('публикация без обязанностей и без файла — отклоняется', () => {
+    expect(() => profileInputZod.parse({ ...base, dutiesText: '' })).toThrow(/Обязанности|файл/i);
+  });
+
+  it('публикация только с обязанностями (без файла) — проходит', () => {
+    expect(() => profileInputZod.parse({
+      ...base, dutiesText: 'Оформляет заявки, ведёт реестр закупок.',
+    })).not.toThrow();
+  });
+
+  it('файл без имени — отклоняется', () => {
+    expect(() => profileInputZod.parse({
+      ...base, dutiesText: '', skillMd: '# Методичка',
+    })).toThrow(/имя загруженного файла/i);
+  });
+
+  it('обязанности по-прежнему ограничены 8000 символами', () => {
+    expect(() => profileInputZod.parse({
+      ...base, dutiesText: 'д'.repeat(8001),
+    })).toThrow();
   });
 });
 

@@ -1,10 +1,11 @@
-import { type FC, useMemo, useState } from 'react';
+import { type ChangeEvent, type FC, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, CircleAlert, Pencil, Plus, X } from 'lucide-react';
+import { CheckCircle2, CircleAlert, FileText, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { ModalShell } from '../ui/ModalShell';
 import {
   adaptiveTestingService,
+  SKILL_MD_MAX_CHARS,
   type IAdaptiveCoverageRow,
   type IAdaptiveProfile,
   type IAdaptiveProfileInput,
@@ -25,6 +26,9 @@ interface IEditorState {
   /** Одна компетенция на строку: «Название — описание». */
   competenciesText: string;
   isPublished: boolean;
+  /** Содержимое загруженного .md; null — файла нет. */
+  skillMd: string | null;
+  skillMdFilename: string | null;
 }
 
 const profileToEditor = (p: IAdaptiveProfile): IEditorState => ({
@@ -39,6 +43,8 @@ const profileToEditor = (p: IAdaptiveProfile): IEditorState => ({
     .map(c => (c.description ? `${c.name} — ${c.description}` : c.name))
     .join('\n'),
   isPublished: p.isPublished,
+  skillMd: p.skillMd,
+  skillMdFilename: p.skillMdFilename,
 });
 
 const coverageToEditor = (row: IAdaptiveCoverageRow): IEditorState => ({
@@ -51,7 +57,11 @@ const coverageToEditor = (row: IAdaptiveCoverageRow): IEditorState => ({
   dutiesText: '',
   competenciesText: '',
   isPublished: false,
+  skillMd: null,
+  skillMdFilename: null,
 });
+
+const formatChars = (n: number): string => n.toLocaleString('ru-RU');
 
 /** Строки «Название — описание» → компетенции с ключами c1..cN. */
 const parseCompetencies = (text: string): IAdaptiveProfileInput['competencies'] =>
@@ -73,6 +83,39 @@ export const AdaptiveProfilesPanel: FC = () => {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const [editor, setEditor] = useState<IEditorState | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * Чтение .md на клиенте: содержимое уходит строкой вместе с профилем
+   * (express.json допускает до 10 МБ), поэтому multipart-загрузка не нужна.
+   */
+  const handleSkillMdPick = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Сбрасываем input сразу: иначе повторный выбор того же файла не сработает.
+    e.target.value = '';
+    if (!file || !editor) return;
+
+    if (!/\.(md|markdown)$/i.test(file.name)) {
+      showToast('error', 'Нужен файл .md или .markdown');
+      return;
+    }
+    try {
+      const text = await file.text();
+      const trimmed = text.trim();
+      if (!trimmed) {
+        showToast('error', 'Файл пустой');
+        return;
+      }
+      if (trimmed.length > SKILL_MD_MAX_CHARS) {
+        showToast('error', `Файл слишком большой: ${formatChars(trimmed.length)} символов, максимум ${formatChars(SKILL_MD_MAX_CHARS)}`);
+        return;
+      }
+      setEditor({ ...editor, skillMd: text, skillMdFilename: file.name });
+      showToast('success', `Файл «${file.name}» прикреплён — не забудьте сохранить`);
+    } catch {
+      showToast('error', 'Не удалось прочитать файл');
+    }
+  };
 
   const profilesQuery = useQuery({ queryKey: PROFILES_KEY, queryFn: adaptiveTestingService.listProfiles, staleTime: 30_000 });
   const coverageQuery = useQuery({ queryKey: COVERAGE_KEY, queryFn: adaptiveTestingService.getCoverage, staleTime: 60_000 });
@@ -92,6 +135,8 @@ export const AdaptiveProfilesPanel: FC = () => {
         dutiesText: state.dutiesText.trim(),
         competencies,
         isPublished: state.isPublished,
+        skillMd: state.skillMd,
+        skillMdFilename: state.skillMdFilename,
       };
       return state.profileId
         ? adaptiveTestingService.updateProfile(state.profileId, input)
@@ -129,6 +174,11 @@ export const AdaptiveProfilesPanel: FC = () => {
                   <span className={styles.profileScope}>
                     {p.departmentName ?? '—'}{p.positionName ? ` · ${p.positionName}` : ' · весь отдел'}
                     {' · '}{p.competencies.length} комп.
+                    {p.skillMdChars > 0 && (
+                      <span className={styles.fileBadge}>
+                        <FileText size={12} /> {p.skillMdFilename ?? 'skill.md'}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div className={styles.profileActions}>
@@ -241,6 +291,55 @@ export const AdaptiveProfilesPanel: FC = () => {
                     placeholder="Опишите обязанности, регламенты и знания, которыми должен владеть сотрудник…"
                   />
                 </label>
+                <div className={styles.field}>
+                  <span>Файл скилла (.md) — развёрнутое описание для ИИ</span>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".md,.markdown,text/markdown"
+                    className={styles.hiddenFileInput}
+                    onChange={handleSkillMdPick}
+                  />
+                  {editor.skillMd ? (
+                    <div className={styles.fileCard}>
+                      <FileText size={16} className={styles.fileIcon} />
+                      <div className={styles.fileInfo}>
+                        <span className={styles.fileName}>{editor.skillMdFilename ?? 'skill.md'}</span>
+                        <span className={styles.fileMeta}>{formatChars(editor.skillMd.trim().length)} символов</span>
+                      </div>
+                      <div className={styles.fileActions}>
+                        <button type="button" className={styles.iconBtn} onClick={() => fileInputRef.current?.click()}>
+                          <Upload size={14} /> Заменить
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.iconBtn}
+                          onClick={() => setEditor({ ...editor, skillMd: null, skillMdFilename: null })}
+                        >
+                          <Trash2 size={14} /> Удалить
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button type="button" className={styles.uploadBtn} onClick={() => fileInputRef.current?.click()}>
+                      <Upload size={16} /> Загрузить .md
+                    </button>
+                  )}
+                  <span className={styles.fieldHint}>
+                    Файл целиком передаётся ИИ при составлении каждого вопроса. Не загружайте документы
+                    с паролями, токенами и персональными данными. Максимум {formatChars(SKILL_MD_MAX_CHARS)} символов.
+                  </span>
+                  {editor.skillMd && (
+                    <details className={styles.preview}>
+                      <summary>Предпросмотр</summary>
+                      <pre className={styles.previewBody}>
+                        {editor.skillMd.trim().slice(0, 2000)}
+                        {editor.skillMd.trim().length > 2000 ? '\n\n…' : ''}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+
                 <label className={styles.field}>
                   <span>Компетенции — одна на строку: «Название — описание» (до 15)</span>
                   <textarea

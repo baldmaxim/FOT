@@ -157,6 +157,36 @@ describe('generateQuestion', () => {
     expect(opts).toMatchObject({ modelOverride: 'openai/gpt-5.6-luna', maxAttempts: 1 });
   });
 
+  it('содержимое загруженного .md попадает в промпт вместе с обязанностями', async () => {
+    chatMock.mockResolvedValue(llmResponse(JSON.stringify({
+      question_text: 'Каков порядок оформления заявки на закупку материалов?',
+      options: [{ id: 'a', text: '1' }, { id: 'b', text: '2' }, { id: 'c', text: '3' }],
+      correct_option_ids: ['a'],
+      rubric: null,
+    })));
+
+    await adaptiveTestingLlmService.generateQuestion({
+      sessionId: 's1',
+      snapshot: {
+        ...SNAPSHOT,
+        skillMd: '# Методичка отдела\n\nПравило эскалации: уведомить руководителя за 2 часа.',
+        skillMdFilename: 'skill.md',
+      },
+      competency: SNAPSHOT.competencies[0],
+      difficulty: 1,
+      type: 'single',
+      seq: 1,
+      askedQuestions: [],
+      gapTags: [],
+    });
+
+    const payload = chatMock.mock.calls[0][0];
+    const duties = JSON.parse(payload.messages[1].content as string).duties as string;
+    expect(duties).toContain(SNAPSHOT.dutiesText);
+    expect(duties).toContain('Правило эскалации');
+    expect(duties).toContain('skill.md');
+  });
+
   it('невалидный JSON — ошибка + запись invalid_json в ledger', async () => {
     chatMock.mockResolvedValue(llmResponse('это не JSON вовсе'));
     await expect(adaptiveTestingLlmService.generateQuestion({

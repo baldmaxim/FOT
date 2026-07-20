@@ -115,6 +115,11 @@ export interface IAdaptiveProfile {
   competencies: IAdaptiveCompetencyInput[];
   isPublished: boolean;
   updatedAt: string;
+  /** Содержимое загруженного .md со скиллом отдела. */
+  skillMd: string | null;
+  skillMdFilename: string | null;
+  skillMdChars: number;
+  skillMdUploadedAt: string | null;
 }
 
 export interface IAdaptiveProfileInput {
@@ -124,7 +129,13 @@ export interface IAdaptiveProfileInput {
   dutiesText: string;
   competencies: IAdaptiveCompetencyInput[];
   isPublished: boolean;
+  /** null/пусто — удалить ранее загруженный файл. */
+  skillMd?: string | null;
+  skillMdFilename?: string | null;
 }
+
+/** Лимит содержимого .md — синхронно с сервером (SKILL_MD_MAX_CHARS). */
+export const SKILL_MD_MAX_CHARS = 150_000;
 
 export interface IAdaptiveCoverageRow {
   departmentId: string;

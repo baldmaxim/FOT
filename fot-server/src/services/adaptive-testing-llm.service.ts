@@ -13,7 +13,7 @@ import type {
 export const ADAPTIVE_PROMPT_VERSION = 'v1';
 
 const GENERATOR_MAX_TOKENS = 2500;
-const EVALUATOR_MAX_TOKENS = 1500;
+const EVALUATOR_MAX_TOKENS = 2500;
 /** Суммарное число HTTP-попыток одного логического вызова (не «ретраев»). */
 const LLM_MAX_ATTEMPTS = 1;
 
@@ -43,6 +43,22 @@ const recordLlmCall = async (row: {
     // Ledger не должен ронять основной поток.
     console.error('[adaptive-llm] ledger insert failed:', err);
   }
+};
+
+/**
+ * Источник вопросов: краткие обязанности профиля + содержимое загруженной
+ * методички (.md), если она есть. Файл уходит в LLM целиком при каждой
+ * генерации и оценке — 40 000 символов ≈ 13k токенов, то есть около $0.26
+ * за сессию из 10 вопросов; предельные 150 000 символов ≈ $1. Дневной лимит
+ * сессий на сотрудника ограничивает суммарный расход.
+ */
+const buildDutiesContext = (snapshot: IAdaptiveProfileSnapshot): string => {
+  const parts: string[] = [];
+  if (snapshot.dutiesText.trim()) parts.push(snapshot.dutiesText.trim());
+  if (snapshot.skillMd && snapshot.skillMd.trim()) {
+    parts.push(`# Описание скилла отдела (файл ${snapshot.skillMdFilename ?? 'skill.md'})\n\n${snapshot.skillMd.trim()}`);
+  }
+  return parts.join('\n\n---\n\n');
 };
 
 const stripJsonFence = (raw: string): string => {
@@ -272,7 +288,7 @@ export const adaptiveTestingLlmService = {
     const userPayload = {
       department: snapshot.departmentName,
       position: snapshot.positionName,
-      duties: snapshot.dutiesText,
+      duties: buildDutiesContext(snapshot),
       competency: { key: competency.key, name: competency.name, description: competency.description ?? null },
       difficulty: params.difficulty,
       question_type: params.type,
@@ -312,7 +328,7 @@ export const adaptiveTestingLlmService = {
     answerText: string;
   }): Promise<IAdaptiveEvalResult> {
     const userPayload = {
-      duties: params.snapshot.dutiesText,
+      duties: buildDutiesContext(params.snapshot),
       competency: { key: params.competency.key, name: params.competency.name },
       question: params.questionText,
       rubric: params.rubric,

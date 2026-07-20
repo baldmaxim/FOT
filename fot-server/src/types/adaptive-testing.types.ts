@@ -22,6 +22,9 @@ export interface IAdaptiveProfileSnapshot {
   positionName: string | null;
   dutiesText: string;
   competencies: IAdaptiveCompetency[];
+  /** Содержимое загруженного .md со скиллом отдела (если админ его прикрепил). */
+  skillMd?: string | null;
+  skillMdFilename?: string | null;
 }
 
 /** Состояние компетенции внутри сессии (competency_state JSONB, по key). */

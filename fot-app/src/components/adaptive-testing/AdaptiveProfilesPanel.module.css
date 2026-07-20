@@ -257,6 +257,116 @@
   cursor: pointer;
 }
 
+/* ── Файл скилла (.md) ── */
+
+.hiddenFileInput {
+  display: none;
+}
+
+.uploadBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.uploadBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.fileCard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  flex-wrap: wrap;
+}
+
+.fileIcon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.fileInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.fileName {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.fileMeta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.fileActions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.fieldHint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.preview {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+}
+
+.preview summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.previewBody {
+  margin: 8px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.fileBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .editorActions {
   display: flex;
   justify-content: flex-end;

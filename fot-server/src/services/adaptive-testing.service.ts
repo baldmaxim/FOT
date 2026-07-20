@@ -250,7 +250,12 @@ interface IProfileRow {
   duties_text: string;
   competencies: IAdaptiveCompetency[];
   is_published: boolean;
+  skill_md: string | null;
+  skill_md_filename: string | null;
 }
+
+const PROFILE_COLUMNS = `id, org_department_id, position_id, title, duties_text,
+                         competencies, is_published, skill_md, skill_md_filename`;
 
 /** Опубликованный профиль: точный (отдел+должность) → фоллбек (отдел, NULL). */
 const findPublishedProfile = async (
@@ -259,7 +264,7 @@ const findPublishedProfile = async (
 ): Promise<IProfileRow | null> => {
   if (positionId) {
     const exact = await queryOne<IProfileRow>(
-      `SELECT id, org_department_id, position_id, title, duties_text, competencies, is_published
+      `SELECT ${PROFILE_COLUMNS}
          FROM adaptive_skill_profiles
         WHERE org_department_id = $1 AND position_id = $2 AND is_published = true`,
       [departmentId, positionId],
@@ -267,11 +272,32 @@ const findPublishedProfile = async (
     if (exact) return exact;
   }
   return queryOne<IProfileRow>(
-    `SELECT id, org_department_id, position_id, title, duties_text, competencies, is_published
+    `SELECT ${PROFILE_COLUMNS}
        FROM adaptive_skill_profiles
       WHERE org_department_id = $1 AND position_id IS NULL AND is_published = true`,
     [departmentId],
   );
+};
+
+/** Лимит содержимого .md-файла: защита БД от раздувания и стоимости LLM-запросов. */
+export const SKILL_MD_MAX_CHARS = 150_000;
+
+/**
+ * Санитизация загруженного .md: убираем BOM и управляющие символы (кроме
+ * табуляции и переводов строк), нормализуем CRLF. В БД пишем только текст.
+ */
+export const sanitizeSkillMd = (raw: string): string => {
+  const withoutBom = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  let out = '';
+  for (const ch of withoutBom.replace(/\r\n?/g, '\n')) {
+    const code = ch.codePointAt(0) ?? 0;
+    // Управляющие символы кроме табуляции и перевода строки: нулевой байт
+    // недопустим в PostgreSQL text, остальные — мусор из кривых редакторов.
+    if (code < 0x20 && ch !== '\t' && ch !== '\n') continue;
+    if (code === 0x7f) continue;
+    out += ch;
+  }
+  return out.trim();
 };
 
 const competencyZod = z.object({
@@ -284,13 +310,32 @@ export const profileInputZod = z.object({
   orgDepartmentId: z.string().uuid(),
   positionId: z.string().uuid().nullable(),
   title: z.string().min(1).max(300),
-  dutiesText: z.string().min(10).max(8000),
+  // Краткое описание. Развёрнутая методичка грузится .md-файлом (skillMd),
+  // поэтому поле может быть пустым, если файл загружен.
+  dutiesText: z.string().max(8000),
   competencies: z.array(competencyZod).min(1).max(15),
   isPublished: z.boolean(),
+  skillMd: z.string().max(SKILL_MD_MAX_CHARS).nullable().optional(),
+  skillMdFilename: z.string().max(255).nullable().optional(),
 }).strict().superRefine((val, ctx) => {
   const keys = val.competencies.map(c => c.key);
   if (new Set(keys).size !== keys.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Ключи компетенций должны быть уникальны' });
+  }
+  // Публиковать нечего, если нет ни описания, ни файла.
+  const hasDuties = val.dutiesText.trim().length >= 10;
+  const hasSkillMd = Boolean(val.skillMd && sanitizeSkillMd(val.skillMd).length > 0);
+  if (val.isPublished && !hasDuties && !hasSkillMd) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Для публикации заполните «Обязанности» или загрузите файл скилла (.md)',
+    });
+  }
+  if (!val.isPublished && !hasDuties && !hasSkillMd && val.dutiesText.trim().length > 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Описание обязанностей — минимум 10 символов' });
+  }
+  if (val.skillMd && !val.skillMdFilename) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Не передано имя загруженного файла' });
   }
 });
 
@@ -786,6 +831,8 @@ export const adaptiveTestingService = {
       throw Object.assign(new Error('Для вашей должности не настроен профиль тестирования'), { httpStatus: 409, code: 'no_profile' });
     }
 
+    // Методичка замораживается вместе с профилем: замена или удаление файла
+    // администратором не влияет на уже идущие сессии.
     const snapshot: IAdaptiveProfileSnapshot = {
       profileId: profile.id,
       title: profile.title,
@@ -793,6 +840,8 @@ export const adaptiveTestingService = {
       positionName: ctx.positionName,
       dutiesText: profile.duties_text,
       competencies: profile.competencies,
+      skillMd: profile.skill_md,
+      skillMdFilename: profile.skill_md_filename,
     };
 
     const config = await settingsService.getResolvedAdaptiveLlmConfig();
@@ -1141,7 +1190,9 @@ export const adaptiveTestingService = {
       `SELECT sp.id, sp.org_department_id AS "orgDepartmentId", d.name AS "departmentName",
               sp.position_id AS "positionId", p.name AS "positionName",
               sp.title, sp.duties_text AS "dutiesText", sp.competencies,
-              sp.is_published AS "isPublished", sp.updated_at AS "updatedAt"
+              sp.is_published AS "isPublished", sp.updated_at AS "updatedAt",
+              sp.skill_md AS "skillMd", sp.skill_md_filename AS "skillMdFilename",
+              sp.skill_md_chars AS "skillMdChars", sp.skill_md_uploaded_at AS "skillMdUploadedAt"
          FROM adaptive_skill_profiles sp
          LEFT JOIN org_departments d ON d.id = sp.org_department_id
          LEFT JOIN positions p ON p.id = sp.position_id
@@ -1152,16 +1203,41 @@ export const adaptiveTestingService = {
   async saveProfile(rawInput: unknown, userId: string, profileId?: string): Promise<{ id: string }> {
     const input = profileInputZod.parse(rawInput);
 
+    // Файл: пустая строка/null = «удалить». Метаданные (имя, размер, кто и когда
+    // загрузил) обновляем только при фактической смене содержимого.
+    const skillMd = input.skillMd ? sanitizeSkillMd(input.skillMd) : '';
+    const hasSkillMd = skillMd.length > 0;
+    const skillMdFilename = hasSkillMd ? (input.skillMdFilename ?? null) : null;
+    const skillMdChars = hasSkillMd ? skillMd.length : 0;
+
     if (profileId) {
+      const existing = await queryOne<{ skill_md: string | null }>(
+        'SELECT skill_md FROM adaptive_skill_profiles WHERE id = $1',
+        [profileId],
+      );
+      if (!existing) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
+      const contentChanged = (existing.skill_md ?? '') !== skillMd;
+
       const updated = await queryOne<{ id: string }>(
         `UPDATE adaptive_skill_profiles
             SET org_department_id = $2, position_id = $3, title = $4, duties_text = $5,
-                competencies = $6, is_published = $7, updated_at = now()
+                competencies = $6, is_published = $7, updated_at = now(),
+                skill_md = $8, skill_md_filename = $9, skill_md_chars = $10,
+                skill_md_uploaded_at = CASE
+                  WHEN $11::boolean AND $8 IS NOT NULL THEN now()
+                  WHEN $8 IS NULL THEN NULL
+                  ELSE skill_md_uploaded_at END,
+                skill_md_uploaded_by = CASE
+                  WHEN $11::boolean AND $8 IS NOT NULL THEN $12::uuid
+                  WHEN $8 IS NULL THEN NULL
+                  ELSE skill_md_uploaded_by END
           WHERE id = $1
           RETURNING id`,
         [
           profileId, input.orgDepartmentId, input.positionId, input.title,
           input.dutiesText, JSON.stringify(input.competencies), input.isPublished,
+          hasSkillMd ? skillMd : null, skillMdFilename, skillMdChars,
+          contentChanged, userId,
         ],
       );
       if (!updated) throw Object.assign(new Error('Профиль не найден'), { httpStatus: 404 });
@@ -1170,12 +1246,16 @@ export const adaptiveTestingService = {
 
     const created = await queryOne<{ id: string }>(
       `INSERT INTO adaptive_skill_profiles
-         (org_department_id, position_id, title, duties_text, competencies, is_published, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (org_department_id, position_id, title, duties_text, competencies, is_published, created_by,
+          skill_md, skill_md_filename, skill_md_chars, skill_md_uploaded_at, skill_md_uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+               CASE WHEN $8 IS NULL THEN NULL ELSE now() END,
+               CASE WHEN $8 IS NULL THEN NULL ELSE $7::uuid END)
        RETURNING id`,
       [
         input.orgDepartmentId, input.positionId, input.title, input.dutiesText,
         JSON.stringify(input.competencies), input.isPublished, userId,
+        hasSkillMd ? skillMd : null, skillMdFilename, skillMdChars,
       ],
     );
     return created!;
@@ -1337,6 +1417,10 @@ export interface IProfileListItem {
   competencies: IAdaptiveCompetency[];
   isPublished: boolean;
   updatedAt: string;
+  skillMd: string | null;
+  skillMdFilename: string | null;
+  skillMdChars: number;
+  skillMdUploadedAt: string | null;
 }
 
 export interface ICoverageRow {
