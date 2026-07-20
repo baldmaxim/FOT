@@ -173,7 +173,15 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     || path === '/mts-business/personal-data/requests'
     // Лог синхронизации: у идущего прогона записи подтягиваются каждые 15с,
     // список прогонов — каждые 30с; max-age=30 показывал бы устаревший лог.
-    || path.startsWith('/mts-business/sync-log');
+    || path.startsWith('/mts-business/sync-log')
+    // Адаптивное тестирование: состояние сессии опрашивается каждые 2с, а после
+    // ответа окно обязано сразу увидеть «оценка идёт» и следующий вопрос. С кэшем
+    // max-age=30 браузер отдавал тело, снятое ДО ответа: форма оставалась на
+    // отвеченном вопросе, и повторные клики упирались в серверный гард
+    // «Ответ не на текущий вопрос» — ответ принимался только с третьего раза.
+    || path === '/adaptive-testing/sessions/current'
+    || path === '/adaptive-testing/availability'
+    || path === '/adaptive-testing/results/my';
 };
 
 const refreshSession = async (): Promise<boolean> => {
