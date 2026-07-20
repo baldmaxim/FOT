@@ -1,4 +1,4 @@
-import { type FC, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from 'react';
+import { type FC, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Check,
@@ -108,7 +108,7 @@ export const LeaveRequestsManagePage: FC = () => {
   const [preview, setPreview] = useState<IPreviewState | null>(null);
   const [eventsPanel, setEventsPanel] = useState<IEventsPanelState | null>(null);
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
-  const { data, isLoading } = useLeaveRequestsManage(scope, filter);
+  const { data, isLoading, isPlaceholderData } = useLeaveRequestsManage(scope, filter);
   const requests = data ?? EMPTY_REQUESTS;
 
   const baseRequests = useMemo(
@@ -152,14 +152,19 @@ export const LeaveRequestsManagePage: FC = () => {
   // плоско, ≥2 (отдел + direct reports или несколько отделов) → группы.
   const showGroupHeaders = scope === 'all' ? grouped.length >= 1 : grouped.length > 1;
 
+  const baseRequestsRef = useRef(baseRequests);
+  baseRequestsRef.current = baseRequests;
+  const hasData = data !== undefined;
+
   useEffect(() => {
-    // Дефолтное сворачивание (>2 групп — свернуть все) — только при смене
-    // данных: загрузка списка, переключатель «Ожидающие/Все» (входит в
-    // baseRequests). Клиентские фильтры (тип/отдел/поиск) состояние
-    // сворачивания не трогают — пользователь управляет им сам.
-    const keys = new Set(baseRequests.map(groupKeyOf));
+    // Дефолтное сворачивание (>2 групп — свернуть все) — только при первичной
+    // загрузке и смене «Ожидающие/Все» (по реальным данным вкладки, не по
+    // placeholder). Approve/reject/refetch и клиентские фильтры (тип/отдел/
+    // поиск) раскрытые отделы не трогают — пользователь управляет ими сам.
+    if (!hasData || isPlaceholderData) return;
+    const keys = new Set(baseRequestsRef.current.map(groupKeyOf));
     setCollapsedDepts(keys.size > 2 ? keys : new Set());
-  }, [baseRequests]);
+  }, [hasData, isPlaceholderData, scope, filter]);
 
   const queryActive = query !== '';
   useEffect(() => {

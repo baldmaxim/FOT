@@ -1,4 +1,4 @@
-import { type FC, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useState } from 'react';
+import { type FC, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Clock,
@@ -103,13 +103,18 @@ export const VacationsManagePage: FC = () => {
     return Array.from(map.entries()).sort(([a], [b]) => compareDeptKeys(a, b));
   }, [filtered]);
 
+  const ackFilteredRef = useRef(ackFiltered);
+  ackFilteredRef.current = ackFiltered;
+  const hasData = data !== undefined;
+
   useEffect(() => {
-    // Дефолтное сворачивание (>2 групп — свернуть все) — только при смене
-    // данных: загрузка списка, под-вкладка «Не ознакомлен/Ознакомлен» (входит
-    // в ackFiltered). Поиск/фильтр по отделам состояние сворачивания не трогают.
-    const keys = new Set(ackFiltered.map(deptKeyOf));
+    // Дефолтное сворачивание (>2 групп — свернуть все) — только при первичной
+    // загрузке и смене под-вкладки «Не ознакомлен/Ознакомлен». Изменения данных
+    // (отметка «Ознакомлен», refetch) раскрытые отделы не трогают.
+    if (!hasData) return;
+    const keys = new Set(ackFilteredRef.current.map(deptKeyOf));
     setCollapsedDepts(keys.size > 2 ? keys : new Set());
-  }, [ackFiltered]);
+  }, [hasData, ackFilter]);
 
   const queryActive = query !== '';
   useEffect(() => {
