@@ -25,8 +25,10 @@ const todayIso = (): string => new Date().toLocaleDateString('en-CA');
 export const LeaveRequestsPage: FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { profile } = useAuth();
+  const { profile, canEditPage } = useAuth();
   const employeeId = profile?.employee_id ?? null;
+  // view-only конфигурация роли: список доступен, подача и отмена скрыты.
+  const canEditRequests = canEditPage('/employee/requests');
   const [showModal, setShowModal] = useState(false);
   const [tab, setTab] = useState<TabKey>('active');
   const { data, isLoading } = useMyLeaveRequests();
@@ -83,9 +85,11 @@ export const LeaveRequestsPage: FC = () => {
             Архив
           </button>
         </div>
-        <button className="btn-primary" onClick={() => setShowModal(true)}>
-          <Plus size={16} /> Создать
-        </button>
+        {canEditRequests && (
+          <button className="btn-primary" onClick={() => setShowModal(true)}>
+            <Plus size={16} /> Создать
+          </button>
+        )}
       </div>
 
       {isLoading ? (
@@ -100,13 +104,13 @@ export const LeaveRequestsPage: FC = () => {
               request={r}
               today={today}
               onClick={() => navigate(`/employee/requests/${r.id}`)}
-              onCancel={handleCancel}
+              onCancel={canEditRequests ? handleCancel : undefined}
             />
           ))}
         </div>
       )}
 
-      {showModal && (
+      {showModal && canEditRequests && (
         <Suspense fallback={null}>
           <UnifiedRequestModal
             employeeId={employeeId}

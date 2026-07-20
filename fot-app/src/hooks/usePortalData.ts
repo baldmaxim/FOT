@@ -36,9 +36,10 @@ export const useMyDocuments = () => useQuery({
   staleTime: 60_000,
 });
 
-export const useMyLeaveRequests = () => useQuery({
+export const useMyLeaveRequests = (enabled = true) => useQuery({
   queryKey: getMyLeaveRequestsQueryKey(),
   queryFn: () => leaveRequestService.getMy(),
+  enabled,
   staleTime: 30_000,
   // Статус заявления могли поменять извне (руководитель одобрил/отклонил),
   // поэтому при возврате на страницу всегда тянем актуальные данные —

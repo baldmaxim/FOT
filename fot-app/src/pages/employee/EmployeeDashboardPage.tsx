@@ -41,7 +41,7 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 
 export const EmployeeDashboardPage: React.FC = () => {
 
-  const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward } = useAuth();
+  const { user, profile, refreshProfile, isTwoFactorEnabled, timesheetMonthsBack, timesheetMonthsForward, canViewPage, canEditPage } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
 
@@ -101,8 +101,14 @@ export const EmployeeDashboardPage: React.FC = () => {
     return undefined;
   }, [timesheetQuery.data, employeeId]);
 
+  // Права на «Мои заявления»: view — список и переходы, edit — подача/отмена.
+  // У ролей без прав (напр. без строки /employee/requests в role_page_access)
+  // блок не показываем — иначе подача упрётся в 403 на сервере.
+  const canViewRequests = canViewPage('/employee/requests');
+  const canEditRequests = canEditPage('/employee/requests');
+
   // Последние заявления для блока списка (свежие сверху, максимум 5).
-  const leaveRequestsQuery = useMyLeaveRequests();
+  const leaveRequestsQuery = useMyLeaveRequests(canViewRequests);
   const recentRequests = useMemo(() => {
     const list = leaveRequestsQuery.data ?? [];
     return [...list]
@@ -208,10 +214,13 @@ export const EmployeeDashboardPage: React.FC = () => {
           </div>
 
           {/* Заявления: кнопка подачи + список последних */}
+          {canViewRequests && (
           <div className={styles.formPane}>
-            <button className="btn-primary" onClick={() => setShowRequestModal(true)} style={{ width: '100%', marginBottom: '14px' }}>
-              Подать заявление
-            </button>
+            {canEditRequests && (
+              <button className="btn-primary" onClick={() => setShowRequestModal(true)} style={{ width: '100%', marginBottom: '14px' }}>
+                Подать заявление
+              </button>
+            )}
             {recentRequests.length === 0 ? (
               <div className={styles.emptyState}>Заявлений пока нет</div>
             ) : (
@@ -228,6 +237,7 @@ export const EmployeeDashboardPage: React.FC = () => {
               </div>
             )}
           </div>
+          )}
         </div>
 
         {/* Правая узкая колонка: Информация → Тест → Задачи → Обратная связь → Безопасность */}
@@ -264,7 +274,7 @@ export const EmployeeDashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {showRequestModal && (
+      {showRequestModal && canEditRequests && (
         <Suspense fallback={null}>
           <UnifiedRequestModal
             employeeId={employeeId}

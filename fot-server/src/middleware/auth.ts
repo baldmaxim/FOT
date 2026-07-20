@@ -132,7 +132,7 @@ export const requirePageAccess = (pagePath: string, action: AccessAction = 'view
       const hasAccess = await resolveEffectivePageAccess(req, pagePath, action);
 
       if (!hasAccess) {
-        res.status(403).json({ success: false, error: 'Insufficient permissions' });
+        res.status(403).json({ success: false, error: 'Недостаточно прав' });
         return;
       }
 
@@ -173,7 +173,7 @@ export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction =
       );
 
       if (!checks.some(Boolean)) {
-        res.status(403).json({ success: false, error: 'Insufficient permissions' });
+        res.status(403).json({ success: false, error: 'Недостаточно прав' });
         return;
       }
 
