@@ -78,6 +78,7 @@ export const ALLOWED_OPENROUTER_MODELS: IOpenRouterModelInfo[] = [
   { id: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
   { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (бесплатно)', costPer1kReceiptsRub: 0, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
   { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash (платно)', costPer1kReceiptsRub: 70, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
+  { id: 'google/gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite (платно)', costPer1kReceiptsRub: 45, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
   { id: 'qwen/qwen3.7-plus', label: 'Qwen3.7 Plus (платно)', costPer1kReceiptsRub: 90, supportsVision: true, allowedForReceiptOcr: true, allowedForAdaptiveTesting: false },
   { id: 'openai/gpt-5.6-luna', label: 'GPT-5.6 Luna (тестирование)', costPer1kReceiptsRub: 0, supportsVision: true, allowedForReceiptOcr: false, allowedForAdaptiveTesting: true },
 ];
