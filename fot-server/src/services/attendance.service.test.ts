@@ -297,6 +297,80 @@ describe('attendance.service', () => {
     });
   });
 
+  // «Учебный день» (УД): часы не вводятся вручную, а берутся из нормы графика
+  // (ABSENCE_STATUSES_AS_WORKED). В выходной норма 0 (NON_WORK_ADJUSTMENT_STATUSES) —
+  // иначе при норме 0 день превратился бы в переработку.
+  it('study_day в рабочий день без hours_override → часы = норма графика', async () => {
+    mockedState.isWorkingDay = true;
+    mockedState.adjustmentRows = [{
+      id: 6100,
+      employee_id: 800,
+      work_date: '2026-07-21',
+      status: 'study_day',
+      hours_override: null,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Учебный день',
+      created_by: 'user-1',
+      approval_status: 'auto_approved',
+      created_at: '2026-07-21T07:00:00.000Z',
+      updated_at: '2026-07-21T07:00:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [800, new Map([['2026-07-21', { work_hours: 11, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 800, full_name: 'Учащийся Пётр' }],
+      startDate: '2026-07-21',
+      endDate: '2026-07-21',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-07-22',
+    });
+
+    expect(result.entries[0]).toMatchObject({
+      id: 6100,
+      status: 'study_day',
+      hours_worked: 11,
+      display_hours_worked: 11,
+    });
+  });
+
+  it('study_day в нерабочий по графику день → 0 часов', async () => {
+    mockedState.isWorkingDay = false;
+    mockedState.adjustmentRows = [{
+      id: 6101,
+      employee_id: 800,
+      work_date: '2026-07-25',
+      status: 'study_day',
+      hours_override: null,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Учебный день',
+      created_by: 'user-1',
+      approval_status: 'auto_approved',
+      created_at: '2026-07-25T07:00:00.000Z',
+      updated_at: '2026-07-25T07:00:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [800, new Map([['2026-07-25', { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 800, full_name: 'Учащийся Пётр' }],
+      startDate: '2026-07-25',
+      endDate: '2026-07-25',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-07-27',
+    });
+
+    expect(result.entries[0]).toMatchObject({ id: 6101, status: 'study_day', hours_worked: 0 });
+  });
+
   it('не зачитывает remote-корректировку в выходной, пока она на согласовании (pending → 0)', async () => {
     mockedState.isWorkingDay = false;
     mockedState.adjustmentRows = [{

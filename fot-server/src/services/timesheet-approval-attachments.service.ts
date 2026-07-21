@@ -21,6 +21,7 @@ const LEAVE_TYPE_LABELS: Record<string, string> = {
   work: 'Работа в выходной/праздник',
   educational_leave: 'Учебный отпуск',
   sick_worked: 'Работа на больничном',
+  study_day: 'Учебный день',
 };
 
 export interface IApprovalAttachmentEmployee {

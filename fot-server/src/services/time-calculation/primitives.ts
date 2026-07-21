@@ -31,7 +31,7 @@ export const getAdjustmentPriority = (sourceType: string): number => (
 // корректировки дают 0 часов: иначе при норме 0 любые часы превращаются
 // в переработку.
 export const NON_WORK_ADJUSTMENT_STATUSES = new Set<TimeStatus>([
-  'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote', 'sick_worked',
+  'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote', 'sick_worked', 'study_day',
 ]);
 
 // Статусы отсутствия, которые засчитываются как полный рабочий день при
@@ -39,5 +39,5 @@ export const NON_WORK_ADJUSTMENT_STATUSES = new Set<TimeStatus>([
 // исторически уже работало; то же распространено на отпуск/больничный и т.п. —
 // иначе в табеле они показывались как недоработка.
 export const ABSENCE_STATUSES_AS_WORKED = new Set<TimeStatus>([
-  'vacation', 'sick', 'dayoff', 'remote', 'educational_leave', 'unpaid', 'absent', 'sick_worked',
+  'vacation', 'sick', 'dayoff', 'remote', 'educational_leave', 'unpaid', 'absent', 'sick_worked', 'study_day',
 ]);

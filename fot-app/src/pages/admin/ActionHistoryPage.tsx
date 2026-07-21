@@ -77,6 +77,8 @@ const TIMESHEET_STATUS_LABELS: Record<string, string> = {
   absent: 'Неявка',
   unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
+  sick_worked: 'Работа на больничном',
+  study_day: 'Учебный день',
 };
 
 const CHAT_INBOUND_LABELS: Record<string, string> = {

@@ -86,7 +86,7 @@ import {
   DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
 } from '../utils/timesheet-month-access.js';
 
-const validStatuses = ['work', 'manual', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave', 'sick_worked'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
+const validStatuses = ['work', 'manual', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave', 'sick_worked', 'study_day'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
 function buildCompactDailySchedules(
   dailySchedulesMap: Map<number, Map<string, IResolvedSchedule>>,
@@ -185,32 +185,80 @@ const formatZodErrorMessage = (err: z.ZodError): string => {
  * Критерий для него часовой, а не статусный: `hours_override = 0` → «не работал»
  * (auto_approved выше), `hours_override IS NULL` → часы недоказуемы (гард ниже).
  *
- * `sick_worked` намеренно НЕ включён: часы у него всегда null и берутся из нормы
- * графика, а в нерабочий день норма = 0 — согласовывать формально нечего.
+ * `sick_worked`/`study_day` намеренно НЕ включены: часы у них всегда null и берутся из
+ * нормы графика, а в нерабочий день норма = 0 — согласовывать формально нечего.
  */
 const WORKED_STATUSES_FOR_APPROVAL = new Set<TimeStatus>(['work', 'remote', 'manual']);
 
 /**
  * Статусы, дающие положительное рабочее время — В ТОМ ЧИСЛЕ при hours_override=null:
- * UI шлёт часы только для manual/remote (HOURS_EDITABLE_STATUSES), а work/sick_worked
+ * UI шлёт часы только для manual/remote (HOURS_EDITABLE_STATUSES), а work/sick_worked/study_day
  * приходят без часов, и бэкенд доначисляет их (work → СКУД при согласованном выходе,
- * sick_worked → норма графика как absence-as-worked). Поэтому гард ограничений роли
+ * sick_worked/study_day → норма графика как absence-as-worked). Поэтому гард ограничений роли
  * (только-аномалии / не-больше-нормы / лимит N-в-месяц) обязан срабатывать по статусу, а не
- * только по явным часам, иначе work/sick_worked обходят лимит. Отдельно от
+ * только по явным часам, иначе они обходят лимит. Отдельно от
  * WORKED_STATUSES_FOR_APPROVAL: та множественность управляет автосогласованием, а эта —
  * вызовом assertCorrectionAllowed.
  */
-const POSITIVE_TIME_STATUSES = new Set<TimeStatus>(['work', 'remote', 'manual', 'sick_worked']);
+const POSITIVE_TIME_STATUSES = new Set<TimeStatus>(['work', 'remote', 'manual', 'sick_worked', 'study_day']);
+
+/**
+ * Статусы, у которых часы ВСЕГДА берутся из нормы графика (ABSENCE_STATUSES_AS_WORKED),
+ * а присланные клиентом игнорируются: hours_override пишется строго null.
+ * Раньше это держалось только фронтом (HOURS_EDITABLE_STATUSES), из-за чего PATCH со
+ * сменой manual(5 ч) → sick_worked оставлял чужие 5 ч, а hours_worked=0 обходил гард.
+ *
+ * Важно: нормализация выполняется ДО гардов, и в assertCorrectionAllowed для этих статусов
+ * идёт РЕАЛЬНАЯ норма дня без fallback 8 — иначе в выходной (норма 0) роль с
+ * corrections_cap_by_schedule_norm получала бы ложный 422 «часы (8) превышают план (0)».
+ * При hours=0 гард пропускает все проверки, а обойти лимит нельзя: положительных часов
+ * в такой день не возникнет.
+ */
+export const SCHEDULE_NORM_STATUSES = new Set<TimeStatus>(['sick_worked', 'study_day']);
+
+/**
+ * Часы для записи в hours_override (POST/bulk; в PATCH — та же логика плюс безусловная
+ * запись, см. ниже). Единая точка нормализации: SCHEDULE_NORM_STATUSES → всегда null,
+ * remote → присланные или полный день по графику (в выходной work_hours=0, поэтому `|| 8`),
+ * остальные → строго присланные.
+ */
+export const resolveWriteHours = (
+  status: TimeStatus,
+  requestedHours: number | null | undefined,
+  plannedHours: number | null,
+): number | null | undefined => {
+  if (SCHEDULE_NORM_STATUSES.has(status)) return null;
+  if (status === 'remote') return requestedHours ?? (plannedHours || 8);
+  return requestedHours;
+};
+
+/**
+ * Часы для assertCorrectionAllowed. Для SCHEDULE_NORM_STATUSES — норма дня как есть
+ * (может быть 0). Для остальных: явные часы, иначе fallback на норму/8 (у work в выходной
+ * часы могут появиться из СКУД позже, поэтому 0 там занижал бы проверку).
+ */
+export const resolveGuardHours = (
+  status: TimeStatus,
+  explicitHours: number | null | undefined,
+  scheduledNormHours: number,
+): number => {
+  if (SCHEDULE_NORM_STATUSES.has(status)) return scheduledNormHours;
+  if (typeof explicitHours === 'number' && explicitHours > 0) return explicitHours;
+  return scheduledNormHours > 0 ? scheduledNormHours : 8;
+};
 
 /**
  * Нужен ли гард ограничений роли (assertCorrectionAllowed) для этой правки. true, если правка
  * может дать положительное рабочее время. Исключения (разрешены всем ролям):
  *  - явное обнуление: любой статус с hours === 0;
  *  - manual без явных часов: не правка времени.
- * Для work/remote/sick_worked возвращает true даже при null — часы доначислятся на бэке.
+ * Для work/remote/sick_worked/study_day возвращает true даже при null — часы доначислятся на бэке.
+ * Для SCHEDULE_NORM_STATUSES вызывающий обязан передавать null (часы клиента игнорируются),
+ * иначе hours_worked=0 обошёл бы гард, хотя фактически начислится норма графика.
  */
 export const guardsRestriction = (status: TimeStatus, explicitHours: number | null | undefined): boolean => {
   if (!POSITIVE_TIME_STATUSES.has(status)) return false;
+  if (SCHEDULE_NORM_STATUSES.has(status)) return true;
   if (typeof explicitHours === 'number' && explicitHours === 0) return false;
   if (status === 'manual') return typeof explicitHours === 'number' && Number.isFinite(explicitHours) && explicitHours > 0;
   return true;
@@ -2003,20 +2051,20 @@ export const timesheetController = {
       // Удалёнка: начальник отдела вводит фактические часы вручную (в т.ч. в выходной
       // поверх согласованного выхода). Если часы не заданы — полный день по графику
       // (для выходного work_hours=0, поэтому `|| 8`, а не `??`).
-      const normalizedHours = parsed.status === 'remote'
-        ? (parsed.hours_worked ?? (plannedHours || 8))
-        : (parsed.hours_worked ?? null);
+      // sick_worked/study_day: часы всегда из нормы графика, присланные игнорируем (null) —
+      // нормализация ДО гарда, иначе hours_worked=0 обошёл бы assertCorrectionAllowed.
+      const normalizedHours = resolveWriteHours(parsed.status, parsed.hours_worked, plannedHours) ?? null;
 
       // Гарды роли: «только аномалии», «не больше плана», «лимит за месяц».
-      // Правка часов через модалку идёт со status='manual', а work/sick_worked могут прийти
-      // без явных часов и доначислиться на бэке — все они обязаны проходить гард (см. guardsRestriction).
+      // Правка часов через модалку идёт со status='manual', а work/sick_worked/study_day могут
+      // прийти без явных часов и доначислиться на бэке — все они обязаны проходить гард
+      // (см. guardsRestriction).
       if (guardsRestriction(parsed.status, normalizedHours)) {
         const scheduledNorm = await resolveScheduledNormHours(parsed.employee_id, parsed.work_date);
-        // Для статусов с неявными часами (work/sick_worked) подставляем положительное значение —
-        // точная величина не важна: при лимите=0 monthly_limit сработает при любом hours>0.
-        const guardHours = typeof normalizedHours === 'number'
-          ? normalizedHours
-          : (scheduledNorm > 0 ? scheduledNorm : 8);
+        // Для статусов с неявными часами (work) подставляем положительное значение — точная
+        // величина не важна: при лимите=0 monthly_limit сработает при любом hours>0. Для
+        // SCHEDULE_NORM_STATUSES — норма как есть (в выходной 0, гард пропустит проверки).
+        const guardHours = resolveGuardHours(parsed.status, normalizedHours, scheduledNorm);
         // Удалёнка поверх согласованного выхода — норму/аномалию не проверяем (но лимит — да).
         const skipNormAndAnomalyChecks = parsed.status === 'remote'
           && await hasApprovedWorkOnDate(parsed.employee_id, parsed.work_date);
@@ -2266,9 +2314,11 @@ export const timesheetController = {
           employee_id: Number(existing.employee_id),
           work_date: String(existing.work_date),
         }])).get(`${Number(existing.employee_id)}_${String(existing.work_date)}`) ?? null;
-        const normalizedHours = nextStatus === 'remote'
-          ? (parsed.hours_worked ?? (plannedHours || 8))
-          : parsed.hours_worked;
+        // sick_worked/study_day: часы всегда из нормы графика. Присланные игнорируем И при
+        // записи, и в гарде — иначе смена manual(5 ч) → study_day без hours_worked оставила бы
+        // старые 5 ч, а hours_worked=0 обошёл бы assertCorrectionAllowed.
+        const isScheduleNormStatus = SCHEDULE_NORM_STATUSES.has(nextStatus);
+        const normalizedHours = resolveWriteHours(nextStatus, parsed.hours_worked, plannedHours);
 
         // Часы «для проверки» ≠ часы «для записи». В гард передаём эффективные часы
         // (что реально будет в строке), но пишем строго присланное (см. блок update ниже).
@@ -2276,9 +2326,11 @@ export const timesheetController = {
           ? existing.hours_override
           : Number(existing.hours_override ?? 0);
         const hoursProvided = parsed.hours_worked !== undefined; // null = явное обнуление, тоже «передано»
-        const effectiveHours = nextStatus === 'remote'
-          ? (typeof normalizedHours === 'number' ? normalizedHours : 0)
-          : (hoursProvided ? (parsed.hours_worked ?? 0) : existingHours);
+        const effectiveHours = isScheduleNormStatus
+          ? null
+          : (nextStatus === 'remote'
+            ? (typeof normalizedHours === 'number' ? normalizedHours : 0)
+            : (hoursProvided ? (parsed.hours_worked ?? 0) : existingHours));
         // Гард только когда правка реально вводит/меняет засчитываемые часы — иначе
         // редактирование одной лишь заметки на исторической строке упёрлось бы в
         // not_anomalous/monthly_limit и сломало бы правку.
@@ -2286,19 +2338,21 @@ export const timesheetController = {
           && parsed.status !== String(existing.status)
           && POSITIVE_TIME_STATUSES.has(nextStatus);
         // Вход для guardsRestriction: явные часы (или null при обнулении), а при смене статуса на
-        // work/sick_worked без часов — undefined (часы доначислятся → гард обязателен).
-        const guardInputHours = hoursProvided
-          ? (nextStatus === 'remote' ? effectiveHours : (parsed.hours_worked ?? null))
-          : (statusChangedToCounted ? undefined : effectiveHours);
+        // work без часов — undefined (часы доначислятся → гард обязателен). Для
+        // SCHEDULE_NORM_STATUSES — всегда null: часы клиента не участвуют в решении.
+        const guardInputHours = isScheduleNormStatus
+          ? null
+          : (hoursProvided
+            ? (nextStatus === 'remote' ? effectiveHours : (parsed.hours_worked ?? null))
+            : (statusChangedToCounted ? undefined : effectiveHours));
         if (guardsRestriction(nextStatus, guardInputHours) && (hoursProvided || statusChangedToCounted)) {
           const scheduledNormUpd = await resolveScheduledNormHours(
             Number(existing.employee_id),
             String(existing.work_date),
           );
-          // Для неявных часов (work/sick_worked без часов) — положительный fallback на норму.
-          const guardHours = typeof effectiveHours === 'number' && effectiveHours > 0
-            ? effectiveHours
-            : (scheduledNormUpd > 0 ? scheduledNormUpd : 8);
+          // Для неявных часов (work без часов) — положительный fallback на норму; для
+          // SCHEDULE_NORM_STATUSES — норма как есть (в выходной 0, без ложного 422).
+          const guardHours = resolveGuardHours(nextStatus, effectiveHours, scheduledNormUpd);
           const skipNormAndAnomalyChecks = nextStatus === 'remote'
             && await hasApprovedWorkOnDate(Number(existing.employee_id), String(existing.work_date));
           await assertCorrectionAllowed({
@@ -2323,7 +2377,9 @@ export const timesheetController = {
 
 	      const updated = await updateAttendanceAdjustmentById(id, {
 	        ...(parsed.status ? { status: parsed.status } : {}),
-	        ...(nextStatus === 'remote'
+	        // SCHEDULE_NORM_STATUSES — безусловное обнуление: старые ручные часы не должны
+	        // пережить смену статуса, даже если клиент не прислал hours_worked.
+	        ...(isScheduleNormStatus || nextStatus === 'remote'
             ? { hours_override: normalizedHours }
             : (normalizedHours !== undefined ? { hours_override: normalizedHours } : {})),
 	        ...(parsed.notes !== undefined ? { reason: parsed.notes ?? null } : {}),
@@ -2431,17 +2487,20 @@ export const timesheetController = {
       // для bulk проверяем ЦЕЛИКОМ до единой записи. Иначе sequential-upsert дал бы частичный
       // успех (первые строки записаны, на превышающей — 422). assertBulkCorrectionAllowed
       // бросит CorrectionRestrictionError → 422, ничего не пишем.
-      const bulkCounts = guardsRestriction(parsed.status, parsed.hours_worked);
+      // sick_worked/study_day: часы клиента игнорируем ещё ДО гарда — иначе hours_worked=0
+      // обошёл бы preflight, а hours_worked=12 ушли бы в проверку вместо нормы графика.
+      const isBulkScheduleNormStatus = SCHEDULE_NORM_STATUSES.has(parsed.status);
+      const bulkExplicitHours = isBulkScheduleNormStatus ? null : parsed.hours_worked;
+      const bulkCounts = guardsRestriction(parsed.status, bulkExplicitHours);
       if (bulkCounts) {
         const preflightItems = await Promise.all(uniqueItems.map(async item => {
           const scheduledNormHours = await resolveScheduledNormHours(item.employee_id, item.work_date);
-          // work/sick_worked без явных часов доначисляются на бэке — для preflight берём
-          // положительный fallback на норму (иначе 0 отфильтруется и обход лимита пройдёт).
+          // work без явных часов доначисляется на бэке — для preflight берём положительный
+          // fallback на норму (иначе 0 отфильтруется и обход лимита пройдёт). Для
+          // SCHEDULE_NORM_STATUSES — норма как есть: рабочий день → норма, выходной → 0.
           const hours = parsed.status === 'remote'
             ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) || 8)
-            : (typeof parsed.hours_worked === 'number' && parsed.hours_worked > 0
-              ? parsed.hours_worked
-              : (scheduledNormHours > 0 ? scheduledNormHours : 8));
+            : resolveGuardHours(parsed.status, bulkExplicitHours, scheduledNormHours);
           return {
             employeeId: item.employee_id,
             workDate: item.work_date,
@@ -2462,9 +2521,11 @@ export const timesheetController = {
       // одного сотрудника все они увидят 0 уже зачтённых и пройдут как auto_approved.
       const isWorkOrRemoteBulk = WORKED_STATUSES_FOR_APPROVAL.has(parsed.status);
       const buildUpsert = async (item: typeof uniqueItems[number]) => {
-        const itemHoursOverride = parsed.status === 'remote'
-          ? (plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) || 8)
-          : (parsed.hours_worked ?? null);
+        const itemHoursOverride = resolveWriteHours(
+          parsed.status,
+          parsed.hours_worked,
+          plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? null,
+        ) ?? null;
         // Ограничения роли уже проверены целиком в PREFLIGHT выше (assertBulkCorrectionAllowed).
         const approvalStatus = await resolveAdjustmentApprovalStatus(
           item.employee_id,

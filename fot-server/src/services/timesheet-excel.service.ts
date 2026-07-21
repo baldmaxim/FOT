@@ -7,10 +7,16 @@ import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import type { IResolvedSchedule } from '../types/index.js';
 import { defangCsvCell } from '../utils/file-validation.utils.js';
 
+// study_day (и sick_worked) намеренно отсутствуют: в 1С и в HR-выгрузках учебный день
+// экспортируется целыми часами нормы графика, а не буквенным статусом.
 const STATUS_LABELS: Record<string, string> = {
   work: '', sick: 'Б', vacation: 'От', absent: 'Н',
   dayoff: 'В', remote: 'УУ', unpaid: 'С', educational_leave: 'У', manual: '',
 };
+
+// Учебный день: буквы нет, но клетку с часами подсвечиваем фиолетовым (как «Учебный
+// отпуск» в UI), чтобы табельщица видела природу дня в выгрузке.
+const STUDY_DAY_STATUS = 'study_day';
 
 // «Н» (прогул) — единый файл для 1С выводит вместо него пустую клетку.
 export const ONE_C_ABSENT_LABEL = STATUS_LABELS.absent;
@@ -891,6 +897,7 @@ export function buildTimesheetSheet(
             rowDaysCount++;
             rowHoursSum += entry.hours;
             if (isUnderworkHours(entry.hours, thresholdHours)) cell.fill = underworkFill;
+            else if (entry.status === STUDY_DAY_STATUS) cell.fill = statusFills.educational_leave;
             else if (entry.corrected) cell.fill = correctedFill;
           } else {
             cell.value = formatExportCellValue('', entry.corrected);

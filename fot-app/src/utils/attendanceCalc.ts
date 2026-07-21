@@ -490,7 +490,7 @@ export const calculateAttendanceFromTimesheet = (params: {
   const arrivalByDow: number[][] = [[], [], [], [], []];
   const workedLikeStatuses = new Set([
     'work', 'manual', 'remote',
-    'vacation', 'sick', 'dayoff', 'educational_leave', 'business_trip', 'unpaid', 'absent', 'sick_worked',
+    'vacation', 'sick', 'dayoff', 'educational_leave', 'business_trip', 'unpaid', 'absent', 'sick_worked', 'study_day',
   ]);
 
   for (let day = 1; day <= daysInMonth; day++) {

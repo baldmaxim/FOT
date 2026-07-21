@@ -147,6 +147,11 @@ describe('resolveAdjustmentApprovalStatus — ранние выходы в auto_
     mockResolve();
     expect(await resolveAdjustmentApprovalStatus(EMP, '2026-05-02', 'sick_worked')).toBe('auto_approved');
   });
+
+  it('study_day (учебный день) в субботу → auto_approved: часы из нормы, в выходной она 0', async () => {
+    mockResolve();
+    expect(await resolveAdjustmentApprovalStatus(EMP, '2026-05-02', 'study_day')).toBe('auto_approved');
+  });
 });
 
 /**

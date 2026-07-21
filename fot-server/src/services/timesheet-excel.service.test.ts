@@ -210,6 +210,25 @@ describe('timesheet-excel.service', () => {
     });
   });
 
+  it('HR-выгрузка: study_day идёт часами (8:00), считается в «Дней»/«Часов» и подсвечен фиолетовым', () => {
+    const wb = new ExcelJS.Workbook();
+    const data = makeBaseData();
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-01', { status: 'study_day', hours: 8, corrected: false }]])],
+      [2, new Map([['2026-04-01', { status: 'work', hours: 8, corrected: false }]])],
+    ]);
+
+    buildTimesheetSheet(wb, 'Табель', data);
+
+    const ws = wb.getWorksheet('Табель');
+    const dayCell = ws!.getCell(7, 5);
+    expect(dayCell.value).toBe('8:00');
+    expect(dayCell.fill).toMatchObject({ type: 'pattern', fgColor: { argb: 'FFCE93D8' } });
+    // exportDays=[1] → «Дней» в колонке 6, «Часов» в колонке 8.
+    expect(ws!.getCell(7, 6).value).toBe(1);
+    expect(ws!.getCell(7, 8).value).toBe('8:00');
+  });
+
   it('returns only non-empty object targets and builds a dedicated object sheet', () => {
     const data = makeBaseData();
     const targets = listObjectExportTargets(data);
@@ -424,6 +443,20 @@ describe('timesheet-excel.service', () => {
     expect(ws!.getCell(4, 3).value).toBe('Б');
     expect(ws!.getCell(4, 34).value).toBeNull(); // total = 0, ячейка не заполняется
     expect(ws!.getCell(5, 3).value).toBe(8);
+  });
+
+  // «Учебный день» (УД): своей буквы в выгрузках нет — день уходит как обычный
+  // рабочий, часами по норме графика (в 1С — целое число).
+  it('1C export: study_day выводит часы нормы, а не букву', async () => {
+    const data = makeBaseData();
+    data.dataMap = new Map([
+      [1, new Map([['2026-04-01', { status: 'study_day', hours: 8, corrected: false }]])],
+    ]);
+
+    const wb = await build1CTimesheetWorkbook('Табель 1С', data);
+    const ws = wb.getWorksheet('Табель 1С');
+    expect(ws!.getCell(4, 3).value).toBe(8);
+    expect(ws!.getCell(4, 34).value).toBe(8); // итог строки учитывает учебный день
   });
 
   it('1C export: удалённая работа (remote, 8 ч) выводит букву УУ', async () => {

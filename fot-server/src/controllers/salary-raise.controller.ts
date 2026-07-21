@@ -63,6 +63,7 @@ const TIMESHEET_STATUS_LABELS: Record<string, string> = {
   absent: 'Неявка',
   unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
+  study_day: 'Учебный день',
 };
 
 const createOrUpdateRequestSchema = z.object({

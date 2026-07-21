@@ -50,7 +50,7 @@ const formatTime = (t: string) => t.slice(0, 5);
 
 
 const getStatusClassName = (status: TimesheetStatus | null): string => {
-  if (status === 'work' || status === 'manual' || status === 'sick_worked') return styles.dayStatusBadgeWork;
+  if (status === 'work' || status === 'manual' || status === 'sick_worked' || status === 'study_day') return styles.dayStatusBadgeWork;
   if (status === 'remote') return styles.dayStatusBadgeRemote;
   if (status === 'vacation' || status === 'dayoff' || status === 'sick' || status === 'unpaid' || status === 'educational_leave') return styles.dayStatusBadgeVacation;
   if (status === 'absent') return styles.dayStatusBadgeAbsent;

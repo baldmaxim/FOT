@@ -58,6 +58,7 @@ const STATUS_TO_CSS: Record<DayStatus, string> = {
   unpaid: 'cellAbsent',
   educational_leave: 'cellVacation',
   sick_worked: 'cellRemote',
+  study_day: 'cellVacation',
   weekend: 'cellWeekend',
   future: 'cellEmpty',
   empty: 'cellEmpty',
@@ -79,6 +80,7 @@ const STATUS_LETTER: Partial<Record<DayStatus, string>> = {
   unpaid: 'С',
   educational_leave: 'УО',
   sick_worked: 'РБ',
+  study_day: 'УД',
   absent: 'Н',
 };
 
@@ -93,6 +95,7 @@ const STATUS_LABEL: Record<DayStatus, string> = {
   unpaid: 'За свой счёт',
   educational_leave: 'Учебный отпуск',
   sick_worked: 'Работал на больничном',
+  study_day: 'Учебный день',
   weekend: 'Выходной',
   future: 'Будущий день',
   empty: '—',

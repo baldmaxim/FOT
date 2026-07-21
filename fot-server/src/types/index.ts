@@ -249,7 +249,7 @@ export interface SalaryHistory {
   created_at: string;
 }
 
-export type TimeStatus = 'work' | 'vacation' | 'dayoff' | 'remote' | 'unpaid' | 'absent' | 'sick' | 'manual' | 'educational_leave' | 'sick_worked';
+export type TimeStatus = 'work' | 'vacation' | 'dayoff' | 'remote' | 'unpaid' | 'absent' | 'sick' | 'manual' | 'educational_leave' | 'sick_worked' | 'study_day';
 
 export interface TimeEntry {
   id: number;
