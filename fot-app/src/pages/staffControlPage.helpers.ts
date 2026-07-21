@@ -59,6 +59,13 @@ export const getLocalISODate = (): string => {
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10);
 };
 
+/**
+ * Текущая дата в зоне Europe/Moscow как ISO YYYY-MM-DD.
+ * Для увольнений: бэкенд классифицирует дату по МСК, TZ браузера не должна расходиться.
+ */
+export const getMoscowISODate = (now: Date = new Date()): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(now);
+
 /** true если назначение activeScheduleAssignment покрывает указанную дату. */
 export const isActiveScheduleAssignment = (effectiveFrom: string, effectiveTo: string | null, date: string): boolean =>
   effectiveFrom <= date && (effectiveTo === null || effectiveTo >= date);

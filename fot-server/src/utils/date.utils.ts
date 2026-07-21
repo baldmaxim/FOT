@@ -136,6 +136,61 @@ export function moscowTodayIso(now: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(now);
 }
 
+/** Порог применения увольнения, назначенного на сегодняшнюю дату (Europe/Moscow). */
+export const DISMISSAL_CUTOFF_HM = '23:00';
+
+export interface IMoscowDismissalTiming {
+  /** Календарная дата МСК, YYYY-MM-DD. */
+  today: string;
+  /** Время МСК, HH:mm (24-часовое). */
+  timeHm: string;
+  /** true, если порог 23:00 МСК уже пройден — увольнение «на сегодня» применяется сразу. */
+  cutoffPassed: boolean;
+  /** Граница для планировщика: применяем увольнения с dismissal_date <= dueCutoff. */
+  dueCutoff: string;
+}
+
+/**
+ * Дата и время Europe/Moscow из ОДНОГО момента времени + порог 23:00.
+ *
+ * Один formatToParts вместо отдельных вызовов moscowTodayIso()/времени: иначе между
+ * вызовами может наступить полночь и дата с временем разъедутся. dateStyle с
+ * hour/minute сочетать нельзя (Node кидает TypeError) — только component-options.
+ */
+export function getMoscowDismissalTiming(now: Date = new Date()): IMoscowDismissalTiming {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+
+  const get = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find(p => p.type === type)?.value ?? '';
+
+  const today = `${get('year')}-${get('month')}-${get('day')}`;
+  const timeHm = `${get('hour')}:${get('minute')}`;
+  const cutoffPassed = timeHm >= DISMISSAL_CUTOFF_HM;
+
+  return {
+    today,
+    timeHm,
+    cutoffPassed,
+    dueCutoff: cutoffPassed ? today : addDaysToIso(today, -1),
+  };
+}
+
+/** Сдвиг ISO-даты на N дней (UTC-арифметика, без влияния локальной TZ). */
+function addDaysToIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
 /**
  * Собирает timestamptz-строку для события SKUD в часовом поясе Europe/Moscow.
  * Используется как канонический источник для skud_events.event_at.

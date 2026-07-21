@@ -58,6 +58,7 @@ import {
   EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS,
   EMPTY_SCHEDULE_TEMPLATES,
   getLocalISODate,
+  getMoscowISODate,
   handleMiddleClickMouseDown,
   isActiveScheduleAssignment,
   openEmployeeInNewTab,
@@ -1255,8 +1256,10 @@ interface IFireEmployeeModalProps {
 
 const FireEmployeeModal: FC<IFireEmployeeModalProps> = ({ emp, date, onChangeDate, inFlight, onCancel, onConfirm }) => {
   const overlayHandlers = useOverlayDismiss(onCancel);
-  const today = getLocalISODate();
+  // Классификация по МСК — как на бэкенде (иначе HR в другой TZ увидит другую ветку).
+  const today = getMoscowISODate();
   const isFuture = date > today;
+  const isToday = date === today;
   const minDate = emp.hire_date || undefined;
 
   return (
@@ -1284,11 +1287,18 @@ const FireEmployeeModal: FC<IFireEmployeeModalProps> = ({ emp, date, onChangeDat
             />
             {isFuture && (
               <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>
-                Увольнение запланировано на {date}. До этого дня сотрудник остаётся активным
-                в Sigur и в табеле. Применится автоматически в день увольнения.
+                Увольнение запланировано на {date}. Сотрудник остаётся активным в Sigur и в табеле
+                до 23:00 МСК выбранного дня — тогда увольнение применится автоматически.
               </div>
             )}
-            {!isFuture && (
+            {isToday && (
+              <div style={{ fontSize: 12, color: '#b45309', marginTop: 8 }}>
+                При выборе сегодняшней даты до 23:00 МСК увольнение откладывается: сотрудник дорабатывает
+                день, перевод в папку «Уволенные» и блокировка карт пропуска — после 23:00 МСК.
+                После 23:00 МСК увольнение применяется сразу.
+              </div>
+            )}
+            {!isFuture && !isToday && (
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
                 Сотрудник будет перемещён в папку «Уволенные» в Sigur, карты пропуска заблокированы.
               </div>
@@ -1950,12 +1960,12 @@ export const StaffControlPage: FC = () => {
   }, [rehireEmp, rehireDeptId, invalidateEmployee, toast]);
 
   const [fireEmp, setFireEmp] = useState<Employee | null>(null);
-  const [fireDate, setFireDate] = useState<string>(() => getLocalISODate());
+  const [fireDate, setFireDate] = useState<string>(() => getMoscowISODate());
   const [fireInFlight, setFireInFlight] = useState(false);
 
   const handleFire = useCallback((emp: Employee) => {
     setFireEmp(emp);
-    setFireDate(getLocalISODate());
+    setFireDate(getMoscowISODate());
   }, []);
 
   const closeFireModal = useCallback(() => {

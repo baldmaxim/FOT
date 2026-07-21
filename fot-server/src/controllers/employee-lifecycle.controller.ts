@@ -28,6 +28,7 @@ import {
 } from '../services/employee-department-access.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
+import { DISMISSAL_CUTOFF_HM, getMoscowDismissalTiming } from '../utils/date.utils.js';
 
 async function emitEmployeeChanged(employeeId: number, action: string): Promise<void> {
   try {
@@ -448,12 +449,15 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
       return;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    // Календарь Europe/Moscow. Увольнение «на сегодня» откладывается до 23:00 МСК,
+    // чтобы сотрудник доработал последний рабочий день с рабочим пропуском:
+    // применит dismissal-scheduler. Бэкдейт применяется сразу.
+    const { today, cutoffPassed } = getMoscowDismissalTiming();
     const connection = body.connection || undefined;
-    const isFuture = dismissalDate > today;
+    const isDeferred = dismissalDate > today || (dismissalDate === today && !cutoffPassed);
     const structureCache = await loadStructureCache();
 
-    if (isFuture) {
+    if (isDeferred) {
       const data = await queryOne<EmployeeEncrypted>(
         `UPDATE employees SET dismissal_date = $1 WHERE id = $2 RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
         [dismissalDate, employeeId],
@@ -475,6 +479,7 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
         details: {
           dismissal_date: dismissalDate,
           source: existing.sigur_employee_id ? 'sigur' : 'portal',
+          applies_after: `${DISMISSAL_CUTOFF_HM} MSK`,
         },
       });
 
@@ -586,22 +591,24 @@ export async function cancelDismissal(req: AuthenticatedRequest, res: Response):
       return;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    if (existing.dismissal_date <= today) {
-      res.status(409).json({
-        success: false,
-        error: 'Дата увольнения уже наступила. Используйте «Восстановить» после применения увольнения.',
-      });
-      return;
-    }
-
     const prevDate = existing.dismissal_date;
+    // Отмена разрешена, пока планировщик не захватил запись (dismissal_apply_started_at IS NULL).
+    // Условие в самом UPDATE — иначе гонка: отмена проходит уже после старта применения.
     const data = await queryOne<EmployeeEncrypted>(
-      `UPDATE employees SET dismissal_date = NULL WHERE id = $1 RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+      `UPDATE employees
+          SET dismissal_date = NULL
+        WHERE id = $1
+          AND employment_status = 'active'
+          AND dismissal_date IS NOT NULL
+          AND dismissal_apply_started_at IS NULL
+      RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
       [employeeId],
     );
     if (!data) {
-      res.status(500).json({ success: false, error: 'Failed to cancel dismissal' });
+      res.status(409).json({
+        success: false,
+        error: 'Увольнение уже применяется или применено. Используйте «Восстановить».',
+      });
       return;
     }
     employeeCache.invalidate(employeeId);
@@ -779,12 +786,14 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
              department_locked = $2,
              sigur_employee_id = NULL,
              dismissal_date = NULL,
+             dismissal_apply_started_at = NULL,
              excluded_from_timesheet = false,
              excluded_from_timesheet_date = NULL`
         : `employment_status = 'active',
              org_department_id = $1,
              department_locked = $2,
              dismissal_date = NULL,
+             dismissal_apply_started_at = NULL,
              excluded_from_timesheet = false,
              excluded_from_timesheet_date = NULL`;
       data = await queryOne<EmployeeEncrypted>(
