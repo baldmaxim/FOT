@@ -57,6 +57,19 @@ export type IAdaptiveAnswerInput =
   | { type: 'multiple'; optionIds: string[] }
   | { type: 'text'; text: string };
 
+/** Разбор отвеченного вопроса. Для text правильного варианта нет — только рубрика. */
+export interface IAdaptiveReveal {
+  seq: number;
+  type: AdaptiveQuestionType;
+  questionText: string;
+  options: { id: string; text: string }[] | null;
+  correctOptionIds: string[] | null;
+  rubric: string[] | null;
+  answer: IAdaptiveAnswerInput;
+  score: number | null;
+  evalState: string;
+}
+
 export interface IAdaptiveResultListItem {
   sessionId: string;
   employeeId: number;
@@ -209,6 +222,13 @@ export const adaptiveTestingService = {
   },
   submitAnswer: async (sessionId: string, questionId: string, answer: IAdaptiveAnswerInput): Promise<void> => {
     await apiClient.post(`/adaptive-testing/sessions/${sessionId}/answer`, { questionId, answer });
+  },
+  /** Разбор: сервер отдаёт ключ только по уже отвеченному вопросу. */
+  getReveal: async (sessionId: string, questionId: string): Promise<IAdaptiveReveal> => {
+    const res = await apiClient.get<ApiResponse<IAdaptiveReveal>>(
+      `/adaptive-testing/sessions/${sessionId}/questions/${questionId}/reveal`,
+    );
+    return res.data;
   },
   retry: async (): Promise<void> => {
     await apiClient.post('/adaptive-testing/sessions/current/retry');

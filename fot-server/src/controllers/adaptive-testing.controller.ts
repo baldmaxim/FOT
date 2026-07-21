@@ -70,6 +70,22 @@ export const adaptiveTestingController = {
     }
   },
 
+  /** Разбор уже отвеченного вопроса — правильные варианты и рубрика. */
+  async getAnswerReveal(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user.employee_id) {
+        res.status(409).json({ success: false, error: 'Учётная запись не привязана к сотруднику' });
+        return;
+      }
+      const data = await adaptiveTestingService.getAnswerReveal(
+        req.user.employee_id, String(req.params.sessionId), String(req.params.questionId),
+      );
+      res.json({ success: true, data });
+    } catch (err) {
+      handleError(res, err, 'reveal');
+    }
+  },
+
   async submitAnswer(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!req.user.employee_id) {

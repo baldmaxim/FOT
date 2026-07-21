@@ -9,6 +9,14 @@ import {
   type IAdaptiveAnswerInput,
   type IAdaptiveCurrent,
 } from '../../services/adaptiveTestingService';
+
+/** Вопрос, на который ответ уже принят, — показываем разбор перед переходом дальше. */
+interface IAnsweredStep {
+  sessionId: string;
+  questionId: string;
+  seq: number;
+  isLast: boolean;
+}
 import styles from './AdaptiveTestModal.module.css';
 
 interface IProps {
@@ -39,6 +47,10 @@ export const AdaptiveTestModal: FC<IProps> = ({ hasActiveSession, onClose }) => 
   const [submitting, setSubmitting] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [textAnswer, setTextAnswer] = useState('');
+  // Шаг разбора: держим отвеченный вопрос, пока сотрудник его не закроет.
+  // Пока он читает, сервер в фоне готовит следующий — задержка не видна.
+  const [answered, setAnswered] = useState<IAnsweredStep | null>(null);
+  const [showKey, setShowKey] = useState(false);
   // id вопроса, для которого набран ответ — сбрасываем поля при смене вопроса.
   const answeredForRef = useRef<string | null>(null);
 
@@ -78,6 +90,20 @@ export const AdaptiveTestModal: FC<IProps> = ({ hasActiveSession, onClose }) => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [starting]);
 
+  // Ключ запрашиваем только по клику — заранее он на клиенте не оседает.
+  const revealQuery = useQuery({
+    queryKey: ['adaptive-testing', 'reveal', answered?.questionId] as const,
+    queryFn: () => adaptiveTestingService.getReveal(answered!.sessionId, answered!.questionId),
+    enabled: showKey && !!answered,
+    staleTime: Infinity,
+  });
+
+  const handleNext = async () => {
+    setAnswered(null);
+    setShowKey(false);
+    await queryClient.invalidateQueries({ queryKey: CURRENT_QUERY_KEY });
+  };
+
   const current = currentQuery.data;
   const question = current?.state === 'question_ready' ? current.question : null;
 
@@ -112,7 +138,14 @@ export const AdaptiveTestModal: FC<IProps> = ({ hasActiveSession, onClose }) => 
     setSubmitting(true);
     try {
       await adaptiveTestingService.submitAnswer(current.sessionId, question.id, answer);
-      await queryClient.invalidateQueries({ queryKey: CURRENT_QUERY_KEY });
+      // Не инвалидируем current сразу: сначала разбор, переход — по кнопке.
+      setShowKey(false);
+      setAnswered({
+        sessionId: current.sessionId,
+        questionId: question.id,
+        seq: question.seq,
+        isLast: question.seq >= current.totalQuestions,
+      });
     } catch (err) {
       if (isStaleQuestionError(err)) {
         await queryClient.invalidateQueries({ queryKey: CURRENT_QUERY_KEY });
@@ -149,10 +182,93 @@ export const AdaptiveTestModal: FC<IProps> = ({ hasActiveSession, onClose }) => 
     }
   };
 
+  /** Разбор отвеченного вопроса: сначала кнопка, ключ — по требованию. */
+  const renderAnswered = () => {
+    if (!answered || !current) return null;
+    const reveal = revealQuery.data;
+    const pickedIds = reveal
+      ? reveal.answer.type === 'single'
+        ? [reveal.answer.optionId]
+        : reveal.answer.type === 'multiple' ? reveal.answer.optionIds : []
+      : [];
+
+    return (
+      <div className={styles.question}>
+        <div className={styles.progressRow}>
+          <span className={styles.progressLabel}>Вопрос {answered.seq} из {current.totalQuestions}</span>
+          <div className={styles.progressTrack}>
+            <div
+              className={styles.progressFill}
+              style={{ width: `${(answered.seq / current.totalQuestions) * 100}%` }}
+            />
+          </div>
+        </div>
+
+        {!showKey && <p className={styles.answeredNote}>Ответ принят.</p>}
+
+        {showKey && revealQuery.isLoading && (
+          <div className={styles.centered}><span className={styles.spinner} />Загружаем разбор…</div>
+        )}
+        {showKey && revealQuery.isError && (
+          <p className={styles.errorText}>Не удалось загрузить разбор.</p>
+        )}
+
+        {showKey && reveal && (
+          <>
+            <h3 className={styles.qText}>{reveal.questionText}</h3>
+            {reveal.options ? (
+              <div className={styles.options}>
+                {reveal.options.map(opt => {
+                  const isCorrect = reveal.correctOptionIds?.includes(opt.id) ?? false;
+                  const picked = pickedIds.includes(opt.id);
+                  const cls = isCorrect
+                    ? styles.optionCorrect
+                    : picked ? styles.optionWrong : '';
+                  return (
+                    <div key={opt.id} className={`${styles.option} ${cls}`}>
+                      <span>{opt.text}</span>
+                      {(isCorrect || picked) && (
+                        <span className={styles.optionBadge}>
+                          {isCorrect ? 'верно' : 'ваш выбор'}
+                          {isCorrect && picked ? ' · ваш выбор' : ''}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className={styles.resultBlock}>
+                {/* У свободного ответа единственного верного варианта нет — показываем критерии. */}
+                <h4 className={styles.resultTitle}>Что ожидалось в ответе</h4>
+                <ul className={styles.resultList}>
+                  {(reveal.rubric ?? []).map(item => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+
+        <div className={styles.answeredActions}>
+          {!showKey && (
+            <button type="button" className={styles.secondaryBtn} onClick={() => setShowKey(true)}>
+              Показать правильный ответ
+            </button>
+          )}
+          <button type="button" className={styles.primaryBtn} onClick={handleNext}>
+            {answered.isLast ? 'Посмотреть результат' : 'Следующий вопрос'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderBody = () => {
     if (starting || currentQuery.isLoading || !current) {
       return <div className={styles.centered}><span className={styles.spinner} />Готовим тест…</div>;
     }
+    // Разбор перекрывает любое состояние: сервер уже ушёл к следующему вопросу.
+    if (answered) return renderAnswered();
 
     switch (current.state) {
       case 'generating':

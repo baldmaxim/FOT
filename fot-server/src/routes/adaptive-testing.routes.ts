@@ -18,6 +18,8 @@ router.get('/sessions/current', requirePageAccess(EMPLOYEE, 'view'), adaptiveTes
 router.post('/sessions/current/retry', requirePageAccess(EMPLOYEE, 'edit'), adaptiveTestingLimiter, adaptiveTestingController.retrySession);
 router.post('/sessions/current/cancel', requirePageAccess(EMPLOYEE, 'edit'), adaptiveTestingLimiter, adaptiveTestingController.cancelSession);
 router.post('/sessions/:sessionId/answer', requirePageAccess(EMPLOYEE, 'edit'), adaptiveTestingLimiter, adaptiveTestingController.submitAnswer);
+// Ключ отдаётся только по уже отвеченному вопросу — гейт в сервисе.
+router.get('/sessions/:sessionId/questions/:questionId/reveal', requirePageAccess(EMPLOYEE, 'view'), adaptiveTestingController.getAnswerReveal);
 router.get('/results/my', requirePageAccess(EMPLOYEE, 'view'), adaptiveTestingController.listMyResults);
 router.get('/results/my/:sessionId', requirePageAccess(EMPLOYEE, 'view'), adaptiveTestingController.getMyResultDetail);
 

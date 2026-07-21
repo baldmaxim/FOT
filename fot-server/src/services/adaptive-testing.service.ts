@@ -965,6 +965,62 @@ export const adaptiveTestingService = {
   },
 
   /**
+   * Разбор вопроса: правильные варианты и рубрика. Отдаётся ТОЛЬКО когда по
+   * вопросу уже есть строка ответа — иначе прямым вызовом API можно было бы
+   * получить ключ до выбора. Статус сессии не проверяем: после 10-го вопроса
+   * она уже 'completed', а разбор нужен и там.
+   */
+  async getAnswerReveal(employeeId: number, sessionId: string, questionId: string): Promise<{
+    seq: number;
+    type: AdaptiveQuestionType;
+    questionText: string;
+    options: IAdaptiveQuestionOption[] | null;
+    correctOptionIds: string[] | null;
+    rubric: string[] | null;
+    answer: IAdaptiveAnswerPayload;
+    score: number | null;
+    evalState: string;
+  }> {
+    const row = await queryOne<{
+      seq: number;
+      type: AdaptiveQuestionType;
+      question_text: string;
+      options: IAdaptiveQuestionOption[] | null;
+      correct_option_ids: string[] | null;
+      rubric: string[] | null;
+      answer: IAdaptiveAnswerPayload;
+      score: number | null;
+      eval_state: string;
+    }>(
+      `SELECT q.seq, q.type, q.question_text, q.options, q.correct_option_ids, q.rubric,
+              a.answer, a.score, a.eval_state
+         FROM adaptive_test_questions q
+         JOIN adaptive_test_sessions s ON s.id = q.session_id
+         JOIN adaptive_test_answers a ON a.question_id = q.id
+        WHERE q.id = $1::uuid AND q.session_id = $2::uuid AND s.employee_id = $3`,
+      [questionId, sessionId, employeeId],
+    );
+    if (!row) {
+      throw Object.assign(
+        new Error('Ответ на этот вопрос ещё не дан'),
+        { httpStatus: 404, code: 'not_answered' },
+      );
+    }
+
+    return {
+      seq: row.seq,
+      type: row.type,
+      questionText: row.question_text,
+      options: row.options,
+      correctOptionIds: row.correct_option_ids,
+      rubric: row.rubric,
+      answer: row.answer,
+      score: row.score,
+      evalState: row.eval_state,
+    };
+  },
+
+  /**
    * Приём ответа: только владелец, только на текущий вопрос. Повтор
    * идентичного payload идемпотентен; другой ответ на отвеченный → 409.
    */

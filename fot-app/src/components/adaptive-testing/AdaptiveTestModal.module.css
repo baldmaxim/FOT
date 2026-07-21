@@ -248,6 +248,80 @@
   cursor: not-allowed;
 }
 
+/* ── Разбор отвеченного вопроса ── */
+
+.answeredNote {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.answeredActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.answeredActions .primaryBtn,
+.answeredActions .secondaryBtn {
+  align-self: auto;
+}
+
+.secondaryBtn {
+  padding: 12px 22px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.secondaryBtn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* В разборе варианты не кликабельны — только подсветка итога. */
+.optionCorrect,
+.optionWrong {
+  cursor: default;
+  justify-content: space-between;
+}
+
+.optionCorrect {
+  border-color: var(--success, #2e9e54);
+  background: color-mix(in srgb, var(--success, #2e9e54) 12%, transparent);
+}
+
+.optionWrong {
+  border-color: var(--error, #d9534f);
+  background: color-mix(in srgb, var(--error, #d9534f) 12%, transparent);
+}
+
+.optionBadge {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .answeredActions .primaryBtn,
+  .answeredActions .secondaryBtn {
+    flex: 1;
+  }
+
+  .optionCorrect,
+  .optionWrong {
+    flex-wrap: wrap;
+  }
+}
+
 .result {
   display: flex;
   flex-direction: column;
