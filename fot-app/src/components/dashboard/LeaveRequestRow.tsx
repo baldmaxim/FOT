@@ -2,7 +2,7 @@ import { type FC, type MouseEvent } from 'react';
 import { Clock, CheckCircle, XCircle, Ban, ChevronRight } from 'lucide-react';
 import {
   REQUEST_TYPE_LABELS,
-  STATUS_LABELS,
+  getRequestDecision,
   type ILeaveRequest,
   type LeaveRequestStatus,
 } from '../../services/leaveRequestService';
@@ -31,11 +31,12 @@ interface ILeaveRequestRowProps {
   request: ILeaveRequest;
   today: string;
   onClick?: () => void;
-  onCancel?: (id: number, status: ILeaveRequest['status']) => void;
+  onCancel?: (request: ILeaveRequest) => void;
 }
 
 export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({ request: r, today, onClick, onCancel }) => {
   const Icon = STATUS_ICONS[r.status];
+  const decision = getRequestDecision(r);
   const awaitingApproval = (r.request_type === 'time_correction' || r.request_type === 'work')
     && r.correction_approval_status === 'pending';
   const canCancel =
@@ -66,18 +67,22 @@ export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({ request: r, today, 
             <Clock size={12} /> <strong>Ожидает согласования</strong>
           </div>
         )}
-        {r.review_comment && <div className="lr-card-comment">Комментарий: {r.review_comment}</div>}
+        {decision.comment && (
+          <div className="lr-card-comment">
+            {r.status === 'cancelled' ? 'Причина: ' : 'Комментарий: '}{decision.comment}
+          </div>
+        )}
       </div>
       <div className="lr-card-right">
         <div className="lr-status-wrap">
           <span className="lr-status" style={{ color: STATUS_COLORS[r.status] }}>
-            <Icon size={16} /> {STATUS_LABELS[r.status]}
+            <Icon size={16} /> {decision.label}
           </span>
-          {(r.status === 'approved' || r.status === 'rejected') && (r.reviewer || r.reviewed_at) && (
+          {(decision.actor || decision.at) && (
             <div className="lr-status-meta">
-              {formatFioShort(r.reviewer?.full_name)}
-              {r.reviewer?.full_name && r.reviewed_at ? ' · ' : ''}
-              {r.reviewed_at ? formatDate(r.reviewed_at) : ''}
+              {formatFioShort(decision.actor)}
+              {decision.actor && decision.at ? ' · ' : ''}
+              {decision.at ? formatDate(decision.at) : ''}
             </div>
           )}
           {r.hr_acknowledged_at && (
@@ -87,7 +92,7 @@ export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({ request: r, today, 
           )}
         </div>
         {canCancel && (
-          <button className="btn-secondary lr-cancel-btn" onClick={() => onCancel?.(r.id, r.status)}>Отменить</button>
+          <button className="btn-secondary lr-cancel-btn" onClick={() => onCancel?.(r)}>Отменить</button>
         )}
         {onClick && <ChevronRight size={18} className="lr-card-chevron" />}
       </div>

@@ -644,7 +644,8 @@ describe('leaveRequestsController.revokeApproval', () => {
     const updateCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
     expect(updateCall).toBeDefined();
     expect(String(updateCall![0])).toContain('cancelled_by');
-    expect(updateCall![1]).toEqual(['reviewer-uuid', expect.any(String), 'тест', '708']);
+    // Согласовавший руководитель → cancel_source='manager'.
+    expect(updateCall![1]).toEqual(['reviewer-uuid', expect.any(String), 'тест', '708', 'manager']);
 
     const deleteCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('DELETE FROM attendance_adjustments'));
     expect(deleteCall).toBeDefined();
@@ -666,5 +667,194 @@ describe('leaveRequestsController.revokeApproval', () => {
 
     expect(res._status).toBe(200);
     expect(pgTx).toHaveBeenCalledTimes(1);
+  });
+
+  it('админ, который сам не согласовывал → cancel_source=admin', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({ reviewer_id: 'someone-else' }));
+    pgQuery.mockResolvedValueOnce([]);
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
+      .mockResolvedValueOnce({ rowCount: 1 });
+    const res = makeRes();
+
+    await leaveRequestsController.revokeApproval(adminReq(), res);
+
+    const updateCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall![1]![4]).toBe('admin');
+  });
+
+  it('админ, который сам согласовывал → cancel_source=manager', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({ reviewer_id: 'admin-uuid' }));
+    pgQuery.mockResolvedValueOnce([]);
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
+      .mockResolvedValueOnce({ rowCount: 1 });
+    const res = makeRes();
+
+    await leaveRequestsController.revokeApproval(adminReq(), res);
+
+    const updateCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall![1]![4]).toBe('manager');
+  });
+
+  it('ответ содержит ФИО отменившего (canceller)', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation());
+    pgQuery
+      .mockResolvedValueOnce([]) // гард периода
+      .mockResolvedValueOnce([{ id: 'reviewer-uuid', full_name: 'Тихонович Юрий Витальевич' }]); // профили
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled', cancelled_by: 'reviewer-uuid', cancel_source: 'manager' }] })
+      .mockResolvedValueOnce({ rowCount: 1 });
+    const res = makeRes();
+
+    await leaveRequestsController.revokeApproval(makeReq({ body: { reason: 'тест' } }), res);
+
+    const data = (res._json as { data: { canceller: { full_name: string } | null; reviewer: unknown } }).data;
+    expect(data.canceller?.full_name).toBe('Тихонович Юрий Витальевич');
+    expect(data.reviewer).toBeNull();
+  });
+});
+
+describe('leaveRequestsController.cancel (самоотмена сотрудником)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+  });
+
+  // Автор заявления = employee_id 7 (= makeReq().user.employee_id).
+  const ownRequest = (over: Record<string, unknown> = {}) => ({
+    id: 708, employee_id: 7, status: 'pending', request_type: 'vacation', ...over,
+  });
+
+  const okTx = () => {
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'pending', employee_id: 7 }] }) // FOR UPDATE
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] }) // UPDATE
+      .mockResolvedValueOnce({ rowCount: 0 }); // DELETE
+  };
+
+  it('400 — отпуск без причины', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest());
+    const res = makeRes();
+    await leaveRequestsController.cancel(makeReq(), res);
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('400 — причина из одних пробелов для отпуска', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest());
+    const res = makeRes();
+    await leaveRequestsController.cancel(makeReq({ body: { reason: '   ' } }), res);
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('400 — причина длиннее 500 символов', async () => {
+    const res = makeRes();
+    await leaveRequestsController.cancel(makeReq({ body: { reason: 'x'.repeat(501) } }), res);
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('успех — cancel_reason (trim) + cancel_source=employee', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest());
+    okTx();
+    const res = makeRes();
+
+    await leaveRequestsController.cancel(makeReq({ body: { reason: '  перенос на сентябрь  ' } }), res);
+
+    expect(res._status).toBe(200);
+    const updateCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
+    expect(String(updateCall![0])).toContain("cancel_source = 'employee'");
+    expect(updateCall![1]).toEqual([expect.any(String), '708', 'reviewer-uuid', 'перенос на сентябрь']);
+  });
+
+  it('не-отпуск без причины проходит, cancel_reason = null', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest({ request_type: 'remote' }));
+    okTx();
+    const res = makeRes();
+
+    await leaveRequestsController.cancel(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    const updateCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall![1]![3]).toBeNull();
+  });
+
+  it('409 — статус успел смениться внутри транзакции (гонка с approve/reject)', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest());
+    txClient.query.mockResolvedValueOnce({ rows: [{ status: 'rejected', employee_id: 7 }] }); // FOR UPDATE
+    const res = makeRes();
+
+    await leaveRequestsController.cancel(makeReq({ body: { reason: 'причина' } }), res);
+
+    expect(res._status).toBe(409);
+    const updateCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall).toBeUndefined();
+  });
+
+  it('отмена уже одобренного отпуска разрешена (удаляет корректировки)', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest({ status: 'approved' }));
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved', employee_id: 7 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
+      .mockResolvedValueOnce({ rowCount: 3 });
+    const res = makeRes();
+
+    await leaveRequestsController.cancel(makeReq({ body: { reason: 'заболел' } }), res);
+
+    expect(res._status).toBe(200);
+    const deleteCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('DELETE FROM attendance_adjustments'));
+    expect(deleteCall![1]).toEqual([['708', '708:time_correction']]);
+  });
+
+  it('400 — повторная отмена уже отменённого', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest({ status: 'cancelled' }));
+    const res = makeRes();
+    await leaveRequestsController.cancel(makeReq({ body: { reason: 'причина' } }), res);
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('403 — чужое заявление', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest({ employee_id: 999 }));
+    const res = makeRes();
+    await leaveRequestsController.cancel(makeReq({ body: { reason: 'причина' } }), res);
+    expect(res._status).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+});
+
+describe('leaveRequestsController.approve/reject (анти-гонка со самоотменой)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveApprovalMock.mockResolvedValue('auto_approved');
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+  });
+
+  it('approve после отмены → 409, корректировки не создаются', async () => {
+    mockRequestRow({ start_date: '2026-05-30', end_date: '2026-05-30' });
+    // UPDATE ... WHERE status='pending' не нашёл строку (сотрудник успел отменить).
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(409);
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('reject после отмены → 409', async () => {
+    pgQueryOne
+      .mockResolvedValueOnce({ id: 708, employee_id: 247, status: 'pending', request_type: 'remote' })
+      .mockResolvedValueOnce(null); // UPDATE ... WHERE status='pending' → 0 строк
+    const res = makeRes();
+
+    await leaveRequestsController.reject(makeReq({ body: { comment: 'нет' } }), res);
+
+    expect(res._status).toBe(409);
   });
 });

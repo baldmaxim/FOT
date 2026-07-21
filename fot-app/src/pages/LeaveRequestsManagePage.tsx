@@ -17,8 +17,8 @@ import { useToast } from '../contexts/ToastContext';
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
-  STATUS_LABELS,
   CORRECTION_STATUS_LABELS,
+  getRequestDecision,
   type ILeaveRequest,
   type ILeaveRequestAttachment,
   type LeaveRequestStatus,
@@ -292,6 +292,7 @@ export const LeaveRequestsManagePage: FC = () => {
 
   const renderCard = (r: ILeaveRequest) => {
     const Icon = STATUS_ICONS[r.status];
+    const decision = getRequestDecision(r);
     const isCorrection = r.request_type === 'time_correction' && !!r.correction_date;
     const isActive =
       !!eventsPanel &&
@@ -329,13 +330,13 @@ export const LeaveRequestsManagePage: FC = () => {
             </div>
             <div className="lrm-status-wrap">
               <span className="lrm-status" style={{ color: STATUS_COLORS[r.status] }}>
-                <Icon size={14} /> <strong>{STATUS_LABELS[r.status]}</strong>
+                <Icon size={14} /> <strong>{decision.label}</strong>
               </span>
-              {(r.status === 'approved' || r.status === 'rejected') && (r.reviewer || r.reviewed_at) && (
+              {(decision.actor || decision.at) && (
                 <div className="lrm-status-meta">
-                  {formatFioShort(r.reviewer?.full_name)}
-                  {r.reviewer?.full_name && r.reviewed_at ? ' · ' : ''}
-                  {r.reviewed_at ? formatDate(r.reviewed_at) : ''}
+                  {formatFioShort(decision.actor)}
+                  {decision.actor && decision.at ? ' · ' : ''}
+                  {decision.at ? formatDate(decision.at) : ''}
                 </div>
               )}
               {r.hr_acknowledged_at && (
@@ -429,9 +430,11 @@ export const LeaveRequestsManagePage: FC = () => {
               ))}
             </div>
           )}
-          {r.review_comment && (
+          {decision.comment && (
             <div className="lrm-card-comment">
-              <span className="lrm-card-comment-label">Комментарий:</span> {r.review_comment}
+              <span className="lrm-card-comment-label">
+                {r.status === 'cancelled' ? 'Причина:' : 'Комментарий:'}
+              </span> {decision.comment}
             </div>
           )}
         </div>

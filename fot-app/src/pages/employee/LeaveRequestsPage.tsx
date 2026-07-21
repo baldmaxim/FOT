@@ -2,10 +2,7 @@ import { type FC, lazy, Suspense, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
-import {
-  leaveRequestService,
-  type ILeaveRequest,
-} from '../../services/leaveRequestService';
+import { type ILeaveRequest } from '../../services/leaveRequestService';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
 import { LeaveRequestRow } from '../../components/dashboard/LeaveRequestRow';
@@ -14,6 +11,10 @@ import './LeaveRequestsPage.css';
 
 const UnifiedRequestModal = lazy(() =>
   import('../../components/dashboard/RequestModals').then(m => ({ default: m.UnifiedRequestModal })),
+);
+
+const CancelRequestModal = lazy(() =>
+  import('../../components/dashboard/CancelRequestModal').then(m => ({ default: m.CancelRequestModal })),
 );
 
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
@@ -30,6 +31,7 @@ export const LeaveRequestsPage: FC = () => {
   // view-only конфигурация роли: список доступен, подача и отмена скрыты.
   const canEditRequests = canEditPage('/employee/requests');
   const [showModal, setShowModal] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<ILeaveRequest | null>(null);
   const [tab, setTab] = useState<TabKey>('active');
   const { data, isLoading } = useMyLeaveRequests();
   const requests = data ?? EMPTY_REQUESTS;
@@ -39,25 +41,15 @@ export const LeaveRequestsPage: FC = () => {
     tab === 'archive' ? isLeaveRequestArchived(r, today) : !isLeaveRequestArchived(r, today),
   );
 
-  const handleCancel = async (id: number, status: ILeaveRequest['status']) => {
-    const confirmText = status === 'approved'
-      ? 'Отменить уже одобренное заявление? Связанные корректировки табеля будут удалены.'
-      : 'Отменить заявление?';
-    if (!window.confirm(confirmText)) return;
-    try {
-      await leaveRequestService.cancel(id);
-      // Оптимистично переключаем статус, чтобы кнопка «Отменить» исчезла мгновенно.
-      queryClient.setQueryData<ILeaveRequest[] | undefined>(
-        getMyLeaveRequestsQueryKey(),
-        (prev) => prev?.map(r => r.id === id ? { ...r, status: 'cancelled' } : r),
-      );
-      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
-    } catch (err) {
-      console.error('Cancel leave request error:', err);
-      // 400 «уже обработано» → кэш устарел; принудительно подтянем актуальные
-      // данные, чтобы кнопка пропала и юзер увидел реальный статус.
-      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
-    }
+  const handleCancelled = async (updated: ILeaveRequest) => {
+    setCancelTarget(null);
+    // Оптимистично подмешиваем ответ целиком (статус + след отмены: кто/когда/почему),
+    // иначе до refetch карточка показывала бы «Отменено» без инициатора и причины.
+    queryClient.setQueryData<ILeaveRequest[] | undefined>(
+      getMyLeaveRequestsQueryKey(),
+      (prev) => prev?.map(r => r.id === updated.id ? { ...r, ...updated } : r),
+    );
+    await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
   };
 
   const emptyText = tab === 'archive' ? 'Архив пуст' : 'Нет активных заявлений';
@@ -104,7 +96,7 @@ export const LeaveRequestsPage: FC = () => {
               request={r}
               today={today}
               onClick={() => navigate(`/employee/requests/${r.id}`)}
-              onCancel={canEditRequests ? handleCancel : undefined}
+              onCancel={canEditRequests ? setCancelTarget : undefined}
             />
           ))}
         </div>
@@ -115,6 +107,16 @@ export const LeaveRequestsPage: FC = () => {
           <UnifiedRequestModal
             employeeId={employeeId}
             onClose={() => setShowModal(false)}
+          />
+        </Suspense>
+      )}
+
+      {cancelTarget && canEditRequests && (
+        <Suspense fallback={null}>
+          <CancelRequestModal
+            request={cancelTarget}
+            onClose={() => setCancelTarget(null)}
+            onCancelled={handleCancelled}
           />
         </Suspense>
       )}

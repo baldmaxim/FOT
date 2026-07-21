@@ -32,6 +32,8 @@ const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid', 
 // Типы «отпусков» для вкладки «Отпуска» (отдел кадров): ежегодный, за свой счёт,
 // учебный. Больничные и прочее сюда не входят.
 const VACATION_REQUEST_TYPES: string[] = ['vacation', 'unpaid', 'educational_leave'];
+// Лимит причины отмены — тот же, что у текста заявления; дублируется на фронте.
+const CANCEL_REASON_MAX_LENGTH = 500;
 const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
@@ -150,6 +152,35 @@ async function loadReviewerProfiles(
     [reviewerIds],
   );
   return new Map(rows.map(r => [r.id, r]));
+}
+
+type DecisionProfile = { id: string; full_name: string | null };
+// Любая строка leave_requests: интересуют только reviewer_id / cancelled_by,
+// но у вызывающих типы разные (SELECT * с разным набором явных полей).
+type DecisionRow = Record<string, unknown>;
+
+const asUuid = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+
+/** ФИО участников решения (согласовавший + отменивший) одним запросом. */
+async function loadDecisionProfiles(rows: DecisionRow[]): Promise<Map<string, DecisionProfile>> {
+  const ids = [...new Set(
+    rows.flatMap(r => [asUuid(r.reviewer_id), asUuid(r.cancelled_by)]).filter((v): v is string => !!v),
+  )];
+  return loadReviewerProfiles(ids);
+}
+
+/** Подмешивает reviewer/canceller в строку заявления для ответа API. */
+function withDecisionProfiles<T extends DecisionRow>(
+  row: T,
+  profiles: Map<string, DecisionProfile>,
+): T & { reviewer: DecisionProfile | null; canceller: DecisionProfile | null } {
+  const reviewerId = asUuid(row.reviewer_id);
+  const cancelledBy = asUuid(row.cancelled_by);
+  return {
+    ...row,
+    reviewer: reviewerId ? (profiles.get(reviewerId) ?? null) : null,
+    canceller: cancelledBy ? (profiles.get(cancelledBy) ?? null) : null,
+  };
 }
 
 async function loadAttachmentsByLeaveRequestIds(
@@ -626,12 +657,10 @@ const getMy = async (req: AuthenticatedRequest, res: Response): Promise<void> =>
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
-    const reviewerIds = [...new Set(data.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
-    const reviewerMap = await loadReviewerProfiles(reviewerIds);
+    const profileMap = await loadDecisionProfiles(data);
     const enriched = data.map(r => ({
-      ...r,
+      ...withDecisionProfiles(r, profileMap),
       correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
-      reviewer: r.reviewer_id ? (reviewerMap.get(String(r.reviewer_id)) ?? null) : null,
     }));
     res.json({ success: true, data: enriched });
   } catch (err) {
@@ -759,21 +788,19 @@ const getDepartment = async (req: AuthenticatedRequest, res: Response): Promise<
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
-    const reviewerIds = [...new Set(visibleData.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
-    const reviewerMap = await loadReviewerProfiles(reviewerIds);
+    const profileMap = await loadDecisionProfiles(visibleData);
     const directOnlySet = new Set(directOnlyIds);
 
     const enriched = visibleData.map(r => {
       const meta = metaMap.get(r.employee_id);
       return {
-        ...r,
+        ...withDecisionProfiles(r, profileMap),
         employee_name: meta?.full_name ?? null,
         department_name: meta?.department_name ?? null,
         position_name: meta?.position_name ?? null,
         is_direct_subordinate: directOnlySet.has(Number(r.employee_id)),
         attachments: attachmentsMap.get(Number(r.id)) ?? [],
         correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
-        reviewer: r.reviewer_id ? (reviewerMap.get(String(r.reviewer_id)) ?? null) : null,
       };
     });
     res.json({ success: true, data: enriched });
@@ -858,20 +885,18 @@ const getAll = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       .map(r => Number(r.id))
       .filter(Number.isFinite);
     const correctionStatusMap = await loadCorrectionApprovalStatusByRequestIds(correctionRequestIds);
-    const reviewerIds = [...new Set(visibleData.map(r => r.reviewer_id as string | null).filter((v): v is string => !!v))];
-    const reviewerMap = await loadReviewerProfiles(reviewerIds);
+    const profileMap = await loadDecisionProfiles(visibleData);
 
     const enriched = visibleData.map(r => {
       const meta = metaMap.get(r.employee_id);
       return {
-        ...r,
+        ...withDecisionProfiles(r, profileMap),
         employee_name: meta?.full_name ?? null,
         department_name: meta?.department_name ?? null,
         position_name: meta?.position_name ?? null,
         is_direct_subordinate: directOnlySet.has(Number(r.employee_id)),
         attachments: attachmentsMap.get(Number(r.id)) ?? [],
         correction_approval_status: correctionStatusMap.get(Number(r.id)) ?? null,
-        reviewer: r.reviewer_id ? (reviewerMap.get(String(r.reviewer_id)) ?? null) : null,
       };
     });
     res.json({ success: true, data: enriched });
@@ -982,15 +1007,8 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       [request.employee_id],
     );
 
-    // Данные ревьюера
-    let reviewer: { id: string; full_name: string | null } | null = null;
-    if (request.reviewer_id) {
-      const reviewerProfile = await queryOne<{ id: string; full_name: string | null }>(
-        `SELECT id, full_name FROM user_profiles WHERE id = $1`,
-        [request.reviewer_id],
-      );
-      if (reviewerProfile) reviewer = reviewerProfile;
-    }
+    // Данные согласовавшего и отменившего
+    const profileMap = await loadDecisionProfiles([request]);
 
     let correctionApprovalStatus: string | null = null;
     if (shouldLoadCorrectionApprovalStatus(request)) {
@@ -1001,9 +1019,8 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     res.json({
       success: true,
       data: {
-        ...request,
+        ...withDecisionProfiles(request, profileMap),
         employee_name: emp?.full_name ?? null,
-        reviewer,
         correction_approval_status: correctionApprovalStatus,
       },
     });
@@ -1096,7 +1113,10 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     // Раньше status='approved' проставлялся ДО создания adjustment'ов и вне транзакции —
     // при сбое вставки заявка оставалась одобренной без строк в табеле (осиротевшие
     // approved-заявки). Теперь падение отката → заявка остаётся pending, запрос ретраится.
-    const data = await withTransaction(async (client) => {
+    const result = await withTransaction(async (client) => {
+      // Анти-гонка: статус мог смениться после проверки выше (сотрудник отменил заявление
+      // параллельно). Обновляем только pending — иначе откатываемся и НЕ материализуем
+      // корректировки, иначе они остались бы сиротами при отменённой заявке.
       const updated = (await client.query(
         `UPDATE leave_requests SET
            status = 'approved',
@@ -1104,10 +1124,12 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
            reviewed_at = $2,
            review_comment = $3,
            updated_at = $2
-         WHERE id = $4
+         WHERE id = $4 AND status = 'pending'
          RETURNING *`,
         [req.user.id, nowIso, comment || null, id],
       )).rows[0] ?? null;
+
+      if (!updated) return { conflict: true as const };
 
       // Создаём attendance adjustments как канонический источник ручных статусов.
       // Для work/remote в выходной approval_status считает единый резолвер.
@@ -1179,8 +1201,13 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         }
       }
 
-      return updated;
+      return { conflict: false as const, row: updated };
     });
+
+    if (result.conflict) {
+      res.status(409).json({ success: false, error: 'Статус заявления изменился, обновите страницу' });
+      return;
+    }
 
     broadcastPendingChanged();
 
@@ -1195,7 +1222,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       })
       .catch((e) => console.error('[leave-requests] emit approve realtime error:', e));
 
-    res.json({ success: true, data });
+    res.json({ success: true, data: result.row });
   } catch (err) {
     console.error('leave-requests.approve error:', err);
     res.status(500).json({ success: false, error: 'Ошибка одобрения заявления' });
@@ -1229,6 +1256,7 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     const nowIso = new Date().toISOString();
+    // Анти-гонка: статус мог смениться после проверки выше (самоотмена сотрудником).
     const data = await queryOne(
       `UPDATE leave_requests SET
          status = 'rejected',
@@ -1236,10 +1264,15 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
          reviewed_at = $2,
          review_comment = $3,
          updated_at = $2
-       WHERE id = $4
+       WHERE id = $4 AND status = 'pending'
        RETURNING *`,
       [req.user.id, nowIso, comment || null, id],
     );
+
+    if (!data) {
+      res.status(409).json({ success: false, error: 'Статус заявления изменился, обновите страницу' });
+      return;
+    }
 
     broadcastPendingChanged();
 
@@ -1315,12 +1348,21 @@ const updateReason = async (req: AuthenticatedRequest, res: Response): Promise<v
 };
 
 /** Отмена заявления автором (статусы pending или approved). Откатываем
- *  материализованные строки attendance_adjustments в той же транзакции. */
+ *  материализованные строки attendance_adjustments в той же транзакции.
+ *  Для отпусков причина обязательна — отдел кадров должен видеть, почему отпуск отменён.
+ *  След: cancelled_by/at/reason + cancel_source='employee' (в отличие от revokeApproval). */
 const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    const reasonRaw = req.body?.reason;
+    const reason = typeof reasonRaw === 'string' && reasonRaw.trim() ? reasonRaw.trim() : null;
 
-    const request = await queryOne<{ id: number; employee_id: number; status: string }>(
+    if (reason && reason.length > CANCEL_REASON_MAX_LENGTH) {
+      res.status(400).json({ success: false, error: `Причина не может быть длиннее ${CANCEL_REASON_MAX_LENGTH} символов` });
+      return;
+    }
+
+    const request = await queryOne<{ id: number; employee_id: number; status: string; request_type: string }>(
       `SELECT * FROM leave_requests WHERE id = $1`,
       [id],
     );
@@ -1340,14 +1382,33 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
+    if (!reason && VACATION_REQUEST_TYPES.includes(request.request_type)) {
+      res.status(400).json({ success: false, error: 'Укажите причину отмены отпуска' });
+      return;
+    }
+
     const nowIso = new Date().toISOString();
-    const data = await withTransaction(async (client) => {
+    const result = await withTransaction(async (client) => {
+      // Анти-гонка: блокируем строку и повторно проверяем статус/владельца внутри
+      // транзакции — руководитель мог согласовать или отклонить заявление параллельно.
+      const locked = await client.query<{ status: string; employee_id: number }>(
+        `SELECT status, employee_id FROM leave_requests WHERE id = $1 FOR UPDATE`,
+        [id],
+      );
+      const current = locked.rows[0];
+      if (!current || (current.status !== 'pending' && current.status !== 'approved')) {
+        return { conflict: true as const };
+      }
+      if (current.employee_id !== req.user.employee_id) {
+        return { forbidden: true as const };
+      }
       const updated = await client.query(
         `UPDATE leave_requests SET status = 'cancelled',
-                cancelled_by = $3, cancelled_at = $1, updated_at = $1
+                cancelled_by = $3, cancelled_at = $1, cancel_reason = $4,
+                cancel_source = 'employee', updated_at = $1
           WHERE id = $2
           RETURNING *`,
-        [nowIso, id, req.user.id],
+        [nowIso, id, req.user.id, reason],
       );
       // Чистим корректировки и для pending-заявок: легаси work-заявки могли
       // материализовать pending-строки ещё при создании — без удаления они
@@ -1358,8 +1419,20 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
              AND source_id = ANY($1::text[])`,
         [[String(id), `${id}:time_correction`]],
       );
-      return updated.rows[0] ?? null;
+      return { conflict: false as const, row: updated.rows[0] ?? null };
     });
+
+    if ('forbidden' in result) {
+      res.status(403).json({ success: false, error: 'Можно отменить только своё заявление' });
+      return;
+    }
+    if (result.conflict) {
+      res.status(409).json({ success: false, error: 'Статус заявления изменился, обновите страницу' });
+      return;
+    }
+
+    const profileMap = await loadDecisionProfiles([result.row ?? {}]);
+    const data = result.row ? withDecisionProfiles(result.row, profileMap) : null;
 
     broadcastPendingChanged();
 
@@ -1421,13 +1494,11 @@ const getVacations = async (req: AuthenticatedRequest, res: Response): Promise<v
 
     const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
     const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
-    const reviewerIds = [...new Set(data.map(r => r.reviewer_id).filter((v): v is string => !!v))];
-    const reviewerMap = await loadReviewerProfiles(reviewerIds);
+    const profileMap = await loadDecisionProfiles(data);
 
     const enriched = data.map(r => ({
-      ...r,
+      ...withDecisionProfiles(r, profileMap),
       attachments: attachmentsMap.get(Number(r.id)) ?? [],
-      reviewer: r.reviewer_id ? (reviewerMap.get(String(r.reviewer_id)) ?? null) : null,
     }));
     res.json({ success: true, data: enriched });
   } catch (err) {
@@ -1590,12 +1661,15 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
       if (!current || current.status !== 'approved') {
         return { conflict: true as const };
       }
+      // Источник отмены: согласовавший — 'manager', иначе (админ, который не согласовывал) — 'admin'.
+      const cancelSource = isApprover ? 'manager' : 'admin';
       const updated = await client.query(
         `UPDATE leave_requests SET status = 'cancelled',
-                cancelled_by = $1, cancelled_at = $2, cancel_reason = $3, updated_at = $2
+                cancelled_by = $1, cancelled_at = $2, cancel_reason = $3,
+                cancel_source = $5, updated_at = $2
           WHERE id = $4
           RETURNING *`,
-        [req.user.id, nowIso, reason, id],
+        [req.user.id, nowIso, reason, id, cancelSource],
       );
       // Точечный откат табеля — ровно строки этого заявления (как в cancel). Шире не трогаем.
       await client.query(
@@ -1648,7 +1722,8 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
         .catch((e) => console.error('[leave-requests] revoke push error:', e));
     }
 
-    res.json({ success: true, data: result.row });
+    const profileMap = await loadDecisionProfiles([result.row ?? {}]);
+    res.json({ success: true, data: result.row ? withDecisionProfiles(result.row, profileMap) : null });
   } catch (err) {
     console.error('leave-requests.revokeApproval error:', err);
     res.status(500).json({ success: false, error: 'Ошибка отмены согласованного отпуска' });

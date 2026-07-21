@@ -5,9 +5,11 @@ import { ArrowLeft, Download, Clock, CheckCircle, XCircle, Ban, FileText, Image 
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
-  STATUS_LABELS,
+  getRequestDecision,
+  type ILeaveRequest,
   type LeaveRequestStatus,
 } from '../../services/leaveRequestService';
+import { CancelRequestModal } from '../../components/dashboard/CancelRequestModal';
 import { documentService, type IDocument } from '../../services/documentService';
 import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
@@ -70,6 +72,7 @@ export const LeaveRequestDetailPage: FC = () => {
   const attachments = attachmentsQuery.data ?? [];
   const [previewDoc, setPreviewDoc] = useState<IDocument | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canEditAttachments = !!request && request.status === 'pending';
@@ -119,20 +122,15 @@ export const LeaveRequestDetailPage: FC = () => {
   const canCancel =
     !!request && (request.status === 'pending' || request.status === 'approved') && !isPast;
 
-  const handleCancel = async () => {
-    if (!request) return;
-    const confirmText = request.status === 'approved'
-      ? 'Отменить уже одобренное заявление? Связанные корректировки табеля будут удалены.'
-      : 'Отменить заявление?';
-    if (!confirm(confirmText)) return;
-    try {
-      await leaveRequestService.cancel(request.id);
-      await queryClient.invalidateQueries({ queryKey: ['leave-request', requestId] });
-      await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
-      showToast('success', 'Заявка отменена');
-    } catch {
-      showToast('error', 'Не удалось отменить заявку');
-    }
+  const handleCancelled = async (updated: ILeaveRequest) => {
+    setShowCancelModal(false);
+    queryClient.setQueryData<ILeaveRequest | undefined>(
+      ['leave-request', requestId],
+      (prev) => (prev ? { ...prev, ...updated } : prev),
+    );
+    await queryClient.invalidateQueries({ queryKey: ['leave-request', requestId] });
+    await queryClient.invalidateQueries({ queryKey: getMyLeaveRequestsQueryKey() });
+    showToast('success', 'Заявка отменена');
   };
 
   const handleDownload = async (doc: IDocument) => {
@@ -165,6 +163,7 @@ export const LeaveRequestDetailPage: FC = () => {
   }
 
   const StatusIcon = STATUS_ICONS[request.status];
+  const decision = getRequestDecision(request);
 
   return (
     <div className="lr-page">
@@ -180,7 +179,7 @@ export const LeaveRequestDetailPage: FC = () => {
           </div>
         </div>
         <span className="lr-status-big" style={{ color: STATUS_COLORS[request.status] }}>
-          <StatusIcon size={20} /> {STATUS_LABELS[request.status]}
+          <StatusIcon size={20} /> {decision.label}
         </span>
       </div>
 
@@ -312,29 +311,37 @@ export const LeaveRequestDetailPage: FC = () => {
         </section>
 
         <section className="lr-detail-card">
-          <h3>Решение руководителя</h3>
+          <h3>Решение / отмена</h3>
           {request.status === 'pending' ? (
             <div className="lr-detail-empty">Ожидает рассмотрения</div>
-          ) : request.status === 'cancelled' ? (
-            <div className="lr-detail-empty">Отменена автором</div>
+          ) : !decision.actor && !decision.at && !decision.comment ? (
+            <div className="lr-detail-empty">{decision.label}</div>
           ) : (
             <>
-              {request.reviewer && (
+              <div className="lr-detail-row">
+                <span className="lr-detail-label">Статус</span>
+                <span className="lr-detail-value">{decision.label}</span>
+              </div>
+              {decision.actor && (
                 <div className="lr-detail-row">
-                  <span className="lr-detail-label">Рассмотрел</span>
-                  <span className="lr-detail-value">{formatFioShort(request.reviewer.full_name) || '—'}</span>
+                  <span className="lr-detail-label">
+                    {request.status === 'cancelled' ? 'Отменил' : 'Рассмотрел'}
+                  </span>
+                  <span className="lr-detail-value">{formatFioShort(decision.actor) || '—'}</span>
                 </div>
               )}
-              {request.reviewed_at && (
+              {decision.at && (
                 <div className="lr-detail-row">
                   <span className="lr-detail-label">Дата</span>
-                  <span className="lr-detail-value">{formatDateTime(request.reviewed_at)}</span>
+                  <span className="lr-detail-value">{formatDateTime(decision.at)}</span>
                 </div>
               )}
-              {request.review_comment && (
+              {decision.comment && (
                 <div className="lr-detail-row lr-detail-row-col">
-                  <span className="lr-detail-label">Комментарий</span>
-                  <span className="lr-detail-value">{request.review_comment}</span>
+                  <span className="lr-detail-label">
+                    {request.status === 'cancelled' ? 'Причина' : 'Комментарий'}
+                  </span>
+                  <span className="lr-detail-value">{decision.comment}</span>
                 </div>
               )}
             </>
@@ -344,10 +351,18 @@ export const LeaveRequestDetailPage: FC = () => {
 
       {canCancel && (
         <div className="lr-detail-actions">
-          <button className="lr-cancel-btn" onClick={handleCancel}>
+          <button className="lr-cancel-btn" onClick={() => setShowCancelModal(true)}>
             Отменить заявку
           </button>
         </div>
+      )}
+
+      {showCancelModal && (
+        <CancelRequestModal
+          request={request}
+          onClose={() => setShowCancelModal(false)}
+          onCancelled={handleCancelled}
+        />
       )}
 
       {previewDoc && (

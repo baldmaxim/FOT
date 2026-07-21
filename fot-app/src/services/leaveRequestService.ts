@@ -2,6 +2,15 @@ import { apiClient } from '../api/client';
 
 export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid' | 'work' | 'educational_leave' | 'sick_worked';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+export type LeaveRequestCancelSource = 'employee' | 'manager' | 'admin';
+
+/** Типы «отпусков»: причина отмены обязательна, отмена согласованного доступна руководителю. */
+export const VACATION_REQUEST_TYPES: LeaveRequestType[] = ['vacation', 'unpaid', 'educational_leave'];
+export const isVacationRequestType = (type: LeaveRequestType): boolean =>
+  VACATION_REQUEST_TYPES.includes(type);
+
+/** Лимит причины отмены — тот же, что на бэкенде (leave-requests.controller.ts). */
+export const CANCEL_REASON_MAX_LENGTH = 500;
 
 export interface ILeaveRequestAttachment {
   id: number;
@@ -41,6 +50,13 @@ export interface ILeaveRequest {
   /** Отметка «Отдел кадров ознакомлен» (только отпуска). NULL/отсутствует — не отмечено. */
   hr_acknowledged_at?: string | null;
   hr_acknowledged_by?: string | null;
+  /** След отмены: кто/когда/почему. NULL у легаси-отмен до миграции 230. */
+  cancelled_by?: string | null;
+  cancelled_at?: string | null;
+  cancel_reason?: string | null;
+  /** Инициатор отмены: сотрудник (самоотмена) / согласовавший руководитель / администратор. */
+  cancel_source?: LeaveRequestCancelSource | null;
+  canceller?: { id: string; full_name: string | null } | null;
   /**
    * Для time_correction/work заявок — текущий approval_status связанной
    * attendance_adjustment. 'pending' = ждёт согласования на странице /approvals.
@@ -76,6 +92,47 @@ export const STATUS_LABELS: Record<LeaveRequestStatus, string> = {
   approved: 'Согласовано',
   rejected: 'Отклонено',
   cancelled: 'Отменено',
+};
+
+const CANCEL_LABELS: Record<LeaveRequestCancelSource, string> = {
+  employee: 'Отменено сотрудником',
+  manager: 'Отменено руководителем',
+  admin: 'Отменено администратором',
+};
+
+export interface ILeaveRequestDecision {
+  /** Подпись статуса с учётом инициатора отмены. */
+  label: string;
+  /** ФИО принявшего решение (согласовал / отменил), уже строкой. */
+  actor: string | null;
+  /** Момент решения (ISO). */
+  at: string | null;
+  /** Комментарий согласующего или причина отмены. */
+  comment: string | null;
+}
+
+/**
+ * Единый источник подписи решения по заявлению для всех карточек: статус + кто/когда/почему.
+ * Для отмен различает инициатора (cancel_source); легаси-отмены без следа → просто «Отменено».
+ */
+export const getRequestDecision = (r: ILeaveRequest): ILeaveRequestDecision => {
+  if (r.status === 'cancelled') {
+    return {
+      label: r.cancel_source ? CANCEL_LABELS[r.cancel_source] : STATUS_LABELS.cancelled,
+      actor: r.canceller?.full_name ?? null,
+      at: r.cancelled_at ?? null,
+      comment: r.cancel_reason ?? null,
+    };
+  }
+  if (r.status === 'approved' || r.status === 'rejected') {
+    return {
+      label: r.status === 'approved' ? STATUS_LABELS.approved : 'Не согласовано',
+      actor: r.reviewer?.full_name ?? null,
+      at: r.reviewed_at ?? null,
+      comment: r.review_comment ?? null,
+    };
+  }
+  return { label: STATUS_LABELS.pending, actor: null, at: null, comment: null };
 };
 
 export interface ISelectableObject {
@@ -154,8 +211,9 @@ export const leaveRequestService = {
     return res.data;
   },
 
-  cancel: async (id: number) => {
-    const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/cancel`, {});
+  // Самоотмена автором. Для отпусков причина обязательна (проверяется и на бэкенде).
+  cancel: async (id: number, reason?: string) => {
+    const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/cancel`, { reason });
     return res.data;
   },
 
