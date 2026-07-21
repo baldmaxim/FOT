@@ -90,6 +90,9 @@ temp/
 *.xlsx
 *.xls
 
+# Бланки для скачивания — статика фронта, должны быть в репо
+!fot-app/public/forms/*.xlsx
+
 # Local agent scratch
 .codex-skill-build/
 
