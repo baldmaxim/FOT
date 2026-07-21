@@ -31,6 +31,7 @@ vi.mock('./openrouter.service.js', () => {
 
 import {
   adaptiveTestingLlmService,
+  assertBalancedOptions,
   normalizeExtractedCompetencies,
   redactPii,
   validateGeneratedQuestion,
@@ -68,6 +69,69 @@ beforeEach(() => {
   vi.clearAllMocks();
   resolvedConfigMock.mockResolvedValue(OK_CONFIG);
   pgExecute.mockResolvedValue(1);
+});
+
+describe('assertBalancedOptions — правильный вариант не выдаёт себя длиной', () => {
+  const opt = (id: string, len: number) => ({ id, text: 'я'.repeat(len) });
+
+  it('сбалансированные варианты проходят', () => {
+    expect(() => assertBalancedOptions(
+      [opt('a', 120), opt('b', 140), opt('c', 130), opt('d', 110)], ['b'],
+    )).not.toThrow();
+  });
+
+  // Реальный Q1 первой сессии: 68 | 318* | 70 | 96 — «самый длинный» = правильный.
+  it('правильный вариант в 3 раза длиннее — отклоняется', () => {
+    expect(() => assertBalancedOptions(
+      [opt('a', 68), opt('b', 318), opt('c', 70), opt('d', 96)], ['b'],
+    )).toThrow(/разной длины|систематически длиннее/);
+  });
+
+  it('короткие варианты с небольшим разрывом — не ложное срабатывание', () => {
+    // Реальный Q2 сессии: 66* | 54 | 87* | 43* | 50 — отношение шумит, подсказки нет.
+    expect(() => assertBalancedOptions(
+      [opt('a', 66), opt('b', 54), opt('c', 87), opt('d', 43), opt('e', 50)], ['a', 'c', 'd'],
+    )).not.toThrow();
+  });
+
+  it('умеренный, но систематический перевес правильного — отклоняется', () => {
+    // Реальный Q9: 120 | 217* | 125 | 140 — по общему разбросу (1.81) прошёл бы,
+    // ловится сравнением средних: 217 против 128.
+    expect(() => assertBalancedOptions(
+      [opt('a', 120), opt('b', 217), opt('c', 125), opt('d', 140)], ['b'],
+    )).toThrow(/систематически длиннее/);
+  });
+
+  it('длинный НЕверный вариант допустим — подсказки не создаёт', () => {
+    expect(() => assertBalancedOptions(
+      [opt('a', 150), opt('b', 120), opt('c', 130), opt('d', 140)], ['b'],
+    )).not.toThrow();
+  });
+
+  it('multiple: правильные не длиннее неверных — проходит', () => {
+    expect(() => assertBalancedOptions(
+      [opt('a', 66), opt('b', 54), opt('c', 87), opt('d', 43), opt('e', 50)], ['a', 'd'],
+    )).not.toThrow();
+  });
+});
+
+describe('validateGeneratedQuestion — позиция правильного варианта', () => {
+  it('порядок вариантов перемешивается, id и correct_option_ids сохраняются', () => {
+    const options = Array.from({ length: 4 }, (_, i) => ({ id: 'abcd'[i], text: `Вариант ${'abcd'[i]} одинаковой длины` }));
+    const positions = new Set<number>();
+
+    // 40 прогонов: при живом перемешивании правильный id не залипает на одной позиции.
+    for (let i = 0; i < 40; i += 1) {
+      const q = validateGeneratedQuestion(
+        { question_text: 'Достаточно длинный текст вопроса?', options, correct_option_ids: ['b'], rubric: null },
+        'single',
+      );
+      expect(q.options?.map(o => o.id).sort()).toEqual(['a', 'b', 'c', 'd']);
+      expect(q.correct_option_ids).toEqual(['b']);
+      positions.add(q.options!.findIndex(o => o.id === 'b'));
+    }
+    expect(positions.size).toBeGreaterThan(1);
+  });
 });
 
 describe('normalizeExtractedCompetencies', () => {
