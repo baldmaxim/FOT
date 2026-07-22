@@ -11,7 +11,7 @@ import { Sentry } from '../instrument.js';
 import { query } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
-import { resolveCompanyScope } from '../services/data-scope.service.js';
+import { ensureContractorSectionAccess } from './contractor-access-gate.js';
 import {
   addPassesToPool,
   assignPoolPassesByCount,
@@ -37,18 +37,6 @@ import { sigurService } from '../services/sigur.service.js';
 import { ContractorScopeError } from '../services/contractor-scope.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
 
-const ensureSystemAdmin = async (
-  req: AuthenticatedRequest,
-  res: Response,
-): Promise<boolean> => {
-  const scope = await resolveCompanyScope(req);
-  if (scope.roots !== 'all') {
-    res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
-    return false;
-  }
-  return true;
-};
-
 const sendPoolNotConfigured = (res: Response): void => {
   res.status(400).json({
     success: false,
@@ -68,7 +56,7 @@ export const contractorPoolController = {
   /** GET /pool/settings — текущая выбранная папка пула. */
   async getSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const id = await getFreePoolDepartmentId();
       let name: string | null = null;
       if (id != null && !isContractorSigurDryRun()) {
@@ -90,7 +78,7 @@ export const contractorPoolController = {
   /** PUT /pool/settings — сохранить выбранную папку пула. Body: { sigur_department_id|null }. */
   async setSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const { sigur_department_id } = z.object({
         sigur_department_id: z.number().int().positive().nullable(),
       }).parse(req.body);
@@ -125,7 +113,7 @@ export const contractorPoolController = {
   /** GET /sigur-departments — все отделы Sigur (id, name, parentId) для TreeSelect. */
   async listSigurDepartments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       if (isContractorSigurDryRun()) {
         res.json({ success: true, data: [] });
         return;
@@ -149,7 +137,7 @@ export const contractorPoolController = {
   /** GET /pool?limit=&offset=&search= — пропуска в общем пуле (пагинация). */
   async list(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const search = typeof req.query.search === 'string' ? req.query.search : undefined;
       const limitRaw = Number(req.query.limit);
       const offsetRaw = Number(req.query.offset);
@@ -167,7 +155,7 @@ export const contractorPoolController = {
   /** GET /pool/ranges — диапазоны для шапки вкладки «Общий пул». */
   async getRanges(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const data = await getPoolRanges();
       res.json({ success: true, data });
     } catch (error) {
@@ -180,7 +168,7 @@ export const contractorPoolController = {
   /** GET /pool/matrix — все пропуска пула (ячейка на номер) с цветом по статусу. */
   async matrix(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const data = await getPoolMatrix();
       res.json({ success: true, data });
     } catch (error) {
@@ -196,7 +184,7 @@ export const contractorPoolController = {
    */
   async issueToPool(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const body = z.object({
         from: z.number().int().positive(),
         to: z.number().int().positive().optional(),
@@ -255,7 +243,7 @@ export const contractorPoolController = {
    */
   async retryProvisioning(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const body = z.object({
         pass_numbers: z.array(z.string().trim().min(1)).max(500).optional(),
       }).parse(req.body ?? {});
@@ -300,7 +288,7 @@ export const contractorPoolController = {
    */
   async cancelProvisioning(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const body = z.object({
         pass_numbers: z.array(z.string().trim().min(1)).min(1).max(500),
       }).parse(req.body ?? {});
@@ -338,7 +326,7 @@ export const contractorPoolController = {
    */
   async checkCard(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const body = z.object({
         uid: z.string().trim().min(1),
         exclude_pass_number: z.string().trim().optional(),
@@ -359,7 +347,7 @@ export const contractorPoolController = {
   /** GET /pool/anomalies — битые строки пула (no_profile / duplicate_card) для панели удаления. */
   async anomalies(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const data = await getPoolAnomalies();
       res.json({ success: true, data });
     } catch (error) {
@@ -376,7 +364,7 @@ export const contractorPoolController = {
    */
   async deletePasses(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const body = z.object({
         pass_ids: z.array(z.string().uuid()).min(1).max(500),
       }).parse(req.body ?? {});
@@ -413,7 +401,7 @@ export const contractorPoolController = {
    */
   async assign(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const body = z.object({
         pass_ids: z.array(z.string().uuid()).min(1).max(500),
         org_department_id: z.string().uuid(),
@@ -464,7 +452,7 @@ export const contractorPoolController = {
   async revokePass(req: AuthenticatedRequest, res: Response): Promise<void> {
     const passId = typeof req.params.id === 'string' ? req.params.id : undefined;
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const parsedPassId = z.string().uuid().parse(req.params.id);
       let result;
       try {
@@ -508,7 +496,7 @@ export const contractorPoolController = {
    */
   async syncFailed(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const data = await listFailedSyncs();
       res.json({ success: true, data });
     } catch (error) {
@@ -521,7 +509,7 @@ export const contractorPoolController = {
   /** POST /passes/:id/retry-sync — повторить застрявшую досинхронизацию отзыва. */
   async retrySync(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const passId = z.string().uuid().parse(req.params.id);
       const ok = await retryRevokeSync(passId);
       if (!ok) {
@@ -549,7 +537,7 @@ export const contractorPoolController = {
   /** GET /pool/free — все свободные пропуска (id+номер) для матрицы выбора. */
   async free(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const data = await getFreePasses();
       res.json({ success: true, data });
     } catch (error) {
@@ -565,7 +553,7 @@ export const contractorPoolController = {
    */
   async assignCount(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const body = z.object({
         count: z.number().int().positive().max(500),
         org_department_id: z.string().uuid(),
@@ -610,7 +598,7 @@ export const contractorPoolController = {
   /** GET /pool/next-number — следующий свободный номер для нового пакета. */
   async getNextNumber(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       // MAX по ВСЕМ строкам пула (org IS NULL), включая provisioning/
       // provisioning_failed: reserve материализует строку до Sigur, поэтому
       // сорвавшийся выпуск больше не «теряет» номер — MAX его учитывает.

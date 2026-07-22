@@ -1092,3 +1092,91 @@ describe('contractorAdminController.clearPassHolder', () => {
     expect(String(subUpd?.[0])).toContain("status IN ('pending', 'partially_applied')");
   });
 });
+
+/**
+ * Доступ к разделу для не-админских ролей (см. contractor-access-gate.ts):
+ * роль с грантом на /admin/contractor-approvals (например «Отдел безопасности»)
+ * работает со всем разделом; узкая роль ОТиТБ остаётся при своих вкладках;
+ * компанийный админ (is_admin + ограниченный scope) — по-прежнему 403.
+ */
+describe('contractorAdminController — доступ по гранту страницы', () => {
+  const SECTION = '/admin/contractor-approvals';
+  const SUBMISSIONS = '/admin/contractor-approvals/submissions';
+  const OTITB = '/admin/contractor-approvals/otitb';
+
+  const makeAccessReq = (isAdmin: boolean, roleCode: string) => ({
+    user: { id: 'u-1', role_code: roleCode, is_admin: isAdmin },
+    params: { id: 'sub-1' },
+    query: { org_department_id: '11111111-1111-1111-1111-111111111111' },
+    body: {},
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+  }) as never;
+
+  /** Гранты по ключам: can_view и can_edit одновременно. */
+  const grantKeys = (keys: string[]) => {
+    h.hasPageView.mockImplementation(async (_r: string, key: string) => keys.includes(key));
+    h.hasPageEdit.mockImplementation(async (_r: string, key: string) => keys.includes(key));
+  };
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.logFromRequest.mockResolvedValue(undefined);
+    h.query.mockResolvedValue([]);
+    h.isDryRun.mockReturnValue(false);
+  });
+
+  it('security (основной грант): monitorPasses отдаёт данные', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    grantKeys([SECTION]);
+    const res = makeRes();
+    await contractorAdminController.monitorPasses(makeAccessReq(false, 'security'), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ success: true });
+  });
+
+  it('security (основной грант): rejectSubmission проходит гейт edit', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    grantKeys([SECTION]);
+    h.queryOne.mockResolvedValueOnce(null); // заявки нет → 404, но гейт уже пройден
+    const res = makeRes();
+    await contractorAdminController.rejectSubmission(makeAccessReq(false, 'security'), res as never);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('security (основной грант): getPendingSubmissions и listInductionOrgs открыты', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    grantKeys([SECTION]);
+    const subsRes = makeRes();
+    await contractorAdminController.getPendingSubmissions(makeAccessReq(false, 'security'), subsRes as never);
+    expect(subsRes.statusCode).toBe(200);
+
+    const scopeSvc = await import('../services/contractor-scope.service.js');
+    vi.mocked(scopeSvc.getContractorOrgs).mockResolvedValue([]);
+    const otitbRes = makeRes();
+    await contractorAdminController.listInductionOrgs(makeAccessReq(false, 'security'), otitbRes as never);
+    expect(otitbRes.statusCode).toBe(200);
+  });
+
+  it('узкая роль ОТиТБ: заявки открыты, мониторинг закрыт', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    grantKeys([SUBMISSIONS, OTITB]);
+
+    const subsRes = makeRes();
+    await contractorAdminController.getPendingSubmissions(makeAccessReq(false, 'otitb'), subsRes as never);
+    expect(subsRes.statusCode).toBe(200);
+
+    const monitorRes = makeRes();
+    await contractorAdminController.monitorPasses(makeAccessReq(false, 'otitb'), monitorRes as never);
+    expect(monitorRes.statusCode).toBe(403);
+  });
+
+  it('компанийный админ: 403 даже при гранте роли', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['root-1'] });
+    grantKeys([SECTION, SUBMISSIONS, OTITB]);
+    const res = makeRes();
+    await contractorAdminController.monitorPasses(makeAccessReq(true, 'admin'), res as never);
+    expect(res.statusCode).toBe(403);
+  });
+});

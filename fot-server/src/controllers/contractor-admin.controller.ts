@@ -12,7 +12,11 @@ import { query, queryOne, execute, withTransaction } from '../config/postgres.js
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { resolveCompanyScope } from '../services/data-scope.service.js';
-import { hasPageView, hasPageEdit } from '../services/access-control.service.js';
+import {
+  ensureContractorSectionAccess,
+  ensureSubmissionsAccess,
+  ensureOtitbAccess,
+} from './contractor-access-gate.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import {
@@ -91,50 +95,6 @@ const ensureSystemAdmin = async (
     return false;
   }
   return true;
-};
-
-const SUBMISSIONS_PAGE_KEY = '/admin/contractor-approvals/submissions';
-const OTITB_PAGE_KEY = '/admin/contractor-approvals/otitb';
-
-/**
- * Гейт вкладки «Заявки на согласование». Пускает системного админа (как раньше —
- * scope.roots==='all', чтобы не расширить доступ компанийным is_admin) ИЛИ роль
- * с явным грантом на техническую вкладку (ОТиТБ). Проверяем именно грант роли,
- * а не is_admin-байпас — иначе компанийный админ получил бы доступ помимо scope.
- */
-const ensureSubmissionsAccess = async (
-  req: AuthenticatedRequest,
-  res: Response,
-  action: 'view' | 'edit',
-): Promise<boolean> => {
-  const scope = await resolveCompanyScope(req);
-  if (scope.roots === 'all') return true;
-  const granted = action === 'edit'
-    ? await hasPageEdit(req.user.role_code, SUBMISSIONS_PAGE_KEY)
-    : await hasPageView(req.user.role_code, SUBMISSIONS_PAGE_KEY);
-  if (granted) return true;
-  res.status(403).json({ success: false, error: 'Недостаточно прав' });
-  return false;
-};
-
-/**
- * Гейт вкладки «ОТиТБ» (реестр прошедших вводный инструктаж). Аналогично
- * ensureSubmissionsAccess: системный админ (scope.roots==='all') ИЛИ роль ОТиТБ
- * с грантом на технический ключ /admin/contractor-approvals/otitb.
- */
-const ensureOtitbAccess = async (
-  req: AuthenticatedRequest,
-  res: Response,
-  action: 'view' | 'edit',
-): Promise<boolean> => {
-  const scope = await resolveCompanyScope(req);
-  if (scope.roots === 'all') return true;
-  const granted = action === 'edit'
-    ? await hasPageEdit(req.user.role_code, OTITB_PAGE_KEY)
-    : await hasPageView(req.user.role_code, OTITB_PAGE_KEY);
-  if (granted) return true;
-  res.status(403).json({ success: false, error: 'Недостаточно прав' });
-  return false;
 };
 
 /** Окно «использования» старых пропусков для статистики (последние N дней по СКУД). */
@@ -327,7 +287,7 @@ export const contractorAdminController = {
    */
   async listRemovals(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const data = await query(
         `SELECT r.id AS roster_id,
                 r.org_department_id,
@@ -353,7 +313,7 @@ export const contractorAdminController = {
   /** GET /removals/count — количество заявок на удаление (для бейджа вкладки). */
   async removalsCount(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const row = await queryOne<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM contractor_roster WHERE state = 'pending_remove'`,
       );
@@ -372,7 +332,7 @@ export const contractorAdminController = {
    */
   async approveRemoval(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const rosterId = z.string().uuid().parse(req.params.rosterId);
 
       const roster = await queryOne<{
@@ -826,7 +786,7 @@ export const contractorAdminController = {
   /** GET /sigur-access-points — каталог точек доступа Sigur для модалки одобрения. */
   async listSigurAccessPoints(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const connection = await sigurService.getBackgroundConnectionType();
       const data = await sigurService.getAccessPointOptionsCached(connection);
       res.json({ success: true, data });
@@ -860,7 +820,7 @@ export const contractorAdminController = {
    */
   async exportSubmission(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const submissionId = req.params.id;
 
       const sub = await queryOne<{ id: string; org_name: string; submitted_at: string }>(
@@ -918,7 +878,7 @@ export const contractorAdminController = {
   /** GET /orgs/:orgId/documents — список документов организации подрядчика для модалки заявки. */
   async getOrgDocuments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const orgId = z.string().uuid().parse(req.params.orgId);
       const data = await listOrgDocuments(orgId);
       res.json({ success: true, data });
@@ -935,7 +895,7 @@ export const contractorAdminController = {
   /** GET /documents/:id/download — pre-signed URL (админ имеет доступ ко всем оргам). */
   async getOrgDocumentDownloadUrl(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const docId = z.string().uuid().parse(req.params.id);
       const out = await getOrgDocumentDownloadUrl(docId, null);
       if (!out) {
@@ -1301,7 +1261,7 @@ export const contractorAdminController = {
    */
   async approveSubmission(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const submissionId = req.params.id;
       const sub = await queryOne<{ id: string; status: string }>(
         'SELECT id, status FROM contractor_submissions WHERE id = $1::uuid',
@@ -1499,7 +1459,7 @@ export const contractorAdminController = {
    */
   async listSentPasses(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const orgFilter = typeof req.query.org_department_id === 'string'
         ? req.query.org_department_id : null;
 
@@ -1541,7 +1501,7 @@ export const contractorAdminController = {
    */
   async monitorPasses(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
 
       const orgIdRaw = typeof req.query.org_department_id === 'string'
         ? req.query.org_department_id.trim() : '';
@@ -1627,7 +1587,7 @@ export const contractorAdminController = {
    */
   async passStats(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const orgs = await getContractorOrgs();
       if (orgs.length === 0) {
         res.json({ success: true, data: [] });
@@ -1659,7 +1619,7 @@ export const contractorAdminController = {
    */
   async exportPassStats(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
 
       const orgRaw = typeof req.query.org_department_id === 'string'
         ? req.query.org_department_id.trim() : '';
@@ -1736,7 +1696,7 @@ export const contractorAdminController = {
    */
   async getPassHistoryAdmin(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
       const passId = req.params.id;
       const holders = await query(
         `SELECT h.id, h.holder_name, h.valid_from, h.valid_until,
@@ -1789,7 +1749,7 @@ export const contractorAdminController = {
    */
   async decideSubmission(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const submissionId = req.params.id;
       const body = z.object({
         decisions: z.array(z.object({
@@ -2150,7 +2110,7 @@ export const contractorAdminController = {
    */
   async blockDuplicate(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const { batch_id, sigur_employee_id } = z.object({
         batch_id: z.string().uuid(),
         sigur_employee_id: z.number().int(),
@@ -2307,7 +2267,7 @@ export const contractorAdminController = {
   /** POST /submissions/:id/reject — отклонение. Body: { comment }. Sigur не трогаем. */
   async rejectSubmission(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const submissionId = req.params.id;
       const { comment } = z.object({
         comment: z.string().trim().max(1000).optional(),
@@ -2397,7 +2357,7 @@ export const contractorAdminController = {
    */
   async rejectSubmissionPasses(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const submissionId = req.params.id;
       const { pass_ids, comment } = z.object({
         pass_ids: z.array(z.string().uuid()).min(1).max(MAX_ACTIVATION_BATCH),
@@ -2561,7 +2521,7 @@ export const contractorAdminController = {
    */
   async clearPassHolder(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
       const passId = z.string().uuid().parse(req.params.id);
 
       type SaveError = { http: number; message: string };
