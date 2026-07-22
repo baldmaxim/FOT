@@ -4,8 +4,8 @@ import { useToast } from '../../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../../hooks/useOverlayDismiss';
 import { useDeleteForwarding, useMyForwarding, useSetForwarding } from '../../../hooks/useMySim';
 import { mySimService, type ForwardingType } from '../../../services/mySimService';
-import { ApiError } from '../../../api/client';
-import { fmtPhone } from '../../mts-business/mtsBusinessFormat';
+import type { IForwardingResult } from '../../../services/mtsBusinessSubscriberService';
+import { fmtPhone, mtsErrText } from '../../mts-business/mtsBusinessFormat';
 import {
   DEFAULT_NO_REPLY_TIMER,
   FORWARDING_TYPES,
@@ -25,8 +25,10 @@ interface IProps {
 
 /**
  * Модалка управления переадресацией своего номера: текущее правило (из ночного
- * снапшота МТС) + форма включения/изменения и кнопка отключения. Заявка в МТС
- * асинхронная — после отправки поллим статус по eventId до «completed».
+ * снапшота МТС) + форма включения/изменения и кнопка отключения. Исход зависит
+ * от контура МТС: queued — поллим статус по eventId до «completed»; applied —
+ * правило уже применено, сразу перечитываем; unknown — исход не подтверждён,
+ * форму запираем, чтобы сотрудник не отправил мутацию повторно.
  * Без права edit на /employee/sim — только просмотр текущего правила.
  */
 export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
@@ -45,6 +47,8 @@ export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
   const [target, setTarget] = useState('');
   const [timer, setTimer] = useState(DEFAULT_NO_REPLY_TIMER);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
+  // Исход в МТС не подтверждён — кнопки запираем, повтор мутации недопустим.
+  const [locked, setLocked] = useState(false);
 
   const overlayHandlers = useOverlayDismiss(onClose);
 
@@ -95,30 +99,45 @@ export const MySimForwardingModal: FC<IProps> = ({ msisdn, onClose }) => {
     };
   }, [pendingEventId, refetch, toast]);
 
-  const busy = Boolean(pendingEventId) || setMutation.isPending || deleteMutation.isPending;
+  const busy = Boolean(pendingEventId) || locked || setMutation.isPending || deleteMutation.isPending;
   const targetDigits = target.replace(/\D/g, '');
+
+  /** Общая развилка исходов: заявка / уже применено / не подтверждено. */
+  const handleResult = async (r: IForwardingResult, appliedText: string): Promise<void> => {
+    if (r.outcome === 'queued' && r.eventId) {
+      setPendingEventId(r.eventId);
+      return;
+    }
+    if (r.outcome === 'applied') {
+      await refetch();
+      toast.success(r.tracking ? appliedText : `${appliedText}. Состояние обновится позже`);
+      return;
+    }
+    setLocked(true);
+    toast.showToast('info', 'МТС принял запрос, но результат пока не подтверждён. Не повторяйте — проверьте состояние позже.');
+  };
 
   const handleSave = async (): Promise<void> => {
     try {
-      const eventId = await setMutation.mutateAsync({
+      const result = await setMutation.mutateAsync({
         msisdn,
         type,
         target: targetDigits,
         timer: type === 'CFNRY' ? timer : undefined,
       });
-      setPendingEventId(eventId);
+      await handleResult(result, 'Переадресация включена');
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Не удалось включить переадресацию');
+      toast.error(mtsErrText(error, 'Не удалось включить переадресацию'));
     }
   };
 
   const handleDelete = async (): Promise<void> => {
     if (!rule || !isForwardingType(rule.forwardingType)) return;
     try {
-      const eventId = await deleteMutation.mutateAsync({ msisdn, type: rule.forwardingType });
-      setPendingEventId(eventId);
+      const result = await deleteMutation.mutateAsync({ msisdn, type: rule.forwardingType });
+      await handleResult(result, 'Переадресация отключена');
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : 'Не удалось отключить переадресацию');
+      toast.error(mtsErrText(error, 'Не удалось отключить переадресацию'));
     }
   };
 

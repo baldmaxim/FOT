@@ -39,6 +39,9 @@ export const useMyForwarding = (enabled = true) => useQuery({
   enabled,
 });
 
+// Мутации возвращают IForwardingResult: модалка сама решает, ждать заявку
+// (queued), обновиться сразу (applied) или предупредить о неподтверждённом
+// исходе (unknown).
 export const useSetForwarding = () => {
   const qc = useQueryClient();
   return useMutation({

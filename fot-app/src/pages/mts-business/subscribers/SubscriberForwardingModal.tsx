@@ -14,9 +14,10 @@ import {
   isMtsForwardingType,
   pickMtsForwardingRule,
   type IMtsSubForwardingRule,
+  type IForwardingResult,
   type MtsForwardingType,
 } from '../../../services/mtsBusinessSubscriberService';
-import { errText, fmtPhone, FORWARDING_TYPE_LABELS } from '../mtsBusinessFormat';
+import { mtsErrText, fmtPhone, FORWARDING_TYPE_LABELS } from '../mtsBusinessFormat';
 import st from './Subscribers.module.css';
 import styles from '../MtsBusinessPage.module.css';
 
@@ -26,10 +27,12 @@ const TIMER_OPTIONS = [5, 10, 15, 20, 25, 30];
 
 /**
  * Управление переадресацией ЗА абонента (тот же ChangeCallForwarding, что в ЛК
- * «Моя SIM»). Заявка в МТС асинхронная: после отправки следим за ней в журнале
- * заявок (useMtsBusinessActions поллит, пока есть in_progress) и по completed
- * перезапрашиваем детали номера — снапшот правил к тому моменту уже переписан
- * статус-поллером бэкенда.
+ * «Моя SIM»). Три исхода от бэкенда:
+ *  - queued  — заявка принята, следим за ней в журнале (useMtsBusinessActions
+ *    поллит, пока есть in_progress) и по completed перезапрашиваем детали;
+ *  - applied — правило уже применено, сразу обновляем детали и список;
+ *  - unknown — МТС не подтвердил исход: показываем предупреждение и НЕ даём
+ *    нажать ещё раз, чтобы не отправить внешнюю мутацию повторно.
  */
 export const SubscriberForwardingModal: FC<{
   msisdn: string;
@@ -51,6 +54,8 @@ export const SubscriberForwardingModal: FC<{
   const [timer, setTimer] = useState(rule?.noReplyTimer ?? MTS_DEFAULT_NO_REPLY_TIMER);
   const [pendingEventId, setPendingEventId] = useState<string | null>(null);
   const [msg, setMsg] = useState<Msg>(null);
+  // Исход в МТС не подтверждён — форму запираем до ручного обновления.
+  const [locked, setLocked] = useState(false);
 
   const actions = useMtsBusinessActions(Boolean(pendingEventId));
   const pending = pendingEventId ? actions.data?.find(a => a.eventId === pendingEventId) ?? null : null;
@@ -63,13 +68,43 @@ export const SubscriberForwardingModal: FC<{
       setMsg({ ok: true, text: 'Переадресация применена' });
       void qc.invalidateQueries({ queryKey: getMtsBusinessSubscriberDetailsKey(msisdn) });
       void qc.invalidateQueries({ queryKey: getMtsBusinessSubscribersKey() });
+    } else if (pending.status === 'unknown') {
+      setLocked(true);
+      setMsg({ ok: false, text: 'МТС не подтвердил исход заявки. Не повторяйте операцию — проверьте состояние номера позже.' });
     } else {
       setMsg({ ok: false, text: 'МТС отклонил заявку на переадресацию' });
     }
   }, [pending, qc, msisdn]);
 
-  const busy = Boolean(pendingEventId) || setForwarding.isPending || deleteForwarding.isPending;
+  const busy = Boolean(pendingEventId) || locked || setForwarding.isPending || deleteForwarding.isPending;
   const targetDigits = target.replace(/\D/g, '');
+
+  const refreshSubscriber = (): void => {
+    void qc.invalidateQueries({ queryKey: getMtsBusinessSubscriberDetailsKey(msisdn) });
+    void qc.invalidateQueries({ queryKey: getMtsBusinessSubscribersKey() });
+  };
+
+  /** Общая развилка исходов для включения и снятия. */
+  const handleResult = (r: IForwardingResult, queuedText: string, appliedText: string): void => {
+    if (r.outcome === 'queued' && r.eventId) {
+      setPendingEventId(r.eventId);
+      setMsg({ ok: true, text: `${queuedText} (eventId ${r.eventId}) — МТС применит её в течение нескольких минут` });
+      return;
+    }
+    if (r.outcome === 'applied') {
+      refreshSubscriber();
+      setMsg({
+        ok: true,
+        text: r.tracking ? appliedText : `${appliedText}. Состояние в портале обновится позже`,
+      });
+      return;
+    }
+    setLocked(true);
+    setMsg({
+      ok: false,
+      text: 'МТС принял запрос, но результат пока не подтверждён. Не повторяйте операцию — обновите состояние номера через несколько минут.',
+    });
+  };
 
   const onSave = async (): Promise<void> => {
     if (!window.confirm(`Включить переадресацию с номера ${fmtPhone(msisdn)} на ${fmtPhone(targetDigits)}? Потребуется 2FA.`)) return;
@@ -82,10 +117,9 @@ export const SubscriberForwardingModal: FC<{
         target: targetDigits,
         timer: type === 'CFNRY' ? timer : undefined,
       });
-      setPendingEventId(r.eventId);
-      setMsg({ ok: true, text: `Заявка отправлена (eventId ${r.eventId}) — МТС применит её в течение нескольких минут` });
+      handleResult(r, 'Заявка отправлена', 'Переадресация применена');
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка включения переадресации (возможно нужен 2FA)') });
+      setMsg({ ok: false, text: mtsErrText(e, 'Не удалось включить переадресацию') });
     }
   };
 
@@ -95,10 +129,9 @@ export const SubscriberForwardingModal: FC<{
     setMsg(null);
     try {
       const r = await deleteForwarding.mutateAsync({ accountId, msisdn, type: rule.forwardingType });
-      setPendingEventId(r.eventId);
-      setMsg({ ok: true, text: `Заявка на снятие отправлена (eventId ${r.eventId})` });
+      handleResult(r, 'Заявка на снятие отправлена', 'Переадресация снята');
     } catch (e) {
-      setMsg({ ok: false, text: errText(e, 'Ошибка отключения переадресации (возможно нужен 2FA)') });
+      setMsg({ ok: false, text: mtsErrText(e, 'Не удалось отключить переадресацию') });
     }
   };
 

@@ -121,7 +121,7 @@ type IMtsErrorBody = {
 // Гейт МТС отдаёт часть ошибок (401 в т.ч.) строкой, а не разобранным JSON —
 // axios оставляет data как есть, и плоский разбор не видит errorCode
 // (в логах это «http=401 code=-» при теле с errorCode 1014). Допарсиваем сами.
-const parseMtsErrorBody = (data: unknown): IMtsErrorBody | undefined => {
+export const parseMtsErrorBody = (data: unknown): IMtsErrorBody | undefined => {
   if (typeof data === 'string') {
     try { return JSON.parse(data) as IMtsErrorBody; } catch { return undefined; }
   }

@@ -1,6 +1,6 @@
 import { apiClient } from '../api/client';
 import type { MtsSection } from './mtsBusinessTypes';
-import type { IMtsSubServiceItem, IMtsSubForwardingRule, IMtsSubRoaming, IMtsSubDeliveryMethod, IMtsSubTariffFee, MtsForwardingType } from './mtsBusinessSubscriberService';
+import type { IMtsSubServiceItem, IMtsSubForwardingRule, IMtsSubRoaming, IMtsSubDeliveryMethod, IMtsSubTariffFee, MtsForwardingType, IForwardingResult } from './mtsBusinessSubscriberService';
 
 // Вкладка «Абоненты МТС»: список/детали из БД (снапшоты полного профиля),
 // точечный полный синк, живой каталог подключаемого, смена тарифа.
@@ -216,11 +216,11 @@ export const mtsBusinessSubscribersService = {
     return res.data;
   },
 
-  /** Включить/изменить переадресацию за абонента. Асинхронно: статус — в журнале заявок по eventId. */
+  /** Включить/изменить переадресацию за абонента. Исход см. IForwardingResult. */
   setForwarding: async (
     input: { accountId?: string; msisdn: string; type: MtsForwardingType; target: string; timer?: number },
-  ): Promise<{ eventId: string }> => {
-    const res = await apiClient.post<ApiResponse<{ eventId: string }>>('/mts-business/subscribers/forwarding', {
+  ): Promise<IForwardingResult> => {
+    const res = await apiClient.post<ApiResponse<IForwardingResult>>('/mts-business/subscribers/forwarding', {
       ...input, confirmed: true,
     });
     return res.data;
@@ -229,8 +229,8 @@ export const mtsBusinessSubscribersService = {
   /** Снять правило переадресации за абонента. */
   deleteForwarding: async (
     input: { accountId?: string; msisdn: string; type: MtsForwardingType },
-  ): Promise<{ eventId: string }> => {
-    const res = await apiClient.post<ApiResponse<{ eventId: string }>>('/mts-business/subscribers/forwarding/delete', {
+  ): Promise<IForwardingResult> => {
+    const res = await apiClient.post<ApiResponse<IForwardingResult>>('/mts-business/subscribers/forwarding/delete', {
       ...input, confirmed: true,
     });
     return res.data;

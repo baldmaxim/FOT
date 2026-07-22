@@ -18,6 +18,7 @@ import {
   validateForwardingTarget,
   resolveNoReplyTimer,
 } from '../services/mts-forwarding.shared.js';
+import { persistForwardingResult, sendForwardingResult } from '../services/mts-forwarding-persist.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 
 // Вкладка «Абоненты»: список/детали из БД, точечный полный синк одного номера,
@@ -308,21 +309,20 @@ export const mtsBusinessSubscribersController = {
       if (!accountId) return;
       const timer = resolveNoReplyTimer(type, parsed.data.timer);
 
-      const { eventId } = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'create', {
+      const result = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'create', {
         forwardingType: type,
         forwardingAddress: target.value,
         noReplyTimer: timer,
-        numType: 'Regular',
       });
-      await mtsBusinessActionsService.create({
-        eventId, accountId, scope: 'msisdn', msisdn, actionType: 'forwarding_set',
+      const { tracking } = await persistForwardingResult({
+        result, accountId, msisdn, actionType: 'forwarding_set',
         payload: { type, target: target.value, timer }, requestedBy: req.user.id,
+        // В аудит номер назначения целиком не пишем — только тип правила и хвост.
+        audit: () => auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_SET_REQUESTED, {
+          details: { accountId, type, timer, targetTail: target.value.slice(-4), outcome: result.outcome },
+        }),
       });
-      // В аудит номер назначения целиком не пишем — только тип правила и хвост.
-      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_SET_REQUESTED, {
-        details: { accountId, type, timer, targetTail: target.value.slice(-4) },
-      });
-      res.json({ success: true, data: { eventId } });
+      sendForwardingResult(res, result, tracking);
     } catch (error) {
       fail(res, error, 'Ошибка включения переадресации');
     }
@@ -340,18 +340,17 @@ export const mtsBusinessSubscribersController = {
       const accountId = await resolveAccountId(res, parsed.data.accountId, msisdn);
       if (!accountId) return;
 
-      const { eventId } = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'delete', {
+      const result = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'delete', {
         forwardingType: type,
-        numType: 'Regular',
       });
-      await mtsBusinessActionsService.create({
-        eventId, accountId, scope: 'msisdn', msisdn, actionType: 'forwarding_remove',
+      const { tracking } = await persistForwardingResult({
+        result, accountId, msisdn, actionType: 'forwarding_remove',
         payload: { type }, requestedBy: req.user.id,
+        audit: () => auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_REMOVE_REQUESTED, {
+          details: { accountId, type, outcome: result.outcome },
+        }),
       });
-      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_REMOVE_REQUESTED, {
-        details: { accountId, type },
-      });
-      res.json({ success: true, data: { eventId } });
+      sendForwardingResult(res, result, tracking);
     } catch (error) {
       fail(res, error, 'Ошибка отключения переадресации');
     }

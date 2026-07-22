@@ -5,6 +5,19 @@ import { ApiError } from '../../api/client';
 
 export const errText = (e: unknown, fallback: string): string => (e instanceof ApiError ? e.message : fallback);
 
+/**
+ * Текст ошибки апстрима МТС. apiClient берёт в message поле `error` (общий текст
+ * вроде «Ошибка включения переадресации»), а причина от МТС приходит отдельным
+ * полем mtsMessage и лежит в ApiError.details — иначе пользователь видит только
+ * общий фолбэк и не понимает, что именно отклонил оператор.
+ */
+export const mtsErrText = (e: unknown, fallback: string): string => {
+  if (!(e instanceof ApiError)) return fallback;
+  const mts = e.details?.mtsMessage;
+  if (typeof mts === 'string' && mts.trim()) return mts.trim();
+  return e.message || fallback;
+};
+
 export const pad = (n: number): string => String(n).padStart(2, '0');
 export const toISODate = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 

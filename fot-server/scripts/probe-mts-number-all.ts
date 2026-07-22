@@ -1,5 +1,7 @@
 /**
- * Проба МТС Бизнес API: ВСЯ доступная информация по одному номеру (READ-ONLY).
+ * Проба МТС Бизнес API: ВСЯ доступная информация по одному номеру.
+ * READ-ONLY во всех режимах, КРОМЕ `--forwarding --confirm-write` (см. ниже) —
+ * там выполняется реальная мутация ChangeCallForwarding на живом номере.
  *
  * Обходит все известные read-only эндпоинты api.mts.ru/b2b/v1 для MSISDN:
  * структура/ЛС, персональные данные (ФИО), комментарии, баланс, начисления,
@@ -23,11 +25,28 @@
  *                   ValidateMobileConnectivity). По документации МТС это
  *                   dry-run методы — тариф/услуги НЕ меняются.
  *
+ * Режим --forwarding — ЕДИНСТВЕННЫЙ пишущий (подбор контракта §5.6
+ * ChangeCallForwarding, Sentry FOT-SERVER-4K). Правила безопасности:
+ *   · без --confirm-write печатает план вызовов и выходит (ноль мутаций);
+ *   · только на ВЫДЕЛЕННОЙ SIM без активной переадресации — при найденном
+ *     активном правиле выходит с кодом 1 (восстановление набора правил при
+ *     обрыве/Ctrl+C гарантировать нельзя, поэтому «восстановить» не умеем);
+ *   · ОДИН вариант тела за запуск (--fwd-variant=V1..V6), автоперебора нет:
+ *     вариант мог примениться с задержкой, и следующий испортил бы картину;
+ *   · исход не подтверждён за отведённое время → останов без cleanup, код 3;
+ *   · cleanup только после подтверждённого create, с проверкой финального
+ *     набора правил (несовпадение → код 4 и инструкция ручной проверки).
+ *   npx tsx scripts/probe-mts-number-all.ts <msisdn> --forwarding \
+ *     --fwd-variant=V1 --fwd-target=7XXXXXXXXXX [--fwd-type=CFU] --confirm-write
+ * Флаги режима: --fwd-dump (редактированный дамп в файл),
+ *   --confirm-pii-dump (полный сырой дамп — только осознанно).
+ *
  * В консоли ПДн маскируются (ФИО/паспорт/email → первая буква+***). Полный
  * сырой дамп уходит в fot-server/tmp/mts-probe-*.json (папка в .gitignore) —
  * файл содержит ПДн, не коммитить и не пересылать.
  */
 import dotenv from 'dotenv';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -49,6 +68,7 @@ for (const a of rawArgs) {
 }
 if (flags.has('help')) {
   console.log('Использование: npx tsx fot-server/scripts/probe-mts-number-all.ts <msisdn> [--account=<id>] [--days=N] [--full] [--no-file] [--check-manage]');
+  console.log('Пишущий режим (только выделенная SIM): --forwarding --fwd-variant=V1..V6 --fwd-target=7XXXXXXXXXX [--fwd-type=CFU|CFNRY|CFNRC] --confirm-write [--fwd-dump|--confirm-pii-dump]');
   process.exit(0);
 }
 
@@ -92,6 +112,27 @@ const maskPii = (v: unknown, key?: string): unknown => {
   }
   return v;
 };
+// Телефоны в ответах МТС не покрываются NAME_KEYS/DOC_KEYS: они приходят
+// значениями productCharacteristic и в свободном тексте, форматы разные
+// (79161234567, +7 (916) 123-45-67, 8-916-123-45-67). Для пишущего режима
+// печатаем только редактированные тела — номер назначения тоже ПДн.
+const PHONE_RE = /(?:\+?\d[\s()-]?){10,17}\d/g;
+const redactPhoneText = (s: string): string => s.replace(PHONE_RE, m => {
+  const digits = m.replace(/\D/g, '');
+  return digits.length >= 10 ? `7***${digits.slice(-3)}` : m;
+});
+const redactPhones = (v: unknown): unknown => {
+  if (typeof v === 'string') return redactPhoneText(v);
+  if (typeof v === 'number') return redactPhoneText(String(v));
+  if (Array.isArray(v)) return v.map(redactPhones);
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = redactPhones(val);
+    return out;
+  }
+  return v;
+};
+
 const maskEmails = (v: unknown): unknown => {
   if (typeof v === 'string') return v.replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '***@***');
   if (Array.isArray(v)) return v.map(maskEmails);
@@ -143,6 +184,327 @@ const collectNumberNodes = (root: unknown): Record<string, unknown>[] => {
   };
   walk(root);
   return nodes;
+};
+
+// ================== режим --forwarding (единственный пишущий) ==================
+
+interface IFwdClient {
+  raw(
+    method: 'get' | 'post' | 'patch',
+    endpoint: string,
+    opts: { accountId: string; params?: Record<string, unknown>; data?: unknown; suppressErrorBodyLog?: boolean },
+  ): Promise<unknown>;
+}
+
+interface IFwdRule { forwardingType: string | null; forwardingAddress: string | null; noReplyTimer: number | null }
+
+const FWD_VARIANTS = ['V1', 'V2', 'V3', 'V4', 'V5', 'V6'] as const;
+type FwdVariant = (typeof FWD_VARIANTS)[number];
+
+const FWD_VARIANT_NOTE: Record<FwdVariant, string> = {
+  V1: 'текущее тело портала: характеристики + msisdn в characteristic[]',
+  V2: 'V1 + relatedParty (location.id = ЛС номера)',
+  V3: 'V1 + relatedParty (location.id = 000000000 — буквально из доки)',
+  V4: 'подтверждённое тело + ?msisdn= в query',
+  V5: 'подтверждённое тело + NumType=international',
+  V6: 'подтверждённое тело без характеристики NumType',
+};
+
+/** Правила переадресации из сырого ответа (глубокий обход, как в парсере сервиса). */
+const collectFwdRules = (resp: unknown): IFwdRule[] => {
+  const out: IFwdRule[] = [];
+  const seen = new Set<string>();
+  const walk = (node: unknown, depth = 0): void => {
+    if (depth > 8 || node == null) return;
+    if (Array.isArray(node)) { node.forEach(n => walk(n, depth + 1)); return; }
+    if (typeof node !== 'object') return;
+    const r = node as Record<string, unknown>;
+    const type = (r.forwardingType ?? r.ForwardingType ?? r.type) as string | null | undefined;
+    const addr = (r.forwardingAddress ?? r.ForwardingAddress ?? r.address) as string | null | undefined;
+    if (typeof type === 'string' || typeof addr === 'string') {
+      const key = `${type ?? ''}|${addr ?? ''}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        const timer = r.noReplyTimer ?? r.NoReplyTimer;
+        out.push({
+          forwardingType: typeof type === 'string' ? type : null,
+          forwardingAddress: typeof addr === 'string' ? addr : null,
+          noReplyTimer: timer == null ? null : Number(timer) || null,
+        });
+      }
+    }
+    Object.values(r).forEach(v => walk(v, depth + 1));
+  };
+  walk(resp);
+  return out;
+};
+
+const runForwardingProbe = async (ctx: {
+  client: IFwdClient;
+  accountId: string;
+  msisdn: string;
+  msisdnMasked: string;
+  accountNo: string | null;
+  flags: Map<string, string>;
+}): Promise<void> => {
+  const { client, accountId, msisdn, msisdnMasked, flags } = ctx;
+  const { normalizeMsisdn } = await import('../src/services/mts-business-cdr.service.js');
+  const { validateForwardingTarget, matchesForwardingIntent, FORWARDING_TYPES } =
+    await import('../src/services/mts-forwarding.shared.js');
+  const { MtsBusinessApiError } = await import('../src/services/mts-business-base.service.js');
+
+  // Явная аннотация типа обязательна: без неё TS не сужает типы после вызова
+  // never-функции (targetCheck.ok и т.п.).
+  const die: (code: number, ...lines: string[]) => never = (code, ...lines) => {
+    for (const l of lines) console.error(l);
+    process.exit(code);
+  };
+  const show = (label: string, data: unknown): void => {
+    let text = '';
+    try { text = JSON.stringify(redactPhones(maskEmails(data))); } catch { text = String(data); }
+    console.log(`   ${label}: ${text.slice(0, 4000)}${text.length > 4000 ? ' …(усечено)' : ''}`);
+  };
+  const explain = (e: unknown): string => (e instanceof MtsBusinessApiError
+    ? `HTTP ${e.status}${e.code ? `/${e.code}` : ''} — ${e.message}`
+    : e instanceof Error ? e.message : String(e));
+
+  // ---------- аргументы ----------
+  const variant = (flags.get('fwd-variant') ?? '').toUpperCase() as FwdVariant;
+  if (!FWD_VARIANTS.includes(variant)) {
+    die(2, `Укажи вариант тела: --fwd-variant=${FWD_VARIANTS.join('|')}`,
+      ...FWD_VARIANTS.map(v => `   ${v} — ${FWD_VARIANT_NOTE[v]}`),
+      'Автоперебора нет намеренно: вариант может примениться с задержкой, и следующий испортит картину.');
+  }
+  const type = (flags.get('fwd-type') ?? 'CFU').toUpperCase();
+  if (!(FORWARDING_TYPES as readonly string[]).includes(type)) {
+    die(2, `Тип правила: --fwd-type=${FORWARDING_TYPES.join('|')}`);
+  }
+  const fwdType = type as (typeof FORWARDING_TYPES)[number];
+  const targetCheck = validateForwardingTarget(flags.get('fwd-target') ?? '', msisdn);
+  if (!targetCheck.ok) die(2, `Номер назначения: --fwd-target=7XXXXXXXXXX (${targetCheck.error})`);
+  const target = targetCheck.value;
+  const targetMasked = `7***${target.slice(-3)}`;
+  const timer = fwdType === 'CFNRY' ? 20 : undefined;
+
+  // ---------- тело варианта ----------
+  const buildCall = (action: 'create' | 'delete'): { params?: Record<string, unknown>; data: unknown } => {
+    const productCharacteristic: Array<{ name: string; value: string }> = [{ name: 'ForwardingType', value: fwdType }];
+    if (action === 'create') {
+      productCharacteristic.push({ name: 'ForwardingAddress', value: target });
+      if (timer != null) productCharacteristic.push({ name: 'NoReplyTimer', value: String(timer) });
+    }
+    if (variant !== 'V6') {
+      productCharacteristic.push({ name: 'NumType', value: variant === 'V5' ? 'international' : 'Regular' });
+    }
+    const data: Record<string, unknown> = {
+      characteristic: [{ name: 'MSISDN', value: msisdn }],
+      item: [{ action, product: { productLine: { name: 'CallForwarding' }, productCharacteristic } }],
+    };
+    if (variant === 'V2' || variant === 'V3') {
+      const locationId = variant === 'V3' ? '000000000' : (ctx.accountNo ?? '000000000');
+      data.relatedParty = [{ type: 'Individual', location: { id: locationId }, role: 'point-of-sale' }];
+    }
+    return { params: variant === 'V4' ? { msisdn } : undefined, data };
+  };
+
+  const readRules = async (): Promise<{ rules: IFwdRule[]; raw: unknown }> => {
+    const raw = await client.raw('get', '/Product/CallForwardingInfo', {
+      accountId,
+      params: {
+        'productCharacteristic.name': 'MSISDN',
+        'productCharacteristic.value': msisdn,
+        'productLine.name': 'CallForwarding',
+      },
+    });
+    return { rules: collectFwdRules(raw), raw };
+  };
+  /** Канонический слепок набора правил — сравниваем состояние «до» и «после». */
+  const canon = (rules: IFwdRule[]): string => rules
+    .map(r => `${(r.forwardingType ?? '').toUpperCase()}|${normalizeMsisdn(r.forwardingAddress ?? '') ?? ''}|${r.noReplyTimer ?? ''}`)
+    .sort()
+    .join(';');
+  const isActive = (r: IFwdRule): boolean => Boolean(normalizeMsisdn(r.forwardingAddress ?? ''));
+
+  const deepEventId = (resp: unknown): string | null => {
+    let found: string | null = null;
+    const walk = (node: unknown, depth = 0): void => {
+      if (found || depth > 8 || node == null) return;
+      if (Array.isArray(node)) { node.forEach(n => walk(n, depth + 1)); return; }
+      if (typeof node !== 'object') return;
+      const r = node as Record<string, unknown>;
+      for (const k of ['eventID', 'eventId']) {
+        if (typeof r[k] === 'string' && r[k]) { found = r[k] as string; return; }
+      }
+      Object.values(r).forEach(v => walk(v, depth + 1));
+    };
+    walk(resp);
+    return found;
+  };
+
+  const fmtDay = (d: Date): string => {
+    const p = (n: number): string => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  };
+  /** Опрос статуса заявки до терминального состояния. null — не дождались. */
+  const pollEvent = async (eventId: string): Promise<'completed' | 'faulted' | null> => {
+    for (const waitMs of [4_000, 6_000, 10_000, 15_000, 25_000]) {
+      await new Promise(r => setTimeout(r, waitMs));
+      try {
+        const now = new Date();
+        const resp = await client.raw('post', '/Product/CheckRequestStatus', {
+          accountId,
+          data: {
+            relatedParty: [{ characteristic: [{ name: 'MSISDN', value: msisdn }] }, { id: eventId }],
+            validFor: { startDateTime: fmtDay(new Date(now.getTime() - 3_600_000)), endDateTime: fmtDay(now) },
+          },
+        });
+        const raw = String((resp as Record<string, unknown> | null)?.status ?? '').toLowerCase();
+        console.log(`   статус заявки: ${raw || '(пусто)'}`);
+        if (raw.includes('complet')) return 'completed';
+        if (raw.includes('fault')) return 'faulted';
+      } catch (e) {
+        console.log(`   статус заявки не прочитан: ${explain(e)}`);
+      }
+    }
+    return null;
+  };
+  /** Ожидание нужного состояния правил. false — не дождались. */
+  const waitForIntent = async (action: 'create' | 'delete'): Promise<boolean> => {
+    for (const waitMs of [3_000, 5_000, 7_000, 15_000]) {
+      await new Promise(r => setTimeout(r, waitMs));
+      const { rules } = await readRules();
+      if (matchesForwardingIntent(rules, action, fwdType, target)) return true;
+    }
+    return false;
+  };
+
+  const STOP_BANNER = [
+    '',
+    '!!! СОСТОЯНИЕ НЕИЗВЕСТНО !!!',
+    `Мутация ${variant} по номеру ${msisdnMasked} отправлена, но МТС не подтвердил исход.`,
+    'НЕ запускай probe повторно и не пробуй другой вариант: правило может примениться позже.',
+    'Проверь номер вручную в ЛК МТС и сними правило там, если оно появилось.',
+    '',
+  ];
+
+  console.log('=== ПОДБОР КОНТРАКТА ПЕРЕАДРЕСАЦИИ (ChangeCallForwarding) ===');
+  console.log(`Номер ${msisdnMasked}, вариант ${variant} — ${FWD_VARIANT_NOTE[variant]}`);
+  console.log(`Правило: ${fwdType} → ${targetMasked}${timer ? `, таймер ${timer} с` : ''}\n`);
+
+  const plan = buildCall('create');
+  if (!flags.has('confirm-write')) {
+    console.log('РЕЖИМ ПЛАНА (нет --confirm-write) — ни одного вызова к МТС не выполнено.');
+    console.log('Будет отправлено: POST /Product/ChangeCallForwarding');
+    show('query', plan.params ?? {});
+    show('body', plan.data);
+    console.log('\nДля реального прогона добавь --confirm-write (на ВЫДЕЛЕННОЙ SIM без переадресации).');
+    return;
+  }
+
+  // ---------- предусловие: номер должен быть чистым ----------
+  const before = await readRules();
+  show('правила ДО', before.raw);
+  const active = before.rules.filter(isActive);
+  if (active.length > 0) {
+    die(1,
+      `На номере уже есть активные правила (${active.length}): ${active.map(r => r.forwardingType ?? '?').join(', ')}.`,
+      'Probe работает только на выделенной SIM без переадресации: восстановить исходный набор правил',
+      'при обрыве связи или Ctrl+C невозможно. Сними правила вручную и повтори.');
+  }
+  const canonBefore = canon(before.rules);
+
+  let mutationSent = false;
+  const onSignal = (sig: string): void => {
+    console.error(`\n[${sig}] прервано вручную.`);
+    if (mutationSent) STOP_BANNER.forEach(l => console.error(l));
+    process.exit(130);
+  };
+  process.on('SIGINT', () => onSignal('SIGINT'));
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+
+  // ---------- create ----------
+  console.log(`\n── POST /Product/ChangeCallForwarding (${variant}, action=create)`);
+  mutationSent = true;
+  let createResp: unknown;
+  try {
+    createResp = await client.raw('post', '/Product/ChangeCallForwarding', { accountId, ...plan });
+  } catch (e) {
+    // Ошибка апстрима — исход всё равно неизвестен (мутация могла уйти в обработку).
+    console.error(`   ✗ ${explain(e)}`);
+    return die(3, ...STOP_BANNER);
+  }
+  show('сырой ответ', createResp);
+
+  const eventId = deepEventId(createResp);
+  let applied = false;
+  if (eventId) {
+    console.log(`   eventID найден: ${eventId} — опрашиваю статус до терминального`);
+    const st = await pollEvent(eventId);
+    if (st === null) return die(3, ...STOP_BANNER);
+    if (st === 'faulted') {
+      console.log('   МТС отклонил заявку (faulted) — вариант не подошёл, состояние номера не изменилось.');
+    } else {
+      applied = await waitForIntent('create');
+      if (!applied) return die(3, ...STOP_BANNER, 'Заявка completed, но правило не видно в CallForwardingInfo.');
+    }
+  } else {
+    console.log('   eventID НЕ найден — проверяю, применилось ли правило синхронно');
+    applied = await waitForIntent('create');
+    if (!applied) return die(3, ...STOP_BANNER);
+  }
+
+  if (!applied) {
+    const afterReject = await readRules();
+    if (canon(afterReject.rules) !== canonBefore) {
+      return die(4, 'Правило не применилось, но набор правил изменился — проверь номер вручную в ЛК МТС.');
+    }
+    console.log(`\nИТОГ: вариант ${variant} НЕ работает (правило не появилось), номер в исходном состоянии.`);
+    return;
+  }
+
+  console.log(`\n✓ ВАРИАНТ ${variant} РАБОТАЕТ${eventId ? ' (асинхронно, с eventID)' : ' (синхронно, без eventID)'}`);
+
+  // ---------- cleanup: только после подтверждённого create ----------
+  console.log('\n── Снятие правила (cleanup, тот же вариант)');
+  const del = buildCall('delete');
+  try {
+    const delResp = await client.raw('post', '/Product/ChangeCallForwarding', { accountId, ...del });
+    show('сырой ответ delete', delResp);
+    const delEvent = deepEventId(delResp);
+    if (delEvent && (await pollEvent(delEvent)) === null) return die(3, ...STOP_BANNER, 'Cleanup не подтверждён.');
+    if (!(await waitForIntent('delete'))) return die(3, ...STOP_BANNER, 'Cleanup не подтверждён: правило ещё видно.');
+  } catch (e) {
+    console.error(`   ✗ cleanup упал: ${explain(e)}`);
+    return die(3, ...STOP_BANNER, 'Правило осталось включённым — сними его вручную.');
+  }
+
+  const after = await readRules();
+  show('правила ПОСЛЕ', after.raw);
+  if (canon(after.rules) !== canonBefore) {
+    return die(4,
+      'Набор правил после cleanup не совпал с исходным.',
+      `было: ${canonBefore || '(пусто)'}`,
+      `стало: ${canon(after.rules) || '(пусто)'}`,
+      'Проверь номер вручную в ЛК МТС.');
+  }
+
+  console.log('\nCleanup подтверждён, номер в исходном состоянии.');
+  console.log(`Перенеси в mts-business-catalog.service.ts тело варианта ${variant}${eventId ? '' : ' (ветка applied: eventID не приходит)'}.`);
+
+  // ---------- дампы (по умолчанию файла нет) ----------
+  if (flags.has('fwd-dump') || flags.has('confirm-pii-dump')) {
+    const dir = path.resolve(__dirname, '../tmp');
+    fs.mkdirSync(dir, { recursive: true });
+    const raw = flags.has('confirm-pii-dump');
+    const body = {
+      variant, type: fwdType, hadEventId: Boolean(eventId),
+      before: before.raw, createResp, after: after.raw,
+    };
+    const file = path.join(dir, `mts-fwd-${crypto.createHash('sha256').update(msisdn).digest('hex').slice(0, 8)}-${stamp()}.json`);
+    fs.writeFileSync(file, JSON.stringify(raw ? body : redactPhones(maskEmails(body)), null, 2), { encoding: 'utf8', mode: 0o600 });
+    console.log(`\nДамп (${raw ? 'СЫРОЙ, с ПДн' : 'редактированный'}): ${file} (права 0600)`);
+    console.log('Удали файл сразу после разбора: он не защищён ни .gitignore на проде, ни бэкапами.');
+  }
 };
 
 type ProbeOutcome =
@@ -218,6 +580,14 @@ const main = async (): Promise<void> => {
   }
   const account = accounts.find(a => a.id === accountId);
   console.log(`\nПроба: номер ${msisdnMasked}, аккаунт «${account?.label ?? accountId}», окно выписок ${days} дн.\n`);
+
+  // ---------- режим --forwarding: подбор контракта ChangeCallForwarding (ПИШЕТ) ----------
+  if (flags.has('forwarding')) {
+    await runForwardingProbe({
+      client, accountId, msisdn, msisdnMasked, accountNo: ctxAccountNo, flags,
+    });
+    process.exit(0); // сюда доходим только штатным путём: все аварийные — exit внутри
+  }
 
   // ---------- режим --check-manage: только валидационные вызовы управления ----------
   if (flags.has('check-manage')) {

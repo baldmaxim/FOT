@@ -1,6 +1,8 @@
-import { MtsBusinessServiceBase } from './mts-business-base.service.js';
+import * as Sentry from '@sentry/node';
+import { MtsBusinessServiceBase, MtsBusinessApiError, parseMtsErrorBody } from './mts-business-base.service.js';
 import { normalizeMsisdn } from './mts-business-cdr.service.js';
 import { mtsBusinessPersonalDataService } from './mts-business-personal-data.service.js';
+import { matchesForwardingIntent, type ForwardingType } from './mts-forwarding.shared.js';
 
 // Тариф/услуги/остатки пакетов/структура абонента (Product+Service-домен МТС
 // Business API). BillPlanInfo и ProductInfo подтверждены по support.mts.ru.
@@ -176,6 +178,57 @@ const firstValue = (node: unknown, keys: string[]): unknown => {
     if (hit && hit[k] !== undefined) return hit[k];
   }
   return undefined;
+};
+
+/** Исход мутации переадресации. `unknown` — не отказ, а «МТС не подтвердил». */
+export type ForwardingChangeResult =
+  | { outcome: 'queued'; eventId: string }
+  | { outcome: 'applied'; eventId: null; rules: IMtsForwardingRule[] }
+  | { outcome: 'unknown'; eventId: null };
+
+// Значение NumType и паузы перепроверки — здесь, а не у вызывающего кода.
+// Контракт §5.6 не подтверждён живым вызовом (в доке пример с 'international'),
+// подбирается probe-скриптом; правка должна доезжать до обоих контуров разом.
+const FORWARDING_NUM_TYPE = 'Regular';
+// В тестах ждать секунды незачем — проверяется логика, а не таймеры.
+const FORWARDING_VERIFY_DELAYS_MS = process.env.NODE_ENV === 'test' ? [0, 0, 0] : [0, 3_000, 8_000];
+
+/** Длинные цифровые последовательности (номера) в тексте → ***: в логи ПДн не уносим. */
+const maskDigitRuns = (text: string): string => text.replace(/\d{6,}/g, '***');
+
+/**
+ * Явная ошибка в теле 2xx: гейт МТС умеет отвечать 200 с конвертом ошибки.
+ * Признак — код ошибки И текст; голый `code` без текста ошибкой не считаем
+ * (в нормальных ответах встречаются служебные коды).
+ */
+const errorEnvelope = (resp: unknown): { message: string; code?: string } | null => {
+  const body = parseMtsErrorBody(resp);
+  if (!body) return null;
+  const code = body.errorCode ?? body.code;
+  const message = body.errorMessage || body.message || body.error_description || body.description;
+  if (code == null || !message) return null;
+  return { message, code: String(code) };
+};
+
+// Незнакомый конверт ответа шлём в Sentry один раз на процесс и на форму
+// ответа: это диагностика контракта, а не поток ошибок. Payload маскируем —
+// в теле могут быть номера.
+const reportedEnvelopes = new Set<string>();
+const reportForwardingEnvelope = (outcome: 'applied' | 'unknown', action: 'create' | 'delete', resp: unknown): void => {
+  const keys = resp && typeof resp === 'object' && !Array.isArray(resp)
+    ? Object.keys(resp as Record<string, unknown>).sort()
+    : [Array.isArray(resp) ? 'array' : typeof resp];
+  const fingerprint = `${outcome}|${keys.join(',')}`;
+  if (reportedEnvelopes.has(fingerprint)) return;
+  reportedEnvelopes.add(fingerprint);
+  let snippet = '';
+  try { snippet = maskDigitRuns(JSON.stringify(resp) ?? ''); } catch { snippet = '<не сериализуется>'; }
+  console.warn(`[mts-biz] ChangeCallForwarding ${action}: ответ без eventID, исход «${outcome}», ключи: ${keys.join(', ')}`);
+  Sentry.captureMessage(`МТС Бизнес: ChangeCallForwarding без eventID (${outcome})`, {
+    level: 'warning',
+    tags: { module: 'mts-business', kind: 'forwarding-envelope' },
+    extra: { outcome, action, keys, snippet: snippet.slice(0, 1_000) },
+  });
 };
 
 /** Первое числовое значение по одному из ключей (для цены во вложенных структурах). */
@@ -420,17 +473,30 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
 
   /**
    * Включить (create) или снять (delete) правило переадресации по номеру —
-   * POST /Product/ChangeCallForwarding (док §5.6). Асинхронно: ответ с eventID,
-   * статус — через Product/CheckRequestStatus (как у ModifyProduct).
-   * Контракт НЕ проверен живым вызовом, только по докам support.mts.ru.
-   * retryOn500=false — мутация, исход первой попытки неизвестен.
+   * POST /Product/ChangeCallForwarding (док §5.6). retryOn500=false — мутация,
+   * исход первой попытки неизвестен.
+   *
+   * Три исхода (см. ForwardingChangeResult):
+   *  - queued  — пришёл eventID, дальше следит статус-поллер;
+   *  - applied — eventID нет, но повторное чтение правил показало наш результат
+   *    (контур применяет синхронно). Прежний код в этом случае бросал
+   *    «ответ ChangeCallForwarding без eventID» → 500, из-за чего переадресация
+   *    не работала ни разу (Sentry FOT-SERVER-4K, заявок в БД 0);
+   *  - unknown — eventID нет и правило за ~11 с не появилось. Это НЕ отказ:
+   *    МТС может применить позже, поэтому наверх идёт «исход неизвестен», а не
+   *    ошибка (иначе пользователь повторит уже отправленную мутацию).
+   * Явный error-конверт в теле 2xx — единственный случай исключения.
+   *
+   * NumType/форма тела задаются здесь, а не вызывающим кодом: контракт не
+   * подтверждён живым вызовом, подбирается probe-скриптом (--forwarding), и
+   * правка должна доезжать до обоих контуров разом.
    */
   async changeCallForwarding(
     accountId: string,
     msisdn: string,
     action: 'create' | 'delete',
-    opts: { forwardingType: string; forwardingAddress?: string; noReplyTimer?: number; numType?: string },
-  ): Promise<{ eventId: string }> {
+    opts: { forwardingType: ForwardingType; forwardingAddress?: string; noReplyTimer?: number },
+  ): Promise<ForwardingChangeResult> {
     const productCharacteristic: Array<{ name: string; value: string }> = [
       { name: 'ForwardingType', value: opts.forwardingType },
     ];
@@ -440,7 +506,7 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     if (opts.noReplyTimer != null) {
       productCharacteristic.push({ name: 'NoReplyTimer', value: String(opts.noReplyTimer) });
     }
-    productCharacteristic.push({ name: 'NumType', value: opts.numType ?? 'Regular' });
+    productCharacteristic.push({ name: 'NumType', value: FORWARDING_NUM_TYPE });
 
     const resp = await this.request<unknown>('post', '/Product/ChangeCallForwarding', {
       accountId,
@@ -456,10 +522,26 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
         }],
       },
     });
-    const r = (resp ?? {}) as Record<string, unknown>;
-    const eventId = asString(r.eventID) ?? asString(r.eventId);
-    if (!eventId) throw new Error('МТС Бизнес: ответ ChangeCallForwarding без eventID');
-    return { eventId };
+
+    const envelopeError = errorEnvelope(resp);
+    if (envelopeError) {
+      throw new MtsBusinessApiError(envelopeError.message, 200, envelopeError.code);
+    }
+
+    const eventId = asString(firstValue(resp, ['eventID', 'eventId']));
+    if (eventId) return { outcome: 'queued', eventId };
+
+    // eventID нет — узнать исход можно только перечитав правила.
+    for (const delayMs of FORWARDING_VERIFY_DELAYS_MS) {
+      if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+      const rules = await this.getCallForwarding(accountId, msisdn);
+      if (matchesForwardingIntent(rules, action, opts.forwardingType, opts.forwardingAddress)) {
+        reportForwardingEnvelope('applied', action, resp);
+        return { outcome: 'applied', eventId: null, rules };
+      }
+    }
+    reportForwardingEnvelope('unknown', action, resp);
+    return { outcome: 'unknown', eventId: null };
   }
 
   /** Текущая локация/роуминг абонента. */

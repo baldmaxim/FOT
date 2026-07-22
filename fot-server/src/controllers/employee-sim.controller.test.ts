@@ -36,11 +36,12 @@ vi.mock('../services/mts-business-statement-rows.service.js', async (importOrigi
 vi.mock('../services/mts-business-metrics-store.service.js', () => ({
   mtsBusinessMetricsStoreService: {
     getLatestSnapshotForMsisdn: vi.fn(async () => null),
+    upsertSnapshot: vi.fn(async () => undefined),
   },
 }));
 vi.mock('../services/mts-business-catalog.service.js', () => ({
   mtsBusinessCatalogService: {
-    changeCallForwarding: vi.fn(async () => ({ eventId: 'EV-1' })),
+    changeCallForwarding: vi.fn(async () => ({ outcome: 'queued', eventId: 'EV-1' })),
   },
 }));
 vi.mock('../services/mts-business-actions.service.js', () => ({
@@ -65,6 +66,7 @@ import { mtsBusinessCatalogService } from '../services/mts-business-catalog.serv
 import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
 import { mtsBusinessMetricsStoreService } from '../services/mts-business-metrics-store.service.js';
 import { auditService } from '../services/audit.service.js';
+import { MtsBusinessApiError } from '../services/mts-business-base.service.js';
 import { msisdnHash } from '../services/mts-business-cdr.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -338,13 +340,66 @@ describe('employeeSimController — переадресация', () => {
     );
 
     expect(catalog.changeCallForwarding).toHaveBeenCalledWith('acc-1', OWN, 'create', {
-      forwardingType: 'CFNRY', forwardingAddress: '79161234567', noReplyTimer: 20, numType: 'Regular',
+      forwardingType: 'CFNRY', forwardingAddress: '79161234567', noReplyTimer: 20,
     });
     expect(actions.create).toHaveBeenCalledWith(expect.objectContaining({
       eventId: 'EV-1', actionType: 'forwarding_set', scope: 'msisdn', msisdn: OWN, requestedBy: 'u-1',
     }));
     expect(audit.logFromRequest).toHaveBeenCalled();
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: { eventId: 'EV-1' } });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'queued', eventId: 'EV-1', tracking: true } });
+  });
+
+  it('setMyForwarding: applied — заявки нет, снапшот из прочитанных правил', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
+    const rules = [{ forwardingType: 'CFU', forwardingAddress: '79161234567', noReplyTimer: null, numType: 'Regular', status: null }];
+    catalog.changeCallForwarding.mockResolvedValueOnce({ outcome: 'applied', eventId: null, rules });
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+
+    expect(actions.create).not.toHaveBeenCalled();
+    expect(metrics.upsertSnapshot).toHaveBeenCalledWith({
+      accountId: 'acc-1', scope: 'msisdn', msisdn: OWN, metric: 'forwarding', payload: rules,
+    });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'applied', eventId: null, tracking: true } });
+  });
+
+  it('setMyForwarding: падение аудита не отменяет успех МТС (tracking:false, не 500)', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
+    audit.logFromRequest.mockRejectedValueOnce(new Error('audit down'));
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'queued', eventId: 'EV-1', tracking: false } });
+  });
+
+  it('setMyForwarding: unknown → 202, ничего локально не пишем', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
+    catalog.changeCallForwarding.mockResolvedValueOnce({ outcome: 'unknown', eventId: null });
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(actions.create).not.toHaveBeenCalled();
+    expect(metrics.upsertSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('setMyForwarding: ошибка МТС отдаётся сотруднику текстом оператора (502 + mtsMessage)', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
+    catalog.changeCallForwarding.mockRejectedValueOnce(new MtsBusinessApiError('Переадресация недоступна на тарифе', 400, '2005'));
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(502);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ mtsMessage: 'Переадресация недоступна на тарифе' }));
   });
 
   it('deleteMyForwarding: снимает правило действием delete', async () => {
@@ -354,7 +409,7 @@ describe('employeeSimController — переадресация', () => {
     await employeeSimController.deleteMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU' }), res);
 
     expect(catalog.changeCallForwarding).toHaveBeenCalledWith('acc-1', OWN, 'delete', {
-      forwardingType: 'CFU', numType: 'Regular',
+      forwardingType: 'CFU',
     });
     expect(actions.create).toHaveBeenCalledWith(expect.objectContaining({ actionType: 'forwarding_remove' }));
   });

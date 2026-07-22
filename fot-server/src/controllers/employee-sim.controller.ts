@@ -8,6 +8,7 @@ import { mtsBusinessStatementRowsService, parseUsagePeriod, USAGE_ROWS_LIMIT } f
 import { mtsBusinessMetricsStoreService } from '../services/mts-business-metrics-store.service.js';
 import { mtsBusinessCatalogService, type IMtsForwardingRule } from '../services/mts-business-catalog.service.js';
 import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
+import { MtsBusinessApiError } from '../services/mts-business-base.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { msisdnHash, normalizeMsisdn } from '../services/mts-business-cdr.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
@@ -16,6 +17,7 @@ import {
   validateForwardingTarget,
   resolveNoReplyTimer,
 } from '../services/mts-forwarding.shared.js';
+import { persistForwardingResult, sendForwardingResult } from '../services/mts-forwarding-persist.service.js';
 
 // ЛК сотрудника: «Моя SIM» + «Телефонная книга». Номер резолвится ТОЛЬКО из
 // req.user.employee_id (msisdn в параметрах не принимается) — сотрудник видит
@@ -68,6 +70,14 @@ const buildInternetPackage = async (
 };
 
 const fail = (res: Response, error: unknown, fallback: string): void => {
+  // Причину от МТС наверх отдаём (как в админском контуре): без неё сотрудник
+  // видит только общий текст и не понимает, что именно отклонил оператор.
+  if (error instanceof MtsBusinessApiError) {
+    console.error(`[employee-sim] upstream error: http=${error.status} code=${error.code ?? '-'}`);
+    Sentry.captureException(error, { tags: { module: 'mts-business', kind: 'employee-sim-upstream' } });
+    res.status(502).json({ success: false, error: fallback, mtsHttp: error.status, mtsMessage: error.message });
+    return;
+  }
   console.error(`[employee-sim] ${fallback}:`, error instanceof Error ? error.message : 'unknown');
   Sentry.captureException(error, { tags: { module: 'mts-business', kind: 'employee-sim' } });
   res.status(500).json({ success: false, error: fallback });
@@ -240,21 +250,20 @@ export const employeeSimController = {
         return;
       }
 
-      const { eventId } = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'create', {
+      const result = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'create', {
         forwardingType: type,
         forwardingAddress: target.value,
         noReplyTimer: timer,
-        numType: 'Regular',
       });
-      await mtsBusinessActionsService.create({
-        eventId, accountId, scope: 'msisdn', msisdn, actionType: 'forwarding_set',
+      const { tracking } = await persistForwardingResult({
+        result, accountId, msisdn, actionType: 'forwarding_set',
         payload: { type, target: target.value, timer }, requestedBy: req.user.id,
+        // В аудит номера не пишем целиком — только тип правила и хвост номера.
+        audit: () => auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_SET_REQUESTED, {
+          details: { accountId, type, timer, targetTail: target.value.slice(-4), outcome: result.outcome },
+        }),
       });
-      // В аудит номера не пишем целиком — только тип правила и хвост номера.
-      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_SET_REQUESTED, {
-        details: { accountId, type, timer, targetTail: target.value.slice(-4) },
-      });
-      res.json({ success: true, data: { eventId } });
+      sendForwardingResult(res, result, tracking);
     } catch (error) {
       fail(res, error, 'Ошибка включения переадресации');
     }
@@ -277,18 +286,17 @@ export const employeeSimController = {
         return;
       }
 
-      const { eventId } = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'delete', {
+      const result = await mtsBusinessCatalogService.changeCallForwarding(accountId, msisdn, 'delete', {
         forwardingType: parsed.data.type,
-        numType: 'Regular',
       });
-      await mtsBusinessActionsService.create({
-        eventId, accountId, scope: 'msisdn', msisdn, actionType: 'forwarding_remove',
+      const { tracking } = await persistForwardingResult({
+        result, accountId, msisdn, actionType: 'forwarding_remove',
         payload: { type: parsed.data.type }, requestedBy: req.user.id,
+        audit: () => auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_REMOVE_REQUESTED, {
+          details: { accountId, type: parsed.data.type, outcome: result.outcome },
+        }),
       });
-      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_FORWARDING_REMOVE_REQUESTED, {
-        details: { accountId, type: parsed.data.type },
-      });
-      res.json({ success: true, data: { eventId } });
+      sendForwardingResult(res, result, tracking);
     } catch (error) {
       fail(res, error, 'Ошибка отключения переадресации');
     }

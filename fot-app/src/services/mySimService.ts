@@ -1,4 +1,5 @@
 import { apiClient } from '../api/client';
+import type { IForwardingResult } from './mtsBusinessSubscriberService';
 import type { IMtsUsageRow, IUsageTotals, IMtsPackageRow } from './mtsBusinessSubscribersService';
 import type { IMtsSubTariffFee } from './mtsBusinessSubscriberService';
 
@@ -103,15 +104,15 @@ export const mySimService = {
     return res.data.numbers;
   },
 
-  /** Включить/изменить переадресацию. Ответ асинхронный — eventId для поллинга статуса. */
-  setForwarding: async (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }): Promise<string> => {
-    const res = await apiClient.post<ApiResponse<{ eventId: string }>>('/my-sim/forwarding', input);
-    return res.data.eventId;
+  /** Включить/изменить переадресацию. Исход см. IForwardingResult. */
+  setForwarding: async (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }): Promise<IForwardingResult> => {
+    const res = await apiClient.post<ApiResponse<IForwardingResult>>('/my-sim/forwarding', input);
+    return res.data;
   },
 
-  deleteForwarding: async (input: { msisdn: string; type: ForwardingType }): Promise<string> => {
-    const res = await apiClient.post<ApiResponse<{ eventId: string }>>('/my-sim/forwarding/delete', input);
-    return res.data.eventId;
+  deleteForwarding: async (input: { msisdn: string; type: ForwardingType }): Promise<IForwardingResult> => {
+    const res = await apiClient.post<ApiResponse<IForwardingResult>>('/my-sim/forwarding/delete', input);
+    return res.data;
   },
 
   getForwardingStatus: async (eventId: string): Promise<ForwardingStatus> => {

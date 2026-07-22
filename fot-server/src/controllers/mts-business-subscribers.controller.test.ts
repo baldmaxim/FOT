@@ -37,11 +37,14 @@ vi.mock('../services/mts-business-mapping.service.js', () => ({
 }));
 vi.mock('../services/mts-business-catalog.service.js', () => ({
   mtsBusinessCatalogService: {
-    changeCallForwarding: vi.fn(async () => ({ eventId: 'EV-1' })),
+    changeCallForwarding: vi.fn(async () => ({ outcome: 'queued', eventId: 'EV-1' })),
   },
 }));
 vi.mock('../services/mts-business-actions.service.js', () => ({
   mtsBusinessActionsService: { create: vi.fn(async () => undefined) },
+}));
+vi.mock('../services/mts-business-metrics-store.service.js', () => ({
+  mtsBusinessMetricsStoreService: { upsertSnapshot: vi.fn(async () => undefined) },
 }));
 vi.mock('../services/mts-business-data.service.js', () => ({ mtsBusinessDataService: {} }));
 vi.mock('../services/audit.service.js', () => ({
@@ -56,12 +59,17 @@ vi.mock('../services/audit.service.js', () => ({
 import { mtsBusinessSubscribersController } from './mts-business-subscribers.controller.js';
 import { mtsBusinessCatalogService } from '../services/mts-business-catalog.service.js';
 import { mtsBusinessActionsService } from '../services/mts-business-actions.service.js';
+import { mtsBusinessMetricsStoreService } from '../services/mts-business-metrics-store.service.js';
 import { auditService } from '../services/audit.service.js';
+import { MtsBusinessApiError } from '../services/mts-business-base.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const catalog = vi.mocked(mtsBusinessCatalogService);
 const actions = vi.mocked(mtsBusinessActionsService);
+const snapshots = vi.mocked(mtsBusinessMetricsStoreService);
 const audit = vi.mocked(auditService);
+
+const RULES = [{ forwardingType: 'CFU', forwardingAddress: '79165551122', noReplyTimer: null, numType: 'Regular', status: null }];
 
 const ACCOUNT = 'a1b2c3d4-0000-0000-0000-000000000001';
 const MSISDN = '79151204230';
@@ -79,7 +87,7 @@ const mockRes = () => {
 describe('МТС Бизнес «Абоненты»: переадресация за абонента', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    catalog.changeCallForwarding.mockResolvedValue({ eventId: 'EV-1' });
+    catalog.changeCallForwarding.mockResolvedValue({ outcome: 'queued', eventId: 'EV-1' });
   });
 
   it('включает CFNRY: дефолтный таймер 20 сек, заявка и аудит с хвостом номера', async () => {
@@ -93,16 +101,73 @@ describe('МТС Бизнес «Абоненты»: переадресация �
       forwardingType: 'CFNRY',
       forwardingAddress: '79165551122',
       noReplyTimer: 20,
-      numType: 'Regular',
     });
     expect(actions.create).toHaveBeenCalledWith(expect.objectContaining({
       eventId: 'EV-1', actionType: 'forwarding_set', scope: 'msisdn', msisdn: MSISDN,
     }));
     expect(audit.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'u-1', 'MTS_BUSINESS_FORWARDING_SET_REQUESTED',
-      { details: { accountId: ACCOUNT, type: 'CFNRY', timer: 20, targetTail: '1122' } },
+      { details: { accountId: ACCOUNT, type: 'CFNRY', timer: 20, targetTail: '1122', outcome: 'queued' } },
     );
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: { eventId: 'EV-1' } });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'queued', eventId: 'EV-1', tracking: true } });
+  });
+
+  it('applied (МТС применил сразу): заявки нет, снапшот пишется прочитанными правилами', async () => {
+    const res = mockRes();
+    catalog.changeCallForwarding.mockResolvedValue({ outcome: 'applied', eventId: null, rules: RULES });
+
+    await mtsBusinessSubscribersController.setForwarding(
+      mockReq({ accountId: ACCOUNT, msisdn: MSISDN, type: 'CFU', target: '79165551122', confirmed: true }),
+      res,
+    );
+
+    expect(actions.create).not.toHaveBeenCalled();
+    expect(snapshots.upsertSnapshot).toHaveBeenCalledWith({
+      accountId: ACCOUNT, scope: 'msisdn', msisdn: MSISDN, metric: 'forwarding', payload: RULES,
+    });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'applied', eventId: null, tracking: true } });
+  });
+
+  it('падение локальной записи не отменяет успех МТС: 200 + tracking:false', async () => {
+    const res = mockRes();
+    catalog.changeCallForwarding.mockResolvedValue({ outcome: 'applied', eventId: null, rules: RULES });
+    snapshots.upsertSnapshot.mockRejectedValueOnce(new Error('db down'));
+
+    await mtsBusinessSubscribersController.setForwarding(
+      mockReq({ accountId: ACCOUNT, msisdn: MSISDN, type: 'CFU', target: '79165551122', confirmed: true }),
+      res,
+    );
+
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'applied', eventId: null, tracking: false } });
+  });
+
+  it('unknown: 202, ни заявки, ни снапшота (повторять операцию нельзя)', async () => {
+    const res = mockRes();
+    catalog.changeCallForwarding.mockResolvedValue({ outcome: 'unknown', eventId: null });
+
+    await mtsBusinessSubscribersController.setForwarding(
+      mockReq({ accountId: ACCOUNT, msisdn: MSISDN, type: 'CFU', target: '79165551122', confirmed: true }),
+      res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(actions.create).not.toHaveBeenCalled();
+    expect(snapshots.upsertSnapshot).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'unknown', eventId: null, tracking: true } });
+  });
+
+  it('ошибка апстрима: 502 с текстом МТС, а не общий фолбэк', async () => {
+    const res = mockRes();
+    catalog.changeCallForwarding.mockRejectedValue(new MtsBusinessApiError('Услуга недоступна на тарифе', 400, '2005'));
+
+    await mtsBusinessSubscribersController.setForwarding(
+      mockReq({ accountId: ACCOUNT, msisdn: MSISDN, type: 'CFU', target: '79165551122', confirmed: true }),
+      res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(502);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ mtsMessage: 'Услуга недоступна на тарифе' }));
   });
 
   it('CFU без таймера — noReplyTimer не уходит в МТС', async () => {
@@ -147,7 +212,7 @@ describe('МТС Бизнес «Абоненты»: переадресация �
 
   it('снятие правила: action=delete, заявка forwarding_remove', async () => {
     const res = mockRes();
-    catalog.changeCallForwarding.mockResolvedValue({ eventId: 'EV-2' });
+    catalog.changeCallForwarding.mockResolvedValue({ outcome: 'queued', eventId: 'EV-2' });
 
     await mtsBusinessSubscribersController.deleteForwarding(
       mockReq({ accountId: ACCOUNT, msisdn: MSISDN, type: 'CFU', confirmed: true }),
@@ -155,12 +220,12 @@ describe('МТС Бизнес «Абоненты»: переадресация �
     );
 
     expect(catalog.changeCallForwarding).toHaveBeenCalledWith(ACCOUNT, MSISDN, 'delete', {
-      forwardingType: 'CFU', numType: 'Regular',
+      forwardingType: 'CFU',
     });
     expect(actions.create).toHaveBeenCalledWith(expect.objectContaining({
       eventId: 'EV-2', actionType: 'forwarding_remove',
     }));
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: { eventId: 'EV-2' } });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: { outcome: 'queued', eventId: 'EV-2', tracking: true } });
   });
 
   it('неизвестный тип правила (CFB вне MVP) → 400', async () => {

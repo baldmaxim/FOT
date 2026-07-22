@@ -40,6 +40,39 @@ export const resolveNoReplyTimer = (type: ForwardingType, timer?: number): numbe
 const isForwardingType = (v: unknown): v is ForwardingType =>
   typeof v === 'string' && (FORWARDING_TYPES as readonly string[]).includes(v);
 
+type ForwardingRuleLike = {
+  forwardingType?: string | null;
+  forwardingAddress?: string | null;
+};
+
+const sameType = (a: string | null | undefined, b: string): boolean =>
+  (a ?? '').trim().toUpperCase() === b.toUpperCase();
+
+/**
+ * Совпал ли фактический набор правил с тем, что мы просили. Нужен, когда МТС
+ * ответил 2xx без eventID: единственный способ узнать исход — перечитать
+ * правила и сверить.
+ *  - create: есть правило этого типа с адресом = нормализованный target;
+ *  - delete: нет АКТИВНОГО правила этого типа. Именно активного: МТС отдаёт
+ *    пустые правила-заглушки (см. pickActiveForwardingType), поэтому «строки
+ *    нет вообще» проверять нельзя — удаление так никогда не подтвердится.
+ * Тип сравниваем без учёта регистра, адрес — после normalizeMsisdn.
+ */
+export const matchesForwardingIntent = (
+  rules: ReadonlyArray<ForwardingRuleLike> | null | undefined,
+  action: 'create' | 'delete',
+  type: ForwardingType,
+  target?: string,
+): boolean => {
+  const list = Array.isArray(rules) ? rules : [];
+  if (action === 'delete') {
+    return !list.some(r => sameType(r.forwardingType, type) && Boolean(normalizeMsisdn(r.forwardingAddress ?? '')));
+  }
+  const wanted = normalizeMsisdn(target ?? '');
+  if (!wanted) return false;
+  return list.some(r => sameType(r.forwardingType, type) && normalizeMsisdn(r.forwardingAddress ?? '') === wanted);
+};
+
 /**
  * Активное правило = первое с поддерживаемым типом и непустым адресом
  * (МТС отдаёт и «пустые» правила-заглушки). Тип — для бейджа в списке абонентов.

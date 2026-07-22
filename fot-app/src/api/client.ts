@@ -117,6 +117,12 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     || path === '/leave-requests/department'
     || path === '/leave-requests'
     || path === '/leave-requests/pending-count'
+    // Переадресация МТС: после включения/снятия правила состояние обязано
+    // читаться с сервера. Иначе кэш 30 сек отдавал старое правило, юзер считал,
+    // что операция не прошла, и повторял внешнюю мутацию в МТС.
+    || path === '/my-sim/forwarding'
+    || path === '/mts-business/subscribers'
+    || /^\/mts-business\/subscribers\/[^/]+\/details$/.test(path)
     // API-ключи (админ-вкладка «API-доступ»): после отзыва/удаления список должен
     // обновиться сразу. Кэш max-age=30 держал старое тело — отозванный ключ менял
     // статус с задержкой, а удалённый пропадал только после перезагрузки страницы.

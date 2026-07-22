@@ -72,6 +72,20 @@ export type MtsForwardingType = (typeof MTS_FORWARDING_TYPES)[number];
 /** Таймер «нет ответа» по умолчанию, сек (только CFNRY). */
 export const MTS_DEFAULT_NO_REPLY_TIMER = 20;
 
+/**
+ * Исход мутации переадресации — один контракт для админки и ЛК «Моя SIM»:
+ *  - queued  — МТС принял заявку, статус доедет поллингом по eventId;
+ *  - applied — правило уже применено (контур применяет синхронно), ждать нечего;
+ *  - unknown — МТС ответил, но исход не подтверждён: повторять операцию НЕЛЬЗЯ,
+ *    нужно обновить состояние позже.
+ * tracking:false — в МТС применено, но локальная запись в портале не сохранилась.
+ */
+export interface IForwardingResult {
+  outcome: 'queued' | 'applied' | 'unknown';
+  eventId: string | null;
+  tracking: boolean;
+}
+
 export const isMtsForwardingType = (v: string | null | undefined): v is MtsForwardingType =>
   v != null && (MTS_FORWARDING_TYPES as readonly string[]).includes(v);
 
