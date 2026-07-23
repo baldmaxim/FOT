@@ -332,9 +332,22 @@ export const isMandatoryWeekendSlotAvailable = (
   return usedCount < expected;
 };
 
-// isHolidaySaturday / isHolidayWeekend удалены вместе с квотой плановых суббот в
-// согласовании: они обслуживали только подсчёт занятых слотов квоты.
-// listNonHolidayWeekendDays вынесена в ../services/timesheet-weekend-days.util.js
+/**
+ * Праздничная календарная дата с точки зрения графика: mandatory_holidays всегда,
+ * обычные holidays — только если график их уважает (respects_holidays). Нужна, чтобы
+ * исключить праздничные субботы из кандидатов обязательного слота (праздничная суббота
+ * в квоту не входит). isHolidayWeekend/isHolidayOnWorkday-ветка в квоте НЕ используются:
+ * квота считается строго по субботам (dow=6).
+ * listNonHolidayWeekendDays вынесена в ../services/timesheet-weekend-days.util.js
+ */
+const isHolidaySaturday = (
+  iso: string,
+  schedule: { respects_holidays: boolean },
+  calendar: { holidays?: string[]; mandatory_holidays?: string[] } | null,
+): boolean => !!calendar && (
+  (calendar.mandatory_holidays?.includes(iso) ?? false)
+  || (schedule.respects_holidays && (calendar.holidays?.includes(iso) ?? false))
+);
 
 /**
  * Для каждого сотрудника — множества отработанных ISO-суббот и ISO-воскресений
@@ -462,6 +475,84 @@ async function loadAcceptedWeekendDaysForMonth(
 }
 
 /**
+ * Кандидаты обязательного субботнего слота: для каждого сотрудника — ДЕДУПЛИЦИРОВАННЫЙ
+ * Set ISO-суббот месяца, в которые он фактически работал. Используется резолвером и
+ * reapprove для определения «первой отработанной субботы» (usedBefore < expected).
+ *
+ * Отличия от loadAcceptedWeekendDaysForMonth (та осталась для нормы/недобора грида):
+ *  - включает pending (иначе накопившиеся pending не повысить при пересчёте);
+ *  - фильтрует нулевые часы (work с hours_override=0 = «не работал» → слот не занимает);
+ *  - без «первых N» slice — возвращает ВСЕ отработанные субботы, выбор N делает usedBefore;
+ *  - дедуп по дате (на одну субботу возможны несколько строк: composite unique key
+ *    employee_id+work_date+source_type+source_id).
+ *
+ * Источники (объединение): (1) корректировки work/remote в состоянии
+ * auto_approved/approved/pending с положительными/null часами; (2) СКУД-присутствие без
+ * корректировки — фактический выход без заявки тоже занимает слот. Праздничные субботы и
+ * не-субботы (dow≠6) исключаются.
+ */
+async function loadWorkedSaturdaysForQuota(
+  employeeIds: number[],
+  year: number,
+  mon: number,
+  schedulesMap: Map<number, IResolvedSchedule>,
+): Promise<Map<number, Set<string>>> {
+  const result = new Map<number, Set<string>>();
+  if (employeeIds.length === 0) return result;
+  const monthStr = String(mon).padStart(2, '0');
+  const lastDay = new Date(year, mon, 0).getDate();
+  const monthStart = `${year}-${monthStr}-01`;
+  const monthEnd = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+  const calendar = await loadCalendarMonth(year, mon);
+
+  const add = (empId: number, iso: string): void => {
+    const dateObj = new Date(`${iso}T00:00:00`);
+    if (dateObj.getDay() !== 6) return; // только субботы
+    const sched = schedulesMap.get(empId);
+    if (sched && isHolidaySaturday(iso, sched, calendar)) return; // праздничная суббота не в квоте
+    let set = result.get(empId);
+    if (!set) {
+      set = new Set<string>();
+      result.set(empId, set);
+    }
+    set.add(iso);
+  };
+
+  // (1) Корректировки work/remote — учитываются даже pending; нулевые часы исключены.
+  const adjRows = await query<{ employee_id: number | string; work_date: string }>(
+    `SELECT employee_id, work_date FROM attendance_adjustments
+       WHERE employee_id = ANY($1::int[])
+         AND work_date >= $2 AND work_date <= $3
+         AND status IN ('work', 'remote')
+         AND approval_status IN ('auto_approved', 'approved', 'pending')
+         AND (hours_override IS NULL OR hours_override > 0)`,
+    [employeeIds, monthStart, monthEnd],
+  );
+  for (const row of adjRows) {
+    add(Number(row.employee_id), String(row.work_date).slice(0, 10));
+  }
+
+  // (2) СКУД-присутствие без корректировки — фактический выход без заявки тоже занимает слот.
+  const skudRows = await query<{ employee_id: number | string; date: string }>(
+    `SELECT sds.employee_id, sds.date
+       FROM skud_daily_summary sds
+      WHERE sds.employee_id = ANY($1::int[])
+        AND sds.date >= $2 AND sds.date <= $3
+        AND sds.is_present = true
+        AND NOT EXISTS (
+          SELECT 1 FROM attendance_adjustments aa
+           WHERE aa.employee_id = sds.employee_id AND aa.work_date = sds.date
+        )`,
+    [employeeIds, monthStart, monthEnd],
+  );
+  for (const row of skudRows) {
+    add(Number(row.employee_id), String(row.date).slice(0, 10));
+  }
+
+  return result;
+}
+
+/**
  * Есть ли за (employee, date) согласованный выход в выходной — материализованная заявка
  * «работа в выходной» (status='work') в состоянии approved/auto_approved. Признак того,
  * что корректировку «Удалёнка» можно зачесть сразу и не блокировать гардом нормы.
@@ -527,12 +618,24 @@ export async function resolveAdjustmentApprovalStatus(
   const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
   if (isWorkingDay(schedule, dateObj, monthCalendar)) return 'auto_approved';
 
-  // Квоты плановых суббот (expected_saturdays_per_month) здесь БОЛЬШЕ НЕТ.
-  // На плановую субботу заявление не подают: раз выход в субботу вообще попал в табель,
-  // значит для сотрудника она не плановая — и решает ответственный за выходные.
-  // expected_saturdays_per_month продолжает работать в timesheet-mandatory-weekend.service
-  // (computeMandatoryExemptions) — там он освобождает плановую субботу от служебной записки.
-  // Это осознанное расхождение: служебка не нужна, а согласование — нужно.
+  // Обязательная суббота по count-модели графика (expected_saturdays_per_month): первая
+  // фактически ОТРАБОТАННАЯ (не календарная) непраздничная суббота месяца в пределах квоты
+  // → auto_approved (согласование не требуется). Вторая и последующие → pending к
+  // ответственному за выходные. Только work/remote (явно, не !== 'manual', чтобы будущий
+  // статус случайно не попал в квоту): manual/объектные правки в выходной остаются pending —
+  // обход самосогласования не переоткрываем. usedBefore = отработанные субботы месяца строго
+  // РАНЕЕ этой даты (кандидаты включают pending и СКУД-присутствие; дедуп по дате).
+  if ((status === 'work' || status === 'remote') && dateObj.getDay() === 6
+      && (schedule.expected_saturdays_per_month ?? 0) > 0) {
+    const worked = await loadWorkedSaturdaysForQuota(
+      [employeeId], dateObj.getFullYear(), dateObj.getMonth() + 1,
+      new Map([[employeeId, schedule]]),
+    ).then(m => m.get(employeeId) ?? new Set<string>());
+    const usedBefore = [...worked].filter(d => d < workDate).length;
+    if (isMandatoryWeekendSlotAvailable(schedule, workDate, dateObj, monthCalendar, usedBefore, 6)) {
+      return 'auto_approved';
+    }
+  }
 
   // Корректировка «удалённая работа» поверх уже согласованного выхода в выходной:
   // если за этот день есть одобренная заявка «работа в выходной» (ответственный
@@ -545,15 +648,16 @@ export async function resolveAdjustmentApprovalStatus(
 }
 
 /**
- * Массовое переопределение approval_status по ТЕКУЩЕМУ графику для диапазона.
- * Пересчитываем только строки в состоянии 'auto_approved'/'pending' — решения
- * руководителя ('approved'/'rejected') не трогаем. Возвращает число изменённых.
+ * Расчёт переходов approval_status по ТЕКУЩЕМУ графику для диапазона БЕЗ записи в БД.
+ * Учитываются только строки в состоянии 'auto_approved'/'pending' — решения руководителя
+ * ('approved'/'rejected') не пересчитываются. Возвращает список изменений { id, from, to }.
+ * Общий расчёт для reapproveAdjustmentsForRange (apply) и dry-run бэкфилла — одна логика.
  */
-export async function reapproveAdjustmentsForRange(
+export async function computeReapprovalTransitions(
   employeeIds: number[] | null,
   startDate: string,
   endDate: string,
-): Promise<number> {
+): Promise<Array<{ id: number; from: string; to: 'auto_approved' | 'pending' }>> {
   const params: unknown[] = [startDate, endDate];
   let sql = `SELECT id, employee_id, work_date::text AS work_date, status, hours_override,
                     approval_status, created_by
@@ -573,7 +677,7 @@ export async function reapproveAdjustmentsForRange(
     approval_status: string;
     created_by: string | null;
   }>(sql, params);
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) return [];
 
   // Автор-табельщица: её правки применяются сразу (зеркалит authorIsTimekeeper в
   // resolveAdjustmentApprovalStatus). У reapprove нет req, поэтому роль автора берём
@@ -630,9 +734,25 @@ export async function reapproveAdjustmentsForRange(
     return calendarCache.get(key) ?? null;
   };
 
-  // Квоты плановых суббот здесь БОЛЬШЕ НЕТ — зеркалит resolveAdjustmentApprovalStatus.
-  // См. комментарий там: раз выход в субботу попал в табель, она для сотрудника не
-  // плановая, и решает ответственный за выходные.
+  // Кандидаты обязательного субботнего слота — кэш по (сотрудник, месяц), грузится на
+  // весь месяц один раз (зеркалит квоту resolveAdjustmentApprovalStatus). Набор строится
+  // из ИСХОДНОГО состояния БД до апдейтов, поэтому при пересчёте пары pending первая (по
+  // дате) станет auto, вторая останется pending.
+  const workedSatCache = new Map<string, Set<string>>();
+  const getWorkedSaturdays = async (
+    empId: number,
+    dateObj: Date,
+    schedule: IResolvedSchedule,
+  ): Promise<Set<string>> => {
+    const y = dateObj.getFullYear();
+    const m = dateObj.getMonth() + 1;
+    const key = `${empId}:${y}-${m}`;
+    if (!workedSatCache.has(key)) {
+      const map = await loadWorkedSaturdaysForQuota([empId], y, m, new Map([[empId, schedule]]));
+      workedSatCache.set(key, map.get(empId) ?? new Set<string>());
+    }
+    return workedSatCache.get(key)!;
+  };
 
   const rowKey = (empId: number, workDate: string): string => `${empId}_${workDate}`;
   const isPositiveHours = (hours: number | null): boolean => hours === null || hours > 0;
@@ -681,6 +801,17 @@ export async function reapproveAdjustmentsForRange(
     const dateObj = new Date(`${workDate}T00:00:00`);
     const calendar = await getCalendar(dateObj);
     if (isWorkingDay(schedule, dateObj, calendar)) return 'auto_approved';
+
+    // Обязательная суббота count-модели: первая отработанная непраздничная суббота месяца
+    // (usedBefore < expected) → auto; вторая+ → pending. Только work/remote (manual уже
+    // отсечён гардами выше по статусу/часам).
+    if ((status === 'work' || status === 'remote') && dateObj.getDay() === 6
+        && (schedule.expected_saturdays_per_month ?? 0) > 0) {
+      const worked = await getWorkedSaturdays(empId, dateObj, schedule);
+      const usedBefore = [...worked].filter(d => d < workDate).length;
+      return isMandatoryWeekendSlotAvailable(schedule, workDate, dateObj, calendar, usedBefore, 6)
+        ? 'auto_approved' : 'pending';
+    }
     return 'pending';
   };
 
@@ -688,9 +819,11 @@ export async function reapproveAdjustmentsForRange(
   // множество согласованных выходов. Затем множество пересобирается, и только после
   // этого считается remote — иначе work, ставший pending в этом же проходе, продолжал бы
   // «разрешать» свою remote (она осталась бы auto_approved).
-  const toUpdate: Array<{ id: number; status: 'auto_approved' | 'pending' }> = [];
+  const transitions: Array<{ id: number; from: string; to: 'auto_approved' | 'pending' }> = [];
   const pushIfChanged = (row: Row, target: 'auto_approved' | 'pending'): void => {
-    if (target !== row.approval_status) toUpdate.push({ id: Number(row.id), status: target });
+    if (target !== row.approval_status) {
+      transitions.push({ id: Number(row.id), from: row.approval_status, to: target });
+    }
   };
 
   const remoteRows: Row[] = [];
@@ -718,15 +851,30 @@ export async function reapproveAdjustmentsForRange(
     pushIfChanged(row, await computeTarget(row));
   }
 
-  if (toUpdate.length === 0) return 0;
+  return transitions;
+}
+
+/**
+ * Массовое переопределение approval_status по ТЕКУЩЕМУ графику для диапазона.
+ * Считает переходы через computeReapprovalTransitions (общий расчёт с dry-run) и применяет
+ * их одним UPDATE. Решения руководителя ('approved'/'rejected') не трогает.
+ * Возвращает число изменённых строк.
+ */
+export async function reapproveAdjustmentsForRange(
+  employeeIds: number[] | null,
+  startDate: string,
+  endDate: string,
+): Promise<number> {
+  const transitions = await computeReapprovalTransitions(employeeIds, startDate, endDate);
+  if (transitions.length === 0) return 0;
   await execute(
     `UPDATE attendance_adjustments AS a
         SET approval_status = v.st, updated_at = NOW()
        FROM (SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::text[]) AS st) v
       WHERE a.id = v.id AND a.approval_status <> v.st`,
-    [toUpdate.map(u => u.id), toUpdate.map(u => u.status)],
+    [transitions.map(t => t.id), transitions.map(t => t.to)],
   );
-  return toUpdate.length;
+  return transitions.length;
 }
 
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
