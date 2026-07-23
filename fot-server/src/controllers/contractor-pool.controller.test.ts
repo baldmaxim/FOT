@@ -12,12 +12,19 @@ const h = vi.hoisted(() => ({
   getPoolMatrix: vi.fn(),
   assignPoolPassesToContractor: vi.fn(),
   logFromRequest: vi.fn(),
+  getContractorRootId: vi.fn(),
 }));
 
 vi.mock('../services/data-scope.service.js', () => ({ resolveCompanyScope: h.resolveCompanyScope }));
 vi.mock('../services/access-control.service.js', () => ({
   hasPageView: h.hasPageView,
   hasPageEdit: h.hasPageEdit,
+}));
+// Мокаем config/contractor.js: гейт зовёт getContractorRootId, сам контроллер —
+// isContractorSigurDryRun. Без этого гейт компанийного админа пошёл бы в реальную БД.
+vi.mock('../config/contractor.js', () => ({
+  getContractorRootId: h.getContractorRootId,
+  isContractorSigurDryRun: () => false,
 }));
 vi.mock('../services/contractor-pool.service.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/contractor-pool.service.js')>()),
@@ -93,8 +100,25 @@ describe('contractorPoolController — доступ по гранту стран
     expect(h.assignPoolPassesToContractor).toHaveBeenCalled();
   });
 
-  it('компанийный админ: 403 на matrix', async () => {
-    h.resolveCompanyScope.mockResolvedValue({ roots: ['root-1'] });
+  it('компанийный админ корня подрядчиков: matrix и assign проходят', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['contractor-root'] });
+    h.getContractorRootId.mockResolvedValue('contractor-root');
+    const adminReq = () => ({ ...(makeReq() as object), user: { id: 'a-1', role_code: 'admin', is_admin: true } }) as never;
+
+    const matrixRes = makeRes();
+    await contractorPoolController.matrix(adminReq(), matrixRes as never);
+    expect(matrixRes.statusCode).toBe(200);
+    expect(h.getPoolMatrix).toHaveBeenCalled();
+
+    const assignRes = makeRes();
+    await contractorPoolController.assign(adminReq(), assignRes as never);
+    expect(assignRes.statusCode).toBe(200);
+    expect(h.assignPoolPassesToContractor).toHaveBeenCalled();
+  });
+
+  it('компанийный админ другого корня: 403 на matrix', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['su10-root'] });
+    h.getContractorRootId.mockResolvedValue('contractor-root');
     h.hasPageView.mockResolvedValue(true);
     const req = { ...(makeReq() as object), user: { id: 'a-1', role_code: 'admin', is_admin: true } } as never;
 

@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   insertDismissalHistory: vi.fn(),
   loadLifecycle: vi.fn(),
   empCacheInvalidate: vi.fn(),
+  getContractorRootId: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -47,7 +48,7 @@ vi.mock('../services/audit.service.js', () => ({
 }));
 vi.mock('../config/contractor.js', () => ({
   isContractorSigurDryRun: h.isDryRun,
-  getContractorRootId: vi.fn(),
+  getContractorRootId: h.getContractorRootId,
   CONTRACTOR_ROOT_NAME: 'подрядные организации',
 }));
 vi.mock('../services/sigur.service.js', () => ({ sigurService: { getBackgroundConnectionType: h.bgConn } }));
@@ -1172,9 +1173,18 @@ describe('contractorAdminController — доступ по гранту стра�
     expect(monitorRes.statusCode).toBe(403);
   });
 
-  it('компанийный админ: 403 даже при гранте роли', async () => {
-    h.resolveCompanyScope.mockResolvedValue({ roots: ['root-1'] });
-    grantKeys([SECTION, SUBMISSIONS, OTITB]);
+  it('компанийный админ корня подрядчиков: monitorPasses отдаёт данные', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['contractor-root'] });
+    h.getContractorRootId.mockResolvedValue('contractor-root');
+    const res = makeRes();
+    await contractorAdminController.monitorPasses(makeAccessReq(true, 'admin'), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ success: true });
+  });
+
+  it('компанийный админ другого корня: 403', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['su10-root'] });
+    h.getContractorRootId.mockResolvedValue('contractor-root');
     const res = makeRes();
     await contractorAdminController.monitorPasses(makeAccessReq(true, 'admin'), res as never);
     expect(res.statusCode).toBe(403);

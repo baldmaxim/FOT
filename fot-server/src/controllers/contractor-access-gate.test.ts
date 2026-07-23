@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   resolveCompanyScope: vi.fn(),
   hasPageView: vi.fn(),
   hasPageEdit: vi.fn(),
+  getContractorRootId: vi.fn(),
 }));
 
 vi.mock('../services/data-scope.service.js', () => ({ resolveCompanyScope: h.resolveCompanyScope }));
@@ -11,6 +12,9 @@ vi.mock('../services/access-control.service.js', () => ({
   hasPageView: h.hasPageView,
   hasPageEdit: h.hasPageEdit,
 }));
+vi.mock('../config/contractor.js', () => ({ getContractorRootId: h.getContractorRootId }));
+
+const CONTRACTOR_ROOT = 'contractor-root';
 
 import {
   CONTRACTOR_SECTION_PAGE_KEY,
@@ -69,6 +73,8 @@ describe('contractor-access-gate', () => {
     });
     expect(h.hasPageView).not.toHaveBeenCalled();
     expect(h.hasPageEdit).not.toHaveBeenCalled();
+    // roots==='all' возвращает раньше — корень подрядчиков не запрашивается.
+    expect(h.getContractorRootId).not.toHaveBeenCalled();
   });
 
   it('роль с основным грантом (security) проходит все три гейта на view и edit', async () => {
@@ -80,6 +86,8 @@ describe('contractor-access-gate', () => {
     expect(await runAll(makeReq(false), 'edit')).toEqual({
       section: true, submissions: true, otitb: true,
     });
+    // Не-админ уходит в else-ветку — корень подрядчиков не запрашивается.
+    expect(h.getContractorRootId).not.toHaveBeenCalled();
   });
 
   it('грант только на /submissions открывает лишь вкладку заявок', async () => {
@@ -106,9 +114,42 @@ describe('contractor-access-gate', () => {
     });
   });
 
-  it('компанийный админ не проходит даже при гранте роли', async () => {
-    h.resolveCompanyScope.mockResolvedValue({ roots: ['root-1'] });
+  it('компанийный админ корня подрядчиков проходит все три гейта (view и edit)', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: [CONTRACTOR_ROOT] });
+    h.getContractorRootId.mockResolvedValue(CONTRACTOR_ROOT);
+    expect(await runAll(makeReq(true, 'admin'), 'view')).toEqual({
+      section: true, submissions: true, otitb: true,
+    });
+    expect(await runAll(makeReq(true, 'admin'), 'edit')).toEqual({
+      section: true, submissions: true, otitb: true,
+    });
+    // Доступ по скоупу, а не по гранту роли.
+    expect(h.hasPageView).not.toHaveBeenCalled();
+    expect(h.hasPageEdit).not.toHaveBeenCalled();
+  });
+
+  it('компанийный админ, чей скоуп содержит корень подрядчиков среди нескольких, проходит', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['su10-root', CONTRACTOR_ROOT] });
+    h.getContractorRootId.mockResolvedValue(CONTRACTOR_ROOT);
+    expect(await runAll(makeReq(true, 'admin'))).toEqual({
+      section: true, submissions: true, otitb: true,
+    });
+  });
+
+  it('компанийный админ другого корня не проходит даже при гранте роли', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['su10-root'] });
+    h.getContractorRootId.mockResolvedValue(CONTRACTOR_ROOT);
     grantKeys([CONTRACTOR_SECTION_PAGE_KEY, SUBMISSIONS_PAGE_KEY, OTITB_PAGE_KEY]);
+    expect(await runAll(makeReq(true, 'admin'))).toEqual({
+      section: false, submissions: false, otitb: false,
+    });
+    // Для is_admin гранты роли не проверяются.
+    expect(h.hasPageView).not.toHaveBeenCalled();
+  });
+
+  it('корень подрядчиков не синхронизирован (getContractorRootId → null): 403', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: ['su10-root'] });
+    h.getContractorRootId.mockResolvedValue(null);
     expect(await runAll(makeReq(true, 'admin'))).toEqual({
       section: false, submissions: false, otitb: false,
     });
