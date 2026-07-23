@@ -3264,22 +3264,39 @@ export const timesheetController = {
         return res.status(400).json({ success: false, error: 'Диапазон не должен превышать 62 дня' });
       }
 
+      // «Обновить» скоупится на ОТКРЫТЫЙ отдел (department_id из тела). Иначе под админом
+      // (scope='all' / все управляемые корни) пересчёт уходил на ВСЮ компанию — Шаг A
+      // рекалькулировал десятки тысяч СКУД-сводок → БД-таймаут/500, до Шага B (reapprove)
+      // дело не доходило. Зеркалит скоуп listCorrections: менеджеру — только его managed-отдел
+      // (гард managedIds.includes), админу — любой запрошенный отдел.
+      const requestedDepartmentId = typeof req.body?.department_id === 'string' && req.body.department_id
+        ? req.body.department_id
+        : null;
       let employeeIds: number[] = [];
+      let scopedToDepartment = false;
       if (scope === 'department') {
         const managedIds = await resolveManagedDepartmentIds(req);
+        const departmentIds = requestedDepartmentId && managedIds.includes(requestedDepartmentId)
+          ? [requestedDepartmentId]
+          : managedIds;
         const ids = new Set<number>();
-        for (const deptId of managedIds) {
+        for (const deptId of departmentIds) {
           const list = await listEmployeeIdsAssignedToDepartmentPeriod(deptId, startDate, endDate);
           for (const id of list) ids.add(id);
         }
         employeeIds = [...ids];
-        if (employeeIds.length === 0) {
-          await auditService.logFromRequest(req, req.user.id, 'TIMESHEET_REFRESH', {
-            entityType: 'timesheet',
-            details: { start_date: startDate, end_date: endDate, recalculated_summaries: 0, reapproved: 0, legacy_cleared: 0, conflicts_count: 0 },
-          });
-          return res.json({ success: true, data: { recalculated_summaries: 0, reapproved: 0, conflicts: [] } });
-        }
+        scopedToDepartment = true;
+      } else if (requestedDepartmentId) {
+        // scope='all' (админ): сузить пересчёт до открытого отдела, доступ к нему у админа есть.
+        employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(requestedDepartmentId, startDate, endDate);
+        scopedToDepartment = true;
+      }
+      if (scopedToDepartment && employeeIds.length === 0) {
+        await auditService.logFromRequest(req, req.user.id, 'TIMESHEET_REFRESH', {
+          entityType: 'timesheet',
+          details: { start_date: startDate, end_date: endDate, recalculated_summaries: 0, reapproved: 0, legacy_cleared: 0, conflicts_count: 0 },
+        });
+        return res.json({ success: true, data: { recalculated_summaries: 0, reapproved: 0, conflicts: [] } });
       }
       const empFilter: number[] | null = employeeIds.length > 0 ? employeeIds : null;
 

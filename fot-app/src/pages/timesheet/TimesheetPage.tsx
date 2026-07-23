@@ -1504,7 +1504,12 @@ export const TimesheetPage: FC = () => {
 
     try {
       const result = await timesheetService.refresh(
-        { start_date: rangeStart, end_date: rangeEnd },
+        {
+          start_date: rangeStart,
+          end_date: rangeEnd,
+          // Скоуп пересчёта = открытый отдел, иначе под админом сервер гонит всю компанию → таймаут.
+          department_id: (activeGridDeptId && !isDirectReportsMarker) ? activeGridDeptId : undefined,
+        },
         { signal: controller.signal },
       );
       setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });

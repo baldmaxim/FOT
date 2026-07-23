@@ -271,7 +271,7 @@ export const timesheetService = {
   },
 
   async refresh(
-    payload: { start_date: string; end_date: string },
+    payload: { start_date: string; end_date: string; department_id?: string },
     options?: ITimesheetRefreshOptions,
   ): Promise<ITimesheetRefreshResult> {
     const res = await apiClient.post<ApiResponse<ITimesheetRefreshResult>>(
