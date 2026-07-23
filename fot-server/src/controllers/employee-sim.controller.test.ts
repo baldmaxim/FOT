@@ -390,6 +390,20 @@ describe('employeeSimController — переадресация', () => {
     expect(metrics.upsertSnapshot).not.toHaveBeenCalled();
   });
 
+  it('setMyForwarding: 421/3003 (Foris) → 503 с подсказкой про услугу «Переадресация вызова»', async () => {
+    mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
+    mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);
+    catalog.changeCallForwarding.mockRejectedValueOnce(new MtsBusinessApiError('Сервис Foris временно недоступен', 421, '3003'));
+    const res = mockRes();
+
+    await employeeSimController.setMyForwarding(mockReqBody(42, { msisdn: OWN, type: 'CFU', target: '79161234567' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      mtsMessage: expect.stringContaining('Переадресация вызова'),
+    }));
+  });
+
   it('setMyForwarding: ошибка МТС отдаётся сотруднику текстом оператора (502 + mtsMessage)', async () => {
     mapping.getMsisdnsByEmployeeId.mockResolvedValueOnce([OWN]);
     mapping.getSubscriberContext.mockResolvedValueOnce({ accountId: 'acc-1' } as never);

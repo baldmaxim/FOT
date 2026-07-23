@@ -17,7 +17,7 @@ import {
   validateForwardingTarget,
   resolveNoReplyTimer,
 } from '../services/mts-forwarding.shared.js';
-import { persistForwardingResult, sendForwardingResult } from '../services/mts-forwarding-persist.service.js';
+import { persistForwardingResult, sendForwardingResult, failForwardingUpstream } from '../services/mts-forwarding-persist.service.js';
 
 // ЛК сотрудника: «Моя SIM» + «Телефонная книга». Номер резолвится ТОЛЬКО из
 // req.user.employee_id (msisdn в параметрах не принимается) — сотрудник видит
@@ -265,6 +265,7 @@ export const employeeSimController = {
       });
       sendForwardingResult(res, result, tracking);
     } catch (error) {
+      if (failForwardingUpstream(res, error, 'Не удалось включить переадресацию')) return;
       fail(res, error, 'Ошибка включения переадресации');
     }
   },
@@ -298,6 +299,7 @@ export const employeeSimController = {
       });
       sendForwardingResult(res, result, tracking);
     } catch (error) {
+      if (failForwardingUpstream(res, error, 'Не удалось отключить переадресацию')) return;
       fail(res, error, 'Ошибка отключения переадресации');
     }
   },

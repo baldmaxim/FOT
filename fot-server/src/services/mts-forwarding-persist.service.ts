@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import * as Sentry from '@sentry/node';
 import { mtsBusinessActionsService } from './mts-business-actions.service.js';
 import { mtsBusinessMetricsStoreService } from './mts-business-metrics-store.service.js';
+import { MtsBusinessApiError, isFeatureUnavailable, isTransientMtsError } from './mts-business-base.service.js';
 import type { ForwardingChangeResult } from './mts-business-catalog.service.js';
 
 // Локальная постобработка мутации переадресации — общая для админки
@@ -57,6 +58,38 @@ export const persistForwardingResult = async (input: IForwardingPersistInput): P
     Sentry.captureException(error, { tags: { module: 'mts-business', kind: 'forwarding-persist' } });
     return { tracking: false };
   }
+};
+
+// Разобрано живьём 22.07.2026 (7915***501): 421/3003 «Сервис Foris временно
+// недоступен» на переадресации означал не сбой МТС, а отсутствие услуги на
+// номере — в журнале заявок CallForwardingInfo пришло
+// foris_error_code=CallForwardingServiceNotExists «На приложении обслуживания
+// отсутствует услуга "Переадресация вызова"». После подключения этой услуги
+// (каталог «Подключить услугу» в карточке номера) тот же вызов прошёл.
+const NOT_CONNECTED_HINT = 'Проверьте, подключена ли на номере услуга «Переадресация вызова» — её можно подключить в карточке номера («Подключённые услуги» → «+»).';
+
+/**
+ * Ответ на «не наши» отказы МТС по переадресации: показываем причину и не шумим
+ * в Sentry (это не баг портала). Возвращает true, если ответ уже отправлен.
+ */
+export const failForwardingUpstream = (res: Response, error: unknown, fallback: string): boolean => {
+  if (isFeatureUnavailable(error)) {
+    console.warn('[mts-forwarding] 403/1010 — функция не входит в подписку МТС');
+    res.status(409).json({ success: false, error: fallback, mtsHttp: 403, mtsMessage: NOT_CONNECTED_HINT });
+    return true;
+  }
+  if (isTransientMtsError(error)) {
+    const e = error as MtsBusinessApiError;
+    console.warn('[mts-forwarding] 421/3003 — Foris не принял запрос по переадресации');
+    res.status(503).json({
+      success: false,
+      error: fallback,
+      mtsHttp: e.status,
+      mtsMessage: `${e.message}. ${NOT_CONNECTED_HINT}`,
+    });
+    return true;
+  }
+  return false;
 };
 
 /**

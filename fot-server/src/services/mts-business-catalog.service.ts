@@ -347,16 +347,41 @@ export const parseAvailableTariffs = (resp: unknown): IMtsAvailableTariff[] => {
   return out;
 };
 
-const parseForwarding = (resp: unknown): IMtsForwardingRule[] => {
+/** Значение из productCharacteristic: [{name,value}] без учёта регистра имени. */
+const charValue = (node: Record<string, unknown>, name: string): string | null => {
+  const chars = Array.isArray(node.productCharacteristic) ? (node.productCharacteristic as Record<string, unknown>[]) : [];
+  const hit = chars.find(c => (asString(c.name) ?? '').toLowerCase() === name.toLowerCase());
+  return hit ? asString(hit.value) : null;
+};
+
+/**
+ * Правила переадресации. Контракт снят живым дампом 22.07.2026 (7915***501):
+ *   [{ relatedParty: [{ type:'Party', characteristic:[{name:'MSISDN',…}] }],
+ *      productCharacteristic: [{name:'ForwardingAddress',value:'790…'},
+ *                              {name:'ForwardingType',value:'CFU'},
+ *                              {name:'NoReplyTimer',value:'0'},
+ *                              {name:'NumType',value:'Regular'}] }]
+ * Правило приходит парами name/value, а не полями forwardingType/…— прежний
+ * парсер возвращал [] на живом ответе, и портал всегда показывал «переадресация
+ * не настроена». Заодно ответ может содержать журнал заявок (узлы `type:'Party'`
+ * со статусами Completed/Faulted) — они без productCharacteristic и отсеиваются;
+ * поэтому `r.type` в качестве типа правила больше НЕ читаем (давал «Party»).
+ */
+export const parseForwarding = (resp: unknown): IMtsForwardingRule[] => {
   const items = Array.isArray(resp)
     ? (resp as Record<string, unknown>[])
-    : [...collectByMarker(resp, 'forwardingType'), ...collectByMarker(resp, 'ForwardingType'), ...collectByMarker(resp, 'forwardingAddress')];
+    : [
+      ...collectByMarker(resp, 'productCharacteristic'),
+      ...collectByMarker(resp, 'forwardingType'),
+      ...collectByMarker(resp, 'ForwardingType'),
+      ...collectByMarker(resp, 'forwardingAddress'),
+    ];
   const seen = new Set<string>();
   const out: IMtsForwardingRule[] = [];
   for (const raw of items) {
     const r = raw as Record<string, unknown>;
-    const forwardingType = asString(r.forwardingType ?? r.ForwardingType ?? r.type);
-    const forwardingAddress = asString(r.forwardingAddress ?? r.ForwardingAddress ?? r.address);
+    const forwardingType = asString(r.forwardingType ?? r.ForwardingType) ?? charValue(r, 'ForwardingType');
+    const forwardingAddress = asString(r.forwardingAddress ?? r.ForwardingAddress) ?? charValue(r, 'ForwardingAddress');
     if (!forwardingType && !forwardingAddress) continue;
     const key = `${forwardingType ?? ''}|${forwardingAddress ?? ''}`;
     if (seen.has(key)) continue;
@@ -364,8 +389,8 @@ const parseForwarding = (resp: unknown): IMtsForwardingRule[] => {
     out.push({
       forwardingType,
       forwardingAddress,
-      noReplyTimer: toNumber(r.noReplyTimer ?? r.NoReplyTimer),
-      numType: asString(r.numType ?? r.NumType),
+      noReplyTimer: toNumber(r.noReplyTimer ?? r.NoReplyTimer ?? charValue(r, 'NoReplyTimer')),
+      numType: asString(r.numType ?? r.NumType) ?? charValue(r, 'NumType'),
       status: asString(r.status),
     });
   }

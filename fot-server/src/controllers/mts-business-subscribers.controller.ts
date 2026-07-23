@@ -18,7 +18,7 @@ import {
   validateForwardingTarget,
   resolveNoReplyTimer,
 } from '../services/mts-forwarding.shared.js';
-import { persistForwardingResult, sendForwardingResult } from '../services/mts-forwarding-persist.service.js';
+import { persistForwardingResult, sendForwardingResult, failForwardingUpstream } from '../services/mts-forwarding-persist.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 
 // Вкладка «Абоненты»: список/детали из БД, точечный полный синк одного номера,
@@ -324,6 +324,7 @@ export const mtsBusinessSubscribersController = {
       });
       sendForwardingResult(res, result, tracking);
     } catch (error) {
+      if (failForwardingUpstream(res, error, 'Не удалось включить переадресацию')) return;
       fail(res, error, 'Ошибка включения переадресации');
     }
   },
@@ -352,6 +353,7 @@ export const mtsBusinessSubscribersController = {
       });
       sendForwardingResult(res, result, tracking);
     } catch (error) {
+      if (failForwardingUpstream(res, error, 'Не удалось отключить переадресацию')) return;
       fail(res, error, 'Ошибка отключения переадресации');
     }
   },
