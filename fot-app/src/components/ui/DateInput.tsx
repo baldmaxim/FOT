@@ -6,6 +6,9 @@ interface IDateInputProps {
   value: string; // YYYY-MM-DD или ''
   onChange: (value: string) => void;
   className?: string;
+  /** Блокирует ввод, календарь и скрытый date-input (например, на время сохранения). */
+  disabled?: boolean;
+  onBlur?: () => void;
 }
 
 const PLACEHOLDER = '_';
@@ -61,7 +64,7 @@ const computeIso = (digits: (string | null)[]): string | null => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
-export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) => {
+export const DateInput: FC<IDateInputProps> = ({ value, onChange, className, disabled = false, onBlur }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const hiddenRef = useRef<HTMLInputElement>(null);
   const [digits, setDigits] = useState<(string | null)[]>(() => parse(value));
@@ -237,6 +240,7 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
   };
 
   const openPicker = () => {
+    if (disabled) return;
     const node = hiddenRef.current;
     if (!node) return;
     type WithShowPicker = HTMLInputElement & { showPicker?: () => void };
@@ -268,6 +272,8 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
         onClick={handleClick}
         onSelect={handleSelect}
         onPaste={handlePaste}
+        onBlur={onBlur}
+        disabled={disabled}
         spellCheck={false}
         autoComplete="off"
         aria-label="Дата"
@@ -276,6 +282,7 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
         type="button"
         className="date-input-calendar-btn"
         onClick={openPicker}
+        disabled={disabled}
         aria-label="Открыть календарь"
         tabIndex={-1}
       >
@@ -287,6 +294,7 @@ export const DateInput: FC<IDateInputProps> = ({ value, onChange, className }) =
         className="date-input-calendar-hidden"
         value={value || ''}
         onChange={handleHiddenChange}
+        disabled={disabled}
         tabIndex={-1}
         aria-hidden="true"
       />

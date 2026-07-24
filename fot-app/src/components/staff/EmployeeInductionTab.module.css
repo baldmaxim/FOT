@@ -1,0 +1,218 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.search {
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+
+.select {
+  height: 36px;
+  min-width: 220px;
+  max-width: 100%;
+  padding: 0 10px;
+  font-size: 16px; /* < 16px даёт авто-зум на iOS/Android */
+  color: var(--text-primary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.segBtn {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segBtnActive {
+  color: #fff;
+  background: var(--primary);
+}
+
+.counter {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.table th,
+.table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.num {
+  width: 56px;
+  color: var(--text-secondary);
+}
+
+.dateCell {
+  width: 210px;
+}
+
+.dateBox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clearBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.clearBtn:hover:not(:disabled) {
+  color: var(--danger, #dc2626);
+  border-color: var(--danger, #dc2626);
+}
+
+.clearBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dateText {
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--text-secondary);
+}
+
+.empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.pagerBtn {
+  min-height: 36px;
+  min-width: 44px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pagerBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pagerInfo {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .filters {
+    gap: 6px;
+  }
+
+  .counter {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .table th,
+  .table td {
+    padding: 8px;
+  }
+}
+
+@media (max-width: 430px) {
+  .search,
+  .select {
+    flex: 1 1 100%;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .segBtn {
+    min-height: 36px;
+    padding: 4px 8px;
+  }
+
+  .table {
+    min-width: 560px; /* горизонтальный скролл внутри .tableWrap, не у страницы */
+  }
+}

@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
+import { employeeInductionController } from '../controllers/employee-induction.controller.js';
 import { employeeObjectAttributionController } from '../controllers/employee-object-attribution.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
 import { employeeSalaryEnrichController } from '../controllers/employee-enrich-salary.controller.js';
@@ -122,6 +123,27 @@ router.get(
   '/counts',
   requirePageAccess('/staff-control', 'view'),
   employeesController.getCounts
+);
+
+// Вводный инструктаж (вкладка «Управление кадрами → Вводный инструктаж»).
+// Статические пути объявлены до '/:id', чтобы не быть перехваченными параметром.
+// Чтение — всем, у кого есть «Управление кадрами» либо технический ключ вкладки (ОТиТБ);
+// запись — только по ключу вкладки: роли с edit на /staff-control (напр. security)
+// даты инструктажа не правят. Область данных сужается скоупом в самом сервисе.
+router.get(
+  '/induction/departments',
+  requireAnyPageAccess(['/staff-control', '/staff-control/induction'], 'view'),
+  employeeInductionController.departments
+);
+router.get(
+  '/induction',
+  requireAnyPageAccess(['/staff-control', '/staff-control/induction'], 'view'),
+  employeeInductionController.list
+);
+router.patch(
+  '/:id/induction',
+  requirePageAccess('/staff-control/induction', 'edit'),
+  employeeInductionController.setDate
 );
 
 // GET /api/employees/:id/history - история событий сотрудника (worker+, для полной карточки требуется /employees)

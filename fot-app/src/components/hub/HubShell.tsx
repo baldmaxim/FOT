@@ -6,7 +6,8 @@ import styles from './HubShell.module.css';
 export interface IHubTab {
   key: string;
   label: string;
-  accessPath: string;
+  /** Ключ доступа. Массив — вкладка видна при наличии ЛЮБОГО из ключей. */
+  accessPath: string | string[];
   icon?: FC<{ size?: number }>;
   render: () => ReactNode;
 }
@@ -28,7 +29,11 @@ export const HubShell: FC<IHubShellProps> = ({ tabs, defaultTab, persistInUrl = 
   const [searchParams, setSearchParams] = useSearchParams();
 
   const visibleTabs = useMemo(
-    () => tabs.filter(tab => canViewPage(tab.accessPath)),
+    () => tabs.filter(tab => (
+      Array.isArray(tab.accessPath)
+        ? tab.accessPath.some(path => canViewPage(path))
+        : canViewPage(tab.accessPath)
+    )),
     [tabs, canViewPage],
   );
 
