@@ -43,6 +43,9 @@ export const MissingPatentReceiptsModal: FC<IProps> = ({ onClose }) => {
     queryKey: ['missing-patent', from, to],
     queryFn: () => patentReceiptService.listMissing(from, to),
     enabled: valid,
+    // Глобально refetchOnMount: false — иначе список не увидит смену гражданства
+    // в карточке сотрудника, пока не истечёт gcTime.
+    refetchOnMount: 'always',
   });
 
   const rows = data?.data ?? [];

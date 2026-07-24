@@ -66,7 +66,7 @@ const fullEmployeeSchema = z.object({
   salary_actual: z.number().min(0).max(999999999).nullable().optional(),
   salary_calculated: z.number().min(0).max(999999999).nullable().optional(),
   staff_units: z.number().min(0).max(1).nullable().optional(),
-  country: z.string().max(100).nullable().optional(),
+  country: z.string().trim().max(100).nullable().optional(),
   pension_number: z.string().max(50).nullable().optional(),
   patent_issue_date: z.string().regex(ISO_DATE_REGEX).nullable().optional(),
   patent_expiry_date: z.string().regex(ISO_DATE_REGEX).nullable().optional(),
@@ -885,7 +885,10 @@ export const employeesController = {
           sigurPayload.tabId = validated.tab_number?.trim() || null;
         }
 
-        if (Object.keys(sigurPayload).length > 0) {
+        // Правка только локальных полей (гражданство, даты, документы) не должна
+        // трогать Sigur: ни записи имени, ни обратного синка отдела/должности.
+        const touchesSigur = Object.keys(sigurPayload).length > 0;
+        if (touchesSigur) {
           await sigurService.updateEmployee(existing.sigur_employee_id, sigurPayload);
         }
 
@@ -953,7 +956,10 @@ export const employeesController = {
           }
         }
 
-        await syncLinkedEmployeeFromSigur(employeeId);
+        if (touchesSigur) {
+          // Редактирование карточки — не перевод: ручной override отдела не снимаем.
+          await syncLinkedEmployeeFromSigur(employeeId, undefined, { clearDepartmentLock: false });
+        }
 
         employeeCache.invalidate(id);
         const refreshed = await queryOne<EmployeeEncrypted>(

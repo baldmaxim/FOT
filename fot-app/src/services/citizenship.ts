@@ -40,3 +40,25 @@ const PATENT_SET = new Set(
 /** Нужен ли патент гражданину с данным гражданством (регистронезависимо). */
 export const citizenshipRequiresPatent = (v: string | null | undefined): boolean =>
   !!v && PATENT_SET.has(v.trim().toUpperCase());
+
+/**
+ * Гражданства сотрудников (`employees.country`). Формат — UPPER, как в 1С-выгрузке,
+ * которой заполняется поле при импорте документов. Патентные страны должны совпадать
+ * с PATENT_COUNTRY_PREFIXES (fot-server/src/services/patent-missing-receipts.service.ts).
+ * Отдельный список от CITIZENSHIP_OPTIONS: там подрядные пропуска и другой регистр.
+ */
+export const EMPLOYEE_COUNTRY_OPTIONS: string[] = [
+  'РОССИЯ',
+  'БЕЛАРУСЬ',
+  'КАЗАХСТАН',
+  'АРМЕНИЯ',
+  'КИРГИЗИЯ',
+  'УЗБЕКИСТАН',
+  'ТАДЖИКИСТАН',
+  'УКРАИНА',
+  'АЗЕРБАЙДЖАН',
+  'МОЛДОВА',
+  'ТУРКМЕНИСТАН',
+  'ТУРЦИЯ',
+  'СЕРБИЯ',
+];

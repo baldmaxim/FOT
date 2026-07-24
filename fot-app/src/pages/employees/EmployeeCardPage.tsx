@@ -36,6 +36,12 @@ const formatHireDate = (date: string) => {
   return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
+/** Пустая строка и пробелы → null: иначе diff формы считает '' и null разными. */
+const nullableText = (value: string | null | undefined): string | null => value?.trim() || null;
+
+/** Дата в формате колонки БД (YYYY-MM-DD) — бэкенд валидирует по ISO_DATE_REGEX. */
+const dateOnly = (value: string | null | undefined): string | null => value?.slice(0, 10) || null;
+
 const MONTH_LABELS_GEN = [
   'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
   'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
@@ -368,6 +374,7 @@ export const EmployeeCardPage: FC = () => {
       full_name: employee.full_name,
       hire_date: employee.hire_date,
       work_object: employee.work_object,
+      country: employee.country ?? undefined,
       ...(isSigurLinked ? {} : {
         birth_date: employee.birth_date || undefined,
         current_salary: employee.current_salary,
@@ -380,9 +387,41 @@ export const EmployeeCardPage: FC = () => {
   const saveEditing = async () => {
     if (!employee) return;
     try {
-      const payload = employee.sigur_employee_id != null
-        ? { full_name: editData.full_name || '', work_object: editData.work_object ?? null, hire_date: editData.hire_date }
-        : editData;
+      // Шлём только реально изменённые поля: любой full_name/tab_number в теле
+      // заставляет бэкенд писать в Sigur и пересинхронизировать карточку.
+      const payload: Partial<EmployeeInput> = {};
+      const fullName = (editData.full_name ?? '').trim();
+      if (fullName !== (employee.full_name ?? '').trim()) {
+        payload.full_name = fullName;
+      }
+      if (nullableText(editData.work_object) !== nullableText(employee.work_object)) {
+        payload.work_object = nullableText(editData.work_object);
+      }
+      const hireDate = dateOnly(editData.hire_date);
+      if (hireDate && hireDate !== dateOnly(employee.hire_date)) {
+        payload.hire_date = hireDate;
+      }
+      if (nullableText(editData.country) !== nullableText(employee.country)) {
+        payload.country = nullableText(editData.country);
+      }
+      if (employee.sigur_employee_id == null) {
+        const birthDate = dateOnly(editData.birth_date);
+        if (birthDate !== dateOnly(employee.birth_date)) {
+          payload.birth_date = birthDate;
+        }
+        if ((editData.current_salary ?? null) !== (employee.current_salary ?? null)) {
+          payload.current_salary = editData.current_salary ?? null;
+        }
+        if (nullableText(editData.org_department_id) !== nullableText(employee.org_department_id)) {
+          payload.org_department_id = nullableText(editData.org_department_id);
+        }
+      }
+
+      if (Object.keys(payload).length === 0) {
+        setIsEditing(false);
+        return;
+      }
+
       await employeeService.update(employee.id, payload);
       setIsEditing(false);
       reloadEmployee();

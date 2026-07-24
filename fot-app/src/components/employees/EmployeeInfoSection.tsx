@@ -2,6 +2,7 @@ import { type FC } from 'react';
 import { X, Check } from 'lucide-react';
 import type { Employee, EmployeeInput } from '../../types';
 import type { IWorkObjectOption } from '../../services/employeeService';
+import { EMPLOYEE_COUNTRY_OPTIONS } from '../../services/citizenship';
 
 interface IEmployeeInfoSectionProps {
   employee: Employee;
@@ -55,6 +56,8 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
   if (isEditing) {
     const currentObject = editData.work_object ?? '';
     const currentObjectInList = !currentObject || workObjectOptions.some(o => o.name === currentObject);
+    const currentCountry = editData.country ?? '';
+    const currentCountryInList = !currentCountry || EMPLOYEE_COUNTRY_OPTIONS.includes(currentCountry);
     return (
       <div className="card-edit-form">
         <div className="edit-grid">
@@ -93,10 +96,25 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
               onChange={e => onEditDataChange({ ...editData, hire_date: e.target.value || undefined })}
             />
           </div>
+          <div className="form-group">
+            <label>Гражданство</label>
+            <select
+              value={currentCountry}
+              onChange={e => onEditDataChange({ ...editData, country: e.target.value || null })}
+            >
+              <option value="">—</option>
+              {!currentCountryInList && (
+                <option value={currentCountry}>{currentCountry}</option>
+              )}
+              {EMPLOYEE_COUNTRY_OPTIONS.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
           {isSigurLinked ? (
             <div className="form-group">
               <label>Режим редактирования</label>
-              <span className="form-readonly">Для связанных с Sigur сотрудников в этой версии можно менять ФИО, Объект и Дату найма.</span>
+              <span className="form-readonly">Для связанных с Sigur сотрудников в этой версии можно менять ФИО, Объект, Дату найма и Гражданство.</span>
             </div>
           ) : (
             <div className="form-group">
@@ -136,12 +154,10 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
             <span className="ec-info-val">{formatDate(employee.birth_date)}</span>
           </div>
         )}
-        {employee.country && (
-          <div className="ec-info-row">
-            <span className="ec-info-label">Гражданство</span>
-            <span className="ec-info-val">{employee.country}</span>
-          </div>
-        )}
+        <div className="ec-info-row">
+          <span className="ec-info-label">Гражданство</span>
+          <span className="ec-info-val">{employee.country || '—'}</span>
+        </div>
         {employee.pension_number && (
           <div className="ec-info-row">
             <span className="ec-info-label">СНИЛС</span>
