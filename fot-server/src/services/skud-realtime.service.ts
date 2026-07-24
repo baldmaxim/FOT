@@ -4,7 +4,8 @@ import { invalidateDashboardCache } from './skud-dashboard.service.js';
 import { invalidatePresenceCache, rewarmPresenceAll } from './skud-presence.service.js';
 import { invalidatePresenceByObjectCache, rewarmPresenceByObjectAll } from './skud-presence-by-object.service.js';
 
-export type SkudRealtimeSource = 'polling' | 'manual_sync' | 'employee_sync' | 'daily_sync' | 'timesheet_refresh';
+export type SkudRealtimeSource = 'polling' | 'manual_sync' | 'employee_sync' | 'daily_sync' | 'timesheet_refresh'
+  | 'timesheet_quota_reapproval';
 
 export interface ISkudRealtimeNotification {
   source: SkudRealtimeSource;

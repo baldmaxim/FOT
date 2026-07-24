@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { query, queryOne } from '../config/postgres.js';
+import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   resolveAccessibleDepartmentIds,
@@ -10,10 +10,28 @@ import { listDirectSubordinates } from '../services/employee-direct-reports.serv
 import { resolveResponsibleEmployeeIdsForRows } from '../services/approval-routing.service.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import { correctionApprovalSettingsService } from '../services/correction-approval-settings.service.js';
-import { reapproveAdjustmentsForRange } from './timesheet.controller.js';
+import {
+  reapproveAdjustmentsForRange,
+  reapproveEmployeeMonthTail,
+  reportQuotaTailTransitions,
+  withEmployeeMonthQuotaLock,
+  withQuotaLocks,
+  type IReapprovalTransition,
+} from './timesheet.controller.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 import { listRecentSkudObjectNamesByEmployee } from '../services/employee-skud-object-access.service.js';
+
+/**
+ * SELECT через клиент транзакции, если он передан, иначе через пул. Решения согласующего
+ * пишутся под advisory-lock квоты — там все запросы обязаны идти по одному соединению.
+ */
+async function queryWith<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
 
 async function emitCorrectionChanged(params: {
   employeeIds: number[];
@@ -449,16 +467,30 @@ async function changeAdjustmentApproval(
     return;
   }
 
+  // Решение согласующего меняет занятость субботней квоты: pending → rejected освобождает
+  // слот, → approved его занимает. Пишем и пересчитываем хвост месяца под общим локом.
   const now = new Date().toISOString();
-  const updatedRows = await query<{ id: number }>(
-    `UPDATE attendance_adjustments SET
-       approval_status = $1,
-       approved_by = $2,
-       approved_at = $3,
-       approval_comment = $4
-     WHERE id = $5 AND approval_status = 'pending'
-     RETURNING id`,
-    [nextStatus, req.user.id, now, comment, adjustmentId],
+  const { updatedRows, tail } = await withEmployeeMonthQuotaLock(
+    adj.employee_id,
+    adj.work_date,
+    async exec => {
+      const rows = await queryWith<{ id: number }>(
+        exec,
+        `UPDATE attendance_adjustments SET
+           approval_status = $1,
+           approved_by = $2,
+           approved_at = $3,
+           approval_comment = $4
+         WHERE id = $5 AND approval_status = 'pending'
+         RETURNING id`,
+        [nextStatus, req.user.id, now, comment, adjustmentId],
+      );
+      if (rows.length === 0) return { updatedRows: rows, tail: [] as IReapprovalTransition[] };
+      return {
+        updatedRows: rows,
+        tail: await reapproveEmployeeMonthTail(adj.employee_id, adj.work_date, exec),
+      };
+    },
   );
 
   if (updatedRows.length === 0) {
@@ -470,6 +502,7 @@ async function changeAdjustmentApproval(
     return;
   }
 
+  await reportQuotaTailTransitions(req, tail, 'correction_approval_decision');
   await syncWorkLeaveRequestsForAdjustmentIds([adjustmentId], req.user.id, nextStatus === 'rejected' ? comment : null);
 
   await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
@@ -580,21 +613,38 @@ async function bulkChangeByIds(
     return;
   }
 
+  // Массовое решение меняет занятость квоты у нескольких (сотрудник, месяц) — берём их
+  // локи в детерминированном порядке (см. withQuotaLocks) и пересчитываем хвосты месяцев.
   const now = new Date().toISOString();
-  const updated = await query<{ id: number }>(
-    `UPDATE attendance_adjustments SET
-       approval_status = $1,
-       approved_by = $2,
-       approved_at = $3,
-       approval_comment = $4
-     WHERE id = ANY($5::bigint[]) AND approval_status = 'pending'
-     RETURNING id`,
-    [nextStatus, req.user.id, now, comment, allowedIds],
-  );
+  const lockPairs = pending
+    .filter(a => allowedIds.includes(Number(a.id)))
+    .map(a => ({ employeeId: Number(a.employee_id), workDate: String(a.work_date) }));
+  const { updated, tail } = await withQuotaLocks(lockPairs, async exec => {
+    const rows = await queryWith<{ id: number }>(
+      exec,
+      `UPDATE attendance_adjustments SET
+         approval_status = $1,
+         approved_by = $2,
+         approved_at = $3,
+         approval_comment = $4
+       WHERE id = ANY($5::bigint[]) AND approval_status = 'pending'
+       RETURNING id`,
+      [nextStatus, req.user.id, now, comment, allowedIds],
+    );
+    const transitions: IReapprovalTransition[] = [];
+    if (rows.length > 0) {
+      const months = new Map(lockPairs.map(p => [`${p.employeeId}:${p.workDate.slice(0, 7)}`, p]));
+      for (const pair of months.values()) {
+        transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
+      }
+    }
+    return { updated: rows, tail: transitions };
+  });
 
   const processedCount = updated.length;
   const processedIds = updated.map((r) => Number(r.id));
 
+  await reportQuotaTailTransitions(req, tail, 'correction_approval_bulk');
   if (processedIds.length > 0) {
     await syncWorkLeaveRequestsForAdjustmentIds(processedIds, req.user.id, nextStatus === 'rejected' ? comment : null);
   }
@@ -710,20 +760,36 @@ async function bulkRevertByIdsImpl(
     return;
   }
 
-  const updated = await query<{ id: number }>(
-    `UPDATE attendance_adjustments SET
-       approval_status = 'pending',
-       approved_by = NULL,
-       approved_at = NULL,
-       approval_comment = NULL
-     WHERE id = ANY($1::bigint[]) AND approval_status = ANY($2::text[])
-     RETURNING id`,
-    [allowedIds, ['approved', 'rejected']],
-  );
+  // Откат в pending снова занимает субботний слот — под локом с пересчётом хвостов месяцев.
+  const revertPairs = revertable
+    .filter(a => allowedIds.includes(Number(a.id)))
+    .map(a => ({ employeeId: Number(a.employee_id), workDate: String(a.work_date) }));
+  const { updated, tail } = await withQuotaLocks(revertPairs, async exec => {
+    const rows = await queryWith<{ id: number }>(
+      exec,
+      `UPDATE attendance_adjustments SET
+         approval_status = 'pending',
+         approved_by = NULL,
+         approved_at = NULL,
+         approval_comment = NULL
+       WHERE id = ANY($1::bigint[]) AND approval_status = ANY($2::text[])
+       RETURNING id`,
+      [allowedIds, ['approved', 'rejected']],
+    );
+    const transitions: IReapprovalTransition[] = [];
+    if (rows.length > 0) {
+      const months = new Map(revertPairs.map(p => [`${p.employeeId}:${p.workDate.slice(0, 7)}`, p]));
+      for (const pair of months.values()) {
+        transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
+      }
+    }
+    return { updated: rows, tail: transitions };
+  });
 
   const processedCount = updated.length;
   const processedIds = updated.map((r) => Number(r.id));
 
+  await reportQuotaTailTransitions(req, tail, 'correction_approval_bulk_revert');
   if (processedIds.length > 0) {
     await syncWorkLeaveRequestsForAdjustmentIds(processedIds, req.user.id, null);
   }
@@ -817,22 +883,39 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
     );
     const allowedIds = candidates.filter(a => allowedSet.has(Number(a.id))).map(a => Number(a.id));
 
+    // Согласование отдела занимает субботние слоты у многих сотрудников — берём их локи
+    // в детерминированном порядке и пересчитываем хвосты затронутых месяцев.
     const now = new Date().toISOString();
-    const updated = allowedIds.length > 0
-      ? await query<{ id: number }>(
-        `UPDATE attendance_adjustments SET
-           approval_status = 'approved',
-           approved_by = $1,
-           approved_at = $2,
-           approval_comment = NULL
-         WHERE id = ANY($3::bigint[])
-           AND approval_status = 'pending'
-         RETURNING id`,
-        [req.user.id, now, allowedIds],
-      )
-      : [];
+    const approvePairs = candidates
+      .filter(a => allowedIds.includes(Number(a.id)))
+      .map(a => ({ employeeId: Number(a.employee_id), workDate: String(a.work_date) }));
+    const { updated, tail } = allowedIds.length > 0
+      ? await withQuotaLocks(approvePairs, async exec => {
+        const rows = await queryWith<{ id: number }>(
+          exec,
+          `UPDATE attendance_adjustments SET
+             approval_status = 'approved',
+             approved_by = $1,
+             approved_at = $2,
+             approval_comment = NULL
+           WHERE id = ANY($3::bigint[])
+             AND approval_status = 'pending'
+           RETURNING id`,
+          [req.user.id, now, allowedIds],
+        );
+        const transitions: IReapprovalTransition[] = [];
+        if (rows.length > 0) {
+          const months = new Map(approvePairs.map(p => [`${p.employeeId}:${p.workDate.slice(0, 7)}`, p]));
+          for (const pair of months.values()) {
+            transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
+          }
+        }
+        return { updated: rows, tail: transitions };
+      })
+      : { updated: [] as Array<{ id: number }>, tail: [] as IReapprovalTransition[] };
 
     const approvedIds = updated.map((r) => Number(r.id));
+    await reportQuotaTailTransitions(req, tail, 'correction_approval_department');
     if (approvedIds.length > 0) {
       await syncWorkLeaveRequestsForAdjustmentIds(approvedIds, req.user.id, null);
     }
@@ -1359,16 +1442,29 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
       return;
     }
 
+    // Откат снова занимает субботний слот — под локом с пересчётом хвоста месяца.
     const prevStatus = adj.approval_status;
-    const updatedRows = await query<{ id: number }>(
-      `UPDATE attendance_adjustments SET
-         approval_status = 'pending',
-         approved_by = NULL,
-         approved_at = NULL,
-         approval_comment = NULL
-       WHERE id = $1 AND approval_status = ANY($2::text[])
-       RETURNING id`,
-      [id, ['approved', 'rejected']],
+    const { updatedRows, tail } = await withEmployeeMonthQuotaLock(
+      adj.employee_id,
+      adj.work_date,
+      async exec => {
+        const rows = await queryWith<{ id: number }>(
+          exec,
+          `UPDATE attendance_adjustments SET
+             approval_status = 'pending',
+             approved_by = NULL,
+             approved_at = NULL,
+             approval_comment = NULL
+           WHERE id = $1 AND approval_status = ANY($2::text[])
+           RETURNING id`,
+          [id, ['approved', 'rejected']],
+        );
+        if (rows.length === 0) return { updatedRows: rows, tail: [] as IReapprovalTransition[] };
+        return {
+          updatedRows: rows,
+          tail: await reapproveEmployeeMonthTail(adj.employee_id, adj.work_date, exec),
+        };
+      },
     );
 
     if (updatedRows.length === 0) {
@@ -1379,6 +1475,7 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
       });
       return;
     }
+    await reportQuotaTailTransitions(req, tail, 'correction_approval_revert');
 
     await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.UPDATE_TIMESHEET_ENTRY, {
       entityType: 'attendance_adjustment',
@@ -1459,7 +1556,7 @@ const saveSettings = async (req: AuthenticatedRequest, res: Response): Promise<v
       const employeeIds = empRows.map(r => Number(r.id));
       if (employeeIds.length > 0) {
         const { start, end } = settingsRecomputeWindow();
-        recomputed = await reapproveAdjustmentsForRange(employeeIds, start, end);
+        recomputed = (await reapproveAdjustmentsForRange(employeeIds, start, end)).length;
       }
     }
 

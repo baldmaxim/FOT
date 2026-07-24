@@ -1,13 +1,12 @@
-import { query, queryOne } from '../config/postgres.js';
-import type { Pool, PoolClient } from 'pg';
+import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
 
 /**
  * Исполнитель SQL: клиент транзакции (withTransaction). Если не передан —
- * upsert/supersede ходят через module-level query/queryOne (пул). Позволяет
- * вызывать их как самостоятельно, так и внутри транзакции вызывающего кода.
+ * запросы идут через module-level query/queryOne (пул). Тип живёт в
+ * config/postgres.ts; здесь ре-экспорт для существующих импортов.
  */
-export type DbExecutor = Pool | PoolClient;
+export type { DbExecutor };
 
 /** SELECT-many: через tx-клиент, если передан, иначе через пул (mockable query). */
 async function sqlRows<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
@@ -1457,8 +1456,9 @@ export async function deleteAttendanceAdjustmentBySource(input: {
   work_date: string;
   source_type: string;
   source_id: string;
-}): Promise<number[]> {
-  const rows = await query<{ id: number | string }>(
+}, exec?: DbExecutor): Promise<number[]> {
+  const rows = await sqlRows<{ id: number | string }>(
+    exec,
     `DELETE FROM attendance_adjustments
        WHERE employee_id = $1
          AND work_date = $2
@@ -1470,9 +1470,14 @@ export async function deleteAttendanceAdjustmentBySource(input: {
   return rows.map(row => Number(row.id));
 }
 
-export async function getAttendanceAdjustmentById(id: number): Promise<Record<string, unknown> | null> {
-  return queryOne<Record<string, unknown>>(
-    `SELECT * FROM attendance_adjustments WHERE id = $1 LIMIT 1`,
+export async function getAttendanceAdjustmentById(
+  id: number,
+  exec?: DbExecutor,
+  forUpdate = false,
+): Promise<Record<string, unknown> | null> {
+  return sqlOne<Record<string, unknown>>(
+    exec,
+    `SELECT * FROM attendance_adjustments WHERE id = $1 LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`,
     [id],
   );
 }
@@ -1484,6 +1489,7 @@ export async function updateAttendanceAdjustmentById(
     updated_by?: string | null;
     approval_status?: AdjustmentApprovalStatus;
   },
+  exec?: DbExecutor,
 ): Promise<Record<string, unknown> | null> {
   const updates: Record<string, unknown> = {
     ...(patch.status ? { status: patch.status } : {}),
@@ -1504,7 +1510,8 @@ export async function updateAttendanceAdjustmentById(
 
   const keys = Object.keys(updates);
   if (keys.length === 0) {
-    return queryOne<Record<string, unknown>>(
+    return sqlOne<Record<string, unknown>>(
+      exec,
       `SELECT * FROM attendance_adjustments WHERE id = $1 LIMIT 1`,
       [id],
     );
@@ -1513,7 +1520,8 @@ export async function updateAttendanceAdjustmentById(
   const values = keys.map((k) => updates[k]);
   values.push(id);
 
-  return queryOne<Record<string, unknown>>(
+  return sqlOne<Record<string, unknown>>(
+    exec,
     `UPDATE attendance_adjustments
        SET ${setClauses}
        WHERE id = $${values.length}
@@ -1522,8 +1530,9 @@ export async function updateAttendanceAdjustmentById(
   );
 }
 
-export async function deleteAttendanceAdjustmentById(id: number): Promise<boolean> {
-  const deleted = await queryOne<{ id: number }>(
+export async function deleteAttendanceAdjustmentById(id: number, exec?: DbExecutor): Promise<boolean> {
+  const deleted = await sqlOne<{ id: number }>(
+    exec,
     `DELETE FROM attendance_adjustments WHERE id = $1 RETURNING id`,
     [id],
   );

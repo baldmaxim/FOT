@@ -59,6 +59,11 @@ const { resolveApprovalMock } = vi.hoisted(() => ({
 }));
 vi.mock('./timesheet.controller.js', () => ({
   resolveAdjustmentApprovalStatus: resolveApprovalMock,
+  // Материализация берёт advisory-лок квоты (employee, YYYYMM) на tx-клиенте.
+  quotaLockKeys: (employeeId: number, workDate: string) => {
+    const [y, m] = workDate.split('-');
+    return [employeeId, Number(`${y}${m}`)];
+  },
 }));
 
 const { weekendResponsibleMock } = vi.hoisted(() => ({

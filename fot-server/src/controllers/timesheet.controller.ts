@@ -1,9 +1,11 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { query, execute, withTransaction } from '../config/postgres.js';
+import type { PoolClient, QueryResultRow } from 'pg';
+import { query, execute, withTransaction, type DbExecutor } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import type {
   AuthenticatedRequest,
+  IProductionCalendarMonth,
   IResolvedSchedule,
   TimeStatus,
   TimesheetApprovalStatus,
@@ -85,6 +87,26 @@ import {
   monthAccessFromUser,
   DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
 } from '../utils/timesheet-month-access.js';
+
+/**
+ * SELECT через клиент транзакции, если он передан, иначе через пул. Под advisory-lock
+ * все чтения и записи обязаны идти по ОДНОМУ соединению: иначе транзакция не видит
+ * собственную незакоммиченную запись, а лишние соединения занимают пул.
+ */
+async function queryWith<T extends QueryResultRow = QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
+
+/** INSERT/UPDATE/DELETE через exec, если передан, иначе через пул (см. queryWith). */
+async function executeWith(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<number> {
+  if (exec) return (await exec.query(sql, params as unknown[] | undefined)).rowCount ?? 0;
+  return execute(sql, params);
+}
 
 const validStatuses = ['work', 'manual', 'vacation', 'remote', 'unpaid', 'absent', 'sick', 'educational_leave', 'sick_worked', 'study_day'] as const satisfies readonly [TimeStatus, ...TimeStatus[]];
 
@@ -486,16 +508,23 @@ async function loadAcceptedWeekendDaysForMonth(
  *  - дедуп по дате (на одну субботу возможны несколько строк: composite unique key
  *    employee_id+work_date+source_type+source_id).
  *
- * Источники (объединение): (1) корректировки work/remote в состоянии
- * auto_approved/approved/pending с положительными/null часами; (2) СКУД-присутствие без
- * корректировки — фактический выход без заявки тоже занимает слот. Праздничные субботы и
- * не-субботы (dow≠6) исключаются.
+ * Источники (объединение): (1) корректировки work/remote/manual в состоянии
+ * auto_approved/approved/pending; для work/remote часы null допустимы («придут из СКУД»),
+ * для manual нужны строго положительные — объектная правка занимает слот наравне с
+ * заявкой; (2) СКУД-присутствие без корректировки — фактический выход без заявки тоже
+ * занимает слот. Праздничные субботы и не-субботы (dow≠6) исключаются.
+ *
+ * Календарь месяца передаётся аргументом: функция вызывается под advisory-lock через
+ * транзакционный exec, и собственная загрузка календаря при промахе кэша ушла бы мимо
+ * транзакционного клиента (лишнее соединение пула).
  */
 async function loadWorkedSaturdaysForQuota(
   employeeIds: number[],
   year: number,
   mon: number,
   schedulesMap: Map<number, IResolvedSchedule>,
+  calendar: IProductionCalendarMonth | null,
+  exec?: DbExecutor,
 ): Promise<Map<number, Set<string>>> {
   const result = new Map<number, Set<string>>();
   if (employeeIds.length === 0) return result;
@@ -503,7 +532,6 @@ async function loadWorkedSaturdaysForQuota(
   const lastDay = new Date(year, mon, 0).getDate();
   const monthStart = `${year}-${monthStr}-01`;
   const monthEnd = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
-  const calendar = await loadCalendarMonth(year, mon);
 
   const add = (empId: number, iso: string): void => {
     const dateObj = new Date(`${iso}T00:00:00`);
@@ -518,14 +546,19 @@ async function loadWorkedSaturdaysForQuota(
     set.add(iso);
   };
 
-  // (1) Корректировки work/remote — учитываются даже pending; нулевые часы исключены.
-  const adjRows = await query<{ employee_id: number | string; work_date: string }>(
+  // (1) Корректировки work/remote/manual — учитываются даже pending. У work/remote null
+  // часов = «часы придут из СКУД», у manual null недоказуем и слот не занимает.
+  const adjRows = await queryWith<{ employee_id: number | string; work_date: string }>(
+    exec,
     `SELECT employee_id, work_date FROM attendance_adjustments
        WHERE employee_id = ANY($1::int[])
          AND work_date >= $2 AND work_date <= $3
-         AND status IN ('work', 'remote')
          AND approval_status IN ('auto_approved', 'approved', 'pending')
-         AND (hours_override IS NULL OR hours_override > 0)`,
+         AND (
+           (status IN ('work', 'remote') AND (hours_override IS NULL OR hours_override > 0))
+           OR
+           (status = 'manual' AND hours_override > 0)
+         )`,
     [employeeIds, monthStart, monthEnd],
   );
   for (const row of adjRows) {
@@ -533,7 +566,8 @@ async function loadWorkedSaturdaysForQuota(
   }
 
   // (2) СКУД-присутствие без корректировки — фактический выход без заявки тоже занимает слот.
-  const skudRows = await query<{ employee_id: number | string; date: string }>(
+  const skudRows = await queryWith<{ employee_id: number | string; date: string }>(
+    exec,
     `SELECT sds.employee_id, sds.date
        FROM skud_daily_summary sds
       WHERE sds.employee_id = ANY($1::int[])
@@ -555,38 +589,69 @@ async function loadWorkedSaturdaysForQuota(
 /**
  * Есть ли за (employee, date) согласованный выход в выходной — материализованная заявка
  * «работа в выходной» (status='work') в состоянии approved/auto_approved. Признак того,
- * что корректировку «Удалёнка» можно зачесть сразу и не блокировать гардом нормы.
+ * что корректировку «Удалёнка»/объектную правку можно зачесть сразу: ответственный уже
+ * согласовал сам факт выхода, второй раз согласовывать нечего.
+ *
+ * excludeAdjustmentId — строка, которую вызывающий прямо сейчас переписывает (UPSERT/UPDATE).
+ * Без исключения резолвер увидел бы её саму (в старой, ещё work-версии) как «основание» и
+ * ошибочно выдал auto_approved.
  */
-export async function hasApprovedWorkOnDate(employeeId: number, workDate: string): Promise<boolean> {
-  const rows = await query<{ id: number | string }>(
+export async function hasApprovedWorkOnDate(
+  employeeId: number,
+  workDate: string,
+  excludeAdjustmentId: number | null = null,
+  exec?: DbExecutor,
+): Promise<boolean> {
+  const rows = await queryWith<{ id: number | string }>(
+    exec,
     `SELECT id FROM attendance_adjustments
       WHERE employee_id = $1 AND work_date = $2 AND status = 'work'
         AND approval_status IN ('approved', 'auto_approved')
         AND (hours_override IS NULL OR hours_override > 0)
+        AND ($3::bigint IS NULL OR id <> $3::bigint)
       LIMIT 1`,
-    [employeeId, workDate],
+    [employeeId, workDate, excludeAdjustmentId],
   );
   return rows.length > 0;
 }
 
-export async function resolveAdjustmentApprovalStatus(
+/** Контекст квотной части резолвера: график и календарь уже загружены (см. precheck). */
+interface IApprovalQuotaContext {
+  employeeId: number;
+  workDate: string;
+  status: TimeStatus;
+  dateObj: Date;
+  schedule: IResolvedSchedule;
+  calendar: IProductionCalendarMonth | null;
+  excludeAdjustmentId: number | null;
+}
+
+/**
+ * Часть резолвера ВНЕ гонки: роль автора, часы, статус, whitelist отдела, график,
+ * календарь, рабочий ли день. Ничего из этого не зависит от параллельных записей,
+ * поэтому выполняется ДО захвата advisory-lock, по пулу.
+ *
+ * Возвращает либо готовый вердикт, либо контекст для квотной части.
+ */
+export async function resolveAdjustmentApprovalPrecheck(
   employeeId: number,
   workDate: string,
   status: TimeStatus,
   hoursOverride: number | null = null,
   authorIsTimekeeper: boolean = false,
-): Promise<'auto_approved' | 'pending'> {
+  excludeAdjustmentId: number | null = null,
+): Promise<{ resolved: 'auto_approved' | 'pending' } | { quota: IApprovalQuotaContext }> {
   // Корректировки табельщицы (полный менеджерский доступ) применяются сразу.
-  if (authorIsTimekeeper) return 'auto_approved';
+  if (authorIsTimekeeper) return { resolved: 'auto_approved' };
   // Правка руководителя с 0 часов = «не работал» — не требует согласования админом
-  if (hoursOverride !== null && Number(hoursOverride) === 0) return 'auto_approved';
-  if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return 'auto_approved';
+  if (hoursOverride !== null && Number(hoursOverride) === 0) return { resolved: 'auto_approved' };
+  if (!WORKED_STATUSES_FOR_APPROVAL.has(status)) return { resolved: 'auto_approved' };
   // Гард инварианта: manual всегда несёт явные часы (в проде 0 строк с null).
   // Если часов нет — «положительность» недоказуема, согласовывать нечего.
   // ВАЖНО: гард привязан строго к manual. У work/remote null означает «часы будут
   // посчитаны позже» (заявление на выходной подаётся заранее, часы придут из СКУД) —
   // такие строки обязаны дойти до ответственного, а не автосогласоваться.
-  if (status === 'manual' && hoursOverride === null) return 'auto_approved';
+  if (status === 'manual' && hoursOverride === null) return { resolved: 'auto_approved' };
 
   let employee: { id: number | string; org_department_id: string | null } | null = null;
   try {
@@ -597,14 +662,14 @@ export async function resolveAdjustmentApprovalStatus(
       [employeeId],
     ).then(rows => rows[0] ?? null);
   } catch {
-    return 'auto_approved';
+    return { resolved: 'auto_approved' };
   }
-  if (!employee) return 'auto_approved';
+  if (!employee) return { resolved: 'auto_approved' };
   // Согласование требуется только отделам из настройки (whitelist). Остальные
   // (в т.ч. бригады и новые отделы) — auto_approved без проверок графика.
   const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
   const employeeDeptId = employee.org_department_id ? String(employee.org_department_id) : null;
-  if (!employeeDeptId || !requiredDepartments.has(employeeDeptId)) return 'auto_approved';
+  if (!employeeDeptId || !requiredDepartments.has(employeeDeptId)) return { resolved: 'auto_approved' };
 
   const schedules = await resolveSchedulesForPeriod(
     [{ id: Number(employee.id) }],
@@ -612,35 +677,53 @@ export async function resolveAdjustmentApprovalStatus(
     workDate,
   );
   const schedule = schedules.get(employeeId)?.get(workDate);
-  if (!schedule) return 'auto_approved';
+  if (!schedule) return { resolved: 'auto_approved' };
 
   const dateObj = new Date(`${workDate}T00:00:00`);
   const monthCalendar = await loadCalendarMonth(dateObj.getFullYear(), dateObj.getMonth() + 1);
-  if (isWorkingDay(schedule, dateObj, monthCalendar)) return 'auto_approved';
+  if (isWorkingDay(schedule, dateObj, monthCalendar)) return { resolved: 'auto_approved' };
+
+  return {
+    quota: {
+      employeeId, workDate, status, dateObj, schedule, calendar: monthCalendar, excludeAdjustmentId,
+    },
+  };
+}
+
+/**
+ * Гоночная часть резолвера: занятость обязательного субботнего слота и наличие уже
+ * согласованного выхода за день. Оба чтения идут через exec — под advisory-lock это
+ * обязано быть то же соединение, что и последующая запись.
+ */
+export async function resolveAdjustmentApprovalQuota(
+  ctx: IApprovalQuotaContext,
+  exec?: DbExecutor,
+): Promise<'auto_approved' | 'pending'> {
+  const { employeeId, workDate, status, dateObj, schedule, calendar } = ctx;
 
   // Обязательная суббота по count-модели графика (expected_saturdays_per_month): первая
   // фактически ОТРАБОТАННАЯ (не календарная) непраздничная суббота месяца в пределах квоты
-  // → auto_approved (согласование не требуется). Вторая и последующие → pending к
-  // ответственному за выходные. Только work/remote (явно, не !== 'manual', чтобы будущий
-  // статус случайно не попал в квоту): manual/объектные правки в выходной остаются pending —
-  // обход самосогласования не переоткрываем. usedBefore = отработанные субботы месяца строго
+  // → auto_approved. Вторая и последующие → pending к ответственному за выходные.
+  // Учитываются все статусы согласования (work/remote/manual): решает ФАКТ отработанной
+  // субботы, а не способ ввода часов. usedBefore = отработанные субботы месяца строго
   // РАНЕЕ этой даты (кандидаты включают pending и СКУД-присутствие; дедуп по дате).
-  if ((status === 'work' || status === 'remote') && dateObj.getDay() === 6
+  if (WORKED_STATUSES_FOR_APPROVAL.has(status) && dateObj.getDay() === 6
       && (schedule.expected_saturdays_per_month ?? 0) > 0) {
     const worked = await loadWorkedSaturdaysForQuota(
       [employeeId], dateObj.getFullYear(), dateObj.getMonth() + 1,
-      new Map([[employeeId, schedule]]),
+      new Map([[employeeId, schedule]]), calendar, exec,
     ).then(m => m.get(employeeId) ?? new Set<string>());
     const usedBefore = [...worked].filter(d => d < workDate).length;
-    if (isMandatoryWeekendSlotAvailable(schedule, workDate, dateObj, monthCalendar, usedBefore, 6)) {
+    if (isMandatoryWeekendSlotAvailable(schedule, workDate, dateObj, calendar, usedBefore, 6)) {
       return 'auto_approved';
     }
   }
 
-  // Корректировка «удалённая работа» поверх уже согласованного выхода в выходной:
-  // если за этот день есть одобренная заявка «работа в выходной» (ответственный
-  // согласовал выход), отдельного согласования удалёнки не требуется — зачитываем сразу.
-  if (status === 'remote' && await hasApprovedWorkOnDate(employeeId, workDate)) {
+  // Удалёнка или объектная правка поверх уже согласованного выхода в выходной: если за
+  // этот день есть одобренная заявка «работа в выходной» (ответственный согласовал выход),
+  // отдельного согласования не требуется — зачитываем сразу.
+  if ((status === 'remote' || status === 'manual')
+      && await hasApprovedWorkOnDate(employeeId, workDate, ctx.excludeAdjustmentId, exec)) {
     return 'auto_approved';
   }
 
@@ -648,16 +731,116 @@ export async function resolveAdjustmentApprovalStatus(
 }
 
 /**
+ * Фасад: precheck + квота одним вызовом (для путей, которым не нужен транзакционный
+ * клиент). Под advisory-lock вызывать составляющие раздельно — precheck до захвата
+ * лока, quota внутри него с exec.
+ */
+export async function resolveAdjustmentApprovalStatus(
+  employeeId: number,
+  workDate: string,
+  status: TimeStatus,
+  hoursOverride: number | null = null,
+  authorIsTimekeeper: boolean = false,
+  excludeAdjustmentId: number | null = null,
+  exec?: DbExecutor,
+): Promise<'auto_approved' | 'pending'> {
+  const pre = await resolveAdjustmentApprovalPrecheck(
+    employeeId, workDate, status, hoursOverride, authorIsTimekeeper, excludeAdjustmentId,
+  );
+  if ('resolved' in pre) return pre.resolved;
+  return resolveAdjustmentApprovalQuota(pre.quota, exec);
+}
+
+/**
+ * ID корректировок, попадающих в уже поданный/утверждённый табель. Такие строки пересчёт
+ * не трогает: редактирование этих периодов уже закрыто (ensureNotLockedForScope), и
+ * переигрывать статусы задним числом нельзя.
+ *
+ * Принадлежность сотрудника подаче берём из СНИМКА состава (timesheet_approval_employees),
+ * а не из employees.org_department_id: снимок фиксирует, кто реально был подан, и потому
+ * корректен для переведённых сотрудников, поддеревьев и подач по родительскому отделу.
+ * Подачи без снимка (легаси, 8 из 697 на проде) добираем по членству отдела за период.
+ */
+async function loadLockedByApprovalPeriodIds(
+  rows: Array<{ id: number; employee_id: number; work_date: string }>,
+  exec?: DbExecutor,
+): Promise<Set<number>> {
+  const locked = new Set<number>();
+  if (rows.length === 0) return locked;
+
+  const ids = rows.map(r => r.id);
+  const snapshotRows = await queryWith<{ id: number | string }>(
+    exec,
+    `SELECT DISTINCT aa.id
+       FROM attendance_adjustments aa
+       JOIN timesheet_approval_employees tae ON tae.employee_id = aa.employee_id
+       JOIN timesheet_approvals ta ON ta.id = tae.approval_id
+      WHERE aa.id = ANY($1::bigint[])
+        AND ta.status IN ('submitted', 'approved')
+        AND aa.work_date BETWEEN ta.start_date AND ta.end_date`,
+    [ids],
+  );
+  for (const row of snapshotRows) locked.add(Number(row.id));
+
+  // Fallback для подач без снимка состава. Пересекаем ПО СТРОКАМ: сотрудник должен входить
+  // в состав подачи И дата строки попадать в её диапазон — иначе подача 1–15 заморозила бы
+  // и строки 16–31.
+  const dates = rows.map(r => r.work_date).sort();
+  const legacyApprovals = await queryWith<{
+    department_id: string; start_date: string; end_date: string;
+  }>(
+    exec,
+    `SELECT ta.department_id, ta.start_date::text AS start_date, ta.end_date::text AS end_date
+       FROM timesheet_approvals ta
+      WHERE ta.status IN ('submitted', 'approved')
+        AND ta.start_date <= $2::date AND ta.end_date >= $1::date
+        AND NOT EXISTS (
+          SELECT 1 FROM timesheet_approval_employees tae WHERE tae.approval_id = ta.id
+        )`,
+    [dates[0]!, dates[dates.length - 1]!],
+  );
+  for (const approval of legacyApprovals) {
+    if (!approval.department_id) continue;
+    const candidates = rows.filter(
+      r => !locked.has(r.id) && r.work_date >= approval.start_date && r.work_date <= approval.end_date,
+    );
+    if (candidates.length === 0) continue;
+    const members = new Set(await listEmployeeIdsAssignedToDepartmentPeriod(
+      String(approval.department_id), approval.start_date, approval.end_date,
+    ));
+    for (const row of candidates) {
+      if (members.has(row.employee_id)) locked.add(row.id);
+    }
+  }
+
+  return locked;
+}
+
+/** Переход approval_status, рассчитанный пересчётом (для аудита и ответов API). */
+export interface IReapprovalTransition {
+  id: number;
+  from: string;
+  to: 'auto_approved' | 'pending';
+  workDate: string;
+  employeeId: number;
+}
+
+/**
  * Расчёт переходов approval_status по ТЕКУЩЕМУ графику для диапазона БЕЗ записи в БД.
  * Учитываются только строки в состоянии 'auto_approved'/'pending' — решения руководителя
- * ('approved'/'rejected') не пересчитываются. Возвращает список изменений { id, from, to }.
- * Общий расчёт для reapproveAdjustmentsForRange (apply) и dry-run бэкфилла — одна логика.
+ * ('approved'/'rejected') не пересчитываются. Строки закрытых подач табеля
+ * (submitted/approved) исключаются: там редактирование уже заблокировано, переигрывать
+ * статусы задним числом нельзя.
+ *
+ * Все запросы идут через exec — под advisory-lock это обязано быть то же соединение,
+ * что и запись, иначе транзакция не увидит собственные незакоммиченные изменения.
  */
 export async function computeReapprovalTransitions(
   employeeIds: number[] | null,
   startDate: string,
   endDate: string,
-): Promise<Array<{ id: number; from: string; to: 'auto_approved' | 'pending' }>> {
+  exec?: DbExecutor,
+): Promise<IReapprovalTransition[]> {
   const params: unknown[] = [startDate, endDate];
   let sql = `SELECT id, employee_id, work_date::text AS work_date, status, hours_override,
                     approval_status, created_by
@@ -668,7 +851,7 @@ export async function computeReapprovalTransitions(
     params.push(employeeIds);
     sql += ` AND employee_id = ANY($3::int[])`;
   }
-  const rows = await query<{
+  const allRows = await queryWith<{
     id: number | string;
     employee_id: number | string;
     work_date: string;
@@ -676,7 +859,18 @@ export async function computeReapprovalTransitions(
     hours_override: number | string | null;
     approval_status: string;
     created_by: string | null;
-  }>(sql, params);
+  }>(exec, sql, params);
+  if (allRows.length === 0) return [];
+
+  const lockedIds = await loadLockedByApprovalPeriodIds(
+    allRows.map(r => ({
+      id: Number(r.id),
+      employee_id: Number(r.employee_id),
+      work_date: String(r.work_date).slice(0, 10),
+    })),
+    exec,
+  );
+  const rows = lockedIds.size > 0 ? allRows.filter(r => !lockedIds.has(Number(r.id))) : allRows;
   if (rows.length === 0) return [];
 
   // Автор-табельщица: её правки применяются сразу (зеркалит authorIsTimekeeper в
@@ -689,7 +883,8 @@ export async function computeReapprovalTransitions(
       .map(r => r.created_by)
       .filter((v): v is string => typeof v === 'string' && v.length > 0))];
     if (authorIds.length > 0) {
-      const authorRows = await query<{ id: string }>(
+      const authorRows = await queryWith<{ id: string }>(
+        exec,
         `SELECT up.id
            FROM user_profiles up
            JOIN system_roles sr ON sr.id = up.system_role_id
@@ -709,7 +904,8 @@ export async function computeReapprovalTransitions(
   const requiredDepartments = await correctionApprovalSettingsService.getRequiredDepartmentIds();
   const deptMap = new Map<number, string | null>();
   if (empIds.length > 0) {
-    const deptRows = await query<{ id: number | string; org_department_id: string | null }>(
+    const deptRows = await queryWith<{ id: number | string; org_department_id: string | null }>(
+      exec,
       `SELECT e.id, e.org_department_id
          FROM employees e
         WHERE e.id = ANY($1::int[])`,
@@ -748,7 +944,9 @@ export async function computeReapprovalTransitions(
     const m = dateObj.getMonth() + 1;
     const key = `${empId}:${y}-${m}`;
     if (!workedSatCache.has(key)) {
-      const map = await loadWorkedSaturdaysForQuota([empId], y, m, new Map([[empId, schedule]]));
+      const map = await loadWorkedSaturdaysForQuota(
+        [empId], y, m, new Map([[empId, schedule]]), await getCalendar(dateObj), exec,
+      );
       workedSatCache.set(key, map.get(empId) ?? new Set<string>());
     }
     return workedSatCache.get(key)!;
@@ -772,7 +970,9 @@ export async function computeReapprovalTransitions(
       wParams.push(employeeIds);
       wSql += ` AND employee_id = ANY($3::int[])`;
     }
-    const workRows = await query<{ employee_id: number | string; work_date: string }>(wSql, wParams);
+    const workRows = await queryWith<{ employee_id: number | string; work_date: string }>(
+      exec, wSql, wParams,
+    );
     for (const r of workRows) {
       approvedWorkKeys.add(rowKey(Number(r.employee_id), String(r.work_date).slice(0, 10)));
     }
@@ -794,7 +994,9 @@ export async function computeReapprovalTransitions(
     // «положительность» недоказуема. work/remote с null сюда не попадают намеренно.
     if (status === 'manual' && hoursOverride === null) return 'auto_approved';
     if (!isDepartmentApprovalRequired(empId)) return 'auto_approved';
-    if (status === 'remote' && approvedWorkKeys.has(rowKey(empId, workDate))) return 'auto_approved';
+    if ((status === 'remote' || status === 'manual') && approvedWorkKeys.has(rowKey(empId, workDate))) {
+      return 'auto_approved';
+    }
 
     const schedule = schedules.get(empId)?.get(workDate);
     if (!schedule) return 'auto_approved';
@@ -803,9 +1005,9 @@ export async function computeReapprovalTransitions(
     if (isWorkingDay(schedule, dateObj, calendar)) return 'auto_approved';
 
     // Обязательная суббота count-модели: первая отработанная непраздничная суббота месяца
-    // (usedBefore < expected) → auto; вторая+ → pending. Только work/remote (manual уже
-    // отсечён гардами выше по статусу/часам).
-    if ((status === 'work' || status === 'remote') && dateObj.getDay() === 6
+    // (usedBefore < expected) → auto; вторая+ → pending. Учитываются work/remote/manual —
+    // решает факт отработанной субботы, а не способ ввода часов (объектная правка тоже).
+    if (WORKED_STATUSES_FOR_APPROVAL.has(status) && dateObj.getDay() === 6
         && (schedule.expected_saturdays_per_month ?? 0) > 0) {
       const worked = await getWorkedSaturdays(empId, dateObj, schedule);
       const usedBefore = [...worked].filter(d => d < workDate).length;
@@ -815,21 +1017,27 @@ export async function computeReapprovalTransitions(
     return 'pending';
   };
 
-  // Двухфазный расчёт. Фаза 1 — все строки, кроме remote: их результат может изменить
-  // множество согласованных выходов. Затем множество пересобирается, и только после
-  // этого считается remote — иначе work, ставший pending в этом же проходе, продолжал бы
-  // «разрешать» свою remote (она осталась бы auto_approved).
-  const transitions: Array<{ id: number; from: string; to: 'auto_approved' | 'pending' }> = [];
+  // Двухфазный расчёт. Фаза 1 — строки, не зависящие от множества согласованных выходов.
+  // Затем множество пересобирается, и только после этого считаются remote и manual —
+  // иначе work, ставший pending в этом же проходе, продолжал бы «разрешать» свою remote
+  // (она осталась бы auto_approved), а порядок строк из SQL не гарантирован.
+  const transitions: IReapprovalTransition[] = [];
   const pushIfChanged = (row: Row, target: 'auto_approved' | 'pending'): void => {
     if (target !== row.approval_status) {
-      transitions.push({ id: Number(row.id), from: row.approval_status, to: target });
+      transitions.push({
+        id: Number(row.id),
+        from: row.approval_status,
+        to: target,
+        workDate: String(row.work_date).slice(0, 10),
+        employeeId: Number(row.employee_id),
+      });
     }
   };
 
-  const remoteRows: Row[] = [];
+  const deferredRows: Row[] = [];
   for (const row of rows) {
-    if (String(row.status) === 'remote') {
-      remoteRows.push(row);
+    if (String(row.status) === 'remote' || String(row.status) === 'manual') {
+      deferredRows.push(row);
       continue;
     }
     const target = await computeTarget(row);
@@ -846,8 +1054,8 @@ export async function computeReapprovalTransitions(
     }
   }
 
-  // Фаза 2 — remote, уже по пересобранному approvedWorkKeys.
-  for (const row of remoteRows) {
+  // Фаза 2 — remote и manual, уже по пересобранному approvedWorkKeys.
+  for (const row of deferredRows) {
     pushIfChanged(row, await computeTarget(row));
   }
 
@@ -858,23 +1066,138 @@ export async function computeReapprovalTransitions(
  * Массовое переопределение approval_status по ТЕКУЩЕМУ графику для диапазона.
  * Считает переходы через computeReapprovalTransitions (общий расчёт с dry-run) и применяет
  * их одним UPDATE. Решения руководителя ('approved'/'rejected') не трогает.
- * Возвращает число изменённых строк.
+ *
+ * Возвращает СПИСОК переходов, а не число: автоматический пересчёт хвоста месяца может
+ * перевести чужую строку из auto_approved в pending, и это обязано попадать в аудит и в
+ * ответ API, а не исчезать в счётчике.
  */
 export async function reapproveAdjustmentsForRange(
   employeeIds: number[] | null,
   startDate: string,
   endDate: string,
-): Promise<number> {
-  const transitions = await computeReapprovalTransitions(employeeIds, startDate, endDate);
-  if (transitions.length === 0) return 0;
-  await execute(
+  exec?: DbExecutor,
+): Promise<IReapprovalTransition[]> {
+  const transitions = await computeReapprovalTransitions(employeeIds, startDate, endDate, exec);
+  if (transitions.length === 0) return [];
+  await executeWith(
+    exec,
     `UPDATE attendance_adjustments AS a
         SET approval_status = v.st, updated_at = NOW()
        FROM (SELECT UNNEST($1::bigint[]) AS id, UNNEST($2::text[]) AS st) v
       WHERE a.id = v.id AND a.approval_status <> v.st`,
     [transitions.map(t => t.id), transitions.map(t => t.to)],
   );
-  return transitions.length;
+  return transitions;
+}
+
+/**
+ * Пересчёт хвоста МЕСЯЦА одного сотрудника — вызывается под тем же advisory-lock сразу
+ * после мутации квотной строки.
+ *
+ * Зачем: одного лока мало. Ввод задним числом (сначала сохранили 18.07, потом 04.07) дал бы
+ * обеим субботам auto_approved — каждая видит ноль занятых слотов раньше себя. Обнуление
+ * или удаление первой субботы, наоборот, освобождает слот, а последующие строки остаются
+ * pending. Пересчёт месяца после мутации закрывает оба случая.
+ */
+export async function reapproveEmployeeMonthTail(
+  employeeId: number,
+  workDate: string,
+  exec?: DbExecutor,
+): Promise<IReapprovalTransition[]> {
+  const dateObj = new Date(`${workDate}T00:00:00`);
+  const year = dateObj.getFullYear();
+  const mon = dateObj.getMonth() + 1;
+  const monthStr = String(mon).padStart(2, '0');
+  const lastDay = new Date(year, mon, 0).getDate();
+  return reapproveAdjustmentsForRange(
+    [employeeId],
+    `${year}-${monthStr}-01`,
+    `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`,
+    exec,
+  );
+}
+
+/**
+ * Побочные эффекты хвостового пересчёта ПОСЛЕ коммита: аудит поимённо (с ID и from→to,
+ * а не счётчиком) + realtime-уведомление, чтобы грид перечитал затронутые даты сам.
+ * Автоперевод чужой строки из auto_approved в pending не должен происходить бесследно.
+ */
+export async function reportQuotaTailTransitions(
+  req: AuthenticatedRequest,
+  transitions: IReapprovalTransition[],
+  source: string,
+): Promise<void> {
+  if (transitions.length === 0) return;
+  await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
+    entityType: 'attendance_adjustment',
+    entityId: transitions.length === 1 ? String(transitions[0]!.id) : 'quota_tail',
+    details: {
+      action: 'quota_tail_reapproval',
+      source,
+      transitions: transitions.map(t => ({
+        id: t.id, employee_id: t.employeeId, work_date: t.workDate, from: t.from, to: t.to,
+      })),
+    },
+  });
+  const dates = transitions.map(t => t.workDate).sort();
+  notifySkudRealtimeChanged({
+    source: 'timesheet_quota_reapproval',
+    employeeIds: [...new Set(transitions.map(t => t.employeeId))],
+    from: dates[0] ?? null,
+    to: dates[dates.length - 1] ?? null,
+    recalculatedCount: transitions.length,
+  });
+}
+
+/**
+ * Ключ advisory-lock квоты: (employee_id, YYYYMM). Все мутации квотных строк сотрудника за
+ * месяц сериализуются между собой — независимо от маршрута (табель, объектная правка,
+ * материализация заявления, решение согласующего).
+ */
+export const quotaLockKeys = (employeeId: number, workDate: string): [number, number] => {
+  const [y, m] = workDate.split('-');
+  return [employeeId, Number(`${y}${m}`)];
+};
+
+/**
+ * Выполняет fn в транзакции под advisory-lock (employee, месяц). xact-лок освобождается
+ * на коммите, поэтому ждущий запрос резолвит квоту уже после видимой записи предыдущего.
+ * ВНУТРИ передавать exec во все чтения и записи — иначе сериализация не работает.
+ */
+export async function withEmployeeMonthQuotaLock<T>(
+  employeeId: number,
+  workDate: string,
+  fn: (exec: PoolClient) => Promise<T>,
+): Promise<T> {
+  const [empKey, monthKey] = quotaLockKeys(employeeId, workDate);
+  return withTransaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [empKey, monthKey]);
+    return fn(client);
+  });
+}
+
+/**
+ * Несколько ключей за раз (многодневные заявления, массовые решения согласующего).
+ * Ключи сортируются по (employee_id, YYYYMM) — детерминированный порядок захвата
+ * исключает взаимную блокировку встречных транзакций.
+ */
+export async function withQuotaLocks<T>(
+  pairs: Array<{ employeeId: number; workDate: string }>,
+  fn: (exec: PoolClient) => Promise<T>,
+): Promise<T> {
+  const keys = [...new Map(
+    pairs.map(p => {
+      const [emp, month] = quotaLockKeys(p.employeeId, p.workDate);
+      return [`${emp}:${month}`, { emp, month }] as const;
+    }),
+  ).values()].sort((a, b) => (a.emp - b.emp) || (a.month - b.month));
+
+  return withTransaction(async client => {
+    for (const key of keys) {
+      await client.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [key.emp, key.month]);
+    }
+    return fn(client);
+  });
 }
 
 const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
@@ -2227,7 +2550,8 @@ export const timesheetController = {
         });
       }
 
-      const approvalStatus = await resolveAdjustmentApprovalStatus(
+      // Справочная часть резолвера — до захвата lock (квотная считается внутри, с exec).
+      const entryPrecheck = await resolveAdjustmentApprovalPrecheck(
         parsed.employee_id,
         parsed.work_date,
         parsed.status,
@@ -2271,41 +2595,73 @@ export const timesheetController = {
         }
       }
 
-      // Мьютекс day-level ↔ per-object: снимаем строки противоположного типа.
-      await execute(
-        `DELETE FROM attendance_adjustments
-           WHERE employee_id = $1 AND work_date = $2 AND source_type = $3`,
-        [parsed.employee_id, parsed.work_date, resolvedObject ? 'manual' : OBJECT_ADJUSTMENT_SOURCE_TYPE],
-      );
+      // Мьютекс-DELETE, upsert и хвостовой пересчёт — под общим advisory-lock квоты.
+      const { raw, tail: entryTail } = await withEmployeeMonthQuotaLock(
+        parsed.employee_id,
+        parsed.work_date,
+        async exec => {
+          const targetSourceType = resolvedObject ? OBJECT_ADJUSTMENT_SOURCE_TYPE : 'manual';
+          const targetSourceId = resolvedObject ? resolvedObject.object_id : 'manual';
+          // Строку, которую сейчас переписываем, исключаем из hasApprovedWorkOnDate:
+          // иначе её старая work-версия сработала бы «основанием» для самой себя.
+          const conflictingId = await queryWith<{ id: number | string }>(
+            exec,
+            `SELECT id FROM attendance_adjustments
+              WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
+              LIMIT 1 FOR UPDATE`,
+            [parsed.employee_id, parsed.work_date, targetSourceType, targetSourceId],
+          ).then(rows => (rows[0] ? Number(rows[0].id) : null));
 
-      const raw = resolvedObject
-        ? await upsertAttendanceAdjustment({
-            employee_id: parsed.employee_id,
-            work_date: parsed.work_date,
-            status: parsed.status,
-            hours_override: normalizedHours,
-            source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-            source_id: resolvedObject.object_id,
-            reason: parsed.notes ?? null,
-            created_by: req.user.id,
-            approval_status: approvalStatus,
-            metadata: {
-              object_id: resolvedObject.object_id,
-              object_name: resolvedObject.object_name,
-              auto_resolved: true,
-            },
-          })
-        : await upsertAttendanceAdjustment({
-            employee_id: parsed.employee_id,
-            work_date: parsed.work_date,
-            status: parsed.status,
-            hours_override: normalizedHours,
-            source_type: 'manual',
-            source_id: 'manual',
-            reason: parsed.notes ?? null,
-            created_by: req.user.id,
-            approval_status: approvalStatus,
-          });
+          const approvalStatus = 'resolved' in entryPrecheck
+            ? entryPrecheck.resolved
+            : await resolveAdjustmentApprovalQuota(
+                { ...entryPrecheck.quota, excludeAdjustmentId: conflictingId }, exec,
+              );
+
+          // Мьютекс day-level ↔ per-object: снимаем строки противоположного типа.
+          await executeWith(
+            exec,
+            `DELETE FROM attendance_adjustments
+               WHERE employee_id = $1 AND work_date = $2 AND source_type = $3`,
+            [parsed.employee_id, parsed.work_date, resolvedObject ? 'manual' : OBJECT_ADJUSTMENT_SOURCE_TYPE],
+          );
+
+          const saved = resolvedObject
+            ? await upsertAttendanceAdjustment({
+                employee_id: parsed.employee_id,
+                work_date: parsed.work_date,
+                status: parsed.status,
+                hours_override: normalizedHours,
+                source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+                source_id: resolvedObject.object_id,
+                reason: parsed.notes ?? null,
+                created_by: req.user.id,
+                approval_status: approvalStatus,
+                metadata: {
+                  object_id: resolvedObject.object_id,
+                  object_name: resolvedObject.object_name,
+                  auto_resolved: true,
+                },
+              }, exec)
+            : await upsertAttendanceAdjustment({
+                employee_id: parsed.employee_id,
+                work_date: parsed.work_date,
+                status: parsed.status,
+                hours_override: normalizedHours,
+                source_type: 'manual',
+                source_id: 'manual',
+                reason: parsed.notes ?? null,
+                created_by: req.user.id,
+                approval_status: approvalStatus,
+              }, exec);
+
+          return {
+            raw: saved,
+            tail: await reapproveEmployeeMonthTail(parsed.employee_id, parsed.work_date, exec),
+          };
+        },
+      );
+      await reportQuotaTailTransitions(req, entryTail, 'timesheet_entry');
 
 	      const data = {
 	        id: Number(raw.id),
@@ -2515,26 +2871,60 @@ export const timesheetController = {
           });
         }
 
-        const approvalStatus = await resolveAdjustmentApprovalStatus(
+        // Значимое изменение = меняются статус или часы. Правка одного примечания решение
+        // согласующего НЕ снимает: approval_status в патч не передаём.
+        const hoursPatch: { hours_override?: number | null } = isScheduleNormStatus || nextStatus === 'remote'
+          ? { hours_override: normalizedHours ?? null }
+          : (normalizedHours !== undefined ? { hours_override: normalizedHours } : {});
+        const significantUpdate = (parsed.status !== undefined && parsed.status !== String(existing.status))
+          || (hoursPatch.hours_override !== undefined
+            && Number(hoursPatch.hours_override ?? 0) !== Number(existing.hours_override ?? 0));
+
+        // Справочная часть резолвера — до lock; квотная и запись — внутри него.
+        const updatePrecheck = significantUpdate
+          ? await resolveAdjustmentApprovalPrecheck(
+              Number(existing.employee_id),
+              String(existing.work_date),
+              nextStatus,
+              normalizedHours ?? null,
+              isTimekeeper(req),
+              id,
+            )
+          : null;
+
+        const { updated, tail: updateTail } = await withEmployeeMonthQuotaLock(
           Number(existing.employee_id),
           String(existing.work_date),
-          nextStatus,
-          normalizedHours ?? null,
-          isTimekeeper(req),
+          async exec => {
+            let approvalStatus: 'auto_approved' | 'pending' | undefined;
+            if (updatePrecheck) {
+              approvalStatus = 'resolved' in updatePrecheck
+                ? updatePrecheck.resolved
+                : await resolveAdjustmentApprovalQuota(updatePrecheck.quota, exec);
+            }
+            const row = await updateAttendanceAdjustmentById(id, {
+              ...(parsed.status ? { status: parsed.status } : {}),
+              // SCHEDULE_NORM_STATUSES — безусловное обнуление: старые ручные часы не должны
+              // пережить смену статуса, даже если клиент не прислал hours_worked.
+              ...hoursPatch,
+              ...(parsed.notes !== undefined ? { reason: parsed.notes ?? null } : {}),
+              updated_by: req.user.id,
+              ...(approvalStatus ? { approval_status: approvalStatus } : {}),
+            }, exec);
+            if (!row) return { updated: null, tail: [] as IReapprovalTransition[] };
+            const tail = significantUpdate
+              ? await reapproveEmployeeMonthTail(
+                  Number(existing.employee_id), String(existing.work_date), exec,
+                )
+              : [];
+            const rowAfter = tail.some(t => t.id === id)
+              ? (await getAttendanceAdjustmentById(id, exec)) ?? row
+              : row;
+            return { updated: rowAfter, tail };
+          },
         );
-
-	      const updated = await updateAttendanceAdjustmentById(id, {
-	        ...(parsed.status ? { status: parsed.status } : {}),
-	        // SCHEDULE_NORM_STATUSES — безусловное обнуление: старые ручные часы не должны
-	        // пережить смену статуса, даже если клиент не прислал hours_worked.
-	        ...(isScheduleNormStatus || nextStatus === 'remote'
-            ? { hours_override: normalizedHours }
-            : (normalizedHours !== undefined ? { hours_override: normalizedHours } : {})),
-	        ...(parsed.notes !== undefined ? { reason: parsed.notes ?? null } : {}),
-	        updated_by: req.user.id,
-          approval_status: approvalStatus,
-	      });
 	      if (!updated) return res.status(404).json({ success: false, error: 'Запись не найдена' });
+        await reportQuotaTailTransitions(req, updateTail, 'timesheet_update');
 
         const actualHours = typeof updated.hours_override === 'number'
           ? updated.hours_override
@@ -2663,11 +3053,12 @@ export const timesheetController = {
         });
       }
 
-      // Для work/remote (где статус согласования зависит от уже зачтённых плановых
-      // суббот) обходим items последовательно, чтобы каждый upsert был виден
-      // последующим расчётам — иначе при бульке нескольких суббот одного месяца
-      // одного сотрудника все они увидят 0 уже зачтённых и пройдут как auto_approved.
-      const isWorkOrRemoteBulk = WORKED_STATUSES_FOR_APPROVAL.has(parsed.status);
+      // Статусы, участвующие в квоте (work/remote/manual), обходим последовательно и под
+      // advisory-lock (сотрудник, месяц): иначе несколько суббот одного месяца одного
+      // сотрудника увидят 0 уже зачтённых и все пройдут как auto_approved. Лок нужен и
+      // между параллельными запросами — последовательности внутри одного мало.
+      const isQuotaBulk = WORKED_STATUSES_FOR_APPROVAL.has(parsed.status);
+      const bulkTail: IReapprovalTransition[] = [];
       const buildUpsert = async (item: typeof uniqueItems[number]) => {
         const itemHoursOverride = resolveWriteHours(
           parsed.status,
@@ -2675,34 +3066,58 @@ export const timesheetController = {
           plannedHoursByItem.get(`${item.employee_id}_${item.work_date}`) ?? null,
         ) ?? null;
         // Ограничения роли уже проверены целиком в PREFLIGHT выше (assertBulkCorrectionAllowed).
-        const approvalStatus = await resolveAdjustmentApprovalStatus(
+        const precheck = await resolveAdjustmentApprovalPrecheck(
           item.employee_id,
           item.work_date,
           parsed.status,
           itemHoursOverride,
           isTimekeeper(req),
         );
-        const saved = await upsertAttendanceAdjustment({
-          employee_id: item.employee_id,
-          work_date: item.work_date,
-          status: parsed.status,
-          hours_override: itemHoursOverride,
-          source_type: 'manual',
-          source_id: 'manual',
-          reason: parsed.notes ?? null,
-          created_by: req.user.id,
-          approval_status: approvalStatus,
-        });
-        return {
-          employee_id: item.employee_id,
-          work_date: item.work_date,
-          adjustment_id: Number(saved.id),
+
+        const writeRow = async (exec: PoolClient | undefined) => {
+          const conflictingId = exec
+            ? await queryWith<{ id: number | string }>(
+                exec,
+                `SELECT id FROM attendance_adjustments
+                  WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual' AND source_id = 'manual'
+                  LIMIT 1 FOR UPDATE`,
+                [item.employee_id, item.work_date],
+              ).then(rows => (rows[0] ? Number(rows[0].id) : null))
+            : null;
+          const approvalStatus = 'resolved' in precheck
+            ? precheck.resolved
+            : await resolveAdjustmentApprovalQuota(
+                { ...precheck.quota, excludeAdjustmentId: conflictingId }, exec,
+              );
+          const saved = await upsertAttendanceAdjustment({
+            employee_id: item.employee_id,
+            work_date: item.work_date,
+            status: parsed.status,
+            hours_override: itemHoursOverride,
+            source_type: 'manual',
+            source_id: 'manual',
+            reason: parsed.notes ?? null,
+            created_by: req.user.id,
+            approval_status: approvalStatus,
+          }, exec);
+          if (exec) {
+            bulkTail.push(...await reapproveEmployeeMonthTail(item.employee_id, item.work_date, exec));
+          }
+          return {
+            employee_id: item.employee_id,
+            work_date: item.work_date,
+            adjustment_id: Number(saved.id),
+          };
         };
+
+        return isQuotaBulk
+          ? withEmployeeMonthQuotaLock(item.employee_id, item.work_date, exec => writeRow(exec))
+          : writeRow(undefined);
       };
 
       // Возвращаем id созданных/обновлённых корректировок — фронт по ним цепляет файлы.
       const savedItems: Array<{ employee_id: number; work_date: string; adjustment_id: number }> = [];
-      if (isWorkOrRemoteBulk) {
+      if (isQuotaBulk) {
         const sortedItems = [...uniqueItems].sort((a, b) => {
           if (a.employee_id !== b.employee_id) return a.employee_id - b.employee_id;
           return a.work_date.localeCompare(b.work_date);
@@ -2713,6 +3128,7 @@ export const timesheetController = {
       } else {
         savedItems.push(...await Promise.all(uniqueItems.map(buildUpsert)));
       }
+      await reportQuotaTailTransitions(req, bulkTail, 'timesheet_bulk');
 
       const auditNamesMap = await loadEmployeeFullNamesMap(employeeIds);
       const auditEmployeeNames = employeeIds
@@ -2812,45 +3228,132 @@ export const timesheetController = {
         });
       }
 
-      // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
-      // строки на тот же (employee, work_date) перед сохранением. RETURNING нужен
-      // чтобы каскадно подчистить файлы и R2-объекты этих корректировок.
-      const removedManualRows = await query<{ id: number | string }>(
-        `DELETE FROM attendance_adjustments
-           WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'
-         RETURNING id`,
-        [parsed.employee_id, parsed.work_date],
-      );
-      if (removedManualRows.length > 0) {
-        try {
-          const r2Keys = (await Promise.all(
-            removedManualRows.map(row => purgeCorrectionAttachments(Number(row.id))),
-          )).flat();
-          if (r2Keys.length > 0 && await r2Service.isEnabledAsync()) {
-            await Promise.allSettled(r2Keys.map(key => r2Service.deleteObject(key)));
-          }
-        } catch (cleanupErr) {
-          console.warn('timesheet.upsertObjectEntry: day-level mutex cleanup failed', cleanupErr);
-        }
-      }
+      // Справочная часть резолвера (график, календарь, whitelist) — ДО захвата lock,
+      // чтобы под локом не занимать лишние соединения пула.
+      const objectPrecheck = allowedHours > 0
+        ? await resolveAdjustmentApprovalPrecheck(
+            parsed.employee_id, parsed.work_date, 'manual', allowedHours, isTimekeeper(req),
+          )
+        : null;
 
-      // 0 часов на объекте = снять корректировку. Иначе агрегат по дню падает в 'absent'
-      // (см. attendance.service.ts) — будет «неявка» в режиме «по сотрудникам».
-      if (allowedHours <= 0) {
-        const removedIdsForCleanup = await deleteAttendanceAdjustmentBySource({
-          employee_id: parsed.employee_id,
-          work_date: parsed.work_date,
-          source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-          source_id: parsed.object_key,
-        });
+      // Все изменения БД по (сотрудник, месяц) — под общим advisory-lock: mutex-DELETE,
+      // upsert/удаление и хвостовой пересчёт месяца. Чистка вложений и R2 — после коммита.
+      const lockOutcome = await withEmployeeMonthQuotaLock(
+        parsed.employee_id,
+        parsed.work_date,
+        async exec => {
+          // Текущая объектная строка: нужна и для исключения самой себя из
+          // hasApprovedWorkOnDate, и для «изменилось ли что-то значимое».
+          const existingRow = await queryWith<{
+            id: number | string; status: string; hours_override: number | string | null;
+          }>(
+            exec,
+            `SELECT id, status, hours_override FROM attendance_adjustments
+              WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
+              LIMIT 1 FOR UPDATE`,
+            [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, parsed.object_key],
+          ).then(rows => rows[0] ?? null);
+
+          // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
+          // строки на тот же (employee, work_date). RETURNING нужен, чтобы после коммита
+          // каскадно подчистить файлы и R2-объекты этих корректировок.
+          const removedManualRows = await queryWith<{ id: number | string }>(
+            exec,
+            `DELETE FROM attendance_adjustments
+               WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'
+             RETURNING id`,
+            [parsed.employee_id, parsed.work_date],
+          );
+
+          // 0 часов на объекте = снять корректировку. Иначе агрегат по дню падает в 'absent'
+          // (см. attendance.service.ts) — будет «неявка» в режиме «по сотрудникам».
+          if (allowedHours <= 0) {
+            const removedIds = await deleteAttendanceAdjustmentBySource({
+              employee_id: parsed.employee_id,
+              work_date: parsed.work_date,
+              source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+              source_id: parsed.object_key,
+            }, exec);
+            // Удаление освободило субботний слот — пересчитываем хвост месяца.
+            const tail = await reapproveEmployeeMonthTail(parsed.employee_id, parsed.work_date, exec);
+            return {
+              removed: true as const,
+              removedManualIds: removedManualRows.map(r => Number(r.id)),
+              removedIds,
+              tail,
+            };
+          }
+
+          // Статус согласования пересчитываем ТОЛЬКО при значимом изменении (часы/статус).
+          // Правка одного примечания или названия объекта решение согласующего не снимает:
+          // approval_status в upsert не передаём, поля решения остаются нетронутыми.
+          const prevHours = existingRow?.hours_override == null ? null : Number(existingRow.hours_override);
+          const significantChange = !existingRow
+            || String(existingRow.status) !== 'manual'
+            || prevHours !== allowedHours;
+
+          let approvalStatus: 'auto_approved' | 'pending' | undefined;
+          if (significantChange && objectPrecheck) {
+            if ('resolved' in objectPrecheck) {
+              approvalStatus = objectPrecheck.resolved;
+            } else {
+              objectPrecheck.quota.excludeAdjustmentId = existingRow ? Number(existingRow.id) : null;
+              approvalStatus = await resolveAdjustmentApprovalQuota(objectPrecheck.quota, exec);
+            }
+          }
+
+          const saved = await upsertAttendanceAdjustment({
+            employee_id: parsed.employee_id,
+            work_date: parsed.work_date,
+            status: 'manual',
+            hours_override: allowedHours,
+            source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+            source_id: parsed.object_key,
+            reason: parsed.notes ?? null,
+            created_by: req.user.id,
+            ...(approvalStatus ? { approval_status: approvalStatus } : {}),
+            metadata: {
+              object_id: parsed.object_id ?? null,
+              object_name: parsed.object_name,
+            },
+          }, exec);
+
+          // Хвост месяца: ввод задним числом мог занять слот раньше уже сохранённых суббот.
+          const tail = significantChange
+            ? await reapproveEmployeeMonthTail(parsed.employee_id, parsed.work_date, exec)
+            : [];
+
+          // Пересчёт мог поменять статус и самой сохранённой строки — отдаём актуальный.
+          const savedAfter = tail.some(t => t.id === Number(saved.id))
+            ? (await getAttendanceAdjustmentById(Number(saved.id), exec)) ?? saved
+            : saved;
+
+          return {
+            removed: false as const,
+            removedManualIds: removedManualRows.map(r => Number(r.id)),
+            saved: savedAfter,
+            tail,
+          };
+        },
+      );
+
+      // Пост-коммит: чистка вложений/R2 и побочные эффекты хвостового пересчёта.
+      const purgeAttachmentsSafely = async (ids: number[], context: string): Promise<void> => {
+        if (ids.length === 0) return;
         try {
-          const r2Keys = (await Promise.all(removedIdsForCleanup.map(id => purgeCorrectionAttachments(id)))).flat();
+          const r2Keys = (await Promise.all(ids.map(id => purgeCorrectionAttachments(id)))).flat();
           if (r2Keys.length > 0 && await r2Service.isEnabledAsync()) {
             await Promise.allSettled(r2Keys.map(key => r2Service.deleteObject(key)));
           }
         } catch (cleanupErr) {
-          console.warn('timesheet.upsertObjectEntry: attachments cleanup failed', cleanupErr);
+          console.warn(`timesheet.upsertObjectEntry: ${context} cleanup failed`, cleanupErr);
         }
+      };
+      await purgeAttachmentsSafely(lockOutcome.removedManualIds, 'day-level mutex');
+      await reportQuotaTailTransitions(req, lockOutcome.tail, 'object_entry');
+
+      if (lockOutcome.removed) {
+        await purgeAttachmentsSafely(lockOutcome.removedIds, 'attachments');
         res.json({
           success: true,
           data: {
@@ -2871,21 +3374,7 @@ export const timesheetController = {
         return;
       }
 
-      const raw = await upsertAttendanceAdjustment({
-        employee_id: parsed.employee_id,
-        work_date: parsed.work_date,
-        status: 'manual',
-        hours_override: allowedHours,
-        source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-        source_id: parsed.object_key,
-        reason: parsed.notes ?? null,
-        created_by: req.user.id,
-        metadata: {
-          object_id: parsed.object_id ?? null,
-          object_name: parsed.object_name,
-        },
-      });
-
+      const raw = lockOutcome.saved;
       const auditFullNameObj = await loadEmployeeFullNameForAudit(parsed.employee_id);
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
@@ -2898,6 +3387,7 @@ export const timesheetController = {
           object_key: parsed.object_key,
           object_name: parsed.object_name,
           hours_worked: allowedHours,
+          approval_status: raw.approval_status ?? null,
         },
       });
 
@@ -2915,6 +3405,7 @@ export const timesheetController = {
           base_hours_worked: allowedHours,
           is_correction: true,
           notes: parsed.notes ?? null,
+          approval_status: (raw.approval_status ?? null) as string | null,
         },
       });
     } catch (err) {
@@ -2955,12 +3446,24 @@ export const timesheetController = {
         });
       }
 
-      const removedIds = await deleteAttendanceAdjustmentBySource({
-        employee_id: parsed.employee_id,
-        work_date: parsed.work_date,
-        source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-        source_id: parsed.object_key,
-      });
+      // Удаление освобождает субботний слот — делаем его и пересчёт хвоста месяца под
+      // общим advisory-lock, иначе параллельное сохранение увидит слот занятым.
+      const { removedIds, tail } = await withEmployeeMonthQuotaLock(
+        parsed.employee_id,
+        parsed.work_date,
+        async exec => {
+          const ids = await deleteAttendanceAdjustmentBySource({
+            employee_id: parsed.employee_id,
+            work_date: parsed.work_date,
+            source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+            source_id: parsed.object_key,
+          }, exec);
+          return {
+            removedIds: ids,
+            tail: await reapproveEmployeeMonthTail(parsed.employee_id, parsed.work_date, exec),
+          };
+        },
+      );
 
       try {
         const r2Keys = (await Promise.all(removedIds.map(id => purgeCorrectionAttachments(id)))).flat();
@@ -2970,6 +3473,7 @@ export const timesheetController = {
       } catch (cleanupErr) {
         console.warn('timesheet.deleteObjectEntry: attachments cleanup failed', cleanupErr);
       }
+      await reportQuotaTailTransitions(req, tail, 'object_entry_delete');
 
       const auditFullNameObjDel = await loadEmployeeFullNameForAudit(parsed.employee_id);
 
@@ -3177,19 +3681,31 @@ export const timesheetController = {
         ? Number(sourceId)
         : null;
 
-      // Удаление строки + синхронизация заявления — атомарно (как откат approve в cancel()).
-      const txResult = await withTransaction(async (client) => {
-        const del = await client.query<{ id: number }>(
-          `DELETE FROM attendance_adjustments WHERE id = $1 RETURNING id`,
-          [id],
-        );
-        if (del.rows.length === 0) return { deleted: false as const, sync: null };
-        const sync = leaveRequestId !== null
-          ? await syncLeaveRequestOnDayRemoval(client, leaveRequestId)
-          : null;
-        return { deleted: true as const, sync };
-      });
+      // Удаление строки + синхронизация заявления — атомарно (как откат approve в cancel()),
+      // под advisory-lock квоты: удаление освобождает субботний слот, поэтому здесь же
+      // пересчитываем хвост месяца сотрудника.
+      const txResult = await withEmployeeMonthQuotaLock(
+        Number(existing.employee_id),
+        String(existing.work_date),
+        async (client) => {
+          const del = await client.query<{ id: number }>(
+            `DELETE FROM attendance_adjustments WHERE id = $1 RETURNING id`,
+            [id],
+          );
+          if (del.rows.length === 0) {
+            return { deleted: false as const, sync: null, tail: [] as IReapprovalTransition[] };
+          }
+          const sync = leaveRequestId !== null
+            ? await syncLeaveRequestOnDayRemoval(client, leaveRequestId)
+            : null;
+          const tail = await reapproveEmployeeMonthTail(
+            Number(existing.employee_id), String(existing.work_date), client,
+          );
+          return { deleted: true as const, sync, tail };
+        },
+      );
       if (!txResult.deleted) return res.status(404).json({ success: false, error: 'Запись не найдена' });
+      await reportQuotaTailTransitions(req, txResult.tail, 'timesheet_delete');
 
       try {
         const orphanedR2Keys = await purgeCorrectionAttachments(id);
@@ -3322,7 +3838,8 @@ export const timesheetController = {
       }
 
       // Шаг B — переопределение approval_status по текущему графику.
-      const reapproved = await reapproveAdjustmentsForRange(empFilter, startDate, endDate);
+      const reapprovedTransitions = await reapproveAdjustmentsForRange(empFilter, startDate, endDate);
+      const reapproved = reapprovedTransitions.length;
 
       // Шаг C — сброс легаси-часов (день начинает считаться по проходам+графику).
       const legacyParams: unknown[] = [startDate, endDate];

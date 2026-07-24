@@ -18,7 +18,7 @@ import { listDirectSubordinates } from '../services/employee-direct-reports.serv
 import { resolveResponsibleEmployeeIdsByEmployee } from '../services/approval-routing.service.js';
 import { resolveResponsibleEmployeeForTarget } from '../services/weekend-approval-assignments.service.js';
 import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
-import { resolveAdjustmentApprovalStatus } from './timesheet.controller.js';
+import { resolveAdjustmentApprovalStatus, quotaLockKeys } from './timesheet.controller.js';
 import { syncLeaveRequestReason } from '../services/leave-request-sync.service.js';
 import { auditService } from '../services/audit.service.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
@@ -388,6 +388,22 @@ function collectMaterializedLeaveDates(request: {
   return [...new Set(isoDates)].sort();
 }
 
+/**
+ * Берёт advisory-локи квоты (employee, YYYYMM) для набора дат на УЖЕ ОТКРЫТОМ клиенте
+ * транзакции. Ключи сортируются по возрастанию месяца — детерминированный порядок
+ * захвата исключает взаимную блокировку встречных многомесячных заявлений.
+ */
+async function lockQuotaMonthsOnClient(
+  client: DbExecutor,
+  employeeId: number,
+  isoDates: string[],
+): Promise<void> {
+  const months = [...new Set(isoDates.map(iso => quotaLockKeys(employeeId, iso)[1]))].sort((a, b) => a - b);
+  for (const month of months) {
+    await client.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [employeeId, month]);
+  }
+}
+
 async function materializeLeaveRequestAdjustments(
   request: {
     id: number;
@@ -412,12 +428,21 @@ async function materializeLeaveRequestAdjustments(
   const isoDates = collectMaterializedLeaveDates(request);
   let hasPending = false;
 
+  // Материализация занимает субботние слоты квоты, поэтому берём те же advisory-локи
+  // (employee, YYYYMM), что и табельные маршруты. Клиент транзакции здесь уже есть —
+  // лок вешаем на него. Порядок ключей детерминированный (по возрастанию месяца), иначе
+  // встречные многомесячные заявления могут заблокировать друг друга.
+  await lockQuotaMonthsOnClient(client, request.employee_id, isoDates);
+
   for (const iso of isoDates) {
     const resolvedStatus = await resolveAdjustmentApprovalStatus(
       request.employee_id,
       iso,
       timesheetStatus,
       null,
+      false,
+      null,
+      client,
     );
     const collapsed = resolvedStatus === 'pending' && weekendCollapseApproverUserId != null;
     const approvalStatus = collapsed ? ('approved' as const) : resolvedStatus;
@@ -1148,11 +1173,15 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         // настройки «Согласование выходных дней», корректировка попадает в pending
         // и должна быть дополнительно одобрена админом на /approvals.
         // Исключение — схлопывание: одобряющий сам ответственный за выходные.
+        await lockQuotaMonthsOnClient(client, request.employee_id, [request.correction_date]);
         const resolvedApproval = await resolveAdjustmentApprovalStatus(
           request.employee_id,
           request.correction_date,
           correctionStatus,
           request.correction_hours ?? null,
+          false,
+          null,
+          client,
         );
         const collapsed = resolvedApproval === 'pending' && weekendCollapseApproverUserId != null;
         const approvalStatus = collapsed ? ('approved' as const) : resolvedApproval;
