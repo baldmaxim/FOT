@@ -27,7 +27,8 @@ export interface IExportEmployee {
   position_id: string | null;
   org_department_id: string | null;
   sigur_employee_id: number | null;
-  // 'fired' → уволенный: единый файл для 1С исключает его целиком.
+  // 'fired' → уволенный: остаётся в едином файле для 1С, дни после увольнения
+  // отсекаются через cutoffByEmployeeId (день увольнения включительно сохраняется).
   employment_status?: string | null;
 }
 

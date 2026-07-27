@@ -256,7 +256,7 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
   });
 });
 
-describe('buildUnified1CWorkbook — «Н» пустой клеткой, уволенные вне выгрузки', () => {
+describe('buildUnified1CWorkbook — «Н» пустой клеткой, уволенные с усечением по дате увольнения', () => {
   beforeEach(() => {
     queryMock.mockReset();
     queryMock.mockResolvedValue([]);
@@ -271,11 +271,18 @@ describe('buildUnified1CWorkbook — «Н» пустой клеткой, уво�
       id: number;
       full_name: string;
       employment_status?: string | null;
+      // Дата (вкл.), с которой дни не считаются (для уволенных = dismissal+1).
+      cutoff?: string;
       days: Array<{ date: string; status: string; hours: number }>;
+      // Объектные часы (ветка buildObjectRowsForOneC).
+      objects?: Array<{ date: string; object_key: string; object_id: string; object_name: string; hours: number }>;
     }>,
     exportDays: number[],
   ): IDepartmentTimesheetData => {
     const schedule = makeSchedule();
+    const cutoffEntries = emps
+      .filter(e => e.cutoff)
+      .map(e => [e.id, e.cutoff!] as [number, string | null]);
     return {
       departmentName,
       departmentId,
@@ -296,7 +303,18 @@ describe('buildUnified1CWorkbook — «Н» пустой клеткой, уво�
         e.id,
         new Map(e.days.map(d => [d.date, { status: d.status, hours: d.hours, corrected: false }])),
       ])),
-      objectEntries: [],
+      objectEntries: emps.flatMap(e => (e.objects ?? []).map(o => ({
+        adjustment_id: null,
+        employee_id: e.id,
+        work_date: o.date,
+        object_key: o.object_key,
+        object_id: o.object_id,
+        object_name: o.object_name,
+        hours_worked: o.hours,
+        display_hours_worked: o.hours,
+        base_hours_worked: o.hours,
+        is_correction: false,
+      }))),
       skudMap: new Map(),
       posMap: new Map(),
       year: 2026,
@@ -305,6 +323,7 @@ describe('buildUnified1CWorkbook — «Н» пустой клеткой, уво�
       exportHalf: 'FULL',
       exportDays,
       showActualHours: false,
+      cutoffByEmployeeId: cutoffEntries.length > 0 ? new Map(cutoffEntries) : undefined,
     };
   };
 
@@ -367,7 +386,8 @@ describe('buildUnified1CWorkbook — «Н» пустой клеткой, уво�
     expect(rows[0].total).toBeNull();
   });
 
-  it('уволенный исчезает целиком (даже с часами до увольнения); активный сосед остаётся', async () => {
+  it('уволенный ОСТАЁТСЯ (статус-ветка): дни до и в день увольнения считаются, день после — пусто', async () => {
+    // Устин уволен 02.04 → cutoff 03.04: дни 01–02 в файле, 03 отсекается.
     const dept = makeDeptStatuses('Отдел', 'dept-1', [
       {
         id: 1,
@@ -378,16 +398,53 @@ describe('buildUnified1CWorkbook — «Н» пустой клеткой, уво�
         id: 2,
         full_name: 'Уволенный Устин',
         employment_status: 'fired',
-        days: [{ date: '2026-04-01', status: 'work', hours: 8 }],
+        cutoff: '2026-04-03',
+        days: [
+          { date: '2026-04-01', status: 'work', hours: 8 },
+          { date: '2026-04-02', status: 'work', hours: 8 },
+          { date: '2026-04-03', status: 'work', hours: 8 },
+        ],
       },
-    ], [1]);
+    ], [1, 2, 3]);
 
     const wb = await buildUnified1CWorkbook(4, 2026, [dept]);
-    const rows = collectRows(wb.getWorksheet(1)!, 1);
+    const rows = collectRows(wb.getWorksheet(1)!, 3);
 
-    expect(rows).toHaveLength(1);
-    expect(rows[0].fio).toBe('Активный Андрей');
-    expect(rows.some(r => r.fio === 'Уволенный Устин')).toBe(false);
+    const ustin = rows.find(r => r.fio === 'Уволенный Устин');
+    expect(ustin).toBeDefined();
+    expect(ustin!.days[0]).toBe(8);   // день до увольнения
+    expect(ustin!.days[1]).toBe(8);   // день увольнения — сохраняется
+    expect(ustin!.days[2]).toBeNull(); // день после cutoff — пусто
+    expect(ustin!.total).toBe(16);     // итог без дня после увольнения
+    // Активный сосед не затронут.
+    expect(rows.some(r => r.fio === 'Активный Андрей')).toBe(true);
+  });
+
+  it('уволенный ОСТАЁТСЯ (объектная ветка): день увольнения в объектной строке, день после — отсечён', async () => {
+    // Устин работал по объекту 02.04 и 03.04; cutoff 03.04 → в файл идёт только 02.04.
+    const dept = makeDeptStatuses('Отдел', 'dept-1', [
+      {
+        id: 2,
+        full_name: 'Уволенный Устин',
+        employment_status: 'fired',
+        cutoff: '2026-04-03',
+        days: [],
+        objects: [
+          { date: '2026-04-02', object_key: 'obj-x', object_id: 'obj-x', object_name: 'Объект X', hours: 8 },
+          { date: '2026-04-03', object_key: 'obj-x', object_id: 'obj-x', object_name: 'Объект X', hours: 8 },
+        ],
+      },
+    ], [1, 2, 3]);
+
+    const wb = await buildUnified1CWorkbook(4, 2026, [dept]);
+    const rows = collectRows(wb.getWorksheet(1)!, 3);
+
+    const ustin = rows.find(r => r.fio === 'Уволенный Устин');
+    expect(ustin).toBeDefined();
+    expect(ustin!.days[0]).toBeNull(); // 01.04 — не работал
+    expect(ustin!.days[1]).toBe(8);    // 02.04 — день увольнения, объектные часы
+    expect(ustin!.days[2]).toBeNull(); // 03.04 — после cutoff, отсечён
+    expect(ustin!.total).toBe(8);
   });
 
   it('остальные статусы (Б/От) по-прежнему выводятся буквами', async () => {

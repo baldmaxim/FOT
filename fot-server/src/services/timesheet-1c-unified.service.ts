@@ -145,18 +145,11 @@ const buildRowsForDepartment = (
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
 
-  // Уволенные в единый файл не попадают вовсе (даже отработанные до увольнения дни):
-  // их расчёт в 1С идёт отдельным документом при увольнении.
-  const firedIds = new Set<number>(
-    data.employees.filter(e => e.employment_status === 'fired').map(e => e.id),
-  );
-  const visibleData: IDepartmentTimesheetData = firedIds.size === 0
-    ? data
-    : {
-      ...data,
-      employees: data.employees.filter(e => !firedIds.has(e.id)),
-      objectEntries: data.objectEntries.filter(e => !firedIds.has(e.employee_id)),
-    };
+  // Уволенные ОСТАЮТСЯ в едином файле. Fetch передаёт cutoffByEmployeeId, а 1С-билдеры
+  // (buildEmployeeRowsForOneC/buildObjectRowsForOneC) пропускают даты >= cutoff — день
+  // увольнения сохраняется, последующие дни пустые. Паритет с ZIP «Как в 1С»
+  // (build1CTimesheetWorkbook), которая fired не режет.
+  const visibleData: IDepartmentTimesheetData = data;
 
   // Сотрудники в режиме «текущая деятельность». Персональное назначение объекта
   // полностью переопределяет отдел: есть персональные объекты → смотрим только их;
