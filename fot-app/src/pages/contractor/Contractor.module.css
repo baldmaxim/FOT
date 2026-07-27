@@ -248,6 +248,22 @@
   min-height: 0;
 }
 
+/* Прокручиваемая середина модалки: заголовок и футер остаются на месте. */
+.modalScrollArea {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Кнопки скачивания документов: длинные имена файлов переносятся, а не режутся. */
+.docButton {
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
 .modalTitle {
   font-size: 16px;
   font-weight: 600;

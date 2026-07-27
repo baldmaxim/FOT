@@ -326,6 +326,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
           <div className={styles.applyBody}>
             <h2 className={styles.modalTitle} style={{ flexShrink: 0 }}>Открыть пропуска — {orgName}</h2>
 
+            <div className={styles.modalScrollArea}>
             <div style={{ marginBottom: 12, flexShrink: 0 }}>
               <div className={styles.statusNote} style={{ marginBottom: 6 }}>
                 Документы организации:
@@ -340,7 +341,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                     <li key={d.id} style={{ marginBottom: 4 }}>
                       <button
                         type="button"
-                        className="btn-secondary"
+                        className={`btn-secondary ${styles.docButton}`}
                         style={{ padding: '2px 8px', fontSize: 13 }}
                         onClick={() => void handleDownloadDoc(d)}
                       >
@@ -362,7 +363,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
             )}
 
             {!loading && pendingRows.length > 0 && (
-              <div style={{ flex: 1, minHeight: 120, overflow: 'auto' }}>
+              <div style={{ overflowX: 'auto' }}>
                 <table className={styles.table}>
                   <thead>
                     <tr>
@@ -579,6 +580,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
                 )}
               </div>
             )}
+            </div>
 
             {!loading && selectedPasses.size > MAX_ACTIVATION_BATCH && (
               <div className={styles.statusNote} style={{ marginTop: 8, color: 'var(--danger, #c0392b)', flexShrink: 0 }}>
@@ -608,7 +610,8 @@ export const ApproveSubmissionModal: FC<IProps> = ({
               Это ранее созданные сотрудники с тем же ФИО. Заблокируйте старые пропуска, если это один и тот же человек.
             </div>
 
-            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+            <div className={styles.modalScrollArea}>
+            <div style={{ overflowX: 'auto' }}>
             {duplicates.length === 0 && (
               <div className={styles.empty}>Все дубли обработаны</div>
             )}
@@ -685,6 +688,7 @@ export const ApproveSubmissionModal: FC<IProps> = ({
               </div>
             )}
 
+            </div>
             </div>
 
             <div className={styles.modalActions} style={{ flexShrink: 0 }}>
