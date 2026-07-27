@@ -142,6 +142,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Отсутствие обучения подсвечено, чтобы руководитель сразу видел пробел. */
+.missing {
+  background: var(--error-muted);
+}
+
 .muted {
   color: var(--text-secondary);
 }
@@ -196,6 +201,11 @@
   .table th,
   .table td {
     padding: 8px;
+  }
+
+  /* Шесть колонок на телефоне не помещаются: отдел и должность — вторичны. */
+  .hideNarrow {
+    display: none;
   }
 }
 

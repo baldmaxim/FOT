@@ -11,17 +11,50 @@ export interface IContractorOrg {
   sigur_department_id: number | null;
 }
 
-/** Организация подрядчика + счётчик сотрудников в реестре ОТиТБ (прошедших инструктаж). */
+/** Организация подрядчика + счётчики реестра ОТиТБ (всего и сколько требуют внимания). */
 export interface IInductionOrg extends IContractorOrg {
   inducted_count: number;
+  /** Нет какого-то обучения либо оно просрочено. */
+  alert_count: number;
+  warning_count: number;
 }
 
-/** Запись реестра ОТиТБ (сотрудник, прошедший вводный инструктаж). */
+/** Вид обучения по ОТ из каталога сервера (периодичность зашита там же). */
+export interface IOtTrainingDef {
+  kind: string;
+  label: string;
+  /** Периодичность из регламента — подсказка под подписью в модалке. */
+  hint: string;
+  /** null — бессрочно. */
+  validMonths: number | null;
+  audience: 'all' | 'itr';
+  order: number;
+}
+
+/** Состояние одного вида обучения. Дату окончания и статус считает сервер. */
+export interface IOtTrainingState {
+  kind: string;
+  passed_on: string;
+  valid_until: string | null;
+  status: 'valid' | 'expiring' | 'expired';
+}
+
+/** Запись реестра ОТиТБ (сотрудник подрядчика и его обучение по ОТ). */
 export interface IInductedPerson {
   id: string;
   full_name: string;
-  inducted_on: string;
+  /** Ревизия записи: уходит обратно в PATCH, сервер отвечает 409 при расхождении. */
+  updated_at: string;
+  /** Дата вводного инструктажа; null — не пройден. */
+  inducted_on: string | null;
+  trainings: IOtTrainingState[];
+  /** Виды без даты. */
+  missing: string[];
+  row_status: 'ok' | 'warning' | 'alert';
 }
+
+/** Патч дат обучения: ключ отсутствует — вид не трогаем, null — снять дату. */
+export type OtTrainingsPatch = Record<string, string | null>;
 
 /** Запись реестра ОТиТБ + организация (для плоского списка «показать всех»). */
 export interface IInductedPersonFull extends IInductedPerson {
@@ -581,7 +614,12 @@ export const contractorAdminService = {
     const r = await apiClient.get<ApiResponse<IContractorOrg[]>>('/admin/contractor/orgs');
     return r.data ?? [];
   },
-  // Реестр ОТиТБ: прошедшие вводный инструктаж сотрудники подрядчиков.
+  // Реестр ОТиТБ: обучение по охране труда сотрудников подрядчиков.
+  /** Каталог видов обучения (без программы А — она только для ИТР). */
+  async getOtCatalog(): Promise<IOtTrainingDef[]> {
+    const r = await apiClient.get<ApiResponse<IOtTrainingDef[]>>('/admin/contractor/induction/catalog');
+    return r.data ?? [];
+  },
   async getInductionOrgs(): Promise<IInductionOrg[]> {
     const r = await apiClient.get<ApiResponse<IInductionOrg[]>>('/admin/contractor/induction/orgs');
     return r.data ?? [];
@@ -597,14 +635,33 @@ export const contractorAdminService = {
     const r = await apiClient.get<ApiResponse<IInductedPersonFull[]>>('/admin/contractor/induction/all');
     return r.data ?? [];
   },
-  async addInducted(orgId: string, fullName: string, inductedOn?: string): Promise<IInductedPerson> {
+  async addInducted(
+    orgId: string,
+    fullName: string,
+    trainings: OtTrainingsPatch,
+  ): Promise<IInductedPerson> {
     const r = await apiClient.post<ApiResponse<IInductedPerson>>('/admin/contractor/induction', {
       org_department_id: orgId,
       full_name: fullName,
-      inducted_on: inductedOn,
+      trainings,
     });
     return r.data;
   },
+  /**
+   * Правка ФИО и дат. Шлём только изменённые ключи + ревизию: полная отправка формы
+   * вернула бы устаревшие значения и затёрла чужую правку (сервер ответит 409).
+   */
+  async updateInducted(
+    id: string,
+    payload: { full_name?: string; trainings?: OtTrainingsPatch; expected_updated_at: string },
+  ): Promise<IInductedPerson | null> {
+    const r = await apiClient.patch<ApiResponse<IInductedPerson | null>>(
+      `/admin/contractor/induction/${id}`,
+      payload,
+    );
+    return r.data ?? null;
+  },
+  /** Архивирование записи: история обучения сохраняется, из списков запись пропадает. */
   async removeInducted(id: string): Promise<void> {
     await apiClient.delete(`/admin/contractor/induction/${id}`);
   },

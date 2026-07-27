@@ -37,6 +37,14 @@ export interface IInductionRow {
   department_name: string | null;
   position_name: string | null;
   inducted_on: string | null;
+  /** Программа А «Общие вопросы охраны труда» — только для ИТР (миграция 233). */
+  program_a_on: string | null;
+}
+
+/** Поля реестра, которые правит вкладка. Ключ отсутствует — поле не трогаем. */
+export interface IInductionPatch {
+  inducted_on?: string | null;
+  program_a_on?: string | null;
 }
 
 export interface IInductionDepartment {
@@ -61,7 +69,17 @@ export interface IInductionListResult {
 
 export type SetInductionResult =
   | { found: false }
-  | { found: true; changed: boolean; previous: string | null; current: string | null };
+  | {
+    found: true;
+    changed: boolean;
+    previous: IInductionValues;
+    current: IInductionValues;
+  };
+
+export interface IInductionValues {
+  inducted_on: string | null;
+  program_a_on: string | null;
+}
 
 /** Плоский список id поддерева (включая сами корни). */
 const descendantIds = async (rootIds: string[]): Promise<string[]> => {
@@ -148,9 +166,11 @@ const buildWhere = (
     parts.push(`e.full_name ILIKE $${values.length}`);
   }
 
+  // Статус — по дате вводного инструктажа, а НЕ по наличию строки: после программы А
+  // (миграция 233) строка может существовать без вводного инструктажа.
   if (opts.withStatus) {
-    if (params.status === 'missing') parts.push('i.employee_id IS NULL');
-    else if (params.status === 'passed') parts.push('i.employee_id IS NOT NULL');
+    if (params.status === 'missing') parts.push('i.inducted_on IS NULL');
+    else if (params.status === 'passed') parts.push('i.inducted_on IS NOT NULL');
   }
 
   return { sql: parts.join(' AND '), values };
@@ -170,7 +190,8 @@ export const listInduction = async (params: IInductionListParams): Promise<IIndu
             e.full_name,
             od.name AS department_name,
             p.name  AS position_name,
-            to_char(i.inducted_on, 'YYYY-MM-DD') AS inducted_on
+            to_char(i.inducted_on, 'YYYY-MM-DD') AS inducted_on,
+            to_char(i.program_a_on, 'YYYY-MM-DD') AS program_a_on
        FROM employees e
        LEFT JOIN org_departments od ON od.id = e.org_department_id
        LEFT JOIN positions p ON p.id = e.position_id
@@ -186,7 +207,7 @@ export const listInduction = async (params: IInductionListParams): Promise<IIndu
   const countWhere = buildWhere(params, { withStatus: false });
   const countsPromise = query<{ total: number; passed: number }>(
     `SELECT count(*)::int AS total,
-            count(i.employee_id)::int AS passed
+            count(i.inducted_on)::int AS passed
        FROM employees e
        LEFT JOIN employee_inductions i ON i.employee_id = e.id
       WHERE ${countWhere.sql}`,
@@ -202,8 +223,11 @@ export const listInduction = async (params: IInductionListParams): Promise<IIndu
 };
 
 /**
- * Установка/снятие даты. Атомарно: сотрудник блокируется FOR UPDATE, поэтому два
- * одновременных PATCH не запишут в аудит неверный previous.
+ * Установка/снятие дат (вводный инструктаж, программа А). Патч частичный: не переданное
+ * поле сохраняется как есть — иначе правка одной колонки затирала бы вторую.
+ *
+ * Атомарно: сотрудник блокируется FOR UPDATE, поэтому два одновременных PATCH не
+ * запишут в аудит неверный previous.
  *
  * Условия выборки сотрудника совпадают со списком (не архивный, не уволенный,
  * в скоупе) — иначе прямым запросом к API можно было бы проставить инструктаж
@@ -211,11 +235,11 @@ export const listInduction = async (params: IInductionListParams): Promise<IIndu
  */
 export const setInduction = async (input: {
   employeeId: number;
-  inductedOn: string | null;
+  patch: IInductionPatch;
   userId: string;
   scopeIds: string[];
 }): Promise<SetInductionResult> => {
-  const { employeeId, inductedOn, userId, scopeIds } = input;
+  const { employeeId, patch, userId, scopeIds } = input;
   if (scopeIds.length === 0) return { found: false };
 
   return withTransaction(async (client: PoolClient) => {
@@ -231,35 +255,47 @@ export const setInduction = async (input: {
     );
     if (target.rows.length === 0) return { found: false };
 
-    const prev = await client.query<{ inducted_on: string }>(
-      `SELECT to_char(inducted_on, 'YYYY-MM-DD') AS inducted_on
+    const prev = await client.query<{ inducted_on: string | null; program_a_on: string | null }>(
+      `SELECT to_char(inducted_on, 'YYYY-MM-DD') AS inducted_on,
+              to_char(program_a_on, 'YYYY-MM-DD') AS program_a_on
          FROM employee_inductions
         WHERE employee_id = $1
         FOR UPDATE`,
       [employeeId],
     );
-    const previous = prev.rows[0]?.inducted_on ?? null;
+    const previous: IInductionValues = {
+      inducted_on: prev.rows[0]?.inducted_on ?? null,
+      program_a_on: prev.rows[0]?.program_a_on ?? null,
+    };
+    const current: IInductionValues = {
+      inducted_on: patch.inducted_on !== undefined ? patch.inducted_on : previous.inducted_on,
+      program_a_on: patch.program_a_on !== undefined ? patch.program_a_on : previous.program_a_on,
+    };
 
     // Значение не меняется — ничего не пишем: иначе повтор той же даты перетирал бы
     // updated_by/updated_at «правкой», которой не было. Покрывает и очистку пустого.
-    if (previous === inductedOn) {
-      return { found: true, changed: false, previous, current: previous };
+    if (previous.inducted_on === current.inducted_on
+      && previous.program_a_on === current.program_a_on) {
+      return { found: true, changed: false, previous, current };
     }
 
-    if (inductedOn === null) {
+    // Ветка DELETE обязана идти до UPSERT: строка без обеих дат нарушает
+    // employee_inductions_any_date_chk (миграция 233).
+    if (current.inducted_on === null && current.program_a_on === null) {
       await client.query('DELETE FROM employee_inductions WHERE employee_id = $1', [employeeId]);
     } else {
       await client.query(
-        `INSERT INTO employee_inductions (employee_id, inducted_on, updated_by, updated_at)
-         VALUES ($1, $2::date, $3::uuid, now())
+        `INSERT INTO employee_inductions (employee_id, inducted_on, program_a_on, updated_by, updated_at)
+         VALUES ($1, $2::date, $3::date, $4::uuid, now())
          ON CONFLICT (employee_id) DO UPDATE
-            SET inducted_on = EXCLUDED.inducted_on,
-                updated_by  = EXCLUDED.updated_by,
-                updated_at  = now()`,
-        [employeeId, inductedOn, userId],
+            SET inducted_on  = EXCLUDED.inducted_on,
+                program_a_on = EXCLUDED.program_a_on,
+                updated_by   = EXCLUDED.updated_by,
+                updated_at   = now()`,
+        [employeeId, current.inducted_on, current.program_a_on, userId],
       );
     }
 
-    return { found: true, changed: true, previous, current: inductedOn };
+    return { found: true, changed: true, previous, current };
   });
 };

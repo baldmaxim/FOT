@@ -23,9 +23,15 @@ const listQuerySchema = z.object({
   search: z.string().trim().max(100).optional(),
 });
 
+// Патч частичный: переданное поле правим, остальные сохраняются как есть. Старое тело
+// { inducted_on } продолжает работать — фронт мог остаться от предыдущего релиза.
 const setDateSchema = z.object({
-  inducted_on: z.string().date('Некорректная дата').nullable(),
-});
+  inducted_on: z.string().date('Некорректная дата').nullable().optional(),
+  program_a_on: z.string().date('Некорректная дата').nullable().optional(),
+}).refine(
+  v => v.inducted_on !== undefined || v.program_a_on !== undefined,
+  'Нечего сохранять',
+);
 
 export const employeeInductionController = {
   /** GET /api/employees/induction — список сотрудников с датой инструктажа. */
@@ -78,22 +84,24 @@ export const employeeInductionController = {
 
   /**
    * PATCH /api/employees/:id/induction — проставить или снять дату.
-   * Body: { inducted_on: 'YYYY-MM-DD' | null }.
+   * Body: { inducted_on?: 'YYYY-MM-DD' | null, program_a_on?: 'YYYY-MM-DD' | null }.
    */
   async setDate(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const employeeId = z.coerce.number().int().positive().parse(req.params.id);
-      const { inducted_on } = setDateSchema.parse(req.body);
+      const patch = setDateSchema.parse(req.body);
 
-      if (inducted_on !== null && inducted_on > moscowTodayIso()) {
-        res.status(400).json({ success: false, error: 'Дата инструктажа не может быть в будущем' });
+      const today = moscowTodayIso();
+      const future = [patch.inducted_on, patch.program_a_on].some(v => !!v && v > today);
+      if (future) {
+        res.status(400).json({ success: false, error: 'Дата обучения не может быть в будущем' });
         return;
       }
 
       const scopeIds = await resolveInductionScopeIds(req);
       const result = await setInduction({
         employeeId,
-        inductedOn: inducted_on,
+        patch,
         userId: req.user.id,
         scopeIds,
       });
@@ -108,13 +116,18 @@ export const employeeInductionController = {
         await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.EMPLOYEE_INDUCTION_CHANGED, {
           entityType: 'employee',
           entityId: String(employeeId),
-          details: { inducted_on: result.current, previous: result.previous },
+          details: { current: result.current, previous: result.previous },
         });
       }
 
       res.json({
         success: true,
-        data: { employee_id: employeeId, inducted_on: result.current, changed: result.changed },
+        data: {
+          employee_id: employeeId,
+          inducted_on: result.current.inducted_on,
+          program_a_on: result.current.program_a_on,
+          changed: result.changed,
+        },
       });
     } catch (error) {
       if (error instanceof z.ZodError) {

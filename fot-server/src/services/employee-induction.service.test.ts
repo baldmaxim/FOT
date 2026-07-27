@@ -138,7 +138,8 @@ describe('listInduction', () => {
 
     const [countSql] = h.query.mock.calls[1];
     expect(String(countSql)).toContain('count(*)::int');
-    expect(String(countSql)).toContain('count(i.employee_id)::int');
+    // Счётчик по дате, а не по наличию строки: строка может быть только с программой А.
+    expect(String(countSql)).toContain('count(i.inducted_on)::int');
     expect(result).toEqual({
       rows: [{ employee_id: 1, full_name: 'Иванов', inducted_on: '2026-07-01' }],
       total: 12,
@@ -151,8 +152,25 @@ describe('listInduction', () => {
 
     await listInduction({ scopeIds: BRANCH, status: 'missing', page: 1, pageSize: 100 });
 
-    expect(String(h.query.mock.calls[0][0])).toContain('i.employee_id IS NULL');
-    expect(String(h.query.mock.calls[1][0])).not.toContain('i.employee_id IS NULL');
+    expect(String(h.query.mock.calls[0][0])).toContain('i.inducted_on IS NULL');
+    expect(String(h.query.mock.calls[1][0])).not.toContain('i.inducted_on IS NULL');
+  });
+
+  it('фильтр «Пройден» — по дате вводного, а не по наличию строки (программа А не считается)', async () => {
+    h.query.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 3, passed: 1 }]);
+
+    await listInduction({ scopeIds: BRANCH, status: 'passed', page: 1, pageSize: 100 });
+
+    expect(String(h.query.mock.calls[0][0])).toContain('i.inducted_on IS NOT NULL');
+    expect(String(h.query.mock.calls[0][0])).not.toContain('i.employee_id IS NOT NULL');
+  });
+
+  it('в списке отдаётся и программа А', async () => {
+    h.query.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0, passed: 0 }]);
+
+    await listInduction({ scopeIds: BRANCH, page: 1, pageSize: 100 });
+
+    expect(String(h.query.mock.calls[0][0])).toContain('program_a_on');
   });
 
   it('поиск по ФИО экранирует LIKE-символы', async () => {
@@ -166,9 +184,11 @@ describe('listInduction', () => {
 
 describe('setInduction', () => {
   const base = { employeeId: 7, userId: 'u-1', scopeIds: BRANCH };
+  const values = (inducted: string | null, programA: string | null = null) =>
+    ({ inducted_on: inducted, program_a_on: programA });
 
   it('пустой скоуп — found:false, транзакция не открывается', async () => {
-    await expect(setInduction({ ...base, inductedOn: '2026-07-01', scopeIds: [] }))
+    await expect(setInduction({ ...base, patch: { inducted_on: '2026-07-01' }, scopeIds: [] }))
       .resolves.toEqual({ found: false });
     expect(h.withTransaction).not.toHaveBeenCalled();
   });
@@ -176,7 +196,7 @@ describe('setInduction', () => {
   it('сотрудник вне скоупа / уволенный / архивный — found:false', async () => {
     const { calls } = makeTxClient([{ rows: [] }]);
 
-    await expect(setInduction({ ...base, inductedOn: '2026-07-01' }))
+    await expect(setInduction({ ...base, patch: { inducted_on: '2026-07-01' } }))
       .resolves.toEqual({ found: false });
 
     // Целевой SELECT повторяет условия списка и берёт блокировку.
@@ -190,12 +210,12 @@ describe('setInduction', () => {
   it('первая установка даты: previous=null, found=true, запись выполняется', async () => {
     const { calls } = makeTxClient([
       { rows: [{ id: 7 }] },   // сотрудник найден
-      { rows: [] },            // прежней даты нет
+      { rows: [] },            // прежних дат нет
       { rows: [] },            // upsert
     ]);
 
-    await expect(setInduction({ ...base, inductedOn: '2026-07-01' })).resolves.toEqual({
-      found: true, changed: true, previous: null, current: '2026-07-01',
+    await expect(setInduction({ ...base, patch: { inducted_on: '2026-07-01' } })).resolves.toEqual({
+      found: true, changed: true, previous: values(null), current: values('2026-07-01'),
     });
     expect(calls[2].sql).toContain('INSERT INTO employee_inductions');
     expect(calls[2].sql).toContain('ON CONFLICT (employee_id) DO UPDATE');
@@ -205,11 +225,11 @@ describe('setInduction', () => {
   it('повтор той же даты — no-op: ни INSERT, ни DELETE', async () => {
     const { calls } = makeTxClient([
       { rows: [{ id: 7 }] },
-      { rows: [{ inducted_on: '2026-07-01' }] },
+      { rows: [{ inducted_on: '2026-07-01', program_a_on: null }] },
     ]);
 
-    await expect(setInduction({ ...base, inductedOn: '2026-07-01' })).resolves.toEqual({
-      found: true, changed: false, previous: '2026-07-01', current: '2026-07-01',
+    await expect(setInduction({ ...base, patch: { inducted_on: '2026-07-01' } })).resolves.toEqual({
+      found: true, changed: false, previous: values('2026-07-01'), current: values('2026-07-01'),
     });
     expect(calls).toHaveLength(2);
   });
@@ -220,35 +240,78 @@ describe('setInduction', () => {
       { rows: [] },
     ]);
 
-    await expect(setInduction({ ...base, inductedOn: null })).resolves.toEqual({
-      found: true, changed: false, previous: null, current: null,
+    await expect(setInduction({ ...base, patch: { inducted_on: null } })).resolves.toEqual({
+      found: true, changed: false, previous: values(null), current: values(null),
     });
     expect(calls).toHaveLength(2);
   });
 
-  it('снятие существующей даты — DELETE и previous в результате', async () => {
+  it('снятие обеих дат — DELETE строки', async () => {
     const { calls } = makeTxClient([
       { rows: [{ id: 7 }] },
-      { rows: [{ inducted_on: '2026-07-01' }] },
+      { rows: [{ inducted_on: '2026-07-01', program_a_on: null }] },
       { rows: [] },
     ]);
 
-    await expect(setInduction({ ...base, inductedOn: null })).resolves.toEqual({
-      found: true, changed: true, previous: '2026-07-01', current: null,
+    await expect(setInduction({ ...base, patch: { inducted_on: null } })).resolves.toEqual({
+      found: true, changed: true, previous: values('2026-07-01'), current: values(null),
     });
     expect(calls[2].sql).toContain('DELETE FROM employee_inductions');
   });
 
-  it('прежняя дата читается под блокировкой (защита от гонки конкурентных PATCH)', async () => {
+  it('снятие вводного при живой программе А — UPDATE, а не DELETE строки', async () => {
     const { calls } = makeTxClient([
       { rows: [{ id: 7 }] },
-      { rows: [{ inducted_on: '2026-06-01' }] },
+      { rows: [{ inducted_on: '2026-07-01', program_a_on: '2026-05-01' }] },
       { rows: [] },
     ]);
 
-    await setInduction({ ...base, inductedOn: '2026-07-01' });
+    await expect(setInduction({ ...base, patch: { inducted_on: null } })).resolves.toEqual({
+      found: true,
+      changed: true,
+      previous: values('2026-07-01', '2026-05-01'),
+      current: values(null, '2026-05-01'),
+    });
+    expect(calls[2].sql).toContain('INSERT INTO employee_inductions');
+    expect(calls[2].params).toEqual([7, null, '2026-05-01', 'u-1']);
+  });
+
+  it('только программа А создаёт строку без вводного инструктажа', async () => {
+    const { calls } = makeTxClient([
+      { rows: [{ id: 7 }] },
+      { rows: [] },
+      { rows: [] },
+    ]);
+
+    await expect(setInduction({ ...base, patch: { program_a_on: '2026-05-01' } })).resolves.toEqual({
+      found: true, changed: true, previous: values(null), current: values(null, '2026-05-01'),
+    });
+    expect(calls[2].params).toEqual([7, null, '2026-05-01', 'u-1']);
+  });
+
+  it('патч одного поля не затирает второе', async () => {
+    const { calls } = makeTxClient([
+      { rows: [{ id: 7 }] },
+      { rows: [{ inducted_on: '2026-07-01', program_a_on: '2026-05-01' }] },
+      { rows: [] },
+    ]);
+
+    await setInduction({ ...base, patch: { program_a_on: '2026-06-01' } });
+
+    expect(calls[2].params).toEqual([7, '2026-07-01', '2026-06-01', 'u-1']);
+  });
+
+  it('прежние даты читаются под блокировкой (защита от гонки конкурентных PATCH)', async () => {
+    const { calls } = makeTxClient([
+      { rows: [{ id: 7 }] },
+      { rows: [{ inducted_on: '2026-06-01', program_a_on: null }] },
+      { rows: [] },
+    ]);
+
+    await setInduction({ ...base, patch: { inducted_on: '2026-07-01' } });
 
     expect(calls[1].sql).toContain('FROM employee_inductions');
     expect(calls[1].sql).toContain('FOR UPDATE');
+    expect(calls[1].sql).toContain('program_a_on');
   });
 });

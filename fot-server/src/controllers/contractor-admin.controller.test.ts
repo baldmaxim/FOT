@@ -23,6 +23,13 @@ const h = vi.hoisted(() => ({
   loadLifecycle: vi.fn(),
   empCacheInvalidate: vi.fn(),
   getContractorRootId: vi.fn(),
+  createInductedPerson: vi.fn(),
+  updateInductedPerson: vi.fn(),
+  archiveInductedPerson: vi.fn(),
+  listInductedByOrg: vi.fn(),
+  listAllInducted: vi.fn(),
+  countInductionByOrg: vi.fn(),
+  getContractorOrgs: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -43,8 +50,19 @@ vi.mock('../services/audit.service.js', () => ({
     CONTRACTOR_SUBMISSION_REJECTED: 'CONTRACTOR_SUBMISSION_REJECTED',
     CONTRACTOR_SUBMISSION_PASS_DECIDED: 'CONTRACTOR_SUBMISSION_PASS_DECIDED',
     CONTRACTOR_INDUCTION_CHANGED: 'CONTRACTOR_INDUCTION_CHANGED',
+    CONTRACTOR_OT_TRAINING_CHANGED: 'CONTRACTOR_OT_TRAINING_CHANGED',
+    CONTRACTOR_OT_PERSON_ARCHIVED: 'CONTRACTOR_OT_PERSON_ARCHIVED',
     CONTRACTOR_PASS_HOLDER_CHANGED: 'CONTRACTOR_PASS_HOLDER_CHANGED',
   },
+}));
+vi.mock('../services/contractor-induction.service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/contractor-induction.service.js')>()),
+  createInductedPerson: h.createInductedPerson,
+  updateInductedPerson: h.updateInductedPerson,
+  archiveInductedPerson: h.archiveInductedPerson,
+  listInductedByOrg: h.listInductedByOrg,
+  listAllInducted: h.listAllInducted,
+  countInductionByOrg: h.countInductionByOrg,
 }));
 vi.mock('../config/contractor.js', () => ({
   isContractorSigurDryRun: h.isDryRun,
@@ -65,7 +83,7 @@ vi.mock('../services/contractor-access.service.js', () => ({
   resolveAccessPointNamesToIds: h.resolveAP,
 }));
 vi.mock('../services/contractor-scope.service.js', () => ({
-  getContractorOrgs: vi.fn(),
+  getContractorOrgs: h.getContractorOrgs,
   getOrgSigurDepartmentId: vi.fn(),
   getContractorUserIdsForOrg: vi.fn().mockResolvedValue([]),
   ContractorScopeError: class extends Error {
@@ -1188,5 +1206,191 @@ describe('contractorAdminController — доступ по гранту стра�
     const res = makeRes();
     await contractorAdminController.monitorPasses(makeAccessReq(true, 'admin'), res as never);
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('contractorAdminController — реестр обучения по ОТ', () => {
+  const ORG = '11111111-1111-1111-1111-111111111111';
+  const PERSON = '33333333-3333-3333-3333-333333333333';
+
+  const req = (body: unknown, params: Record<string, string> = {}) => ({
+    user: { id: 'u-1', role_code: 'otitb', is_admin: false },
+    params,
+    query: { org_department_id: ORG },
+    body,
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+  }) as never;
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.logFromRequest.mockResolvedValue(undefined);
+    h.query.mockResolvedValue([]);
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    h.getContractorRootId.mockResolvedValue('contractor-root');
+    h.getContractorOrgs.mockResolvedValue([{ id: ORG, name: 'ООО Подрядчик', sigur_department_id: 1 }]);
+    h.listInductedByOrg.mockResolvedValue([]);
+    h.countInductionByOrg.mockResolvedValue(new Map());
+    h.listAllInducted.mockResolvedValue([]);
+    // Роль ОТиТБ: гранты на техническую вкладку.
+    h.hasPageView.mockImplementation(async (_r: string, key: string) =>
+      key === '/admin/contractor-approvals/otitb');
+    h.hasPageEdit.mockImplementation(async (_r: string, key: string) =>
+      key === '/admin/contractor-approvals/otitb');
+  });
+
+  it('каталог видов отдаётся без программы А (она только для ИТР)', async () => {
+    const res = makeRes();
+    await contractorAdminController.otTrainingCatalog(req({}), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const kinds = (res.body as { data: Array<{ kind: string }> }).data.map(d => d.kind);
+    expect(kinds).toContain('introductory');
+    expect(kinds).not.toContain('program_a');
+  });
+
+  it('без гранта — 403 на каталог и PATCH', async () => {
+    h.hasPageView.mockResolvedValue(false);
+    h.hasPageEdit.mockResolvedValue(false);
+
+    const catalogRes = makeRes();
+    await contractorAdminController.otTrainingCatalog(req({}), catalogRes as never);
+    expect(catalogRes.statusCode).toBe(403);
+
+    const patchRes = makeRes();
+    await contractorAdminController.updateInductedPersonHandler(
+      req({ trainings: {}, expected_updated_at: 'r1' }, { id: PERSON }),
+      patchRes as never,
+    );
+    expect(patchRes.statusCode).toBe(403);
+    expect(h.updateInductedPerson).not.toHaveBeenCalled();
+  });
+
+  it('back-compat: старое тело { inducted_on } создаёт вид introductory', async () => {
+    h.createInductedPerson.mockResolvedValue({ id: PERSON, diff: {} });
+    const res = makeRes();
+
+    await contractorAdminController.addInductedPerson(
+      req({ org_department_id: ORG, full_name: 'Иванов И.И.', inducted_on: '2026-07-01' }),
+      res as never,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(h.createInductedPerson).toHaveBeenCalledWith(
+      expect.objectContaining({ trainings: { introductory: '2026-07-01' } }),
+    );
+  });
+
+  it('inducted_on и trainings.introductory с разными датами — 400, а не тихий выбор одной', async () => {
+    const res = makeRes();
+
+    await contractorAdminController.addInductedPerson(
+      req({
+        org_department_id: ORG,
+        full_name: 'Иванов И.И.',
+        inducted_on: '2026-07-01',
+        trainings: { introductory: '2026-07-02' },
+      }),
+      res as never,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(h.createInductedPerson).not.toHaveBeenCalled();
+  });
+
+  it('дата обучения в будущем — 400, сервис не вызывается', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-24T12:00:00+03:00'));
+    const res = makeRes();
+
+    await contractorAdminController.addInductedPerson(
+      req({ org_department_id: ORG, full_name: 'Иванов И.И.', trainings: { workplace: '2026-07-25' } }),
+      res as never,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(h.createInductedPerson).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('программа А в подрядчицком payload — 400 (вид только для ИТР)', async () => {
+    const res = makeRes();
+
+    await contractorAdminController.addInductedPerson(
+      req({ org_department_id: ORG, full_name: 'Иванов И.И.', trainings: { program_a: '2026-07-01' } }),
+      res as never,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(h.createInductedPerson).not.toHaveBeenCalled();
+  });
+
+  it('устаревшая ревизия — 409 с понятным текстом', async () => {
+    h.updateInductedPerson.mockResolvedValue({ status: 'conflict' });
+    const res = makeRes();
+
+    await contractorAdminController.updateInductedPersonHandler(
+      req({ trainings: { workplace: '2026-07-01' }, expected_updated_at: 'r1' }, { id: PERSON }),
+      res as never,
+    );
+
+    expect(res.statusCode).toBe(409);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('PATCH без изменений — 200 без записи в аудит', async () => {
+    h.updateInductedPerson.mockResolvedValue({ status: 'ok', diff: {}, nameFrom: null });
+    const res = makeRes();
+
+    await contractorAdminController.updateInductedPersonHandler(
+      req({ trainings: { workplace: '2026-07-01' }, expected_updated_at: 'r1' }, { id: PERSON }),
+      res as never,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('DELETE архивирует и пишет полный снимок в аудит', async () => {
+    h.archiveInductedPerson.mockResolvedValue({
+      id: PERSON,
+      full_name: 'Иванов И.И.',
+      org_department_id: ORG,
+      trainings: { introductory: '2026-07-01' },
+    });
+    const res = makeRes();
+
+    await contractorAdminController.deleteInductedPerson(req({}, { id: PERSON }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'u-1', 'CONTRACTOR_OT_PERSON_ARCHIVED',
+      expect.objectContaining({
+        entityId: PERSON,
+        details: expect.objectContaining({ trainings: { introductory: '2026-07-01' } }),
+      }),
+    );
+  });
+
+  it('архивирование чужой записи — 404', async () => {
+    h.archiveInductedPerson.mockResolvedValue(null);
+    const res = makeRes();
+
+    await contractorAdminController.deleteInductedPerson(req({}, { id: PERSON }), res as never);
+
+    expect(res.statusCode).toBe(404);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('счётчики организаций включают «есть замечания»', async () => {
+    h.countInductionByOrg.mockResolvedValue(new Map([[ORG, { total: 4, alert: 2, warning: 1 }]]));
+    const res = makeRes();
+
+    await contractorAdminController.listInductionOrgs(req({}), res as never);
+
+    expect(res.body).toMatchObject({
+      data: [expect.objectContaining({ id: ORG, inducted_count: 4, alert_count: 2, warning_count: 1 })],
+    });
   });
 });

@@ -127,8 +127,13 @@ describe('employeeInductionController.departments', () => {
 describe('employeeInductionController.setDate', () => {
   const req = (body: unknown, id = '7') => makeReq({ params: { id }, body });
 
+  const vals = (inducted: string | null, programA: string | null = null) =>
+    ({ inducted_on: inducted, program_a_on: programA });
+
   it('первая установка даты: 200 и previous=null в аудите (не 404)', async () => {
-    h.setInduction.mockResolvedValue({ found: true, changed: true, previous: null, current: '2026-07-01' });
+    h.setInduction.mockResolvedValue({
+      found: true, changed: true, previous: vals(null), current: vals('2026-07-01'),
+    });
     const res = makeRes();
 
     await employeeInductionController.setDate(req({ inducted_on: '2026-07-01' }), res as never);
@@ -136,14 +141,14 @@ describe('employeeInductionController.setDate', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({
       success: true,
-      data: { employee_id: 7, inducted_on: '2026-07-01', changed: true },
+      data: { employee_id: 7, inducted_on: '2026-07-01', program_a_on: null, changed: true },
     });
     expect(h.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'u-1', 'EMPLOYEE_INDUCTION_CHANGED',
       expect.objectContaining({
         entityType: 'employee',
         entityId: '7',
-        details: { inducted_on: '2026-07-01', previous: null },
+        details: { current: vals('2026-07-01'), previous: vals(null) },
       }),
     );
   });
@@ -160,7 +165,7 @@ describe('employeeInductionController.setDate', () => {
 
   it('no-op (та же дата) — 200 без записи в аудит', async () => {
     h.setInduction.mockResolvedValue({
-      found: true, changed: false, previous: '2026-07-01', current: '2026-07-01',
+      found: true, changed: false, previous: vals('2026-07-01'), current: vals('2026-07-01'),
     });
     const res = makeRes();
 
@@ -172,13 +177,53 @@ describe('employeeInductionController.setDate', () => {
   });
 
   it('снятие даты (null) — проходит в сервис', async () => {
-    h.setInduction.mockResolvedValue({ found: true, changed: true, previous: '2026-07-01', current: null });
+    h.setInduction.mockResolvedValue({
+      found: true, changed: true, previous: vals('2026-07-01'), current: vals(null),
+    });
     const res = makeRes();
 
     await employeeInductionController.setDate(req({ inducted_on: null }), res as never);
 
     expect(res.statusCode).toBe(200);
-    expect(h.setInduction).toHaveBeenCalledWith(expect.objectContaining({ inductedOn: null, scopeIds: SCOPE }));
+    expect(h.setInduction).toHaveBeenCalledWith(
+      expect.objectContaining({ patch: { inducted_on: null }, scopeIds: SCOPE }),
+    );
+  });
+
+  it('программа А правится отдельно и не тянет за собой вводный инструктаж', async () => {
+    h.setInduction.mockResolvedValue({
+      found: true, changed: true, previous: vals(null), current: vals(null, '2026-05-01'),
+    });
+    const res = makeRes();
+
+    await employeeInductionController.setDate(req({ program_a_on: '2026-05-01' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.setInduction).toHaveBeenCalledWith(
+      expect.objectContaining({ patch: { program_a_on: '2026-05-01' } }),
+    );
+    expect(res.body).toMatchObject({ data: { inducted_on: null, program_a_on: '2026-05-01' } });
+  });
+
+  it('пустое тело — 400, сервис не вызывается', async () => {
+    const res = makeRes();
+
+    await employeeInductionController.setDate(req({}), res as never);
+
+    expect(res.statusCode).toBe(400);
+    expect(h.setInduction).not.toHaveBeenCalled();
+  });
+
+  it('будущая дата программы А — 400', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-24T12:00:00+03:00'));
+    const res = makeRes();
+
+    await employeeInductionController.setDate(req({ program_a_on: '2026-07-25' }), res as never);
+
+    expect(res.statusCode).toBe(400);
+    expect(h.setInduction).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it('дата в будущем — 400, сервис не вызывается', async () => {

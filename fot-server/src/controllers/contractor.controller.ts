@@ -99,11 +99,18 @@ export const contractorController = {
     try {
       const orgId = await resolveOrgOr403(req, res);
       if (!orgId) return;
+      // Только реально прошедшие вводный инструктаж и не архивные: наличие строки
+      // в реестре само по себе инструктажа не подтверждает (миграция 232).
       const data = await query<{ id: string; full_name: string }>(
-        `SELECT id, full_name
-           FROM contractor_inducted_persons
-          WHERE org_department_id = $1::uuid
-          ORDER BY full_name ASC, inducted_on DESC`,
+        `SELECT p.id, p.full_name
+           FROM contractor_inducted_persons p
+          WHERE p.org_department_id = $1::uuid
+            AND p.deleted_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM contractor_person_trainings t
+               WHERE t.person_id = p.id AND t.kind = 'introductory'
+            )
+          ORDER BY p.full_name ASC`,
         [orgId],
       );
       res.json({ success: true, data });

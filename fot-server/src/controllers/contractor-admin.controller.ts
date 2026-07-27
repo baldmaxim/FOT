@@ -56,6 +56,100 @@ import {
   getErrorMessage,
 } from './employee-lifecycle.controller.js';
 import { employeeCache } from '../services/employee-cache.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
+import {
+  OT_CONTRACTOR_KINDS,
+  otTrainingsFor,
+  type OtTrainingKind,
+} from '../services/ot-training.service.js';
+import {
+  archiveInductedPerson,
+  countInductionByOrg,
+  createInductedPerson,
+  listAllInducted,
+  listInductedByOrg,
+  updateInductedPerson,
+  OtTrainingKindError,
+  type OtTrainingsPatch,
+} from '../services/contractor-induction.service.js';
+
+/** Даты обучения: ключ отсутствует — вид не трогаем, null — снять дату. */
+const otTrainingsSchema = z.record(
+  z.enum(OT_CONTRACTOR_KINDS as [OtTrainingKind, ...OtTrainingKind[]]),
+  z.string().date('Некорректная дата').nullable(),
+);
+
+const createInductedSchema = z.object({
+  org_department_id: z.string().uuid(),
+  full_name: z.string().trim().min(2).max(200),
+  trainings: otTrainingsSchema.optional(),
+  // deprecated: одиночная дата старого фронта = вводный инструктаж.
+  inducted_on: z.string().date('Некорректная дата').optional(),
+}).superRefine((v, ctx) => {
+  const fromTrainings = v.trainings?.introductory;
+  // Молча выбрать одно из двух значений нельзя — это тихая потеря данных.
+  if (v.inducted_on && fromTrainings !== undefined && fromTrainings !== v.inducted_on) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Дата вводного инструктажа передана дважды с разными значениями',
+    });
+  }
+});
+
+const updateInductedSchema = z.object({
+  full_name: z.string().trim().min(2).max(200).optional(),
+  trainings: otTrainingsSchema.optional(),
+  expected_updated_at: z.string().min(1, 'Не передана ревизия записи'),
+}).refine(
+  v => v.full_name !== undefined || v.trainings !== undefined,
+  'Нечего сохранять',
+);
+
+/** Старое одиночное поле сводим к виду introductory (значения уже сверены схемой). */
+const mergeLegacyIntroductory = (
+  trainings: OtTrainingsPatch | undefined,
+  legacyDate: string | undefined,
+): OtTrainingsPatch => {
+  if (trainings) return trainings;
+  return legacyDate ? { introductory: legacyDate } : {};
+};
+
+/** Дата обучения в будущем — та же проверка, что на вкладке своих сотрудников. */
+const validateNotFuture = (trainings: OtTrainingsPatch): string | null => {
+  const today = moscowTodayIso();
+  for (const value of Object.values(trainings)) {
+    if (value && value > today) return 'Дата обучения не может быть в будущем';
+  }
+  return null;
+};
+
+/** Общая обработка ожидаемых ошибок реестра. true — ответ уже отправлен. */
+const handleInductionError = (error: unknown, res: Response, _fallback: string): boolean => {
+  if (error instanceof z.ZodError) {
+    res.status(400).json({ success: false, error: error.errors[0]?.message ?? 'Некорректные данные' });
+    return true;
+  }
+  if (error instanceof OtTrainingKindError) {
+    res.status(400).json({ success: false, error: error.message });
+    return true;
+  }
+  // Неверная дата на уровне PG (22007/22008) → 400, а не 500.
+  const code = (error as { code?: string })?.code;
+  if (code === '22007' || code === '22008') {
+    res.status(400).json({ success: false, error: 'Некорректная дата' });
+    return true;
+  }
+  return false;
+};
+
+/** Realtime: открытые вкладки ОТиТБ подхватывают правку без перезагрузки. Без ПДн. */
+const emitInductionChanged = (orgId: string): void => {
+  emitDomainChange({
+    event: 'contractor_induction:changed',
+    broadcast: true,
+    payload: { orgId },
+  });
+};
 
 /** Максимум сотрудников в одной активации (защита от таймаута массовой привязки в Sigur). */
 const MAX_ACTIVATION_BATCH = 50;
@@ -1097,21 +1191,35 @@ export const contractorAdminController = {
     }
   },
 
+  /** GET /induction/catalog — виды обучения по ОТ для подрядчиков (без программы А). */
+  async otTrainingCatalog(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureOtitbAccess(req, res, 'view'))) return;
+      res.json({ success: true, data: otTrainingsFor('contractor') });
+    } catch (error) {
+      console.error('Contractor otTrainingCatalog error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить виды обучения' });
+    }
+  },
+
   /**
-   * GET /induction/orgs — все подрядные организации + счётчик заведённых в реестр
-   * ОТиТБ (прошедших вводный инструктаж) сотрудников. Для внешнего списка вкладки.
+   * GET /induction/orgs — все подрядные организации + счётчики реестра ОТиТБ:
+   * сколько заведено и сколько требуют внимания (нет обучения либо просрочено).
    */
   async listInductionOrgs(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureOtitbAccess(req, res, 'view'))) return;
       const orgs = await getContractorOrgs();
-      const counts = await query<{ org_department_id: string; cnt: string }>(
-        `SELECT org_department_id, COUNT(*)::text AS cnt
-           FROM contractor_inducted_persons
-          GROUP BY org_department_id`,
-      );
-      const byOrg = new Map(counts.map(c => [c.org_department_id, Number(c.cnt)]));
-      const data = orgs.map(o => ({ ...o, inducted_count: byOrg.get(o.id) ?? 0 }));
+      const counts = await countInductionByOrg(orgs.map(o => o.id), moscowTodayIso());
+      const data = orgs.map(o => {
+        const c = counts.get(o.id);
+        return {
+          ...o,
+          inducted_count: c?.total ?? 0,
+          alert_count: c?.alert ?? 0,
+          warning_count: c?.warning ?? 0,
+        };
+      });
       res.json({ success: true, data });
     } catch (error) {
       console.error('Contractor listInductionOrgs error:', error);
@@ -1119,19 +1227,12 @@ export const contractorAdminController = {
     }
   },
 
-  /** GET /induction?org_department_id= — реестр сотрудников организации. */
+  /** GET /induction?org_department_id= — реестр сотрудников организации с обучением. */
   async listInductedPersons(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureOtitbAccess(req, res, 'view'))) return;
       const orgId = z.string().uuid().parse(req.query.org_department_id);
-      // Дату отдаём строкой YYYY-MM-DD (to_char — не зависит от DateStyle), без Date-преобразований.
-      const data = await query<{ id: string; full_name: string; inducted_on: string }>(
-        `SELECT id, full_name, to_char(inducted_on, 'YYYY-MM-DD') AS inducted_on
-           FROM contractor_inducted_persons
-          WHERE org_department_id = $1::uuid
-          ORDER BY inducted_on DESC, created_at DESC`,
-        [orgId],
-      );
+      const data = await listInductedByOrg(orgId, moscowTodayIso());
       res.json({ success: true, data });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1144,74 +1245,147 @@ export const contractorAdminController = {
   },
 
   /**
-   * POST /induction — добавить сотрудника в реестр.
-   * Body: { org_department_id, full_name, inducted_on? }. Дата — строка YYYY-MM-DD
-   * (реальная календарная, .date() отсекает 2026-99-99); по умолчанию — сегодня.
+   * POST /induction — добавить сотрудника в реестр вместе с датами обучения.
+   * Body: { org_department_id, full_name, trainings?, inducted_on? }. Даты — строки
+   * YYYY-MM-DD (.date() отсекает 2026-99-99). Поле inducted_on оставлено для старого
+   * фронта и трактуется как вводный инструктаж.
    */
   async addInductedPerson(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureOtitbAccess(req, res, 'edit'))) return;
-      const { org_department_id, full_name, inducted_on } = z.object({
-        org_department_id: z.string().uuid(),
-        full_name: z.string().trim().min(2).max(200),
-        inducted_on: z.string().date().optional(),
-      }).parse(req.body);
+      const body = createInductedSchema.parse(req.body);
 
       // Организация должна быть подрядной (источник истины — getContractorOrgs).
       const orgs = await getContractorOrgs();
-      if (!orgs.some(o => o.id === org_department_id)) {
+      if (!orgs.some(o => o.id === body.org_department_id)) {
         res.status(404).json({ success: false, error: 'Подрядная организация не найдена' });
         return;
       }
 
-      // Дату передаём строкой в $4::date без Date-преобразований (иначе сдвиг дня по TZ).
-      // COALESCE — при отсутствии даты берём CURRENT_DATE (прежнее поведение).
-      const row = await queryOne<{ id: string; full_name: string; inducted_on: string }>(
-        `INSERT INTO contractor_inducted_persons (org_department_id, full_name, inducted_on, created_by)
-         VALUES ($1::uuid, $2, COALESCE($3::date, CURRENT_DATE), $4::uuid)
-         RETURNING id, full_name, to_char(inducted_on, 'YYYY-MM-DD') AS inducted_on`,
-        [org_department_id, full_name, inducted_on ?? null, req.user.id],
-      );
-      res.json({ success: true, data: row });
+      const trainings = mergeLegacyIntroductory(body.trainings, body.inducted_on);
+      const futureError = validateNotFuture(trainings);
+      if (futureError) {
+        res.status(400).json({ success: false, error: futureError });
+        return;
+      }
+
+      const { id, diff } = await createInductedPerson({
+        orgDepartmentId: body.org_department_id,
+        fullName: body.full_name,
+        trainings,
+        userId: req.user.id,
+      });
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_OT_TRAINING_CHANGED, {
+        entityType: 'contractor_inducted_person',
+        entityId: id,
+        details: { created: true, org_department_id: body.org_department_id, changed: diff },
+      });
+      emitInductionChanged(body.org_department_id);
+
+      const [person] = (await listInductedByOrg(body.org_department_id, moscowTodayIso()))
+        .filter(p => p.id === id);
+      res.json({ success: true, data: person ?? { id, full_name: body.full_name } });
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        res.status(400).json({ success: false, error: 'Некорректные данные' });
-        return;
+      const handled = handleInductionError(error, res, 'Не удалось добавить сотрудника');
+      if (!handled) {
+        console.error('Contractor addInductedPerson error:', error);
+        res.status(500).json({ success: false, error: 'Не удалось добавить сотрудника' });
       }
-      // Защита: неверная дата на уровне PG (22007/22008) → 400, а не 500.
-      const code = (error as { code?: string })?.code;
-      if (code === '22007' || code === '22008') {
-        res.status(400).json({ success: false, error: 'Некорректная дата' });
-        return;
-      }
-      console.error('Contractor addInductedPerson error:', error);
-      res.status(500).json({ success: false, error: 'Не удалось добавить сотрудника' });
     }
   },
 
-  /** DELETE /induction/:id — удалить запись реестра (только в пределах подрядных орг). */
+  /**
+   * PATCH /induction/:id — правка ФИО и дат обучения. Партиал: приходят только
+   * изменённые ключи, expected_updated_at отсекает сохранение поверх чужой правки.
+   */
+  async updateInductedPersonHandler(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureOtitbAccess(req, res, 'edit'))) return;
+      const id = z.string().uuid().parse(req.params.id);
+      const body = updateInductedSchema.parse(req.body);
+
+      const trainings = body.trainings as OtTrainingsPatch | undefined;
+      if (trainings) {
+        const futureError = validateNotFuture(trainings);
+        if (futureError) {
+          res.status(400).json({ success: false, error: futureError });
+          return;
+        }
+      }
+
+      const orgs = await getContractorOrgs();
+      const result = await updateInductedPerson({
+        id,
+        orgIds: orgs.map(o => o.id),
+        fullName: body.full_name,
+        trainings,
+        expectedUpdatedAt: body.expected_updated_at,
+        userId: req.user.id,
+      });
+
+      if (result.status === 'not_found') {
+        res.status(404).json({ success: false, error: 'Запись не найдена' });
+        return;
+      }
+      if (result.status === 'conflict') {
+        res.status(409).json({
+          success: false,
+          error: 'Запись изменена другим пользователем — обновите страницу',
+        });
+        return;
+      }
+
+      if (Object.keys(result.diff).length > 0 || result.nameFrom !== null) {
+        await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_OT_TRAINING_CHANGED, {
+          entityType: 'contractor_inducted_person',
+          entityId: id,
+          details: {
+            changed: result.diff,
+            ...(result.nameFrom !== null
+              ? { full_name: { from: result.nameFrom, to: body.full_name } }
+              : {}),
+          },
+        });
+      }
+
+      const person = (await listAllInducted(orgs.map(o => o.id), moscowTodayIso()))
+        .find(p => p.id === id);
+      if (person) emitInductionChanged(person.org_department_id);
+      res.json({ success: true, data: person ?? null });
+    } catch (error) {
+      const handled = handleInductionError(error, res, 'Не удалось сохранить обучение');
+      if (!handled) {
+        console.error('Contractor updateInductedPerson error:', error);
+        res.status(500).json({ success: false, error: 'Не удалось сохранить обучение' });
+      }
+    }
+  },
+
+  /**
+   * DELETE /induction/:id — архивирование записи реестра. Физического удаления нет:
+   * каскад унёс бы всю историю обучения по ОТ, а она нужна как доказательная база.
+   */
   async deleteInductedPerson(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureOtitbAccess(req, res, 'edit'))) return;
       const id = z.string().uuid().parse(req.params.id);
 
-      // Граница scope: удаляем только записи подрядных организаций.
+      // Граница scope: архивируем только записи подрядных организаций.
       const orgs = await getContractorOrgs();
-      const orgIds = orgs.map(o => o.id);
-      if (orgIds.length === 0) {
+      const snapshot = await archiveInductedPerson(id, orgs.map(o => o.id), req.user.id);
+      if (!snapshot) {
         res.status(404).json({ success: false, error: 'Запись не найдена' });
         return;
       }
-      const deleted = await queryOne<{ id: string }>(
-        `DELETE FROM contractor_inducted_persons
-          WHERE id = $1::uuid AND org_department_id = ANY($2::uuid[])
-          RETURNING id`,
-        [id, orgIds],
-      );
-      if (!deleted) {
-        res.status(404).json({ success: false, error: 'Запись не найдена' });
-        return;
-      }
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_OT_PERSON_ARCHIVED, {
+        entityType: 'contractor_inducted_person',
+        entityId: id,
+        details: { ...snapshot },
+      });
+      emitInductionChanged(snapshot.org_department_id);
+
       res.json({ success: true });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1224,29 +1398,14 @@ export const contractorAdminController = {
   },
 
   /**
-   * GET /induction/all — плоский список всех прошедших вводный инструктаж по всем
-   * подрядным организациям (для режима «показать всех» на вкладке ОТиТБ).
+   * GET /induction/all — плоский список реестра по всем подрядным организациям
+   * (для режима «показать всех» на вкладке ОТиТБ).
    */
   async listAllInducted(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureOtitbAccess(req, res, 'view'))) return;
       const orgs = await getContractorOrgs();
-      const orgIds = orgs.map(o => o.id);
-      if (orgIds.length === 0) {
-        res.json({ success: true, data: [] });
-        return;
-      }
-      const data = await query<{
-        id: string; org_department_id: string; org_name: string; full_name: string; inducted_on: string;
-      }>(
-        `SELECT cip.id, cip.org_department_id, od.name AS org_name, cip.full_name,
-                to_char(cip.inducted_on, 'YYYY-MM-DD') AS inducted_on
-           FROM contractor_inducted_persons cip
-           JOIN org_departments od ON od.id = cip.org_department_id
-          WHERE cip.org_department_id = ANY($1::uuid[])
-          ORDER BY cip.inducted_on DESC, od.name ASC, cip.full_name ASC`,
-        [orgIds],
-      );
+      const data = await listAllInducted(orgs.map(o => o.id), moscowTodayIso());
       res.json({ success: true, data });
     } catch (error) {
       console.error('Contractor listAllInducted error:', error);

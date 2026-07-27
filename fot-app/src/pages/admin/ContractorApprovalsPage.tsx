@@ -15,7 +15,7 @@ import { SentTab } from '../../components/contractor/SentTab';
 import { SubmissionsTab } from '../../components/contractor/SubmissionsTab';
 import { MonitorTab } from '../../components/contractor/MonitorTab';
 import { RemovalRequestsTab } from '../../components/contractor/RemovalRequestsTab';
-import { OtitbTab } from '../../components/contractor/OtitbTab';
+import { OtitbTab } from '../../components/contractor/otitb/OtitbTab';
 import { usePendingContractorRemovalsCount } from '../../hooks/usePendingContractorRemovalsCount';
 import { useContractorSyncFailedCount } from '../../hooks/useContractorSyncFailedCount';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';

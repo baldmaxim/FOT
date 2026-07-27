@@ -9,6 +9,7 @@ import { useToast } from '../../contexts/ToastContext';
 import {
   employeeInductionService,
   type IInductionRow,
+  type InductionField,
   type InductionStatusFilter,
 } from '../../services/employeeInductionService';
 import styles from './EmployeeInductionTab.module.css';
@@ -41,11 +42,22 @@ interface IRowProps {
   row: IInductionRow;
   index: number;
   canEdit: boolean;
-  onSave: (employeeId: number, inductedOn: string | null) => Promise<void>;
+  onSave: (employeeId: number, field: InductionField, value: string | null) => Promise<void>;
 }
 
-const InductionRow: FC<IRowProps> = memo(({ row, index, canEdit, onSave }) => {
-  const serverValue = row.inducted_on ?? '';
+interface IDateCellProps {
+  employeeId: number;
+  field: InductionField;
+  serverValue: string;
+  canEdit: boolean;
+  clearTitle: string;
+  onSave: IRowProps['onSave'];
+}
+
+/** Ячейка одной даты: черновик, откат и блокировка на время сохранения. */
+const InductionDateCell: FC<IDateCellProps> = ({
+  employeeId, field, serverValue, canEdit, clearTitle, onSave,
+}) => {
   const [draft, setDraft] = useState(serverValue);
   const [busy, setBusy] = useState(false);
   // Смена ключа ремоунтит DateInput: повторная передача того же value внутреннее
@@ -77,7 +89,7 @@ const InductionRow: FC<IRowProps> = memo(({ row, index, canEdit, onSave }) => {
     }
     setDraft(next);
     setBusy(true);
-    void onSave(row.employee_id, next)
+    void onSave(employeeId, field, next)
       .catch(() => revert())
       .finally(() => setBusy(false));
   };
@@ -88,41 +100,67 @@ const InductionRow: FC<IRowProps> = memo(({ row, index, canEdit, onSave }) => {
       return;
     }
     setBusy(true);
-    void onSave(row.employee_id, null)
+    void onSave(employeeId, field, null)
       .catch(() => revert())
       .finally(() => setBusy(false));
   };
+
+  if (!canEdit) {
+    return <span className={styles.dateText}>{fmtDate(serverValue || null)}</span>;
+  }
+
+  return (
+    <div className={styles.dateBox}>
+      <DateInput
+        key={`${employeeId}:${field}:${resetRevision}`}
+        value={draft}
+        onChange={handleChange}
+        onBlur={() => { if (!busy && draft !== serverValue) revert(); }}
+        disabled={busy}
+      />
+      <button
+        type="button"
+        className={styles.clearBtn}
+        onClick={handleClear}
+        disabled={busy || !serverValue}
+        title={clearTitle}
+        aria-label={clearTitle}
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+};
+
+const InductionRow: FC<IRowProps> = memo(({ row, index, canEdit, onSave }) => {
+  const inducted = row.inducted_on ?? '';
+  const programA = row.program_a_on ?? '';
 
   return (
     <tr>
       <td className={styles.num}>{index}</td>
       <td>{row.full_name || '—'}</td>
-      <td className={styles.muted}>{row.department_name || '—'}</td>
-      <td className={styles.muted}>{row.position_name || '—'}</td>
-      <td className={styles.dateCell}>
-        {canEdit ? (
-          <div className={styles.dateBox}>
-            <DateInput
-              key={`${row.employee_id}:${resetRevision}`}
-              value={draft}
-              onChange={handleChange}
-              onBlur={() => { if (!busy && draft !== serverValue) revert(); }}
-              disabled={busy}
-            />
-            <button
-              type="button"
-              className={styles.clearBtn}
-              onClick={handleClear}
-              disabled={busy || !serverValue}
-              title="Снять дату инструктажа"
-              aria-label="Снять дату инструктажа"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        ) : (
-          <span className={styles.dateText}>{fmtDate(row.inducted_on)}</span>
-        )}
+      <td className={`${styles.muted} ${styles.hideNarrow}`}>{row.department_name || '—'}</td>
+      <td className={`${styles.muted} ${styles.hideNarrow}`}>{row.position_name || '—'}</td>
+      <td className={`${styles.dateCell} ${inducted ? '' : styles.missing}`}>
+        <InductionDateCell
+          employeeId={row.employee_id}
+          field="inducted_on"
+          serverValue={inducted}
+          canEdit={canEdit}
+          clearTitle="Снять дату инструктажа"
+          onSave={onSave}
+        />
+      </td>
+      <td className={`${styles.dateCell} ${programA ? '' : styles.missing}`}>
+        <InductionDateCell
+          employeeId={row.employee_id}
+          field="program_a_on"
+          serverValue={programA}
+          canEdit={canEdit}
+          clearTitle="Снять дату программы А"
+          onSave={onSave}
+        />
       </td>
     </tr>
   );
@@ -174,29 +212,34 @@ export const EmployeeInductionTab: FC = () => {
   });
 
   const saveMutation = useMutation({
-    mutationFn: ({ employeeId, inductedOn }: { employeeId: number; inductedOn: string | null }) =>
-      employeeInductionService.setDate(employeeId, inductedOn),
-    onSuccess: (inductedOn, { employeeId }) => {
+    mutationFn: ({ employeeId, field, value }: {
+      employeeId: number; field: InductionField; value: string | null;
+    }) => employeeInductionService.setDate(employeeId, field, value),
+    onSuccess: (dates, { employeeId }) => {
       queryClient.setQueryData<Awaited<ReturnType<typeof employeeInductionService.list>>>(
         listQueryKey,
         previous => (previous
           ? {
             ...previous,
-            data: previous.data.map(r => (r.employee_id === employeeId ? { ...r, inducted_on: inductedOn } : r)),
+            data: previous.data.map(r => (r.employee_id === employeeId ? { ...r, ...dates } : r)),
           }
           : previous),
       );
       void queryClient.invalidateQueries({ queryKey: ['employee-induction'] });
     },
     onError: (error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Не удалось сохранить дату инструктажа');
+      toast.error(error instanceof Error ? error.message : 'Не удалось сохранить дату');
     },
   });
 
   // Стабильная ссылка — иначе memo на строках таблицы бесполезен.
   const { mutateAsync } = saveMutation;
-  const handleSave = useCallback(async (employeeId: number, inductedOn: string | null): Promise<void> => {
-    await mutateAsync({ employeeId, inductedOn });
+  const handleSave = useCallback(async (
+    employeeId: number,
+    field: InductionField,
+    value: string | null,
+  ): Promise<void> => {
+    await mutateAsync({ employeeId, field, value });
   }, [mutateAsync]);
 
   const rows = listQuery.data?.data ?? [];
@@ -259,9 +302,15 @@ export const EmployeeInductionTab: FC = () => {
             <tr>
               <th className={styles.num}>№</th>
               <th>ФИО</th>
-              <th>Отдел</th>
-              <th>Должность</th>
+              <th className={styles.hideNarrow}>Отдел</th>
+              <th className={styles.hideNarrow}>Должность</th>
               <th className={styles.dateCell}>Дата инструктажа</th>
+              <th
+                className={styles.dateCell}
+                title="Общие вопросы охраны труда (только ИТР), 1 раз в 3 года"
+              >
+                Программа А
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -276,7 +325,7 @@ export const EmployeeInductionTab: FC = () => {
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={5} className={styles.empty}>
+                <td colSpan={6} className={styles.empty}>
                   {listQuery.isPending ? 'Загрузка…' : 'Сотрудники не найдены'}
                 </td>
               </tr>

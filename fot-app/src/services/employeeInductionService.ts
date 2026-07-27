@@ -7,7 +7,12 @@ export interface IInductionRow {
   position_name: string | null;
   /** YYYY-MM-DD или null (инструктаж не пройден). */
   inducted_on: string | null;
+  /** Программа А «Общие вопросы охраны труда» — только для ИТР. */
+  program_a_on: string | null;
 }
+
+/** Поля реестра, которые правит вкладка. */
+export type InductionField = 'inducted_on' | 'program_a_on';
 
 export interface IInductionDepartment {
   id: string;
@@ -56,12 +61,19 @@ export const employeeInductionService = {
     return res.data;
   },
 
-  /** `inductedOn = null` — снять дату (инструктаж не пройден). */
-  setDate: async (employeeId: number, inductedOn: string | null): Promise<IInductionRow['inducted_on']> => {
-    const res = await apiClient.patch<{ success: boolean; data: { inducted_on: string | null } }>(
-      `/employees/${employeeId}/induction`,
-      { inducted_on: inductedOn },
-    );
-    return res.data.inducted_on;
+  /**
+   * Правит одно поле: `value = null` — снять дату. Патч частичный, второе поле
+   * на сервере сохраняется как есть.
+   */
+  setDate: async (
+    employeeId: number,
+    field: InductionField,
+    value: string | null,
+  ): Promise<{ inducted_on: string | null; program_a_on: string | null }> => {
+    const res = await apiClient.patch<{
+      success: boolean;
+      data: { inducted_on: string | null; program_a_on: string | null };
+    }>(`/employees/${employeeId}/induction`, { [field]: value });
+    return { inducted_on: res.data.inducted_on, program_a_on: res.data.program_a_on };
   },
 };

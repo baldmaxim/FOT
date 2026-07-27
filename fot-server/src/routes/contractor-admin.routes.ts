@@ -53,12 +53,15 @@ router.get('/submissions/:id/export', apprView, contractorAdminController.export
 router.get('/submissions/:id', submView, contractorAdminController.getSubmissionDetail);
 // Отметка вводного инструктажа держателя пропуска (единственное write-действие ОТиТБ).
 router.patch('/submissions/passes/:passId/induction', submEdit, contractorAdminController.setPassInduction);
-// Реестр ОТиТБ: прошедшие вводный инструктаж сотрудники подрядчиков.
-// Статические GET (/induction/orgs, /induction/all) — ДО параметрического /induction/:id.
+// Реестр ОТиТБ: обучение по охране труда сотрудников подрядчиков.
+// Статические GET (/induction/catalog, /induction/orgs, /induction/all) — ДО параметрических
+// /induction/:id, иначе 'catalog' уедет в :id и упрётся в uuid-валидацию.
+router.get('/induction/catalog', otitbView, contractorAdminController.otTrainingCatalog);
 router.get('/induction/orgs', otitbView, contractorAdminController.listInductionOrgs);
 router.get('/induction/all', otitbView, contractorAdminController.listAllInducted);
 router.get('/induction', otitbView, contractorAdminController.listInductedPersons);
 router.post('/induction', otitbEdit, contractorAdminController.addInductedPerson);
+router.patch('/induction/:id', otitbEdit, contractorAdminController.updateInductedPersonHandler);
 router.delete('/induction/:id', otitbEdit, contractorAdminController.deleteInductedPerson);
 
 router.post('/submissions/:id/approve', apprEdit, requireCritical2FA, contractorAdminController.approveSubmission);

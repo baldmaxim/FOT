@@ -128,6 +128,10 @@ export const AUDIT_ACTIONS = {
   CONTRACTOR_DOCUMENT_UPLOADED: 'CONTRACTOR_DOCUMENT_UPLOADED',
   CONTRACTOR_DOCUMENT_DELETED: 'CONTRACTOR_DOCUMENT_DELETED',
   CONTRACTOR_INDUCTION_CHANGED: 'CONTRACTOR_INDUCTION_CHANGED',
+  // Обучение по ОТ в реестре подрядчиков (даты видов обучения, архивирование записи).
+  // Отдельно от CONTRACTOR_INDUCTION_CHANGED — тот занят пер-пропускным флагом инструктажа.
+  CONTRACTOR_OT_TRAINING_CHANGED: 'CONTRACTOR_OT_TRAINING_CHANGED',
+  CONTRACTOR_OT_PERSON_ARCHIVED: 'CONTRACTOR_OT_PERSON_ARCHIVED',
   // Вводный инструктаж своих сотрудников (вкладка «Управление кадрами»)
   EMPLOYEE_INDUCTION_CHANGED: 'EMPLOYEE_INDUCTION_CHANGED',
   // МТС «Мобильные сотрудники»

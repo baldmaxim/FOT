@@ -1,0 +1,91 @@
+/* Вкладка ОТиТБ: статусы обучения и модалка ввода дат. */
+
+.statusBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.statusOk { background: var(--success-muted); color: var(--success); }
+.statusWarning { background: var(--warning-muted); color: var(--warning); }
+.statusAlert { background: var(--error-muted); color: var(--error); }
+
+/* Строка с проблемой — видна списком, без вчитывания в бейдж. */
+.rowAlert td { background: var(--error-muted); }
+
+.orgAlert {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.rowActions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.modal {
+  width: min(720px, 100vw - 24px);
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+
+.trainingRow {
+  display: grid;
+  grid-template-columns: 1fr 168px auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.trainingRow:last-of-type { border-bottom: none; }
+
+.trainingLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.trainingName {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.trainingHint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.trainingState {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 132px;
+}
+
+.dirtyNote {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.searchRow { margin-bottom: 12px; }
+
+@media (max-width: 640px) {
+  /* Дата вводного инструктажа уходит — статус и ФИО важнее на узком экране. */
+  .hideNarrow { display: none; }
+}
+
+@media (max-width: 560px) {
+  .trainingRow {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .trainingState { justify-content: flex-start; }
+}
