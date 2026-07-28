@@ -5,55 +5,8 @@
   min-height: 0;
 }
 
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.search {
-  flex: 1 1 260px;
-  min-width: 220px;
-}
-
-.select {
-  height: 36px;
-  min-width: 220px;
-  max-width: 100%;
-  padding: 0 10px;
-  font-size: 16px; /* < 16px даёт авто-зум на iOS/Android */
-  color: var(--text-primary);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.seg {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--surface-hover);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.segBtn {
-  min-height: 32px;
-  padding: 4px 10px;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.segBtnActive {
-  color: #fff;
-  background: var(--primary);
-}
+/* Панель фильтров (.sc-filters / .sc-schedule-filter / .sc-filter-search) — общая
+ * с вкладкой «Текущие сотрудники», лежит в styles/FilterBar.css. */
 
 .counter {
   margin-left: auto;
@@ -177,11 +130,10 @@
 }
 
 @media (max-width: 768px) {
-  .filters {
-    gap: 6px;
-  }
-
+  /* Поиск на узком экране уходит в конец строки (order: 5 в FilterBar.css), поэтому
+   * счётчику нужен явный порядок — иначе он с order: 0 уехал бы вперёд селектора. */
   .counter {
+    order: 6;
     margin-left: 0;
     width: 100%;
   }
@@ -191,25 +143,13 @@
     padding: 8px;
   }
 
-  /* Шесть колонок на телефоне не помещаются: отдел и должность — вторичны. */
+  /* Колонки отдела и должности на телефоне вторичны. */
   .hideNarrow {
     display: none;
   }
 }
 
 @media (max-width: 430px) {
-  .search,
-  .select {
-    flex: 1 1 100%;
-    min-width: 0;
-    width: 100%;
-  }
-
-  .segBtn {
-    min-height: 36px;
-    padding: 4px 8px;
-  }
-
   .table {
     min-width: 0; /* колонок мало, горизонтальный скролл не нужен */
   }

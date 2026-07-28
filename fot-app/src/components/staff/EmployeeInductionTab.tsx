@@ -7,17 +7,10 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   employeeInductionService,
   type IInductionRow,
-  type InductionStatusFilter,
 } from '../../services/employeeInductionService';
 import styles from './EmployeeInductionTab.module.css';
 
 const PAGE_SIZE = 100;
-
-const STATUS_OPTIONS: Array<{ key: InductionStatusFilter; label: string }> = [
-  { key: 'all', label: 'Все' },
-  { key: 'missing', label: 'Без инструктажа' },
-  { key: 'passed', label: 'Пройден' },
-];
 
 interface IRowProps {
   row: IInductionRow;
@@ -66,7 +59,6 @@ export const EmployeeInductionTab: FC = () => {
 
   const [search, setSearch] = useState('');
   const [departmentId, setDepartmentId] = useState('');
-  const [status, setStatus] = useState<InductionStatusFilter>('all');
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState<number | null>(null);
   const debouncedSearch = useDebouncedValue(search, 300).trim();
@@ -77,9 +69,8 @@ export const EmployeeInductionTab: FC = () => {
       pageSize: PAGE_SIZE,
       departmentId: departmentId || undefined,
       search: debouncedSearch || undefined,
-      status,
     }),
-    [page, departmentId, debouncedSearch, status],
+    [page, departmentId, debouncedSearch],
   );
 
   const listQuery = useQuery({
@@ -111,16 +102,10 @@ export const EmployeeInductionTab: FC = () => {
 
   return (
     <div className={styles.wrap}>
-      <div className={styles.filters}>
-        <SearchInput
-          className={styles.search}
-          value={search}
-          onValueChange={resetPage(setSearch)}
-          placeholder="Поиск по ФИО..."
-        />
-
+      {/* Панель фильтров — общая с вкладкой «Текущие сотрудники» (styles/FilterBar.css). */}
+      <div className="sc-filters">
         <select
-          className={styles.select}
+          className="sc-schedule-filter"
           value={departmentId}
           onChange={e => resetPage(setDepartmentId)(e.target.value)}
           aria-label="Отдел"
@@ -131,26 +116,20 @@ export const EmployeeInductionTab: FC = () => {
           ))}
         </select>
 
-        <div className={styles.seg} role="tablist">
-          {STATUS_OPTIONS.map(opt => (
-            <button
-              key={opt.key}
-              type="button"
-              role="tab"
-              aria-selected={status === opt.key}
-              className={`${styles.segBtn} ${status === opt.key ? styles.segBtnActive : ''}`}
-              onClick={() => resetPage(setStatus)(opt.key)}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
         {meta && (
           <span className={styles.counter}>
             Пройдено {meta.passed} из {meta.total}
           </span>
         )}
+
+        {/* className у SearchInput уходит на сам input — место в строке задаёт обёртка. */}
+        <div className="sc-filter-search">
+          <SearchInput
+            value={search}
+            onValueChange={resetPage(setSearch)}
+            placeholder="Поиск по ФИО..."
+          />
+        </div>
       </div>
 
       <div className={styles.tableWrap}>

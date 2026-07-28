@@ -1,6 +1,9 @@
 import { lazy, useMemo, type FC } from 'react';
 import { Users, Briefcase, ShieldCheck } from 'lucide-react';
 import { HubShell, type IHubTab } from '../components/hub/HubShell';
+// Панель фильтров общая для вкладок раздела. Импорт здесь, а не в ленивых вкладках:
+// хаб грузится раньше любой из них, поэтому стили на месте при любом порядке открытия.
+import '../styles/FilterBar.css';
 
 const StaffControlPage = lazy(() => import('./StaffControlPage').then(m => ({ default: m.StaffControlPage })));
 const HiringRequestsBoard = lazy(() => import('../components/staff/hiring/HiringRequestsBoard').then(m => ({ default: m.HiringRequestsBoard })));

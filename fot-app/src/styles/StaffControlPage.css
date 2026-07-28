@@ -97,14 +97,9 @@
   margin: 4px 0;
 }
 
-/* ── Filter Bar (Level 2) ── */
-
-.sc-filters {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
+/* ── Filter Bar (Level 2) ──
+ * .sc-filters / .sc-schedule-filter / .sc-filter-search — в общем styles/FilterBar.css
+ * (используются и вкладкой «Вводный инструктаж»). Здесь — только ростерные элементы. */
 
 /* Segmented status switch */
 .sc-segmented {
@@ -229,22 +224,6 @@
   cursor: default;
 }
 
-.sc-schedule-filter {
-  height: 36px;
-  min-width: 180px;
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.sc-schedule-filter:hover {
-  border-color: var(--text-muted);
-}
-
 .sc-dept-dropdown {
   position: absolute;
   top: calc(100% + 4px);
@@ -337,11 +316,6 @@
 
 .sc-dept-retry:hover {
   opacity: 0.8;
-}
-
-.sc-filter-search {
-  order: -1;
-  flex: 0 0 auto;
 }
 
 .sc-bulk-bar {
@@ -1565,21 +1539,8 @@
     gap: 10px;
   }
 
-  .sc-filters {
-    gap: 8px;
-    width: 100%;
-    box-sizing: border-box;
-    margin: 0;
-  }
-
   .sc-filters .sc-dept-select {
     order: 1;
-    flex: 1 1 0;
-    min-width: 0;
-  }
-
-  .sc-schedule-filter {
-    order: 2;
     flex: 1 1 0;
     min-width: 0;
   }
@@ -1611,17 +1572,6 @@
   .sc-overflow-trigger > svg {
     width: 20px;
     height: 20px;
-  }
-
-  .sc-filter-search {
-    order: 5;
-    flex: 0 0 100%;
-    width: 100%;
-    min-width: 0;
-    max-width: unset;
-    margin-right: 0;
-    box-sizing: border-box;
-    align-self: auto;
   }
 
   .sc-segmented {
@@ -1662,10 +1612,6 @@
 @media (max-width: 430px) {
   .sc-page {
     gap: 8px;
-  }
-
-  .sc-filters {
-    gap: 6px;
   }
 
   .sc-card {

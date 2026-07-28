@@ -1,0 +1,79 @@
+/* Панель фильтров раздела «Управление кадрами».
+ *
+ * Общая для вкладок «Текущие сотрудники» и «Вводный инструктаж» — вынесена из
+ * StaffControlPage.css, чтобы вкладки не расходились по виду. Значения перенесены
+ * без изменений; ростерные селекторы (.sc-segmented, .sc-dept-select, .sc-page-actions
+ * и т.п.) остались в StaffControlPage.css.
+ *
+ * Импортируется один раз в StaffControlHubPage.tsx: сам хаб не ленивый, поэтому стили
+ * на месте, какую вкладку ни открой первой.
+ */
+
+.sc-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Нативный select фильтра (график работы на ростере, отдел на вводном инструктаже). */
+.sc-schedule-filter {
+  height: 36px;
+  min-width: 180px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sc-schedule-filter:hover {
+  border-color: var(--text-muted);
+}
+
+/* Обёртка поиска: className самого SearchInput уходит на внутренний input, поэтому
+ * место элемента в строке задаётся только этим контейнером. */
+.sc-filter-search {
+  order: -1;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 768px) {
+  .sc-filters {
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+  }
+
+  .sc-schedule-filter {
+    order: 2;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  /* На узком экране поиск уезжает в конец строки — так же, как на «Текущих сотрудниках». */
+  .sc-filter-search {
+    order: 5;
+    flex: 0 0 100%;
+    width: 100%;
+    min-width: 0;
+    max-width: unset;
+    margin-right: 0;
+    box-sizing: border-box;
+    align-self: auto;
+  }
+}
+
+@media (max-width: 430px) {
+  .sc-filters {
+    gap: 6px;
+  }
+
+  /* < 16px даёт авто-зум страницы при фокусе на iOS. */
+  .sc-schedule-filter {
+    font-size: 16px;
+  }
+}
