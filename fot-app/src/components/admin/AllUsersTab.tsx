@@ -419,11 +419,14 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
       search: debouncedSearch,
       role: effectiveRoleFilter,
     }],
-    queryFn: () => adminService.getUsersPaginated({
+    // signal обязателен: cancelQueries перед удалением должен обрывать сам HTTP-запрос,
+    // иначе рефетч, стартовавший до мутации, вернёт список ДО удаления.
+    queryFn: ({ signal }) => adminService.getUsersPaginated({
       page,
       pageSize: PAGE_SIZE,
       search: debouncedSearch || undefined,
       role: effectiveRoleFilter || undefined,
+      signal,
     }),
     staleTime: 30_000,
     placeholderData: keepPreviousData,
@@ -625,6 +628,9 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
   const handleDeleteUser = useCallback(async (userId: string) => {
     if (!confirm('Удалить пользователя из системы? Это действие необратимо.')) return;
     try {
+      // Отменяем in-flight рефечи до мутации: иначе запрос, стартовавший раньше,
+      // возвращается после оптимистичного удаления и возвращает строку на экран.
+      await queryClient.cancelQueries({ queryKey: ['admin-users'] });
       await adminService.deleteUser(userId);
       toast.success('Пользователь удалён');
       // Карточку сворачиваем и строку убираем сразу (оптимистично), затем
@@ -635,7 +641,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка удаления пользователя');
     }
-  }, [onReload, removeUserFromPageCaches, toast]);
+  }, [onReload, queryClient, removeUserFromPageCaches, toast]);
 
   const handleGenerate2FA = useCallback(async (userId: string, userName: string) => {
     setTwoFactorModal({ visible: true, userId, userName, data: null, loading: true });

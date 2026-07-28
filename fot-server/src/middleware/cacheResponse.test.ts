@@ -172,4 +172,124 @@ describe('cacheResponse middleware', () => {
     middleware(baseReq, r2, next2 as NextFunction);
     expect(next2).toHaveBeenCalledTimes(1);
   });
+
+  it('invalidate() во время in-flight: запрос старого поколения не воскрешает кеш', async () => {
+    const middleware = cacheResponse(() => 'k', 1000);
+
+    // GET#1 — MISS, handler «завис» и ещё не ответил.
+    const next1 = vi.fn();
+    const r1 = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(baseReq, r1, next1 as NextFunction);
+    expect(r1.headers['X-Cache-Status']).toBe('MISS');
+
+    // Мутация (DELETE) — write-through инвалидация.
+    middleware.invalidate();
+
+    // GET#2 не должен присоединяться к in-flight старого поколения.
+    const next2 = vi.fn();
+    const r2 = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(baseReq, r2, next2 as NextFunction);
+    expect(r2.headers['X-Cache-Status']).toBe('MISS');
+    expect(next2).toHaveBeenCalledTimes(1);
+
+    // Свежий ответ приходит первым, следом — устаревший от GET#1.
+    r2.json({ value: 'fresh' });
+    r1.json({ value: 'stale' });
+    await Promise.resolve();
+
+    // GET#3 обязан увидеть свежее тело, а не воскрешённое старое.
+    const next3 = vi.fn();
+    const r3 = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(baseReq, r3, next3 as NextFunction);
+    expect(next3).not.toHaveBeenCalled();
+    expect(r3.headers['X-Cache-Status']).toBe('HIT');
+    expect(r3.jsonBody).toEqual({ value: 'fresh' });
+  });
+
+  it('после invalidate() COALESCED-клиент старого поколения не зависает на close', async () => {
+    const middleware = cacheResponse(() => 'k', 1000);
+
+    const r1 = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(baseReq, r1, vi.fn() as NextFunction);
+
+    // Клиент присоединился к in-flight ДО инвалидации.
+    const nextC = vi.fn();
+    const rc = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(baseReq, rc, nextC as NextFunction);
+    expect(rc.headers['X-Cache-Status']).toBe('COALESCED');
+
+    middleware.invalidate();
+
+    const r2 = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(baseReq, r2, vi.fn() as NextFunction);
+    expect(r2.headers['X-Cache-Status']).toBe('MISS');
+
+    // GET#1 оборвался — pending старого поколения обязан резолвнуться,
+    // иначе присоединённый клиент завис бы навсегда.
+    r1.closeCallbacks.forEach((cb) => cb());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(nextC).toHaveBeenCalledTimes(1);
+  });
+
+  it('после invalidate() COALESCED-клиент старого поколения освобождается по single-flight таймауту', async () => {
+    vi.useFakeTimers();
+    try {
+      const middleware = cacheResponse(() => 'k', 1000);
+
+      const r1 = createFakeRes() as unknown as Response & IFakeRes;
+      middleware(baseReq, r1, vi.fn() as NextFunction);
+
+      const nextC = vi.fn();
+      const rc = createFakeRes() as unknown as Response & IFakeRes;
+      middleware(baseReq, rc, nextC as NextFunction);
+      expect(rc.headers['X-Cache-Status']).toBe('COALESCED');
+
+      middleware.invalidate();
+
+      const r2 = createFakeRes() as unknown as Response & IFakeRes;
+      middleware(baseReq, r2, vi.fn() as NextFunction);
+      expect(r2.headers['X-Cache-Status']).toBe('MISS');
+
+      // GET#1 так и не ответил — срабатывает SINGLE_FLIGHT_TIMEOUT_MS (10 c).
+      await vi.advanceTimersByTimeAsync(10_001);
+
+      expect(nextC).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('invalidateKey() точечный: не отменяет кеширование параллельного in-flight по другому ключу', async () => {
+    const middleware = cacheResponse((req) => (req as unknown as { cacheKey: string }).cacheKey, 1000);
+    const reqA = { cacheKey: 'A' } as unknown as Request;
+    const reqB = { cacheKey: 'B' } as unknown as Request;
+
+    const rA = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(reqA, rA, vi.fn() as NextFunction);
+    const rB = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(reqB, rB, vi.fn() as NextFunction);
+
+    middleware.invalidateKey('A');
+
+    rA.json({ value: 'A-stale' });
+    rB.json({ value: 'B-fresh' });
+    await Promise.resolve();
+
+    // B не задет инвалидацией A — его ответ закеширован.
+    const nextB2 = vi.fn();
+    const rB2 = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(reqB, rB2, nextB2 as NextFunction);
+    expect(nextB2).not.toHaveBeenCalled();
+    expect(rB2.headers['X-Cache-Status']).toBe('HIT');
+    expect(rB2.jsonBody).toEqual({ value: 'B-fresh' });
+
+    // A инвалидирован во время запроса — его устаревший ответ в кеш не попал.
+    const nextA2 = vi.fn();
+    const rA2 = createFakeRes() as unknown as Response & IFakeRes;
+    middleware(reqA, rA2, nextA2 as NextFunction);
+    expect(nextA2).toHaveBeenCalledTimes(1);
+    expect(rA2.headers['X-Cache-Status']).toBe('MISS');
+  });
 });

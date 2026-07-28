@@ -87,9 +87,13 @@ export interface IObjectAssignments {
 }
 
 export const adminService = {
-  // User management
-  async getPendingUsers(): Promise<PendingUserFromApi[]> {
-    const response = await apiClient.get<ApiResponse<PendingUserFromApi[]>>('/admin/users/pending');
+  // User management.
+  // Списки пользователей принимают signal от React Query: cancelQueries перед
+  // мутацией должен обрывать сам HTTP-запрос, а не только игнорировать его
+  // результат — иначе запрос, стартовавший до удаления, доезжает до сервера и
+  // участвует в гонке за серверный кеш.
+  async getPendingUsers(signal?: AbortSignal): Promise<PendingUserFromApi[]> {
+    const response = await apiClient.get<ApiResponse<PendingUserFromApi[]>>('/admin/users/pending', { signal });
     return response.data || [];
   },
 
@@ -98,14 +102,15 @@ export const adminService = {
     return response.data || [];
   },
 
-  async getAllUsersSlim(): Promise<IUserSlim[]> {
-    const response = await apiClient.get<ApiResponse<IUserSlim[]>>('/admin/users?slim=1');
+  async getAllUsersSlim(signal?: AbortSignal): Promise<IUserSlim[]> {
+    const response = await apiClient.get<ApiResponse<IUserSlim[]>>('/admin/users?slim=1', { signal });
     return response.data || [];
   },
 
-  async getAllUsersCount(): Promise<number> {
+  async getAllUsersCount(signal?: AbortSignal): Promise<number> {
     const response = await apiClient.get<{ success: boolean; count: number }>(
       '/admin/users?countOnly=1',
+      { signal },
     );
     return response.count ?? 0;
   },
@@ -115,6 +120,7 @@ export const adminService = {
     pageSize: number;
     search?: string;
     role?: string;
+    signal?: AbortSignal;
   }): Promise<{ data: UserFromApi[]; meta: IUsersPaginationMeta }> {
     const qs = new URLSearchParams({
       page: String(params.page),
@@ -124,7 +130,7 @@ export const adminService = {
     }).toString();
     const response = await apiClient.get<
       ApiResponse<UserFromApi[]> & { meta: IUsersPaginationMeta }
-    >(`/admin/users?${qs}`);
+    >(`/admin/users?${qs}`, { signal: params.signal });
     return { data: response.data || [], meta: response.meta };
   },
 
@@ -163,9 +169,10 @@ export const adminService = {
     return { resetUrl: response.resetUrl, expiresAt: response.expiresAt };
   },
 
-  async getPasswordResetRequests(): Promise<IPasswordResetRequest[]> {
+  async getPasswordResetRequests(signal?: AbortSignal): Promise<IPasswordResetRequest[]> {
     const response = await apiClient.get<ApiResponse<IPasswordResetRequest[]>>(
       '/admin/users/password-reset-requests',
+      { signal },
     );
     return response.data || [];
   },

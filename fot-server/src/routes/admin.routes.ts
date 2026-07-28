@@ -3,6 +3,7 @@ import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
+import { noStore } from '../middleware/noStore.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const router = Router();
@@ -88,14 +89,20 @@ router.use((req, res, next) => {
   next();
 });
 
-// Пользователи — доступно admin
-router.get('/users', requirePageAccess('/admin/users', 'view'), usersListCache, adminController.getAllUsers);
-router.get('/users/pending', requirePageAccess('/admin/users', 'view'), pendingUsersCache, adminController.getPendingUsers);
+// Пользователи — доступно admin.
+// noStore: глобальный дефолт `private, max-age=30` (app.ts) держал у браузера
+// тело списка, снятое ДО мутации — после удаления пользователя рефетч читал
+// ответ из HTTP-кеша, строка «возвращалась», и админ жал «Удалить» повторно,
+// хотя в БД он уже удалён с первого раза. Серверный LRU-кеш ниже остаётся.
+// Заодно списки с ПДн (ФИО, email) перестают оседать в кеше браузера.
+router.get('/users', requirePageAccess('/admin/users', 'view'), noStore, usersListCache, adminController.getAllUsers);
+router.get('/users/pending', requirePageAccess('/admin/users', 'view'), noStore, pendingUsersCache, adminController.getPendingUsers);
 // Запросы на сброс пароля — должен быть выше /users/:id/..., иначе Express
 // смэтчит как `:id = 'password-reset-requests'`.
 router.get(
   '/users/password-reset-requests',
   requirePageAccess('/admin/users', 'view'),
+  noStore,
   passwordResetRequestsCache,
   adminController.getPasswordResetRequests,
 );

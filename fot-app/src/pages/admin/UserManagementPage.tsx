@@ -22,27 +22,30 @@ export const UserManagementPage: React.FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'pending' | 'all' | 'employee-access' | 'password-reset'>('pending');
+  // signal во всех запросах префикса ['admin-users']: cancelQueries перед мутацией
+  // должен обрывать сам HTTP-запрос, иначе стартовавший до удаления рефетч доезжает
+  // до сервера и может вернуть/закешировать состояние ДО мутации.
   const pendingUsersQuery = useQuery<IPendingUser[]>({
     queryKey: ['admin-users', 'pending'],
-    queryFn: () => adminService.getPendingUsers(),
+    queryFn: ({ signal }) => adminService.getPendingUsers(signal),
     staleTime: 30_000,
   });
   const passwordResetRequestsQuery = useQuery<IPasswordResetRequest[]>({
     queryKey: ['admin-users', 'password-reset-requests'],
-    queryFn: () => adminService.getPasswordResetRequests(),
+    queryFn: ({ signal }) => adminService.getPasswordResetRequests(signal),
     staleTime: 30_000,
   });
   // Лёгкий COUNT(*) для бейджа «Все пользователи (N)» — грузим всегда (≤ десятки мс).
   const allUsersCountQuery = useQuery<number>({
     queryKey: ['admin-users', 'count'],
-    queryFn: () => adminService.getAllUsersCount(),
+    queryFn: ({ signal }) => adminService.getAllUsersCount(signal),
     staleTime: 60_000,
   });
   // Полный slim-список нужен только вкладке assignments — лениво.
   const needsSlim = activeTab === 'employee-access';
   const allUsersSlimQuery = useQuery<IUserSlim[]>({
     queryKey: ['admin-users', 'slim'],
-    queryFn: () => adminService.getAllUsersSlim(),
+    queryFn: ({ signal }) => adminService.getAllUsersSlim(signal),
     staleTime: 30_000,
     enabled: needsSlim,
   });
