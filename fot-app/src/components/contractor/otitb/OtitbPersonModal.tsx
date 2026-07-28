@@ -1,7 +1,8 @@
 import { useMemo, useState, type FC } from 'react';
 import { ApiError } from '../../../api/client';
-import { DateInput } from '../../ui/DateInput';
 import { ModalShell } from '../../ui/ModalShell';
+import { OtTrainingRow } from '../../ot/OtTrainingRow';
+import { isValidIsoDate, todayLocal } from '../../ot/otShared';
 import { useToast } from '../../../contexts/ToastContext';
 import {
   contractorAdminService,
@@ -9,8 +10,6 @@ import {
   type IOtTrainingDef,
   type OtTrainingsPatch,
 } from '../../../services/contractorService';
-import { isValidIsoDate, todayLocal } from './otitbShared';
-import { OtitbTrainingBadge } from './OtitbStatusBadge';
 import contractorStyles from '../../../pages/contractor/Contractor.module.css';
 import styles from './Otitb.module.css';
 
@@ -27,7 +26,11 @@ type Draft = Record<string, string>;
 
 const draftFrom = (person: IInductedPerson | undefined): Draft => {
   const draft: Draft = {};
-  for (const t of person?.trainings ?? []) draft[t.kind] = t.passed_on;
+  // Сервер отдаёт подрядчику только заполненные виды, но тип допускает null (общий с панелью
+  // сотрудника, где приходят и непройденные) — пустую дату в черновик не кладём.
+  for (const t of person?.trainings ?? []) {
+    if (t.passed_on) draft[t.kind] = t.passed_on;
+  }
   return draft;
 };
 
@@ -125,12 +128,12 @@ export const OtitbPersonModal: FC<IProps> = ({ orgId, person, catalog, onClose, 
       onClose={onClose}
       overlayClassName={contractorStyles.overlay}
       containerClassName={styles.modal}
-      aria-label="Обучение по охране труда"
+      aria-label="Вводный инструктаж"
     >
       {({ requestClose }) => (
         <>
           <h2 className={contractorStyles.modalTitle}>
-            {person ? `Обучение по ОТ — ${person.full_name}` : 'Новый сотрудник'}
+            {person ? `Вводный инструктаж — ${person.full_name}` : 'Новый сотрудник'}
           </h2>
 
           <div className={contractorStyles.field}>
@@ -146,38 +149,17 @@ export const OtitbPersonModal: FC<IProps> = ({ orgId, person, catalog, onClose, 
 
           {catalog.map(def => {
             const value = draft[def.kind] ?? '';
-            const dirty = value !== (initial[def.kind] ?? '');
             return (
-              <div className={styles.trainingRow} key={def.kind}>
-                <div className={styles.trainingLabel}>
-                  <span className={styles.trainingName}>{def.label}</span>
-                  <span className={styles.trainingHint}>{def.hint}</span>
-                </div>
-                <DateInput
-                  value={value}
-                  onChange={next => setDate(def.kind, next)}
-                  disabled={busy}
-                />
-                <div className={styles.trainingState}>
-                  <OtitbTrainingBadge
-                    state={stateByKind.get(def.kind)}
-                    validMonths={def.validMonths}
-                    dirty={dirty}
-                  />
-                  {value !== '' && (
-                    <button
-                      type="button"
-                      className={`${contractorStyles.btn} ${contractorStyles.btnIcon}`}
-                      onClick={() => setDate(def.kind, '')}
-                      disabled={busy}
-                      title="Снять дату"
-                      aria-label={`Снять дату: ${def.label}`}
-                    >
-                      ✗
-                    </button>
-                  )}
-                </div>
-              </div>
+              <OtTrainingRow
+                key={def.kind}
+                def={def}
+                value={value}
+                state={stateByKind.get(def.kind)}
+                dirty={value !== (initial[def.kind] ?? '')}
+                disabled={busy}
+                onChange={next => setDate(def.kind, next)}
+                onClear={() => setDate(def.kind, '')}
+              />
             );
           })}
 

@@ -1,4 +1,5 @@
 import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
+import type { IOtTrainingDef, IOtTrainingState, OtTrainingsPatch } from './otTraining.types';
 
 interface ApiResponse<T> {
   data: T;
@@ -19,25 +20,7 @@ export interface IInductionOrg extends IContractorOrg {
   warning_count: number;
 }
 
-/** Вид обучения по ОТ из каталога сервера (периодичность зашита там же). */
-export interface IOtTrainingDef {
-  kind: string;
-  label: string;
-  /** Периодичность из регламента — подсказка под подписью в модалке. */
-  hint: string;
-  /** null — бессрочно. */
-  validMonths: number | null;
-  audience: 'all' | 'itr';
-  order: number;
-}
-
-/** Состояние одного вида обучения. Дату окончания и статус считает сервер. */
-export interface IOtTrainingState {
-  kind: string;
-  passed_on: string;
-  valid_until: string | null;
-  status: 'valid' | 'expiring' | 'expired';
-}
+export type { IOtTrainingDef, IOtTrainingState, OtTrainingsPatch } from './otTraining.types';
 
 /** Запись реестра ОТиТБ (сотрудник подрядчика и его обучение по ОТ). */
 export interface IInductedPerson {
@@ -53,8 +36,6 @@ export interface IInductedPerson {
   row_status: 'ok' | 'warning' | 'alert';
 }
 
-/** Патч дат обучения: ключ отсутствует — вид не трогаем, null — снять дату. */
-export type OtTrainingsPatch = Record<string, string | null>;
 
 /** Запись реестра ОТиТБ + организация (для плоского списка «показать всех»). */
 export interface IInductedPersonFull extends IInductedPerson {

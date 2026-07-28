@@ -97,18 +97,39 @@ describe('каталог видов обучения', () => {
     expect(new Set(orders).size).toBe(orders.length);
   });
 
-  it('программа А — единственный вид для ИТР и её нет у подрядчиков', () => {
-    const itrOnly = OT_TRAININGS.filter(t => t.audience === 'itr').map(t => t.kind);
-    expect(itrOnly).toEqual(['program_a']);
-    expect(otTrainingsFor('contractor').map(t => t.kind)).not.toContain('program_a');
-    expect(otTrainingsFor('itr').map(t => t.kind)).toContain('program_a');
+  it('подрядчикам остаётся только вводный инструктаж', () => {
+    expect(otTrainingsFor('contractor').map(t => t.kind)).toEqual(['introductory']);
+    expect(OT_TRAININGS.filter(t => t.audience === 'all').map(t => t.kind)).toEqual(['introductory']);
+  });
+
+  it('весь цикл обучения — у своих сотрудников', () => {
+    const kinds = otTrainingsFor('employee').map(t => t.kind);
+    expect(kinds).toContain('program_a');
+    expect(kinds).toContain('cross_profession');
+    expect(kinds).toHaveLength(OT_TRAININGS.length);
+  });
+
+  it('программа А стоит между протоколом ОТ и программой Б, без оговорки про ИТР', () => {
+    expect(def('program_a').order).toBeGreaterThan(def('protocol').order);
+    expect(def('program_a').order).toBeLessThan(def('program_b').order);
     expect(def('program_a').label).toBe(
-      'Общие вопросы охраны труда и функционирования системы охраны труда',
+      'Программа А — обучение по общим вопросам охраны труда и функционирования СУОТ',
     );
+    // Признака ИТР у сотрудника нет — подсказка не должна обещать фильтрацию.
+    expect(def('program_a').hint).not.toMatch(/ИТР/);
+  });
+
+  it('сквозные профессии — последние, бессрочные и с ручным вводом профессии', () => {
+    const crossProfession = def('cross_profession');
+    expect(crossProfession.validMonths).toBeNull();
+    expect(crossProfession.hasNote).toBe(true);
+    expect(crossProfession.order).toBeGreaterThan(def('work_admission').order);
+    // hasNote — единственный вид с текстовым уточнением.
+    expect(OT_TRAININGS.filter(t => t.hasNote).map(t => t.kind)).toEqual(['cross_profession']);
   });
 
   it('виды отсортированы по order', () => {
-    const orders = otTrainingsFor('itr').map(t => t.order);
+    const orders = otTrainingsFor('employee').map(t => t.order);
     expect(orders).toEqual([...orders].sort((a, b) => a - b));
   });
 
@@ -120,16 +141,19 @@ describe('каталог видов обучения', () => {
     expect(def('work_admission').validMonths).toBeNull();
   });
 
-  it('коды совпадают со справочником миграции 232 (иначе FK отобьёт запись)', () => {
-    const sql = readFileSync(
-      resolve(process.cwd(), '../docs/migrations/232_ot_trainings.sql'),
-      'utf8',
-    );
-    const block = sql.slice(
-      sql.indexOf('INSERT INTO public.ot_training_kinds'),
-      sql.indexOf('ON CONFLICT (code) DO NOTHING'),
-    );
-    const seeded = [...block.matchAll(/\('([a-z_]+)'\)/g)].map(m => m[1]);
+  it('коды совпадают со справочником миграций 232 и 234 (иначе FK отобьёт запись)', () => {
+    const seededIn = (file: string): string[] => {
+      const sql = readFileSync(resolve(process.cwd(), `../docs/migrations/${file}`), 'utf8');
+      const block = sql.slice(
+        sql.indexOf('INSERT INTO public.ot_training_kinds'),
+        sql.indexOf('ON CONFLICT (code) DO NOTHING'),
+      );
+      return [...block.matchAll(/\('([a-z_]+)'\)/g)].map(m => m[1]);
+    };
+    const seeded = [
+      ...seededIn('232_ot_trainings.sql'),
+      ...seededIn('234_employee_ot_trainings.sql'),
+    ];
     const catalog = OT_TRAININGS.map(t => t.kind);
     expect([...catalog].sort()).toEqual([...new Set(seeded)].sort());
   });
@@ -153,15 +177,15 @@ describe('summarizeOtPerson', () => {
   });
 
   it('просроченный вид перевешивает истекающие — alert', () => {
-    const all = otTrainingsFor('contractor').map(t => [t.kind, '2026-07-01'] as [string, string]);
-    const s = summarizeOtPerson('contractor', passed([...all, ['workplace', '2026-01-01']]), TODAY);
+    const all = otTrainingsFor('employee').map(t => [t.kind, '2026-07-01'] as [string, string]);
+    const s = summarizeOtPerson('employee', passed([...all, ['workplace', '2026-01-01']]), TODAY);
     expect(s.row_status).toBe('alert');
   });
 
   it('всё заполнено, но что-то истекает — warning', () => {
-    const all = otTrainingsFor('contractor')
+    const all = otTrainingsFor('employee')
       .map(t => [t.kind, t.kind === 'workplace' ? '2026-05-26' : '2026-07-01'] as [string, string]);
-    const s = summarizeOtPerson('contractor', passed(all), TODAY);
+    const s = summarizeOtPerson('employee', passed(all), TODAY);
     expect(s.row_status).toBe('warning');
   });
 

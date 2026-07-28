@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   resolveInductionScopeIds: vi.fn(),
   setInduction: vi.fn(),
   logFromRequest: vi.fn(),
+  listEmployeeTrainings: vi.fn(),
+  setEmployeeTraining: vi.fn(),
 }));
 
 vi.mock('../services/employee-induction.service.js', () => ({
@@ -13,6 +15,11 @@ vi.mock('../services/employee-induction.service.js', () => ({
   listInductionDepartments: h.listInductionDepartments,
   resolveInductionScopeIds: h.resolveInductionScopeIds,
   setInduction: h.setInduction,
+}));
+vi.mock('../services/employee-ot-training.service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/employee-ot-training.service.js')>()),
+  listEmployeeTrainings: h.listEmployeeTrainings,
+  setEmployeeTraining: h.setEmployeeTraining,
 }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest },
@@ -254,5 +261,133 @@ describe('employeeInductionController.setDate', () => {
 
     expect(res.statusCode).toBe(400);
     expect(h.setInduction).not.toHaveBeenCalled();
+  });
+});
+
+describe('employeeInductionController — панель обучения по ОТ', () => {
+  const req = (body: unknown, id = '7') => makeReq({ params: { id }, body });
+
+  it('каталог отдаёт весь цикл, включая программу А и сквозные профессии', async () => {
+    const res = makeRes();
+
+    await employeeInductionController.trainingCatalog(makeReq(), res as never);
+
+    const kinds = (res.body as { data: Array<{ kind: string }> }).data.map(d => d.kind);
+    expect(kinds).toContain('program_a');
+    expect(kinds).toContain('cross_profession');
+    expect(kinds[0]).toBe('introductory');
+  });
+
+  it('GET: сотрудник вне скоупа — 404 без раскрытия причины', async () => {
+    h.listEmployeeTrainings.mockResolvedValue(null);
+    const res = makeRes();
+
+    await employeeInductionController.trainings(req({}), res as never);
+
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toEqual({ success: false, error: 'Сотрудник не найден' });
+  });
+
+  it('GET: отдаёт состояния с профессией', async () => {
+    h.listEmployeeTrainings.mockResolvedValue([
+      { kind: 'cross_profession', passed_on: '2026-07-01', valid_until: null, status: 'valid', note: 'Монтажник' },
+    ]);
+    const res = makeRes();
+
+    await employeeInductionController.trainings(req({}), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ data: [expect.objectContaining({ note: 'Монтажник' })] });
+  });
+
+  it('PATCH: пустое тело — 400, сервис не вызывается', async () => {
+    const res = makeRes();
+
+    await employeeInductionController.setTraining(req({ kind: 'workplace' }), res as never);
+
+    expect(res.statusCode).toBe(400);
+    expect(h.setEmployeeTraining).not.toHaveBeenCalled();
+  });
+
+  it('PATCH: дата в будущем — 400', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-24T12:00:00+03:00'));
+    const res = makeRes();
+
+    await employeeInductionController.setTraining(
+      req({ kind: 'cross_profession', passed_on: '2026-07-25' }), res as never,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(h.setEmployeeTraining).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('PATCH: слишком длинная профессия — 400', async () => {
+    const res = makeRes();
+
+    await employeeInductionController.setTraining(
+      req({ kind: 'cross_profession', note: 'М'.repeat(121) }), res as never,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(h.setEmployeeTraining).not.toHaveBeenCalled();
+  });
+
+  it('PATCH: неизвестный вид — 400', async () => {
+    const res = makeRes();
+
+    await employeeInductionController.setTraining(
+      req({ kind: 'unknown_kind', passed_on: '2026-07-01' }), res as never,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(h.setEmployeeTraining).not.toHaveBeenCalled();
+  });
+
+  it('PATCH: изменение только профессии пишется в аудит', async () => {
+    h.setEmployeeTraining.mockResolvedValue({
+      found: true, changed: true, diff: { note: { from: null, to: 'Монтажник' } },
+    });
+    h.listEmployeeTrainings.mockResolvedValue([]);
+    const res = makeRes();
+
+    await employeeInductionController.setTraining(
+      req({ kind: 'cross_profession', note: 'Монтажник' }), res as never,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'u-1', 'EMPLOYEE_INDUCTION_CHANGED',
+      expect.objectContaining({
+        entityId: '7',
+        details: { changed: { cross_profession: { note: { from: null, to: 'Монтажник' } } } },
+      }),
+    );
+  });
+
+  it('PATCH: no-op не пишется в аудит', async () => {
+    h.setEmployeeTraining.mockResolvedValue({ found: true, changed: false, diff: {} });
+    h.listEmployeeTrainings.mockResolvedValue([]);
+    const res = makeRes();
+
+    await employeeInductionController.setTraining(
+      req({ kind: 'workplace', passed_on: '2026-07-01' }), res as never,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('PATCH: сотрудник не найден — 404', async () => {
+    h.setEmployeeTraining.mockResolvedValue({ found: false });
+    const res = makeRes();
+
+    await employeeInductionController.setTraining(
+      req({ kind: 'workplace', passed_on: '2026-07-01' }), res as never,
+    );
+
+    expect(res.statusCode).toBe(404);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
   });
 });

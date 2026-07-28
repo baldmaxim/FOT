@@ -105,41 +105,34 @@
   color: var(--text-secondary);
 }
 
-.dateCell {
-  width: 260px;
-}
-
-.dateBox {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.clearBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  color: var(--text-secondary);
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+/* Строка сотрудника раскрывает панель обучения — как аккордеон организаций у подрядчиков. */
+.clickableRow {
   cursor: pointer;
+  user-select: none;
 }
 
-.clearBtn:hover:not(:disabled) {
-  color: var(--danger, #dc2626);
-  border-color: var(--danger, #dc2626);
+.clickableRow:hover td {
+  background: var(--surface-hover);
 }
 
-.clearBtn:disabled {
-  opacity: 0.5;
-  cursor: default;
+.chevron {
+  display: inline-block;
+  width: 14px;
+  color: var(--text-secondary);
 }
 
-.dateText {
-  font-variant-numeric: tabular-nums;
+.panelCell {
+  padding: 0 12px 12px !important;
+  background: var(--bg-secondary);
+}
+
+.panel {
+  padding: 4px 0;
+}
+
+.panelEmpty {
+  padding: 12px 0;
+  color: var(--text-secondary);
 }
 
 .muted {
@@ -218,6 +211,6 @@
   }
 
   .table {
-    min-width: 560px; /* горизонтальный скролл внутри .tableWrap, не у страницы */
+    min-width: 0; /* колонок мало, горизонтальный скролл не нужен */
   }
 }

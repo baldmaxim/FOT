@@ -19,10 +19,15 @@ export type OtTrainingKind =
   | 'siz'
   | 'first_aid'
   | 'internship'
-  | 'work_admission';
+  | 'work_admission'
+  | 'cross_profession';
 
-/** 'itr' — вид только для инженерно-технических работников, подрядчикам-рабочим не показываем. */
-export type OtAudience = 'all' | 'itr';
+/**
+ * 'all' — ведётся и у подрядчиков, и у своих сотрудников;
+ * 'employee' — только свои сотрудники (вкладка «Управление кадрами → Вводный инструктаж»).
+ * У подрядчиков ОТиТБ отмечает единственный факт — вводный инструктаж.
+ */
+export type OtAudience = 'all' | 'employee';
 
 export type OtStatus = 'missing' | 'valid' | 'expiring' | 'expired';
 
@@ -38,6 +43,10 @@ export interface IOtTrainingDef {
   validMonths: number | null;
   audience: OtAudience;
   order: number;
+  /** Вид с текстовым уточнением (профессия). UI рисует поле, сервер разрешает note. */
+  hasNote?: boolean;
+  /** Подпись поля note. */
+  noteLabel?: string;
 }
 
 /** За сколько дней до истечения показываем «истекает» (как PATENT_WARN_DAYS в ЛК рабочего). */
@@ -49,7 +58,10 @@ export const OT_WARN_DAYS = 30;
  *   на рабочем месте — при приёме, далее для рабочих не реже 1 раза в 3 месяца;
  *   протокол ОТ с внесением в реестр Минтруда — не реже 1 раза в 3 года, каждая программа
  *   (поэтому у программ А/Б/В, СИЗ и первой помощи те же 36 месяцев);
- *   стажировка и допуск к самостоятельной работе — разовые при приёме.
+ *   стажировка, допуск к самостоятельной работе и сквозные профессии — разовые.
+ *
+ * Аудитория: подрядчикам ОТиТБ отмечает только вводный инструктаж, весь остальной цикл
+ * обучения ведут кадры по своим сотрудникам.
  */
 export const OT_TRAININGS: readonly IOtTrainingDef[] = [
   {
@@ -65,7 +77,7 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
     label: 'Инструктаж на рабочем месте',
     hint: 'при приёме, далее не реже 1 раза в 3 месяца',
     validMonths: 3,
-    audience: 'all',
+    audience: 'employee',
     order: 2,
   },
   {
@@ -73,15 +85,15 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
     label: 'Протокол ОТ (реестр Минтруда)',
     hint: 'на следующий день после приёма, не реже 1 раза в 3 года',
     validMonths: 36,
-    audience: 'all',
+    audience: 'employee',
     order: 3,
   },
   {
     kind: 'program_a',
-    label: 'Общие вопросы охраны труда и функционирования системы охраны труда',
-    hint: 'только для ИТР, не реже 1 раза в 3 года',
+    label: 'Программа А — обучение по общим вопросам охраны труда и функционирования СУОТ',
+    hint: 'не реже 1 раза в 3 года',
     validMonths: 36,
-    audience: 'itr',
+    audience: 'employee',
     order: 4,
   },
   {
@@ -89,7 +101,7 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
     label: 'Программа Б — вредные и опасные производственные факторы',
     hint: 'на следующий день после приёма, 2 дня',
     validMonths: 36,
-    audience: 'all',
+    audience: 'employee',
     order: 5,
   },
   {
@@ -97,7 +109,7 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
     label: 'Программа В — работы повышенной опасности',
     hint: 'после программы Б, 2 дня',
     validMonths: 36,
-    audience: 'all',
+    audience: 'employee',
     order: 6,
   },
   {
@@ -105,7 +117,7 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
     label: 'СИЗ — применение средств индивидуальной защиты',
     hint: 'после программы В, 1 день',
     validMonths: 36,
-    audience: 'all',
+    audience: 'employee',
     order: 7,
   },
   {
@@ -113,7 +125,7 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
     label: 'Первая помощь пострадавшим',
     hint: 'после СИЗ, 1 день',
     validMonths: 36,
-    audience: 'all',
+    audience: 'employee',
     order: 8,
   },
   {
@@ -121,7 +133,7 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
     label: 'Стажировка',
     hint: 'на следующий день после обучения, 3 дня',
     validMonths: null,
-    audience: 'all',
+    audience: 'employee',
     order: 9,
   },
   {
@@ -129,8 +141,18 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
     label: 'Допуск к самостоятельной работе',
     hint: 'на следующий день после стажировки',
     validMonths: null,
-    audience: 'all',
+    audience: 'employee',
     order: 10,
+  },
+  {
+    kind: 'cross_profession',
+    label: 'Обучение по сквозным профессиям',
+    hint: 'профессия указывается вручную',
+    validMonths: null,
+    audience: 'employee',
+    order: 11,
+    hasNote: true,
+    noteLabel: 'Профессия',
   },
 ];
 
@@ -138,13 +160,14 @@ const BY_KIND = new Map<string, IOtTrainingDef>(OT_TRAININGS.map(t => [t.kind, t
 
 export const otTrainingDef = (kind: string): IOtTrainingDef | undefined => BY_KIND.get(kind);
 
-/** Виды для аудитории: подрядчикам-рабочим программа А не требуется. */
-export const otTrainingsFor = (audience: 'contractor' | 'itr'): IOtTrainingDef[] =>
-  OT_TRAININGS.filter(t => (audience === 'itr' ? true : t.audience === 'all'))
+/** Виды для аудитории: подрядчикам — только то, что помечено 'all' (вводный инструктаж). */
+export const otTrainingsFor = (audience: 'contractor' | 'employee'): IOtTrainingDef[] =>
+  OT_TRAININGS.filter(t => (audience === 'employee' ? true : t.audience === 'all'))
     .slice()
     .sort((a, b) => a.order - b.order);
 
 export const OT_CONTRACTOR_KINDS: OtTrainingKind[] = otTrainingsFor('contractor').map(t => t.kind);
+export const OT_EMPLOYEE_KINDS: OtTrainingKind[] = otTrainingsFor('employee').map(t => t.kind);
 
 const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
@@ -187,6 +210,11 @@ export interface IOtTrainingState {
   status: OtStatus;
 }
 
+/** Состояние вида у своего сотрудника: плюс текстовое уточнение (профессия). */
+export interface IEmployeeOtTrainingState extends IOtTrainingState {
+  note: string | null;
+}
+
 /**
  * Статус одного вида обучения. Дата окончания считается здесь и вручную не правится —
  * вся периодичность зашита в каталог.
@@ -220,7 +248,7 @@ export interface IOtPersonSummary {
  * остальные — в missing. Отсутствие любого обучения = alert, это и подсвечивает UI.
  */
 export const summarizeOtPerson = (
-  audience: 'contractor' | 'itr',
+  audience: 'contractor' | 'employee',
   passedByKind: ReadonlyMap<string, string>,
   todayIso: string,
 ): IOtPersonSummary => {

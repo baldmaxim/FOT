@@ -1,36 +1,17 @@
-import { memo, useCallback, useMemo, useState, type FC } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { Fragment, memo, useMemo, useState, type FC } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { SearchInput } from '../ui/SearchInput';
-import { DateInput } from '../ui/DateInput';
+import { EmployeeTrainingsPanel } from './EmployeeTrainingsPanel';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { useAuth } from '../../contexts/AuthContext';
-import { useToast } from '../../contexts/ToastContext';
 import {
   employeeInductionService,
   type IInductionRow,
-  type InductionField,
   type InductionStatusFilter,
 } from '../../services/employeeInductionService';
 import styles from './EmployeeInductionTab.module.css';
 
 const PAGE_SIZE = 100;
-
-/** YYYY-MM-DD → ДД.ММ.ГГГГ строкой: new Date('YYYY-MM-DD') даёт UTC-сдвиг на день назад. */
-const fmtDate = (iso: string | null): string => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? '');
-  return m ? `${m[3]}.${m[2]}.${m[1]}` : '—';
-};
-
-/** Полная и календарно существующая дата (31.02 не пройдёт). */
-const isValidIsoDate = (value: string): boolean => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!m) return false;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (y < 1900 || mo < 1 || mo > 12 || d < 1 || d > 31) return false;
-  const probe = new Date(Date.UTC(y, mo - 1, d));
-  return probe.getUTCFullYear() === y && probe.getUTCMonth() === mo - 1 && probe.getUTCDate() === d;
-};
 
 const STATUS_OPTIONS: Array<{ key: InductionStatusFilter; label: string }> = [
   { key: 'all', label: 'Все' },
@@ -42,141 +23,44 @@ interface IRowProps {
   row: IInductionRow;
   index: number;
   canEdit: boolean;
-  onSave: (employeeId: number, field: InductionField, value: string | null) => Promise<void>;
+  isOpen: boolean;
+  onToggle: (employeeId: number) => void;
 }
 
-interface IDateCellProps {
-  employeeId: number;
-  field: InductionField;
-  serverValue: string;
-  canEdit: boolean;
-  clearTitle: string;
-  onSave: IRowProps['onSave'];
-}
-
-/** Ячейка одной даты: черновик, откат и блокировка на время сохранения. */
-const InductionDateCell: FC<IDateCellProps> = ({
-  employeeId, field, serverValue, canEdit, clearTitle, onSave,
-}) => {
-  const [draft, setDraft] = useState(serverValue);
-  const [busy, setBusy] = useState(false);
-  // Смена ключа ремоунтит DateInput: повторная передача того же value внутреннее
-  // состояние компонента не сбрасывает, а откатить незавершённый ввод нужно.
-  const [resetRevision, setResetRevision] = useState(0);
-  const [syncedValue, setSyncedValue] = useState(serverValue);
-
-  // Синхронизация черновика с сервером в рендере (тот же приём, что в DateInput):
-  // useEffect тут дал бы каскадный ре-рендер. Во время сохранения не трогаем —
-  // иначе оптимистичное значение перебьёт ввод пользователя.
-  if (!busy && serverValue !== syncedValue) {
-    setSyncedValue(serverValue);
-    setDraft(serverValue);
-  }
-
-  const revert = () => {
-    setDraft(serverValue);
-    setResetRevision(r => r + 1);
-  };
-
-  const handleChange = (next: string) => {
-    // DateInput отдаёт '' на любом неполном вводе (в т.ч. на первой стёртой цифре).
-    // Это не очистка — очистить дату можно только крестиком.
-    if (next === '') return;
-    if (!isValidIsoDate(next)) return;
-    if (next === serverValue) {
-      setDraft(next);
-      return;
-    }
-    setDraft(next);
-    setBusy(true);
-    void onSave(employeeId, field, next)
-      .catch(() => revert())
-      .finally(() => setBusy(false));
-  };
-
-  const handleClear = () => {
-    if (!serverValue) {
-      revert();
-      return;
-    }
-    setBusy(true);
-    void onSave(employeeId, field, null)
-      .catch(() => revert())
-      .finally(() => setBusy(false));
-  };
-
-  if (!canEdit) {
-    return <span className={styles.dateText}>{fmtDate(serverValue || null)}</span>;
-  }
-
-  return (
-    <div className={styles.dateBox}>
-      <DateInput
-        key={`${employeeId}:${field}:${resetRevision}`}
-        value={draft}
-        onChange={handleChange}
-        onBlur={() => { if (!busy && draft !== serverValue) revert(); }}
-        disabled={busy}
-      />
-      <button
-        type="button"
-        className={styles.clearBtn}
-        onClick={handleClear}
-        disabled={busy || !serverValue}
-        title={clearTitle}
-        aria-label={clearTitle}
-      >
-        <X size={14} />
-      </button>
-    </div>
-  );
-};
-
-const InductionRow: FC<IRowProps> = memo(({ row, index, canEdit, onSave }) => {
-  const inducted = row.inducted_on ?? '';
-  const programA = row.program_a_on ?? '';
-
-  return (
-    <tr>
+const InductionRow: FC<IRowProps> = memo(({ row, index, canEdit, isOpen, onToggle }) => (
+  <Fragment>
+    <tr
+      className={styles.clickableRow}
+      onClick={() => onToggle(row.employee_id)}
+      title={isOpen ? 'Скрыть обучение' : 'Показать обучение'}
+    >
       <td className={styles.num}>{index}</td>
-      <td>{row.full_name || '—'}</td>
+      <td>
+        <span className={styles.chevron}>{isOpen ? '▾' : '▸'}</span>
+        {row.full_name || '—'}
+      </td>
       <td className={`${styles.muted} ${styles.hideNarrow}`}>{row.department_name || '—'}</td>
       <td className={`${styles.muted} ${styles.hideNarrow}`}>{row.position_name || '—'}</td>
-      <td className={styles.dateCell}>
-        <InductionDateCell
-          employeeId={row.employee_id}
-          field="inducted_on"
-          serverValue={inducted}
-          canEdit={canEdit}
-          clearTitle="Снять дату инструктажа"
-          onSave={onSave}
-        />
-      </td>
-      <td className={styles.dateCell}>
-        <InductionDateCell
-          employeeId={row.employee_id}
-          field="program_a_on"
-          serverValue={programA}
-          canEdit={canEdit}
-          clearTitle="Снять дату программы А"
-          onSave={onSave}
-        />
-      </td>
     </tr>
-  );
-});
+    {isOpen && (
+      <tr>
+        <td colSpan={4} className={styles.panelCell}>
+          <EmployeeTrainingsPanel employeeId={row.employee_id} canEdit={canEdit} />
+        </td>
+      </tr>
+    )}
+  </Fragment>
+));
 
 InductionRow.displayName = 'InductionRow';
 
 /**
- * Вкладка «Вводный инструктаж»: свои сотрудники (СУ-10 + Служба Механизации) и дата
- * прохождения. Есть дата — инструктаж пройден, нет даты — не пройден; галочек нет.
- * Дату правит служба ОТиТБ (право /staff-control/induction edit), остальные смотрят.
+ * Вкладка «Вводный инструктаж»: свои сотрудники (СУ-10 + Служба Механизации). Клик по строке
+ * раскрывает панель обучения по ОТ — весь цикл регламента с датами и сроками действия.
+ * Даты правит служба ОТиТБ (право /staff-control/induction edit), остальные смотрят.
  */
 export const EmployeeInductionTab: FC = () => {
   const { isAdmin, canEditPage } = useAuth();
-  const toast = useToast();
-  const queryClient = useQueryClient();
 
   const canEdit = isAdmin || canEditPage('/staff-control/induction');
 
@@ -184,6 +68,7 @@ export const EmployeeInductionTab: FC = () => {
   const [departmentId, setDepartmentId] = useState('');
   const [status, setStatus] = useState<InductionStatusFilter>('all');
   const [page, setPage] = useState(1);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const debouncedSearch = useDebouncedValue(search, 300).trim();
 
   const listParams = useMemo(
@@ -197,10 +82,8 @@ export const EmployeeInductionTab: FC = () => {
     [page, departmentId, debouncedSearch, status],
   );
 
-  const listQueryKey = ['employee-induction', listParams] as const;
-
   const listQuery = useQuery({
-    queryKey: listQueryKey,
+    queryKey: ['employee-induction', listParams],
     queryFn: () => employeeInductionService.list(listParams),
     placeholderData: previous => previous,
   });
@@ -211,46 +94,20 @@ export const EmployeeInductionTab: FC = () => {
     staleTime: 30 * 60_000,
   });
 
-  const saveMutation = useMutation({
-    mutationFn: ({ employeeId, field, value }: {
-      employeeId: number; field: InductionField; value: string | null;
-    }) => employeeInductionService.setDate(employeeId, field, value),
-    onSuccess: (dates, { employeeId }) => {
-      queryClient.setQueryData<Awaited<ReturnType<typeof employeeInductionService.list>>>(
-        listQueryKey,
-        previous => (previous
-          ? {
-            ...previous,
-            data: previous.data.map(r => (r.employee_id === employeeId ? { ...r, ...dates } : r)),
-          }
-          : previous),
-      );
-      void queryClient.invalidateQueries({ queryKey: ['employee-induction'] });
-    },
-    onError: (error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Не удалось сохранить дату');
-    },
-  });
-
-  // Стабильная ссылка — иначе memo на строках таблицы бесполезен.
-  const { mutateAsync } = saveMutation;
-  const handleSave = useCallback(async (
-    employeeId: number,
-    field: InductionField,
-    value: string | null,
-  ): Promise<void> => {
-    await mutateAsync({ employeeId, field, value });
-  }, [mutateAsync]);
-
   const rows = listQuery.data?.data ?? [];
   const meta = listQuery.data?.meta;
   const departments = departmentsQuery.data ?? [];
   const totalPages = meta?.totalPages ?? 0;
 
+  // Смена фильтра/страницы схлопывает панель: раскрытая строка уехала бы к чужому сотруднику.
   const resetPage = <T,>(setter: (value: T) => void) => (value: T) => {
     setter(value);
     setPage(1);
+    setExpanded(null);
   };
+
+  const toggle = (employeeId: number) =>
+    setExpanded(prev => (prev === employeeId ? null : employeeId));
 
   return (
     <div className={styles.wrap}>
@@ -304,13 +161,6 @@ export const EmployeeInductionTab: FC = () => {
               <th>ФИО</th>
               <th className={styles.hideNarrow}>Отдел</th>
               <th className={styles.hideNarrow}>Должность</th>
-              <th className={styles.dateCell}>Вводный инструктаж</th>
-              <th
-                className={styles.dateCell}
-                title="Только ИТР, 1 раз в 3 года"
-              >
-                Общие вопросы охраны труда и функционирования системы охраны труда
-              </th>
             </tr>
           </thead>
           <tbody>
@@ -320,12 +170,13 @@ export const EmployeeInductionTab: FC = () => {
                 row={row}
                 index={(page - 1) * PAGE_SIZE + i + 1}
                 canEdit={canEdit}
-                onSave={handleSave}
+                isOpen={expanded === row.employee_id}
+                onToggle={toggle}
               />
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className={styles.empty}>
+                <td colSpan={4} className={styles.empty}>
                   {listQuery.isPending ? 'Загрузка…' : 'Сотрудники не найдены'}
                 </td>
               </tr>
@@ -339,7 +190,7 @@ export const EmployeeInductionTab: FC = () => {
           <button
             type="button"
             className={styles.pagerBtn}
-            onClick={() => setPage(p => Math.max(1, p - 1))}
+            onClick={() => { setPage(p => Math.max(1, p - 1)); setExpanded(null); }}
             disabled={page <= 1}
           >
             Назад
@@ -348,7 +199,7 @@ export const EmployeeInductionTab: FC = () => {
           <button
             type="button"
             className={styles.pagerBtn}
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            onClick={() => { setPage(p => Math.min(totalPages, p + 1)); setExpanded(null); }}
             disabled={page >= totalPages}
           >
             Вперёд

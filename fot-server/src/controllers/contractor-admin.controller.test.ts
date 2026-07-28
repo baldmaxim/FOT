@@ -1305,7 +1305,7 @@ describe('contractorAdminController — реестр обучения по ОТ'
     const res = makeRes();
 
     await contractorAdminController.addInductedPerson(
-      req({ org_department_id: ORG, full_name: 'Иванов И.И.', trainings: { workplace: '2026-07-25' } }),
+      req({ org_department_id: ORG, full_name: 'Иванов И.И.', trainings: { introductory: '2026-07-25' } }),
       res as never,
     );
 
@@ -1314,15 +1314,17 @@ describe('contractorAdminController — реестр обучения по ОТ'
     vi.useRealTimers();
   });
 
-  it('программа А в подрядчицком payload — 400 (вид только для ИТР)', async () => {
-    const res = makeRes();
+  it('вид, который ведут кадры по своим сотрудникам, в подрядчицком payload — 400', async () => {
+    for (const kind of ['workplace', 'program_a', 'cross_profession']) {
+      const res = makeRes();
 
-    await contractorAdminController.addInductedPerson(
-      req({ org_department_id: ORG, full_name: 'Иванов И.И.', trainings: { program_a: '2026-07-01' } }),
-      res as never,
-    );
+      await contractorAdminController.addInductedPerson(
+        req({ org_department_id: ORG, full_name: 'Иванов И.И.', trainings: { [kind]: '2026-07-01' } }),
+        res as never,
+      );
 
-    expect(res.statusCode).toBe(400);
+      expect(res.statusCode).toBe(400);
+    }
     expect(h.createInductedPerson).not.toHaveBeenCalled();
   });
 
@@ -1331,7 +1333,7 @@ describe('contractorAdminController — реестр обучения по ОТ'
     const res = makeRes();
 
     await contractorAdminController.updateInductedPersonHandler(
-      req({ trainings: { workplace: '2026-07-01' }, expected_updated_at: 'r1' }, { id: PERSON }),
+      req({ trainings: { introductory: '2026-07-01' }, expected_updated_at: 'r1' }, { id: PERSON }),
       res as never,
     );
 
@@ -1344,7 +1346,7 @@ describe('contractorAdminController — реестр обучения по ОТ'
     const res = makeRes();
 
     await contractorAdminController.updateInductedPersonHandler(
-      req({ trainings: { workplace: '2026-07-01' }, expected_updated_at: 'r1' }, { id: PERSON }),
+      req({ trainings: { introductory: '2026-07-01' }, expected_updated_at: 'r1' }, { id: PERSON }),
       res as never,
     );
 

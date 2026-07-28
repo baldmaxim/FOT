@@ -136,10 +136,27 @@ router.get(
   employeeInductionController.departments
 );
 router.get(
+  '/induction/catalog',
+  requireAnyPageAccess(['/staff-control', '/staff-control/induction'], 'view'),
+  employeeInductionController.trainingCatalog
+);
+router.get(
   '/induction',
   requireAnyPageAccess(['/staff-control', '/staff-control/induction'], 'view'),
   employeeInductionController.list
 );
+router.get(
+  '/:id/induction/trainings',
+  requireAnyPageAccess(['/staff-control', '/staff-control/induction'], 'view'),
+  employeeInductionController.trainings
+);
+router.patch(
+  '/:id/induction/trainings',
+  requirePageAccess('/staff-control/induction', 'edit'),
+  employeeInductionController.setTraining
+);
+// Legacy: одиночные даты вводного инструктажа и программы А. Остаётся ещё релиз —
+// его правки доезжают в employee_ot_trainings триггером из миграции 234.
 router.patch(
   '/:id/induction',
   requirePageAccess('/staff-control/induction', 'edit'),

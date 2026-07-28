@@ -1,18 +1,16 @@
 import { apiClient } from '../api/client';
+import type { IEmployeeOtTrainingState, IOtTrainingDef } from './otTraining.types';
 
 export interface IInductionRow {
   employee_id: number;
   full_name: string | null;
   department_name: string | null;
   position_name: string | null;
-  /** YYYY-MM-DD или null (инструктаж не пройден). */
+  /** YYYY-MM-DD или null (вводный инструктаж не пройден). */
   inducted_on: string | null;
-  /** Программа А «Общие вопросы охраны труда» — только для ИТР. */
+  /** Программа А. Полный набор обучения — в панели под строкой. */
   program_a_on: string | null;
 }
-
-/** Поля реестра, которые правит вкладка. */
-export type InductionField = 'inducted_on' | 'program_a_on';
 
 export interface IInductionDepartment {
   id: string;
@@ -42,6 +40,13 @@ export interface IInductionListResponse {
   };
 }
 
+/** Патч одного вида: поле не передано — не менять, null — очистить. */
+export interface IOtTrainingPatch {
+  kind: string;
+  passed_on?: string | null;
+  note?: string | null;
+}
+
 export const employeeInductionService = {
   list: async (params: IInductionListParams): Promise<IInductionListResponse> => {
     const qs = new URLSearchParams({
@@ -61,19 +66,31 @@ export const employeeInductionService = {
     return res.data;
   },
 
-  /**
-   * Правит одно поле: `value = null` — снять дату. Патч частичный, второе поле
-   * на сервере сохраняется как есть.
-   */
-  setDate: async (
+  /** Каталог видов обучения для своих сотрудников (включая программу А и сквозные профессии). */
+  otCatalog: async (): Promise<IOtTrainingDef[]> => {
+    const res = await apiClient.get<{ success: boolean; data: IOtTrainingDef[] }>(
+      '/employees/induction/catalog',
+    );
+    return res.data ?? [];
+  },
+
+  /** Состояния всех видов обучения сотрудника, включая непройденные (status 'missing'). */
+  trainings: async (employeeId: number): Promise<IEmployeeOtTrainingState[]> => {
+    const res = await apiClient.get<{ success: boolean; data: IEmployeeOtTrainingState[] }>(
+      `/employees/${employeeId}/induction/trainings`,
+    );
+    return res.data ?? [];
+  },
+
+  /** Правит один вид обучения и возвращает пересчитанный сервером набор состояний. */
+  setTraining: async (
     employeeId: number,
-    field: InductionField,
-    value: string | null,
-  ): Promise<{ inducted_on: string | null; program_a_on: string | null }> => {
-    const res = await apiClient.patch<{
-      success: boolean;
-      data: { inducted_on: string | null; program_a_on: string | null };
-    }>(`/employees/${employeeId}/induction`, { [field]: value });
-    return { inducted_on: res.data.inducted_on, program_a_on: res.data.program_a_on };
+    patch: IOtTrainingPatch,
+  ): Promise<IEmployeeOtTrainingState[]> => {
+    const res = await apiClient.patch<{ success: boolean; data: IEmployeeOtTrainingState[] }>(
+      `/employees/${employeeId}/induction/trainings`,
+      patch,
+    );
+    return res.data ?? [];
   },
 };

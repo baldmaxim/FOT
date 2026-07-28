@@ -161,6 +161,10 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // хотя в БД всё записано с первого раза.
     || path === '/employees/induction'
     || path === '/employees/induction/departments'
+    // Панель обучения по ОТ под строкой сотрудника: PATCH идёт по одному виду, и без
+    // обхода кэша refetch вернул бы тело, снятое ДО записи (тот же класс бага).
+    || path === '/employees/induction/catalog'
+    || /^\/employees\/\d+\/induction\/trainings$/.test(path)
     // Месячный табель сотрудника / общий табель: после подачи корректировки
     // (time_correction) сам календарь личного кабинета должен показать новые
     // часы/бейдж заявки сразу. Иначе HTTP-кэш 30 сек отдавал старый body

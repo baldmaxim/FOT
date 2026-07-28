@@ -1,0 +1,82 @@
+/* Строка вида обучения и бейдж состояния: общие для реестра подрядчиков и панели сотрудника. */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badgeOk { background: var(--success-muted); color: var(--success); }
+.badgeWarning { background: var(--warning-muted); color: var(--warning); }
+.badgeAlert { background: var(--error-muted); color: var(--error); }
+
+.muted {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 168px auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.row:last-of-type { border-bottom: none; }
+
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.name {
+  font-size: 14px;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 132px;
+}
+
+/* Поле профессии: занимает всю ширину строки под названием вида. */
+.note {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.noteInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 360px;
+}
+
+@media (max-width: 560px) {
+  .row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .state { justify-content: flex-start; }
+
+  .noteInput { max-width: none; }
+}

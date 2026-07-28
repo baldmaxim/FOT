@@ -39,48 +39,7 @@
   border-radius: var(--radius-lg);
 }
 
-.trainingRow {
-  display: grid;
-  grid-template-columns: 1fr 168px auto;
-  gap: 12px;
-  align-items: center;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.trainingRow:last-of-type { border-bottom: none; }
-
-.trainingLabel {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.trainingName {
-  font-size: 14px;
-  overflow-wrap: break-word;
-  word-break: normal;
-}
-
-.trainingHint {
-  font-size: 12px;
-  color: var(--text-secondary);
-  overflow-wrap: break-word;
-  word-break: normal;
-}
-
-.trainingState {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 132px;
-}
-
-.dirtyNote {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
+/* Строка вида обучения и бейдж состояния — в общем модуле components/ot/Ot.module.css. */
 
 .searchRow { margin-bottom: 12px; }
 
@@ -95,11 +54,4 @@
     max-width: calc(100vw - 16px);
     height: 92dvh;
   }
-
-  .trainingRow {
-    grid-template-columns: 1fr;
-    gap: 6px;
-  }
-
-  .trainingState { justify-content: flex-start; }
 }

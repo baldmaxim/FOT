@@ -14,6 +14,17 @@ import {
   resolveInductionScopeIds,
   setInduction,
 } from '../services/employee-induction.service.js';
+import {
+  OT_EMPLOYEE_KINDS,
+  otTrainingsFor,
+  type OtTrainingKind,
+} from '../services/ot-training.service.js';
+import {
+  listEmployeeTrainings,
+  setEmployeeTraining,
+  EmployeeOtTrainingError,
+  OT_NOTE_MAX_LENGTH,
+} from '../services/employee-ot-training.service.js';
 
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -30,6 +41,21 @@ const setDateSchema = z.object({
   program_a_on: z.string().date('Некорректная дата').nullable().optional(),
 }).refine(
   v => v.inducted_on !== undefined || v.program_a_on !== undefined,
+  'Нечего сохранять',
+);
+
+const employeeIdSchema = z.coerce.number().int().positive();
+
+/**
+ * Патч одного вида обучения. Отсутствие поля — «не менять», null — очистить:
+ * профессия сохраняется отдельным запросом по уходу фокуса и не должна стирать дату.
+ */
+const trainingPatchSchema = z.object({
+  kind: z.enum(OT_EMPLOYEE_KINDS as [OtTrainingKind, ...OtTrainingKind[]]),
+  passed_on: z.string().date('Некорректная дата').nullable().optional(),
+  note: z.string().trim().max(OT_NOTE_MAX_LENGTH, 'Слишком длинное значение').nullable().optional(),
+}).refine(
+  v => v.passed_on !== undefined || v.note !== undefined,
   'Нечего сохранять',
 );
 
@@ -136,6 +162,92 @@ export const employeeInductionController = {
       }
       console.error('Induction setDate error:', error);
       res.status(500).json({ success: false, error: 'Не удалось сохранить дату инструктажа' });
+    }
+  },
+
+  /** GET /api/employees/induction/catalog — виды обучения для своих сотрудников. */
+  async trainingCatalog(_req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      res.json({ success: true, data: otTrainingsFor('employee') });
+    } catch (error) {
+      console.error('Induction catalog error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить виды обучения' });
+    }
+  },
+
+  /** GET /api/employees/:id/induction/trainings — состояния всех видов обучения сотрудника. */
+  async trainings(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = employeeIdSchema.parse(req.params.id);
+      const scopeIds = await resolveInductionScopeIds(req);
+      const data = await listEmployeeTrainings(employeeId, scopeIds, moscowTodayIso());
+
+      // Уволенный/архивный/чужой — одинаковый 404: не раскрываем факт существования.
+      if (!data) {
+        res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Induction trainings error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить обучение' });
+    }
+  },
+
+  /**
+   * PATCH /api/employees/:id/induction/trainings — дата и/или профессия по одному виду.
+   * Body: { kind, passed_on?: 'YYYY-MM-DD' | null, note?: string | null }.
+   */
+  async setTraining(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const employeeId = employeeIdSchema.parse(req.params.id);
+      const body = trainingPatchSchema.parse(req.body);
+
+      if (body.passed_on && body.passed_on > moscowTodayIso()) {
+        res.status(400).json({ success: false, error: 'Дата обучения не может быть в будущем' });
+        return;
+      }
+
+      const scopeIds = await resolveInductionScopeIds(req);
+      const result = await setEmployeeTraining({
+        employeeId,
+        kind: body.kind,
+        passedOn: body.passed_on,
+        note: body.note,
+        userId: req.user.id,
+        scopeIds,
+      });
+
+      if (!result.found) {
+        res.status(404).json({ success: false, error: 'Сотрудник не найден' });
+        return;
+      }
+
+      if (result.changed) {
+        await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.EMPLOYEE_INDUCTION_CHANGED, {
+          entityType: 'employee',
+          entityId: String(employeeId),
+          details: { changed: { [body.kind]: result.diff } },
+        });
+      }
+
+      const data = await listEmployeeTrainings(employeeId, scopeIds, moscowTodayIso());
+      res.json({ success: true, data: data ?? [], changed: result.changed });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      if (error instanceof EmployeeOtTrainingError) {
+        res.status(400).json({ success: false, error: error.message });
+        return;
+      }
+      console.error('Induction setTraining error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось сохранить обучение' });
     }
   },
 };

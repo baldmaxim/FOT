@@ -58,10 +58,23 @@ describe('listInductedByOrg', () => {
     expect(String(h.query.mock.calls[0][0])).toContain('p.deleted_at IS NULL');
     expect(rows[0].inducted_on).toBe('2026-07-01');
     expect(rows[0].updated_at).toBe(REV);
-    // Заполнен только вводный — остальные виды в missing, строка требует внимания.
-    expect(rows[0].row_status).toBe('alert');
-    expect(rows[0].missing).toContain('workplace');
+    // У подрядчика вид один: вводный пройден — замечаний нет.
+    expect(rows[0].row_status).toBe('ok');
+    expect(rows[0].missing).toEqual([]);
     expect(rows[0].trainings).toHaveLength(1);
+  });
+
+  it('без вводного инструктажа строка требует внимания', async () => {
+    h.query
+      .mockResolvedValueOnce([
+        { id: PERSON, org_department_id: ORG, full_name: 'Сидоров С.С.', updated_at: REV },
+      ])
+      .mockResolvedValueOnce([]);
+
+    const rows = await listInductedByOrg(ORG, TODAY);
+
+    expect(rows[0].row_status).toBe('alert');
+    expect(rows[0].missing).toEqual(['introductory']);
   });
 
   it('человек без единой даты — inducted_on null (а не «сегодня»)', async () => {
@@ -89,7 +102,8 @@ describe('countInductionByOrg', () => {
 
     const counts = await countInductionByOrg([ORG], TODAY);
 
-    expect(counts.get(ORG)).toEqual({ total: 2, alert: 2, warning: 0 });
+    // p1 прошёл вводный, p2 нет — замечание только у второго.
+    expect(counts.get(ORG)).toEqual({ total: 2, alert: 1, warning: 0 });
   });
 
   it('пустой список организаций — без запросов', async () => {
@@ -99,7 +113,7 @@ describe('countInductionByOrg', () => {
 });
 
 describe('createInductedPerson', () => {
-  it('создаёт запись и проставляет переданные даты, вводный дублируется в legacy-колонку', async () => {
+  it('создаёт запись и дублирует вводный инструктаж в legacy-колонку', async () => {
     const { calls } = makeTxClient([
       { rows: [{ id: PERSON }] },  // INSERT персоны
       { rows: [] },                // прежних дат нет
@@ -108,15 +122,12 @@ describe('createInductedPerson', () => {
     const result = await createInductedPerson({
       orgDepartmentId: ORG,
       fullName: 'Иванов И.И.',
-      trainings: { introductory: '2026-07-01', workplace: '2026-07-02' },
+      trainings: { introductory: '2026-07-01' },
       userId: 'u-1',
     });
 
     expect(result.id).toBe(PERSON);
-    expect(result.diff).toEqual({
-      introductory: { from: null, to: '2026-07-01' },
-      workplace: { from: null, to: '2026-07-02' },
-    });
+    expect(result.diff).toEqual({ introductory: { from: null, to: '2026-07-01' } });
     // Персона создаётся с NULL в legacy-колонке — DEFAULT CURRENT_DATE больше не врёт.
     expect(calls[0].sql).toContain('INSERT INTO contractor_inducted_persons');
     expect(calls[0].sql).toContain('NULL');
@@ -124,26 +135,28 @@ describe('createInductedPerson', () => {
     expect(dual?.params).toEqual([PERSON, '2026-07-01']);
   });
 
-  it('без вводного инструктажа legacy-колонка не трогается (остаётся NULL)', async () => {
-    const { calls } = makeTxClient([{ rows: [{ id: PERSON }] }, { rows: [] }]);
+  it('без дат legacy-колонка не трогается (остаётся NULL)', async () => {
+    const { calls } = makeTxClient([{ rows: [{ id: PERSON }] }]);
 
     await createInductedPerson({
       orgDepartmentId: ORG,
       fullName: 'Иванов И.И.',
-      trainings: { workplace: '2026-07-02' },
+      trainings: {},
       userId: 'u-1',
     });
 
     expect(calls.some(c => c.sql.includes('SET inducted_on'))).toBe(false);
   });
 
-  it('вид только для ИТР отклоняется до обращения к БД', async () => {
-    await expect(createInductedPerson({
-      orgDepartmentId: ORG,
-      fullName: 'Иванов И.И.',
-      trainings: { program_a: '2026-07-01' } as never,
-      userId: 'u-1',
-    })).rejects.toBeInstanceOf(OtTrainingKindError);
+  it('вид, который ведут кадры по своим сотрудникам, подрядчику не записать', async () => {
+    for (const kind of ['workplace', 'program_a', 'cross_profession']) {
+      await expect(createInductedPerson({
+        orgDepartmentId: ORG,
+        fullName: 'Иванов И.И.',
+        trainings: { [kind]: '2026-07-01' } as never,
+        userId: 'u-1',
+      })).rejects.toBeInstanceOf(OtTrainingKindError);
+    }
     expect(h.withTransaction).not.toHaveBeenCalled();
   });
 });
@@ -173,7 +186,7 @@ describe('updateInductedPerson', () => {
       { rows: [{ full_name: 'Иванов И.И.', updated_at: '2026-07-27T10:00:00.000Z' }] },
     ]);
 
-    await expect(updateInductedPerson({ ...base, trainings: { workplace: '2026-07-02' } }))
+    await expect(updateInductedPerson({ ...base, trainings: { introductory: '2026-07-02' } }))
       .resolves.toEqual({ status: 'conflict' });
     expect(calls).toHaveLength(1);
   });
@@ -181,19 +194,19 @@ describe('updateInductedPerson', () => {
   it('патч трогает только присланные виды', async () => {
     const { calls } = makeTxClient([
       { rows: [{ full_name: 'Иванов И.И.', updated_at: REV }] },
-      { rows: [{ kind: 'workplace', passed_on: '2026-04-01' }] },
-      { rows: [] },  // upsert workplace
+      { rows: [{ kind: 'introductory', passed_on: '2026-04-01' }] },
+      { rows: [] },  // upsert вводного
       { rows: [] },  // bump updated_at
     ]);
 
-    const result = await updateInductedPerson({ ...base, trainings: { workplace: '2026-07-02' } });
+    const result = await updateInductedPerson({ ...base, trainings: { introductory: '2026-07-02' } });
 
     expect(result).toEqual({
       status: 'ok',
-      diff: { workplace: { from: '2026-04-01', to: '2026-07-02' } },
+      diff: { introductory: { from: '2026-04-01', to: '2026-07-02' } },
       nameFrom: null,
     });
-    expect(calls[1].params).toEqual([PERSON, ['workplace']]);
+    expect(calls[1].params).toEqual([PERSON, ['introductory']]);
     expect(calls[2].sql).toContain('ON CONFLICT (person_id, kind) DO UPDATE');
   });
 
@@ -221,10 +234,10 @@ describe('updateInductedPerson', () => {
   it('повтор той же даты — no-op: ни записи, ни bump ревизии', async () => {
     const { calls } = makeTxClient([
       { rows: [{ full_name: 'Иванов И.И.', updated_at: REV }] },
-      { rows: [{ kind: 'workplace', passed_on: '2026-07-02' }] },
+      { rows: [{ kind: 'introductory', passed_on: '2026-07-02' }] },
     ]);
 
-    const result = await updateInductedPerson({ ...base, trainings: { workplace: '2026-07-02' } });
+    const result = await updateInductedPerson({ ...base, trainings: { introductory: '2026-07-02' } });
 
     expect(result).toEqual({ status: 'ok', diff: {}, nameFrom: null });
     expect(calls).toHaveLength(2);
@@ -243,8 +256,8 @@ describe('updateInductedPerson', () => {
     expect(calls[1].sql).toContain('SET full_name');
   });
 
-  it('вид только для ИТР отклоняется', async () => {
-    await expect(updateInductedPerson({ ...base, trainings: { program_a: '2026-07-01' } as never }))
+  it('вид, который ведут кадры по своим сотрудникам, отклоняется', async () => {
+    await expect(updateInductedPerson({ ...base, trainings: { workplace: '2026-07-01' } as never }))
       .rejects.toBeInstanceOf(OtTrainingKindError);
   });
 });
