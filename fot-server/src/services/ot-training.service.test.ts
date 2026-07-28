@@ -102,6 +102,9 @@ describe('каталог видов обучения', () => {
     expect(itrOnly).toEqual(['program_a']);
     expect(otTrainingsFor('contractor').map(t => t.kind)).not.toContain('program_a');
     expect(otTrainingsFor('itr').map(t => t.kind)).toContain('program_a');
+    expect(def('program_a').label).toBe(
+      'Общие вопросы охраны труда и функционирования системы охраны труда',
+    );
   });
 
   it('виды отсортированы по order', () => {

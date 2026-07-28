@@ -106,7 +106,7 @@
 }
 
 .dateCell {
-  width: 210px;
+  width: 260px;
 }
 
 .dateBox {
@@ -140,11 +140,6 @@
 
 .dateText {
   font-variant-numeric: tabular-nums;
-}
-
-/* Отсутствие обучения подсвечено, чтобы руководитель сразу видел пробел. */
-.missing {
-  background: var(--error-muted);
 }
 
 .muted {

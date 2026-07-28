@@ -78,7 +78,7 @@ export const OT_TRAININGS: readonly IOtTrainingDef[] = [
   },
   {
     kind: 'program_a',
-    label: 'Программа А — общие вопросы охраны труда',
+    label: 'Общие вопросы охраны труда и функционирования системы охраны труда',
     hint: 'только для ИТР, не реже 1 раза в 3 года',
     validMonths: 36,
     audience: 'itr',

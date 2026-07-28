@@ -142,7 +142,7 @@ const InductionRow: FC<IRowProps> = memo(({ row, index, canEdit, onSave }) => {
       <td>{row.full_name || '—'}</td>
       <td className={`${styles.muted} ${styles.hideNarrow}`}>{row.department_name || '—'}</td>
       <td className={`${styles.muted} ${styles.hideNarrow}`}>{row.position_name || '—'}</td>
-      <td className={`${styles.dateCell} ${inducted ? '' : styles.missing}`}>
+      <td className={styles.dateCell}>
         <InductionDateCell
           employeeId={row.employee_id}
           field="inducted_on"
@@ -152,7 +152,7 @@ const InductionRow: FC<IRowProps> = memo(({ row, index, canEdit, onSave }) => {
           onSave={onSave}
         />
       </td>
-      <td className={`${styles.dateCell} ${programA ? '' : styles.missing}`}>
+      <td className={styles.dateCell}>
         <InductionDateCell
           employeeId={row.employee_id}
           field="program_a_on"
@@ -304,12 +304,12 @@ export const EmployeeInductionTab: FC = () => {
               <th>ФИО</th>
               <th className={styles.hideNarrow}>Отдел</th>
               <th className={styles.hideNarrow}>Должность</th>
-              <th className={styles.dateCell}>Дата инструктажа</th>
+              <th className={styles.dateCell}>Вводный инструктаж</th>
               <th
                 className={styles.dateCell}
-                title="Общие вопросы охраны труда (только ИТР), 1 раз в 3 года"
+                title="Только ИТР, 1 раз в 3 года"
               >
-                Программа А
+                Общие вопросы охраны труда и функционирования системы охраны труда
               </th>
             </tr>
           </thead>

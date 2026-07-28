@@ -124,7 +124,7 @@ export const OtitbPersonModal: FC<IProps> = ({ orgId, person, catalog, onClose, 
     <ModalShell
       onClose={onClose}
       overlayClassName={contractorStyles.overlay}
-      containerClassName={`${contractorStyles.modal} ${styles.modal}`}
+      containerClassName={styles.modal}
       aria-label="Обучение по охране труда"
     >
       {({ requestClose }) => (
@@ -167,7 +167,7 @@ export const OtitbPersonModal: FC<IProps> = ({ orgId, person, catalog, onClose, 
                   {value !== '' && (
                     <button
                       type="button"
-                      className={contractorStyles.btnIcon}
+                      className={`${contractorStyles.btn} ${contractorStyles.btnIcon}`}
                       onClick={() => setDate(def.kind, '')}
                       disabled={busy}
                       title="Снять дату"
@@ -186,7 +186,8 @@ export const OtitbPersonModal: FC<IProps> = ({ orgId, person, catalog, onClose, 
               Отмена
             </button>
             <button
-              className={contractorStyles.btnPrimary}
+              type="button"
+              className={`${contractorStyles.btn} ${contractorStyles.btnPrimary}`}
               onClick={() => void handleSave()}
               disabled={busy}
             >

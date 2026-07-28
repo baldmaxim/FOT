@@ -93,20 +93,14 @@ export const OtitbOrgDetail: FC<IProps> = ({ orgId, canEdit, catalog }) => {
               )}
             </tr>
           ))}
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={canEdit ? 5 : 4} style={{ color: 'var(--text-secondary)' }}>
-                Пока никого нет
-              </td>
-            </tr>
-          )}
         </tbody>
       </table>
 
       {canEdit && (
         <div className={contractorStyles.detailRow}>
           <button
-            className={contractorStyles.btnPrimary}
+            type="button"
+            className={`${contractorStyles.btn} ${contractorStyles.btnPrimary}`}
             onClick={() => setCreating(true)}
             disabled={busy}
           >
