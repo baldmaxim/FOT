@@ -1763,7 +1763,6 @@
   font-weight: 600;
   white-space: nowrap;
   min-width: 64px;
-  box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
 }
 .ts-table thead th.ts-col-sum-sticky {
   z-index: 55;
@@ -1775,9 +1774,33 @@
 .ts-table--objects th.ts-col-sum-sticky,
 .ts-table--objects td.ts-col-sum-sticky {
   right: 0;
+  /* В объектной таблице «Часы» — крайняя левая из закреплённых, тень границы прокрутки на ней. */
+  box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
 }
 .ts-table--objects thead th.ts-col-sum-sticky {
   z-index: 85;
+}
+
+/* Sticky days column («Дни») — крайняя левая из трёх закреплённых справа,
+   несёт тень границы прокрутки. */
+.ts-table th.ts-col-days-sticky,
+.ts-table td.ts-col-days-sticky {
+  position: sticky;
+  right: 128px;
+  z-index: 15;
+  background: var(--surface);
+  text-align: center;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 64px;
+  box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.15);
+}
+.ts-table thead th.ts-col-days-sticky {
+  z-index: 55;
+  background: var(--bg-secondary);
+}
+.ts-table tbody tr:hover td.ts-col-days-sticky {
+  background: var(--surface-hover);
 }
 .ts-day--deviation-undertime {
   color: var(--error);
@@ -1797,6 +1820,26 @@
   border-radius: 6px;
   background: var(--bg-secondary);
 }
+/* Обёртка «Дни» + «Откл.» в шапке мобильной карточки: прижата вправо целиком,
+   margin-left: auto у бейджа «Откл.» внутри обёртки гасится. */
+.ts-mobile-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.ts-mobile-summary .ts-mobile-deviation {
+  margin-left: 0;
+}
+.ts-mobile-days {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
 @media (max-width: 480px) {
   .ts-table th.ts-col-deviation-sticky,
   .ts-table td.ts-col-deviation-sticky {
@@ -1806,6 +1849,12 @@
   .ts-table th.ts-col-sum-sticky,
   .ts-table td.ts-col-sum-sticky {
     right: 52px;
+    min-width: 52px;
+    font-size: 11px;
+  }
+  .ts-table th.ts-col-days-sticky,
+  .ts-table td.ts-col-days-sticky {
+    right: 104px;
     min-width: 52px;
     font-size: 11px;
   }

@@ -281,6 +281,30 @@ const getDayCellHours = (entry: TimesheetEntry | null): number => {
   return 0;
 };
 
+// Статусы-буквы, которые считаются отработанным днём в столбце «Дни».
+const WORKED_DAY_LETTER_STATUSES = new Set<TimesheetStatus>(['remote', 'sick_worked', 'study_day']);
+
+// День идёт в столбец «Дни»: УУ/РБ/УД либо любая ячейка с видимыми часами > 0
+// (зелёные и жёлтые). Буквенные статусы и обнуляющие корректировки дают 0 часов
+// в getDayCellHours, поэтому «> 0» покрывает ровно рабочие ячейки с цифрой.
+const isWorkedDay = (entry: TimesheetEntry | null): boolean => {
+  if (!entry) return false;
+  if (WORKED_DAY_LETTER_STATUSES.has(entry.status)) return true;
+  return getDayCellHours(entry) > 0;
+};
+
+const countWorkedDays = (
+  row: IEmployeeRowData,
+  days: readonly number[],
+  year: number,
+  month: number,
+): number =>
+  days.reduce((acc, day) => (
+    isDayInactiveForEmployee(row.employee, year, month, day)
+      ? acc
+      : acc + (isWorkedDay(row.days.get(day) || null) ? 1 : 0)
+  ), 0);
+
 const getDayCellTextMobile = (entry: TimesheetEntry | null, weekend: boolean): string => {
   const visibleHours = getVisibleHours(entry);
   if (weekend && !entry) return '—';
@@ -449,6 +473,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   }, [employeeStats]);
   const showDeviationColumn = viewMode === 'employees';
   const showSumColumn = viewMode === 'employees';
+  const showDaysColumn = viewMode === 'employees';
   const [expandedEmployeeIds, setExpandedEmployeeIds] = useState<Set<number>>(new Set());
   const [bulkDragAnchor, setBulkDragAnchor] = useState<IBulkCellCoord | null>(null);
   const [bulkDragBaseKeys, setBulkDragBaseKeys] = useState<Set<string>>(new Set());
@@ -1081,19 +1106,29 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         Исключён {formatBadgeDate(row.employee.excluded_from_timesheet_date)}
                       </span>
                     )}
-                    {stat && (() => {
-                      const normR = Math.round(stat.norm_hours);
-                      const factR = Math.round(stat.fact_hours);
-                      const devR = normR - factR;
-                      return (
+                    <span className="ts-mobile-summary">
+                      {showDaysColumn && (
                         <span
-                          className={`ts-mobile-deviation ${getDeviationCellClass(devR)}`}
-                          title={`План ${formatHoursLabel(normR)}, факт ${formatHoursLabel(factR)}`}
+                          className="ts-mobile-days"
+                          title="Отработанные дни: ячейки с часами больше нуля, а также УУ, РБ и УД"
                         >
-                          {formatDeviationHours(devR)}
+                          {countWorkedDays(row, days, year, month)} дн.
                         </span>
-                      );
-                    })()}
+                      )}
+                      {stat && (() => {
+                        const normR = Math.round(stat.norm_hours);
+                        const factR = Math.round(stat.fact_hours);
+                        const devR = normR - factR;
+                        return (
+                          <span
+                            className={`ts-mobile-deviation ${getDeviationCellClass(devR)}`}
+                            title={`План ${formatHoursLabel(normR)}, факт ${formatHoursLabel(factR)}`}
+                          >
+                            {formatDeviationHours(devR)}
+                          </span>
+                        );
+                      })()}
+                    </span>
                     <button
                       type="button"
                       className="ts-mobile-chip-btn"
@@ -1347,7 +1382,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     );
   }
 
-  const desktopColSpan = days.length + 1 + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0);
+  const desktopColSpan = days.length + 1 + (showDaysColumn ? 1 : 0) + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0);
   const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
@@ -1375,6 +1410,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                   </th>
                 );
               })}
+              {showDaysColumn && (
+                <th className="ts-col-days-sticky" title="Отработанные дни: ячейки с часами больше нуля, а также УУ, РБ и УД">
+                  Дни
+                </th>
+              )}
               {showSumColumn && (
                 <th className="ts-col-sum-sticky" title="Сумма показываемых часов за месяц">
                   Часы
@@ -1421,6 +1461,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     : acc + getDayCellHours(row.days.get(day) || null)
                 ), 0)
                 : 0;
+              const rowDays = showDaysColumn ? countWorkedDays(row, days, year, month) : 0;
 
               return (
                 <tbody key={row.employee.id} data-index={index} ref={rowVirtualizer.measureElement}>
@@ -1428,7 +1469,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     <tr className="ts-section-divider-row">
                       <td
                         className="ts-col-sticky ts-section-divider-cell"
-                        colSpan={days.length + 1 + (showSumColumn ? 1 : 0) + (showDeviationColumn ? 1 : 0)}
+                        colSpan={desktopColSpan}
                       >
                         {sectionLabel}
                       </td>
@@ -1547,6 +1588,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         </td>
                       );
                     })}
+                    {showDaysColumn && (
+                      <td className="ts-col-days-sticky" title="Отработанные дни: ячейки с часами больше нуля, а также УУ, РБ и УД">
+                        {rowDays > 0 ? rowDays : '—'}
+                      </td>
+                    )}
                     {showSumColumn && (
                       <td className="ts-col-sum-sticky" title="Сумма показываемых часов за месяц">
                         {rowSum > 0 ? formatHoursLabel(rowSum) : '—'}
@@ -1624,6 +1670,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           </td>
                         );
                       })}
+                      {showDaysColumn && <td className="ts-col-days-sticky" />}
                       {showSumColumn && <td className="ts-col-sum-sticky" />}
                       {showDeviationColumn && <td className="ts-col-deviation-sticky" />}
                     </tr>
