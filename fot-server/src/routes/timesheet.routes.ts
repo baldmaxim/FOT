@@ -229,6 +229,24 @@ router.post(
   timesheetController.exportAssigned
 );
 
+// POST /api/timesheet/export-department-unified — единый файл 1С по ОДНОМУ отделу
+// со страницы «Табель». Поддерево раскрывается на сервере; скоуп и окно месяцев
+// проверяются внутри контроллера теми же резолверами, что и грид табеля.
+router.post(
+  '/export-department-unified',
+  requireAnyPageAccess(['/timesheet-hr', '/timesheet'], 'view'),
+  timesheetController.exportDepartmentUnified
+);
+
+// POST /api/timesheet/export-assigned-unified — единый файл 1С по участку
+// (бригады начальника + его прямые подчинённые) либо по своим прямым подчинённым.
+// Право на assigned-режим проверяется в контроллере (зеркало фронтового гейта).
+router.post(
+  '/export-assigned-unified',
+  requireAnyPageAccess(['/timesheet-hr', '/timesheet'], 'view'),
+  timesheetController.exportAssignedUnified
+);
+
 // GET /api/timesheet/assigned-employees
 // Список начальников участка для assigned-режима. Доступен и табельщице (/timesheet):
 // collectAssignedEmployees ограничивает выборку её accessible-бригадами (объекты ∩ папки).

@@ -464,6 +464,68 @@ export async function listScopedMembersByDepartment(
   return result;
 }
 
+/**
+ * Подразделение сотрудников ЗА ПЕРИОД (обратная задача к listScopedMembersByDepartment:
+ * фильтр по employee_id, а не по отделам). Тот же приоритет источников:
+ * assignment(1) > snapshot(2) > отдел на дату увольнения(3).
+ *
+ * Нужен для сотрудников, попадающих в выгрузку не через членство отдела (прямые
+ * подчинённые): employees.org_department_id — ТЕКУЩИЙ отдел, и при экспорте прошлого
+ * периода переведённый сотрудник оказался бы не в своём разделе файла.
+ *
+ * Сотрудники, не прошедшие eligibility (архивные, уволенные до начала периода,
+ * исключённые из табеля), в результат не попадают — вызывающий трактует отсутствие
+ * ключа как «в выгрузку не берём».
+ */
+export async function resolveDepartmentIdsForEmployeesInPeriod(
+  employeeIds: number[],
+  startDate: string,
+  endDate: string,
+): Promise<Map<number, string | null>> {
+  const result = new Map<number, string | null>();
+  const uniqueIds = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
+  if (uniqueIds.length === 0) return result;
+
+  const rows = await query<{ employee_id: number; dept_id: string | null }>(
+    `SELECT DISTINCT ON (s.employee_id) s.employee_id, s.dept_id
+       FROM (
+         SELECT a.employee_id, a.org_department_id AS dept_id, 1 AS prio
+           FROM employee_assignments a
+          WHERE a.employee_id = ANY($1::int[])
+            AND a.effective_from <= $3::date
+            AND (a.effective_to IS NULL OR a.effective_to >= $2::date)
+         UNION ALL
+         SELECT e.id, e.org_department_id, 2
+           FROM employees e
+          WHERE e.id = ANY($1::int[])
+         UNION ALL
+         SELECT de.employee_id, de.from_department_id, 3
+           FROM employee_dismissal_events de
+          WHERE de.employee_id = ANY($1::int[])
+            AND de.dismissal_date IS NOT NULL
+            AND de.dismissal_date >= $2::date
+       ) s
+       JOIN employees emp ON emp.id = s.employee_id
+      WHERE emp.is_archived = false
+        AND (emp.employment_status = 'active'
+             OR (emp.employment_status = 'fired'
+                 AND emp.dismissal_date IS NOT NULL
+                 AND emp.dismissal_date >= $2::date))
+        AND NOT (emp.excluded_from_timesheet = true
+                 AND (emp.excluded_from_timesheet_date IS NULL
+                      OR emp.excluded_from_timesheet_date <= $2::date))
+      ORDER BY s.employee_id, s.prio`,
+    [uniqueIds, startDate, endDate],
+  );
+
+  for (const row of rows) {
+    const empId = Number(row.employee_id);
+    if (!Number.isFinite(empId)) continue;
+    result.set(empId, row.dept_id ?? null);
+  }
+  return result;
+}
+
 export async function isEmployeeAssignedToDepartmentOnDate(
   employeeId: number,
   departmentId: string,

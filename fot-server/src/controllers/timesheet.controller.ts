@@ -10,27 +10,30 @@ import type {
   TimeStatus,
   TimesheetApprovalStatus,
 } from '../types/index.js';
-import type { DataScope } from '../config/access-control.js';
 import { exportTimesheet } from './timesheet-export.controller.js';
 import { exportTimesheetMass, exportTimesheetMassUnified } from './timesheet-mass-export.controller.js';
-import { exportTimesheetAssigned, listAssignedEmployees, emailTimesheetAssigned, getDepartmentSupervisor, listBrigadeSupervisorEmployeeIds } from './timesheet-assigned-export.controller.js';
+import { exportTimesheetAssigned, exportTimesheetAssignedUnified, listAssignedEmployees, emailTimesheetAssigned, getDepartmentSupervisor, listBrigadeSupervisorEmployeeIds } from './timesheet-assigned-export.controller.js';
+import { exportTimesheetDepartmentUnified } from './timesheet-department-export.controller.js';
 import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-memo.controller.js';
 import { resolveSchedulesForPeriod, isWorkingDay, isHolidayOnWorkday, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getSelfHistoryLimitForUser,
   isSelfEmployeeRequest,
-  resolveAccessibleDepartmentIds,
   resolveAccessibleEmployeeIds,
   resolveManagedDepartmentIds,
   resolveEditableDepartmentIds,
   resolveEditableEmployeeIds,
-  resolveScopedDepartmentId,
   resolveEffectiveDirectSubordinates,
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
 import { isTimekeeper, resolveTimekeeperEditableLiIds, resolveTimekeeperLiObshestroyPresenceIds, LI_OBSHESTROY_DEPARTMENT_ID, TIMEKEEPER_ROLE_CODE } from '../services/timekeeper-scope.service.js';
+import {
+  canAccessEmployeeForTimesheetPeriod,
+  hasManagedTimesheetAccess,
+  resolveTimesheetScope,
+  resolveTimesheetScopedDepartmentId,
+} from '../services/timesheet-scope.service.js';
 import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
-import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
 import {
   buildAttendanceEntries,
   deleteAttendanceAdjustmentBySource,
@@ -1200,8 +1203,6 @@ export async function withQuotaLocks<T>(
   });
 }
 
-const MANAGED_TIMESHEET_PAGE_KEYS = ['/timesheet', '/timesheet-hr'] as const;
-
 interface IManagedDepartmentTimesheetSummary {
   department_id: string;
   department_name: string;
@@ -1397,146 +1398,17 @@ async function canAccessEmployeeForTimesheetDate(
   return false;
 }
 
-async function canAccessEmployeeForTimesheetPeriod(
-  req: AuthenticatedRequest,
-  employeeId: number | null | undefined,
-  startDate: string,
-  endDate: string,
-  requireEdit = false,
-): Promise<boolean> {
-  if (!employeeId) {
-    return false;
-  }
+// canAccessEmployeeForTimesheetPeriod живёт в services/timesheet-scope.service.ts
+// (общая проверка для грида и экспортных контроллеров) — импортируется выше.
 
-  const scope = await resolveTimesheetScope(req);
-  if (!scope) {
-    return false;
-  }
-
-  if (scope === 'all') {
-    return true;
-  }
-
-  if (scope === 'self') {
-    return req.user.employee_id === employeeId;
-  }
-
-  if (scope === 'department' && req.user.employee_id === employeeId) {
-    return true;
-  }
-
-  // Объектный view-скоуп (отделы ∩ объекты) ИЛИ hr: для ПРОСМОТРА авторитетен видимый набор.
-  if (!requireEdit && (req.user.role_code === 'hr' || await hasObjectViewScope(req))) {
-    const acc = await resolveAccessibleEmployeeIds(req);
-    return acc === 'all' || acc.has(employeeId);
-  }
-
-  const managedDepartmentIds = requireEdit
-    ? await resolveEditableDepartmentIds(req)
-    : await resolveManagedDepartmentIds(req);
-  if (managedDepartmentIds !== 'all' && managedDepartmentIds.length > 0) {
-    const employeeIdsByDepartment = await Promise.all(
-      managedDepartmentIds.map(departmentId => listEmployeeIdsAssignedToDepartmentPeriod(departmentId, startDate, endDate)),
-    );
-    if (employeeIdsByDepartment.flat().includes(employeeId)) {
-      return true;
-    }
-  }
-
-  // Табельщица: правка сотрудников ЛИНИЯ-Общестрой, работающих на её объектах
-  // («По отделу → ЛИНИЯ-Общестрой»). Бригады правятся веткой editable-seeds выше.
-  // Строго LI ∩ её объекты — чужих ИТР/подрядных, прошедших через объект, не пускаем.
-  // Read-only не затрагивается: ветка под requireEdit.
-  if (requireEdit && isTimekeeper(req)) {
-    const editableLi = await resolveTimekeeperEditableLiIds(req);
-    if (editableLi.has(employeeId)) {
-      return true;
-    }
-  }
-
-  // Прямые подчинённые руководителя (employee_direct_reports). Для табельщицы пусто —
-  // её объектные сотрудники обработаны веткой выше.
-  const directSubs = await resolveEffectiveDirectSubordinates(req);
-  if (directSubs.includes(employeeId)) {
-    return true;
-  }
-
-  return false;
-}
-
-export async function hasManagedTimesheetAccess(
-  req: AuthenticatedRequest,
-  action: 'view' | 'edit',
-): Promise<boolean> {
-  const checker = action === 'edit' ? hasPageEdit : hasPageView;
-  const checks = await Promise.all(MANAGED_TIMESHEET_PAGE_KEYS.map(pageKey => checker(req.user.role_code, pageKey)));
-  return checks.some(Boolean);
-}
-
-export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<DataScope | null> {
-  if (req.user.is_admin) {
-    const accessible = await resolveAccessibleDepartmentIds(req);
-    if (accessible === 'all') return 'all';
-    if (accessible.length > 0) return 'department';
-    // is_admin со scope=[] (теоретически не возникает: company_scope=[] только если не is_admin)
-  }
-
-  // hr (role_code='hr', is_admin=false): полный ПРОСМОТР организации в табеле.
-  // Именно 'department' (не 'all') — иначе canAccessEmployeeForTimesheet* (scope==='all')
-  // откроет и запись. При 'department' getAll грузит всех сотрудников выбранного отдела
-  // (resolveTimesheetScopedDepartmentId → requested id, т.к. accessible='all'), а правка
-  // остаётся закрытой (editable-скоуп hr пуст + page can_edit=false → edit-роуты 403).
-  if (req.user.role_code === 'hr') return 'department';
-
-  if (await hasManagedTimesheetAccess(req, 'view')) {
-    const managedDepartmentIds = await resolveManagedDepartmentIds(req);
-    if (managedDepartmentIds.length > 0) {
-      return 'department';
-    }
-  }
-
-  // Псевдо-ячейка: прямые подчинённые (employee_direct_reports) или явные сотрудники
-  // табельщицы (employee_object_assignment) — ведёт их табель без managed-отделов.
-  // getAll и canAccessEmployeeForTimesheet* ограничивают выборку строго этим набором.
-  const directSubs = await resolveEffectiveDirectSubordinates(req);
-  if (directSubs.length > 0) {
-    return 'department';
-  }
-
-  if (req.user.employee_id) {
-    return 'self';
-  }
-
-  return null;
-}
-
-export async function resolveTimesheetScopedDepartmentId(
-  req: AuthenticatedRequest,
-  requestedDepartmentId?: string | null,
-): Promise<string | null> {
-  const scope = await resolveTimesheetScope(req);
-  if (!scope) {
-    return null;
-  }
-
-  if (scope === 'all') {
-    return requestedDepartmentId ?? null;
-  }
-
-  if (scope === 'department') {
-    // Табельщица: разрешаем выбор «ЛИНИЯ-Общестрой» в «По отделу», хотя это не её
-    // seed-бригада (соседняя ветка). Состав грида при этом сужается до её людей
-    // (isTimekeeperLiDeptView в getAll), а правка — только по присутствие-набору
-    // (edit-гейт, часть A). В editable-скоуп LI-отдел не входит → массовой правки
-    // всего отдела нет.
-    if (isTimekeeper(req) && requestedDepartmentId === LI_OBSHESTROY_DEPARTMENT_ID) {
-      return LI_OBSHESTROY_DEPARTMENT_ID;
-    }
-    return resolveScopedDepartmentId(req, requestedDepartmentId);
-  }
-
-  return null;
-}
+// hasManagedTimesheetAccess / resolveTimesheetScope / resolveTimesheetScopedDepartmentId
+// живут в services/timesheet-scope.service.ts (их используют экспортные контроллеры —
+// импорт контроллера из контроллера замкнул бы цикл). Здесь только реэкспорт.
+export {
+  hasManagedTimesheetAccess,
+  resolveTimesheetScope,
+  resolveTimesheetScopedDepartmentId,
+};
 
 const APPROVAL_STATUS_PRIORITY: Record<TimesheetApprovalStatus, number> = {
   rejected: 4,
@@ -3943,6 +3815,12 @@ export const timesheetController = {
 
   /** POST /api/timesheet/export-assigned  body: { month, half, group_by, export_as_1c, employee_ids? } */
   exportAssigned: exportTimesheetAssigned,
+
+  /** POST /api/timesheet/export-department-unified  body: { department_id, month, from, to } */
+  exportDepartmentUnified: exportTimesheetDepartmentUnified,
+
+  /** POST /api/timesheet/export-assigned-unified  body: { assignee_employee_id, month, from, to } */
+  exportAssignedUnified: exportTimesheetAssignedUnified,
 
   /** GET /api/timesheet/assigned-employees */
   listAssignedEmployees,

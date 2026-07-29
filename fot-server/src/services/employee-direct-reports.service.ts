@@ -70,6 +70,57 @@ export async function listDirectSubordinates(managerEmployeeId: number): Promise
 }
 
 /**
+ * Прямые подчинённые ЗА ПЕРИОД: связь пересекается с [startDate, endDate].
+ *
+ * `is_active` для экспорта прошлых месяцев не годится — он добавил бы назначенных
+ * уже после периода и потерял бы снятых после него. Сравнение через `::date`
+ * обязательно: assigned_at/unassigned_at — timestamp, и связь, созданная вечером
+ * последнего дня периода, при сравнении по timestamp выпала бы.
+ *
+ * Дополнительно применяются те же eligibility-правила, что и к остальному ростеру:
+ * не архивный, активный либо уволенный не раньше начала периода, не исключённый
+ * из табеля до начала периода.
+ */
+export async function listDirectReportIdsInPeriod(
+  managerEmployeeId: number,
+  startDate: string,
+  endDate: string,
+): Promise<number[]> {
+  if (!Number.isInteger(managerEmployeeId) || managerEmployeeId <= 0) return [];
+  try {
+    const rows = await query<{ subordinate_employee_id: number | null }>(
+      `SELECT DISTINCT dr.subordinate_employee_id
+         FROM employee_direct_reports dr
+         JOIN employees e ON e.id = dr.subordinate_employee_id
+        WHERE dr.manager_employee_id = $1
+          AND dr.assigned_at::date <= $3::date
+          AND (dr.unassigned_at IS NULL OR dr.unassigned_at::date >= $2::date)
+          AND e.is_archived = false
+          AND (e.employment_status = 'active'
+               OR (e.employment_status = 'fired'
+                   AND e.dismissal_date IS NOT NULL
+                   AND e.dismissal_date >= $2::date))
+          AND NOT (e.excluded_from_timesheet = true
+                   AND (e.excluded_from_timesheet_date IS NULL
+                        OR e.excluded_from_timesheet_date <= $2::date))`,
+      [managerEmployeeId, startDate, endDate],
+    );
+
+    return [...new Set(
+      rows
+        .map(row => row.subordinate_employee_id)
+        .filter((id): id is number => Number.isInteger(id)),
+    )];
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      warnMissingTable();
+      return [];
+    }
+    throw err;
+  }
+}
+
+/**
  * Отделы (org_department_id) активных прямых подчинённых руководителя.
  * Используется как доп. путь доступа к подаче/вложениям табеля: руководитель
  * «по людям» (без employee_department_access) управляет отделами, в которых

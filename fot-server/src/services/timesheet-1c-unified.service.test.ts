@@ -468,3 +468,117 @@ describe('buildUnified1CWorkbook — «Н» пустой клеткой, уво�
     expect(rows[0].total).toBe(8);
   });
 });
+
+describe('buildUnified1CWorkbook — строки связываются по employee_id, а не по ФИО', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    queryMock.mockImplementation((sql: string) => {
+      if (sql.includes('FROM employee_department_access')) {
+        return Promise.resolve([{ employee_id: 200, department_id: 'dept-x' }]);
+      }
+      if (sql.includes('SELECT id, full_name FROM employees')) {
+        return Promise.resolve([{ id: 200, full_name: 'Реальный Начальник' }]);
+      }
+      if (sql.includes('FROM skud_objects')) {
+        return Promise.resolve([
+          { id: 'obj-a', alt_name: null, name: 'ЖК Сад 69' },
+          { id: 'obj-b', alt_name: null, name: 'Склад 7' },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+  });
+
+  const makeDeptWithEmployees = (
+    emps: Array<{ id: number; full_name: string; position_id: string | null; objects: string[] }>,
+    posMap: Map<string, string>,
+  ): IDepartmentTimesheetData => {
+    const schedule = makeSchedule();
+    const objectNames: Record<string, string> = { 'obj-a': 'ЖК Сад 69', 'obj-b': 'Склад 7' };
+    return {
+      departmentName: 'бр.Тест',
+      departmentId: 'dept-x',
+      isBrigade: true,
+      employees: emps.map(e => ({
+        id: e.id,
+        full_name: e.full_name,
+        position_id: e.position_id,
+        org_department_id: 'dept-x',
+        sigur_employee_id: null,
+      })),
+      schedulesMap: new Map(emps.map(e => [e.id, schedule])),
+      dailySchedulesMap: new Map(emps.map(e => [e.id, new Map([['2026-04-01', schedule]])])),
+      calendarMonth: null,
+      entries: [],
+      dataMap: new Map(emps.map(e => [
+        e.id,
+        new Map([['2026-04-01', { status: 'work', hours: 8, corrected: false }]]),
+      ])),
+      objectEntries: emps.flatMap(e => e.objects.map(objectId => ({
+        adjustment_id: null,
+        employee_id: e.id,
+        work_date: '2026-04-01',
+        object_key: objectId,
+        object_id: objectId,
+        object_name: objectNames[objectId],
+        hours_worked: 8,
+        display_hours_worked: 8,
+        base_hours_worked: 8,
+        is_correction: false,
+      }))),
+      skudMap: new Map(),
+      posMap,
+      year: 2026,
+      mon: 4,
+      daysInMonth: 30,
+      exportHalf: 'FULL',
+      exportDays: [1],
+      showActualHours: false,
+    };
+  };
+
+  it('однофамильцы в одном отделе не схлопываются и получают свою должность', async () => {
+    const dept = makeDeptWithEmployees(
+      [
+        { id: 11, full_name: 'Уринов Улугбек Уринович', position_id: 'p1', objects: ['obj-a'] },
+        { id: 12, full_name: 'Уринов Улугбек Уринович', position_id: 'p2', objects: ['obj-b'] },
+      ],
+      new Map([['p1', 'Каменщик'], ['p2', 'Электромонтажник']]),
+    );
+
+    const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
+    const rows: Array<{ fio: string; address: string; position: string }> = [];
+    for (let r = ONE_C_DATA_START_ROW; r <= ws.rowCount; r++) {
+      const fio = ws.getCell(r, COL_FIO).value;
+      if (typeof fio !== 'string' || !fio.trim()) continue;
+      rows.push({
+        fio,
+        address: String(ws.getCell(r, COL_ADDRESS).value ?? ''),
+        position: String(ws.getCell(r, 38).value ?? ''),
+      });
+    }
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map(r => r.address).sort()).toEqual(['ЖК Сад 69', 'Склад 7']);
+    const byAddress = new Map(rows.map(r => [r.address, r.position]));
+    expect(byAddress.get('ЖК Сад 69')).toBe('Каменщик');
+    expect(byAddress.get('Склад 7')).toBe('Электромонтажник');
+  });
+
+  it('несколько объектов одного сотрудника дают несколько строк (seenEmployeeIds их не режет)', async () => {
+    const dept = makeDeptWithEmployees(
+      [{ id: 11, full_name: 'Иван Иванов', position_id: 'p1', objects: ['obj-a', 'obj-b'] }],
+      new Map([['p1', 'Каменщик']]),
+    );
+
+    const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
+    const addresses: string[] = [];
+    for (let r = ONE_C_DATA_START_ROW; r <= ws.rowCount; r++) {
+      const fio = ws.getCell(r, COL_FIO).value;
+      if (typeof fio !== 'string' || !fio.trim()) continue;
+      addresses.push(String(ws.getCell(r, COL_ADDRESS).value ?? ''));
+    }
+
+    expect(addresses.sort()).toEqual(['ЖК Сад 69', 'Склад 7']);
+  });
+});

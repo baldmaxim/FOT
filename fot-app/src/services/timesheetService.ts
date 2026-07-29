@@ -44,6 +44,20 @@ interface ApiResponse<T> {
   error?: string;
 }
 
+/**
+ * Текст ошибки из JSON-ответа файлового эндпоинта. Нужен, чтобы осмысленные
+ * сообщения (нет доступа к отделу, нет сотрудников за период) доходили до тоста,
+ * а не подменялись общей фразой.
+ */
+const extractExportError = async (response: Response, fallback: string): Promise<string> => {
+  try {
+    const body = await response.json() as { error?: string };
+    return typeof body?.error === 'string' && body.error.length > 0 ? body.error : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 export interface IWeekendMemoEntry {
   employee_id: number;
   full_name: string;
@@ -482,6 +496,58 @@ export const timesheetService = {
       throw new Error('Ошибка загрузки объектов');
     }
     return res.data;
+  },
+
+  /**
+   * Единый файл для 1С по одному отделу (страница «Табель»).
+   * Поддерево раскрывается на сервере — фронт шлёт ровно выбранный узел.
+   */
+  async exportDepartmentUnified(filters: {
+    department_id: string;
+    month: string;
+    from: string;
+    to: string;
+  }): Promise<Blob> {
+    const response = await fetch(
+      buildApiUrl('/timesheet/export-department-unified'),
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildAuthHeaders(),
+        },
+        body: JSON.stringify(filters),
+      }
+    );
+    if (!response.ok) throw new Error(await extractExportError(response, 'Ошибка единого экспорта для 1С'));
+    return response.blob();
+  },
+
+  /**
+   * Единый файл для 1С по участку (бригады начальника + его прямые подчинённые).
+   * assignee_employee_id === собственный employee_id — режим «Мои сотрудники».
+   */
+  async exportAssignedUnified(filters: {
+    assignee_employee_id: number;
+    month: string;
+    from: string;
+    to: string;
+  }): Promise<Blob> {
+    const response = await fetch(
+      buildApiUrl('/timesheet/export-assigned-unified'),
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...buildAuthHeaders(),
+        },
+        body: JSON.stringify(filters),
+      }
+    );
+    if (!response.ok) throw new Error(await extractExportError(response, 'Ошибка единого экспорта для 1С'));
+    return response.blob();
   },
 
   async exportObjectsUnified(filters: {

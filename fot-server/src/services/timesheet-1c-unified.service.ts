@@ -174,14 +174,16 @@ const buildRowsForDepartment = (
       objectEntries: visibleData.objectEntries.filter(e => !currentActivityEmpIds.has(e.employee_id)),
     };
 
-  const nameToId = new Map<string, number>(visibleData.employees.map(e => [e.full_name, e.id]));
   const positionByEmpId = new Map<number, string>(
     visibleData.employees.map(e => [e.id, e.position_id ? (data.posMap.get(e.position_id) ?? '') : '']),
   );
   const positionForEmpId = (empId: number | undefined): string =>
     empId != null ? (positionByEmpId.get(empId) ?? '') : '';
   const targets = listObjectExportTargets(splitData);
-  const seenFullNames = new Set<string>();
+  // Только признак «у сотрудника уже есть хотя бы одна объектная строка» → общая
+  // статус-строка ему не нужна. Дедуплицировать этим набором сами объектные строки
+  // нельзя: несколько строк по разным объектам — законный случай.
+  const seenEmployeeIds = new Set<number>();
 
   for (const target of targets) {
     const objectRows = buildObjectRowsForOneC(splitData, target);
@@ -189,9 +191,9 @@ const buildRowsForDepartment = (
       ? (objectAddressMap.get(target.object_id) ?? target.object_name)
       : '';
     for (const oneCRow of objectRows) {
-      seenFullNames.add(oneCRow.fullName);
-      const empId = nameToId.get(oneCRow.fullName);
-      const managerName = empId != null ? (managerNameMap.get(empId) ?? '') : '';
+      seenEmployeeIds.add(oneCRow.employeeId);
+      const empId = oneCRow.employeeId;
+      const managerName = managerNameMap.get(empId) ?? '';
       rows.push({
         departmentNameSort: data.departmentName,
         fullNameSort: oneCRow.fullName,
@@ -208,10 +210,10 @@ const buildRowsForDepartment = (
   // Сотрудники без выходов на объекты — отпуск/больничный/прогул и пр.
   // Если у сотрудника есть строки по объектам, его «общая» статус-строка не нужна.
   for (const employeeRow of buildEmployeeRowsForOneC(splitData)) {
-    if (seenFullNames.has(employeeRow.fullName)) continue;
+    if (seenEmployeeIds.has(employeeRow.employeeId)) continue;
     if (isOneCRowEmpty(employeeRow)) continue;
-    const empId = nameToId.get(employeeRow.fullName);
-    const managerName = empId != null ? (managerNameMap.get(empId) ?? '') : '';
+    const empId = employeeRow.employeeId;
+    const managerName = managerNameMap.get(empId) ?? '';
     rows.push({
       departmentNameSort: data.departmentName,
       fullNameSort: employeeRow.fullName,
@@ -234,8 +236,8 @@ const buildRowsForDepartment = (
     };
     for (const employeeRow of buildEmployeeRowsForOneC(currentActivityData)) {
       if (isOneCRowEmpty(employeeRow)) continue;
-      const empId = nameToId.get(employeeRow.fullName);
-      const managerName = empId != null ? (managerNameMap.get(empId) ?? '') : '';
+      const empId = employeeRow.employeeId;
+      const managerName = managerNameMap.get(empId) ?? '';
       rows.push({
         departmentNameSort: data.departmentName,
         fullNameSort: employeeRow.fullName,

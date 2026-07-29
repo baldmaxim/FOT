@@ -24,7 +24,22 @@ import {
   writeTimesheetWorkbookBuffer,
 } from '../services/timesheet-excel.service.js';
 import { formatAssignedFolderName, formatNameWithInitials } from '../utils/fio.utils.js';
-import { isDepartmentMonthAllowed, monthAccessFromUser, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
+import { isDepartmentMonthAllowed, isTimesheetWindowExempt, monthAccessFromUser, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
+import { hasPageEdit, hasPageView } from '../services/access-control.service.js';
+import { resolveScopedDepartmentIds } from '../services/data-scope.service.js';
+import { collectDeptIds } from '../services/skud-shared.service.js';
+import { isTimekeeper } from '../services/timekeeper-scope.service.js';
+import { listDirectReportIdsInPeriod } from '../services/employee-direct-reports.service.js';
+import {
+  listScopedMembersByDepartment,
+  resolveDepartmentIdsForEmployeesInPeriod,
+} from '../services/timesheet-department-assignments.service.js';
+import {
+  filterAdditionalEmployeeIdsForTimesheetPeriod,
+  filterEmployeeIdsByTimesheetScope,
+  resolveTimesheetScope,
+} from '../services/timesheet-scope.service.js';
+import { buildUnified1CBuffer, parseStrictExportPeriod } from '../services/timesheet-unified-export.service.js';
 
 const MONTH_NAMES = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -511,6 +526,141 @@ export async function getDepartmentSupervisor(req: AuthenticatedRequest, res: Re
   } catch (err) {
     console.error('timesheet.getDepartmentSupervisor error:', err);
     return res.status(500).json({ success: false, error: 'Ошибка загрузки начальника участка' });
+  }
+}
+
+/**
+ * Право работать в режиме «По участкам» — зеркало фронтового гейта
+ * (TimesheetPage: isTimekeeperRole || monitor || review). Доступа к странице табеля
+ * недостаточно: обычный начальник участка этот режим не открывает.
+ */
+async function canUseAssignedMode(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.is_admin || isTimekeeper(req) || req.user.role_code === 'hr') return true;
+  const [canView, canEdit] = await Promise.all([
+    hasPageView(req.user.role_code, '/timesheet-hr'),
+    hasPageEdit(req.user.role_code, '/timesheet-hr'),
+  ]);
+  return canView || canEdit;
+}
+
+/**
+ * POST /api/timesheet/export-assigned-unified
+ * body: { assignee_employee_id, month: 'YYYY-MM', from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' }
+ *
+ * Единый файл для 1С по участку — тот же формат, что «Единый файл для 1С» в «Табели HR».
+ * Состав: все бригады выбранного начальника (с поддеревьями) + его прямые подчинённые
+ * за период. Отдельный случай `assignee_employee_id === req.user.employee_id` —
+ * режим «Мои сотрудники» для руководителя без назначенных подразделений.
+ */
+export async function exportTimesheetAssignedUnified(req: AuthenticatedRequest, res: Response) {
+  try {
+    const parsed = parseStrictExportPeriod(req.body ?? {});
+    if (!parsed.ok) {
+      return res.status(400).json({ success: false, error: parsed.error });
+    }
+    const { month, year, mon, startDate, endDate, rangeArg, segmentSuffix } = parsed.period;
+
+    const assigneeId = Number(req.body?.assignee_employee_id);
+    if (!Number.isInteger(assigneeId) || assigneeId <= 0) {
+      return res.status(400).json({ success: false, error: 'Не указан начальник участка для выгрузки' });
+    }
+
+    const scope = await resolveTimesheetScope(req);
+    if (!scope) {
+      return res.status(403).json({ success: false, error: 'Недостаточно прав для выгрузки табеля' });
+    }
+    if (!isTimesheetWindowExempt(req.user, scope) && !isDepartmentMonthAllowed(year, mon, {
+      monthsBack: req.user.timesheet_months_back,
+      monthsForward: req.user.timesheet_months_forward,
+      referenceDate: new Date(),
+    })) {
+      return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
+    }
+
+    const isSelfDirectReports = assigneeId === req.user.employee_id;
+    if (!isSelfDirectReports && !(await canUseAssignedMode(req))) {
+      return res.status(403).json({ success: false, error: 'Недостаточно прав для выгрузки по участку' });
+    }
+
+    let memberByEmp = new Map<number, string | null>();
+    let supervisorSet = new Set<number>();
+    let leaderName = '';
+
+    if (isSelfDirectReports) {
+      // «Мои сотрудники»: собственный контекст без подразделений — к списку бригад
+      // назначенного начальника не обращаемся (его здесь может не быть вовсе).
+      leaderName = '';
+    } else {
+      const collected = await collectAssignedEmployees(req);
+      if ('error' in collected) {
+        return res.status(collected.error.status).json({ success: false, error: collected.error.message });
+      }
+      const assignee = collected.employees.find(employee => employee.id === assigneeId);
+      if (!assignee) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к выбранному начальнику участка' });
+      }
+      leaderName = assignee.full_name;
+
+      // Назначение может указывать на родительский узел — раскрываем до бригад,
+      // затем повторно пересекаем со скоупом вызывающего.
+      const expanded = [...new Set((await Promise.all(
+        assignee.department_ids.map(deptId => collectDeptIds(deptId)),
+      )).flat())];
+      const scopedDeptIds = expanded.length > 0 ? await resolveScopedDepartmentIds(req, expanded) : [];
+      if (scopedDeptIds.length > 0) {
+        supervisorSet = await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDeptIds);
+        memberByEmp = new Map<number, string | null>(
+          await listScopedMembersByDepartment(scopedDeptIds, startDate, endDate),
+        );
+      }
+    }
+
+    // Прямые подчинённые сверх бригад: доступ проверяем ВСЕГДА — иначе прямой
+    // подчинённый вне бригад/объектов вызывающего утёк бы в файл.
+    const directIds = (await listDirectReportIdsInPeriod(assigneeId, startDate, endDate))
+      .filter(id => !memberByEmp.has(id));
+    if (directIds.length > 0) {
+      const allowedDirect = await filterAdditionalEmployeeIdsForTimesheetPeriod(req, directIds, startDate, endDate);
+      if (allowedDirect.length > 0) {
+        // Отдел — периодный: employees.org_department_id это ТЕКУЩИЙ отдел, и при
+        // экспорте прошлого месяца переведённый сотрудник попал бы не в свой раздел.
+        const deptByEmp = await resolveDepartmentIdsForEmployeesInPeriod(allowedDirect, startDate, endDate);
+        for (const id of allowedDirect) {
+          if (!deptByEmp.has(id)) continue;   // не прошёл eligibility — в выгрузку не берём
+          memberByEmp.set(id, deptByEmp.get(id) ?? null);
+        }
+      }
+    }
+
+    const visible = await filterEmployeeIdsByTimesheetScope(req, [...memberByEmp.keys()], supervisorSet);
+    if (visible.length !== memberByEmp.size) {
+      const visibleSet = new Set(visible);
+      memberByEmp = new Map([...memberByEmp].filter(([empId]) => visibleSet.has(empId)));
+    }
+
+    if (memberByEmp.size === 0) {
+      return res.status(422).json({ success: false, error: 'Нет сотрудников для выгрузки за выбранный период' });
+    }
+
+    const buffer = await buildUnified1CBuffer({
+      month, rangeArg, memberByEmp, exemptEmployeeIds: supervisorSet,
+    });
+
+    const namePart = isSelfDirectReports
+      ? 'Мои_сотрудники'
+      : `Участок_${formatNameWithInitials(leaderName)}`;
+    const fileName = sanitizeFileName(`Единый_1С_${namePart}_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.end(buffer);
+  } catch (err) {
+    console.error('timesheet.exportAssignedUnified error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: 'Ошибка единого экспорта для 1С' });
+    }
   }
 }
 

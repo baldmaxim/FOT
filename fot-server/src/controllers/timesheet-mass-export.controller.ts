@@ -6,9 +6,6 @@ import { query } from '../config/postgres.js';
 import { resolveRequestDataScope, resolveScopedDepartmentIds } from '../services/data-scope.service.js';
 import {
   fetchTimesheetDataForDepartment,
-  fetchTimesheetDataForEmployees,
-  sliceTimesheetDataByEmployees,
-  type IDepartmentTimesheetData,
   type TimesheetExportGrouping,
   type TimesheetExportHalf,
   type TimesheetExportPresentation,
@@ -29,6 +26,7 @@ import {
   writeTimesheetWorkbookBuffer,
 } from '../services/timesheet-excel.service.js';
 import { buildUnified1CWorkbook } from '../services/timesheet-1c-unified.service.js';
+import { buildUnified1CBuffer } from '../services/timesheet-unified-export.service.js';
 import { fetchTimesheetDataForObjectIds } from '../services/timesheet-objects-export.service.js';
 import { listBrigadeSupervisorEmployeeIdsForDepartments } from './timesheet-assigned-export.controller.js';
 import { isDepartmentMonthAllowed, monthAccessFromUser, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE } from '../utils/timesheet-month-access.js';
@@ -272,52 +270,23 @@ export async function exportTimesheetMassUnified(req: AuthenticatedRequest, res:
     }
     const { startDate, endDate } = periodRange;
 
-    // Названия отделов одним запросом.
-    const deptNameRows = scopedDepartmentIds.length > 0
-      ? await query<{ id: string; name: string }>(
-        'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
-        [scopedDepartmentIds],
-      )
-      : [];
-    const deptNameById = new Map(deptNameRows.map(r => [r.id, r.name]));
-
     // Членство по ВСЕМ выбранным отделам — ОДНИМ bulk-запросом (employee_id → один отдел).
     // Снимает O(числа отделов) N+1 (прежде ~5 запросов на отдел) и дубли строк
     // (сотрудник под каждым предком). Тяжёлая посещаемость — тоже один раз ниже.
     const tMembers = Date.now();
     const memberByEmp = await listScopedMembersByDepartment(scopedDepartmentIds, startDate, endDate);
-    const empIdsByDept = new Map<string, number[]>();
-    for (const [empId, deptId] of memberByEmp) {
-      const list = empIdsByDept.get(deptId);
-      if (list) list.push(empId);
-      else empIdsByDept.set(deptId, [empId]);
-    }
-    const allEmployeeIds = [...memberByEmp.keys()];
 
-    // Один bulk-прогон на всех сотрудников выбранных отделов (один attendance/skud-скан).
-    // Единый файл для 1С: не проходящие по СКУДу исключаются ещё в bulk; exempt —
-    // объединение начальников участков ВСЕХ выбранных бригад (до нарезки по отделам,
-    // иначе «пустой» начальник выпал бы из среза своей бригады). Exempt только
-    // сохраняет уже загруженных членов — ростер не расширяет.
+    // Сборка файла — общий helper (тот же код обслуживает экспорт со страницы «Табель»).
+    // exempt — объединение начальников участков ВСЕХ выбранных бригад (до нарезки по
+    // отделам, иначе «пустой» начальник выпал бы из среза своей бригады).
     const tFetch = Date.now();
-    const bulk = await fetchTimesheetDataForEmployees(
-      month, allEmployeeIds, 'Сводный 1С', rangeArg, 'actual', true,
-      {
-        excludeZeroActivity: true,
-        exemptEmployeeIds: await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDepartmentIds),
-      },
-    );
-
-    // Нарезаем bulk обратно в поотдельские данные — формат итогового файла не меняется.
-    const tBuild = Date.now();
-    const collected: IDepartmentTimesheetData[] = [...empIdsByDept]
-      .map(([deptId, empIds]) => sliceTimesheetDataByEmployees(
-        bulk, empIds, deptNameById.get(deptId) ?? 'Без названия', deptId,
-      ));
-
-    const workbook = await buildUnified1CWorkbook(mon, year, collected);
-    const buffer = await writeTimesheetWorkbookBuffer(workbook);
-    console.log(`[export-mass-unified] depts=${scopedDepartmentIds.length} emp=${allEmployeeIds.length} bytes=${buffer.length} | members=${tFetch - tMembers}ms attendance=${tBuild - tFetch}ms build+write=${Date.now() - tBuild}ms total=${Date.now() - tMembers}ms`);
+    const buffer = await buildUnified1CBuffer({
+      month,
+      rangeArg,
+      memberByEmp,
+      exemptEmployeeIds: await listBrigadeSupervisorEmployeeIdsForDepartments(scopedDepartmentIds),
+    });
+    console.log(`[export-mass-unified] depts=${scopedDepartmentIds.length} emp=${memberByEmp.size} bytes=${buffer.length} | members=${tFetch - tMembers}ms build=${Date.now() - tFetch}ms total=${Date.now() - tMembers}ms`);
 
     const fileName = `Единый_1С_${MONTH_NAMES[mon]}_${year}${segmentSuffix}.xlsx`
       .replace(/[\/\\?%*:|"<>]/g, '_');

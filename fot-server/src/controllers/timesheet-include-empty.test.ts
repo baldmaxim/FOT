@@ -31,10 +31,14 @@ vi.mock('./timesheet-mass-export.controller.js', () => ({
 }));
 vi.mock('./timesheet-assigned-export.controller.js', () => ({
   exportTimesheetAssigned: vi.fn(),
+  exportTimesheetAssignedUnified: vi.fn(),
   listAssignedEmployees: vi.fn(),
   emailTimesheetAssigned: vi.fn(),
   getDepartmentSupervisor: vi.fn(),
   listBrigadeSupervisorEmployeeIds: h.supervisors,
+}));
+vi.mock('./timesheet-department-export.controller.js', () => ({
+  exportTimesheetDepartmentUnified: vi.fn(),
 }));
 vi.mock('./timesheet-weekend-memo.controller.js', () => ({
   generateWeekendMemo: vi.fn(),

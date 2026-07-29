@@ -228,6 +228,9 @@ export const TimesheetPage: FC = () => {
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const [bulkSelectedCellKeys, setBulkSelectedCellKeys] = useState<Set<string>>(new Set());
+  // Блокировка кнопки «Экспорт» на время запроса: XLSX тяжёлый, двойной клик
+  // запустил бы две параллельные выгрузки.
+  const [isExporting, setIsExporting] = useState(false);
   const [teamManagementOpen, setTeamManagementOpen] = useState(false);
   const [teamSearch, setTeamSearch] = useState('');
   const [teamPendingEmployeeId, setTeamPendingEmployeeId] = useState<number | null>(null);
@@ -895,17 +898,21 @@ export const TimesheetPage: FC = () => {
     }
   }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
 
-  // Export
+  // Export. Во всех режимах отдаётся ЕДИНЫЙ файл для 1С — тот же, что в «Табели HR».
+  // Режим «Мои сотрудники» (руководитель без назначенных отделов) идёт через
+  // assigned-эндпоинт с собственным employee_id.
+  const selfEmployeeId = Number.isInteger(profile?.employee_id) ? Number(profile?.employee_id) : null;
   const canExport = timesheetMode === 'assigned'
     ? Boolean(selectedAssigneeId)
-    : Boolean(effectiveSelectedDeptId);
-  const exportPresentation: 'hr' | 'manager' = isTimesheetDepartmentScope ? 'manager' : 'hr';
+    : Boolean(effectiveSelectedDeptId) || (isDirectReportsMarker && Boolean(selfEmployeeId));
 
-  const handleExport = async (presentation: 'hr' | 'manager' = 'hr') => {
+  const handleExport = async () => {
+    if (isExporting) return;
     if (!canExport) {
-      toast.error(timesheetMode === 'assigned' ? 'Выберите начальника участка' : 'Выберите отдел');
+      toast.error(timesheetMode === 'assigned' ? 'Выберите начальника участка' : 'Выберите отдел или участок');
       return;
     }
+    setIsExporting(true);
     try {
       const monthStr = `${year}-${String(month).padStart(2, '0')}`;
       const startDay = Number.parseInt(rangeStart.slice(-2), 10);
@@ -913,44 +920,36 @@ export const TimesheetPage: FC = () => {
       const isFullMonth = startDay === 1 && endDay === daysInMonth;
       const segmentSuffix = isFullMonth ? '' : `_${startDay}-${endDay}`;
       const monthName = MONTH_NAMES_RU[month];
-      const presentationSuffix = presentation === 'manager' ? '_Руководитель' : '';
-      const exportGrouping = viewMode === 'objects' ? 'objects' : 'employees';
 
       let blob: Blob;
       let filename: string;
 
       if (timesheetMode === 'assigned' && selectedAssigneeId) {
-        blob = await timesheetService.exportAssigned({
+        blob = await timesheetService.exportAssignedUnified({
+          assignee_employee_id: selectedAssigneeId,
           month: monthStr,
           from: rangeStart,
           to: rangeEnd,
-          employee_ids: [selectedAssigneeId],
-          group_by: exportGrouping,
-          presentation,
         });
         const assignee = assigneesQuery.data?.find(emp => emp.id === selectedAssigneeId);
         const assigneeName = formatFioWithInitials(assignee?.full_name) || 'Участок';
-        const suffix = exportGrouping === 'objects' ? '_объекты' : '';
-        filename = `Участок_${assigneeName}${suffix}_${monthName}_${year}${segmentSuffix}${presentationSuffix}.zip`;
-      } else if (viewMode === 'objects' && effectiveSelectedDeptId) {
-        blob = await timesheetService.exportMass({
+        filename = `Единый_1С_Участок_${assigneeName}_${monthName}_${year}${segmentSuffix}.xlsx`;
+      } else if (!effectiveSelectedDeptId && isDirectReportsMarker && selfEmployeeId) {
+        blob = await timesheetService.exportAssignedUnified({
+          assignee_employee_id: selfEmployeeId,
           month: monthStr,
           from: rangeStart,
           to: rangeEnd,
-          department_ids: [effectiveSelectedDeptId],
-          group_by: 'objects',
-          presentation,
         });
-        filename = `${selectedDeptName}_объекты_${monthName}_${year}${segmentSuffix}${presentationSuffix}.zip`;
+        filename = `Единый_1С_Мои_сотрудники_${monthName}_${year}${segmentSuffix}.xlsx`;
       } else {
-        blob = await timesheetService.export({
+        blob = await timesheetService.exportDepartmentUnified({
+          department_id: effectiveSelectedDeptId as string,
           month: monthStr,
-          department_id: effectiveSelectedDeptId || undefined,
           from: rangeStart,
           to: rangeEnd,
-          presentation,
         });
-        filename = `${selectedDeptName}_${monthName}_${year}${segmentSuffix}${presentationSuffix}.xlsx`;
+        filename = `Единый_1С_${selectedDeptName}_${monthName}_${year}${segmentSuffix}.xlsx`;
       }
 
       const url = URL.createObjectURL(blob);
@@ -962,6 +961,8 @@ export const TimesheetPage: FC = () => {
     } catch (err) {
       console.error('Export error:', err);
       toast.error(err instanceof Error ? err.message : 'Ошибка экспорта');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -1998,10 +1999,10 @@ export const TimesheetPage: FC = () => {
                 <button
                   type="button"
                   className="ts-btn ts-btn--icon"
-                  onClick={() => handleExport(exportPresentation)}
-                  disabled={!canExport}
+                  onClick={() => handleExport()}
+                  disabled={!canExport || isExporting}
                   aria-label="Экспорт табеля"
-                  title={exportPresentation === 'manager' ? 'Экспорт (урезано по графику)' : 'Экспорт'}
+                  title={canExport ? 'Единый файл для 1С (фактические часы)' : 'Выберите отдел или участок'}
                 >
                   <Download size={16} />
                 </button>
@@ -2076,12 +2077,12 @@ export const TimesheetPage: FC = () => {
                 <button
                   type="button"
                   className="ts-btn"
-                  onClick={() => handleExport(exportPresentation)}
-                  disabled={!canExport}
-                  title={exportPresentation === 'manager' ? 'Табель урезан по графику работы' : undefined}
+                  onClick={() => handleExport()}
+                  disabled={!canExport || isExporting}
+                  title={canExport ? 'Единый файл для 1С (фактические часы)' : 'Выберите отдел или участок'}
                 >
                   <Download size={16} />
-                  Экспорт
+                  {isExporting ? 'Экспорт…' : 'Экспорт'}
                 </button>
                 <button
                   type="button"

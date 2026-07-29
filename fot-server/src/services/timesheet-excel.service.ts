@@ -217,6 +217,8 @@ export interface IOneCDisplayDayValue {
 }
 
 export interface IOneCExportRow {
+  /** Ключ строки. ФИО не уникально (однофамильцы), связывать строки только по id. */
+  employeeId: number;
   fullName: string;
   dayValues: Map<number, IOneCDisplayDayValue>;
   totalHours: number;
@@ -397,6 +399,7 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
     }
 
     return {
+      employeeId: employee.id,
       fullName: employee.full_name,
       dayValues,
       totalHours,
@@ -476,6 +479,7 @@ export const buildObjectRowsForOneC = (
       }
 
       return {
+        employeeId: employee.id,
         fullName: employee.full_name,
         dayValues,
         totalHours,
