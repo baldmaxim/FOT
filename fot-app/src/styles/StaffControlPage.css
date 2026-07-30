@@ -1350,8 +1350,10 @@
   color: var(--text-secondary);
 }
 
-.sc-field input,
-.sc-field select {
+/* Только прямые потомки: вложенные компоненты (DepartmentTreeSelect, SearchInput)
+   стилизуют свои инпуты сами. */
+.sc-field > input,
+.sc-field > select {
   height: 38px;
   padding: 0 12px;
   border-radius: var(--radius-sm);
@@ -1361,8 +1363,8 @@
   font-size: 14px;
 }
 
-.sc-field input:focus,
-.sc-field select:focus {
+.sc-field > input:focus,
+.sc-field > select:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 2px rgba(var(--primary-rgb, 59, 130, 246), 0.15);

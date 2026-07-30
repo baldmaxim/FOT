@@ -27,6 +27,8 @@ interface IDepartmentTreeSelectProps {
   placeholder?: string;
   /** Показывать строку «Все отделы» (сброс). Default true. */
   showAllOption?: boolean;
+  /** Текст в триггере при пустом value. Default «Все отделы». */
+  emptyLabel?: string;
 }
 
 const ALL_LABEL = 'Все отделы';
@@ -50,6 +52,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   autoExpandThreshold = 40,
   placeholder = 'Поиск отдела...',
   showAllOption = true,
+  emptyLabel = ALL_LABEL,
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -227,7 +230,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
         <input
           ref={inputRef}
           className={styles.input}
-          value={open ? query : (selectedName ?? ALL_LABEL)}
+          value={open ? query : (selectedName ?? emptyLabel)}
           placeholder={placeholder}
           onChange={handleInputChange}
           onFocus={openPanel}

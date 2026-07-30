@@ -39,7 +39,7 @@ import { StaffObjectCell } from '../components/staff/StaffObjectCell';
 import type { IAddressObject } from '../utils/objectGroups';
 import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
 import { structureApi } from '../api/structure';
-import type { IFlatDepartmentOption } from '../utils/departmentUtils';
+import type { OrgDepartmentNode } from '../types/organization';
 import { filterDepartmentTreeByIds, getTreeFlatDepartments } from '../utils/departmentUtils';
 import '../styles/StaffControlPage.css';
 
@@ -235,7 +235,7 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, isOnline, scheduleViews
 interface IStaffModalsProps {
   modalType: ModalType | null;
   modalEmp: Employee | null;
-  allDepts: IFlatDepartmentOption[];
+  deptTree: OrgDepartmentNode[];
   templates: IWorkSchedule[];
   scheduleViews: Map<number, IEmployeeScheduleView>;
   baseScheduleViews: Map<number, IEmployeeScheduleView>;
@@ -251,7 +251,7 @@ interface IStaffModalsProps {
 const StaffModals: FC<IStaffModalsProps> = memo(({
   modalType,
   modalEmp,
-  allDepts,
+  deptTree,
   templates,
   scheduleViews,
   baseScheduleViews,
@@ -828,12 +828,13 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
           )}
           <div className="sc-field">
             <label>Отдел</label>
-            <select value={deptVal} onChange={e => setDeptVal(e.target.value)} autoFocus>
-              <option value="">Выберите отдел</option>
-              {allDepts.map(d => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
+            <DepartmentTreeSelect
+              departments={deptTree}
+              value={deptVal}
+              onChange={setDeptVal}
+              showAllOption={false}
+              emptyLabel="Выберите отдел"
+            />
           </div>
           <div className="sc-field">
             <label>Дата перевода</label>
@@ -2520,7 +2521,7 @@ export const StaffControlPage: FC = () => {
         key={`${modalType ?? 'none'}-${modalEmp?.id ?? 'none'}`}
         modalType={modalType}
         modalEmp={modalEmp}
-        allDepts={allDepts}
+        deptTree={deptTree}
         templates={scheduleTemplates}
         scheduleViews={scheduleViews}
         baseScheduleViews={baseScheduleViews}
