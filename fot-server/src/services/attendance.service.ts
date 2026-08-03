@@ -102,6 +102,8 @@ export interface IAttendanceAdjustmentWithAuthor extends IAttendanceAdjustment {
   approver_name: string | null;
 }
 
+export type UnderworkReason = 'long_break' | 'short_span' | null;
+
 export interface IAttendanceEntry {
   id: number | null;
   employee_id: number;
@@ -132,6 +134,12 @@ export interface IAttendanceEntry {
   object_detail_message?: string | null;
   object_detail_count?: number;
   presence_covers_shift?: boolean;
+  // Причина непокрытия смены (presence_covers_shift=false): 'long_break' — span покрыл
+  // смену, но гэпы между парами превысили квоту обеда; 'short_span' — span меньше смены
+  // (опоздал/ушёл рано/открытый вход), в т.ч. когда перерывы тоже превышены. null/не задано —
+  // смена покрыта либо данных summary нет; недобор часов при покрытой смене фронт
+  // определяет сам (порог зависит от роли/day_overrides).
+  underwork_reason?: UnderworkReason;
   // Перерыв за день (сумма гэпов между парами вход→выход) из skud_daily_summary. Для дней
   // без summary не задаётся — ЛК показывает строку «Перерыв» только при > 0.
   break_minutes?: number | null;
@@ -349,21 +357,28 @@ function computePresenceCoversShift(params: {
   workDate: string;
   todayStr: string;
   nowHMS: string;
-}): boolean {
+}): { covers: boolean; reason: UnderworkReason } {
   const { firstEntry, lastExit, totalMinutes, shiftDurationHours, lunchMinutes, workDate, todayStr, nowHMS } = params;
-  if (!firstEntry) return false;
+  if (!firstEntry) return { covers: false, reason: 'short_span' };
   const firstSec = parseTimeToSeconds(firstEntry);
   let lastSec = lastExit
     ? parseTimeToSeconds(lastExit)
     : (workDate === todayStr ? parseTimeToSeconds(nowHMS) : null);
-  if (lastSec === null) return false;
+  if (lastSec === null) return { covers: false, reason: 'short_span' };
   // Ночная смена: выход (08:00) раньше входа (20:00) по времени суток — значит
   // смена перешла через полночь, добавляем сутки, иначе span отрицательный.
   if (lastSec < firstSec) lastSec += 24 * 3600;
   const spanSec = Math.max(0, lastSec - firstSec);
   const workSec = totalMinutes * 60;
   const gapsSec = Math.max(0, spanSec - workSec);
-  return spanSec >= shiftDurationHours * 3600 && gapsSec <= lunchMinutes * 60;
+  const spanOk = spanSec >= shiftDurationHours * 3600;
+  const gapsOk = gapsSec <= lunchMinutes * 60;
+  // short_span приоритетнее long_break: если смена не покрыта по span,
+  // причина жёлтого дня — недобор, даже если перерывы тоже превышены.
+  return {
+    covers: spanOk && gapsOk,
+    reason: spanOk && gapsOk ? null : (spanOk ? 'long_break' : 'short_span'),
+  };
 }
 
 function extractLegacyCorrectorId(metadata: Record<string, unknown>): number | null {
@@ -790,6 +805,7 @@ export async function buildAttendanceEntries(params: {
       continue;
     }
     let presenceCoversShift: boolean | undefined;
+    let underworkReason: UnderworkReason = null;
     if (!isPresent) {
       presenceCoversShift = false;
     } else if (schedule) {
@@ -801,7 +817,7 @@ export async function buildAttendanceEntries(params: {
         // Предпраздничный день — смена сокращена на 1ч, span должен сравниваться с укороченной длительностью.
         const baseShiftHours = getShiftDurationHours(getScheduleForDate(schedule, dateObject));
         const shiftDurationHours = Math.max(0, baseShiftHours - (isPreHoliday(dateObject, schedule, calendarMonth) ? 1 : 0));
-        presenceCoversShift = computePresenceCoversShift({
+        const presence = computePresenceCoversShift({
           firstEntry: summary.first_entry,
           lastExit: summary.last_exit,
           totalMinutes: getSummaryMinutes(summary),
@@ -811,6 +827,8 @@ export async function buildAttendanceEntries(params: {
           todayStr,
           nowHMS,
         });
+        presenceCoversShift = presence.covers;
+        underworkReason = presence.reason;
       }
     }
 
@@ -831,6 +849,7 @@ export async function buildAttendanceEntries(params: {
       first_entry: summary.first_entry,
       last_exit: summary.last_exit,
       presence_covers_shift: presenceCoversShift,
+      underwork_reason: underworkReason,
       break_minutes: getSummaryBreakMinutes(summary),
     });
   }
@@ -877,7 +896,7 @@ export async function buildAttendanceEntries(params: {
 
           const baseShiftHours = getShiftDurationHours(dayParams);
           const shiftDurationHours = Math.max(0, baseShiftHours - (isPreHoliday(dateObject, schedule, calendarMonth) ? 1 : 0));
-          const presenceCoversShift = isPresent
+          const presence = isPresent
             ? computePresenceCoversShift({
               firstEntry: rawSummary.first_entry,
               lastExit: rawSummary.last_exit,
@@ -888,7 +907,7 @@ export async function buildAttendanceEntries(params: {
               todayStr,
               nowHMS,
             })
-            : false;
+            : { covers: false, reason: null as UnderworkReason };
 
           pushEntry({
             id: null,
@@ -906,7 +925,8 @@ export async function buildAttendanceEntries(params: {
             is_correction: false,
             first_entry: rawSummary.first_entry,
             last_exit: rawSummary.last_exit,
-            presence_covers_shift: presenceCoversShift,
+            presence_covers_shift: presence.covers,
+            underwork_reason: presence.reason,
             break_minutes: getSummaryBreakMinutes(rawSummary),
           });
         } else {

@@ -69,7 +69,7 @@ export const AttendanceCalendar: FC<IAttendanceCalendarProps> = ({
           </div>
           <div className="ec-cal-legend">
             <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--full" /> Норма</div>
-            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--partial" /> Недобор</div>
+            <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--partial" /> Недобор / длинный перерыв</div>
             <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--absent" /> Прогул</div>
             <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--sick" /> Б/л</div>
             <div className="ec-legend-item"><span className="ec-legend-dot ec-cal-day--vacation" /> Отпуск</div>

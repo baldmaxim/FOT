@@ -8,6 +8,7 @@ import { selectVisibleHours } from './hoursDisplay';
 export type DayStatus =
   | 'present'           // полная норма часов в рабочий день (зелёный)
   | 'underwork'         // недобор часов / span смены не покрыт (жёлтый)
+  | 'long_break'        // смена покрыта по span, но перерывы > квоты обеда (жёлтый, как underwork)
   | 'absent'            // прогул, нет присутствия (красный)
   | 'incomplete_skud'   // СКУД-события есть, но часов нет (magenta)
   | 'sick'              // больничный (синий)
@@ -70,7 +71,11 @@ export const getDayStatus = (
       // день: если присутствие не покрыло смену (open-entry без exit и shiftDuration > totalMinutes) —
       // день недоработан.
       const spanOk = isScheduledDayOff || entry.is_correction || entry.presence_covers_shift !== false;
-      return hoursOk && spanOk ? 'present' : 'underwork';
+      if (hoursOk && spanOk) return 'present';
+      // Жёлтый из-за перерывов сверх квоты обеда при покрытом span — отдельная подпись
+      // «Длинный перерыв». Причину считает бэк (underwork_reason); при нескольких причинах
+      // (опоздал И перерыв превышен) бэк отдаёт 'short_span' → остаётся «Недобор».
+      return entry.underwork_reason === 'long_break' ? 'long_break' : 'underwork';
     }
     case 'remote':
       return 'remote';
@@ -103,6 +108,7 @@ export const getDayStatus = (
 export const STATUS_TO_GRID_CLASS: Record<DayStatus, string> = {
   present: 'ts-day--full',
   underwork: 'ts-day--partial',
+  long_break: 'ts-day--partial',
   absent: 'ts-day--absent',
   incomplete_skud: 'ts-day--incomplete-skud',
   sick: 'ts-day--sick',
@@ -121,6 +127,7 @@ export const STATUS_TO_GRID_CLASS: Record<DayStatus, string> = {
 export const STATUS_TO_DETAIL_HOURS_CLASS: Record<DayStatus, string> = {
   present: 'ts-day-detail-hours--full',
   underwork: 'ts-day-detail-hours--partial',
+  long_break: 'ts-day-detail-hours--partial',
   absent: 'ts-day-detail-hours--absent',
   incomplete_skud: 'ts-day-detail-hours--incomplete-skud',
   sick: 'ts-day-detail-hours--sick',
@@ -140,6 +147,7 @@ export const STATUS_TO_DETAIL_HOURS_CLASS: Record<DayStatus, string> = {
 export const STATUS_TO_CALENDAR_CLASS: Record<DayStatus, string> = {
   present: 'ec-cal-day--full',
   underwork: 'ec-cal-day--partial',
+  long_break: 'ec-cal-day--partial',
   absent: 'ec-cal-day--absent',
   incomplete_skud: 'ec-cal-day--incomplete-skud',
   sick: 'ec-cal-day--sick',
@@ -158,6 +166,7 @@ export const STATUS_TO_CALENDAR_CLASS: Record<DayStatus, string> = {
 export const STATUS_LABEL_RU: Record<DayStatus, string> = {
   present: 'Полный день',
   underwork: 'Недобор',
+  long_break: 'Длинный перерыв',
   absent: 'Прогул',
   incomplete_skud: 'СКУД без часов',
   sick: 'Больничный',

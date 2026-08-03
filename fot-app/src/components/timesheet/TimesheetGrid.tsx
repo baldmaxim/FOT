@@ -326,7 +326,9 @@ const getDayCellTitle = (entry: TimesheetEntry | null, weekend: boolean): string
     parts.push(`Часы: ${formatHoursLabel(Math.round(visibleHours))}`);
   }
   if ((entry.status === 'work' || entry.status === 'manual') && entry.presence_covers_shift === false) {
-    parts.push('Присутствие меньше длительности смены');
+    parts.push(entry.underwork_reason === 'long_break'
+      ? 'Перерыв дольше нормы'
+      : 'Присутствие меньше длительности смены');
   }
   const hasSkudEventsTooltip = Boolean(entry.first_entry || entry.last_exit);
   const zeroHoursTooltip = !hasPositiveHours(visibleHours);

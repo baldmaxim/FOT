@@ -1537,6 +1537,7 @@ describe('attendance.service', () => {
       });
 
       expect(result.entries[0].presence_covers_shift).toBe(false);
+      expect(result.entries[0].underwork_reason).toBe('short_span');
     });
 
     it('accepts full 9:00-18:00 with proper lunch break', async () => {
@@ -1560,6 +1561,7 @@ describe('attendance.service', () => {
       });
 
       expect(result.entries[0].presence_covers_shift).toBe(true);
+      expect(result.entries[0].underwork_reason).toBeNull();
     });
 
     it('rejects day when gaps exceed allotted lunch (90min absence while lunch=60)', async () => {
@@ -1582,7 +1584,36 @@ describe('attendance.service', () => {
         todayStr: '2026-04-03',
       });
 
+      // Смена покрыта по span (09:00→18:30 ≥ 9ч), но гэпы 90мин > обеда 60мин —
+      // причина жёлтого дня именно «длинный перерыв».
       expect(result.entries[0].presence_covers_shift).toBe(false);
+      expect(result.entries[0].underwork_reason).toBe('long_break');
+    });
+
+    it('reports short_span when both late arrival and long break (multiple causes = недобор)', async () => {
+      // 09:30→18:00: span 8.5ч < смены 9ч И гэпы 90мин > обеда 60мин.
+      // short_span приоритетнее — фронт покажет «Недобор», не «Длинный перерыв».
+      setSummary({
+        employee_id: 1,
+        date: '2026-04-01',
+        first_entry: '09:30:00',
+        last_exit: '18:00:00',
+        total_hours: 7,
+        total_minutes: 420,
+      });
+
+      const schedule = { work_hours: 9, lunch_minutes: 60 } as unknown as IResolvedSchedule;
+      const result = await buildAttendanceEntries({
+        employees: [{ id: 1, full_name: 'A' }],
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        dailySchedulesMap: new Map([[1, new Map([['2026-04-01', schedule]])]]),
+        calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+        todayStr: '2026-04-03',
+      });
+
+      expect(result.entries[0].presence_covers_shift).toBe(false);
+      expect(result.entries[0].underwork_reason).toBe('short_span');
     });
 
     it('flags past day with missing last_exit as not covering shift', async () => {
@@ -1610,6 +1641,7 @@ describe('attendance.service', () => {
       });
 
       expect(result.entries[0].presence_covers_shift).toBe(false);
+      expect(result.entries[0].underwork_reason).toBe('short_span');
     });
 
     it('marks remote day as covering shift without SKUD check', async () => {

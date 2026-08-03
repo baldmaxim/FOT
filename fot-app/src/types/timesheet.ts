@@ -33,6 +33,10 @@ export interface TimesheetEntry {
   object_detail_message?: string | null;
   object_detail_count?: number;
   presence_covers_shift?: boolean;
+  // Причина непокрытия смены (при presence_covers_shift=false): 'long_break' — span покрыл
+  // смену, но перерывы превысили квоту обеда; 'short_span' — span меньше смены (опоздал/ушёл
+  // рано/открытый вход), в т.ч. при одновременно превышенных перерывах.
+  underwork_reason?: 'long_break' | 'short_span' | null;
   // true, если за день у сотрудника в БД есть object-adjustments (source_type='manual_object').
   // Такие корректировки нельзя удалить через DELETE /api/timesheet/:id — фронт по этому флагу
   // прячет кнопку «Снять корректировку» в day-modal режима «По сотрудникам».

@@ -21,7 +21,7 @@ import type { TimesheetEntry, TimesheetObjectEntry } from '../../types';
 import styles from './MyMonthTimesheet.module.css';
 
 // Проблемные статусы дня — для них блок дня показывает просмотр СКУД (#7).
-const PROBLEMATIC_STATUSES: ReadonlySet<DayStatus> = new Set(['underwork', 'incomplete_skud', 'absent']);
+const PROBLEMATIC_STATUSES: ReadonlySet<DayStatus> = new Set(['underwork', 'long_break', 'incomplete_skud', 'absent']);
 
 export interface IDayFocusPayload {
   entry: TimesheetEntry | null;
@@ -50,6 +50,7 @@ const WEEKDAY_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const STATUS_TO_CSS: Record<DayStatus, string> = {
   present: 'cellWork',
   underwork: 'cellUnderwork',
+  long_break: 'cellUnderwork',
   absent: 'cellAbsent',
   incomplete_skud: 'cellAbsent',
   sick: 'cellSick',
@@ -87,6 +88,7 @@ const STATUS_LETTER: Partial<Record<DayStatus, string>> = {
 const STATUS_LABEL: Record<DayStatus, string> = {
   present: 'Работа',
   underwork: 'Недоработка',
+  long_break: 'Длинный перерыв',
   absent: 'Неявка',
   incomplete_skud: 'СКУД без часов',
   sick: 'Больничный',
