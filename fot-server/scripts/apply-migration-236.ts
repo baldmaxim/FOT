@@ -1,10 +1,10 @@
 /**
- * Применение миграции 235 (docs/migrations/235_fix_dismissal_sync_race_duplicates.sql)
+ * Применение миграции 236 (docs/migrations/236_fix_dismissal_sync_race_duplicates.sql)
  * БЕЗ psql — через pg-подключение бэкенда. Для случаев, когда psql на проде недоступен.
  *
  * Режимы:
- *   npx tsx scripts/apply-migration-235.ts --check   — только проверка прав и числа кандидатов (read-only)
- *   npx tsx scripts/apply-migration-235.ts --yes     — применить миграцию (BEGIN/COMMIT внутри файла)
+ *   npx tsx scripts/apply-migration-236.ts --check   — только проверка прав и числа кандидатов (read-only)
+ *   npx tsx scripts/apply-migration-236.ts --yes     — применить миграцию (BEGIN/COMMIT внутри файла)
  *
  * Запуск: локально из fot-server (DATABASE_URL из .env + CA .migration/yandex-ca.pem)
  * или на проде из /opt/fot-build/fot-server (env с сайта).
@@ -51,7 +51,7 @@ if (fs.existsSync(LOCAL_CA)) {
   process.env.DATABASE_SSL_CA_PATH = LOCAL_CA;
 }
 
-const MIGRATION_PATH = path.resolve(__dirname, '../../docs/migrations/235_fix_dismissal_sync_race_duplicates.sql');
+const MIGRATION_PATH = path.resolve(__dirname, '../../docs/migrations/236_fix_dismissal_sync_race_duplicates.sql');
 
 async function main() {
   const mode = process.argv.includes('--yes') ? 'apply' : process.argv.includes('--check') ? 'check' : null;
@@ -126,9 +126,9 @@ async function main() {
     console.log(JSON.stringify(last.rows ?? [], null, 2));
 
     const after = await client.query<{ cnt: string }>(
-      `SELECT count(*) AS cnt FROM public.migration_235_backup WHERE migration_name = '235'`,
+      `SELECT count(*) AS cnt FROM public.migration_236_backup WHERE migration_name = '236'`,
     );
-    console.log(`Строк в backup (migration_235_backup, все kind): ${after.rows[0].cnt}`);
+    console.log(`Строк в backup (migration_236_backup, все kind): ${after.rows[0].cnt}`);
   } finally {
     client.release();
   }

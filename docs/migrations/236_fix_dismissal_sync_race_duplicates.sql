@@ -1,5 +1,5 @@
 -- ============================================================================
--- Миграция 235: устранение последствий гонки «увольнение ↔ Sigur-синк»
+-- Миграция 236: устранение последствий гонки «увольнение ↔ Sigur-синк»
 -- ============================================================================
 --
 -- Симптом (кейс Сафарова 1623 / бр.Вохидова Ш.А., 31.07.2026): увольнение,
@@ -20,7 +20,7 @@
 --   2) каждая тройка повторно валидируется против живых данных; повторный
 --      запуск даёт 0 кандидатов и завершается no-op;
 --   3) блокировка затронутых строк FOR UPDATE в стабильном порядке;
---   4) backup полных строк в public.migration_235_backup (переживает COMMIT);
+--   4) backup полных строк в public.migration_236_backup (переживает COMMIT);
 --   5) DELETE дублей [D..D];
 --   6) UPDATE prev.effective_to: D-1 → D (возврат последнего рабочего дня);
 --   7) постусловия по каждой тройке + отсутствие пересечений.
@@ -28,12 +28,12 @@
 -- ROLLBACK (после COMMIT), если потребуется вернуть как было:
 --   INSERT INTO employee_assignments
 --   SELECT (jsonb_populate_record(NULL::employee_assignments, row_data)).*
---     FROM migration_235_backup
---    WHERE migration_name = '235' AND kind = 'dup_assignment';
+--     FROM migration_236_backup
+--    WHERE migration_name = '236' AND kind = 'dup_assignment';
 --   UPDATE employee_assignments p
 --      SET effective_to = (b.row_data->>'effective_to')::date, updated_at = now()
---     FROM migration_235_backup b
---    WHERE b.migration_name = '235' AND b.kind = 'prev_assignment'
+--     FROM migration_236_backup b
+--    WHERE b.migration_name = '236' AND b.kind = 'prev_assignment'
 --      AND p.id = (b.row_data->>'id')::uuid;
 --
 -- После применения: сбросить кэш ответов табеля (или подождать ≤5 минут TTL).
@@ -42,7 +42,7 @@
 BEGIN;
 
 -- Backup-таблица (постоянная): точный снимок изменяемых строк до миграции.
-CREATE TABLE IF NOT EXISTS public.migration_235_backup (
+CREATE TABLE IF NOT EXISTS public.migration_236_backup (
   row_id         bigserial PRIMARY KEY,
   migration_name text        NOT NULL,
   run_id         uuid        NOT NULL,
@@ -159,20 +159,20 @@ DECLARE
 BEGIN
   SELECT count(*) INTO v_pinned FROM tmp_pinned;
   IF v_pinned <> 54 THEN
-    RAISE EXCEPTION 'МИГРАЦИЯ 235: pinned-набор повреждён: % строк вместо 54', v_pinned;
+    RAISE EXCEPTION 'МИГРАЦИЯ 236: pinned-набор повреждён: % строк вместо 54', v_pinned;
   END IF;
 
   SELECT value INTO v_archive FROM system_settings WHERE key = 'employees_archive_department_id';
   IF v_archive IS DISTINCT FROM 'ba4f7fb1-d24c-4e7f-9c75-4b27300ef6cc' THEN
-    RAISE EXCEPTION 'МИГРАЦИЯ 235: employees_archive_department_id = % — не совпадает с зашитым архивом', v_archive;
+    RAISE EXCEPTION 'МИГРАЦИЯ 236: employees_archive_department_id = % — не совпадает с зашитым архивом', v_archive;
   END IF;
 
   SELECT count(*) INTO v_expected FROM tmp_race_fix;
   IF v_expected NOT IN (54, 0) THEN
-    RAISE EXCEPTION 'МИГРАЦИЯ 235: кандидатов % — ожидалось 54 (первый запуск) или 0 (повторный). Данные изменились, нужен новый preflight.', v_expected;
+    RAISE EXCEPTION 'МИГРАЦИЯ 236: кандидатов % — ожидалось 54 (первый запуск) или 0 (повторный). Данные изменились, нужен новый preflight.', v_expected;
   END IF;
 
-  RAISE NOTICE 'МИГРАЦИЯ 235: кандидатов к исправлению: %', v_expected;
+  RAISE NOTICE 'МИГРАЦИЯ 236: кандидатов к исправлению: %', v_expected;
 END $$;
 
 -- 4) Блокировка затронутых строк в стабильном порядке (исключает изменение
@@ -196,8 +196,8 @@ END $$;
 -- 5) Backup ДО изменений (переживает COMMIT; restore-SQL — в шапке файла).
 CREATE TEMP TABLE tmp_run ON COMMIT DROP AS SELECT gen_random_uuid() AS run_id;
 
-INSERT INTO public.migration_235_backup (migration_name, run_id, kind, source_id, row_data)
-SELECT '235', r.run_id, k.kind, k.source_id, k.row_data
+INSERT INTO public.migration_236_backup (migration_name, run_id, kind, source_id, row_data)
+SELECT '236', r.run_id, k.kind, k.source_id, k.row_data
 FROM tmp_run r
 CROSS JOIN LATERAL (
   SELECT 'dup_assignment' AS kind, a.id::text AS source_id, to_jsonb(a) AS row_data
@@ -230,7 +230,7 @@ BEGIN
   DELETE FROM employee_assignments WHERE id IN (SELECT dup_id FROM tmp_race_fix);
   GET DIAGNOSTICS v_deleted = ROW_COUNT;
   IF v_deleted <> v_expected THEN
-    RAISE EXCEPTION 'МИГРАЦИЯ 235: DELETE удалил % строк вместо %', v_deleted, v_expected;
+    RAISE EXCEPTION 'МИГРАЦИЯ 236: DELETE удалил % строк вместо %', v_deleted, v_expected;
   END IF;
 END $$;
 
@@ -248,7 +248,7 @@ BEGIN
    WHERE p.id = t.prev_id;
   GET DIAGNOSTICS v_updated = ROW_COUNT;
   IF v_updated <> v_expected THEN
-    RAISE EXCEPTION 'МИГРАЦИЯ 235: UPDATE изменил % строк вместо %', v_updated, v_expected;
+    RAISE EXCEPTION 'МИГРАЦИЯ 236: UPDATE изменил % строк вместо %', v_updated, v_expected;
   END IF;
 END $$;
 
@@ -259,14 +259,14 @@ DECLARE
 BEGIN
   -- Каждый дубль удалён.
   SELECT count(*) INTO v_bad FROM employee_assignments WHERE id IN (SELECT dup_id FROM tmp_race_fix);
-  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 235: % дублей не удалено', v_bad; END IF;
+  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 236: % дублей не удалено', v_bad; END IF;
 
   -- Каждый prev заканчивается ровно D.
   SELECT count(*) INTO v_bad
     FROM tmp_race_fix t
     JOIN employee_assignments p ON p.id = t.prev_id
    WHERE p.effective_to IS DISTINCT FROM t.d;
-  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 235: % prev-строк не заканчиваются на D', v_bad; END IF;
+  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 236: % prev-строк не заканчиваются на D', v_bad; END IF;
 
   -- Каждый next не изменился: начинается D+1 в архиве.
   SELECT count(*) INTO v_bad
@@ -274,7 +274,7 @@ BEGIN
     JOIN employee_assignments n ON n.id = t.next_id
    WHERE n.effective_from IS DISTINCT FROM t.d + 1
       OR n.org_department_id IS DISTINCT FROM 'ba4f7fb1-d24c-4e7f-9c75-4b27300ef6cc'::uuid;
-  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 235: % next-строк изменены', v_bad; END IF;
+  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 236: % next-строк изменены', v_bad; END IF;
 
   -- Снапшот сотрудника и увольнение не изменились.
   SELECT count(*) INTO v_bad
@@ -283,7 +283,7 @@ BEGIN
    WHERE e.employment_status <> 'fired'
       OR e.dismissal_date IS DISTINCT FROM t.d
       OR e.org_department_id IS DISTINCT FROM 'ba4f7fb1-d24c-4e7f-9c75-4b27300ef6cc'::uuid;
-  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 235: % сотрудников изменили статус/дату/отдел', v_bad; END IF;
+  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 236: % сотрудников изменили статус/дату/отдел', v_bad; END IF;
 
   -- Событие увольнения на месте.
   SELECT count(*) INTO v_bad
@@ -294,7 +294,7 @@ BEGIN
         AND ede.dismissal_date = t.d
         AND ede.from_department_id = t.prev_dept_id
    );
-  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 235: % dismissal-событий пропало', v_bad; END IF;
+  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 236: % dismissal-событий пропало', v_bad; END IF;
 
   -- Пересечений диапазонов у затронутых сотрудников нет.
   SELECT count(*) INTO v_bad
@@ -305,9 +305,9 @@ BEGIN
      AND daterange(a.effective_from, COALESCE(a.effective_to, 'infinity'::date), '[]')
       && daterange(b.effective_from, COALESCE(b.effective_to, 'infinity'::date), '[]')
    WHERE a.employee_id IN (SELECT employee_id FROM tmp_race_fix);
-  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 235: обнаружены пересечения диапазонов (% пар)', v_bad; END IF;
+  IF v_bad > 0 THEN RAISE EXCEPTION 'МИГРАЦИЯ 236: обнаружены пересечения диапазонов (% пар)', v_bad; END IF;
 
-  RAISE NOTICE 'МИГРАЦИЯ 235: постусловия пройдены';
+  RAISE NOTICE 'МИГРАЦИЯ 236: постусловия пройдены';
 END $$;
 
 COMMIT;
