@@ -1382,7 +1382,17 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
     )) return;
     onSave(status, hours, notes, files);
   };
-  const showEventsTab = !hideSkudTab;
+  // Статус дня — общий для чипа и правила показа вкладки событий (utils/dayStatus.ts).
+  const dayStatus = dayStatusContext
+    ? getDayStatus(timesheetEntry ?? null, {
+        showActualHours: dayStatusContext.showActualHours,
+        fullDayThresholdHours: dayStatusContext.fullDayThresholdHours,
+        isScheduledDayOff: dayStatusContext.isScheduledDayOff,
+      })
+    : null;
+  // На «жёлтом» дне (недобор) события СКУД видны и без права /timesheet/events:
+  // руководителю нужны сырые входы/выходы, чтобы понять, почему часы не зачлись.
+  const showEventsTab = !hideSkudTab || dayStatus === 'underwork';
   const showCorrectionTab = !hideCorrectionTab;
   const [tab, setTab] = useState<ModalTab>(() => {
     if (!showEventsTab && showCorrectionTab) return 'correction';
@@ -1399,21 +1409,14 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
 
   // Чип со статусом дня — рисуется только если родитель передал dayStatusContext.
   // Логика и палитра общие с табелем и боковой панелью (см. utils/dayStatus.ts).
-  const statusChip = dayStatusContext ? (() => {
-    const status = getDayStatus(timesheetEntry ?? null, {
-      showActualHours: dayStatusContext.showActualHours,
-      fullDayThresholdHours: dayStatusContext.fullDayThresholdHours,
-      isScheduledDayOff: dayStatusContext.isScheduledDayOff,
-    });
-    return (
-      <span className={`ts-modal-status-chip ${STATUS_TO_DETAIL_HOURS_CLASS[status]}`}>
-        {STATUS_LABEL_RU[status]}
-        {dayStatusContext.isPreHoliday && (
-          <span className="ts-modal-status-chip__pre">• −1ч</span>
-        )}
-      </span>
-    );
-  })() : null;
+  const statusChip = dayStatusContext && dayStatus ? (
+    <span className={`ts-modal-status-chip ${STATUS_TO_DETAIL_HOURS_CLASS[dayStatus]}`}>
+      {STATUS_LABEL_RU[dayStatus]}
+      {dayStatusContext.isPreHoliday && (
+        <span className="ts-modal-status-chip__pre">• −1ч</span>
+      )}
+    </span>
+  ) : null;
 
   if (customContent) {
     return (
