@@ -159,6 +159,7 @@ async function buildProfileResponse(
     employee_variant: role.employee_variant,
     show_actual_hours: !!role.show_actual_hours,
     hide_sidebar: !!role.hide_sidebar,
+    view_all_departments: !!role.view_all_departments,
     timesheet_months_back: Number.isFinite(role.timesheet_months_back) ? role.timesheet_months_back : 1,
     timesheet_months_forward: Number.isFinite(role.timesheet_months_forward) ? role.timesheet_months_forward : 1,
     timesheet_show_full_period: role.timesheet_show_full_period !== false,

@@ -567,6 +567,28 @@ export const RoleManagementPage: FC = () => {
     }
   };
 
+  const handleToggleViewAllDepartments = async (role: SystemRole, next: boolean) => {
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: role.show_actual_hours,
+        hide_sidebar: role.hide_sidebar,
+        view_all_departments: next,
+      });
+      toast.success(next
+        ? 'Роль видит все табели и проходы (только чтение)'
+        : 'Просмотр всех отделов выключен: действует обычный скоуп роли');
+      upsertRoleInCache(updated);
+      await refreshProfile();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения просмотра всех отделов');
+    }
+  };
+
   const handleToggleHideSidebar = async (role: SystemRole, next: boolean) => {
     try {
       const updated = await rolesService.update(role.code, {
@@ -1395,6 +1417,26 @@ export const RoleManagementPage: FC = () => {
                     <span className={styles.roleSwitchText}>
                       <strong>Боковое меню</strong>
                       <small>{selectedRole.hide_sidebar ? 'Скрыто' : 'Видно'}</small>
+                    </span>
+                  </label>
+
+                  <label className={styles.roleSwitch} title="Роль видит все отделы организации на чтение: дерево отделов целиком, табели и СКУД-проходы всех сотрудников на страницах, открытых роли. Правка не расширяется, окно месяцев роли действует. Для «Админ» и табельщицы не применяется.">
+                    <input
+                      type="checkbox"
+                      checked={selectedRole.view_all_departments === true}
+                      disabled={selectedRole.is_admin || selectedRole.code === 'timekeeper'}
+                      onChange={e => void handleToggleViewAllDepartments(selectedRole, e.target.checked)}
+                    />
+                    <span className={styles.roleSwitchTrack} />
+                    <span className={styles.roleSwitchText}>
+                      <strong>Просмотр всех табелей и проходов (только чтение)</strong>
+                      <small>
+                        {selectedRole.is_admin || selectedRole.code === 'timekeeper'
+                          ? 'Для этой роли действует собственная логика доступа'
+                          : selectedRole.view_all_departments === true
+                            ? 'Все отделы на чтение — по страницам, открытым роли'
+                            : 'Действует обычный скоуп по назначенным отделам'}
+                      </small>
                     </span>
                   </label>
                 </div>

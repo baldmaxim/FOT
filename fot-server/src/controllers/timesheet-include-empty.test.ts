@@ -63,7 +63,9 @@ vi.mock('../services/schedule.service.js', () => ({
 
 vi.mock('../services/data-scope.service.js', () => ({
   getSelfHistoryLimitForUser: vi.fn(() => ({ minDate: null, message: null })),
+  hasGlobalDepartmentReadScope: vi.fn(async () => false),
   isSelfEmployeeRequest: vi.fn(() => false),
+  normalizeUuidParam: vi.fn((value: unknown) => (typeof value === 'string' && value.trim() ? value.trim() : null)),
   resolveAccessibleDepartmentIds: vi.fn(async () => 'all'),
   resolveAccessibleEmployeeIds: vi.fn(async () => 'all'),
   resolveManagedDepartmentIds: vi.fn(async () => []),

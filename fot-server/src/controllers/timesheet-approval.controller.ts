@@ -7,6 +7,7 @@ import type {
   TimesheetApprovalStatus,
 } from '../types/index.js';
 import {
+  hasGlobalDepartmentReadScope,
   resolveAccessibleDepartmentIds,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
@@ -219,6 +220,21 @@ async function resolveTimesheetActionDepartmentId(
     if (drDepartmentIds.includes(requestedDepartmentId)) return requestedDepartmentId;
   }
   return null;
+}
+
+/**
+ * READ-вариант: глобальный read-scope (hr / флаг view_all_departments) разрешает
+ * просмотр статуса/списка согласований любого отдела. Только для GET-эндпоинтов;
+ * мутации (submit/approve/attachments) остаются на resolveTimesheetActionDepartmentId.
+ */
+async function resolveTimesheetActionDepartmentIdForRead(
+  req: AuthenticatedRequest,
+  requestedDepartmentId: string | null,
+): Promise<string | null> {
+  if (requestedDepartmentId && await hasGlobalDepartmentReadScope(req)) {
+    return requestedDepartmentId;
+  }
+  return resolveTimesheetActionDepartmentId(req, requestedDepartmentId);
 }
 
 async function ensureTimesheetActionDepartmentAccess(
@@ -1100,7 +1116,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
     }
 
     const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-    const department_id = await resolveTimesheetActionDepartmentId(req, requestedDepartmentId);
+    const department_id = await resolveTimesheetActionDepartmentIdForRead(req, requestedDepartmentId);
 
     // Раньше при недоступном отделе тихо возвращали data: null — клиент думал «согласования
     // нет», хотя на деле просто нет прав смотреть. Делаем явный 403, чтобы не маскировать.
@@ -1160,7 +1176,7 @@ const listDepartmentApprovals = async (req: AuthenticatedRequest, res: Response)
 
     if (scope === 'department' || scope === 'all') {
       const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-      const department_id = await resolveTimesheetActionDepartmentId(req, requestedDepartmentId);
+      const department_id = await resolveTimesheetActionDepartmentIdForRead(req, requestedDepartmentId);
       if (requestedDepartmentId && !department_id) {
         res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
         return;

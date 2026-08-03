@@ -62,6 +62,8 @@ export interface CreateRoleData extends CorrectionRestrictionFields {
   employee_variant?: EmployeeVariant | null;
   show_actual_hours?: boolean;
   hide_sidebar?: boolean;
+  /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
+  view_all_departments?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
   timesheet_show_full_period?: boolean;
@@ -79,6 +81,8 @@ export interface UpdateRoleData extends CorrectionRestrictionFields {
   is_active?: boolean;
   show_actual_hours?: boolean;
   hide_sidebar?: boolean;
+  /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
+  view_all_departments?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
   timesheet_show_full_period?: boolean;
@@ -97,6 +101,8 @@ export interface CloneRoleData extends CorrectionRestrictionFields {
   is_active?: boolean;
   show_actual_hours?: boolean;
   hide_sidebar?: boolean;
+  /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
+  view_all_departments?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
   timesheet_show_full_period?: boolean;

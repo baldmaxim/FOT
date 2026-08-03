@@ -16,3 +16,21 @@ export function invalidateDepartmentScopeCaches(): void {
   invalidateStructureCache();
   invalidateAccessibleScopeCache();
 }
+
+/**
+ * Сбрасывает закешированные JSON-ответы, зависящие от глобального read-скоупа
+ * роли (system_roles.view_all_departments). Вызывается при изменении флага у роли
+ * (roles.controller) и при смене роли пользователя (admin-users.controller):
+ * без этого после выключения флага пользователь дочитывал бы закешированные
+ * данные всей организации до истечения TTL.
+ */
+export function invalidateGlobalReadScopeCaches(): void {
+  invalidateCaches(
+    'structure:tree',
+    'timesheet',
+    'timesheet:today',
+    'timesheet:overview',
+    'timesheet:overview:today',
+    'timesheet:search',
+  );
+}

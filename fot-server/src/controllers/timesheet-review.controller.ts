@@ -1,7 +1,12 @@
 import type { Response } from 'express';
 import { query, queryOne, execute } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { resolveAccessibleDepartmentIds, resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import {
+  hasGlobalDepartmentReadScope,
+  normalizeUuidParam,
+  resolveAccessibleDepartmentIds,
+  resolveScopedDepartmentId,
+} from '../services/data-scope.service.js';
 import { isIsoDate } from '../services/timesheet-range.service.js';
 
 /**
@@ -62,7 +67,11 @@ const getReviewStatus = async (req: AuthenticatedRequest, res: Response): Promis
       return;
     }
     const requested = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-    const departmentId = await resolveScopedDepartmentId(req, requested);
+    // GET: глобальный read-scope (hr / флаг view_all_departments) читает статус любого
+    // отдела. POST (setReviewStatus) остаётся на resolveScopedDepartmentId.
+    const departmentId = (await hasGlobalDepartmentReadScope(req))
+      ? normalizeUuidParam(requested)
+      : await resolveScopedDepartmentId(req, requested);
     if (requested && !departmentId) {
       res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
       return;
@@ -129,7 +138,10 @@ const listReviewedDepartments = async (req: AuthenticatedRequest, res: Response)
       res.json({ success: true, data: [] });
       return;
     }
-    const accessible = await resolveAccessibleDepartmentIds(req);
+    // Глобальный read-scope: список «Проверено» по всем отделам (read-only бейджи).
+    const accessible = (await hasGlobalDepartmentReadScope(req))
+      ? 'all'
+      : await resolveAccessibleDepartmentIds(req);
     if (Array.isArray(accessible) && accessible.length === 0) {
       res.json({ success: true, data: [] });
       return;

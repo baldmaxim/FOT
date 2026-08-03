@@ -124,11 +124,13 @@ router.get(
   skudController.getDailySummary
 );
 
-// GET /api/skud/employee-events/:employeeId - события конкретного сотрудника (worker+)
+// GET /api/skud/employee-events/:employeeId - события конкретного сотрудника (worker+).
+// '/timesheet' — timesheet-путь (модалка дня); внутри контроллера ensureEmployeeEventsAccess
+// требует '/timesheet' + '/timesheet/events' и применяет окно месяцев роли.
 router.get(
   '/employee-events/:employeeId',
   requireAnyPageAccess(
-    ['/employee', '/staff-control'],
+    ['/employee', '/staff-control', '/timesheet'],
     'view',
   ),
   skudController.getEmployeeEvents
@@ -137,7 +139,7 @@ router.get(
 router.get(
   '/employee-events/:employeeId/export',
   requireAnyPageAccess(
-    ['/employee', '/staff-control'],
+    ['/employee', '/staff-control', '/timesheet'],
     'view',
   ),
   skudController.exportEmployeeEvents
@@ -166,10 +168,11 @@ router.get(
   skudController.getAccessPoints
 );
 
-// GET /api/skud/access-point-settings - настройки точек доступа для отдела (worker+)
+// GET /api/skud/access-point-settings - настройки точек доступа для отдела (worker+).
+// '/timesheet' — только вместе с '/timesheet/events' (AND-проверка в контроллере).
 router.get(
   '/access-point-settings',
-  requireAnyPageAccess(['/employee', '/staff-control', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/staff-control', '/skud-settings', '/timesheet'], 'view'),
   skudController.getAccessPointSettings
 );
 

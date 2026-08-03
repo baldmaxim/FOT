@@ -15,6 +15,7 @@ import {
   validatePageAccessModes,
 } from '../services/access-catalog.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
+import { invalidateGlobalReadScopeCaches } from '../services/scope-cache.service.js';
 import { getIo } from '../socket/io-instance.js';
 
 // Правки роли (окно табеля, is_admin, доступ страниц) зашиты в JWT/state.profile
@@ -42,6 +43,14 @@ const timesheetMonthsSchema = z.number().int().min(0).max(12);
 
 const maxCorrectionsSchema = z.number().int().min(0).max(100000).nullable();
 
+/**
+ * Флаг «Просмотр всех табелей и проходов» не действует для админ-ролей и табельщицы
+ * (hasGlobalDepartmentReadScope их исключает) — нормализуем в false на сервере,
+ * не полагаясь на disabled-тумблер в UI.
+ */
+const normalizeViewAllDepartments = (value: boolean, isAdmin: boolean, roleCode: string): boolean =>
+  value === true && !isAdmin && roleCode !== 'timekeeper';
+
 const createRoleSchema = z.object({
   code: z.string().min(1).max(50).regex(/^[a-z_]+$/, 'Только строчные буквы и подчёркивание'),
   name: z.string().min(1).max(100),
@@ -62,6 +71,8 @@ const createRoleSchema = z.object({
   corrections_disable_object_entries: z.boolean().optional().default(false),
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional().default(false),
+  // NOT NULL-колонка: default(false) гарантирует boolean в INSERT (не NULL).
+  view_all_departments: z.boolean().optional().default(false),
 });
 
 const updateRoleSchema = z.object({
@@ -84,6 +95,7 @@ const updateRoleSchema = z.object({
   corrections_disable_object_entries: z.boolean().optional(),
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional(),
+  view_all_departments: z.boolean().optional(),
 });
 
 const updateAccessProfileSchema = z.object({
@@ -111,6 +123,7 @@ const cloneRoleSchema = z.object({
   corrections_disable_object_entries: z.boolean().optional(),
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional(),
+  view_all_departments: z.boolean().optional(),
 });
 
 function isMissingFunctionError(error: unknown): boolean {
@@ -308,6 +321,7 @@ export const rolesController = {
       corrections_disable_object_entries,
       max_corrections_per_month,
       weekend_memo_required,
+      view_all_departments,
     } = parsed.data;
 
     let data: SystemRole | null;
@@ -319,8 +333,9 @@ export const rolesController = {
             corrections_anomalies_only, corrections_cap_by_schedule_norm,
             corrections_allow_zero_short_attendance, corrections_disable_bulk,
             max_corrections_per_month, weekend_memo_required,
-            corrections_disable_object_entries, admin_access, manager_auto_access, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, true)
+            corrections_disable_object_entries, admin_access, manager_auto_access,
+            view_all_departments, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, true)
          RETURNING *`,
         [
           code,
@@ -342,6 +357,7 @@ export const rolesController = {
           !!corrections_disable_object_entries,
           !!is_admin || !!admin_access,
           manager_auto_access !== false,
+          normalizeViewAllDepartments(view_all_departments === true, !!is_admin, code),
         ],
       );
     } catch (error) {
@@ -398,8 +414,9 @@ export const rolesController = {
               corrections_anomalies_only, corrections_cap_by_schedule_norm,
               corrections_allow_zero_short_attendance, corrections_disable_bulk,
               max_corrections_per_month, weekend_memo_required, is_active,
-              corrections_disable_object_entries, admin_access, manager_auto_access)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+              corrections_disable_object_entries, admin_access, manager_auto_access,
+              view_all_departments)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
            RETURNING *`,
           [
             targetCode,
@@ -427,6 +444,11 @@ export const rolesController = {
             (parsed.data.is_admin ?? sourceRole.is_admin)
               || (parsed.data.admin_access ?? sourceRole.admin_access ?? false),
             (parsed.data.manager_auto_access ?? sourceRole.manager_auto_access) !== false,
+            normalizeViewAllDepartments(
+              parsed.data.view_all_departments ?? sourceRole.view_all_departments ?? false,
+              parsed.data.is_admin ?? sourceRole.is_admin,
+              targetCode,
+            ),
           ],
         );
       } catch (createError) {
@@ -518,6 +540,11 @@ export const rolesController = {
     if (parsed.data.corrections_disable_object_entries !== undefined) setClauses.push(`corrections_disable_object_entries = ${addParam(parsed.data.corrections_disable_object_entries)}`);
     if (parsed.data.max_corrections_per_month !== undefined) setClauses.push(`max_corrections_per_month = ${addParam(parsed.data.max_corrections_per_month)}`);
     if (parsed.data.weekend_memo_required !== undefined) setClauses.push(`weekend_memo_required = ${addParam(parsed.data.weekend_memo_required)}`);
+    if (parsed.data.view_all_departments !== undefined) {
+      setClauses.push(`view_all_departments = ${addParam(
+        normalizeViewAllDepartments(parsed.data.view_all_departments, nextIsAdmin, code),
+      )}`);
+    }
 
     // Выключение доступа в админку физически убирает админ-строки роли: иначе они
     // остались бы «спящими» и сработали бы на путях, которые читают role_page_access
@@ -574,6 +601,9 @@ export const rolesController = {
     invalidateRoleListCache();
     invalidateRolePageAccessCache();
     invalidateCorrectionRestrictionsCache(data.id);
+    if (data.view_all_departments !== currentRole.view_all_departments) {
+      invalidateGlobalReadScopeCaches();
+    }
     await emitRoleAccessChanged(data.id);
     res.json({ success: true, data });
   },

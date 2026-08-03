@@ -48,10 +48,12 @@ router.use((req, res, next) => {
   next();
 });
 
-// GET /api/structure - получение дерева (worker+, кэш 15мин)
+// GET /api/structure - получение дерева (worker+, кэш 15мин).
+// '/timesheet' — для ролей, у которых из «управленческих» страниц есть только табель
+// (напр. security с флагом view_all_departments): селектору отделов нужно дерево.
 router.get(
   '/',
-  requireAnyPageAccess(['/employee', '/dashboard', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings'], 'view'),
+  requireAnyPageAccess(['/employee', '/dashboard', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings', '/timesheet'], 'view'),
   structureTreeCache,
   structureController.getTree
 );

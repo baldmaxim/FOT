@@ -2,7 +2,9 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import type { DataScope } from '../config/access-control.js';
 import { hasPageEdit, hasPageView } from './access-control.service.js';
 import {
+  hasGlobalDepartmentReadScope,
   hasObjectViewScope,
+  normalizeUuidParam,
   resolveAccessibleDepartmentIds,
   resolveAccessibleEmployeeIds,
   resolveEditableDepartmentIds,
@@ -37,12 +39,11 @@ export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<
     // is_admin со scope=[] (теоретически не возникает: company_scope=[] только если не is_admin)
   }
 
-  // hr (role_code='hr', is_admin=false): полный ПРОСМОТР организации в табеле.
+  // hr и роли с флагом view_all_departments: полный ПРОСМОТР организации в табеле.
   // Именно 'department' (не 'all') — иначе canAccessEmployeeForTimesheet* (scope==='all')
-  // откроет и запись. При 'department' getAll грузит всех сотрудников выбранного отдела
-  // (resolveTimesheetScopedDepartmentId → requested id, т.к. accessible='all'), а правка
-  // остаётся закрытой (editable-скоуп hr пуст + page can_edit=false → edit-роуты 403).
-  if (req.user.role_code === 'hr') return 'department';
+  // откроет и запись. Правка остаётся закрытой (editable-скоуп не расширяется +
+  // page can_edit=false → edit-роуты 403).
+  if (await hasGlobalDepartmentReadScope(req)) return 'department';
 
   if (await hasManagedTimesheetAccess(req, 'view')) {
     const managedDepartmentIds = await resolveManagedDepartmentIds(req);
@@ -94,6 +95,22 @@ export async function resolveTimesheetScopedDepartmentId(
   return null;
 }
 
+/**
+ * READ-версия резолвера отдела табеля: глобальный read-scope (hr / флаг
+ * view_all_departments) разрешает любой запрошенный отдел. Применять ТОЛЬКО
+ * в читающих эндпоинтах; write-пути (team-management, submit и т.п.) остаются
+ * на resolveTimesheetScopedDepartmentId.
+ */
+export async function resolveTimesheetReadableDepartmentId(
+  req: AuthenticatedRequest,
+  requestedDepartmentId?: string | null,
+): Promise<string | null> {
+  if (await hasGlobalDepartmentReadScope(req)) {
+    return normalizeUuidParam(requestedDepartmentId);
+  }
+  return resolveTimesheetScopedDepartmentId(req, requestedDepartmentId);
+}
+
 export async function canAccessEmployeeForTimesheetPeriod(
   req: AuthenticatedRequest,
   employeeId: number | null | undefined,
@@ -122,8 +139,15 @@ export async function canAccessEmployeeForTimesheetPeriod(
     return true;
   }
 
-  // Объектный view-скоуп (отделы ∩ объекты) ИЛИ hr: для ПРОСМОТРА авторитетен видимый набор.
-  if (!requireEdit && (req.user.role_code === 'hr' || await hasObjectViewScope(req))) {
+  // Глобальный read-scope (hr / флаг view_all_departments): ПРОСМОТР любого сотрудника.
+  // Short-circuit ДО resolveAccessibleEmployeeIds — иначе набор (у flagged-роли без
+  // назначений он узкий) отфильтровал бы чужого. Окно месяцев применяет endpoint.
+  if (!requireEdit && await hasGlobalDepartmentReadScope(req)) {
+    return true;
+  }
+
+  // Объектный view-скоуп (отделы ∩ объекты): для ПРОСМОТРА авторитетен видимый набор.
+  if (!requireEdit && await hasObjectViewScope(req)) {
     const acc = await resolveAccessibleEmployeeIds(req);
     return acc === 'all' || acc.has(employeeId);
   }
@@ -174,7 +198,10 @@ export async function filterEmployeeIdsByTimesheetScope(
   supervisorIds?: Set<number>,
 ): Promise<number[]> {
   if (ids.length === 0) return ids;
-  if (req.user.role_code !== 'hr' && !(await hasObjectViewScope(req))) return ids;
+  // Глобальный read-scope (hr / флаг): состав не срезаем — у flagged-роли без
+  // назначений accessible-набор узкий и порезал бы весь грид.
+  if (await hasGlobalDepartmentReadScope(req)) return ids;
+  if (!(await hasObjectViewScope(req))) return ids;
 
   const acc = await resolveAccessibleEmployeeIds(req);
   if (acc === 'all') return ids;
@@ -201,10 +228,13 @@ export async function filterAdditionalEmployeeIdsForTimesheetPeriod(
   if (scope === 'all') return ids;
   if (scope === 'self') return ids.filter(id => id === req.user.employee_id);
 
+  // Глобальный read-scope (hr / флаг): дополнительные сотрудники не срезаются.
+  if (await hasGlobalDepartmentReadScope(req)) return ids;
+
   const allowed = new Set<number>();
   if (req.user.employee_id) allowed.add(req.user.employee_id);
 
-  if (req.user.role_code === 'hr' || await hasObjectViewScope(req)) {
+  if (await hasObjectViewScope(req)) {
     const acc = await resolveAccessibleEmployeeIds(req);
     if (acc === 'all') return ids;
     for (const id of acc) allowed.add(id);

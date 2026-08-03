@@ -21,6 +21,8 @@ export interface SystemRole {
   show_actual_hours: boolean;
   /** true → у пользователей роли скрывается боковое меню. Для is_admin игнорируется. */
   hide_sidebar: boolean;
+  /** true → роль видит все табели и СКУД-проходы организации на чтение (миграция 237). Не действует для is_admin и timekeeper. */
+  view_all_departments?: boolean;
   /** Окно доступных месяцев табеля: сколько месяцев назад от текущего. Применяется когда is_admin=false. */
   timesheet_months_back: number;
   /** Окно доступных месяцев табеля: сколько месяцев вперёд от текущего. Применяется когда is_admin=false. */
@@ -75,6 +77,8 @@ export interface UserProfile {
   employee_variant: EmployeeVariant | null;
   show_actual_hours: boolean;
   hide_sidebar: boolean;
+  /** true → роль видит все табели и СКУД-проходы на чтение (миграция 237). Optional — совместимость со старым кэшем профиля. */
+  view_all_departments?: boolean;
   timesheet_months_back: number;
   timesheet_months_forward: number;
   timesheet_show_full_period: boolean;

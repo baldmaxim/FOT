@@ -18,6 +18,7 @@ import { generateWeekendMemo, getWeekendMemoPreview } from './timesheet-weekend-
 import { resolveSchedulesForPeriod, isWorkingDay, isHolidayOnWorkday, getEffectiveLateThreshold, getScheduleForDate, getDayNormHours, computeCappedFactHours, loadCalendarMonth, NON_WORKING_STATUSES } from '../services/schedule.service.js';
 import {
   getSelfHistoryLimitForUser,
+  hasGlobalDepartmentReadScope,
   isSelfEmployeeRequest,
   resolveAccessibleEmployeeIds,
   resolveManagedDepartmentIds,
@@ -30,6 +31,7 @@ import { isTimekeeper, resolveTimekeeperEditableLiIds, resolveTimekeeperLiObshes
 import {
   canAccessEmployeeForTimesheetPeriod,
   hasManagedTimesheetAccess,
+  resolveTimesheetReadableDepartmentId,
   resolveTimesheetScope,
   resolveTimesheetScopedDepartmentId,
 } from '../services/timesheet-scope.service.js';
@@ -1355,10 +1357,15 @@ async function canAccessEmployeeForTimesheetDate(
     return true;
   }
 
-  // Объектный view-скоуп (отделы ∩ объекты) ИЛИ hr: для ПРОСМОТРА авторитетен видимый
-  // набор сотрудников (для hr resolveAccessibleEmployeeIds='all'). Для записи (requireEdit)
-  // идём по editable-ветке ниже — hr/view-сотрудники туда не попадают (read-only сохранён).
-  if (!requireEdit && (req.user.role_code === 'hr' || await hasObjectViewScope(req))) {
+  // Глобальный read-scope (hr / флаг view_all_departments): ПРОСМОТР любого сотрудника.
+  // Short-circuit ДО resolveAccessibleEmployeeIds — у flagged-роли без назначений набор
+  // узкий. Для записи (requireEdit) идём по editable-ветке ниже (read-only сохранён).
+  if (!requireEdit && await hasGlobalDepartmentReadScope(req)) {
+    return true;
+  }
+
+  // Объектный view-скоуп (отделы ∩ объекты): для ПРОСМОТРА авторитетен видимый набор.
+  if (!requireEdit && await hasObjectViewScope(req)) {
     const acc = await resolveAccessibleEmployeeIds(req);
     return acc === 'all' || acc.has(employeeId);
   }
@@ -1710,7 +1717,7 @@ export const timesheetController = {
           )]
         : [];
       const hasEmployeeIdsFilter = requestedEmployeeIds.length > 0;
-      const department_id = await resolveTimesheetScopedDepartmentId(req, requestedDepartmentId);
+      const department_id = await resolveTimesheetReadableDepartmentId(req, requestedDepartmentId);
 
       if (!month) {
         return res.status(400).json({ success: false, error: 'Параметр month обязателен (формат YYYY-MM)' });

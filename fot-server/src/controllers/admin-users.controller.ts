@@ -25,7 +25,7 @@ import {
   resolveAccessibleDepartmentIds,
   resolveCompanyScope,
 } from '../services/data-scope.service.js';
-import { invalidateDepartmentScopeCaches } from '../services/scope-cache.service.js';
+import { invalidateDepartmentScopeCaches, invalidateGlobalReadScopeCaches } from '../services/scope-cache.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { escapeLike } from '../utils/search.utils.js';
@@ -1338,6 +1338,9 @@ export const adminUsersController = {
       });
 
       invalidateDepartmentScopeCaches();
+      // Смена роли меняет и глобальный read-скоуп (view_all_departments) —
+      // сбрасываем кеши табеля, чтобы не отдать stale-ответы прежней роли.
+      invalidateGlobalReadScopeCaches();
       emitDepartmentAccessChanged(id);
 
       res.json({ success: true, message: 'Position updated successfully' });

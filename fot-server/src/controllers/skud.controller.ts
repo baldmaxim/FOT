@@ -33,6 +33,7 @@ import { skudTravelController } from './skud-travel.controller.js';
 import {
   canAccessEmployeeInScope,
   getSelfHistoryLimitForUser,
+  hasGlobalDepartmentReadScope,
   isSelfEmployeeRequest,
   resolveAccessibleEmployeeIds,
   resolveManagedDepartmentIds,
@@ -40,6 +41,12 @@ import {
   resolveScopedDepartmentId,
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import {
+  DEPARTMENT_MONTH_FORBIDDEN_MESSAGE,
+  isDepartmentMonthAllowed,
+  monthAccessFromUser,
+} from '../utils/timesheet-month-access.js';
 import type { IAccessPointOption, IDisciplineResult } from '../types/skud.types.js';
 
 const MONTH_PATTERN = /^\d{4}-\d{2}$/;
@@ -324,6 +331,62 @@ async function loadEmployeeEventsForRequest(
     cacheStore.set(cacheKey, { at: Date.now(), data: response });
   }
   return response;
+}
+
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Гейт доступа к событиям СКУД сотрудника по ФАКТИЧЕСКОМУ пути авторизации:
+ *  - employee-путь: свой employeeId при '/employee' view (self-лимиты применяет endpoint);
+ *  - staff-control-путь: '/staff-control' view + обычный scope. Флаг view_all_departments
+ *    его НЕ расширяет — иначе стал бы обходом окна месяцев;
+ *  - timesheet-путь: '/timesheet' view И '/timesheet/events' view; сотрудник — из
+ *    обычного scope ИЛИ глобального read-флага. Даты обязательны, обе границы —
+ *    в окне месяцев роли (timesheet_months_back/forward).
+ * Сотрудник ВНЕ обычного scope доступен только через timesheet-путь при флаге.
+ */
+async function ensureEmployeeEventsAccess(
+  req: AuthenticatedRequest,
+  employeeId: number,
+  startDateRaw: unknown,
+  endDateRaw: unknown,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const isSelf = req.user.employee_id === employeeId;
+  const existingScopeAllowed = await canAccessEmployeeInScope(req, employeeId);
+
+  if (isSelf && existingScopeAllowed && await resolveEffectivePageAccess(req, '/employee', 'view')) {
+    return { ok: true };
+  }
+
+  if (existingScopeAllowed && await resolveEffectivePageAccess(req, '/staff-control', 'view')) {
+    return { ok: true };
+  }
+
+  const viaTimesheet = await resolveEffectivePageAccess(req, '/timesheet', 'view')
+    && await resolveEffectivePageAccess(req, '/timesheet/events', 'view');
+  if (viaTimesheet && (existingScopeAllowed || await hasGlobalDepartmentReadScope(req))) {
+    const startDate = typeof startDateRaw === 'string' ? startDateRaw : '';
+    const endDate = typeof endDateRaw === 'string' ? endDateRaw : '';
+    if (!ISO_DATE_PATTERN.test(startDate) || !ISO_DATE_PATTERN.test(endDate) || endDate < startDate) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'Параметры startDate и endDate обязательны (YYYY-MM-DD, endDate >= startDate)',
+      };
+    }
+    // Окно месяцев роли действует всегда, даже для админ-байпаса не делаем исключения
+    // здесь: is_admin проходит выше по staff-control-пути (resolveEffectivePageAccess=true).
+    const window = monthAccessFromUser(req.user);
+    for (const isoDate of [startDate, endDate]) {
+      const [year, month] = isoDate.split('-').map(Number);
+      if (!isDepartmentMonthAllowed(year, month, window)) {
+        return { ok: false, status: 403, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE };
+      }
+    }
+    return { ok: true };
+  }
+
+  return { ok: false, status: 403, error: 'Access denied' };
 }
 
 async function getInternalAccessPointsForRequest(req: AuthenticatedRequest): Promise<Set<string>> {
@@ -690,8 +753,9 @@ const skudReadController = {
         return;
       }
 
-      if (!(await canAccessEmployeeInScope(req, employeeId))) {
-        res.status(403).json({ success: false, error: 'Access denied' });
+      const gate = await ensureEmployeeEventsAccess(req, employeeId, req.query.startDate, req.query.endDate);
+      if (!gate.ok) {
+        res.status(gate.status).json({ success: false, error: gate.error });
         return;
       }
 
@@ -730,8 +794,9 @@ const skudReadController = {
         return;
       }
 
-      if (!(await canAccessEmployeeInScope(req, employeeId))) {
-        res.status(403).json({ success: false, error: 'Access denied' });
+      const gate = await ensureEmployeeEventsAccess(req, employeeId, req.query.startDate, req.query.endDate);
+      if (!gate.ok) {
+        res.status(gate.status).json({ success: false, error: gate.error });
         return;
       }
 
@@ -1036,6 +1101,22 @@ const skudReadController = {
    */
   async getAccessPointSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      // Существующие пути (/employee, /staff-control, /skud-settings) работают как раньше.
+      // Новый timesheet-путь (роут пускает и по '/timesheet') требует AND-права
+      // '/timesheet' + '/timesheet/events' — одно лишь '/timesheet' в requireAnyPageAccess
+      // открыло бы endpoint всем пользователям табеля.
+      const viaLegacyPage = await resolveEffectivePageAccess(req, '/employee', 'view')
+        || await resolveEffectivePageAccess(req, '/staff-control', 'view')
+        || await resolveEffectivePageAccess(req, '/skud-settings', 'view');
+      if (!viaLegacyPage) {
+        const viaTimesheet = await resolveEffectivePageAccess(req, '/timesheet', 'view')
+          && await resolveEffectivePageAccess(req, '/timesheet/events', 'view');
+        if (!viaTimesheet) {
+          res.status(403).json({ success: false, error: 'Access denied' });
+          return;
+        }
+      }
+
       // Признак «внутренняя точка» — физическое свойство точки, а не привилегия отдела:
       // если точка помечена internal хотя бы в одном отделе, она internal везде.
       // Без явного department_id всегда отдаём агрегированный список (BOOL_OR по имени),

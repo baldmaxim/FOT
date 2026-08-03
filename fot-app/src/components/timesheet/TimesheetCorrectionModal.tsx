@@ -1390,11 +1390,11 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         isScheduledDayOff: dayStatusContext.isScheduledDayOff,
       })
     : null;
-  // На «жёлтом» дне (недобор) и на дне с корректировкой события СКУД видны и без права
-  // /timesheet/events: руководителю нужны сырые входы/выходы, чтобы понять, почему часы
-  // не зачлись и что именно перекрыла корректировка (корректировка делает день «зелёным»).
-  const dayHasCorrection = Boolean(timesheetEntry?.is_correction) || dayHasObjectAdjustments;
-  const showEventsTab = !hideSkudTab || dayStatus === 'underwork' || dayHasCorrection;
+  // Вкладка событий СКУД строго по праву /timesheet/events: бэк теперь авторитетно
+  // отклоняет запросы событий без него, поэтому прежнее исключение «показывать при
+  // недоборе/корректировке» дало бы пустую вкладку с 403. Ролям, которым нужны сырые
+  // входы/выходы, право /timesheet/events выдаётся в админке ролей.
+  const showEventsTab = !hideSkudTab;
   const showCorrectionTab = !hideCorrectionTab;
   const [tab, setTab] = useState<ModalTab>(() => {
     if (!showEventsTab && showCorrectionTab) return 'correction';

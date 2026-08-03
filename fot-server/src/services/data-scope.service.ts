@@ -10,6 +10,7 @@ import {
   resolveTimekeeperDepartmentSeeds,
   resolveTimekeeperDirectEmployeeIds,
 } from './timekeeper-scope.service.js';
+import { getRoleByCode } from './roles-cache.service.js';
 import { DEFAULT_TIMESHEET_MONTHS_BACK } from '../utils/timesheet-month-access.js';
 
 export type DataScope = 'self' | 'department' | 'all';
@@ -24,6 +25,22 @@ const subtreeCache = new Map<string, { ids: string[]; expiresAt: number }>();
  */
 export function invalidateAccessibleScopeCache(): void {
   subtreeCache.clear();
+}
+
+/**
+ * «Роль видит все отделы на ЧТЕНИЕ» (флаг system_roles.view_all_departments,
+ * миграция 237) — канонический предикат для READ-путей табеля и СКУД-проходов.
+ * НЕ подключён к resolveAccessibleDepartmentIds/resolveEditableDepartmentIds:
+ * общий department-scope и запись флагом не расширяются.
+ * - is_admin — своя логика (company scope), флаг не применяется;
+ * - timekeeper — исключён: для него editable=accessible, флаг открыл бы запись;
+ * - hr — легаси-хардкод read-all (follow-up: перевести на флаг).
+ */
+export async function hasGlobalDepartmentReadScope(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.is_admin || isTimekeeper(req)) return false;
+  if (req.user.role_code === 'hr') return true;
+  const role = await getRoleByCode(req.user.role_code);
+  return role?.view_all_departments === true;
 }
 
 /**

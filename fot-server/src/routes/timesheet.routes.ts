@@ -296,10 +296,11 @@ router.get(
 // /api/timesheet/corrections/:id/attachments
 router.use('/corrections', correctionAttachmentsRouter);
 
-// POST /api/timesheet/refresh
+// POST /api/timesheet/refresh — пересчёт изменяет данные, поэтому edit (не view):
+// view-only роли (например, security с view_all_departments) запускать его не должны.
 router.post(
   '/refresh',
-  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'edit'),
   timesheetController.refresh
 );
 

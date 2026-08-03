@@ -28,7 +28,7 @@ import {
   saveTravelConfig as saveTravelConfigService,
   updateTravelRoute,
 } from '../services/skud-travel-routes.service.js';
-import { resolveAccessibleDepartmentIds, resolveScopedDepartmentId } from '../services/data-scope.service.js';
+import { hasGlobalDepartmentReadScope, resolveAccessibleDepartmentIds, resolveScopedDepartmentId } from '../services/data-scope.service.js';
 
 const monthRegex = /^\d{4}-\d{2}$/;
 
@@ -114,6 +114,19 @@ async function ensureSegmentDepartmentAccess(
   if (!data) return false;
   const deptId = data.org_department_id ? String(data.org_department_id) : null;
   return deptId !== null && accessible.includes(deptId);
+}
+
+/**
+ * READ-вариант для GET передвижений дня (модалка дня табеля): глобальный
+ * read-scope (hr / флаг view_all_departments) видит любого сотрудника.
+ * approve/reject остаются на ensureSegmentDepartmentAccess.
+ */
+async function canReadSegmentEmployee(
+  req: AuthenticatedRequest,
+  employeeId: number,
+): Promise<boolean> {
+  if (await hasGlobalDepartmentReadScope(req)) return true;
+  return ensureSegmentDepartmentAccess(req, employeeId);
 }
 
 const accessPointMapQuerySchema = z.object({
@@ -454,7 +467,7 @@ export const skudTravelController = {
         work_date: req.query.work_date,
       });
 
-      if (!(await ensureSegmentDepartmentAccess(req, parsed.employee_id))) {
+      if (!(await canReadSegmentEmployee(req, parsed.employee_id))) {
         res.status(403).json({ success: false, error: 'Нет доступа к передвижениям этого сотрудника' });
         return;
       }

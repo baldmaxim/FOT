@@ -33,6 +33,11 @@ vi.mock('./employee-direct-reports.service.js', () => ({
   listDirectSubordinates: vi.fn().mockResolvedValue([]),
 }));
 
+// Кеш ролей: hasGlobalDepartmentReadScope читает флаг view_all_departments через него.
+vi.mock('./roles-cache.service.js', () => ({
+  getRoleByCode: vi.fn().mockResolvedValue(null),
+}));
+
 const mockState = vi.hoisted(() => ({
   /** Записи user_company_access по user_id */
   userCompanyAccess: [] as Array<{ user_id: string; company_root_id: string }>,
@@ -40,9 +45,11 @@ const mockState = vi.hoisted(() => ({
   rpcSubtree: new Map<string, string[]>(),
 }));
 
-import { canAccessEmployeeInScope, getSelfHistoryLimitForUser, invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope } from './data-scope.service.js';
+import { canAccessEmployeeInScope, getSelfHistoryLimitForUser, hasGlobalDepartmentReadScope, invalidateAccessibleScopeCache, resolveAccessibleDepartmentIds, resolveCompanyScope, resolveEditableDepartmentIds } from './data-scope.service.js';
 import { listExplicitDepartmentIdsForUser, listEditableDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
+import { getRoleByCode } from './roles-cache.service.js';
+import type { SystemRole } from '../types/index.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): AuthenticatedRequest {
@@ -79,6 +86,7 @@ beforeEach(() => {
   );
   vi.mocked(loadEmployeeAccessMap).mockReset().mockResolvedValue(new Map());
   vi.mocked(listDirectSubordinates).mockReset().mockResolvedValue([]);
+  vi.mocked(getRoleByCode).mockReset().mockResolvedValue(null);
 
   pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
     if (/FROM user_company_access/i.test(sql)) {
@@ -178,6 +186,59 @@ describe('resolveAccessibleDepartmentIds (для админа)', () => {
     const req = buildReq({ role_code: 'hr', is_admin: false, system_role_id: 'role-hr', employee_id: 2520 });
     const result = await resolveAccessibleDepartmentIds(req);
     expect(result).toBe('all');
+  });
+});
+
+describe('hasGlobalDepartmentReadScope (флаг view_all_departments, миграция 237)', () => {
+  const flaggedRole = { code: 'security', view_all_departments: true } as SystemRole;
+
+  it('роль с флагом (не админ, не табельщица) → true', async () => {
+    vi.mocked(getRoleByCode).mockResolvedValue(flaggedRole);
+    const req = buildReq({ role_code: 'security', is_admin: false, employee_id: 500 });
+    await expect(hasGlobalDepartmentReadScope(req)).resolves.toBe(true);
+  });
+
+  it('is_admin с флагом → false (у админа своя логика скоупа)', async () => {
+    vi.mocked(getRoleByCode).mockResolvedValue(flaggedRole);
+    const req = buildReq({ role_code: 'security', is_admin: true });
+    await expect(hasGlobalDepartmentReadScope(req)).resolves.toBe(false);
+  });
+
+  it('табельщица с флагом → false (для неё editable=accessible, флаг открыл бы запись)', async () => {
+    vi.mocked(getRoleByCode).mockResolvedValue({ code: 'timekeeper', view_all_departments: true } as SystemRole);
+    const req = buildReq({ role_code: 'timekeeper', is_admin: false, employee_id: 700 });
+    await expect(hasGlobalDepartmentReadScope(req)).resolves.toBe(false);
+  });
+
+  it('hr → true (легаси-хардкод, без обращения к кешу ролей)', async () => {
+    const req = buildReq({ role_code: 'hr', is_admin: false, employee_id: 2520 });
+    await expect(hasGlobalDepartmentReadScope(req)).resolves.toBe(true);
+    expect(vi.mocked(getRoleByCode)).not.toHaveBeenCalled();
+  });
+
+  it('роль без флага → false', async () => {
+    vi.mocked(getRoleByCode).mockResolvedValue({ code: 'office', view_all_departments: false } as SystemRole);
+    const req = buildReq({ role_code: 'office', is_admin: false, employee_id: 500 });
+    await expect(hasGlobalDepartmentReadScope(req)).resolves.toBe(false);
+  });
+
+  it('флаг НЕ расширяет resolveAccessibleDepartmentIds (общий department-scope)', async () => {
+    vi.mocked(getRoleByCode).mockResolvedValue(flaggedRole);
+    const req = buildReq({ role_code: 'security', is_admin: false, employee_id: 500 });
+    await expect(resolveAccessibleDepartmentIds(req)).resolves.toEqual([]);
+  });
+
+  it('флаг НЕ расширяет resolveEditableDepartmentIds (запись остаётся узкой)', async () => {
+    vi.mocked(getRoleByCode).mockResolvedValue(flaggedRole);
+    const req = buildReq({ role_code: 'security', is_admin: false, employee_id: 500 });
+    await expect(resolveEditableDepartmentIds(req)).resolves.toEqual([]);
+  });
+
+  it('флаг + явные назначения: editable-scope сохраняет назначенные отделы', async () => {
+    vi.mocked(getRoleByCode).mockResolvedValue(flaggedRole);
+    vi.mocked(listExplicitDepartmentIdsForUser).mockResolvedValue(['dept-own']);
+    const req = buildReq({ role_code: 'security', is_admin: false, employee_id: 500 });
+    await expect(resolveEditableDepartmentIds(req)).resolves.toEqual(['dept-own']);
   });
 });
 

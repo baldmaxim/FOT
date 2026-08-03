@@ -4,7 +4,7 @@ import { execute, query, queryOne, withTransaction } from '../config/postgres.js
 import { auditService } from '../services/audit.service.js';
 import { getKnownArchiveDepartment, isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { invalidateDeptTreeCache } from '../services/skud-shared.service.js';
-import { resolveAccessibleDepartmentIds, resolveCompanyScope } from '../services/data-scope.service.js';
+import { hasGlobalDepartmentReadScope, resolveAccessibleDepartmentIds, resolveCompanyScope } from '../services/data-scope.service.js';
 import { isTimekeeper, LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
 import type {
   AuthenticatedRequest,
@@ -183,6 +183,16 @@ async function loadAccessibleDeptSet(req: AuthenticatedRequest): Promise<Set<str
   return accessible === 'all' ? 'all' : new Set(accessible);
 }
 
+/**
+ * READ-версия скоупа для GET-дерева: глобальный read-scope (hr / флаг
+ * view_all_departments) видит дерево целиком. CRUD-эндпоинты остаются
+ * на loadAccessibleDeptSet — запись флагом не расширяется.
+ */
+async function loadReadableDeptSet(req: AuthenticatedRequest): Promise<Set<string> | 'all'> {
+  if (await hasGlobalDepartmentReadScope(req)) return 'all';
+  return loadAccessibleDeptSet(req);
+}
+
 function assertInScope(scope: Set<string> | 'all', departmentId: string | null): void {
   if (scope === 'all') return;
   if (!departmentId) {
@@ -252,7 +262,7 @@ async function loadTreeForCache(req: AuthenticatedRequest): Promise<object> {
   const [departments, archiveDepartment, scope] = await Promise.all([
     loadAllActiveDepartments(),
     getKnownArchiveDepartment(),
-    loadAccessibleDeptSet(req),
+    loadReadableDeptSet(req),
   ]);
   const fullTree = buildDepartmentTree(departments, null);
   // Табельщица: показываем в дереве отдел «ЛИНИЯ-Общестрой» (её люди по присутствию),

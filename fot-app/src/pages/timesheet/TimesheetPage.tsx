@@ -59,6 +59,7 @@ import {
 } from '../../utils/timesheetApprovalPeriod';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { findDepartmentName, filterDepartmentTreeByIds } from '../../utils/departmentUtils';
+import { hasGlobalTimesheetReadScope } from '../../utils/globalTimesheetRead';
 import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
 import { useHeaderAddon } from '../../components/layout/HeaderAddonContext';
 import './TimesheetPage.css';
@@ -115,7 +116,11 @@ export const TimesheetPage: FC = () => {
   const objectEntriesDisabled = profile?.corrections_disable_object_entries === true;
   const OBJECT_ENTRIES_DISABLED_MESSAGE = 'Корректировки по объектам недоступны для вашей роли. Используйте режим «По сотрудникам».';
   const canEditTeamManagement = isAdmin || canEditPage('timesheet-team-management');
-  const canManageAllDepartments = isAdmin || hasPermission('data.scope.all');
+  // Флаг роли view_all_departments (миграция 237): просмотр всех отделов ТОЛЬКО в табеле.
+  // Глобальные примитивы (data.scope.*, useManagedDepartments) намеренно не расширены —
+  // обрабатываем локально, окно месяцев роли при этом остаётся включённым.
+  const hasGlobalTimesheetRead = hasGlobalTimesheetReadScope(profile);
+  const canManageAllDepartments = isAdmin || hasPermission('data.scope.all') || hasGlobalTimesheetRead;
   const {
     isDepartmentScope,
     isDirectReportsOnly,
@@ -124,7 +129,7 @@ export const TimesheetPage: FC = () => {
     structureQuery,
   } = useManagedDepartments();
   const monthAccess = useTimesheetMonthAccess({
-    enforceWhen: isDepartmentScope && canViewManagedTimesheet,
+    enforceWhen: (isDepartmentScope || hasGlobalTimesheetRead) && canViewManagedTimesheet,
   });
   const isTimesheetDepartmentScope = monthAccess.isWindowEnforced;
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
@@ -242,11 +247,13 @@ export const TimesheetPage: FC = () => {
 
   const deptTree = useMemo(() => {
     const allNodes = structureQuery.data?.departments ?? [];
-    if (isDepartmentScope) {
+    // Глобальный read-флаг: полное дерево (бэк отдаёт его через loadReadableDeptSet),
+    // department-scope фильтр по managed-отделам не применяем.
+    if (isDepartmentScope && !hasGlobalTimesheetRead) {
       return filterDepartmentTreeByIds(allNodes, new Set(managedDepartmentIds));
     }
     return allNodes;
-  }, [structureQuery.data, isDepartmentScope, managedDepartmentIds]);
+  }, [structureQuery.data, isDepartmentScope, hasGlobalTimesheetRead, managedDepartmentIds]);
   const effectiveSelectedDeptId = isTimesheetDepartmentScope
     ? (selectedDeptId || primaryDepartmentId || null)
     : selectedDeptId;
@@ -1996,16 +2003,18 @@ export const TimesheetPage: FC = () => {
                     {mobileApprovalVisible ? 'Скрыть согласование' : 'Согласование'}
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="ts-btn ts-btn--icon"
-                  onClick={() => handleExport()}
-                  disabled={!canExport || isExporting}
-                  aria-label="Экспорт табеля"
-                  title={canExport ? 'Единый файл для 1С (фактические часы)' : 'Выберите отдел или участок'}
-                >
-                  <Download size={16} />
-                </button>
+                {!hasGlobalTimesheetRead && (
+                  <button
+                    type="button"
+                    className="ts-btn ts-btn--icon"
+                    onClick={() => handleExport()}
+                    disabled={!canExport || isExporting}
+                    aria-label="Экспорт табеля"
+                    title={canExport ? 'Единый файл для 1С (фактические часы)' : 'Выберите отдел или участок'}
+                  >
+                    <Download size={16} />
+                  </button>
+                )}
               </div>
             </div>
             <div className="ts-mobile-header-row ts-mobile-header-row--controls">
@@ -2074,26 +2083,32 @@ export const TimesheetPage: FC = () => {
                 {showAllControl}
               </div>
               <div className="ts-header-toolbar-right">
-                <button
-                  type="button"
-                  className="ts-btn"
-                  onClick={() => handleExport()}
-                  disabled={!canExport || isExporting}
-                  title={canExport ? 'Единый файл для 1С (фактические часы)' : 'Выберите отдел или участок'}
-                >
-                  <Download size={16} />
-                  {isExporting ? 'Экспорт…' : 'Экспорт'}
-                </button>
-                <button
-                  type="button"
-                  className="ts-btn"
-                  onClick={() => handleRefreshTimesheet()}
-                  disabled={refreshInFlight || !rangeStart || !rangeEnd}
-                  title="Пересчитать табель по текущему графику и пришедшим проходам"
-                >
-                  <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
-                  Обновить
-                </button>
+                {/* Экспорт скрыт для глобального read-флага: экспорт-эндпоинты работают
+                    в старом скоупе и вернули бы 403 (follow-up: расширить read-scope). */}
+                {!hasGlobalTimesheetRead && (
+                  <button
+                    type="button"
+                    className="ts-btn"
+                    onClick={() => handleExport()}
+                    disabled={!canExport || isExporting}
+                    title={canExport ? 'Единый файл для 1С (фактические часы)' : 'Выберите отдел или участок'}
+                  >
+                    <Download size={16} />
+                    {isExporting ? 'Экспорт…' : 'Экспорт'}
+                  </button>
+                )}
+                {canEditTimesheet && (
+                  <button
+                    type="button"
+                    className="ts-btn"
+                    onClick={() => handleRefreshTimesheet()}
+                    disabled={refreshInFlight || !rangeStart || !rangeEnd}
+                    title="Пересчитать табель по текущему графику и пришедшим проходам"
+                  >
+                    <RefreshCw size={16} className={refreshInFlight ? 'ts-refresh-spinning' : undefined} />
+                    Обновить
+                  </button>
+                )}
                 {refreshState.phase !== 'idle' && (
                   <span
                     className={`ts-refresh-status${refreshState.phase === 'error' ? ' ts-refresh-status--error' : ''}`}
@@ -2115,7 +2130,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {activeGridDeptId && (viewMode === 'employees' || viewMode === 'objects') && (
+                {canEditTimesheet && activeGridDeptId && (viewMode === 'employees' || viewMode === 'objects') && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}

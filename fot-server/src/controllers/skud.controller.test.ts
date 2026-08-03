@@ -66,11 +66,20 @@ vi.mock('../services/skud-export.service.js', () => ({
 
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: vi.fn(async () => true),
+  getSelfHistoryLimitForUser: vi.fn(() => ({ minDate: null, message: '' })),
+  hasGlobalDepartmentReadScope: vi.fn(async () => false),
+  isSelfEmployeeRequest: vi.fn(() => false),
   resolveScopedDepartmentId: vi.fn(async () => null),
   resolveRequestDataScope: vi.fn(async () => 'all'),
   resolveManagedDepartmentIds: vi.fn(async () => []),
   resolveAccessibleEmployeeIds: vi.fn(async () => 'all'),
   hasObjectViewScope: vi.fn(async () => false),
+}));
+
+// Гейт employee-events / access-point-settings проверяет права страниц по фактическому
+// пути авторизации — мокаем resolveEffectivePageAccess per-page в каждом тесте.
+vi.mock('../services/access-control.service.js', () => ({
+  resolveEffectivePageAccess: vi.fn(async () => false),
 }));
 
 vi.mock('../services/employee-skud-object-access.service.js', () => ({
@@ -98,11 +107,14 @@ vi.mock('./skud-travel.controller.js', () => ({
 import { skudController } from './skud.controller.js';
 import { getDisciplineViolations } from '../services/skud-discipline.service.js';
 import {
+  canAccessEmployeeInScope,
+  hasGlobalDepartmentReadScope,
   resolveRequestDataScope,
   resolveManagedDepartmentIds,
   resolveAccessibleEmployeeIds,
   hasObjectViewScope,
 } from '../services/data-scope.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { resolveAccessibleObjectIdsForRequest } from '../services/employee-skud-object-access.service.js';
 import type { IPresenceByObjectResponse } from '../services/skud-presence-by-object.service.js';
 
@@ -394,5 +406,147 @@ describe('skudController.getPresenceByObject (object + employee union)', () => {
     expect(data.scope_mode).toBe('object');
     expect(data.buckets.every(b => !b.is_partial)).toBe(true);
     expect(data.buckets.find(b => b.object_id === 'obj-other')).toBeUndefined();
+  });
+});
+
+describe('skudController.getEmployeeEvents — гейт по фактическому пути авторизации', () => {
+  const mockPageAccess = vi.mocked(resolveEffectivePageAccess);
+  const mockScope = vi.mocked(canAccessEmployeeInScope);
+  const mockGlobalRead = vi.mocked(hasGlobalDepartmentReadScope);
+
+  // Окно месяцев роли: дефолт 1 назад / 1 вперёд — текущий месяц в окне, 2020 — вне.
+  const now = new Date();
+  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const inWindow = { startDate: `${ym}-01`, endDate: `${ym}-05` };
+  const outOfWindow = { startDate: '2020-01-01', endDate: '2020-01-05' };
+
+  function setPages(pages: Record<string, boolean>) {
+    mockPageAccess.mockImplementation(async (_req, pagePath) => pages[pagePath] === true);
+  }
+
+  function eventsReq(employeeId: number, dates: { startDate?: string; endDate?: string }) {
+    return makeReq({
+      params: { employeeId: String(employeeId) } as never,
+      query: { ...dates } as never,
+    });
+  }
+
+  beforeEach(() => {
+    pgQuery.mockReset().mockResolvedValue([]);
+    pgQueryOne.mockReset().mockResolvedValue(null);
+    mockPageAccess.mockReset().mockResolvedValue(false);
+    mockScope.mockReset().mockResolvedValue(false);
+    mockGlobalRead.mockReset().mockResolvedValue(false);
+  });
+
+  it('чужой сотрудник без прав страниц → 403', async () => {
+    mockScope.mockResolvedValue(true);
+    const res = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(999, inWindow), res);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('обход-кейс: флаг + /staff-control, но БЕЗ /timesheet/events, сотрудник вне scope → 403', async () => {
+    mockGlobalRead.mockResolvedValue(true);
+    mockScope.mockResolvedValue(false);
+    setPages({ '/staff-control': true, '/timesheet': true, '/timesheet/events': false });
+    const res = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(999, inWindow), res);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('флаг + /timesheet + /timesheet/events, сотрудник вне scope → 200 в окне месяцев', async () => {
+    mockGlobalRead.mockResolvedValue(true);
+    mockScope.mockResolvedValue(false);
+    setPages({ '/timesheet': true, '/timesheet/events': true });
+    const res = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(999, inWindow), res);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('флаг + /timesheet + /timesheet/events, но месяц вне окна роли → 403', async () => {
+    mockGlobalRead.mockResolvedValue(true);
+    mockScope.mockResolvedValue(false);
+    setPages({ '/timesheet': true, '/timesheet/events': true });
+    const res = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(999, outOfWindow), res);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('свой сотрудник через ОДНИ timesheet-права: вне окна → 403, в окне → 200', async () => {
+    mockScope.mockResolvedValue(true); // self всегда в scope
+    setPages({ '/employee': false, '/timesheet': true, '/timesheet/events': true });
+
+    const resOut = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(1, outOfWindow), resOut);
+    expect(resOut.statusCode).toBe(403);
+
+    const resIn = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(1, inWindow), resIn);
+    expect(resIn.statusCode).toBe(200);
+  });
+
+  it('сотрудник managed-отдела через одни timesheet-права: вне окна → 403, в окне → 200', async () => {
+    mockScope.mockResolvedValue(true);
+    setPages({ '/staff-control': false, '/timesheet': true, '/timesheet/events': true });
+
+    const resOut = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(999, outOfWindow), resOut);
+    expect(resOut.statusCode).toBe(403);
+
+    const resIn = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(999, inWindow), resIn);
+    expect(resIn.statusCode).toBe(200);
+  });
+
+  it('timesheet-ветка без валидных startDate/endDate → 400', async () => {
+    mockGlobalRead.mockResolvedValue(true);
+    setPages({ '/timesheet': true, '/timesheet/events': true });
+    const res = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(999, {}), res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('staff-control-путь с обычным scope: окно месяцев НЕ применяется (существующая семантика)', async () => {
+    mockScope.mockResolvedValue(true);
+    setPages({ '/staff-control': true });
+    const res = makeRes();
+    await skudController.getEmployeeEvents(eventsReq(999, outOfWindow), res);
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('skudController.getAccessPointSettings — timesheet-путь требует AND-права', () => {
+  const mockPageAccess = vi.mocked(resolveEffectivePageAccess);
+
+  function setPages(pages: Record<string, boolean>) {
+    mockPageAccess.mockImplementation(async (_req, pagePath) => pages[pagePath] === true);
+  }
+
+  beforeEach(() => {
+    pgQuery.mockReset().mockResolvedValue([]);
+    mockPageAccess.mockReset().mockResolvedValue(false);
+  });
+
+  it('легаси-путь /employee работает как раньше → 200', async () => {
+    setPages({ '/employee': true });
+    const res = makeRes();
+    await skudController.getAccessPointSettings(makeReq(), res);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('/timesheet БЕЗ /timesheet/events → 403 (новый путь)', async () => {
+    setPages({ '/timesheet': true, '/timesheet/events': false });
+    const res = makeRes();
+    await skudController.getAccessPointSettings(makeReq(), res);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('/timesheet + /timesheet/events → 200 (агрегированный список)', async () => {
+    setPages({ '/timesheet': true, '/timesheet/events': true });
+    const res = makeRes();
+    await skudController.getAccessPointSettings(makeReq(), res);
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { success: boolean }).success).toBe(true);
   });
 });
