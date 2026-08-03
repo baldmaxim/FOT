@@ -103,6 +103,7 @@ export const SubscribersTab: FC = () => {
   const [departmentId, setDepartmentId] = useState('');
   const [onlyUnlinked, setOnlyUnlinked] = useState(false);
   const [onlyForwarded, setOnlyForwarded] = useState(false);
+  const [onlyDuplicates, setOnlyDuplicates] = useState(false);
   const [pageSize, setPageSize] = useState(50);
   // Страница хранится вместе с «подписью» фильтров: смена любого фильтра
   // (в т.ч. размера страницы) возвращает на первую страницу без setState-в-эффекте.
@@ -151,6 +152,15 @@ export const SubscribersTab: FC = () => {
       .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   }, [rows]);
 
+  // Сотрудники, привязанные к 2+ номерам — для фильтра «дубли».
+  const dupEmployeeIds = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const r of rows) {
+      if (r.employeeId != null) counts.set(r.employeeId, (counts.get(r.employeeId) ?? 0) + 1);
+    }
+    return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id));
+  }, [rows]);
+
   const filtered = useMemo(() => {
     const q = norm(search);
     return rows.filter(r => {
@@ -159,6 +169,7 @@ export const SubscribersTab: FC = () => {
       if (departmentId && departmentId !== NO_DEPT && r.departmentId !== departmentId) return false;
       if (onlyUnlinked && r.employeeId != null) return false;
       if (onlyForwarded && r.forwardingType == null) return false;
+      if (onlyDuplicates && (r.employeeId == null || !dupEmployeeIds.has(r.employeeId))) return false;
       if (!q) return true;
       const hay = norm([
         r.msisdn, r.mtsFio, r.mtsComment, r.employeeFullName, r.employeeTabNumber,
@@ -166,9 +177,9 @@ export const SubscribersTab: FC = () => {
       ].filter(Boolean).join(' '));
       return hay.includes(q);
     });
-  }, [rows, search, accountId, departmentId, onlyUnlinked, onlyForwarded]);
+  }, [rows, search, accountId, departmentId, onlyUnlinked, onlyForwarded, onlyDuplicates, dupEmployeeIds]);
 
-  const filtersKey = `${search}|${accountId}|${departmentId}|${onlyUnlinked}|${onlyForwarded}|${pageSize}`;
+  const filtersKey = `${search}|${accountId}|${departmentId}|${onlyUnlinked}|${onlyForwarded}|${onlyDuplicates}|${pageSize}`;
   const page = pageState.key === filtersKey ? pageState.page : 1;
   const setPage = (p: number): void => setPageState({ key: filtersKey, page: p });
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -282,26 +293,34 @@ export const SubscribersTab: FC = () => {
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
-        <select className={st.select} value={accountId} onChange={e => setAccountId(e.target.value)}>
+        <select className={`${st.select} ${st.selectAccount}`} value={accountId} onChange={e => setAccountId(e.target.value)}>
           <option value="">Все ЛС</option>
           {(accounts.data ?? []).map(a => (
             <option key={a.id} value={a.id}>{a.label}{a.accountNumber ? ` (${a.accountNumber})` : ''}</option>
           ))}
         </select>
-        <select className={st.select} value={departmentId} onChange={e => setDepartmentId(e.target.value)}>
+        <select className={`${st.select} ${st.selectDept}`} value={departmentId} onChange={e => setDepartmentId(e.target.value)}>
           <option value="">Все отделы</option>
           <option value={NO_DEPT}>Без отдела / не привязан</option>
           {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
-        <label className={st.checkLabel}>
+        <label className={st.checkLabel} title="Показать только номера без привязки к сотруднику">
           <input type="checkbox" checked={onlyUnlinked} onChange={e => setOnlyUnlinked(e.target.checked)} />
-          только непривязанные
+          непривязанные
         </label>
-        <label className={st.checkLabel}>
+        <label className={st.checkLabel} title="Показать только номера с активной переадресацией">
           <input type="checkbox" checked={onlyForwarded} onChange={e => setOnlyForwarded(e.target.checked)} />
-          только с переадресацией
+          с переадресацией
         </label>
-        <button className={styles.btnSecondary} onClick={() => { void onAutoLink(); }} disabled={autoLink.isPending}>
+        <label className={st.checkLabel} title="Сотрудники, привязанные к двум и более номерам">
+          <input type="checkbox" checked={onlyDuplicates} onChange={e => setOnlyDuplicates(e.target.checked)} />
+          дубли
+        </label>
+        <button
+          className={`${styles.btnSecondary} ${st.autoLinkBtn}`}
+          onClick={() => { void onAutoLink(); }}
+          disabled={autoLink.isPending}
+        >
           Автосвязать по ФИО
         </button>
 
