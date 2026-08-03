@@ -68,7 +68,7 @@ vi.mock('../services/recipients.service.js', () => ({
   getUserIdsByEmployeeIds: vi.fn().mockResolvedValue([]),
 }));
 
-import { cancelDismissal, fire } from './employee-lifecycle.controller.js';
+import { applyDismissalImmediately, cancelDismissal, fire } from './employee-lifecycle.controller.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const makeRes = () => {
@@ -99,10 +99,19 @@ const ACTIVE_EMPLOYEE = {
   dismissal_date: null,
 };
 
-/** queryOne: сначала SELECT сотрудника, дальше — по тексту запроса. */
-const routeQueryOne = (updated: Record<string, unknown> | null = { ...ACTIVE_EMPLOYEE }) => {
+const CLAIMED_AT = '2026-05-20 20:00:05.123+00';
+
+const isClaimSql = (sql: string): boolean =>
+  /UPDATE employees/i.test(sql) && sql.includes('dismissal_apply_started_at = now()');
+
+/** queryOne: SELECT сотрудника, CAS-claim увольнения, дальше — по тексту запроса. */
+const routeQueryOne = (
+  updated: Record<string, unknown> | null = { ...ACTIVE_EMPLOYEE },
+  claimResult: { claimed_at: string } | null = { claimed_at: CLAIMED_AT },
+) => {
   h.queryOne.mockImplementation(async (sql: string) => {
     if (sql.trim().startsWith('SELECT')) return { ...ACTIVE_EMPLOYEE };
+    if (isClaimSql(sql)) return claimResult;
     return updated;
   });
 };
@@ -170,6 +179,80 @@ describe('fire — порог 23:00 МСК', () => {
     // По UTC это «завтра», по МСК — «сегодня до 23:00»: в обоих случаях откладываем,
     // но применяться должно с 23:00 МСК 20-го, а не 19-го.
     expect(h.blockEmployee).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyDismissalImmediately — CAS-claim увольнения', () => {
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.isConfigured.mockResolvedValue(true);
+    h.ensureArchiveSigur.mockResolvedValue({ sigurDepartmentId: 9, localDepartmentId: 'arch-1' });
+    h.ensureLocalArchive.mockResolvedValue({ id: 'arch-1' });
+    h.changeDepartment.mockResolvedValue('applied');
+    h.execute.mockResolvedValue(undefined);
+    routeQueryOne();
+  });
+
+  const callApply = (overrides: Record<string, unknown> = {}) =>
+    applyDismissalImmediately({
+      employeeId: 77,
+      existing: { ...ACTIVE_EMPLOYEE } as never,
+      dismissalDate: '2026-05-20',
+      userId: 'admin-1',
+      ...overrides,
+    });
+
+  it('ручной вызов: claim и dismissal_date пишутся одним UPDATE через CAS', async () => {
+    await callApply();
+
+    const claimCall = h.queryOne.mock.calls.find(c => isClaimSql(String(c[0])));
+    expect(claimCall).toBeTruthy();
+    const sql = String(claimCall![0]);
+    // Атомарно: маркер + дата в одном UPDATE (падение между Sigur и локальной
+    // записью не оставит сотрудника active без dismissal_date).
+    expect(sql).toContain('dismissal_apply_started_at = now()');
+    expect(sql).toContain('dismissal_date = $2');
+    // CAS: чужой свежий claim не перезаписывается.
+    expect(sql).toContain('dismissal_apply_started_at IS NULL');
+    expect(sql).toMatch(/dismissal_apply_started_at < now\(\)/);
+    expect(claimCall![1]).toEqual([77, '2026-05-20', '30']);
+  });
+
+  it('claim не захвачен (чужой активный) → 409, Sigur не трогается', async () => {
+    routeQueryOne({ ...ACTIVE_EMPLOYEE }, null);
+
+    await expect(callApply()).rejects.toMatchObject({ status: 409 });
+    expect(h.updateSigurEmployee).not.toHaveBeenCalled();
+    expect(h.blockEmployee).not.toHaveBeenCalled();
+  });
+
+  it('планировщик передал claimedAt → метод НЕ перезахватывает claim (нет ложного 409)', async () => {
+    routeQueryOne({ ...ACTIVE_EMPLOYEE }, null); // CAS вернул бы конфликт, но он не должен вызываться
+
+    await expect(callApply({ claimedAt: CLAIMED_AT })).resolves.toBeTruthy();
+    const claimCall = h.queryOne.mock.calls.find(c => isClaimSql(String(c[0])));
+    expect(claimCall).toBeUndefined();
+  });
+
+  it('полная ошибка Sigur (перенос не выполнен) → снимает СВОЙ claim и восстанавливает прежний dismissal_date', async () => {
+    h.updateSigurEmployee.mockRejectedValue(new Error('sigur down'));
+
+    await expect(callApply()).rejects.toMatchObject({ code: 'SIGUR_WRITE_FAILED' });
+
+    const release = h.execute.mock.calls.find(c => String(c[0]).includes('dismissal_apply_started_at = NULL'));
+    expect(release).toBeTruthy();
+    // Освобождение только собственного claim по точному timestamp + возврат прежней даты (null).
+    expect(String(release![0])).toContain('dismissal_apply_started_at = $2::timestamptz');
+    expect(release![1]).toEqual([77, CLAIMED_AT, null]);
+  });
+
+  it('частичная ошибка Sigur (перенесён, но не заблокирован) → claim НЕ снимается (повтор после lease)', async () => {
+    h.blockEmployee.mockRejectedValue(new Error('block failed'));
+
+    await expect(callApply()).rejects.toMatchObject({ code: 'SIGUR_PARTIAL_FAILURE' });
+
+    const release = h.execute.mock.calls.find(c => String(c[0]).includes('dismissal_apply_started_at = NULL'));
+    expect(release).toBeUndefined();
   });
 });
 

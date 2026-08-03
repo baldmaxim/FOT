@@ -31,7 +31,17 @@ interface ChangeOpts {
    * (реальный отдел → «Уволенные» → восстановление) не должна теряться.
    */
   forceHistory?: boolean;
+  /**
+   * Атомарный гард от дублей: если у сотрудника уже есть назначение в целевой отдел,
+   * действующее на дату перевода или начинающееся позже, — вернуть 'skipped' и ничего
+   * не менять. Проверка выполняется внутри транзакции ПОСЛЕ SELECT ... FOR UPDATE
+   * строки сотрудника, поэтому закрывает гонку «увольнение ↔ Sigur-синк» (дубль
+   * «Уволенные [D..D]» рядом с «[D+1..∞]» от увольнения).
+   */
+  skipIfScheduledToTarget?: boolean;
 }
+
+export type TChangeDepartmentResult = 'applied' | 'skipped';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -385,7 +395,7 @@ export const employeeChangesService = {
   /**
    * Изменение отдела → закрыть текущий assignment + новый assignment + employees.org_department_id
    */
-  async changeDepartment(employeeId: number, departmentId: string, opts: ChangeOpts & { lockDepartment?: boolean } = {}): Promise<void> {
+  async changeDepartment(employeeId: number, departmentId: string, opts: ChangeOpts & { lockDepartment?: boolean } = {}): Promise<TChangeDepartmentResult> {
     const { freezeHistory } = await settingsService.getEmployeeTransferConfig();
     const effectiveFreeze = freezeHistory && !opts.forceHistory;
 
@@ -416,12 +426,12 @@ export const employeeChangesService = {
       });
 
       employeeCache.invalidate(employeeId);
-      return;
+      return 'applied';
     }
 
     const date = opts.effectiveDate || today();
 
-    await withTransaction(async (client) => {
+    const txResult = await withTransaction<TChangeDepartmentResult>(async (client) => {
       // FOR UPDATE: сериализуем параллельные переводы одного сотрудника — второй ждёт
       // коммита первого, поэтому getEmployeeAssignments ниже читает уже согласованную историю.
       const empRes = await client.query<{ position_id: string | null; org_department_id: string | null; hire_date: string | null }>(
@@ -429,6 +439,26 @@ export const employeeChangesService = {
         [employeeId],
       );
       const emp = empRes.rows[0] ?? null;
+
+      if (opts.skipIfScheduledToTarget) {
+        // Чтение тем же транзакционным client (не общий getEmployeeAssignments —
+        // тот может уйти в другой connection пула и проверка потеряет атомарность).
+        const scheduledRes = await client.query<{ id: string }>(
+          `SELECT id
+             FROM employee_assignments
+            WHERE employee_id = $1
+              AND org_department_id = $2
+              AND (effective_to IS NULL OR effective_to >= $3)
+            LIMIT 1`,
+          [employeeId, departmentId, date],
+        );
+        if ((scheduledRes.rows?.length ?? 0) > 0) {
+          console.log(
+            `[changeDepartment] skipped: назначение в целевой отдел уже существует (employee=${employeeId}, dept=${departmentId}, date=${date})`,
+          );
+          return 'skipped';
+        }
+      }
 
       const assignments = await getEmployeeAssignments(employeeId);
       const previousDay = formatDateShift(date, -1);
@@ -618,9 +648,11 @@ export const employeeChangesService = {
       );
 
       await syncEmployeeAssignmentSnapshotTx(client, employeeId);
+      return 'applied';
     });
 
     employeeCache.invalidate(employeeId);
+    return txResult;
   },
 
   /**

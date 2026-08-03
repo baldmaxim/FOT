@@ -97,7 +97,7 @@ describe('employee-changes.service.changeDepartment — overlap regression', () 
         createdBy: 'user-1',
         effectiveDate: '2026-05-13',
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe('applied');
 
     const updates = fake.queries.filter(q => /UPDATE employee_assignments/i.test(q.sql));
     const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
@@ -692,5 +692,113 @@ describe('employee-changes.service.changeDepartment — snapshot-only: синт�
     const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
     const synth = inserts.find(q => (q.params || []).includes(SYNTH_REASON));
     expect(synth).toBeFalsy();
+  });
+});
+
+describe('employee-changes.service.changeDepartment — атомарный гард skipIfScheduledToTarget', () => {
+  beforeEach(() => {
+    pgQuery.mockReset();
+    pgQueryOne.mockReset();
+    pgExecute.mockReset();
+    pgTx.mockReset();
+    mockGetEmployeeAssignments.mockReset();
+    mockGetTransferConfig.mockReset();
+  });
+
+  const GUARD_SQL = /SELECT id\s+FROM employee_assignments\s+WHERE employee_id = \$1\s+AND org_department_id = \$2/i;
+
+  it('назначение в целевой отдел уже существует → skipped, история и снапшот не тронуты', async () => {
+    // Гонка «увольнение ↔ Sigur-синк»: увольнение уже создало «Уволенные [D+1..∞]»,
+    // параллельный вызов синка не должен резать реальный отдел и плодить дубль [D..D].
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-real', effective_from: '2024-01-01', effective_to: '2026-07-31' },
+      { id: 'a-archive', effective_from: '2026-08-01', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'brigade', hire_date: '2020-01-01' }] };
+      }
+      if (GUARD_SQL.test(sql)) {
+        return { rows: [{ id: 'a-archive' }] };
+      }
+      return { rows: [] };
+    });
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await expect(
+      employeeChangesService.changeDepartment(1623, 'archive-dept', {
+        reason: 'Увольнение — перевод в папку "Уволенные"',
+        effectiveDate: '2026-07-31',
+        forceHistory: true,
+        skipIfScheduledToTarget: true,
+      }),
+    ).resolves.toBe('skipped');
+
+    // Проверка гарда ушла через client ТРАНЗАКЦИИ (после FOR UPDATE), с датой перевода.
+    const guardCall = fake.queries.find(q => GUARD_SQL.test(q.sql));
+    expect(guardCall).toBeTruthy();
+    expect(guardCall?.params).toEqual([1623, 'archive-dept', '2026-07-31']);
+    const forUpdateIdx = fake.queries.findIndex(q => /FOR UPDATE/i.test(q.sql));
+    const guardIdx = fake.queries.findIndex(q => GUARD_SQL.test(q.sql));
+    expect(forUpdateIdx).toBeGreaterThanOrEqual(0);
+    expect(guardIdx).toBeGreaterThan(forUpdateIdx);
+
+    // Никаких изменений истории и снапшота.
+    const mutations = fake.queries.filter(q =>
+      /INSERT INTO employee_assignments|UPDATE employee_assignments|UPDATE employees\s+SET/i.test(q.sql));
+    expect(mutations).toHaveLength(0);
+  });
+
+  it('назначений в целевой отдел нет → applied, обычный перевод выполняется', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2024-01-01', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'old-dept', hire_date: '2020-01-01' }] };
+      }
+      if (GUARD_SQL.test(sql)) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await expect(
+      employeeChangesService.changeDepartment(1623, 'new-dept', {
+        effectiveDate: '2026-07-31',
+        skipIfScheduledToTarget: true,
+      }),
+    ).resolves.toBe('applied');
+
+    const inserts = fake.queries.filter(q => /INSERT INTO employee_assignments/i.test(q.sql));
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].params?.[1]).toBe('new-dept');
+  });
+
+  it('без опции гард не выполняется (поведение по умолчанию не меняется)', async () => {
+    mockGetTransferConfig.mockResolvedValue({ freezeHistory: false });
+    mockGetEmployeeAssignments.mockResolvedValue([
+      { id: 'a-1', effective_from: '2024-01-01', effective_to: null },
+    ]);
+
+    const fake = createFakeClient((sql) => {
+      if (/SELECT position_id, org_department_id.* FROM employees/i.test(sql)) {
+        return { rows: [{ position_id: null, org_department_id: 'old-dept', hire_date: '2020-01-01' }] };
+      }
+      return { rows: [] };
+    });
+    pgTx.mockImplementation(async (fn: (client: typeof fake) => Promise<unknown>) => fn(fake));
+
+    await expect(
+      employeeChangesService.changeDepartment(1623, 'new-dept', { effectiveDate: '2026-07-31' }),
+    ).resolves.toBe('applied');
+
+    const guardCall = fake.queries.find(q => GUARD_SQL.test(q.sql));
+    expect(guardCall).toBeFalsy();
   });
 });

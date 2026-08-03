@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { evaluateAutoFireSafety, isAncestorDepartment } from './sigur-sync-employees.service.js';
+import {
+  cleanUpdateFieldsForAction,
+  decideDeptSyncAction,
+  evaluateAutoFireSafety,
+  isAncestorDepartment,
+  type IDeptSyncFreshState,
+} from './sigur-sync-employees.service.js';
 
 describe('evaluateAutoFireSafety', () => {
   it('пропускает обычный fire ниже лимита', () => {
@@ -106,5 +112,159 @@ describe('isAncestorDepartment (guard B′: защита от подъёма к 
   it('цикл в parent_id не зацикливает обход', () => {
     const cyclic = new Map<string, string | null>([['a', 'b'], ['b', 'a']]);
     expect(isAncestorDepartment('x', 'a', cyclic)).toBe(false);
+  });
+});
+
+// ─── Гонка «увольнение ↔ синк» (кейс Сафарова 1623, 31.07.2026) ───
+
+const ARCHIVE = 'archive-dept';
+const BRIGADE = 'brigade-dept';
+const TODAY = '2026-07-31';
+const TOMORROW = '2026-08-01';
+
+const freshState = (over: Partial<IDeptSyncFreshState> = {}): IDeptSyncFreshState => ({
+  org_department_id: BRIGADE,
+  employment_status: 'active',
+  dismissal_date: null,
+  dismissal_apply_started_at: null,
+  target_assignments: [],
+  ...over,
+});
+
+describe('decideDeptSyncAction — решение по смене отдела на фазе сохранения', () => {
+  it('гонка-эталон: увольнение применено (fired + claim + назначение D+1) → skip-local-dismissal', () => {
+    const fresh = freshState({
+      org_department_id: BRIGADE, // stale-снапшот здесь не важен — важны маркеры
+      employment_status: 'fired',
+      dismissal_date: TODAY,
+      dismissal_apply_started_at: '2026-07-31 20:02:47+00',
+      target_assignments: [{ effective_from: TOMORROW, effective_to: null }],
+    });
+    expect(decideDeptSyncAction(fresh, ARCHIVE, true, TODAY)).toBe('skip-local-dismissal');
+  });
+
+  it('Sigur перемещён, назначения D+1 ещё нет, но claim установлен (ручное увольнение в окне) → skip', () => {
+    const fresh = freshState({ dismissal_apply_started_at: '2026-07-31 20:02:47+00' });
+    expect(decideDeptSyncAction(fresh, ARCHIVE, true, TODAY)).toBe('skip-local-dismissal');
+  });
+
+  it('активная заявка с будущим dismissal_date → синк не увольняет немедленно', () => {
+    const fresh = freshState({ dismissal_date: '2026-08-15' });
+    expect(decideDeptSyncAction(fresh, ARCHIVE, true, TODAY)).toBe('skip-local-dismissal');
+  });
+
+  it('активный с ПРОСРОЧЕННЫМ dismissal_date < today → skip (владелец — scheduler, дата не подменяется)', () => {
+    const fresh = freshState({ dismissal_date: '2026-07-25' });
+    expect(decideDeptSyncAction(fresh, ARCHIVE, true, TODAY)).toBe('skip-local-dismissal');
+  });
+
+  it('только будущее назначение в архив (без заявки и claim) → skip-local-dismissal', () => {
+    const fresh = freshState({
+      target_assignments: [{ effective_from: TOMORROW, effective_to: null }],
+    });
+    expect(decideDeptSyncAction(fresh, ARCHIVE, true, TODAY)).toBe('skip-local-dismissal');
+  });
+
+  it('archiveLocalDeptId неважен: увольнение распознаётся по флагу isDismissalDept', () => {
+    // Раньше кейс Сафарова уходил в «обычную» ветку из-за несовпавшего локального
+    // маппинга архива. Решение обязано опираться на Sigur department ID.
+    const fresh = freshState({ dismissal_date: TODAY });
+    expect(decideDeptSyncAction(fresh, 'какой-то-локальный-uuid', true, TODAY)).toBe('skip-local-dismissal');
+  });
+
+  it('возврат из архива при старом (не очищенном) claim → НЕ блокируется', () => {
+    const fresh = freshState({
+      org_department_id: ARCHIVE,
+      employment_status: 'fired',
+      dismissal_date: '2026-06-01',
+      dismissal_apply_started_at: '2026-06-01 20:02:00+00',
+    });
+    expect(decideDeptSyncAction(fresh, BRIGADE, false, TODAY)).toBe('apply');
+  });
+
+  it('обычный перевод (не архив) сотрудника с будущим увольнением → НЕ блокируется', () => {
+    const fresh = freshState({ dismissal_date: '2026-08-15' });
+    expect(decideDeptSyncAction(fresh, 'other-dept', false, TODAY)).toBe('apply');
+  });
+
+  it('внешний перенос в архив без локального увольнения → apply (старое поведение)', () => {
+    const fresh = freshState();
+    expect(decideDeptSyncAction(fresh, ARCHIVE, true, TODAY)).toBe('apply');
+  });
+
+  it('снапшот уже в целевом отделе → noop', () => {
+    const fresh = freshState({ org_department_id: 'target' });
+    expect(decideDeptSyncAction(fresh, 'target', false, TODAY)).toBe('noop');
+  });
+
+  it('назначение в целевой отдел активно сегодня → snapshot-only', () => {
+    const fresh = freshState({
+      target_assignments: [{ effective_from: TODAY, effective_to: null }],
+    });
+    expect(decideDeptSyncAction(fresh, 'target', false, TODAY)).toBe('snapshot-only');
+  });
+
+  it('назначение в целевой отдел с завтра / через месяц → defer', () => {
+    const tomorrow = freshState({ target_assignments: [{ effective_from: TOMORROW, effective_to: null }] });
+    expect(decideDeptSyncAction(tomorrow, 'target', false, TODAY)).toBe('defer');
+
+    const nextMonth = freshState({ target_assignments: [{ effective_from: '2026-08-31', effective_to: null }] });
+    expect(decideDeptSyncAction(nextMonth, 'target', false, TODAY)).toBe('defer');
+  });
+});
+
+describe('cleanUpdateFieldsForAction — очистка авто-полей по принятому решению', () => {
+  const autoFields = () => ({
+    employment_status: 'fired',
+    dismissal_date: TODAY,
+    excluded_from_timesheet: true,
+    excluded_from_timesheet_date: TOMORROW,
+    org_department_id: ARCHIVE,
+    full_name: 'Иванов Иван',
+    tab_number: '123',
+  });
+
+  it('skip-local-dismissal: снимает авто-поля увольнения и org_department_id, несвязанные — остаются', () => {
+    const fields = autoFields();
+    cleanUpdateFieldsForAction(fields, 'skip-local-dismissal', true, 'fired');
+    expect(fields).toEqual({ full_name: 'Иванов Иван', tab_number: '123' });
+  });
+
+  it('defer: активный сотрудник НЕ помечается уволенным без изменения истории', () => {
+    const fields = autoFields();
+    cleanUpdateFieldsForAction(fields, 'defer', true, 'active');
+    expect(fields).toEqual({ full_name: 'Иванов Иван', tab_number: '123' });
+  });
+
+  it('snapshot-only: из полей перехода остаётся только org_department_id, ФИО/таб.номер не трогаются', () => {
+    const fields = autoFields();
+    cleanUpdateFieldsForAction(fields, 'snapshot-only', true, 'fired');
+    expect(fields).toEqual({
+      org_department_id: ARCHIVE,
+      full_name: 'Иванов Иван',
+      tab_number: '123',
+    });
+  });
+
+  it('apply при fresh=active: авто-поля увольнения сохраняются (настоящее внешнее увольнение)', () => {
+    const fields = autoFields();
+    cleanUpdateFieldsForAction(fields, 'apply', true, 'active');
+    expect(fields.employment_status).toBe('fired');
+    expect(fields.dismissal_date).toBe(TODAY);
+    // org_department_id снят: историю и снапшот пишет changeDepartment.
+    expect(fields.org_department_id).toBeUndefined();
+  });
+
+  it('apply при fresh=fired: авто-поля сняты — чужой dismissal_date не затирается сегодняшним', () => {
+    const fields = autoFields();
+    cleanUpdateFieldsForAction(fields, 'apply', true, 'fired');
+    expect(fields.employment_status).toBeUndefined();
+    expect(fields.dismissal_date).toBeUndefined();
+  });
+
+  it('не-архивный перевод: авто-поля увольнения не трогаются (их и не бывает), org снимается при skip', () => {
+    const fields: Record<string, unknown> = { org_department_id: 'other-dept', tab_number: '5' };
+    cleanUpdateFieldsForAction(fields, 'defer', false, 'active');
+    expect(fields).toEqual({ tab_number: '5' });
   });
 });

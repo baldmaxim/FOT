@@ -88,6 +88,8 @@ async function applyForEmployee(employeeId: number, claimedAt: string): Promise<
       existing,
       dismissalDate,
       userId: null,
+      // Claim уже захвачен claimNextDueEmployee — метод не должен перезахватывать его (ложный 409).
+      claimedAt,
     });
     employeeCache.invalidate(employeeId);
 

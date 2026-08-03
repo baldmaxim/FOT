@@ -180,10 +180,72 @@ export async function insertDismissalHistory(
   );
 }
 
+/** Просроченный claim перезахватывается (процесс упал между claim и применением). */
+export const DISMISSAL_CLAIM_LEASE_MINUTES = 30;
+
+/**
+ * CAS-захват claim'а немедленного увольнения: атомарно одним UPDATE ставит
+ * `dismissal_apply_started_at` (маркер «увольнение в работе» для Sigur-синка)
+ * И `dismissal_date` — если процесс упадёт после переноса в Sigur, но до локального
+ * увольнения, сотрудник не останется «active без dismissal_date» и планировщик
+ * подхватит операцию после истечения lease. Чужой свежий claim не перезаписывается.
+ *
+ * @returns точный timestamp claim'а (token для releaseOwnDismissalClaim) или null,
+ *          если claim уже удерживается другим процессом (конфликт → 409 у вызывающего).
+ */
+export async function acquireDismissalClaim(
+  employeeId: number,
+  dismissalDate: string,
+): Promise<string | null> {
+  const row = await queryOne<{ claimed_at: string }>(
+    `UPDATE employees
+        SET dismissal_apply_started_at = now(),
+            dismissal_date = $2
+      WHERE id = $1
+        AND employment_status = 'active'
+        AND (dismissal_apply_started_at IS NULL
+             OR dismissal_apply_started_at < now() - ($3 || ' minutes')::interval)
+      RETURNING dismissal_apply_started_at::text AS claimed_at`,
+    [employeeId, dismissalDate, String(DISMISSAL_CLAIM_LEASE_MINUTES)],
+  );
+  return row?.claimed_at ?? null;
+}
+
+/**
+ * Освобождает ТОЛЬКО собственный claim (по точному timestamp) и восстанавливает
+ * прежний dismissal_date. Используется исключительно когда внешние системы (Sigur)
+ * не были изменены — иначе claim намеренно остаётся до истечения lease, чтобы
+ * планировщик повторил операцию.
+ */
+async function releaseOwnDismissalClaim(
+  employeeId: number,
+  claimedAt: string,
+  restoreDismissalDate: string | null,
+): Promise<void> {
+  try {
+    await execute(
+      `UPDATE employees
+          SET dismissal_apply_started_at = NULL,
+              dismissal_date = $3
+        WHERE id = $1
+          AND employment_status = 'active'
+          AND dismissal_apply_started_at = $2::timestamptz`,
+      [employeeId, claimedAt, restoreDismissalDate],
+    );
+  } catch (releaseError) {
+    console.error(`[dismissal] failed to release own claim for employee=${employeeId}:`, releaseError);
+  }
+}
+
 /**
  * Применяет полное увольнение немедленно: Sigur block + перевод в архивный отдел,
  * закрытие assignments, флаги в employees. Используется как ветка fire(),
  * так и dismissal-scheduler-ом для срабатывания отложенного увольнения.
+ *
+ * Claim: планировщик передаёт уже захваченный `claimedAt` — метод НЕ пытается
+ * перезахватить его (иначе ложный 409). Ручные вызовы (fire, contractor-admin)
+ * `claimedAt` не передают — метод сам берёт claim через CAS до первого обращения
+ * к Sigur; при конфликте бросает 409.
  *
  * Бросает HttpError (createHttpError) или DismissalSigurError при ошибке Sigur.
  */
@@ -193,17 +255,38 @@ export async function applyDismissalImmediately(args: {
   dismissalDate: string;
   userId: string | null;
   connection?: 'external' | 'internal';
+  /** Уже захваченный claim (планировщик). Без него метод захватывает claim сам. */
+  claimedAt?: string | null;
 }): Promise<{ employee: EmployeeEncrypted; fromDepartmentId: string | null }> {
   const { employeeId, existing, dismissalDate, userId, connection } = args;
+
+  // Claim ДО удалённых действий: с этого момента Sigur-синк видит маркер
+  // «увольнением владеет lifecycle» и не оформляет перенос своей датой.
+  const prevDismissalDate = existing.dismissal_date ?? null;
+  let ownClaim: string | null = null;
+  if (!args.claimedAt) {
+    ownClaim = await acquireDismissalClaim(employeeId, dismissalDate);
+    if (!ownClaim) {
+      throw createHttpError(409, 'Увольнение сотрудника уже применяется другим процессом — повторите позже');
+    }
+  }
 
   let targetDepartmentId = existing.org_department_id || null;
 
   if (existing.sigur_employee_id) {
     if (!(await sigurService.isConfigured())) {
+      if (ownClaim) await releaseOwnDismissalClaim(employeeId, ownClaim, prevDismissalDate);
       throw createHttpError(503, 'Sigur не настроен');
     }
 
-    const archive = await ensureArchiveSigurDepartment(userId, connection);
+    let archive: Awaited<ReturnType<typeof ensureArchiveSigurDepartment>>;
+    try {
+      archive = await ensureArchiveSigurDepartment(userId, connection);
+    } catch (archiveError) {
+      // Sigur ещё не изменён — безопасно вернуть всё как было.
+      if (ownClaim) await releaseOwnDismissalClaim(employeeId, ownClaim, prevDismissalDate);
+      throw archiveError;
+    }
     let movedToArchive = false;
     let blocked = false;
 
@@ -216,6 +299,14 @@ export async function applyDismissalImmediately(args: {
       await sigurService.blockEmployee(existing.sigur_employee_id, connection);
       blocked = true;
     } catch (error) {
+      if (!movedToArchive && ownClaim) {
+        // Sigur не изменён — операция не начиналась, снимаем СВОЙ claim и
+        // возвращаем прежний dismissal_date (иначе неудавшееся немедленное
+        // увольнение превратилось бы в отложенное).
+        await releaseOwnDismissalClaim(employeeId, ownClaim, prevDismissalDate);
+      }
+      // При частичной ошибке (movedToArchive=true) claim НЕ снимаем: после
+      // истечения lease планировщик повторит применение увольнения.
       throw new DismissalSigurError(
         movedToArchive
           ? 'Сотрудник уже перемещён в архивный отдел Sigur, но блокировка не выполнена. Локальный статус не изменён.'

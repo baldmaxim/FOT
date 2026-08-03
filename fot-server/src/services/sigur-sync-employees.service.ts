@@ -9,6 +9,8 @@ import {
   type ISyncContext,
 } from './sigur-sync-shared.js';
 import { employeeChangesService } from './employee-changes.service.js';
+import { formatDateShift } from './timesheet-department-assignments.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { employeeCache } from './employee-cache.service.js';
 import { assignEmployeesToArchiveDepartment } from './employee-archive-department.service.js';
 import { invalidatePresencePollingEmployeeCache } from './presence-polling-cache.service.js';
@@ -36,6 +38,101 @@ export function isAncestorDepartment(
     cursor = parentById.get(cursor) ?? null;
   }
   return false;
+}
+
+// ─── Решение по смене отдела на фазе сохранения (защита от гонки с увольнением) ───
+
+export type TDeptSyncAction = 'apply' | 'noop' | 'snapshot-only' | 'defer' | 'skip-local-dismissal';
+
+export interface IDeptSyncFreshState {
+  org_department_id: string | null;
+  employment_status: string;
+  dismissal_date: string | null;
+  dismissal_apply_started_at: string | null;
+  /** Назначения сотрудника в ЦЕЛЕВОЙ отдел, ещё актуальные (effective_to IS NULL или >= today). */
+  target_assignments: Array<{ effective_from: string; effective_to: string | null }>;
+}
+
+/**
+ * Чистая функция решения: что делать с обнаруженным расхождением отдела.
+ *
+ * Гонка «увольнение ↔ синк» (кейс Сафарова 1623, 31.07.2026): in-memory снимок
+ * `dbEmpById` грузится в начале долгого прогона и устаревает — увольнение,
+ * применённое планировщиком в 23:00+, синк принимал за неучтённый перенос и
+ * оформлял его «сегодняшним днём»: резал реальный отдел до D-1 и вставлял дубль
+ * «Уволенные [D..D]» рядом с правильным «[D+1..∞]» от увольнения. Решение
+ * принимается по СВЕЖИМ данным БД, прочитанным непосредственно перед записью.
+ *
+ * - `skip-local-dismissal` — только для перехода в архив (`isDismissalDept`),
+ *   когда увольнением владеет lifecycle/scheduler: активная заявка (`active` +
+ *   `dismissal_date` ЛЮБОЙ даты — просроченную после простоя сервера обязан
+ *   применить планировщик именно той датой), claim `dismissal_apply_started_at`
+ *   или уже созданное будущее назначение в архив. Гейт по целевому отделу
+ *   обязателен: claim не очищается после успешного увольнения, без гейта
+ *   блокировались бы возврат из архива и обычный перевод с будущим увольнением.
+ * - `noop` — снапшот уже в целевом отделе.
+ * - `snapshot-only` — назначение в целевой отдел уже активно сегодня, отстал только
+ *   снапшот `employees.org_department_id`: обновить его, историю не трогать.
+ * - `defer` — назначение в целевой отдел начинается в будущем: в этот тик ничего
+ *   не менять (когда оно вступит в силу, срезка станет `snapshot-only`).
+ * - `apply` — настоящий внешний перенос через Sigur, полное старое поведение.
+ */
+export function decideDeptSyncAction(
+  fresh: IDeptSyncFreshState,
+  nextDeptId: string,
+  isDismissalDept: boolean,
+  todayIso: string,
+): TDeptSyncAction {
+  if (isDismissalDept) {
+    const localDismissalPending = fresh.employment_status === 'active' && fresh.dismissal_date != null;
+    const claimed = fresh.dismissal_apply_started_at != null;
+    const archiveScheduled = fresh.target_assignments.some(a => a.effective_from > todayIso);
+    if (localDismissalPending || claimed || archiveScheduled) return 'skip-local-dismissal';
+  }
+  if (fresh.org_department_id === nextDeptId) return 'noop';
+  const activeToday = fresh.target_assignments.some(
+    a => a.effective_from <= todayIso && (a.effective_to == null || a.effective_to >= todayIso),
+  );
+  if (activeToday) return 'snapshot-only';
+  const scheduledFuture = fresh.target_assignments.some(a => a.effective_from > todayIso);
+  if (scheduledFuture) return 'defer';
+  return 'apply';
+}
+
+/** Авто-поля увольнения, проставляемые на этапе подготовки update по stale-снимку. */
+const DISMISSAL_AUTO_FIELDS = [
+  'employment_status',
+  'dismissal_date',
+  'excluded_from_timesheet',
+  'excluded_from_timesheet_date',
+] as const;
+
+/**
+ * Чистит `u.fields` по принятому решению (мутирует объект).
+ *
+ * - Авто-поля увольнения снимаются для ЛЮБОГО не-apply перехода в архив (иначе
+ *   `defer` не менял бы историю, но всё равно пометил бы активного сотрудника
+ *   уволенным сегодняшней датой), а также когда fresh-статус уже не `active`
+ *   (увольнение применено — его dismissal_date авторитетен, не затирать).
+ * - `org_department_id` остаётся только при `snapshot-only` (прямой UPDATE ниже
+ *   подтянет отставший снапшот); при `apply` историю и снапшот пишет
+ *   changeDepartment, при остальных решениях менять снапшот нельзя.
+ * - Несвязанные обновления (ФИО, табельный номер и т.п.) не трогаются.
+ */
+export function cleanUpdateFieldsForAction(
+  fields: Record<string, unknown>,
+  action: TDeptSyncAction,
+  isDismissalDept: boolean,
+  freshEmploymentStatus: string | null,
+): void {
+  const dropDismissalAuto = isDismissalDept
+    && (action !== 'apply' || freshEmploymentStatus !== 'active');
+  if (dropDismissalAuto) {
+    for (const key of DISMISSAL_AUTO_FIELDS) delete fields[key];
+  }
+  if (action !== 'snapshot-only') {
+    delete fields.org_department_id;
+  }
 }
 
 // ─── Типы результатов ───
@@ -400,7 +497,9 @@ export async function syncEmployeesLogic(
   const archiveLocalDeptId = archiveDepartmentId != null
     ? (sigurDeptToDbId.get(archiveDepartmentId) || null)
     : null;
-  const syncTodayIso = new Date().toISOString().slice(0, 10);
+  // Московская дата: UTC-срезка в окне 00:00–03:00 МСК давала вчерашнее число,
+  // из-за чего переводы/увольнения ночного тика датировались вчерашним днём.
+  const syncTodayIso = moscowTodayIso();
 
   // Карта parent_id отделов — для защиты от «осиротения» (B′): если Sigur вернул
   // сотруднику отдел-ПРЕДОК его текущего (подъём к корню/родителю — типичный
@@ -506,8 +605,10 @@ export async function syncEmployeesLogic(
     }
   }
 
-  // Собираем обновления и вставки (без DB-запросов в цикле)
-  const updates: { id: number; fields: Record<string, unknown>; name: string }[] = [];
+  // Собираем обновления и вставки (без DB-запросов в цикле).
+  // isDismissalDept — признак архивной папки ПО SIGUR department ID (не по archiveLocalDeptId:
+  // локальный маппинг может отсутствовать, а распознавание увольнения обязано работать всегда).
+  const updates: { id: number; fields: Record<string, unknown>; name: string; isDismissalDept: boolean }[] = [];
 
   for (let empIdx = 0; empIdx < sigurEmployees.length; empIdx++) {
     const emp = sigurEmployees[empIdx];
@@ -550,14 +651,13 @@ export async function syncEmployeesLogic(
           updateFields.employment_status = 'fired';
           updateFields.dismissal_date = syncTodayIso;
           updateFields.excluded_from_timesheet = true;
-          updateFields.excluded_from_timesheet_date = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+          updateFields.excluded_from_timesheet_date = formatDateShift(syncTodayIso, 1);
           console.log(`[syncEmployees] fire (dismissal dept): ${fullName} (sigurId=${sigurEmpId})`);
         }
       } else if (sigurEmpId && firedSigurIds.has(sigurEmpId)) {
         const pendingDismissalDate = prev?.dismissal_date ?? null;
-        const today = new Date().toISOString().slice(0, 10);
         // Не реактивировать, если dismissal_date в будущем (запланировано вручную через scheduler)
-        if (!pendingDismissalDate || pendingDismissalDate <= today) {
+        if (!pendingDismissalDate || pendingDismissalDate <= syncTodayIso) {
           // Сотрудник fired в БД, но числится в обычном отделе Sigur → реактивируем
           updateFields.employment_status = 'active';
           updateFields.dismissal_date = null; // Сбросить дату, иначе scheduler уволит снова
@@ -610,7 +710,7 @@ export async function syncEmployeesLogic(
       // меняет отдел» (см. skip dept change (locked) выше). Снимается только вручную.
 
       if (Object.keys(updateFields).length > 0) {
-        updates.push({ id: dbId, fields: updateFields, name: fullName });
+        updates.push({ id: dbId, fields: updateFields, name: fullName, isDismissalDept });
       } else {
         skipped++;
       }
@@ -652,7 +752,8 @@ export async function syncEmployeesLogic(
           linkFields.first_name = fio.firstName || null;
           linkFields.middle_name = fio.middleName || null;
         }
-        updates.push({ id: match.id, fields: linkFields, name: fullName });
+        // Ветка недостижима для архивной папки (isDismissalDept отсёкся выше continue'ом).
+        updates.push({ id: match.id, fields: linkFields, name: fullName, isDismissalDept: false });
         // dbEmpById нужен для корректной обработки в batch ниже (changeDepartment / changePosition)
         dbEmpById.set(match.id, {
           org_department_id: match.org_department_id,
@@ -733,81 +834,138 @@ export async function syncEmployeesLogic(
           // Отдел изменился → пишем историю и синхронизируем назначения
           if (u.fields.org_department_id && prev && u.fields.org_department_id !== prev.org_department_id) {
             const nextDeptId = u.fields.org_department_id as string;
-            const toArchive = archiveLocalDeptId != null && nextDeptId === archiveLocalDeptId;
-            const fromArchive = archiveLocalDeptId != null && prev.org_department_id === archiveLocalDeptId;
 
-            if (toArchive || fromArchive) {
-              // Увольнение / восстановление через Sigur — ведём ПОЛНУЮ историю периодов
-              // (forceHistory обходит freeze_history), без reopen-перезаписи, чтобы
-              // реальный отдел не терялся. Переход датируется сегодняшним днём.
-              await employeeChangesService.changeDepartment(u.id, nextDeptId, {
-                reason: toArchive
-                  ? 'Увольнение — перевод в папку "Уволенные"'
-                  : 'Восстановление (синхронизация Sigur)',
-                lockDepartment: false,
-                effectiveDate: syncTodayIso,
-                forceHistory: true,
-              });
-              if (toArchive && prev.org_department_id && prev.org_department_id !== archiveLocalDeptId) {
-                // Фиксируем событие увольнения с реальным отделом (для связности истории).
-                await execute(
-                  `INSERT INTO employee_dismissal_events
-                     (employee_id, dismissal_date, scheduled, from_department_id, created_by)
-                   VALUES ($1, $2, false, $3, NULL)`,
-                  [u.id, syncTodayIso, prev.org_department_id],
-                );
-              }
-            } else {
-              // Обычный перевод между отделами — поведение как раньше (под freeze).
-              // Защита от gap'а: если нет открытого назначения, но есть свежее закрытое
-              // в нужном отделе — переоткрываем его, а не создаём запись задним числом.
-              const openCountRow = await queryOne<{ count: number }>(
-                `SELECT count(*)::int AS count FROM employee_assignments
-                 WHERE employee_id = $1 AND effective_to IS NULL`,
-                [u.id],
+            // Fresh re-read: dbEmpById загружен в начале долгого прогона и мог
+            // устареть — увольнение/перевод могли примениться, пока синк читал
+            // страницы Sigur. Решение принимается по актуальным данным БД.
+            const freshEmp = await queryOne<{
+              org_department_id: string | null;
+              employment_status: string;
+              dismissal_date: string | null;
+              dismissal_apply_started_at: string | null;
+            }>(
+              `SELECT org_department_id, employment_status,
+                      dismissal_date::text AS dismissal_date,
+                      dismissal_apply_started_at::text AS dismissal_apply_started_at
+                 FROM employees WHERE id = $1`,
+              [u.id],
+            );
+            const targetAssignments = freshEmp
+              ? await query<{ effective_from: string; effective_to: string | null }>(
+                  `SELECT effective_from::text AS effective_from, effective_to::text AS effective_to
+                     FROM employee_assignments
+                    WHERE employee_id = $1 AND org_department_id = $2
+                      AND (effective_to IS NULL OR effective_to >= $3)`,
+                  [u.id, nextDeptId, syncTodayIso],
+                )
+              : [];
+
+            const action: TDeptSyncAction = freshEmp
+              ? decideDeptSyncAction(
+                  { ...freshEmp, target_assignments: targetAssignments || [] },
+                  nextDeptId,
+                  u.isDismissalDept,
+                  syncTodayIso,
+                )
+              : 'apply';
+
+            cleanUpdateFieldsForAction(u.fields, action, u.isDismissalDept, freshEmp?.employment_status ?? null);
+
+            if (action !== 'apply') {
+              console.log(
+                `[syncEmployees] dept change ${action}: ${u.name} (id=${u.id}) → ${nextDeptId}`
+                + (action === 'skip-local-dismissal' ? ' — увольнением владеет lifecycle/scheduler' : ''),
               );
-              const openCount = openCountRow?.count ?? 0;
+            } else {
+              // Реальный отдел берём из fresh-строки (stale prev мог отстать).
+              const freshDeptId = freshEmp?.org_department_id ?? prev.org_department_id;
+              const toArchive = u.isDismissalDept || (archiveLocalDeptId != null && nextDeptId === archiveLocalDeptId);
+              const fromArchive = archiveLocalDeptId != null && freshDeptId === archiveLocalDeptId;
+              let changeResult: 'applied' | 'skipped' = 'applied';
 
-              let reopened = false;
-              if (openCount === 0) {
-                const lastClosed = await queryOne<{ id: string; position_id: string | null; effective_to: string | null }>(
-                  `SELECT id, position_id, effective_to FROM employee_assignments
-                   WHERE employee_id = $1 AND org_department_id = $2 AND effective_to IS NOT NULL
-                   ORDER BY effective_to DESC
-                   LIMIT 1`,
-                  [u.id, nextDeptId],
+              if (toArchive || fromArchive) {
+                // Увольнение / восстановление через Sigur — ведём ПОЛНУЮ историю периодов
+                // (forceHistory обходит freeze_history), без reopen-перезаписи, чтобы
+                // реальный отдел не терялся. Переход датируется сегодняшним днём.
+                changeResult = await employeeChangesService.changeDepartment(u.id, nextDeptId, {
+                  reason: toArchive
+                    ? 'Увольнение — перевод в папку "Уволенные"'
+                    : 'Восстановление (синхронизация Sigur)',
+                  lockDepartment: false,
+                  effectiveDate: syncTodayIso,
+                  forceHistory: true,
+                  skipIfScheduledToTarget: true,
+                });
+                if (changeResult === 'applied' && toArchive && freshDeptId && freshDeptId !== archiveLocalDeptId) {
+                  // Фиксируем событие увольнения с реальным отделом (для связности истории).
+                  await execute(
+                    `INSERT INTO employee_dismissal_events
+                       (employee_id, dismissal_date, scheduled, from_department_id, created_by)
+                     VALUES ($1, $2, false, $3, NULL)`,
+                    [u.id, syncTodayIso, freshDeptId],
+                  );
+                }
+              } else {
+                // Обычный перевод между отделами — поведение как раньше (под freeze).
+                // Защита от gap'а: если нет открытого назначения, но есть свежее закрытое
+                // в нужном отделе — переоткрываем его, а не создаём запись задним числом.
+                const openCountRow = await queryOne<{ count: number }>(
+                  `SELECT count(*)::int AS count FROM employee_assignments
+                   WHERE employee_id = $1 AND effective_to IS NULL`,
+                  [u.id],
                 );
-                if (lastClosed) {
-                  const nowIso = new Date().toISOString();
-                  try {
-                    await execute(
-                      'UPDATE employee_assignments SET effective_to = NULL, updated_at = $1 WHERE id = $2',
-                      [nowIso, lastClosed.id],
-                    );
-                    await execute(
-                      `UPDATE employees SET org_department_id = $1, position_id = $2, updated_at = $3 WHERE id = $4`,
-                      [nextDeptId, lastClosed.position_id || null, nowIso, u.id],
-                    );
-                    console.log('[syncEmployees] reopened orphaned assignment', {
-                      employeeId: u.id, assignmentId: lastClosed.id, deptId: nextDeptId,
-                      previousEffectiveTo: lastClosed.effective_to,
-                    });
-                    reopened = true;
-                  } catch {
-                    reopened = false;
+                const openCount = openCountRow?.count ?? 0;
+
+                let reopened = false;
+                if (openCount === 0) {
+                  const lastClosed = await queryOne<{ id: string; position_id: string | null; effective_to: string | null }>(
+                    `SELECT id, position_id, effective_to FROM employee_assignments
+                     WHERE employee_id = $1 AND org_department_id = $2 AND effective_to IS NOT NULL
+                     ORDER BY effective_to DESC
+                     LIMIT 1`,
+                    [u.id, nextDeptId],
+                  );
+                  if (lastClosed) {
+                    const nowIso = new Date().toISOString();
+                    try {
+                      await execute(
+                        'UPDATE employee_assignments SET effective_to = NULL, updated_at = $1 WHERE id = $2',
+                        [nowIso, lastClosed.id],
+                      );
+                      await execute(
+                        `UPDATE employees SET org_department_id = $1, position_id = $2, updated_at = $3 WHERE id = $4`,
+                        [nextDeptId, lastClosed.position_id || null, nowIso, u.id],
+                      );
+                      console.log('[syncEmployees] reopened orphaned assignment', {
+                        employeeId: u.id, assignmentId: lastClosed.id, deptId: nextDeptId,
+                        previousEffectiveTo: lastClosed.effective_to,
+                      });
+                      reopened = true;
+                    } catch {
+                      reopened = false;
+                    }
                   }
+                }
+
+                if (!reopened) {
+                  changeResult = await employeeChangesService.changeDepartment(u.id, nextDeptId, {
+                    reason: 'Синхронизация Sigur',
+                    lockDepartment: false,
+                    skipIfScheduledToTarget: true,
+                  });
                 }
               }
 
-              if (!reopened) {
-                await employeeChangesService.changeDepartment(u.id, nextDeptId, {
-                  reason: 'Синхронизация Sigur',
-                  lockDepartment: false,
-                });
+              if (changeResult === 'skipped') {
+                // Атомарный гард changeDepartment нашёл уже существующее назначение в целевой
+                // отдел (перевод оформлен параллельно) → полный skip, как skip-local-dismissal:
+                // без события увольнения, техдоступа и lifecycle-полей.
+                console.log(`[syncEmployees] dept change skipped by atomic guard: ${u.name} (id=${u.id}) → ${nextDeptId}`);
+                cleanUpdateFieldsForAction(u.fields, 'skip-local-dismissal', u.isDismissalDept, freshEmp?.employment_status ?? null);
+              } else {
+                await upsertTechnicalDepartmentAccess(u.id, nextDeptId, freshDeptId || null, 'sigur_sync');
               }
             }
-            await upsertTechnicalDepartmentAccess(u.id, nextDeptId, prev.org_department_id || null, 'sigur_sync');
-            delete u.fields.org_department_id;
           }
           if (u.fields.position_id && prev && u.fields.position_id !== prev.position_id) {
             await employeeChangesService.changePosition(u.id, u.fields.position_id as string, {
