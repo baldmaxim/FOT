@@ -1945,10 +1945,11 @@ export const contractorAdminController = {
 
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet('Статистика');
+      // Ширины общие со списком выданных ниже (B — «Выдано новых» и ФИО).
       ws.columns = [
         { header: 'Подрядчик', key: 'org_name', width: 40 },
-        { header: 'Выдано новых', key: 'issued_new', width: 16 },
-        { header: 'Активные', key: 'active_new', width: 14 },
+        { header: 'Выдано новых', key: 'issued_new', width: 35 },
+        { header: 'Активные', key: 'active_new', width: 16 },
         { header: 'Всего старых', key: 'old_total', width: 16 },
         { header: `Используются старые (${OLD_PASS_USAGE_WINDOW_DAYS} дн.)`, key: 'old_used', width: 28 },
       ];
@@ -1976,25 +1977,16 @@ export const contractorAdminController = {
         totalRow.font = { bold: true };
       }
 
-      // Лист «Пропуска» — детализация выданных (текущие одобренные держатели).
+      // Детализация выданных (текущие одобренные держатели) — на том же листе,
+      // через пустую строку после сводки. Шапка — addRow массивом (ws.columns занят сводкой).
       const details = await fetchContractorPassDetails(ids, dateFrom, dateTo);
-      const wsDetails = wb.addWorksheet('Пропуска');
-      wsDetails.columns = [
-        { header: 'Подрядчик', key: 'org_name', width: 40 },
-        { header: 'ФИО', key: 'holder_name', width: 35 },
-        { header: '№ пропуска ФОТ', key: 'pass_number', width: 16 },
-        { header: '№ Sigur (W26)', key: 'w26', width: 16 },
-        { header: 'Дата выдачи', key: 'issued_on', width: 14 },
-      ];
-      wsDetails.getRow(1).font = { bold: true };
-      for (const d of details) {
-        wsDetails.addRow({
-          org_name: d.org_name,
-          holder_name: d.holder_name,
-          pass_number: d.pass_number,
-          w26: decodeW26(d.card_uid) ?? '—',
-          issued_on: d.issued_on,
-        });
+      if (details.length > 0) {
+        ws.addRow([]);
+        const detailsHeader = ws.addRow(['Подрядчик', 'ФИО', '№ пропуска ФОТ', '№ Sigur (W26)', 'Дата выдачи']);
+        detailsHeader.font = { bold: true };
+        for (const d of details) {
+          ws.addRow([d.org_name, d.holder_name, d.pass_number, decodeW26(d.card_uid) ?? '—', d.issued_on]);
+        }
       }
 
       const buf = Buffer.from(await wb.xlsx.writeBuffer());

@@ -1518,7 +1518,7 @@ describe('contractorAdminController — статистика пропусков 
     expect(res.body).toMatchObject({ error: 'Некорректный период' });
   });
 
-  it('exportPassStats: два листа, период в детализации, active_new>0 при issued_new=0 не отфильтровывается', async () => {
+  it('exportPassStats: детализация на том же листе через пустую строку, active_new>0 при issued_new=0 не отфильтровывается', async () => {
     // 1-й query — сводка, 2-й — детализация.
     h.query
       .mockResolvedValueOnce([statRow({ issued_new: 0, active_new: 5, old_total: 0, old_used: 0 })])
@@ -1540,16 +1540,16 @@ describe('contractorAdminController — статистика пропусков 
     const ExcelJS = (await import('exceljs')).default;
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(res.sent as Buffer as never);
-    expect(wb.worksheets.map(ws => ws.name)).toEqual(['Статистика', 'Пропуска']);
-    // Сводка: подрядчик с active_new=5 и issued_new=0 присутствует.
+    expect(wb.worksheets.map(ws => ws.name)).toEqual(['Статистика']);
     const stat = wb.getWorksheet('Статистика')!;
+    // Сводка: подрядчик с active_new=5 и issued_new=0 присутствует.
     expect(stat.getRow(2).getCell(1).value).toBe('АЛЬФА ООО');
     expect(stat.getRow(2).getCell(3).value).toBe(5);
-    // Детализация: ФИО / № ФОТ / W26 / дата.
-    const details = wb.getWorksheet('Пропуска')!;
-    expect(details.getRow(1).values).toEqual(
+    // Через пустую строку — шапка детализации и строки: ФИО / № ФОТ / W26 / дата.
+    expect(stat.getRow(3).values).toEqual([]);
+    expect(stat.getRow(4).values).toEqual(
       [undefined, 'Подрядчик', 'ФИО', '№ пропуска ФОТ', '№ Sigur (W26)', 'Дата выдачи']);
-    expect(details.getRow(2).values).toEqual(
+    expect(stat.getRow(5).values).toEqual(
       [undefined, 'АЛЬФА ООО', 'Иванов И.', '101', '168,15956', '2026-07-10']);
   });
 });
