@@ -1390,9 +1390,11 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         isScheduledDayOff: dayStatusContext.isScheduledDayOff,
       })
     : null;
-  // На «жёлтом» дне (недобор) события СКУД видны и без права /timesheet/events:
-  // руководителю нужны сырые входы/выходы, чтобы понять, почему часы не зачлись.
-  const showEventsTab = !hideSkudTab || dayStatus === 'underwork';
+  // На «жёлтом» дне (недобор) и на дне с корректировкой события СКУД видны и без права
+  // /timesheet/events: руководителю нужны сырые входы/выходы, чтобы понять, почему часы
+  // не зачлись и что именно перекрыла корректировка (корректировка делает день «зелёным»).
+  const dayHasCorrection = Boolean(timesheetEntry?.is_correction) || dayHasObjectAdjustments;
+  const showEventsTab = !hideSkudTab || dayStatus === 'underwork' || dayHasCorrection;
   const showCorrectionTab = !hideCorrectionTab;
   const [tab, setTab] = useState<ModalTab>(() => {
     if (!showEventsTab && showCorrectionTab) return 'correction';
