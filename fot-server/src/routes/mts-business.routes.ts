@@ -151,6 +151,13 @@ router.post(
   requireCritical2FA,
   mtsBusinessController.autoLinkNumberMap,
 );
+// Тоггл «Не отображать» — скрытие номера из «Телефонной книги» ЛК сотрудника
+router.put(
+  '/phonebook-hidden',
+  requirePageAccess('/mts-business', 'edit'),
+  requireCritical2FA,
+  mtsBusinessController.setPhonebookHidden,
+);
 
 // Отчёт «время разговоров» по сотрудникам + сводка по лицевым счетам (дашборд)
 router.get('/report/talk-time', requirePageAccess('/mts-business', 'view'), mtsBusinessController.getTalkTimeReport);

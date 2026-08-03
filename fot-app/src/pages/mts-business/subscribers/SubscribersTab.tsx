@@ -1,6 +1,6 @@
 import { type FC, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useMtsBusinessAccounts, useAutoLinkMtsBusinessNumberMap } from '../../../hooks/useMtsBusinessData';
-import { useMtsBusinessSubscribers } from '../../../hooks/useMtsBusinessSubscribers';
+import { useMtsBusinessSubscribers, useSetMtsBusinessPhonebookHidden } from '../../../hooks/useMtsBusinessSubscribers';
 import { PersonalDataStatusBadge } from '../personal-data/PersonalDataStatusBadge';
 import { PersonalDataModal } from '../personal-data/PersonalDataModal';
 import { SubscriberDrawer } from './SubscriberDrawer';
@@ -16,9 +16,10 @@ type Msg = { ok: boolean; text: string } | null;
 const norm = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 const NO_DEPT = '__none__';
-const COLS_STORAGE_KEY = 'mts-subscribers-columns';
+// v2: сброс сохранённых настроек, чтобы новая колонка «Не отображать» появилась у всех.
+const COLS_STORAGE_KEY = 'mts-subscribers-columns-v2';
 
-type ColKey = 'num' | 'name' | 'dept' | 'acc' | 'tariff' | 'charges' | 'services' | 'fwd' | 'calls' | 'time' | 'pd';
+type ColKey = 'num' | 'name' | 'dept' | 'acc' | 'tariff' | 'charges' | 'services' | 'fwd' | 'calls' | 'time' | 'pd' | 'hide';
 
 interface IColumn {
   key: ColKey;
@@ -45,6 +46,7 @@ const COLUMNS: IColumn[] = [
   { key: 'calls', label: 'Звонки', weight: 7, numeric: true },
   { key: 'time', label: 'Время', weight: 8, numeric: true, offByDefault: true },
   { key: 'pd', label: 'Персданные', weight: 10, pinned: true },
+  { key: 'hide', label: 'Не отображать', weight: 8 },
 ];
 
 const DEFAULT_VISIBLE = COLUMNS.filter(c => !c.offByDefault).map(c => c.key);
@@ -94,6 +96,7 @@ export const SubscribersTab: FC = () => {
   const accounts = useMtsBusinessAccounts();
   const subscribers = useMtsBusinessSubscribers(true);
   const autoLink = useAutoLinkMtsBusinessNumberMap();
+  const setPhonebookHidden = useSetMtsBusinessPhonebookHidden();
 
   const [search, setSearch] = useState('');
   const [accountId, setAccountId] = useState('');
@@ -245,6 +248,25 @@ export const SubscribersTab: FC = () => {
             <PersonalDataStatusBadge status={r.pdStatus} />
           </button>
         );
+      case 'hide':
+        return (
+          <button
+            type="button"
+            className={`${st.hideToggle} ${r.phonebookHidden ? st.hideToggleOn : ''}`}
+            aria-pressed={r.phonebookHidden}
+            disabled={setPhonebookHidden.isPending}
+            title={r.phonebookHidden ? 'Скрыт из телефонной книги ЛК — нажмите, чтобы показать' : 'Скрыть из телефонной книги ЛК'}
+            onClick={() => {
+              if (!r.msisdn) return;
+              setPhonebookHidden.mutate(
+                { msisdn: r.msisdn, hidden: !r.phonebookHidden },
+                { onError: e => setMsg({ ok: false, text: errText(e, 'Ошибка изменения видимости (возможно нужен 2FA)') }) },
+              );
+            }}
+          >
+            <span className={st.hideSwitch} aria-hidden="true" />
+          </button>
+        );
       default:
         return null;
     }
@@ -343,7 +365,7 @@ export const SubscribersTab: FC = () => {
                       key={c.key}
                       data-col={c.key}
                       className={c.numeric ? st.numCell : undefined}
-                      onClick={c.key === 'pd' ? e => e.stopPropagation() : undefined}
+                      onClick={c.key === 'pd' || c.key === 'hide' ? e => e.stopPropagation() : undefined}
                     >
                       {renderCell(c, r)}
                     </td>

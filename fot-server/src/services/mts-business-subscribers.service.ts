@@ -39,6 +39,8 @@ export interface IMtsSubscriberRow {
   servicesMonthlyTotal: number;
   /** Активное правило переадресации (первое) — только тип; адрес в списке не отдаём (лишняя PII, он виден в дровере). */
   forwardingType: ForwardingType | null;
+  /** Скрыт из «Телефонной книги» ЛК (тоггл «Не отображать»). */
+  phonebookHidden: boolean;
   capturedAt: string | null;
 }
 
@@ -87,6 +89,7 @@ class MtsBusinessSubscribersService {
       mts_comment: string | null;
       pd_status: string | null;
       pd_synced_at: string | null;
+      phonebook_hidden: boolean | null;
       employee_id: number | null;
       full_name: string | null;
       tab_number: string | null;
@@ -153,6 +156,7 @@ class MtsBusinessSubscribersService {
               m.mts_comment,
               m.pd_status,
               m.pd_synced_at,
+              COALESCE(m.phonebook_hidden, false) AS phonebook_hidden,
               m.employee_id,
               e.full_name,
               e.tab_number,
@@ -210,6 +214,7 @@ class MtsBusinessSubscribersService {
         servicesCount: list.length,
         servicesMonthlyTotal: list.reduce((a, s) => a + (s.monthlyAmount ?? 0), 0),
         forwardingType: pickActiveForwardingType(forwarding),
+        phonebookHidden: r.phonebook_hidden ?? false,
         capturedAt: r.captured_at,
       };
     });

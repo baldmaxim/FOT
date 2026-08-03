@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { mtsBusinessSubscribersService } from '../services/mtsBusinessSubscribersService';
+import type { IMtsSubscriberRow } from '../services/mtsBusinessSubscribersService';
 import type { MtsForwardingType } from '../services/mtsBusinessSubscriberService';
 
 // Хуки вкладки «Абоненты МТС».
@@ -39,6 +40,31 @@ export const useMtsBusinessSubscriberUsage = (msisdn: string | null, month: stri
   staleTime: 5 * 60_000,
   enabled: enabled && Boolean(msisdn),
 });
+
+/**
+ * Тоггл «Не отображать» (скрытие из «Телефонной книги» ЛК): оптимистично
+ * переключаем флаг в кэше списка, при ошибке откатываем, затем перечитываем.
+ */
+export const useSetMtsBusinessPhonebookHidden = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { msisdn: string; hidden: boolean }) =>
+      mtsBusinessSubscribersService.setPhonebookHidden(input),
+    onMutate: async ({ msisdn, hidden }) => {
+      await qc.cancelQueries({ queryKey: getMtsBusinessSubscribersKey() });
+      const prev = qc.getQueryData<IMtsSubscriberRow[]>(getMtsBusinessSubscribersKey());
+      qc.setQueryData<IMtsSubscriberRow[]>(getMtsBusinessSubscribersKey(), rows =>
+        rows?.map(r => (r.msisdn === msisdn ? { ...r, phonebookHidden: hidden } : r)));
+      return { prev };
+    },
+    onError: (_e, _input, ctx) => {
+      if (ctx?.prev) qc.setQueryData(getMtsBusinessSubscribersKey(), ctx.prev);
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: getMtsBusinessSubscribersKey() });
+    },
+  });
+};
 
 export const useRefreshMtsBusinessSubscriber = () => {
   const qc = useQueryClient();

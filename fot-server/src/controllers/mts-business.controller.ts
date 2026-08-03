@@ -401,6 +401,21 @@ export const mtsBusinessController = {
     }
   },
 
+  /** Тоггл «Не отображать»: скрыть/показать номер в «Телефонной книге» ЛК. */
+  async setPhonebookHidden(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { msisdn, hidden } = req.body as { msisdn?: string; hidden?: boolean };
+      if (!msisdn) { res.status(400).json({ success: false, error: 'Укажите номер телефона' }); return; }
+      await mtsBusinessMappingService.setPhonebookHidden(msisdn, hidden === true);
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.MTS_BUSINESS_PHONEBOOK_HIDDEN_SET, {
+        details: { hidden: hidden === true },
+      });
+      res.json({ success: true });
+    } catch (error) {
+      fail(res, error, 'Ошибка изменения видимости в телефонной книге');
+    }
+  },
+
   /** Пере-проверка автопривязки по ФИО для уже сохранённых, но не связанных номеров. */
   async autoLinkNumberMap(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {

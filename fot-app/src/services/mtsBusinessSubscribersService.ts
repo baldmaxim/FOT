@@ -48,6 +48,8 @@ export interface IMtsSubscriberRow {
   servicesMonthlyTotal: number;
   /** Тип активного правила переадресации (адрес в списке не приходит — он в дровере). */
   forwardingType: MtsForwardingType | null;
+  /** Скрыт из «Телефонной книги» ЛК (тоггл «Не отображать»). */
+  phonebookHidden: boolean;
   capturedAt: string | null;
 }
 
@@ -200,6 +202,11 @@ export const mtsBusinessSubscribersService = {
       `/mts-business/subscribers/${encodeURIComponent(msisdn)}/usage?${qs.toString()}`,
     );
     return res.data;
+  },
+
+  /** Тоггл «Не отображать»: скрыть/показать номер в «Телефонной книге» ЛК. */
+  setPhonebookHidden: async (input: { msisdn: string; hidden: boolean }): Promise<void> => {
+    await apiClient.put<ApiResponse<never>>('/mts-business/phonebook-hidden', input);
   },
 
   refreshOne: async (msisdn: string): Promise<IMtsSubscriberSyncResult> => {

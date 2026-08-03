@@ -585,6 +585,7 @@ class MtsBusinessMappingService {
          LEFT JOIN positions p ON p.id = e.position_id
          LEFT JOIN org_departments od ON od.id = e.org_department_id
         WHERE nm.msisdn_enc IS NOT NULL
+          AND NOT COALESCE(nm.phonebook_hidden, false)
           AND e.employment_status = 'active'
           AND NOT COALESCE(e.is_archived, false)
         ORDER BY e.full_name, nm.linked_at NULLS LAST`,
@@ -768,6 +769,27 @@ class MtsBusinessMappingService {
       [hash, encryptionService.encrypt(norm), employeeId, userId],
     );
     return this.getNumberMap();
+  }
+
+  /**
+   * Скрыть/показать номер в «Телефонной книге» ЛК (тоггл «Не отображать» на
+   * вкладке «Абоненты»). Строки в number_map может не быть (номер известен
+   * только по CDR) — тогда создаём её, не трогая привязку к сотруднику.
+   */
+  async setPhonebookHidden(rawMsisdn: string, hidden: boolean): Promise<void> {
+    const norm = normalizeMsisdn(rawMsisdn);
+    const hash = msisdnHash(rawMsisdn);
+    if (!norm || !hash) {
+      throw new Error('МТС Бизнес: некорректный номер телефона');
+    }
+    await execute(
+      `INSERT INTO mts_business_number_map (msisdn_hash, msisdn_enc, phonebook_hidden)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (msisdn_hash) DO UPDATE
+         SET phonebook_hidden = EXCLUDED.phonebook_hidden,
+             msisdn_enc = COALESCE(mts_business_number_map.msisdn_enc, EXCLUDED.msisdn_enc)`,
+      [hash, encryptionService.encrypt(norm), hidden],
+    );
   }
 }
 

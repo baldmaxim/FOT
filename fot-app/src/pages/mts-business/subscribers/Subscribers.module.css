@@ -736,3 +736,52 @@
   .fwdFields { flex-direction: column; }
   .fwdActions > * { flex: 1 1 auto; }
 }
+
+/* ===== Тоггл «Не отображать» (скрытие из «Телефонной книги» ЛК) ===== */
+.hideToggle {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  min-height: 32px;
+  padding: 0 4px;
+}
+
+.hideToggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.hideSwitch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex: 0 0 auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.hideSwitch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 0.2s, background 0.2s;
+}
+
+.hideToggleOn .hideSwitch {
+  background: var(--primary-light);
+  border-color: var(--accent);
+}
+
+.hideToggleOn .hideSwitch::after {
+  transform: translateX(18px);
+  background: var(--accent);
+}
