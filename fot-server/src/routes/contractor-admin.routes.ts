@@ -76,6 +76,7 @@ router.post('/duplicates/block', apprEdit, requireCritical2FA, contractorAdminCo
 router.get('/passes/sent', apprView, contractorAdminController.listSentPasses);
 router.get('/passes/monitor', apprView, contractorAdminController.monitorPasses);
 router.get('/passes/stats', apprView, contractorAdminController.passStats);
+router.get('/passes/stats/details', apprView, contractorAdminController.passStatsDetails);
 router.get('/passes/stats/export', apprView, contractorAdminController.exportPassStats);
 router.get('/passes/sync-failed', apprView, contractorPoolController.syncFailed);
 router.get('/passes/:id/history', apprView, contractorAdminController.getPassHistoryAdmin);

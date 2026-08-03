@@ -277,6 +277,17 @@ export interface IContractorPassStat {
   old_used: number;
 }
 
+/** Строка детализации выданного пропуска (текущий одобренный держатель). */
+export interface IContractorPassDetail {
+  pass_id: string;
+  pass_number: string;
+  holder_name: string;
+  /** W26-код карты Sigur (null — карта не назначена/не декодируется). */
+  w26: string | null;
+  /** Дата выдачи = дата одобрения заявки (МСК), YYYY-MM-DD. */
+  issued_on: string;
+}
+
 export interface IHolderHistoryRow {
   id: string;
   holder_name: string;
@@ -587,6 +598,16 @@ export const contractorService = {
     );
     return r.data;
   },
+};
+
+/** Query-строка для эндпоинтов статистики пропусков (пустые значения не попадают). */
+const buildStatsQuery = (params: Record<string, string | undefined>): string => {
+  const sp = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) sp.set(key, value);
+  }
+  const qs = sp.toString();
+  return qs ? `?${qs}` : '';
 };
 
 /** Админ-фасад подрядчиков. */
@@ -927,12 +948,25 @@ export const contractorAdminService = {
   },
 
   // Статистика пропусков (новые номерные vs старые белые)
-  async getPassStats(): Promise<IContractorPassStat[]> {
-    const r = await apiClient.get<ApiResponse<IContractorPassStat[]>>('/admin/contractor/passes/stats');
+  async getPassStats(dateFrom?: string, dateTo?: string): Promise<IContractorPassStat[]> {
+    const qs = buildStatsQuery({ date_from: dateFrom, date_to: dateTo });
+    const r = await apiClient.get<ApiResponse<IContractorPassStat[]>>(`/admin/contractor/passes/stats${qs}`);
     return r.data ?? [];
   },
-  async exportPassStats(orgDepartmentId?: string): Promise<Blob> {
-    const qs = orgDepartmentId ? `?org_department_id=${encodeURIComponent(orgDepartmentId)}` : '';
+  /** Детализация выданных пропусков подрядчика (ФИО, № ФОТ, W26, дата выдачи). */
+  async getPassStatsDetails(
+    orgDepartmentId: string,
+    dateFrom?: string,
+    dateTo?: string,
+  ): Promise<IContractorPassDetail[]> {
+    const qs = buildStatsQuery({ org_department_id: orgDepartmentId, date_from: dateFrom, date_to: dateTo });
+    const r = await apiClient.get<ApiResponse<IContractorPassDetail[]>>(
+      `/admin/contractor/passes/stats/details${qs}`,
+    );
+    return r.data ?? [];
+  },
+  async exportPassStats(orgDepartmentId?: string, dateFrom?: string, dateTo?: string): Promise<Blob> {
+    const qs = buildStatsQuery({ org_department_id: orgDepartmentId, date_from: dateFrom, date_to: dateTo });
     const response = await fetch(
       buildApiUrl(`/admin/contractor/passes/stats/export${qs}`),
       { credentials: 'include', headers: buildAuthHeaders() },

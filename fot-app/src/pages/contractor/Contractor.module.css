@@ -330,6 +330,11 @@
 .filterRow .field.filterAction {
   flex: 0 0 auto;
 }
+/* Компактные поля дат периода — не растягиваются как основной селект. */
+.filterRow .field.dateField {
+  flex: 0 1 150px;
+  min-width: 130px;
+}
 
 /* Модалка «Статистика пропусков»: широкая, со скроллом таблицы внутри. */
 .statsModal {
@@ -346,6 +351,10 @@
 .statsTotalRow td {
   font-weight: 700;
   border-top: 2px solid var(--border);
+}
+.statsSubtitle {
+  margin: 14px 0 8px;
+  font-weight: 600;
 }
 
 .checkList {

@@ -75,9 +75,11 @@ vi.mock('../services/sigur-live-employees-crud.service.js', () => ({
   updateSigurEmployee: h.updEmp,
   createSigurEmployee: h.createEmp,
 }));
-vi.mock('../services/sigur-live-cards.service.js', () => ({
+vi.mock('../services/sigur-live-cards.service.js', async () => ({
   assignSigurEmployeeCardBinding: h.assignCard,
   replaceSigurEmployeeAccessPoints: h.replaceAP,
+  // Реальная утилита: статистика пропусков декодирует W26 из card_uid.
+  deriveCardW26: (await import('../services/sigur-card-w26.util.js')).deriveCardW26,
 }));
 vi.mock('../services/contractor-access.service.js', () => ({
   resolveAccessPointNamesToIds: h.resolveAP,
@@ -1394,5 +1396,160 @@ describe('contractorAdminController — реестр обучения по ОТ'
     expect(res.body).toMatchObject({
       data: [expect.objectContaining({ id: ORG, inducted_count: 4, alert_count: 2, warning_count: 1 })],
     });
+  });
+});
+
+describe('contractorAdminController — статистика пропусков (период + детализация)', () => {
+  const ORG = '11111111-1111-1111-1111-111111111111';
+
+  const statsReq = (query: Record<string, string> = {}) => ({
+    user: { id: 'admin-1', company_scope: { roots: 'all' } },
+    params: {},
+    query,
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+  }) as never;
+
+  /** makeRes + setHeader/send для xlsx-экспорта. */
+  const makeExportRes = () => {
+    const res = {
+      statusCode: 200,
+      body: null as unknown,
+      sent: null as Buffer | null,
+      headersSent: false,
+      status: vi.fn(function (this: { statusCode: number }, c: number) { this.statusCode = c; return res; }),
+      json: vi.fn(function (this: { body: unknown }, b: unknown) { this.body = b; return res; }),
+      setHeader: vi.fn(),
+      send: vi.fn(function (this: { sent: Buffer | null }, b: Buffer) { this.sent = b; return res; }),
+    };
+    return res;
+  };
+
+  const statRow = (over: Partial<Record<string, unknown>> = {}) => ({
+    org_department_id: ORG, issued_new: 3, active_new: 2, old_total: 1, old_used: 0, ...over,
+  });
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.getContractorOrgs.mockResolvedValue([{ id: ORG, name: 'АЛЬФА ООО', sigur_department_id: 1 }]);
+    h.query.mockResolvedValue([]);
+  });
+
+  it('passStats без периода: параметры [orgIds, 14, null, null], SQL с независимыми границами', async () => {
+    h.query.mockResolvedValueOnce([statRow()]);
+    const res = makeRes();
+    await contractorAdminController.passStats(statsReq(), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ success: true, data: [expect.objectContaining({ issued_new: 3 })] });
+    const [sql, params] = h.query.mock.calls[0];
+    expect(params).toEqual([[ORG], 14, null, null]);
+    expect(sql).toContain("$3::date IS NULL OR (h.approved_at AT TIME ZONE 'Europe/Moscow')::date >= $3::date");
+    expect(sql).toContain("$4::date IS NULL OR (h.approved_at AT TIME ZONE 'Europe/Moscow')::date <= $4::date");
+  });
+
+  it('passStats с периодом и односторонними границами: даты уходят в SQL-параметры', async () => {
+    const res1 = makeRes();
+    await contractorAdminController.passStats(
+      statsReq({ date_from: '2026-07-01', date_to: '2026-07-31' }), res1 as never);
+    expect(h.query.mock.calls[0][1]).toEqual([[ORG], 14, '2026-07-01', '2026-07-31']);
+
+    const res2 = makeRes();
+    await contractorAdminController.passStats(statsReq({ date_from: '2026-07-01' }), res2 as never);
+    expect(h.query.mock.calls[1][1]).toEqual([[ORG], 14, '2026-07-01', null]);
+
+    const res3 = makeRes();
+    await contractorAdminController.passStats(statsReq({ date_to: '2026-07-31' }), res3 as never);
+    expect(h.query.mock.calls[2][1]).toEqual([[ORG], 14, null, '2026-07-31']);
+  });
+
+  it('passStats: 400 на несуществующую дату, год 0000 и from > to', async () => {
+    for (const query of [
+      { date_from: '2026-02-31' },
+      { date_to: '0000-01-01' },
+      { date_from: '2026-08-01', date_to: '2026-07-01' },
+      { date_from: '31.07.2026' },
+    ]) {
+      const res = makeRes();
+      await contractorAdminController.passStats(statsReq(query), res as never);
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toMatchObject({ error: 'Некорректный период' });
+    }
+    expect(h.query).not.toHaveBeenCalled();
+  });
+
+  it('passStatsDetails: 400 без организации и при неверном периоде', async () => {
+    const noOrg = makeRes();
+    await contractorAdminController.passStatsDetails(statsReq(), noOrg as never);
+    expect(noOrg.statusCode).toBe(400);
+    expect(noOrg.body).toMatchObject({ error: 'Некорректная организация' });
+
+    const badPeriod = makeRes();
+    await contractorAdminController.passStatsDetails(
+      statsReq({ org_department_id: ORG, date_from: '2026-13-01' }), badPeriod as never);
+    expect(badPeriod.statusCode).toBe(400);
+    expect(badPeriod.body).toMatchObject({ error: 'Некорректный период' });
+  });
+
+  it('passStatsDetails: w26 из card_uid, null без карты; без периода параметры [orgIds, null, null]', async () => {
+    h.query.mockResolvedValueOnce([
+      { pass_id: 'p1', org_name: 'АЛЬФА ООО', pass_number: '101', holder_name: 'Иванов И.', card_uid: '168,15956', issued_on: '2026-07-10' },
+      { pass_id: 'p2', org_name: 'АЛЬФА ООО', pass_number: '102', holder_name: 'Петров П.', card_uid: null, issued_on: '2026-07-11' },
+    ]);
+    const res = makeRes();
+    await contractorAdminController.passStatsDetails(statsReq({ org_department_id: ORG }), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(h.query.mock.calls[0][1]).toEqual([[ORG], null, null]);
+    expect(res.body).toMatchObject({
+      success: true,
+      data: [
+        { pass_id: 'p1', pass_number: '101', holder_name: 'Иванов И.', w26: '168,15956', issued_on: '2026-07-10' },
+        { pass_id: 'p2', pass_number: '102', holder_name: 'Петров П.', w26: null, issued_on: '2026-07-11' },
+      ],
+    });
+  });
+
+  it('exportPassStats: 400 при неверном периоде (текст отличается от организации)', async () => {
+    const res = makeExportRes();
+    await contractorAdminController.exportPassStats(
+      statsReq({ date_from: '2026-02-31' }), res as never);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: 'Некорректный период' });
+  });
+
+  it('exportPassStats: два листа, период в детализации, active_new>0 при issued_new=0 не отфильтровывается', async () => {
+    // 1-й query — сводка, 2-й — детализация.
+    h.query
+      .mockResolvedValueOnce([statRow({ issued_new: 0, active_new: 5, old_total: 0, old_used: 0 })])
+      .mockResolvedValueOnce([
+        { pass_id: 'p1', org_name: 'АЛЬФА ООО', pass_number: '101', holder_name: 'Иванов И.', card_uid: '168,15956', issued_on: '2026-07-10' },
+      ]);
+    const res = makeExportRes();
+    await contractorAdminController.exportPassStats(
+      statsReq({ date_from: '2026-07-01', date_to: '2026-07-31' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.query.mock.calls[0][1]).toEqual([[ORG], 14, '2026-07-01', '2026-07-31']);
+    expect(h.query.mock.calls[1][1]).toEqual([[ORG], '2026-07-01', '2026-07-31']);
+    // Период в имени файла.
+    const disposition = res.setHeader.mock.calls
+      .find(c => c[0] === 'Content-Disposition')?.[1] as string;
+    expect(decodeURIComponent(disposition)).toContain('_2026-07-01_2026-07-31.xlsx');
+
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.sent as Buffer as never);
+    expect(wb.worksheets.map(ws => ws.name)).toEqual(['Статистика', 'Пропуска']);
+    // Сводка: подрядчик с active_new=5 и issued_new=0 присутствует.
+    const stat = wb.getWorksheet('Статистика')!;
+    expect(stat.getRow(2).getCell(1).value).toBe('АЛЬФА ООО');
+    expect(stat.getRow(2).getCell(3).value).toBe(5);
+    // Детализация: ФИО / № ФОТ / W26 / дата.
+    const details = wb.getWorksheet('Пропуска')!;
+    expect(details.getRow(1).values).toEqual(
+      [undefined, 'Подрядчик', 'ФИО', '№ пропуска ФОТ', '№ Sigur (W26)', 'Дата выдачи']);
+    expect(details.getRow(2).values).toEqual(
+      [undefined, 'АЛЬФА ООО', 'Иванов И.', '101', '168,15956', '2026-07-10']);
   });
 });

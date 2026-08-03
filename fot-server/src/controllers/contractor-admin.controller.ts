@@ -194,6 +194,57 @@ const ensureSystemAdmin = async (
 /** Окно «использования» старых пропусков для статистики (последние N дней по СКУД). */
 const OLD_PASS_USAGE_WINDOW_DAYS = 14;
 
+/** W26, выведенный из сохранённого card_uid (формула FOT) — для сверки с Sigur. */
+const decodeW26 = (uid: unknown): string | null => {
+  if (typeof uid !== 'string' || !uid.trim()) return null;
+  try {
+    return deriveCardW26(uid).w26;
+  } catch {
+    return null;
+  }
+};
+
+/** Ошибка валидации периода статистики (date_from/date_to) → 400, отличима от ZodError. */
+class StatsPeriodValidationError extends Error {}
+
+/** Дата формата YYYY-MM-DD, календарно существующая (round-trip через Date, UTC). */
+const isValidIsoDate = (value: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  if (y < 1) return false;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+};
+
+/**
+ * Парсит период статистики из query (?date_from=&date_to=, обе границы опциональны).
+ * Бросает StatsPeriodValidationError при неверном формате/несуществующей дате/from > to.
+ */
+const parseStatsPeriod = (
+  q: AuthenticatedRequest['query'],
+): { dateFrom: string | null; dateTo: string | null } => {
+  const read = (key: string): string | null => {
+    const raw = typeof q[key] === 'string' ? (q[key] as string).trim() : '';
+    if (!raw) return null;
+    if (!isValidIsoDate(raw)) throw new StatsPeriodValidationError(`Некорректная дата ${key}`);
+    return raw;
+  };
+  const dateFrom = read('date_from');
+  const dateTo = read('date_to');
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    throw new StatsPeriodValidationError('Начало периода позже конца');
+  }
+  return { dateFrom, dateTo };
+};
+
+/** Суффикс периода для имени xlsx-файла (зеркален фронтовому в PassStatsModal). */
+const statsPeriodFileSuffix = (dateFrom: string | null, dateTo: string | null): string => {
+  if (dateFrom && dateTo) return `_${dateFrom}_${dateTo}`;
+  if (dateFrom) return `_с_${dateFrom}`;
+  if (dateTo) return `_по_${dateTo}`;
+  return '';
+};
+
 /** Строка статистики пропусков по одному подрядчику. */
 interface IContractorPassStatsRow {
   org_department_id: string;
@@ -215,20 +266,41 @@ interface IContractorPassStatsRow {
  *     чей sigur_employee_id НЕ закреплён за действующим номерным пропуском.
  *   • «Используются старые» — наличие событий skud_events за последние OLD_PASS_USAGE_WINDOW_DAYS дней
  *     (skud_events.employee_id ссылается на локальный employees.id).
+ *   • Период (dateFrom/dateTo, МСК-даты): фильтрует ТОЛЬКО issued_new — по дате одобрения
+ *     текущего держателя (contractor_pass_holders.approved_at). Без периода issued_new —
+ *     все неотозванные слоты (в т.ч. пустые assigned), как раньше. active_new/old_* —
+ *     снапшот «на сейчас», период на них не влияет.
  */
-const fetchContractorPassStats = async (orgIds: string[]): Promise<IContractorPassStatsRow[]> => {
+const fetchContractorPassStats = async (
+  orgIds: string[],
+  dateFrom: string | null = null,
+  dateTo: string | null = null,
+): Promise<IContractorPassStatsRow[]> => {
   if (orgIds.length === 0) return [];
   return query<IContractorPassStatsRow>(
     `WITH orgs AS (
        SELECT unnest($1::uuid[]) AS id
      ),
      pass_stats AS (
-       SELECT org_department_id AS oid,
-              count(*) FILTER (WHERE status <> 'revoked') AS issued_new,
-              count(*) FILTER (WHERE is_active)           AS active_new
-         FROM contractor_passes
-        WHERE org_department_id = ANY($1::uuid[])
-        GROUP BY org_department_id
+       SELECT p.org_department_id AS oid,
+              count(*) FILTER (
+                WHERE p.status <> 'revoked'
+                  AND (
+                    ($3::date IS NULL AND $4::date IS NULL)
+                    OR EXISTS (
+                      SELECT 1 FROM contractor_pass_holders h
+                       WHERE h.pass_id = p.id
+                         AND h.valid_until IS NULL
+                         AND h.approved_at IS NOT NULL
+                         AND ($3::date IS NULL OR (h.approved_at AT TIME ZONE 'Europe/Moscow')::date >= $3::date)
+                         AND ($4::date IS NULL OR (h.approved_at AT TIME ZONE 'Europe/Moscow')::date <= $4::date)
+                    )
+                  )
+              ) AS issued_new,
+              count(*) FILTER (WHERE p.is_active) AS active_new
+         FROM contractor_passes p
+        WHERE p.org_department_id = ANY($1::uuid[])
+        GROUP BY p.org_department_id
      ),
      old_white AS (
        SELECT e.org_department_id AS oid, e.id AS emp_id
@@ -264,7 +336,49 @@ const fetchContractorPassStats = async (orgIds: string[]): Promise<IContractorPa
        FROM orgs o
        LEFT JOIN pass_stats ps ON ps.oid = o.id
        LEFT JOIN old_stats  os ON os.oid = o.id`,
-    [orgIds, OLD_PASS_USAGE_WINDOW_DAYS],
+    [orgIds, OLD_PASS_USAGE_WINDOW_DAYS, dateFrom, dateTo],
+  );
+};
+
+/** Строка детализации выданного пропуска (текущий одобренный держатель). */
+interface IContractorPassDetailRow {
+  pass_id: string;
+  org_name: string;
+  pass_number: string;
+  holder_name: string;
+  card_uid: string | null;
+  /** Дата выдачи = дата одобрения заявки (approved_at, МСК), YYYY-MM-DD. */
+  issued_on: string;
+}
+
+/**
+ * Детализация выданных пропусков: только пропуска с текущим ОДОБРЕННЫМ держателем
+ * (contractor_pass_holders.valid_until IS NULL AND approved_at IS NOT NULL).
+ * Период фильтрует по дате одобрения (МСК) — совпадает с issued_new при заданном периоде.
+ */
+const fetchContractorPassDetails = async (
+  orgIds: string[],
+  dateFrom: string | null = null,
+  dateTo: string | null = null,
+): Promise<IContractorPassDetailRow[]> => {
+  if (orgIds.length === 0) return [];
+  return query<IContractorPassDetailRow>(
+    `SELECT p.id AS pass_id,
+            COALESCE(od.name, '—') AS org_name,
+            p.pass_number,
+            COALESCE(h.holder_name, p.holder_name, '—') AS holder_name,
+            p.card_uid,
+            to_char(h.approved_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS issued_on
+       FROM contractor_passes p
+       JOIN contractor_pass_holders h
+         ON h.pass_id = p.id AND h.valid_until IS NULL AND h.approved_at IS NOT NULL
+       LEFT JOIN org_departments od ON od.id = p.org_department_id
+      WHERE p.org_department_id = ANY($1::uuid[])
+        AND p.status <> 'revoked'
+        AND ($2::date IS NULL OR (h.approved_at AT TIME ZONE 'Europe/Moscow')::date >= $2::date)
+        AND ($3::date IS NULL OR (h.approved_at AT TIME ZONE 'Europe/Moscow')::date <= $3::date)
+      ORDER BY od.name, p.pass_number::int`,
+    [orgIds, dateFrom, dateTo],
   );
 };
 
@@ -1718,15 +1832,6 @@ export const contractorAdminController = {
           [orgId],
         );
       }
-      // W26, выведенный из сохранённого card_uid (формула FOT) — для сверки с Sigur.
-      const decodeW26 = (uid: unknown): string | null => {
-        if (typeof uid !== 'string' || !uid.trim()) return null;
-        try {
-          return deriveCardW26(uid).w26;
-        } catch {
-          return null;
-        }
-      };
       const data = (rows as Array<Record<string, unknown>>).map(r => ({ ...r, w26: decodeW26(r.card_uid) }));
       res.json({ success: true, data });
     } catch (error) {
@@ -1740,19 +1845,21 @@ export const contractorAdminController = {
   },
 
   /**
-   * GET /passes/stats — статистика пропусков по всем подрядчикам.
+   * GET /passes/stats?date_from=&date_to= — статистика пропусков по всем подрядчикам.
    * Возвращает по строке на организацию: выдано новых / активные / всего старых /
-   * используются старые. Фильтрацию по конкретному подрядчику делает фронт.
+   * используются старые. Период фильтрует только «выдано новых» (по дате одобрения).
+   * Фильтрацию по конкретному подрядчику делает фронт.
    */
   async passStats(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
+      const { dateFrom, dateTo } = parseStatsPeriod(req.query);
       const orgs = await getContractorOrgs();
       if (orgs.length === 0) {
         res.json({ success: true, data: [] });
         return;
       }
-      const stats = await fetchContractorPassStats(orgs.map(o => o.id));
+      const stats = await fetchContractorPassStats(orgs.map(o => o.id), dateFrom, dateTo);
       const byId = new Map(stats.map(s => [s.org_department_id, s]));
       const data = orgs.map(o => {
         const s = byId.get(o.id);
@@ -1767,14 +1874,54 @@ export const contractorAdminController = {
       });
       res.json({ success: true, data });
     } catch (error) {
+      if (error instanceof StatsPeriodValidationError) {
+        res.status(400).json({ success: false, error: 'Некорректный период' });
+        return;
+      }
       console.error('Contractor passStats error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить статистику пропусков' });
     }
   },
 
   /**
-   * GET /passes/stats/export?org_department_id=? — xlsx со статистикой пропусков.
-   * Без параметра — все подрядчики (только непустые строки), с параметром — один.
+   * GET /passes/stats/details?org_department_id=&date_from=&date_to= — список выданных
+   * пропусков подрядчика: ФИО текущего одобренного держателя, № пропуска ФОТ, W26-код
+   * карты Sigur, дата выдачи (= дата одобрения заявки, МСК).
+   */
+  async passStatsDetails(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
+      const orgRaw = typeof req.query.org_department_id === 'string'
+        ? req.query.org_department_id.trim() : '';
+      const orgId = z.string().uuid().parse(orgRaw);
+      const { dateFrom, dateTo } = parseStatsPeriod(req.query);
+      const rows = await fetchContractorPassDetails([orgId], dateFrom, dateTo);
+      const data = rows.map(r => ({
+        pass_id: r.pass_id,
+        pass_number: r.pass_number,
+        holder_name: r.holder_name,
+        w26: decodeW26(r.card_uid),
+        issued_on: r.issued_on,
+      }));
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof StatsPeriodValidationError) {
+        res.status(400).json({ success: false, error: 'Некорректный период' });
+        return;
+      }
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректная организация' });
+        return;
+      }
+      console.error('Contractor passStatsDetails error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить список пропусков' });
+    }
+  },
+
+  /**
+   * GET /passes/stats/export?org_department_id=&date_from=&date_to= — xlsx со статистикой
+   * пропусков. Без org — все подрядчики (только непустые строки), с ним — один.
+   * Лист «Статистика» + лист «Пропуска» (детализация выданных). Период — как в /passes/stats.
    */
   async exportPassStats(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -1783,16 +1930,17 @@ export const contractorAdminController = {
       const orgRaw = typeof req.query.org_department_id === 'string'
         ? req.query.org_department_id.trim() : '';
       const orgFilter = orgRaw ? z.string().uuid().parse(orgRaw) : null;
+      const { dateFrom, dateTo } = parseStatsPeriod(req.query);
 
       const orgs = await getContractorOrgs();
       const nameById = new Map(orgs.map(o => [o.id, o.name]));
       const ids = orgFilter ? [orgFilter] : orgs.map(o => o.id);
-      const stats = await fetchContractorPassStats(ids);
+      const stats = await fetchContractorPassStats(ids, dateFrom, dateTo);
 
       const rows = stats
         .map(s => ({ ...s, org_name: nameById.get(s.org_department_id) ?? '—' }))
         // в режиме «все подрядчики» показываем только тех, у кого есть хоть какие-то пропуска
-        .filter(s => (orgFilter ? true : s.issued_new > 0 || s.old_total > 0))
+        .filter(s => (orgFilter ? true : s.issued_new > 0 || s.active_new > 0 || s.old_total > 0))
         .sort((a, b) => a.org_name.localeCompare(b.org_name, 'ru'));
 
       const wb = new ExcelJS.Workbook();
@@ -1828,16 +1976,41 @@ export const contractorAdminController = {
         totalRow.font = { bold: true };
       }
 
+      // Лист «Пропуска» — детализация выданных (текущие одобренные держатели).
+      const details = await fetchContractorPassDetails(ids, dateFrom, dateTo);
+      const wsDetails = wb.addWorksheet('Пропуска');
+      wsDetails.columns = [
+        { header: 'Подрядчик', key: 'org_name', width: 40 },
+        { header: 'ФИО', key: 'holder_name', width: 35 },
+        { header: '№ пропуска ФОТ', key: 'pass_number', width: 16 },
+        { header: '№ Sigur (W26)', key: 'w26', width: 16 },
+        { header: 'Дата выдачи', key: 'issued_on', width: 14 },
+      ];
+      wsDetails.getRow(1).font = { bold: true };
+      for (const d of details) {
+        wsDetails.addRow({
+          org_name: d.org_name,
+          holder_name: d.holder_name,
+          pass_number: d.pass_number,
+          w26: decodeW26(d.card_uid) ?? '—',
+          issued_on: d.issued_on,
+        });
+      }
+
       const buf = Buffer.from(await wb.xlsx.writeBuffer());
       const baseName = orgFilter ? (nameById.get(orgFilter) ?? 'Подрядчик') : 'Все подрядчики';
       const safeOrg = baseName.replace(/[\\/:*?"<>|]+/g, '_').trim();
-      const fileName = `Статистика_пропусков_${safeOrg}.xlsx`;
+      const fileName = `Статистика_пропусков_${safeOrg}${statsPeriodFileSuffix(dateFrom, dateTo)}.xlsx`;
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition',
         `attachment; filename="${encodeURIComponent(fileName)}"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
       res.send(buf);
     } catch (error) {
+      if (error instanceof StatsPeriodValidationError) {
+        res.status(400).json({ success: false, error: 'Некорректный период' });
+        return;
+      }
       if (error instanceof z.ZodError) {
         res.status(400).json({ success: false, error: 'Некорректная организация' });
         return;
