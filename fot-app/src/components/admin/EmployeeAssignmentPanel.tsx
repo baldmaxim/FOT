@@ -152,15 +152,23 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     [weekendQuery.data?.employee_ids],
   );
 
-  // Сброс drafts при открытии новой панели/обновлении источников.
+  // Сброс UI только при открытии/смене сотрудника: фоновый рефетч списка
+  // (новая идентичность объекта employee) не должен сбрасывать активную вкладку.
+  const employeeId = employee?.employee_id ?? null;
   useEffect(() => {
-    if (isOpen && employee) {
-      setDraftDepartmentIds(initialDepartmentIds);
-      setDraftViewOnlyIds(initialViewOnlyIds);
+    if (isOpen && employeeId != null) {
       setSearchQuery('');
       setActiveTab('department');
       setWeekendMode('department');
       setWeekendShowFree(false);
+    }
+  }, [isOpen, employeeId]);
+
+  // Посев department-drafts при открытии/обновлении источников.
+  useEffect(() => {
+    if (isOpen && employee) {
+      setDraftDepartmentIds(initialDepartmentIds);
+      setDraftViewOnlyIds(initialViewOnlyIds);
     }
   }, [isOpen, employee, initialDepartmentIds, initialViewOnlyIds]);
 
@@ -323,6 +331,9 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const handleSave = async () => {
     if (!employee || !hasChanges) return;
     setSaving(true);
+    // Успешно добавленные/убранные подчинённые — для оптимистичного патча кэша списка.
+    const addedDirectIds: number[] = [];
+    const removedDirectIds: number[] = [];
     try {
       // 1) Отделы и бригады — единым массивом + подмножество «только просмотр».
       if (hasDepartmentChanges || hasViewOnlyChanges) {
@@ -337,9 +348,8 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
         const initialSet = new Set(initialDirectIds);
         const draftSet = new Set(draftDirectIds);
         const toAdd = draftDirectIds.filter(id => !initialSet.has(id));
-        const toRemoveIds = (directReportsQuery.data || [])
-          .filter(r => !draftSet.has(r.subordinate_employee_id))
-          .map(r => r.id);
+        const toRemove = (directReportsQuery.data || [])
+          .filter(r => !draftSet.has(r.subordinate_employee_id));
 
         const errors: string[] = [];
         for (const subId of toAdd) {
@@ -348,6 +358,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
               managerEmployeeId: employee.employee_id,
               subordinateEmployeeId: subId,
             });
+            addedDirectIds.push(subId);
           } catch (err) {
             if (err instanceof ApiError && err.status === 409) {
               const sub = employeeMap.get(subId);
@@ -357,8 +368,9 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
             }
           }
         }
-        for (const rowId of toRemoveIds) {
-          await directReportsService.unassign(rowId);
+        for (const row of toRemove) {
+          await directReportsService.unassign(row.id);
+          removedDirectIds.push(row.subordinate_employee_id);
         }
         if (errors.length > 0) {
           toast.error(errors.join('; '));
@@ -379,15 +391,47 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
         }
       }
       toast.success('Назначения сохранены');
+      // Панель не закрываем: сбрасываем только поиск, добавленный человек остаётся
+      // вверху в группе «Назначенные» (pinned по draftDirectIds).
+      setSearchQuery('');
+      // Оптимистичный патч тяжёлого списка (~8700 строк): панель и список консистентны
+      // сразу, не дожидаясь фонового рефетча.
+      const addedSet = new Set(addedDirectIds);
+      const removedSet = new Set(removedDirectIds);
+      queryClient.setQueryData<EmployeeDepartmentAssignmentFromApi[]>(
+        ['admin-employees', 'department-access'],
+        (old) => old?.map(row => {
+          if (row.employee_id === employee.employee_id) {
+            return {
+              ...row,
+              assigned_department_ids: [...draftDepartmentIds],
+              view_only_department_ids: [...draftViewOnlyIds],
+            };
+          }
+          if (addedSet.has(row.employee_id)) {
+            return {
+              ...row,
+              direct_manager_employee_id: employee.employee_id,
+              direct_manager_full_name: employee.full_name,
+              has_responsible: true,
+            };
+          }
+          if (removedSet.has(row.employee_id)) {
+            return { ...row, direct_manager_employee_id: null, direct_manager_full_name: null };
+          }
+          return row;
+        }),
+      );
+      // Тяжёлые списки (admin-users + department-access) рефетчатся в фоне.
+      onSaved();
+      void queryClient.invalidateQueries({ queryKey: ['admin-weekend-eligible'] });
+      // Лёгкие per-employee ключи ждём: после них initial* совпадут с drafts
+      // и hasChanges обнулится.
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
         queryClient.invalidateQueries({ queryKey: directReportsQueryKey }),
         queryClient.invalidateQueries({ queryKey: employeeObjectsQueryKey }),
         queryClient.invalidateQueries({ queryKey: weekendQueryKey }),
-        queryClient.invalidateQueries({ queryKey: ['admin-weekend-eligible'] }),
       ]);
-      onSaved();
-      onClose();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Ошибка сохранения');
     } finally {

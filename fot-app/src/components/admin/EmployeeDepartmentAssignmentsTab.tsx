@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, type FC } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   adminService,
@@ -34,12 +35,22 @@ const normalizeText = (value: string | null | undefined): string => (
 
 export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignmentsTabProps> = ({ allUsers, allUsersLoading = false, onReload }) => {
   const toast = useToast();
-  const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [hideEmployeesWithoutAssignments, setHideEmployeesWithoutAssignments] = useState(false);
-  const [showWithoutResponsible, setShowWithoutResponsible] = useState(false);
-  const [selectedEmployee, setSelectedEmployee] = useState<EmployeeDepartmentAssignmentFromApi | null>(null);
+  // Поиск и фильтры в URL — переживают F5 (replace: true, чтобы не засорять history).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchQuery = searchParams.get('q') || '';
+  const hideEmployeesWithoutAssignments = searchParams.get('hideUnassigned') === '1';
+  const showWithoutResponsible = searchParams.get('noResp') === '1';
+  const setUrlParam = (key: string, value: string | null) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    }, { replace: true });
+  };
+  // Храним id, а не снапшот строки: после рефетча списка панель получает свежие данные.
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
 
   const employeesQuery = useQuery<EmployeeDepartmentAssignmentFromApi[]>({
     queryKey: ['admin-employees', 'department-access'],
@@ -71,6 +82,12 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
   ), [allUsers]);
 
   const employees = employeesQuery.data || [];
+  const selectedEmployee = useMemo(
+    () => (selectedEmployeeId == null
+      ? null
+      : employees.find(e => e.employee_id === selectedEmployeeId) ?? null),
+    [employees, selectedEmployeeId],
+  );
   const employeesWithAssignmentsCount = useMemo(
     () => employees.filter(employee => employee.assigned_department_ids.length > 0).length,
     [employees],
@@ -140,10 +157,8 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
 
   const handleSaved = async () => {
     try {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['admin-employees', 'department-access'] }),
-        onReload(),
-      ]);
+      // ['admin-employees','department-access'] инвалидирует сам onReload (reloadUsers).
+      await onReload();
     } catch {
       toast.error('Ошибка обновления списка');
     }
@@ -166,7 +181,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
         <input
           type="text"
           value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
+          onChange={(event) => setUrlParam('q', event.target.value || null)}
           className={styles.nameInput}
           placeholder="Поиск по сотруднику, аккаунту или отделу..."
         />
@@ -174,7 +189,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
           <input
             type="checkbox"
             checked={hideEmployeesWithoutAssignments}
-            onChange={(event) => setHideEmployeesWithoutAssignments(event.target.checked)}
+            onChange={(event) => setUrlParam('hideUnassigned', event.target.checked ? '1' : null)}
           />
           Скрыть сотрудников без назначений
         </label>
@@ -182,7 +197,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
           <input
             type="checkbox"
             checked={showWithoutResponsible}
-            onChange={(event) => setShowWithoutResponsible(event.target.checked)}
+            onChange={(event) => setUrlParam('noResp', event.target.checked ? '1' : null)}
           />
           Показать сотрудников без ответственного (ООО СУ-10)
         </label>
@@ -229,13 +244,13 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
                   >
                     <div
                       className={styles.userRowHeader}
-                      onClick={() => setSelectedEmployee(employee)}
+                      onClick={() => setSelectedEmployeeId(employee.employee_id)}
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
-                          setSelectedEmployee(employee);
+                          setSelectedEmployeeId(employee.employee_id);
                         }
                       }}
                     >
@@ -276,7 +291,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
         isOpen={!!selectedEmployee}
         employee={selectedEmployee}
         allEmployees={employees}
-        onClose={() => setSelectedEmployee(null)}
+        onClose={() => setSelectedEmployeeId(null)}
         onSaved={() => void handleSaved()}
       />
     </div>

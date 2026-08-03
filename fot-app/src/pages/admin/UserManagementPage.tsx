@@ -1,4 +1,5 @@
-import React, { lazy, Suspense, useState } from 'react';
+import React, { lazy, Suspense } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminService, type IUserSlim, type IPasswordResetRequest } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
@@ -18,10 +19,26 @@ const PasswordResetRequestsTab = lazy(() => import('../../components/admin/Passw
   default: module.PasswordResetRequestsTab,
 })));
 
+type UserManagementTab = 'pending' | 'all' | 'employee-access' | 'password-reset';
+
+const VALID_TABS: readonly UserManagementTab[] = ['pending', 'all', 'employee-access', 'password-reset'];
+
 export const UserManagementPage: React.FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<'pending' | 'all' | 'employee-access' | 'password-reset'>('pending');
+  // Вкладка в URL (?utab=...), чтобы переживать F5; `tab` занят внешним HubShell.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const utabParam = searchParams.get('utab');
+  const activeTab: UserManagementTab = VALID_TABS.includes(utabParam as UserManagementTab)
+    ? utabParam as UserManagementTab
+    : 'pending';
+  const setActiveTab = (tab: UserManagementTab) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('utab', tab);
+      return next;
+    });
+  };
   // signal во всех запросах префикса ['admin-users']: cancelQueries перед мутацией
   // должен обрывать сам HTTP-запрос, иначе стартовавший до удаления рефетч доезжает
   // до сервера и может вернуть/закешировать состояние ДО мутации.
