@@ -177,6 +177,52 @@
   font-weight: 700;
 }
 
+/* Часы корректировки: кликабельны у заявок «На рассмотрении» (правка перед согласованием). */
+.lrm-hours-btn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.lrm-hours-btn:hover {
+  color: var(--primary);
+}
+
+.lrm-hours-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.lrm-hours-input {
+  width: 72px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-secondary, var(--bg-primary));
+  color: var(--text-primary);
+  /* 16px — иначе iOS/Android Chrome зумят страницу при фокусе. */
+  font-size: 16px;
+  font-family: inherit;
+  outline: none;
+}
+
+.lrm-hours-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
+.lrm-hours-unit {
+  font-weight: 700;
+}
+
 .lrm-card-reason {
   font-size: 13px;
   color: var(--text-secondary);
@@ -524,6 +570,17 @@
     flex: 1;
     min-width: 0;
     max-width: none;
+  }
+
+  /* Тап-цель по часам — не меньше 44px, иначе не попасть пальцем в «10.00ч». */
+  .lrm-hours-btn {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .lrm-hours-input {
+    min-height: 44px;
   }
 }
 

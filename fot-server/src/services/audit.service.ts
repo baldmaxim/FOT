@@ -1,5 +1,6 @@
 import { execute, query, queryOne } from '../config/postgres.js';
 import type { Request } from 'express';
+import type { PoolClient } from 'pg';
 
 export const AUDIT_ACTIONS = {
   // Auth
@@ -68,6 +69,7 @@ export const AUDIT_ACTIONS = {
   UPDATE_TIMESHEET_ENTRY: 'UPDATE_TIMESHEET_ENTRY',
   DELETE_TIMESHEET_ENTRY: 'DELETE_TIMESHEET_ENTRY',
   UPDATE_LEAVE_REQUEST_REASON: 'UPDATE_LEAVE_REQUEST_REASON',
+  UPDATE_LEAVE_REQUEST_CORRECTION_HOURS: 'UPDATE_LEAVE_REQUEST_CORRECTION_HOURS',
   TIMESHEET_REFRESH: 'TIMESHEET_REFRESH',
   IMPORT_TIMESHEET: 'IMPORT_TIMESHEET',
   TIMESHEET_APPROVAL_SUBMITTED: 'TIMESHEET_APPROVAL_SUBMITTED',
@@ -224,6 +226,27 @@ export const auditService = {
   },
 
   /**
+   * Аудит внутри чужой транзакции: пишет ТЕМ ЖЕ клиентом и НЕ глотает ошибку
+   * (в отличие от log выше). Нужен там, где след обязателен: не записался
+   * аудит — откатывается и сама операция.
+   */
+  async logWithClient(client: PoolClient, entry: AuditEntry): Promise<void> {
+    await client.query(
+      `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details, ip_address, user_agent)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`,
+      [
+        entry.user_id || null,
+        entry.action,
+        entry.entity_type || null,
+        entry.entity_id || null,
+        entry.details ? JSON.stringify(entry.details) : null,
+        entry.ip_address || null,
+        entry.user_agent || null,
+      ],
+    );
+  },
+
+  /**
    * Создаёт аудит запись из Express Request
    */
   async logFromRequest(
@@ -237,6 +260,29 @@ export const auditService = {
     }
   ): Promise<void> {
     await this.log({
+      user_id: userId,
+      action,
+      entity_type: options?.entityType,
+      entity_id: options?.entityId,
+      details: options?.details,
+      ip_address: req.ip || req.socket.remoteAddress,
+      user_agent: req.headers['user-agent'],
+    });
+  },
+
+  /** То же, что logFromRequest, но внутри транзакции вызывающего (см. logWithClient). */
+  async logFromRequestWithClient(
+    client: PoolClient,
+    req: Request,
+    userId: string | null,
+    action: AuditAction,
+    options?: {
+      entityType?: string;
+      entityId?: string;
+      details?: Record<string, unknown>;
+    }
+  ): Promise<void> {
+    await this.logWithClient(client, {
       user_id: userId,
       action,
       entity_type: options?.entityType,

@@ -91,6 +91,7 @@ import {
   MAX_MATERIALIZED_LEAVE_DAYS,
 } from './leave-requests.controller.js';
 import { notificationService } from '../services/notification.service.js';
+import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 
 function makeReq(overrides: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest {
   return {
@@ -206,6 +207,47 @@ describe('leaveRequestsController.approve', () => {
     });
   });
 
+  it('корректировку материализует из RETURNING: часы, изменённые параллельно, не устаревают', async () => {
+    // Гонка: approve прочитал заявку с 10ч, следом согласующий сохранил 9ч
+    // (PATCH /:id/correction-hours). В табель должны уйти 9ч из RETURNING, не 10.
+    mockRequestRow({
+      request_type: 'time_correction',
+      start_date: '2026-06-01', end_date: '2026-06-01',
+      correction_date: '2026-06-01', correction_status: 'work', correction_hours: 10,
+      correction_object_id: 'obj-1', correction_object_name: 'Объект 1',
+    });
+    txClient.query.mockImplementation(async (sql: string) => (
+      String(sql).includes('UPDATE leave_requests')
+        ? {
+          rows: [{
+            id: 708, employee_id: 247, status: 'approved', request_type: 'time_correction',
+            start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
+            correction_date: '2026-06-01', correction_status: 'work', correction_hours: '9.00',
+            correction_object_id: 'obj-1', correction_object_name: 'Объект 1', reason: null,
+          }],
+          rowCount: 1,
+        }
+        : { rows: [], rowCount: 0 }
+    ));
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    expect(upsertSpy.mock.calls[0][0]).toMatchObject({
+      employee_id: 247,
+      work_date: '2026-06-01',
+      // work + явные часы > 0 → 'manual' (часы авторитетны, не из СКУД)
+      status: 'manual',
+      hours_override: '9.00',
+      source_type: 'manual_object',
+      source_id: 'obj-1',
+    });
+    // Резолвер approval_status тоже должен видеть свежие часы.
+    expect(resolveApprovalMock).toHaveBeenCalledWith(247, '2026-06-01', 'manual', '9.00', false, null, txClient);
+  });
+
   it('одобряющий — ответственный за выходные: 2-й этап схлопывается в approved', async () => {
     resolveApprovalMock.mockResolvedValueOnce('pending');
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
@@ -232,6 +274,145 @@ describe('leaveRequestsController.approve', () => {
       approval_status: 'approved',
       approved_by: 'reviewer-uuid',
     });
+  });
+});
+
+describe('leaveRequestsController.updateCorrectionHours', () => {
+  // Реальный req несёт headers/socket — их читает аудит (ip/user-agent).
+  const makeHoursReq = (body: unknown) => makeReq({
+    body: body as AuthenticatedRequest['body'],
+    headers: { 'user-agent': 'vitest' },
+    socket: { remoteAddress: '127.0.0.1' },
+  } as unknown as Partial<AuthenticatedRequest>);
+
+  const CORRECTION_ROW = {
+    id: 708, employee_id: 247, request_type: 'time_correction', status: 'pending',
+  };
+
+  // FOR UPDATE → UPDATE → INSERT audit_logs.
+  const mockTxFlow = (locked: unknown, updated: unknown) => {
+    txClient.query.mockReset();
+    txClient.query
+      .mockResolvedValueOnce({ rows: locked ? [locked] : [], rowCount: locked ? 1 : 0 })
+      .mockResolvedValueOnce({ rows: updated ? [updated] : [], rowCount: updated ? 1 : 0 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+  });
+
+  it.each([10.3, 25, -1, '9', undefined, null, Number.NaN])('400 на некорректных часах: %s', async (hours) => {
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours }), res);
+
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('404, если заявления нет', async () => {
+    pgQueryOne.mockResolvedValueOnce(null);
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(404);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('400 на заявлении не типа time_correction', async () => {
+    pgQueryOne.mockResolvedValueOnce({ ...CORRECTION_ROW, request_type: 'remote' });
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('403, если нет прав на сотрудника', async () => {
+    pgQueryOne.mockResolvedValueOnce(CORRECTION_ROW);
+    const { canEditEmployeeInScope } = await import('../services/data-scope.service.js');
+    vi.mocked(canEditEmployeeInScope).mockResolvedValueOnce(false);
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('409, если под блокировкой заявление уже не pending (аудита и realtime нет)', async () => {
+    pgQueryOne.mockResolvedValueOnce(CORRECTION_ROW);
+    mockTxFlow({ status: 'approved', correction_hours: '10.00' }, null);
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(409);
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('audit_logs'))).toBe(false);
+    await Promise.resolve();
+    expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
+  });
+
+  it('409, если условный UPDATE не задел ни одной строки (гонка с approve)', async () => {
+    pgQueryOne.mockResolvedValueOnce(CORRECTION_ROW);
+    mockTxFlow({ status: 'pending', correction_hours: '10.00' }, null);
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(409);
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('audit_logs'))).toBe(false);
+    await Promise.resolve();
+    expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
+  });
+
+  it('успех: пишет часы, аудит «было → стало» в той же транзакции и шлёт realtime', async () => {
+    pgQueryOne.mockResolvedValueOnce(CORRECTION_ROW);
+    mockTxFlow(
+      { status: 'pending', correction_hours: '10.00' },
+      { id: 708, employee_id: 247, correction_hours: '9.00' },
+    );
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(200);
+    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall?.[1]).toEqual([9, '708']);
+
+    const auditCall = txClient.query.mock.calls.find(c => String(c[0]).includes('audit_logs'));
+    expect(auditCall).toBeDefined();
+    expect(auditCall?.[1]?.[1]).toBe('UPDATE_LEAVE_REQUEST_CORRECTION_HOURS');
+    // details пишутся числами: numeric из pg («10.00») нормализуется.
+    expect(JSON.parse(String(auditCall?.[1]?.[4]))).toMatchObject({ old_hours: 10, new_hours: 9 });
+
+    await vi.waitFor(() => expect(vi.mocked(emitDomainChange)).toHaveBeenCalled());
+    expect(vi.mocked(emitDomainChange).mock.calls[0][0]).toMatchObject({
+      event: 'leave_request:changed',
+      payload: { entityId: 708, employeeId: 247, action: 'update_hours' },
+    });
+  });
+
+  it('сбой аудита откатывает правку: 500 и никакого realtime', async () => {
+    pgQueryOne.mockResolvedValueOnce(CORRECTION_ROW);
+    txClient.query.mockReset();
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'pending', correction_hours: '10.00' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: 708, correction_hours: '9.00' }], rowCount: 1 })
+      .mockRejectedValueOnce(new Error('audit insert failed'));
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(500);
+    await Promise.resolve();
+    expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
   });
 });
 

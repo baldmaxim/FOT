@@ -86,6 +86,13 @@ router.patch(
   leaveRequestsController.updateReason
 );
 
+// PATCH /api/leave-requests/:id/correction-hours — правка часов корректировки до согласования
+router.patch(
+  '/:id/correction-hours',
+  requirePageAccess('/leave-requests', 'edit'),
+  leaveRequestsController.updateCorrectionHours
+);
+
 // PATCH /api/leave-requests/:id/cancel — отмена (worker+)
 router.patch(
   '/:id/cancel',

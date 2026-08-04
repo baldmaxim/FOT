@@ -5,6 +5,7 @@ import { ArrowLeft, Download, Clock, CheckCircle, XCircle, Ban, FileText, Image 
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
+  formatCorrectionHours,
   getRequestDecision,
   type ILeaveRequest,
   type LeaveRequestStatus,
@@ -228,7 +229,7 @@ export const LeaveRequestDetailPage: FC = () => {
               {request.correction_hours != null && (
                 <div className="lr-detail-row">
                   <span className="lr-detail-label">Часы</span>
-                  <span className="lr-detail-value">{request.correction_hours}</span>
+                  <span className="lr-detail-value">{formatCorrectionHours(request.correction_hours)}</span>
                 </div>
               )}
             </>

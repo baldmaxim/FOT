@@ -32,7 +32,8 @@ export interface ILeaveRequest {
   review_comment: string | null;
   correction_date: string | null;
   correction_status: string | null;
-  correction_hours: number | null;
+  /** numeric в БД → бэкенд отдаёт строкой ("10.00"); число приходит только из оптимистичных правок. */
+  correction_hours: number | string | null;
   /** Объект (skud_objects.id), к которому привязана корректировка табеля. NULL для не-корректировок. */
   correction_object_id?: string | null;
   correction_object_name?: string | null;
@@ -63,6 +64,13 @@ export interface ILeaveRequest {
    */
   correction_approval_status?: 'auto_approved' | 'pending' | 'approved' | 'rejected' | null;
 }
+
+/** Единый формат часов корректировки: и строка из БД, и число из оптимистичной правки → «9.00». */
+export const formatCorrectionHours = (value: number | string): string => Number(value).toFixed(2);
+
+/** Допустимые часы корректировки: 0–24 с шагом 0.5 (та же проверка на бэкенде). */
+export const isValidCorrectionHours = (value: number): boolean =>
+  Number.isFinite(value) && value >= 0 && value <= 24 && Number.isInteger(value * 2);
 
 export const CORRECTION_STATUS_LABELS: Record<string, string> = {
   work: 'Рабочий день',
@@ -220,6 +228,15 @@ export const leaveRequestService = {
   // Правка текста обоснования заявления руководителем/админом (admin/manager/manager_obj/site_supervisor).
   updateReason: async (id: number, reason: string) => {
     const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/reason`, { reason });
+    return res.data;
+  },
+
+  // Правка часов корректировки табеля согласующим до одобрения (admin/hr/руководитель отдела).
+  updateCorrectionHours: async (id: number, hours: number) => {
+    const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(
+      `/leave-requests/${id}/correction-hours`,
+      { hours },
+    );
     return res.data;
   },
 

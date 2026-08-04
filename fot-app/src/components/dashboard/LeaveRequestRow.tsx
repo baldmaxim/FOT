@@ -2,6 +2,7 @@ import { type FC, type MouseEvent } from 'react';
 import { Clock, CheckCircle, XCircle, Ban, ChevronRight } from 'lucide-react';
 import {
   REQUEST_TYPE_LABELS,
+  formatCorrectionHours,
   getRequestDecision,
   type ILeaveRequest,
   type LeaveRequestStatus,
@@ -57,7 +58,7 @@ export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({ request: r, today, 
       <div className="lr-card-left">
         <div className="lr-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>
         {r.request_type === 'time_correction' && r.correction_date ? (
-          <div className="lr-card-dates">Дата: {formatDate(r.correction_date)} · Статус: {r.correction_status} · {r.correction_hours != null ? `${r.correction_hours}ч` : ''}</div>
+          <div className="lr-card-dates">Дата: {formatDate(r.correction_date)} · Статус: {r.correction_status} · {r.correction_hours != null ? `${formatCorrectionHours(r.correction_hours)}ч` : ''}</div>
         ) : (
           <div className="lr-card-dates">{formatLeaveRequestDatesCompact(r)}</div>
         )}

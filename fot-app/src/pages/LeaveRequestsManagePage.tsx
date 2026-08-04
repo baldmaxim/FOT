@@ -18,6 +18,8 @@ import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
   CORRECTION_STATUS_LABELS,
+  formatCorrectionHours,
+  isValidCorrectionHours,
   getRequestDecision,
   type ILeaveRequest,
   type ILeaveRequestAttachment,
@@ -84,10 +86,13 @@ interface IEventsPanelState {
 }
 
 export const LeaveRequestsManagePage: FC = () => {
-  const { hasPermission, profile } = useAuth();
+  const { hasPermission, profile, canEditPage } = useAuth();
   const { showToast } = useToast();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
   const scope = isDepartmentScope ? 'department' : 'all';
+  // Страница доступна и с одним лишь 'view' — правку часов показываем только редакторам.
+  // Права на конкретную заявку окончательно проверяет бэк (canManageLeaveRequest).
+  const canEditRequests = canEditPage('/leave-requests');
   const queryClient = useQueryClient();
 
   // «Сегодня» в Europe/Moscow (как на бэке) — для показа кнопки отмены только на будущих отпусках.
@@ -105,6 +110,9 @@ export const LeaveRequestsManagePage: FC = () => {
   const [editingReasonId, setEditingReasonId] = useState<number | null>(null);
   const [reasonDraft, setReasonDraft] = useState('');
   const [savingReason, setSavingReason] = useState(false);
+  const [editingHoursId, setEditingHoursId] = useState<number | null>(null);
+  const [hoursDraft, setHoursDraft] = useState('');
+  const [savingHours, setSavingHours] = useState(false);
   const [preview, setPreview] = useState<IPreviewState | null>(null);
   const [eventsPanel, setEventsPanel] = useState<IEventsPanelState | null>(null);
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
@@ -253,6 +261,42 @@ export const LeaveRequestsManagePage: FC = () => {
     }
   };
 
+  // Правка часов корректировки до согласования: сотрудник заявил 10ч, руководитель
+  // согласовывает 9ч. Разрешена только на pending — строка в табеле создаётся при approve.
+  const handleUpdateHours = async (id: number) => {
+    const raw = hoursDraft.trim();
+    // Number('') === 0 — очищенное поле иначе молча ушло бы как «0 часов».
+    if (!raw) {
+      showToast('error', 'Укажите количество часов');
+      return;
+    }
+    const hours = Number(raw);
+    if (!isValidCorrectionHours(hours)) {
+      showToast('error', 'Часы: от 0 до 24 с шагом 0.5');
+      return;
+    }
+    setSavingHours(true);
+    try {
+      const updated = await leaveRequestService.updateCorrectionHours(id, hours);
+      queryClient.setQueriesData<ILeaveRequest[] | undefined>(
+        { queryKey: ['leave-requests-manage'] },
+        (prev) => (prev
+          ? prev.map(r => (r.id === id ? { ...r, correction_hours: updated?.correction_hours ?? hours } : r))
+          : prev),
+      );
+      setEditingHoursId(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+      ]);
+    } catch (err) {
+      console.error('Update correction hours error:', err);
+      showToast('error', err instanceof Error ? err.message : 'Не удалось изменить часы');
+    } finally {
+      setSavingHours(false);
+    }
+  };
+
   const handleRevoke = async (id: number) => {
     setRevoking(true);
     try {
@@ -361,7 +405,63 @@ export const LeaveRequestsManagePage: FC = () => {
                   ? (CORRECTION_STATUS_LABELS[r.correction_status] ?? r.correction_status)
                   : '—'}
               </strong>
-              {r.correction_hours != null ? ` · ${r.correction_hours}ч` : ''}
+              {r.correction_hours != null && (
+                editingHoursId === r.id ? (
+                  <span className="lrm-hours-edit" onClick={stop}>
+                    {' · '}
+                    <input
+                      type="number"
+                      className="lrm-hours-input"
+                      value={hoursDraft}
+                      onChange={(e) => setHoursDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === 'Enter') { e.preventDefault(); void handleUpdateHours(r.id); }
+                        if (e.key === 'Escape') { e.preventDefault(); setEditingHoursId(null); }
+                      }}
+                      step="0.5"
+                      min="0"
+                      max="24"
+                      inputMode="decimal"
+                      disabled={savingHours}
+                      autoFocus
+                    />
+                    <span className="lrm-hours-unit">ч</span>
+                    <button
+                      type="button"
+                      className="lrm-action-btn approve"
+                      disabled={savingHours}
+                      onClick={(e) => { e.stopPropagation(); void handleUpdateHours(r.id); }}
+                    >
+                      Сохранить
+                    </button>
+                    <button
+                      type="button"
+                      className="lrm-action-btn ghost"
+                      disabled={savingHours}
+                      onClick={(e) => { e.stopPropagation(); setEditingHoursId(null); }}
+                    >
+                      Отмена
+                    </button>
+                  </span>
+                ) : (r.status === 'pending' && canEditRequests ? (
+                  <>
+                    {' · '}
+                    <button
+                      type="button"
+                      className="lrm-hours-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingHoursId(r.id);
+                        setHoursDraft(String(Number(r.correction_hours)));
+                      }}
+                      title="Изменить часы"
+                    >
+                      {formatCorrectionHours(r.correction_hours)}ч
+                    </button>
+                  </>
+                ) : ` · ${formatCorrectionHours(r.correction_hours)}ч`)
+              )}
             </div>
           ) : (
             <div className="lrm-card-dates">

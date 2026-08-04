@@ -1156,29 +1156,34 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
       if (!updated) return { conflict: true as const };
 
+      // RETURNING * — единственный источник актуальных полей заявки: часы могли быть
+      // изменены согласующим (PATCH /:id/correction-hours) уже после чтения request выше.
+      // Материализуем строго из свежей строки, иначе в табель уйдут устаревшие часы.
+      const approvedRequest = { ...request, ...(updated as Partial<typeof request>) };
+
       // Создаём attendance adjustments как канонический источник ручных статусов.
       // Для work/remote в выходной approval_status считает единый резолвер.
-      await materializeLeaveRequestAdjustments(request, authorUserId, client, weekendCollapseApproverUserId);
+      await materializeLeaveRequestAdjustments(approvedRequest, authorUserId, client, weekendCollapseApproverUserId);
 
       // Обработка корректировки табеля
-      if (request.request_type === 'time_correction' && request.correction_date) {
-        const rawCorrectionStatus: TimeStatus = isTimeStatus(request.correction_status) ? request.correction_status : 'work';
+      if (approvedRequest.request_type === 'time_correction' && approvedRequest.correction_date) {
+        const rawCorrectionStatus: TimeStatus = isTimeStatus(approvedRequest.correction_status) ? approvedRequest.correction_status : 'work';
         // Явные часы на «рабочий день» = «Корректировка табеля» (manual): время авторитетно
         // берётся из hours_override, а не из СКУД. Иначе при отсутствии проходов время «терялось»
         // (status='work' + null часов → 0 по СКУД), и статус расходился со списком корректировок.
-        const correctionStatus: TimeStatus = rawCorrectionStatus === 'work' && (request.correction_hours ?? 0) > 0
+        const correctionStatus: TimeStatus = rawCorrectionStatus === 'work' && (approvedRequest.correction_hours ?? 0) > 0
           ? 'manual'
           : rawCorrectionStatus;
         // Если день — выходной по графику сотрудника И его отдел в whitelist
         // настройки «Согласование выходных дней», корректировка попадает в pending
         // и должна быть дополнительно одобрена админом на /approvals.
         // Исключение — схлопывание: одобряющий сам ответственный за выходные.
-        await lockQuotaMonthsOnClient(client, request.employee_id, [request.correction_date]);
+        await lockQuotaMonthsOnClient(client, approvedRequest.employee_id, [approvedRequest.correction_date]);
         const resolvedApproval = await resolveAdjustmentApprovalStatus(
-          request.employee_id,
-          request.correction_date,
+          approvedRequest.employee_id,
+          approvedRequest.correction_date,
           correctionStatus,
-          request.correction_hours ?? null,
+          approvedRequest.correction_hours ?? null,
           false,
           null,
           client,
@@ -1186,7 +1191,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         const collapsed = resolvedApproval === 'pending' && weekendCollapseApproverUserId != null;
         const approvalStatus = collapsed ? ('approved' as const) : resolvedApproval;
         const approvedBy = collapsed ? weekendCollapseApproverUserId : undefined;
-        if (request.correction_object_id) {
+        if (approvedRequest.correction_object_id) {
           // Корректировка привязана к конкретному объекту → создаём manual_object
           // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
           // day-level записи дня (мьютекс day-level ↔ per-object).
@@ -1194,35 +1199,35 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
             `DELETE FROM attendance_adjustments
                WHERE employee_id = $1 AND work_date = $2
                  AND source_type IN ('manual', 'leave_request')`,
-            [request.employee_id, request.correction_date],
+            [approvedRequest.employee_id, approvedRequest.correction_date],
           );
           await upsertAttendanceAdjustment({
-            employee_id: request.employee_id,
-            work_date: request.correction_date,
+            employee_id: approvedRequest.employee_id,
+            work_date: approvedRequest.correction_date,
             status: correctionStatus,
-            hours_override: request.correction_hours ?? null,
+            hours_override: approvedRequest.correction_hours ?? null,
             source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-            source_id: request.correction_object_id,
-            reason: request.reason ?? null,
+            source_id: approvedRequest.correction_object_id,
+            reason: approvedRequest.reason ?? null,
             created_by: authorUserId,
             approval_status: approvalStatus,
             approved_by: approvedBy,
             metadata: {
-              object_id: request.correction_object_id,
-              object_name: request.correction_object_name,
+              object_id: approvedRequest.correction_object_id,
+              object_name: approvedRequest.correction_object_name,
               auto_resolved: false,
             },
           }, client);
         } else {
           // Легаси-заявки без объекта (созданные до миграции 158): day-level как раньше.
           await upsertAttendanceAdjustment({
-            employee_id: request.employee_id,
-            work_date: request.correction_date,
+            employee_id: approvedRequest.employee_id,
+            work_date: approvedRequest.correction_date,
             status: correctionStatus,
-            hours_override: request.correction_hours ?? null,
+            hours_override: approvedRequest.correction_hours ?? null,
             source_type: 'leave_request',
-            source_id: `${request.id}:time_correction`,
-            reason: request.reason ?? null,
+            source_id: `${approvedRequest.id}:time_correction`,
+            reason: approvedRequest.reason ?? null,
             created_by: authorUserId,
             approval_status: approvalStatus,
             approved_by: approvedBy,
@@ -1373,6 +1378,108 @@ const updateReason = async (req: AuthenticatedRequest, res: Response): Promise<v
   } catch (err) {
     console.error('leave-requests.updateReason error:', err);
     res.status(500).json({ success: false, error: 'Ошибка правки текста заявления' });
+  }
+};
+
+/**
+ * Правка часов корректировки табеля согласующим ДО одобрения (в карточке
+ * «Заявлений» часы кликабельны). Разрешена только на pending: строки в
+ * attendance_adjustments ещё нет — она создаётся в approve, который читает
+ * заявку заново, поэтому табель получит уже исправленное значение.
+ * Аудит пишется в той же транзакции (гарантированный след «было → стало»).
+ */
+const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { hours } = req.body as { hours?: unknown };
+
+    if (typeof hours !== 'number' || !Number.isFinite(hours)
+      || hours < 0 || hours > 24 || !Number.isInteger(hours * 2)) {
+      res.status(400).json({ success: false, error: 'Часы: от 0 до 24 с шагом 0.5' });
+      return;
+    }
+
+    const request = await queryOne<{ id: number; employee_id: number; request_type: string; status: string }>(
+      `SELECT id, employee_id, request_type, status FROM leave_requests WHERE id = $1`,
+      [id],
+    );
+    if (!request) {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+
+    if (request.request_type !== 'time_correction') {
+      res.status(400).json({ success: false, error: 'Часы правятся только у корректировки табеля' });
+      return;
+    }
+
+    if (!(await canManageLeaveRequest(req, request.employee_id, request.request_type, 'edit'))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
+      return;
+    }
+
+    // FOR UPDATE: без блокировки два параллельных редактора прочитали бы одно и то же
+    // «было», и второй аудит соврал бы (10→8 вместо 9→8). Аудит — единственный след правки.
+    const result = await withTransaction(async (client) => {
+      const locked = (await client.query(
+        `SELECT status, correction_hours FROM leave_requests WHERE id = $1 FOR UPDATE`,
+        [id],
+      )).rows[0] ?? null;
+
+      if (!locked) return { conflict: 'gone' as const };
+      if (locked.status !== 'pending') return { conflict: 'not_pending' as const };
+
+      const updated = (await client.query(
+        `UPDATE leave_requests SET correction_hours = $1, updated_at = now()
+          WHERE id = $2 AND status = 'pending'
+          RETURNING *`,
+        [hours, id],
+      )).rows[0] ?? null;
+
+      if (!updated) return { conflict: 'not_pending' as const };
+
+      await auditService.logFromRequestWithClient(
+        client, req, req.user.id, 'UPDATE_LEAVE_REQUEST_CORRECTION_HOURS',
+        {
+          entityType: 'leave_request',
+          entityId: String(id),
+          details: {
+            employee_id: request.employee_id,
+            // numeric из pg приходит строкой — нормализуем, чтобы в JSON не легли
+            // разнотипные "10.00" и 9.
+            old_hours: locked.correction_hours == null ? null : Number(locked.correction_hours),
+            new_hours: hours,
+          },
+        },
+      );
+
+      return { conflict: null, row: updated };
+    });
+
+    if (result.conflict === 'gone') {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+    if (result.conflict === 'not_pending') {
+      res.status(409).json({ success: false, error: 'Заявление уже обработано, обновите страницу' });
+      return;
+    }
+
+    // Realtime: автор в ЛК должен увидеть исправленные часы до согласования.
+    getLeaveRequestRecipients(request.employee_id, req.user.id)
+      .then((recipients) => {
+        emitDomainChange({
+          event: 'leave_request:changed',
+          targetUserIds: recipients,
+          payload: { entityId: request.id, employeeId: request.employee_id, action: 'update_hours' },
+        });
+      })
+      .catch((e) => console.error('[leave-requests] emit updateCorrectionHours realtime error:', e));
+
+    res.json({ success: true, data: result.row });
+  } catch (err) {
+    console.error('leave-requests.updateCorrectionHours error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка правки часов корректировки' });
   }
 };
 
@@ -1771,6 +1878,7 @@ export const leaveRequestsController = {
   approve,
   reject,
   updateReason,
+  updateCorrectionHours,
   cancel,
   hrAcknowledge,
   revokeApproval,
