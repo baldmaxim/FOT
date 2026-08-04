@@ -80,6 +80,9 @@ router.get('/passes/stats/details', apprView, contractorAdminController.passStat
 router.get('/passes/stats/export', apprView, contractorAdminController.exportPassStats);
 router.get('/passes/sync-failed', apprView, contractorPoolController.syncFailed);
 router.get('/passes/:id/history', apprView, contractorAdminController.getPassHistoryAdmin);
+// Правка документов держателя любым админом раздела (замена патента и т.п.) + история снапшотов.
+router.post('/passes/:id/documents', apprEdit, contractorAdminController.updatePassDocumentsAdmin);
+router.get('/passes/:id/documents/history', apprView, contractorAdminController.getPassDocumentsHistory);
 router.post('/passes/:id/revoke', apprEdit, requireCritical2FA, contractorPoolController.revokePass);
 router.post('/passes/:id/retry-sync', apprEdit, contractorPoolController.retrySync);
 // Освободить пропуск: обнулить ФИО/документы/выдачу, вернуть пустой assigned-слот подрядчику,

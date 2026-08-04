@@ -288,6 +288,25 @@ export interface IContractorPassDetail {
   issued_on: string;
 }
 
+/** Снапшот прежних документов держателя (история замен патента/паспорта). */
+export interface IDocHistoryRow {
+  id: string;
+  holder_name: string | null;
+  passport_series_number: string | null;
+  passport_issue_date: string | null;
+  birth_date: string | null;
+  citizenship: string | null;
+  patent_number: string | null;
+  patent_issue_date: string | null;
+  patent_blank_number: string | null;
+  has_residence_permit: boolean | null;
+  residence_permit_number: string | null;
+  changed_fields: string[];
+  changed_by_name: string | null;
+  changed_source: 'admin' | 'contractor' | 'clear_holder';
+  changed_at: string;
+}
+
 export interface IHolderHistoryRow {
   id: string;
   holder_name: string;
@@ -941,6 +960,20 @@ export const contractorAdminService = {
   async getPassHistoryAdmin(passId: string): Promise<IPassHistory> {
     const r = await apiClient.get<ApiResponse<IPassHistory>>(`/admin/contractor/passes/${passId}/history`);
     return r.data ?? { holders: [], decisions: [] };
+  },
+  /** Правка документов держателя (админ/HR): замена патента, дозаполнение. */
+  async updatePassDocuments(
+    passId: string,
+    docs: IPassDocuments & { expected_updated_at: string },
+  ): Promise<void> {
+    await apiClient.post(`/admin/contractor/passes/${passId}/documents`, docs);
+  },
+  /** История снапшотов прежних документов (новые сверху). */
+  async getPassDocumentsHistory(passId: string): Promise<IDocHistoryRow[]> {
+    const r = await apiClient.get<ApiResponse<IDocHistoryRow[]>>(
+      `/admin/contractor/passes/${passId}/documents/history`,
+    );
+    return r.data ?? [];
   },
   /** Освободить пропуск: обнулить ФИО/документы/выдачу + заблокировать профиль в Sigur. */
   async clearPassHolder(passId: string): Promise<void> {

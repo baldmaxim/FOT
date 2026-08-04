@@ -1,6 +1,6 @@
 import { useState, type FC } from 'react';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
-import type { IPassDocDuplicate, IPassDocuments } from '../../services/contractorService';
+import type { IDocHistoryRow, IPassDocDuplicate, IPassDocuments } from '../../services/contractorService';
 import { CITIZENSHIP_OPTIONS, citizenshipRequiresPatent } from '../../services/citizenship';
 import styles from '../../pages/contractor/Contractor.module.css';
 
@@ -31,9 +31,49 @@ interface IProps {
   busy?: boolean;
   /** Совпадения номеров с другими держателями (для подсветки). */
   duplicates?: IDuplicates;
+  /** Снапшоты прежних документов (админка): блок «История изменений» внизу. */
+  history?: IDocHistoryRow[];
   onClose: () => void;
   onSave?: (docs: IPassDocuments) => void;
 }
+
+/** Подписи полей истории. */
+const DOC_FIELD_LABELS: Record<string, string> = {
+  passport_series_number: 'Паспорт',
+  passport_issue_date: 'Дата выдачи паспорта',
+  birth_date: 'Дата рождения',
+  citizenship: 'Гражданство',
+  patent_number: 'Номер патента',
+  patent_issue_date: 'Дата выдачи патента',
+  patent_blank_number: 'Бланк патента',
+  has_residence_permit: 'ВНЖ',
+  residence_permit_number: 'Номер ВНЖ',
+};
+
+const DOC_DATE_FIELDS = new Set(['passport_issue_date', 'birth_date', 'patent_issue_date']);
+
+const formatRuDate = (iso: string | null | undefined): string => {
+  const s = (iso ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '—';
+  const [y, m, d] = s.split('-');
+  return `${d}.${m}.${y}`;
+};
+
+/** Прежнее значение изменённого поля для строки истории. */
+const historyValue = (row: IDocHistoryRow, field: string): string => {
+  if (field === 'has_residence_permit') return row.has_residence_permit ? 'да' : 'нет';
+  const raw = (row as unknown as Record<string, string | null>)[field] ?? null;
+  if (raw == null) return 'не указано';
+  return DOC_DATE_FIELDS.has(field) ? formatRuDate(raw) : raw;
+};
+
+/** Кто внёс правку (для строки истории). */
+const historyAuthor = (row: IDocHistoryRow): string => {
+  const name = row.changed_by_name?.trim();
+  if (row.changed_source === 'clear_holder') return `${name || 'админ'} — освобождение пропуска`;
+  if (row.changed_source === 'contractor') return name ? `${name} (подрядчик)` : 'подрядчик';
+  return name || 'админ';
+};
 
 const dupNote = (rows: IPassDocDuplicate[] | undefined): string | null => {
   if (!rows || rows.length === 0) return null;
@@ -51,6 +91,7 @@ export const PassDocumentsModal: FC<IProps> = ({
   readOnlyReason,
   busy = false,
   duplicates,
+  history,
   onClose,
   onSave,
 }) => {
@@ -113,7 +154,7 @@ export const PassDocumentsModal: FC<IProps> = ({
       onTouchStart={overlay.onTouchStart}
       onTouchEnd={overlay.onTouchEnd}
     >
-      <div className={styles.modal}>
+      <div className={`${styles.modal} ${styles.modalScroll}`}>
         <h2 className={styles.modalTitle}>
           Документы — {holderName ?? `пропуск № ${passNumber}`}
         </h2>
@@ -121,6 +162,7 @@ export const PassDocumentsModal: FC<IProps> = ({
           <p className={styles.docDupNote} style={{ marginTop: 0 }}>{readOnlyReason}</p>
         )}
 
+        <div className={styles.modalScrollArea}>
         <div className={styles.field}>
           <span className={styles.label}>Паспорт серия номер</span>
           <input
@@ -237,6 +279,31 @@ export const PassDocumentsModal: FC<IProps> = ({
             </div>
           </>
         )}
+
+        {history && history.length > 0 && (
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+            <span className={styles.label}>История изменений</span>
+            {history.map(row => (
+              <div key={row.id} className={styles.statusNote} style={{ margin: '8px 0 0' }}>
+                <div>
+                  {new Date(row.changed_at).toLocaleString('ru-RU', {
+                    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+                  })}
+                  {' — '}
+                  {historyAuthor(row)}
+                </div>
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                  {row.changed_fields.map(f => (
+                    <li key={f}>
+                      {DOC_FIELD_LABELS[f] ?? f}: было {historyValue(row, f)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+        </div>
 
         <div className={styles.modalActions}>
           <button className="btn-secondary" onClick={onClose} disabled={busy}>

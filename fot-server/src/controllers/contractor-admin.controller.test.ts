@@ -53,6 +53,7 @@ vi.mock('../services/audit.service.js', () => ({
     CONTRACTOR_OT_TRAINING_CHANGED: 'CONTRACTOR_OT_TRAINING_CHANGED',
     CONTRACTOR_OT_PERSON_ARCHIVED: 'CONTRACTOR_OT_PERSON_ARCHIVED',
     CONTRACTOR_PASS_HOLDER_CHANGED: 'CONTRACTOR_PASS_HOLDER_CHANGED',
+    CONTRACTOR_PASS_DOCUMENTS_UPDATED: 'CONTRACTOR_PASS_DOCUMENTS_UPDATED',
   },
 }));
 vi.mock('../services/contractor-induction.service.js', async (importOriginal) => ({
@@ -1051,6 +1052,33 @@ describe('contractorAdminController.clearPassHolder', () => {
     );
   });
 
+  it('освобождение сохраняет последний комплект документов в историю (source=clear_holder)', async () => {
+    wireTx({
+      ...basePass({}),
+      org_department_id: '77777777-7777-7777-7777-777777777777',
+      passport_series_number: 'AB 1234567', passport_issue_date: '2020-01-01',
+      birth_date: '1990-01-01', citizenship: 'УЗБЕКИСТАН',
+      patent_number: '77 №2600295204', patent_issue_date: '2025-06-01',
+      patent_blank_number: 'ПР8048893', has_residence_permit: false, residence_permit_number: null,
+    } as unknown as PassRow);
+    h.updEmp.mockResolvedValueOnce(undefined);
+
+    const res = makeRes();
+    await contractorAdminController.clearPassHolder(makeClearReq(), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const hist = findCall('contractor_pass_document_history');
+    expect(hist).toBeTruthy();
+    const hp = hist?.[1] as unknown[];
+    expect(hp[8]).toBe('77 №2600295204');   // прежний patent_number
+    expect(hp[15]).toBe('clear_holder');    // changed_source
+    // Снапшот — ДО очищающего UPDATE.
+    const histIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('contractor_pass_document_history'));
+    const updIdx = clientQuery.mock.calls.findIndex(c => String(c[0]).includes('UPDATE contractor_passes'));
+    expect(histIdx).toBeGreaterThanOrEqual(0);
+    expect(histIdx).toBeLessThan(updIdx);
+  });
+
   it('guard: revoked → 409, Sigur и БД не трогаются', async () => {
     wireTx(basePass({ status: 'revoked', is_active: false }));
 
@@ -1111,6 +1139,194 @@ describe('contractorAdminController.clearPassHolder', () => {
     const subUpd = findCall('UPDATE contractor_submissions');
     expect(subUpd).toBeTruthy();
     expect(String(subUpd?.[0])).toContain("status IN ('pending', 'partially_applied')");
+  });
+});
+
+/**
+ * Админская правка документов держателя (замена патента по письму подрядчика).
+ * Схема/нормализация/история — настоящие (contractor-docs.service не мокается
+ * в этом файле); маршрутизация client.query — по фрагментам SQL.
+ */
+describe('contractorAdminController.updatePassDocumentsAdmin', () => {
+  const PASS = '66666666-6666-6666-6666-666666666666';
+  const ORG = '77777777-7777-7777-7777-777777777777';
+  const UPDATED_AT = '2026-08-01T10:00:00.000Z';
+
+  const basePass = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: PASS, pass_number: '90', status: 'applied', approval_status: 'approved',
+    updated_at: new Date(UPDATED_AT),
+    org_department_id: ORG, holder_name: 'Носиров Озод Орифович',
+    passport_series_number: 'AB 1234567', passport_issue_date: '2020-01-01',
+    birth_date: '1990-01-01', citizenship: 'УЗБЕКИСТАН',
+    patent_number: '77 №2600295204', patent_issue_date: '2025-06-01',
+    patent_blank_number: 'ПР8048893', has_residence_permit: false, residence_permit_number: null,
+    ...over,
+  });
+
+  // Новый патент поверх старого; expected_updated_at совпадает с БД.
+  const validBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    passport_series_number: 'AB 1234567', passport_issue_date: '2020-01-01', birth_date: '1990-01-01',
+    citizenship: 'УЗБЕКИСТАН', patent_number: '78 №9999999999', patent_issue_date: '2026-07-01',
+    patent_blank_number: 'ПР0000001', has_residence_permit: false, residence_permit_number: null,
+    expected_updated_at: UPDATED_AT,
+    ...over,
+  });
+
+  const makeDocsReq = (body: Record<string, unknown>, passId = PASS) => ({
+    user: { id: 'admin-1', company_scope: { roots: 'all' } },
+    params: { id: passId },
+    body,
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+  }) as never;
+
+  let clientQuery: ReturnType<typeof vi.fn>;
+  const wireTx = (rows: Array<Record<string, unknown>>, dupRows: Array<Record<string, unknown>> = []) => {
+    h.withTransaction.mockImplementation(async (fn: (c: { query: ReturnType<typeof vi.fn> }) => unknown) => {
+      clientQuery = vi.fn(async (sql: string) => {
+        const s = String(sql);
+        if (s.includes('FOR UPDATE')) return { rows };
+        // Дубль-детектор (findOrgDocDuplicate): FROM contractor_passes p + JOIN holders.
+        if (s.includes('LEFT JOIN contractor_pass_holders')) return { rows: dupRows };
+        return { rows: [], rowCount: 1 };
+      });
+      return fn({ query: clientQuery });
+    });
+  };
+
+  const findCall = (frag: string) => clientQuery?.mock.calls.find(c => String(c[0]).includes(frag));
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.resolveCompanyScope.mockResolvedValue({ roots: 'all' });
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('невалидный uuid → 400, транзакция не открывается', async () => {
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(makeDocsReq(validBody(), 'not-a-uuid'), res as never);
+    expect(res.statusCode).toBe(400);
+    expect(h.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('view-only роль (грант без edit) → 403', async () => {
+    h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+    h.hasPageView.mockResolvedValue(true);
+    h.hasPageEdit.mockResolvedValue(false);
+    const req = {
+      user: { id: 'u-1', role_code: 'security', is_admin: false },
+      params: { id: PASS }, body: validBody(), ip: '127.0.0.1', headers: {}, socket: {},
+    } as never;
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(req, res as never);
+    expect(res.statusCode).toBe(403);
+    expect(h.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('пропуск не найден → 404', async () => {
+    wireTx([]);
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(makeDocsReq(validBody()), res as never);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it.each(['in_pool', 'revoked'])('status=%s → 409, без UPDATE', async status => {
+    wireTx([basePass({ status, approval_status: 'not_submitted' })]);
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(makeDocsReq(validBody()), res as never);
+    expect(res.statusCode).toBe(409);
+    expect(findCall('UPDATE contractor_passes')).toBeUndefined();
+  });
+
+  it('stale expected_updated_at (запись изменил другой) → 409, без UPDATE и истории', async () => {
+    wireTx([basePass()]);
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(
+      makeDocsReq(validBody({ expected_updated_at: '2026-08-01T09:00:00.000Z' })), res as never,
+    );
+    expect(res.statusCode).toBe(409);
+    expect((res.body as { error?: string }).error).toContain('другим пользователем');
+    expect(findCall('UPDATE contractor_passes')).toBeUndefined();
+    expect(findCall('contractor_pass_document_history')).toBeUndefined();
+  });
+
+  it('approved нельзя оставить с неполным комплектом (патентная страна без патента) → 409', async () => {
+    wireTx([basePass()]);
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(
+      makeDocsReq(validBody({ patent_number: null, patent_issue_date: null, patent_blank_number: null })),
+      res as never,
+    );
+    expect(res.statusCode).toBe(409);
+    expect((res.body as { code?: string }).code).toBe('CONTRACTOR_DOCUMENTS_INCOMPLETE');
+    expect(findCall('UPDATE contractor_passes')).toBeUndefined();
+  });
+
+  it('дубль патента внутри организации → 409 CONTRACTOR_DOCUMENT_DUPLICATE', async () => {
+    wireTx([basePass()], [{ field: 'patent', holder_name: 'Другой Держатель', pass_number: '91' }]);
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(makeDocsReq(validBody()), res as never);
+    expect(res.statusCode).toBe(409);
+    expect((res.body as { code?: string }).code).toBe('CONTRACTOR_DOCUMENT_DUPLICATE');
+    expect(findCall('UPDATE contractor_passes')).toBeUndefined();
+  });
+
+  it('успех: замена патента у действующего пропуска → UPDATE + снапшот старого патента + audit', async () => {
+    wireTx([basePass()]);
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(makeDocsReq(validBody()), res as never);
+
+    expect(res.statusCode).toBe(200);
+    const body = res.body as { success: boolean; data: { changed_fields: string[] } };
+    expect(body.success).toBe(true);
+    expect(body.data.changed_fields.sort()).toEqual(['patent_blank_number', 'patent_issue_date', 'patent_number']);
+
+    // Снапшот прежних значений: старый патент, источник admin.
+    const hist = findCall('contractor_pass_document_history');
+    expect(hist).toBeTruthy();
+    const hp = hist?.[1] as unknown[];
+    expect(hp[8]).toBe('77 №2600295204');          // прежний patent_number
+    expect(hp[15]).toBe('admin');                  // changed_source
+    expect((hp[13] as string[]).sort()).toEqual(['patent_blank_number', 'patent_issue_date', 'patent_number']);
+
+    // Новые значения ушли в UPDATE.
+    const upd = findCall('UPDATE contractor_passes');
+    expect(upd).toBeTruthy();
+    expect((upd?.[1] as unknown[])[4]).toBe('78 №9999999999');
+
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'CONTRACTOR_PASS_DOCUMENTS_UPDATED',
+      expect.objectContaining({ entityType: 'contractor_pass', entityId: PASS }),
+    );
+  });
+
+  it('сохранение без изменений → 200, истории нет', async () => {
+    wireTx([basePass()]);
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(
+      makeDocsReq(validBody({
+        patent_number: '77 №2600295204', patent_issue_date: '2025-06-01', patent_blank_number: 'ПР8048893',
+      })),
+      res as never,
+    );
+    expect(res.statusCode).toBe(200);
+    expect((res.body as { data: { changed_fields: string[] } }).data.changed_fields).toEqual([]);
+    expect(findCall('contractor_pass_document_history')).toBeUndefined();
+  });
+
+  it('первичное заполнение пустого комплекта → 200 + UPDATE, но истории нет', async () => {
+    wireTx([basePass({
+      status: 'applied', approval_status: 'approved',
+      passport_series_number: null, passport_issue_date: null, birth_date: null, citizenship: null,
+      patent_number: null, patent_issue_date: null, patent_blank_number: null,
+      has_residence_permit: false, residence_permit_number: null,
+    })]);
+    const res = makeRes();
+    await contractorAdminController.updatePassDocumentsAdmin(makeDocsReq(validBody()), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(findCall('UPDATE contractor_passes')).toBeTruthy();
+    expect(findCall('contractor_pass_document_history')).toBeUndefined();
   });
 });
 

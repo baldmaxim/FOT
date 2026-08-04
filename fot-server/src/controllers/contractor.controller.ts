@@ -25,7 +25,10 @@ import {
   duplicateMessage,
   findOrgDocDuplicate,
   isDocsComplete,
-  citizenshipRequiresPatent,
+  docsBodySchema,
+  normalizeDocsPayload,
+  recordDocHistoryIfChanged,
+  type IDocHistoryPass,
 } from '../services/contractor-docs.service.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 
@@ -464,46 +467,9 @@ export const contractorController = {
       if (!orgId) return;
       const passId = req.params.id;
 
-      const dateField = z.preprocess(
-        v => (typeof v === 'string' && v.trim() === '' ? null : v),
-        z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-      );
-      const parsed = z.object({
-        passport_series_number: z.string().trim().max(50).nullable().optional(),
-        passport_issue_date: dateField,
-        birth_date: dateField,
-        citizenship: z.string().trim().max(50).nullable().optional(),
-        patent_number: z.string().trim().max(50).nullable().optional(),
-        patent_issue_date: dateField,
-        patent_blank_number: z.string().trim().max(50).nullable().optional(),
-        has_residence_permit: z.boolean().optional(),
-        residence_permit_number: z.string().trim().max(50).nullable().optional(),
-      }).parse(req.body);
-
-      const norm = (v: string | null | undefined): string | null => {
-        const s = (v ?? '').trim();
-        return s.length > 0 ? s : null;
-      };
-
-      const citizenship = norm(parsed.citizenship);
-      // ВНЖ имеет смысл только для патентной страны. Серверная страховка от скрытого
-      // состояния: если гражданство непатентное (или сменилось на такое), ВНЖ сбрасываем,
-      // даже если клиент прислал has_residence_permit=true.
-      const effHasVnzh = citizenshipRequiresPatent(citizenship) && !!parsed.has_residence_permit;
-
-      // Нормализованный набор сохраняемых значений. Патент и ВНЖ взаимоисключающие:
-      // при ВНЖ обнуляем поля патента, иначе — номер ВНЖ; чтобы не копились устаревшие значения.
-      const next = {
-        passport_series_number: norm(parsed.passport_series_number),
-        passport_issue_date: parsed.passport_issue_date ?? null,
-        birth_date: parsed.birth_date ?? null,
-        citizenship,
-        patent_number: effHasVnzh ? null : norm(parsed.patent_number),
-        patent_issue_date: effHasVnzh ? null : (parsed.patent_issue_date ?? null),
-        patent_blank_number: effHasVnzh ? null : norm(parsed.patent_blank_number),
-        has_residence_permit: effHasVnzh,
-        residence_permit_number: effHasVnzh ? norm(parsed.residence_permit_number) : null,
-      };
+      // Разбор и нормализация общие с админским эндпоинтом (contractor-docs.service):
+      // trim→null, ВНЖ только для патентной страны, патент↔ВНЖ взаимоисключающие.
+      const next = normalizeDocsPayload(docsBodySchema.parse(req.body));
 
       // Конфликт уникальности (CONTRACTOR_DOCUMENT_DUPLICATE) или read-only/неполнота —
       // прокидываем через типизированную ошибку из транзакции.
@@ -516,14 +482,17 @@ export const contractorController = {
       // единственная точка записи документов, поэтому org-блокировки достаточно,
       // чтобы два параллельных сохранения не создали дубль.
       await withTransaction(async client => {
-        const passRes = await client.query<{
-          id: string;
+        const passRes = await client.query<IDocHistoryPass & {
           approval_status: string;
           status: string;
         }>(
-          `SELECT id, approval_status, status
+          `SELECT id, approval_status, status, pass_number, org_department_id, holder_name,
+                  passport_series_number, passport_issue_date, birth_date, citizenship,
+                  patent_number, patent_issue_date, patent_blank_number,
+                  has_residence_permit, residence_permit_number
              FROM contractor_passes
             WHERE org_department_id = $1::uuid
+            ORDER BY id
             FOR UPDATE`,
           [orgId],
         );
@@ -565,6 +534,12 @@ export const contractorController = {
           failWith({ http: 409, code: CONTRACTOR_DOCUMENT_DUPLICATE, message: duplicateMessage(dup) });
           return;
         }
+        // Снапшот прежних значений в историю (только если реально что-то менялось
+        // и прежний комплект был не пустой).
+        await recordDocHistoryIfChanged(client, pass, next, {
+          userId: req.user?.id ?? null,
+          source: 'contractor',
+        });
         await client.query(
           `UPDATE contractor_passes
               SET passport_series_number = $1,

@@ -1,10 +1,16 @@
 import { useState, type FC } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { BarChart3 } from 'lucide-react';
-import { contractorAdminService, type IPassHistory, type IMonitorPassRow } from '../../services/contractorService';
+import {
+  contractorAdminService,
+  type IPassHistory,
+  type IMonitorPassRow,
+  type IPassDocuments,
+} from '../../services/contractorService';
 import { formatCardW26 } from '../../utils/cardW26';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
 import { PassStatsModal } from './PassStatsModal';
@@ -218,8 +224,62 @@ const ClearHolderModal: FC<{ pass: IMonitorPassRow; onClose: () => void; onDone:
   );
 };
 
+/**
+ * Модалка документов держателя: у админа с edit-правом — редактирование
+ * (замена патента по письму подрядчика, дозаполнение старых пропусков)
+ * + история прежних значений. Отдельный компонент, чтобы хуки (история,
+ * мутация) не нарушали Rules of Hooks в таблице.
+ */
+const MonitorDocsModal: FC<{
+  pass: IMonitorPassRow;
+  canEdit: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}> = ({ pass, canEdit, onClose, onSaved }) => {
+  const toast = useToast();
+  const readOnly = !canEdit || pass.status === 'revoked' || pass.status === 'in_pool';
+
+  const historyQuery = useQuery({
+    queryKey: ['contractor-pass-doc-history', pass.id],
+    queryFn: () => contractorAdminService.getPassDocumentsHistory(pass.id),
+    staleTime: 15_000,
+  });
+
+  const save = useMutation({
+    mutationFn: (docs: IPassDocuments) =>
+      contractorAdminService.updatePassDocuments(pass.id, {
+        ...docs,
+        // Optimistic lock: 409, если запись изменили, пока модалка была открыта.
+        expected_updated_at: pass.updated_at,
+      }),
+    onSuccess: () => {
+      toast.success('Документы сохранены');
+      onSaved();
+    },
+    onError: (e: unknown) => {
+      toast.error(e instanceof Error ? e.message : 'Не удалось сохранить документы');
+    },
+  });
+
+  return (
+    <PassDocumentsModal
+      documents={pass}
+      holderName={pass.holder_name}
+      passNumber={pass.pass_number}
+      readOnly={readOnly}
+      readOnlyReason={readOnly && canEdit ? 'Пропуск свободен или отозван — только просмотр' : undefined}
+      busy={save.isPending}
+      history={historyQuery.data}
+      onClose={onClose}
+      onSave={readOnly ? undefined : docs => save.mutate(docs)}
+    />
+  );
+};
+
 export const MonitorTab: FC = () => {
   const qc = useQueryClient();
+  const { canEditPage } = useAuth();
+  const canEdit = canEditPage('/admin/contractor-approvals');
   const [orgId, setOrgId] = useState('');
   const [search, setSearch] = useState('');
   const [historyPassId, setHistoryPassId] = useState<string | null>(null);
@@ -324,7 +384,7 @@ export const MonitorTab: FC = () => {
                     className="btn-secondary"
                     style={{ marginLeft: 8 }}
                     onClick={() => setDocRow(p)}
-                    title="Просмотр документов"
+                    title={canEdit ? 'Документы держателя (просмотр и правка)' : 'Просмотр документов'}
                   >
                     Документы
                   </button>
@@ -343,7 +403,7 @@ export const MonitorTab: FC = () => {
                   <button className="btn-secondary" onClick={() => setHistoryPassId(p.id)}>
                     История
                   </button>
-                  {p.holder_name && p.status !== 'revoked' && (
+                  {canEdit && p.holder_name && p.status !== 'revoked' && (
                     <button
                       className="btn-secondary"
                       style={{ marginLeft: 8, color: 'var(--error)' }}
@@ -365,12 +425,16 @@ export const MonitorTab: FC = () => {
       )}
 
       {docRow && (
-        <PassDocumentsModal
-          documents={docRow}
-          holderName={docRow.holder_name}
-          passNumber={docRow.pass_number}
-          readOnly
+        <MonitorDocsModal
+          pass={docRow}
+          canEdit={canEdit}
           onClose={() => setDocRow(null)}
+          onSaved={() => {
+            void qc.invalidateQueries({ queryKey: ['contractor-monitor'] });
+            void qc.invalidateQueries({ queryKey: ['contractor-monitor-search'] });
+            void qc.invalidateQueries({ queryKey: ['contractor-pass-doc-history', docRow.id] });
+            setDocRow(null);
+          }}
         />
       )}
 

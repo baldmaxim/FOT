@@ -39,7 +39,19 @@ import {
   getOrgDocumentDownloadUrl,
   listOrgDocuments,
 } from '../services/contractor-documents.service.js';
-import { normalizeDocSql } from '../services/contractor-docs.service.js';
+import {
+  normalizeDocSql,
+  docsBodySchema,
+  normalizeDocsPayload,
+  recordDocHistoryIfChanged,
+  isDocsComplete,
+  findOrgDocDuplicate,
+  duplicateMessage,
+  CONTRACTOR_DOCUMENT_DUPLICATE,
+  CONTRACTOR_DOCUMENTS_INCOMPLETE,
+  type IDocHistoryPass,
+  type IDocPayload,
+} from '../services/contractor-docs.service.js';
 import {
   assignSigurEmployeeCardBinding,
   replaceSigurEmployeeAccessPoints,
@@ -2062,6 +2074,173 @@ export const contractorAdminController = {
   },
 
   /**
+   * POST /passes/:id/documents — админ/HR правит документы держателя ЛЮБОГО
+   * пропуска с держателем (в т.ч. действующего applied/approved): замена патента
+   * по письму подрядчика, дозаполнение старых пропусков без документов.
+   * Body: комплект документов + expected_updated_at (optimistic lock).
+   * Прежние значения уходят снапшотом в contractor_pass_document_history.
+   */
+  async updatePassDocumentsAdmin(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureContractorSectionAccess(req, res, 'edit'))) return;
+      const passId = z.string().uuid().parse(req.params.id);
+      const { expected_updated_at } = z
+        .object({ expected_updated_at: z.string().min(1).optional() })
+        .parse({ expected_updated_at: (req.body as Record<string, unknown> | undefined)?.expected_updated_at });
+      const next = normalizeDocsPayload(docsBodySchema.parse(req.body));
+
+      type SaveError = { http: number; code?: string; message: string };
+      const failWith = (e: SaveError): never => {
+        throw Object.assign(new Error(e.message), { __save: e });
+      };
+
+      let changedFields: string[] = [];
+      await withTransaction(async client => {
+        // Блокируем ВСЕ пропуска организации (как в подрядном savePassDocuments):
+        // иначе два параллельных админа запишут одинаковый паспорт в разные пропуска.
+        // Стабильный ORDER BY id — против взаимных дедлоков.
+        const passRes = await client.query<IDocHistoryPass & {
+          approval_status: string;
+          status: string;
+          updated_at: Date | string;
+        }>(
+          `SELECT id, approval_status, status, updated_at,
+                  pass_number, org_department_id, holder_name,
+                  passport_series_number, passport_issue_date, birth_date, citizenship,
+                  patent_number, patent_issue_date, patent_blank_number,
+                  has_residence_permit, residence_permit_number
+             FROM contractor_passes
+            WHERE org_department_id = (SELECT org_department_id FROM contractor_passes WHERE id = $1::uuid)
+            ORDER BY id
+            FOR UPDATE`,
+          [passId],
+        );
+        const pass = passRes.rows.find(r => r.id === passId);
+        if (!pass) {
+          failWith({ http: 404, message: 'Пропуск не найден' });
+          return;
+        }
+        // Allowlist по status (не путать с approval_status: 'approved' живёт только там).
+        if (pass.status === 'in_pool' || pass.status === 'revoked') {
+          failWith({ http: 409, message: 'Пропуск свободен или отозван — документы не редактируются' });
+          return;
+        }
+        // Optimistic lock: пока модалка была открыта, пропуск изменил другой пользователь.
+        if (expected_updated_at) {
+          const currentMs = new Date(pass.updated_at as string | Date).getTime();
+          const expectedMs = new Date(expected_updated_at).getTime();
+          if (Number.isFinite(expectedMs) && currentMs !== expectedMs) {
+            failWith({ http: 409, message: 'Пропуск изменён другим пользователем — обновите страницу и повторите' });
+            return;
+          }
+        }
+        // У согласованного/поданного пропуска комплект обязан остаться полным.
+        if ((pass.approval_status === 'pending' || pass.approval_status === 'approved') && !isDocsComplete(next)) {
+          failWith({
+            http: 409,
+            code: CONTRACTOR_DOCUMENTS_INCOMPLETE,
+            message: 'Документы согласованного пропуска должны остаться заполненными полностью',
+          });
+          return;
+        }
+        if (pass.org_department_id) {
+          const dup = await findOrgDocDuplicate(client, {
+            orgId: pass.org_department_id,
+            passId,
+            patentNumber: next.patent_number,
+            passportNumber: next.passport_series_number,
+          });
+          if (dup) {
+            failWith({ http: 409, code: CONTRACTOR_DOCUMENT_DUPLICATE, message: duplicateMessage(dup) });
+            return;
+          }
+        }
+        changedFields = await recordDocHistoryIfChanged(client, pass, next, {
+          userId: req.user.id,
+          source: 'admin',
+        });
+        await client.query(
+          `UPDATE contractor_passes
+              SET passport_series_number = $1,
+                  passport_issue_date = $2,
+                  birth_date = $3,
+                  citizenship = $4,
+                  patent_number = $5,
+                  patent_issue_date = $6,
+                  patent_blank_number = $7,
+                  has_residence_permit = $8,
+                  residence_permit_number = $9,
+                  updated_at = now()
+            WHERE id = $10::uuid`,
+          [
+            next.passport_series_number,
+            next.passport_issue_date,
+            next.birth_date,
+            next.citizenship,
+            next.patent_number,
+            next.patent_issue_date,
+            next.patent_blank_number,
+            next.has_residence_permit,
+            next.residence_permit_number,
+            passId,
+          ],
+        );
+      });
+
+      await auditService.logFromRequest(req, req.user.id, AUDIT_ACTIONS.CONTRACTOR_PASS_DOCUMENTS_UPDATED, {
+        entityType: 'contractor_pass',
+        entityId: passId,
+        details: { changed_fields: changedFields },
+      });
+
+      res.json({ success: true, data: { changed_fields: changedFields } });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      const save = (error as { __save?: { http: number; code?: string; message: string } }).__save;
+      if (save) {
+        res.status(save.http).json({ success: false, error: save.message, code: save.code });
+        return;
+      }
+      console.error('Contractor updatePassDocumentsAdmin error:', error);
+      Sentry.captureException(error, { tags: { route: 'contractor.updatePassDocumentsAdmin' } });
+      res.status(500).json({ success: false, error: 'Не удалось сохранить документы' });
+    }
+  },
+
+  /**
+   * GET /passes/:id/documents/history — снапшоты прежних документов держателя
+   * (замены патента/паспорта, освобождения пропуска), новые сверху.
+   */
+  async getPassDocumentsHistory(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
+      const passId = z.string().uuid().parse(req.params.id);
+      const rows = await query(
+        `SELECT id, holder_name,
+                passport_series_number, passport_issue_date, birth_date, citizenship,
+                patent_number, patent_issue_date, patent_blank_number,
+                has_residence_permit, residence_permit_number,
+                changed_fields, changed_by_name, changed_source, changed_at
+           FROM contractor_pass_document_history
+          WHERE pass_id = $1::uuid
+          ORDER BY changed_at DESC`,
+        [passId],
+      );
+      res.json({ success: true, data: rows });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: error.errors[0].message });
+        return;
+      }
+      console.error('Contractor getPassDocumentsHistory error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить историю документов' });
+    }
+  },
+
+  /**
    * POST /submissions/:id/decide — поштучные решения по заявке.
    * Body: { decisions: [{ pass_id, decision: 'approved'|'rejected', reason?,
    *                       access_point_names?[] }] }
@@ -2856,18 +3035,18 @@ export const contractorAdminController = {
       const dryRun = isContractorSigurDryRun();
 
       const snapshot = await withTransaction(async client => {
-        const passRes = await client.query<{
-          id: string;
-          pass_number: string;
+        const passRes = await client.query<IDocHistoryPass & {
           status: string;
           is_active: boolean;
-          holder_name: string | null;
           sigur_employee_id: number | null;
           submission_id: string | null;
           has_open_holder: boolean;
         }>(
           `SELECT p.id, p.pass_number, p.status, p.is_active, p.holder_name,
-                  p.sigur_employee_id, p.submission_id,
+                  p.sigur_employee_id, p.submission_id, p.org_department_id,
+                  p.passport_series_number, p.passport_issue_date, p.birth_date, p.citizenship,
+                  p.patent_number, p.patent_issue_date, p.patent_blank_number,
+                  p.has_residence_permit, p.residence_permit_number,
                   EXISTS(SELECT 1 FROM contractor_pass_holders h
                           WHERE h.pass_id = p.id AND h.valid_until IS NULL) AS has_open_holder
              FROM contractor_passes p
@@ -2909,6 +3088,24 @@ export const contractorAdminController = {
             });
           }
         }
+
+        // Снапшот документов уходящего держателя в историю — иначе прежний патент
+        // теряется именно при освобождении пропуска.
+        const emptyDocs: IDocPayload = {
+          passport_series_number: null,
+          passport_issue_date: null,
+          birth_date: null,
+          citizenship: null,
+          patent_number: null,
+          patent_issue_date: null,
+          patent_blank_number: null,
+          has_residence_permit: false,
+          residence_permit_number: null,
+        };
+        await recordDocHistoryIfChanged(client, pass, emptyDocs, {
+          userId: req.user.id,
+          source: 'clear_holder',
+        });
 
         // Сброс ФИО + персональных документов + параметров выдачи + статуса + sync-флагов.
         await client.query(

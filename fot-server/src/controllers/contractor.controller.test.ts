@@ -46,15 +46,17 @@ vi.mock('../services/contractor-documents.service.js', () => ({
   listOrgDocuments: vi.fn(),
   uploadOrgDocument: vi.fn(),
 }));
-const PATENT_SET = new Set(['УЗБЕКИСТАН', 'ТАДЖИКИСТАН', 'УКРАИНА', 'АЗЕРБАЙДЖАН', 'МОЛДОВА', 'ТУРКМЕНИСТАН']);
-vi.mock('../services/contractor-docs.service.js', () => ({
-  CONTRACTOR_DOCUMENT_DUPLICATE: 'CONTRACTOR_DOCUMENT_DUPLICATE',
-  CONTRACTOR_DOCUMENTS_INCOMPLETE: 'CONTRACTOR_DOCUMENTS_INCOMPLETE',
-  duplicateMessage: () => 'dup',
-  findOrgDocDuplicate: h.findDup,
-  isDocsComplete: h.isDocsComplete,
-  citizenshipRequiresPatent: (c: string | null | undefined) => !!c && PATENT_SET.has(c.trim().toUpperCase()),
-}));
+// Частичный мок: схема/нормализация/история — настоящие (их и проверяем),
+// дубль-детектор и полнота — управляемые моки.
+vi.mock('../services/contractor-docs.service.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../services/contractor-docs.service.js')>();
+  return {
+    ...actual,
+    duplicateMessage: () => 'dup',
+    findOrgDocDuplicate: h.findDup,
+    isDocsComplete: h.isDocsComplete,
+  };
+});
 vi.mock('../utils/multer-filename.utils.js', () => ({ decodeMulterFilename: (s: string) => s }));
 
 import { contractorController } from './contractor.controller.js';

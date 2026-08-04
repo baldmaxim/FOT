@@ -5,6 +5,7 @@
  * админских заявок (contractor-admin.controller).
  */
 import type { PoolClient } from 'pg';
+import { z } from 'zod';
 
 /** Коды ошибок документов (отдаются клиенту для готового toast). */
 export const CONTRACTOR_DOCUMENT_DUPLICATE = 'CONTRACTOR_DOCUMENT_DUPLICATE';
@@ -157,4 +158,165 @@ export const duplicateMessage = (dup: IDocDuplicate): string => {
   const who = dup.holder_name?.trim() || 'другой держатель';
   const what = dup.field === 'patent' ? 'Номер патента' : 'Номер паспорта';
   return `${what} уже указан у ${who} (пропуск №${dup.pass_number})`;
+};
+
+// ------------------------------------------------------------------
+// Разбор/нормализация тела запроса сохранения документов.
+// Общая точка для подрядного savePassDocuments и админского
+// updatePassDocumentsAdmin — чтобы правила не разъезжались.
+// ------------------------------------------------------------------
+
+const docsDateField = z.preprocess(
+  v => (typeof v === 'string' && v.trim() === '' ? null : v),
+  z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+);
+
+export const docsBodySchema = z.object({
+  passport_series_number: z.string().trim().max(50).nullable().optional(),
+  passport_issue_date: docsDateField,
+  birth_date: docsDateField,
+  citizenship: z.string().trim().max(50).nullable().optional(),
+  patent_number: z.string().trim().max(50).nullable().optional(),
+  patent_issue_date: docsDateField,
+  patent_blank_number: z.string().trim().max(50).nullable().optional(),
+  has_residence_permit: z.boolean().optional(),
+  residence_permit_number: z.string().trim().max(50).nullable().optional(),
+});
+
+export type IDocsBody = z.infer<typeof docsBodySchema>;
+
+/** Полный нормализованный комплект документов (то, что пишется в contractor_passes). */
+export interface IDocPayload extends IDocRow {
+  has_residence_permit: boolean;
+  residence_permit_number: string | null;
+}
+
+/**
+ * Нормализация разобранного тела: trim→null; ВНЖ имеет смысл только для
+ * патентной страны; патент и ВНЖ взаимоисключающие (при ВНЖ поля патента
+ * обнуляются, иначе — номер ВНЖ), чтобы не копились устаревшие значения.
+ */
+export const normalizeDocsPayload = (parsed: IDocsBody): IDocPayload => {
+  const norm = (v: string | null | undefined): string | null => {
+    const s = (v ?? '').trim();
+    return s.length > 0 ? s : null;
+  };
+  const citizenship = norm(parsed.citizenship);
+  const effHasVnzh = citizenshipRequiresPatent(citizenship) && !!parsed.has_residence_permit;
+  return {
+    passport_series_number: norm(parsed.passport_series_number),
+    passport_issue_date: parsed.passport_issue_date ?? null,
+    birth_date: parsed.birth_date ?? null,
+    citizenship,
+    patent_number: effHasVnzh ? null : norm(parsed.patent_number),
+    patent_issue_date: effHasVnzh ? null : (parsed.patent_issue_date ?? null),
+    patent_blank_number: effHasVnzh ? null : norm(parsed.patent_blank_number),
+    has_residence_permit: effHasVnzh,
+    residence_permit_number: effHasVnzh ? norm(parsed.residence_permit_number) : null,
+  };
+};
+
+// ------------------------------------------------------------------
+// История изменений документов (contractor_pass_document_history).
+// ------------------------------------------------------------------
+
+/** Все поля комплекта, участвующие в diff/снапшоте истории. */
+export const DOC_HISTORY_FIELDS = [
+  ...BASE_DOC_FIELDS,
+  ...PATENT_DOC_FIELDS,
+  'has_residence_permit',
+  'residence_permit_number',
+] as const;
+
+export type DocHistoryField = (typeof DOC_HISTORY_FIELDS)[number];
+
+/** Строка пропуска с текущими документами — вход recordDocHistoryIfChanged. */
+export interface IDocHistoryPass extends IDocPayload {
+  id: string;
+  pass_number: string;
+  org_department_id: string | null;
+  holder_name: string | null;
+}
+
+export type DocHistorySource = 'admin' | 'contractor' | 'clear_holder';
+
+/** Дата из pg (Date | ISO-строка) → 'YYYY-MM-DD' для сравнения. */
+const comparableDate = (v: unknown): string | null => {
+  if (v instanceof Date) {
+    const y = v.getFullYear();
+    const m = String(v.getMonth() + 1).padStart(2, '0');
+    const d = String(v.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  if (typeof v === 'string' && v.trim().length > 0) return v.slice(0, 10);
+  return null;
+};
+
+const DATE_FIELDS: ReadonlySet<string> = new Set(['passport_issue_date', 'birth_date', 'patent_issue_date']);
+
+const comparable = (field: DocHistoryField, v: unknown): string | boolean | null => {
+  if (field === 'has_residence_permit') return !!v;
+  if (DATE_FIELDS.has(field)) return comparableDate(v);
+  const s = typeof v === 'string' ? v.trim() : v == null ? '' : String(v);
+  return s.length > 0 ? s : null;
+};
+
+/**
+ * Diff prev/next по полям комплекта и снапшот ПРЕЖНИХ значений в
+ * contractor_pass_document_history, если что-то изменилось.
+ * Первичное заполнение с нуля (все prev-поля пустые) историю не создаёт.
+ * changed_by_name берётся подзапросом из user_profiles (в req.user ФИО нет).
+ * Возвращает список изменённых полей ([] — записи не было и изменений нет).
+ */
+export const recordDocHistoryIfChanged = async (
+  client: PoolClient,
+  pass: IDocHistoryPass,
+  next: IDocPayload,
+  actor: { userId: string | null; source: DocHistorySource },
+): Promise<DocHistoryField[]> => {
+  const prevRec = pass as unknown as Record<string, unknown>;
+  const nextRec = next as unknown as Record<string, unknown>;
+  const changed = DOC_HISTORY_FIELDS.filter(f => comparable(f, prevRec[f]) !== comparable(f, nextRec[f]));
+  if (changed.length === 0) return [];
+
+  const prevHasData = DOC_HISTORY_FIELDS.some(f => {
+    const v = comparable(f, prevRec[f]);
+    return f === 'has_residence_permit' ? v === true : v !== null;
+  });
+  if (!prevHasData) return changed;
+
+  await client.query(
+    `INSERT INTO contractor_pass_document_history (
+        pass_id, pass_number, org_department_id, holder_name,
+        passport_series_number, passport_issue_date, birth_date, citizenship,
+        patent_number, patent_issue_date, patent_blank_number,
+        has_residence_permit, residence_permit_number,
+        changed_fields, changed_by, changed_by_name, changed_source
+     ) VALUES (
+        $1::uuid, $2, $3::uuid, $4,
+        $5, $6::date, $7::date, $8,
+        $9, $10::date, $11, $12, $13,
+        $14::text[], $15::uuid,
+        (SELECT full_name FROM user_profiles WHERE id = $15::uuid), $16
+     )`,
+    [
+      pass.id,
+      pass.pass_number,
+      pass.org_department_id,
+      pass.holder_name,
+      pass.passport_series_number,
+      comparableDate(pass.passport_issue_date),
+      comparableDate(pass.birth_date),
+      pass.citizenship,
+      pass.patent_number,
+      comparableDate(pass.patent_issue_date),
+      pass.patent_blank_number,
+      !!pass.has_residence_permit,
+      pass.residence_permit_number ?? null,
+      changed,
+      actor.userId,
+      actor.source,
+    ],
+  );
+  return changed;
 };
