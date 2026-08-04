@@ -15,8 +15,9 @@ const ONE_C_DATA_START_ROW = 4;
 const COL_FIO = 2;
 const COL_DAY1 = 3;
 const COL_TOTAL = 34;
-const COL_ADDRESS = 36;
-const COL_MANAGER = 37;
+const COL_DAYS = 35;
+const COL_ADDRESS = 37;
+const COL_MANAGER = 38;
 
 const makeSchedule = (): IResolvedSchedule => ({
   schedule_id: 'sched-1',
@@ -262,7 +263,7 @@ describe('buildUnified1CWorkbook — «Н» пустой клеткой, уво�
     queryMock.mockResolvedValue([]);
   });
 
-  const COL_DEPT = 35;
+  const COL_DEPT = 36;
 
   const makeDeptStatuses = (
     departmentName: string,
@@ -363,6 +364,24 @@ describe('buildUnified1CWorkbook — «Н» пустой клеткой, уво�
     expect(rows[0].days[0]).toBe(8);
     expect(rows[0].days[1]).toBeNull();
     expect(rows[0].total).toBe(8);
+  });
+
+  it('сотрудник только с нулевым учебным днём не выбрасывается: «Дни» = 1 при пустом итоге часов', async () => {
+    const dept = makeDeptStatuses('Отдел', 'dept-1', [{
+      id: 1,
+      full_name: 'Учащийся Пётр',
+      // study_day в нерабочий по графику день даёт 0 часов (см. attendance.service).
+      days: [{ date: '2026-04-01', status: 'study_day', hours: 0 }],
+    }], [1]);
+
+    const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
+    const rows = collectRows(ws, 1);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].fio).toBe('Учащийся Пётр');
+    expect(rows[0].days[0]).toBeNull();
+    expect(rows[0].total).toBeNull();
+    expect(ws.getCell(ONE_C_DATA_START_ROW, COL_DAYS).value).toBe(1);
   });
 
   it('сотрудник с одними «Н» остаётся в файле пустой строкой (ФИО/отдел без клеток и итога)', async () => {
@@ -554,7 +573,7 @@ describe('buildUnified1CWorkbook — строки связываются по em
       rows.push({
         fio,
         address: String(ws.getCell(r, COL_ADDRESS).value ?? ''),
-        position: String(ws.getCell(r, 38).value ?? ''),
+        position: String(ws.getCell(r, 39).value ?? ''),
       });
     }
 

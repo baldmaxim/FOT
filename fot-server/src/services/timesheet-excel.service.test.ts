@@ -6,8 +6,10 @@ import {
   build1CObjectTimesheetWorkbook,
   build1CTimesheetWorkbook,
   buildEmployeeRowsForOneC,
+  buildObjectRowsForOneC,
   buildObjectTimesheetSheet,
   buildTimesheetSheet,
+  buildUnified1CWorkbookFromTemplate,
   listObjectExportTargets,
 } from './timesheet-excel.service.js';
 
@@ -592,5 +594,143 @@ describe('timesheet-excel.service', () => {
     const ws = wb.getWorksheet('Табель 1С');
     expect(ws).toBeTruthy();
     expect(ws!.getCell(4, 3).value).toBe(8);
+  });
+});
+
+// «Дни» — колонка 35 единого файла для 1С: отработанные дни строки. Правило
+// зеркалит UI: ячейка с часами > 0, либо статус УУ/РБ/УД (даже с нулём часов).
+describe('timesheet-excel.service — колонка «Дни» единого файла 1С', () => {
+  const COL_TOTAL = 34;
+  const COL_DAYS = 35;
+
+  // Один сотрудник, без объектных строк, дневные статусы задаются явно.
+  const makeStatusData = (
+    days: Array<[string, { status: string; hours: number }]>,
+    exportDays: number[] = [1],
+  ): IDepartmentTimesheetData => {
+    const data = makeBaseData();
+    data.employees = [data.employees[0]];
+    data.objectEntries = [];
+    data.exportDays = exportDays;
+    data.dataMap = new Map([
+      [1, new Map(days.map(([date, value]) => [date, { ...value, corrected: false }]))],
+    ]);
+    return data;
+  };
+
+  const buildUnifiedSheet = async (data: IDepartmentTimesheetData) => {
+    const rows = buildEmployeeRowsForOneC(data).map(oneCRow => ({
+      oneCRow,
+      departmentName: data.departmentName,
+      objectAddress: '',
+      managerName: '',
+      position: '',
+    }));
+    const wb = await buildUnified1CWorkbookFromTemplate('Табель 1С', rows);
+    return wb.getWorksheet(1)!;
+  };
+
+  it('шапка: «Дни» в 35, «ч/часы» остаётся в 34, служебные колонки сдвинуты в 36–39', async () => {
+    const ws = await buildUnifiedSheet(makeStatusData([['2026-04-01', { status: 'work', hours: 8 }]]));
+
+    expect(ws.getCell(3, COL_TOTAL).value).toBe('ч/часы');
+    expect(ws.getCell(3, COL_DAYS).value).toBe('Дни');
+    expect(ws.getCell(3, 36).value).toBe('Отдел');
+    expect(ws.getCell(3, 37).value).toBe('Адрес объекта');
+    expect(ws.getCell(3, 38).value).toBe('Руководитель');
+    expect(ws.getCell(3, 39).value).toBe('Должность');
+  });
+
+  it('три отработанных дня по 8 ч → «Дни» = 3, часы = 24', async () => {
+    const ws = await buildUnifiedSheet(makeStatusData(
+      [
+        ['2026-04-01', { status: 'work', hours: 8 }],
+        ['2026-04-02', { status: 'work', hours: 8 }],
+        ['2026-04-03', { status: 'work', hours: 8 }],
+      ],
+      [1, 2, 3],
+    ));
+
+    expect(ws.getCell(4, COL_DAYS).value).toBe(3);
+    expect(ws.getCell(4, COL_TOTAL).value).toBe(24);
+  });
+
+  it('От/Б с часами в исходных данных в «Дни» не идут (считаются экспортируемые часы, не факт)', async () => {
+    const ws = await buildUnifiedSheet(makeStatusData(
+      [
+        ['2026-04-01', { status: 'vacation', hours: 8 }],
+        ['2026-04-02', { status: 'sick', hours: 8 }],
+      ],
+      [1, 2],
+    ));
+
+    expect(ws.getCell(4, 3).value).toBe('От');
+    expect(ws.getCell(4, 4).value).toBe('Б');
+    expect(ws.getCell(4, COL_DAYS).value).toBeNull();
+    expect(ws.getCell(4, COL_TOTAL).value).toBeNull();
+  });
+
+  it('удалёнка (УУ) без часов — отработанный день, хотя в ячейке буква', async () => {
+    const ws = await buildUnifiedSheet(makeStatusData([['2026-04-01', { status: 'remote', hours: 0 }]]));
+
+    expect(ws.getCell(4, 3).value).toBe('УУ');
+    expect(ws.getCell(4, COL_DAYS).value).toBe(1);
+    expect(ws.getCell(4, COL_TOTAL).value).toBeNull();
+  });
+
+  it('нулевые УД и РБ — отработанные дни при пустой дневной ячейке', async () => {
+    const ws = await buildUnifiedSheet(makeStatusData(
+      [
+        ['2026-04-01', { status: 'study_day', hours: 0 }],
+        ['2026-04-02', { status: 'sick_worked', hours: 0 }],
+      ],
+      [1, 2],
+    ));
+
+    expect(ws.getCell(4, 3).value).toBeNull();
+    expect(ws.getCell(4, 4).value).toBeNull();
+    expect(ws.getCell(4, COL_DAYS).value).toBe(2);
+    expect(ws.getCell(4, COL_TOTAL).value).toBeNull();
+  });
+
+  it('УД/РБ с часами дают +1 день, а не +2', async () => {
+    const ws = await buildUnifiedSheet(makeStatusData(
+      [
+        ['2026-04-01', { status: 'study_day', hours: 8 }],
+        ['2026-04-02', { status: 'sick_worked', hours: 8 }],
+      ],
+      [1, 2],
+    ));
+
+    expect(ws.getCell(4, COL_DAYS).value).toBe(2);
+    expect(ws.getCell(4, COL_TOTAL).value).toBe(16);
+  });
+
+  it('объектные строки: дни считаются по часам на объекте', () => {
+    const data = makeBaseData();
+    const target = listObjectExportTargets(data).find(item => item.object_key === 'obj-b');
+
+    const rows = buildObjectRowsForOneC(data, target!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].workedDays).toBe(1);
+    expect(rows[0].totalHours).toBe(8);
+  });
+
+  it('объектные строки: нулевой УД идёт в «Дни» при пустой дневной ячейке', () => {
+    const data = makeBaseData();
+    data.exportDays = [1, 2];
+    data.dataMap = new Map([
+      [1, new Map([
+        ['2026-04-01', { status: 'work', hours: 5, corrected: false }],
+        ['2026-04-02', { status: 'study_day', hours: 0, corrected: false }],
+      ])],
+    ]);
+    const target = listObjectExportTargets(data).find(item => item.object_key === 'obj-a');
+
+    const rows = buildObjectRowsForOneC(data, target!);
+    expect(rows[0].dayValues.get(2)?.hours ?? 0).toBe(0);
+    // День 1 — по объектным часам, день 2 — по статусу УД.
+    expect(rows[0].workedDays).toBe(2);
+    expect(rows[0].totalHours).toBe(5);
   });
 });

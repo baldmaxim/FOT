@@ -128,6 +128,8 @@ const fetchObjectAddressMap = async (objectIds: string[]): Promise<Map<string, s
 
 const isOneCRowEmpty = (row: IOneCExportRow): boolean => {
   if (row.totalHours > 0) return false;
+  // Нулевой УД/РБ часов и буквы не даёт, но идёт в колонку «Дни» — строку сохраняем.
+  if (row.workedDays > 0) return false;
   for (const value of row.dayValues.values()) {
     if (value.label) return false;
     if (value.hours > 0) return false;

@@ -115,6 +115,23 @@ const getExportDateSet = (data: IDepartmentTimesheetData): Set<string> => new Se
 
 const hasPositiveHours = (value: number): boolean => value > 0.001;
 
+// Статусы, которые считаются отработанным днём сами по себе, без часов: удалёнка,
+// работа на больничном, учебный день. Зеркалит WORKED_DAY_LETTER_STATUSES в UI
+// (fot-app/src/components/timesheet/TimesheetGrid.tsx) — колонка «Дни» должна
+// совпадать с тем, что видит табельщица на экране.
+const WORKED_DAY_STATUSES = new Set(['remote', 'sick_worked', STUDY_DAY_STATUS]);
+
+/**
+ * День идёт в колонку «Дни» единого файла для 1С.
+ * exportedHours — именно те часы, что уходят в ячейку (после compute1CDayHours),
+ * а не исходный факт: у отпуска/больничного в данных может стоять норма часов,
+ * но в выгрузке они выводятся буквой и рабочим днём не считаются.
+ */
+const isWorkedDayForOneC = (status: string | undefined, exportedHours: number): boolean => {
+  if (status && WORKED_DAY_STATUSES.has(status)) return true;
+  return hasPositiveHours(exportedHours);
+};
+
 const isUnderworkHours = (hours: number, thresholdHours: number): boolean => (
   hasPositiveHours(hours) && hours + 0.001 < thresholdHours
 );
@@ -222,6 +239,8 @@ export interface IOneCExportRow {
   fullName: string;
   dayValues: Map<number, IOneCDisplayDayValue>;
   totalHours: number;
+  /** Отработанные дни строки — колонка «Дни» (правило см. isWorkedDayForOneC). */
+  workedDays: number;
 }
 
 let oneCTemplateBufferPromise: Promise<Buffer> | null = null;
@@ -361,6 +380,7 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
     const cutoff = data.cutoffByEmployeeId?.get(employee.id) ?? null;
     const dayValues = new Map<number, IOneCDisplayDayValue>();
     let totalHours = 0;
+    let workedDays = 0;
 
     for (const day of data.exportDays) {
       const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
@@ -377,25 +397,36 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
       const label = STATUS_LABELS[entry.status];
       if (label) {
         dayValues.set(day, { hours: 0, label, isUnderwork: false });
+        // Удалёнка (УУ) — буква в ячейке, но отработанный день.
+        if (isWorkedDayForOneC(entry.status, 0)) workedDays++;
         continue;
       }
-      if (!hasPositiveHours(entry.hours)) { markWeekend(); continue; }
-      const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
-      const effectiveSchedule = getEffectiveScheduleForDate(data, employee.id, dateStr, schedule);
-      const roundedHours = compute1CDayHours(
-        entry.hours,
-        dayNormHours,
-        isPreHolidayDate(data, dateStr),
-        isStudentSchedule(effectiveSchedule),
-        Boolean(entry.hoursOverridden),
-      );
-      if (!roundedHours) { markWeekend(); continue; }
-      const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
-      dayValues.set(day, {
-        hours: roundedHours,
-        isUnderwork: isUnderworkHours(roundedHours, thresholdHours),
-      });
-      totalHours += roundedHours;
+      // Часы, реально уходящие в ячейку: 0, если дня нет или он схлопнулся при округлении.
+      let exportedHours = 0;
+      if (hasPositiveHours(entry.hours)) {
+        const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
+        const effectiveSchedule = getEffectiveScheduleForDate(data, employee.id, dateStr, schedule);
+        const roundedHours = compute1CDayHours(
+          entry.hours,
+          dayNormHours,
+          isPreHolidayDate(data, dateStr),
+          isStudentSchedule(effectiveSchedule),
+          Boolean(entry.hoursOverridden),
+        );
+        if (roundedHours) {
+          const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
+          dayValues.set(day, {
+            hours: roundedHours,
+            isUnderwork: isUnderworkHours(roundedHours, thresholdHours),
+          });
+          totalHours += roundedHours;
+          exportedHours = roundedHours;
+        }
+      }
+      // Один инкремент на день: РБ/УД с часами дают +1, а не +2. Нулевой УД/РБ
+      // (учебный день в нерабочий по графику) идёт в «Дни» при пустой ячейке.
+      if (isWorkedDayForOneC(entry.status, exportedHours)) workedDays++;
+      if (!exportedHours) markWeekend();
     }
 
     return {
@@ -403,6 +434,7 @@ export const buildEmployeeRowsForOneC = (data: IDepartmentTimesheetData): IOneCE
       fullName: employee.full_name,
       dayValues,
       totalHours,
+      workedDays,
     };
   });
 };
@@ -436,6 +468,7 @@ export const buildObjectRowsForOneC = (
       const cutoff = data.cutoffByEmployeeId?.get(employee.id) ?? null;
       const dayValues = new Map<number, IOneCDisplayDayValue>();
       let totalHours = 0;
+      let workedDays = 0;
 
       for (const day of data.exportDays) {
         const dateStr = `${data.year}-${pad2(data.mon)}-${pad2(day)}`;
@@ -448,10 +481,12 @@ export const buildObjectRowsForOneC = (
         const label = statusEntry ? STATUS_LABELS[statusEntry.status] : undefined;
         if (label) {
           dayValues.set(day, { hours: 0, label, isUnderwork: false });
+          if (isWorkedDayForOneC(statusEntry?.status, 0)) workedDays++;
           continue;
         }
 
         const hours = employeeDays.get(dateStr) ?? 0;
+        let exportedHours = 0;
         if (hasPositiveHours(hours)) {
           const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
           const effectiveSchedule = getEffectiveScheduleForDate(data, employee.id, dateStr, schedule);
@@ -462,14 +497,21 @@ export const buildObjectRowsForOneC = (
             isStudentSchedule(effectiveSchedule),
             Boolean(statusEntry?.hoursOverridden),
           );
-          if (!roundedHours) continue;
-          const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
-          dayValues.set(day, {
-            hours: roundedHours,
-            isUnderwork: isUnderworkHours(roundedHours, thresholdHours),
-          });
-          totalHours += roundedHours;
+          if (roundedHours) {
+            const thresholdHours = getThresholdHoursForDate(data, employee.id, dateStr, schedule);
+            dayValues.set(day, {
+              hours: roundedHours,
+              isUnderwork: isUnderworkHours(roundedHours, thresholdHours),
+            });
+            totalHours += roundedHours;
+            exportedHours = roundedHours;
+          }
         }
+        // Один инкремент на день. Нулевой УУ/РБ/УД идёт в «Дни» и здесь — паритет
+        // с UI; у сотрудника с несколькими объектами такой день попадёт в каждую
+        // его строку, как уже дублируется сама буква статуса.
+        if (isWorkedDayForOneC(statusEntry?.status, exportedHours)) workedDays++;
+
         // В рабочие дни показываем часы на конкретном объекте; буквенные статусы
         // невыхода уже проставлены выше из утверждённого табеля.
         // Выходные дни по календарю оставляем серыми.
@@ -483,6 +525,7 @@ export const buildObjectRowsForOneC = (
         fullName: employee.full_name,
         dayValues,
         totalHours,
+        workedDays,
       };
     });
 };
@@ -538,16 +581,18 @@ export interface IUnifiedOneCRow {
   position?: string;
 }
 
-const UNIFIED_COL_DEPARTMENT = ONE_C_TOTAL_COLUMN + 1; // 35
-const UNIFIED_COL_OBJECT_ADDRESS = ONE_C_TOTAL_COLUMN + 2; // 36
-const UNIFIED_COL_MANAGER = ONE_C_TOTAL_COLUMN + 3; // 37
-const UNIFIED_COL_POSITION = ONE_C_TOTAL_COLUMN + 4; // 38 — крайняя правая
+const UNIFIED_COL_DAYS = ONE_C_TOTAL_COLUMN + 1; // 35
+const UNIFIED_COL_DEPARTMENT = ONE_C_TOTAL_COLUMN + 2; // 36
+const UNIFIED_COL_OBJECT_ADDRESS = ONE_C_TOTAL_COLUMN + 3; // 37
+const UNIFIED_COL_MANAGER = ONE_C_TOTAL_COLUMN + 4; // 38
+const UNIFIED_COL_POSITION = ONE_C_TOTAL_COLUMN + 5; // 39 — крайняя правая
 const UNIFIED_HEADER_ROW = ONE_C_DATA_START_ROW - 1; // 3 — шапка шаблона
 
 /**
  * Единый файл для 1С: тот же шаблон, что и одиночный «Как в 1С» (шапка в строке 3,
- * данные с строки 4, дни 1..31, итог в колонке 34), плюс справа колонки «Отдел» (35) и
- * «Адрес объекта» (36) — без них строки разных отделов/объектов неразличимы.
+ * данные с строки 4, дни 1..31, итог часов в колонке 34), плюс справа «Дни» (35),
+ * «Отдел» (36), «Адрес объекта» (37), «Руководитель» (38) и «Должность» (39) —
+ * без них строки разных отделов/объектов неразличимы.
  */
 export async function buildUnified1CWorkbookFromTemplate(
   sheetName: string,
@@ -567,6 +612,10 @@ export async function buildUnified1CWorkbookFromTemplate(
 
   // Шапка доп. колонок (строка 3) — стиль как у шапки «ч/часы».
   const headerStyle = worksheet.getCell(UNIFIED_HEADER_ROW, ONE_C_TOTAL_COLUMN).style;
+  const daysHeader = worksheet.getCell(UNIFIED_HEADER_ROW, UNIFIED_COL_DAYS);
+  daysHeader.style = cloneExcelValue(headerStyle) || {};
+  daysHeader.value = 'Дни';
+  daysHeader.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   const deptHeader = worksheet.getCell(UNIFIED_HEADER_ROW, UNIFIED_COL_DEPARTMENT);
   deptHeader.style = cloneExcelValue(headerStyle) || {};
   deptHeader.value = 'Отдел';
@@ -578,6 +627,8 @@ export async function buildUnified1CWorkbookFromTemplate(
 
   // Образец стиля тела — ячейка ФИО строки-образца (левое выравнивание текста).
   const bodyStyle = worksheet.getRow(ONE_C_TEMPLATE_STYLE_ROW).getCell(COL_FIO).style;
+  // Для числовой колонки «Дни» берём стиль ячейки итога часов (центрирование).
+  const totalBodyStyle = worksheet.getRow(ONE_C_TEMPLATE_STYLE_ROW).getCell(ONE_C_TOTAL_COLUMN).style;
 
   // Шапка доп. колонок — стиль как у шапки
   const managerHeader = worksheet.getCell(UNIFIED_HEADER_ROW, UNIFIED_COL_MANAGER);
@@ -593,6 +644,11 @@ export async function buildUnified1CWorkbookFromTemplate(
   rows.forEach((row, index) => {
     const rowNumber = ONE_C_DATA_START_ROW + index;
     writeOneCRow(worksheet, rowNumber, index, row.oneCRow);
+
+    const daysCell = worksheet.getCell(rowNumber, UNIFIED_COL_DAYS);
+    daysCell.style = cloneExcelValue(totalBodyStyle) || {};
+    // Как и итог часов: ноль не пишем, ячейка остаётся пустой.
+    daysCell.value = row.oneCRow.workedDays > 0 ? row.oneCRow.workedDays : null;
 
     const deptCell = worksheet.getCell(rowNumber, UNIFIED_COL_DEPARTMENT);
     deptCell.style = cloneExcelValue(bodyStyle) || {};
@@ -615,6 +671,7 @@ export async function buildUnified1CWorkbookFromTemplate(
     positionCell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
   });
 
+  worksheet.getColumn(UNIFIED_COL_DAYS).width = 6;
   worksheet.getColumn(UNIFIED_COL_DEPARTMENT).width = 26;
   worksheet.getColumn(UNIFIED_COL_OBJECT_ADDRESS).width = 32;
   worksheet.getColumn(UNIFIED_COL_MANAGER).width = 26;
