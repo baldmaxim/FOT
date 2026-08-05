@@ -111,6 +111,12 @@
   background: var(--bg-tertiary, rgba(127, 127, 127, 0.06));
 }
 
+/* Панель СКУД открыта — hover-рамка у остальных карточек не подсвечивается,
+   выделена только активная. */
+.lrm-shell--with-panel .lrm-card--clickable:not(.lrm-card--active):hover {
+  border-color: var(--border);
+}
+
 .lrm-card-main {
   margin-bottom: 12px;
 }
