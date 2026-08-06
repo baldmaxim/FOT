@@ -5,6 +5,8 @@ import type {
   SkudDailySummary,
   IEmployeePresence,
   IPresenceByObjectResponse,
+  IPresenceExportFilterOptions,
+  IPresenceExportRequest,
   IAccessPointSetting,
   IDashboardStats,
   AccessPointOption,
@@ -379,6 +381,33 @@ export const skudService = {
       { signal },
     );
     return response.data;
+  },
+
+  async getPresenceExportFilters(
+    dateFrom: string,
+    dateTo: string,
+    signal?: AbortSignal,
+  ): Promise<IPresenceExportFilterOptions> {
+    const response = await apiClient.get<ApiResponse<IPresenceExportFilterOptions>>(
+      `/skud/presence-by-object/export-filters?date_from=${dateFrom}&date_to=${dateTo}`,
+      { signal },
+    );
+    return response.data;
+  },
+
+  /** POST, а не GET: массивы ключей отделов не влезают в query-строку. */
+  async exportPresenceByObject(body: IPresenceExportRequest): Promise<Blob> {
+    const response = await fetch(buildApiUrl('/skud/presence-by-object/export'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(payload?.error || 'Не удалось сформировать файл');
+    }
+    return response.blob();
   },
 
   async syncEmployee(

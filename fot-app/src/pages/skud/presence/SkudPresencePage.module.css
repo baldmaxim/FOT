@@ -123,6 +123,33 @@
   align-items: flex-start;
 }
 
+/* Экспорт прижат к правому краю строки фильтров. */
+.exportBtn {
+  margin-left: auto;
+  align-self: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.exportBtn:hover {
+  filter: brightness(1.05);
+}
+
+@media (max-width: 430px) {
+  .exportBtn {
+    margin-left: 0;
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
 .companyFilter {
   display: flex;
   flex-wrap: wrap;
@@ -244,6 +271,17 @@
 .companyFilterRowSynced {
   font-weight: 700;
   color: var(--text-primary);
+}
+
+/* Заголовок компании в списке отделов (модалка выгрузки): чекбокс «все отделы». */
+.companyFilterGroupRow {
+  position: sticky;
+  top: 42px;
+  background: var(--bg-secondary);
+  font-weight: 600;
+  color: var(--text-primary);
+  border-radius: 6px;
+  margin-top: 4px;
 }
 
 .chipSynced {

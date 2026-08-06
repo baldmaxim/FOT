@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useEffect, type FC } from 'react';
+import { useMemo, useState, type FC } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePresenceByObjectQuery, presenceByObjectQueryKey } from '../../../hooks/useEmployeeDirectory';
 import { usePresenceRealtime } from '../../../hooks/usePresenceRealtime';
@@ -11,6 +11,8 @@ import type {
 } from '../../../types';
 import { ObjectDetailsModal } from './ObjectDetailsModal';
 import { ObjectDetailView } from './ObjectDetailView';
+import { EntityFilter } from './EntityFilter';
+import { PresenceExportModal } from './PresenceExportModal';
 import { isSyncedCompanyId } from './companyId.utils';
 import styles from './SkudPresencePage.module.css';
 
@@ -146,128 +148,6 @@ const ObjectCard: FC<{
   );
 };
 
-const EntityFilter: FC<{
-  label: string;
-  searchPlaceholder: string;
-  emptyText: string;
-  allEntities: { id: string; name: string }[];
-  selected: Set<string>;
-  onToggle: (id: string) => void;
-  onClear: () => void;
-  isSynced?: (id: string) => boolean;
-}> = ({ label, searchPlaceholder, emptyText, allEntities, selected, onToggle, onClear, isSynced }) => {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const wrapperRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  // Сброс поиска при закрытии — паттерн «состояние из прошлого рендера»
-  // вместо setState-в-effect (react.dev «You Might Not Need an Effect»).
-  const [wasOpen, setWasOpen] = useState(open);
-  if (wasOpen !== open) {
-    setWasOpen(open);
-    if (!open) setSearch('');
-  }
-
-  const selectedList = useMemo(
-    () => allEntities.filter(c => selected.has(c.id)),
-    [allEntities, selected],
-  );
-
-  const visibleEntities = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return allEntities;
-    return allEntities.filter(c => c.name.toLowerCase().includes(q));
-  }, [allEntities, search]);
-
-  return (
-    <div className={styles.companyFilter} ref={wrapperRef}>
-      <button
-        type="button"
-        className={`${styles.companyFilterToggle} ${open ? styles.companyFilterToggleOpen : ''}`}
-        onClick={() => setOpen(prev => !prev)}
-      >
-        {label}
-        {selected.size > 0 && <span className={styles.companyFilterBadge}>{selected.size}</span>}
-        <span className={styles.companyFilterCaret} aria-hidden>▾</span>
-      </button>
-
-      {selectedList.map(entity => {
-        const synced = isSynced?.(entity.id) ?? false;
-        return (
-          <button
-            key={entity.id}
-            type="button"
-            className={`${styles.chip} ${styles.chipActive} ${synced ? styles.chipSynced : ''}`}
-            onClick={() => onToggle(entity.id)}
-            title="Убрать из фильтра"
-          >
-            {entity.name}
-            <span className={styles.chipRemove} aria-hidden>×</span>
-          </button>
-        );
-      })}
-
-      {selected.size > 0 && (
-        <button type="button" className={styles.chipClear} onClick={onClear}>
-          Сбросить
-        </button>
-      )}
-
-      {open && (
-        <div className={styles.companyFilterPanel}>
-          <div className={styles.companyFilterSearch}>
-            <SearchIcon className={styles.companyFilterSearchIcon} />
-            <input
-              type="search"
-              className={styles.companyFilterSearchInput}
-              placeholder={searchPlaceholder}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              autoFocus
-            />
-          </div>
-          {visibleEntities.length === 0 ? (
-            <div className={styles.companyFilterEmpty}>
-              {allEntities.length === 0 ? emptyText : 'Ничего не найдено'}
-            </div>
-          ) : (
-            visibleEntities.map(entity => {
-              const isActive = selected.has(entity.id);
-              const synced = isSynced?.(entity.id) ?? false;
-              return (
-                <label key={entity.id} className={styles.companyFilterRow}>
-                  <input
-                    type="checkbox"
-                    checked={isActive}
-                    onChange={() => onToggle(entity.id)}
-                  />
-                  <span
-                    className={synced ? styles.companyFilterRowSynced : undefined}
-                    title={isSynced ? (synced ? 'Синхронизирована с ФОТ' : 'Только в Sigur') : undefined}
-                  >
-                    {entity.name}
-                  </span>
-                </label>
-              );
-            })
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
-
 export const SkudPresencePage: FC = () => {
   const { data, isLoading, isError, refetch, isFetching } = usePresenceByObjectQuery();
   const queryClient = useQueryClient();
@@ -276,6 +156,7 @@ export const SkudPresencePage: FC = () => {
   const [selectedObjects, setSelectedObjects] = useState<Set<string>>(new Set());
   const [hideEmpty, setHideEmpty] = useState(false);
   const [detailsBucket, setDetailsBucket] = useState<IFilteredBucket | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
   // Прямой эфир: socket `presence_updated` (как на дашборде) → мгновенный
   // refetch. 30-сек polling в usePresenceByObjectQuery остаётся как fallback.
@@ -389,33 +270,39 @@ export const SkudPresencePage: FC = () => {
         </button>
       </div>
 
-      {(allCompanies.length > 0 || (allObjects.length > 1 && !isSingleObjectView)) && (
-        <div className={styles.filters}>
-          {allCompanies.length > 0 && (
-            <EntityFilter
-              label="Фильтр по компаниям"
-              searchPlaceholder="Поиск компании"
-              emptyText="Компании не найдены"
-              allEntities={allCompanies}
-              selected={selectedCompanies}
-              onToggle={toggleCompanyFilter}
-              onClear={() => setSelectedCompanies(new Set())}
-              isSynced={isSyncedCompanyId}
-            />
-          )}
-          {allObjects.length > 1 && !isSingleObjectView && (
-            <EntityFilter
-              label="Фильтр по объектам"
-              searchPlaceholder="Поиск объекта"
-              emptyText="Объекты не найдены"
-              allEntities={allObjects}
-              selected={selectedObjects}
-              onToggle={toggleObjectFilter}
-              onClear={() => setSelectedObjects(new Set())}
-            />
-          )}
-        </div>
-      )}
+      {/* Строка фильтров рендерится всегда — кнопка выгрузки не зависит от состава данных. */}
+      <div className={styles.filters}>
+        {allCompanies.length > 0 && (
+          <EntityFilter
+            label="Фильтр по компаниям"
+            searchPlaceholder="Поиск компании"
+            emptyText="Компании не найдены"
+            allEntities={allCompanies}
+            selected={selectedCompanies}
+            onToggle={toggleCompanyFilter}
+            onClear={() => setSelectedCompanies(new Set())}
+            isSynced={isSyncedCompanyId}
+          />
+        )}
+        {allObjects.length > 1 && !isSingleObjectView && (
+          <EntityFilter
+            label="Фильтр по объектам"
+            searchPlaceholder="Поиск объекта"
+            emptyText="Объекты не найдены"
+            allEntities={allObjects}
+            selected={selectedObjects}
+            onToggle={toggleObjectFilter}
+            onClear={() => setSelectedObjects(new Set())}
+          />
+        )}
+        <button
+          type="button"
+          className={styles.exportBtn}
+          onClick={() => setExportOpen(true)}
+        >
+          Экспорт в Excel
+        </button>
+      </div>
 
       {isLoading && <div className={styles.state}>Загрузка…</div>}
       {isError && (
@@ -456,6 +343,8 @@ export const SkudPresencePage: FC = () => {
           onClose={() => setDetailsBucket(null)}
         />
       )}
+
+      {exportOpen && <PresenceExportModal onClose={() => setExportOpen(false)} />}
     </div>
   );
 };

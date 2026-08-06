@@ -86,6 +86,19 @@ export interface IPresenceByObjectResponse {
   scope_mode: 'all' | 'object' | 'employee' | 'object_employee';
 }
 
+/** Опции модалки выгрузки «Сотрудники на объектах» — производные от датасета за период. */
+export interface IPresenceExportFilterOptions {
+  objects: Array<{ key: string; name: string }>;
+  groups: Array<{ key: string; name: string; company_name: string | null }>;
+}
+
+export interface IPresenceExportRequest {
+  date_from: string;
+  date_to: string;
+  object_keys?: string[];
+  group_keys?: string[];
+}
+
 export interface SkudDailySummary {
   id: number;
   employee_id: number;

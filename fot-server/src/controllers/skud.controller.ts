@@ -30,6 +30,7 @@ import {
 } from '../services/skud-shared.service.js';
 import { skudWriteController } from './skud-write.controller.js';
 import { skudTravelController } from './skud-travel.controller.js';
+import { skudPresenceExportController } from './skud-presence-export.controller.js';
 import {
   canAccessEmployeeInScope,
   getSelfHistoryLimitForUser,
@@ -1432,4 +1433,5 @@ export const skudController = {
   ...skudReadController,
   ...skudWriteController,
   ...skudTravelController,
+  ...skudPresenceExportController,
 };

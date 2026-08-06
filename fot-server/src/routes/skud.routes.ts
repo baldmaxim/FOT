@@ -63,11 +63,15 @@ const upload = multer({
 // Все роуты требуют аутентификации
 router.use(authenticate);
 
+// Read-only POST'ы (массивы в теле не влезают в query) — мутациями не считаются,
+// иначе каждая выгрузка сбрасывала бы кэши живого экрана присутствия.
+const READ_ONLY_POST_PATHS = new Set(['/presence-by-object/export']);
+
 // Write-through invalidation: после мутаций (импорт, sync-employee, rebuild сегментов,
 // CRUD объектов/маршрутов) сбрасываем HTTP-кэши per-user и in-memory кэши сервисов,
 // иначе presence/dashboard продолжат отдавать stale-данные до TTL 5-10 сек.
 router.use((req, res, next) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !READ_ONLY_POST_PATHS.has(req.path)) {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         invalidateCaches('skud-presence', 'skud-presence-by-object', 'skud-dashboard');
@@ -360,6 +364,22 @@ router.get(
   serverTiming('skud_presence_by_object'),
   presenceByObjectCache,
   skudController.getPresenceByObject
+);
+
+// GET /api/skud/presence-by-object/export-filters - объекты/отделы для модалки выгрузки
+router.get(
+  '/presence-by-object/export-filters',
+  requirePageAccess('/skud-presence', 'view'),
+  noStore,
+  skudController.getPresenceExportFilters
+);
+
+// POST /api/skud/presence-by-object/export - xlsx за период (read-only, см. READ_ONLY_POST_PATHS)
+router.post(
+  '/presence-by-object/export',
+  requirePageAccess('/skud-presence', 'view'),
+  noStore,
+  skudController.exportPresenceByObject
 );
 
 // POST /api/skud/import - импорт (admin+, требуется 2FA)
