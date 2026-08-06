@@ -357,6 +357,33 @@
   font-weight: 600;
 }
 
+/* Разбивка активных пропусков по точкам доступа — чипы «имя + число». */
+.apChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.apChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--primary-light);
+  color: var(--primary);
+  font-size: 13px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.apChip b {
+  font-weight: 700;
+}
+.apChipEmpty {
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+}
+
 .checkList {
   display: flex;
   flex-wrap: wrap;

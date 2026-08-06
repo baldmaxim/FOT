@@ -1768,4 +1768,96 @@ describe('contractorAdminController — статистика пропусков 
     expect(stat.getRow(5).values).toEqual(
       [undefined, 'АЛЬФА ООО', 'Иванов И.', '101', '168,15956', '2026-07-10']);
   });
+
+  it('passAccessPointStats: разбивка по точкам, база — is_active, btrim + count(DISTINCT)', async () => {
+    h.queryOne.mockResolvedValueOnce({
+      active_total: 160,
+      points: [
+        { access_point_name: 'кпп ASTERUS', passes_count: 160 },
+        { access_point_name: 'ЗилАрт Штаб', passes_count: 13 },
+        { access_point_name: null, passes_count: 7 },
+      ],
+    });
+    const res = makeRes();
+    await contractorAdminController.passAccessPointStats(
+      statsReq({ org_department_id: ORG }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      data: {
+        active_total: 160,
+        points: [
+          { access_point_name: 'кпп ASTERUS', passes_count: 160 },
+          { access_point_name: 'ЗилАрт Штаб', passes_count: 13 },
+          { access_point_name: null, passes_count: 7 },
+        ],
+      },
+    });
+    const [sql, params] = h.queryOne.mock.calls[0];
+    expect(params).toEqual([[ORG]]);
+    // База совпадает с active_new в сводке; период не участвует.
+    expect(sql).toContain('AND p.is_active');
+    expect(sql).not.toContain('Europe/Moscow');
+    // Нормализация имён и защита от двойного счёта одного пропуска.
+    expect(sql).toContain('SELECT DISTINCT btrim(u.name)');
+    expect(sql).toContain('count(DISTINCT pass_id)::int AS passes_count');
+    // «Без точек» всегда последним — сортировка внутри jsonb_agg.
+    expect(sql).toContain('ORDER BY (g.access_point_name IS NULL), g.passes_count DESC');
+  });
+
+  it('passAccessPointStats: ноль активных пропусков — 200 с пустым points', async () => {
+    h.queryOne.mockResolvedValueOnce({ active_total: 0, points: [] });
+    const res = makeRes();
+    await contractorAdminController.passAccessPointStats(
+      statsReq({ org_department_id: ORG }), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ success: true, data: { active_total: 0, points: [] } });
+  });
+
+  it('passAccessPointStats: 400 без организации', async () => {
+    const res = makeRes();
+    await contractorAdminController.passAccessPointStats(statsReq(), res as never);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: 'Некорректная организация' });
+    expect(h.queryOne).not.toHaveBeenCalled();
+  });
+
+  it('exportPassStats: блок точек доступа только при выбранном подрядчике', async () => {
+    h.query
+      .mockResolvedValueOnce([statRow({ issued_new: 2, active_new: 2 })])
+      .mockResolvedValueOnce([]);
+    h.queryOne.mockResolvedValueOnce({
+      active_total: 2,
+      points: [
+        { access_point_name: 'кпп ASTERUS', passes_count: 2 },
+        { access_point_name: null, passes_count: 1 },
+      ],
+    });
+    const withOrg = makeExportRes();
+    await contractorAdminController.exportPassStats(
+      statsReq({ org_department_id: ORG }), withOrg as never);
+    expect(withOrg.statusCode).toBe(200);
+
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(withOrg.sent as Buffer as never);
+    const stat = wb.getWorksheet('Статистика')!;
+    expect(stat.getRow(4).values).toEqual([undefined, 'Точка доступа', 'Пропусков (активные)']);
+    expect(stat.getRow(5).values).toEqual([undefined, 'кпп ASTERUS', 2]);
+    expect(stat.getRow(6).values).toEqual([undefined, 'Без точек', 1]);
+    expect(String(stat.getRow(7).getCell(1).value))
+      .toContain('У пропуска может быть несколько точек');
+
+    // Без организации — блока нет, queryOne не вызывается повторно.
+    h.query.mockResolvedValueOnce([statRow()]).mockResolvedValueOnce([]);
+    const allOrgs = makeExportRes();
+    await contractorAdminController.exportPassStats(statsReq(), allOrgs as never);
+    expect(allOrgs.statusCode).toBe(200);
+    expect(h.queryOne).toHaveBeenCalledTimes(1);
+    const wb2 = new ExcelJS.Workbook();
+    await wb2.xlsx.load(allOrgs.sent as Buffer as never);
+    const stat2 = wb2.getWorksheet('Статистика')!;
+    expect(stat2.getRow(4).values).toEqual([]);
+  });
 });

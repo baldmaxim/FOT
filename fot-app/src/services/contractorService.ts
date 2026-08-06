@@ -288,6 +288,20 @@ export interface IContractorPassDetail {
   issued_on: string;
 }
 
+/** Точка доступа и число активных пропусков подрядчика на ней. */
+export interface IContractorPassAccessPointStat {
+  /** null — пропуска без точек доступа. */
+  access_point_name: string | null;
+  passes_count: number;
+}
+
+/** Разбивка активных пропусков подрядчика по точкам доступа. */
+export interface IContractorPassAccessPointStats {
+  /** Всего активных пропусков — совпадает с active_new в сводке. */
+  active_total: number;
+  points: IContractorPassAccessPointStat[];
+}
+
 /** Снапшот прежних документов держателя (история замен патента/паспорта). */
 export interface IDocHistoryRow {
   id: string;
@@ -997,6 +1011,17 @@ export const contractorAdminService = {
       `/admin/contractor/passes/stats/details${qs}`,
     );
     return r.data ?? [];
+  },
+  /**
+   * Разбивка активных пропусков подрядчика по точкам доступа. Периода нет —
+   * это состояние «на сейчас», как и «Активные» в сводке.
+   */
+  async getPassAccessPointStats(orgDepartmentId: string): Promise<IContractorPassAccessPointStats> {
+    const qs = buildStatsQuery({ org_department_id: orgDepartmentId });
+    const r = await apiClient.get<ApiResponse<IContractorPassAccessPointStats>>(
+      `/admin/contractor/passes/stats/access-points${qs}`,
+    );
+    return r.data ?? { active_total: 0, points: [] };
   },
   async exportPassStats(orgDepartmentId?: string, dateFrom?: string, dateTo?: string): Promise<Blob> {
     const qs = buildStatsQuery({ org_department_id: orgDepartmentId, date_from: dateFrom, date_to: dateTo });

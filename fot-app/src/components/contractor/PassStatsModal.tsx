@@ -6,6 +6,7 @@ import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
   contractorAdminService,
   type IContractorOrg,
+  type IContractorPassAccessPointStats,
   type IContractorPassDetail,
   type IContractorPassStat,
 } from '../../services/contractorService';
@@ -83,7 +84,16 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
     [rows],
   );
 
+  // Разбивка активных пропусков по точкам доступа — состояние «на сейчас», период не влияет.
+  const accessPointsQuery = useQuery<IContractorPassAccessPointStats>({
+    queryKey: ['contractor-pass-access-points', orgId],
+    queryFn: () => contractorAdminService.getPassAccessPointStats(orgId),
+    enabled: !!orgId,
+    staleTime: 30_000,
+  });
+
   const details = detailsQuery.data ?? [];
+  const accessPoints = accessPointsQuery.data;
   const hasPeriod = Boolean(dateFrom || dateTo);
 
   const handleExport = async (): Promise<void> => {
@@ -233,6 +243,36 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
 
           {orgId && (
             <>
+              <div className={styles.statsSubtitle}>
+                Точки доступа — активные пропуска
+                {accessPointsQuery.isSuccess ? ` (${accessPoints?.active_total ?? 0})` : ''}
+              </div>
+              {accessPointsQuery.isLoading && <div className={styles.empty}>Загрузка…</div>}
+              {accessPointsQuery.isError && (
+                <div className={styles.empty}>Не удалось загрузить точки доступа</div>
+              )}
+              {accessPointsQuery.isSuccess && (accessPoints?.points.length ?? 0) === 0 && (
+                <div className={styles.empty}>Нет активных пропусков</div>
+              )}
+              {accessPointsQuery.isSuccess && (accessPoints?.points.length ?? 0) > 0 && (
+                <>
+                  <div className={styles.apChips}>
+                    {accessPoints?.points.map(p => (
+                      <span
+                        key={p.access_point_name ?? '__none__'}
+                        className={`${styles.apChip} ${p.access_point_name ? '' : styles.apChipEmpty}`}
+                      >
+                        {p.access_point_name ?? 'Без точек'} <b>{p.passes_count}</b>
+                      </span>
+                    ))}
+                  </div>
+                  <div className={styles.statusNote}>
+                    У пропуска может быть несколько точек — сумма по точкам больше числа
+                    активных пропусков.
+                  </div>
+                </>
+              )}
+
               <div className={styles.statsSubtitle}>
                 Выданные пропуска{detailsQuery.isSuccess ? ` (${details.length})` : ''}
               </div>

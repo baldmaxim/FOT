@@ -394,6 +394,68 @@ const fetchContractorPassDetails = async (
   );
 };
 
+/** Разбивка активных пропусков по точкам доступа (одна точка — одна строка). */
+interface IContractorAccessPointStat {
+  /** null — пропуска без точек доступа (пустой/отсутствующий access_point_names). */
+  access_point_name: string | null;
+  passes_count: number;
+}
+
+interface IContractorAccessPointStatsRow {
+  /** Всего активных пропусков подрядчика — совпадает с active_new в сводке. */
+  active_total: number;
+  points: IContractorAccessPointStat[];
+}
+
+/**
+ * Разбивка АКТИВНЫХ пропусков подрядчика по точкам доступа (снапшот
+ * contractor_passes.access_point_names, Sigur не дёргается). База — тот же фильтр
+ * p.is_active, что даёт active_new в сводке, поэтому числа сходятся.
+ * Один пропуск может входить в несколько точек → сумма passes_count > active_total.
+ * Имена нормализуются btrim (в данных встречаются хвостовые пробелы), пропуска без точек
+ * попадают в строку access_point_name = NULL и всегда стоят последними.
+ * Период на разбивку не влияет — как и на active_new, это состояние «на сейчас».
+ */
+const fetchContractorPassAccessPointStats = async (
+  orgIds: string[],
+): Promise<IContractorAccessPointStatsRow> => {
+  if (orgIds.length === 0) return { active_total: 0, points: [] };
+  const row = await queryOne<IContractorAccessPointStatsRow>(
+    `WITH active_passes AS (
+       SELECT p.id, COALESCE(p.access_point_names, '{}'::text[]) AS names
+         FROM contractor_passes p
+        WHERE p.org_department_id = ANY($1::uuid[])
+          AND p.is_active
+     ),
+     expanded AS (
+       SELECT a.id AS pass_id, ap.access_point_name
+         FROM active_passes a
+         LEFT JOIN LATERAL (
+           SELECT DISTINCT btrim(u.name) AS access_point_name
+             FROM unnest(a.names) AS u(name)
+            WHERE NULLIF(btrim(u.name), '') IS NOT NULL
+         ) ap ON true
+     ),
+     grouped AS (
+       SELECT access_point_name, count(DISTINCT pass_id)::int AS passes_count
+         FROM expanded
+        GROUP BY access_point_name
+     )
+     SELECT (SELECT count(*)::int FROM active_passes) AS active_total,
+            COALESCE((
+              SELECT jsonb_agg(
+                       jsonb_build_object(
+                         'access_point_name', g.access_point_name,
+                         'passes_count', g.passes_count)
+                       ORDER BY (g.access_point_name IS NULL), g.passes_count DESC, g.access_point_name)
+                FROM grouped g
+            ), '[]'::jsonb) AS points`,
+    [orgIds],
+  );
+  // Агрегатный запрос всегда даёт ровно одну строку — фолбэк только ради типизации queryOne.
+  return row ?? { active_total: 0, points: [] };
+};
+
 /** Строка дубля-однофамильца (подрядный пропуск или штатный сотрудник). */
 interface IDuplicateRow {
   source: 'contractor_pass' | 'employee';
@@ -1931,6 +1993,32 @@ export const contractorAdminController = {
   },
 
   /**
+   * GET /passes/stats/access-points?org_department_id= — разбивка активных пропусков
+   * подрядчика по точкам доступа. Период не принимается: как и «Активные» в сводке,
+   * это состояние «на сейчас».
+   */
+  async passAccessPointStats(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
+      const orgRaw = typeof req.query.org_department_id === 'string'
+        ? req.query.org_department_id.trim() : '';
+      const orgId = z.string().uuid().parse(orgRaw);
+      const data = await fetchContractorPassAccessPointStats([orgId]);
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректная организация' });
+        return;
+      }
+      console.error('Contractor passAccessPointStats error:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Не удалось загрузить статистику по точкам доступа',
+      });
+    }
+  },
+
+  /**
    * GET /passes/stats/export?org_department_id=&date_from=&date_to= — xlsx со статистикой
    * пропусков. Без org — все подрядчики (только непустые строки), с ним — один.
    * Лист «Статистика» + лист «Пропуска» (детализация выданных). Период — как в /passes/stats.
@@ -1987,6 +2075,24 @@ export const contractorAdminController = {
         );
         const totalRow = ws.addRow({ org_name: 'Итого', ...total });
         totalRow.font = { bold: true };
+      }
+
+      // Разбивка активных пропусков по точкам доступа — только для конкретного подрядчика
+      // (в режиме «все» смешивать точки разных организаций бессмысленно).
+      if (orgFilter) {
+        const ap = await fetchContractorPassAccessPointStats([orgFilter]);
+        if (ap.points.length > 0) {
+          ws.addRow([]);
+          const apHeader = ws.addRow(['Точка доступа', 'Пропусков (активные)']);
+          apHeader.font = { bold: true };
+          for (const p of ap.points) {
+            ws.addRow([p.access_point_name ?? 'Без точек', p.passes_count]);
+          }
+          const apNote = ws.addRow([
+            'У пропуска может быть несколько точек — сумма по точкам больше числа активных пропусков',
+          ]);
+          apNote.font = { italic: true };
+        }
       }
 
       // Детализация выданных (текущие одобренные держатели) — на том же листе,
