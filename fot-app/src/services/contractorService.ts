@@ -297,6 +297,7 @@ export interface IContractorPassAccessPointStat {
 
 /** Разбивка активных пропусков подрядчика по точкам доступа. */
 export interface IContractorPassAccessPointStats {
+  org_department_id: string;
   /** Всего активных пропусков — совпадает с active_new в сводке. */
   active_total: number;
   points: IContractorPassAccessPointStat[];
@@ -1013,15 +1014,16 @@ export const contractorAdminService = {
     return r.data ?? [];
   },
   /**
-   * Разбивка активных пропусков подрядчика по точкам доступа. Периода нет —
-   * это состояние «на сейчас», как и «Активные» в сводке.
+   * Разбивка активных пропусков по точкам доступа: с org — по одному подрядчику,
+   * без него — по всем. Периода нет: это состояние «на сейчас», как «Активные» в сводке.
+   * Подрядчики без активных пропусков в ответ не попадают.
    */
-  async getPassAccessPointStats(orgDepartmentId: string): Promise<IContractorPassAccessPointStats> {
+  async getPassAccessPointStats(orgDepartmentId?: string): Promise<IContractorPassAccessPointStats[]> {
     const qs = buildStatsQuery({ org_department_id: orgDepartmentId });
-    const r = await apiClient.get<ApiResponse<IContractorPassAccessPointStats>>(
+    const r = await apiClient.get<ApiResponse<IContractorPassAccessPointStats[]>>(
       `/admin/contractor/passes/stats/access-points${qs}`,
     );
-    return r.data ?? { active_total: 0, points: [] };
+    return r.data ?? [];
   },
   async exportPassStats(orgDepartmentId?: string, dateFrom?: string, dateTo?: string): Promise<Blob> {
     const qs = buildStatsQuery({ org_department_id: orgDepartmentId, date_from: dateFrom, date_to: dateTo });

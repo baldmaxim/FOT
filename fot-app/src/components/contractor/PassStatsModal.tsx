@@ -1,6 +1,6 @@
-import { useMemo, useState, type FC } from 'react';
+import { Fragment, useEffect, useMemo, useState, type FC, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Download } from 'lucide-react';
+import { ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import {
@@ -46,6 +46,8 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [exporting, setExporting] = useState(false);
+  /** Раскрытая строка сводки в режиме «Все подрядчики» (одна за раз). */
+  const [expandedOrgId, setExpandedOrgId] = useState<string | null>(null);
 
   const statsQuery = useQuery<IContractorPassStat[]>({
     queryKey: ['contractor-pass-stats', dateFrom, dateTo],
@@ -85,15 +87,47 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
   );
 
   // Разбивка активных пропусков по точкам доступа — состояние «на сейчас», период не влияет.
-  const accessPointsQuery = useQuery<IContractorPassAccessPointStats>({
+  // Без выбранного подрядчика грузим по всем сразу: строки сводки раскрываются аккордеоном.
+  const accessPointsQuery = useQuery<IContractorPassAccessPointStats[]>({
     queryKey: ['contractor-pass-access-points', orgId],
-    queryFn: () => contractorAdminService.getPassAccessPointStats(orgId),
-    enabled: !!orgId,
+    queryFn: () => contractorAdminService.getPassAccessPointStats(orgId || undefined),
     staleTime: 30_000,
   });
 
+  // Подрядчики без активных пропусков в ответ не попадают — отсутствие ключа значит ноль,
+  // но только когда запрос успешно завершён (см. renderAccessPoints).
+  const pointsByOrg = useMemo(
+    () => new Map((accessPointsQuery.data ?? []).map(a => [a.org_department_id, a])),
+    [accessPointsQuery.data],
+  );
+
+  useEffect(() => setExpandedOrgId(null), [orgId]);
+
+  /** Блок точек доступа одного подрядчика: загрузка / ошибка / пусто / чипы. */
+  const renderAccessPoints = (targetOrgId: string): ReactNode => {
+    if (accessPointsQuery.isLoading) return <div className={styles.empty}>Загрузка…</div>;
+    if (accessPointsQuery.isError) {
+      return <div className={styles.empty}>Не удалось загрузить точки доступа</div>;
+    }
+    const stat = pointsByOrg.get(targetOrgId);
+    if (!stat || stat.points.length === 0) {
+      return <div className={styles.empty}>Нет активных пропусков</div>;
+    }
+    return (
+      <div className={styles.apChips}>
+        {stat.points.map(p => (
+          <span
+            key={p.access_point_name ?? '__none__'}
+            className={`${styles.apChip} ${p.access_point_name ? '' : styles.apChipEmpty}`}
+          >
+            {p.access_point_name ?? 'Без точек'} <b>{p.passes_count}</b>
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   const details = detailsQuery.data ?? [];
-  const accessPoints = accessPointsQuery.data;
   const hasPeriod = Boolean(dateFrom || dateTo);
 
   const handleExport = async (): Promise<void> => {
@@ -217,15 +251,50 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
                 </tr>
               </thead>
               <tbody>
-                {rows.map(r => (
-                  <tr key={r.org_department_id}>
-                    <td>{r.org_name}</td>
-                    <td>{r.issued_new}</td>
-                    <td>{r.active_new}</td>
-                    <td>{r.old_total}</td>
-                    <td>{r.old_used}</td>
-                  </tr>
-                ))}
+                {rows.map(r => {
+                  // В режиме одного подрядчика точки показаны отдельной секцией ниже.
+                  if (orgId) {
+                    return (
+                      <tr key={r.org_department_id}>
+                        <td>{r.org_name}</td>
+                        <td>{r.issued_new}</td>
+                        <td>{r.active_new}</td>
+                        <td>{r.old_total}</td>
+                        <td>{r.old_used}</td>
+                      </tr>
+                    );
+                  }
+                  const expanded = expandedOrgId === r.org_department_id;
+                  const toggle = (): void => setExpandedOrgId(expanded ? null : r.org_department_id);
+                  return (
+                    <Fragment key={r.org_department_id}>
+                      <tr className={styles.statsRowClickable} onClick={toggle}>
+                        <td>
+                          <button
+                            type="button"
+                            className={styles.statsRowToggle}
+                            aria-expanded={expanded}
+                            onClick={e => { e.stopPropagation(); toggle(); }}
+                          >
+                            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            {r.org_name}
+                          </button>
+                        </td>
+                        <td>{r.issued_new}</td>
+                        <td>{r.active_new}</td>
+                        <td>{r.old_total}</td>
+                        <td>{r.old_used}</td>
+                      </tr>
+                      {expanded && (
+                        <tr>
+                          <td className={styles.apChipsCell} colSpan={5}>
+                            {renderAccessPoints(r.org_department_id)}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
               {rows.length > 1 && (
                 <tfoot>
@@ -241,36 +310,27 @@ export const PassStatsModal: FC<IPassStatsModalProps> = ({ orgs, orgsLoading, on
             </table>
           )}
 
+          {!orgId && rows.length > 0 && (
+            <div className={styles.statusNote}>
+              Клик по подрядчику раскрывает точки доступа его активных пропусков. У пропуска
+              может быть несколько точек — сумма по точкам больше числа активных пропусков.
+            </div>
+          )}
+
           {orgId && (
             <>
               <div className={styles.statsSubtitle}>
                 Точки доступа — активные пропуска
-                {accessPointsQuery.isSuccess ? ` (${accessPoints?.active_total ?? 0})` : ''}
+                {accessPointsQuery.isSuccess
+                  ? ` (${pointsByOrg.get(orgId)?.active_total ?? 0})`
+                  : ''}
               </div>
-              {accessPointsQuery.isLoading && <div className={styles.empty}>Загрузка…</div>}
-              {accessPointsQuery.isError && (
-                <div className={styles.empty}>Не удалось загрузить точки доступа</div>
-              )}
-              {accessPointsQuery.isSuccess && (accessPoints?.points.length ?? 0) === 0 && (
-                <div className={styles.empty}>Нет активных пропусков</div>
-              )}
-              {accessPointsQuery.isSuccess && (accessPoints?.points.length ?? 0) > 0 && (
-                <>
-                  <div className={styles.apChips}>
-                    {accessPoints?.points.map(p => (
-                      <span
-                        key={p.access_point_name ?? '__none__'}
-                        className={`${styles.apChip} ${p.access_point_name ? '' : styles.apChipEmpty}`}
-                      >
-                        {p.access_point_name ?? 'Без точек'} <b>{p.passes_count}</b>
-                      </span>
-                    ))}
-                  </div>
-                  <div className={styles.statusNote}>
-                    У пропуска может быть несколько точек — сумма по точкам больше числа
-                    активных пропусков.
-                  </div>
-                </>
+              {renderAccessPoints(orgId)}
+              {(pointsByOrg.get(orgId)?.points.length ?? 0) > 0 && (
+                <div className={styles.statusNote}>
+                  У пропуска может быть несколько точек — сумма по точкам больше числа
+                  активных пропусков.
+                </div>
               )}
 
               <div className={styles.statsSubtitle}>

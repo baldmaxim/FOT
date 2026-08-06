@@ -357,6 +357,36 @@
   font-weight: 600;
 }
 
+/* Аккордеон точек доступа в сводке «Все подрядчики». Селекторы через .table —
+   иначе .table td и .table tr:hover td (выше) перебивают эти правила. */
+.table .statsRowClickable {
+  cursor: pointer;
+}
+.table .statsRowClickable:hover > td {
+  background: var(--bg-secondary);
+}
+.statsRowToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.statsRowToggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.table td.apChipsCell,
+.table tr:hover td.apChipsCell {
+  padding: 8px 12px 12px;
+  background: var(--bg-secondary);
+}
+
 /* Разбивка активных пропусков по точкам доступа — чипы «имя + число». */
 .apChips {
   display: flex;

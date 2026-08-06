@@ -1735,9 +1735,10 @@ describe('contractorAdminController — статистика пропусков 
   });
 
   it('exportPassStats: детализация на том же листе через пустую строку, active_new>0 при issued_new=0 не отфильтровывается', async () => {
-    // 1-й query — сводка, 2-й — детализация.
+    // 1-й query — сводка, 2-й — точки доступа, 3-й — детализация.
     h.query
       .mockResolvedValueOnce([statRow({ issued_new: 0, active_new: 5, old_total: 0, old_used: 0 })])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         { pass_id: 'p1', org_name: 'АЛЬФА ООО', pass_number: '101', holder_name: 'Иванов И.', card_uid: '168,15956', issued_on: '2026-07-10' },
       ]);
@@ -1747,7 +1748,8 @@ describe('contractorAdminController — статистика пропусков 
 
     expect(res.statusCode).toBe(200);
     expect(h.query.mock.calls[0][1]).toEqual([[ORG], 14, '2026-07-01', '2026-07-31']);
-    expect(h.query.mock.calls[1][1]).toEqual([[ORG], '2026-07-01', '2026-07-31']);
+    expect(h.query.mock.calls[1][1]).toEqual([[ORG]]);
+    expect(h.query.mock.calls[2][1]).toEqual([[ORG], '2026-07-01', '2026-07-31']);
     // Период в имени файла.
     const disposition = res.setHeader.mock.calls
       .find(c => c[0] === 'Content-Disposition')?.[1] as string;
@@ -1769,15 +1771,19 @@ describe('contractorAdminController — статистика пропусков 
       [undefined, 'АЛЬФА ООО', 'Иванов И.', '101', '168,15956', '2026-07-10']);
   });
 
+  const apRow = (over: Partial<Record<string, unknown>> = {}) => ({
+    org_department_id: ORG,
+    active_total: 160,
+    points: [
+      { access_point_name: 'кпп ASTERUS', passes_count: 160 },
+      { access_point_name: 'ЗилАрт Штаб', passes_count: 13 },
+      { access_point_name: null, passes_count: 7 },
+    ],
+    ...over,
+  });
+
   it('passAccessPointStats: разбивка по точкам, база — is_active, btrim + count(DISTINCT)', async () => {
-    h.queryOne.mockResolvedValueOnce({
-      active_total: 160,
-      points: [
-        { access_point_name: 'кпп ASTERUS', passes_count: 160 },
-        { access_point_name: 'ЗилАрт Штаб', passes_count: 13 },
-        { access_point_name: null, passes_count: 7 },
-      ],
-    });
+    h.query.mockResolvedValueOnce([apRow()]);
     const res = makeRes();
     await contractorAdminController.passAccessPointStats(
       statsReq({ org_department_id: ORG }), res as never);
@@ -1785,16 +1791,17 @@ describe('contractorAdminController — статистика пропусков 
     expect(res.statusCode).toBe(200);
     expect(res.body).toMatchObject({
       success: true,
-      data: {
+      data: [{
+        org_department_id: ORG,
         active_total: 160,
         points: [
           { access_point_name: 'кпп ASTERUS', passes_count: 160 },
           { access_point_name: 'ЗилАрт Штаб', passes_count: 13 },
           { access_point_name: null, passes_count: 7 },
         ],
-      },
+      }],
     });
-    const [sql, params] = h.queryOne.mock.calls[0];
+    const [sql, params] = h.query.mock.calls[0];
     expect(params).toEqual([[ORG]]);
     // База совпадает с active_new в сводке; период не участвует.
     expect(sql).toContain('AND p.is_active');
@@ -1802,38 +1809,49 @@ describe('contractorAdminController — статистика пропусков 
     // Нормализация имён и защита от двойного счёта одного пропуска.
     expect(sql).toContain('SELECT DISTINCT btrim(u.name)');
     expect(sql).toContain('count(DISTINCT pass_id)::int AS passes_count');
+    // Разбивка считается по каждому подрядчику отдельно.
+    expect(sql).toContain('GROUP BY oid, access_point_name');
     // «Без точек» всегда последним — сортировка внутри jsonb_agg.
     expect(sql).toContain('ORDER BY (g.access_point_name IS NULL), g.passes_count DESC');
   });
 
-  it('passAccessPointStats: ноль активных пропусков — 200 с пустым points', async () => {
-    h.queryOne.mockResolvedValueOnce({ active_total: 0, points: [] });
+  it('passAccessPointStats: без org — по всем подрядчикам из getContractorOrgs', async () => {
+    h.query.mockResolvedValueOnce([apRow()]);
+    const res = makeRes();
+    await contractorAdminController.passAccessPointStats(statsReq(), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(h.getContractorOrgs).toHaveBeenCalled();
+    expect(h.query.mock.calls[0][1]).toEqual([[ORG]]);
+  });
+
+  it('passAccessPointStats: подрядчик без активных пропусков — 200 с пустым data', async () => {
+    // Организации без активных пропусков в выдачу SQL не попадают вовсе.
+    h.query.mockResolvedValueOnce([]);
     const res = makeRes();
     await contractorAdminController.passAccessPointStats(
       statsReq({ org_department_id: ORG }), res as never);
     expect(res.statusCode).toBe(200);
-    expect(res.body).toMatchObject({ success: true, data: { active_total: 0, points: [] } });
+    expect(res.body).toMatchObject({ success: true, data: [] });
   });
 
-  it('passAccessPointStats: 400 без организации', async () => {
+  it('passAccessPointStats: 400 при невалидном org_department_id', async () => {
     const res = makeRes();
-    await contractorAdminController.passAccessPointStats(statsReq(), res as never);
+    await contractorAdminController.passAccessPointStats(
+      statsReq({ org_department_id: 'not-a-uuid' }), res as never);
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatchObject({ error: 'Некорректная организация' });
-    expect(h.queryOne).not.toHaveBeenCalled();
+    expect(h.query).not.toHaveBeenCalled();
   });
 
-  it('exportPassStats: блок точек доступа только при выбранном подрядчике', async () => {
+  it('exportPassStats: точки доступа — свёрнутая группа строк под подрядчиком, в обоих режимах', async () => {
+    const points = [
+      { access_point_name: 'кпп ASTERUS', passes_count: 2 },
+      { access_point_name: null, passes_count: 1 },
+    ];
     h.query
       .mockResolvedValueOnce([statRow({ issued_new: 2, active_new: 2 })])
+      .mockResolvedValueOnce([apRow({ active_total: 2, points })])
       .mockResolvedValueOnce([]);
-    h.queryOne.mockResolvedValueOnce({
-      active_total: 2,
-      points: [
-        { access_point_name: 'кпп ASTERUS', passes_count: 2 },
-        { access_point_name: null, passes_count: 1 },
-      ],
-    });
     const withOrg = makeExportRes();
     await contractorAdminController.exportPassStats(
       statsReq({ org_department_id: ORG }), withOrg as never);
@@ -1843,21 +1861,27 @@ describe('contractorAdminController — статистика пропусков 
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(withOrg.sent as Buffer as never);
     const stat = wb.getWorksheet('Статистика')!;
-    expect(stat.getRow(4).values).toEqual([undefined, 'Точка доступа', 'Пропусков (активные)']);
-    expect(stat.getRow(5).values).toEqual([undefined, 'кпп ASTERUS', 2]);
-    expect(stat.getRow(6).values).toEqual([undefined, 'Без точек', 1]);
-    expect(String(stat.getRow(7).getCell(1).value))
-      .toContain('У пропуска может быть несколько точек');
+    // «+» рисуется у родительской строки (она выше группы), а не под ней.
+    expect(stat.properties.outlineProperties?.summaryBelow).toBe(false);
+    expect(stat.getRow(2).getCell(1).value).toBe('АЛЬФА ООО');
+    // Точки — под строкой подрядчика: имя с отступом в A, число активных в C.
+    expect(String(stat.getRow(3).getCell(1).value).trim()).toBe('кпп ASTERUS');
+    expect(stat.getRow(3).getCell(3).value).toBe(2);
+    expect(stat.getRow(3).outlineLevel).toBe(1);
+    expect(stat.getRow(3).hidden).toBe(true);
+    expect(String(stat.getRow(4).getCell(1).value).trim()).toBe('Без точек');
+    expect(stat.getRow(4).getCell(3).value).toBe(1);
+    expect(stat.getRow(4).outlineLevel).toBe(1);
+    expect(String(stat.getRow(5).getCell(1).value)).toContain('раскрываются кнопкой «+»');
 
-    // Без организации — блока нет, queryOne не вызывается повторно.
-    h.query.mockResolvedValueOnce([statRow()]).mockResolvedValueOnce([]);
+    // Режим «все подрядчики» — точки запрашиваются по всем организациям, а не пропускаются.
+    h.query
+      .mockResolvedValueOnce([statRow()])
+      .mockResolvedValueOnce([apRow({ active_total: 2, points })])
+      .mockResolvedValueOnce([]);
     const allOrgs = makeExportRes();
     await contractorAdminController.exportPassStats(statsReq(), allOrgs as never);
     expect(allOrgs.statusCode).toBe(200);
-    expect(h.queryOne).toHaveBeenCalledTimes(1);
-    const wb2 = new ExcelJS.Workbook();
-    await wb2.xlsx.load(allOrgs.sent as Buffer as never);
-    const stat2 = wb2.getWorksheet('Статистика')!;
-    expect(stat2.getRow(4).values).toEqual([]);
+    expect(h.query.mock.calls[4][1]).toEqual([[ORG]]);
   });
 });
