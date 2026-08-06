@@ -209,12 +209,6 @@ export const PresenceExportModal: FC<IPresenceExportModalProps> = ({ onClose }) 
                 onToggleGroup={toggleGroupBlock}
               />
             </div>
-            <div className={styles.hint}>Пусто = выгружаются все.</div>
-          </div>
-
-          <div className={styles.notes}>
-            <div>В файле лист на каждый день; группы раскрываются кнопкой «+» слева.</div>
-            <div>Отдел берётся текущий, а не на дату прохода.</div>
           </div>
         </div>
 

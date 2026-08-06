@@ -11,8 +11,7 @@
 }
 
 .modal {
-  width: min(560px, 100%);
-  max-height: 92dvh;
+  width: min(760px, 100%);
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
@@ -58,7 +57,9 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
-  overflow-y: auto;
+  /* Не auto: прокручиваемый контейнер обрезал бы absolute-панель фильтра.
+   * Высоту ограничивает скролл оверлея. */
+  overflow: visible;
 }
 
 .section {
@@ -131,6 +132,13 @@
   align-items: flex-start;
 }
 
+/* Корень EntityFilter: без явной ширины он сжимается по содержимому, и
+ * выпадающая панель (max-width: 100%) меряется от узкого контейнера. */
+.filtersRow > div {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
 .hint {
   font-size: 0.8rem;
   color: var(--text-secondary);
@@ -139,17 +147,6 @@
 .error {
   font-size: 0.82rem;
   color: var(--error);
-}
-
-.notes {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 0.78rem;
-  font-style: italic;
-  color: var(--text-secondary);
-  border-top: 1px dashed var(--border);
-  padding-top: 12px;
 }
 
 .footer {
@@ -194,7 +191,8 @@
 
   .modal {
     width: 100%;
-    max-height: 100dvh;
+    /* max-height не задаём: иначе панель фильтра снова обрежется. */
+    max-height: none;
     min-height: 100dvh;
     border-radius: 0;
     border: none;
