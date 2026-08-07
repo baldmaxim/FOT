@@ -34,6 +34,7 @@ const card = (over: Partial<ICardFacts> = {}): ICardFacts => ({
     employeeHasPassRow: false,
     readerIssued: false,
     deletedPassTrace: false,
+    moduleFacilityBatch: false,
   },
   ...over,
 });
@@ -152,6 +153,17 @@ describe('classifyCardGeneration', () => {
     expect(result.reason).toContain('след удалённого пропуска');
   });
 
+  it('партия, засветившаяся в модуле, не подтверждается даже из confirmation-файла', () => {
+    // Физическая партия однородна: одна закупка — один тип пластика. Ловит удалённые
+    // пуловые пропуска с переименованными в ФИО профилями.
+    const result = classifyCardGeneration(
+      card({ cardId: 7, facility: 38, moduleLink: { ...card().moduleLink, moduleFacilityBatch: true } }),
+      new Set([7]),
+    );
+    expect(result.generation).toBe('module_linked');
+    expect(result.reason).toContain('партия facility 38 засвечена в модуле');
+  });
+
   it('причина перечисляет все сработавшие признаки', () => {
     const result = classifyCardGeneration(card({
       cardId: 7,
@@ -162,10 +174,11 @@ describe('classifyCardGeneration', () => {
         employeeHasPassRow: true,
         readerIssued: true,
         deletedPassTrace: true,
+        moduleFacilityBatch: true,
       },
     }), new Set([7]));
     expect(result.generation).toBe('module_linked');
-    for (const fragment of ['FOT-POOL', 'Пропуск N', 'сопоставлена', 'владельца', 'ридер', 'удалённого']) {
+    for (const fragment of ['FOT-POOL', 'Пропуск N', 'сопоставлена', 'владельца', 'ридер', 'удалённого', 'партия']) {
       expect(result.reason).toContain(fragment);
     }
   });

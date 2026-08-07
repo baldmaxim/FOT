@@ -98,6 +98,8 @@ export interface ILiveState {
   denylist: Set<number>;
   /** cardId всех сотрудников СУ-10 / Службы механизации — независимый жёсткий запрет. */
   excludedBranchCardIds: Set<number>;
+  /** facility партий, засветившихся в модуле выдачи — вся партия под запретом. */
+  moduleFacilities: Set<number>;
   /** Факты по каждой карте каталога — для повторной классификации при per-record гардах. */
   cardFactsById: Map<number, ICardFacts>;
   /** cardId, встретившиеся более чем в одной привязке (неоднозначность). */
@@ -378,6 +380,8 @@ export async function collectLiveState(options: ICollectOptions): Promise<ILiveS
   }
 
   // Факты по каждой карте каталога — общий источник для отчёта и для per-record гардов.
+  // Строятся в два прохода: сначала прямые признаки связи с модулем, затем — признак
+  // партии, который вычислим только после того, как известны все модульные карты.
   const cardFactsById = new Map<number, ICardFacts>();
   for (const [cardId, info] of cardById) {
     const matched = passesByCardId.get(cardId) ?? [];
@@ -396,9 +400,27 @@ export async function collectLiveState(options: ICollectOptions): Promise<ILiveS
         readerIssued: matched.some(pass => !!pass.card_hex_uid),
         deletedPassTrace: deletedTrace.cardIds.has(cardId)
           || (ownerId !== null && deletedTrace.employeeIds.has(ownerId)),
+        moduleFacilityBatch: false, // второй проход ниже
       },
     });
   }
+
+  // Второй проход: партии, засветившиеся в модуле. Физическая партия однородна —
+  // если хоть одна карта facility выдана через модуль, вся партия потенциально красная.
+  // Это ловит удалённые пуловые пропуска, чьи профили переименованы в ФИО.
+  const moduleFacilities = new Set<number>();
+  for (const facts of cardFactsById.values()) {
+    const link = facts.moduleLink;
+    const linkedDirectly = link.poolProfile || link.poolPlaceholderName || link.inPassModule
+      || link.employeeHasPassRow || link.readerIssued || link.deletedPassTrace;
+    if (linkedDirectly && facts.facility !== null) moduleFacilities.add(facts.facility);
+  }
+  for (const facts of cardFactsById.values()) {
+    if (facts.facility !== null && moduleFacilities.has(facts.facility)) {
+      facts.moduleLink.moduleFacilityBatch = true;
+    }
+  }
+  log(`[партии] facility, засветившихся в модуле: ${moduleFacilities.size}`);
 
   // ── Классификация ────────────────────────────────────────────────────────────────
   const rows: ICardRow[] = [];
@@ -428,6 +450,7 @@ export async function collectLiveState(options: ICollectOptions): Promise<ILiveS
           employeeHasPassRow: employeesWithPassRow.has(employeeId),
           readerIssued: false,
           deletedPassTrace: deletedTrace.employeeIds.has(employeeId),
+          moduleFacilityBatch: false,
         },
       };
       const matched = passesByCardId.get(binding.cardId) ?? [];
@@ -486,6 +509,7 @@ export async function collectLiveState(options: ICollectOptions): Promise<ILiveS
     employeesWithNewCard,
     denylist,
     excludedBranchCardIds,
+    moduleFacilities,
     cardFactsById,
     duplicateCardIds,
     rootlessComplete,

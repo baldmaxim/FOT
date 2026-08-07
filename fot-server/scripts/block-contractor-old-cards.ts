@@ -202,7 +202,10 @@ async function runDryRun(
   },
 ): Promise<void> {
   const { util, collect } = deps;
-  console.log('=== DRY-RUN: ничего не пишется ===\n');
+  console.log('=== DRY-RUN: ничего не пишется ===');
+  console.log(`Скоуп: ${args.scope.join(',')}${args.org ? ` | организация: ${args.org}` : ''}`
+    + `${args.limit ? ` | limit: ${args.limit}` : ''}`);
+  console.log('Скоуп обязан совпадать с тем, что передан в build-white-confirmation.ts\n');
   if (!args.input) throw new Error('нужен --input=<inventory JSON>');
 
   const inventoryRaw = fs.readFileSync(args.input, 'utf8');
@@ -304,10 +307,11 @@ async function runDryRun(
   console.log(`\nПлан: ${planPath}`);
   console.log(`planHash: ${planHash}`);
   console.log(`Целевая дата окончания: ${expirationTarget}`);
-  console.log('\nБоевой запуск (план живёт 60 минут):');
-  console.log(`  npx tsx scripts/block-contractor-old-cards.ts --plan=${planPath} \\`);
-  console.log(`    --confirmations=${args.confirmations} --confirm-plan=${planHash} \\`);
-  console.log(`    --apply --expect=${operations.length}`);
+  // Одной строкой: перенос через "\" ломается в PowerShell, а именно там это запускают.
+  console.log('\nБоевой запуск (план живёт 60 минут). Команда ОДНОЙ строкой:');
+  console.log(`npx tsx scripts/block-contractor-old-cards.ts "--plan=${planPath}" `
+    + `"--confirmations=${args.confirmations}" "--confirm-plan=${planHash}" `
+    + `--apply "--expect=${operations.length}"`);
 }
 
 function printSelection(
@@ -697,9 +701,11 @@ async function runApply(
   for (const [key, count] of Object.entries(counters).sort((left, right) => right[1] - left[1])) {
     console.log(`  ${key}: ${count}`);
   }
-  console.log(`\nЖурнал: ${journalPath}`);
-  console.log('Откат: npx tsx scripts/block-contractor-old-cards.ts '
-    + `--rollback=${journalPath} --apply`);
+  console.log(`\nЖурнал этого прогона: ${journalPath}`);
+  console.log('Откат ИМЕННО этого прогона — берите путь выше, не автоподбор свежего файла:');
+  console.log(`npx tsx scripts/block-contractor-old-cards.ts "--rollback=${journalPath}" --apply`);
+  console.log('\nВНИМАНИЕ: прежний план теперь недействителен — состав изменился.');
+  console.log('Для следующей партии нужен новый dry-run и новый план.');
 }
 
 // ── ROLLBACK ───────────────────────────────────────────────────────────────────────

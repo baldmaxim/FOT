@@ -61,6 +61,13 @@ export interface IModuleLinkFacts {
   readerIssued: boolean;
   /** Карта или её владелец числятся в чёрном списке удалённых пропусков. */
   deletedPassTrace: boolean;
+  /**
+   * facility карты встречается хотя бы у одной карты, связанной с модулем.
+   * Физическая партия однородна — одна закупка даёт один тип пластика, поэтому
+   * засветившаяся в модуле партия целиком считается потенциально красной.
+   * Ловит удалённые пуловые пропуска с переименованными в ФИО профилями.
+   */
+  moduleFacilityBatch: boolean;
 }
 
 /** Факты по конкретной карте, собранные инвентаризацией. */
@@ -104,6 +111,7 @@ export function classifyCardGeneration(
     link.employeeHasPassRow ? 'у владельца есть строка в модуле' : null,
     link.readerIssued ? 'оформлялась через ридер' : null,
     link.deletedPassTrace ? 'след удалённого пропуска' : null,
+    link.moduleFacilityBatch ? `партия facility ${card.facility} засвечена в модуле` : null,
   ].filter(Boolean);
   if (reasons.length > 0) {
     return { generation: 'module_linked', reason: `связана с модулем выдачи (${reasons.join(', ')}) — может быть красной` };

@@ -74,9 +74,45 @@ async function main(): Promise<void> {
   };
   const scopeRaw = getArg('scope') ?? 'contractors,rootless';
   const scope = new Set(scopeRaw.split(',').map(part => part.trim()).filter(Boolean));
+  const acceptUnresolvedRaw = getArg('accept-unresolved');
 
   console.log('=== Сборка confirmation-файла (READ-ONLY) ===');
-  console.log(`Основание: ${OWNER_RULE_SOURCE}\n`);
+  console.log(`Основание: ${OWNER_RULE_SOURCE}`);
+  console.log(`Скоуп: ${[...scope].join(',')}\n`);
+
+  // ── Fail-closed по неразрешённым удалениям ───────────────────────────────────────
+  // Часть удалённых пропусков не имеет связи «номер → профиль» в аудите. Отсутствие
+  // следа НЕ доказывает, что профиль удалён: переименованный в ФИО профиль с красной
+  // картой так не находится. Принять этот остаток может только человек — явным числом.
+  const blacklistPath = path.resolve(OUT_DIR, 'deleted-passes-blacklist.json');
+  if (!fs.existsSync(blacklistPath)) {
+    throw new Error('Сначала выполните: npx tsx scripts/diagnose-deleted-passes.ts');
+  }
+  const blacklist = JSON.parse(fs.readFileSync(blacklistPath, 'utf8')) as {
+    entries: Array<{ passNumber: string; verdict: string; note: string }>;
+  };
+  const unresolvedNoLink = blacklist.entries.filter(
+    entry => entry.verdict === 'unresolved_no_trace' && !entry.note.includes('из аудита'),
+  );
+  if (unresolvedNoLink.length > 0) {
+    console.log(`── Неразрешённые удаления: ${unresolvedNoLink.length} ──`);
+    console.log(`  номера: ${unresolvedNoLink.map(entry => entry.passNumber).join(', ')}`);
+    console.log('  У этих пропусков нет связи «номер → профиль» в аудите. Следов в Sigur не найдено,');
+    console.log('  но это НЕ доказывает удаление профиля: переименованный в ФИО профиль не ищется.');
+    if (acceptUnresolvedRaw === null) {
+      throw new Error(
+        `Стоп. Чтобы принять этот остаток осознанно, запустите с флагом `
+        + `'--accept-unresolved=${unresolvedNoLink.length}'`,
+      );
+    }
+    if (Number(acceptUnresolvedRaw) !== unresolvedNoLink.length) {
+      throw new Error(
+        `--accept-unresolved=${acceptUnresolvedRaw} не совпадает с фактическим числом `
+        + `${unresolvedNoLink.length} — проверьте разбор удалений заново`,
+      );
+    }
+    console.log(`  Принято флагом --accept-unresolved=${unresolvedNoLink.length}.\n`);
+  }
 
   const collect = await import('../src/services/old-card-block.collect.js');
   const util = await import('../src/services/old-card-block.util.js');
@@ -89,6 +125,7 @@ async function main(): Promise<void> {
     excludedBranch: 0,
     moduleLinked: 0,
     unknownCard: 0,
+    moduleFacilityBatch: 0,
     duplicateCard: 0,
     confirmed: 0,
   };
@@ -105,10 +142,14 @@ async function main(): Promise<void> {
     if (state.denylist.has(row.cardId)) { stats.moduleLinked += 1; continue; }
     const facts = state.cardFactsById.get(row.cardId);
     if (!facts || !facts.value || !facts.w26) { stats.unknownCard += 1; continue; }
-    if (facts.moduleLink.poolProfile || facts.moduleLink.inPassModule || facts.moduleLink.readerIssued) {
+    const link = facts.moduleLink;
+    if (link.poolProfile || link.poolPlaceholderName || link.inPassModule
+      || link.employeeHasPassRow || link.readerIssued || link.deletedPassTrace) {
       stats.moduleLinked += 1;
       continue;
     }
+    // Партия однородна: если facility засветился в модуле, вся партия потенциально красная.
+    if (link.moduleFacilityBatch) { stats.moduleFacilityBatch += 1; continue; }
     // Карта, встреченная в нескольких привязках, — неоднозначность, подтверждать нельзя.
     if (state.duplicateCardIds.has(row.cardId)) { stats.duplicateCard += 1; continue; }
 
@@ -132,6 +173,7 @@ async function main(): Promise<void> {
   console.log(`  карты СУ-10 / СМ / аномалий: ${stats.excludedBranch}`);
   console.log(`  связаны с модулем (могут быть красными): ${stats.moduleLinked}`);
   console.log(`  карта не в каталоге / битый W26: ${stats.unknownCard}`);
+  console.log(`  партия facility засвечена в модуле: ${stats.moduleFacilityBatch}`);
   console.log(`  неоднозначные (карта в нескольких привязках): ${stats.duplicateCard}`);
   console.log(`\n  ПОДТВЕРЖДЕНО КАК БЕЛЫЕ: ${stats.confirmed}`);
 
