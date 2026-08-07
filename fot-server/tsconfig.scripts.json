@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // Скрипты запускаются через tsx как ESM (import.meta.url), тогда как сам сервер
+    // собирается в CommonJS. Для проверки типов переключаем модульную систему.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": [
+    "scripts/inventory-contractor-cards.ts",
+    "scripts/block-contractor-old-cards.ts",
+    "scripts/usage-contractor-old-cards.ts",
+    "scripts/diagnose-card-eras.ts",
+    "scripts/build-white-confirmation.ts",
+    "scripts/diagnose-deleted-passes.ts",
+    "src/services/old-card-block.util.ts",
+    "src/services/old-card-block.collect.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}
