@@ -54,6 +54,60 @@
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
+.lrm-date-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lrm-date-label,
+.lrm-date-sep {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+
+.lrm-date-input {
+  height: 36px;
+  padding: 0 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: inherit;
+  /* 16px — иначе iOS/Android-Chrome зумят страницу при фокусе. */
+  font-size: 16px;
+  outline: none;
+  cursor: pointer;
+  /* Нативный календарь и иконка следуют теме. */
+  color-scheme: dark light;
+  transition: all 0.15s ease;
+}
+
+.lrm-date-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+}
+
+[data-theme="light"] .lrm-date-input:focus {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.lrm-date-clear {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.lrm-date-clear:hover {
+  color: var(--text-primary);
+}
+
 .lrm-filter {
   display: flex;
   gap: 4px;
@@ -578,6 +632,16 @@
     flex: 1 1 140px;
     min-width: 0;
     max-width: none;
+  }
+
+  /* Блок периода переносится целиком; 280px — два поля по 16px + подпись и «×». */
+  .lrm-date-range {
+    flex: 1 1 280px;
+  }
+
+  .lrm-date-input {
+    flex: 1;
+    min-width: 0;
   }
 
   /* Тап-цель по часам — не меньше 44px, иначе не попасть пальцем в «10.00ч». */

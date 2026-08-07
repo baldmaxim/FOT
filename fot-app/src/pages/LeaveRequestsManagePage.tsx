@@ -35,7 +35,6 @@ import {
   leaveRequestMinDate,
   leaveRequestOverlapsPeriod,
 } from '../utils/leaveRequestDates';
-import { LEAVE_PERIOD_ALL, leaveMonthOptions, leaveMonthRange } from '../utils/leaveRequestPeriod';
 import { displayFileName } from '../utils/fileNameDisplay';
 import { formatFioShort } from '../utils/formatFio';
 import './LeaveRequestsManagePage.css';
@@ -107,7 +106,8 @@ export const LeaveRequestsManagePage: FC = () => {
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<LeaveRequestType | 'all'>('all');
-  const [periodFilter, setPeriodFilter] = useState<string>(LEAVE_PERIOD_ALL);
+  const [periodFrom, setPeriodFrom] = useState('');
+  const [periodTo, setPeriodTo] = useState('');
   const [commentId, setCommentId] = useState<number | null>(null);
   const [comment, setComment] = useState('');
   const [revokeId, setRevokeId] = useState<number | null>(null);
@@ -136,21 +136,31 @@ export const LeaveRequestsManagePage: FC = () => {
     [baseRequests],
   );
 
-  // Опции периода — из полного списка вкладки, до поиска/отдела/типа (как deptOptions).
-  const monthOptions = useMemo(() => leaveMonthOptions(requests, periodFilter), [requests, periodFilter]);
-
   const query = search.trim().toLowerCase();
-  const period = useMemo(() => leaveMonthRange(periodFilter), [periodFilter]);
-  const isFiltering = query !== '' || deptFilter !== 'all' || typeFilter !== 'all' || period !== null;
+  const hasPeriod = periodFrom !== '' || periodTo !== '';
+  const isFiltering = query !== '' || deptFilter !== 'all' || typeFilter !== 'all' || hasPeriod;
 
   const filteredRequests = useMemo(() => {
     if (!isFiltering) return baseRequests;
     return baseRequests.filter(r =>
       (typeFilter === 'all' || r.request_type === typeFilter)
       && (deptFilter === 'all' || groupKeyOf(r) === deptFilter)
-      && (!period || leaveRequestOverlapsPeriod(r, period.from, period.to))
+      && (!hasPeriod || leaveRequestOverlapsPeriod(r, periodFrom, periodTo))
       && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
-  }, [baseRequests, isFiltering, typeFilter, deptFilter, period, query]);
+  }, [baseRequests, isFiltering, typeFilter, deptFilter, hasPeriod, periodFrom, periodTo, query]);
+
+  // Инвариант from ≤ to держим сами: min/max — лишь подсказка календарю,
+  // при ручном вводе с клавиатуры перевёрнутый диапазон иначе пройдёт.
+  const handlePeriodFromChange = (next: string) => {
+    if (!next || !periodTo || next <= periodTo) setPeriodFrom(next);
+  };
+  const handlePeriodToChange = (next: string) => {
+    if (!next || !periodFrom || next >= periodFrom) setPeriodTo(next);
+  };
+  const resetPeriod = () => {
+    setPeriodFrom('');
+    setPeriodTo('');
+  };
 
   const grouped = useMemo(() => {
     const map = new Map<string, ILeaveRequest[]>();
@@ -679,17 +689,36 @@ export const LeaveRequestsManagePage: FC = () => {
                   <option key={value} value={value}>{label}</option>
                 ))}
               </select>
-              <select
-                className="lrm-filter-select"
-                value={periodFilter}
-                onChange={e => setPeriodFilter(e.target.value)}
-                aria-label="Фильтр по периоду"
-              >
-                <option value={LEAVE_PERIOD_ALL}>Все периоды</option>
-                {monthOptions.map(o => (
-                  <option key={o.key} value={o.key}>{o.label}</option>
-                ))}
-              </select>
+              <div className="lrm-date-range">
+                <span className="lrm-date-label">Период</span>
+                <input
+                  type="date"
+                  className="lrm-date-input"
+                  value={periodFrom}
+                  max={periodTo || undefined}
+                  onChange={e => handlePeriodFromChange(e.target.value)}
+                  aria-label="Период с"
+                />
+                <span className="lrm-date-sep">—</span>
+                <input
+                  type="date"
+                  className="lrm-date-input"
+                  value={periodTo}
+                  min={periodFrom || undefined}
+                  onChange={e => handlePeriodToChange(e.target.value)}
+                  aria-label="Период по"
+                />
+                {hasPeriod && (
+                  <button
+                    type="button"
+                    className="lrm-date-clear"
+                    onClick={resetPeriod}
+                    aria-label="Сбросить период"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
             </>
           )}
           <div className="lrm-filter">
