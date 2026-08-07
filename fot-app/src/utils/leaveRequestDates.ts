@@ -79,6 +79,21 @@ export function leaveRequestMinDate(r: ILeaveRequest): string {
   return r.start_date;
 }
 
+/**
+ * Даты заявления пересекаются с периодом [from, to] (ISO, включительно).
+ * Источник дат — те же правила, что в formatLeaveRequestDatesCompact.
+ */
+export function leaveRequestOverlapsPeriod(r: ILeaveRequest, from: string, to: string): boolean {
+  if (r.request_type === 'time_correction' && r.correction_date) {
+    return r.correction_date >= from && r.correction_date <= to;
+  }
+  const dates = r.selected_dates ?? null;
+  if (dates && dates.length > 0) {
+    return dates.some(d => d >= from && d <= to);
+  }
+  return r.start_date <= to && r.end_date >= from;
+}
+
 /** Все даты заявления строго в будущем относительно `today` (ISO YYYY-MM-DD). */
 export function isLeaveRequestFullyFuture(r: ILeaveRequest, today: string): boolean {
   return leaveRequestMinDate(r) > today;

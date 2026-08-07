@@ -21,7 +21,13 @@ import {
 import { useVacationLeaveRequests, getVacationLeaveRequestsQueryKey } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
-import { formatLeaveRequestDatesCompact } from '../utils/leaveRequestDates';
+import { formatLeaveRequestDatesCompact, leaveRequestOverlapsPeriod } from '../utils/leaveRequestDates';
+import {
+  LEAVE_PERIOD_OPTIONS,
+  leavePeriodRange,
+  leaveTodayIso,
+  type LeavePeriodKey,
+} from '../utils/leaveRequestPeriod';
 import { displayFileName } from '../utils/fileNameDisplay';
 import { formatFioShort } from '../utils/formatFio';
 import './LeaveRequestsManagePage.css';
@@ -70,6 +76,8 @@ export const VacationsManagePage: FC = () => {
   const [ackFilter, setAckFilter] = useState<'unacked' | 'acked'>('unacked');
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState<string>('all');
+  const [periodFilter, setPeriodFilter] = useState<LeavePeriodKey>('all');
+  const today = useMemo(() => leaveTodayIso(), []);
 
   const ackFiltered = useMemo(
     () => requests.filter(r => (ackFilter === 'acked' ? !!r.hr_acknowledged_at : !r.hr_acknowledged_at)),
@@ -83,14 +91,16 @@ export const VacationsManagePage: FC = () => {
   );
 
   const query = search.trim().toLowerCase();
-  const isFiltering = query !== '' || deptFilter !== 'all';
+  const period = useMemo(() => leavePeriodRange(periodFilter, today), [periodFilter, today]);
+  const isFiltering = query !== '' || deptFilter !== 'all' || periodFilter !== 'all';
 
   const filtered = useMemo(() => {
     if (!isFiltering) return ackFiltered;
     return ackFiltered.filter(r =>
       (deptFilter === 'all' || deptKeyOf(r) === deptFilter)
+      && (!period || leaveRequestOverlapsPeriod(r, period.from, period.to))
       && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
-  }, [ackFiltered, isFiltering, deptFilter, query]);
+  }, [ackFiltered, isFiltering, deptFilter, period, query]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, ILeaveRequest[]>();
@@ -115,6 +125,13 @@ export const VacationsManagePage: FC = () => {
     const keys = new Set(ackFilteredRef.current.map(deptKeyOf));
     setCollapsedDepts(keys.size > 2 ? keys : new Set());
   }, [hasData, ackFilter]);
+
+  useEffect(() => {
+    // При активном фильтре периода группы держим раскрытыми: эффект выше
+    // сворачивает их заново при смене «Не ознакомлен/Ознакомлен».
+    if (periodFilter === 'all' || !hasData) return;
+    setCollapsedDepts(new Set());
+  }, [periodFilter, ackFilter, hasData]);
 
   const queryActive = query !== '';
   useEffect(() => {
@@ -272,6 +289,16 @@ export const VacationsManagePage: FC = () => {
                 <option value="all">Все отделы</option>
                 {deptOptions.map(key => (
                   <option key={key} value={key}>{key}</option>
+                ))}
+              </select>
+              <select
+                className="lrm-filter-select"
+                value={periodFilter}
+                onChange={e => setPeriodFilter(e.target.value as LeavePeriodKey)}
+                aria-label="Фильтр по периоду"
+              >
+                {LEAVE_PERIOD_OPTIONS.map(o => (
+                  <option key={o.key} value={o.key}>{o.label}</option>
                 ))}
               </select>
               <div className="lrm-filter">
