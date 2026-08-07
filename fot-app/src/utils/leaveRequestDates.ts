@@ -94,6 +94,41 @@ export function leaveRequestOverlapsPeriod(r: ILeaveRequest, from: string, to: s
   return r.start_date <= to && r.end_date >= from;
 }
 
+const MONTH_KEY_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** 'YYYY-MM' → порядковый номер месяца, для перебора диапазона без арифметики над Date. */
+const monthOrdinal = (key: string): number => {
+  const [y, m] = key.split('-').map(Number);
+  return y * 12 + (m - 1);
+};
+
+const ordinalToKey = (ord: number): string =>
+  `${Math.floor(ord / 12)}-${String((ord % 12) + 1).padStart(2, '0')}`;
+
+/**
+ * Месяцы ('YYYY-MM'), которые покрывают даты заявления.
+ * Источник дат — те же правила, что в formatLeaveRequestDatesCompact.
+ */
+export function leaveRequestMonthKeys(r: ILeaveRequest): string[] {
+  if (r.request_type === 'time_correction' && r.correction_date) {
+    const key = r.correction_date.slice(0, 7);
+    return MONTH_KEY_RE.test(key) ? [key] : [];
+  }
+  const dates = r.selected_dates ?? null;
+  if (dates && dates.length > 0) {
+    return [...new Set(dates.map(d => d.slice(0, 7)))].filter(k => MONTH_KEY_RE.test(k));
+  }
+  const from = r.start_date?.slice(0, 7) ?? '';
+  const to = r.end_date?.slice(0, 7) ?? '';
+  if (!MONTH_KEY_RE.test(from) || !MONTH_KEY_RE.test(to)) return [];
+  const fromOrd = monthOrdinal(from);
+  const toOrd = monthOrdinal(to);
+  if (fromOrd > toOrd) return [];
+  const keys: string[] = [];
+  for (let ord = fromOrd; ord <= toOrd; ord++) keys.push(ordinalToKey(ord));
+  return keys;
+}
+
 /** Все даты заявления строго в будущем относительно `today` (ISO YYYY-MM-DD). */
 export function isLeaveRequestFullyFuture(r: ILeaveRequest, today: string): boolean {
   return leaveRequestMinDate(r) > today;

@@ -35,7 +35,7 @@ import {
   leaveRequestMinDate,
   leaveRequestOverlapsPeriod,
 } from '../utils/leaveRequestDates';
-import { LEAVE_PERIOD_OPTIONS, leavePeriodRange, type LeavePeriodKey } from '../utils/leaveRequestPeriod';
+import { LEAVE_PERIOD_ALL, leaveMonthOptions, leaveMonthRange } from '../utils/leaveRequestPeriod';
 import { displayFileName } from '../utils/fileNameDisplay';
 import { formatFioShort } from '../utils/formatFio';
 import './LeaveRequestsManagePage.css';
@@ -107,7 +107,7 @@ export const LeaveRequestsManagePage: FC = () => {
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<LeaveRequestType | 'all'>('all');
-  const [periodFilter, setPeriodFilter] = useState<LeavePeriodKey>('all');
+  const [periodFilter, setPeriodFilter] = useState<string>(LEAVE_PERIOD_ALL);
   const [commentId, setCommentId] = useState<number | null>(null);
   const [comment, setComment] = useState('');
   const [revokeId, setRevokeId] = useState<number | null>(null);
@@ -136,9 +136,12 @@ export const LeaveRequestsManagePage: FC = () => {
     [baseRequests],
   );
 
+  // Опции периода — из полного списка вкладки, до поиска/отдела/типа (как deptOptions).
+  const monthOptions = useMemo(() => leaveMonthOptions(requests, periodFilter), [requests, periodFilter]);
+
   const query = search.trim().toLowerCase();
-  const period = useMemo(() => leavePeriodRange(periodFilter, todayIso), [periodFilter, todayIso]);
-  const isFiltering = query !== '' || deptFilter !== 'all' || typeFilter !== 'all' || periodFilter !== 'all';
+  const period = useMemo(() => leaveMonthRange(periodFilter), [periodFilter]);
+  const isFiltering = query !== '' || deptFilter !== 'all' || typeFilter !== 'all' || period !== null;
 
   const filteredRequests = useMemo(() => {
     if (!isFiltering) return baseRequests;
@@ -181,15 +184,6 @@ export const LeaveRequestsManagePage: FC = () => {
     const keys = new Set(baseRequestsRef.current.map(groupKeyOf));
     setCollapsedDepts(keys.size > 2 ? keys : new Set());
   }, [hasData, isPlaceholderData, scope, filter]);
-
-  useEffect(() => {
-    // При активном фильтре периода группы держим раскрытыми: эффект выше
-    // сворачивает их заново после смены «Ожидающие/Все», когда приходят
-    // неплейсхолдерные данные — иначе отфильтрованный результат не виден.
-    if (periodFilter === 'all') return;
-    if (!hasData || isPlaceholderData) return;
-    setCollapsedDepts(new Set());
-  }, [periodFilter, filter, hasData, isPlaceholderData]);
 
   const queryActive = query !== '';
   useEffect(() => {
@@ -688,10 +682,11 @@ export const LeaveRequestsManagePage: FC = () => {
               <select
                 className="lrm-filter-select"
                 value={periodFilter}
-                onChange={e => setPeriodFilter(e.target.value as LeavePeriodKey)}
+                onChange={e => setPeriodFilter(e.target.value)}
                 aria-label="Фильтр по периоду"
               >
-                {LEAVE_PERIOD_OPTIONS.map(o => (
+                <option value={LEAVE_PERIOD_ALL}>Все периоды</option>
+                {monthOptions.map(o => (
                   <option key={o.key} value={o.key}>{o.label}</option>
                 ))}
               </select>
