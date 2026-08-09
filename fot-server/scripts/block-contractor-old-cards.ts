@@ -486,13 +486,22 @@ async function runApply(
   }
   console.log(`[preflight] идентичность подтверждена у ${identityOk.size} из ${confirmations.size} карт`);
 
+  // Пересчёт обязан идти ровно с теми же ограничениями, что и dry-run: иначе состав
+  // разойдётся с планом на пустом месте.
+  const planOnlyCards = plan.onlyCards ? new Set(plan.onlyCards) : null;
   const result = util.selectBlockCandidates({
-    cards: state.rows,
+    cards: planOnlyCards ? state.rows.filter(row => planOnlyCards.has(row.cardId)) : state.rows,
     allowlist: identityOk,
     denylist: state.denylist,
     employeesWithNewCard: state.employeesWithNewCard,
     excludedBranchCardIds: state.excludedBranchCardIds,
-    options: { scope: plan.scope, org: plan.org, limit: plan.limit, now: Date.now() },
+    options: {
+      scope: plan.scope,
+      org: plan.org,
+      limit: plan.limit,
+      allowSyntheticStartDate: planSynthetic !== null,
+      now: Date.now(),
+    },
   });
 
   const liveOperations: IOperation[] = result.candidates.map(card => ({
