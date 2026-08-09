@@ -15,6 +15,11 @@
  *     --employee=145814 --card=37202 \
  *     --expect-expiration="2027-01-01 00:00:00" --confirm-write
  *
+ * Варианты тела:
+ *   (по умолчанию)      — поля startDate в теле нет. Проверено 09.08.2026: 422
+ *                         card.invalid.dates.update, привязка не изменилась.
+ *   --null-start-date   — startDate присутствует со значением null.
+ *
  * Без --confirm-write не пишет ничего. Ненулевой exit code при любом расхождении.
  */
 import fs from 'fs';
@@ -73,6 +78,7 @@ async function main(): Promise<void> {
   const cardId = Number(getArg('card'));
   const expectExpiration = getArg('expect-expiration');
   const confirmWrite = argv.includes('--confirm-write');
+  const nullStartDate = argv.includes('--null-start-date');
 
   if (!Number.isInteger(employeeId) || employeeId <= 0) throw new Error('нужен --employee=<id>');
   if (!Number.isInteger(cardId) || cardId <= 0) throw new Error('нужен --card=<id>');
@@ -138,15 +144,31 @@ async function main(): Promise<void> {
 
   // Срок отправляем той же строкой, что отдал Sigur: прогон через Date сдвинет таймзону,
   // и «no-op» перестанет быть no-op. format — как в боевом PATCH, тело должно совпадать.
-  console.log('\n[запись] PATCH без startDate, expirationDate тем же значением…');
-  await sigurService.patchEmployeeCardBinding(
-    employeeId,
-    cardId,
-    null,
-    current.expirationDate,
-    undefined,
-    current.format ?? undefined,
-  );
+  if (nullStartDate) {
+    // Разовая проба контракта: сервисный метод пустой startDate в тело не кладёт вовсе,
+    // а здесь нужно именно поле со значением null. Боевой путь остаётся через сервис.
+    const body = [{
+      employeeId,
+      cardId,
+      startDate: null,
+      expirationDate: current.expirationDate,
+      ...(current.format ? { format: current.format } : {}),
+    }];
+    console.log(`\n[запись] PATCH со startDate: null — тело ${JSON.stringify(body)}`);
+    await (sigurService as unknown as {
+      mutate: (method: string, endpoint: string, body: unknown) => Promise<void>;
+    }).mutate('patch', '/api/v1/bindings/employees-cards', body);
+  } else {
+    console.log('\n[запись] PATCH без поля startDate, expirationDate тем же значением…');
+    await sigurService.patchEmployeeCardBinding(
+      employeeId,
+      cardId,
+      null,
+      current.expirationDate,
+      undefined,
+      current.format ?? undefined,
+    );
+  }
   // Статуса ответа тут не видно: HTTP-слой отдаёт только тело, менять его ради пробы не будем.
   console.log('PATCH succeeded (2xx)');
 
