@@ -19,6 +19,7 @@
     "scripts/build-white-confirmation.ts",
     "scripts/diagnose-deleted-passes.ts",
     "scripts/probe-card-identity.ts",
+    "scripts/probe-binding-patch.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"
   ],

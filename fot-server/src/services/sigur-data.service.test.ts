@@ -211,3 +211,54 @@ describe('SigurDataService.loadEventTypes', () => {
     expect(cache!.byId.get(12)).toBe('PASS_DENY');
   });
 });
+
+describe('SigurDataService.patchEmployeeCardBinding', () => {
+  const spyMutate = (service: SigurDataService) =>
+    vi.spyOn(service as unknown as { mutate: (...args: unknown[]) => Promise<void> }, 'mutate')
+      .mockResolvedValue(undefined);
+
+  it('со startDate — поле в теле запроса', async () => {
+    const service = new SigurDataService();
+    const mutate = spyMutate(service);
+
+    await service.patchEmployeeCardBinding(500, 38046, '2026-06-09T21:00:00.000Z', '2026-08-08T20:59:59.000Z', undefined, 'W26');
+
+    expect(mutate).toHaveBeenCalledWith('patch', '/api/v1/bindings/employees-cards', [{
+      employeeId: 500,
+      cardId: 38046,
+      expirationDate: '2026-08-08T20:59:59.000Z',
+      startDate: '2026-06-09T21:00:00.000Z',
+      format: 'W26',
+    }], undefined, undefined);
+  });
+
+  // Регрессия 09.08.2026: у 205 карт подрядчиков привязка без даты начала, и PUT на этот же
+  // ресурс отвечает 500. PATCH обязан уходить без startDate, а не с пустым значением.
+  it('startDate = null — поля startDate в теле нет', async () => {
+    const service = new SigurDataService();
+    const mutate = spyMutate(service);
+
+    await service.patchEmployeeCardBinding(500, 38046, null, '2026-08-08T20:59:59.000Z', undefined, 'W26');
+
+    const body = mutate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    expect(body[0]).toEqual({
+      employeeId: 500,
+      cardId: 38046,
+      expirationDate: '2026-08-08T20:59:59.000Z',
+      format: 'W26',
+    });
+    expect('startDate' in body[0]).toBe(false);
+  });
+
+  it('откат карты без даты начала — прежний срок и format, без startDate', async () => {
+    const service = new SigurDataService();
+    const mutate = spyMutate(service);
+
+    await service.patchEmployeeCardBinding(500, 38046, null, '2027-01-01 00:00:00', undefined, 'W26');
+
+    const body = mutate.mock.calls[0][2] as Array<Record<string, unknown>>;
+    expect(body[0].expirationDate).toBe('2027-01-01 00:00:00');
+    expect(body[0].format).toBe('W26');
+    expect('startDate' in body[0]).toBe(false);
+  });
+});

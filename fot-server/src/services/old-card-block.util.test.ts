@@ -567,6 +567,35 @@ describe('evaluateRollback', () => {
   });
 });
 
+describe('evaluateRollback — привязка без даты начала', () => {
+  // Такие карты гасятся PATCH без startDate; CAS-условие отката обязано работать на null.
+  const entry = {
+    employeeId: 500,
+    cardId: 38046,
+    startDateBefore: null,
+    expirationDateBefore: '2027-01-01 00:00:00',
+    expirationDateAfter: '2026-08-08T20:59:59.000Z',
+  };
+  const live = {
+    employeeId: 500,
+    cardId: 38046,
+    startDate: null,
+    expirationDate: '2026-08-08T20:59:59.000Z',
+  };
+
+  it('состояние после гашения → ok', () => {
+    expect(evaluateRollback(entry, live)).toBe('ok');
+  });
+
+  it('срок уже вернули → already_restored', () => {
+    expect(evaluateRollback(entry, { ...live, expirationDate: '2027-01-01 00:00:00' })).toBe('already_restored');
+  });
+
+  it('кто-то проставил дату начала → conflict_start_date, откат не трогает', () => {
+    expect(evaluateRollback(entry, { ...live, startDate: '2026-06-09 21:00:00' })).toBe('conflict_start_date');
+  });
+});
+
 describe('buildExpirationTarget', () => {
   it('даёт вчерашние 23:59:59 МСК', () => {
     const target = buildExpirationTarget(new Date('2026-08-07T09:00:00.000Z'));

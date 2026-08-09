@@ -661,22 +661,16 @@ async function runApply(
 
     let writeError: string | null = null;
     try {
-      if (current.startDate) {
-        await sigurService.patchEmployeeCardBinding(
-          operation.employeeId,
-          operation.cardId,
-          new Date(current.startDate).toISOString(),
-          plan.expirationTarget,
-          undefined,
-          operation.format ?? undefined,
-        );
-      } else {
-        await sigurService.updateEmployeeCardBindingExpiration(
-          operation.employeeId,
-          operation.cardId,
-          plan.expirationTarget,
-        );
-      }
+      // Всегда PATCH: привязки без даты начала PUT не переваривает (500 internal.error),
+      // а PATCH без startDate её просто не трогает — и откат остаётся обратимым.
+      await sigurService.patchEmployeeCardBinding(
+        operation.employeeId,
+        operation.cardId,
+        current.startDate ? new Date(current.startDate).toISOString() : null,
+        plan.expirationTarget,
+        undefined,
+        operation.format ?? undefined,
+      );
     } catch (error) {
       writeError = (error as Error).message;
     }
@@ -822,22 +816,15 @@ async function runRollback(
     if (!args.apply) { bump('would_restore'); continue; }
 
     try {
-      if (entry.startDateBefore) {
-        await sigurService.patchEmployeeCardBinding(
-          entry.employeeId,
-          entry.cardId,
-          new Date(entry.startDateBefore).toISOString(),
-          entry.expirationDateBefore!,
-          undefined,
-          entry.format ?? undefined,
-        );
-      } else {
-        await sigurService.updateEmployeeCardBindingExpiration(
-          entry.employeeId,
-          entry.cardId,
-          entry.expirationDateBefore!,
-        );
-      }
+      // Как и на записи — всегда PATCH: PUT падает 500 на привязках без даты начала.
+      await sigurService.patchEmployeeCardBinding(
+        entry.employeeId,
+        entry.cardId,
+        entry.startDateBefore ? new Date(entry.startDateBefore).toISOString() : null,
+        entry.expirationDateBefore!,
+        undefined,
+        entry.format ?? undefined,
+      );
       bump('restored');
     } catch (error) {
       bump('restore_failed');

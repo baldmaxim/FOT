@@ -1389,6 +1389,11 @@ export class SigurDataService extends SigurServiceBase {
     );
   }
 
+  /**
+   * ВНИМАНИЕ: PUT здесь — полная замена привязки. Если у привязки нет даты начала,
+   * Sigur 1.6.3.14 отвечает 500 internal.error (подтверждено на 205 карт 09.08.2026).
+   * Для таких случаев используйте patchEmployeeCardBinding с startDate = null.
+   */
   async updateEmployeeCardBindingExpiration(
     employeeId: number,
     cardId: number,
@@ -1405,15 +1410,25 @@ export class SigurDataService extends SigurServiceBase {
     );
   }
 
+  /**
+   * Частичное обновление привязки. `startDate` можно не передавать — предполагается, что
+   * PATCH меняет только присланные поля и дата начала остаётся прежней (в т.ч. пустой).
+   * Это поведение Sigur документацией не подтверждено, проверяется живой пробой
+   * scripts/probe-binding-patch.ts.
+   *
+   * Доказано другое: PUT на тот же ресурс — полная замена, и БЕЗ startDate Sigur 1.6.3.14
+   * отвечает 500 internal.error вместо 400 (205 карт подрядчиков, 09.08.2026).
+   */
   async patchEmployeeCardBinding(
     employeeId: number,
     cardId: number,
-    startDate: string,
+    startDate: string | null,
     expirationDate: string,
     connection?: ConnectionType,
     format?: string,
   ): Promise<void> {
-    const item: Record<string, unknown> = { employeeId, cardId, startDate, expirationDate };
+    const item: Record<string, unknown> = { employeeId, cardId, expirationDate };
+    if (startDate) item.startDate = startDate;
     if (format) item.format = format;
     await this.mutate<void>(
       'patch',
