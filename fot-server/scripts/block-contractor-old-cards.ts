@@ -153,8 +153,7 @@ async function main(): Promise<void> {
   const { sigurService } = await import('../src/services/sigur.service.js');
   const { query } = await import('../src/config/postgres.js');
   const { resolveField } = await import('../src/services/sigur-sync-shared.js');
-  const { normalizeInt, formatW26 } = await import('../src/services/sigur-live-admin.service.js');
-  const { deriveCardW26 } = await import('../src/services/sigur-card-w26.util.js');
+  const { normalizeInt } = await import('../src/services/sigur-live-admin.service.js');
 
   /** Точечное чтение привязки — единственный авторитетный источник состояния после записи. */
   const readBinding = async (employeeId: number, cardId: number): Promise<ILiveBinding | null> => {
@@ -185,7 +184,7 @@ async function main(): Promise<void> {
   }
   if (args.apply) {
     await runApply(args, {
-      util, collect, sigurService, query, resolveField, normalizeInt, readBinding, formatW26, deriveCardW26,
+      util, collect, sigurService, query, resolveField, normalizeInt, readBinding,
     });
     return;
   }
@@ -361,13 +360,9 @@ async function runApply(
     resolveField: typeof import('../src/services/sigur-sync-shared.js')['resolveField'];
     normalizeInt: typeof import('../src/services/sigur-live-admin.service.js')['normalizeInt'];
     readBinding: (employeeId: number, cardId: number) => Promise<ILiveBinding | null>;
-    formatW26: typeof import('../src/services/sigur-live-admin.service.js')['formatW26'];
-    deriveCardW26: typeof import('../src/services/sigur-card-w26.util.js')['deriveCardW26'];
   },
 ): Promise<void> {
-  const {
-    util, collect, sigurService, query, resolveField, normalizeInt, readBinding, formatW26, deriveCardW26,
-  } = deps;
+  const { util, collect, sigurService, query, resolveField, normalizeInt, readBinding } = deps;
   console.log('=== БОЕВОЙ ПРОГОН ===\n');
   if (!args.plan) throw new Error('--apply требует --plan=<block-plan.json>');
   if (!args.confirmPlan) throw new Error('--apply требует --confirm-plan=<planHash>');
@@ -479,6 +474,13 @@ async function runApply(
 
   const counters: Record<string, number> = {};
   const bump = (key: string): void => { counters[key] = (counters[key] ?? 0) + 1; };
+
+  /** Настоящая ошибка, а не «что-то пошло не так»: тип, текст и первый кадр стека. */
+  const describeError = (error: unknown): string => {
+    if (!(error instanceof Error)) return String(error);
+    const frame = (error.stack ?? '').split('\n').map(line => line.trim()).find(line => line.startsWith('at '));
+    return `${error.name}: ${error.message}${frame ? ` (${frame})` : ''}`;
+  };
 
   const passHexByEmployee = new Map<number, boolean>();
   for (const operation of liveOperations) passHexByEmployee.set(operation.employeeId, false);
@@ -601,26 +603,44 @@ async function runApply(
     // Идентичность сверяется СВЕЖИМ чтением каталога Sigur, а не снимком preflight.
     const entry = confirmations.get(operation.cardId);
     if (!entry) { bump('skip_not_confirmed'); console.warn(`${label} — skip_not_confirmed`); return; }
-    let liveIdentity: { cardId: number; value: string | null; w26: string | null; format: string | null; employeeId: number } | null = null;
+    // try/catch — ТОЛЬКО вокруг запроса. Разбор ответа наружу: иначе ошибка разбора
+    // снова замаскируется под «Sigur недоступен» и остановит гашение целиком.
+    let found: Awaited<ReturnType<typeof sigurService.findCardByCandidates>>;
     try {
-      const found = await sigurService.findCardByCandidates([entry.value, entry.w26]);
-      const exact = found.matches.find(raw => util.normalizeDepartmentId(
-        resolveField(raw, 'id', 'ID', 'cardId'),
-      ) === operation.cardId);
-      if (exact) {
-        const decoded = deriveCardW26(String(resolveField<string>(exact, 'value', 'cardValue') ?? ''));
-        liveIdentity = {
-          cardId: operation.cardId,
-          value: decoded.value,
-          w26: formatW26(decoded),
-          format: String(resolveField<string>(exact, 'format', 'Format') ?? operation.format ?? '') || null,
-          employeeId: current.employeeId ?? operation.employeeId,
-        };
-      }
-    } catch {
+      found = await sigurService.findCardByCandidates([entry.value, entry.w26]);
+    } catch (error) {
       bump('skip_unknown_new_status');
-      console.warn(`${label} — skip_unknown_new_status: не удалось перечитать карту из Sigur`);
+      console.warn(`${label} — skip_unknown_new_status: запрос карты в Sigur не удался: ${describeError(error)}`);
       return;
+    }
+
+    const exact = found.matches.find(
+      raw => normalizeInt(resolveField(raw, 'id', 'ID', 'cardId', 'card_id')) === operation.cardId,
+    );
+    let liveIdentity: ReturnType<typeof util.buildLiveCardIdentity> = null;
+    if (exact) {
+      liveIdentity = util.buildLiveCardIdentity(
+        exact,
+        operation.cardId,
+        current.employeeId ?? operation.employeeId,
+        operation.format,
+      );
+      // Карта найдена, но W26 не выводится — состояние неопределённое, гасить нельзя.
+      if (!liveIdentity) {
+        bump('skip_identity_underivable');
+        console.warn(
+          `${label} — skip_identity_underivable: W26 не выводится`
+          + ` (value=${JSON.stringify(resolveField(exact, 'value', 'cardValue', 'card_value') ?? null)},`
+          + ` formattedValue=${JSON.stringify(resolveField(exact, 'formattedValue', 'formatted_value') ?? null)},`
+          + ` format=${JSON.stringify(resolveField(exact, 'format', 'Format', 'cardFormat') ?? null)})`,
+        );
+        return;
+      }
+    } else {
+      console.warn(
+        `${label} — карта не найдена в каталоге по подтверждению`
+        + ` (tried=${JSON.stringify(found.tried)}, matches=${found.matches.length})`,
+      );
     }
     const identityVerdict = util.verifyConfirmedIdentity(entry, liveIdentity);
     if (identityVerdict !== 'ok') {

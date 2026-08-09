@@ -11,6 +11,7 @@
  * Любая неполнота данных даёт пропуск, а не запись.
  */
 import crypto from 'crypto';
+import { deriveSigurCardIdentity } from './sigur-card-w26.util.js';
 
 /**
  * Поколение конкретной карты (не сотрудника).
@@ -437,6 +438,56 @@ export function parseConfirmationFile(rawText: string): IConfirmationValidation 
 
   if (entries.length === 0 && errors.length === 0) errors.push('confirmation-файл не содержит ни одной записи');
   return { entries, errors };
+}
+
+/**
+ * Чтение поля сырой записи Sigur по списку алиасов.
+ *
+ * Локальная копия, а не `resolveField` из sigur-sync-shared: тот модуль тянет sigurService
+ * и пул PostgreSQL, а этот обязан остаться чистым и тестируемым без I/O.
+ */
+function pickField(raw: Record<string, unknown>, ...aliases: string[]): unknown {
+  for (const alias of aliases) {
+    const value = raw[alias];
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+}
+
+export interface ILiveCardIdentity {
+  cardId: number;
+  value: string | null;
+  w26: string | null;
+  format: string | null;
+  employeeId: number;
+}
+
+/**
+ * Идентичность карты для сверки перед записью — из сырой записи каталога Sigur.
+ *
+ * Возвращает null, если W26 не выводится: гасить карту, идентичность которой не удалось
+ * восстановить, нельзя (fail-closed). Именно эта функция стоит в боевом скрипте, поэтому
+ * тесты на неё покрывают реальный call site, а не его копию.
+ *
+ * `format`: поля нет → format привязки (fallbackFormat); поле есть, но пустое → null,
+ * что даёт `format_changed` при сверке. Пустоту не подменяем — это тоже fail-closed.
+ */
+export function buildLiveCardIdentity(
+  raw: Record<string, unknown>,
+  cardId: number,
+  employeeId: number,
+  fallbackFormat: string | null,
+): ILiveCardIdentity | null {
+  const identity = deriveSigurCardIdentity(
+    String(pickField(raw, 'value', 'cardValue', 'card_value') ?? ''),
+    String(pickField(raw, 'formattedValue', 'formatted_value') ?? ''),
+  );
+  if (!identity.w26) return null;
+
+  const rawFormat = pickField(raw, 'format', 'Format', 'cardFormat');
+  const format = String(rawFormat ?? fallbackFormat ?? '').trim() || null;
+
+  return { cardId, value: identity.value, w26: identity.w26, format, employeeId };
 }
 
 /** Сверка подтверждения с живой картой: идентичность должна совпасть целиком. */

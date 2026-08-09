@@ -13,7 +13,11 @@ import {
   normalizeAccessPointKey,
   type IAccessPointObjectMeta,
 } from './sigur-access-point-meta.service.js';
-import { deriveCardW26, type ICardW26 } from './sigur-card-w26.util.js';
+import { deriveCardW26, formatW26, type ICardW26 } from './sigur-card-w26.util.js';
+
+// Формат W26 живёт в чистой утилите рядом с декодером — там же, где им пользуются
+// инвентаризация и боевая сверка карт. Здесь ре-экспорт, чтобы не трогать импортёров.
+export { formatW26 };
 
 export interface IAccessPointBinding {
   accessPointId: number;
@@ -262,11 +266,6 @@ function toEmployeeCardBinding(raw: Record<string, unknown>): {
     expirationDate,
     startDate,
   };
-}
-
-/** Стабильный формат W26 для таблицы/тестов: FFF,NNNNN (3 цифры facility + 5 цифр number). */
-export function formatW26(decoded: ICardW26): string {
-  return `${String(decoded.facility).padStart(3, '0')},${String(decoded.number).padStart(5, '0')}`;
 }
 
 /**

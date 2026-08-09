@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildExpirationTarget,
+  buildLiveCardIdentity,
   buildPlanHash,
   canonicalJson,
   classifyCardGeneration,
@@ -392,6 +393,57 @@ describe('verifyConfirmedIdentity', () => {
 
   it('регистр format не считается расхождением', () => {
     expect(verifyConfirmedIdentity(entry, { ...live, format: 'w26' })).toBe('ok');
+  });
+});
+
+describe('buildLiveCardIdentity', () => {
+  const entry: IConfirmationEntry = {
+    cardId: 38046,
+    value: '26CFFD',
+    w26: '038,53245',
+    format: 'W26',
+    employeeId: 500,
+    confirmationType: 'owner_rule',
+    source: 'Владелец процесса',
+    confirmedAt: '2026-08-07T12:00:00.000Z',
+  };
+  const raw = { id: 38046, value: '26CFFD', formattedValue: '038,53245', format: 'W26' };
+
+  // Регрессия боевого прогона 09.08.2026: на этой самой записи каталога скрипт
+  // бросал «Слишком короткий UID» и пропускал все 1620 карт.
+  it('запись каталога Sigur → идентичность сходится с подтверждением', () => {
+    const live = buildLiveCardIdentity(raw, entry.cardId, entry.employeeId, 'W26');
+    expect(live).toEqual({
+      cardId: 38046,
+      value: '26CFFD',
+      w26: '038,53245',
+      format: 'W26',
+      employeeId: 500,
+    });
+    expect(verifyConfirmedIdentity(entry, live)).toBe('ok');
+  });
+
+  it('W26 не выводится → null (карта не гасится)', () => {
+    expect(buildLiveCardIdentity({ id: 1, value: 'garbage', formattedValue: '???' }, 1, 500, 'W26')).toBeNull();
+  });
+
+  it('поля format нет → берётся format привязки', () => {
+    const live = buildLiveCardIdentity({ id: 1, value: '26CFFD', formattedValue: '038,53245' }, 1, 500, 'W26');
+    expect(live?.format).toBe('W26');
+  });
+
+  it('format в каталоге пустой → null, а не подмена форматом привязки', () => {
+    const live = buildLiveCardIdentity({ ...raw, format: '   ' }, entry.cardId, entry.employeeId, 'W26');
+    expect(live?.format).toBeNull();
+    expect(verifyConfirmedIdentity(entry, live)).toBe('format_changed');
+  });
+
+  it('алиасы полей Sigur читаются наравне с основными', () => {
+    const live = buildLiveCardIdentity(
+      { cardValue: '26CFFD', formatted_value: '038,53245', cardFormat: 'W26' },
+      38046, 500, null,
+    );
+    expect(verifyConfirmedIdentity(entry, live)).toBe('ok');
   });
 });
 

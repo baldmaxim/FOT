@@ -13,7 +13,7 @@ import type { ConnectionType } from './sigur-base.service.js';
 import { sigurService } from './sigur.service.js';
 import { query } from '../config/postgres.js';
 import { getContractorRootId } from '../config/contractor.js';
-import { deriveCardW26 } from './sigur-card-w26.util.js';
+import { deriveCardW26, deriveSigurCardIdentity } from './sigur-card-w26.util.js';
 import { resolveField, normalizeDepartmentLookupName } from './sigur-sync-shared.js';
 import {
   collectSigurDepartmentDescendantIds,
@@ -287,14 +287,10 @@ export async function collectLiveState(options: ICollectOptions): Promise<ILiveS
     if (!cardId) continue;
     const rawValue = String(resolveField<string>(raw, 'value', 'cardValue', 'card_value') ?? '').trim();
     const rawFormatted = String(resolveField<string>(raw, 'formattedValue', 'formatted_value') ?? '').trim();
-    let info: ICardInfo = { cardId, value: rawValue || null, w26: null, facility: null };
-    try {
-      const decoded = deriveCardW26(rawValue || rawFormatted);
-      info = { cardId, value: decoded.value, w26: formatW26(decoded), facility: decoded.facility };
-    } catch {
-      const fallback = normW26Key(rawFormatted);
-      if (fallback) info = { cardId, value: rawValue || null, w26: rawFormatted, facility: Number(fallback.split(',')[0]) };
-    }
+    // Тот же helper, что и в боевой сверке перед записью: иначе confirmation и apply
+    // выведут идентичность по-разному и гашение упрётся в ложные пропуски.
+    const identity = deriveSigurCardIdentity(rawValue, rawFormatted);
+    const info: ICardInfo = { cardId, ...identity };
     cardById.set(cardId, info);
     if (info.value) addKey(`v:${normValue(info.value)}`, cardId);
     if (info.w26) addKey(`w:${normW26Key(info.w26)}`, cardId);

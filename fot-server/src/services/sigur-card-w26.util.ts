@@ -55,3 +55,53 @@ export function deriveCardW26(input: string): ICardW26 {
   const value = hex.slice(2, 8); // отбросить ведущий байт, взять 3 байта value
   return valueToW26(value);
 }
+
+/** Канонический W26 «FFF,NNNNN» — Sigur паддит facility, сравнивать нужно в одном виде. */
+export function formatW26(decoded: ICardW26): string {
+  return `${String(decoded.facility).padStart(3, '0')},${String(decoded.number).padStart(5, '0')}`;
+}
+
+export interface ISigurCardIdentity {
+  /** 3-байтовый value карты; null — вывести не удалось. */
+  value: string | null;
+  /** Канонический W26 «FFF,NNNNN»; null — вывести не удалось. */
+  w26: string | null;
+  facility: number | null;
+}
+
+/**
+ * Идентичность карты из сырой записи каталога Sigur.
+ *
+ * ВАЖНО: `value` каталога — 3 байта (6 hex, напр. `26CFFD`), а `deriveCardW26` принимает
+ * только `facility,number` либо сырой UID ридера (≥8 hex). Поэтому на «голом» value он
+ * законно бросает, и единственный способ вывести W26 — `formattedValue`. Один helper на
+ * инвентаризацию и на боевую сверку: если их развести, confirmation и запись разойдутся.
+ *
+ * `w26 === null` — идентичность НЕ выведена (value при этом может быть непустым).
+ */
+export function deriveSigurCardIdentity(rawValue: string, rawFormatted: string): ISigurCardIdentity {
+  const value = (rawValue ?? '').trim();
+  const formatted = (rawFormatted ?? '').trim();
+
+  // Сам value декодируется — берём канонический 3-байтовый value из декодера.
+  if (value) {
+    try {
+      const decoded = deriveCardW26(value);
+      return { value: decoded.value, w26: formatW26(decoded), facility: decoded.facility };
+    } catch {
+      /* 6-hex value каталога сюда и попадает — идём в formattedValue */
+    }
+  }
+
+  // Фолбэк: W26 берём из formattedValue, а value оставляем как в каталоге.
+  if (formatted) {
+    try {
+      const decoded = deriveCardW26(formatted);
+      return { value: value || decoded.value, w26: formatW26(decoded), facility: decoded.facility };
+    } catch {
+      /* идентичность не выводится */
+    }
+  }
+
+  return { value: value || null, w26: null, facility: null };
+}

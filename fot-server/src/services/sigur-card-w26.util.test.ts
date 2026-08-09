@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveCardW26 } from './sigur-card-w26.util.js';
+import { deriveCardW26, deriveSigurCardIdentity, formatW26 } from './sigur-card-w26.util.js';
 
 describe('deriveCardW26', () => {
   it('сырой UID с ведущим байтом 18 и хвостовыми нулями → младшие 3 байта', () => {
@@ -71,5 +71,57 @@ describe('deriveCardW26', () => {
 
   it('W26 с number вне диапазона → ошибка', () => {
     expect(() => deriveCardW26('1,70000')).toThrow(/Некорректный W26/);
+  });
+});
+
+describe('deriveSigurCardIdentity', () => {
+  // Регрессия: value каталога Sigur — 3 байта (6 hex), deriveCardW26 на нём законно бросает.
+  // Раньше боевой скрипт звал декодер напрямую и падал на 100% карт.
+  it('value каталога (6 hex) + formattedValue → идентичность из formattedValue', () => {
+    expect(deriveSigurCardIdentity('26CFFD', '038,53245')).toEqual({
+      value: '26CFFD',
+      w26: '038,53245',
+      facility: 38,
+    });
+  });
+
+  it('сырой UID ридера (16 hex) → декодируется напрямую, value канонический', () => {
+    expect(deriveSigurCardIdentity('1826CFFD00000000', '')).toEqual({
+      value: '26CFFD',
+      w26: '038,53245',
+      facility: 38,
+    });
+  });
+
+  it('только formattedValue без паддинга → канонический W26', () => {
+    expect(deriveSigurCardIdentity('', '38,53245')).toEqual({
+      value: '26CFFD',
+      w26: '038,53245',
+      facility: 38,
+    });
+  });
+
+  it('мусорный value, но валидный formattedValue → фолбэк срабатывает', () => {
+    const identity = deriveSigurCardIdentity('garbage', '038,53245');
+    expect(identity.w26).toBe('038,53245');
+    expect(identity.value).toBe('garbage');
+  });
+
+  it('мусор в обоих полях → w26 null (гасить нельзя)', () => {
+    expect(deriveSigurCardIdentity('garbage', '???')).toEqual({
+      value: 'garbage',
+      w26: null,
+      facility: null,
+    });
+  });
+
+  it('оба поля пустые → всё null', () => {
+    expect(deriveSigurCardIdentity('', '')).toEqual({ value: null, w26: null, facility: null });
+  });
+});
+
+describe('formatW26', () => {
+  it('паддит facility до 3 и number до 5 знаков', () => {
+    expect(formatW26(deriveCardW26('38,53245'))).toBe('038,53245');
   });
 });
