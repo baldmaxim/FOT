@@ -78,6 +78,10 @@ interface IArgs {
   scope: ScopePart[];
   org: string | null;
   limit: number | null;
+  /** Явный список карт — пилотный прогон на одной-двух перед партией. */
+  onlyCards: Set<number> | null;
+  /** Согласие на НЕОБРАТИМУЮ служебную дату начала у привязок, где её нет. */
+  allowSyntheticStartDate: boolean;
   expect: number | null;
   concurrency: number;
   apply: boolean;
@@ -104,9 +108,15 @@ interface IPlanFile {
   scope: ScopePart[];
   org: string | null;
   limit: number | null;
+  onlyCards: number[] | null;
   contractorSigurId: number;
   controlNodes: Record<string, { id: number; parentId: number | null; descendantsHash: string }>;
   expirationTarget: string;
+  /**
+   * Служебная дата начала для привязок без неё. null — режим выключен, такие карты
+   * в план не попали. Входит в planHash: apply не может включить режим втихую.
+   */
+  syntheticStartDate: string | null;
   operations: IOperation[];
   planHash: string;
 }
@@ -131,6 +141,12 @@ function parseArgs(argv: string[]): IArgs {
     return value;
   };
 
+  const onlyCardsRaw = get('only-cards');
+  const onlyCards = onlyCardsRaw
+    ? new Set(onlyCardsRaw.split(',').map(part => Number(part.trim())).filter(Number.isFinite))
+    : null;
+  if (onlyCards && onlyCards.size === 0) throw new Error('--only-cards не содержит ни одного числа');
+
   return {
     input: get('input'),
     confirmations: get('confirmations'),
@@ -140,6 +156,8 @@ function parseArgs(argv: string[]): IArgs {
     scope,
     org: get('org'),
     limit: num('limit'),
+    onlyCards,
+    allowSyntheticStartDate: argv.includes('--allow-synthetic-start-date'),
     expect: num('expect'),
     concurrency: num('concurrency') ?? 1,
     apply: argv.includes('--apply'),
@@ -203,8 +221,14 @@ async function runDryRun(
   const { util, collect } = deps;
   console.log('=== DRY-RUN: ничего не пишется ===');
   console.log(`Скоуп: ${args.scope.join(',')}${args.org ? ` | организация: ${args.org}` : ''}`
-    + `${args.limit ? ` | limit: ${args.limit}` : ''}`);
-  console.log('Скоуп обязан совпадать с тем, что передан в build-white-confirmation.ts\n');
+    + `${args.limit ? ` | limit: ${args.limit}` : ''}`
+    + `${args.onlyCards ? ` | только карты: ${[...args.onlyCards].join(',')}` : ''}`);
+  console.log('Скоуп обязан совпадать с тем, что передан в build-white-confirmation.ts');
+  if (args.allowSyntheticStartDate) {
+    console.log(`\n! Режим служебной даты начала ВКЛЮЧЁН: привязкам без неё будет проставлена`);
+    console.log(`  ${util.SYNTHETIC_START_DATE} — снять её обратно Sigur не даёт, откат вернёт только срок.`);
+  }
+  console.log('');
   if (!args.input) throw new Error('нужен --input=<inventory JSON>');
 
   const inventoryRaw = fs.readFileSync(args.input, 'utf8');
@@ -290,26 +314,33 @@ async function runDryRun(
     scope: args.scope,
     org: args.org,
     limit: args.limit,
+    onlyCards: args.onlyCards ? [...args.onlyCards].sort((left, right) => left - right) : null,
     contractorSigurId: state.contractorSigurId,
     controlNodes: state.controlNodes,
     expirationTarget,
+    syntheticStartDate: args.allowSyntheticStartDate ? util.SYNTHETIC_START_DATE : null,
     operations,
   };
   const planHash = util.buildPlanHash(planWithoutHash);
   const plan: IPlanFile = { ...planWithoutHash, planHash };
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const suffix = args.org || args.limit ? 'pilot-' : '';
+  const suffix = args.org || args.limit || args.onlyCards ? 'pilot-' : '';
   const planPath = path.join(OUT_DIR, `block-plan-${suffix}${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
   fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), 'utf8');
 
+  const withSynthetic = operations.filter(operation => !operation.startDate).length;
   console.log(`\nПлан: ${planPath}`);
   console.log(`planHash: ${planHash}`);
   console.log(`Целевая дата окончания: ${expirationTarget}`);
+  if (plan.syntheticStartDate) {
+    console.log(`Служебная дата начала: ${plan.syntheticStartDate} — получат ${withSynthetic} карт (необратимо)`);
+  }
   // Одной строкой: перенос через "\" ломается в PowerShell, а именно там это запускают.
   console.log('\nБоевой запуск (план живёт 60 минут). Команда ОДНОЙ строкой:');
   console.log(`npx tsx scripts/block-contractor-old-cards.ts "--plan=${planPath}" `
     + `"--confirmations=${args.confirmations}" "--confirm-plan=${planHash}" `
+    + `${args.allowSyntheticStartDate ? '--allow-synthetic-start-date ' : ''}`
     + `--apply "--expect=${operations.length}"`);
 }
 
@@ -320,12 +351,18 @@ function printSelection(
   util: typeof import('../src/services/old-card-block.util.js'),
 ): ReturnType<typeof util.selectBlockCandidates> {
   const result = util.selectBlockCandidates({
-    cards: state.rows,
+    cards: args.onlyCards ? state.rows.filter(row => args.onlyCards!.has(row.cardId)) : state.rows,
     allowlist,
     denylist: state.denylist,
     employeesWithNewCard: state.employeesWithNewCard,
     excludedBranchCardIds: state.excludedBranchCardIds,
-    options: { scope: args.scope, org: args.org, limit: args.limit, now: Date.now() },
+    options: {
+      scope: args.scope,
+      org: args.org,
+      limit: args.limit,
+      allowSyntheticStartDate: args.allowSyntheticStartDate,
+      now: Date.now(),
+    },
   });
 
   console.log('\n── Отбор ──');
@@ -391,6 +428,20 @@ async function runApply(
   }
   console.log(`[план] операций: ${plan.operations.length}, возраст ${Math.round(ageMs / 1000)} с`);
   console.log(`[план] scope=${plan.scope.join(',')} org=${plan.org ?? '—'} limit=${plan.limit ?? '—'}`);
+
+  // Согласие на необратимую служебную дату подтверждается ДВАЖДЫ: в плане (через planHash)
+  // и флагом боевого запуска. Расхождение — стоп, чтобы режим не включился по инерции.
+  const planSynthetic = plan.syntheticStartDate ?? null;
+  if (planSynthetic && !args.allowSyntheticStartDate) {
+    throw new Error('план собран со служебной датой начала — повторите с --allow-synthetic-start-date');
+  }
+  if (!planSynthetic && args.allowSyntheticStartDate) {
+    throw new Error('--allow-synthetic-start-date передан, а план собран без него — стоп');
+  }
+  if (planSynthetic) {
+    const affected = plan.operations.filter(operation => !operation.startDate).length;
+    console.log(`[план] служебная дата начала ${planSynthetic} — получат ${affected} карт, необратимо`);
+  }
 
   // ── Фаза A: живой preflight ──────────────────────────────────────────────────────
   const needRootless = plan.scope.includes('rootless');
@@ -599,6 +650,10 @@ async function runApply(
     if (!current.expirationDate) {
       bump('skipped_no_expiration_unrevertable'); console.warn(`${label} — skipped_no_expiration_unrevertable`); return;
     }
+    // Привязка без даты начала: гасится только с необратимой служебной датой из плана.
+    if (!current.startDate && !planSynthetic) {
+      bump('skipped_no_start_date'); console.warn(`${label} — skipped_no_start_date`); return;
+    }
 
     // Идентичность сверяется СВЕЖИМ чтением каталога Sigur, а не снимком preflight.
     const entry = confirmations.get(operation.cardId);
@@ -649,11 +704,19 @@ async function runApply(
       return;
     }
 
+    // Дата начала: своя, если есть. Если её нет — служебная из плана, и это необратимо,
+    // поэтому она отдельно фиксируется в журнале и отдельно сверяется после записи.
+    const startDateToWrite = current.startDate
+      ? new Date(current.startDate).toISOString()
+      : planSynthetic!;
+    const syntheticApplied = !current.startDate;
+
     const base = {
       employeeId: operation.employeeId,
       cardId: operation.cardId,
       format: operation.format,
       startDateBefore: current.startDate,
+      startDateTarget: syntheticApplied ? startDateToWrite : null,
       expirationDateBefore: current.expirationDate,
       expirationDateTarget: plan.expirationTarget,
     };
@@ -661,12 +724,12 @@ async function runApply(
 
     let writeError: string | null = null;
     try {
-      // Всегда PATCH: привязки без даты начала PUT не переваривает (500 internal.error),
-      // а PATCH без startDate её просто не трогает — и откат остаётся обратимым.
+      // Всегда PATCH: PUT на этот ресурс — полная замена, и на привязках без даты начала
+      // отвечает 500. Обе даты идут в одном запросе: срок без startDate Sigur не принимает.
       await sigurService.patchEmployeeCardBinding(
         operation.employeeId,
         operation.cardId,
-        current.startDate ? new Date(current.startDate).toISOString() : null,
+        startDateToWrite,
         plan.expirationTarget,
         undefined,
         operation.format ?? undefined,
@@ -688,12 +751,15 @@ async function runApply(
       getFailed,
       targetExpiration: plan.expirationTarget,
       beforeExpiration: current.expirationDate,
+      targetStartDate: syntheticApplied ? startDateToWrite : null,
     });
     bump(outcome);
+    if (outcome === 'committed' && syntheticApplied) bump('committed_with_synthetic_start');
     writeJournal({
       event: outcome,
       at: new Date().toISOString(),
       ...base,
+      startDateAfter: live?.startDate ?? null,
       expirationDateAfter: live?.expirationDate ?? null,
       error: writeError,
     });
@@ -743,6 +809,8 @@ async function runRollback(
     cardId: number;
     format: string | null;
     startDateBefore: string | null;
+    /** Служебная дата начала, если скрипт её проставил. Откат её НЕ снимает. */
+    startDateTarget: string | null;
     expirationDateBefore: string | null;
     expirationDateTarget: string;
     expirationDateAfter: string | null;
@@ -759,6 +827,7 @@ async function runRollback(
       cardId,
       format: (event.format as string | null) ?? existing?.format ?? null,
       startDateBefore: (event.startDateBefore as string | null) ?? existing?.startDateBefore ?? null,
+      startDateTarget: (event.startDateTarget as string | null) ?? existing?.startDateTarget ?? null,
       expirationDateBefore: (event.expirationDateBefore as string | null) ?? existing?.expirationDateBefore ?? null,
       expirationDateTarget: (event.expirationDateTarget as string) ?? existing?.expirationDateTarget ?? '',
       expirationDateAfter: (event.expirationDateAfter as string | null) ?? existing?.expirationDateAfter ?? null,
@@ -804,6 +873,7 @@ async function runRollback(
       employeeId: entry.employeeId,
       cardId: entry.cardId,
       startDateBefore: entry.startDateBefore,
+      startDateTarget: entry.startDateTarget,
       expirationDateBefore: entry.expirationDateBefore,
       expirationDateAfter: entry.expirationDateAfter,
     }, live);
@@ -816,16 +886,20 @@ async function runRollback(
     if (!args.apply) { bump('would_restore'); continue; }
 
     try {
-      // Как и на записи — всегда PATCH: PUT падает 500 на привязках без даты начала.
+      // Как и на записи — всегда PATCH с обеими датами. Служебную дату начала не снимаем:
+      // Sigur не принимает пустую, поэтому откат ЧАСТИЧНЫЙ — возвращает только срок.
+      const startDateToRestore = entry.startDateBefore
+        ? new Date(entry.startDateBefore).toISOString()
+        : entry.startDateTarget;
       await sigurService.patchEmployeeCardBinding(
         entry.employeeId,
         entry.cardId,
-        entry.startDateBefore ? new Date(entry.startDateBefore).toISOString() : null,
+        startDateToRestore,
         entry.expirationDateBefore!,
         undefined,
         entry.format ?? undefined,
       );
-      bump('restored');
+      bump(entry.startDateTarget ? 'restored_partial_synthetic_start' : 'restored');
     } catch (error) {
       bump('restore_failed');
       manual.push(`${label}: запись отката упала (${(error as Error).message})`);

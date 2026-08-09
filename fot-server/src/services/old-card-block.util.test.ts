@@ -18,6 +18,7 @@ import {
   selectBlockCandidates,
   verifyConfirmedIdentity,
   CONFIRMATION_HEADER,
+  SYNTHETIC_START_DATE,
   type ICardFacts,
   type IConfirmationEntry,
   type IInventoryCard,
@@ -69,6 +70,7 @@ const select = (
     scope?: Array<'contractors' | 'rootless'>;
     org?: string | null;
     limit?: number | null;
+    allowSyntheticStartDate?: boolean;
   } = {},
 ) => selectBlockCandidates({
   cards,
@@ -80,6 +82,7 @@ const select = (
     scope: over.scope ?? ['contractors', 'rootless'],
     org: over.org ?? null,
     limit: over.limit ?? null,
+    allowSyntheticStartDate: over.allowSyntheticStartDate ?? false,
     now: NOW,
   },
 });
@@ -567,32 +570,73 @@ describe('evaluateRollback', () => {
   });
 });
 
-describe('evaluateRollback — привязка без даты начала', () => {
-  // Такие карты гасятся PATCH без startDate; CAS-условие отката обязано работать на null.
+describe('привязка без даты начала — служебный startDate', () => {
+  // Sigur не даёт менять срок привязки без даты начала (PUT → 500, PATCH → 422), поэтому
+  // такие карты гасятся вместе с проставлением SYNTHETIC_START_DATE. Снять её нельзя,
+  // значит откат частичный, а CAS обязан ждать именно её, а не исходный null.
   const entry = {
     employeeId: 500,
     cardId: 38046,
     startDateBefore: null,
+    startDateTarget: SYNTHETIC_START_DATE,
     expirationDateBefore: '2027-01-01 00:00:00',
     expirationDateAfter: '2026-08-08T20:59:59.000Z',
   };
   const live = {
     employeeId: 500,
     cardId: 38046,
-    startDate: null,
+    startDate: SYNTHETIC_START_DATE,
     expirationDate: '2026-08-08T20:59:59.000Z',
   };
 
-  it('состояние после гашения → ok', () => {
+  it('состояние после гашения со служебной датой → ok', () => {
     expect(evaluateRollback(entry, live)).toBe('ok');
   });
 
-  it('срок уже вернули → already_restored', () => {
+  it('срок уже вернули, служебная дата на месте → already_restored', () => {
     expect(evaluateRollback(entry, { ...live, expirationDate: '2027-01-01 00:00:00' })).toBe('already_restored');
   });
 
-  it('кто-то проставил дату начала → conflict_start_date, откат не трогает', () => {
+  it('дату начала после нас поменяли → conflict_start_date, откат не трогает', () => {
     expect(evaluateRollback(entry, { ...live, startDate: '2026-06-09 21:00:00' })).toBe('conflict_start_date');
+  });
+
+  it('без служебной даты ожидается исходный null', () => {
+    const plain = { ...entry, startDateTarget: null };
+    expect(evaluateRollback(plain, { ...live, startDate: null })).toBe('ok');
+    expect(evaluateRollback(plain, live)).toBe('conflict_start_date');
+  });
+
+  it('срок встал, а служебная дата — нет → unknown, не committed', () => {
+    expect(classifyWriteOutcome({
+      live: { ...live, startDate: null },
+      getFailed: false,
+      targetExpiration: '2026-08-08T20:59:59.000Z',
+      beforeExpiration: '2027-01-01 00:00:00',
+      targetStartDate: SYNTHETIC_START_DATE,
+    })).toBe('unknown');
+  });
+
+  it('обе даты встали → committed', () => {
+    expect(classifyWriteOutcome({
+      live,
+      getFailed: false,
+      targetExpiration: '2026-08-08T20:59:59.000Z',
+      beforeExpiration: '2027-01-01 00:00:00',
+      targetStartDate: SYNTHETIC_START_DATE,
+    })).toBe('committed');
+  });
+
+  it('без флага карта без даты начала в кандидаты не попадает', () => {
+    const off = select([row({ cardId: 100, startDate: null })], [100]);
+    expect(off.candidates).toHaveLength(0);
+    expect(off.skipCounts.no_start_date_needs_synthetic).toBe(1);
+  });
+
+  it('с флагом — попадает, служебная дата будет проставлена', () => {
+    const on = select([row({ cardId: 100, startDate: null })], [100], { allowSyntheticStartDate: true });
+    expect(on.candidates.map(item => item.cardId)).toEqual([100]);
+    expect(on.skipCounts.no_start_date_needs_synthetic).toBe(0);
   });
 });
 

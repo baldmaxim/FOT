@@ -243,6 +243,7 @@ export type SkipReason =
   | 'org_filter'
   | 'employee_has_new_card'
   | 'no_expiration_unrevertable'
+  | 'no_start_date_needs_synthetic'
   | 'already_expired';
 
 export const SKIP_REASONS: readonly SkipReason[] = [
@@ -258,13 +259,33 @@ export const SKIP_REASONS: readonly SkipReason[] = [
   'org_filter',
   'employee_has_new_card',
   'no_expiration_unrevertable',
+  'no_start_date_needs_synthetic',
   'already_expired',
 ];
+
+/**
+ * Служебная дата начала для привязок, у которых её нет.
+ *
+ * Sigur не умеет менять срок привязки без даты начала: PUT → 500, PATCH без поля и с
+ * `startDate: null` → 422 card.invalid.dates.update (проверено 09.08.2026 на живой карте).
+ * Единственный способ погасить такую карту — заполнить дату начала. Значение заведомо
+ * раньше любых проходов, поэтому фактический доступ не расширяется ни на день, а вместе
+ * с целевым сроком «вчера» окно закрыто в любом случае.
+ *
+ * ВНИМАНИЕ: операция необратима — вернуть `null` теми же методами нельзя, поэтому
+ * применяется только под явным флагом --allow-synthetic-start-date.
+ */
+export const SYNTHETIC_START_DATE = '2019-12-31T21:00:00.000Z'; // 2020-01-01 00:00 МСК
 
 export interface ISelectOptions {
   scope: ReadonlyArray<'contractors' | 'rootless'>;
   org?: string | null;
   limit?: number | null;
+  /**
+   * Разрешить гашение привязок без даты начала ценой служебного [[SYNTHETIC_START_DATE]].
+   * Без флага такие карты отсеиваются: запись по ним необратима.
+   */
+  allowSyntheticStartDate?: boolean;
   /** Момент отсечки «уже просрочено», мс. */
   now: number;
 }
@@ -325,6 +346,11 @@ export function selectBlockCandidates(input: ISelectInput): ISelectResult {
     if (employeesWithNewCard.has(card.sigurEmployeeId)) { skip(card, 'employee_has_new_card'); continue; }
     // Бессрочную привязку нельзя вернуть существующими методами записи (оба требуют строковую дату).
     if (!card.expirationDate) { skip(card, 'no_expiration_unrevertable'); continue; }
+    // Привязка без даты начала гасится только вместе с её проставлением — это необратимо.
+    if (!card.startDate && !options.allowSyntheticStartDate) {
+      skip(card, 'no_start_date_needs_synthetic');
+      continue;
+    }
     const expiresAt = normalizeTimestamp(card.expirationDate);
     if (expiresAt !== null && expiresAt <= options.now) { skip(card, 'already_expired'); continue; }
     passed.push(card);
@@ -582,9 +608,15 @@ export function classifyWriteOutcome(params: {
   getFailed: boolean;
   targetExpiration: string;
   beforeExpiration: string | null;
+  /** Задана, если записывали служебную дату начала: тогда сверяются ОБЕ даты. */
+  targetStartDate?: string | null;
 }): WriteOutcome {
   if (params.getFailed || !params.live) return 'unknown';
-  if (datesEqual(params.live.expirationDate, params.targetExpiration)) return 'committed';
+  const startOk = !params.targetStartDate || datesEqual(params.live.startDate, params.targetStartDate);
+  if (datesEqual(params.live.expirationDate, params.targetExpiration)) {
+    // Срок встал, а служебная дата начала — нет: состояние половинчатое, разбирать руками.
+    return startOk ? 'committed' : 'unknown';
+  }
   if (datesEqual(params.live.expirationDate, params.beforeExpiration)) return 'not_applied';
   return 'unknown';
 }
@@ -596,6 +628,11 @@ export interface IJournalRestoreEntry {
   expirationDateBefore: string | null;
   /** Состояние ПОСЛЕ записи, прочитанное контрольным GET (не отправленное значение). */
   expirationDateAfter: string | null;
+  /**
+   * Служебная дата начала, записанная скриптом взамен пустой. Откат её НЕ снимает —
+   * Sigur не принимает пустую дату начала, — но обязан её учитывать в CAS-условии.
+   */
+  startDateTarget?: string | null;
 }
 
 export type RollbackVerdict =
@@ -611,6 +648,10 @@ export type RollbackVerdict =
  * CAS-условие отката: восстанавливаем, только если привязка ровно в том состоянии,
  * в котором её оставил скрипт. Любое расхождение — конфликт и пропуск, чтобы не затереть
  * более позднюю ручную правку (в том числе правку startDate, которую PATCH перезаписал бы).
+ *
+ * Если скрипт проставил служебную дату начала, ожидаемое «текущее» значение — именно она,
+ * а не исходный `null`: снять дату начала Sigur не даёт, поэтому откат ЧАСТИЧНЫЙ —
+ * возвращает прежний срок и оставляет служебную дату.
  */
 export function evaluateRollback(
   entry: IJournalRestoreEntry,
@@ -620,11 +661,12 @@ export function evaluateRollback(
   if (live.employeeId !== entry.employeeId) return 'conflict_owner';
   if (live.cardId !== entry.cardId) return 'conflict_card';
 
-  const startMatchesBefore = datesEqual(live.startDate, entry.startDateBefore);
-  if (startMatchesBefore && datesEqual(live.expirationDate, entry.expirationDateBefore)) {
+  const expectedStart = entry.startDateTarget ?? entry.startDateBefore;
+  const startMatchesExpected = datesEqual(live.startDate, expectedStart);
+  if (startMatchesExpected && datesEqual(live.expirationDate, entry.expirationDateBefore)) {
     return 'already_restored';
   }
-  if (!startMatchesBefore) return 'conflict_start_date';
+  if (!startMatchesExpected) return 'conflict_start_date';
   if (!datesEqual(live.expirationDate, entry.expirationDateAfter)) return 'conflict_expiration';
   return 'ok';
 }
