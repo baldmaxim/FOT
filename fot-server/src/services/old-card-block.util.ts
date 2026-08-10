@@ -241,6 +241,7 @@ export type SkipReason =
   | 'scope_anomaly'
   | 'scope_disabled'
   | 'org_filter'
+  | 'rootless_fot_active'
   | 'employee_has_new_card'
   | 'no_expiration_unrevertable'
   | 'no_start_date_needs_synthetic'
@@ -257,11 +258,30 @@ export const SKIP_REASONS: readonly SkipReason[] = [
   'scope_anomaly',
   'scope_disabled',
   'org_filter',
+  'rootless_fot_active',
   'employee_has_new_card',
   'no_expiration_unrevertable',
   'no_start_date_needs_synthetic',
   'already_expired',
 ];
+
+/**
+ * Карта корневого сотрудника, который по данным ФОТ работает.
+ *
+ * «Корневой» в Sigur — это всего лишь непроставленный отдел, а не «пропуск без хозяина».
+ * Среди таких оказываются и люди из СУ-10 и Службы механизации, которых мы защищаем тремя
+ * барьерами, и действующие подрядчики. Правильная реакция — проставить отдел, а не гасить,
+ * поэтому такая карта в гашение не идёт.
+ *
+ * Только для `rootless`: у подрядчиков в ФОТ есть все, там правило отсекло бы весь скоуп.
+ * Уволенные в множество не входят — их карты гасятся.
+ */
+export function isProtectedRootlessEmployee(
+  card: Pick<IInventoryCard, 'scopeBucket' | 'sigurEmployeeId'>,
+  fotActiveSigurEmployeeIds: ReadonlySet<number>,
+): boolean {
+  return card.scopeBucket === 'rootless' && fotActiveSigurEmployeeIds.has(card.sigurEmployeeId);
+}
 
 /**
  * Служебная дата начала для привязок, у которых её нет.
@@ -298,6 +318,8 @@ export interface ISelectInput {
   employeesWithNewCard: ReadonlySet<number>;
   /** cardId всех сотрудников СУ-10 / Службы механизации — независимый жёсткий запрет. */
   excludedBranchCardIds?: ReadonlySet<number>;
+  /** sigur_employee_id действующих сотрудников ФОТ — защита корневых, см. [[isProtectedRootlessEmployee]]. */
+  fotActiveSigurEmployeeIds?: ReadonlySet<number>;
   options: ISelectOptions;
 }
 
@@ -315,6 +337,7 @@ export interface ISelectResult {
 export function selectBlockCandidates(input: ISelectInput): ISelectResult {
   const { cards, allowlist, denylist, employeesWithNewCard, options } = input;
   const excludedBranchCardIds = input.excludedBranchCardIds ?? new Set<number>();
+  const fotActiveSigurEmployeeIds = input.fotActiveSigurEmployeeIds ?? new Set<number>();
   const allowedBuckets = new Set<string>(options.scope);
   const orgFilter = options.org?.trim().toLowerCase() || null;
 
@@ -343,6 +366,11 @@ export function selectBlockCandidates(input: ISelectInput): ISelectResult {
     if (card.scopeBucket === 'excluded') { skip(card, 'scope_excluded'); continue; }
     if (!allowedBuckets.has(card.scopeBucket)) { skip(card, 'scope_disabled'); continue; }
     if (orgFilter && (card.orgName ?? '').trim().toLowerCase() !== orgFilter) { skip(card, 'org_filter'); continue; }
+    // Корневой по дереву Sigur, но действующий по данным ФОТ — сначала проставить отдел.
+    if (isProtectedRootlessEmployee(card, fotActiveSigurEmployeeIds)) {
+      skip(card, 'rootless_fot_active');
+      continue;
+    }
     if (employeesWithNewCard.has(card.sigurEmployeeId)) { skip(card, 'employee_has_new_card'); continue; }
     // Бессрочную привязку нельзя вернуть существующими методами записи (оба требуют строковую дату).
     if (!card.expirationDate) { skip(card, 'no_expiration_unrevertable'); continue; }
@@ -766,7 +794,7 @@ export function mergeJournalEvents(entries: readonly IJournalEntry[]): IMergedJo
 
   const perRun = new Map<string, IJournalRecord>();
   for (const entry of sorted) {
-    const runKey = `${entry.file} ${journalKey(entry.employeeId, entry.cardId)}`;
+    const runKey = `${entry.file}\u0000${journalKey(entry.employeeId, entry.cardId)}`;
     const existing = perRun.get(runKey);
     if (!existing) {
       perRun.set(runKey, {

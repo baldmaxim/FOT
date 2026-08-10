@@ -356,6 +356,7 @@ function printSelection(
     denylist: state.denylist,
     employeesWithNewCard: state.employeesWithNewCard,
     excludedBranchCardIds: state.excludedBranchCardIds,
+    fotActiveSigurEmployeeIds: state.fotActiveSigurEmployeeIds,
     options: {
       scope: args.scope,
       org: args.org,
@@ -382,7 +383,61 @@ function printSelection(
   for (const [org, count] of [...byOrg.entries()].sort((left, right) => right[1] - left[1]).slice(0, 30)) {
     console.log(`  ${org}: ${count}`);
   }
+
+  printProtectedRootless(state, util);
+  printNonPersonNames(result.candidates);
   return result;
+}
+
+/**
+ * Кого защитило правило «корневой, но действующий в ФОТ».
+ *
+ * Считается по состоянию, а НЕ по skipCounts: безопасный confirmation исключает такие карты
+ * заранее, и до нового гарда они не доходят — в разбивке отсева стоял бы ноль, хотя защита
+ * сработала. Карты и люди считаются отдельно: у человека их может быть несколько.
+ */
+function printProtectedRootless(
+  state: ILiveState,
+  util: typeof import('../src/services/old-card-block.util.js'),
+): void {
+  const cards = state.rows.filter(row => util.isProtectedRootlessEmployee(row, state.fotActiveSigurEmployeeIds));
+  console.log(`\n── Защищены как «корневой, но действующий в ФОТ» ──`);
+  if (cards.length === 0) {
+    console.log('  таких карт нет');
+    return;
+  }
+  const people = new Set(cards.map(card => card.sigurEmployeeId));
+  console.log(`  карт: ${cards.length}, людей: ${people.size} — им нужно проставить отдел в Sigur`);
+  for (const card of cards.slice(0, 30)) {
+    const fot = state.fotActiveEmployeesBySigurId.get(card.sigurEmployeeId)?.[0];
+    console.log(
+      `  • карта ${card.cardId} — ${card.employeeName ?? fot?.fullName ?? '?'}`
+      + ` (ФОТ: ${fot?.departmentName ?? 'отдел не указан'})`,
+    );
+  }
+  if (cards.length > 30) console.log(`  ... ещё ${cards.length - 30}`);
+}
+
+/** ФИО = 2–3 кириллических слова без цифр и латиницы. «Охрана б. Мытищи» под это не подходит. */
+const PERSON_NAME_RE = /^[А-ЯЁ][а-яё-]+(?:\s+[А-ЯЁ][а-яё-]+){1,3}$/;
+
+/**
+ * Кандидаты со служебными именами. Гардом это не поймать: таких профилей нет в ФОТ,
+ * а по данным Sigur они неотличимы от людей. Список — человеку на просмотр перед боем.
+ */
+function printNonPersonNames(candidates: readonly { cardId: number; employeeName: string | null }[]): void {
+  const suspicious = candidates.filter(card => !PERSON_NAME_RE.test((card.employeeName ?? '').trim()));
+  console.log('\n── Кандидаты с именем, не похожим на ФИО (просмотреть глазами) ──');
+  if (suspicious.length === 0) {
+    console.log('  таких нет');
+    return;
+  }
+  console.log(`  ${suspicious.length} шт. — служебные профили гасить, скорее всего, не нужно:`);
+  for (const card of suspicious.slice(0, 40)) {
+    console.log(`  • карта ${card.cardId} — «${card.employeeName ?? '(без имени)'}»`);
+  }
+  if (suspicious.length > 40) console.log(`  ... ещё ${suspicious.length - 40}`);
+  console.log('  Исключать — удалением строк из проверенной копии confirmation-файла.');
 }
 
 // ── APPLY ──────────────────────────────────────────────────────────────────────────
@@ -495,6 +550,7 @@ async function runApply(
     denylist: state.denylist,
     employeesWithNewCard: state.employeesWithNewCard,
     excludedBranchCardIds: state.excludedBranchCardIds,
+    fotActiveSigurEmployeeIds: state.fotActiveSigurEmployeeIds,
     options: {
       scope: plan.scope,
       org: plan.org,
@@ -601,6 +657,31 @@ async function runApply(
       bump('skip_scope_drift');
       console.warn(`${label} — skip_scope_drift: сотрудник теперь в "${bucket}"`);
       return;
+    }
+
+    // Корневой сотрудник перечитывается в ФОТ прямо перед записью: между preflight и PATCH
+    // человека могли завести или восстановить, и тогда гасить его пропуск уже нельзя.
+    // Ошибка запроса тоже останавливает карту — fail-closed.
+    if (bucket === 'rootless') {
+      let fotActive: Array<{ full_name: string | null }>;
+      try {
+        fotActive = await query<{ full_name: string | null }>(
+          `SELECT full_name FROM public.employees
+            WHERE sigur_employee_id = $1 AND employment_status = 'active' AND is_archived = false`,
+          [operation.employeeId],
+        );
+      } catch (error) {
+        bump('skip_unknown_new_status');
+        console.warn(`${label} — skip_unknown_new_status: проверка ФОТ не удалась: ${describeError(error)}`);
+        return;
+      }
+      if (fotActive.length > 0) {
+        bump('skip_rootless_fot_active');
+        console.warn(
+          `${label} — skip_rootless_fot_active: «${fotActive[0].full_name ?? '?'}» числится действующим в ФОТ`,
+        );
+        return;
+      }
     }
 
     // Ни одна из ЕГО карт не должна быть связана с модулем выдачи.

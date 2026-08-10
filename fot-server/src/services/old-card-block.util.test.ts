@@ -11,6 +11,7 @@ import {
   datesEqual,
   evaluateRollback,
   isAnomalyVerdict,
+  isProtectedRootlessEmployee,
   matchJournalToPlan,
   mergeJournalEvents,
   parseJournal,
@@ -74,6 +75,7 @@ const select = (
     denylist?: number[];
     employeesWithNewCard?: number[];
     excludedBranchCardIds?: number[];
+    fotActiveSigurEmployeeIds?: number[];
     scope?: Array<'contractors' | 'rootless'>;
     org?: string | null;
     limit?: number | null;
@@ -85,6 +87,7 @@ const select = (
   denylist: new Set(over.denylist ?? []),
   employeesWithNewCard: new Set(over.employeesWithNewCard ?? []),
   excludedBranchCardIds: new Set(over.excludedBranchCardIds ?? []),
+  fotActiveSigurEmployeeIds: new Set(over.fotActiveSigurEmployeeIds ?? []),
   options: {
     scope: over.scope ?? ['contractors', 'rootless'],
     org: over.org ?? null,
@@ -644,6 +647,39 @@ describe('привязка без даты начала — служебный s
     const on = select([row({ cardId: 100, startDate: null })], [100], { allowSyntheticStartDate: true });
     expect(on.candidates.map(item => item.cardId)).toEqual([100]);
     expect(on.skipCounts.no_start_date_needs_synthetic).toBe(0);
+  });
+});
+
+describe('isProtectedRootlessEmployee', () => {
+  const rootless = row({ cardId: 300, sigurEmployeeId: 900, scopeBucket: 'rootless' });
+  const fotActive = new Set([900]);
+
+  it('корневой, действующий в ФОТ — защищён', () => {
+    expect(isProtectedRootlessEmployee(rootless, fotActive)).toBe(true);
+  });
+
+  it('корневой, которого в ФОТ нет (или уволен) — не защищён', () => {
+    expect(isProtectedRootlessEmployee(rootless, new Set())).toBe(false);
+  });
+
+  it('подрядчик не защищается никогда: в ФОТ есть все, правило съело бы весь скоуп', () => {
+    const contractor = row({ cardId: 301, sigurEmployeeId: 900, scopeBucket: 'contractors' });
+    expect(isProtectedRootlessEmployee(contractor, fotActive)).toBe(false);
+  });
+
+  it('в отборе даёт rootless_fot_active, а подрядчика с тем же ID пропускает', () => {
+    const cards = [
+      row({ cardId: 300, sigurEmployeeId: 900, scopeBucket: 'rootless' }),
+      row({ cardId: 301, sigurEmployeeId: 901, scopeBucket: 'contractors' }),
+    ];
+    const result = select(cards, [300, 301], { fotActiveSigurEmployeeIds: [900, 901] });
+    expect(result.candidates.map(card => card.cardId)).toEqual([301]);
+    expect(result.skipCounts.rootless_fot_active).toBe(1);
+  });
+
+  it('без множества (старые вызовы) поведение прежнее', () => {
+    const cards = [row({ cardId: 300, sigurEmployeeId: 900, scopeBucket: 'rootless' })];
+    expect(select(cards, [300]).candidates.map(card => card.cardId)).toEqual([300]);
   });
 });
 

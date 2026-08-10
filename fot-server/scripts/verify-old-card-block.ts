@@ -437,6 +437,8 @@ async function main(): Promise<void> {
       denylist: state.denylist,
       employeesWithNewCard: state.employeesWithNewCard,
       excludedBranchCardIds: state.excludedBranchCardIds,
+      // Без этого множества защищённые корневые уедут в «активный остаток» и дадут ложный код 2.
+      fotActiveSigurEmployeeIds: state.fotActiveSigurEmployeeIds,
       options: { scope: args.scope, allowSyntheticStartDate: allowSynthetic, now: startedAt.getTime() },
     });
 

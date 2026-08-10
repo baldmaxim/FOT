@@ -127,6 +127,7 @@ async function main(): Promise<void> {
     unknownCard: 0,
     moduleFacilityBatch: 0,
     duplicateCard: 0,
+    rootlessFotActive: 0,
     confirmed: 0,
   };
 
@@ -152,6 +153,12 @@ async function main(): Promise<void> {
     if (link.moduleFacilityBatch) { stats.moduleFacilityBatch += 1; continue; }
     // Карта, встреченная в нескольких привязках, — неоднозначность, подтверждать нельзя.
     if (state.duplicateCardIds.has(row.cardId)) { stats.duplicateCard += 1; continue; }
+    // Корневой в Sigur, но действующий в ФОТ: тот же предикат, что и в отборе к гашению —
+    // иначе confirmation и selectBlockCandidates разъедутся.
+    if (util.isProtectedRootlessEmployee(row, state.fotActiveSigurEmployeeIds)) {
+      stats.rootlessFotActive += 1;
+      continue;
+    }
 
     entries.push({
       cardId: row.cardId,
@@ -175,6 +182,7 @@ async function main(): Promise<void> {
   console.log(`  карта не в каталоге / битый W26: ${stats.unknownCard}`);
   console.log(`  партия facility засвечена в модуле: ${stats.moduleFacilityBatch}`);
   console.log(`  неоднозначные (карта в нескольких привязках): ${stats.duplicateCard}`);
+  console.log(`  корневые, но действующие в ФОТ (сначала проставить отдел): ${stats.rootlessFotActive}`);
   console.log(`\n  ПОДТВЕРЖДЕНО КАК БЕЛЫЕ: ${stats.confirmed}`);
 
   const byBucket = new Map<string, number>();

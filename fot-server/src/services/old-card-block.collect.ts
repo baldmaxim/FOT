@@ -72,6 +72,19 @@ export interface IPassRow {
   org_name: string | null;
 }
 
+/**
+ * Действующий сотрудник ФОТ, у которого проставлен sigur_employee_id.
+ *
+ * Нужен, чтобы не гасить карту человека, который в Sigur остался в корне (отдел не проставлен),
+ * а в ФОТ числится работающим — в том числе в СУ-10 и Службе механизации. Это рассинхрон
+ * данных, его чинят переводом в отдел, а не гашением пропуска.
+ */
+export interface IFotEmployee {
+  sigurEmployeeId: number;
+  fullName: string | null;
+  departmentName: string | null;
+}
+
 /** Строка «сотрудник → карта» с классификацией и контекстом для отчёта. */
 export interface ICardRow extends IInventoryCard {
   topLevel: string;
@@ -105,6 +118,10 @@ export interface ILiveState {
   cardFactsById: Map<number, ICardFacts>;
   /** cardId, встретившиеся более чем в одной привязке (неоднозначность). */
   duplicateCardIds: Set<number>;
+  /** sigur_employee_id (НЕ employees.id) действующих сотрудников ФОТ — защита корневых. */
+  fotActiveSigurEmployeeIds: Set<number>;
+  /** Те же люди с ФИО и отделом ФОТ — для отчёта «кого защитили и почему». */
+  fotActiveEmployeesBySigurId: Map<number, IFotEmployee[]>;
   rootlessComplete: boolean;
   failedDepartmentIds: number[];
 }
@@ -379,6 +396,31 @@ export async function collectLiveState(options: ICollectOptions): Promise<ILiveS
   }
   log(`[фот] сотрудников со строкой модуля: ${employeesWithPassRow.size}`);
 
+  // ── Действующие сотрудники ФОТ ───────────────────────────────────────────────────
+  // Защита корневых: человек без отдела в Sigur, но работающий по данным ФОТ, — это
+  // рассинхрон, а не «ничей пропуск». Уволенных сюда НЕ берём: их карты гасятся.
+  const fotRows = await query<{ sigur_employee_id: string; full_name: string | null; department_name: string | null }>(
+    `SELECT e.sigur_employee_id::text AS sigur_employee_id,
+            e.full_name,
+            od.name AS department_name
+       FROM public.employees e
+       LEFT JOIN public.org_departments od ON od.id = e.org_department_id
+      WHERE e.sigur_employee_id IS NOT NULL
+        AND e.employment_status = 'active'
+        AND e.is_archived = false`,
+  );
+  const fotActiveSigurEmployeeIds = new Set<number>();
+  const fotActiveEmployeesBySigurId = new Map<number, IFotEmployee[]>();
+  for (const row of fotRows) {
+    const sigurEmployeeId = Number(row.sigur_employee_id);
+    if (!Number.isFinite(sigurEmployeeId) || sigurEmployeeId <= 0) continue;
+    fotActiveSigurEmployeeIds.add(sigurEmployeeId);
+    const list = fotActiveEmployeesBySigurId.get(sigurEmployeeId) ?? [];
+    list.push({ sigurEmployeeId, fullName: row.full_name, departmentName: row.department_name });
+    fotActiveEmployeesBySigurId.set(sigurEmployeeId, list);
+  }
+  log(`[фот] действующих сотрудников с sigur_employee_id: ${fotActiveSigurEmployeeIds.size}`);
+
   // Сопоставление ТОЛЬКО точным W26: матчер Sigur ?value= префиксный и даёт чужие карты.
   const passesByCardId = new Map<number, IPassRow[]>();
   const orgNameByEmployee = new Map<number, string>();
@@ -542,6 +584,8 @@ export async function collectLiveState(options: ICollectOptions): Promise<ILiveS
     moduleFacilities,
     cardFactsById,
     duplicateCardIds,
+    fotActiveSigurEmployeeIds,
+    fotActiveEmployeesBySigurId,
     rootlessComplete,
     failedDepartmentIds,
   };
