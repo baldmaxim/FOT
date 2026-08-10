@@ -248,9 +248,7 @@ async function main(): Promise<void> {
       orphanOperations.push({ runFile: journalPath, operation });
     }
   }
-  if (orphanOperations.length > 0) {
-    console.log(`[план↔журнал] операций без записи в журнале: ${orphanOperations.length} — проверяются живьём\n`);
-  }
+  const orphanReport = { total: orphanOperations.length, closedByOtherRun: 0 };
 
   // ── A. Живая перепроверка + B. идентичность ──────────────────────────────────────
   interface ITask {
@@ -281,7 +279,15 @@ async function main(): Promise<void> {
     fromPlanOnly: false,
   }));
 
+  // Операция без журнала СВОЕГО прогона — ещё не проблема: карту мог погасить следующий
+  // прогон по своему плану, и тогда авторитетна его запись. Проверять такую карту дважды
+  // нельзя: у прежнего плана другая целевая дата, и живое состояние выглядело бы как
+  // third_state. В хвост идут только те, чьей записи нет ни в одном журнале.
   for (const { runFile, operation } of orphanOperations) {
+    if (merged.records.has(`${operation.employeeId}:${operation.cardId}`)) {
+      orphanReport.closedByOtherRun += 1;
+      continue;
+    }
     const plan = plansByFile.get(runFile)!;
     tasks.push({
       runFile,
@@ -296,6 +302,14 @@ async function main(): Promise<void> {
       reattempted: false,
       fromPlanOnly: true,
     });
+  }
+
+  if (orphanReport.total > 0) {
+    console.log(
+      `[план↔журнал] операций без записи в своём журнале: ${orphanReport.total}`
+      + ` (из них закрыты другим прогоном: ${orphanReport.closedByOtherRun},`
+      + ` проверяются живьём: ${orphanReport.total - orphanReport.closedByOtherRun})\n`,
+    );
   }
 
   tasks.sort((left, right) => left.cardId - right.cardId);
@@ -516,6 +530,7 @@ async function main(): Promise<void> {
       }
       : null,
     runs: header,
+    planOperationsWithoutJournal: orphanReport,
     partial: partialReasons,
   };
   const lines = [JSON.stringify(meta), ...rows.map(row => JSON.stringify(row))];
