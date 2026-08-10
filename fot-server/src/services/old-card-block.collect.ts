@@ -31,6 +31,7 @@ import {
   type ICardFacts,
   type IControlNodeSnapshot,
   type IInventoryCard,
+  type ILiveBinding,
   type ScopeBucket,
 } from './old-card-block.util.js';
 
@@ -144,6 +145,39 @@ function loadDeletedBlacklist(filePath: string): IDeletedTrace {
     cardIds: new Set(parsed.blockedCardIds),
     employeeIds: new Set(parsed.blockedEmployeeIds),
   };
+}
+
+/**
+ * READ-ONLY чтение всех привязок карты — источник истины для аудита гашения.
+ *
+ * Фильтр только по cardId, без employeeId: запрос по старому владельцу при перепривязке
+ * вернёт пусто и смена держателя замаскируется под «привязки нет». Контур передаётся явно,
+ * чтобы GET гарантированно ушёл туда же, где собирался план прогона.
+ */
+export async function readLiveBindingsByCard(
+  cardId: number,
+  connection: ConnectionType,
+): Promise<ILiveBinding[]> {
+  const raw = await sigurService.getCardBindings({ cardId }, connection) as Record<string, unknown>[];
+  const out: ILiveBinding[] = [];
+  for (const item of raw) {
+    const holder = item.holder && typeof item.holder === 'object' ? item.holder as Record<string, unknown> : null;
+    const owner = normalizeInt(
+      resolveField(item, 'employeeId', 'employee_id')
+      ?? (holder ? resolveField(holder, 'holderId', 'holder_id', 'id') : null),
+    );
+    const id = normalizeInt(resolveField(item, 'cardId', 'card_id', 'id'));
+    if (id !== cardId) continue;
+    out.push({
+      employeeId: owner,
+      cardId: id,
+      startDate: String(resolveField<string>(item, 'startDate', 'start_date', 'validFrom') ?? '').trim() || null,
+      expirationDate: String(
+        resolveField<string>(item, 'expirationDate', 'expiration_date', 'expiresAt', 'validTo') ?? '',
+      ).trim() || null,
+    });
+  }
+  return out;
 }
 
 const normValue = (value: string): string => value.toUpperCase().replace(/^0+/, '');

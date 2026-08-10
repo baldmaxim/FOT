@@ -4,11 +4,18 @@ import {
   buildLiveCardIdentity,
   buildPlanHash,
   canonicalJson,
+  classifyBlockVerification,
   classifyCardGeneration,
   classifyWriteOutcome,
   compareControlNode,
   datesEqual,
   evaluateRollback,
+  isAnomalyVerdict,
+  matchJournalToPlan,
+  mergeJournalEvents,
+  parseJournal,
+  resolveExitCode,
+  BLOCKED_VERDICTS,
   hasFotPoolNote,
   hashDescendantSet,
   normalizeDepartmentId,
@@ -637,6 +644,279 @@ describe('привязка без даты начала — служебный s
     const on = select([row({ cardId: 100, startDate: null })], [100], { allowSyntheticStartDate: true });
     expect(on.candidates.map(item => item.cardId)).toEqual([100]);
     expect(on.skipCounts.no_start_date_needs_synthetic).toBe(0);
+  });
+});
+
+// ── АУДИТ ГАШЕНИЯ ────────────────────────────────────────────────────────────────────
+
+const TARGET = '2026-08-09T20:59:59.000Z';
+const BEFORE = '2026-12-31T00:00:00.000Z';
+
+const journalLine = (over: Record<string, unknown> = {}): string => JSON.stringify({
+  event: 'committed',
+  at: '2026-08-10T01:00:00.000Z',
+  employeeId: 500,
+  cardId: 100,
+  format: 'W26',
+  startDateBefore: '2020-01-01T00:00:00.000Z',
+  startDateTarget: null,
+  expirationDateBefore: BEFORE,
+  expirationDateTarget: TARGET,
+  startDateAfter: '2020-01-01T00:00:00.000Z',
+  expirationDateAfter: TARGET,
+  error: null,
+  ...over,
+});
+
+describe('parseJournal', () => {
+  it('разбирает нормальные строки и пропускает пустые', () => {
+    const entries = parseJournal('A.jsonl', `${journalLine()}\n\n${journalLine({ cardId: 101 })}\n`);
+    expect(entries.map(entry => entry.cardId)).toEqual([100, 101]);
+    expect(entries[0].line).toBe(1);
+    expect(entries[1].line).toBe(3);
+  });
+
+  it('битая строка — исключение с файлом и номером строки', () => {
+    expect(() => parseJournal('A.jsonl', `${journalLine()}\n{битый`)).toThrow(/A\.jsonl:2/);
+  });
+
+  it('недопустимый event не проходит', () => {
+    expect(() => parseJournal('A.jsonl', journalLine({ event: 'restored' }))).toThrow(/недопустимый event/);
+  });
+
+  it('неразбираемая дата не проходит', () => {
+    expect(() => parseJournal('A.jsonl', journalLine({ expirationDateAfter: 'вчера' })))
+      .toThrow(/некорректная дата expirationDateAfter/);
+    expect(() => parseJournal('A.jsonl', journalLine({ at: '' }))).toThrow(/некорректный at/);
+  });
+
+  it('employeeId и cardId обязаны быть положительными целыми', () => {
+    expect(() => parseJournal('A.jsonl', journalLine({ employeeId: 0 }))).toThrow(/employeeId/);
+    expect(() => parseJournal('A.jsonl', journalLine({ cardId: 'abc' }))).toThrow(/cardId/);
+  });
+});
+
+describe('mergeJournalEvents', () => {
+  const prepared = journalLine({ event: 'prepared', at: '2026-08-10T00:59:00.000Z', startDateAfter: null, expirationDateAfter: null });
+
+  it('prepared + терминальное сворачиваются в одну запись', () => {
+    const merged = mergeJournalEvents(parseJournal('A.jsonl', `${prepared}\n${journalLine()}`));
+    const record = merged.records.get('500:100')!;
+    expect(record.outcome).toBe('committed');
+    expect(record.preparedAt).toBe('2026-08-10T00:59:00.000Z');
+    expect(record.terminalAt).toBe('2026-08-10T01:00:00.000Z');
+    expect(record.sources).toHaveLength(2);
+    expect(merged.byFile.get('A.jsonl')).toHaveLength(1);
+  });
+
+  it('prepared без пары оставляет исход неизвестным', () => {
+    const merged = mergeJournalEvents(parseJournal('A.jsonl', prepared));
+    expect(merged.records.get('500:100')!.outcome).toBeNull();
+  });
+
+  it('расхождение исходных дат внутри одного журнала — исключение', () => {
+    const broken = journalLine({ expirationDateBefore: '2027-05-05T00:00:00.000Z' });
+    expect(() => mergeJournalEvents(parseJournal('A.jsonl', `${prepared}\n${broken}`)))
+      .toThrow(/expirationDateBefore/);
+  });
+
+  it('повтор карты в другом прогоне — берётся позднее состояние', () => {
+    const older = parseJournal('A.jsonl', journalLine({ event: 'not_applied', at: '2026-08-09T20:00:00.000Z' }));
+    const newer = parseJournal('B.jsonl', journalLine({ at: '2026-08-10T01:00:00.000Z' }));
+    const merged = mergeJournalEvents([...older, ...newer]);
+    const record = merged.records.get('500:100')!;
+    expect(record.outcome).toBe('committed');
+    expect(record.file).toBe('B.jsonl');
+    expect(record.reattempted).toBe(true);
+    expect(record.sources).toHaveLength(2);
+    // Каждый прогон при этом сохраняет собственную запись для сверки со своим планом.
+    expect(merged.byFile.get('A.jsonl')).toHaveLength(1);
+    expect(merged.byFile.get('B.jsonl')).toHaveLength(1);
+  });
+
+  it('одинаковое время в разных журналах развести нечем — исключение', () => {
+    const left = parseJournal('A.jsonl', journalLine({ event: 'not_applied' }));
+    const right = parseJournal('B.jsonl', journalLine());
+    expect(() => mergeJournalEvents([...left, ...right])).toThrow(/одинаковым временем/);
+  });
+
+  it('порядок файлов в аргументах не меняет итог при равном at', () => {
+    const a = parseJournal('A.jsonl', `${prepared}\n${journalLine()}`);
+    const b = parseJournal('A.jsonl', `${journalLine()}\n${prepared}`);
+    expect(mergeJournalEvents(a).records.get('500:100')!.outcome)
+      .toBe(mergeJournalEvents(b).records.get('500:100')!.outcome);
+  });
+});
+
+describe('matchJournalToPlan', () => {
+  const plan = {
+    connection: 'external',
+    scope: ['contractors'],
+    expirationTarget: TARGET,
+    syntheticStartDate: null,
+    operations: [{ employeeId: 500, cardId: 100, startDate: '2020-01-01T00:00:00.000Z', expirationDate: BEFORE }],
+    planHash: 'hash',
+  };
+  const records = [...mergeJournalEvents(parseJournal('A.jsonl', journalLine())).records.values()];
+  const input = {
+    runLabel: 'A.jsonl',
+    plan,
+    recomputedPlanHash: 'hash',
+    confirmationsSha256: 'abc',
+    planConfirmationsSha256: 'abc',
+    liveConnection: 'external',
+    auditScope: ['contractors'],
+    records,
+  };
+
+  it('согласованный прогон не даёт ни одного расхождения', () => {
+    const result = matchJournalToPlan(input);
+    expect(result.fatals).toEqual([]);
+    expect(result.missingInJournal).toEqual([]);
+    expect(result.unknownInPlan).toEqual([]);
+  });
+
+  it('чужой контур — фатально', () => {
+    expect(matchJournalToPlan({ ...input, liveConnection: 'internal' }).fatals.join()).toMatch(/контуре/);
+  });
+
+  it('подменённый confirmation — фатально', () => {
+    expect(matchJournalToPlan({ ...input, planConfirmationsSha256: 'zzz' }).fatals.join()).toMatch(/confirmation/);
+  });
+
+  it('изменённый после прогона план — фатально', () => {
+    expect(matchJournalToPlan({ ...input, recomputedPlanHash: 'other' }).fatals.join()).toMatch(/planHash/);
+  });
+
+  it('чужой целевой срок в журнале — фатально', () => {
+    const other = { ...plan, expirationTarget: '2026-08-08T20:59:59.000Z' };
+    expect(matchJournalToPlan({ ...input, plan: other }).fatals.join()).toMatch(/целевой срок/);
+  });
+
+  it('дубль операции в плане — фатально', () => {
+    const dup = { ...plan, operations: [...plan.operations, ...plan.operations] };
+    expect(matchJournalToPlan({ ...input, plan: dup }).fatals.join()).toMatch(/дубль операции/);
+  });
+
+  it('операция плана без записи в журнале попадает в missingInJournal', () => {
+    const extra = {
+      ...plan,
+      operations: [...plan.operations, { employeeId: 501, cardId: 101, startDate: null, expirationDate: BEFORE }],
+    };
+    const result = matchJournalToPlan({ ...input, plan: extra });
+    expect(result.fatals).toEqual([]);
+    expect(result.missingInJournal.map(operation => operation.cardId)).toEqual([101]);
+  });
+
+  it('запись журнала вне плана видна отдельно', () => {
+    const foreign = [...mergeJournalEvents(parseJournal('A.jsonl', journalLine({ cardId: 999 }))).records.values()];
+    expect(matchJournalToPlan({ ...input, records: foreign }).unknownInPlan.map(item => item.cardId)).toEqual([999]);
+  });
+});
+
+describe('classifyBlockVerification', () => {
+  const expected = {
+    employeeId: 500,
+    cardId: 100,
+    expirationTarget: TARGET,
+    expirationBefore: BEFORE,
+    startDateTarget: null as string | null,
+    outcome: 'committed' as 'committed' | 'not_applied' | 'unknown' | null,
+  };
+  const binding = (over: Partial<{ employeeId: number | null; cardId: number | null; startDate: string | null; expirationDate: string | null }> = {}) => ({
+    employeeId: 500,
+    cardId: 100,
+    startDate: '2020-01-01T00:00:00.000Z',
+    expirationDate: TARGET,
+    ...over,
+  });
+  const verify = (
+    live: { readFailed?: boolean; bindings: ReturnType<typeof binding>[] },
+    over: Partial<typeof expected> = {},
+  ) => classifyBlockVerification({
+    expected: { ...expected, ...over },
+    live: { readFailed: live.readFailed ?? false, bindings: live.bindings },
+  });
+
+  it('committed + срок на месте → still_blocked', () => {
+    expect(verify({ bindings: [binding()] })).toBe('still_blocked');
+  });
+
+  it('prepared/unknown + срок на месте → reconciled_blocked', () => {
+    expect(verify({ bindings: [binding()] }, { outcome: null })).toBe('reconciled_blocked');
+    expect(verify({ bindings: [binding()] }, { outcome: 'unknown' })).toBe('reconciled_blocked');
+  });
+
+  it('not_applied, но живьём срок целевой → blocked_after_not_applied', () => {
+    expect(verify({ bindings: [binding()] }, { outcome: 'not_applied' })).toBe('blocked_after_not_applied');
+  });
+
+  it('срок остался прежним → not_applied_confirmed при любом исходе журнала', () => {
+    for (const outcome of ['committed', 'not_applied', 'unknown', null] as const) {
+      expect(verify({ bindings: [binding({ expirationDate: BEFORE })] }, { outcome })).toBe('not_applied_confirmed');
+    }
+  });
+
+  it('срок продлили в будущее → expiration_extended', () => {
+    expect(verify({ bindings: [binding({ expirationDate: '2027-03-01T00:00:00.000Z' })] })).toBe('expiration_extended');
+  });
+
+  it('иной срок в прошлом → expiration_changed', () => {
+    expect(verify({ bindings: [binding({ expirationDate: '2026-08-01T00:00:00.000Z' })] })).toBe('expiration_changed');
+  });
+
+  it('срок сняли → expiration_removed, битая дата → invalid_expiration', () => {
+    expect(verify({ bindings: [binding({ expirationDate: null })] })).toBe('expiration_removed');
+    expect(verify({ bindings: [binding({ expirationDate: 'позавчера' })] })).toBe('invalid_expiration');
+  });
+
+  it('служебная дата начала не встала → start_date_drift', () => {
+    expect(verify(
+      { bindings: [binding({ startDate: null })] },
+      { startDateTarget: SYNTHETIC_START_DATE },
+    )).toBe('start_date_drift');
+    expect(verify(
+      { bindings: [binding({ startDate: SYNTHETIC_START_DATE })] },
+      { startDateTarget: SYNTHETIC_START_DATE },
+    )).toBe('still_blocked');
+  });
+
+  it('другой владелец → owner_drift, привязки нет → binding_gone', () => {
+    expect(verify({ bindings: [binding({ employeeId: 777 })] })).toBe('owner_drift');
+    expect(verify({ bindings: [] })).toBe('binding_gone');
+  });
+
+  it('две привязки — binding_ambiguous даже у одного владельца', () => {
+    expect(verify({ bindings: [binding(), binding()] })).toBe('binding_ambiguous');
+  });
+
+  it('GET не удался → read_failed, а не «привязки нет»', () => {
+    expect(verify({ readFailed: true, bindings: [] })).toBe('read_failed');
+  });
+
+  it('погашенные вердикты не считаются аномалией, хвост — тоже', () => {
+    expect(BLOCKED_VERDICTS.every(verdict => !isAnomalyVerdict(verdict))).toBe(true);
+    expect(isAnomalyVerdict('not_applied_confirmed')).toBe(false);
+    expect(isAnomalyVerdict('third_state')).toBe(true);
+    expect(isAnomalyVerdict('expiration_extended')).toBe(true);
+  });
+});
+
+describe('resolveExitCode', () => {
+  it('аномалия важнее хвоста и неполноты', () => {
+    expect(resolveExitCode({ anomalies: 1, tail: 5, partial: true })).toBe(1);
+  });
+
+  it('хвост важнее неполноты', () => {
+    expect(resolveExitCode({ anomalies: 0, tail: 2, partial: true })).toBe(2);
+  });
+
+  it('частичный прогон не может закончиться нулём', () => {
+    expect(resolveExitCode({ anomalies: 0, tail: 0, partial: true })).toBe(3);
+  });
+
+  it('чисто и полно → 0', () => {
+    expect(resolveExitCode({ anomalies: 0, tail: 0, partial: false })).toBe(0);
   });
 });
 

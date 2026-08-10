@@ -588,6 +588,481 @@ export function compareControlNode(
   return 'ok';
 }
 
+// ── АУДИТ ГАШЕНИЯ ────────────────────────────────────────────────────────────────────
+// Всё ниже обслуживает scripts/verify-old-card-block.ts — независимую read-only проверку
+// того, что боевые прогоны действительно погасили карты. Логика отделена от записи
+// намеренно: аудит не должен верить счётчикам прогона, только журналу, плану и живому Sigur.
+
+/** Событие журнала прогона: `prepared` до записи и одно терминальное после. */
+export const JOURNAL_EVENTS = ['prepared', 'committed', 'not_applied', 'unknown'] as const;
+export type JournalEvent = (typeof JOURNAL_EVENTS)[number];
+
+export interface IJournalEntry {
+  event: JournalEvent;
+  at: string;
+  employeeId: number;
+  cardId: number;
+  format: string | null;
+  startDateBefore: string | null;
+  /** Служебная дата начала, если прогон её проставлял. null — своя дата была на месте. */
+  startDateTarget: string | null;
+  expirationDateBefore: string | null;
+  expirationDateTarget: string;
+  startDateAfter: string | null;
+  expirationDateAfter: string | null;
+  error: string | null;
+  /** Откуда прочитано — для сообщений об ошибках и стабильного порядка свёртки. */
+  file: string;
+  line: number;
+}
+
+/** Свёрнутое состояние одной карты по журналам: `prepared` + терминальное событие. */
+export interface IJournalRecord {
+  employeeId: number;
+  cardId: number;
+  format: string | null;
+  startDateBefore: string | null;
+  startDateTarget: string | null;
+  expirationDateBefore: string | null;
+  expirationDateTarget: string;
+  /** Терминальный исход; null — есть только `prepared`, чем кончилось, неизвестно. */
+  outcome: WriteOutcome | null;
+  expirationDateAfter: string | null;
+  startDateAfter: string | null;
+  /** Момент `prepared` — нижняя граница для проверки проходов. */
+  preparedAt: string | null;
+  terminalAt: string | null;
+  error: string | null;
+  /** Журнал, из которого взято это состояние. */
+  file: string;
+  sources: string[];
+  /** Карта встречалась более чем в одном прогоне — состояние взято из последнего. */
+  reattempted: boolean;
+}
+
+const journalKey = (employeeId: number, cardId: number): string => `${employeeId}:${cardId}`;
+
+const asNullableString = (value: unknown): string | null => {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text || null;
+};
+
+/**
+ * Разбор журнала прогона (JSONL). Fail-closed: любая битая или неполная строка — исключение
+ * с указанием файла и номера строки. Молча пропустить строку нельзя: пропущенная запись
+ * превратится в «операция плана без журнала» и исказит итог аудита.
+ */
+export function parseJournal(fileName: string, rawText: string): IJournalEntry[] {
+  const out: IJournalEntry[] = [];
+  rawText.split(/\r?\n/).forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    const lineNo = index + 1;
+    const fail = (message: string): never => {
+      throw new Error(`${fileName}:${lineNo}: ${message}`);
+    };
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      return fail('строка не разбирается как JSON');
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fail('ожидается JSON-объект');
+
+    const event = String(parsed.event ?? '');
+    if (!(JOURNAL_EVENTS as readonly string[]).includes(event)) {
+      return fail(`недопустимый event "${event}" — допустимы ${JOURNAL_EVENTS.join(', ')}`);
+    }
+    const at = asNullableString(parsed.at);
+    if (!at || normalizeTimestamp(at) === null) return fail(`некорректный at "${String(parsed.at)}"`);
+
+    const employeeId = Number(parsed.employeeId);
+    const cardId = Number(parsed.cardId);
+    if (!Number.isInteger(employeeId) || employeeId <= 0) return fail(`некорректный employeeId "${String(parsed.employeeId)}"`);
+    if (!Number.isInteger(cardId) || cardId <= 0) return fail(`некорректный cardId "${String(parsed.cardId)}"`);
+
+    const expirationDateTarget = asNullableString(parsed.expirationDateTarget);
+    if (!expirationDateTarget || normalizeTimestamp(expirationDateTarget) === null) {
+      return fail(`некорректный expirationDateTarget "${String(parsed.expirationDateTarget)}"`);
+    }
+
+    const dates: Array<[string, string | null]> = [
+      ['startDateBefore', asNullableString(parsed.startDateBefore)],
+      ['startDateTarget', asNullableString(parsed.startDateTarget)],
+      ['expirationDateBefore', asNullableString(parsed.expirationDateBefore)],
+      ['startDateAfter', asNullableString(parsed.startDateAfter)],
+      ['expirationDateAfter', asNullableString(parsed.expirationDateAfter)],
+    ];
+    for (const [field, value] of dates) {
+      if (value !== null && normalizeTimestamp(value) === null) return fail(`некорректная дата ${field} "${value}"`);
+    }
+
+    out.push({
+      event: event as JournalEvent,
+      at,
+      employeeId,
+      cardId,
+      format: asNullableString(parsed.format),
+      startDateBefore: dates[0][1],
+      startDateTarget: dates[1][1],
+      expirationDateBefore: dates[2][1],
+      expirationDateTarget,
+      startDateAfter: dates[3][1],
+      expirationDateAfter: dates[4][1],
+      error: asNullableString(parsed.error),
+      file: fileName,
+      line: lineNo,
+    });
+  });
+  return out;
+}
+
+export interface IMergedJournals {
+  /** Состояние по каждой карте — из последнего прогона, где она встречалась. */
+  records: Map<string, IJournalRecord>;
+  /** То же, но с разбивкой по журналам: нужно для сверки каждого прогона со своим планом. */
+  byFile: Map<string, IJournalRecord[]>;
+}
+
+/** Хронологический порядок события внутри записи; при равном `at` — стабильно по (file, line). */
+const eventOrder = (entry: IJournalEntry, fileOrder: ReadonlyMap<string, number>): [number, number, number] => [
+  normalizeTimestamp(entry.at) ?? 0,
+  fileOrder.get(entry.file) ?? 0,
+  entry.line,
+];
+
+const mismatchField = (
+  left: IJournalRecord,
+  right: IJournalEntry,
+): string | null => ([
+  ['startDateBefore', left.startDateBefore, right.startDateBefore],
+  ['expirationDateBefore', left.expirationDateBefore, right.expirationDateBefore],
+  ['expirationDateTarget', left.expirationDateTarget, right.expirationDateTarget],
+  ['startDateTarget', left.startDateTarget, right.startDateTarget],
+] as Array<[string, string | null, string | null]>)
+  .find(([, a, b]) => !datesEqual(a, b))?.[0] ?? null;
+
+/**
+ * Свёртка событий журналов в состояние по каждой карте.
+ *
+ * Внутри одного прогона исходные и целевые даты обязаны совпадать между `prepared` и
+ * терминальным событием — расхождение означает потерю или перемешивание файлов, и это
+ * исключение. Между разными прогонами расхождение законно: это повторная попытка по новому
+ * плану, тогда авторитетно последнее по времени состояние. Одинаковое время в разных
+ * файлах при разных данных развести нечем — тоже исключение (fail-closed).
+ */
+export function mergeJournalEvents(entries: readonly IJournalEntry[]): IMergedJournals {
+  const fileOrder = new Map<string, number>();
+  for (const entry of entries) {
+    if (!fileOrder.has(entry.file)) fileOrder.set(entry.file, fileOrder.size);
+  }
+  const sorted = [...entries].sort((left, right) => {
+    const a = eventOrder(left, fileOrder);
+    const b = eventOrder(right, fileOrder);
+    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  });
+
+  const perRun = new Map<string, IJournalRecord>();
+  for (const entry of sorted) {
+    const runKey = `${entry.file} ${journalKey(entry.employeeId, entry.cardId)}`;
+    const existing = perRun.get(runKey);
+    if (!existing) {
+      perRun.set(runKey, {
+        employeeId: entry.employeeId,
+        cardId: entry.cardId,
+        format: entry.format,
+        startDateBefore: entry.startDateBefore,
+        startDateTarget: entry.startDateTarget,
+        expirationDateBefore: entry.expirationDateBefore,
+        expirationDateTarget: entry.expirationDateTarget,
+        outcome: entry.event === 'prepared' ? null : entry.event,
+        expirationDateAfter: entry.event === 'prepared' ? null : entry.expirationDateAfter,
+        startDateAfter: entry.event === 'prepared' ? null : entry.startDateAfter,
+        preparedAt: entry.event === 'prepared' ? entry.at : null,
+        terminalAt: entry.event === 'prepared' ? null : entry.at,
+        error: entry.error,
+        file: entry.file,
+        sources: [`${entry.file}:${entry.line}`],
+        reattempted: false,
+      });
+      continue;
+    }
+
+    const mismatch = mismatchField(existing, entry);
+    if (mismatch) {
+      throw new Error(
+        `${entry.file}:${entry.line}: карта ${entry.cardId} (сотрудник ${entry.employeeId}) — поле ${mismatch}`
+        + ` расходится с ${existing.sources[0]} внутри одного журнала`,
+      );
+    }
+    existing.sources.push(`${entry.file}:${entry.line}`);
+    existing.format = existing.format ?? entry.format;
+    if (entry.event === 'prepared') {
+      existing.preparedAt = existing.preparedAt ?? entry.at;
+      continue;
+    }
+    existing.outcome = entry.event;
+    existing.terminalAt = entry.at;
+    existing.expirationDateAfter = entry.expirationDateAfter;
+    existing.startDateAfter = entry.startDateAfter;
+    existing.error = entry.error;
+  }
+
+  const byFile = new Map<string, IJournalRecord[]>();
+  const records = new Map<string, IJournalRecord>();
+  for (const record of perRun.values()) {
+    const list = byFile.get(record.file) ?? [];
+    list.push(record);
+    byFile.set(record.file, list);
+
+    const key = journalKey(record.employeeId, record.cardId);
+    const current = records.get(key);
+    if (!current) { records.set(key, record); continue; }
+
+    const currentAt = normalizeTimestamp(current.terminalAt ?? current.preparedAt) ?? 0;
+    const nextAt = normalizeTimestamp(record.terminalAt ?? record.preparedAt) ?? 0;
+    if (currentAt === nextAt) {
+      throw new Error(
+        `карта ${record.cardId} (сотрудник ${record.employeeId}) встречается в ${current.file} и ${record.file}`
+        + ' с одинаковым временем — какое состояние позднее, определить нечем',
+      );
+    }
+    const authoritative = nextAt > currentAt ? record : current;
+    const older = nextAt > currentAt ? current : record;
+    authoritative.reattempted = true;
+    authoritative.sources = [...older.sources, ...authoritative.sources];
+    records.set(key, authoritative);
+  }
+  return { records, byFile };
+}
+
+/** Операция плана: то, что прогон СОБИРАЛСЯ сделать с картой. */
+export interface IPlanOperation {
+  employeeId: number;
+  cardId: number;
+  startDate: string | null;
+  expirationDate: string | null;
+  format?: string | null;
+}
+
+/** Поля plan-файла, существенные для аудита. */
+export interface IPlanSummary {
+  connection: string;
+  scope: readonly string[];
+  expirationTarget: string;
+  syntheticStartDate: string | null;
+  operations: readonly IPlanOperation[];
+  planHash: string;
+}
+
+export interface IPlanMatchInput {
+  runLabel: string;
+  plan: IPlanSummary;
+  /** Хеш, пересчитанный из тела плана. */
+  recomputedPlanHash: string;
+  /** SHA256 confirmation-файла этого прогона. */
+  confirmationsSha256: string;
+  /** confirmationsSha256, записанный в плане. */
+  planConfirmationsSha256: string;
+  /** Текущий контур Sigur. */
+  liveConnection: string;
+  /** Скоуп аудита. */
+  auditScope: readonly string[];
+  /** Свёрнутые журнальные записи этого прогона. */
+  records: readonly IJournalRecord[];
+}
+
+export interface IPlanMatchResult {
+  /** Фатальные расхождения: аудит по этому прогону недостоверен. */
+  fatals: string[];
+  /** Операции плана, по которым в журнале нет ни одной записи. */
+  missingInJournal: IPlanOperation[];
+  /** Записи журнала, которых нет в плане. */
+  unknownInPlan: IJournalRecord[];
+}
+
+/**
+ * Сверка «план ↔ журнал». Проверяется всё, что связывает прогон с его исходными данными:
+ * хеш плана, хеш confirmation, контур, скоуп и совпадение целевых/исходных дат по каждой карте.
+ * Без этого журнал доказывает только «что-то писалось», но не «писалось по этому плану».
+ */
+export function matchJournalToPlan(input: IPlanMatchInput): IPlanMatchResult {
+  const fatals: string[] = [];
+  const label = input.runLabel;
+
+  if (input.plan.planHash !== input.recomputedPlanHash) {
+    fatals.push(`${label}: planHash не сходится — план изменён после прогона`);
+  }
+  if (input.plan.connection !== input.liveConnection) {
+    fatals.push(
+      `${label}: план собран на контуре "${input.plan.connection}", а проверка идёт на "${input.liveConnection}"`,
+    );
+  }
+  if (input.planConfirmationsSha256 !== input.confirmationsSha256) {
+    fatals.push(`${label}: confirmation-файл не тот, по которому строился план`);
+  }
+  const auditScope = new Set(input.auditScope);
+  const outOfScope = input.plan.scope.filter(part => !auditScope.has(part));
+  if (outOfScope.length > 0) {
+    fatals.push(`${label}: план включает скоуп ${outOfScope.join(', ')}, не входящий в проверяемый`);
+  }
+
+  const byKey = new Map<string, IPlanOperation>();
+  for (const operation of input.plan.operations) {
+    const key = journalKey(operation.employeeId, operation.cardId);
+    if (byKey.has(key)) {
+      fatals.push(`${label}: в плане дубль операции для карты ${operation.cardId} (сотрудник ${operation.employeeId})`);
+      continue;
+    }
+    byKey.set(key, operation);
+  }
+
+  const seen = new Set<string>();
+  const unknownInPlan: IJournalRecord[] = [];
+  for (const record of input.records) {
+    const key = journalKey(record.employeeId, record.cardId);
+    const operation = byKey.get(key);
+    if (!operation) { unknownInPlan.push(record); continue; }
+    seen.add(key);
+
+    if (!datesEqual(record.expirationDateTarget, input.plan.expirationTarget)) {
+      fatals.push(
+        `${label}: карта ${record.cardId} — целевой срок журнала "${record.expirationDateTarget}"`
+        + ` ≠ плановому "${input.plan.expirationTarget}"`,
+      );
+    }
+    if (record.startDateTarget && !datesEqual(record.startDateTarget, input.plan.syntheticStartDate)) {
+      fatals.push(
+        `${label}: карта ${record.cardId} — служебная дата начала "${record.startDateTarget}"`
+        + ` ≠ плановой "${input.plan.syntheticStartDate}"`,
+      );
+    }
+    if (!datesEqual(record.startDateBefore, operation.startDate)
+      || !datesEqual(record.expirationDateBefore, operation.expirationDate)) {
+      fatals.push(`${label}: карта ${record.cardId} — исходные даты журнала расходятся с планом`);
+    }
+  }
+
+  const missingInJournal = [...byKey.entries()]
+    .filter(([key]) => !seen.has(key))
+    .map(([, operation]) => operation);
+
+  return { fatals, missingInJournal, unknownInPlan };
+}
+
+/**
+ * Живое состояние карты для аудита: все привязки, найденные по cardId.
+ * Читается БЕЗ фильтра по владельцу — иначе перепривязка к другому человеку выглядит
+ * как «привязки нет» и маскирует смену держателя.
+ */
+export interface ILiveCardState {
+  /** GET не удался — состояние неизвестно. */
+  readFailed: boolean;
+  bindings: readonly ILiveBinding[];
+}
+
+export type VerificationVerdict =
+  | 'still_blocked'
+  | 'reconciled_blocked'
+  | 'blocked_after_not_applied'
+  | 'not_applied_confirmed'
+  | 'expiration_extended'
+  | 'expiration_changed'
+  | 'expiration_removed'
+  | 'invalid_expiration'
+  | 'start_date_drift'
+  | 'third_state'
+  | 'owner_drift'
+  | 'binding_gone'
+  | 'binding_ambiguous'
+  | 'read_failed';
+
+/** Вердикты, означающие «карта сейчас погашена». */
+export const BLOCKED_VERDICTS: readonly VerificationVerdict[] = [
+  'still_blocked',
+  'reconciled_blocked',
+  'blocked_after_not_applied',
+];
+
+/** Незакрытый хвост: гашение не подтверждено, но и аномалией это не является. */
+export const TAIL_VERDICTS: readonly VerificationVerdict[] = ['not_applied_confirmed'];
+
+export function isAnomalyVerdict(verdict: VerificationVerdict): boolean {
+  return !BLOCKED_VERDICTS.includes(verdict) && !TAIL_VERDICTS.includes(verdict);
+}
+
+export interface IVerificationInput {
+  /** Ожидаемое состояние по журналу/плану. */
+  expected: {
+    employeeId: number;
+    cardId: number;
+    expirationTarget: string;
+    expirationBefore: string | null;
+    /** Служебная дата начала, если прогон её писал. */
+    startDateTarget: string | null;
+    /** Терминальный исход прогона; null — только `prepared` либо операция без журнала. */
+    outcome: WriteOutcome | null;
+  };
+  live: ILiveCardState;
+}
+
+/**
+ * Вердикт по одной карте: что журнал обещал против того, что в Sigur сейчас.
+ *
+ * Терминальный исход прогона роли почти не играет — авторитетно только живое состояние.
+ * Он влияет лишь на название вердикта, чтобы в отчёте было видно, где запись «дозрела»
+ * после `not_applied`/`unknown`, а где сработала штатно.
+ */
+export function classifyBlockVerification(input: IVerificationInput): VerificationVerdict {
+  const { expected, live } = input;
+  if (live.readFailed) return 'read_failed';
+  if (live.bindings.length === 0) return 'binding_gone';
+  // Больше одной привязки на карту — неоднозначность независимо от владельцев и форматов.
+  if (live.bindings.length > 1) return 'binding_ambiguous';
+
+  const [binding] = live.bindings;
+  if (binding.cardId !== null && binding.cardId !== expected.cardId) return 'binding_gone';
+  if (binding.employeeId !== expected.employeeId) return 'owner_drift';
+
+  if (!binding.expirationDate) return 'expiration_removed';
+  const liveExpiration = normalizeTimestamp(binding.expirationDate);
+  if (liveExpiration === null) return 'invalid_expiration';
+
+  if (datesEqual(binding.expirationDate, expected.expirationTarget)) {
+    // Срок на месте, но служебная дата начала не встала — состояние половинчатое.
+    if (expected.startDateTarget && !datesEqual(binding.startDate, expected.startDateTarget)) {
+      return 'start_date_drift';
+    }
+    if (expected.outcome === 'committed') return 'still_blocked';
+    if (expected.outcome === 'not_applied') return 'blocked_after_not_applied';
+    return 'reconciled_blocked';
+  }
+
+  if (datesEqual(binding.expirationDate, expected.expirationBefore)) return 'not_applied_confirmed';
+
+  const target = normalizeTimestamp(expected.expirationTarget);
+  if (target !== null && liveExpiration > target) return 'expiration_extended';
+  return 'expiration_changed';
+}
+
+/**
+ * Итоговый код возврата. Приоритет фиксирован: аномалия важнее хвоста, хвост важнее
+ * неполноты. «Частичный» прогон не может закончиться нулём — иначе успешная проба на
+ * пяти картах прочитается как пройденный аудит.
+ */
+export function resolveExitCode(params: {
+  anomalies: number;
+  tail: number;
+  partial: boolean;
+}): 0 | 1 | 2 | 3 {
+  if (params.anomalies > 0) return 1;
+  if (params.tail > 0) return 2;
+  if (params.partial) return 3;
+  return 0;
+}
+
 /** Живая привязка карты к сотруднику, прочитанная точечным GET. */
 export interface ILiveBinding {
   employeeId: number | null;
