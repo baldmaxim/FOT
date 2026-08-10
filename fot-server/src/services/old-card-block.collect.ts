@@ -378,6 +378,22 @@ export async function collectLiveState(options: ICollectOptions): Promise<ILiveS
     [...cardIdSeen.entries()].filter(([, count]) => count > 1).map(([cardId]) => cardId),
   );
 
+  // Инвариант: у каждой привязки есть владелец, и он обязан быть в выгрузке сотрудников.
+  // Массовое расхождение означает усечённую выгрузку (Sigur отдаёт ровно одну страницу и
+  // молча заканчивает пагинацию). Продолжать нельзя: сотрудники СУ-10 уедут в 'anomaly',
+  // корневые перемешаются с ними, и состав к гашению будет посчитан по неполным данным.
+  const ownersWithoutProfile = [...bindingsByEmployee.keys()].filter(id => !employees.has(id));
+  if (ownersWithoutProfile.length > bindingsByEmployee.size * 0.01) {
+    throw new Error(
+      `выгрузка сотрудников неполная: у ${ownersWithoutProfile.length} из ${bindingsByEmployee.size} владельцев`
+      + ` привязок нет профиля (сотрудников разобрано ${employees.size}). Это транзиентный сбой пагинации`
+      + ' Sigur — повторите запуск; данные, собранные сейчас, доверия не заслуживают',
+    );
+  }
+  if (ownersWithoutProfile.length > 0) {
+    log(`[sigur] владельцев привязок без профиля: ${ownersWithoutProfile.length} (в пределах допуска)`);
+  }
+
   // ── Пропуска ФОТ ─────────────────────────────────────────────────────────────────
   // ВСЕ статусы, включая revoked: отозванный пропуск тоже доказывает, что карта
   // проходила через модуль, а значит могла быть красной.
