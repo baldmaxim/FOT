@@ -196,10 +196,11 @@ export async function resolveAccessibleDepartmentIds(
     return ids;
   }
 
-  // Табельщица: «явные отделы» = бригады, присутствующие на её объектах входа —
-  // по ручной привязке «место работы» (employee_skud_object_access) ЛИБО по
-  // фактическим проходам СКУД (skud_events → skud_object_access_points), пересечённые
-  // с её папками. См. listTimekeeperDepartmentSeeds. Не employee_department_access её самой.
+  // Табельщица: «явные отделы» = бригады и листовые отделы, присутствующие на её
+  // объектах входа — по ручной привязке «место работы» (employee_skud_object_access)
+  // ЛИБО по фактическим проходам СКУД (skud_events → skud_object_access_points),
+  // пересечённые с её папками. См. listTimekeeperDepartmentSeeds.
+  // Не employee_department_access её самой.
   const assigned = isTimekeeper(req)
     ? await resolveTimekeeperDepartmentSeeds(req)
     : await listExplicitDepartmentIdsForUser(req.user.id, req.user.employee_id ?? null);

@@ -6,9 +6,10 @@ import { query } from '../config/postgres.js';
  *
  * Табельщице назначаются «объекты входа» (timekeeper_object_access) и «папки»
  * оргструктуры (timekeeper_folder_access). Её «явные отделы» (seeds скоупа) =
- * ПЕРЕСЕЧЕНИЕ: бригады, где есть работники с её объектов (employee_skud_object_access),
- * И входящие в поддерево выбранных папок. Эти бригады питают resolveAccessibleDepartmentIds,
- * managed_department_ids и «назначенный режим» (collectAssignedEmployees → начальники участка).
+ * ПЕРЕСЕЧЕНИЕ: бригады и листовые отделы, где есть работники с её объектов
+ * (employee_skud_object_access), И входящие в поддерево выбранных папок. Эти отделы
+ * питают resolveAccessibleDepartmentIds, managed_department_ids и «назначенный режим»
+ * (collectAssignedEmployees → начальники участка).
  * См. listTimekeeperDepartmentSeeds. Папки не выбраны → seeds пусто (строго).
  */
 
@@ -16,7 +17,7 @@ export const TIMEKEEPER_ROLE_CODE = 'timekeeper';
 
 /**
  * Окно (в днях) для ветки «присутствие по фактическим проходам СКУД».
- * Бригада/сотрудник считаются присутствующими на объекте табельщицы, если за
+ * Отдел/сотрудник считаются присутствующими на объекте табельщицы, если за
  * последние N дней были проходы через проходные этого объекта. Согласовано с
  * прецедентом listSelectableObjectsForEmployee (employee-skud-object-access.service.ts).
  */
@@ -38,18 +39,22 @@ export async function resolveTimekeeperObjectIds(timekeeperUserId: string): Prom
 }
 
 /**
- * Видимые табельщице бригады = ПЕРЕСЕЧЕНИЕ:
+ * Видимые табельщице отделы = ПЕРЕСЕЧЕНИЕ:
  *   - «присутствуют на её объектах» (две ветки, объединяются UNION):
  *       (B) ручная привязка «место работы» — employee_skud_object_access;
  *       (A) фактические проходы СКУД за последние TIMEKEEPER_PRESENCE_WINDOW_DAYS дней —
  *           skud_events → skud_object_access_points (как в табеле «По объектам»).
- *     В обеих ветках бригада берётся из employee_department_access (kind='brigade');
+ *     В обеих ветках отдел берётся из employee_department_access; допускаются бригады
+ *     И листовые активные department-отделы (например «Участок электромонтажных работ»),
+ *     КРОМЕ ЛИНИЯ-Общестрой — у неё собственный присутствие-путь (сужение состава
+ *     isTimekeeperLiDeptView + edit-гейт resolveTimekeeperEditableLiIds), попадание LI
+ *     в seeds дало бы табельщице полную правку всего отдела в обход этого гейта;
  *   - «входят в выбранные папки»: поддерево timekeeper_folder_access (get_descendant_department_ids).
  * Папки не выбраны → пусто (строго): табельщица не видит никого.
  *
- * Эти бригады — seeds скоупа: их получают resolveAccessibleDepartmentIds (доступ грида),
+ * Эти отделы — seeds скоупа: их получают resolveAccessibleDepartmentIds (доступ грида),
  * managed_department_ids профиля и collectAssignedEmployees (managedIds → начальники участка).
- * Бригады-листья, поэтому subtree-расширение их не размножает.
+ * Seeds — листья, поэтому subtree-расширение их не размножает.
  */
 export async function listTimekeeperDepartmentSeeds(timekeeperUserId: string): Promise<string[]> {
   const folders = await query<{ department_id: string }>(
@@ -72,7 +77,6 @@ export async function listTimekeeperDepartmentSeeds(timekeeperUserId: string): P
            ON esoa.skud_object_id = toa.skud_object_id AND esoa.is_active = true
          JOIN employee_department_access eda
            ON eda.employee_id = esoa.employee_id AND eda.is_active = true
-         JOIN org_departments d ON d.id = eda.department_id AND d.kind = 'brigade'
         WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
        UNION
        -- (A) фактические проходы СКУД на объекты табельщицы за окно
@@ -84,11 +88,25 @@ export async function listTimekeeperDepartmentSeeds(timekeeperUserId: string): P
           AND se.event_date >= (CURRENT_DATE - INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days')
          JOIN employee_department_access eda
            ON eda.employee_id = se.employee_id AND eda.is_active = true
-         JOIN org_departments d ON d.id = eda.department_id AND d.kind = 'brigade'
         WHERE toa.timekeeper_user_id = $1::uuid AND toa.is_active = true
      )
-     SELECT p.id FROM present p WHERE p.id IN (SELECT id FROM folder_desc)`,
-    [timekeeperUserId, folderIds],
+     SELECT p.id
+       FROM present p
+       JOIN org_departments d ON d.id = p.id
+      WHERE p.id IN (SELECT id FROM folder_desc)
+        AND (
+          d.kind = 'brigade'
+          OR (
+            d.kind = 'department'
+            AND d.is_active = true
+            AND d.id <> $3::uuid
+            AND NOT EXISTS (
+              SELECT 1 FROM org_departments c
+               WHERE c.parent_id = d.id AND c.is_active = true
+            )
+          )
+        )`,
+    [timekeeperUserId, folderIds, LI_OBSHESTROY_DEPARTMENT_ID],
   );
   return [...new Set(rows.map(r => r.id))];
 }

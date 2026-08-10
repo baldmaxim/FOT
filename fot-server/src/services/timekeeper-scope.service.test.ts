@@ -11,6 +11,7 @@ vi.mock('../config/postgres.js', () => ({
 
 import {
   isTimekeeper,
+  LI_OBSHESTROY_DEPARTMENT_ID,
   listTimekeeperDepartmentSeeds,
   listTimekeeperDirectEmployeeIds,
   resolveTimekeeperDepartmentSeeds,
@@ -61,7 +62,7 @@ describe('listTimekeeperDepartmentSeeds', () => {
     expect(pgQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('пересечение present ∩ папки → уникальные видимые бригады', async () => {
+  it('пересечение present ∩ папки → уникальные видимые отделы', async () => {
     pgQuery
       .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
       .mockResolvedValueOnce([{ id: 'br-A' }, { id: 'br-B' }, { id: 'br-A' }]); // present ∩ folder_desc
@@ -69,7 +70,7 @@ describe('listTimekeeperDepartmentSeeds', () => {
     expect(seeds).toEqual(['br-A', 'br-B']);
     expect(pgQuery).toHaveBeenCalledTimes(2);
     const [, params] = pgQuery.mock.calls[1];
-    expect(params).toEqual(['tk-1', ['folder-1']]);
+    expect(params).toEqual(['tk-1', ['folder-1'], LI_OBSHESTROY_DEPARTMENT_ID]);
   });
 
   it('present считает обе ветки: ручную привязку И фактические проходы СКУД (окно)', async () => {
@@ -85,6 +86,26 @@ describe('listTimekeeperDepartmentSeeds', () => {
     expect(sql).toContain(`INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days'`);
     // гейт по папкам сохранён
     expect(sql).toContain('folder_desc');
+  });
+
+  it('seeds = бригады И листовые активные department-отделы; ЛИНИЯ-Общестрой исключена', async () => {
+    pgQuery
+      .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
+      .mockResolvedValueOnce([{ id: 'br-A' }]); // present ∩ folder_desc
+    await listTimekeeperDepartmentSeeds('tk-1');
+    const [sql] = pgQuery.mock.calls[1];
+    // kind-фильтр перенесён из веток present в финальный SELECT
+    expect(sql).toContain('JOIN org_departments d ON d.id = p.id');
+    expect(sql).not.toContain('d.id = eda.department_id');
+    // бригадная ветка сохранена
+    expect(sql).toContain("d.kind = 'brigade'");
+    // листовой активный department допускается…
+    expect(sql).toContain("d.kind = 'department'");
+    expect(sql).toContain('d.is_active = true');
+    expect(sql).toContain('NOT EXISTS');
+    expect(sql).toContain('c.parent_id = d.id');
+    // …кроме ЛИНИЯ-Общестрой: у неё собственный присутствие-путь и edit-гейт
+    expect(sql).toContain('d.id <> $3');
   });
 });
 
