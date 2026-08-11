@@ -429,18 +429,51 @@ describe('leaveRequestsController.updateRequestType', () => {
     socket: { remoteAddress: '127.0.0.1' },
   } as unknown as Partial<AuthenticatedRequest>);
 
-  const VACATION_ROW = {
-    id: 708, employee_id: 247, request_type: 'vacation', status: 'pending',
+  // «Сегодня» в тестах — 2026-06-29 (moscowTodayIso замокан выше).
+  const LOCKED_PENDING = {
+    id: 708, employee_id: 247, status: 'pending', request_type: 'vacation',
+    start_date: '2026-09-14', end_date: '2026-09-15', selected_dates: null,
+  };
+  const LOCKED_APPROVED = { ...LOCKED_PENDING, status: 'approved' };
+  const UPDATED_ROW = {
+    id: 708, employee_id: 247, request_type: 'unpaid',
+    start_date: '2026-09-14', end_date: '2026-09-15', selected_dates: null,
   };
 
-  // FOR UPDATE → UPDATE → INSERT audit_logs.
-  const mockTxFlow = (locked: unknown, updated: unknown) => {
+  /**
+   * Роутер SQL внутри транзакции: FOR UPDATE → (проверка закрытого табеля) →
+   * UPDATE leave_requests → (UPDATE attendance_adjustments) → INSERT audit_logs.
+   * Маршрутизация по тексту запроса, а не по порядку — набор шагов зависит от статуса.
+   */
+  const mockTx = (opts: {
+    locked: unknown;
+    updated?: unknown;
+    periodLocked?: boolean;
+    adjustedRows?: number;
+  }) => {
     txClient.query.mockReset();
-    txClient.query
-      .mockResolvedValueOnce({ rows: locked ? [locked] : [], rowCount: locked ? 1 : 0 })
-      .mockResolvedValueOnce({ rows: updated ? [updated] : [], rowCount: updated ? 1 : 0 })
-      .mockResolvedValue({ rows: [], rowCount: 1 });
+    txClient.query.mockImplementation(async (sql: unknown) => {
+      const q = String(sql);
+      if (q.includes('FOR UPDATE')) {
+        return { rows: opts.locked ? [opts.locked] : [], rowCount: opts.locked ? 1 : 0 };
+      }
+      if (q.includes('timesheet_approvals')) {
+        return opts.periodLocked ? { rows: [{ ok: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      if (q.includes('UPDATE leave_requests')) {
+        return { rows: opts.updated ? [opts.updated] : [], rowCount: opts.updated ? 1 : 0 };
+      }
+      if (q.includes('UPDATE attendance_adjustments')) {
+        return { rows: [], rowCount: opts.adjustedRows ?? 0 };
+      }
+      return { rows: [], rowCount: 1 }; // audit_logs
+    });
   };
+
+  const calledWith = (fragment: string) =>
+    txClient.query.mock.calls.some(c => String(c[0]).includes(fragment));
+  const callWith = (fragment: string) =>
+    txClient.query.mock.calls.find(c => String(c[0]).includes(fragment));
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -455,7 +488,6 @@ describe('leaveRequestsController.updateRequestType', () => {
       makeTypeReq({ request_type: target, expected_request_type: 'vacation' }), res);
 
     expect(res._status).toBe(400);
-    expect(pgQueryOne).not.toHaveBeenCalled();
     expect(pgTx).not.toHaveBeenCalled();
   });
 
@@ -466,7 +498,6 @@ describe('leaveRequestsController.updateRequestType', () => {
       makeTypeReq({ request_type: 'unpaid', expected_request_type: expected }), res);
 
     expect(res._status).toBe(400);
-    expect(pgQueryOne).not.toHaveBeenCalled();
     expect(pgTx).not.toHaveBeenCalled();
   });
 
@@ -481,46 +512,44 @@ describe('leaveRequestsController.updateRequestType', () => {
   });
 
   it('404, если заявления нет', async () => {
-    pgQueryOne.mockResolvedValueOnce(null);
+    mockTx({ locked: null });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
       makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
 
     expect(res._status).toBe(404);
-    expect(pgTx).not.toHaveBeenCalled();
+    expect(calledWith('UPDATE leave_requests')).toBe(false);
   });
 
   it('400, если текущий тип заявления не из трёх типов вкладки', async () => {
-    pgQueryOne.mockResolvedValueOnce({ ...VACATION_ROW, request_type: 'sick_leave' });
+    mockTx({ locked: { ...LOCKED_PENDING, request_type: 'sick_leave' } });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
       makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
 
     expect(res._status).toBe(400);
-    expect(pgTx).not.toHaveBeenCalled();
+    expect(calledWith('UPDATE leave_requests')).toBe(false);
   });
 
-  it('409, если под блокировкой заявление уже не pending (без UPDATE/аудита/realtime)', async () => {
-    pgQueryOne.mockResolvedValueOnce(VACATION_ROW);
-    mockTxFlow({ status: 'approved', request_type: 'vacation' }, null);
+  it.each(['rejected', 'cancelled'])('409, если под блокировкой заявление в статусе %s', async (status) => {
+    mockTx({ locked: { ...LOCKED_PENDING, status } });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
       makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
 
     expect(res._status).toBe(409);
-    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
-    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('audit_logs'))).toBe(false);
+    expect(calledWith('UPDATE leave_requests')).toBe(false);
+    expect(calledWith('audit_logs')).toBe(false);
     expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
   });
 
   it('409 stale-UI: первый HR уже сменил vacation → unpaid, второй с устаревшим expected шлёт educational_leave', async () => {
-    // Второй PATCH стартует ПОСЛЕ завершения первого: предчтение уже видит unpaid,
+    // Второй PATCH стартует ПОСЛЕ завершения первого: под локом уже unpaid,
     // но редактор второго HR открывался на vacation — ловит именно expected_request_type.
-    pgQueryOne.mockResolvedValueOnce({ ...VACATION_ROW, request_type: 'unpaid' });
-    mockTxFlow({ status: 'pending', request_type: 'unpaid' }, null);
+    mockTx({ locked: { ...LOCKED_PENDING, request_type: 'unpaid' } });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
@@ -528,59 +557,54 @@ describe('leaveRequestsController.updateRequestType', () => {
 
     expect(res._status).toBe(409);
     expect((res._json as { error: string }).error).toContain('Категория уже изменена');
-    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
-    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('audit_logs'))).toBe(false);
+    expect(calledWith('UPDATE leave_requests')).toBe(false);
+    expect(calledWith('audit_logs')).toBe(false);
     expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
   });
 
   it('409 stale-UI: оба меняют на unpaid — второй тоже получает конфликт', async () => {
-    pgQueryOne.mockResolvedValueOnce({ ...VACATION_ROW, request_type: 'unpaid' });
-    mockTxFlow({ status: 'pending', request_type: 'unpaid' }, null);
+    mockTx({ locked: { ...LOCKED_PENDING, request_type: 'unpaid' } });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
       makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
 
     expect(res._status).toBe(409);
-    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
+    expect(calledWith('UPDATE leave_requests')).toBe(false);
   });
 
   it('409, если условный UPDATE не задел ни одной строки', async () => {
-    pgQueryOne.mockResolvedValueOnce(VACATION_ROW);
-    mockTxFlow({ status: 'pending', request_type: 'vacation' }, null);
+    mockTx({ locked: LOCKED_PENDING, updated: null });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
       makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
 
     expect(res._status).toBe(409);
-    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('audit_logs'))).toBe(false);
+    expect(calledWith('audit_logs')).toBe(false);
     expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
   });
 
-  it('успех vacation → unpaid (диапазон): UPDATE только типа, аудит из locked, broadcast без employeeId', async () => {
-    pgQueryOne.mockResolvedValueOnce(VACATION_ROW);
-    mockTxFlow(
-      { status: 'pending', request_type: 'vacation' },
-      { id: 708, employee_id: 247, request_type: 'unpaid', start_date: '2026-06-01', end_date: '2026-06-03', selected_dates: null },
-    );
+  it('pending: успех vacation → unpaid, табель не трогаем, broadcast без employeeId', async () => {
+    mockTx({ locked: LOCKED_PENDING, updated: UPDATED_ROW });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
       makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
 
     expect(res._status).toBe(200);
-    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
+    const updateCall = callWith('UPDATE leave_requests');
     // Меняется только request_type (+updated_at); даты/selected_dates не передаются.
     expect(String(updateCall![0])).not.toMatch(/start_date|end_date|selected_dates/);
-    expect(String(updateCall![0])).toContain("request_type = $3");
-    expect(updateCall![1]).toEqual(['unpaid', '708', 'vacation']);
+    expect(updateCall![1]).toEqual(['unpaid', '708', 'pending', 'vacation']);
+    // pending не материализован — строк табеля нет, трогать нечего.
+    expect(calledWith('UPDATE attendance_adjustments')).toBe(false);
 
-    const auditCall = txClient.query.mock.calls.find(c => String(c[0]).includes('audit_logs'));
-    expect(auditCall).toBeDefined();
+    const auditCall = callWith('audit_logs');
     expect(auditCall?.[1]?.[1]).toBe('UPDATE_LEAVE_REQUEST_TYPE');
     expect(JSON.parse(String(auditCall?.[1]?.[4]))).toMatchObject({
       employee_id: 247, old_type: 'vacation', new_type: 'unpaid',
+      request_status: 'pending', adjusted_days: 0,
     });
 
     expect(vi.mocked(emitDomainChange)).toHaveBeenCalledWith({
@@ -590,40 +614,115 @@ describe('leaveRequestsController.updateRequestType', () => {
     });
   });
 
-  it('успех unpaid → vacation (selected_dates): форма дат сохраняется', async () => {
-    pgQueryOne.mockResolvedValueOnce({ ...VACATION_ROW, request_type: 'unpaid' });
-    mockTxFlow(
-      { status: 'pending', request_type: 'unpaid' },
-      { id: 708, employee_id: 247, request_type: 'vacation', start_date: '2026-06-01', end_date: '2026-06-03', selected_dates: ['2026-06-01', '2026-06-03'] },
-    );
+  it('pending с прошедшими датами по-прежнему правится (гард даты — только у approved)', async () => {
+    mockTx({
+      locked: { ...LOCKED_PENDING, start_date: '2026-05-01', end_date: '2026-05-05' },
+      updated: UPDATED_ROW,
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.updateRequestType(
+      makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
+
+    expect(res._status).toBe(200);
+    expect(calledWith('UPDATE attendance_adjustments')).toBe(false);
+  });
+
+  it('approved (будущий отпуск): unpaid → vacation переписывает дни табеля от имени HR', async () => {
+    mockTx({
+      locked: { ...LOCKED_APPROVED, request_type: 'unpaid', selected_dates: ['2026-09-14', '2026-09-15'] },
+      updated: { ...UPDATED_ROW, request_type: 'vacation', selected_dates: ['2026-09-14', '2026-09-15'] },
+      adjustedRows: 2,
+    });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
       makeTypeReq({ request_type: 'vacation', expected_request_type: 'unpaid' }), res);
 
     expect(res._status).toBe(200);
-    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
-    expect(updateCall![1]).toEqual(['vacation', '708', 'unpaid']);
-    // RETURNING * отдаёт дискретные даты как были поданы — конвертации нет.
-    expect((res._json as { data: { selected_dates: string[] } }).data.selected_dates).toEqual(['2026-06-01', '2026-06-03']);
+    expect(callWith('UPDATE leave_requests')![1]).toEqual(['vacation', '708', 'approved', 'unpaid']);
 
-    const auditCall = txClient.query.mock.calls.find(c => String(c[0]).includes('audit_logs'));
-    expect(JSON.parse(String(auditCall?.[1]?.[4]))).toMatchObject({ old_type: 'unpaid', new_type: 'vacation' });
+    const adjCall = callWith('UPDATE attendance_adjustments');
+    expect(adjCall).toBeDefined();
+    // Точечный UPDATE: approval_status/approved_by/created_by остаются нетронутыми.
+    expect(String(adjCall![0])).not.toMatch(/approval_status|approved_by|created_by/);
+    expect(adjCall![1]).toEqual(['vacation', 'reviewer-uuid', '708']);
+
+    expect(JSON.parse(String(callWith('audit_logs')?.[1]?.[4]))).toMatchObject({
+      old_type: 'unpaid', new_type: 'vacation', request_status: 'approved', adjusted_days: 2,
+    });
   });
 
-  it('сбой аудита откатывает правку: 500 и никакого realtime', async () => {
-    pgQueryOne.mockResolvedValueOnce(VACATION_ROW);
-    txClient.query.mockReset();
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'pending', request_type: 'vacation' }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [{ id: 708, request_type: 'unpaid' }], rowCount: 1 })
-      .mockRejectedValueOnce(new Error('audit insert failed'));
+  it('approved: 400, если отпуск начинается сегодня', async () => {
+    mockTx({ locked: { ...LOCKED_APPROVED, start_date: '2026-06-29', end_date: '2026-07-05' } });
+    const res = makeRes();
+
+    await leaveRequestsController.updateRequestType(
+      makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
+
+    expect(res._status).toBe(400);
+    expect((res._json as { error: string }).error).toContain('уже начался');
+    expect(calledWith('UPDATE leave_requests')).toBe(false);
+    expect(calledWith('UPDATE attendance_adjustments')).toBe(false);
+  });
+
+  it('гонка approve ↔ смена категории: под локом строка уже approved с прошедшей датой → 400 без правок', async () => {
+    // Редактор HR открывался на pending; пока он сохранял, руководитель согласовал
+    // заявление и материализовал прошедшие дни. Гард обязан сработать по locked,
+    // а не по предчтению — иначе табель закрытого периода переписался бы молча.
+    mockTx({ locked: { ...LOCKED_APPROVED, start_date: '2026-05-01', end_date: '2026-05-05' } });
+    const res = makeRes();
+
+    await leaveRequestsController.updateRequestType(
+      makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
+
+    expect(res._status).toBe(400);
+    expect(calledWith('UPDATE leave_requests')).toBe(false);
+    expect(calledWith('UPDATE attendance_adjustments')).toBe(false);
+    expect(calledWith('audit_logs')).toBe(false);
+    expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
+  });
+
+  it('approved: 409, если дни попали в сданный/закрытый табель', async () => {
+    mockTx({ locked: LOCKED_APPROVED, periodLocked: true });
+    const res = makeRes();
+
+    await leaveRequestsController.updateRequestType(
+      makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
+
+    expect(res._status).toBe(409);
+    expect((res._json as { error: string }).error).toContain('табеле');
+    expect(calledWith('UPDATE leave_requests')).toBe(false);
+    expect(calledWith('UPDATE attendance_adjustments')).toBe(false);
+  });
+
+  it.each([0, 1])('approved: 409 и откат, если строк табеля %s вместо числа дней заявления', async (adjustedRows) => {
+    mockTx({ locked: LOCKED_APPROVED, updated: UPDATED_ROW, adjustedRows }); // 14-15.09 = 2 дня
+    const res = makeRes();
+
+    await leaveRequestsController.updateRequestType(
+      makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
+
+    expect(res._status).toBe(409);
+    expect((res._json as { error: string }).error).toContain('не совпадают');
+    expect(calledWith('audit_logs')).toBe(false);
+    expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
+  });
+
+  it('approved: сбой аудита после правки табеля откатывает всё — 500 и никакого realtime', async () => {
+    mockTx({ locked: LOCKED_APPROVED, updated: UPDATED_ROW, adjustedRows: 2 });
+    const original = txClient.query.getMockImplementation()!;
+    txClient.query.mockImplementation(async (sql: unknown) => {
+      if (String(sql).includes('audit_logs')) throw new Error('audit insert failed');
+      return original(sql);
+    });
     const res = makeRes();
 
     await leaveRequestsController.updateRequestType(
       makeTypeReq({ request_type: 'unpaid', expected_request_type: 'vacation' }), res);
 
     expect(res._status).toBe(500);
+    expect(calledWith('UPDATE attendance_adjustments')).toBe(true);
     expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
   });
 });

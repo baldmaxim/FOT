@@ -1497,15 +1497,25 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
 /**
  * Смена категории заявления отделом кадров (вкладка «Отпуска»). Права целиком
  * на роуте (edit к /leave-vacations, как у hrAcknowledge). Только между типами
- * вкладки (vacation/unpaid/educational_leave) и только на pending: согласованное
- * не переоткрывается — путь через revokeApproval (cancelled) и новое заявление.
+ * вкладки (vacation/unpaid/educational_leave), статусы pending и approved.
+ *
+ * У approved дни уже материализованы в attendance_adjustments, и буква табеля/1С
+ * читается оттуда — поэтому строки заявления переписываются в той же транзакции.
+ * Дополнительно у approved действует правило: менять можно, только пока отпуск НЕ
+ * начался (минимальная дата строго больше сегодняшней МСК) — задним числом табель
+ * не переигрываем.
+ *
+ * ВСЕ решения принимаются под FOR UPDATE: предчтение до транзакции увидело бы
+ * pending и пропустило бы гарды approved, если руководитель согласовал заявление
+ * параллельно (approve материализует дни атомарно вместе со сменой статуса).
  *
  * Осознанные side-effect'ы:
  *  - даты НЕ конвертируем: форма хранения остаётся как подана (диапазон или
- *    selected_dates) — материализация от типа не зависит;
+ *    selected_dates) — набор материализованных дней от типа не зависит;
  *  - маршрутизация видимости вычисляется динамически по типу, круг видящих
  *    заявление руководителей меняется — поэтому realtime уходит broadcast'ом;
- *  - тексты уже отправленных push/уведомлений остаются со старой категорией.
+ *  - тексты уже отправленных push/уведомлений остаются со старой категорией;
+ *  - сотруднику уведомление о смене категории не шлём (след — в аудите).
  *
  * Анти-гонка stale-UI: клиент присылает expected_request_type — категорию,
  * которую редактор видел при открытии. Сверять надо именно её под FOR UPDATE:
@@ -1518,6 +1528,7 @@ const updateRequestType = async (req: AuthenticatedRequest, res: Response): Prom
     const { request_type: requestType, expected_request_type: expectedRequestType } =
       req.body as { request_type?: unknown; expected_request_type?: unknown };
 
+    // Валидация тела не зависит от строки БД — до транзакции.
     if (typeof requestType !== 'string' || !VACATION_REQUEST_TYPES.includes(requestType)) {
       res.status(400).json({ success: false, error: 'Недопустимая категория заявления' });
       return;
@@ -1531,37 +1542,77 @@ const updateRequestType = async (req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
-    const request = await queryOne<{ id: number; employee_id: number; request_type: string; status: string }>(
-      `SELECT id, employee_id, request_type, status FROM leave_requests WHERE id = $1`,
-      [id],
-    );
-    if (!request) {
-      res.status(404).json({ success: false, error: 'Заявление не найдено' });
-      return;
-    }
-    if (!VACATION_REQUEST_TYPES.includes(request.request_type)) {
-      res.status(400).json({ success: false, error: 'Категория правится только у отпусков' });
-      return;
-    }
-
     const result = await withTransaction(async (client) => {
-      const locked = (await client.query(
-        `SELECT status, request_type FROM leave_requests WHERE id = $1 FOR UPDATE`,
+      const locked = (await client.query<{
+        id: number; employee_id: number; status: string; request_type: string;
+        start_date: string; end_date: string; selected_dates: string[] | null;
+      }>(
+        `SELECT id, employee_id, status, request_type, start_date, end_date, selected_dates
+           FROM leave_requests WHERE id = $1 FOR UPDATE`,
         [id],
       )).rows[0] ?? null;
 
       if (!locked) return { conflict: 'gone' as const };
-      if (locked.status !== 'pending') return { conflict: 'not_pending' as const };
+      if (!VACATION_REQUEST_TYPES.includes(locked.request_type)) return { conflict: 'not_vacation' as const };
+      if (locked.status !== 'pending' && locked.status !== 'approved') return { conflict: 'not_editable' as const };
       if (locked.request_type !== expectedRequestType) return { conflict: 'type_changed' as const };
+
+      const isApproved = locked.status === 'approved';
+      const dates = collectLeaveRequestDates(locked);
+
+      if (isApproved) {
+        // Отпуск уже начался (или прошёл) — категорию не меняем: это переигрывание
+        // проставленных дней табеля задним числом.
+        if (!(dates[0] && dates[0] > moscowTodayIso())) {
+          return { conflict: 'started' as const };
+        }
+
+        // Страховка на закрытый табель (как в revokeApproval): при будущих датах
+        // почти не срабатывает, но ловит досрочно поданный период. Членство берём
+        // из снапшота состава подачи, а не из org_department_id.
+        const lockedPeriod = (await client.query<{ ok: number }>(
+          `SELECT 1 AS ok
+             FROM unnest($2::date[]) AS d(work_date)
+             JOIN timesheet_approvals a
+               ON a.start_date <= d.work_date AND a.end_date >= d.work_date
+             JOIN timesheet_approval_employees s
+               ON s.approval_id = a.id AND s.employee_id = $1
+            WHERE a.status IN ('submitted','approved')
+            LIMIT 1`,
+          [locked.employee_id, dates],
+        )).rows;
+        if (lockedPeriod.length > 0) return { conflict: 'timesheet_locked' as const };
+      }
 
       const updated = (await client.query(
         `UPDATE leave_requests SET request_type = $1, updated_at = now()
-          WHERE id = $2 AND status = 'pending' AND request_type = $3
+          WHERE id = $2 AND status = $3 AND request_type = $4
           RETURNING *`,
-        [requestType, id, expectedRequestType],
+        [requestType, id, locked.status, expectedRequestType],
       )).rows[0] ?? null;
 
-      if (!updated) return { conflict: 'not_pending' as const };
+      if (!updated) return { conflict: 'not_editable' as const };
+
+      // Пере-материализация табеля точечным UPDATE, а не повторным вызовом
+      // materializeLeaveRequestAdjustments: набор дат не меняется, а повторный upsert
+      // перетёр бы approval_status/approved_by/created_by уже согласованных строк.
+      // Все три типа вкладки — «нерабочие» статусы (вне WORKED_STATUSES_FOR_APPROVAL),
+      // поэтому пересчитывать approval_status не нужно: он и так auto_approved.
+      let adjustedDays = 0;
+      if (isApproved) {
+        const timesheetStatus = LEAVE_TO_TIMESHEET[requestType as keyof typeof LEAVE_TO_TIMESHEET];
+        const touched = await client.query(
+          `UPDATE attendance_adjustments
+              SET status = $1, updated_by = $2, updated_at = now()
+            WHERE source_type = 'leave_request' AND source_id = $3`,
+          [timesheetStatus, req.user.id, String(id)],
+        );
+        adjustedDays = touched.rowCount ?? 0;
+        // Строгая сверка: заявление и табель обязаны совпадать по числу дней. Иначе
+        // (недоматериализованное легаси, ручные удаления) откатываемся — молчаливое
+        // расхождение «в заявлении Отпуск, в табеле С» хуже отказа.
+        if (adjustedDays !== dates.length) return { conflict: 'days_mismatch' as const };
+      }
 
       await auditService.logFromRequestWithClient(
         client, req, req.user.id, 'UPDATE_LEAVE_REQUEST_TYPE',
@@ -1569,21 +1620,39 @@ const updateRequestType = async (req: AuthenticatedRequest, res: Response): Prom
           entityType: 'leave_request',
           entityId: String(id),
           details: {
-            employee_id: request.employee_id,
+            employee_id: locked.employee_id,
             old_type: locked.request_type,
             new_type: requestType,
+            request_status: locked.status,
+            adjusted_days: adjustedDays,
           },
         },
       );
 
-      return { conflict: null, row: updated };
+      return { conflict: null, row: updated, entityId: locked.id };
     });
 
     if (result.conflict === 'gone') {
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
       return;
     }
-    if (result.conflict === 'not_pending') {
+    if (result.conflict === 'not_vacation') {
+      res.status(400).json({ success: false, error: 'Категория правится только у отпусков' });
+      return;
+    }
+    if (result.conflict === 'started') {
+      res.status(400).json({ success: false, error: 'Отпуск уже начался — категорию изменить нельзя' });
+      return;
+    }
+    if (result.conflict === 'timesheet_locked') {
+      res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку' });
+      return;
+    }
+    if (result.conflict === 'days_mismatch') {
+      res.status(409).json({ success: false, error: 'Дни заявления в табеле не совпадают, обновите страницу' });
+      return;
+    }
+    if (result.conflict === 'not_editable') {
       res.status(409).json({ success: false, error: 'Заявление уже обработано, обновите страницу' });
       return;
     }
@@ -1597,11 +1666,12 @@ const updateRequestType = async (req: AuthenticatedRequest, res: Response): Prom
     // Broadcast, а не адресный список: адресаты вычисляются по типу, а тип только
     // что сменился — часть руководителей получила/потеряла видимость. entityId
     // нужен для инвалидации ['leave-request', id] на детальной странице автора;
-    // employeeId в общий эфир не шлём.
+    // employeeId в общий эфир не шлём. action='update_type' — сигнал клиентам
+    // обновить и кэши табеля (у approved сменилась буква дня).
     emitDomainChange({
       event: 'leave_request:changed',
       broadcast: true,
-      payload: { entityId: request.id, action: 'update_type' },
+      payload: { entityId: result.entityId, action: 'update_type' },
     });
 
     res.json({ success: true, data: result.row });
@@ -1964,15 +2034,18 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
       .catch((e) => console.error('[leave-requests] emit revoke realtime error:', e));
 
     // Уведомление сотруднику (обязательно): согласованный отпуск отменён.
+    // Текст строим из СВЕЖЕЙ строки (result.row), а не из предчтения: HR мог сменить
+    // категорию между чтением и локом — иначе сотрудник получит отмену старого типа.
+    const revoked = { ...request, ...(result.row as Partial<typeof request> ?? {}) };
     const employeeUserId = await getEmployeeUserId(request.employee_id);
     if (employeeUserId) {
-      const label = LEAVE_TYPE_LABELS[request.request_type] || request.request_type;
+      const label = LEAVE_TYPE_LABELS[revoked.request_type] || revoked.request_type;
       const dateLabel = formatLeaveDateLabel({
-        request_type: request.request_type,
-        start_date: request.start_date,
-        end_date: request.end_date,
+        request_type: revoked.request_type,
+        start_date: revoked.start_date,
+        end_date: revoked.end_date,
         correction_date: null,
-        selected_dates: request.selected_dates,
+        selected_dates: revoked.selected_dates,
       });
       const body = `Согласованный отпуск отменён: ${label}${dateLabel ? ` (${dateLabel})` : ''}${reason ? `. Причина: ${reason}` : ''}`;
       notificationService.createMany([{
@@ -1980,7 +2053,7 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
         type: 'leave_request',
         title: 'Отпуск отменён',
         body,
-        metadata: { requestType: request.request_type, employeeId: request.employee_id, action: 'revoke' },
+        metadata: { requestType: revoked.request_type, employeeId: request.employee_id, action: 'revoke' },
       }]).catch((e) => console.error('[leave-requests] revoke notification save error:', e));
       pushService.sendGenericNotification([employeeUserId], 'Отпуск отменён', body, { path: '/employee/requests' })
         .catch((e) => console.error('[leave-requests] revoke push error:', e));

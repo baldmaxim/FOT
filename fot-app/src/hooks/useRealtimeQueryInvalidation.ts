@@ -7,6 +7,7 @@ import {
   patentReceiptsKeys,
   structureKeys,
   timesheetKeys,
+  TIMESHEET_FAMILY_KEYS,
 } from '../api/queryKeys';
 
 // Глобальный listener domain-событий Socket.IO.
@@ -26,6 +27,11 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
     ];
     if (payload.entityId != null) {
       keys.push(['leave-request', payload.entityId]);
+    }
+    // Смена категории согласованного отпуска переписывает буквы дней в табеле —
+    // иначе у других открытых пользователей табель остался бы со старой буквой.
+    if (payload.action === 'update_type') {
+      keys.push(...TIMESHEET_FAMILY_KEYS);
     }
     return keys;
   },

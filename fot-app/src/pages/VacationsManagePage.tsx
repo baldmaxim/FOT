@@ -26,7 +26,12 @@ import { useToast } from '../contexts/ToastContext';
 import { useVacationLeaveRequests, getVacationLeaveRequestsQueryKey } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
-import { formatLeaveRequestDatesCompact, leaveRequestOverlapsPeriod } from '../utils/leaveRequestDates';
+import {
+  formatLeaveRequestDatesCompact,
+  isLeaveRequestFullyFuture,
+  leaveRequestOverlapsPeriod,
+} from '../utils/leaveRequestDates';
+import { TIMESHEET_FAMILY_KEYS } from '../api/queryKeys';
 import { displayFileName } from '../utils/fileNameDisplay';
 import { formatFioShort } from '../utils/formatFio';
 import './LeaveRequestsManagePage.css';
@@ -47,6 +52,10 @@ const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
 
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
 const NO_DEPARTMENT_KEY = 'Без отдела';
+
+// Текущая дата МСК (YYYY-MM-DD) — тем же способом, что и на бэкенде (moscowTodayIso).
+const moscowTodayIso = (): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
 
 // Единый ключ группы отдела — и для группировки списка, и для фильтра по отделам.
 const deptKeyOf = (r: ILeaveRequest) => r.department_name?.trim() || NO_DEPARTMENT_KEY;
@@ -97,6 +106,17 @@ export const VacationsManagePage: FC = () => {
     () => Array.from(new Set(ackFiltered.map(deptKeyOf))).sort(compareDeptKeys),
     [ackFiltered],
   );
+
+  // Дата МСК на один рендер: по ней решаем, начался ли уже согласованный отпуск.
+  const todayIso = useMemo(() => moscowTodayIso(), []);
+
+  // Категорию правим у pending всегда, у согласованного — только пока отпуск не начался
+  // (тот же гард на бэкенде: задним числом табель не переигрываем).
+  const canEditType = (r: ILeaveRequest): boolean => {
+    if (!canEditVacations) return false;
+    if (r.status === 'pending') return true;
+    return r.status === 'approved' && isLeaveRequestFullyFuture(r, todayIso);
+  };
 
   const query = search.trim().toLowerCase();
   const hasPeriod = periodFrom !== '' || periodTo !== '';
@@ -210,6 +230,9 @@ export const VacationsManagePage: FC = () => {
         queryClient.invalidateQueries({ queryKey: ['leave-requests-vacations'] }),
         queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
         queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+        // У согласованного заявления сменилась буква дня в табеле — сбрасываем все
+        // семейства табеля (в TIMESHEET_FAMILY_KEYS есть и legacy-ключ 'timesheet-page').
+        ...TIMESHEET_FAMILY_KEYS.map(key => queryClient.invalidateQueries({ queryKey: key })),
       ]);
     } catch (err) {
       console.error('update request type error:', err);
@@ -290,7 +313,7 @@ export const VacationsManagePage: FC = () => {
                 Отмена
               </button>
             </div>
-          ) : r.status === 'pending' && canEditVacations ? (
+          ) : canEditType(r) ? (
             <div className="lrm-card-type">
               <button
                 type="button"
