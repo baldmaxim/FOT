@@ -116,4 +116,11 @@ router.patch(
   leaveRequestsController.hrAcknowledge
 );
 
+// PATCH /api/leave-requests/:id/request-type — смена категории отпуска отделом кадров (admin/hr)
+router.patch(
+  '/:id/request-type',
+  requirePageAccess('/leave-vacations', 'edit'),
+  leaveRequestsController.updateRequestType
+);
+
 export default router;

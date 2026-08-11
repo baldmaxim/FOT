@@ -1142,6 +1142,9 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       // Анти-гонка: статус мог смениться после проверки выше (сотрудник отменил заявление
       // параллельно). Обновляем только pending — иначе откатываемся и НЕ материализуем
       // корректировки, иначе они остались бы сиротами при отменённой заявке.
+      // request_type в условии: право canManageLeaveRequest проверено по типу из
+      // предчтения — если HR параллельно сменил категорию, согласование по уже
+      // неактуальному праву не должно пройти.
       const updated = (await client.query(
         `UPDATE leave_requests SET
            status = 'approved',
@@ -1149,9 +1152,9 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
            reviewed_at = $2,
            review_comment = $3,
            updated_at = $2
-         WHERE id = $4 AND status = 'pending'
+         WHERE id = $4 AND status = 'pending' AND request_type = $5
          RETURNING *`,
-        [req.user.id, nowIso, comment || null, id],
+        [req.user.id, nowIso, comment || null, id, request.request_type],
       )).rows[0] ?? null;
 
       if (!updated) return { conflict: true as const };
@@ -1239,7 +1242,7 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     });
 
     if (result.conflict) {
-      res.status(409).json({ success: false, error: 'Статус заявления изменился, обновите страницу' });
+      res.status(409).json({ success: false, error: 'Заявление изменилось, обновите страницу' });
       return;
     }
 
@@ -1291,6 +1294,8 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const nowIso = new Date().toISOString();
     // Анти-гонка: статус мог смениться после проверки выше (самоотмена сотрудником).
+    // request_type в условии: право проверено по типу из предчтения — если HR
+    // параллельно сменил категорию, отклонение по неактуальному праву не проходит.
     const data = await queryOne(
       `UPDATE leave_requests SET
          status = 'rejected',
@@ -1298,13 +1303,13 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
          reviewed_at = $2,
          review_comment = $3,
          updated_at = $2
-       WHERE id = $4 AND status = 'pending'
+       WHERE id = $4 AND status = 'pending' AND request_type = $5
        RETURNING *`,
-      [req.user.id, nowIso, comment || null, id],
+      [req.user.id, nowIso, comment || null, id, request.request_type],
     );
 
     if (!data) {
-      res.status(409).json({ success: false, error: 'Статус заявления изменился, обновите страницу' });
+      res.status(409).json({ success: false, error: 'Заявление изменилось, обновите страницу' });
       return;
     }
 
@@ -1364,7 +1369,13 @@ const updateReason = async (req: AuthenticatedRequest, res: Response): Promise<v
       return;
     }
 
-    await syncLeaveRequestReason(Number(id), trimmedReason || null);
+    // expectedRequestType: право выше проверено по типу из предчтения — если HR
+    // параллельно сменил категорию, синк вернёт false и правка не применится.
+    const synced = await syncLeaveRequestReason(Number(id), trimmedReason || null, request.request_type);
+    if (!synced) {
+      res.status(409).json({ success: false, error: 'Заявление изменилось, обновите страницу' });
+      return;
+    }
 
     const data = await queryOne(`SELECT * FROM leave_requests WHERE id = $1`, [id]);
 
@@ -1480,6 +1491,123 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
   } catch (err) {
     console.error('leave-requests.updateCorrectionHours error:', err);
     res.status(500).json({ success: false, error: 'Ошибка правки часов корректировки' });
+  }
+};
+
+/**
+ * Смена категории заявления отделом кадров (вкладка «Отпуска»). Права целиком
+ * на роуте (edit к /leave-vacations, как у hrAcknowledge). Только между типами
+ * вкладки (vacation/unpaid/educational_leave) и только на pending: согласованное
+ * не переоткрывается — путь через revokeApproval (cancelled) и новое заявление.
+ *
+ * Осознанные side-effect'ы:
+ *  - даты НЕ конвертируем: форма хранения остаётся как подана (диапазон или
+ *    selected_dates) — материализация от типа не зависит;
+ *  - маршрутизация видимости вычисляется динамически по типу, круг видящих
+ *    заявление руководителей меняется — поэтому realtime уходит broadcast'ом;
+ *  - тексты уже отправленных push/уведомлений остаются со старой категорией.
+ *
+ * Анти-гонка stale-UI: клиент присылает expected_request_type — категорию,
+ * которую редактор видел при открытии. Сверять надо именно её под FOR UPDATE:
+ * серверное предчтение уже видело бы результат первого редактора и пропустило
+ * бы перезапись, когда второй HR сохраняет позже завершения первого.
+ */
+const updateRequestType = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { request_type: requestType, expected_request_type: expectedRequestType } =
+      req.body as { request_type?: unknown; expected_request_type?: unknown };
+
+    if (typeof requestType !== 'string' || !VACATION_REQUEST_TYPES.includes(requestType)) {
+      res.status(400).json({ success: false, error: 'Недопустимая категория заявления' });
+      return;
+    }
+    if (typeof expectedRequestType !== 'string' || !VACATION_REQUEST_TYPES.includes(expectedRequestType)) {
+      res.status(400).json({ success: false, error: 'Не передана исходная категория заявления' });
+      return;
+    }
+    if (requestType === expectedRequestType) {
+      res.status(400).json({ success: false, error: 'Категория совпадает с текущей' });
+      return;
+    }
+
+    const request = await queryOne<{ id: number; employee_id: number; request_type: string; status: string }>(
+      `SELECT id, employee_id, request_type, status FROM leave_requests WHERE id = $1`,
+      [id],
+    );
+    if (!request) {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+    if (!VACATION_REQUEST_TYPES.includes(request.request_type)) {
+      res.status(400).json({ success: false, error: 'Категория правится только у отпусков' });
+      return;
+    }
+
+    const result = await withTransaction(async (client) => {
+      const locked = (await client.query(
+        `SELECT status, request_type FROM leave_requests WHERE id = $1 FOR UPDATE`,
+        [id],
+      )).rows[0] ?? null;
+
+      if (!locked) return { conflict: 'gone' as const };
+      if (locked.status !== 'pending') return { conflict: 'not_pending' as const };
+      if (locked.request_type !== expectedRequestType) return { conflict: 'type_changed' as const };
+
+      const updated = (await client.query(
+        `UPDATE leave_requests SET request_type = $1, updated_at = now()
+          WHERE id = $2 AND status = 'pending' AND request_type = $3
+          RETURNING *`,
+        [requestType, id, expectedRequestType],
+      )).rows[0] ?? null;
+
+      if (!updated) return { conflict: 'not_pending' as const };
+
+      await auditService.logFromRequestWithClient(
+        client, req, req.user.id, 'UPDATE_LEAVE_REQUEST_TYPE',
+        {
+          entityType: 'leave_request',
+          entityId: String(id),
+          details: {
+            employee_id: request.employee_id,
+            old_type: locked.request_type,
+            new_type: requestType,
+          },
+        },
+      );
+
+      return { conflict: null, row: updated };
+    });
+
+    if (result.conflict === 'gone') {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+    if (result.conflict === 'not_pending') {
+      res.status(409).json({ success: false, error: 'Заявление уже обработано, обновите страницу' });
+      return;
+    }
+    if (result.conflict === 'type_changed') {
+      res.status(409).json({ success: false, error: 'Категория уже изменена, обновите страницу' });
+      return;
+    }
+
+    broadcastPendingChanged();
+
+    // Broadcast, а не адресный список: адресаты вычисляются по типу, а тип только
+    // что сменился — часть руководителей получила/потеряла видимость. entityId
+    // нужен для инвалидации ['leave-request', id] на детальной странице автора;
+    // employeeId в общий эфир не шлём.
+    emitDomainChange({
+      event: 'leave_request:changed',
+      broadcast: true,
+      payload: { entityId: request.id, action: 'update_type' },
+    });
+
+    res.json({ success: true, data: result.row });
+  } catch (err) {
+    console.error('leave-requests.updateRequestType error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка смены категории заявления' });
   }
 };
 
@@ -1879,6 +2007,7 @@ export const leaveRequestsController = {
   reject,
   updateReason,
   updateCorrectionHours,
+  updateRequestType,
   cancel,
   hrAcknowledge,
   revokeApproval,

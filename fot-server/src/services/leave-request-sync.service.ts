@@ -72,13 +72,33 @@ export async function syncLeaveRequestOnDayRemoval(
  * день НЕ заперт согласованием периода отдела (submitted/approved timesheet_approvals) —
  * запертый день остаётся замороженным снимком текста на момент закрытия периода,
  * симметрично тому, как уже заморожены его часы/статус.
+ *
+ * expectedRequestType (опционально) — анти-гонка «правка текста ↔ смена категории
+ * HR-ом»: право вызывающего проверено по типу из предчтения, поэтому UPDATE
+ * дополнительно сверяет request_type; при несовпадении транзакция ничего не
+ * трогает (включая attendance_adjustments) и возвращает false. Без параметра
+ * поведение прежнее (вызов из табеля, notes-only ветка): синхронизация идёт
+ * безусловно, возврат всегда true.
  */
-export async function syncLeaveRequestReason(requestId: number, reason: string | null): Promise<void> {
-  await withTransaction(async (client) => {
-    await client.query(
-      `UPDATE leave_requests SET reason = $2, updated_at = now() WHERE id = $1`,
-      [requestId, reason],
-    );
+export async function syncLeaveRequestReason(
+  requestId: number,
+  reason: string | null,
+  expectedRequestType?: string,
+): Promise<boolean> {
+  return withTransaction(async (client) => {
+    if (expectedRequestType !== undefined) {
+      const guarded = await client.query(
+        `UPDATE leave_requests SET reason = $2, updated_at = now()
+          WHERE id = $1 AND request_type = $3`,
+        [requestId, reason, expectedRequestType],
+      );
+      if (guarded.rowCount === 0) return false;
+    } else {
+      await client.query(
+        `UPDATE leave_requests SET reason = $2, updated_at = now() WHERE id = $1`,
+        [requestId, reason],
+      );
+    }
 
     const rows = (await client.query<{ id: number; employee_id: number; work_date: string }>(
       `SELECT id, employee_id, work_date::text AS work_date
@@ -98,5 +118,7 @@ export async function syncLeaveRequestReason(requestId: number, reason: string |
         [row.id, reason],
       );
     }
+
+    return true;
   });
 }

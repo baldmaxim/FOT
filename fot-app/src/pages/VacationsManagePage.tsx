@@ -9,15 +9,20 @@ import {
   ChevronDown,
   ChevronUp,
   UserCheck,
+  Pencil,
 } from 'lucide-react';
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
+  VACATION_REQUEST_TYPES,
   getRequestDecision,
   type ILeaveRequest,
   type ILeaveRequestAttachment,
   type LeaveRequestStatus,
+  type LeaveRequestType,
 } from '../services/leaveRequestService';
+import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import { useVacationLeaveRequests, getVacationLeaveRequestsQueryKey } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
@@ -60,12 +65,21 @@ interface IPreviewState {
 
 export const VacationsManagePage: FC = () => {
   const queryClient = useQueryClient();
+  const { canEditPage } = useAuth();
+  const { showToast } = useToast();
   const { data, isLoading } = useVacationLeaveRequests();
   const requests = data ?? EMPTY_REQUESTS;
+  const canEditVacations = canEditPage('/leave-vacations');
 
   const [preview, setPreview] = useState<IPreviewState | null>(null);
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
   const [acking, setAcking] = useState<Set<number>>(new Set());
+  const [editingTypeId, setEditingTypeId] = useState<number | null>(null);
+  // Категория на момент ОТКРЫТИЯ редактора — уходит на сервер как expected_request_type:
+  // если другой HR успел её сменить, сервер ответит 409 вместо молчаливой перезаписи.
+  const [editingTypeOriginal, setEditingTypeOriginal] = useState<LeaveRequestType>('vacation');
+  const [typeDraft, setTypeDraft] = useState<LeaveRequestType>('vacation');
+  const [savingType, setSavingType] = useState(false);
   // Под-вкладки: «Не ознакомлен» (hr_acknowledged_at пусто) / «Ознакомлен».
   const [ackFilter, setAckFilter] = useState<'unacked' | 'acked'>('unacked');
   const [search, setSearch] = useState('');
@@ -179,6 +193,34 @@ export const VacationsManagePage: FC = () => {
     }
   };
 
+  const handleUpdateType = async (id: number) => {
+    if (typeDraft === editingTypeOriginal) {
+      setEditingTypeId(null);
+      return;
+    }
+    setSavingType(true);
+    try {
+      const updated = await leaveRequestService.updateRequestType(id, typeDraft, editingTypeOriginal);
+      queryClient.setQueriesData<ILeaveRequest[] | undefined>(
+        { queryKey: getVacationLeaveRequestsQueryKey() },
+        (prev) => prev?.map(r => (r.id === id ? { ...r, request_type: updated?.request_type ?? typeDraft } : r)),
+      );
+      setEditingTypeId(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-vacations'] }),
+        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
+        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+      ]);
+    } catch (err) {
+      console.error('update request type error:', err);
+      // В т.ч. 409 «Категория уже изменена» — ресинк подтянет актуальную категорию.
+      showToast('error', err instanceof Error ? err.message : 'Не удалось изменить категорию');
+      await queryClient.invalidateQueries({ queryKey: ['leave-requests-vacations'] });
+    } finally {
+      setSavingType(false);
+    }
+  };
+
   const openAttachment = (att: ILeaveRequestAttachment) => {
     setPreview({ documentId: att.id, fileName: att.file_name, mimeType: att.mime_type });
   };
@@ -217,7 +259,58 @@ export const VacationsManagePage: FC = () => {
               )}
             </div>
           </div>
-          <div className="lrm-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>
+          {editingTypeId === r.id ? (
+            <div className="lrm-type-edit" onClick={stop}>
+              <select
+                className="lrm-type-select"
+                value={typeDraft}
+                onChange={(e) => setTypeDraft(e.target.value as LeaveRequestType)}
+                disabled={savingType}
+                autoFocus
+                aria-label="Категория заявления"
+              >
+                {VACATION_REQUEST_TYPES.map(t => (
+                  <option key={t} value={t}>{REQUEST_TYPE_LABELS[t]}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="lrm-action-btn approve"
+                disabled={savingType}
+                onClick={(e) => { e.stopPropagation(); void handleUpdateType(r.id); }}
+              >
+                {savingType ? 'Сохраняем…' : 'Сохранить'}
+              </button>
+              <button
+                type="button"
+                className="lrm-action-btn ghost"
+                disabled={savingType}
+                onClick={(e) => { e.stopPropagation(); setEditingTypeId(null); }}
+              >
+                Отмена
+              </button>
+            </div>
+          ) : r.status === 'pending' && canEditVacations ? (
+            <div className="lrm-card-type">
+              <button
+                type="button"
+                className="lrm-type-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingTypeId(r.id);
+                  // Фиксируем категорию, которую HR видит перед правкой: сервер
+                  // сверит её под локом (анти-гонка stale-UI двух редакторов).
+                  setEditingTypeOriginal(r.request_type);
+                  setTypeDraft(r.request_type);
+                }}
+                title="Изменить категорию"
+              >
+                {REQUEST_TYPE_LABELS[r.request_type]} <Pencil size={12} />
+              </button>
+            </div>
+          ) : (
+            <div className="lrm-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>
+          )}
           <div className="lrm-card-dates">
             <strong>{formatLeaveRequestDatesCompact(r)}</strong>
           </div>

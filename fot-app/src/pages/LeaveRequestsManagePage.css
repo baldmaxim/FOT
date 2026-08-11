@@ -283,6 +283,49 @@
   font-weight: 700;
 }
 
+/* Категория отпуска: кликабельна у pending-заявок (правка отделом кадров, вкладка «Отпуска»). */
+.lrm-type-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.lrm-type-btn:hover {
+  color: var(--primary);
+}
+
+.lrm-type-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.lrm-type-select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1.5px solid var(--border);
+  background: var(--bg-secondary, var(--bg-primary));
+  color: var(--text-primary);
+  /* 16px — иначе iOS/Android Chrome зумят страницу при фокусе. */
+  font-size: 16px;
+  font-family: inherit;
+  outline: none;
+}
+
+.lrm-type-select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
 .lrm-card-reason {
   font-size: 13px;
   color: var(--text-secondary);

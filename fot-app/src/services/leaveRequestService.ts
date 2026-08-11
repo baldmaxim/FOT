@@ -231,6 +231,21 @@ export const leaveRequestService = {
     return res.data;
   },
 
+  // Смена категории заявления отделом кадров (вкладка «Отпуска», admin/hr).
+  // expectedRequestType — категория на момент открытия редактора: сервер сверяет её
+  // под локом и отвечает 409, если её уже сменил другой HR (защита от stale-UI).
+  updateRequestType: async (
+    id: number,
+    requestType: LeaveRequestType,
+    expectedRequestType: LeaveRequestType,
+  ) => {
+    const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(
+      `/leave-requests/${id}/request-type`,
+      { request_type: requestType, expected_request_type: expectedRequestType },
+    );
+    return res.data;
+  },
+
   // Правка часов корректировки табеля согласующим до одобрения (admin/hr/руководитель отдела).
   updateCorrectionHours: async (id: number, hours: number) => {
     const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(
