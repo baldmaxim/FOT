@@ -57,6 +57,8 @@ export function formatLeaveRequestDatesCompact(r: ILeaveRequest): string {
     const sorted = [...new Set(dates)].sort();
     return groupConsecutive(sorted).map(fmtRange).join(', ');
   }
+  // Однодневное заявление — одна дата, а не «12.08.2026 — 12.08.2026».
+  if (r.start_date === r.end_date) return fmtFull(r.start_date);
   return `${fmtFull(r.start_date)} — ${fmtFull(r.end_date)}`;
 }
 

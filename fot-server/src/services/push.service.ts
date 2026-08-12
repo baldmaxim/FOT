@@ -47,6 +47,11 @@ const LEAVE_TYPE_LABELS: Record<string, string> = {
   dayoff: 'Отгул',
   certificate: 'Справка',
   unpaid: 'За свой счёт',
+  time_correction: 'Корректировка',
+  work: 'Работа в выходной/праздник',
+  educational_leave: 'Учебный отпуск',
+  sick_worked: 'Работа на больничном',
+  dismissal: 'Заявление на увольнение',
 };
 
 async function deleteStaleSubscriptionByEndpoint(endpoint: string): Promise<void> {
@@ -146,20 +151,31 @@ export const pushService = {
     );
   },
 
+  /**
+   * Уведомление о новом заявлении.
+   * `recipientUserIds` — явный список адресатов (маршрут согласования). Проверяем
+   * именно `!== undefined`: пустой массив означает «ответственных нет» и уведомление
+   * не уходит никому, откат к supervisor_id в этом случае был бы неверным —
+   * supervisor может не иметь доступа к заявлению.
+   */
   async sendLeaveRequestNotification(
     employeeId: number,
     requestType: string,
     submitterUserId: string,
     dateLabel?: string,
+    recipientUserIds?: string[],
   ): Promise<string[]> {
-    const profile = await queryOne<{ supervisor_id: string | null }>(
-      'SELECT supervisor_id FROM user_profiles WHERE employee_id = $1 LIMIT 1',
-      [employeeId],
-    );
-
     const recipientIds = new Set<string>();
-    if (profile?.supervisor_id) {
-      recipientIds.add(profile.supervisor_id);
+    if (recipientUserIds !== undefined) {
+      for (const uid of recipientUserIds) recipientIds.add(uid);
+    } else {
+      const profile = await queryOne<{ supervisor_id: string | null }>(
+        'SELECT supervisor_id FROM user_profiles WHERE employee_id = $1 LIMIT 1',
+        [employeeId],
+      );
+      if (profile?.supervisor_id) {
+        recipientIds.add(profile.supervisor_id);
+      }
     }
     recipientIds.delete(submitterUserId);
 

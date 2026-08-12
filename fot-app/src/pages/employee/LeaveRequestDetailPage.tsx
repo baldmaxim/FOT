@@ -1,7 +1,7 @@
 import { type FC, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Download, Clock, CheckCircle, XCircle, Ban, FileText, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Download, Clock, CheckCircle, XCircle, Ban, FileText, Image as ImageIcon, Plus, Printer, Trash2 } from 'lucide-react';
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
@@ -18,7 +18,14 @@ import { formatFioShort } from '../../utils/formatFio';
 import { hasDiscreteDates } from '../../utils/leaveRequestDates';
 import { displayFileName } from '../../utils/fileNameDisplay';
 import { FilePreviewModal } from '../../components/documents/FilePreviewModal';
+import { DOCUMENT_TEMPLATES } from './documentTemplates';
 import './LeaveRequestsPage.css';
+
+// Бланки, нужные при увольнении. Источник — тот же справочник, что и в «Мои документы».
+const DISMISSAL_FORM_URLS = ['/forms/dismissal.docx', '/forms/bypass-sheet-itr.xlsx'];
+const DISMISSAL_FORMS = DISMISSAL_FORM_URLS
+  .map(url => DOCUMENT_TEMPLATES.find(t => t.url === url))
+  .filter((t): t is (typeof DOCUMENT_TEMPLATES)[number] => !!t);
 
 const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
   pending: Clock,
@@ -191,6 +198,28 @@ export const LeaveRequestDetailPage: FC = () => {
           </div>
         )}
 
+      {request.request_type === 'dismissal'
+        && (request.status === 'pending' || request.status === 'approved') && (
+          <section className="lr-dismissal-note">
+            <div className="lr-dismissal-note-title">
+              <Printer size={16} /> Распечатайте и подпишите бланки
+            </div>
+            <p className="lr-dismissal-note-text">
+              Для оформления увольнения нужны два бланка из раздела «Мои документы»:
+            </p>
+            <div className="lr-dismissal-note-links">
+              {DISMISSAL_FORMS.map(tpl => (
+                <a key={tpl.url} className="lr-dismissal-form" href={tpl.url} download={tpl.fileName}>
+                  <Download size={14} /> {tpl.title}
+                </a>
+              ))}
+            </div>
+            <button className="lr-dismissal-note-btn" onClick={() => navigate('/employee/documents')}>
+              Перейти в «Мои документы»
+            </button>
+          </section>
+        )}
+
       <div className="lr-detail-grid">
         <section className="lr-detail-card">
           <h3>Период</h3>
@@ -207,6 +236,13 @@ export const LeaveRequestDetailPage: FC = () => {
                   <span key={d} className="lr-detail-day-chip">{formatDate(d)}</span>
                 ))}
               </div>
+            </div>
+          ) : request.start_date === request.end_date ? (
+            <div className="lr-detail-row">
+              <span className="lr-detail-label">
+                {request.request_type === 'dismissal' ? 'Последний рабочий день' : 'Дата'}
+              </span>
+              <span className="lr-detail-value">{formatDate(request.start_date)}</span>
             </div>
           ) : (
             <>

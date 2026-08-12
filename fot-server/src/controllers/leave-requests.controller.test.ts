@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -77,7 +77,12 @@ vi.mock('../services/push.service.js', () => ({ pushService: { sendToUser: vi.fn
 vi.mock('../services/notification.service.js', () => ({ notificationService: { create: vi.fn(), createMany: vi.fn(async () => undefined) } }));
 vi.mock('../socket/io-instance.js', () => ({ getIo: vi.fn(() => null) }));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
-vi.mock('../services/recipients.service.js', () => ({ getLeaveRequestRecipients: vi.fn(async () => []), getEmployeeUserId: vi.fn(async () => 'emp-user-uuid') }));
+const { routedApproversMock } = vi.hoisted(() => ({ routedApproversMock: vi.fn(async (): Promise<string[]> => []) }));
+vi.mock('../services/recipients.service.js', () => ({
+  getLeaveRequestRecipients: vi.fn(async () => []),
+  getEmployeeUserId: vi.fn(async () => 'emp-user-uuid'),
+  resolveRoutedLeaveApprovers: routedApproversMock,
+}));
 // Детерминированное «сегодня» (Europe/Moscow) для проверок будущности отпуска.
 vi.mock('../utils/date.utils.js', () => ({ moscowTodayIso: vi.fn(() => '2026-06-29') }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: vi.fn(async () => []) }));
@@ -93,10 +98,12 @@ vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SO
 import {
   leaveRequestsController,
   validateLeaveRequestPeriod,
+  formatLeaveDateLabel,
   MAX_MATERIALIZED_LEAVE_DAYS,
 } from './leave-requests.controller.js';
 import { notificationService } from '../services/notification.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { pushService } from '../services/push.service.js';
 
 function makeReq(overrides: Partial<AuthenticatedRequest> = {}): AuthenticatedRequest {
   return {
@@ -873,6 +880,196 @@ describe('leaveRequestsController.create', () => {
   });
 });
 
+describe('leaveRequestsController.create (заявление на увольнение)', () => {
+  const dismissalRow = {
+    id: 950, employee_id: 247, request_type: 'dismissal', status: 'pending',
+    start_date: '2026-07-15', end_date: '2026-07-15', selected_dates: null, reason: null,
+  };
+
+  const makeCreateReq = (body: Record<string, unknown>) => makeReq({
+    body,
+    user: { ...makeReq().user, id: 'author-user-uuid', employee_id: 247 },
+  } as Partial<AuthenticatedRequest>);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgQueryOne.mockReset();
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    txClient.query.mockResolvedValue({ rows: [dismissalRow], rowCount: 1 });
+    // org_department_id сотрудника для маршрутизации получателей
+    pgQueryOne.mockResolvedValue({ org_department_id: 'dep-1' });
+    routedApproversMock.mockResolvedValue(['manager-user-uuid']);
+    vi.mocked(pushService.sendLeaveRequestNotification).mockResolvedValue(['manager-user-uuid']);
+  });
+
+  // clearAllMocks не чистит очередь mockResolvedValueOnce — недобранные значения
+  // утекли бы в следующий describe и подменили бы там строку заявления.
+  afterEach(() => {
+    pgQueryOne.mockReset();
+    pgQuery.mockReset();
+    txClient.query.mockReset();
+  });
+
+  it('создаётся на одну дату', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCreateReq({
+      request_type: 'dismissal', start_date: '2026-07-15', end_date: '2026-07-15',
+    }), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: { request_type: string } }).data.request_type).toBe('dismissal');
+    // Табель не трогаем ни при создании, ни при согласовании.
+    expect(upsertSpy).not.toHaveBeenCalled();
+  });
+
+  it('отклоняет период из нескольких дней', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCreateReq({
+      request_type: 'dismissal', start_date: '2026-07-15', end_date: '2026-07-20',
+    }), res);
+
+    expect(res._status).toBe(400);
+    expect(txClient.query).not.toHaveBeenCalled();
+  });
+
+  it('отклоняет selected_dates — непустой массив и значение неверного типа', async () => {
+    for (const selected of [['2026-07-15'], '2026-07-15', 42, { from: '2026-07-15' }]) {
+      const res = makeRes();
+      await leaveRequestsController.create(makeCreateReq({
+        request_type: 'dismissal', start_date: '2026-07-15', end_date: '2026-07-15',
+        selected_dates: selected,
+      }), res);
+      expect(res._status).toBe(400);
+    }
+    expect(txClient.query).not.toHaveBeenCalled();
+  });
+
+  it('пустой selected_dates и null допустимы — это «дат нет»', async () => {
+    for (const selected of [[], null, undefined]) {
+      const res = makeRes();
+      await leaveRequestsController.create(makeCreateReq({
+        request_type: 'dismissal', start_date: '2026-07-15', end_date: '2026-07-15',
+        selected_dates: selected,
+      }), res);
+      expect(res._status).toBe(200);
+    }
+  });
+
+  it('уведомление уходит ответственному по маршруту, автору — нет', async () => {
+    // Ответственный по маршруту + сам автор (не должен получить уведомление о себе).
+    routedApproversMock.mockResolvedValue(['manager-user-uuid', 'author-user-uuid']);
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCreateReq({
+      request_type: 'dismissal', start_date: '2026-07-15', end_date: '2026-07-15',
+    }), res);
+
+    await vi.waitFor(() => expect(pushService.sendLeaveRequestNotification).toHaveBeenCalled());
+    const pushArgs = vi.mocked(pushService.sendLeaveRequestNotification).mock.calls[0];
+    expect(pushArgs[4]).toEqual(['manager-user-uuid']);
+    expect(routedApproversMock).toHaveBeenCalledWith(247, 'dep-1');
+
+    await vi.waitFor(() => expect(notificationService.createMany).toHaveBeenCalled());
+    const created = vi.mocked(notificationService.createMany).mock.calls[0][0] as Array<{ userId: string }>;
+    expect(created.map(n => n.userId)).toEqual(['manager-user-uuid']);
+
+    // Realtime получает и автора — ему нужно обновить свой список заявлений.
+    await vi.waitFor(() => expect(emitDomainChange).toHaveBeenCalled());
+    const emit = vi.mocked(emitDomainChange).mock.calls[0][0] as { targetUserIds: string[] };
+    expect(emit.targetUserIds).toContain('author-user-uuid');
+    expect(emit.targetUserIds).toContain('manager-user-uuid');
+  });
+
+  it('без ответственного уведомления не рассылаются (никакого supervisor-fallback)', async () => {
+    routedApproversMock.mockResolvedValue([]);
+    vi.mocked(pushService.sendLeaveRequestNotification).mockResolvedValue([]);
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCreateReq({
+      request_type: 'dismissal', start_date: '2026-07-15', end_date: '2026-07-15',
+    }), res);
+
+    await vi.waitFor(() => expect(pushService.sendLeaveRequestNotification).toHaveBeenCalled());
+    // Пустой массив, а не undefined: push не должен откатываться к supervisor_id.
+    expect(vi.mocked(pushService.sendLeaveRequestNotification).mock.calls[0][4]).toEqual([]);
+    await vi.waitFor(() => expect(notificationService.createMany).toHaveBeenCalledWith([]));
+  });
+});
+
+describe('leaveRequestsController.approve (заявление на увольнение)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgQueryOne.mockReset();
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    txClient.query.mockResolvedValue({ rows: [{ id: 708, status: 'approved' }], rowCount: 1 });
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    pgQueryOne.mockReset();
+    pgQuery.mockReset();
+    txClient.query.mockReset();
+  });
+
+  const mockDismissalRow = () => {
+    pgQueryOne
+      // строка заявления
+      .mockResolvedValueOnce({
+        id: 708, employee_id: 247, status: 'pending', request_type: 'dismissal',
+        start_date: '2026-07-15', end_date: '2026-07-15', selected_dates: null,
+        correction_date: null, correction_status: null, correction_hours: null,
+        correction_object_id: null, correction_object_name: null, reason: null,
+      })
+      // canManageLeaveRequest → org_department_id сотрудника
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' })
+      // автор (user_profiles)
+      .mockResolvedValueOnce({ id: 'author-uuid' });
+  };
+
+  it('ответственный согласовывает, табель и карточка сотрудника не меняются', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]])); // viewer employee_id = 7
+    mockDismissalRow();
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).not.toHaveBeenCalled();
+    const sql = txClient.query.mock.calls.map(c => String(c[0]));
+    expect(sql.some(s => s.includes('employees'))).toBe(false);
+    expect(sql.some(s => s.includes('attendance_adjustments'))).toBe(false);
+  });
+
+  it('посторонний руководитель получает 403', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [999]]]));
+    mockDismissalRow();
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(403);
+    expect(txClient.query).not.toHaveBeenCalled();
+  });
+});
+
+describe('formatLeaveDateLabel', () => {
+  it('однодневное заявление показывается одной датой', () => {
+    expect(formatLeaveDateLabel({
+      request_type: 'dismissal', start_date: '2026-07-15', end_date: '2026-07-15',
+      correction_date: null, selected_dates: null,
+    })).toBe('15.07.2026');
+  });
+
+  it('период остаётся диапазоном', () => {
+    expect(formatLeaveDateLabel({
+      request_type: 'vacation', start_date: '2026-07-01', end_date: '2026-07-15',
+      correction_date: null, selected_dates: null,
+    })).toBe('01.07.2026 — 15.07.2026');
+  });
+});
+
 describe('leaveRequestsController.getAll', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -977,6 +1174,36 @@ describe('leaveRequestsController.getDepartment (адресная маршрут
   it('не-ответственный не видит pending work-заявку', async () => {
     responsiblesByEmpMock.mockResolvedValue(new Map([[102, [999]]]));
     mockWorkDeptQueries();
+    const res = makeRes();
+
+    await leaveRequestsController.getDepartment(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: Array<{ id: number }> }).data).toEqual([]);
+  });
+
+  const mockDismissalDeptQueries = () => {
+    pgQuery
+      .mockResolvedValueOnce([{ id: 102, full_name: 'Увольняется У.', org_department_id: 'dep-1' }])
+      .mockResolvedValueOnce([{ id: 5, employee_id: 102, request_type: 'dismissal', status: 'pending', reviewer_id: null }])
+      .mockResolvedValueOnce([{ id: 102, full_name: 'Увольняется У.', org_department_id: 'dep-1', department_name: 'ЦТ', position_name: null }])
+      .mockResolvedValue([]);
+  };
+
+  it('ответственный видит заявление на увольнение', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[102, [7]]]));
+    mockDismissalDeptQueries();
+    const res = makeRes();
+
+    await leaveRequestsController.getDepartment(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { data: Array<{ id: number }> }).data.map(r => r.id)).toEqual([5]);
+  });
+
+  it('посторонний руководитель не видит заявление на увольнение', async () => {
+    responsiblesByEmpMock.mockResolvedValue(new Map([[102, [999]]]));
+    mockDismissalDeptQueries();
     const res = makeRes();
 
     await leaveRequestsController.getDepartment(makeReq(), res);

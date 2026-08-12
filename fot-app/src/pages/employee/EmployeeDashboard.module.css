@@ -1466,6 +1466,22 @@
   opacity: 1;
 }
 
+/* Подсказка про бланки увольнения в форме подачи заявления */
+.reqDismissalHint {
+  padding: 10px 12px;
+  background: var(--accent-muted);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: break-word;
+}
+
+.reqDismissalHint a {
+  color: var(--accent);
+  font-weight: 500;
+}
+
 /* Calendar + Events combined block */
 .calendarEventsBlock {
   background: var(--bg-secondary);

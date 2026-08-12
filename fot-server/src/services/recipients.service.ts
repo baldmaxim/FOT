@@ -1,4 +1,5 @@
 import { query, queryOne } from '../config/postgres.js';
+import { resolveResponsibleEmployeeIdsByEmployee } from './approval-routing.service.js';
 
 // Resolver-ы получателей realtime-событий по доменам.
 // Цель — централизовать «кто слушатель» для emitDomainChange, не дублируя в каждом контроллере.
@@ -50,6 +51,28 @@ export async function getEmployeeOwnerAndSupervisor(employeeId: number): Promise
   if (row?.id) recipients.add(row.id);
   if (row?.supervisor_id) recipients.add(row.supervisor_id);
   return Array.from(recipients);
+}
+
+/**
+ * Ответственные за согласование заявления сотрудника (user_profiles.id).
+ * Маршрут тот же, что и у прав доступа: назначенный руководитель
+ * (employee_direct_reports) → иначе начальник(и) отдела.
+ *
+ * Автора и reviewer НЕ включает — это адресаты уведомления «Новое заявление».
+ * Fallback на user_profiles.supervisor_id намеренно отсутствует: supervisor
+ * может не входить в маршрут и получит 403 при открытии заявления. Пусто =
+ * ответственного нет, решение принимает вызывающий код.
+ */
+export async function resolveRoutedLeaveApprovers(
+  employeeId: number,
+  orgDepartmentId: string | null,
+): Promise<string[]> {
+  const responsible = await resolveResponsibleEmployeeIdsByEmployee([
+    { employee_id: employeeId, org_department_id: orgDepartmentId },
+  ]);
+  const approverEmployeeIds = responsible.get(Number(employeeId)) ?? [];
+  if (approverEmployeeIds.length === 0) return [];
+  return getUserIdsByEmployeeIds(approverEmployeeIds);
 }
 
 /**

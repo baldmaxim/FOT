@@ -1,11 +1,12 @@
 import type { Response } from 'express';
+import * as Sentry from '@sentry/node';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { pushService } from '../services/push.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
-import { getLeaveRequestRecipients, getEmployeeUserId } from '../services/recipients.service.js';
+import { getLeaveRequestRecipients, getEmployeeUserId, resolveRoutedLeaveApprovers } from '../services/recipients.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import {
   canAccessEmployeeInScope,
@@ -25,10 +26,15 @@ import { listSelectableObjectsForEmployee } from '../services/employee-skud-obje
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
 import type { TimeStatus } from '../types/index.js';
 
-const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave', 'sick_worked'] as const;
+const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave', 'sick_worked', 'dismissal'] as const;
 // Типы заявлений с адресной маршрутизацией: назначенный ответственный
 // (employee_direct_reports) → иначе начальник отдела. Админ (scope=all) видит всё.
-const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid', 'work', 'sick_worked']);
+const ROUTED_LEAVE_TYPES = new Set<string>(['vacation', 'sick_leave', 'unpaid', 'work', 'sick_worked', 'dismissal']);
+// Типы, подаваемые ровно одной датой (start_date = end_date), без selected_dates.
+const SINGLE_DATE_LEAVE_TYPES = new Set<string>(['dismissal']);
+// Типы, у которых адресаты уведомлений берутся из маршрута согласования, а не из
+// user_profiles.supervisor_id. Для остальных типов поведение push не меняем.
+const ROUTED_NOTIFY_TYPES = new Set<string>(['dismissal']);
 // Типы «отпусков» для вкладки «Отпуска» (отдел кадров): ежегодный, за свой счёт,
 // учебный. Больничные и прочее сюда не входят.
 const VACATION_REQUEST_TYPES: string[] = ['vacation', 'unpaid', 'educational_leave'];
@@ -38,7 +44,7 @@ const LEAVE_TYPE_LABELS: Record<string, string> = {
   vacation: 'Отпуск', sick_leave: 'Больничный', remote: 'Удалёнка',
   certificate: 'Справка', time_correction: 'Корректировка', unpaid: 'За свой счёт',
   work: 'Работа в выходной/праздник', educational_leave: 'Учебный отпуск',
-  sick_worked: 'Работа на больничном',
+  sick_worked: 'Работа на больничном', dismissal: 'Заявление на увольнение',
 };
 const LEAVE_TO_TIMESHEET: Record<'vacation' | 'sick_leave' | 'remote' | 'unpaid' | 'work' | 'educational_leave' | 'sick_worked', TimeStatus> = {
   vacation: 'vacation',
@@ -55,7 +61,7 @@ function isTimeStatus(value: unknown): value is TimeStatus {
 }
 
 /** Компактная подпись дат для текста уведомлений: `01.05, 02.05, 11.05.2026` или `01.05.2026 — 16.05.2026`. */
-function formatLeaveDateLabel(input: {
+export function formatLeaveDateLabel(input: {
   request_type: string;
   start_date: string;
   end_date: string;
@@ -80,7 +86,51 @@ function formatLeaveDateLabel(input: {
     if (dates.length <= 4) return `${dates.slice(0, -1).map(fmtShort).join(', ')}, ${fmt(dates[dates.length - 1])}`;
     return `${dates.slice(0, 3).map(fmtShort).join(', ')} и ещё ${dates.length - 3} ${year}`;
   }
+  // Однодневное заявление — одна дата, а не «12.08.2026 — 12.08.2026».
+  if (input.start_date === input.end_date) return fmt(input.start_date);
   return `${fmt(input.start_date)} — ${fmt(input.end_date)}`;
+}
+
+/**
+ * Получатели событий о новом заявлении.
+ * `realtime` — кому инвалидировать списки (автор + согласующие), `notify` — кому
+ * слать push/in-app. Для типов из ROUTED_NOTIFY_TYPES адресаты берутся из маршрута
+ * согласования: иначе начальник отдела заявление видит, но уведомления не получает
+ * (push исторически ходит по user_profiles.supervisor_id). `notify: undefined` —
+ * прежнее поведение push (резолв supervisor_id внутри сервиса).
+ */
+async function resolveCreateRecipients(
+  requestType: string,
+  employeeId: number,
+  submitterUserId: string,
+): Promise<{ realtime: string[]; notify: string[] | undefined }> {
+  if (!ROUTED_NOTIFY_TYPES.has(requestType)) {
+    const realtime = await getLeaveRequestRecipients(employeeId, submitterUserId);
+    return { realtime, notify: undefined };
+  }
+
+  const emp = await queryOne<{ org_department_id: string | null }>(
+    'SELECT org_department_id FROM employees WHERE id = $1',
+    [employeeId],
+  );
+  const approvers = await resolveRoutedLeaveApprovers(employeeId, emp?.org_department_id ?? null);
+  if (approvers.length === 0) {
+    // Заявление создано, но согласовать его сможет только админ (scope=all).
+    const message = `[leave-requests] ${requestType}: у сотрудника ${employeeId} нет ответственного за согласование`;
+    console.error(message);
+    Sentry.captureMessage(message, 'warning');
+  }
+
+  const authorUserId = await getEmployeeUserId(employeeId);
+  const realtime = new Set<string>(approvers);
+  if (authorUserId) realtime.add(authorUserId);
+  realtime.add(submitterUserId);
+
+  return {
+    realtime: Array.from(realtime),
+    // Автор не должен получать уведомление «Новое заявление» о собственной подаче.
+    notify: approvers.filter((uid) => uid !== submitterUserId),
+  };
 }
 
 async function loadEmployeeIdsByDepartment(departmentId: string): Promise<Array<{ id: number; full_name: string | null }>> {
@@ -500,6 +550,22 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       }
     }
 
+    // Однодневные типы (увольнение): ровно одна дата, набор дней недопустим.
+    // Молча игнорировать чужой selected_dates нельзя — заявление создалось бы
+    // с данными, которых клиент не увидит.
+    if (SINGLE_DATE_LEAVE_TYPES.has(request_type)) {
+      if (start_date !== end_date) {
+        res.status(400).json({ success: false, error: 'Заявление подаётся на одну дату' });
+        return;
+      }
+      const hasSelectedDates = selected_dates !== undefined && selected_dates !== null
+        && !(Array.isArray(selected_dates) && selected_dates.length === 0);
+      if (hasSelectedDates) {
+        res.status(400).json({ success: false, error: 'selected_dates недопустим для этого типа заявления' });
+        return;
+      }
+    }
+
     // Дискретный набор дней (типы с выбором дат на календаре: work/remote/certificate/unpaid/sick_worked).
     // «За свой счёт» (unpaid) теперь подаётся датами, а не непрерывным периодом.
     // «Работа на больничном» (sick_worked) — конкретные дни, когда человек работал.
@@ -613,12 +679,16 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     broadcastPendingChanged();
 
+    // Получатели считаются один раз: realtime (списки надо обновить и автору) и
+    // уведомления (только согласующим) — это разные наборы.
+    const recipientsPromise = resolveCreateRecipients(request_type, employeeId, req.user.id);
+
     // Realtime: инвалидируем списки заявлений у автора и согласующих.
-    getLeaveRequestRecipients(employeeId, req.user.id)
-      .then((recipients) => {
+    recipientsPromise
+      .then(({ realtime }) => {
         emitDomainChange({
           event: 'leave_request:changed',
-          targetUserIds: recipients,
+          targetUserIds: realtime,
           payload: { entityId: data.id, employeeId, action: 'create' },
         });
       })
@@ -634,7 +704,8 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       selected_dates: normalizedSelectedDates,
     });
     const bodyText = `Сотрудник подал заявление: ${label}${dateLabel ? ` (${dateLabel})` : ''}`;
-    pushService.sendLeaveRequestNotification(employeeId, request_type, req.user.id, dateLabel)
+    recipientsPromise
+      .then(({ notify }) => pushService.sendLeaveRequestNotification(employeeId, request_type, req.user.id, dateLabel, notify))
       .then((recipientIds) => {
         const io = getIo();
         if (io) {

@@ -1,6 +1,6 @@
 import { apiClient } from '../api/client';
 
-export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid' | 'work' | 'educational_leave' | 'sick_worked';
+export type LeaveRequestType = 'vacation' | 'sick_leave' | 'remote' | 'certificate' | 'time_correction' | 'unpaid' | 'work' | 'educational_leave' | 'sick_worked' | 'dismissal';
 export type LeaveRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 export type LeaveRequestCancelSource = 'employee' | 'manager' | 'admin';
 
@@ -93,6 +93,7 @@ export const REQUEST_TYPE_LABELS: Record<string, string> = {
   work: 'Работа в выходной/праздник',
   educational_leave: 'Учебный отпуск',
   sick_worked: 'Работа на больничном',
+  dismissal: 'Заявление на увольнение',
 };
 
 export const STATUS_LABELS: Record<LeaveRequestStatus, string> = {

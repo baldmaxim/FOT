@@ -1,4 +1,5 @@
 import { type FC, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { leaveRequestService, type ILeaveRequest, type LeaveRequestType } from '../../services/leaveRequestService';
 import { documentService } from '../../services/documentService';
@@ -47,10 +48,13 @@ const UNIFIED_TYPES: { value: LeaveRequestType; label: string }[] = [
   { value: 'educational_leave', label: 'Учебный отпуск' },
   { value: 'sick_worked', label: 'Работа на больничном' },
   { value: 'certificate', label: 'Справка' },
+  { value: 'dismissal', label: 'Заявление на увольнение' },
 ];
 
 // «За свой счёт» (unpaid) подаётся датами на календаре, а не периодом (как на главной).
 const RANGE_TYPES: LeaveRequestType[] = ['vacation', 'sick_leave', 'educational_leave'];
+// Увольнение подаётся одной датой — последним рабочим днём (start_date = end_date).
+const SINGLE_DATE_TYPES: LeaveRequestType[] = ['dismissal'];
 
 interface IUnifiedRequestModalProps {
   onClose: () => void;
@@ -61,6 +65,7 @@ interface IUnifiedRequestModalProps {
 
 export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, employeeId, presetDate }) => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { showToast } = useToast();
   const isMobile = useIsMobile();
   const overlayDismiss = useOverlayDismiss(onClose);
@@ -84,6 +89,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
 
   const isCorrection = requestType === 'time_correction';
   const isRangeType = RANGE_TYPES.includes(requestType);
+  const isSingleDateType = SINGLE_DATE_TYPES.includes(requestType);
 
   // Объекты сотрудника для привязки корректировки табеля (выбор обязателен).
   const objectsQuery = useQuery({
@@ -158,6 +164,11 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
         return showToast('error', 'Часы — только целым числом (8, 9, 10…)');
       }
       if (!correctionObjectId) return showToast('error', 'Выберите объект для корректировки');
+    } else if (isSingleDateType) {
+      if (!rangeStart) return showToast('error', 'Укажите дату увольнения');
+      if (!isValidLeaveDate(rangeStart)) {
+        return showToast('error', `Проверьте дату: год должен быть в диапазоне ${LEAVE_YEAR_MIN}–${LEAVE_YEAR_MAX}`);
+      }
     } else if (isRangeType) {
       if (!rangeStart || !rangeEnd) return showToast('error', 'Укажите период (с — по)');
       // Календарная валидность + правдоподобный год (иначе строковое сравнение ниже
@@ -208,6 +219,16 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
         if (created.length < days.length) {
           showToast('warning', `Создано ${created.length} из ${days.length} корректировок`);
         }
+      } else if (isSingleDateType) {
+        // Одна дата: последний рабочий день (бэкенд требует start_date = end_date).
+        const created = await leaveRequestService.create({
+          request_type: requestType,
+          start_date: rangeStart,
+          end_date: rangeStart,
+          reason: reason.trim() || undefined,
+        });
+        firstCreated = created;
+        failedFiles = await uploadFilesTo(created.id);
       } else {
         const payload = isRangeType
           ? {
@@ -244,8 +265,16 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
       // ['employee-timesheet-summary', employeeId, monthKey] — без этой
       // инвалидации часы/бейдж заявки не появлялись до перезагрузки.
       await queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', employeeId] });
-      showToast('success', 'Заявление отправлено');
-      onClose();
+      if (requestType === 'dismissal') {
+        // Напоминание о бланках нужно увидеть сразу: тост + переход на деталку,
+        // где лежат ссылки на «Заявление на увольнение» и «Обходной лист ИТР».
+        showToast('success', 'Заявление отправлено. Распечатайте бланк заявления и обходной лист ИТР — раздел «Мои документы»');
+        onClose();
+        if (firstCreated) navigate(`/employee/requests/${firstCreated.id}`);
+      } else {
+        showToast('success', 'Заявление отправлено');
+        onClose();
+      }
     } catch (err) {
       showToast('error', err instanceof Error ? err.message : 'Ошибка отправки');
     } finally {
@@ -276,7 +305,30 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
             </select>
           </div>
 
-          {isRangeType ? (
+          {isSingleDateType ? (
+            <>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>
+                  Дата увольнения (последний рабочий день) <span className={styles.required}>*</span>
+                </label>
+                <input
+                  type="date"
+                  className={styles.formInput}
+                  value={rangeStart}
+                  min={LEAVE_DATE_MIN}
+                  max={LEAVE_DATE_MAX}
+                  onChange={e => setRangeStart(e.target.value)}
+                />
+              </div>
+              <div className={styles.formGroup}>
+                <div className={styles.reqDismissalHint}>
+                  После отправки распечатайте и заполните два бланка из раздела{' '}
+                  <a href="/employee/documents" target="_blank" rel="noopener">«Мои документы»</a>:
+                  «Заявление на увольнение» и «Обходной лист ИТР».
+                </div>
+              </div>
+            </>
+          ) : isRangeType ? (
             <div className={styles.formRow}>
               <div className={styles.formGroup}>
                 <label className={styles.formLabel}>Дата начала <span className={styles.required}>*</span></label>

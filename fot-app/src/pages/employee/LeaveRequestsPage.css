@@ -246,6 +246,76 @@
   padding: 16px 18px;
 }
 
+/* Напоминание о бланках увольнения */
+.lr-dismissal-note {
+  max-width: 640px;
+  margin: 16px 0 0;
+  padding: 16px 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 3px solid #f59e0b;
+  border-radius: 12px;
+}
+
+.lr-dismissal-note-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lr-dismissal-note-text {
+  margin: 8px 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: break-word;
+}
+
+.lr-dismissal-note-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.lr-dismissal-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.lr-dismissal-form:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.lr-dismissal-note-btn {
+  min-height: 44px;
+  padding: 10px 16px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.lr-dismissal-note-btn:hover {
+  background: var(--accent-muted);
+}
+
 .lr-detail-card h3 {
   margin: 0 0 12px;
   font-size: 14px;
