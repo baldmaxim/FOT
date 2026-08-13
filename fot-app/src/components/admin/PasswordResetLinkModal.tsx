@@ -53,7 +53,7 @@ export const PasswordResetLinkModal: FC<IProps> = ({ resetUrl, expiresAt, userLa
           <div className={styles.body}>
             <div className={styles.hint}>
               Передайте эту ссылку пользователю (Telegram, звонок, лично). По ней он сам задаст новый пароль — вы пароль не увидите.
-              Ссылка действует 1 час и одноразовая: при повторной генерации предыдущая перестанет работать.
+              Ссылка действует 24 часа и одноразовая: при повторной генерации предыдущая перестанет работать.
             </div>
             <div className={styles.urlRow}>
               <input

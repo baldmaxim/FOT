@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { PASSWORD_RESET_TOKEN_TTL_LABEL } from '../config/password-reset.js';
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -45,11 +46,11 @@ export const mailerService = {
       text:
         `Вы запросили сброс пароля.\n\n` +
         `Перейдите по ссылке, чтобы задать новый пароль:\n${safeUrl}\n\n` +
-        `Ссылка действует 1 час. Если вы не запрашивали сброс — проигнорируйте письмо.`,
+        `Ссылка действует ${PASSWORD_RESET_TOKEN_TTL_LABEL}. Если вы не запрашивали сброс — проигнорируйте письмо.`,
       html:
         `<p>Вы запросили сброс пароля.</p>` +
         `<p><a href="${safeUrl}">Установить новый пароль</a></p>` +
-        `<p>Ссылка действует 1 час. Если вы не запрашивали сброс — проигнорируйте письмо.</p>`,
+        `<p>Ссылка действует ${PASSWORD_RESET_TOKEN_TTL_LABEL}. Если вы не запрашивали сброс — проигнорируйте письмо.</p>`,
     });
   },
 };

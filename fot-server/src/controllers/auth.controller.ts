@@ -10,6 +10,7 @@ import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import type { AuthenticatedRequest, SystemRole, UserProfile, UserProfileResponse } from '../types/index.js';
 import { LOGIN_2FA_ENABLED } from '../config/features.js';
+import { PASSWORD_RESET_TOKEN_TTL_MS } from '../config/password-reset.js';
 import { isAdminAreaPageKey } from '../config/access-control.js';
 import { getRolePageAccess } from '../services/access-control.service.js';
 import { getRoleByCode, getRoleById } from '../services/roles-cache.service.js';
@@ -344,7 +345,7 @@ async function forgotPassword(req: Request, res: Response): Promise<void> {
 
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-    const resetTokenExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const resetTokenExpires = new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS).toISOString();
 
     try {
       await execute(

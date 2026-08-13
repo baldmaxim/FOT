@@ -6,6 +6,7 @@ import { localAuthService } from '../services/local-auth.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../types/index.js';
 import { logSupabaseError } from './admin-helpers.js';
+import { PASSWORD_RESET_TOKEN_TTL_MS } from '../config/password-reset.js';
 import { getAllRoles, getRoleByCode } from '../services/roles-cache.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
 import {
@@ -1197,7 +1198,7 @@ export const adminUsersController = {
 
       const resetToken = crypto.randomBytes(32).toString('hex');
       const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-      const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS);
 
       try {
         await execute(
