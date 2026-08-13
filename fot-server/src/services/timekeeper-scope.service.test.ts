@@ -10,10 +10,13 @@ vi.mock('../config/postgres.js', () => ({
 }));
 
 import {
+  expandTimekeeperAccessibleDepartmentIds,
   isTimekeeper,
   LI_OBSHESTROY_DEPARTMENT_ID,
+  listTimekeeperAccessibleDepartmentIds,
   listTimekeeperDepartmentSeeds,
   listTimekeeperDirectEmployeeIds,
+  loadTimekeeperScopeSnapshot,
   resolveTimekeeperDepartmentSeeds,
   resolveTimekeeperDirectEmployeeIds,
   resolveTimekeeperEditableLiIds,
@@ -42,6 +45,14 @@ function buildReq(roleCode = 'timekeeper', id = 'tk-1'): AuthenticatedRequest {
   } as unknown as AuthenticatedRequest;
 }
 
+/** Строки объединённого statement'а: kind = 'seed' | 'direct'. */
+function scopeRows(seeds: string[], direct: Array<string | null>) {
+  return [
+    ...seeds.map(val => ({ kind: 'seed', val })),
+    ...direct.map(val => ({ kind: 'direct', val })),
+  ];
+}
+
 beforeEach(() => {
   pgQuery.mockReset();
 });
@@ -54,83 +65,154 @@ describe('isTimekeeper', () => {
   });
 });
 
-describe('listTimekeeperDepartmentSeeds', () => {
-  it('пустые папки → пусто (строгое пересечение), один запрос', async () => {
-    pgQuery.mockResolvedValueOnce([]); // folders
-    const seeds = await listTimekeeperDepartmentSeeds('tk-1');
-    expect(seeds).toEqual([]);
+describe('loadTimekeeperScopeSnapshot', () => {
+  it('оба множества — из ОДНОГО обращения к БД', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A', 'br-B'], ['5', '7']));
+    const snapshot = await loadTimekeeperScopeSnapshot('tk-1');
+    expect(snapshot.departmentSeeds).toEqual(['br-A', 'br-B']);
+    expect(snapshot.directEmployeeIds).toEqual([5, 7]);
     expect(pgQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('пересечение present ∩ папки → уникальные видимые отделы', async () => {
-    pgQuery
-      .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
-      .mockResolvedValueOnce([{ id: 'br-A' }, { id: 'br-B' }, { id: 'br-A' }]); // present ∩ folder_desc
-    const seeds = await listTimekeeperDepartmentSeeds('tk-1');
-    expect(seeds).toEqual(['br-A', 'br-B']);
-    expect(pgQuery).toHaveBeenCalledTimes(2);
-    const [, params] = pgQuery.mock.calls[1];
-    expect(params).toEqual(['tk-1', ['folder-1'], LI_OBSHESTROY_DEPARTMENT_ID]);
+  it('дедуплицирует обе стороны и приводит id сотрудников к числам', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A', 'br-B', 'br-A'], ['10', '20', '10']));
+    const snapshot = await loadTimekeeperScopeSnapshot('tk-1');
+    expect(snapshot.departmentSeeds).toEqual(['br-A', 'br-B']);
+    expect(snapshot.directEmployeeIds).toEqual([10, 20]);
   });
 
-  it('present считает обе ветки: ручную привязку И фактические проходы СКУД (окно)', async () => {
-    pgQuery
-      .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
-      .mockResolvedValueOnce([{ id: 'br-A' }]); // present ∩ folder_desc
-    await listTimekeeperDepartmentSeeds('tk-1');
-    const [sql] = pgQuery.mock.calls[1];
-    expect(sql).toContain('employee_skud_object_access'); // ветка B (ручная)
-    expect(sql).toContain('skud_object_access_points'); // ветка A (проходы)
-    expect(sql).toContain('skud_events');
-    expect(sql).toContain('UNION');
+  it('параметры: пользователь и ЛИНИЯ-Общестрой', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    await loadTimekeeperScopeSnapshot('tk-1');
+    const [, params] = pgQuery.mock.calls[0];
+    expect(params).toEqual(['tk-1', LI_OBSHESTROY_DEPARTMENT_ID]);
+  });
+
+  it('события сканируются один раз: MATERIALIZED и единственное вхождение skud_events', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    await loadTimekeeperScopeSnapshot('tk-1');
+    const [sql] = pgQuery.mock.calls[0];
+    expect(sql).toContain('points AS MATERIALIZED');
+    expect(sql).toContain('event_emp AS MATERIALIZED');
+    expect(sql).toContain('present AS MATERIALIZED');
+    // Скан событий ровно один — иначе вернулись к исходной проблеме.
+    expect(sql.match(/FROM skud_events/g)?.length).toBe(1);
+  });
+
+  it('три источника сотрудников сохранены, окно присутствия не изменено', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    await loadTimekeeperScopeSnapshot('tk-1');
+    const [sql] = pgQuery.mock.calls[0];
+    expect(sql).toContain('employee_skud_object_access'); // ручная привязка
+    expect(sql).toContain('employee_object_assignment'); // явное назначение
+    expect(sql).toContain('skud_object_access_points'); // проходы
     expect(sql).toContain(`INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days'`);
-    // гейт по папкам сохранён
-    expect(sql).toContain('folder_desc');
   });
 
-  it('seeds = бригады И листовые активные department-отделы; ЛИНИЯ-Общестрой исключена', async () => {
-    pgQuery
-      .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
-      .mockResolvedValueOnce([{ id: 'br-A' }]); // present ∩ folder_desc
-    await listTimekeeperDepartmentSeeds('tk-1');
-    const [sql] = pgQuery.mock.calls[1];
-    // kind-фильтр перенесён из веток present в финальный SELECT
-    expect(sql).toContain('JOIN org_departments d ON d.id = p.id');
-    expect(sql).not.toContain('d.id = eda.department_id');
-    // бригадная ветка сохранена
+  it('seeds считаются от present (без явных назначений), direct — с ними', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    await loadTimekeeperScopeSnapshot('tk-1');
+    const [sql] = pgQuery.mock.calls[0];
+    // present = проходы ∪ ручная привязка; assigned_emp подмешивается только в direct
+    expect(sql).toContain('SELECT employee_id FROM event_emp');
+    expect(sql).toContain('SELECT employee_id FROM manual_emp');
+    expect(sql).toContain('SELECT employee_id FROM assigned_emp');
+    expect(sql).toContain('JOIN employee_department_access eda');
+    expect(sql).toContain('ON eda.employee_id = p.employee_id');
+  });
+
+  it('BTRIM сохранён с обеих сторон', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    await loadTimekeeperScopeSnapshot('tk-1');
+    const [sql] = pgQuery.mock.calls[0];
+    expect(sql).toContain('BTRIM(sap.access_point_name)');
+    expect(sql).toContain('BTRIM(se.access_point)');
+  });
+
+  it('гард «папки не выбраны → seeds пусто» сохранён и не задевает direct', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    await loadTimekeeperScopeSnapshot('tk-1');
+    const [sql] = pgQuery.mock.calls[0];
+    expect(sql).toContain('timekeeper_folder_access');
+    expect(sql).toContain("COALESCE(array_agg(department_id), '{}'::uuid[])");
+    expect(sql).toContain('get_descendant_department_ids');
+    // folder_desc ограничивает только seeds
+    expect(sql).toContain('eda.department_id IN (SELECT id FROM folder_desc)');
+    // ...и не встречается в ветке direct
+    expect(sql).not.toContain('direct AS (\n       SELECT employee_id FROM folder_desc');
+  });
+
+  it('предикат допустимых отделов перенесён дословно: у brigade НЕТ проверки is_active', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    await loadTimekeeperScopeSnapshot('tk-1');
+    const [sql] = pgQuery.mock.calls[0];
     expect(sql).toContain("d.kind = 'brigade'");
-    // листовой активный department допускается…
     expect(sql).toContain("d.kind = 'department'");
     expect(sql).toContain('d.is_active = true');
     expect(sql).toContain('NOT EXISTS');
     expect(sql).toContain('c.parent_id = d.id');
-    // …кроме ЛИНИЯ-Общестрой: у неё собственный присутствие-путь и edit-гейт
-    expect(sql).toContain('d.id <> $3');
+    expect(sql).toContain('d.id <> $2::uuid'); // ЛИНИЯ-Общестрой исключена
+    // is_active стоит ТОЛЬКО в ветке department: между 'brigade' и 'department'
+    // не должно быть проверки активности, иначе состав видимых бригад изменится.
+    const brigadeIdx = sql.indexOf("d.kind = 'brigade'");
+    const departmentIdx = sql.indexOf("d.kind = 'department'");
+    expect(sql.slice(brigadeIdx, departmentIdx)).not.toContain('is_active');
+  });
+
+  it('NULL employee_id даёт 0 — как в прежней реализации (эквивалентность, не улучшение)', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows([], ['5', null]));
+    const snapshot = await loadTimekeeperScopeSnapshot('tk-1');
+    expect(snapshot.directEmployeeIds).toEqual([5, 0]);
   });
 });
 
-describe('listTimekeeperDirectEmployeeIds', () => {
-  it('приводит к числам и дедуплицирует', async () => {
-    pgQuery.mockResolvedValue([
-      { employee_id: 10 },
-      { employee_id: '20' },
-      { employee_id: 10 },
-    ]);
-    const ids = await listTimekeeperDirectEmployeeIds('tk-1');
-    expect(ids).toEqual([10, 20]);
+describe('listTimekeeperDepartmentSeeds / listTimekeeperDirectEmployeeIds (обёртки)', () => {
+  it('seeds берутся из снапшота', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['5']));
+    expect(await listTimekeeperDepartmentSeeds('tk-1')).toEqual(['br-A']);
+    expect(pgQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('берёт сотрудников из трёх источников: явных назначений, места работы СКУД и фактических проходов', async () => {
-    pgQuery.mockResolvedValue([{ employee_id: 5 }]);
+  it('direct берутся из снапшота', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['10', '20']));
+    expect(await listTimekeeperDirectEmployeeIds('tk-1')).toEqual([10, 20]);
+  });
+
+  it('только direct-строки → seeds пусто', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows([], ['5']));
+    expect(await listTimekeeperDepartmentSeeds('tk-1')).toEqual([]);
+  });
+
+  it('последовательные вызовы идут в БД каждый раз — межзапросного кэша нет', async () => {
+    pgQuery.mockResolvedValue(scopeRows(['br-A'], ['5']));
+    await listTimekeeperDepartmentSeeds('tk-1');
+    await listTimekeeperDepartmentSeeds('tk-1');
     await listTimekeeperDirectEmployeeIds('tk-1');
-    const [sql, params] = pgQuery.mock.calls[0];
-    expect(sql).toContain('employee_object_assignment');
-    expect(sql).toContain('employee_skud_object_access');
-    expect(sql).toContain('skud_object_access_points');
-    expect(sql).toContain('skud_events');
-    expect(sql).toContain(`INTERVAL '${TIMEKEEPER_PRESENCE_WINDOW_DAYS} days'`);
-    expect(sql.match(/UNION/g)?.length).toBe(2); // три источника → два UNION
-    expect(params).toEqual(['tk-1']);
+    expect(pgQuery).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('expandTimekeeperAccessibleDepartmentIds', () => {
+  it('пустые seeds → пусто, БЕЗ ЛИНИЯ-Общестрой и без запроса', async () => {
+    const ids = await expandTimekeeperAccessibleDepartmentIds([]);
+    expect(ids).toEqual([]);
+    expect(ids).not.toContain(LI_OBSHESTROY_DEPARTMENT_ID);
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('seeds + поддерево + ЛИНИЯ-Общестрой, без дублей', async () => {
+    pgQuery.mockResolvedValueOnce([{ id: 'br-A' }, { id: 'child-1' }]);
+    const ids = await expandTimekeeperAccessibleDepartmentIds(['br-A']);
+    expect(ids).toEqual(['br-A', 'child-1', LI_OBSHESTROY_DEPARTMENT_ID]);
+  });
+
+  it('listTimekeeperAccessibleDepartmentIds = снапшот + расширение', async () => {
+    pgQuery
+      .mockResolvedValueOnce(scopeRows(['br-A'], ['5'])) // снапшот
+      .mockResolvedValueOnce([{ id: 'br-A' }, { id: 'child-1' }]); // поддерево
+    const ids = await listTimekeeperAccessibleDepartmentIds('tk-1');
+    expect(ids).toEqual(['br-A', 'child-1', LI_OBSHESTROY_DEPARTMENT_ID]);
+    expect(pgQuery).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -141,29 +223,52 @@ describe('resolveTimekeeperObjectIds', () => {
   });
 });
 
-describe('resolveTimekeeperDepartmentSeeds (кэш на req)', () => {
-  it('второй вызов не дёргает БД', async () => {
-    pgQuery
-      .mockResolvedValueOnce([{ department_id: 'folder-1' }]) // folders
-      .mockResolvedValueOnce([{ id: 'br-A' }]); // present ∩ folder_desc
+describe('req-снимок: оба resolve-метода делят одно обращение к БД', () => {
+  it('seeds: второй вызов не дёргает БД', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['5']));
     const req = buildReq();
-    const first = await resolveTimekeeperDepartmentSeeds(req);
-    const second = await resolveTimekeeperDepartmentSeeds(req);
-    expect(first).toEqual(['br-A']);
-    expect(second).toEqual(['br-A']);
+    expect(await resolveTimekeeperDepartmentSeeds(req)).toEqual(['br-A']);
+    expect(await resolveTimekeeperDepartmentSeeds(req)).toEqual(['br-A']);
     expect(req.user.__timekeeper_dept_seeds).toEqual(['br-A']);
-    expect(pgQuery).toHaveBeenCalledTimes(2); // folders + intersection, далее из кэша
+    expect(pgQuery).toHaveBeenCalledTimes(1);
   });
-});
 
-describe('resolveTimekeeperDirectEmployeeIds (кэш на req)', () => {
-  it('возвращает Set и кэширует', async () => {
-    pgQuery.mockResolvedValue([{ employee_id: 5 }, { employee_id: 7 }]);
+  it('direct: возвращает Set и кэширует', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['5', '7']));
     const req = buildReq();
     const set = await resolveTimekeeperDirectEmployeeIds(req);
     expect([...set]).toEqual([5, 7]);
     await resolveTimekeeperDirectEmployeeIds(req);
     expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('seeds + direct в одном запросе = ОДИН поход в БД, а не два', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['5']));
+    const req = buildReq();
+    const seeds = await resolveTimekeeperDepartmentSeeds(req);
+    const direct = await resolveTimekeeperDirectEmployeeIds(req);
+    expect(seeds).toEqual(['br-A']);
+    expect([...direct]).toEqual([5]);
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+    expect(req.user.__timekeeper_scope_snapshot).toEqual({
+      departmentSeeds: ['br-A'],
+      directEmployeeIds: [5],
+    });
+  });
+
+  it('обратный порядок вызовов даёт тот же один запрос', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['5']));
+    const req = buildReq();
+    await resolveTimekeeperDirectEmployeeIds(req);
+    await resolveTimekeeperDepartmentSeeds(req);
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('разные req не делят снимок', async () => {
+    pgQuery.mockResolvedValue(scopeRows(['br-A'], ['5']));
+    await resolveTimekeeperDepartmentSeeds(buildReq());
+    await resolveTimekeeperDepartmentSeeds(buildReq());
+    expect(pgQuery).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -199,7 +304,7 @@ describe('resolveTimekeeperLiObshestroyPresenceIds', () => {
 describe('resolveTimekeeperEditableLiIds (гейт правки, 90д ∩ ЛИНИЯ-Общестрой, кэш)', () => {
   it('direct-сотрудники ∩ ЛИНИЯ-Общестрой; кэширует на req', async () => {
     pgQuery
-      .mockResolvedValueOnce([{ employee_id: 5 }, { employee_id: 7 }, { employee_id: 9 }]) // direct (90д)
+      .mockResolvedValueOnce(scopeRows([], ['5', '7', '9'])) // снапшот: direct
       .mockResolvedValueOnce([{ id: 7 }]); // только 7 в ЛИНИЯ-Общестрой
     const req = buildReq();
     const set = await resolveTimekeeperEditableLiIds(req);
@@ -214,7 +319,7 @@ describe('resolveTimekeeperEditableLiIds (гейт правки, 90д ∩ ЛИН
   });
 
   it('пусто без direct-сотрудников (второй запрос не идёт)', async () => {
-    pgQuery.mockResolvedValueOnce([]); // direct пусто
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], [])); // снапшот: direct пусто
     const set = await resolveTimekeeperEditableLiIds(buildReq());
     expect([...set]).toEqual([]);
     expect(pgQuery).toHaveBeenCalledTimes(1);

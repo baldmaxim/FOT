@@ -18,7 +18,7 @@ import { listManagedDepartmentIdsForUser } from '../services/department-access.s
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
-import { TIMEKEEPER_ROLE_CODE, listTimekeeperAccessibleDepartmentIds, listTimekeeperDirectEmployeeIds } from '../services/timekeeper-scope.service.js';
+import { TIMEKEEPER_ROLE_CODE, expandTimekeeperAccessibleDepartmentIds, loadTimekeeperScopeSnapshot } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
   clearSessionCookies,
@@ -92,19 +92,26 @@ async function buildProfileResponse(
     loadCompanyScopeForProfile(profile, role.is_admin),
   ]);
 
+  // Табельщице оба поля ниже считаются из ОДНОГО снимка скоупа: раньше здесь шли два
+  // независимых вызова, каждый со своим 90-дневным сканом skud_events, и логин стоил
+  // два полных скана подряд.
+  const timekeeperScope = role.code === TIMEKEEPER_ROLE_CODE
+    ? await loadTimekeeperScopeSnapshot(profile.id)
+    : null;
+
   // Табельщица: «управляемые отделы» = поддерево отделов/бригад, назначенных её
   // объектам входа (семена + потомки) — чтобы селектор на /timesheet показывал все
   // дочерние бригады, даже если объект назначен на родительский отдел.
   // НЕ выдаём ей /staff-control.
-  const managed_department_ids = role.code === TIMEKEEPER_ROLE_CODE
-    ? await listTimekeeperAccessibleDepartmentIds(profile.id)
+  const managed_department_ids = timekeeperScope
+    ? await expandTimekeeperAccessibleDepartmentIds(timekeeperScope.departmentSeeds)
     : await listManagedDepartmentIdsForUser(profile.id, null, profile.employee_id);
 
   // Табельщица: «прямые подчинённые» = сотрудники её объектов (employee_object_assignment
   // + место работы СКУД employee_skud_object_access). Нужно фронту для рендера direct-reports
   // ячейки, когда у табельщицы нет отделов, только сотрудники объектов.
-  const has_direct_reports = role.code === TIMEKEEPER_ROLE_CODE
-    ? (await listTimekeeperDirectEmployeeIds(profile.id)).length > 0
+  const has_direct_reports = timekeeperScope
+    ? timekeeperScope.directEmployeeIds.length > 0
     : (profile.employee_id != null && (await listDirectSubordinates(profile.employee_id)).length > 0);
 
   // Назначен ли ответственным за согласование выходных — для доступа к «Согласованиям»
