@@ -261,12 +261,6 @@ export const leaveRequestService = {
     return res.data;
   },
 
-  // Правка текста обоснования заявления руководителем/админом (admin/manager/manager_obj/site_supervisor).
-  updateReason: async (id: number, reason: string) => {
-    const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/reason`, { reason });
-    return res.data;
-  },
-
   // Смена категории заявления отделом кадров (вкладка «Отпуска», admin/hr).
   // expectedRequestType — категория на момент открытия редактора: сервер сверяет её
   // под локом и отвечает 409, если её уже сменил другой HR (защита от stale-UI).
@@ -291,7 +285,7 @@ export const leaveRequestService = {
     return res.data;
   },
 
-  // Управленческая отмена согласованного отпуска (admin или согласовавший руководитель).
+  // Управленческая отмена согласования (admin или согласовавший руководитель), любой тип.
   revokeApproval: async (id: number, reason?: string) => {
     const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/revoke-approval`, { reason });
     return res.data;
