@@ -103,6 +103,35 @@ export const STATUS_LABELS: Record<LeaveRequestStatus, string> = {
   cancelled: 'Отменено',
 };
 
+/** Действия в leave_request_history (миграция 240) — подписи для таймлайна в карточке. */
+export type LeaveRequestHistoryAction =
+  | 'approved'
+  | 'rejected'
+  | 'cancelled'
+  | 'revoked'
+  | 'hours_changed'
+  | 'type_changed';
+
+export interface ILeaveRequestHistoryEntry {
+  id: number;
+  action: LeaveRequestHistoryAction;
+  actor_id: string | null;
+  actor_name: string | null;
+  old_value: Record<string, unknown> | null;
+  new_value: Record<string, unknown> | null;
+  comment: string | null;
+  created_at: string;
+}
+
+export const HISTORY_ACTION_LABELS: Record<LeaveRequestHistoryAction, string> = {
+  approved: 'Согласовано',
+  rejected: 'Не согласовано',
+  cancelled: 'Отменено сотрудником',
+  revoked: 'Согласование отменено',
+  hours_changed: 'Часы изменены',
+  type_changed: 'Категория изменена',
+};
+
 const CANCEL_LABELS: Record<LeaveRequestCancelSource, string> = {
   employee: 'Отменено сотрудником',
   manager: 'Отменено руководителем',
@@ -183,6 +212,12 @@ export const leaveRequestService = {
 
   getById: async (id: number) => {
     const res = await apiClient.get<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}`);
+    return res.data;
+  },
+
+  /** История изменений заявления (автор или согласующий). Запрос ленивый — только при раскрытии блока. */
+  getHistory: async (id: number): Promise<ILeaveRequestHistoryEntry[]> => {
+    const res = await apiClient.get<ApiResponse<ILeaveRequestHistoryEntry[]>>(`/leave-requests/${id}/history`);
     return res.data;
   },
 
