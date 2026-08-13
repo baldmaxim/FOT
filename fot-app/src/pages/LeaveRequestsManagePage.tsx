@@ -586,7 +586,7 @@ export const LeaveRequestsManagePage: FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="lrm-action-row">
+              <div className="lrm-action-row lrm-action-row--right">
                 <button
                   className="lrm-action-btn revoke"
                   onClick={(e) => { e.stopPropagation(); setRevokeId(r.id); setRevokeReason(''); }}

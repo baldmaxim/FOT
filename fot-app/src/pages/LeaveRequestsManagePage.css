@@ -506,6 +506,11 @@
   gap: 8px;
 }
 
+/* Отмена согласования — второстепенное действие, прижата к правому краю карточки. */
+.lrm-action-row--right {
+  justify-content: flex-end;
+}
+
 .lrm-action-btn {
   display: flex;
   align-items: center;
