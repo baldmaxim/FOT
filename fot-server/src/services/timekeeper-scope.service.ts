@@ -43,9 +43,125 @@ export async function resolveTimekeeperObjectIds(timekeeperUserId: string): Prom
 /** Оба множества скоупа табельщицы, полученные из ОДНОГО снимка БД. */
 export interface ITimekeeperScopeSnapshot {
   /** Видимые отделы (seeds скоупа). Папки не выбраны → пусто. */
-  departmentSeeds: string[];
+  readonly departmentSeeds: readonly string[];
   /** «Прямые подчинённые» — сотрудники её объектов из трёх источников. */
-  directEmployeeIds: number[];
+  readonly directEmployeeIds: readonly number[];
+}
+
+// ─── Кэш скоупа ───────────────────────────────────────────────────────────────
+//
+// Запрос стоит ~12.7 с и вызывался на каждое действие табельщицы — 41% всего
+// времени БД (2089 вызовов за окно наблюдения). Ускорить сам скан нечем: ANALYZE
+// партиции план не изменил, индекс по BTRIM бесполезен (48 из 77 точек покрывают
+// 91% событий). Остаётся сократить ЧИСЛО выполнений.
+//
+// Согласованный предел устаревания — одна минута, поэтому:
+//   * отсчёт идёт от СТАРТА SQL, а не от завершения: данные читаются в начале
+//     запроса, и отсчёт от конца дал бы 60 + 12.7 ≈ 73 с вместо обещанных 60;
+//   * SOFT_TTL 45 с — дальше отдаём устаревшее НЕМЕДЛЕННО и обновляем в фоне,
+//     иначе каждую минуту один пользователь ждал бы полные 12.7 с;
+//   * HARD_TTL 60 с — предел, за которым ждём свежий результат.
+// Худшее устаревание = 45 + длительность обновления ≈ 58 с, то есть внутри минуты.
+//
+// Задержка касается ТОЛЬКО событийной ветки. Любая административная правка
+// инвалидирует кэш немедленно — см. invalidateTimekeeperScopeCache и точки вызова.
+
+const SOFT_TTL_MS = 45_000;
+const HARD_TTL_MS = 60_000;
+
+interface ICacheEntry {
+  snapshot: ITimekeeperScopeSnapshot;
+  /** Момент старта SQL — от него, а не от завершения, считается возраст. */
+  startedAt: number;
+}
+
+const scopeCache = new Map<string, ICacheEntry>();
+const scopeInflight = new Map<string, Promise<ITimekeeperScopeSnapshot>>();
+/** Поколение ключа: растёт при инвалидации, отсекает результаты устаревших полётов. */
+const scopeGenerations = new Map<string, number>();
+
+/** Счётчики для доказательства эффекта дельтами, а не проекцией. */
+export const timekeeperScopeCacheStats = {
+  hit: 0,
+  staleHit: 0,
+  miss: 0,
+  coalesced: 0,
+  backgroundRefresh: 0,
+  lastLoadMs: 0,
+};
+
+/**
+ * Ключ включает дату: окно `CURRENT_DATE - 90 days` сдвигается в полночь.
+ * Расхождение таймзоны сервера и БД дало бы лишь лишнее обновление на границе
+ * суток — устаревание всё равно ограничено HARD_TTL.
+ */
+const cacheKey = (userId: string): string =>
+  `${userId}:${new Date().toLocaleDateString('sv-SE')}`;
+
+const generationOf = (key: string): number => scopeGenerations.get(key) ?? 0;
+
+/** Замораживаем снимок: один запрос не должен мутировать массивы для остальных. */
+function freezeSnapshot(snapshot: ITimekeeperScopeSnapshot): ITimekeeperScopeSnapshot {
+  Object.freeze(snapshot.departmentSeeds);
+  Object.freeze(snapshot.directEmployeeIds);
+  return Object.freeze(snapshot);
+}
+
+/**
+ * Сброс кэша. С `userId` — точечно (по всем датам этого пользователя),
+ * без него — полностью. Поколение растёт всегда: полёт, стартовавший до сброса,
+ * не запишет свой результат и не удалит запись нового полёта.
+ */
+export function invalidateTimekeeperScopeCache(userId?: string): void {
+  const affected = userId
+    ? [...scopeCache.keys(), ...scopeInflight.keys()].filter(k => k.startsWith(`${userId}:`))
+    : [...new Set([...scopeCache.keys(), ...scopeInflight.keys(), ...scopeGenerations.keys()])];
+
+  for (const key of affected) {
+    scopeGenerations.set(key, generationOf(key) + 1);
+    scopeCache.delete(key);
+    scopeInflight.delete(key);
+  }
+  // Точечный сброс по пользователю, у которого ещё нет записей: поколение всё равно
+  // поднимаем, иначе идущий сейчас первый полёт запишет доинвалидационный результат.
+  if (userId && affected.length === 0) {
+    const key = cacheKey(userId);
+    scopeGenerations.set(key, generationOf(key) + 1);
+  }
+}
+
+/** Полный сброс + обнуление счётчиков. Только для тестов. */
+export function resetTimekeeperScopeCache(): void {
+  scopeCache.clear();
+  scopeInflight.clear();
+  scopeGenerations.clear();
+  Object.assign(timekeeperScopeCacheStats, {
+    hit: 0, staleHit: 0, miss: 0, coalesced: 0, backgroundRefresh: 0, lastLoadMs: 0,
+  });
+}
+
+/** Запускает загрузку и кладёт результат в кэш, если поколение не изменилось. */
+function startLoad(key: string, userId: string): Promise<ITimekeeperScopeSnapshot> {
+  const startedAt = Date.now();
+  const generation = generationOf(key);
+
+  const promise = loadTimekeeperScopeSnapshotUncached(userId)
+    .then(snapshot => {
+      const frozen = freezeSnapshot(snapshot);
+      timekeeperScopeCacheStats.lastLoadMs = Date.now() - startedAt;
+      // Инвалидация во время полёта: результат уже неактуален, в кэш не кладём.
+      if (generationOf(key) === generation) {
+        scopeCache.set(key, { snapshot: frozen, startedAt });
+      }
+      return frozen;
+    })
+    .finally(() => {
+      // Удаляем ТОЛЬКО свою запись: за время полёта мог стартовать новый.
+      if (scopeInflight.get(key) === promise) scopeInflight.delete(key);
+    });
+
+  scopeInflight.set(key, promise);
+  return promise;
 }
 
 /**
@@ -170,7 +286,7 @@ export function parseTimekeeperScopeRows(rows: ITimekeeperScopeRow[]): ITimekeep
   };
 }
 
-export async function loadTimekeeperScopeSnapshot(
+async function loadTimekeeperScopeSnapshotUncached(
   timekeeperUserId: string,
 ): Promise<ITimekeeperScopeSnapshot> {
   const rows = await query<ITimekeeperScopeRow>(
@@ -178,6 +294,49 @@ export async function loadTimekeeperScopeSnapshot(
     [timekeeperUserId, LI_OBSHESTROY_DEPARTMENT_ID],
   );
   return parseTimekeeperScopeRows(rows);
+}
+
+/**
+ * Снимок скоупа с кэшем (SOFT 45 с → отдаём устаревшее и обновляем в фоне,
+ * HARD 60 с → ждём свежее). Пустой результат кэшируется наравне с непустым:
+ * `query()` при сбое бросает исключение, поэтому `[]` — валидный ответ, и без
+ * кэширования табельщица без сотрудников гоняла бы самый тяжёлый запрос
+ * на каждое действие.
+ */
+export async function loadTimekeeperScopeSnapshot(
+  timekeeperUserId: string,
+): Promise<ITimekeeperScopeSnapshot> {
+  const key = cacheKey(timekeeperUserId);
+  const entry = scopeCache.get(key);
+
+  if (entry) {
+    const age = Date.now() - entry.startedAt;
+    if (age < SOFT_TTL_MS) {
+      timekeeperScopeCacheStats.hit += 1;
+      return entry.snapshot;
+    }
+    if (age < HARD_TTL_MS) {
+      // Устаревшее отдаём немедленно, свежее готовим в фоне: иначе каждую минуту
+      // один пользователь ждал бы полные ~12.7 с.
+      timekeeperScopeCacheStats.staleHit += 1;
+      if (!scopeInflight.has(key)) {
+        timekeeperScopeCacheStats.backgroundRefresh += 1;
+        startLoad(key, timekeeperUserId).catch(error => {
+          console.error('[timekeeper-scope] фоновое обновление не удалось:', error);
+        });
+      }
+      return entry.snapshot;
+    }
+  }
+
+  const existing = scopeInflight.get(key);
+  if (existing) {
+    timekeeperScopeCacheStats.coalesced += 1;
+    return existing;
+  }
+
+  timekeeperScopeCacheStats.miss += 1;
+  return startLoad(key, timekeeperUserId);
 }
 
 /** Как loadTimekeeperScopeSnapshot, но с кэшем на req: один снимок на HTTP-запрос. */
@@ -198,7 +357,9 @@ async function resolveScopeSnapshot(req: AuthenticatedRequest): Promise<ITimekee
  * Совместимая обёртка над снапшотом — сигнатура сохранена, зовётся из многих мест.
  */
 export async function listTimekeeperDepartmentSeeds(timekeeperUserId: string): Promise<string[]> {
-  return (await loadTimekeeperScopeSnapshot(timekeeperUserId)).departmentSeeds;
+  // Копия, а не сама закэшированная (замороженная) ссылка: вызывающий код волен
+  // сортировать и дополнять результат, и это не должно задевать других.
+  return [...(await loadTimekeeperScopeSnapshot(timekeeperUserId)).departmentSeeds];
 }
 
 /**
@@ -207,7 +368,7 @@ export async function listTimekeeperDepartmentSeeds(timekeeperUserId: string): P
  * фактические проходы за окно. Совместимая обёртка над снапшотом.
  */
 export async function listTimekeeperDirectEmployeeIds(timekeeperUserId: string): Promise<number[]> {
-  return (await loadTimekeeperScopeSnapshot(timekeeperUserId)).directEmployeeIds;
+  return [...(await loadTimekeeperScopeSnapshot(timekeeperUserId)).directEmployeeIds];
 }
 
 /**
@@ -216,7 +377,7 @@ export async function listTimekeeperDirectEmployeeIds(timekeeperUserId: string):
  */
 export async function resolveTimekeeperDepartmentSeeds(req: AuthenticatedRequest): Promise<string[]> {
   if (req.user.__timekeeper_dept_seeds) return req.user.__timekeeper_dept_seeds;
-  const seeds = (await resolveScopeSnapshot(req)).departmentSeeds;
+  const seeds = [...(await resolveScopeSnapshot(req)).departmentSeeds];
   req.user.__timekeeper_dept_seeds = seeds;
   return seeds;
 }
@@ -239,7 +400,7 @@ export async function resolveTimekeeperDirectEmployeeIds(req: AuthenticatedReque
  *
  * Принимает готовые seeds, чтобы профиль не выполнял снимок повторно.
  */
-export async function expandTimekeeperAccessibleDepartmentIds(seeds: string[]): Promise<string[]> {
+export async function expandTimekeeperAccessibleDepartmentIds(seeds: readonly string[]): Promise<string[]> {
   if (seeds.length === 0) return [];
   const rows = await query<{ id: string }>(
     'SELECT id FROM public.get_descendant_department_ids($1::uuid[])',

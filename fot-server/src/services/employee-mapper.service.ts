@@ -1,6 +1,7 @@
 import { query } from '../config/postgres.js';
 import { invalidateDeptTreeCache, invalidateSyncFilterCache } from './skud-shared.service.js';
 import type { Employee, EmployeeEncrypted } from '../types/index.js';
+import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 
 // Кэш для расшифрованных названий структуры
 export interface StructureCache {
@@ -39,6 +40,10 @@ export function invalidateOrgStructureCaches(): void {
   invalidateStructureCache();
   invalidateDeptTreeCache();
   invalidateSyncFilterCache();
+  // Sigur structure sync массово переписывает employee_department_access — вход
+  // скоупа табельщицы. Без этого сброса новый состав отделов не был бы виден
+  // до истечения TTL кэша скоупа.
+  invalidateTimekeeperScopeCache();
 }
 
 export async function loadStructureCache(): Promise<StructureCache> {

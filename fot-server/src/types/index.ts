@@ -141,7 +141,7 @@ export interface AuthenticatedRequest extends Request {
     __direct_subordinates?: Set<number>;
     __skud_object_scope?: { is_unrestricted: boolean; object_ids: string[] };
     /** Один снимок скоупа табельщицы на HTTP-запрос: seeds и direct из одного SQL. */
-    __timekeeper_scope_snapshot?: { departmentSeeds: string[]; directEmployeeIds: number[] };
+    __timekeeper_scope_snapshot?: { readonly departmentSeeds: readonly string[]; readonly directEmployeeIds: readonly number[] };
     __timekeeper_dept_seeds?: string[];
     __timekeeper_direct_employees?: Set<number>;
     __timekeeper_editable_li?: Set<number>;

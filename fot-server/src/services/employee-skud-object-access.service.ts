@@ -10,6 +10,7 @@
  * присутствие (skud_events за день).
  */
 import { execute, query } from '../config/postgres.js';
+import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 let missingTableWarned = false;
@@ -236,6 +237,9 @@ export async function replaceEmployeeObjectAccess(params: {
 
   const now = new Date().toISOString();
 
+  // Сброс в finally: «место работы» — вход скоупа табельщицы, а он обслуживает
+  // и гейт правки. Частично применённая запись всё равно меняет доступ.
+  try {
   if (nextObjectIds.length > 0) {
     await execute(
       `INSERT INTO employee_skud_object_access
@@ -262,6 +266,9 @@ export async function replaceEmployeeObjectAccess(params: {
   }
 
   return nextObjectIds;
+  } finally {
+    invalidateTimekeeperScopeCache();
+  }
 }
 
 /**

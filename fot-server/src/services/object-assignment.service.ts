@@ -8,6 +8,7 @@
  * читается только скоупом табельщицы (timekeeper-scope.service.ts).
  */
 import { execute, query } from '../config/postgres.js';
+import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 
 const nowIso = (): string => new Date().toISOString();
 
@@ -100,6 +101,10 @@ export async function replaceEmployeeObjectAssignment(params: {
   const toDeactivate = existing.filter(r => r.is_active).map(r => r.skud_object_id).filter(id => !nextSet.has(id));
   const now = nowIso();
 
+  // Сброс в finally: многошаговая запись может завершиться частично, и тогда
+  // скоуп всё равно изменился. Кэш обслуживает и гейт правки, поэтому отзыв
+  // доступа обязан применяться сразу, а не через TTL.
+  try {
   if (next.length > 0) {
     await execute(
       `INSERT INTO employee_object_assignment (employee_id, skud_object_id, is_active, created_by, updated_at)
@@ -119,6 +124,9 @@ export async function replaceEmployeeObjectAssignment(params: {
     );
   }
   return next;
+  } finally {
+    invalidateTimekeeperScopeCache();
+  }
 }
 
 // ---- Timekeeper → objects ----------------------------------------------------
@@ -146,6 +154,7 @@ export async function replaceTimekeeperObjectAccess(params: {
   const toDeactivate = existing.filter(r => r.is_active).map(r => r.skud_object_id).filter(id => !nextSet.has(id));
   const now = nowIso();
 
+  try {
   if (next.length > 0) {
     await execute(
       `INSERT INTO timekeeper_object_access (timekeeper_user_id, skud_object_id, is_active, created_by, updated_at)
@@ -165,6 +174,9 @@ export async function replaceTimekeeperObjectAccess(params: {
     );
   }
   return next;
+  } finally {
+    invalidateTimekeeperScopeCache(params.timekeeperUserId);
+  }
 }
 
 // ---- Timekeeper → folders (org_departments) ----------------------------------
@@ -194,6 +206,7 @@ export async function replaceTimekeeperFolderAccess(params: {
   const toDeactivate = existing.filter(r => r.is_active).map(r => r.department_id).filter(id => !nextSet.has(id));
   const now = nowIso();
 
+  try {
   if (next.length > 0) {
     await execute(
       `INSERT INTO timekeeper_folder_access (timekeeper_user_id, department_id, is_active, created_by, updated_at)
@@ -213,4 +226,7 @@ export async function replaceTimekeeperFolderAccess(params: {
     );
   }
   return next;
+  } finally {
+    invalidateTimekeeperScopeCache(params.timekeeperUserId);
+  }
 }

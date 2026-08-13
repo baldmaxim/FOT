@@ -187,8 +187,9 @@ async function compareForUser(
       [userId, LI_OBSHESTROY_DEPARTMENT_ID],
     );
     const parsed = parseTimekeeperScopeRows(snapshot.rows);
-    const newSeeds = parsed.departmentSeeds;
-    const newDirect = parsed.directEmployeeIds;
+    // Снимок отдаётся замороженным — копируем, дальше идут sort/map.
+    const newSeeds = [...parsed.departmentSeeds];
+    const newDirect = [...parsed.directEmployeeIds];
     const newMs = Date.now() - newStarted;
 
     // --- Профильные поля: managed_department_ids и has_direct_reports ------

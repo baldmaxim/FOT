@@ -77,7 +77,10 @@ vi.mock('../utils/auth-session.js', () => ({
 }));
 
 import { authController } from './auth.controller.js';
-import { LI_OBSHESTROY_DEPARTMENT_ID } from '../services/timekeeper-scope.service.js';
+import {
+  LI_OBSHESTROY_DEPARTMENT_ID,
+  resetTimekeeperScopeCache,
+} from '../services/timekeeper-scope.service.js';
 
 const TIMEKEEPER_ROLE = {
   id: 'role-tk',
@@ -146,6 +149,8 @@ const scopeRows = (seeds: string[], direct: number[]) => [
 beforeEach(() => {
   pgQuery.mockReset();
   pgQueryOne.mockReset();
+  // Кэш скоупа модульный: без сброса второй кейс получил бы снимок первого.
+  resetTimekeeperScopeCache();
   mocked.getRoleById.mockReset();
   mocked.getRoleById.mockResolvedValue(TIMEKEEPER_ROLE);
   mocked.getRolePageAccess.mockResolvedValue({});

@@ -1,6 +1,7 @@
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { invalidateStructureCache } from './employee-mapper.service.js';
 import { invalidateAccessibleScopeCache } from './data-scope.service.js';
+import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 
 /**
  * Сбрасывает все кеши, зависящие от scope доступа (employee_department_access /
@@ -10,11 +11,24 @@ import { invalidateAccessibleScopeCache } from './data-scope.service.js';
  * resolveAccessibleDepartmentIds — закэшированный subtree.
  *
  * Зеркалит набор инвалидаций из structure.routes.ts write-through хука.
+ *
+ * Сбрасывает и HTTP-кеши табеля: скоуп табельщицы кэшируется (SOFT 45 с / HARD 60 с),
+ * и без сброса ответов /api/timesheet* обновлённый скоуп остался бы невидим на экране
+ * до истечения их собственного TTL (до 5 минут).
  */
 export function invalidateDepartmentScopeCaches(): void {
-  invalidateCaches('structure:tree', 'structure:positions');
+  invalidateCaches(
+    'structure:tree',
+    'structure:positions',
+    'timesheet',
+    'timesheet:today',
+    'timesheet:overview',
+    'timesheet:overview:today',
+    'timesheet:search',
+  );
   invalidateStructureCache();
   invalidateAccessibleScopeCache();
+  invalidateTimekeeperScopeCache();
 }
 
 /**

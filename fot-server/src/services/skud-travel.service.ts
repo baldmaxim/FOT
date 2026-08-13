@@ -1,4 +1,5 @@
 import { query, queryOne, execute } from '../config/postgres.js';
+import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { settingsService } from './settings.service.js';
 import { createCache } from '../utils/cache.js';
@@ -1042,6 +1043,7 @@ export const updateTravelObject = async ({
   altName?: string | null;
   accessPoints: string[];
 }): Promise<ITravelObject> => {
+  try {
   const currentMappings = await fetchTravelMappingsRaw();
   const normalizedName = name.trim();
   const normalizedAccessPoints = dedupeAccessPoints(accessPoints);
@@ -1141,6 +1143,11 @@ export const updateTravelObject = async ({
   if (!updated) throw new Error('Объект не найден после сохранения');
   invalidateTravelSegmentsCache();
   return updated;
+  } finally {
+    // Маппинг точек доступа — вход событийной ветки скоупа табельщицы.
+    // Сброс в finally: правка могла примениться частично и всё равно менять состав.
+    invalidateTimekeeperScopeCache();
+  }
 };
 
 export const deleteTravelObject = async (objectId: string): Promise<void> => {

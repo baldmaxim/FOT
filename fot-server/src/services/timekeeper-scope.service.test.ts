@@ -22,6 +22,9 @@ import {
   resolveTimekeeperEditableLiIds,
   resolveTimekeeperLiObshestroyPresenceIds,
   resolveTimekeeperObjectIds,
+  resetTimekeeperScopeCache,
+  invalidateTimekeeperScopeCache,
+  timekeeperScopeCacheStats,
   TIMEKEEPER_PRESENCE_WINDOW_DAYS,
 } from './timekeeper-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -55,6 +58,9 @@ function scopeRows(seeds: string[], direct: Array<string | null>) {
 
 beforeEach(() => {
   pgQuery.mockReset();
+  // Кэш скоупа модульный: без сброса тесты стали бы зависеть от порядка.
+  resetTimekeeperScopeCache();
+  vi.useRealTimers();
 });
 
 describe('isTimekeeper', () => {
@@ -183,12 +189,15 @@ describe('listTimekeeperDepartmentSeeds / listTimekeeperDirectEmployeeIds (об�
     expect(await listTimekeeperDepartmentSeeds('tk-1')).toEqual([]);
   });
 
-  it('последовательные вызовы идут в БД каждый раз — межзапросного кэша нет', async () => {
+  // Раньше здесь проверялось ОТСУТСТВИЕ межзапросного кэша. 13.08, когда табельщицы
+  // перестали работать, кэш был согласован осознанно: запрос стоил 12.7 с и давал 41%
+  // нагрузки БД. Теперь фиксируем обратное — вызовы обслуживаются из кэша.
+  it('последовательные вызовы обслуживаются кэшем, а не идут в БД', async () => {
     pgQuery.mockResolvedValue(scopeRows(['br-A'], ['5']));
     await listTimekeeperDepartmentSeeds('tk-1');
     await listTimekeeperDepartmentSeeds('tk-1');
     await listTimekeeperDirectEmployeeIds('tk-1');
-    expect(pgQuery).toHaveBeenCalledTimes(3);
+    expect(pgQuery).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -264,10 +273,18 @@ describe('req-снимок: оба resolve-метода делят одно об
     expect(pgQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('разные req не делят снимок', async () => {
+  it('разные req одного пользователя делят модульный кэш', async () => {
     pgQuery.mockResolvedValue(scopeRows(['br-A'], ['5']));
     await resolveTimekeeperDepartmentSeeds(buildReq());
     await resolveTimekeeperDepartmentSeeds(buildReq());
+    // req-кэш у каждого свой, но снимок берётся из общего кэша скоупа.
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('разные пользователи не делят снимок', async () => {
+    pgQuery.mockResolvedValue(scopeRows(['br-A'], ['5']));
+    await resolveTimekeeperDepartmentSeeds(buildReq('timekeeper', 'tk-1'));
+    await resolveTimekeeperDepartmentSeeds(buildReq('timekeeper', 'tk-2'));
     expect(pgQuery).toHaveBeenCalledTimes(2);
   });
 });
@@ -323,5 +340,158 @@ describe('resolveTimekeeperEditableLiIds (гейт правки, 90д ∩ ЛИН
     const set = await resolveTimekeeperEditableLiIds(buildReq());
     expect([...set]).toEqual([]);
     expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('кэш скоупа: SOFT 45 с / HARD 60 с от старта SQL', () => {
+  it('повторный вызов в пределах SOFT не идёт в БД', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['5']));
+    await loadTimekeeperScopeSnapshot('tk-1');
+    await loadTimekeeperScopeSnapshot('tk-1');
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+    expect(timekeeperScopeCacheStats).toMatchObject({ miss: 1, hit: 1 });
+  });
+
+  it('ПУСТОЙ результат кэшируется наравне с непустым', async () => {
+    pgQuery.mockResolvedValueOnce([]);
+    expect((await loadTimekeeperScopeSnapshot('tk-1')).departmentSeeds).toEqual([]);
+    await loadTimekeeperScopeSnapshot('tk-1');
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('возраст считается от СТАРТА SQL, а не от завершения', async () => {
+    vi.useFakeTimers();
+    // Запрос длится 12.7 с — как на проде.
+    pgQuery.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(12_700);
+      return scopeRows(['br-A'], ['5']);
+    });
+    const first = loadTimekeeperScopeSnapshot('tk-1');
+    await vi.advanceTimersByTimeAsync(12_700);
+    await first;
+
+    // Ещё 33 с: от старта прошло 45.7 с — SOFT истёк.
+    await vi.advanceTimersByTimeAsync(33_000);
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-B'], ['7']));
+    await loadTimekeeperScopeSnapshot('tk-1');
+    // Отсчёт от завершения дал бы «ещё свежо», и обновления не случилось бы.
+    expect(timekeeperScopeCacheStats.staleHit).toBe(1);
+  });
+
+  it('после SOFT отдаёт устаревшее НЕМЕДЛЕННО и обновляет в фоне', async () => {
+    vi.useFakeTimers();
+    pgQuery.mockResolvedValueOnce(scopeRows(['old'], ['1']));
+    await loadTimekeeperScopeSnapshot('tk-1');
+
+    await vi.advanceTimersByTimeAsync(50_000); // SOFT прошёл, HARD нет
+    pgQuery.mockResolvedValueOnce(scopeRows(['new'], ['2']));
+    const stale = await loadTimekeeperScopeSnapshot('tk-1');
+    expect(stale.departmentSeeds).toEqual(['old']); // ждать не заставили
+    expect(timekeeperScopeCacheStats.backgroundRefresh).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await loadTimekeeperScopeSnapshot('tk-1')).departmentSeeds).toEqual(['new']);
+  });
+
+  it('после HARD ждёт свежий результат', async () => {
+    vi.useFakeTimers();
+    pgQuery.mockResolvedValueOnce(scopeRows(['old'], ['1']));
+    await loadTimekeeperScopeSnapshot('tk-1');
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    pgQuery.mockResolvedValueOnce(scopeRows(['new'], ['2']));
+    expect((await loadTimekeeperScopeSnapshot('tk-1')).departmentSeeds).toEqual(['new']);
+  });
+
+  it('параллельные вызовы схлопываются в один запрос', async () => {
+    let release: (value: unknown) => void = () => undefined;
+    pgQuery.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const a = loadTimekeeperScopeSnapshot('tk-1');
+    const b = loadTimekeeperScopeSnapshot('tk-1');
+    release(scopeRows(['br-A'], ['5']));
+    expect((await a).departmentSeeds).toEqual(['br-A']);
+    expect((await b).departmentSeeds).toEqual(['br-A']);
+    expect(pgQuery).toHaveBeenCalledTimes(1);
+    expect(timekeeperScopeCacheStats.coalesced).toBe(1);
+  });
+
+  it('ошибка не залипает: следующий вызов снова идёт в БД', async () => {
+    pgQuery.mockRejectedValueOnce(new Error('boom'));
+    await expect(loadTimekeeperScopeSnapshot('tk-1')).rejects.toThrow('boom');
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['5']));
+    expect((await loadTimekeeperScopeSnapshot('tk-1')).departmentSeeds).toEqual(['br-A']);
+    expect(pgQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('снимок заморожен, а обёртки отдают копию', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['br-A'], ['5']));
+    const snapshot = await loadTimekeeperScopeSnapshot('tk-1');
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.departmentSeeds)).toBe(true);
+
+    const seeds = await listTimekeeperDepartmentSeeds('tk-1');
+    seeds.push('чужое');
+    expect((await loadTimekeeperScopeSnapshot('tk-1')).departmentSeeds).toEqual(['br-A']);
+  });
+});
+
+describe('инвалидация кэша скоупа', () => {
+  it('точечный сброс по userId не трогает чужой кэш', async () => {
+    pgQuery.mockResolvedValueOnce(scopeRows(['a'], ['1']));
+    await loadTimekeeperScopeSnapshot('tk-1');
+    pgQuery.mockResolvedValueOnce(scopeRows(['b'], ['2']));
+    await loadTimekeeperScopeSnapshot('tk-2');
+    expect(pgQuery).toHaveBeenCalledTimes(2);
+
+    invalidateTimekeeperScopeCache('tk-1');
+    pgQuery.mockResolvedValueOnce(scopeRows(['a2'], ['1']));
+    await loadTimekeeperScopeSnapshot('tk-1'); // ушёл в БД
+    await loadTimekeeperScopeSnapshot('tk-2'); // остался в кэше
+    expect(pgQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it('полный сброс очищает всех', async () => {
+    pgQuery.mockResolvedValue(scopeRows(['a'], ['1']));
+    await loadTimekeeperScopeSnapshot('tk-1');
+    await loadTimekeeperScopeSnapshot('tk-2');
+    invalidateTimekeeperScopeCache();
+    await loadTimekeeperScopeSnapshot('tk-1');
+    await loadTimekeeperScopeSnapshot('tk-2');
+    expect(pgQuery).toHaveBeenCalledTimes(4);
+  });
+
+  it('ГОНКА: инвалидация во время полёта не даёт записать устаревший результат', async () => {
+    let release: (value: unknown) => void = () => undefined;
+    pgQuery.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const inflight = loadTimekeeperScopeSnapshot('tk-1');
+
+    invalidateTimekeeperScopeCache('tk-1'); // доступ отозвали, пока запрос летел
+    release(scopeRows(['устаревшее'], ['1']));
+    await inflight;
+
+    pgQuery.mockResolvedValueOnce(scopeRows(['актуальное'], ['2']));
+    expect((await loadTimekeeperScopeSnapshot('tk-1')).departmentSeeds).toEqual(['актуальное']);
+    expect(pgQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it('ГОНКА: завершение старого полёта не удаляет запись нового', async () => {
+    let releaseOld: (value: unknown) => void = () => undefined;
+    let releaseNew: (value: unknown) => void = () => undefined;
+    pgQuery
+      .mockImplementationOnce(() => new Promise(resolve => { releaseOld = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { releaseNew = resolve; }));
+
+    const oldFlight = loadTimekeeperScopeSnapshot('tk-1');
+    invalidateTimekeeperScopeCache('tk-1');
+    const newFlight = loadTimekeeperScopeSnapshot('tk-1'); // стартовал второй полёт
+
+    releaseOld(scopeRows(['старое'], ['1']));
+    await oldFlight;
+    releaseNew(scopeRows(['новое'], ['2']));
+    await newFlight;
+
+    // Новый результат сохранён — третий запрос не нужен.
+    expect((await loadTimekeeperScopeSnapshot('tk-1')).departmentSeeds).toEqual(['новое']);
+    expect(pgQuery).toHaveBeenCalledTimes(2);
   });
 });

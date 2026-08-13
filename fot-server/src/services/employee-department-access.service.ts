@@ -1,4 +1,5 @@
 import { execute, queryOne } from '../config/postgres.js';
+import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 
 export type EmployeeDepartmentAccessSource =
   | 'manual_admin_ui'
@@ -64,6 +65,10 @@ export async function upsertTechnicalDepartmentAccess(
       return;
     }
     throw err;
+  } finally {
+    // Вход скоупа табельщицы: состав отделов сотрудника. Сброс в finally —
+    // частично применённая запись всё равно меняет доступ.
+    invalidateTimekeeperScopeCache();
   }
 }
 
@@ -84,6 +89,10 @@ export async function deactivateAllDepartmentAccessForEmployee(
       return;
     }
     throw err;
+  } finally {
+    // Вход скоупа табельщицы: состав отделов сотрудника. Сброс в finally —
+    // частично применённая запись всё равно меняет доступ.
+    invalidateTimekeeperScopeCache();
   }
 }
 
