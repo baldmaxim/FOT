@@ -21,7 +21,11 @@ vi.mock('./sigur-access-point-meta.service.js', () => ({
   loadAccessPointObjectMetaMap: vi.fn(async () => new Map()),
 }));
 
-import { assignSigurEmployeeCardBinding } from './sigur-live-cards.service.js';
+import {
+  applyCardExpirationChange,
+  assignSigurEmployeeCardBinding,
+  updateSigurEmployeeCardBinding,
+} from './sigur-live-cards.service.js';
 import { sigurService } from './sigur.service.js';
 
 const sig = sigurService as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -153,5 +157,66 @@ describe('assignSigurEmployeeCardBinding', () => {
     expect(sig.createCard).toHaveBeenCalledTimes(1);
     expect(sig.findCardByCandidates).toHaveBeenCalledTimes(2);
     expect(sig.createEmployeeCardBinding).toHaveBeenCalledWith(500, 38046, expect.any(String), expect.any(String), 'external', 'W26');
+  });
+});
+
+/**
+ * Ядро записи срока: им пользуются и кнопка «Сохранить» в сайдбаре, и массовое
+ * продление. Расхождение здесь означало бы, что массовая операция делает не то же
+ * самое, что поштучная.
+ */
+describe('applyCardExpirationChange', () => {
+  const START = '2026-01-01T00:00:00.000Z';
+  const TARGET = '2026-12-31T20:59:59.000Z';
+
+  beforeEach(() => {
+    sig.getCardBindings = vi.fn(async () => [
+      { id: 100, cardId: 100, employeeId: 1, startDate: START, expirationDate: TARGET, format: 'W26' },
+    ]);
+  });
+
+  it('шлёт PATCH с неизменным startDate и новым сроком', async () => {
+    await applyCardExpirationChange({
+      sigurEmployeeId: 1, cardId: 100, startDate: START, expirationDate: TARGET, format: 'W26',
+    });
+
+    expect(sig.patchEmployeeCardBinding).toHaveBeenCalledWith(1, 100, START, TARGET, undefined, 'W26');
+  });
+
+  it('по умолчанию не читает состояние «до» — на сотнях карт это лишний трафик и лог', async () => {
+    await applyCardExpirationChange({
+      sigurEmployeeId: 1, cardId: 100, startDate: START, expirationDate: TARGET,
+    });
+
+    // Единственное чтение — контрольное, уже после PATCH.
+    expect(sig.getCardBindings).toHaveBeenCalledTimes(1);
+  });
+
+  it('ошибку записи пробрасывает: классификация исхода — забота вызывающего', async () => {
+    sig.patchEmployeeCardBinding = vi.fn(async () => { throw new Error('sigur 500'); });
+
+    await expect(applyCardExpirationChange({
+      sigurEmployeeId: 1, cardId: 100, startDate: START, expirationDate: TARGET,
+    })).rejects.toThrow('sigur 500');
+  });
+
+  it('некорректные даты отсекаются до обращения к Sigur', async () => {
+    await expect(applyCardExpirationChange({
+      sigurEmployeeId: 1, cardId: 100, startDate: 'что-то', expirationDate: TARGET,
+    })).rejects.toThrow('Некорректная дата начала доступа');
+
+    await expect(applyCardExpirationChange({
+      sigurEmployeeId: 1, cardId: 100, startDate: START, expirationDate: 'что-то',
+    })).rejects.toThrow('Некорректная дата срока действия');
+
+    expect(sig.patchEmployeeCardBinding).not.toHaveBeenCalled();
+  });
+
+  it('одиночное «Сохранить» выполняет тот же PATCH и сохраняет диагностическое чтение', async () => {
+    const card = await updateSigurEmployeeCardBinding(1, 100, START, TARGET, undefined, 'W26');
+
+    expect(sig.patchEmployeeCardBinding).toHaveBeenCalledWith(1, 100, START, TARGET, undefined, 'W26');
+    expect(sig.getCardBindings).toHaveBeenCalledTimes(2);
+    expect(card).toMatchObject({ cardId: 100, expirationDate: TARGET });
   });
 });

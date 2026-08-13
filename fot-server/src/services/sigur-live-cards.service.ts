@@ -183,21 +183,32 @@ export async function updateSigurEmployeeCardExpiration(
   };
 }
 
-export async function updateSigurEmployeeCardBinding(
-  sigurEmployeeId: number,
-  cardId: number,
-  startDate: string,
-  expirationDate: string,
-  connection?: ConnectionType,
-  format?: string | null,
-): Promise<{
+/**
+ * ЯДРО записи срока действия карты — единственное место, где выполняется PATCH
+ * привязки. Его вызывают и кнопка «Сохранить» в сайдбаре (через обёртку ниже),
+ * и массовое продление: массовая операция обязана быть буквально тем же
+ * сохранением, повторённым N раз, иначе поведение начнёт расходиться.
+ *
+ * Контракт намеренно узкий: меняется только expirationDate, startDate идёт как
+ * есть. Карты не создаются, не перепривязываются, не удаляются; статус сотрудника
+ * и точки доступа не трогаются. Ошибку ядро ПРОБРАСЫВАЕТ — классификация исхода
+ * (запись прошла / не прошла / перехвачена) остаётся снаружи, в bulk-обёртке.
+ */
+export async function applyCardExpirationChange(params: {
+  sigurEmployeeId: number;
   cardId: number;
-  cardNumber: string | null;
-  status: string | null;
-  format: string | null;
-  startDate: string | null;
-  expirationDate: string | null;
-}> {
+  startDate: string;
+  expirationDate: string;
+  connection?: ConnectionType;
+  format?: string | null;
+  /** Дамп привязки до PATCH: на 500 картах он забивает логи, поэтому по умолчанию выключен. */
+  logBeforeState?: boolean;
+}): Promise<ISigurCardSummary> {
+  const {
+    sigurEmployeeId, cardId, startDate, expirationDate,
+    connection, format, logBeforeState = false,
+  } = params;
+
   const parsedStartDate = new Date(startDate);
   if (Number.isNaN(parsedStartDate.getTime())) {
     throw new Error('Некорректная дата начала доступа');
@@ -207,8 +218,10 @@ export async function updateSigurEmployeeCardBinding(
     throw new Error('Некорректная дата срока действия');
   }
 
-  const existingBindings = await sigurService.getCardBindings({ employeeId: sigurEmployeeId, cardId }, connection) as Record<string, unknown>[];
-  console.log('[Sigur binding BEFORE patch] raw=', JSON.stringify(existingBindings));
+  if (logBeforeState) {
+    const existingBindings = await sigurService.getCardBindings({ employeeId: sigurEmployeeId, cardId }, connection) as Record<string, unknown>[];
+    console.log('[Sigur binding BEFORE patch] raw=', JSON.stringify(existingBindings));
+  }
 
   await sigurService.patchEmployeeCardBinding(
     sigurEmployeeId,
@@ -233,6 +246,26 @@ export async function updateSigurEmployeeCardBinding(
     startDate: parsedStartDate.toISOString(),
     expirationDate: parsedExpirationDate.toISOString(),
   };
+}
+
+/** Поштучное сохранение срока из сайдбара. Тонкая обёртка над ядром: сигнатура и поведение прежние. */
+export async function updateSigurEmployeeCardBinding(
+  sigurEmployeeId: number,
+  cardId: number,
+  startDate: string,
+  expirationDate: string,
+  connection?: ConnectionType,
+  format?: string | null,
+): Promise<ISigurCardSummary> {
+  return applyCardExpirationChange({
+    sigurEmployeeId,
+    cardId,
+    startDate,
+    expirationDate,
+    connection,
+    format,
+    logBeforeState: true,
+  });
 }
 
 export async function replaceSigurEmployeeAccessPoints(

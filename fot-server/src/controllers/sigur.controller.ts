@@ -11,6 +11,7 @@ import {
 import { settingsService } from '../services/settings.service.js';
 import { getSigurMonitorStatus } from '../services/sigur-monitor.service.js';
 import { sigurService } from '../services/sigur.service.js';
+import { SigurCardLeaseBusyError, withSigurCardWriteLease } from '../services/sigur-card-lease.service.js';
 import { resolveField } from '../services/sigur-sync-shared.js';
 import { createCache } from '../utils/cache.js';
 import { mapSigurEvent } from '../utils/sigur.mapper.js';
@@ -1285,12 +1286,15 @@ export const sigurController = {
         return;
       }
 
-      await sigurService.updateEmployeeCardBindingExpiration(
-        employee.sigur_employee_id,
-        cardId,
-        parsedExpirationDate.toISOString(),
-        connection,
-      );
+      // Общий lock со «страницей SIGUR»: массовое продление не должно пересечься
+      // с поштучной правкой между перечитыванием карты и записью.
+      await withSigurCardWriteLease(req.user.id, () =>
+        sigurService.updateEmployeeCardBindingExpiration(
+          employee.sigur_employee_id as number,
+          cardId,
+          parsedExpirationDate.toISOString(),
+          connection,
+        ));
 
       const cardsRaw = await sigurService.getCardBindings(
         { employeeId: employee.sigur_employee_id },
@@ -1327,6 +1331,10 @@ export const sigurController = {
         },
       });
     } catch (error) {
+      if (error instanceof SigurCardLeaseBusyError) {
+        res.status(409).json({ success: false, error: error.message });
+        return;
+      }
       console.error('Sigur update employee card expiration error:', error);
       const status = error instanceof AxiosError && error.response?.status ? error.response.status : 500;
       const data = error instanceof AxiosError ? error.response?.data as Record<string, unknown> | string | undefined : undefined;
@@ -1394,14 +1402,15 @@ export const sigurController = {
         return;
       }
 
-      await sigurService.patchEmployeeCardBinding(
-        employee.sigur_employee_id,
-        cardId,
-        parsedStartDate.toISOString(),
-        parsedExpirationDate.toISOString(),
-        connection,
-        format,
-      );
+      await withSigurCardWriteLease(req.user.id, () =>
+        sigurService.patchEmployeeCardBinding(
+          employee.sigur_employee_id as number,
+          cardId,
+          parsedStartDate.toISOString(),
+          parsedExpirationDate.toISOString(),
+          connection,
+          format,
+        ));
 
       const cardsRaw = await sigurService.getCardBindings(
         { employeeId: employee.sigur_employee_id },
@@ -1439,6 +1448,10 @@ export const sigurController = {
         },
       });
     } catch (error) {
+      if (error instanceof SigurCardLeaseBusyError) {
+        res.status(409).json({ success: false, error: error.message });
+        return;
+      }
       console.error('Sigur update employee card binding error:', error);
       const status = error instanceof AxiosError && error.response?.status ? error.response.status : 500;
       const data = error instanceof AxiosError ? error.response?.data as Record<string, unknown> | string | undefined : undefined;

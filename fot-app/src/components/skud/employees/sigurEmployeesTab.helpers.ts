@@ -12,6 +12,9 @@ import type { SigurDepartmentNode, SigurEmployeeCardAccessStatus, SigurEmployeeS
 export const EMPLOYEE_DRAG_TYPE = 'application/x-fot-sigur-employees';
 export const EMPLOYEES_PAGE_SIZE = 100;
 
+/** Лимит одной операции массового продления карт — тот же, что на сервере. */
+export const MAX_BULK_EXTEND_EMPLOYEES = 500;
+
 export const DEPT_PANEL_WIDTH_KEY = 'sigur-dept-panel-width';
 export const DEPT_PANEL_MIN_WIDTH = 200;
 export const DEPT_PANEL_MAX_WIDTH = 640;

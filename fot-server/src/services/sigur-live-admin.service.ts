@@ -240,12 +240,21 @@ export function toAccessRuleBinding(raw: Record<string, unknown>): { employeeId:
   return { employeeId, accessRuleId };
 }
 
-function toEmployeeCardBinding(raw: Record<string, unknown>): {
+export interface IEmployeeCardBinding {
   employeeId: number;
   cardId: number | null;
   expirationDate: string | null;
   startDate: string | null;
-} | null {
+  format: string | null;
+}
+
+/**
+ * Нормализация привязки «сотрудник ↔ карта» из ответа Sigur.
+ * Экспортируется: массовое продление обязано читать привязки ровно так же, как
+ * статусы карт и профиль, иначе появится вторая трактовка тех же полей.
+ * `format` нужен для PATCH — Sigur принимает его вместе с датами.
+ */
+export function toEmployeeCardBinding(raw: Record<string, unknown>): IEmployeeCardBinding | null {
   const employeeId = normalizeInt(resolveField(raw, 'employeeId', 'employee_id'));
   if (!employeeId) return null;
 
@@ -259,12 +268,17 @@ function toEmployeeCardBinding(raw: Record<string, unknown>): {
     resolveField<string>(raw, 'startDate', 'start_date', 'validFrom')
     || '',
   ).trim() || null;
+  const format = String(
+    resolveField<string>(raw, 'format', 'cardFormat', 'card_format')
+    || '',
+  ).trim() || null;
 
   return {
     employeeId,
     cardId,
     expirationDate,
     startDate,
+    format,
   };
 }
 
@@ -331,7 +345,7 @@ export function selectPrimaryCardBinding(
  * (deriveCardW26 + formatW26), fallback — сырой formattedValue. Ключ строковый, чтобы 123 vs "123"
  * не давали промах. Каталог кэширован (getCardsCached, TTL ~60c).
  */
-async function buildCardW26ById(connection?: ConnectionType): Promise<Map<string, string>> {
+export async function buildCardW26ById(connection?: ConnectionType): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   let catalog: Record<string, unknown>[];
   try {

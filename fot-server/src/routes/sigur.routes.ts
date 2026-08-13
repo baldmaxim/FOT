@@ -270,6 +270,19 @@ router.post(
   requireCritical2FA,
   sigurAdminController.bulkAddEmployeeAccessPointsStream,
 );
+// Предпросмотр массового продления карт. Без кэш-мидлвары: ответ зависит от
+// живого состояния карт, устаревшая выборка привела бы к записи не того состава.
+router.get(
+  '/admin/employees/bulk-extend-cards/preview',
+  requirePageAccess('/skud-settings', 'view'),
+  sigurAdminController.previewBulkExtendCards,
+);
+router.post(
+  '/admin/employees/bulk-extend-cards-stream',
+  requirePageAccess('/skud-settings', 'edit'),
+  requireCritical2FA,
+  sigurAdminController.bulkExtendCardsStream,
+);
 router.put(
   '/admin/employees/:sigurEmployeeId/access-points',
   requirePageAccess('/skud-settings', 'edit'),

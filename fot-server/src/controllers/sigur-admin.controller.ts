@@ -42,6 +42,21 @@ import {
 import { sigurService } from '../services/sigur.service.js';
 import { bulkAddEmployeeAccessPointsStreaming } from '../services/sigur-bulk-access.service.js';
 import {
+  previewBulkExtendCards,
+  prepareBulkExtendOperation,
+  executePreparedBulkExtend,
+  normalizeEmployeeIds,
+} from '../services/sigur-bulk-cards.service.js';
+import {
+  createBulkExtendToken,
+  verifyBulkExtendToken,
+  BulkExtendTokenError,
+} from '../services/sigur-bulk-cards-token.js';
+import { SigurCardLeaseBusyError, withSigurCardWriteLease } from '../services/sigur-card-lease.service.js';
+import { withTransaction } from '../config/postgres.js';
+import { parseIsoDateOnly, moscowTodayIso } from '../utils/date.utils.js';
+import { randomUUID } from 'crypto';
+import {
   seedPositionsLogic,
 } from '../services/sigur-sync.service.js';
 import { readExcelRows } from '../utils/excel-reader.js';
@@ -64,6 +79,46 @@ function parseInteger(value: unknown): number | null {
 
 /** Лимит сотрудников в одной пачке массового добавления точек доступа. */
 const MAX_BULK_ACCESS_POINTS_EMPLOYEES = 50;
+
+/** Лимит сотрудников в одной операции массового продления карт. */
+const MAX_BULK_EXTEND_CARDS_EMPLOYEES = 500;
+
+/**
+ * Разбор входа массового продления. Мусор не отбрасываем молча: список
+ * сотрудников — основа операции, и «часть id потерялась» пользователю
+ * не видно, а последствия — непродлённые пропуска.
+ */
+function parseBulkExtendEmployeeIds(raw: unknown): { ids: number[] } | { error: string } {
+  const source = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string'
+      ? raw.split(',').map(part => part.trim()).filter(Boolean)
+      : null;
+
+  if (!source) return { error: 'employeeIds обязателен' };
+  if (source.length === 0) return { error: 'Не выбрано ни одного сотрудника' };
+
+  const ids = normalizeEmployeeIds(source);
+  const uniqueSource = new Set(source.map(value => String(value).trim()));
+  if (ids.length !== uniqueSource.size) {
+    return { error: 'Список сотрудников содержит некорректные значения' };
+  }
+  if (ids.length > MAX_BULK_EXTEND_CARDS_EMPLOYEES) {
+    return { error: `За один раз можно обработать не более ${MAX_BULK_EXTEND_CARDS_EMPLOYEES} сотрудников` };
+  }
+  return { ids };
+}
+
+/** Целевая дата: календарно существующая и строго будущая по МСК. */
+function parseBulkExtendDate(raw: unknown): { date: string } | { error: string } {
+  if (typeof raw !== 'string' || !parseIsoDateOnly(raw)) {
+    return { error: 'Укажите корректную дату в формате ГГГГ-ММ-ДД' };
+  }
+  if (raw <= moscowTodayIso()) {
+    return { error: 'Дата окончания должна быть будущей' };
+  }
+  return { date: raw };
+}
 
 function parseBooleanQuery(value: unknown): boolean | null | undefined {
   if (value === undefined) return undefined;
@@ -781,6 +836,243 @@ export const sigurAdminController = {
   },
 
   /**
+   * GET /admin/employees/bulk-extend-cards/preview — что произойдёт с картами
+   * выбранных сотрудников при переносе срока на указанную дату.
+   * Возвращает разбор и подписанный previewToken, которым связывается запись.
+   * Query: employeeIds=1,2,3&expirationDate=YYYY-MM-DD&connection?
+   */
+  async previewBulkExtendCards(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const parsedIds = parseBulkExtendEmployeeIds(req.query.employeeIds);
+    if ('error' in parsedIds) {
+      res.status(400).json({ success: false, error: parsedIds.error });
+      return;
+    }
+    const parsedDate = parseBulkExtendDate(req.query.expirationDate);
+    if ('error' in parsedDate) {
+      res.status(400).json({ success: false, error: parsedDate.error });
+      return;
+    }
+    if (req.query.connection !== undefined && !parseConnection(req.query.connection)) {
+      res.status(400).json({ success: false, error: 'Неизвестный контур подключения' });
+      return;
+    }
+
+    try {
+      const connection = parseConnection(req.query.connection);
+      const preview = await previewBulkExtendCards({
+        employeeIds: parsedIds.ids,
+        expirationDate: parsedDate.date,
+        connection,
+      });
+
+      const previewToken = createBulkExtendToken({
+        employeeIds: parsedIds.ids,
+        connection,
+        expirationDate: preview.expirationDate,
+        targetIso: preview.targetIso,
+        cards: preview.cards.map(card => ({
+          employeeId: card.employeeId,
+          cardId: card.cardId,
+          startDate: card.startDate,
+          expirationDate: card.expirationDate,
+          format: card.format,
+        })),
+      });
+
+      res.json({ success: true, data: { ...preview, previewToken } });
+    } catch (error) {
+      console.error('Sigur admin previewBulkExtendCards error:', error);
+      res.status(getErrorStatus(error)).json({
+        success: false,
+        error: getErrorMessage(error, 'Не удалось рассчитать предпросмотр продления'),
+      });
+    }
+  },
+
+  /**
+   * POST /admin/employees/bulk-extend-cards-stream — массовое продление срока карт.
+   * SSE-прогресс. Body: { previewToken, confirmExpired? }.
+   *
+   * Порядок жёсткий: подготовка (lock + свежий снимок) → строгий аудит started →
+   * запись. Не записался started — к Sigur не идём вовсе: без следа операцию
+   * нельзя было бы ни разобрать, ни откатить.
+   */
+  async bulkExtendCardsStream(req: AuthenticatedRequest, res: Response): Promise<void> {
+    let payload;
+    try {
+      payload = verifyBulkExtendToken((req.body as { previewToken?: unknown }).previewToken);
+    } catch (error) {
+      const message = error instanceof BulkExtendTokenError
+        ? error.message
+        : 'Предпросмотр не найден — обновите его и повторите';
+      res.status(400).json({ success: false, error: message });
+      return;
+    }
+
+    const parsedIds = parseBulkExtendEmployeeIds(payload.employeeIds);
+    if ('error' in parsedIds) {
+      res.status(400).json({ success: false, error: parsedIds.error });
+      return;
+    }
+    const parsedDate = parseBulkExtendDate(payload.expirationDate);
+    if ('error' in parsedDate) {
+      res.status(400).json({ success: false, error: parsedDate.error });
+      return;
+    }
+
+    const confirmExpired = (req.body as { confirmExpired?: unknown }).confirmExpired === true;
+    const operationId = randomUUID();
+    const actorId = req.user.id;
+
+    let prepared;
+    try {
+      prepared = await prepareBulkExtendOperation({
+        operationId,
+        employeeIds: parsedIds.ids,
+        expirationDate: parsedDate.date,
+        confirmExpired,
+        expected: payload.cards,
+        connection: payload.connection,
+      });
+    } catch (error) {
+      const status = error instanceof SigurCardLeaseBusyError ? 409 : getErrorStatus(error);
+      console.error('Sigur admin bulkExtendCards prepare error:', error);
+      res.status(status).json({
+        success: false,
+        error: getErrorMessage(error, 'Не удалось подготовить массовое продление'),
+      });
+      return;
+    }
+
+    // Строгий аудит намерения: logWithClient в транзакции бросает при неудаче,
+    // в отличие от auditService.log, который ошибку глотает.
+    try {
+      await withTransaction(async client => {
+        await auditService.logWithClient(client, {
+          user_id: actorId,
+          action: 'UPDATE_EMPLOYEE',
+          entity_type: 'sigur_card_bulk_extend',
+          entity_id: operationId,
+          details: {
+            action: 'bulk_extend_cards_started',
+            operationId,
+            connection: payload.connection ?? null,
+            expirationDate: prepared.plan.expirationDate,
+            targetIso: prepared.plan.targetIso,
+            confirmExpired,
+            employeeIds: prepared.plan.employeeIds,
+            noCardEmployeeIds: prepared.plan.noCardEmployeeIds,
+            unreadableEmployeeIds: prepared.plan.unreadableEmployeeIds,
+            plan: prepared.plan.items.map(item => ({
+              employeeId: item.employeeId,
+              cardId: item.cardId,
+              previousExpiration: item.previousExpiration,
+              startDate: item.startDate,
+              format: item.format,
+              status: item.status,
+              reason: item.reason,
+              passes: item.passes.map(pass => ({
+                passId: pass.passId,
+                passNumber: pass.passNumber,
+                previousExpiresAt: pass.previousExpiresAt,
+                previousCardUid: pass.previousCardUid,
+                previousCardHexUid: pass.previousCardHexUid,
+              })),
+            })),
+          },
+          ip_address: req.ip,
+          user_agent: req.get('user-agent'),
+        });
+      });
+    } catch (error) {
+      await prepared.lease.release();
+      console.error('Sigur admin bulkExtendCards started-audit error:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Не удалось записать операцию в журнал — продление не выполнялось',
+      });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    // Клиент мог закрыть вкладку: события больше не пишем, но операцию доводим
+    // до конца и обязательно закрываем аудитом — иначе останется «полуоперация».
+    let clientGone = false;
+    res.on('close', () => { clientGone = true; });
+
+    const keepAliveTimer = setInterval(() => {
+      if (!clientGone) res.write(': keepalive\n\n');
+    }, 15_000);
+
+    const send = (data: Record<string, unknown>) => {
+      if (clientGone) return;
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const result = await executePreparedBulkExtend(prepared, send);
+      const warnings = [...result.warnings];
+
+      try {
+        await withTransaction(async client => {
+          await auditService.logWithClient(client, {
+            user_id: actorId,
+            action: 'UPDATE_EMPLOYEE',
+            entity_type: 'sigur_card_bulk_extend',
+            entity_id: operationId,
+            details: {
+              action: result.failedCards > 0 || result.unknownCards > 0
+                ? 'bulk_extend_cards_partial'
+                : 'bulk_extend_cards_completed',
+              operationId,
+              expirationDate: prepared.plan.expirationDate,
+              confirmExpired,
+              requestedEmployees: result.requestedEmployees,
+              updatedEmployees: result.updatedEmployees,
+              updatedCards: result.updatedCards,
+              retriedCards: result.retriedCards,
+              unknownCards: result.unknownCards,
+              changedDuringWriteCards: result.changedDuringWriteCards,
+              failedCards: result.failedCards,
+              skippedCards: result.skippedCards,
+              expiredExtendedCards: result.expiredExtendedCards,
+              localUpdatedPasses: result.localUpdatedPasses,
+              localSyncFailedPasses: result.localSyncFailedPasses,
+              localUnknownPasses: result.localUnknownPasses,
+              failedEmployeeIds: result.failedEmployeeIds,
+              items: result.items,
+            },
+            ip_address: req.ip,
+            user_agent: req.get('user-agent'),
+          });
+        });
+      } catch (auditError) {
+        // Записи в Sigur уже сделаны — превращать это в error нельзя, иначе
+        // пользователь повторит операцию.
+        console.error('Sigur admin bulkExtendCards completed-audit error:', auditError);
+        warnings.push('Операция выполнена, но итоговая запись в журнал не удалась');
+      }
+
+      send({ type: 'done', ...result, warnings });
+    } catch (error) {
+      console.error('Sigur admin bulkExtendCardsStream error:', error);
+      send({
+        type: 'error',
+        error: getErrorMessage(error, 'Ошибка массового продления карт'),
+        operationId,
+      });
+    } finally {
+      clearInterval(keepAliveTimer);
+      await prepared.lease.release();
+      res.end();
+    }
+  },
+
+  /**
    * POST /admin/employees/bulk-access-points-stream — массовое ДОБАВЛЕНИЕ точек
    * доступа выбранным сотрудникам (merge). SSE-прогресс. Дополнительно
    * синхронизирует связанные contractor_passes и пишет историю в audit_logs.
@@ -959,7 +1251,10 @@ export const sigurAdminController = {
       }
 
       const connection = parseConnection(req.body.connection);
-      const data = await updateSigurEmployeeCardExpiration(sigurEmployeeId, cardId, expirationDate, connection);
+      // Тот же lock, что у массового продления: иначе одиночное сохранение
+      // вклинится между перечитыванием карты и PATCH массовой операции.
+      const data = await withSigurCardWriteLease(req.user.id, () =>
+        updateSigurEmployeeCardExpiration(sigurEmployeeId, cardId, expirationDate, connection));
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
         entityType: 'sigur_employee',
@@ -973,6 +1268,10 @@ export const sigurAdminController = {
 
       res.json({ success: true, data });
     } catch (error) {
+      if (error instanceof SigurCardLeaseBusyError) {
+        res.status(409).json({ success: false, error: error.message });
+        return;
+      }
       const status = getErrorStatus(error);
       console.error('Sigur admin updateEmployeeCardExpiration error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка обновления срока действия карты Sigur') });
@@ -993,7 +1292,8 @@ export const sigurAdminController = {
 
       const connection = parseConnection(req.body.connection);
       const format = typeof req.body.format === 'string' && req.body.format ? req.body.format : undefined;
-      const data = await updateSigurEmployeeCardBinding(sigurEmployeeId, cardId, startDate, expirationDate, connection, format);
+      const data = await withSigurCardWriteLease(req.user.id, () =>
+        updateSigurEmployeeCardBinding(sigurEmployeeId, cardId, startDate, expirationDate, connection, format));
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
         entityType: 'sigur_employee',
@@ -1008,6 +1308,10 @@ export const sigurAdminController = {
 
       res.json({ success: true, data });
     } catch (error) {
+      if (error instanceof SigurCardLeaseBusyError) {
+        res.status(409).json({ success: false, error: error.message });
+        return;
+      }
       const status = getErrorStatus(error);
       if (error instanceof AxiosError) {
         const data = error.response?.data as Record<string, unknown> | undefined;

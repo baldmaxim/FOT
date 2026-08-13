@@ -31,6 +31,51 @@ export interface BulkAccessPointsCardConflict {
   reason: 'bound_to_other' | 'missing_dates';
 }
 
+export interface BulkExtendCardsPreview {
+  expirationDate: string;
+  targetIso: string;
+  requestedEmployees: number;
+  willExtendCards: number;
+  expiredCards: number;
+  skippedCards: number;
+  noCardEmployees: number;
+  unreadableEmployees: number;
+  byReason: Record<string, number>;
+  /** Подписанный токен предпросмотра — им связывается запись. */
+  previewToken: string;
+}
+
+export type BulkExtendCardsProgressEvent =
+  | { type: 'start'; total: number }
+  | {
+      type: 'progress';
+      processed: number;
+      total: number;
+      employeeId: number;
+      okCards: number;
+      failedCards: number;
+    };
+
+export interface BulkExtendCardsResult {
+  operationId: string;
+  requestedEmployees: number;
+  updatedEmployees: number;
+  updatedCards: number;
+  retriedCards: number;
+  unknownCards: number;
+  changedDuringWriteCards: number;
+  skippedCards: number;
+  failedCards: number;
+  expiredExtendedCards: number;
+  noCardEmployees: number;
+  unreadableEmployees: number;
+  localUpdatedPasses: number;
+  localSyncFailedPasses: number;
+  localUnknownPasses: number;
+  failedEmployeeIds: number[];
+  warnings: string[];
+}
+
 export type BulkAccessPointsProgressEvent =
   | { type: 'start'; total: number }
   | {
@@ -462,6 +507,73 @@ export const sigurAdminService = {
       }
       if (data.type === 'error') {
         streamError = typeof data.error === 'string' ? data.error : 'Ошибка массового добавления точек доступа';
+      }
+    });
+
+    if (streamError) {
+      throw new Error(streamError);
+    }
+    if (!result) {
+      throw new Error('Стрим завершился без результата');
+    }
+    return result;
+  },
+
+  async previewBulkExtendCards(
+    employeeIds: number[],
+    expirationDate: string,
+    connection?: SigurConnectionScope,
+  ): Promise<BulkExtendCardsPreview> {
+    const params = new URLSearchParams({
+      employeeIds: employeeIds.join(','),
+      expirationDate,
+    });
+    if (connection) params.set('connection', connection);
+    const response = await apiClient.get<ApiResponse<BulkExtendCardsPreview>>(
+      `/sigur/admin/employees/bulk-extend-cards/preview?${params.toString()}`,
+    );
+    return response.data;
+  },
+
+  /**
+   * Массовое продление срока карт. Состав операции берётся сервером из previewToken —
+   * так карта, появившаяся после предпросмотра, не попадёт под «продлить и истёкшие».
+   */
+  async bulkExtendCardsStream(
+    payload: { previewToken: string; confirmExpired: boolean },
+    onProgress: (event: BulkExtendCardsProgressEvent) => void,
+  ): Promise<BulkExtendCardsResult> {
+    const response = await fetch(buildApiUrl('/sigur/admin/employees/bulk-extend-cards-stream'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok && response.headers.get('content-type')?.includes('application/json')) {
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(body?.error || 'Не удалось запустить массовое продление');
+    }
+
+    let result: BulkExtendCardsResult | null = null;
+    let streamError: string | null = null;
+
+    await readSseResponse(response, data => {
+      if (data.type === 'start' || data.type === 'progress') {
+        onProgress(data as BulkExtendCardsProgressEvent);
+        return;
+      }
+      if (data.type === 'done') {
+        const rest = { ...(data as Record<string, unknown>) };
+        delete rest.type;
+        result = rest as unknown as BulkExtendCardsResult;
+        return;
+      }
+      if (data.type === 'error') {
+        streamError = typeof data.error === 'string' ? data.error : 'Ошибка массового продления карт';
       }
     });
 

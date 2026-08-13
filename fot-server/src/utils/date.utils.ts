@@ -136,6 +136,21 @@ export function moscowTodayIso(now: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(now);
 }
 
+/**
+ * Конец календарного дня Europe/Moscow (23:59:59) в виде ISO-строки.
+ *
+ * Смещение +03:00 задано явно: `new Date('2026-09-30T23:59:59')` трактуется в зоне
+ * ПРОЦЕССА, а она на проде не гарантирована — в UTC-контейнере срок карты уехал бы
+ * на 03:00 следующих суток. МСК с 2014 года без переходов, поэтому +03:00 — константа.
+ */
+export function moscowEndOfDayIso(dateIso: string): string {
+  const parsed = parseIsoDateOnly(dateIso);
+  if (!parsed) {
+    throw new Error(`Некорректная календарная дата: ${dateIso}`);
+  }
+  return new Date(`${dateIso}T23:59:59+03:00`).toISOString();
+}
+
 /** Порог применения увольнения, назначенного на сегодняшнюю дату (Europe/Moscow). */
 export const DISMISSAL_CUTOFF_HM = '23:00';
 

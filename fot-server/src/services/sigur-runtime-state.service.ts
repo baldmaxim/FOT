@@ -276,6 +276,14 @@ export function startSigurRuntimeLeaseHeartbeat(params: {
   ttlSeconds: number;
   getMeta?: () => Record<string, unknown>;
   onError?: (error: Error) => void;
+  /**
+   * Вызывается, когда heartbeat вернул refreshed=false — lease перехвачен другим
+   * владельцем или истёк. Без этого колбэка потеря выглядит как обычный успешный
+   * тик: у долгих операций (массовое продление карт) это означало бы продолжение
+   * записи без блокировки. Существующие вызывающие колбэк не передают — поведение
+   * для них не меняется.
+   */
+  onLost?: () => void;
 }): () => void {
   const intervalMs = Math.max(15_000, Math.floor((params.ttlSeconds * 1000) / 3));
   const timer = setInterval(() => {
@@ -284,6 +292,10 @@ export function startSigurRuntimeLeaseHeartbeat(params: {
       owner: params.owner,
       ttlSeconds: params.ttlSeconds,
       meta: params.getMeta?.() || {},
+    }).then(refreshed => {
+      if (!refreshed) {
+        params.onLost?.();
+      }
     }).catch(error => {
       params.onError?.(error as Error);
     });

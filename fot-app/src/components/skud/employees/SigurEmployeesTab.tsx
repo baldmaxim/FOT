@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FC, type MouseE
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRightLeft,
+  CalendarClock,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -30,6 +31,7 @@ import {
   EmployeeMoveDialog,
 } from './SigurEmployeeDialogs';
 import { BulkAccessPointsModal } from './BulkAccessPointsModal';
+import { BulkExtendCardsModal } from './BulkExtendCardsModal';
 import { ImportTabNumbersModal } from './ImportTabNumbersModal';
 import {
   buildDepartmentNodeMap,
@@ -47,6 +49,7 @@ import {
   getEmployeeStatusPresentation,
   getMatchingDepartmentIds,
   getRootExpandedIds,
+  MAX_BULK_EXTEND_EMPLOYEES,
   readInitialDeptPanelWidth,
   type DeleteDepartmentsDialogState,
   type DepartmentContextMenuState,
@@ -134,6 +137,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
   const [triedSubmitEmployee, setTriedSubmitEmployee] = useState(false);
   const [employeeMoveDialog, setEmployeeMoveDialog] = useState<EmployeeMoveDialogState>(null);
   const [bulkAccessPointsEmployeeIds, setBulkAccessPointsEmployeeIds] = useState<number[] | null>(null);
+  const [bulkExtendCardsEmployeeIds, setBulkExtendCardsEmployeeIds] = useState<number[] | null>(null);
   const [importTabsOpen, setImportTabsOpen] = useState(false);
   const [newEmployeePositionName, setNewEmployeePositionName] = useState('');
   const [employeeNameSuggestionsQuery, setEmployeeNameSuggestionsQuery] = useState('');
@@ -1051,6 +1055,19 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <span>Точки доступа</span>
               </button>
             )}
+            {canEdit && selectedEmployeeIds.size > 0 && (
+              <button
+                className="ep-toolbar-btn secondary"
+                onClick={() => setBulkExtendCardsEmployeeIds([...selectedEmployeeIds])}
+                disabled={selectedEmployeeIds.size > MAX_BULK_EXTEND_EMPLOYEES}
+                title={selectedEmployeeIds.size > MAX_BULK_EXTEND_EMPLOYEES
+                  ? `Не больше ${MAX_BULK_EXTEND_EMPLOYEES} сотрудников за раз`
+                  : undefined}
+              >
+                <CalendarClock size={16} />
+                <span>Продлить карты</span>
+              </button>
+            )}
             {canEdit && (
               <button className="ep-toolbar-btn primary" onClick={openCreateEmployeeDialog}>
                 <UserPlus size={16} />
@@ -1601,6 +1618,19 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
           onClose={() => setBulkAccessPointsEmployeeIds(null)}
           onApplied={() => {
             setSelectedEmployeeIds(new Set());
+            void refreshData();
+          }}
+        />
+      )}
+      {bulkExtendCardsEmployeeIds && (
+        <BulkExtendCardsModal
+          employeeIds={bulkExtendCardsEmployeeIds}
+          onClose={() => setBulkExtendCardsEmployeeIds(null)}
+          onApplied={() => {
+            setSelectedEmployeeIds(new Set());
+            // refreshData обновляет список и статусы карт, но не открытую карточку —
+            // у неё свой ключ ['sigur-employee-profile', id].
+            void queryClient.invalidateQueries({ queryKey: ['sigur-employee-profile'] });
             void refreshData();
           }}
         />
