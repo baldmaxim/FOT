@@ -20,8 +20,11 @@ import { resolveResponsibleEmployeeIdsByEmployee } from '../services/approval-ro
 import { resolveResponsibleEmployeeForTarget } from '../services/weekend-approval-assignments.service.js';
 import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus, quotaLockKeys } from './timesheet.controller.js';
-import { syncLeaveRequestReason } from '../services/leave-request-sync.service.js';
 import { auditService } from '../services/audit.service.js';
+import {
+  recordLeaveRequestHistory,
+  listLeaveRequestHistory,
+} from '../services/leave-request-history.service.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
 import type { TimeStatus } from '../types/index.js';
@@ -1126,6 +1129,38 @@ const getById = async (req: AuthenticatedRequest, res: Response): Promise<void> 
   }
 };
 
+/**
+ * История изменений заявления (кто, когда, что менял). Доступ тот же, что у getById:
+ * автор заявления либо согласующий с правом видеть его заявления.
+ */
+const getHistory = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    const request = await queryOne<{ employee_id: number; request_type: string }>(
+      `SELECT employee_id, request_type FROM leave_requests WHERE id = $1`,
+      [id],
+    );
+    if (!request) {
+      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+      return;
+    }
+
+    const isOwner = request.employee_id === req.user.employee_id;
+    const canReviewOthers = await canManageLeaveRequest(req, request.employee_id, request.request_type, 'view');
+    if (!isOwner && !canReviewOthers) {
+      res.status(403).json({ success: false, error: 'Нет доступа к заявке' });
+      return;
+    }
+
+    const data = await listLeaveRequestHistory(Number(id));
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('leave-requests.getHistory error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения истории заявления' });
+  }
+};
+
 /** Одобрение заявления */
 const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -1309,6 +1344,13 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         }
       }
 
+      await recordLeaveRequestHistory(client, {
+        requestId: Number(id),
+        action: 'approved',
+        actorId: req.user.id,
+        comment: comment || null,
+      });
+
       return { conflict: false as const, row: updated };
     });
 
@@ -1367,17 +1409,30 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     // Анти-гонка: статус мог смениться после проверки выше (самоотмена сотрудником).
     // request_type в условии: право проверено по типу из предчтения — если HR
     // параллельно сменил категорию, отклонение по неактуальному праву не проходит.
-    const data = await queryOne(
-      `UPDATE leave_requests SET
-         status = 'rejected',
-         reviewer_id = $1,
-         reviewed_at = $2,
-         review_comment = $3,
-         updated_at = $2
-       WHERE id = $4 AND status = 'pending' AND request_type = $5
-       RETURNING *`,
-      [req.user.id, nowIso, comment || null, id, request.request_type],
-    );
+    // Транзакция — ради записи истории: отклонение без следа в истории не нужно.
+    const data = await withTransaction(async (client) => {
+      const updated = (await client.query(
+        `UPDATE leave_requests SET
+           status = 'rejected',
+           reviewer_id = $1,
+           reviewed_at = $2,
+           review_comment = $3,
+           updated_at = $2
+         WHERE id = $4 AND status = 'pending' AND request_type = $5
+         RETURNING *`,
+        [req.user.id, nowIso, comment || null, id, request.request_type],
+      )).rows[0] ?? null;
+
+      if (!updated) return null;
+
+      await recordLeaveRequestHistory(client, {
+        requestId: Number(id),
+        action: 'rejected',
+        actorId: req.user.id,
+        comment: comment || null,
+      });
+      return updated;
+    });
 
     if (!data) {
       res.status(409).json({ success: false, error: 'Заявление изменилось, обновите страницу' });
@@ -1405,70 +1460,17 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 };
 
 /**
- * Правка текста обоснования заявления руководителем/админом (например, дописать
- * пропущенный объект). Разрешена независимо от статуса заявления и от того,
- * заперты ли по периоду какие-то из материализованных дней — см.
- * syncLeaveRequestReason: leave_requests.reason обновляется всегда, копии в
- * attendance_adjustments — только для незапертых дней.
- */
-const updateReason = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const { reason } = req.body as { reason?: unknown };
-
-    if (typeof reason !== 'string') {
-      res.status(400).json({ success: false, error: 'Текст заявления обязателен' });
-      return;
-    }
-    const trimmedReason = reason.trim();
-    if (trimmedReason.length > 500) {
-      res.status(400).json({ success: false, error: 'Текст заявления не может быть длиннее 500 символов' });
-      return;
-    }
-
-    const request = await queryOne<{ id: number; employee_id: number; request_type: string }>(
-      `SELECT * FROM leave_requests WHERE id = $1`,
-      [id],
-    );
-    if (!request) {
-      res.status(404).json({ success: false, error: 'Заявление не найдено' });
-      return;
-    }
-
-    if (!(await canManageLeaveRequest(req, request.employee_id, request.request_type, 'edit'))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
-      return;
-    }
-
-    // expectedRequestType: право выше проверено по типу из предчтения — если HR
-    // параллельно сменил категорию, синк вернёт false и правка не применится.
-    const synced = await syncLeaveRequestReason(Number(id), trimmedReason || null, request.request_type);
-    if (!synced) {
-      res.status(409).json({ success: false, error: 'Заявление изменилось, обновите страницу' });
-      return;
-    }
-
-    const data = await queryOne(`SELECT * FROM leave_requests WHERE id = $1`, [id]);
-
-    auditService.logFromRequest(req, req.user.id, 'UPDATE_LEAVE_REQUEST_REASON', {
-      entityType: 'leave_request',
-      entityId: String(id),
-      details: { employee_id: request.employee_id, reason: trimmedReason },
-    }).catch((e) => console.error('[leave-requests] audit updateReason error:', e));
-
-    res.json({ success: true, data });
-  } catch (err) {
-    console.error('leave-requests.updateReason error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка правки текста заявления' });
-  }
-};
-
-/**
- * Правка часов корректировки табеля согласующим ДО одобрения (в карточке
- * «Заявлений» часы кликабельны). Разрешена только на pending: строки в
- * attendance_adjustments ещё нет — она создаётся в approve, который читает
- * заявку заново, поэтому табель получит уже исправленное значение.
- * Аудит пишется в той же транзакции (гарантированный след «было → стало»).
+ * Правка часов корректировки табеля согласующим.
+ *
+ *  - `pending`: правим только leave_requests — строки в attendance_adjustments ещё
+ *    нет, она создаётся в approve, который перечитывает заявку (RETURNING *), так что
+ *    в табель уйдёт уже исправленное значение;
+ *  - `approved`: дни уже материализованы, поэтому в той же транзакции точечно
+ *    переписываем строку табеля. Право здесь уже, чем «любой согласующий»:
+ *    согласовавший или админ (как у отмены согласования), и только пока период не
+ *    сдан в табеле.
+ *
+ * Аудит и история пишутся в той же транзакции (гарантированный след «было → стало»).
  */
 const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -1481,10 +1483,9 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    const request = await queryOne<{ id: number; employee_id: number; request_type: string; status: string }>(
-      `SELECT id, employee_id, request_type, status FROM leave_requests WHERE id = $1`,
-      [id],
-    );
+    const request = await queryOne<LeaveRequestDatesRow & {
+      status: string; reviewer_id: string | null; correction_status: string | null;
+    }>(`SELECT * FROM leave_requests WHERE id = $1`, [id]);
     if (!request) {
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
       return;
@@ -1500,25 +1501,80 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
       return;
     }
 
+    if (request.status !== 'pending' && request.status !== 'approved') {
+      res.status(409).json({ success: false, error: 'Заявление уже обработано, обновите страницу' });
+      return;
+    }
+
+    // У согласованного заявления часы уже уехали в табель: правку допускаем только
+    // тому, кто согласовал (или админу), и только пока период не сдан.
+    if (request.status === 'approved') {
+      const isAdmin = !!req.user.is_admin;
+      const isApprover = !!request.reviewer_id && req.user.id === request.reviewer_id;
+      if (!isAdmin && !isApprover) {
+        res.status(403).json({ success: false, error: 'Часы согласованной корректировки может изменить только администратор или согласовавший руководитель' });
+        return;
+      }
+      if (await hasLockedTimesheetDates(request.employee_id, collectAffectedTimesheetDates(request))) {
+        res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку' });
+        return;
+      }
+    }
+
     // FOR UPDATE: без блокировки два параллельных редактора прочитали бы одно и то же
     // «было», и второй аудит соврал бы (10→8 вместо 9→8). Аудит — единственный след правки.
     const result = await withTransaction(async (client) => {
-      const locked = (await client.query(
+      const locked = (await client.query<{ status: string; correction_hours: string | number | null }>(
         `SELECT status, correction_hours FROM leave_requests WHERE id = $1 FOR UPDATE`,
         [id],
       )).rows[0] ?? null;
 
       if (!locked) return { conflict: 'gone' as const };
-      if (locked.status !== 'pending') return { conflict: 'not_pending' as const };
+      // Статус мог смениться между предчтением и локом (параллельный approve/cancel):
+      // права и гарды выше считались по старому статусу, поэтому расхождение — конфликт.
+      if (locked.status !== request.status) return { conflict: 'not_editable' as const };
 
       const updated = (await client.query(
         `UPDATE leave_requests SET correction_hours = $1, updated_at = now()
-          WHERE id = $2 AND status = 'pending'
+          WHERE id = $2 AND status = $3
           RETURNING *`,
-        [hours, id],
+        [hours, id, request.status],
       )).rows[0] ?? null;
 
-      if (!updated) return { conflict: 'not_pending' as const };
+      if (!updated) return { conflict: 'not_editable' as const };
+
+      // Согласованное заявление: переписываем материализованную строку табеля.
+      // Точечный UPDATE, а не upsertAttendanceAdjustment — approval_status/approved_by
+      // остаются как есть: смена часов не должна возвращать одобренный день в очередь
+      // /approvals (та же логика, что у смены категории отпуска).
+      if (request.status === 'approved' && request.correction_date) {
+        const rawCorrectionStatus: TimeStatus = isTimeStatus(request.correction_status) ? request.correction_status : 'work';
+        // То же правило, что в approve: явные часы на «рабочий день» → 'manual'
+        // (время авторитетно из hours_override, а не из СКУД).
+        const correctionStatus: TimeStatus = rawCorrectionStatus === 'work' && hours > 0
+          ? 'manual'
+          : rawCorrectionStatus;
+        const adjusted = request.correction_object_id
+          ? await client.query(
+            `UPDATE attendance_adjustments
+                SET hours_override = $1, status = $2, updated_at = now()
+              WHERE employee_id = $3 AND work_date = $4::date
+                AND source_type = $5 AND source_id = $6`,
+            [hours, correctionStatus, request.employee_id, request.correction_date,
+              OBJECT_ADJUSTMENT_SOURCE_TYPE, request.correction_object_id],
+          )
+          : await client.query(
+            `UPDATE attendance_adjustments
+                SET hours_override = $1, status = $2, updated_at = now()
+              WHERE source_type = 'leave_request' AND source_id = $3`,
+            [hours, correctionStatus, `${request.id}:time_correction`],
+          );
+        // Строки нет — материализация не совпадает с заявлением (день переписан
+        // вручную в табеле). Молча разойтись нельзя: откатываемся.
+        if ((adjusted.rowCount ?? 0) === 0) return { conflict: 'no_adjustment' as const };
+      }
+
+      const oldHours = locked.correction_hours == null ? null : Number(locked.correction_hours);
 
       await auditService.logFromRequestWithClient(
         client, req, req.user.id, 'UPDATE_LEAVE_REQUEST_CORRECTION_HOURS',
@@ -1529,11 +1585,19 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
             employee_id: request.employee_id,
             // numeric из pg приходит строкой — нормализуем, чтобы в JSON не легли
             // разнотипные "10.00" и 9.
-            old_hours: locked.correction_hours == null ? null : Number(locked.correction_hours),
+            old_hours: oldHours,
             new_hours: hours,
           },
         },
       );
+
+      await recordLeaveRequestHistory(client, {
+        requestId: Number(id),
+        action: 'hours_changed',
+        actorId: req.user.id,
+        oldValue: { hours: oldHours },
+        newValue: { hours },
+      });
 
       return { conflict: null, row: updated };
     });
@@ -1542,8 +1606,12 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
       return;
     }
-    if (result.conflict === 'not_pending') {
-      res.status(409).json({ success: false, error: 'Заявление уже обработано, обновите страницу' });
+    if (result.conflict === 'not_editable') {
+      res.status(409).json({ success: false, error: 'Статус заявления изменился, обновите страницу' });
+      return;
+    }
+    if (result.conflict === 'no_adjustment') {
+      res.status(409).json({ success: false, error: 'День уже изменён в табеле — правьте часы там' });
       return;
     }
 
@@ -1700,6 +1768,14 @@ const updateRequestType = async (req: AuthenticatedRequest, res: Response): Prom
         },
       );
 
+      await recordLeaveRequestHistory(client, {
+        requestId: Number(id),
+        action: 'type_changed',
+        actorId: req.user.id,
+        oldValue: { request_type: locked.request_type },
+        newValue: { request_type: requestType },
+      });
+
       return { conflict: null, row: updated, entityId: locked.id };
     });
 
@@ -1767,7 +1843,7 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    const request = await queryOne<{ id: number; employee_id: number; status: string; request_type: string }>(
+    const request = await queryOne<LeaveRequestDatesRow & { status: string }>(
       `SELECT * FROM leave_requests WHERE id = $1`,
       [id],
     );
@@ -1818,12 +1894,13 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       // Чистим корректировки и для pending-заявок: легаси work-заявки могли
       // материализовать pending-строки ещё при создании — без удаления они
       // остались бы сиротами в очереди /approvals.
-      await client.query(
-        `DELETE FROM attendance_adjustments
-           WHERE source_type = 'leave_request'
-             AND source_id = ANY($1::text[])`,
-        [[String(id), `${id}:time_correction`]],
-      );
+      await deleteLeaveRequestAdjustments(client, request, current.status === 'approved');
+      await recordLeaveRequestHistory(client, {
+        requestId: Number(id),
+        action: 'cancelled',
+        actorId: req.user.id,
+        comment: reason,
+      });
       return { conflict: false as const, row: updated.rows[0] ?? null };
     });
 
@@ -1984,15 +2061,98 @@ function collectLeaveRequestDates(r: { start_date: string; end_date: string; sel
   return out;
 }
 
+/** Строка заявления в объёме, нужном для гардов табеля и отката материализации. */
+type LeaveRequestDatesRow = {
+  id: number;
+  employee_id: number;
+  request_type: string;
+  start_date: string;
+  end_date: string;
+  selected_dates: string[] | null;
+  correction_date: string | null;
+  correction_object_id: string | null;
+};
+
 /**
- * Управленческая отмена СОГЛАСОВАННОГО отпуска (admin или согласовавший руководитель).
+ * Все даты табеля, которых касается заявление. У `time_correction` день живёт в
+ * `correction_date` (start/end дублируют его лишь по договорённости клиента),
+ * поэтому добавляем его явно — иначе гард закрытого табеля можно было бы обойти
+ * заявкой с рассинхронизированными start/end.
+ */
+function collectAffectedTimesheetDates(r: LeaveRequestDatesRow): string[] {
+  const dates = collectLeaveRequestDates(r);
+  if (r.correction_date) dates.push(String(r.correction_date).slice(0, 10));
+  return [...new Set(dates)].sort();
+}
+
+/**
+ * true, если хоть одна из дат попадает в сданный/одобренный табель сотрудника.
+ * Членство берём из снапшота состава подачи (timesheet_approval_employees), а не из
+ * org_department_id: членство снапшотное.
+ */
+async function hasLockedTimesheetDates(employeeId: number, dates: string[]): Promise<boolean> {
+  if (dates.length === 0) return false;
+  const locked = await query<{ ok: number }>(
+    `SELECT 1 AS ok
+       FROM unnest($2::date[]) AS d(work_date)
+       JOIN timesheet_approvals a
+         ON a.start_date <= d.work_date AND a.end_date >= d.work_date
+       JOIN timesheet_approval_employees s
+         ON s.approval_id = a.id AND s.employee_id = $1
+      WHERE a.status IN ('submitted','approved')
+      LIMIT 1`,
+    [employeeId, dates],
+  );
+  return locked.length > 0;
+}
+
+/**
+ * Точечный откат материализации заявления. Две формы хранения:
+ *  - day-level: source_type='leave_request', source_id = '<id>' или '<id>:time_correction';
+ *  - объектная корректировка (миграция 158): source_type='manual_object',
+ *    source_id = correction_object_id — по source_id заявления её не найти,
+ *    поэтому бьём по (employee_id, correction_date, объект).
+ * Шире не трогаем: чужие ручные правки дня должны пережить откат.
+ *
+ * `wasMaterialized` — заявление было согласовано, т.е. объектная строка создана именно
+ * approve'ом. У pending-заявки строки от неё нет, а совпадающая по (сотрудник, дата,
+ * объект) может принадлежать ручной правке табеля руководителя — её удалять нельзя.
+ */
+async function deleteLeaveRequestAdjustments(
+  client: DbExecutor,
+  request: Pick<LeaveRequestDatesRow, 'id' | 'employee_id' | 'correction_date' | 'correction_object_id'>,
+  wasMaterialized: boolean,
+): Promise<void> {
+  await client.query(
+    `DELETE FROM attendance_adjustments
+       WHERE source_type = 'leave_request'
+         AND source_id = ANY($1::text[])`,
+    [[String(request.id), `${request.id}:time_correction`]],
+  );
+  if (wasMaterialized && request.correction_date && request.correction_object_id) {
+    await client.query(
+      `DELETE FROM attendance_adjustments
+         WHERE employee_id = $1
+           AND work_date = $2::date
+           AND source_type = $3
+           AND source_id = $4`,
+      [request.employee_id, request.correction_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, request.correction_object_id],
+    );
+  }
+}
+
+/**
+ * Управленческая отмена СОГЛАСОВАННОГО заявления (admin или согласовавший руководитель).
  * Иной смысл, чем у самоотмены сотрудника (`cancel`): откат принятого решения.
- *  - типы: только vacation/unpaid/educational_leave; статус: только approved;
+ *  - типы: любые; статус: только approved;
  *  - право (источник истины): is_admin || reviewer_id === req.user.id;
- *  - руководитель — только если ВСЕ даты строго в будущем (Europe/Moscow);
+ *  - для ОТПУСКОВ руководитель — только если все даты строго в будущем (Europe/Moscow):
+ *    отпуск отменяют до его начала. Для корректировок/выходных это правило неприменимо
+ *    (дата всегда в прошлом), их сдерживает гард закрытого табеля;
  *  - закрытый/сданный табель (submitted/approved по снапшоту состава) → 409, ничего не трогаем;
- *  - откат табеля — тем же точечным DELETE, что и `cancel` (для отпусков он полный);
- *  - след: cancelled_by/at/reason; reviewer_id НЕ трогаем; сотрудник получает уведомление.
+ *  - откат табеля — тем же точечным DELETE, что и `cancel`, включая объектную корректировку;
+ *  - след: cancelled_by/at/reason + запись в leave_request_history; reviewer_id НЕ трогаем;
+ *    сотрудник получает уведомление.
  */
 const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -2000,17 +2160,12 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
     const reasonRaw = req.body?.reason;
     const reason = typeof reasonRaw === 'string' && reasonRaw.trim() ? reasonRaw.trim() : null;
 
-    const request = await queryOne<{
-      id: number; employee_id: number; request_type: string; status: string;
-      reviewer_id: string | null; start_date: string; end_date: string; selected_dates: string[] | null;
+    const request = await queryOne<LeaveRequestDatesRow & {
+      status: string; reviewer_id: string | null;
     }>(`SELECT * FROM leave_requests WHERE id = $1`, [id]);
 
     if (!request) {
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
-      return;
-    }
-    if (!VACATION_REQUEST_TYPES.includes(request.request_type)) {
-      res.status(400).json({ success: false, error: 'Отмена доступна только для отпусков' });
       return;
     }
     if (request.status !== 'approved') {
@@ -2021,38 +2176,28 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
     const isAdmin = !!req.user.is_admin;
     const isApprover = !!request.reviewer_id && req.user.id === request.reviewer_id;
     if (!isAdmin && !isApprover) {
-      res.status(403).json({ success: false, error: 'Отменить согласованный отпуск может только администратор или согласовавший руководитель' });
+      res.status(403).json({ success: false, error: 'Отменить согласование может только администратор или согласовавший руководитель' });
       return;
     }
 
-    const dates = collectLeaveRequestDates(request);
-    const minDate = dates[0];
+    const isVacation = VACATION_REQUEST_TYPES.includes(request.request_type);
+    const dates = collectAffectedTimesheetDates(request);
 
-    // Руководитель — только полностью будущий отпуск. Админ может и начавшийся/прошедший.
-    if (!isAdmin && !(minDate && minDate > moscowTodayIso())) {
-      res.status(400).json({ success: false, error: 'Руководитель может отменить только отпуск, который ещё не начался' });
-      return;
+    // Отпуск руководитель отменяет только до его начала. Админ может и начавшийся/прошедший.
+    if (isVacation && !isAdmin) {
+      const minDate = collectLeaveRequestDates(request)[0];
+      if (!(minDate && minDate > moscowTodayIso())) {
+        res.status(400).json({ success: false, error: 'Руководитель может отменить только отпуск, который ещё не начался' });
+        return;
+      }
     }
 
     // Жёсткий гард: ни одна дата не должна попадать в уже сданный/одобренный табель.
-    // Членство берём из снапшота состава подачи (timesheet_approval_employees) — не из
-    // org_department_id (членство снапшотное). У руководителя не срабатывает (даты будущие).
-    if (dates.length > 0) {
-      const locked = await query<{ ok: number }>(
-        `SELECT 1 AS ok
-           FROM unnest($2::date[]) AS d(work_date)
-           JOIN timesheet_approvals a
-             ON a.start_date <= d.work_date AND a.end_date >= d.work_date
-           JOIN timesheet_approval_employees s
-             ON s.approval_id = a.id AND s.employee_id = $1
-          WHERE a.status IN ('submitted','approved')
-          LIMIT 1`,
-        [request.employee_id, dates],
-      );
-      if (locked.length > 0) {
-        res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку' });
-        return;
-      }
+    // Для отпусков у руководителя не срабатывает (даты будущие), для корректировок —
+    // это единственное, что удерживает от переписывания закрытого периода.
+    if (await hasLockedTimesheetDates(request.employee_id, dates)) {
+      res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку' });
+      return;
     }
 
     const nowIso = new Date().toISOString();
@@ -2077,12 +2222,13 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
         [req.user.id, nowIso, reason, id, cancelSource],
       );
       // Точечный откат табеля — ровно строки этого заявления (как в cancel). Шире не трогаем.
-      await client.query(
-        `DELETE FROM attendance_adjustments
-           WHERE source_type = 'leave_request'
-             AND source_id = ANY($1::text[])`,
-        [[String(id), `${id}:time_correction`]],
-      );
+      await deleteLeaveRequestAdjustments(client, request, true); // revoke бывает только у approved
+      await recordLeaveRequestHistory(client, {
+        requestId: Number(id),
+        action: 'revoked',
+        actorId: req.user.id,
+        comment: reason,
+      });
       return { conflict: false as const, row: updated.rows[0] ?? null };
     });
 
@@ -2104,7 +2250,7 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
       })
       .catch((e) => console.error('[leave-requests] emit revoke realtime error:', e));
 
-    // Уведомление сотруднику (обязательно): согласованный отпуск отменён.
+    // Уведомление сотруднику (обязательно): согласование отменено.
     // Текст строим из СВЕЖЕЙ строки (result.row), а не из предчтения: HR мог сменить
     // категорию между чтением и локом — иначе сотрудник получит отмену старого типа.
     const revoked = { ...request, ...(result.row as Partial<typeof request> ?? {}) };
@@ -2115,18 +2261,19 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
         request_type: revoked.request_type,
         start_date: revoked.start_date,
         end_date: revoked.end_date,
-        correction_date: null,
+        correction_date: revoked.correction_date,
         selected_dates: revoked.selected_dates,
       });
-      const body = `Согласованный отпуск отменён: ${label}${dateLabel ? ` (${dateLabel})` : ''}${reason ? `. Причина: ${reason}` : ''}`;
+      const title = isVacation ? 'Отпуск отменён' : 'Согласование отменено';
+      const body = `${isVacation ? 'Согласованный отпуск отменён' : 'Согласование отменено'}: ${label}${dateLabel ? ` (${dateLabel})` : ''}${reason ? `. Причина: ${reason}` : ''}`;
       notificationService.createMany([{
         userId: employeeUserId,
         type: 'leave_request',
-        title: 'Отпуск отменён',
+        title,
         body,
         metadata: { requestType: revoked.request_type, employeeId: request.employee_id, action: 'revoke' },
       }]).catch((e) => console.error('[leave-requests] revoke notification save error:', e));
-      pushService.sendGenericNotification([employeeUserId], 'Отпуск отменён', body, { path: '/employee/requests' })
+      pushService.sendGenericNotification([employeeUserId], title, body, { path: '/employee/requests' })
         .catch((e) => console.error('[leave-requests] revoke push error:', e));
     }
 
@@ -2134,7 +2281,7 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
     res.json({ success: true, data: result.row ? withDecisionProfiles(result.row, profileMap) : null });
   } catch (err) {
     console.error('leave-requests.revokeApproval error:', err);
-    res.status(500).json({ success: false, error: 'Ошибка отмены согласованного отпуска' });
+    res.status(500).json({ success: false, error: 'Ошибка отмены согласования' });
   }
 };
 
@@ -2149,10 +2296,10 @@ export const leaveRequestsController = {
   pendingCount,
   approve,
   reject,
-  updateReason,
   updateCorrectionHours,
   updateRequestType,
   cancel,
   hrAcknowledge,
   revokeApproval,
+  getHistory,
 };

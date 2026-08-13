@@ -10,7 +10,6 @@ import {
   Paperclip,
   ChevronDown,
   ChevronUp,
-  Pencil,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -30,6 +29,7 @@ import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
 import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
+import { LeaveRequestHistory } from '../components/leave-requests/LeaveRequestHistory';
 import {
   formatLeaveRequestDatesCompact,
   leaveRequestMinDate,
@@ -113,9 +113,6 @@ export const LeaveRequestsManagePage: FC = () => {
   const [revokeId, setRevokeId] = useState<number | null>(null);
   const [revokeReason, setRevokeReason] = useState('');
   const [revoking, setRevoking] = useState(false);
-  const [editingReasonId, setEditingReasonId] = useState<number | null>(null);
-  const [reasonDraft, setReasonDraft] = useState('');
-  const [savingReason, setSavingReason] = useState(false);
   const [editingHoursId, setEditingHoursId] = useState<number | null>(null);
   const [hoursDraft, setHoursDraft] = useState('');
   const [savingHours, setSavingHours] = useState(false);
@@ -258,32 +255,9 @@ export const LeaveRequestsManagePage: FC = () => {
     }
   };
 
-  // Правка текста заявления (например, дописать пропущенный объект) — доступна
-  // независимо от статуса заявления, синхронизируется с копией в табеле на бэке.
-  const handleUpdateReason = async (id: number) => {
-    const trimmed = reasonDraft.trim();
-    if (!trimmed) return;
-    setSavingReason(true);
-    try {
-      await leaveRequestService.updateReason(id, trimmed);
-      queryClient.setQueriesData<ILeaveRequest[] | undefined>(
-        { queryKey: ['leave-requests-manage'] },
-        (prev) => (prev ? prev.map(r => (r.id === id ? { ...r, reason: trimmed } : r)) : prev),
-      );
-      setEditingReasonId(null);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
-      ]);
-    } catch (err) {
-      console.error('Update reason error:', err);
-    } finally {
-      setSavingReason(false);
-    }
-  };
-
-  // Правка часов корректировки до согласования: сотрудник заявил 10ч, руководитель
-  // согласовывает 9ч. Разрешена только на pending — строка в табеле создаётся при approve.
+  // Правка часов корректировки: сотрудник заявил 10ч, руководитель согласовывает 9ч.
+  // На pending строки в табеле ещё нет (создаётся при approve), у согласованного бэк
+  // точечно переписывает её сам — здесь достаточно инвалидировать табель.
   const handleUpdateHours = async (id: number) => {
     const raw = hoursDraft.trim();
     // Number('') === 0 — очищенное поле иначе молча ушло бы как «0 часов».
@@ -309,6 +283,8 @@ export const LeaveRequestsManagePage: FC = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
         queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
+        queryClient.invalidateQueries({ queryKey: ['leave-request-history', id] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
       ]);
     } catch (err) {
       console.error('Update correction hours error:', err);
@@ -328,9 +304,13 @@ export const LeaveRequestsManagePage: FC = () => {
         queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
         queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
         queryClient.invalidateQueries({ queryKey: ['leave-requests-vacations'] }),
+        queryClient.invalidateQueries({ queryKey: ['leave-request-history', id] }),
+        queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
       ]);
     } catch (err) {
       console.error('Revoke error:', err);
+      // Гард закрытого табеля отвечает 409 — без тоста кнопка выглядела бы «мёртвой».
+      showToast('error', err instanceof Error ? err.message : 'Не удалось отменить согласование');
       await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
     } finally {
       setRevoking(false);
@@ -366,6 +346,12 @@ export const LeaveRequestsManagePage: FC = () => {
       eventsPanel.date === r.correction_date;
     const awaitingApproval = (isCorrection || r.request_type === 'work')
       && r.correction_approval_status === 'pending';
+    // Решение по согласованному заявлению откатывает только тот, кто его принял, — или админ.
+    const canManageApproved = r.status === 'approved'
+      && (!!profile?.is_admin || profile?.id === r.reviewer_id);
+    // Часы правит согласующий до решения; после — только принявший решение и только
+    // пока период не сдан в табеле (окончательную проверку делает бэк).
+    const canEditHours = canEditRequests && (r.status === 'pending' || canManageApproved);
     return (
       <div
         key={r.id}
@@ -465,7 +451,7 @@ export const LeaveRequestsManagePage: FC = () => {
                       Отмена
                     </button>
                   </span>
-                ) : (r.status === 'pending' && canEditRequests ? (
+                ) : (canEditHours ? (
                   <>
                     {' · '}
                     <button
@@ -489,52 +475,7 @@ export const LeaveRequestsManagePage: FC = () => {
               <strong>{formatLeaveRequestDatesCompact(r)}</strong>
             </div>
           )}
-          {editingReasonId === r.id ? (
-            <div className="lrm-card-reason lrm-card-reason--editing" onClick={stop}>
-              <textarea
-                className="lrm-reason-textarea"
-                value={reasonDraft}
-                onChange={(e) => setReasonDraft(e.target.value)}
-                maxLength={500}
-                rows={3}
-                disabled={savingReason}
-                autoFocus
-              />
-              <div className="lrm-reason-actions">
-                <button
-                  type="button"
-                  className="lrm-action-btn approve"
-                  disabled={savingReason || !reasonDraft.trim()}
-                  onClick={() => void handleUpdateReason(r.id)}
-                >
-                  Сохранить
-                </button>
-                <button
-                  type="button"
-                  className="lrm-action-btn ghost"
-                  disabled={savingReason}
-                  onClick={() => setEditingReasonId(null)}
-                >
-                  Отмена
-                </button>
-              </div>
-            </div>
-          ) : (
-            r.reason && (
-              <div className="lrm-card-reason lrm-card-reason--viewable">
-                <span>{r.reason}</span>
-                <button
-                  type="button"
-                  className="lrm-reason-edit-btn"
-                  onClick={(e) => { e.stopPropagation(); setEditingReasonId(r.id); setReasonDraft(r.reason ?? ''); }}
-                  aria-label="Изменить текст заявления"
-                  title="Изменить текст"
-                >
-                  <Pencil size={13} />
-                </button>
-              </div>
-            )
-          )}
+          {r.reason && <div className="lrm-card-reason">{r.reason}</div>}
           {r.attachments && r.attachments.length > 0 && (
             <div className="lrm-attachments" onClick={stop}>
               {r.attachments.map(att => (
@@ -558,6 +499,7 @@ export const LeaveRequestsManagePage: FC = () => {
               </span> {decision.comment}
             </div>
           )}
+          <LeaveRequestHistory requestId={r.id} />
         </div>
 
         {r.status === 'pending' && (
@@ -606,14 +548,16 @@ export const LeaveRequestsManagePage: FC = () => {
           </div>
         )}
 
-        {r.status === 'approved'
-          && VACATION_TYPES.has(r.request_type)
-          && (profile?.is_admin || profile?.id === r.reviewer_id)
-          && (profile?.is_admin || leaveRequestMinDate(r) > todayIso) && (
+        {canManageApproved
+          // Отпуск руководитель отменяет только до его начала (у админа ограничения нет);
+          // для остальных типов сдерживает гард закрытого табеля на бэке.
+          && (!VACATION_TYPES.has(r.request_type) || profile?.is_admin || leaveRequestMinDate(r) > todayIso) && (
           <div className="lrm-card-actions" onClick={stop}>
             {revokeId === r.id ? (
               <div className="lrm-comment-form">
-                <div className="lrm-revoke-confirm">Отменить согласованный отпуск?</div>
+                <div className="lrm-revoke-confirm">
+                  {VACATION_TYPES.has(r.request_type) ? 'Отменить согласованный отпуск?' : 'Отменить согласование заявления?'}
+                </div>
                 <input
                   className="lrm-comment-input"
                   placeholder="Причина (необязательно)"
@@ -628,7 +572,9 @@ export const LeaveRequestsManagePage: FC = () => {
                     disabled={revoking}
                     onClick={(e) => { e.stopPropagation(); handleRevoke(r.id); }}
                   >
-                    <Ban size={14} /> {revoking ? 'Отменяем…' : 'Отменить отпуск'}
+                    <Ban size={14} /> {revoking
+                      ? 'Отменяем…'
+                      : (VACATION_TYPES.has(r.request_type) ? 'Отменить отпуск' : 'Отменить согласование')}
                   </button>
                   <button
                     className="lrm-action-btn ghost"
@@ -645,7 +591,7 @@ export const LeaveRequestsManagePage: FC = () => {
                   className="lrm-action-btn revoke"
                   onClick={(e) => { e.stopPropagation(); setRevokeId(r.id); setRevokeReason(''); }}
                 >
-                  <Ban size={14} /> Отменить согласованное
+                  <Ban size={14} /> {VACATION_TYPES.has(r.request_type) ? 'Отменить согласованное' : 'Отменить согласование'}
                 </button>
               </div>
             )}

@@ -86,11 +86,8 @@ vi.mock('../services/recipients.service.js', () => ({
 // Детерминированное «сегодня» (Europe/Moscow) для проверок будущности отпуска.
 vi.mock('../utils/date.utils.js', () => ({ moscowTodayIso: vi.fn(() => '2026-06-29') }));
 vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSubordinates: vi.fn(async () => []) }));
-const { syncReasonMock } = vi.hoisted(() => ({ syncReasonMock: vi.fn(async () => true) }));
-vi.mock('../services/leave-request-sync.service.js', () => ({
-  syncLeaveRequestReason: syncReasonMock,
-  syncLeaveRequestOnDayRemoval: vi.fn(),
-}));
+// leave-request-history.service НЕ мокаем: он пишет через client.query того же
+// tx-клиента, что и остальной код, — так тесты видят INSERT в leave_request_history.
 import { resolveAccessibleDepartmentIds, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
 vi.mock('../services/employee-skud-object-access.service.js', () => ({ listSelectableObjectsForEmployee: vi.fn(async () => []) }));
 vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object' }));
@@ -357,7 +354,7 @@ describe('leaveRequestsController.updateCorrectionHours', () => {
     expect(pgTx).not.toHaveBeenCalled();
   });
 
-  it('409, если под блокировкой заявление уже не pending (аудита и realtime нет)', async () => {
+  it('409, если статус сменился между предчтением и локом (параллельный approve)', async () => {
     pgQueryOne.mockResolvedValueOnce(CORRECTION_ROW);
     mockTxFlow({ status: 'approved', correction_hours: '10.00' }, null);
     const res = makeRes();
@@ -396,13 +393,20 @@ describe('leaveRequestsController.updateCorrectionHours', () => {
 
     expect(res._status).toBe(200);
     const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
-    expect(updateCall?.[1]).toEqual([9, '708']);
+    expect(updateCall?.[1]).toEqual([9, '708', 'pending']);
+    // pending: строки в табеле ещё нет — трогать attendance_adjustments нечего.
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE attendance_adjustments'))).toBe(false);
 
     const auditCall = txClient.query.mock.calls.find(c => String(c[0]).includes('audit_logs'));
     expect(auditCall).toBeDefined();
     expect(auditCall?.[1]?.[1]).toBe('UPDATE_LEAVE_REQUEST_CORRECTION_HOURS');
     // details пишутся числами: numeric из pg («10.00») нормализуется.
     expect(JSON.parse(String(auditCall?.[1]?.[4]))).toMatchObject({ old_hours: 10, new_hours: 9 });
+
+    const historyCall = txClient.query.mock.calls.find(c => String(c[0]).includes('leave_request_history'));
+    expect(historyCall?.[1]?.[1]).toBe('hours_changed');
+    expect(JSON.parse(String(historyCall?.[1]?.[3]))).toEqual({ hours: 10 });
+    expect(JSON.parse(String(historyCall?.[1]?.[4]))).toEqual({ hours: 9 });
 
     await vi.waitFor(() => expect(vi.mocked(emitDomainChange)).toHaveBeenCalled());
     expect(vi.mocked(emitDomainChange).mock.calls[0][0]).toMatchObject({
@@ -425,6 +429,110 @@ describe('leaveRequestsController.updateCorrectionHours', () => {
     expect(res._status).toBe(500);
     await Promise.resolve();
     expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
+  });
+
+  // --- Согласованная корректировка: часы уже уехали в табель ---
+
+  const APPROVED_ROW = {
+    id: 708, employee_id: 247, request_type: 'time_correction', status: 'approved',
+    reviewer_id: 'reviewer-uuid',
+    start_date: '2026-06-01', end_date: '2026-06-01',
+    selected_dates: null, correction_date: '2026-06-01', correction_status: 'work',
+    correction_object_id: 'obj-1',
+  };
+
+  it('approved: 403, если правит не согласовавший и не админ', async () => {
+    pgQueryOne.mockResolvedValueOnce({ ...APPROVED_ROW, reviewer_id: 'other-uuid' });
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('approved: 409, если день попал в сданный табель — БД не трогаем', async () => {
+    pgQueryOne.mockResolvedValueOnce(APPROVED_ROW);
+    pgQuery.mockResolvedValueOnce([{ ok: 1 }]); // hasLockedTimesheetDates
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(409);
+    expect((res._json as { error: string }).error).toContain('табеле');
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('approved: точечно переписывает объектную строку табеля и пишет историю', async () => {
+    pgQueryOne.mockResolvedValueOnce(APPROVED_ROW);
+    pgQuery.mockResolvedValueOnce([]); // табель не сдан
+    mockTxFlow(
+      { status: 'approved', correction_hours: '10.00' },
+      { id: 708, employee_id: 247, correction_hours: '9.00' },
+    );
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(200);
+    const adjCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE attendance_adjustments'));
+    expect(adjCall).toBeDefined();
+    // work + часы > 0 → 'manual', строка ищется по объекту; approval_status не в SET.
+    expect(adjCall?.[1]).toEqual([9, 'manual', 247, '2026-06-01', 'manual_object', 'obj-1']);
+    expect(String(adjCall?.[0])).not.toContain('approval_status');
+
+    const historyCall = txClient.query.mock.calls.find(c => String(c[0]).includes('leave_request_history'));
+    expect(historyCall?.[1]?.[1]).toBe('hours_changed');
+  });
+
+  it('approved без объекта (легаси): правит day-level строку заявления', async () => {
+    pgQueryOne.mockResolvedValueOnce({ ...APPROVED_ROW, correction_object_id: null });
+    pgQuery.mockResolvedValueOnce([]);
+    mockTxFlow(
+      { status: 'approved', correction_hours: '10.00' },
+      { id: 708, employee_id: 247, correction_hours: '9.00' },
+    );
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(200);
+    const adjCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE attendance_adjustments'));
+    expect(adjCall?.[1]).toEqual([9, 'manual', '708:time_correction']);
+  });
+
+  it('approved: 0 строк в табеле → 409 и откат (день переписан вручную)', async () => {
+    pgQueryOne.mockResolvedValueOnce(APPROVED_ROW);
+    pgQuery.mockResolvedValueOnce([]);
+    txClient.query.mockReset();
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved', correction_hours: '10.00' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: 708, correction_hours: '9.00' }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // UPDATE attendance_adjustments
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
+
+    expect(res._status).toBe(409);
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('audit_logs'))).toBe(false);
+    await Promise.resolve();
+    expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
+  });
+
+  it('approved: 0 часов на «рабочем дне» оставляет статус work (не manual)', async () => {
+    pgQueryOne.mockResolvedValueOnce({ ...APPROVED_ROW, correction_object_id: null });
+    pgQuery.mockResolvedValueOnce([]);
+    mockTxFlow(
+      { status: 'approved', correction_hours: '10.00' },
+      { id: 708, employee_id: 247, correction_hours: '0.00' },
+    );
+    const res = makeRes();
+
+    await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 0 }), res);
+
+    expect(res._status).toBe(200);
+    const adjCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE attendance_adjustments'));
+    expect(adjCall?.[1]).toEqual([0, 'work', '708:time_correction']);
   });
 });
 
@@ -731,46 +839,6 @@ describe('leaveRequestsController.updateRequestType', () => {
     expect(res._status).toBe(500);
     expect(calledWith('UPDATE attendance_adjustments')).toBe(true);
     expect(vi.mocked(emitDomainChange)).not.toHaveBeenCalled();
-  });
-});
-
-describe('leaveRequestsController.updateReason (гонка со сменой категории)', () => {
-  const makeReasonReq = (body: unknown) => makeReq({
-    body: body as AuthenticatedRequest['body'],
-    headers: { 'user-agent': 'vitest' },
-    socket: { remoteAddress: '127.0.0.1' },
-  } as unknown as Partial<AuthenticatedRequest>);
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]])); // зритель 7 — ответственный
-    syncReasonMock.mockResolvedValue(true);
-  });
-
-  it('передаёт в syncLeaveRequestReason тип из предчтения (guarded-вызов)', async () => {
-    pgQueryOne
-      .mockResolvedValueOnce({ id: 708, employee_id: 247, request_type: 'vacation' })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }) // canManageLeaveRequest
-      .mockResolvedValueOnce({ id: 708, reason: 'новый текст' }); // перечитка после синка
-    const res = makeRes();
-
-    await leaveRequestsController.updateReason(makeReasonReq({ reason: 'новый текст' }), res);
-
-    expect(res._status).toBe(200);
-    expect(syncReasonMock).toHaveBeenCalledWith(708, 'новый текст', 'vacation');
-  });
-
-  it('sync вернул false (категория сменилась параллельно) → 409, перечитки и аудита нет', async () => {
-    pgQueryOne
-      .mockResolvedValueOnce({ id: 708, employee_id: 247, request_type: 'vacation' })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' });
-    syncReasonMock.mockResolvedValueOnce(false);
-    const res = makeRes();
-
-    await leaveRequestsController.updateReason(makeReasonReq({ reason: 'новый текст' }), res);
-
-    expect(res._status).toBe(409);
-    expect(pgQueryOne).toHaveBeenCalledTimes(2); // без SELECT-перечитки после отказа
   });
 });
 
@@ -1414,13 +1482,6 @@ describe('leaveRequestsController.revokeApproval', () => {
     expect(pgTx).not.toHaveBeenCalled();
   });
 
-  it('400 — тип не отпускной', async () => {
-    pgQueryOne.mockResolvedValueOnce(approvedVacation({ request_type: 'remote' }));
-    const res = makeRes();
-    await leaveRequestsController.revokeApproval(makeReq(), res);
-    expect(res._status).toBe(400);
-  });
-
   it('400 — статус не approved', async () => {
     pgQueryOne.mockResolvedValueOnce(approvedVacation({ status: 'pending' }));
     const res = makeRes();
@@ -1477,7 +1538,47 @@ describe('leaveRequestsController.revokeApproval', () => {
     expect(deleteCall).toBeDefined();
     expect(deleteCall![1]).toEqual([['708', '708:time_correction']]);
 
+    const historyCall = txClient.query.mock.calls.find((c: unknown[]) => String(c[0]).includes('leave_request_history'));
+    expect(historyCall![1]).toEqual([708, 'revoked', 'reviewer-uuid', null, null, 'тест']);
+
     expect(notificationService.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('корректировка табеля: отменяется без правила «только будущее», объектная строка тоже удаляется', async () => {
+    // Дата в прошлом — для time_correction это норма: сдерживает только гард табеля.
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({
+      request_type: 'time_correction',
+      start_date: '2026-06-01', end_date: '2026-06-01',
+      correction_date: '2026-06-01', correction_object_id: 'obj-1',
+    }));
+    pgQuery.mockResolvedValueOnce([]); // табель не сдан
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
+      .mockResolvedValue({ rowCount: 1 });
+    const res = makeRes();
+
+    await leaveRequestsController.revokeApproval(makeReq({ body: { reason: 'ошибочно согласовал' } }), res);
+
+    expect(res._status).toBe(200);
+    const deletes = txClient.query.mock.calls.filter((c: unknown[]) => String(c[0]).includes('DELETE FROM attendance_adjustments'));
+    expect(deletes).toHaveLength(2);
+    // Объектная корректировка лежит под source_id объекта — по id заявления её не найти.
+    expect(deletes[1][1]).toEqual([247, '2026-06-01', 'manual_object', 'obj-1']);
+  });
+
+  it('корректировка табеля в сданном периоде → 409, БД не трогаем', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvedVacation({
+      request_type: 'time_correction',
+      start_date: '2026-06-01', end_date: '2026-06-01', correction_date: '2026-06-01',
+    }));
+    pgQuery.mockResolvedValueOnce([{ ok: 1 }]);
+    const res = makeRes();
+
+    await leaveRequestsController.revokeApproval(makeReq(), res);
+
+    expect(res._status).toBe(409);
+    expect(pgTx).not.toHaveBeenCalled();
   });
 
   it('админ может отменить начавшийся отпуск, если период не закрыт', async () => {
@@ -1610,6 +1711,42 @@ describe('leaveRequestsController.cancel (самоотмена сотрудни�
     expect(updateCall![1]![3]).toBeNull();
   });
 
+  it('pending-корректировка с объектом: чужую ручную строку табеля не удаляем', async () => {
+    // Материализации ещё не было — совпадающая (сотрудник, дата, объект) строка
+    // принадлежит ручной правке табеля руководителя, её трогать нельзя.
+    pgQueryOne.mockResolvedValueOnce(ownRequest({
+      request_type: 'time_correction', correction_date: '2026-06-01', correction_object_id: 'obj-1',
+    }));
+    okTx();
+    const res = makeRes();
+
+    await leaveRequestsController.cancel(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    const deletes = txClient.query.mock.calls.filter((c: unknown[]) => String(c[0]).includes('DELETE FROM attendance_adjustments'));
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0][1]).toEqual([['708', '708:time_correction']]);
+  });
+
+  it('approved-корректировка с объектом: объектная строка тоже удаляется', async () => {
+    pgQueryOne.mockResolvedValueOnce(ownRequest({
+      status: 'approved', request_type: 'time_correction',
+      correction_date: '2026-06-01', correction_object_id: 'obj-1',
+    }));
+    txClient.query
+      .mockResolvedValueOnce({ rows: [{ status: 'approved', employee_id: 7 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
+      .mockResolvedValue({ rowCount: 1 });
+    const res = makeRes();
+
+    await leaveRequestsController.cancel(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    const deletes = txClient.query.mock.calls.filter((c: unknown[]) => String(c[0]).includes('DELETE FROM attendance_adjustments'));
+    expect(deletes).toHaveLength(2);
+    expect(deletes[1][1]).toEqual([7, '2026-06-01', 'manual_object', 'obj-1']);
+  });
+
   it('409 — статус успел смениться внутри транзакции (гонка с approve/reject)', async () => {
     pgQueryOne.mockResolvedValueOnce(ownRequest());
     txClient.query.mockResolvedValueOnce({ rows: [{ status: 'rejected', employee_id: 7 }] }); // FOR UPDATE
@@ -1674,14 +1811,15 @@ describe('leaveRequestsController.approve/reject (анти-гонка со са�
   });
 
   it('reject после отмены → 409', async () => {
-    pgQueryOne
-      .mockResolvedValueOnce({ id: 708, employee_id: 247, status: 'pending', request_type: 'remote' })
-      .mockResolvedValueOnce(null); // UPDATE ... WHERE status='pending' → 0 строк
+    pgQueryOne.mockResolvedValueOnce({ id: 708, employee_id: 247, status: 'pending', request_type: 'remote' });
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 }); // UPDATE ... WHERE status='pending' → 0 строк
     const res = makeRes();
 
     await leaveRequestsController.reject(makeReq({ body: { comment: 'нет' } }), res);
 
     expect(res._status).toBe(409);
+    // История не пишется, если отклонение не состоялось.
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('leave_request_history'))).toBe(false);
   });
 
   it('approve при параллельной смене категории → 409: UPDATE сверяет тип из предчтения', async () => {
@@ -1713,14 +1851,14 @@ describe('leaveRequestsController.approve/reject (анти-гонка со са�
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
     pgQueryOne
       .mockResolvedValueOnce({ id: 708, employee_id: 247, status: 'pending', request_type: 'vacation' })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }) // canManageLeaveRequest
-      .mockResolvedValueOnce(null); // UPDATE ... AND request_type=$5 → 0 строк
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' }); // canManageLeaveRequest
+    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 }); // UPDATE ... AND request_type=$5 → 0 строк
     const res = makeRes();
 
     await leaveRequestsController.reject(makeReq({ body: { comment: 'нет' } }), res);
 
     expect(res._status).toBe(409);
-    const updateCall = pgQueryOne.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
+    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
     expect(String(updateCall![0])).toContain('request_type = $5');
     expect(updateCall![1]).toEqual(['reviewer-uuid', expect.any(String), 'нет', '708', 'vacation']);
   });

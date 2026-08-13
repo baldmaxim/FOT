@@ -65,6 +65,13 @@ router.get(
   leaveRequestsController.getById
 );
 
+// GET /api/leave-requests/:id/history — история изменений заявления (автор или ревьюер)
+router.get(
+  '/:id/history',
+  requireAnyPageAccess(['/employee/requests', '/leave-requests'], 'view'),
+  leaveRequestsController.getHistory
+);
+
 // PATCH /api/leave-requests/:id/approve — одобрение (header/hr/admin)
 router.patch(
   '/:id/approve',
@@ -79,14 +86,9 @@ router.patch(
   leaveRequestsController.reject
 );
 
-// PATCH /api/leave-requests/:id/reason — правка текста обоснования руководителем/админом
-router.patch(
-  '/:id/reason',
-  requirePageAccess('/leave-requests', 'edit'),
-  leaveRequestsController.updateReason
-);
-
-// PATCH /api/leave-requests/:id/correction-hours — правка часов корректировки до согласования
+// PATCH /api/leave-requests/:id/correction-hours — правка часов корректировки.
+// До согласования — любой согласующий; после — только согласовавший/админ (проверка
+// в контроллере) и только пока период не сдан в табеле.
 router.patch(
   '/:id/correction-hours',
   requirePageAccess('/leave-requests', 'edit'),

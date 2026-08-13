@@ -11,6 +11,7 @@ import {
   type LeaveRequestStatus,
 } from '../../services/leaveRequestService';
 import { CancelRequestModal } from '../../components/dashboard/CancelRequestModal';
+import { LeaveRequestHistory } from '../../components/leave-requests/LeaveRequestHistory';
 import { documentService, type IDocument } from '../../services/documentService';
 import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
 import { useToast } from '../../contexts/ToastContext';
@@ -383,6 +384,7 @@ export const LeaveRequestDetailPage: FC = () => {
               )}
             </>
           )}
+          <LeaveRequestHistory requestId={request.id} />
         </section>
       </div>
 
