@@ -15,6 +15,7 @@ export type ObjectKpiEntityKind =
   | 'contract'
   | 'addendum'
   | 'ks2'
+  | 'ks6'
   | 'assignment'
   | 'global_role'
   | 'plan';

@@ -39,6 +39,9 @@ export interface ObjectKpiReportRow {
   contract_total: string | null;
   ks2_cumulative_before: string | null;
   ks2_cumulative_after: string | null;
+  /** КС-6 — СПРАВОЧНО. В план, остаток и факт не входит (см. 243_object_ks6_entries.sql). */
+  ks6_cumulative_after: string | null;
+  ks6_month_amount: string;
   remainder: string | null;
   months_remaining: number | null;
   plan_amount: string | null;
@@ -122,7 +125,15 @@ baselines AS (
        WHERE a.contract_id = s.contract_id
          AND a.status = 'signed'
          AND a.effective_date <= (SELECT month_from FROM params)
-    ), 0::numeric) AS addenda_before_window
+    ), 0::numeric) AS addenda_before_window,
+    -- КС-6 — справочная величина, копится отдельно и ни в одну формулу не входит.
+    COALESCE((
+      SELECT SUM(k6.amount)
+        FROM object_ks6_entries k6
+       WHERE k6.skud_object_id = s.skud_object_id
+         AND k6.status = 'signed'
+         AND k6.customer_signed_date < (SELECT month_from FROM params)
+    ), 0::numeric) AS ks6_before_window
   FROM scope s
 ),
 ks2_monthly AS (
@@ -141,6 +152,24 @@ ks2_monthly AS (
     AND k.customer_signed_date >= p.month_from
     AND k.customer_signed_date <  (p.month_to + INTERVAL '1 month')
   GROUP BY k.skud_object_id, k.period_month
+),
+ks6_monthly AS (
+  -- КС-6 — СПРАВОЧНАЯ величина (см. 243_object_ks6_entries.sql): ни план, ни остаток,
+  -- ни факт её не видят, приказ считает KPI по КС-2 (п. 3.1). Отдельный CTE, а не FILTER
+  -- внутри ks2_monthly: таблицы разные, и объединение агрегатов ради одной справочной
+  -- колонки читается хуже, чем шесть лишних строк.
+  SELECT
+    k6.skud_object_id,
+    k6.period_month,
+    SUM(k6.amount) AS ks6_net
+  FROM object_ks6_entries k6
+  CROSS JOIN params p
+  WHERE k6.status = 'signed'
+    AND k6.skud_object_id = ANY(p.object_ids)
+    -- Полуинтервал по customer_signed_date — по тем же причинам, что в ks2_monthly.
+    AND k6.customer_signed_date >= p.month_from
+    AND k6.customer_signed_date <  (p.month_to + INTERVAL '1 month')
+  GROUP BY k6.skud_object_id, k6.period_month
 ),
 addenda_monthly AS (
   -- «Месяц влияния» ДС: допник от 1-го числа действует весь месяц M и обязан войти
@@ -184,10 +213,16 @@ running AS (
       + COALESCE(SUM(COALESCE(am.addenda_delta, 0::numeric)) OVER w, 0::numeric)
     END AS contract_total_calc,
     b.ks2_before_window
-      + COALESCE(SUM(COALESCE(km.fact_net, 0::numeric)) OVER w, 0::numeric) AS ks2_cumulative_before_calc
+      + COALESCE(SUM(COALESCE(km.fact_net, 0::numeric)) OVER w, 0::numeric) AS ks2_cumulative_before_calc,
+    COALESCE(k6m.ks6_net, 0::numeric) AS ks6_net,
+    -- То же окно w, что у КС-2: своё окно разъехалось бы с ним при обрезании
+    -- префикса plan_start_month, и накопительные колонки перестали бы сходиться.
+    b.ks6_before_window
+      + COALESCE(SUM(COALESCE(k6m.ks6_net, 0::numeric)) OVER w, 0::numeric) AS ks6_cumulative_before_calc
   FROM grid g
   JOIN baselines b       ON b.skud_object_id = g.skud_object_id
   LEFT JOIN ks2_monthly km ON km.skud_object_id = g.skud_object_id AND km.period_month = g.period_month
+  LEFT JOIN ks6_monthly k6m ON k6m.skud_object_id = g.skud_object_id AND k6m.period_month = g.period_month
   LEFT JOIN addenda_monthly am ON am.skud_object_id = g.skud_object_id AND am.period_month = g.period_month
   -- RANGE, не ROWS: при обрезании префикса (plan_start_month) или пропуске месяца
   -- ROWS начнёт врать, RANGE — нет. Цена одинаковая.
@@ -286,6 +321,10 @@ SELECT
   -- Факт НИКОГДА не берётся из снимка: приказ фиксирует план, а факт по определению
   -- доначисляется задним числом при подписании актов Заказчиком (п. 3.1).
   x.ks2_cumulative_before_calc + x.fact_net AS ks2_cumulative_after,
+  -- КС-6 накопительно — пара к ks2_cumulative_after. Из снимка НИКОГДА не берётся:
+  -- снимок замораживает план, а КС-6 в плане не участвует вовсе.
+  x.ks6_cumulative_before_calc + x.ks6_net AS ks6_cumulative_after,
+  x.ks6_net         AS ks6_month_amount,
   x.fact_net        AS fact_amount,
   x.fact_acts,
   x.fact_reductions,

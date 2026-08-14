@@ -5,6 +5,13 @@ import { withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { AUDIT_ACTIONS, auditService } from '../services/audit.service.js';
 import { respondWithError, resolveActorName } from './object-kpi.controller.js';
+import {
+  dateSchema,
+  moneySchema,
+  monthSchema,
+  uuidSchema,
+  versionSchema,
+} from './object-kpi-schemas.js';
 import type { ObjectKpiActor } from '../services/object-kpi-history.service.js';
 import { isObjectInScope } from '../services/object-kpi-scope.service.js';
 import { fixMonthPlan, revisePlan } from '../services/object-kpi-plan.service.js';
@@ -39,10 +46,9 @@ import {
  * незадокументированной.
  */
 
-const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ожидается YYYY-MM-DD');
-const moneySchema = z.union([z.number(), z.string().regex(/^-?\d+(\.\d{1,2})?$/)]);
-const versionSchema = z.coerce.number().int().min(1);
-const uuidSchema = z.string().uuid();
+// Примитивы живут в object-kpi-schemas.ts — их же использует контроллер КС-6.
+// monthSchema реэкспортируется: на него ссылаются тесты и внешние импорты.
+export { monthSchema } from './object-kpi-schemas.js';
 
 const contractSchema = z.object({
   contract_number: z.string().trim().max(120).nullish(),
@@ -51,7 +57,7 @@ const contractSchema = z.object({
   base_amount: moneySchema,
   planned_zos_date: dateSchema.nullish(),
   actual_zos_date: dateSchema.nullish(),
-  plan_start_month: dateSchema.nullish(),
+  plan_start_month: monthSchema.nullish(),
   planned_headcount: z.number().int().min(0).nullish(),
   notes: z.string().trim().max(2000).nullish(),
 });
@@ -60,7 +66,8 @@ const addendumSchema = z.object({
   addendum_number: z.string().trim().min(1).max(120),
   addendum_date: dateSchema,
   effective_date: dateSchema,
-  amount_delta: moneySchema,
+  // Нулевое ДС запрещено констрейнтом БД; ловим до запроса, чтобы вернуть текст, а не код.
+  amount_delta: moneySchema.refine((v) => Number(v) !== 0, 'Сумма допсоглашения не может быть нулевой'),
   notes: z.string().trim().max(2000).nullish(),
 });
 
@@ -81,7 +88,7 @@ const assignmentSchema = z.object({
   notes: z.string().trim().max(2000).nullish(),
 });
 
-async function buildActor(req: AuthenticatedRequest): Promise<ObjectKpiActor> {
+export async function buildActor(req: AuthenticatedRequest): Promise<ObjectKpiActor> {
   return { userId: req.user.id, userName: await resolveActorName(req.user.id) };
 }
 

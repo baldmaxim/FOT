@@ -32,6 +32,9 @@ export interface ObjectKpiMonthPlanRow {
   plan_amount: string | null;
   status: 'open' | 'fixed' | 'corrected' | 'data_incomplete';
   fixed_at: string | null;
+  fixed_by: string | null;
+  /** Только в listMonthPlans (чтение для UI): в RETURNING у INSERT/UPDATE его нет. */
+  fixed_by_name?: string | null;
   fixed_source: 'auto' | 'manual' | 'economics_head_override' | null;
   correction_reason: string | null;
   superseded_at: string | null;
@@ -44,7 +47,7 @@ const PLAN_COLUMNS = `
   to_char(planned_zos_date_used, 'YYYY-MM-DD') AS planned_zos_date_used,
   to_char(control_date, 'YYYY-MM-DD')          AS control_date,
   months_remaining, calculated_plan_amount, override_plan_amount, plan_amount,
-  status, fixed_at, fixed_source, correction_reason, superseded_at, created_at`;
+  status, fixed_at, fixed_by, fixed_source, correction_reason, superseded_at, created_at`;
 
 /** Нормализация «месяца» к 1-му числу: снаружи приходит и `YYYY-MM`, и `YYYY-MM-DD`. */
 export function normalizeMonth(value: string): string {
@@ -61,8 +64,13 @@ export async function listMonthPlans(
   monthTo: string,
   options: { currentOnly?: boolean } = {},
 ): Promise<ObjectKpiMonthPlanRow[]> {
+  // JOIN только здесь, в чтении для UI: fixed_source — это ИСТОЧНИК операции
+  // ('manual'/'auto'/'economics_head_override'), а не человек, и подпись «правил такой-то»
+  // без имени не собирается. В RETURNING у INSERT/UPDATE (PLAN_COLUMNS) джойна нет.
   return query<ObjectKpiMonthPlanRow>(
-    `SELECT ${PLAN_COLUMNS}
+    `SELECT ${PLAN_COLUMNS},
+            (SELECT up.full_name FROM user_profiles up
+              WHERE up.id = object_kpi_month_plans.fixed_by) AS fixed_by_name
        FROM object_kpi_month_plans
       WHERE skud_object_id = $1
         AND period_month BETWEEN $2::date AND $3::date

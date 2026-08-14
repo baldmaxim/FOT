@@ -96,7 +96,7 @@ const KS2_COLUMNS = `
 /** Уникальные индексы отдаются пользователю понятным текстом, а не «duplicate key». */
 const UNIQUE_VIOLATION = '23505';
 
-const rethrowUnique = (error: unknown, message: string): never => {
+export const rethrowUnique = (error: unknown, message: string): never => {
   if ((error as { code?: string }).code === UNIQUE_VIOLATION) {
     failWith({ http: 409, code: 'duplicate', message });
   }
@@ -125,7 +125,10 @@ export async function getContractById(contractId: string): Promise<ObjectContrac
  * Без FOR UPDATE два параллельных подписания ДС проверят «сумма не уйдёт в минус»
  * каждый по отдельности и вместе уведут стоимость договора ниже нуля.
  */
-async function lockContract(client: PoolClient, contractId: string): Promise<ObjectContractRow> {
+export async function lockContract(
+  client: PoolClient,
+  contractId: string,
+): Promise<ObjectContractRow> {
   const result = await client.query<ObjectContractRow>(
     `SELECT ${CONTRACT_COLUMNS} FROM object_contracts WHERE id = $1 FOR UPDATE`,
     [contractId],
@@ -375,7 +378,7 @@ async function lockAddendum(
 }
 
 /** Подписанную запись править нельзя — только аннулировать и завести новую (п. «Жизненный цикл»). */
-const assertDraft = (status: EntryStatus, what: string): void => {
+export const assertDraft = (status: EntryStatus, what: string): void => {
   if (status !== 'draft') {
     failWith({
       http: 409,

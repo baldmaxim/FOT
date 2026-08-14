@@ -20,13 +20,19 @@ vi.mock('./object-kpi-history.service.js', () => ({
   requireReasonIfObjectHasFixedMonths: vi.fn(),
 }));
 
-import { requireReasonIfMonthFixed } from './object-kpi-history.service.js';
+import { recordObjectKpiHistory, requireReasonIfMonthFixed } from './object-kpi-history.service.js';
 import {
   createKs2Entry,
   setAddendumStatus,
   updateContract,
   updateKs2Entry,
 } from './object-kpi.service.js';
+import {
+  createKs6Entry,
+  deleteKs6Entry,
+  setKs6Status,
+  updateKs6Entry,
+} from './object-kpi-ks6.service.js';
 
 const OBJECT_ID = '11111111-1111-1111-1111-111111111111';
 const CONTRACT_ID = '22222222-2222-2222-2222-222222222222';
@@ -181,5 +187,116 @@ describe('КС-2', () => {
       act_number: 'А-1',
       customer_signed_date: '2026-09-10',
     })).rejects.toMatchObject({ __save: { http: 400, code: 'bad_amount' } });
+  });
+});
+
+/**
+ * КС-6 — справочный реестр: в план, остаток и факт он не входит. Отсюда единственное
+ * отличие от КС-2, которое здесь и фиксируется: основание при закрытом месяце не требуется.
+ */
+describe('КС-6', () => {
+  const ks6Row = (overrides: Record<string, unknown> = {}) => ({
+    id: 'ks6-1',
+    contract_id: CONTRACT_ID,
+    skud_object_id: OBJECT_ID,
+    amount: '1000.00',
+    doc_number: 'КС6-1',
+    customer_signed_date: '2026-09-10',
+    period_month: '2026-09-01',
+    status: 'draft',
+    version: 1,
+    ...overrides,
+  });
+
+  it('запись создаётся черновиком и блокирует договор', async () => {
+    const { client, calls } = makeClient([
+      { rows: [contractRow()] },
+      { rows: [ks6Row()] },
+    ]);
+
+    await createKs6Entry(client as never, ACTOR, CONTRACT_ID, {
+      amount: 1_000,
+      doc_number: 'КС6-1',
+      customer_signed_date: '2026-09-10',
+    });
+
+    expect(calls[0].sql).toContain('FOR UPDATE');
+    expect(calls[1].sql).toContain('draft');
+    expect(recordObjectKpiHistory).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ entityKind: 'ks6', action: 'create' }),
+    );
+  });
+
+  it('нулевая и отрицательная сумма отвергаются: знака у КС-6 нет', async () => {
+    for (const amount of [0, -1_000]) {
+      const { client } = makeClient([{ rows: [contractRow()] }]);
+      await expect(createKs6Entry(client as never, ACTOR, CONTRACT_ID, {
+        amount,
+        doc_number: 'КС6-1',
+        customer_signed_date: '2026-09-10',
+      })).rejects.toMatchObject({ __save: { http: 400, code: 'bad_amount' } });
+    }
+  });
+
+  it('подписанная запись не правится', async () => {
+    const { client } = makeClient([{ rows: [ks6Row({ status: 'signed' })] }]);
+
+    await expect(updateKs6Entry(client as never, ACTOR, 'ks6-1', 1, { notes: 'правка' }))
+      .rejects.toMatchObject({ __save: { http: 409, code: 'not_draft' } });
+  });
+
+  it('устаревшая версия при правке → 409', async () => {
+    const { client } = makeClient([
+      { rows: [ks6Row()] },
+      { rows: [] },
+    ]);
+
+    await expect(updateKs6Entry(client as never, ACTOR, 'ks6-1', 1, { doc_number: 'КС6-2' }))
+      .rejects.toMatchObject({ __save: { http: 409, code: 'stale_version' } });
+  });
+
+  it('дубль номера отдаётся понятным текстом, а не «duplicate key»', async () => {
+    const calls: Array<{ sql: string }> = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        calls.push({ sql });
+        if (calls.length === 1) return { rows: [contractRow()], rowCount: 1 };
+        throw Object.assign(new Error('duplicate key'), { code: '23505' });
+      }),
+    };
+
+    await expect(createKs6Entry(client as never, ACTOR, CONTRACT_ID, {
+      amount: 1_000,
+      doc_number: 'КС6-1',
+      customer_signed_date: '2026-09-10',
+    })).rejects.toMatchObject({ __save: { http: 409, code: 'duplicate' } });
+  });
+
+  it('аннулированную запись подписать нельзя', async () => {
+    const { client } = makeClient([{ rows: [ks6Row({ status: 'cancelled' })] }]);
+
+    await expect(setKs6Status(client as never, ACTOR, 'ks6-1', 'signed', 1))
+      .rejects.toMatchObject({ __save: { http: 409, code: 'bad_transition' } });
+  });
+
+  it('смена статуса НЕ требует основания даже в закрытом месяце', async () => {
+    const { client } = makeClient([
+      { rows: [ks6Row()] },
+      { rows: [ks6Row({ status: 'signed', version: 2 })] },
+    ]);
+
+    await setKs6Status(client as never, ACTOR, 'ks6-1', 'signed', 1);
+
+    // Ключевая проверка: КС-6 не двигает ни план, ни факт, поэтому симметрия с КС-2
+    // здесь была бы требованием основания на ровном месте.
+    expect(requireReasonIfMonthFixed).not.toHaveBeenCalled();
+  });
+
+  it('удаляется только черновик', async () => {
+    const { client } = makeClient([{ rows: [ks6Row({ status: 'signed' })] }]);
+
+    await expect(deleteKs6Entry(client as never, ACTOR, 'ks6-1', 1))
+      .rejects.toMatchObject({ __save: { http: 409, code: 'not_draft' } });
   });
 });

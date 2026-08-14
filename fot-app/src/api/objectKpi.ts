@@ -26,6 +26,9 @@ export interface IObjectKpiReportRow {
   contract_total: string | null;
   ks2_cumulative_before: string | null;
   ks2_cumulative_after: string | null;
+  /** КС-6 — СПРАВОЧНО: в план, остаток и факт не входит (миграция 243). */
+  ks6_cumulative_after: string | null;
+  ks6_month_amount: string;
   remainder: string | null;
   months_remaining: number | null;
   plan_amount: string | null;
@@ -69,9 +72,18 @@ export interface IObjectKpiObject {
   contract_number: string | null;
   customer_name: string | null;
   base_amount: string | null;
+  contract_date: string | null;
   planned_zos_date: string | null;
   actual_zos_date: string | null;
+  /** Первый расчётный месяц договора — от него разворачивается «Показать все месяцы». */
+  plan_start_month: string | null;
   contract_version: number | null;
+}
+
+export interface IObjectKpiObjectsResponse {
+  data: IObjectKpiObject[];
+  /** can_revise_plan — подсказка UI: право пересматривать зафиксированный план. */
+  scope: { is_unrestricted: boolean; can_revise_plan: boolean };
 }
 
 export interface IObjectContract {
@@ -116,6 +128,19 @@ export interface IObjectKs2Entry {
   version: number;
 }
 
+export interface IObjectKs6Entry {
+  id: string;
+  contract_id: string;
+  skud_object_id: string;
+  amount: string;
+  doc_number: string;
+  customer_signed_date: string;
+  period_month: string;
+  status: ObjectKpiEntryStatus;
+  notes: string | null;
+  version: number;
+}
+
 export interface IObjectKpiMonthPlan {
   id: string;
   period_month: string;
@@ -130,6 +155,8 @@ export interface IObjectKpiMonthPlan {
   status: ObjectKpiPlanStatus;
   fixed_at: string | null;
   fixed_source: 'auto' | 'manual' | 'economics_head_override' | null;
+  /** Человек, зафиксировавший или пересмотревший план (fixed_source — это источник, не автор). */
+  fixed_by_name: string | null;
   correction_reason: string | null;
 }
 
@@ -174,9 +201,15 @@ export interface IObjectKpiCard {
   contract: IObjectContract | null;
   addenda: IObjectAddendum[];
   ks2: IObjectKs2Entry[];
+  ks6: IObjectKs6Entry[];
   plans: IObjectKpiMonthPlan[];
   assignments: IObjectKpiAssignment[];
   report: IObjectKpiReportRow[];
+  /**
+   * Есть ли у объекта зафиксированные месяцы ВООБЩЕ, а не только в запрошенном окне:
+   * от этого зависит, обязательно ли основание правки договора.
+   */
+  has_fixed_months: boolean;
 }
 
 interface IPeriod {
@@ -188,13 +221,19 @@ const periodQuery = ({ from, to }: IPeriod): string =>
   `?${new URLSearchParams({ from, to }).toString()}`;
 
 export const objectKpiApi = {
-  async listObjects(): Promise<IObjectKpiObject[]> {
-    const res = await apiClient.get<{ data: IObjectKpiObject[] }>('/object-kpi/objects');
-    return res.data;
+  /** Отдаёт и список, и scope: право на правку плана берётся отсюда же. */
+  async listObjects(): Promise<IObjectKpiObjectsResponse> {
+    const res = await apiClient.get<IObjectKpiObjectsResponse>('/object-kpi/objects');
+    return { data: res.data, scope: res.scope };
   },
 
-  async getReport(period: IPeriod): Promise<{ data: IObjectKpiReportRow[]; summary: IObjectKpiSummary }> {
-    return apiClient.get(`/object-kpi/report${periodQuery(period)}`);
+  /** objectId сужает выборку на сервере: чужой объект вернёт 403, а не пустой список. */
+  async getReport(
+    period: IPeriod,
+    objectId?: string | null,
+  ): Promise<{ data: IObjectKpiReportRow[]; summary: IObjectKpiSummary }> {
+    const suffix = objectId ? `&object_id=${objectId}` : '';
+    return apiClient.get(`/object-kpi/report${periodQuery(period)}${suffix}`);
   },
 
   async getHeadcount(period: IPeriod): Promise<IObjectKpiHeadcountRow[]> {
@@ -313,6 +352,45 @@ export const objectKpiApi = {
 
   async deleteKs2(id: string, version: number): Promise<void> {
     await apiClient.delete(`/object-kpi/ks2/${id}?version=${version}`);
+  },
+
+  // ─── КС-6 (справочный реестр) ─────────────────────────────────────────────
+
+  async listKs6(contractId: string): Promise<IObjectKs6Entry[]> {
+    const res = await apiClient.get<{ data: IObjectKs6Entry[] }>(
+      `/object-kpi/contracts/${contractId}/ks6`,
+    );
+    return res.data;
+  },
+
+  async createKs6(contractId: string, payload: Record<string, unknown>): Promise<IObjectKs6Entry> {
+    const res = await apiClient.post<{ data: IObjectKs6Entry }>(
+      `/object-kpi/contracts/${contractId}/ks6`, payload,
+    );
+    return res.data;
+  },
+
+  async updateKs6(id: string, payload: Record<string, unknown>): Promise<IObjectKs6Entry> {
+    const res = await apiClient.patch<{ data: IObjectKs6Entry }>(`/object-kpi/ks6/${id}`, payload);
+    return res.data;
+  },
+
+  async signKs6(id: string, version: number, reason?: string): Promise<IObjectKs6Entry> {
+    const res = await apiClient.post<{ data: IObjectKs6Entry }>(
+      `/object-kpi/ks6/${id}/sign`, { version, reason },
+    );
+    return res.data;
+  },
+
+  async cancelKs6(id: string, version: number, reason?: string): Promise<IObjectKs6Entry> {
+    const res = await apiClient.post<{ data: IObjectKs6Entry }>(
+      `/object-kpi/ks6/${id}/cancel`, { version, reason },
+    );
+    return res.data;
+  },
+
+  async deleteKs6(id: string, version: number): Promise<void> {
+    await apiClient.delete(`/object-kpi/ks6/${id}?version=${version}`);
   },
 
   // ─── План ─────────────────────────────────────────────────────────────────

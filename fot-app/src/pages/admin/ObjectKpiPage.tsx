@@ -1,7 +1,8 @@
 import { useMemo, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 
-import { objectKpiApi, type IObjectKpiReportRow } from '../../api/objectKpi';
+import { objectKpiApi } from '../../api/objectKpi';
 import { objectKpiKeys } from '../../api/queryKeys';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -17,12 +18,15 @@ import styles from './ObjectKpiPage.module.css';
 /**
  * Вкладка «KPI объектов» на странице «Аналитика».
  *
- * Показывает расчёт приказа: остаток договора → план месяца → факт подписанных КС-2 →
- * процент выполнения. Все суммы — с НДС, в рублях (п. 2.1).
+ * Экран строится вокруг одного месяца: виджеты показывают план, факт КС-2 и процент за
+ * выбранный месяц (по всем объектам или по одному), а таблица появляется только после
+ * выбора объекта — иначе это простыня «все объекты × все месяцы», по которой ничего не видно.
  *
- * Численность грузится ВТОРЫМ запросом: основной отчёт — чистый SQL и отвечает быстро,
- * а человеко-дни тянут события СКУД по всем сотрудникам объектов.
+ * Все суммы — с НДС, в рублях (п. 2.1).
  */
+
+/** Потолок окна отчёта на бэкенде — 24 месяца; шире zod вернёт 400. */
+const MAX_MONTHS = 24;
 
 const shiftMonth = (month: string, delta: number): string => {
   const [year, value] = month.split('-').map(Number);
@@ -36,248 +40,245 @@ export const ObjectKpiPage: FC = () => {
   const { canEditPage } = useAuth();
   const canEdit = canEditPage('/discipline/objects');
 
-  const [from, setFrom] = useState(() => shiftMonth(currentMonth(), -5));
-  const [to, setTo] = useState(currentMonth);
+  const [month, setMonth] = useState(currentMonth);
   const [objectFilter, setObjectFilter] = useState('');
-  const [onlyWithContract, setOnlyWithContract] = useState(false);
+  const [showAllMonths, setShowAllMonths] = useState(false);
   const [openObjectId, setOpenObjectId] = useState<string | null>(null);
   const [assignmentsOpen, setAssignmentsOpen] = useState(false);
 
-  const period = useMemo(() => ({ from, to }), [from, to]);
-  const invalidPeriod = from > to;
+  // Развёрнутая история относится к конкретной паре «объект + месяц»: при смене любого
+  // из них она схлопывается, иначе на экране остались бы месяцы чужого запроса.
+  // Сброс в обработчиках, а не в эффекте: эффект давал бы лишний каскадный рендер.
+  const changeMonth = (value: string) => {
+    setMonth(value);
+    setShowAllMonths(false);
+  };
 
-  const reportQuery = useQuery({
-    queryKey: objectKpiKeys.report(from, to),
-    queryFn: () => objectKpiApi.getReport(period),
-    enabled: !invalidPeriod,
-  });
-
-  const headcountQuery = useQuery({
-    queryKey: objectKpiKeys.headcount(from, to),
-    queryFn: () => objectKpiApi.getHeadcount(period),
-    enabled: !invalidPeriod && reportQuery.isSuccess,
-  });
-
-  const fixationQuery = useQuery({
-    queryKey: objectKpiKeys.fixationInfo(to),
-    queryFn: () => objectKpiApi.getFixationInfo(to),
-  });
+  const changeObject = (value: string) => {
+    setObjectFilter(value);
+    setShowAllMonths(false);
+  };
 
   const objectsQuery = useQuery({
     queryKey: objectKpiKeys.objects(),
     queryFn: () => objectKpiApi.listObjects(),
   });
 
-  // Мемо, а не `?? []` по месту: новый литерал массива каждый рендер менял бы
-  // зависимости useMemo ниже.
-  const rows = useMemo(() => reportQuery.data?.data ?? [], [reportQuery.data]);
+  const objects = useMemo(() => objectsQuery.data?.data ?? [], [objectsQuery.data]);
+  const canRevisePlan = objectsQuery.data?.scope.can_revise_plan === true;
+  const selectedObject = objects.find(item => item.id === objectFilter) ?? null;
+
+  const monthPeriod = useMemo(() => ({ from: month, to: month }), [month]);
+
+  // Виджеты всегда за выбранный месяц — и когда таблица развёрнута на всю историю тоже.
+  const reportQuery = useQuery({
+    queryKey: objectKpiKeys.report(month, month, objectFilter || 'all'),
+    queryFn: () => objectKpiApi.getReport(monthPeriod, objectFilter || null),
+  });
+
+  // Начало истории — первый расчётный месяц договора, но не глубже потолка окна.
+  const historyFrom = useMemo(() => {
+    const floor = shiftMonth(month, -(MAX_MONTHS - 1));
+    const start = selectedObject?.plan_start_month?.slice(0, 7)
+      ?? selectedObject?.contract_date?.slice(0, 7);
+    if (!start) return floor;
+    return start > floor ? start : floor;
+  }, [month, selectedObject]);
+
+  const historyPeriod = useMemo(() => ({ from: historyFrom, to: month }), [historyFrom, month]);
+
+  const historyQuery = useQuery({
+    queryKey: objectKpiKeys.report(historyFrom, month, objectFilter || 'all'),
+    queryFn: () => objectKpiApi.getReport(historyPeriod, objectFilter || null),
+    enabled: showAllMonths && Boolean(objectFilter),
+  });
+
   const summary = reportQuery.data?.summary;
 
-  const headcountByKey = useMemo(() => {
-    const map = new Map<string, { avg: number | null; weekend: number }>();
-    for (const row of headcountQuery.data ?? []) {
-      map.set(`${row.skud_object_id}|${row.period_month}`, {
-        avg: row.avg_headcount,
-        weekend: row.weekend_person_days,
-      });
-    }
-    return map;
-  }, [headcountQuery.data]);
+  const activeQuery = showAllMonths && objectFilter ? historyQuery : reportQuery;
+  // Строки без договора не показываем: единственное действие по ним — «Создать договор»,
+  // а эта кнопка теперь живёт над таблицей.
+  const rows = useMemo(
+    () => (activeQuery.data?.data ?? [])
+      .filter(row => row.contract_id !== null)
+      .slice()
+      .sort((a, b) => b.period_month.localeCompare(a.period_month)),
+    [activeQuery.data],
+  );
 
-  // Фильтр действует только на таблицу: сводка и «Требуют внимания» остаются по всему
-  // периоду, иначе выбор одного объекта тихо переписал бы итоги за период.
-  const visibleRows = useMemo(() => rows.filter(row => (
-    (!objectFilter || row.skud_object_id === objectFilter)
-    && (!onlyWithContract || row.contract_id !== null)
-  )), [rows, objectFilter, onlyWithContract]);
-
-  // «Требуют внимания»: незакрытые просроченные месяцы, неполные данные и дрейф
-  // исходных данных после фиксации.
-  const attention = useMemo(() => ({
-    incomplete: rows.filter(row => row.report_status === 'data_incomplete'),
-    overdue: rows.filter(row => row.is_overdue && row.report_status === 'open'),
-    drift: rows.filter(row => row.plan_drift),
-    overContract: rows.filter(row => row.over_contract),
-  }), [rows]);
-
-  const renderStatus = (row: IObjectKpiReportRow) => {
-    if (row.report_status === 'data_incomplete') {
-      const reason = row.data_quality === 'no_active_contract' ? 'нет договора'
-        : row.data_quality === 'no_base_amount' ? 'нет стоимости'
-        : 'нет плановой ЗОС';
-      return <span className={`${styles.badge} ${styles.badgeWarn}`}>{reason}</span>;
-    }
-    if (row.report_status === 'corrected') {
-      return <span className={`${styles.badge} ${styles.badgeInfo}`}>пересмотрен</span>;
-    }
-    if (row.report_status === 'fixed') {
-      return <span className={`${styles.badge} ${styles.badgeOk}`}>зафиксирован</span>;
-    }
-    return <span className={styles.badge}>открыт</span>;
-  };
+  // Шапка ЗОС берётся из строки ВЫБРАННОГО месяца, а не из первой строки таблицы:
+  // в развёрнутом виде первой может оказаться любая.
+  const monthRow = reportQuery.data?.data.find(row => row.skud_object_id === objectFilter) ?? null;
 
   return (
     <div className={styles.page}>
       <div className={styles.toolbar}>
-        <div className={styles.period}>
-          <label className={styles.field}>
-            <span>Период с</span>
-            <input type="month" value={from} onChange={e => setFrom(e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span>по</span>
-            <input type="month" value={to} onChange={e => setTo(e.target.value)} />
-          </label>
-          <label className={styles.field}>
-            <span>Объект</span>
-            <select value={objectFilter} onChange={e => setObjectFilter(e.target.value)}>
+        <div className={styles.summaryTile}>
+          <span className={styles.summaryLabel}>План за период</span>
+          <strong>{formatMoneyShort(summary?.total_plan ?? null)}</strong>
+        </div>
+        <div className={styles.summaryTile}>
+          <span className={styles.summaryLabel}>Факт КС-2</span>
+          <strong>{formatMoneyShort(summary?.total_fact ?? null)}</strong>
+        </div>
+        <div className={styles.summaryTile}>
+          <span className={styles.summaryLabel}>Выполнение</span>
+          {/* Σфакт / Σплан, а не среднее процентов по месяцам (п. 3.5). */}
+          <strong>{formatPercent(summary?.completion_pct ?? null)}</strong>
+        </div>
+
+        <label className={styles.field}>
+          <span>Месяц</span>
+          <input type="month" value={month} onChange={e => changeMonth(e.target.value)} />
+        </label>
+
+        <label className={styles.field}>
+          <span>Объект</span>
+          <span className={styles.selectRow}>
+            <select value={objectFilter} onChange={e => changeObject(e.target.value)}>
               <option value="">Все объекты</option>
-              {(objectsQuery.data ?? []).map(item => (
+              {objects.map(item => (
                 <option key={item.id} value={item.id}>{item.name}</option>
               ))}
             </select>
-          </label>
-          <label className={styles.checkboxField}>
-            <input
-              type="checkbox"
-              checked={onlyWithContract}
-              onChange={e => setOnlyWithContract(e.target.checked)}
-            />
-            <span>Только с договором</span>
-          </label>
-        </div>
+            {objectFilter && (
+              <button
+                type="button"
+                className={styles.clearBtn}
+                aria-label="Сбросить объект"
+                title="Все объекты"
+                onClick={() => changeObject('')}
+              >
+                <X size={16} />
+              </button>
+            )}
+          </span>
+        </label>
 
-        <div className={styles.toolbarRight}>
-          {fixationQuery.data?.fixation_date && (
-            <span className={styles.hint}>
-              План {formatMonthLabel(`${to}-01`)} фиксируется {formatDate(fixationQuery.data.fixation_date)}
-              {!fixationQuery.data.freezer_enabled && ' (автофиксация выключена)'}
-            </span>
-          )}
-          {canEdit && (
-            <button type="button" className={styles.secondaryBtn} onClick={() => setAssignmentsOpen(true)}>
-              Назначения
-            </button>
-          )}
-        </div>
+        {canEdit && (
+          <button type="button" className={styles.secondaryBtn} onClick={() => setAssignmentsOpen(true)}>
+            Назначения
+          </button>
+        )}
       </div>
 
-      {invalidPeriod && <div className={styles.error}>Начало периода позже конца</div>}
       {reportQuery.isError && <div className={styles.error}>Не удалось загрузить отчёт</div>}
 
-      {summary && (
-        <div className={styles.summary}>
-          <div className={styles.summaryTile}>
-            <span className={styles.summaryLabel}>План за период</span>
-            <strong>{formatMoneyShort(summary.total_plan)}</strong>
+      {selectedObject && (
+        <>
+          <div className={styles.contractBar}>
+            <span className={styles.contractItem}>
+              <span className={styles.summaryLabel}>ЗОС план / факт</span>
+              <strong>
+                {formatDate(monthRow?.planned_zos_date_used ?? selectedObject.planned_zos_date)}
+                {' / '}
+                {formatDate(monthRow?.actual_zos_date ?? selectedObject.actual_zos_date)}
+              </strong>
+            </span>
+            <span className={styles.contractItem}>
+              <span className={styles.summaryLabel}>Контрольная дата</span>
+              <strong className={monthRow?.is_overdue ? styles.overdue : undefined}>
+                {formatDate(monthRow?.control_date ?? null)}
+              </strong>
+            </span>
+            {canEdit && (
+              <button
+                type="button"
+                className={styles.primaryBtn}
+                onClick={() => setOpenObjectId(selectedObject.id)}
+              >
+                {selectedObject.contract_id ? 'Договор' : 'Создать договор'}
+              </button>
+            )}
           </div>
-          <div className={styles.summaryTile}>
-            <span className={styles.summaryLabel}>Факт КС-2</span>
-            <strong>{formatMoneyShort(summary.total_fact)}</strong>
-          </div>
-          <div className={styles.summaryTile}>
-            <span className={styles.summaryLabel}>Выполнение</span>
-            {/* Σфакт / Σплан, а не среднее процентов по месяцам (п. 3.5). */}
-            <strong>{formatPercent(summary.completion_pct)}</strong>
-          </div>
-        </div>
+
+          <p className={styles.note}>Все суммы — в рублях, с НДС.</p>
+
+          {!selectedObject.contract_id ? (
+            <div className={styles.emptyBlock}>По объекту нет договора</div>
+          ) : (
+            <>
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Премия</th>
+                      <th>Месяц</th>
+                      <th>Руководитель</th>
+                      <th>Договор с ДС</th>
+                      <th>КС-2</th>
+                      <th>КС-6</th>
+                      <th>Остаток</th>
+                      <th>Мес.</th>
+                      <th>План месяца</th>
+                      <th>Факт месяца</th>
+                      <th>%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeQuery.isLoading && (
+                      <tr><td colSpan={11} className={styles.empty}>Загрузка…</td></tr>
+                    )}
+                    {!activeQuery.isLoading && rows.length === 0 && (
+                      <tr>
+                        <td colSpan={11} className={styles.empty}>
+                          Месяц вне расчётного периода договора
+                        </td>
+                      </tr>
+                    )}
+                    {rows.map(row => (
+                      <tr
+                        key={`${row.skud_object_id}-${row.period_month}`}
+                        className={styles.row}
+                        onClick={() => setOpenObjectId(row.skud_object_id)}
+                      >
+                        {/* Премия — Этап 2 приказа, расчёта пока нет. */}
+                        <td>—</td>
+                        <td>{formatMonthLabel(row.period_month)}</td>
+                        <td>{row.primary_manager_name ?? '—'}</td>
+                        <td>{formatMoneyShort(row.contract_total)}</td>
+                        <td>{formatMoneyShort(row.ks2_cumulative_after)}</td>
+                        <td>{formatMoneyShort(row.ks6_cumulative_after)}</td>
+                        <td>{formatMoneyShort(row.remainder)}</td>
+                        <td>{row.months_remaining ?? '—'}</td>
+                        <td>
+                          {formatMoneyShort(row.plan_amount)}
+                          {row.plan_overridden && (
+                            <span className={styles.mark} title="План задан вручную">✎</span>
+                          )}
+                          {row.plan_drift && (
+                            <span
+                              className={styles.mark}
+                              title="Исходные данные изменились после фиксации"
+                            >!</span>
+                          )}
+                        </td>
+                        <td>{formatMoneyShort(row.fact_amount)}</td>
+                        <td>{formatPercent(row.completion_pct)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <button
+                type="button"
+                className={styles.secondaryBtn}
+                onClick={() => setShowAllMonths(value => !value)}
+              >
+                {showAllMonths ? 'Только выбранный месяц' : 'Показать все месяцы'}
+              </button>
+            </>
+          )}
+        </>
       )}
-
-      {(attention.incomplete.length > 0 || attention.overdue.length > 0
-        || attention.drift.length > 0 || attention.overContract.length > 0) && (
-        <div className={styles.attention}>
-          <strong>Требуют внимания</strong>
-          <ul>
-            {attention.incomplete.length > 0 && (
-              <li>Неполные данные: {attention.incomplete.length} строк — план не считается</li>
-            )}
-            {attention.overdue.length > 0 && (
-              <li>Контрольная дата прошла, месяц не закрыт: {attention.overdue.length}</li>
-            )}
-            {attention.drift.length > 0 && (
-              <li>После фиксации изменились исходные данные: {attention.drift.length}</li>
-            )}
-            {attention.overContract.length > 0 && (
-              <li>КС-2 превышают стоимость договора: {attention.overContract.length}</li>
-            )}
-          </ul>
-        </div>
-      )}
-
-      <p className={styles.note}>Все суммы — в рублях, с НДС.</p>
-
-      <div className={styles.tableWrap}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Объект</th>
-              <th>Месяц</th>
-              <th>Руководитель</th>
-              <th>ЗОС план / факт</th>
-              <th>Контрольная дата</th>
-              <th>Договор с ДС</th>
-              <th>КС-2 накопительно</th>
-              <th>Остаток</th>
-              <th>Мес.</th>
-              <th>План месяца</th>
-              <th>Факт месяца</th>
-              <th>%</th>
-              <th>Числ.</th>
-              <th>Вых.</th>
-              <th>Статус</th>
-            </tr>
-          </thead>
-          <tbody>
-            {reportQuery.isLoading && (
-              <tr><td colSpan={15} className={styles.empty}>Загрузка…</td></tr>
-            )}
-            {!reportQuery.isLoading && visibleRows.length === 0 && (
-              <tr><td colSpan={15} className={styles.empty}>Нет данных за период</td></tr>
-            )}
-            {visibleRows.map(row => {
-              const headcount = headcountByKey.get(`${row.skud_object_id}|${row.period_month}`);
-              return (
-                <tr
-                  key={`${row.skud_object_id}-${row.period_month}`}
-                  className={styles.row}
-                  onClick={() => setOpenObjectId(row.skud_object_id)}
-                >
-                  <td className={styles.objectCell}>
-                    {row.object_name}
-                    {!row.object_is_active && <span className={styles.archived}>архив</span>}
-                  </td>
-                  <td>{formatMonthLabel(row.period_month)}</td>
-                  <td>{row.primary_manager_name ?? '—'}</td>
-                  <td>{formatDate(row.planned_zos_date_used)} / {formatDate(row.actual_zos_date)}</td>
-                  <td className={row.is_overdue ? styles.overdue : undefined}>
-                    {formatDate(row.control_date)}
-                  </td>
-                  <td>{formatMoneyShort(row.contract_total)}</td>
-                  <td>{formatMoneyShort(row.ks2_cumulative_after)}</td>
-                  <td>{formatMoneyShort(row.remainder)}</td>
-                  <td>{row.months_remaining ?? '—'}</td>
-                  <td>
-                    {formatMoneyShort(row.plan_amount)}
-                    {row.plan_overridden && <span className={styles.mark} title="План задан вручную">✎</span>}
-                    {row.plan_drift && <span className={styles.mark} title="Исходные данные изменились после фиксации">!</span>}
-                  </td>
-                  <td>{formatMoneyShort(row.fact_amount)}</td>
-                  <td>{formatPercent(row.completion_pct)}</td>
-                  <td>{headcountQuery.isLoading ? '…' : (headcount?.avg ?? '—')}</td>
-                  <td>{headcountQuery.isLoading ? '…' : (headcount?.weekend ?? '—')}</td>
-                  <td>{renderStatus(row)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
 
       {openObjectId && (
         <ObjectKpiCardModal
           objectId={openObjectId}
-          period={period}
+          period={showAllMonths ? historyPeriod : monthPeriod}
           canEdit={canEdit}
+          canRevisePlan={canRevisePlan}
           onClose={() => setOpenObjectId(null)}
         />
       )}

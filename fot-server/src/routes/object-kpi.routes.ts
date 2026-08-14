@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { objectKpiController } from '../controllers/object-kpi.controller.js';
 import { objectKpiEntriesController } from '../controllers/object-kpi-entries.controller.js';
+import { objectKpiKs6Controller } from '../controllers/object-kpi-ks6.controller.js';
 
 const router = Router();
 
@@ -48,6 +49,15 @@ router.patch('/ks2/:id', kpiEdit, objectKpiEntriesController.updateKs2);
 router.post('/ks2/:id/sign', kpiEdit, objectKpiEntriesController.signKs2);
 router.post('/ks2/:id/cancel', kpiEdit, objectKpiEntriesController.cancelKs2);
 router.delete('/ks2/:id', kpiEdit, objectKpiEntriesController.deleteKs2);
+
+// ─── Записи КС-6 (справочные, в расчёт KPI не входят) ────────────────────────
+// GET под kpiView, а не reportView: в ЛК руководителя реестра КС-6 нет.
+router.get('/contracts/:id/ks6', kpiView, objectKpiKs6Controller.listKs6);
+router.post('/contracts/:id/ks6', kpiEdit, objectKpiKs6Controller.createKs6);
+router.patch('/ks6/:id', kpiEdit, objectKpiKs6Controller.updateKs6);
+router.post('/ks6/:id/sign', kpiEdit, objectKpiKs6Controller.signKs6);
+router.post('/ks6/:id/cancel', kpiEdit, objectKpiKs6Controller.cancelKs6);
+router.delete('/ks6/:id', kpiEdit, objectKpiKs6Controller.deleteKs6);
 
 // ─── План месяца ─────────────────────────────────────────────────────────────
 router.post('/objects/:objectId/plans/:periodMonth/fix', kpiEdit, objectKpiEntriesController.fixPlan);

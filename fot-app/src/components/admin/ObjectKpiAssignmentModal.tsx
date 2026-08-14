@@ -27,10 +27,9 @@ const ROLE_LABELS: Record<RoleKind, string> = {
   economics_head: 'Руководитель эк. отдела',
 };
 
+/** Серверный текст ошибки лежит в ApiError.message (client.ts кладёт туда body.error). */
 const errorText = (error: unknown): string =>
-  (error as { data?: { error?: string } })?.data?.error
-  ?? (error as Error)?.message
-  ?? 'Не удалось сохранить';
+  (error as Error)?.message || 'Не удалось сохранить';
 
 interface IProps {
   onClose: () => void;
@@ -171,7 +170,7 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
                   <span>Объект</span>
                   <select name="skud_object_id" defaultValue={objectId ?? ''} required>
                     <option value="">— выберите —</option>
-                    {(objectsQuery.data ?? []).map(item => (
+                    {(objectsQuery.data?.data ?? []).map(item => (
                       <option key={item.id} value={item.id}>{item.name}</option>
                     ))}
                   </select>

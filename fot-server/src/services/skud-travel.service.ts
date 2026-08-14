@@ -1159,11 +1159,12 @@ export const updateTravelObject = async ({
  */
 const findKpiBlockers = async (objectId: string): Promise<string[]> => {
   const row = await queryOne<{
-    contracts: number; ks2: number; assignments: number; plans: number;
+    contracts: number; ks2: number; ks6: number; assignments: number; plans: number;
   }>(
     `SELECT
        (SELECT count(*)::int FROM object_contracts       WHERE skud_object_id = $1) AS contracts,
        (SELECT count(*)::int FROM object_ks2_entries     WHERE skud_object_id = $1) AS ks2,
+       (SELECT count(*)::int FROM object_ks6_entries     WHERE skud_object_id = $1) AS ks6,
        (SELECT count(*)::int FROM object_kpi_assignments WHERE skud_object_id = $1) AS assignments,
        (SELECT count(*)::int FROM object_kpi_month_plans WHERE skud_object_id = $1) AS plans`,
     [objectId],
@@ -1173,6 +1174,7 @@ const findKpiBlockers = async (objectId: string): Promise<string[]> => {
   const blockers: string[] = [];
   if (row.contracts > 0) blockers.push('договор');
   if (row.ks2 > 0) blockers.push('акты КС-2');
+  if (row.ks6 > 0) blockers.push('записи КС-6');
   if (row.assignments > 0) blockers.push('закрепления руководителей');
   if (row.plans > 0) blockers.push('зафиксированные планы');
   return blockers;

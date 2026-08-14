@@ -133,7 +133,10 @@ export const patentReceiptsKeys = {
 export const objectKpiKeys = {
   all: ['object-kpi'] as const,
   objects: () => [...objectKpiKeys.all, 'objects'] as const,
-  report: (from: string, to: string) => [...objectKpiKeys.all, 'report', from, to] as const,
+  // objectId в ключе обязателен: сервер сужает отчёт по object_id, и без него кэш
+  // отдал бы данные всех объектов под видом выбранного.
+  report: (from: string, to: string, objectId: string = 'all') =>
+    [...objectKpiKeys.all, 'report', from, to, objectId] as const,
   headcount: (from: string, to: string) => [...objectKpiKeys.all, 'headcount', from, to] as const,
   card: (objectId: string, from: string, to: string) =>
     [...objectKpiKeys.all, 'card', objectId, from, to] as const,
