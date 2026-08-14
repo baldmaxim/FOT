@@ -303,6 +303,46 @@ export interface IContractorPassAccessPointStats {
   points: IContractorPassAccessPointStat[];
 }
 
+/**
+ * Событие СКУД для модалки проходов по пропуску. Свой тип, а не общий SkudEvent:
+ * там card_number/physical_person объявлены как string, хотя card_number приходит
+ * пустым (Sigur его не отдаёт). Правка общего типа задела бы все СКУД-экраны.
+ */
+export interface IContractorPassEvent {
+  id: number;
+  physical_person: string | null;
+  card_number: string | null;
+  /** YYYY-MM-DD, МСК. */
+  event_date: string;
+  event_time: string;
+  access_point: string | null;
+  direction: 'entry' | 'exit';
+}
+
+/** Почему событий нет, хотя запрос успешен. */
+export type ContractorPassEventsReason = 'no_holder' | 'holder_not_approved' | 'no_employee';
+
+/** Проходы текущего держателя пропуска за период. */
+export interface IPassEventsResponse {
+  pass_number: string;
+  holder_name: string | null;
+  holder_valid_from: string | null;
+  holder_approved_at: string | null;
+  /** Фактически применённый период (сервер достраивает недостающую границу). */
+  date_from: string;
+  date_to: string;
+  /** Нижняя граница выборки после обрезки по дате выдачи, ISO timestamptz. */
+  effective_start_at: string | null;
+  /** Период урезан датой выдачи текущему держателю. */
+  clipped: boolean;
+  /** Событий больше лимита — часы за день считать нельзя. */
+  truncated: boolean;
+  reason?: ContractorPassEventsReason;
+  events: IContractorPassEvent[];
+  /** Внутренние точки доступа: не участвуют в парном расчёте часов. */
+  internal_points: string[];
+}
+
 /** Снапшот прежних документов держателя (история замен патента/паспорта). */
 export interface IDocHistoryRow {
   id: string;
@@ -644,6 +684,21 @@ const buildStatsQuery = (params: Record<string, string | undefined>): string => 
   return qs ? `?${qs}` : '';
 };
 
+/** Заглушка на случай ответа без data — чтобы модалка проходов не падала на undefined. */
+const EMPTY_PASS_EVENTS: IPassEventsResponse = {
+  pass_number: '',
+  holder_name: null,
+  holder_valid_from: null,
+  holder_approved_at: null,
+  date_from: '',
+  date_to: '',
+  effective_start_at: null,
+  clipped: false,
+  truncated: false,
+  events: [],
+  internal_points: [],
+};
+
 /** Админ-фасад подрядчиков. */
 export const contractorAdminService = {
   async listOrgs(): Promise<IContractorOrg[]> {
@@ -975,6 +1030,22 @@ export const contractorAdminService = {
   async getPassHistoryAdmin(passId: string): Promise<IPassHistory> {
     const r = await apiClient.get<ApiResponse<IPassHistory>>(`/admin/contractor/passes/${passId}/history`);
     return r.data ?? { holders: [], decisions: [] };
+  },
+  /**
+   * Проходы СКУД текущего держателя пропуска. Период необязателен: без него
+   * сервер отдаёт последние 14 дней по Москве. Нижняя граница на бэке обрезается
+   * датой фактической выдачи, чтобы не показать проходы прежнего держателя.
+   */
+  async getPassEvents(
+    passId: string,
+    dateFrom?: string,
+    dateTo?: string,
+  ): Promise<IPassEventsResponse> {
+    const qs = buildStatsQuery({ date_from: dateFrom, date_to: dateTo });
+    const r = await apiClient.get<ApiResponse<IPassEventsResponse>>(
+      `/admin/contractor/passes/${passId}/events${qs}`,
+    );
+    return r.data ?? EMPTY_PASS_EVENTS;
   },
   /** Правка документов держателя (админ/HR): замена патента, дозаполнение. */
   async updatePassDocuments(

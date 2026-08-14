@@ -69,6 +69,7 @@ import {
 } from './employee-lifecycle.controller.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
+import { getInternalAccessPoints } from '../services/skud-shared.service.js';
 import {
   OT_CONTRACTOR_KINDS,
   otTrainingsFor,
@@ -245,6 +246,80 @@ const parseStatsPeriod = (
   const dateTo = read('date_to');
   if (dateFrom && dateTo && dateFrom > dateTo) {
     throw new StatsPeriodValidationError('Начало периода позже конца');
+  }
+  return { dateFrom, dateTo };
+};
+
+/** Потолок окна просмотра проходов по пропуску, календарных дней (включительно). */
+const PASS_EVENTS_MAX_WINDOW_DAYS = 92;
+/** Окно по умолчанию, если период не задан: сегодня по МСК и 13 предыдущих дней. */
+const PASS_EVENTS_DEFAULT_WINDOW_DAYS = 14;
+/** Потолок числа отдаваемых событий: сверх него отвечаем truncated и прячем часы. */
+const PASS_EVENTS_MAX_ROWS = 2000;
+
+/**
+ * Сдвиг ISO-даты на N дней через UTC-компоненты. `new Date('YYYY-MM-DD')`
+ * не используем: он парсится как UTC-полночь, но арифметика через локальные
+ * геттеры даёт разъезд на сутки в зонах западнее Гринвича.
+ */
+const shiftIsoDate = (iso: string, days: number): string => {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+};
+
+/** Число календарных дней в отрезке [from, to] включительно. */
+const isoDaysInclusive = (from: string, to: string): number => {
+  const [fy, fm, fd] = from.split('-').map(Number);
+  const [ty, tm, td] = to.split('-').map(Number);
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000) + 1;
+};
+
+/**
+ * Период для просмотра проходов по пропуску. В отличие от parseStatsPeriod здесь
+ * границы обязаны быть заданы обе: недостающую достраиваем сами, «сегодня» берём
+ * по Москве (moscowTodayIso), а не по UTC и не по зоне клиента.
+ *  • обе пусты        → [сегодня − 13 дней, сегодня];
+ *  • только date_from → [date_from, min(date_from + 13 дней, сегодня)];
+ *  • только date_to   → [date_to − 13 дней, date_to].
+ * Окно больше PASS_EVENTS_MAX_WINDOW_DAYS дней — ошибка (92 валидно, 93 нет).
+ */
+const parsePassEventsPeriod = (
+  q: AuthenticatedRequest['query'],
+): { dateFrom: string; dateTo: string } => {
+  const read = (key: string): string | null => {
+    const raw = typeof q[key] === 'string' ? (q[key] as string).trim() : '';
+    if (!raw) return null;
+    if (!isValidIsoDate(raw)) throw new StatsPeriodValidationError(`Некорректная дата ${key}`);
+    return raw;
+  };
+  const rawFrom = read('date_from');
+  const rawTo = read('date_to');
+  const today = moscowTodayIso();
+  const span = PASS_EVENTS_DEFAULT_WINDOW_DAYS - 1;
+
+  let dateFrom: string;
+  let dateTo: string;
+  if (rawFrom && rawTo) {
+    dateFrom = rawFrom;
+    dateTo = rawTo;
+  } else if (rawFrom) {
+    const candidate = shiftIsoDate(rawFrom, span);
+    // date_from в будущем: не схлопываем период в отрицательный, отдаём один день.
+    dateTo = candidate > today ? (rawFrom > today ? rawFrom : today) : candidate;
+    dateFrom = rawFrom;
+  } else if (rawTo) {
+    dateTo = rawTo;
+    dateFrom = shiftIsoDate(rawTo, -span);
+  } else {
+    dateTo = today;
+    dateFrom = shiftIsoDate(today, -span);
+  }
+
+  if (dateFrom > dateTo) throw new StatsPeriodValidationError('Начало периода позже конца');
+  if (isoDaysInclusive(dateFrom, dateTo) > PASS_EVENTS_MAX_WINDOW_DAYS) {
+    throw new StatsPeriodValidationError(`Период больше ${PASS_EVENTS_MAX_WINDOW_DAYS} дней`);
   }
   return { dateFrom, dateTo };
 };
@@ -2182,6 +2257,156 @@ export const contractorAdminController = {
     } catch (error) {
       console.error('Contractor getPassHistoryAdmin error:', error);
       res.status(500).json({ success: false, error: 'Не удалось загрузить историю' });
+    }
+  },
+
+  /**
+   * GET /passes/:id/events?date_from=&date_to= — проходы СКУД текущего держателя
+   * пропуска. Отдельный эндпоинт, а не /api/skud/employee-events/:id: тот гейтится
+   * страницами /employee|/staff-control|/timesheet (ensureEmployeeEventsAccess),
+   * и админ подрядчиков получил бы 403.
+   *
+   * Главное правило — не приписать нынешнему держателю проходы предыдущего.
+   * Пропуск это переиспользуемый слот, поэтому нижняя граница выборки:
+   *   greatest(начало периода, valid_from, approved_at)
+   * Именно approved_at, а не valid_from: valid_from вводит подрядчик руками,
+   * фактическая выдача происходит при одобрении заявки (так же считается дата
+   * выдачи в fetchContractorPassDetails). Держатель без approved_at — заявка ещё
+   * не одобрена, выдачи не было: отдаём holder_not_approved и пустой список.
+   *
+   * Границы считает Postgres (timestamp AT TIME ZONE 'Europe/Moscow'), чтобы не
+   * воспроизводить переходы на летнее время в JS. Фильтр идёт по event_at (индекс
+   * idx_skud_events_employee_event_at), event_date оставлен для отсечения партиций.
+   */
+  async passEvents(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!(await ensureContractorSectionAccess(req, res, 'view'))) return;
+      const passId = z.string().uuid().parse(req.params.id);
+      const { dateFrom, dateTo } = parsePassEventsPeriod(req.query);
+
+      const pass = await queryOne<{
+        pass_number: string;
+        sigur_employee_id: number | null;
+        holder_name: string | null;
+        /** date-колонка: парсер postgres.ts отдаёт её строкой 'YYYY-MM-DD'. */
+        valid_from: string | null;
+        /** timestamptz: приходит объектом Date (парсер 1184 не переопределён). */
+        approved_at: Date | null;
+      }>(
+        `SELECT p.pass_number, p.sigur_employee_id,
+                h.holder_name, h.valid_from, h.approved_at
+           FROM contractor_passes p
+           LEFT JOIN contractor_pass_holders h
+             ON h.pass_id = p.id AND h.valid_until IS NULL
+          WHERE p.id = $1::uuid`,
+        [passId],
+      );
+      if (!pass) {
+        res.status(404).json({ success: false, error: 'Пропуск не найден' });
+        return;
+      }
+
+      const base = {
+        pass_number: pass.pass_number,
+        holder_name: pass.holder_name,
+        holder_valid_from: pass.valid_from,
+        holder_approved_at: pass.approved_at?.toISOString() ?? null,
+        date_from: dateFrom,
+        date_to: dateTo,
+        effective_start_at: null as string | null,
+        clipped: false,
+        truncated: false,
+        events: [] as unknown[],
+        internal_points: [] as string[],
+      };
+
+      if (!pass.holder_name) {
+        res.json({ success: true, data: { ...base, reason: 'no_holder' } });
+        return;
+      }
+      if (!pass.approved_at) {
+        res.json({ success: true, data: { ...base, reason: 'holder_not_approved' } });
+        return;
+      }
+
+      // Границы окна: нижняя — не раньше фактической выдачи, верхняя — полуинтервал
+      // [start, end) до МСК-полуночи следующего за date_to дня.
+      const bounds = await queryOne<{ start_at: Date; end_at: Date; clipped: boolean }>(
+        `SELECT b.start_at, b.end_at, b.start_at > b.period_start AS clipped
+           FROM (SELECT ($1::date)::timestamp AT TIME ZONE 'Europe/Moscow' AS period_start,
+                        GREATEST(
+                          ($1::date)::timestamp AT TIME ZONE 'Europe/Moscow',
+                          ($2::date)::timestamp AT TIME ZONE 'Europe/Moscow',
+                          $3::timestamptz
+                        ) AS start_at,
+                        ($4::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow' AS end_at) b`,
+        [dateFrom, pass.valid_from ?? dateFrom, pass.approved_at, dateTo],
+      );
+      if (!bounds) {
+        res.status(500).json({ success: false, error: 'Не удалось рассчитать период' });
+        return;
+      }
+      const effectiveStartAt = bounds.start_at.toISOString();
+      const withBounds = { ...base, effective_start_at: effectiveStartAt, clipped: bounds.clipped };
+
+      if (bounds.start_at >= bounds.end_at) {
+        // Весь период раньше выдачи текущему держателю — показывать нечего.
+        res.json({ success: true, data: { ...withBounds, clipped: true } });
+        return;
+      }
+
+      // Локальные employees.id профиля Sigur. Отдельным запросом до событий:
+      // пустая выдача событий иначе неотличима от «профиль не сматчен».
+      const employeeRows = pass.sigur_employee_id === null
+        ? []
+        : await query<{ id: number }>(
+          'SELECT id FROM employees WHERE sigur_employee_id = $1::bigint',
+          [pass.sigur_employee_id],
+        );
+      if (employeeRows.length === 0) {
+        res.json({ success: true, data: { ...withBounds, reason: 'no_employee' } });
+        return;
+      }
+
+      const rows = await query<Record<string, unknown>>(
+        `SELECT se.id, se.physical_person, se.card_number, se.event_date,
+                se.event_time, se.access_point, se.direction
+           FROM skud_events se
+          WHERE se.employee_id = ANY($1::bigint[])
+            AND se.event_at >= $2::timestamptz
+            AND se.event_at <  $3::timestamptz
+            AND se.event_date BETWEEN $4::date AND $5::date
+            AND se.direction IN ('entry', 'exit')
+          ORDER BY se.event_date DESC, se.event_time DESC
+          LIMIT ${PASS_EVENTS_MAX_ROWS + 1}`,
+        [employeeRows.map(r => r.id), bounds.start_at, bounds.end_at, dateFrom, dateTo],
+      );
+
+      // Лимит не молчит: обрезанный посередине день дал бы неверные часы,
+      // поэтому фронт по truncated прячет итоги и просит сузить период.
+      const truncated = rows.length > PASS_EVENTS_MAX_ROWS;
+      const internalPoints = await getInternalAccessPoints();
+
+      res.json({
+        success: true,
+        data: {
+          ...withBounds,
+          truncated,
+          events: truncated ? rows.slice(0, PASS_EVENTS_MAX_ROWS) : rows,
+          internal_points: [...internalPoints],
+        },
+      });
+    } catch (error) {
+      if (error instanceof StatsPeriodValidationError) {
+        res.status(400).json({ success: false, error: error.message || 'Некорректный период' });
+        return;
+      }
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный идентификатор пропуска' });
+        return;
+      }
+      console.error('Contractor passEvents error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить проходы' });
     }
   },
 

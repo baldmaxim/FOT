@@ -256,6 +256,57 @@
   overflow-x: hidden;
 }
 
+/* ── Модалка проходов по пропуску ─────────────────────────────────────── */
+
+/* Таблица проходов скроллится внутри себя: на 360px страница не должна ехать вбок. */
+.eventsScroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Шапка дня: дата слева, часы справа. */
+.eventsDay {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0 6px;
+}
+
+.eventsDayDate {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.eventsDayHours {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Предупреждения: обрезка периода по дате выдачи, обрезка по лимиту событий. */
+.eventsNote {
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+
+.eventsNoteWarn {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+/* Строка перерыва между парами и пометка внутренней точки. */
+.eventsMuted {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
 /* Кнопки скачивания документов: длинные имена файлов переносятся, а не режутся. */
 .docButton {
   white-space: normal;

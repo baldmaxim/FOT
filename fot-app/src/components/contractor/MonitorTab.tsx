@@ -14,6 +14,7 @@ import {
 import { formatCardW26 } from '../../utils/cardW26';
 import { ContractorOrgSelect } from './ContractorOrgSelect';
 import { PassStatsModal } from './PassStatsModal';
+import { PassEventsModal } from './PassEventsModal';
 import { PassDocumentsModal } from './PassDocumentsModal';
 import styles from '../../pages/contractor/Contractor.module.css';
 
@@ -285,6 +286,7 @@ export const MonitorTab: FC = () => {
   const [historyPassId, setHistoryPassId] = useState<string | null>(null);
   const [docRow, setDocRow] = useState<IMonitorPassRow | null>(null);
   const [clearRow, setClearRow] = useState<IMonitorPassRow | null>(null);
+  const [eventsRow, setEventsRow] = useState<IMonitorPassRow | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
 
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
@@ -400,6 +402,16 @@ export const MonitorTab: FC = () => {
                 <td>{(p.access_point_names ?? []).join(', ') || '—'}</td>
                 <td>{p.expires_at ?? '—'}</td>
                 <td>
+                  {p.holder_name && (
+                    <button
+                      className="btn-secondary"
+                      style={{ marginRight: 8 }}
+                      onClick={() => setEventsRow(p)}
+                      title="Входы и выходы держателя по данным СКУД"
+                    >
+                      Проходы
+                    </button>
+                  )}
                   <button className="btn-secondary" onClick={() => setHistoryPassId(p.id)}>
                     История
                   </button>
@@ -448,6 +460,10 @@ export const MonitorTab: FC = () => {
             setClearRow(null);
           }}
         />
+      )}
+
+      {eventsRow && (
+        <PassEventsModal pass={eventsRow} onClose={() => setEventsRow(null)} />
       )}
 
       {statsOpen && (

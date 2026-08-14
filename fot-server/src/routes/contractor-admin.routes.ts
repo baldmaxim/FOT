@@ -81,6 +81,9 @@ router.get('/passes/stats/access-points', apprView, contractorAdminController.pa
 router.get('/passes/stats/export', apprView, contractorAdminController.exportPassStats);
 router.get('/passes/sync-failed', apprView, contractorPoolController.syncFailed);
 router.get('/passes/:id/history', apprView, contractorAdminController.getPassHistoryAdmin);
+// Проходы СКУД текущего держателя пропуска (нижняя граница — approved_at, чтобы
+// не показать проходы предыдущего держателя слота).
+router.get('/passes/:id/events', apprView, contractorAdminController.passEvents);
 // Правка документов держателя любым админом раздела (замена патента и т.п.) + история снапшотов.
 router.post('/passes/:id/documents', apprEdit, contractorAdminController.updatePassDocumentsAdmin);
 router.get('/passes/:id/documents/history', apprView, contractorAdminController.getPassDocumentsHistory);

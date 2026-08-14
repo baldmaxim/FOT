@@ -111,6 +111,40 @@ export const calculateWorkSeconds = (
   return total;
 };
 
+/**
+ * id входа, оставшегося незакрытым к концу дня (или null). Правила спаривания —
+ * один-в-один с calculateWorkSeconds, поэтому пометка «вход без выхода» в UI
+ * никогда не разойдётся с посчитанными часами.
+ *
+ * Отдельная функция нужна потому, что по DisplayItem незакрытый вход не вычислить:
+ * buildDisplayItems кладёт pairDurationSeconds на строку exit, а у ЛЮБОГО entry
+ * там null — пометка «по null» окрасила бы и нормальные входы.
+ *
+ * Вход, поглощённый повторным пробивом той же точки, незакрытым не считается:
+ * в расчёте часов он тоже не участвует.
+ */
+export const findUnclosedEntryId = (
+  events: SkudEvent[],
+  internalPoints: Set<string>,
+): number | null => {
+  const sorted = events
+    .filter(e => !isInternalEvent(e, internalPoints))
+    .sort((a, b) => a.event_time.localeCompare(b.event_time));
+
+  let openEntry: SkudEvent | null = null;
+  for (const ev of sorted) {
+    if (ev.direction === 'entry') {
+      if (openEntry === null || ev.access_point === openEntry.access_point) {
+        openEntry = ev;
+      }
+    } else if (ev.direction === 'exit' && openEntry !== null) {
+      openEntry = null;
+    }
+  }
+
+  return openEntry?.id ?? null;
+};
+
 export interface IPresenceInterval {
   startSec: number;
   endSec: number;
