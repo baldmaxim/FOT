@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   queryOne: vi.fn(),
   query: vi.fn(),
   execute: vi.fn(),
+  txQuery: vi.fn(),
   canAccessEmployeeInScope: vi.fn(),
   logFromRequest: vi.fn(),
   blockEmployee: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock('../config/postgres.js', () => ({
   queryOne: h.queryOne,
   query: h.query,
   execute: h.execute,
+  withTransaction: async (fn: (client: unknown) => Promise<unknown>) => fn({ query: h.txQuery }),
 }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest, log: vi.fn() },
@@ -125,6 +127,12 @@ describe('fire — порог 23:00 МСК', () => {
     h.ensureArchiveSigur.mockResolvedValue({ sigurDepartmentId: 9, localDepartmentId: 'arch-1' });
     h.ensureLocalArchive.mockResolvedValue({ id: 'arch-1' });
     h.execute.mockResolvedValue(undefined);
+    // Отложенное увольнение: CAS-UPDATE + вставка события в одной транзакции.
+    h.txQuery.mockImplementation(async (sql: string) => (
+      sql.includes('UPDATE employees')
+        ? { rows: [{ ...ACTIVE_EMPLOYEE, dismissal_date: '2026-05-20' }], rowCount: 1 }
+        : { rows: [], rowCount: 1 }
+    ));
     routeQueryOne();
   });
   afterEach(() => vi.useRealTimers());
@@ -169,6 +177,36 @@ describe('fire — порог 23:00 МСК', () => {
     await fire(makeReq({ dismissalDate: '2026-05-25' }), res as never);
 
     expect(h.blockEmployee).not.toHaveBeenCalled();
+  });
+
+  it('отложенное увольнение: CAS по active + отсутствию claim, событие в той же транзакции', async () => {
+    vi.setSystemTime(new Date('2026-05-20T09:00:00Z'));
+    const res = makeRes();
+    await fire(makeReq({ dismissalDate: '2026-05-25' }), res as never);
+
+    const updateCall = h.txQuery.mock.calls.find(([sql]) => String(sql).includes('UPDATE employees'));
+    expect(updateCall).toBeDefined();
+    expect(String(updateCall![0])).toContain("employment_status = 'active'");
+    expect(String(updateCall![0])).toContain('dismissal_apply_started_at IS NULL');
+    // Событие истории пишется тем же соединением — иначе правка и история разъезжаются.
+    expect(h.txQuery.mock.calls.some(([sql]) => String(sql).includes('employee_dismissal_events'))).toBe(true);
+    expect(h.execute).not.toHaveBeenCalledWith(
+      expect.stringContaining('employee_dismissal_events'),
+      expect.anything(),
+    );
+  });
+
+  it('гонка: сотрудника уже уволили/увольняют → 409, событие не пишется', async () => {
+    vi.setSystemTime(new Date('2026-05-20T09:00:00Z'));
+    h.txQuery.mockImplementation(async (sql: string) => (
+      sql.includes('UPDATE employees') ? { rows: [], rowCount: 0 } : { rows: [], rowCount: 1 }
+    ));
+    const res = makeRes();
+    await fire(makeReq({ dismissalDate: '2026-05-25' }), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.txQuery.mock.calls.some(([sql]) => String(sql).includes('employee_dismissal_events'))).toBe(false);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
   });
 
   it('00:30 МСК (21:30 UTC прошлых суток) — считает дату по МСК', async () => {

@@ -89,15 +89,26 @@ describe('dismissal-scheduler', () => {
     expect(h.query).toHaveBeenCalledTimes(3);
   });
 
-  it('ошибка применения → условный сброс lease по тому же timestamp', async () => {
+  it('ошибка применения → claim НЕ снимается (повтор после истечения lease)', async () => {
     claimOnce();
     h.applyDismissal.mockRejectedValue(new Error('Sigur down'));
     await runStartupTick();
 
-    expect(h.execute).toHaveBeenCalledTimes(1);
-    const [sql, params] = h.execute.mock.calls[0];
-    expect(sql).toContain('dismissal_apply_started_at = $2::timestamptz');
-    expect(params).toEqual([77, CLAIMED_AT]);
+    // Снятие claim вернуло бы сотрудника в выборку тем же циклом — горячая петля
+    // до MAX_PER_CYCLE попыток по падающему Sigur.
+    expect(h.execute).not.toHaveBeenCalled();
+  });
+
+  it('ошибка применения не приводит к повторному захвату того же сотрудника в цикле', async () => {
+    // claim отдаёт сотрудника, пока его lease свободен; после ошибки claim держится,
+    // поэтому второй запрос выборки возвращает пусто и цикл завершается.
+    let calls = 0;
+    h.query.mockImplementation(async () => (calls++ === 0 ? [{ id: 77, claimed_at: CLAIMED_AT }] : []));
+    h.applyDismissal.mockRejectedValue(new Error('Sigur down'));
+    await runStartupTick();
+
+    expect(h.applyDismissal).toHaveBeenCalledTimes(1);
+    expect(h.execute).not.toHaveBeenCalled();
   });
 
   it('запись уже не active (успели отменить/уволить) → lease отпускается без применения', async () => {

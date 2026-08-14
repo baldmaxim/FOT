@@ -399,6 +399,12 @@
   color: var(--text-secondary);
 }
 
+.sigur-archive-warning {
+  color: var(--warning, #b45309);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
 /* Предпросмотр */
 .sigur-preview-controls {
   display: flex;

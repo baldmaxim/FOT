@@ -1,5 +1,5 @@
 import { sigurService } from './sigur.service.js';
-import { query, queryOne, execute } from '../config/postgres.js';
+import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
 import { parseFIO, normalizeFullName } from '../utils/fio.utils.js';
 import {
   getPositionsRaw,
@@ -12,11 +12,13 @@ import { employeeChangesService } from './employee-changes.service.js';
 import { formatDateShift } from './timesheet-department-assignments.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { employeeCache } from './employee-cache.service.js';
-import { assignEmployeesToArchiveDepartment } from './employee-archive-department.service.js';
+import { ensureLocalArchiveDepartment, getKnownArchiveDepartment } from './employee-archive-department.service.js';
 import { invalidatePresencePollingEmployeeCache } from './presence-polling-cache.service.js';
 import { batchMoveSigurEmployees } from './sigur-live-employees-crud.service.js';
 import { settingsService } from './settings.service.js';
 import { upsertTechnicalDepartmentAccess } from './employee-department-access.service.js';
+import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
+import { auditService } from './audit.service.js';
 
 // ─── Хелперы защиты от «осиротения» (B′) ───
 
@@ -42,7 +44,7 @@ export function isAncestorDepartment(
 
 // ─── Решение по смене отдела на фазе сохранения (защита от гонки с увольнением) ───
 
-export type TDeptSyncAction = 'apply' | 'noop' | 'snapshot-only' | 'defer' | 'skip-local-dismissal';
+export type TDeptSyncAction = 'apply' | 'noop' | 'snapshot-only' | 'defer' | 'skip-local-dismissal' | 'skip-fired';
 
 export interface IDeptSyncFreshState {
   org_department_id: string | null;
@@ -70,6 +72,10 @@ export interface IDeptSyncFreshState {
  *   или уже созданное будущее назначение в архив. Гейт по целевому отделу
  *   обязателен: claim не очищается после успешного увольнения, без гейта
  *   блокировались бы возврат из архива и обычный перевод с будущим увольнением.
+ * - `skip-fired` — сотрудник уже уволен (fresh-статус не `active`), а Sigur всё ещё
+ *   отдаёт его в рабочем отделе. Синк не возвращает уволенного в строй: ни отдел,
+ *   ни должность, ни lifecycle-поля не меняются (инцидент 10–13.08.2026 — увольнения
+ *   планировщика откатывались ближайшим синком). Возврат в строй — только явный rehire.
  * - `noop` — снапшот уже в целевом отделе.
  * - `snapshot-only` — назначение в целевой отдел уже активно сегодня, отстал только
  *   снапшот `employees.org_department_id`: обновить его, историю не трогать.
@@ -89,6 +95,8 @@ export function decideDeptSyncAction(
     const archiveScheduled = fresh.target_assignments.some(a => a.effective_from > todayIso);
     if (localDismissalPending || claimed || archiveScheduled) return 'skip-local-dismissal';
   }
+  // Уволенного синк не двигает вообще — независимо от того, что показывает Sigur.
+  if (fresh.employment_status !== 'active') return 'skip-fired';
   if (fresh.org_department_id === nextDeptId) return 'noop';
   const activeToday = fresh.target_assignments.some(
     a => a.effective_from <= todayIso && (a.effective_to == null || a.effective_to >= todayIso),
@@ -117,6 +125,9 @@ const DISMISSAL_AUTO_FIELDS = [
  * - `org_department_id` остаётся только при `snapshot-only` (прямой UPDATE ниже
  *   подтянет отставший снапшот); при `apply` историю и снапшот пишет
  *   changeDepartment, при остальных решениях менять снапшот нельзя.
+ * - При `skip-fired` дополнительно снимаются `position_id` и авто-поля увольнения
+ *   (независимо от `isDismissalDept`): уволенному синк не меняет ни отдел, ни
+ *   должность, ни статус.
  * - Несвязанные обновления (ФИО, табельный номер и т.п.) не трогаются.
  */
 export function cleanUpdateFieldsForAction(
@@ -125,13 +136,16 @@ export function cleanUpdateFieldsForAction(
   isDismissalDept: boolean,
   freshEmploymentStatus: string | null,
 ): void {
-  const dropDismissalAuto = isDismissalDept
-    && (action !== 'apply' || freshEmploymentStatus !== 'active');
+  const dropDismissalAuto = action === 'skip-fired'
+    || (isDismissalDept && (action !== 'apply' || freshEmploymentStatus !== 'active'));
   if (dropDismissalAuto) {
     for (const key of DISMISSAL_AUTO_FIELDS) delete fields[key];
   }
   if (action !== 'snapshot-only') {
     delete fields.org_department_id;
+  }
+  if (action === 'skip-fired') {
+    delete fields.position_id;
   }
 }
 
@@ -168,6 +182,10 @@ export interface ISyncEmployeesResult {
   errors: string[];
   unmatched: IUnmatchedSigurEmployee[];
   auto_fired: number;
+  /** Уволенных в ФОТ, которых Sigur отдал в рабочем отделе (обнаружено за прогон). */
+  fired_mismatch_detected: number;
+  /** Из них осталось нерешёнными после штатного переноса fired → архив Sigur. */
+  fired_mismatch_unresolved: number;
 }
 
 // ─── Защита авто-fire от ложных срабатываний ───
@@ -351,7 +369,10 @@ export async function syncEmployeesLogic(
   console.log('[syncEmployees] got', sigurEmployeesRaw.length, 'employees from Sigur');
 
   if (sigurEmployeesRaw.length === 0) {
-    return { imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [], auto_fired: 0 };
+    return {
+      imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [], auto_fired: 0,
+      fired_mismatch_detected: 0, fired_mismatch_unresolved: 0,
+    };
   }
 
   logSampleAndWarn('syncEmployees', sigurEmployeesRaw[0], ['id', 'name', 'departmentId', 'positionId', 'position']);
@@ -494,9 +515,14 @@ export async function syncEmployeesLogic(
   }
 
   // Локальный id архивного отдела «Уволенные» (для распознавания переходов увольнение/восстановление).
-  const archiveLocalDeptId = archiveDepartmentId != null
+  // Фолбэк на локальную настройку `employees_archive_department_id` обязателен: пока
+  // `sigur_archive_department_id` пустовал (до 14.08.2026), гард переходов в архив был
+  // выключен целиком, и синк оформлял увольнения как обычные переводы.
+  const archiveLocalDeptId = (archiveDepartmentId != null
     ? (sigurDeptToDbId.get(archiveDepartmentId) || null)
-    : null;
+    : null)
+    ?? (await getKnownArchiveDepartment(connection).catch(() => null))?.id
+    ?? null;
   // Московская дата: UTC-срезка в окне 00:00–03:00 МСК давала вчерашнее число,
   // из-за чего переводы/увольнения ночного тика датировались вчерашним днём.
   const syncTodayIso = moscowTodayIso();
@@ -609,6 +635,8 @@ export async function syncEmployeesLogic(
   // isDismissalDept — признак архивной папки ПО SIGUR department ID (не по archiveLocalDeptId:
   // локальный маппинг может отсутствовать, а распознавание увольнения обязано работать всегда).
   const updates: { id: number; fields: Record<string, unknown>; name: string; isDismissalDept: boolean }[] = [];
+  // Уволенные в ФОТ, которых Sigur отдал в рабочем отделе (см. ветку ниже — реактивации нет).
+  const firedMismatch: { employeeId: number; sigurId: number; name: string; sigurDeptName: string | null }[] = [];
 
   for (let empIdx = 0; empIdx < sigurEmployees.length; empIdx++) {
     const emp = sigurEmployees[empIdx];
@@ -624,10 +652,14 @@ export async function syncEmployeesLogic(
     // Признак «уволен в Sigur» — точное совпадение с архивной папкой по id (settings.sigur_archive_department_id).
     // Раньше тут была regex /уволен/i по имени отдела, которая ловила ложные совпадения
     // (например, любой отдел с подстрокой «уволен» в названии).
-    const isDismissalDept = archiveDepartmentId != null
-      && sigurDeptId != null
-      && sigurDeptId === archiveDepartmentId;
     const orgDepartmentId = sigurDeptId ? sigurDeptToDbId.get(sigurDeptId) || null : null;
+    // Вторая опора — локальный архивный отдел: при пустом `sigur_archive_department_id`
+    // (как было до 14.08.2026) переход в «Уволенные» иначе считался обычным переводом,
+    // и гард `skip-local-dismissal` не срабатывал.
+    const isDismissalDept = (archiveDepartmentId != null
+      && sigurDeptId != null
+      && sigurDeptId === archiveDepartmentId)
+      || (archiveLocalDeptId != null && orgDepartmentId === archiveLocalDeptId);
     const sigurPosId = emp.positionId;
     const positionText = emp.position;
     const tabNumber = emp.tabId ? emp.tabId.trim() : null;
@@ -655,16 +687,22 @@ export async function syncEmployeesLogic(
           console.log(`[syncEmployees] fire (dismissal dept): ${fullName} (sigurId=${sigurEmpId})`);
         }
       } else if (sigurEmpId && firedSigurIds.has(sigurEmpId)) {
-        const pendingDismissalDate = prev?.dismissal_date ?? null;
-        // Не реактивировать, если dismissal_date в будущем (запланировано вручную через scheduler)
-        if (!pendingDismissalDate || pendingDismissalDate <= syncTodayIso) {
-          // Сотрудник fired в БД, но числится в обычном отделе Sigur → реактивируем
-          updateFields.employment_status = 'active';
-          updateFields.dismissal_date = null; // Сбросить дату, иначе scheduler уволит снова
-          updateFields.excluded_from_timesheet = false;
-          updateFields.excluded_from_timesheet_date = null;
-          console.log(`[syncEmployees] reactivate: ${fullName} (sigurId=${sigurEmpId})`);
-        }
+        // Сотрудник fired в ФОТ, но Sigur отдаёт его в рабочем отделе. Раньше синк
+        // «реактивировал» такого человека (снимал fired и обнулял dismissal_date) —
+        // из-за этого увольнения планировщика откатывались ближайшим тиком
+        // (инцидент 10–13.08.2026). Теперь только фиксируем расхождение: вернуть
+        // в строй может лишь HR через явный rehire. Само расхождение штатно
+        // устраняется ниже переносом fired → архивная папка Sigur.
+        firedMismatch.push({
+          employeeId: dbId,
+          sigurId: sigurEmpId,
+          name: fullName.trim(),
+          sigurDeptName: sigurDeptName || null,
+        });
+        console.warn(
+          `[syncEmployees] fired in FOT, working dept in Sigur — no reactivation: ${fullName} `
+          + `(sigurId=${sigurEmpId}${sigurDeptName ? `, ${sigurDeptName}` : ''})`,
+        );
       }
 
       if (orgDepartmentId) {
@@ -831,14 +869,19 @@ export async function syncEmployeesLogic(
       batch.map(async u => {
         try {
           const prev = dbEmpById.get(u.id);
-          // Отдел изменился → пишем историю и синхронизируем назначения
-          if (u.fields.org_department_id && prev && u.fields.org_department_id !== prev.org_department_id) {
-            const nextDeptId = u.fields.org_department_id as string;
+          const deptChanging = Boolean(
+            u.fields.org_department_id && prev && u.fields.org_department_id !== prev.org_department_id,
+          );
+          const positionChanging = Boolean(
+            u.fields.position_id && prev && u.fields.position_id !== prev.position_id,
+          );
 
-            // Fresh re-read: dbEmpById загружен в начале долгого прогона и мог
-            // устареть — увольнение/перевод могли примениться, пока синк читал
-            // страницы Sigur. Решение принимается по актуальным данным БД.
-            const freshEmp = await queryOne<{
+          // Fresh re-read: dbEmpById загружен в начале долгого прогона и мог устареть —
+          // увольнение/перевод могли примениться, пока синк читал страницы Sigur.
+          // Читаем при ЛЮБОМ lifecycle-изменении (отдел или должность): иначе у
+          // уволенного с неизменившимся отделом синк всё равно менял бы должность.
+          const freshEmp = (deptChanging || positionChanging)
+            ? await queryOne<{
               org_department_id: string | null;
               employment_status: string;
               dismissal_date: string | null;
@@ -849,7 +892,19 @@ export async function syncEmployeesLogic(
                       dismissal_apply_started_at::text AS dismissal_apply_started_at
                  FROM employees WHERE id = $1`,
               [u.id],
-            );
+            )
+            : null;
+
+          // Уволенного не трогаем и когда меняется только должность.
+          if (!deptChanging && positionChanging && freshEmp && freshEmp.employment_status !== 'active') {
+            cleanUpdateFieldsForAction(u.fields, 'skip-fired', u.isDismissalDept, freshEmp.employment_status);
+            console.log(`[syncEmployees] position change skip-fired: ${u.name} (id=${u.id}) — сотрудник уволен`);
+          }
+
+          // Отдел изменился → пишем историю и синхронизируем назначения
+          if (deptChanging && prev) {
+            const nextDeptId = u.fields.org_department_id as string;
+
             const targetAssignments = freshEmp
               ? await query<{ effective_from: string; effective_to: string | null }>(
                   `SELECT effective_from::text AS effective_from, effective_to::text AS effective_to
@@ -872,9 +927,13 @@ export async function syncEmployeesLogic(
             cleanUpdateFieldsForAction(u.fields, action, u.isDismissalDept, freshEmp?.employment_status ?? null);
 
             if (action !== 'apply') {
+              // Должность уволенного/увольняемого тоже не трогаем: changePosition ниже
+              // сработал бы по оставшемуся position_id.
+              if (action === 'skip-local-dismissal') delete u.fields.position_id;
               console.log(
                 `[syncEmployees] dept change ${action}: ${u.name} (id=${u.id}) → ${nextDeptId}`
-                + (action === 'skip-local-dismissal' ? ' — увольнением владеет lifecycle/scheduler' : ''),
+                + (action === 'skip-local-dismissal' ? ' — увольнением владеет lifecycle/scheduler' : '')
+                + (action === 'skip-fired' ? ' — сотрудник уволен, синк его не двигает' : ''),
               );
             } else {
               // Реальный отдел берём из fresh-строки (stale prev мог отстать).
@@ -962,6 +1021,7 @@ export async function syncEmployeesLogic(
                 // без события увольнения, техдоступа и lifecycle-полей.
                 console.log(`[syncEmployees] dept change skipped by atomic guard: ${u.name} (id=${u.id}) → ${nextDeptId}`);
                 cleanUpdateFieldsForAction(u.fields, 'skip-local-dismissal', u.isDismissalDept, freshEmp?.employment_status ?? null);
+                delete u.fields.position_id;
               } else {
                 await upsertTechnicalDepartmentAccess(u.id, nextDeptId, freshDeptId || null, 'sigur_sync');
               }
@@ -1084,58 +1144,116 @@ export async function syncEmployeesLogic(
   }
 
   const activeWithSigur = existingEmps.filter(e => e.employment_status === 'active').length;
+  // Сотрудников с уже назначенным увольнением авто-fire не трогает: их применяет
+  // dismissal-scheduler своей датой (в т.ч. просроченные после простоя сервера).
+  // Иначе увольнение «на сегодня до 23:00 МСК» или на будущую дату применялось бы раньше срока.
+  const skippedAutoFireWithDismissal = existingEmps.filter(
+    e => e.employment_status === 'active' && !sigurIdSet.has(e.sigur_employee_id) && e.dismissal_date != null,
+  ).length;
   const toAutoFire = existingEmps.filter(
-    e => e.employment_status === 'active' && !sigurIdSet.has(e.sigur_employee_id),
+    e => e.employment_status === 'active'
+      && !sigurIdSet.has(e.sigur_employee_id)
+      && e.dismissal_date == null,
   );
+  if (skippedAutoFireWithDismissal > 0) {
+    console.log(`[syncEmployees] auto-fire skip (dismissal scheduled): ${skippedAutoFireWithDismissal}`);
+  }
 
   const safety = evaluateAutoFireSafety(activeWithSigur, sigurEmployees.length, toAutoFire.length, {
     absoluteLimit: Number(process.env.SIGUR_AUTOFIRE_MAX) || undefined,
   });
 
   let autoFired = 0;
-  const today = new Date().toISOString().slice(0, 10);
+  // МСК-дата: UTC-срезка в окне 00:00–03:00 МСК давала вчерашнее число.
+  const today = syncTodayIso;
   const autoFiredIds: number[] = [];
 
   if (safety.shouldSkip) {
     console.error(`[syncEmployees] ${safety.reason}`);
     errors.push(safety.reason!);
   } else {
-    const autoFireExclDate = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const autoFireExclDate = formatDateShift(today, 1);
+    // Архивный отдел резолвим ОДИН раз до цикла: создание отдела не должно
+    // происходить внутри транзакции сотрудника.
+    let autoFireArchiveDeptId: string | null = archiveLocalDeptId;
+    if (toAutoFire.length > 0 && !autoFireArchiveDeptId) {
+      try {
+        autoFireArchiveDeptId = (await ensureLocalArchiveDepartment(null, { connection })).id;
+      } catch (archiveErr) {
+        errors.push(`auto-fire archive resolve: ${(archiveErr as Error).message}`);
+      }
+    }
+
     for (const emp of toAutoFire) {
       try {
-        // dismissal_date + флаги исключения — чтобы уволенный корректно отображался в табеле.
-        await execute(
-          `UPDATE employees
-              SET employment_status = 'fired',
-                  dismissal_date = $1,
-                  excluded_from_timesheet = true,
-                  excluded_from_timesheet_date = $2,
-                  updated_at = $3
-            WHERE id = $4`,
-          [today, autoFireExclDate, new Date().toISOString(), emp.id],
-        );
-        // Фиксируем реальный отдел (до архивации) в событии увольнения — для связности истории.
-        if (emp.org_department_id && emp.org_department_id !== archiveLocalDeptId) {
-          await execute(
-            `INSERT INTO employee_dismissal_events
-               (employee_id, dismissal_date, scheduled, from_department_id, created_by)
-             VALUES ($1, $2, false, $3, NULL)`,
-            [emp.id, today, emp.org_department_id],
+        // Всё состояние увольнения — в одной транзакции: при ошибке любого шага
+        // сотрудник не остаётся fired без истории и без переноса в архив.
+        const applied = await withTransaction(async (client) => {
+          const fired = await client.query<{ id: number }>(
+            `UPDATE employees
+                SET employment_status = 'fired',
+                    dismissal_date = $1,
+                    excluded_from_timesheet = true,
+                    excluded_from_timesheet_date = $2,
+                    updated_at = $3
+              WHERE id = $4
+                AND employment_status = 'active'
+                AND dismissal_date IS NULL
+                AND dismissal_apply_started_at IS NULL
+              RETURNING id`,
+            [today, autoFireExclDate, new Date().toISOString(), emp.id],
           );
+          if (fired.rowCount === 0) return false;
+
+          // Фиксируем реальный отдел (до архивации) в событии увольнения — для связности истории.
+          if (emp.org_department_id && emp.org_department_id !== autoFireArchiveDeptId) {
+            await client.query(
+              `INSERT INTO employee_dismissal_events
+                 (employee_id, dismissal_date, scheduled, from_department_id, created_by)
+               VALUES ($1, $2, false, $3, NULL)`,
+              [emp.id, today, emp.org_department_id],
+            );
+          }
+
+          if (autoFireArchiveDeptId) {
+            await client.query(
+              `UPDATE employee_assignments
+                  SET effective_to = $1
+                WHERE employee_id = $2 AND effective_to IS NULL`,
+              [today, emp.id],
+            );
+            await client.query(
+              `UPDATE employees
+                  SET org_department_id = $1, department_locked = false, updated_at = $2
+                WHERE id = $3`,
+              [autoFireArchiveDeptId, new Date().toISOString(), emp.id],
+            );
+          }
+
+          await client.query(
+            `UPDATE employee_department_access
+                SET is_active = false, updated_at = $1
+              WHERE employee_id = $2 AND is_active = true`,
+            [new Date().toISOString(), emp.id],
+          );
+
+          return true;
+        });
+
+        if (applied) {
+          autoFired++;
+          autoFiredIds.push(emp.id);
+          employeeCache.invalidate(emp.id);
+        } else {
+          console.log(`[syncEmployees] auto-fire skip (state changed): id=${emp.id}`);
         }
-        autoFired++;
-        autoFiredIds.push(emp.id);
       } catch (fireErr) {
         errors.push(`auto-fire ${emp.id}: ${(fireErr as Error).message}`);
       }
     }
 
     if (autoFiredIds.length > 0) {
-      try {
-        await assignEmployeesToArchiveDepartment(autoFiredIds, null, { connection, effectiveDate: today });
-      } catch (archiveError) {
-        errors.push(`auto-fire archive move: ${(archiveError as Error).message}`);
-      }
+      invalidateTimekeeperScopeCache();
     }
 
     if (autoFired > 0) {
@@ -1145,6 +1263,9 @@ export async function syncEmployeesLogic(
 
   // Перенос всех fired сотрудников в архивную папку Sigur (идемпотентно).
   // Сотрудников без sigur_employee_id пропускаем — их нет в Sigur, переносить некуда.
+  // Это же штатно устраняет расхождения firedMismatch (fired в ФОТ / рабочий отдел в Sigur).
+  const firedMismatchSigurIds = new Set(firedMismatch.map(m => m.sigurId));
+  let firedMismatchResolved = 0;
   try {
     const sigurSettings = await settingsService.getSigurConnectionSettings();
     if (!sigurSettings.archiveDepartmentId) {
@@ -1183,6 +1304,10 @@ export async function syncEmployeesLogic(
 
         if (toMove.length > 0) {
           const moveResult = await batchMoveSigurEmployees(toMove, archiveDepartmentId, connection);
+          const failedSet = new Set(moveResult.failedIds);
+          firedMismatchResolved = toMove.filter(
+            sid => firedMismatchSigurIds.has(sid) && !failedSet.has(sid),
+          ).length;
           console.log(
             `[syncEmployees] fired->archive moved=${moveResult.moved}/${moveResult.requested} ` +
             `failed=${moveResult.failedIds.length} skipped_not_in_sigur=${skippedNotInSigur} ` +
@@ -1203,6 +1328,28 @@ export async function syncEmployeesLogic(
     errors.push(`fired->archive sync: ${(archiveSyncErr as Error).message}`);
   }
 
+  const firedMismatchUnresolved = Math.max(0, firedMismatch.length - firedMismatchResolved);
+
+  if (firedMismatch.length > 0) {
+    console.warn(
+      `[syncEmployees] fired mismatch detected=${firedMismatch.length} unresolved=${firedMismatchUnresolved}`,
+    );
+    try {
+      await auditService.log({
+        user_id: null,
+        action: 'SIGUR_SYNC_FIRED_MISMATCH',
+        entity_type: 'employee',
+        details: {
+          detected: firedMismatch.length,
+          unresolved: firedMismatchUnresolved,
+          employees: firedMismatch.slice(0, 50),
+        },
+      });
+    } catch (auditErr) {
+      console.error('[syncEmployees] fired mismatch audit failed:', auditErr);
+    }
+  }
+
   console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${unmatchedList.length} unmatched, ${autoFired} auto-fired`);
 
   // Сбрасываем локальный кэш presence-polling, чтобы первые события нового/изменённого
@@ -1211,5 +1358,15 @@ export async function syncEmployeesLogic(
     invalidatePresencePollingEmployeeCache();
   }
 
-  return { imported, updated, skipped, total: sigurEmployeesRaw.length, errors, unmatched: unmatchedList, auto_fired: autoFired };
+  return {
+    imported,
+    updated,
+    skipped,
+    total: sigurEmployeesRaw.length,
+    errors,
+    unmatched: unmatchedList,
+    auto_fired: autoFired,
+    fired_mismatch_detected: firedMismatch.length,
+    fired_mismatch_unresolved: firedMismatchUnresolved,
+  };
 }

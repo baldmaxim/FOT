@@ -172,14 +172,39 @@ describe('decideDeptSyncAction — решение по смене отдела �
     expect(decideDeptSyncAction(fresh, 'какой-то-локальный-uuid', true, TODAY)).toBe('skip-local-dismissal');
   });
 
-  it('возврат из архива при старом (не очищенном) claim → НЕ блокируется', () => {
+  it('возврат уволенного из архива в бригаду по данным Sigur → skip-fired (реактивации нет)', () => {
+    // Инцидент 10–13.08.2026: синк возвращал уволенного в рабочий отдел и снимал fired.
+    // Теперь такой возврат возможен только явным rehire со стороны HR.
     const fresh = freshState({
       org_department_id: ARCHIVE,
       employment_status: 'fired',
       dismissal_date: '2026-06-01',
       dismissal_apply_started_at: '2026-06-01 20:02:00+00',
     });
-    expect(decideDeptSyncAction(fresh, BRIGADE, false, TODAY)).toBe('apply');
+    expect(decideDeptSyncAction(fresh, BRIGADE, false, TODAY)).toBe('skip-fired');
+  });
+
+  it('уволенный в архиве без claim и будущих назначений → skip-fired', () => {
+    const fresh = freshState({
+      org_department_id: ARCHIVE,
+      employment_status: 'fired',
+      dismissal_date: '2026-06-01',
+    });
+    expect(decideDeptSyncAction(fresh, ARCHIVE, true, TODAY)).toBe('skip-fired');
+  });
+
+  it('уволенный, Sigur отдаёт рабочий отдел → skip-fired, отдел не переносится', () => {
+    const fresh = freshState({
+      org_department_id: ARCHIVE,
+      employment_status: 'fired',
+      dismissal_date: TODAY,
+    });
+    expect(decideDeptSyncAction(fresh, 'other-brigade', false, TODAY)).toBe('skip-fired');
+  });
+
+  it('активный сотрудник исходом skip-fired не задевается', () => {
+    const fresh = freshState();
+    expect(decideDeptSyncAction(fresh, 'other-dept', false, TODAY)).toBe('apply');
   });
 
   it('обычный перевод (не архив) сотрудника с будущим увольнением → НЕ блокируется', () => {
@@ -266,5 +291,21 @@ describe('cleanUpdateFieldsForAction — очистка авто-полей по
     const fields: Record<string, unknown> = { org_department_id: 'other-dept', tab_number: '5' };
     cleanUpdateFieldsForAction(fields, 'defer', false, 'active');
     expect(fields).toEqual({ tab_number: '5' });
+  });
+
+  it('skip-fired: снимает отдел, должность и lifecycle-поля даже вне архивного перехода', () => {
+    const fields: Record<string, unknown> = {
+      ...autoFields(),
+      org_department_id: 'brigade-dept',
+      position_id: 'position-2',
+    };
+    cleanUpdateFieldsForAction(fields, 'skip-fired', false, 'fired');
+    expect(fields).toEqual({ full_name: 'Иванов Иван', tab_number: '123' });
+  });
+
+  it('skip-fired: ФИО и табельный номер уволенного продолжают актуализироваться', () => {
+    const fields: Record<string, unknown> = { full_name: 'Петров Пётр', tab_number: '777' };
+    cleanUpdateFieldsForAction(fields, 'skip-fired', false, 'fired');
+    expect(fields).toEqual({ full_name: 'Петров Пётр', tab_number: '777' });
   });
 });

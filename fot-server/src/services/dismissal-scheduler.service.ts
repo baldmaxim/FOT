@@ -114,12 +114,17 @@ async function applyForEmployee(employeeId: number, claimedAt: string): Promise<
 
     console.log(`[dismissal-scheduler] applied dismissal for employee=${employeeId} date=${dismissalDate}`);
   } catch (error) {
-    console.error(`[dismissal-scheduler] failed for employee=${employeeId}:`, error);
+    // Claim НЕ снимаем: `claimNextDueEmployee` тут же захватил бы того же сотрудника
+    // снова, и цикл крутил бы до MAX_PER_CYCLE попыток подряд по падающему Sigur.
+    // Повтор произойдёт после истечения lease (LEASE_MINUTES), следующим тиком.
+    console.error(
+      `[dismissal-scheduler] failed for employee=${employeeId} — claim held until lease expires:`,
+      error,
+    );
     Sentry.captureException(error, {
       tags: { service: 'dismissal-scheduler' },
       extra: { employeeId, dismissalDate },
     });
-    await releaseClaim(employeeId, claimedAt);
   }
 }
 

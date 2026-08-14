@@ -395,7 +395,10 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
                 <span>ID: <strong>{connectionSettings.archiveDepartmentId}</strong></span>
               </>
             ) : (
-              <span>Архивный отдел пока не создан.</span>
+              <span className="sigur-archive-warning">
+                Архивный отдел не задан. Локальные увольнения защищены, но синк не распознаёт
+                увольнения, сделанные в самом Sigur, и не переносит уволенных в архивную папку Sigur.
+              </span>
             )}
           </div>
           <button

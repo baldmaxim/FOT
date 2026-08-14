@@ -1,7 +1,8 @@
 import { Response } from 'express';
 import { AxiosError } from 'axios';
 import * as Sentry from '@sentry/node';
-import { query, queryOne, execute } from '../config/postgres.js';
+import type { PoolClient } from 'pg';
+import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { loadEmployeeFullName } from '../services/audit-context.helpers.js';
 import { DomainValidationError, employeeChangesService } from '../services/employee-changes.service.js';
@@ -160,24 +161,29 @@ export async function insertDismissalHistory(
   employeeId: number,
   dismissalDate: string,
   opts: IInsertDismissalHistoryOpts,
+  /** Клиент транзакции: событие пишется тем же соединением, что и правка employees. */
+  client?: PoolClient,
 ): Promise<void> {
-  await execute(
-    `INSERT INTO employee_dismissal_events
+  const sql = `INSERT INTO employee_dismissal_events
        (employee_id, dismissal_date, scheduled, cancelled, rehired, applied_from_scheduled, prev_date, reason, created_by, from_department_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-    [
-      employeeId,
-      dismissalDate,
-      opts.scheduled,
-      opts.cancelled === true,
-      opts.rehired === true,
-      opts.appliedFromScheduled === true,
-      opts.prevDate ?? null,
-      opts.reason ?? null,
-      opts.createdBy,
-      opts.fromDepartmentId ?? null,
-    ],
-  );
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`;
+  const params = [
+    employeeId,
+    dismissalDate,
+    opts.scheduled,
+    opts.cancelled === true,
+    opts.rehired === true,
+    opts.appliedFromScheduled === true,
+    opts.prevDate ?? null,
+    opts.reason ?? null,
+    opts.createdBy,
+    opts.fromDepartmentId ?? null,
+  ];
+  if (client) {
+    await client.query(sql, params);
+    return;
+  }
+  await execute(sql, params);
 }
 
 /** Просроченный claim перезахватывается (процесс упал между claim и применением). */
@@ -549,20 +555,36 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
     const structureCache = await loadStructureCache();
 
     if (isDeferred) {
-      const data = await queryOne<EmployeeEncrypted>(
-        `UPDATE employees SET dismissal_date = $1 WHERE id = $2 RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
-        [dismissalDate, employeeId],
-      );
+      // CAS + одна транзакция: параллельное увольнение/применение планировщиком
+      // не должно разъехаться с событием истории (и наоборот — событие без правки).
+      const data = await withTransaction(async (client) => {
+        const updated = await client.query<EmployeeEncrypted>(
+          `UPDATE employees SET dismissal_date = $1
+            WHERE id = $2
+              AND employment_status = 'active'
+              AND dismissal_apply_started_at IS NULL
+            RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
+          [dismissalDate, employeeId],
+        );
+        const row = updated.rows[0] ?? null;
+        if (!row) return null;
+
+        await insertDismissalHistory(employeeId, dismissalDate, {
+          scheduled: true,
+          createdBy: req.user.id,
+        }, client);
+
+        return row;
+      });
+
       if (!data) {
-        res.status(500).json({ success: false, error: 'Failed to schedule dismissal' });
+        res.status(409).json({
+          success: false,
+          error: 'Сотрудник уже уволен или его увольнение применяется — обновите страницу',
+        });
         return;
       }
       employeeCache.invalidate(employeeId);
-
-      await insertDismissalHistory(employeeId, dismissalDate, {
-        scheduled: true,
-        createdBy: req.user.id,
-      });
 
       await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE_SCHEDULED', {
         entityType: 'employee',

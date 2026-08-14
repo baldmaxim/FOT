@@ -63,6 +63,16 @@ export const renderStepResult = (name: string, result: Record<string, unknown>) 
       if (result.imported) text += `, создано: ${result.imported}`;
       const unmatched = result.unmatched as unknown[] | undefined;
       if (unmatched && unmatched.length > 0) text += `, не сопоставлено: ${unmatched.length}`;
+      // Уволенные, которых Sigur всё ещё отдаёт в рабочем отделе: показываем только
+      // нерешённые (перенос в архивную папку Sigur делается тем же прогоном).
+      const firedUnresolved = result.fired_mismatch_unresolved as number | undefined;
+      const firedDetected = result.fired_mismatch_detected as number | undefined;
+      if (typeof firedUnresolved === 'number' && firedUnresolved > 0) {
+        text += `, уволены в ФОТ, но активны в Sigur: ${firedUnresolved}`;
+        if (typeof firedDetected === 'number' && firedDetected > firedUnresolved) {
+          text += ` (найдено ${firedDetected}, устранено ${firedDetected - firedUnresolved})`;
+        }
+      }
       break;
     }
     default:
