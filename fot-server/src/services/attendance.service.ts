@@ -578,7 +578,21 @@ export async function buildAttendanceEntries(params: {
   //  • !includeObjectDetails — свернуть объекты в дневную запись;
   //  • includeObjectDetails  — ДОБРАТЬ дни, где есть ТОЛЬКО объектная корректировка
   //    (без СКУД и без day-level записи), иначе такой день невидим в «по сотрудникам» (#3).
-  const objectAdjustmentTotals = buildObjectAdjustmentTotals(adjustments);
+  // Настоящие объектные правки: мигрированные из day-level строки формально тоже manual_object,
+  // но семантически это итог дня — в объектные записи они не попадают
+  // (timesheet-object.service: objectAdjustments), поэтому и в суммах их быть не должно, иначе
+  // include_objects=1 и include_objects=0 разошлись бы, а мигрированные часы задвоились.
+  const genuineObjectAdjustments = adjustments.filter(
+    adjustment => adjustment.source_type === OBJECT_ADJUSTMENT_SOURCE_TYPE
+      && !isMigratedDayLevelAdjustment(adjustment),
+  );
+  const objectAdjustmentTotals = buildObjectAdjustmentTotals(genuineObjectAdjustments);
+  // Дни, где есть СВОЯ объектная правка. Только на них day-level запись без собственных часов
+  // уступает объектам: иначе день с обычным СКУД по объектам ушёл бы в объектную ветку, где
+  // вычитается lunchCutByKey, а он для дней с day-level записью не заполняется (обед потерялся бы).
+  const genuineObjectCorrectionDays = new Set(
+    genuineObjectAdjustments.map(adjustment => `${adjustment.employee_id}_${adjustment.work_date}`),
+  );
   // Мигрированные из day-level правки трактуем как day-level (авторитетный итог дня),
   // а не как объектные — иначе в режиме без детализации объектов (зарплата) они вовсе
   // игнорировались, а в объектном — задваивали день с СКУД на других объектах.
@@ -652,6 +666,13 @@ export async function buildAttendanceEntries(params: {
     }
   }
 
+  // Дни, где day-level запись задаёт СВОИ часы (явный hours_override, часы графика для
+  // отсутствий, намеренный ноль несогласованного выхода) — только такая запись авторитетнее
+  // объектной правки. Заявление «Работа в выходной/праздник» без hours_override своих часов
+  // не имеет (берёт СКУД) и объектную правку блокировать не должно. Наполняется НИЖЕ по циклу,
+  // после `continue` для уже занятого дня, — то есть только для записи, реально задающей день.
+  const dayLevelAuthoritativeKeys = new Set<string>();
+
   for (const adjustment of sortedAdjustments) {
     const key = `${adjustment.employee_id}_${adjustment.work_date}`;
     if (byEmployeeDate.get(adjustment.employee_id)?.has(adjustment.work_date)) {
@@ -687,11 +708,17 @@ export async function buildAttendanceEntries(params: {
       && adjustment.hours_override != null && Number(adjustment.hours_override) > 0
       && !adjNotApproved;
     let effectiveHours: number | null;
+    // Часы записи «свои» (авторитетны для дня), а не подставлены из СКУД. Считается по веткам
+    // ниже: постфактум это не выводится — 'work' + hours_override=0 в нерабочий день формально
+    // имеет override, но часы берёт из СКУД (обязательная суббота).
+    let hoursAuthoritative: boolean;
     if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status) && !isAdjWorkingDay && !isRemoteWithHours) {
       effectiveHours = 0;
+      hoursAuthoritative = true;
     } else if (adjustment.status === 'work' && !isAdjWorkingDay && adjustment.hours_override === 0) {
       // 'work' в выходной с hours_override=0 → не обнулять, взять часы из СКУД (обязательная суббота)
       const notApproved = adjustment.approval_status === 'pending' || adjustment.approval_status === 'rejected';
+      hoursAuthoritative = notApproved;
       if (notApproved) {
         effectiveHours = 0;
       } else if (existingSkud) {
@@ -708,11 +735,15 @@ export async function buildAttendanceEntries(params: {
       }
     } else if (adjustment.hours_override != null) {
       effectiveHours = adjustment.hours_override;
+      // Явные часы (в т.ч. 0 = «не работал») — собственный итог дня.
+      hoursAuthoritative = true;
     } else if (adjustment.status === 'work') {
       // 'work' без явных часов = заявка на выход. Фактическое время берём из СКУД ТОЛЬКО
       // если выход согласован. Не согласовано (pending/rejected) → 0 (заявка влияет на
       // согласование, а не на отображаемое время). Согласовано/auto/legacy(null) → часы по СКУД.
       const notApproved = adjustment.approval_status === 'pending' || adjustment.approval_status === 'rejected';
+      // Согласованная заявка своих часов не несёт (СКУД) — авторитетен только намеренный ноль.
+      hoursAuthoritative = notApproved;
       if (notApproved) {
         effectiveHours = 0;
       } else if (existingSkud) {
@@ -732,8 +763,15 @@ export async function buildAttendanceEntries(params: {
       }
     } else if (ABSENCE_STATUSES_AS_WORKED.has(adjustment.status) && adjSchedule) {
       effectiveHours = isAdjWorkingDay ? getScheduleForDate(adjSchedule, adjDate).work_hours : 0;
+      // Часы планового графика — собственный итог дня отсутствия.
+      hoursAuthoritative = true;
     } else {
       effectiveHours = null;
+      hoursAuthoritative = false;
+    }
+
+    if (hoursAuthoritative) {
+      dayLevelAuthoritativeKeys.add(key);
     }
 
     // Companion: если ведущая запись — НЕ сама заявка work, а за день есть согласованный
@@ -1009,9 +1047,14 @@ export async function buildAttendanceEntries(params: {
       continue;
     }
 
-    // Дневная корректировка с явным hours_override — приоритет над СКУД-объектами.
-    // Иначе ввод 8:59 в модалке «Корректировка» затирался агрегатом из object_entries (см. plan).
-    if (entry.is_correction && entry.id != null && entry.hours_worked != null) {
+    // Дневная корректировка с СОБСТВЕННЫМИ часами — приоритет над объектами. Иначе ввод 8:59
+    // в модалке «Корректировка» затирался агрегатом из object_entries. Критерий — не «у entry
+    // есть часы» (они могли прийти из СКУД, как у заявления «Работа в выходной/праздник»), а
+    // dayLevelAuthoritativeKeys. Дни без своей объектной правки день-level тоже удерживает:
+    // там объектные записи — обычный СКУД, и объектная ветка потеряла бы обед.
+    const dayKey = `${entry.employee_id}_${entry.work_date}`;
+    if (entry.is_correction && entry.id != null
+      && (dayLevelAuthoritativeKeys.has(dayKey) || !genuineObjectCorrectionDays.has(dayKey))) {
       entry.object_detail_mode = employeesWithMultiObjects.has(entry.employee_id) ? 'available' : 'none';
       entry.object_detail_message = null;
       entry.object_detail_count = employeesWithMultiObjects.has(entry.employee_id) ? dayObjectEntries.length : 0;
@@ -1082,7 +1125,13 @@ export async function buildAttendanceEntries(params: {
       if (existing && includeObjectDetails) {
         continue;
       }
-      if (existing?.is_correction && existing.id != null) {
+      // Зеркало guard'а объектной ветки выше для пути include_objects=0: day-level запись
+      // удерживает день, только если часы у неё свои либо статус — отсутствие (аналога проверки
+      // NON_WORK_ADJUSTMENT_STATUSES в этом проходе нет). Ключ уже есть в `key`.
+      if (existing?.is_correction && existing.id != null
+        && (dayLevelAuthoritativeKeys.has(key)
+          || NON_WORK_ADJUSTMENT_STATUSES.has(existing.status)
+          || !genuineObjectCorrectionDays.has(key))) {
         continue;
       }
 

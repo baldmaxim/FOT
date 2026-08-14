@@ -1725,4 +1725,243 @@ describe('attendance.service', () => {
       });
     });
   });
+
+  describe('приоритет объектной правки над day-level записью без собственных часов', () => {
+    const DATE = '2026-08-04';
+    const EMP = 71;
+
+    const makeObjectEntry = (overrides: Record<string, unknown> = {}) => ({
+      adjustment_id: 1096424,
+      employee_id: EMP,
+      work_date: DATE,
+      object_key: 'obj-a',
+      object_id: 'obj-a',
+      object_name: 'Офис Полковая',
+      hours_worked: 11,
+      display_hours_worked: 11,
+      base_hours_worked: 11,
+      is_correction: true,
+      ...overrides,
+    });
+
+    const withObjectEntries = (entries: Array<Record<string, unknown>>) => ({
+      objectEntries: entries,
+      objectEntriesByEmployeeDate: new Map([[EMP, new Map([[DATE, entries]])]]),
+      employeeDistinctObjectKeys: new Map([[EMP, new Set(['obj-a'])]]),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    });
+
+    const emptyObjectData = () => ({
+      objectEntries: [],
+      objectEntriesByEmployeeDate: new Map(),
+      employeeDistinctObjectKeys: new Map(),
+      legacyBlockedDays: new Map(),
+      rawFallbackSummaries: new Map(),
+    });
+
+    // Заявление «Работа в выходной/праздник»: своих часов нет, они подставляются из СКУД.
+    const workRequestRow = (overrides: Record<string, unknown> = {}) => ({
+      id: 1093057,
+      employee_id: EMP,
+      work_date: DATE,
+      status: 'work',
+      hours_override: null,
+      source_type: 'leave_request',
+      source_id: '5913',
+      reason: null,
+      approval_status: 'auto_approved',
+      created_by: null,
+      created_at: '2026-08-07T12:49:06.612Z',
+      updated_at: '2026-08-07T12:49:06.710Z',
+      metadata: {},
+      ...overrides,
+    });
+
+    const objectCorrectionRow = (overrides: Record<string, unknown> = {}) => ({
+      id: 1096424,
+      employee_id: EMP,
+      work_date: DATE,
+      status: 'manual',
+      hours_override: 11,
+      source_type: 'manual_object',
+      source_id: 'obj-a',
+      reason: 'Офис Полковая',
+      approval_status: 'auto_approved',
+      created_by: null,
+      created_at: '2026-08-14T08:28:51.782Z',
+      updated_at: '2026-08-14T08:28:51.876Z',
+      metadata: { object_id: 'obj-a', object_name: 'Офис Полковая' },
+      ...overrides,
+    });
+
+    const skudSummary = (hours = 3.27) => [{
+      employee_id: EMP,
+      date: DATE,
+      first_entry: '08:57:00',
+      last_exit: '13:13:00',
+      total_hours: hours,
+      total_minutes: Math.round(hours * 60),
+    }];
+
+    const baseParams = () => ({
+      employees: [{ id: EMP, full_name: 'Абраменко М. Н.' }],
+      startDate: DATE,
+      endDate: DATE,
+      dailySchedulesMap: new Map([[EMP, new Map([[DATE, {} as IResolvedSchedule]])]]),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 21 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-08-14',
+    });
+
+    it('кейс Абраменко: объектная правка 11ч выигрывает у заявления «Работа в выходной/праздник» (includeObjectDetails=true)', async () => {
+      mockedState.adjustmentRows = [workRequestRow(), objectCorrectionRow()];
+      mockedState.summaryRows = skudSummary();
+      mockedState.objectAttendanceData = withObjectEntries([makeObjectEntry()]);
+
+      const result = await buildAttendanceEntries({ ...baseParams(), includeObjectDetails: true });
+
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0]).toMatchObject({
+        hours_worked: 11,
+        display_hours_worked: 11,
+        is_correction: true,
+        hours_overridden: true,
+      });
+    });
+
+    it('кейс Абраменко: тот же итог 11ч в режиме includeObjectDetails=false', async () => {
+      mockedState.adjustmentRows = [workRequestRow(), objectCorrectionRow()];
+      mockedState.summaryRows = skudSummary();
+      // Без деталей объектов сервис не строит объектные записи — день добирается из сумм правок.
+      mockedState.objectAttendanceData = emptyObjectData();
+
+      const result = await buildAttendanceEntries({ ...baseParams(), includeObjectDetails: false });
+
+      expect(result.entries[0]).toMatchObject({
+        hours_worked: 11,
+        display_hours_worked: 11,
+        is_correction: true,
+        hours_overridden: true,
+      });
+    });
+
+    it('кейс Абраменко: в capped_to_schedule (зарплата/экспорт) 11ч не режутся под план 8ч', async () => {
+      mockedState.adjustmentRows = [workRequestRow(), objectCorrectionRow()];
+      mockedState.summaryRows = skudSummary();
+      mockedState.objectAttendanceData = withObjectEntries([makeObjectEntry()]);
+
+      const result = await buildAttendanceEntries({
+        ...baseParams(),
+        displayMode: 'capped_to_schedule',
+      });
+
+      expect(result.entries[0]).toMatchObject({ hours_worked: 11, display_hours_worked: 11 });
+    });
+
+    it('согласованный «work» + hours_override=0 в нерабочий день не блокирует объектную правку', async () => {
+      // Обязательная суббота: hours_override=0, но часы берутся из СКУД — своих часов нет.
+      mockedState.isWorkingDay = false;
+      mockedState.adjustmentRows = [
+        workRequestRow({ id: 500, hours_override: 0, source_type: 'manual' }),
+        objectCorrectionRow({ hours_override: 6 }),
+      ];
+      mockedState.summaryRows = skudSummary();
+      mockedState.objectAttendanceData = withObjectEntries([makeObjectEntry({
+        hours_worked: 6, display_hours_worked: 6, base_hours_worked: 6,
+      })]);
+
+      const result = await buildAttendanceEntries({ ...baseParams() });
+
+      expect(result.entries[0]).toMatchObject({ hours_worked: 6, display_hours_worked: 6 });
+    });
+
+    it('обнуление дня day-level правкой (hours_override=0) авторитетно — объектная правка день не воскрешает', async () => {
+      mockedState.adjustmentRows = [
+        workRequestRow({ id: 501, status: 'manual', hours_override: 0, source_type: 'manual' }),
+        objectCorrectionRow({ hours_override: 8 }),
+      ];
+      mockedState.summaryRows = skudSummary();
+      mockedState.objectAttendanceData = withObjectEntries([makeObjectEntry({
+        hours_worked: 8, display_hours_worked: 8, base_hours_worked: 8,
+      })]);
+
+      const result = await buildAttendanceEntries({ ...baseParams() });
+
+      expect(result.entries[0].hours_worked).toBe(0);
+    });
+
+    it('несогласованный выход (pending) остаётся нулём в обоих режимах', async () => {
+      const rows = () => [
+        workRequestRow({ approval_status: 'pending' }),
+        objectCorrectionRow(),
+      ];
+
+      mockedState.adjustmentRows = rows();
+      mockedState.summaryRows = skudSummary();
+      mockedState.objectAttendanceData = withObjectEntries([makeObjectEntry()]);
+      const withObjects = await buildAttendanceEntries({ ...baseParams(), includeObjectDetails: true });
+      expect(withObjects.entries[0].hours_worked).toBe(0);
+
+      mockedState.adjustmentRows = rows();
+      mockedState.summaryRows = skudSummary();
+      mockedState.objectAttendanceData = emptyObjectData();
+      const withoutObjects = await buildAttendanceEntries({ ...baseParams(), includeObjectDetails: false });
+      expect(withoutObjects.entries[0].hours_worked).toBe(0);
+    });
+
+    it('отпуск при includeObjectDetails=false не патчится объектными часами', async () => {
+      mockedState.adjustmentRows = [
+        workRequestRow({ id: 502, status: 'vacation', source_type: 'leave_request' }),
+        objectCorrectionRow(),
+      ];
+      mockedState.summaryRows = [];
+      mockedState.objectAttendanceData = emptyObjectData();
+
+      const result = await buildAttendanceEntries({ ...baseParams(), includeObjectDetails: false });
+
+      expect(result.entries[0]).toMatchObject({ status: 'vacation', hours_worked: 8 });
+    });
+
+    it('без своей объектной правки день остаётся на СКУД-часах (обед не теряется)', async () => {
+      // Только заявление «Работа в выходной/праздник» + обычные СКУД-объекты: поведение прежнее.
+      mockedState.adjustmentRows = [workRequestRow()];
+      mockedState.summaryRows = skudSummary();
+      mockedState.objectAttendanceData = withObjectEntries([makeObjectEntry({
+        adjustment_id: null,
+        hours_worked: 4.27,
+        display_hours_worked: 4.27,
+        base_hours_worked: 4.27,
+        is_correction: false,
+      })]);
+
+      const result = await buildAttendanceEntries({ ...baseParams() });
+
+      expect(result.entries[0].hours_worked).toBeCloseTo(3.27, 2);
+    });
+
+    it('мигрированная day-level строка не задваивает часы: include_objects=1 и 0 совпадают', async () => {
+      const rows = () => [
+        workRequestRow(),
+        objectCorrectionRow({ id: 900, hours_override: 10, source_id: 'obj-b',
+          metadata: { object_id: 'obj-b', object_name: 'ЖК Б', migrated_from_day_level: true } }),
+        objectCorrectionRow({ hours_override: 7 }),
+      ];
+
+      mockedState.adjustmentRows = rows();
+      mockedState.summaryRows = skudSummary();
+      // Мигрированная строка в объектные записи не попадает (день уже имеет свою объектную правку).
+      mockedState.objectAttendanceData = withObjectEntries([makeObjectEntry({
+        hours_worked: 7, display_hours_worked: 7, base_hours_worked: 7,
+      })]);
+      const withObjects = await buildAttendanceEntries({ ...baseParams(), includeObjectDetails: true });
+
+      mockedState.adjustmentRows = rows();
+      mockedState.summaryRows = skudSummary();
+      mockedState.objectAttendanceData = emptyObjectData();
+      const withoutObjects = await buildAttendanceEntries({ ...baseParams(), includeObjectDetails: false });
+
+      expect(withObjects.entries[0].hours_worked).toBe(7);
+      expect(withoutObjects.entries[0].hours_worked).toBe(7);
+    });
+  });
 });
