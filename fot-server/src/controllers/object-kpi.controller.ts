@@ -10,7 +10,7 @@ import { fetchObjectKpiHeadcount } from '../services/object-kpi-headcount.servic
 import { listMonthPlans, normalizeMonth } from '../services/object-kpi-plan.service.js';
 import { fetchObjectKpiReport, summarizeCompletion } from '../services/object-kpi-report.service.js';
 import { listObjectKpiHistory } from '../services/object-kpi-history.service.js';
-import { resolveObjectKpiScope } from '../services/object-kpi-scope.service.js';
+import { loadAssignedObjectIds, resolveObjectKpiScope } from '../services/object-kpi-scope.service.js';
 import { getContractByObject, listAddenda, listKs2Entries } from '../services/object-kpi.service.js';
 import { listAssignments, listGlobalRoles } from '../services/object-kpi-assignments.service.js';
 
@@ -209,23 +209,16 @@ export const objectKpiController = {
         return;
       }
 
-      // Только личные закрепления: ветка «видит всю стройку» здесь неуместна —
-      // это личный кабинет, а не отчёт по компании.
-      const assigned = await query<{ skud_object_id: string }>(
-        `SELECT DISTINCT skud_object_id
-           FROM object_kpi_assignments
-          WHERE employee_id = $1
-            AND role_kind = 'construction_manager'
-            AND valid_from <= $3::date
-            AND (valid_to IS NULL OR valid_to >= $2::date)`,
-        [employeeId, monthFrom, monthTo],
-      );
-
-      const rows = await fetchObjectKpiReport({
-        monthFrom,
-        monthTo,
-        objectIds: assigned.map((row) => row.skud_object_id),
+      // Только личные закрепления: ветка «видит всю стройку» из resolveObjectKpiScope
+      // здесь неуместна — это личный кабинет, а не отчёт по компании. Выборка берётся
+      // из общей функции, а не дублируется запросом: копия уже разъезжалась с эталоном
+      // по границе месяца и прятала объект от руководителя.
+      const objectIds = await loadAssignedObjectIds(employeeId, monthFrom, {
+        from: monthFrom,
+        to: monthTo,
       });
+
+      const rows = await fetchObjectKpiReport({ monthFrom, monthTo, objectIds });
       res.json({ success: true, data: rows, summary: summarizeCompletion(rows) });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] getMyObjects');

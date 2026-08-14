@@ -87,6 +87,22 @@ describe('resolveObjectKpiScope', () => {
     expect(scope.object_ids).toEqual([]);
   });
 
+  it('закрепление с середины месяца попадает в окно, кончающееся этим месяцем', async () => {
+    (query as Mock).mockResolvedValue([{ skud_object_id: OBJECT_A }]);
+
+    // Границы окна — первые числа месяцев. Закрепление от 14.08 обязано попасть в
+    // окно, у которого to = 2026-08-01: сравнение `valid_from <= to` давало пустой
+    // скоуп и прятало объект от руководителя в его же первый месяц.
+    await resolveObjectKpiScope(makeReq({}), {
+      periodRange: { from: '2026-03-01', to: '2026-08-01' },
+    });
+
+    const sql = (query as Mock).mock.calls[0][0] as string;
+    expect(sql).toContain("valid_from < ($3::date + INTERVAL '1 month')");
+    expect(sql).not.toContain('valid_from <= $3');
+    expect((query as Mock).mock.calls[0][1]).toEqual([42, '2026-03-01', '2026-08-01']);
+  });
+
   it('мемоизация на запрос работает только для среза «сегодня»', async () => {
     (query as Mock).mockResolvedValue([{ skud_object_id: OBJECT_A }]);
     const req = makeReq({});

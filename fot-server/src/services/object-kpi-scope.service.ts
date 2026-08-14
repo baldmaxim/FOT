@@ -50,18 +50,23 @@ async function loadAllKpiObjectIds(): Promise<string[]> {
  *                    иначе руководитель не увидит месяцы, за которые он отвечал,
  *                    но уже не отвечает сегодня.
  */
-async function loadAssignedObjectIds(
+export async function loadAssignedObjectIds(
   employeeId: number,
   onDate: string,
   periodRange: { from: string; to: string } | null,
 ): Promise<string[]> {
   if (periodRange) {
+    // Границы окна приходят ПЕРВЫМИ числами месяцев. Верхняя обязана раздвигаться до
+    // конца месяца: закрепление, оформленное 14-го числа, иначе невидимо в собственном
+    // месяце — сравнение `2026-08-14 <= 2026-08-01` даёт пустой скоуп, и руководитель
+    // видит «за вами не закреплено объектов» при заведённом договоре.
+    // Полуинтервал `< месяц + 1` вместо `<= последний день`: не зависит от длины месяца.
     const rows = await query<{ skud_object_id: string }>(
       `SELECT DISTINCT skud_object_id
          FROM object_kpi_assignments
         WHERE employee_id = $1
           AND role_kind = 'construction_manager'
-          AND valid_from <= $3::date
+          AND valid_from < ($3::date + INTERVAL '1 month')
           AND (valid_to IS NULL OR valid_to >= $2::date)`,
       [employeeId, periodRange.from, periodRange.to],
     );
