@@ -38,6 +38,8 @@ export const ObjectKpiPage: FC = () => {
 
   const [from, setFrom] = useState(() => shiftMonth(currentMonth(), -5));
   const [to, setTo] = useState(currentMonth);
+  const [objectFilter, setObjectFilter] = useState('');
+  const [onlyWithContract, setOnlyWithContract] = useState(false);
   const [openObjectId, setOpenObjectId] = useState<string | null>(null);
   const [assignmentsOpen, setAssignmentsOpen] = useState(false);
 
@@ -61,6 +63,11 @@ export const ObjectKpiPage: FC = () => {
     queryFn: () => objectKpiApi.getFixationInfo(to),
   });
 
+  const objectsQuery = useQuery({
+    queryKey: objectKpiKeys.objects(),
+    queryFn: () => objectKpiApi.listObjects(),
+  });
+
   // Мемо, а не `?? []` по месту: новый литерал массива каждый рендер менял бы
   // зависимости useMemo ниже.
   const rows = useMemo(() => reportQuery.data?.data ?? [], [reportQuery.data]);
@@ -76,6 +83,13 @@ export const ObjectKpiPage: FC = () => {
     }
     return map;
   }, [headcountQuery.data]);
+
+  // Фильтр действует только на таблицу: сводка и «Требуют внимания» остаются по всему
+  // периоду, иначе выбор одного объекта тихо переписал бы итоги за период.
+  const visibleRows = useMemo(() => rows.filter(row => (
+    (!objectFilter || row.skud_object_id === objectFilter)
+    && (!onlyWithContract || row.contract_id !== null)
+  )), [rows, objectFilter, onlyWithContract]);
 
   // «Требуют внимания»: незакрытые просроченные месяцы, неполные данные и дрейф
   // исходных данных после фиксации.
@@ -113,6 +127,23 @@ export const ObjectKpiPage: FC = () => {
           <label className={styles.field}>
             <span>по</span>
             <input type="month" value={to} onChange={e => setTo(e.target.value)} />
+          </label>
+          <label className={styles.field}>
+            <span>Объект</span>
+            <select value={objectFilter} onChange={e => setObjectFilter(e.target.value)}>
+              <option value="">Все объекты</option>
+              {(objectsQuery.data ?? []).map(item => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.checkboxField}>
+            <input
+              type="checkbox"
+              checked={onlyWithContract}
+              onChange={e => setOnlyWithContract(e.target.checked)}
+            />
+            <span>Только с договором</span>
           </label>
         </div>
 
@@ -200,10 +231,10 @@ export const ObjectKpiPage: FC = () => {
             {reportQuery.isLoading && (
               <tr><td colSpan={15} className={styles.empty}>Загрузка…</td></tr>
             )}
-            {!reportQuery.isLoading && rows.length === 0 && (
+            {!reportQuery.isLoading && visibleRows.length === 0 && (
               <tr><td colSpan={15} className={styles.empty}>Нет данных за период</td></tr>
             )}
-            {rows.map(row => {
+            {visibleRows.map(row => {
               const headcount = headcountByKey.get(`${row.skud_object_id}|${row.period_month}`);
               return (
                 <tr

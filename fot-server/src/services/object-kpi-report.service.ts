@@ -94,10 +94,15 @@ scope AS (
     c.plan_start_month,
     c.planned_headcount
   FROM skud_objects o
+  -- CROSS JOIN, а не «= ANY((SELECT object_ids FROM params))». Две формы ANY пишутся
+  -- одинаково, но значат разное: ANY(подзапрос) сравнивает со МНОЖЕСТВОМ строк, и
+  -- запрос падал на «operator does not exist: uuid = uuid[]» при любых данных.
+  -- ANY(массив) требует именно выражения-массива — его и даёт p.object_ids.
+  CROSS JOIN params p
   LEFT JOIN object_contracts c
          ON c.skud_object_id = o.id
         AND c.is_active = true
-  WHERE o.id = ANY((SELECT object_ids FROM params))
+  WHERE o.id = ANY(p.object_ids)
 ),
 -- «Хвост истории» ДО начала окна. Оконная сумма ниже видит только строки решётки,
 -- а решётка начинается с month_from. Кардинальность O(объекты), не O(объекты × месяцы).
@@ -128,12 +133,13 @@ ks2_monthly AS (
     COALESCE(SUM(k.amount) FILTER (WHERE k.entry_kind = 'act'), 0)       AS fact_acts,
     COALESCE(SUM(k.amount) FILTER (WHERE k.entry_kind = 'reduction'), 0) AS fact_reductions
   FROM object_ks2_entries k
+  CROSS JOIN params p
   WHERE k.status = 'signed'
-    AND k.skud_object_id = ANY((SELECT object_ids FROM params))
+    AND k.skud_object_id = ANY(p.object_ids)
     -- Полуинтервал по customer_signed_date, а не по period_month: ключ индекса
     -- именно эта колонка, иначе Index Only Scan не сработает.
-    AND k.customer_signed_date >= (SELECT month_from FROM params)
-    AND k.customer_signed_date <  ((SELECT month_to FROM params) + INTERVAL '1 month')
+    AND k.customer_signed_date >= p.month_from
+    AND k.customer_signed_date <  (p.month_to + INTERVAL '1 month')
   GROUP BY k.skud_object_id, k.period_month
 ),
 addenda_monthly AS (

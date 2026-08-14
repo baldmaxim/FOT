@@ -33,7 +33,8 @@
   color: var(--text-secondary);
 }
 
-.field input {
+.field input,
+.field select {
   /* ≥16px — иначе iOS и Android Chrome зумят страницу при фокусе. */
   font-size: 16px;
   padding: 8px 10px;
@@ -42,6 +43,26 @@
   border-radius: 8px;
   background: var(--bg-input, var(--bg-secondary));
   color: var(--text-primary);
+}
+
+.field select {
+  max-width: 260px;
+}
+
+.checkboxField {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Тап-цель 44px: чекбокс сам по себе мельче минимума Material. */
+  min-height: 44px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.checkboxField input {
+  width: 20px;
+  height: 20px;
 }
 
 .secondaryBtn {
