@@ -723,7 +723,8 @@
 .skud-day-summary-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 14px 20px;
   background: var(--bg-tertiary);
   border-top: 1px solid var(--border);
@@ -788,6 +789,14 @@
   border-radius: 4px;
   font-size: 0.8rem;
   font-weight: 500;
+  /* В узкой колонке ЛК плашка не сжимается ниже своего текста: цифры не рвутся,
+     при нехватке ширины плашка целиком переносится на следующую строку. */
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.skud-time-badge[data-tooltip] {
+  cursor: help;
 }
 
 .skud-time-badge.entry {

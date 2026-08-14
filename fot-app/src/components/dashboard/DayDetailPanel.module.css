@@ -1,8 +1,8 @@
 .root {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 8px;
+  padding: 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
   border-radius: 12px;
@@ -68,7 +68,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .objectItem {
@@ -155,7 +155,7 @@
   flex-direction: column;
   gap: 6px;
   border-top: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
-  padding-top: 12px;
+  padding-top: 8px;
 }
 
 /* Блок «Проходы» в ЛК узкий (2/3 от календаря) — таблица проходов не вмещает 3 колонки.
@@ -170,4 +170,25 @@
 
 .skudSection :global(.skud-col-point) {
   display: none;
+}
+
+/* Уплотнение секции проходов в ЛК: карточка сотрудника в админке и табель
+   используют те же классы — правим только внутри панели дня. */
+.skudSection :global(.skud-section) {
+  gap: 8px;
+}
+
+.skudSection :global(.skud-table-header) {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.skudSection :global(.skud-table-row) {
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.skudSection :global(.skud-day-summary-bar) {
+  padding: 10px 14px;
+  gap: 6px;
 }

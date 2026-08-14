@@ -100,6 +100,12 @@ const formatDuration = (seconds: number): string => {
   return `${h}ч ${m}м ${s}с`;
 };
 
+/* Подсказки к плашкам итогов дня — перехватывает глобальный TooltipHost (data-tooltip). */
+const TIP_ENTRY = 'Первый вход\nВремя первого прохода на вход за день (по внешним точкам прохода).';
+const TIP_EXIT = 'Последний выход\nВремя последнего прохода на выход за день.';
+const TIP_SPAN = 'На объекте, брутто\nОт первого входа до последнего выхода, вместе с перерывами. Если сотрудник ещё внутри — до текущего момента.';
+const TIP_TOTAL = 'Чистое время, нетто\nСумма закрытых пар «вход → выход», без перерывов между ними. Разница с «брутто» — суммарные перерывы.';
+
 const groupByDay = (
   events: SkudEvent[],
   failures: SkudEventFailure[],
@@ -500,22 +506,22 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
           {groups.length > 0 && (
             <div className="skud-day-summary-bar">
               {groups[0].firstEntry && (
-                <span className="skud-time-badge entry">
+                <span className="skud-time-badge entry" data-tooltip={TIP_ENTRY}>
                   <LogIn size={12} /> {formatTime(groups[0].firstEntry)}
                 </span>
               )}
               {groups[0].lastExit && (
-                <span className="skud-time-badge exit">
+                <span className="skud-time-badge exit" data-tooltip={TIP_EXIT}>
                   <LogOut size={12} /> {formatTime(groups[0].lastExit)}
                 </span>
               )}
               {groups[0].spanSeconds > 0 && (
-                <span className="skud-time-badge span">
+                <span className="skud-time-badge span" data-tooltip={TIP_SPAN}>
                   <Clock size={12} /> {formatDuration(groups[0].spanSeconds)}
                 </span>
               )}
               {groups[0].totalSeconds > 0 && (
-                <span className="skud-time-badge duration">
+                <span className="skud-time-badge duration" data-tooltip={TIP_TOTAL}>
                   <Timer size={12} /> {formatDuration(groups[0].totalSeconds)}
                 </span>
               )}
@@ -538,22 +544,22 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                   <span className="skud-day-date">{formatDateLabel(group.date)}</span>
                   <span className="skud-day-summary">
                     {group.firstEntry && (
-                      <span className="skud-time-badge entry">
+                      <span className="skud-time-badge entry" data-tooltip={TIP_ENTRY}>
                         <LogIn size={12} /> {formatTime(group.firstEntry)}
                       </span>
                     )}
                     {group.lastExit && (
-                      <span className="skud-time-badge exit">
+                      <span className="skud-time-badge exit" data-tooltip={TIP_EXIT}>
                         <LogOut size={12} /> {formatTime(group.lastExit)}
                       </span>
                     )}
                     {span && (
-                      <span className="skud-time-badge span">
+                      <span className="skud-time-badge span" data-tooltip={TIP_SPAN}>
                         <Clock size={12} /> {span}
                       </span>
                     )}
                     {duration && (
-                      <span className="skud-time-badge duration">
+                      <span className="skud-time-badge duration" data-tooltip={TIP_TOTAL}>
                         <Timer size={12} /> {duration}
                       </span>
                     )}
@@ -585,22 +591,22 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                   <div className="skud-day-events">
                     <div className="skud-day-events-summary">
                       {group.firstEntry && (
-                        <span className="skud-time-badge entry">
+                        <span className="skud-time-badge entry" data-tooltip={TIP_ENTRY}>
                           <LogIn size={12} /> {formatTime(group.firstEntry)}
                         </span>
                       )}
                       {group.lastExit && (
-                        <span className="skud-time-badge exit">
+                        <span className="skud-time-badge exit" data-tooltip={TIP_EXIT}>
                           <LogOut size={12} /> {formatTime(group.lastExit)}
                         </span>
                       )}
                       {span && (
-                        <span className="skud-time-badge span">
+                        <span className="skud-time-badge span" data-tooltip={TIP_SPAN}>
                           <Clock size={12} /> {span}
                         </span>
                       )}
                       {duration && (
-                        <span className="skud-time-badge duration">
+                        <span className="skud-time-badge duration" data-tooltip={TIP_TOTAL}>
                           <Timer size={12} /> {duration}
                         </span>
                       )}
