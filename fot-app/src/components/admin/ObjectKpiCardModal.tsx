@@ -22,7 +22,16 @@ import styles from './ObjectKpiCardModal.module.css';
 
 interface IProps {
   objectId: string;
-  period: { from: string; to: string };
+  /**
+   * `create` — заведение нового договора: карточка не грузится вообще и показывает только
+   * пустую форму договора. Иначе на соседних вкладках всплыли бы ДС, акты и планы уже
+   * существующего договора, что противоречит смыслу действия.
+   */
+  mode: 'view' | 'create';
+  /** Нужен именно в create: заголовок брать неоткуда — отчёт объекта не загружается. */
+  objectName: string;
+  /** Без периода карточка показывает весь расчёт по объекту — окно считает сервер. */
+  period?: { from: string; to: string };
   canEdit: boolean;
   /** Право пересматривать зафиксированный план (руководитель эк. отдела или админ). */
   canRevisePlan: boolean;
@@ -47,10 +56,11 @@ const errorText = (error: unknown): string =>
   (error as Error)?.message || 'Не удалось сохранить';
 
 export const ObjectKpiCardModal: FC<IProps> = ({
-  objectId, period, canEdit, canRevisePlan, onClose,
+  objectId, mode, objectName, period, canEdit, canRevisePlan, onClose,
 }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const isCreate = mode === 'create';
   const [tab, setTab] = useState<Tab>('contract');
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
   const [planEdits, setPlanEdits] = useState<Record<string, { amount: string; reason: string }>>({});
@@ -58,15 +68,18 @@ export const ObjectKpiCardModal: FC<IProps> = ({
   const [contractReason, setContractReason] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // В режиме создания карточка не запрашивается вовсе: форма нового договора не должна
+  // ждать отчёт за весь срок объекта.
   const cardQuery = useQuery({
-    queryKey: objectKpiKeys.card(objectId, period.from, period.to),
+    queryKey: objectKpiKeys.card(objectId, period?.from ?? 'auto', period?.to ?? 'auto'),
     queryFn: () => objectKpiApi.getCard(objectId, period),
+    enabled: !isCreate,
   });
 
   const historyQuery = useQuery({
     queryKey: objectKpiKeys.history(objectId),
     queryFn: () => objectKpiApi.getHistory(objectId),
-    enabled: tab === 'history',
+    enabled: !isCreate && tab === 'history',
   });
 
   const card = cardQuery.data;
@@ -81,16 +94,19 @@ export const ObjectKpiCardModal: FC<IProps> = ({
   };
 
   const contractMutation = useMutation({
+    // Выбор по mode, а не по наличию contract: в режиме создания карточка не загружена,
+    // и «нет договора в состоянии» не должно означать «его нет в базе».
     mutationFn: (payload: Record<string, unknown>) => (
-      contract
+      !isCreate && contract
         ? objectKpiApi.updateContract(contract.id, { ...payload, version: contract.version })
         : objectKpiApi.createContract(objectId, payload)
     ),
     onSuccess: () => {
-      toast.success('Договор сохранён');
+      toast.success(isCreate ? 'Договор создан' : 'Договор сохранён');
       setContractDirty(false);
       setContractReason('');
       refresh();
+      if (isCreate) onClose();
     },
     onError: (error) => toast.error(errorText(error)),
   });
@@ -546,38 +562,45 @@ export const ObjectKpiCardModal: FC<IProps> = ({
         <>
           <div className={styles.header}>
             <span className={styles.title}>
-              {card?.report[0]?.object_name ?? 'Объект'}
+              {isCreate ? `${objectName} — новый договор` : (card?.report[0]?.object_name ?? objectName)}
             </span>
             <button type="button" className={styles.iconBtn} onClick={requestClose} aria-label="Закрыть">
               <X size={18} />
             </button>
           </div>
 
-          <div className={styles.tabs}>
-            {TABS.map(item => (
-              <button
-                key={item.key}
-                type="button"
-                className={`${styles.tab} ${tab === item.key ? styles.tabActive : ''}`}
-                onClick={() => setTab(item.key)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
+          {/* В режиме создания вкладок нет: показывать ДС и акты существующего договора,
+              пока заводится новый, — прямой способ ввести человека в заблуждение. */}
+          {!isCreate && (
+            <div className={styles.tabs}>
+              {TABS.map(item => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`${styles.tab} ${tab === item.key ? styles.tabActive : ''}`}
+                  onClick={() => setTab(item.key)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className={styles.body}>
-            {cardQuery.isLoading && <p className={styles.empty}>Загрузка…</p>}
-            {cardQuery.isError && <p className={styles.empty}>Не удалось загрузить карточку</p>}
-            {!cardQuery.isLoading && tab === 'contract' && renderContract(contract)}
-            {!cardQuery.isLoading && tab === 'addenda'
+            {isCreate && renderContract(null)}
+            {!isCreate && cardQuery.isLoading && <p className={styles.empty}>Загрузка…</p>}
+            {!isCreate && cardQuery.isError && (
+              <p className={styles.empty}>Не удалось загрузить карточку</p>
+            )}
+            {!isCreate && !cardQuery.isLoading && tab === 'contract' && renderContract(contract)}
+            {!isCreate && !cardQuery.isLoading && tab === 'addenda'
               && entriesTab('addenda', ADDENDA_COLUMNS, addenda, 'Допсоглашений нет')}
-            {!cardQuery.isLoading && tab === 'ks2'
+            {!isCreate && !cardQuery.isLoading && tab === 'ks2'
               && entriesTab('ks2', KS2_COLUMNS, ks2, 'Актов нет')}
-            {!cardQuery.isLoading && tab === 'ks6'
+            {!isCreate && !cardQuery.isLoading && tab === 'ks6'
               && entriesTab('ks6', KS6_COLUMNS, ks6, 'Записей КС-6 нет')}
-            {!cardQuery.isLoading && tab === 'plans' && renderPlans()}
-            {tab === 'history' && (
+            {!isCreate && !cardQuery.isLoading && tab === 'plans' && renderPlans()}
+            {!isCreate && tab === 'history' && (
               <ObjectKpiHistoryList
                 entries={historyQuery.data ?? []}
                 isLoading={historyQuery.isLoading}
@@ -587,7 +610,8 @@ export const ObjectKpiCardModal: FC<IProps> = ({
 
           {canEdit && (
             <div className={styles.footer}>
-              {tab === 'contract' && card?.has_fixed_months && (
+              {/* Основание правки — только для существующего договора с закрытыми месяцами. */}
+              {!isCreate && tab === 'contract' && card?.has_fixed_months && (
                 <input
                   className={styles.reasonInput}
                   placeholder="Основание правки (есть закрытые месяцы)"
@@ -596,13 +620,13 @@ export const ObjectKpiCardModal: FC<IProps> = ({
                 />
               )}
               <button
-                type={tab === 'contract' ? 'submit' : 'button'}
-                form={tab === 'contract' ? CONTRACT_FORM_ID : undefined}
+                type={isCreate || tab === 'contract' ? 'submit' : 'button'}
+                form={isCreate || tab === 'contract' ? CONTRACT_FORM_ID : undefined}
                 className={styles.primaryBtn}
                 disabled={!dirty || saving || contractMutation.isPending}
-                onClick={tab === 'contract' ? undefined : handleSave}
+                onClick={isCreate || tab === 'contract' ? undefined : handleSave}
               >
-                Сохранить
+                {isCreate ? 'Создать договор' : 'Сохранить'}
               </button>
             </div>
           )}

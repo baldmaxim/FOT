@@ -2,7 +2,7 @@ import { useMemo, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 
-import { objectKpiApi } from '../../api/objectKpi';
+import { objectKpiApi, type IPeriod } from '../../api/objectKpi';
 import { objectKpiKeys } from '../../api/queryKeys';
 import { useAuth } from '../../contexts/AuthContext';
 import {
@@ -18,46 +18,27 @@ import styles from './ObjectKpiPage.module.css';
 /**
  * Вкладка «KPI объектов» на странице «Аналитика».
  *
- * Экран строится вокруг одного месяца: виджеты показывают план, факт КС-2 и процент за
- * выбранный месяц (по всем объектам или по одному), а таблица появляется только после
- * выбора объекта — иначе это простыня «все объекты × все месяцы», по которой ничего не видно.
+ * Виджеты показывают весь расчёт до текущего месяца — окно считает сервер, фронт датами
+ * не жонглирует. Таблица появляется после выбора объекта и сразу показывает все его месяцы,
+ * свежий сверху.
  *
  * Все суммы — с НДС, в рублях (п. 2.1).
  */
 
-/** Потолок окна отчёта на бэкенде — 24 месяца; шире zod вернёт 400. */
-const MAX_MONTHS = 24;
-
-const shiftMonth = (month: string, delta: number): string => {
-  const [year, value] = month.split('-').map(Number);
-  const total = year * 12 + (value - 1) + delta;
-  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`;
+const formatPeriod = (period?: IPeriod): string | null => {
+  if (!period) return null;
+  const from = formatMonthLabel(`${period.from}-01`);
+  const to = formatMonthLabel(`${period.to}-01`);
+  return from === to ? from : `${from} — ${to}`;
 };
-
-const currentMonth = (): string => new Date().toISOString().slice(0, 7);
 
 export const ObjectKpiPage: FC = () => {
   const { canEditPage } = useAuth();
   const canEdit = canEditPage('/discipline/objects');
 
-  const [month, setMonth] = useState(currentMonth);
   const [objectFilter, setObjectFilter] = useState('');
-  const [showAllMonths, setShowAllMonths] = useState(false);
-  const [openObjectId, setOpenObjectId] = useState<string | null>(null);
+  const [openCard, setOpenCard] = useState<{ objectId: string; mode: 'view' | 'create' } | null>(null);
   const [assignmentsOpen, setAssignmentsOpen] = useState(false);
-
-  // Развёрнутая история относится к конкретной паре «объект + месяц»: при смене любого
-  // из них она схлопывается, иначе на экране остались бы месяцы чужого запроса.
-  // Сброс в обработчиках, а не в эффекте: эффект давал бы лишний каскадный рендер.
-  const changeMonth = (value: string) => {
-    setMonth(value);
-    setShowAllMonths(false);
-  };
-
-  const changeObject = (value: string) => {
-    setObjectFilter(value);
-    setShowAllMonths(false);
-  };
 
   const objectsQuery = useQuery({
     queryKey: objectKpiKeys.objects(),
@@ -68,47 +49,39 @@ export const ObjectKpiPage: FC = () => {
   const canRevisePlan = objectsQuery.data?.scope.can_revise_plan === true;
   const selectedObject = objects.find(item => item.id === objectFilter) ?? null;
 
-  const monthPeriod = useMemo(() => ({ from: month, to: month }), [month]);
-
-  // Виджеты всегда за выбранный месяц — и когда таблица развёрнута на всю историю тоже.
-  const reportQuery = useQuery({
-    queryKey: objectKpiKeys.report(month, month, objectFilter || 'all'),
-    queryFn: () => objectKpiApi.getReport(monthPeriod, objectFilter || null),
+  // Таблица — только по выбранному объекту: без него сервер отказывает, чтобы не строить
+  // решётку «все объекты × 10 лет».
+  const tableQuery = useQuery({
+    queryKey: objectKpiKeys.reportAuto(objectFilter),
+    queryFn: () => objectKpiApi.getReport(null, objectFilter),
+    enabled: Boolean(objectFilter),
   });
 
-  // Начало истории — первый расчётный месяц договора, но не глубже потолка окна.
-  const historyFrom = useMemo(() => {
-    const floor = shiftMonth(month, -(MAX_MONTHS - 1));
-    const start = selectedObject?.plan_start_month?.slice(0, 7)
-      ?? selectedObject?.contract_date?.slice(0, 7);
-    if (!start) return floor;
-    return start > floor ? start : floor;
-  }, [month, selectedObject]);
-
-  const historyPeriod = useMemo(() => ({ from: historyFrom, to: month }), [historyFrom, month]);
-
-  const historyQuery = useQuery({
-    queryKey: objectKpiKeys.report(historyFrom, month, objectFilter || 'all'),
-    queryFn: () => objectKpiApi.getReport(historyPeriod, objectFilter || null),
-    enabled: showAllMonths && Boolean(objectFilter),
+  // Сводка по всем объектам — отдельным лёгким запросом. При выбранном объекте она уже
+  // пришла вместе с таблицей, второй запрос был бы тем же самым по нагрузке на БД.
+  const summaryQuery = useQuery({
+    queryKey: objectKpiKeys.reportSummary('all'),
+    queryFn: () => objectKpiApi.getReportSummary(),
+    enabled: !objectFilter,
   });
 
-  const summary = reportQuery.data?.summary;
+  const summary = objectFilter ? tableQuery.data?.summary : summaryQuery.data?.summary;
+  const period = objectFilter ? tableQuery.data?.period : summaryQuery.data?.period;
+  const periodLabel = formatPeriod(period);
 
-  const activeQuery = showAllMonths && objectFilter ? historyQuery : reportQuery;
   // Строки без договора не показываем: единственное действие по ним — «Создать договор»,
-  // а эта кнопка теперь живёт над таблицей.
+  // а эта кнопка живёт над таблицей.
   const rows = useMemo(
-    () => (activeQuery.data?.data ?? [])
+    () => (tableQuery.data?.data ?? [])
       .filter(row => row.contract_id !== null)
       .slice()
       .sort((a, b) => b.period_month.localeCompare(a.period_month)),
-    [activeQuery.data],
+    [tableQuery.data],
   );
 
-  // Шапка ЗОС берётся из строки ВЫБРАННОГО месяца, а не из первой строки таблицы:
-  // в развёрнутом виде первой может оказаться любая.
-  const monthRow = reportQuery.data?.data.find(row => row.skud_object_id === objectFilter) ?? null;
+  // Шапка ЗОС — из самого свежего месяца отчёта. Контрольную дату фронт не вычисляет:
+  // формула «плановая ЗОС + 3 месяца» принадлежит приказу и живёт в SQL.
+  const latestRow = rows[0] ?? null;
 
   return (
     <div className={styles.page}>
@@ -128,14 +101,14 @@ export const ObjectKpiPage: FC = () => {
         </div>
 
         <label className={styles.field}>
-          <span>Месяц</span>
-          <input type="month" value={month} onChange={e => changeMonth(e.target.value)} />
-        </label>
-
-        <label className={styles.field}>
           <span>Объект</span>
-          <span className={styles.selectRow}>
-            <select value={objectFilter} onChange={e => changeObject(e.target.value)}>
+          {/* Крестик внутри поля: обёртка держит стрелку и кнопку очистки. */}
+          <span className={styles.selectWrap}>
+            <select
+              className={styles.select}
+              value={objectFilter}
+              onChange={e => setObjectFilter(e.target.value)}
+            >
               <option value="">Все объекты</option>
               {objects.map(item => (
                 <option key={item.id} value={item.id}>{item.name}</option>
@@ -144,10 +117,10 @@ export const ObjectKpiPage: FC = () => {
             {objectFilter && (
               <button
                 type="button"
-                className={styles.clearBtn}
+                className={styles.clearInside}
                 aria-label="Сбросить объект"
                 title="Все объекты"
-                onClick={() => changeObject('')}
+                onClick={() => setObjectFilter('')}
               >
                 <X size={16} />
               </button>
@@ -162,7 +135,11 @@ export const ObjectKpiPage: FC = () => {
         )}
       </div>
 
-      {reportQuery.isError && <div className={styles.error}>Не удалось загрузить отчёт</div>}
+      {/* Период подписан явно: он вычисляется сервером и ограничен 10 годами. */}
+      {periodLabel && <p className={styles.note}>Период: {periodLabel}. Все суммы — в рублях, с НДС.</p>}
+
+      {tableQuery.isError && <div className={styles.error}>Не удалось загрузить отчёт</div>}
+      {summaryQuery.isError && <div className={styles.error}>Не удалось загрузить сводку</div>}
 
       {selectedObject && (
         <>
@@ -170,116 +147,105 @@ export const ObjectKpiPage: FC = () => {
             <span className={styles.contractItem}>
               <span className={styles.summaryLabel}>ЗОС план / факт</span>
               <strong>
-                {formatDate(monthRow?.planned_zos_date_used ?? selectedObject.planned_zos_date)}
+                {formatDate(latestRow?.planned_zos_date_used ?? selectedObject.planned_zos_date)}
                 {' / '}
-                {formatDate(monthRow?.actual_zos_date ?? selectedObject.actual_zos_date)}
+                {formatDate(latestRow?.actual_zos_date ?? selectedObject.actual_zos_date)}
               </strong>
             </span>
             <span className={styles.contractItem}>
               <span className={styles.summaryLabel}>Контрольная дата</span>
-              <strong className={monthRow?.is_overdue ? styles.overdue : undefined}>
-                {formatDate(monthRow?.control_date ?? null)}
+              <strong className={latestRow?.is_overdue ? styles.overdue : undefined}>
+                {formatDate(latestRow?.control_date ?? null)}
               </strong>
             </span>
             {canEdit && (
               <button
                 type="button"
                 className={styles.primaryBtn}
-                onClick={() => setOpenObjectId(selectedObject.id)}
+                onClick={() => setOpenCard({ objectId: selectedObject.id, mode: 'create' })}
               >
-                {selectedObject.contract_id ? 'Договор' : 'Создать договор'}
+                Создать договор
               </button>
             )}
           </div>
 
-          <p className={styles.note}>Все суммы — в рублях, с НДС.</p>
-
           {!selectedObject.contract_id ? (
             <div className={styles.emptyBlock}>По объекту нет договора</div>
           ) : (
-            <>
-              <div className={styles.tableWrap}>
-                <table className={styles.table}>
-                  <thead>
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th>Премия</th>
+                    <th>Месяц</th>
+                    <th>Руководитель</th>
+                    <th>Договор с ДС</th>
+                    <th>КС-2</th>
+                    <th>КС-6</th>
+                    <th>Остаток</th>
+                    <th>Мес.</th>
+                    <th>План месяца</th>
+                    <th>Факт месяца</th>
+                    <th>%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableQuery.isLoading && (
+                    <tr><td colSpan={11} className={styles.empty}>Загрузка…</td></tr>
+                  )}
+                  {!tableQuery.isLoading && rows.length === 0 && (
                     <tr>
-                      <th>Премия</th>
-                      <th>Месяц</th>
-                      <th>Руководитель</th>
-                      <th>Договор с ДС</th>
-                      <th>КС-2</th>
-                      <th>КС-6</th>
-                      <th>Остаток</th>
-                      <th>Мес.</th>
-                      <th>План месяца</th>
-                      <th>Факт месяца</th>
-                      <th>%</th>
+                      <td colSpan={11} className={styles.empty}>
+                        Расчётных месяцев по договору нет
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {activeQuery.isLoading && (
-                      <tr><td colSpan={11} className={styles.empty}>Загрузка…</td></tr>
-                    )}
-                    {!activeQuery.isLoading && rows.length === 0 && (
-                      <tr>
-                        <td colSpan={11} className={styles.empty}>
-                          Месяц вне расчётного периода договора
-                        </td>
-                      </tr>
-                    )}
-                    {rows.map(row => (
-                      <tr
-                        key={`${row.skud_object_id}-${row.period_month}`}
-                        className={styles.row}
-                        onClick={() => setOpenObjectId(row.skud_object_id)}
-                      >
-                        {/* Премия — Этап 2 приказа, расчёта пока нет. */}
-                        <td>—</td>
-                        <td>{formatMonthLabel(row.period_month)}</td>
-                        <td>{row.primary_manager_name ?? '—'}</td>
-                        <td>{formatMoneyShort(row.contract_total)}</td>
-                        <td>{formatMoneyShort(row.ks2_cumulative_after)}</td>
-                        <td>{formatMoneyShort(row.ks6_cumulative_after)}</td>
-                        <td>{formatMoneyShort(row.remainder)}</td>
-                        <td>{row.months_remaining ?? '—'}</td>
-                        <td>
-                          {formatMoneyShort(row.plan_amount)}
-                          {row.plan_overridden && (
-                            <span className={styles.mark} title="План задан вручную">✎</span>
-                          )}
-                          {row.plan_drift && (
-                            <span
-                              className={styles.mark}
-                              title="Исходные данные изменились после фиксации"
-                            >!</span>
-                          )}
-                        </td>
-                        <td>{formatMoneyShort(row.fact_amount)}</td>
-                        <td>{formatPercent(row.completion_pct)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <button
-                type="button"
-                className={styles.secondaryBtn}
-                onClick={() => setShowAllMonths(value => !value)}
-              >
-                {showAllMonths ? 'Только выбранный месяц' : 'Показать все месяцы'}
-              </button>
-            </>
+                  )}
+                  {rows.map(row => (
+                    <tr
+                      key={`${row.skud_object_id}-${row.period_month}`}
+                      className={styles.row}
+                      onClick={() => setOpenCard({ objectId: row.skud_object_id, mode: 'view' })}
+                    >
+                      {/* Премия — Этап 2 приказа, расчёта пока нет. */}
+                      <td>—</td>
+                      <td>{formatMonthLabel(row.period_month)}</td>
+                      <td>{row.primary_manager_name ?? '—'}</td>
+                      <td>{formatMoneyShort(row.contract_total)}</td>
+                      <td>{formatMoneyShort(row.ks2_cumulative_after)}</td>
+                      <td>{formatMoneyShort(row.ks6_cumulative_after)}</td>
+                      <td>{formatMoneyShort(row.remainder)}</td>
+                      <td>{row.months_remaining ?? '—'}</td>
+                      <td>
+                        {formatMoneyShort(row.plan_amount)}
+                        {row.plan_overridden && (
+                          <span className={styles.mark} title="План задан вручную">✎</span>
+                        )}
+                        {row.plan_drift && (
+                          <span
+                            className={styles.mark}
+                            title="Исходные данные изменились после фиксации"
+                          >!</span>
+                        )}
+                      </td>
+                      <td>{formatMoneyShort(row.fact_amount)}</td>
+                      <td>{formatPercent(row.completion_pct)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}
 
-      {openObjectId && (
+      {openCard && (
         <ObjectKpiCardModal
-          objectId={openObjectId}
-          period={showAllMonths ? historyPeriod : monthPeriod}
+          objectId={openCard.objectId}
+          mode={openCard.mode}
+          objectName={objects.find(item => item.id === openCard.objectId)?.name ?? 'Объект'}
           canEdit={canEdit}
           canRevisePlan={canRevisePlan}
-          onClose={() => setOpenObjectId(null)}
+          onClose={() => setOpenCard(null)}
         />
       )}
 

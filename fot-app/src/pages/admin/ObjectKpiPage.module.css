@@ -12,29 +12,60 @@
   gap: 12px;
 }
 
-.selectRow {
-  display: flex;
+/* Обёртка под селект: своя стрелка + крестик очистки внутри рамки поля. */
+.selectWrap {
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
 }
 
-/* Крестик «вернуться ко всем объектам»: тап-цель 44px, как у соседних полей. */
-.clearBtn {
+.field .select {
+  /* Системная стрелка убрана: её место занимает пара «крестик + своя стрелка». */
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding-right: 64px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+
+.clearInside {
+  position: absolute;
+  right: 38px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  min-height: 44px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--bg-secondary);
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
   color: var(--text-secondary);
   cursor: pointer;
+  /* Появляется при наведении на поле: постоянный крестик шумит в шапке. */
+  opacity: 0;
+  transition: opacity var(--transition, 0.15s ease), color var(--transition, 0.15s ease);
+  pointer-events: auto;
 }
 
-.clearBtn:hover {
-  background: var(--bg-hover, var(--bg-tertiary));
+.selectWrap:hover .clearInside,
+.selectWrap:focus-within .clearInside,
+.clearInside:focus-visible {
+  opacity: 1;
+}
+
+.clearInside:hover {
   color: var(--text-primary);
+  background: var(--bg-hover, var(--bg-tertiary));
+}
+
+/* На тач-устройствах hover не наступает никогда — там крестик виден сразу. */
+@media (hover: none) {
+  .clearInside {
+    opacity: 1;
+  }
 }
 
 /* Данные договора над таблицей + кнопка договора справа. */
@@ -301,7 +332,7 @@
     max-width: none;
   }
 
-  .selectRow {
+  .selectWrap {
     width: 100%;
   }
 }

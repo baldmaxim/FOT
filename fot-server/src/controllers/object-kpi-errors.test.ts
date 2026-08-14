@@ -14,7 +14,7 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: vi.fn(),
 }));
 
-import { mapDatabaseError } from './object-kpi.controller.js';
+import { mapDatabaseError, objectKpiController, optionalPeriodSchema } from './object-kpi.controller.js';
 import { monthSchema } from './object-kpi-entries.controller.js';
 
 describe('monthSchema', () => {
@@ -30,6 +30,48 @@ describe('monthSchema', () => {
   it('мусор отвергается до похода в БД', () => {
     expect(() => monthSchema.parse('январь')).toThrow();
     expect(() => monthSchema.parse('')).toThrow();
+  });
+});
+
+describe('optionalPeriodSchema', () => {
+  it('период можно не передавать вовсе — окно посчитает сервер', () => {
+    expect(optionalPeriodSchema.parse({})).toEqual({});
+  });
+
+  it('одна граница без второй отвергается', () => {
+    // Иначе запрос прошёл бы разбор и развалился дальше, в periodBounds.
+    expect(() => optionalPeriodSchema.parse({ from: '2026-01' })).toThrow(/обе границы/);
+    expect(() => optionalPeriodSchema.parse({ to: '2026-01' })).toThrow(/обе границы/);
+  });
+
+  it('перевёрнутый и слишком широкий период отвергаются', () => {
+    expect(() => optionalPeriodSchema.parse({ from: '2026-05', to: '2026-01' })).toThrow(/позже конца/);
+    expect(() => optionalPeriodSchema.parse({ from: '2000-01', to: '2026-01' })).toThrow(/месяцев/);
+  });
+});
+
+describe('getReport в авто-режиме', () => {
+  const makeRes = () => {
+    const payload: { status?: number; body?: unknown } = {};
+    return {
+      res: {
+        status(code: number) { payload.status = code; return this; },
+        json(body: unknown) { payload.body = body; return this; },
+      },
+      payload,
+    };
+  };
+
+  it('без периода и без object_id → 400, а не решётка «все объекты × 10 лет»', async () => {
+    const { res, payload } = makeRes();
+
+    await objectKpiController.getReport(
+      { query: {}, user: { id: 'user-1' } } as never,
+      res as never,
+    );
+
+    expect(payload.status).toBe(400);
+    expect(payload.body).toMatchObject({ success: false, error: 'Укажите объект или период' });
   });
 });
 

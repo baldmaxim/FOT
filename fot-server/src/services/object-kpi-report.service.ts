@@ -1,4 +1,5 @@
-import { query } from '../config/postgres.js';
+import { query, queryOne } from '../config/postgres.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 
 /**
  * Сводный отчёт KPI закрытия КС-2 — ОДИН SQL на всё окно и все объекты.
@@ -109,6 +110,16 @@ scope AS (
 ),
 -- «Хвост истории» ДО начала окна. Оконная сумма ниже видит только строки решётки,
 -- а решётка начинается с month_from. Кардинальность O(объекты), не O(объекты × месяцы).
+--
+-- Граница — GREATEST(month_from, plan_start_month), а НЕ просто month_from. Решётка grid
+-- дополнительно режет префикс по plan_start_month, и при окне, начинающемся раньше него,
+-- месяцы зазора не попадали бы ни сюда (они >= month_from), ни в оконную сумму (строк
+-- решётки нет) — накопительный объём и остаток занижались бы молча. GREATEST игнорирует
+-- NULL, поэтому объект без plan_start_month режется по month_from, как раньше.
+--
+-- Операторы у КС-2/КС-6 и ДС РАЗНЫЕ намеренно: акты берутся строго ДО отсечки (по конец
+-- предыдущего месяца), а ДС, действующий с 1-го числа, входит уже в этот месяц —
+-- обе половины остатка на один момент, см. шапку файла.
 baselines AS (
   SELECT
     s.skud_object_id,
@@ -117,14 +128,14 @@ baselines AS (
         FROM object_ks2_entries k
        WHERE k.skud_object_id = s.skud_object_id
          AND k.status = 'signed'
-         AND k.customer_signed_date < (SELECT month_from FROM params)
+         AND k.customer_signed_date < GREATEST((SELECT month_from FROM params), s.plan_start_month)
     ), 0::numeric) AS ks2_before_window,
     COALESCE((
       SELECT SUM(a.amount_delta)
         FROM object_contract_addenda a
        WHERE a.contract_id = s.contract_id
          AND a.status = 'signed'
-         AND a.effective_date <= (SELECT month_from FROM params)
+         AND a.effective_date <= GREATEST((SELECT month_from FROM params), s.plan_start_month)
     ), 0::numeric) AS addenda_before_window,
     -- КС-6 — справочная величина, копится отдельно и ни в одну формулу не входит.
     COALESCE((
@@ -132,7 +143,7 @@ baselines AS (
         FROM object_ks6_entries k6
        WHERE k6.skud_object_id = s.skud_object_id
          AND k6.status = 'signed'
-         AND k6.customer_signed_date < (SELECT month_from FROM params)
+         AND k6.customer_signed_date < GREATEST((SELECT month_from FROM params), s.plan_start_month)
     ), 0::numeric) AS ks6_before_window
   FROM scope s
 ),
@@ -401,6 +412,59 @@ LEFT JOIN LATERAL (
 ) mgr ON true
 ORDER BY x.object_name, x.period_month
 `;
+
+/** Потолок авто-окна: 10 лет. Глубже отчёт превращается в решётку на десятки тысяч строк. */
+export const OBJECT_KPI_MAX_AUTO_MONTHS = 120;
+
+const shiftMonth = (month: string, delta: number): string => {
+  const [year, value] = month.split('-').map(Number);
+  const total = year * 12 + (value - 1) + delta;
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`;
+};
+
+/**
+ * Окно «весь расчёт по этим объектам до текущего месяца».
+ *
+ * Приоритет источников, а не общий минимум: заданный plan_start_month ПЕРЕКРЫВАЕТ дату
+ * договора и первые акты — иначе договор 2020 года с первым расчётным месяцем 2025-01
+ * открыл бы период с 2020-го, где расчёта не было вовсе.
+ */
+export async function resolveCalcWindow(objectIds: string[]): Promise<{ from: string; to: string }> {
+  const to = moscowTodayIso().slice(0, 7);
+  const floor = shiftMonth(to, -(OBJECT_KPI_MAX_AUTO_MONTHS - 1));
+  if (objectIds.length === 0) return { from: to, to };
+
+  const row = await queryOne<{ start_month: string | null }>(
+    `WITH scope AS (
+       SELECT o.id AS skud_object_id, c.plan_start_month, c.contract_date
+         FROM skud_objects o
+         LEFT JOIN object_contracts c ON c.skud_object_id = o.id AND c.is_active = true
+        WHERE o.id = ANY($1::uuid[])
+     )
+     SELECT to_char(min(
+       COALESCE(
+         s.plan_start_month,
+         -- LEAST игнорирует NULL: объект без договора и без истории даёт NULL целиком.
+         LEAST(
+           date_trunc('month', s.contract_date::timestamp)::date,
+           (SELECT min(k.period_month) FROM object_ks2_entries k
+             WHERE k.skud_object_id = s.skud_object_id AND k.status = 'signed'),
+           (SELECT min(p.period_month) FROM object_kpi_month_plans p
+             WHERE p.skud_object_id = s.skud_object_id AND p.is_current)
+         )
+       )
+     ), 'YYYY-MM') AS start_month
+     FROM scope s`,
+    [objectIds],
+  );
+
+  const start = row?.start_month ?? null;
+  if (!start) return { from: to, to };
+  // Клампы с обеих сторон: снизу — потолок окна, сверху — текущий месяц (договор с датой
+  // начала в будущем иначе дал бы from > to и 400 на собственной же валидации).
+  if (start < floor) return { from: floor, to };
+  return { from: start > to ? to : start, to };
+}
 
 export interface ObjectKpiReportParams {
   monthFrom: string;   // YYYY-MM-01

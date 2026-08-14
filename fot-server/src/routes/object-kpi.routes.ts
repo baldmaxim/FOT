@@ -21,6 +21,7 @@ const lkView = requirePageAccess('/employee/objects', 'view');
 // Статические пути объявлены до параметрических: иначе '/objects/:objectId/card'
 // перехватил бы '/report/headcount' и подобные.
 router.get('/report', reportView, objectKpiController.getReport);
+router.get('/report/summary', reportView, objectKpiController.getReportSummary);
 router.get('/report/headcount', reportView, objectKpiController.getHeadcount);
 router.get('/plans/fixation-info', reportView, objectKpiController.getFixationInfo);
 router.get('/my/objects', lkView, objectKpiController.getMyObjects);

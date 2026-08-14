@@ -137,6 +137,9 @@ export const objectKpiKeys = {
   // отдал бы данные всех объектов под видом выбранного.
   report: (from: string, to: string, objectId: string = 'all') =>
     [...objectKpiKeys.all, 'report', from, to, objectId] as const,
+  // Окно считает сервер — дат в ключе нет, объект обязателен.
+  reportAuto: (objectId: string) => [...objectKpiKeys.all, 'report-auto', objectId] as const,
+  reportSummary: (objectId: string) => [...objectKpiKeys.all, 'report-summary', objectId] as const,
   headcount: (from: string, to: string) => [...objectKpiKeys.all, 'headcount', from, to] as const,
   card: (objectId: string, from: string, to: string) =>
     [...objectKpiKeys.all, 'card', objectId, from, to] as const,

@@ -205,6 +205,8 @@ export interface IObjectKpiCard {
   plans: IObjectKpiMonthPlan[];
   assignments: IObjectKpiAssignment[];
   report: IObjectKpiReportRow[];
+  /** Окно, за которое собрана карточка (сервер считает его сам, если период не передан). */
+  period: IPeriod;
   /**
    * Есть ли у объекта зафиксированные месяцы ВООБЩЕ, а не только в запрошенном окне:
    * от этого зависит, обязательно ли основание правки договора.
@@ -212,13 +214,29 @@ export interface IObjectKpiCard {
   has_fixed_months: boolean;
 }
 
-interface IPeriod {
+export interface IPeriod {
   from: string;  // YYYY-MM
   to: string;    // YYYY-MM
 }
 
 const periodQuery = ({ from, to }: IPeriod): string =>
   `?${new URLSearchParams({ from, to }).toString()}`;
+
+/**
+ * Период и объект — оба необязательны. Без периода окно считает сервер: «весь расчёт
+ * по объекту до текущего месяца». Границы уходят только парой — сервер отвергает
+ * запрос с одной.
+ */
+const reportQuery = (period?: IPeriod | null, objectId?: string | null): string => {
+  const params = new URLSearchParams();
+  if (period) {
+    params.set('from', period.from);
+    params.set('to', period.to);
+  }
+  if (objectId) params.set('object_id', objectId);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+};
 
 export const objectKpiApi = {
   /** Отдаёт и список, и scope: право на правку плана берётся отсюда же. */
@@ -227,13 +245,22 @@ export const objectKpiApi = {
     return { data: res.data, scope: res.scope };
   },
 
-  /** objectId сужает выборку на сервере: чужой объект вернёт 403, а не пустой список. */
+  /**
+   * objectId сужает выборку на сервере: чужой объект вернёт 403, а не пустой список.
+   * Без периода объект обязателен — иначе сервер отдаст 400 (решётка «все объекты × 10 лет»).
+   */
   async getReport(
-    period: IPeriod,
+    period: IPeriod | null | undefined,
     objectId?: string | null,
-  ): Promise<{ data: IObjectKpiReportRow[]; summary: IObjectKpiSummary }> {
-    const suffix = objectId ? `&object_id=${objectId}` : '';
-    return apiClient.get(`/object-kpi/report${periodQuery(period)}${suffix}`);
+  ): Promise<{ data: IObjectKpiReportRow[]; summary: IObjectKpiSummary; period: IPeriod }> {
+    return apiClient.get(`/object-kpi/report${reportQuery(period, objectId)}`);
+  },
+
+  /** Только сводка и использованное окно — без строк отчёта. */
+  async getReportSummary(
+    objectId?: string | null,
+  ): Promise<{ summary: IObjectKpiSummary; period: IPeriod }> {
+    return apiClient.get(`/object-kpi/report/summary${reportQuery(null, objectId)}`);
   },
 
   async getHeadcount(period: IPeriod): Promise<IObjectKpiHeadcountRow[]> {
@@ -243,9 +270,10 @@ export const objectKpiApi = {
     return res.data;
   },
 
-  async getCard(objectId: string, period: IPeriod): Promise<IObjectKpiCard> {
+  /** Без периода карточка показывает весь расчёт по объекту — окно считает сервер. */
+  async getCard(objectId: string, period?: IPeriod | null): Promise<IObjectKpiCard> {
     const res = await apiClient.get<{ data: IObjectKpiCard }>(
-      `/object-kpi/objects/${objectId}/card${periodQuery(period)}`,
+      `/object-kpi/objects/${objectId}/card${period ? periodQuery(period) : ''}`,
     );
     return res.data;
   },

@@ -8,7 +8,13 @@ import { extractObjectKpiError } from '../services/object-kpi-errors.js';
 import { getFreezerConfig, resolveFixationDate } from '../services/object-kpi-plan-freezer.service.js';
 import { fetchObjectKpiHeadcount } from '../services/object-kpi-headcount.service.js';
 import { listMonthPlans, normalizeMonth } from '../services/object-kpi-plan.service.js';
-import { fetchObjectKpiReport, summarizeCompletion } from '../services/object-kpi-report.service.js';
+import {
+  fetchObjectKpiReport,
+  resolveCalcWindow,
+  summarizeCompletion,
+  OBJECT_KPI_MAX_AUTO_MONTHS,
+  type ObjectKpiReportParams,
+} from '../services/object-kpi-report.service.js';
 import { listObjectKpiHistory } from '../services/object-kpi-history.service.js';
 import { loadAssignedObjectIds, resolveObjectKpiScope } from '../services/object-kpi-scope.service.js';
 import { getContractByObject, listAddenda, listKs2Entries } from '../services/object-kpi.service.js';
@@ -29,6 +35,26 @@ const periodSchema = z
   })
   .refine((v) => v.from <= v.to, { message: 'Начало периода позже конца' })
   .refine((v) => monthsBetween(v.from, v.to) <= 24, { message: 'Период больше 24 месяцев' });
+
+/**
+ * Период, который можно не передавать вовсе — тогда окно считает сервер (resolveCalcWindow).
+ *
+ * Границы обязаны приходить ПАРОЙ: запрос с одним `from` иначе прошёл бы разбор и развалился
+ * дальше, в periodBounds. Потолок здесь выше (10 лет) — это режим «весь расчёт по объекту».
+ */
+export const optionalPeriodSchema = z
+  .object({
+    from: z.string().regex(/^\d{4}-\d{2}$/, 'Ожидается YYYY-MM').optional(),
+    to: z.string().regex(/^\d{4}-\d{2}$/, 'Ожидается YYYY-MM').optional(),
+  })
+  .refine((v) => (v.from === undefined) === (v.to === undefined), {
+    message: 'Укажите обе границы периода',
+  })
+  .refine((v) => !v.from || !v.to || v.from <= v.to, { message: 'Начало периода позже конца' })
+  .refine(
+    (v) => !v.from || !v.to || monthsBetween(v.from, v.to) <= OBJECT_KPI_MAX_AUTO_MONTHS,
+    { message: `Период больше ${OBJECT_KPI_MAX_AUTO_MONTHS} месяцев` },
+  );
 
 function monthsBetween(from: string, to: string): number {
   const [fy, fm] = from.split('-').map(Number);
@@ -91,6 +117,56 @@ export function mapDatabaseError(error: unknown): { http: number; code: string; 
     default:
       return null;
   }
+}
+
+type ReportRequest =
+  | { params: ObjectKpiReportParams; period: { from: string; to: string } }
+  | { error: { http: number; message: string } };
+
+/**
+ * Общий разбор запроса отчёта для /report и /report/summary: период (передан или авто),
+ * скоуп, фильтр по объекту.
+ *
+ * В авто-режиме скоуп резолвится на СЕГОДНЯ, а не на вычисленное окно: окно считается по
+ * объектам скоупа, и обратная зависимость дала бы цикл. Для экономиста и админа скоуп от
+ * периода не зависит вовсе, а раздел ЛК руководителя ходит в /my/objects со своим периодом.
+ */
+async function resolveReportRequest(
+  req: AuthenticatedRequest,
+  options: { requireObjectInAutoMode: boolean },
+): Promise<ReportRequest> {
+  const { from, to } = optionalPeriodSchema.parse(req.query);
+  // Валидируем как uuid: иначе мусорная строка даёт пустой 200, неотличимый от «нет данных».
+  const requestedId = z.string().uuid().optional().parse(req.query.object_id ?? undefined);
+  const isAuto = from === undefined || to === undefined;
+
+  if (isAuto && options.requireObjectInAutoMode && !requestedId) {
+    // Без объекта авто-режим построил бы решётку «все объекты × 10 лет» — ровно то,
+    // ради чего заведён отдельный /report/summary.
+    return { error: { http: 400, message: 'Укажите объект или период' } };
+  }
+
+  const explicitBounds = isAuto ? null : periodBounds(from!, to!);
+  const scope = await resolveObjectKpiScope(
+    req,
+    explicitBounds ? { periodRange: { from: explicitBounds.monthFrom, to: explicitBounds.monthTo } } : {},
+  );
+
+  // Явный фильтр по объекту сужает скоуп, но не расширяет его.
+  if (requestedId && !scope.object_ids.includes(requestedId)) {
+    return { error: { http: 403, message: 'Объект вне вашего доступа' } };
+  }
+  const objectIds = requestedId ? [requestedId] : scope.object_ids;
+
+  const window = explicitBounds
+    ? { from: from!, to: to! }
+    : await resolveCalcWindow(objectIds);
+  const bounds = explicitBounds ?? periodBounds(window.from, window.to);
+
+  return {
+    params: { monthFrom: bounds.monthFrom, monthTo: bounds.monthTo, objectIds },
+    period: window,
+  };
 }
 
 export function respondWithError(res: Response, error: unknown, logPrefix: string): void {
@@ -163,27 +239,44 @@ export const objectKpiController = {
    */
   async getReport(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { from, to } = periodSchema.parse(req.query);
-      const { monthFrom, monthTo } = periodBounds(from, to);
-
-      const scope = await resolveObjectKpiScope(req, {
-        periodRange: { from: monthFrom, to: monthTo },
-      });
-
-      // Явный фильтр по объекту сужает скоуп, но не расширяет его. Валидируем как uuid и
-      // отвечаем 403 на чужой объект: иначе и мусорная строка, и объект вне доступа дают
-      // пустой 200, неотличимый от «нет данных».
-      const requestedId = z.string().uuid().optional().parse(req.query.object_id ?? undefined);
-      if (requestedId && !scope.object_ids.includes(requestedId)) {
-        res.status(403).json({ success: false, error: 'Объект вне вашего доступа' });
+      const resolved = await resolveReportRequest(req, { requireObjectInAutoMode: true });
+      if ('error' in resolved) {
+        res.status(resolved.error.http).json({ success: false, error: resolved.error.message });
         return;
       }
-      const objectIds = requestedId ? [requestedId] : scope.object_ids;
 
-      const rows = await fetchObjectKpiReport({ monthFrom, monthTo, objectIds });
-      res.json({ success: true, data: rows, summary: summarizeCompletion(rows) });
+      const rows = await fetchObjectKpiReport(resolved.params);
+      res.json({
+        success: true,
+        data: rows,
+        summary: summarizeCompletion(rows),
+        period: resolved.period,
+      });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] getReport');
+    }
+  },
+
+  /**
+   * Сводка без строк: виджеты вкладки показывают весь период по всем объектам, а решётка
+   * «объекты × месяцы» на таком окне — десятки тысяч строк, которые фронту не нужны.
+   *
+   * Формулы не дублируются: тот же fetchObjectKpiReport и та же summarizeCompletion, что
+   * у /report. По нагрузке на БД это ровно тот же запрос — экономится только трафик,
+   * поэтому фронт при выбранном объекте берёт summary из ответа /report, а не зовёт сюда.
+   */
+  async getReportSummary(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const resolved = await resolveReportRequest(req, { requireObjectInAutoMode: false });
+      if ('error' in resolved) {
+        res.status(resolved.error.http).json({ success: false, error: resolved.error.message });
+        return;
+      }
+
+      const rows = await fetchObjectKpiReport(resolved.params);
+      res.json({ success: true, summary: summarizeCompletion(rows), period: resolved.period });
+    } catch (error) {
+      respondWithError(res, error, '[object-kpi] getReportSummary');
     }
   },
 
@@ -211,16 +304,21 @@ export const objectKpiController = {
   async getObjectCard(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const objectId = z.string().uuid().parse(req.params.objectId);
-      const { from, to } = periodSchema.parse(req.query);
-      const { monthFrom, monthTo } = periodBounds(from, to);
+      // Период необязателен: без него карточка показывает весь расчёт по объекту.
+      const { from, to } = optionalPeriodSchema.parse(req.query);
+      const explicit = from && to ? periodBounds(from, to) : null;
 
-      const scope = await resolveObjectKpiScope(req, {
-        periodRange: { from: monthFrom, to: monthTo },
-      });
+      const scope = await resolveObjectKpiScope(
+        req,
+        explicit ? { periodRange: { from: explicit.monthFrom, to: explicit.monthTo } } : {},
+      );
       if (!scope.object_ids.includes(objectId)) {
         res.status(403).json({ success: false, error: 'Объект вне вашего доступа' });
         return;
       }
+
+      const window = explicit ? { from: from!, to: to! } : await resolveCalcWindow([objectId]);
+      const { monthFrom, monthTo } = explicit ?? periodBounds(window.from, window.to);
 
       const contract = await getContractByObject(objectId);
       const [report, plans, assignments, addenda, ks2, ks6, fixedFlag] = await Promise.all([
@@ -254,6 +352,7 @@ export const objectKpiController = {
           assignments,
           report,
           has_fixed_months: fixedFlag?.exists === true,
+          period: window,
         },
       });
     } catch (error) {
