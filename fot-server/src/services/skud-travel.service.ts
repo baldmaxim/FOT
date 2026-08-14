@@ -1150,17 +1150,58 @@ export const updateTravelObject = async ({
   }
 };
 
+/**
+ * Что в KPI-контуре мешает удалить объект. Пустой массив — удалять можно.
+ *
+ * Проверка выполняется ДО любых побочных эффектов: FK на объект стоят RESTRICT,
+ * и без неё удаление файла карты успевало пройти, а DELETE строки падал — объект
+ * оставался в БД уже без карты, безвозвратно.
+ */
+const findKpiBlockers = async (objectId: string): Promise<string[]> => {
+  const row = await queryOne<{
+    contracts: number; ks2: number; assignments: number; plans: number;
+  }>(
+    `SELECT
+       (SELECT count(*)::int FROM object_contracts       WHERE skud_object_id = $1) AS contracts,
+       (SELECT count(*)::int FROM object_ks2_entries     WHERE skud_object_id = $1) AS ks2,
+       (SELECT count(*)::int FROM object_kpi_assignments WHERE skud_object_id = $1) AS assignments,
+       (SELECT count(*)::int FROM object_kpi_month_plans WHERE skud_object_id = $1) AS plans`,
+    [objectId],
+  );
+  if (!row) return [];
+
+  const blockers: string[] = [];
+  if (row.contracts > 0) blockers.push('договор');
+  if (row.ks2 > 0) blockers.push('акты КС-2');
+  if (row.assignments > 0) blockers.push('закрепления руководителей');
+  if (row.plans > 0) blockers.push('зафиксированные планы');
+  return blockers;
+};
+
 export const deleteTravelObject = async (objectId: string): Promise<void> => {
   const currentObject = await fetchTravelObjectByIdRaw(objectId);
-  const currentStoragePath = normalizeTravelObjectMapPath(currentObject?.map_storage_path);
-  if (currentStoragePath) {
-    await objectMapStorageService.removeObject(SKUD_OBJECT_MAPS_BUCKET, currentStoragePath);
+  if (!currentObject) throw new Error('Объект не найден');
+
+  const blockers = await findKpiBlockers(objectId);
+  if (blockers.length > 0) {
+    throw Object.assign(
+      new Error(`Объект участвует в KPI (${blockers.join(', ')}) — удаление запрещено, архивируйте его`),
+      { __save: { http: 409, code: 'object_has_kpi_data', message:
+        `Объект участвует в KPI (${blockers.join(', ')}) — удаление запрещено, архивируйте его` } },
+    );
   }
 
+  // Порядок изменён: сначала строка БД, потом файл. Файл-сирота безобиден,
+  // потерянная карта при упавшем DELETE — нет.
   try {
     await execute('DELETE FROM skud_objects WHERE id = $1', [objectId]);
   } catch (error) {
     throw formatTravelFeatureError(error);
+  }
+
+  const currentStoragePath = normalizeTravelObjectMapPath(currentObject.map_storage_path);
+  if (currentStoragePath) {
+    await objectMapStorageService.removeObject(SKUD_OBJECT_MAPS_BUCKET, currentStoragePath);
   }
 
   invalidateTravelSegmentsCache();

@@ -127,3 +127,19 @@ export const patentReceiptsKeys = {
   all: ['patent-receipts'] as const,
   byId: (receiptId: string | number) => ['patent-receipt', receiptId] as const,
 };
+
+// ─── KPI закрытия КС-2 (объекты строительства) ─────────────────────────────
+
+export const objectKpiKeys = {
+  all: ['object-kpi'] as const,
+  objects: () => [...objectKpiKeys.all, 'objects'] as const,
+  report: (from: string, to: string) => [...objectKpiKeys.all, 'report', from, to] as const,
+  headcount: (from: string, to: string) => [...objectKpiKeys.all, 'headcount', from, to] as const,
+  card: (objectId: string, from: string, to: string) =>
+    [...objectKpiKeys.all, 'card', objectId, from, to] as const,
+  history: (objectId: string) => [...objectKpiKeys.all, 'history', objectId] as const,
+  assignments: (objectId?: string) => [...objectKpiKeys.all, 'assignments', objectId ?? 'all'] as const,
+  globalRoles: () => [...objectKpiKeys.all, 'global-roles'] as const,
+  fixationInfo: (month: string) => [...objectKpiKeys.all, 'fixation-info', month] as const,
+  myObjects: (from: string, to: string) => [...objectKpiKeys.all, 'my-objects', from, to] as const,
+};

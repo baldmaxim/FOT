@@ -7,7 +7,18 @@ import {
 import { getRoleByCode, getRoleById, invalidateRolesCache } from './roles-cache.service.js';
 import { resolveAccessibleDepartmentIds } from './data-scope.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from './hiring-access.service.js';
+import { isEconomicsHead } from './object-kpi-roles-cache.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+
+/**
+ * Единственная страница, которую получает «Руководитель экономического отдела».
+ * Роль внесистемная (запись в object_kpi_global_roles), потому что system_role_id
+ * у пользователя один и системная роль отобрала бы у него текущую.
+ *
+ * Ключ вынесен в константу, чтобы ветка авто-гранта в resolveEffectivePageAccess
+ * выходила по сравнению строк и не трогала все остальные страницы.
+ */
+const ECONOMICS_HEAD_PAGE = '/discipline/objects';
 
 /**
  * Список страниц, к которым не-админ с назначенными отделами
@@ -172,6 +183,14 @@ export async function resolveEffectivePageAccess(
   action: 'view' | 'edit',
 ): Promise<boolean> {
   if (req.user.is_admin) return true;
+
+  // Авто-грант «Руководителю экономического отдела»: view+edit на вкладку «KPI объектов».
+  // Стоит ДО гейта admin_access — у руководителя отдела роль без доступа в админку,
+  // и роль-грантом это право выдать нельзя (роль одна на пользователя).
+  // Сравнение строк первым условием: на любой другой странице ветка не делает ничего.
+  if (pagePath === ECONOMICS_HEAD_PAGE && await isEconomicsHead(req.user.employee_id)) {
+    return true;
+  }
 
   const roleGrantAllowed = isPersonalPageKey(pagePath) || await roleHasAdminAccess(req.user.role_code);
   if (roleGrantAllowed) {

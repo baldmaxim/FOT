@@ -150,6 +150,8 @@ export interface AuthenticatedRequest extends Request {
     __editable_employee_ids?: Set<number>;
     __manager_object_ids?: string[];
     __manager_object_employee_ids?: Set<number>;
+    /** Скоуп объектов KPI на HTTP-запрос (object-kpi-scope.service). */
+    __object_kpi_scope?: { is_unrestricted: boolean; object_ids: string[] };
   };
 }
 

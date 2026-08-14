@@ -1,0 +1,244 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.period {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.field input {
+  /* ≥16px — иначе iOS и Android Chrome зумят страницу при фокусе. */
+  font-size: 16px;
+  padding: 8px 10px;
+  min-height: 44px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.secondaryBtn {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.secondaryBtn:hover {
+  background: var(--bg-hover, var(--bg-tertiary));
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--danger-bg, rgba(220, 38, 38, 0.1));
+  color: var(--danger-color, #dc2626);
+  font-size: 14px;
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.summaryTile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.summaryTile strong {
+  font-size: 18px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.summaryLabel {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.attention {
+  padding: 12px 14px;
+  border: 1px solid var(--warning-color, #f59e0b);
+  border-radius: 10px;
+  background: var(--warning-bg, rgba(245, 158, 11, 0.08));
+  font-size: 13px;
+}
+
+.attention ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Широкая таблица скроллится внутри своего контейнера — страница по горизонтали не едет. */
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 1100px;
+}
+
+.table th,
+.table td {
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 12px;
+  z-index: 1;
+}
+
+.row {
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--bg-hover, var(--bg-tertiary));
+}
+
+.objectCell {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 180px;
+}
+
+.archived {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.overdue {
+  color: var(--danger-color, #dc2626);
+  font-weight: 600;
+}
+
+.mark {
+  margin-left: 4px;
+  color: var(--warning-color, #f59e0b);
+  font-weight: 700;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.badgeOk {
+  background: var(--success-bg, rgba(22, 163, 74, 0.12));
+  color: var(--success-color, #16a34a);
+}
+
+.badgeWarn {
+  background: var(--warning-bg, rgba(245, 158, 11, 0.12));
+  color: var(--warning-color, #b45309);
+}
+
+.badgeInfo {
+  background: var(--info-bg, rgba(37, 99, 235, 0.12));
+  color: var(--info-color, #2563eb);
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 768px) {
+  .summary {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .toolbarRight {
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 430px) {
+  .period {
+    flex-direction: column;
+  }
+
+  .field input {
+    width: 100%;
+  }
+}

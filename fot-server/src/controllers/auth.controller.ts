@@ -18,6 +18,7 @@ import { listManagedDepartmentIdsForUser } from '../services/department-access.s
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
 import { hasHiringAutoAccess, isHiringRequesterRole } from '../services/hiring-access.service.js';
+import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
 import { TIMEKEEPER_ROLE_CODE, expandTimekeeperAccessibleDepartmentIds, loadTimekeeperScopeSnapshot } from '../services/timekeeper-scope.service.js';
 import { verify2FA, useRecoveryCode } from './auth-2fa.controller.js';
 import {
@@ -153,6 +154,15 @@ async function buildProfileResponse(
   if (managerAutoAccess && !role.is_admin && !page_access['/staff-control/hiring']?.can_view
       && (isHiringRequesterRole(role.code) || await hasHiringAutoAccess(profile.employee_id, role.is_admin))) {
     page_access['/staff-control/hiring'] = { can_view: true, can_edit: false };
+  }
+
+  // «Руководитель экономического отдела» — внесистемная роль (object_kpi_global_roles).
+  // Зеркало ветки в resolveEffectivePageAccess: без этой строки бэк запрос пропустит,
+  // а фронт вкладку «KPI объектов» не покажет — canViewPage смотрит именно в page_access.
+  // Гейта managerAutoAccess здесь намеренно нет: назначение точечное и роль человека
+  // (обычно «Руководитель») к нему отношения не имеет.
+  if (!role.is_admin && await isEconomicsHead(profile.employee_id)) {
+    page_access['/discipline/objects'] = { can_view: true, can_edit: true };
   }
 
   const response: UserProfileResponse = {

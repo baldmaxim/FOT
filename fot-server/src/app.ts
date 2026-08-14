@@ -50,6 +50,7 @@ import testsRoutes from './routes/tests.routes.js';
 import adaptiveTestingRoutes from './routes/adaptive-testing.routes.js';
 import hiringRequestsRoutes from './routes/hiring-requests.routes.js';
 import publicDataApiRoutes from './routes/public-data-api.routes.js';
+import objectKpiRoutes from './routes/object-kpi.routes.js';
 
 const app = express();
 
@@ -147,6 +148,7 @@ app.use('/api/presence', presenceRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/tests', testsRoutes);
 app.use('/api/adaptive-testing', adaptiveTestingRoutes);
+app.use('/api/object-kpi', objectKpiRoutes);
 app.use('/api/public/v1', publicDataApiRoutes);
 
 // 404 handler

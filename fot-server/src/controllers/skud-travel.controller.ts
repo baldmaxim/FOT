@@ -223,6 +223,13 @@ export const skudTravelController = {
         res.status(400).json({ success: false, error: 'Некорректный id объекта', details: error.errors });
         return;
       }
+      // Объект с данными KPI удалять нельзя (409, а не 500): у него есть договор,
+      // акты или закрепления — предлагается архивирование.
+      const save = (error as { __save?: { http: number; code?: string; message: string } }).__save;
+      if (save) {
+        res.status(save.http).json({ success: false, error: save.message, code: save.code });
+        return;
+      }
       const message = error instanceof Error ? error.message : 'Ошибка удаления объекта';
       console.error('deleteTravelObject error:', error);
       res.status(500).json({ success: false, error: message });

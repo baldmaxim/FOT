@@ -77,7 +77,9 @@ export const navGroups: INavGroup[] = [
       { id: 'timesheet', path: '/timesheet', label: 'Табель', icon: CalendarIcon, requiredPage: '/timesheet' },
       { id: 'approvals', path: '/approvals', label: 'Согласования', icon: CalendarIcon, requiredPage: '/timesheet-hr' },
       { id: 'timesheet-hr', path: '/timesheet-hr', label: 'Табели HR', icon: CalendarIcon, requiredPage: '/timesheet-hr' },
-      { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPage: '/discipline' },
+      // Массив = ЛЮБОЙ из ключей: экономист попадает в «Аналитику» только ради
+      // вкладки «KPI объектов», доступа к дисциплине у него нет.
+      { id: 'discipline', path: '/discipline', label: 'Аналитика', icon: BarChartIcon, requiredPage: ['/discipline', '/discipline/objects'] },
     ]
   },
   {

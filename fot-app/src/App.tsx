@@ -95,7 +95,6 @@ const TimesheetHrPage = lazy(() => import('./pages/timesheet/TimesheetHrPage').t
 const ApprovalsPage = lazy(() => import('./pages/approvals/ApprovalsPage').then(m => ({ default: m.ApprovalsPage })));
 
 // Discipline Analytics
-const DisciplineAnalyticsPage = lazy(() => import('./pages/DisciplineAnalyticsPage').then(m => ({ default: m.DisciplineAnalyticsPage })));
 
 // Staff Control
 const StaffControlHubPage = lazy(() => import('./pages/StaffControlHubPage').then(m => ({ default: m.StaffControlHubPage })));
@@ -120,6 +119,8 @@ const SalaryRaiseReviewPage = lazy(() => import('./pages/SalaryRaiseReviewPage')
 
 // Hubs (объединяющие страницы-обёртки с табами)
 const LeaveRequestsHubPage = lazy(() => import('./pages/hubs/LeaveRequestsHubPage').then(m => ({ default: m.LeaveRequestsHubPage })));
+const DisciplineHubPage = lazy(() => import('./pages/hubs/DisciplineHubPage').then(m => ({ default: m.DisciplineHubPage })));
+const EmployeeObjectsPage = lazy(() => import('./pages/employee/EmployeeObjectsPage').then(m => ({ default: m.EmployeeObjectsPage })));
 const SystemAdminPage = lazy(() => import('./pages/hubs/SystemAdminPage').then(m => ({ default: m.SystemAdminPage })));
 
 // Компонент для умного редиректа на основе должности
@@ -254,6 +255,17 @@ const AppRoutes = () => {
             element={
               <EmployeeLayout title="Мои задачи">
                 <DailyTasksPage />
+              </EmployeeLayout>
+            }
+          />
+        </Route>
+
+        <Route element={<ProtectedRoute requiredPage="/employee/objects" />}>
+          <Route
+            path="/employee/objects"
+            element={
+              <EmployeeLayout title="Мои объекты">
+                <EmployeeObjectsPage />
               </EmployeeLayout>
             }
           />
@@ -412,12 +424,14 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/discipline" />}>
+        {/* Массив ключей = ЛЮБОЙ из них: экономист входит только по /discipline/objects,
+            начальник участка — только по /discipline. Вкладки внутри фильтрует HubShell. */}
+        <Route element={<ProtectedRoute requiredPage={['/discipline', '/discipline/objects']} />}>
           <Route
             path="/discipline"
             element={
               <Layout title="Аналитика дисциплины" theme={theme} onToggleTheme={toggleTheme}>
-                <DisciplineAnalyticsPage />
+                <DisciplineHubPage />
               </Layout>
             }
           />

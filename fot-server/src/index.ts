@@ -14,6 +14,7 @@ import { startSigurEventsDailyScheduler, stopSigurEventsDailyScheduler } from '.
 import { startSkudSummaryReconcileScheduler, stopSkudSummaryReconcileScheduler } from './services/skud-summary-reconcile.service.js';
 import { startTimesheetReminderScheduler, stopTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
 import { startPatentExpiryReminderScheduler, stopPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
+import { startObjectKpiPlanFreezer, stopObjectKpiPlanFreezer } from './services/object-kpi-plan-freezer.service.js';
 import { startDailyTasksReminderScheduler, stopDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
 import { startDismissalScheduler, stopDismissalScheduler } from './services/dismissal-scheduler.service.js';
 import { startContractorPassSyncScheduler, stopContractorPassSyncScheduler } from './services/contractor-pass-sync.scheduler.js';
@@ -110,6 +111,9 @@ httpServer.listen(PORT, HOST, () => {
   startDailyTasksReminderScheduler();
   startDismissalScheduler();
   startContractorPassSyncScheduler();
+  // Фиксация месячного плана KPI объектов. Сам по себе не работает: включается
+  // в настройках (system_settings.object_kpi_freezer_enabled, по умолчанию false).
+  startObjectKpiPlanFreezer();
   startNewdbPendingPoller();
   startMtsLocationPoller();
   startMtsGeofenceMonitor();
@@ -160,7 +164,8 @@ const gracefulShutdown = (signal: string): void => {
     stopSigurEventsDailyScheduler, stopSkudSummaryReconcileScheduler,
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopDismissalScheduler,
-    stopContractorPassSyncScheduler, stopNewdbPendingPoller, stopMtsLocationPoller, stopMtsGeofenceMonitor,
+    stopContractorPassSyncScheduler, stopObjectKpiPlanFreezer,
+    stopNewdbPendingPoller, stopMtsLocationPoller, stopMtsGeofenceMonitor,
     stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
     stopMtsBusinessMetricsDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler,
     stopMtsBusinessStatementRollingWorker,
