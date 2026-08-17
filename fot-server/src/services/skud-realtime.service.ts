@@ -62,7 +62,14 @@ export function notifySkudRealtimeChanged(input: ISkudRealtimeNotification): voi
   }
 }
 
-export type SigurStructureSource = 'scheduler' | 'admin_crud' | 'manual_sync';
+export type SigurStructureSource =
+  | 'scheduler'
+  /** Ранний checkpoint планового синка: зеркало отделов закоммичено, reconciliation ещё идёт. */
+  | 'scheduler_mirror'
+  | 'admin_crud'
+  | 'manual_sync'
+  /** Целевая деактивация зеркала после удаления отдела в Sigur. */
+  | 'sigur_delete';
 
 export interface ISigurStructureNotification {
   source: SigurStructureSource;

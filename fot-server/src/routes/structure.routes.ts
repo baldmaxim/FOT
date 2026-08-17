@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { Request } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { structureController } from '../controllers/structure.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
@@ -30,6 +30,15 @@ const structureTreeCache = registerCache(
 );
 const structurePositionsCache = registerCache('structure:positions', () => 'structure:positions', 15 * 60_000);
 
+// Заголовок ставим ДО кэш-middleware: на HIT/STALE оно отвечает само, контроллер не
+// вызывается, и в ответе оставался бы глобальный `private, max-age=30` из app.ts —
+// тогда push structure_updated в первые 30 сек обслуживался бы из браузерного кэша,
+// и новый отдел не появлялся бы. Бэк по-прежнему прикрыт серверным кэшем structure:tree.
+const noBrowserCache = (_req: Request, res: Response, next: NextFunction): void => {
+  res.setHeader('Cache-Control', 'private, no-cache');
+  next();
+};
+
 // Все роуты требуют аутентификации
 router.use(authenticate);
 
@@ -54,6 +63,7 @@ router.use((req, res, next) => {
 router.get(
   '/',
   requireAnyPageAccess(['/employee', '/dashboard', '/staff-control', '/admin/users', '/admin/payslips', '/skud-settings', '/timesheet'], 'view'),
+  noBrowserCache,
   structureTreeCache,
   structureController.getTree
 );

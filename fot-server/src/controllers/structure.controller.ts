@@ -301,7 +301,8 @@ export const structureController = {
           extra: { totalMs },
         });
       }
-      res.setHeader('Cache-Control', 'private, max-age=120');
+      // Cache-Control ставит route-middleware noBrowserCache (structure.routes.ts):
+      // на HIT/STALE контроллер не вызывается, заголовок отсюда не применился бы.
       res.setHeader('Server-Timing', `structure_load;dur=${totalMs}`);
       res.json(body);
     } catch (error) {

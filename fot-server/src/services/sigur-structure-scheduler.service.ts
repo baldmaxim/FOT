@@ -15,6 +15,7 @@ import {
 } from './sigur-sync.service.js';
 import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
 import { notifySigurStructureChanged } from './skud-realtime.service.js';
+import { invalidateStructureTreeAndNotify } from './sigur-structure-refresh.service.js';
 import { invalidateCache } from '../middleware/cacheResponse.js';
 import type { ISyncContext } from './sigur-sync-shared.js';
 import { isSigurRuntimeAllowed, logSigurRuntimeGuardSkip } from './sigur-runtime-guard.service.js';
@@ -59,7 +60,11 @@ async function runStructureSyncCycle(): Promise<void> {
           const context: ISyncContext = {};
           console.log(`[structure-scheduler] starting sync connection=${connectionType}: departments + positions + employees`);
 
-          await syncDepartmentsLogic(connectionType, context);
+          // onMirrorCommitted: дерево отделов публикуем сразу после коммита зеркала,
+          // не дожидаясь reconciliation (срез сотрудников Sigur — до нескольких минут).
+          await syncDepartmentsLogic(connectionType, context, {
+            onMirrorCommitted: () => invalidateStructureTreeAndNotify('scheduler_mirror'),
+          });
           await syncPositionsFromSigurLogic(connectionType, context);
           await seedPositionsLogic();
           await syncEmployeesLogic(connectionType, () => {}, context, true);
@@ -69,6 +74,9 @@ async function runStructureSyncCycle(): Promise<void> {
           // и sync filter не отдавали стейл данные.
           invalidateOrgStructureCaches();
           invalidateCache('structure:tree');  // очистить HTTP-кэш дерева для всех пользователей
+          // Должности синкнуты только сейчас — раньше сбрасывать нельзя, иначе
+          // старый ответ закэшировался бы заново на 15 мин.
+          invalidateCache('structure:positions');
           notifySigurStructureChanged({ source: 'scheduler', scope: 'all' });
 
           const durationMs = Date.now() - startedAt;

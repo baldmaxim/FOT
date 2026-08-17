@@ -126,9 +126,30 @@ export function computeAliveDepartmentSet(
 
 // ─── Чистые функции синхронизации ───
 
+/**
+ * Опции синка отделов.
+ *
+ * mode='mirror_only' — только зеркало (Pass 1 + Pass 2), без reconciliation и
+ * consolidate. Reconciliation тянет ВСЕХ сотрудников Sigur (getEmployeesCached:
+ * холодный путь — таймаут 60 с, затем per-department fallback на минуты), всё это
+ * время держится structure-sync lock. Для точечного refresh после CRUD отдела в
+ * админке это неприемлемо: следующая правка ждала бы минуты. Удаления в
+ * mirror_only не гасятся — их закрывает целевая деактивация в
+ * sigur-structure-refresh.service, а полное сведение остаётся за планировщиком.
+ *
+ * onMirrorCommitted — вызывается сразу после коммита транзакции зеркала, ДО
+ * reconciliation. Точка, где отделы уже в БД: здесь сбрасываются кэши структуры,
+ * чтобы дерево не ждало среза сотрудников.
+ */
+export interface ISyncDepartmentsOptions {
+  mode?: 'full' | 'mirror_only';
+  onMirrorCommitted?: () => void | Promise<void>;
+}
+
 export async function syncDepartmentsLogic(
   connection?: 'external' | 'internal',
   context?: ISyncContext,
+  options?: ISyncDepartmentsOptions,
 ): Promise<ISyncDepartmentsResult> {
   if (!(await sigurService.isConfigured())) throw new Error('Sigur не настроен');
 
@@ -333,6 +354,33 @@ export async function syncDepartmentsLogic(
       }
     }
   });
+
+  // Checkpoint: зеркало закоммичено. Сбрасываем кэши структуры здесь, а не в
+  // конце функции — иначе дерево ждёт reconciliation (срез сотрудников Sigur,
+  // до нескольких минут на холодном кэше).
+  if (options?.onMirrorCommitted) {
+    try {
+      await options.onMirrorCommitted();
+    } catch (hookError) {
+      console.error('[syncDepartments] onMirrorCommitted hook error:', (hookError as Error).message);
+    }
+  }
+
+  if (options?.mode === 'mirror_only') {
+    console.log(`[syncDepartments] mirror-only done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${filtered} filtered, ${parentLinksSet} parent links`);
+    invalidateOrgStructureCaches();
+    return {
+      imported,
+      updated,
+      skipped,
+      filtered,
+      total: departments.length,
+      parentLinksSet,
+      deactivated: 0,
+      keptByEmployeeRefs: 0,
+      errors,
+    };
+  }
 
   // Reconciliation (Шаг 4 — правило объединения вместо гард-угадайки):
   // «живой» отдел определяем из ДВУХ срезов САМОГО Sigur (источник истины):

@@ -15,6 +15,10 @@ import { sigurService } from './sigur.service.js';
 import { normalizeDepartment, resolveField } from './sigur-sync-shared.js';
 import type { ConnectionType } from './sigur-base.service.js';
 import {
+  deactivateMirroredDepartments,
+  requestDepartmentsMirrorRefresh,
+} from './sigur-structure-refresh.service.js';
+import {
   collapseNestedDepartmentSelection,
   collectAncestorDepartmentIds,
   collectSigurDepartmentDescendantIds,
@@ -37,6 +41,9 @@ export async function createSigurDepartment(
 
   sigurService.invalidateDepartmentCache();
   invalidateSigurDirectoryCaches();
+  // До readback: отдел в Sigur уже создан, и падение getDepartmentById не должно
+  // отменять обновление зеркала.
+  requestDepartmentsMirrorRefresh('admin_crud', connection);
 
   const departmentId = normalizeInt(resolveField(created, 'id', 'ID', 'Id'));
   if (!departmentId) {
@@ -66,6 +73,7 @@ export async function updateSigurDepartment(
   await sigurService.updateDepartment(departmentId, payload, connection);
   sigurService.invalidateDepartmentCache();
   invalidateSigurDirectoryCaches();
+  requestDepartmentsMirrorRefresh('admin_crud', connection);
 
   const remoteDepartment = normalizeDepartment(await sigurService.getDepartmentById(departmentId, connection));
   return {
@@ -85,6 +93,10 @@ export async function deleteSigurDepartment(
   await sigurService.deleteDepartment(departmentId, connection);
   sigurService.invalidateDepartmentCache();
   invalidateSigurDirectoryCaches();
+  // Целевая деактивация: reconciliation в полном синке гасит удалённые отделы
+  // только при успешном срезе сотрудников Sigur, а mirror_only не гасит вовсе.
+  await deactivateMirroredDepartments([departmentId]);
+  requestDepartmentsMirrorRefresh('admin_crud', connection);
 }
 
 export async function batchMoveSigurDepartments(
@@ -147,6 +159,9 @@ export async function batchMoveSigurDepartments(
 
   sigurService.invalidateDepartmentCache();
   invalidateSigurDirectoryCaches();
+  if (moved > 0) {
+    requestDepartmentsMirrorRefresh('admin_crud', connection);
+  }
 
   return {
     requested,
@@ -192,7 +207,7 @@ async function moveDirectDepartmentEmployees(
 export async function deleteSigurDepartmentRecursive(
   departmentId: number,
   connection?: ConnectionType,
-): Promise<{ deleted: number }> {
+): Promise<{ deleted: number; deletedIds: number[] }> {
   const departments = await getNormalizedDepartments(connection);
   const selectedDepartment = departments.find(department => department.id === departmentId) || null;
   if (!selectedDepartment) {
@@ -210,10 +225,14 @@ export async function deleteSigurDepartmentRecursive(
 
   const targetDepartmentId = selectedDepartment.parentId ?? null;
 
+  // deletedIds — только реально удалённые: ошибки отдельных отделов глотаются,
+  // и гасить в зеркале то, что осталось живым в Sigur, нельзя.
+  const deletedIds: number[] = [];
   for (const currentDepartmentId of descendants) {
     await moveDirectDepartmentEmployees(currentDepartmentId, targetDepartmentId, connection);
     try {
       await sigurService.deleteDepartment(currentDepartmentId, connection);
+      deletedIds.push(currentDepartmentId);
     } catch (error) {
       console.warn(`[sigur live admin] failed to delete department ${currentDepartmentId}:`, error);
     }
@@ -222,6 +241,8 @@ export async function deleteSigurDepartmentRecursive(
   sigurService.invalidateEmployeeCache();
   sigurService.invalidateDepartmentCache();
   invalidateSigurDirectoryCaches();
+  await deactivateMirroredDepartments(deletedIds);
+  requestDepartmentsMirrorRefresh('admin_crud', connection);
 
-  return { deleted: descendants.length };
+  return { deleted: deletedIds.length, deletedIds };
 }

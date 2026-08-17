@@ -21,7 +21,9 @@ import {
   type ISyncContext,
   type SyncAllStepName,
 } from '../services/sigur-sync.service.js';
-import { invalidateStructureCache, invalidateOrgStructureCaches } from '../services/employee-mapper.service.js';
+import { invalidateStructureCache } from '../services/employee-mapper.service.js';
+import { invalidateStructureTreeAndNotify } from '../services/sigur-structure-refresh.service.js';
+import { invalidateCache } from '../middleware/cacheResponse.js';
 import {
   isSigurRuntimeNotAllowedError,
   type SigurRuntimeNotAllowedError,
@@ -268,8 +270,12 @@ export const sigurSyncController = {
       lockAcquired = true;
 
       sigurService.invalidateDepartmentCache();
-      const result = await syncDepartmentsLogic(connection, {});
-      invalidateOrgStructureCaches();
+      // Ранний checkpoint: дерево публикуем сразу после коммита зеркала, не дожидаясь
+      // reconciliation. Финальный вызов — после её завершения (могли быть деактивации).
+      const result = await syncDepartmentsLogic(connection, {}, {
+        onMirrorCommitted: () => invalidateStructureTreeAndNotify('manual_sync'),
+      });
+      invalidateStructureTreeAndNotify('manual_sync');
       res.json({ success: true, data: result });
     } catch (error) {
       if (isManualSyncConflict(error)) {
@@ -302,6 +308,7 @@ export const sigurSyncController = {
       sigurService.invalidatePositionCache();
       const result = await syncPositionsFromSigurLogic(connection, {});
       invalidateStructureCache();
+      invalidateCache('structure:positions');
       res.json({ success: true, data: result });
     } catch (error) {
       if (isManualSyncConflict(error)) {
@@ -449,7 +456,9 @@ export const sigurSyncController = {
           id: 1,
           name: 'departments' as SyncAllStepName,
           label: 'Импорт отделов (иерархия)',
-          fn: async () => syncDepartmentsLogic(connection, context) as unknown as Record<string, unknown>,
+          fn: async () => syncDepartmentsLogic(connection, context, {
+            onMirrorCommitted: () => invalidateStructureTreeAndNotify('manual_sync'),
+          }) as unknown as Record<string, unknown>,
         },
         {
           id: 2,
@@ -500,9 +509,13 @@ export const sigurSyncController = {
       // Если синхронизировались departments/employees — инвалидируем все три
       // (employee-mapper + dept tree + sync filter), иначе только лёгкий name-кэш.
       if (steps.includes('departments') || steps.includes('employees')) {
-        invalidateOrgStructureCaches();
+        invalidateStructureTreeAndNotify('manual_sync');
       } else if (steps.includes('positions')) {
         invalidateStructureCache();
+      }
+      if (steps.includes('positions')) {
+        // HTTP-кэш должностей живёт 15 мин — без явного сброса синк не виден в UI.
+        invalidateCache('structure:positions');
       }
 
       await auditService.logFromRequest(req, req.user.id, 'SYNC_SIGUR', {
