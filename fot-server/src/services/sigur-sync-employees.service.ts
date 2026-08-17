@@ -169,6 +169,8 @@ export interface ISigurRebindEmployee {
   dismissal_date: string | null;
   department_locked: boolean;
   org_department_id: string | null;
+  /** Архивная карточка ФОТ: уникальность sigur_employee_id на них не распространяется. */
+  is_archived: boolean;
 }
 
 export interface ISigurCardRebind {
@@ -197,9 +199,9 @@ export interface IPlanSigurCardRebindsResult {
  * Требования к автопривязке (иначе — unmatched, решает HR):
  * - по нормализованному ФИО ровно ОДНА архивная карточка, привязанная к сотруднику ФОТ,
  *   и ровно ОДНА новая рабочая карточка (двусторонняя однозначность);
- * - сотрудник ещё `active`, без назначенного увольнения (claim проверяется под FOR UPDATE
- *   на этапе применения). Уже уволенных автоматически не реактивируем — возврат в строй
- *   только явным rehire;
+ * - сотрудник ещё `active`, не архивный, без назначенного увольнения (claim и
+ *   `is_archived` перепроверяются под FOR UPDATE на этапе применения). Уже уволенных
+ *   автоматически не реактивируем — возврат в строй только явным rehire;
  * - отдел новой карточки известен и не конфликтует с ручным `department_locked`.
  */
 export function planSigurCardRebinds(
@@ -236,7 +238,9 @@ export function planSigurCardRebinds(
     const newCard = fresh[0];
     const employee = employeeBySigurId.get(oldCard.sigurId)!;
 
-    const notActive = employee.employment_status !== 'active' || employee.dismissal_date != null;
+    const notActive = employee.employment_status !== 'active'
+      || employee.dismissal_date != null
+      || employee.is_archived === true;
     const deptUnknown = newCard.orgDepartmentId == null;
     const deptConflict = employee.department_locked === true
       && newCard.orgDepartmentId != null
@@ -283,10 +287,12 @@ async function applySigurCardRebind(
       org_department_id: string | null;
       position_id: string | null;
       department_locked: boolean;
+      is_archived: boolean;
     }>(
       `SELECT sigur_employee_id, employment_status,
               dismissal_date::text AS dismissal_date,
-              dismissal_apply_started_at, org_department_id, position_id, department_locked
+              dismissal_apply_started_at, org_department_id, position_id, department_locked,
+              is_archived
          FROM employees WHERE id = $1 FOR UPDATE`,
       [plan.employeeId],
     );
@@ -295,6 +301,9 @@ async function applySigurCardRebind(
     if (Number(row.sigur_employee_id) !== plan.oldSigurId) return 'stale';
     if (row.employment_status !== 'active') return 'stale';
     if (row.dismissal_date != null || row.dismissal_apply_started_at != null) return 'stale';
+    // Архивный профиль не под уникальным индексом sigur_employee_id и скрыт в интерфейсе —
+    // привязка к нему дала бы «активную» карточку без видимого сотрудника.
+    if (row.is_archived === true) return 'stale';
 
     const taken = await client.query(
       `SELECT id FROM employees
@@ -598,6 +607,7 @@ export async function syncEmployeesLogic(
     first_name: string | null;
     middle_name: string | null;
     dismissal_date: string | null;
+    is_archived: boolean;
   }[] = [];
   const EMP_PAGE = 1000;
   let empOffset = 0;
@@ -605,7 +615,7 @@ export async function syncEmployeesLogic(
     const existingEmpsPage = await query<typeof existingEmps[number]>(
       `SELECT id, sigur_employee_id, employment_status, department_locked, name_locked,
               org_department_id, position_id, tab_number, full_name, last_name, first_name, middle_name,
-              dismissal_date
+              dismissal_date, is_archived
        FROM employees
        WHERE sigur_employee_id IS NOT NULL
        LIMIT ${EMP_PAGE} OFFSET ${empOffset}`,
@@ -788,6 +798,7 @@ export async function syncEmployeesLogic(
       dismissal_date: e.dismissal_date ?? null,
       department_locked: e.department_locked === true,
       org_department_id: e.org_department_id ?? null,
+      is_archived: e.is_archived === true,
     });
   }
   const rebindPlan = planSigurCardRebinds(
@@ -1094,7 +1105,8 @@ export async function syncEmployeesLogic(
         };
         if (orgDepartmentId) linkFields.org_department_id = orgDepartmentId;
         if (positionId) linkFields.position_id = positionId;
-        if (tabNumber !== (match.tab_number || null)) linkFields.tab_number = tabNumber;
+        // Как и в ветке обновления: пустой tabId из Sigur не затирает существующий номер.
+        if (tabNumber && tabNumber !== (match.tab_number || null)) linkFields.tab_number = tabNumber;
         if (!match.name_locked && (match.full_name || '') !== normalizedFullName) {
           linkFields.full_name = normalizedFullName;
           linkFields.last_name = fio.lastName;

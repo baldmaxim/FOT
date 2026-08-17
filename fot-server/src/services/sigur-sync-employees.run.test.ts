@@ -83,6 +83,7 @@ interface IDbEmployee {
   first_name?: string | null;
   middle_name?: string | null;
   dismissal_date: string | null;
+  is_archived?: boolean;
 }
 
 const dbEmployee = (over: Partial<IDbEmployee> = {}): IDbEmployee => ({
@@ -91,6 +92,7 @@ const dbEmployee = (over: Partial<IDbEmployee> = {}): IDbEmployee => ({
   employment_status: 'active',
   department_locked: false,
   name_locked: false,
+  is_archived: false,
   org_department_id: BRIGADE_LOCAL,
   position_id: 'position-1',
   tab_number: '05510',
@@ -516,6 +518,70 @@ describe('syncEmployeesLogic — смена карточки Sigur (rebind)', ()
     expect(result.errors.some(e => e.includes('card rebind 2568'))).toBe(true);
     expect(insertCalls()).toHaveLength(0);
     expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+  });
+
+  it('архивный локальный профиль не перепривязывается и не порождает второй профиль', async () => {
+    const txCalls = collectTransactionQueries({}, freshRow());
+    setupQueries({ employees: [employee({ is_archived: true })] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(insertCalls()).toHaveLength(0);
+    expect(txCalls.some(c => c.sql.includes('SET sigur_employee_id'))).toBe(false);
+    expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+  });
+
+  it('профиль стал архивным между планом и применением: rebind не выполняется', async () => {
+    const txCalls = collectTransactionQueries({}, freshRow({ is_archived: true }));
+    setupQueries({ employees: [employee()] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(txCalls.some(c => c.sql.includes('SET sigur_employee_id'))).toBe(false);
+    expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+  });
+
+  it('portal-only привязка: пустой tabId не затирает табельный номер', async () => {
+    setupQueries({ employees: [] });
+    h.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employees') && sql.includes('sigur_employee_id IS NOT NULL') && sql.includes('LIMIT')) return [];
+      if (sql.includes('sigur_employee_id IS NULL')) {
+        return [{
+          id: 2568, full_name: NAME, last_name: 'Шарипов', first_name: 'Исмоилджон', middle_name: 'Нуруллоевич',
+          org_department_id: BRIGADE_LOCAL, position_id: 'position-1', tab_number: '05919',
+          department_locked: false, name_locked: false,
+        }];
+      }
+      if (sql.includes('FROM org_departments') && sql.includes('sigur_department_id IS NOT NULL')) {
+        return [
+          { id: ARCHIVE_LOCAL, sigur_department_id: ARCHIVE_SIGUR, name: 'Уволенные', is_active: true },
+          { id: BRIGADE_LOCAL, sigur_department_id: BRIGADE_SIGUR, name: 'бр.Прозорова А.В.', is_active: true },
+        ];
+      }
+      if (sql.includes('parent_id') && sql.includes('org_departments')) {
+        return [{ id: ARCHIVE_LOCAL, parent_id: null }, { id: BRIGADE_LOCAL, parent_id: null }];
+      }
+      if (sql.includes('FROM positions')) return [{ id: 'position-1', sigur_position_id: 501, name: 'Маляр' }];
+      return [];
+    });
+    h.getEmployeesCached.mockResolvedValue([card(NEW_SIGUR, BRIGADE_SIGUR, null)]);
+
+    await syncEmployeesLogic();
+
+    const tabUpdates = h.execute.mock.calls.filter(([sql]) => String(sql).includes('tab_number'));
+    expect(tabUpdates).toHaveLength(0);
+    // Привязка к существующей портальной записи всё равно произошла.
+    expect(h.execute.mock.calls.some(([sql]) => String(sql).includes('sigur_employee_id'))).toBe(true);
   });
 
   it('пустой tabId из Sigur не затирает табельный номер', async () => {
