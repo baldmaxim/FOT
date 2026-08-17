@@ -40,6 +40,28 @@ export const formatPercent = (value: string | number | null | undefined): string
   return `${numeric.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} %`;
 };
 
+/**
+ * Процент с двумя знаками — для расчёта премии: там 107,00 % и 107 % это разные вещи,
+ * потому что коэффициент интерполируется по сотым долям процента.
+ */
+export const formatPercent2 = (value: string | number | null | undefined): string => {
+  if (value === null || value === undefined || value === '') return '—';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '—';
+  return `${numeric.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
+};
+
+/** Коэффициент шкалы: «1,35». Приказ фиксирует два знака (п. 4.3). */
+export const formatCoefficient = (value: string | number | null | undefined): string => {
+  if (value === null || value === undefined || value === '') return '—';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '—';
+  return numeric.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+/** Премия — целые рубли (п. 4.3): «270 000 ₽». */
+export const formatMoneyWhole = formatMoneyShort;
+
 /** «2026-09-01» → «сентябрь 2026». */
 export const formatMonthLabel = (periodMonth: string): string => {
   const [year, month] = periodMonth.split('-').map(Number);

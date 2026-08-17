@@ -15,6 +15,7 @@ import {
   OBJECT_KPI_MAX_AUTO_MONTHS,
   type ObjectKpiReportParams,
 } from '../services/object-kpi-report.service.js';
+import { fetchManagerPremium, EMPTY_PREMIUM_TOTALS } from '../services/object-kpi-premium.service.js';
 import { listObjectKpiHistory } from '../services/object-kpi-history.service.js';
 import { loadAssignedObjectIds, resolveObjectKpiScope } from '../services/object-kpi-scope.service.js';
 import { getContractByObject, listAddenda, listKs2Entries } from '../services/object-kpi.service.js';
@@ -397,8 +398,13 @@ export const objectKpiController = {
   },
 
   /**
-   * ЛК руководителя строительства: только свои объекты за период, без правки.
-   * Отдельный эндпоинт от /report, потому что гард страницы другой (/employee/objects).
+   * ЛК руководителя строительства: свои объекты за период плюс предварительный расчёт
+   * премии по месяцам. Отдельный эндпоинт от /report, потому что гард страницы другой
+   * (/employee/objects).
+   *
+   * Итоги считаются ПО ДОЛЯМ руководителя, а не summarizeCompletion по всем строкам окна:
+   * иначе закреплённый с 14 августа человек видел бы в шапке план и факт за январь–июль,
+   * то есть за месяцы, за которые он не отвечал.
    */
   async getMyObjects(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -407,7 +413,13 @@ export const objectKpiController = {
 
       const employeeId = req.user.employee_id;
       if (!employeeId) {
-        res.json({ success: true, data: [], summary: summarizeCompletion([]) });
+        res.json({
+          success: true,
+          data: [],
+          premium: [],
+          period_totals: EMPTY_PREMIUM_TOTALS,
+          scales: [],
+        });
         return;
       }
 
@@ -420,8 +432,14 @@ export const objectKpiController = {
         to: monthTo,
       });
 
-      const rows = await fetchObjectKpiReport({ monthFrom, monthTo, objectIds });
-      res.json({ success: true, data: rows, summary: summarizeCompletion(rows) });
+      const result = await fetchManagerPremium({ employeeId, objectIds, monthFrom, monthTo });
+      res.json({
+        success: true,
+        data: result.rows,
+        premium: result.premium,
+        period_totals: result.period_totals,
+        scales: result.scales,
+      });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] getMyObjects');
     }

@@ -75,6 +75,37 @@ describe('getReport в авто-режиме', () => {
   });
 });
 
+describe('getMyObjects', () => {
+  const makeRes = () => {
+    const payload: { status?: number; body?: Record<string, unknown> } = {};
+    return {
+      res: {
+        status(code: number) { payload.status = code; return this; },
+        json(body: Record<string, unknown>) { payload.body = body; return this; },
+      },
+      payload,
+    };
+  };
+
+  it('пользователь без карточки сотрудника получает пустой расчёт, а не 500', async () => {
+    const { res, payload } = makeRes();
+
+    await objectKpiController.getMyObjects(
+      { query: { from: '2026-08', to: '2026-08' }, user: { id: 'user-1' } } as never,
+      res as never,
+    );
+
+    expect(payload.body).toMatchObject({
+      success: true,
+      data: [],
+      premium: [],
+      period_totals: { total_plan: '0.00', total_premium: '0' },
+    });
+    // Числового summary в контракте больше нет: итоги считает SQL по долям руководителя.
+    expect(payload.body).not.toHaveProperty('summary');
+  });
+});
+
 describe('mapDatabaseError', () => {
   it('нарушенный CHECK отдаёт 400 с человеческим текстом', () => {
     const result = mapDatabaseError({

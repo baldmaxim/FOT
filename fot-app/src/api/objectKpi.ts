@@ -55,6 +55,88 @@ export interface IObjectKpiSummary {
   completion_pct: number | null;
 }
 
+/**
+ * Строка отчёта в ЛК — с долей руководителя. Доля считается на сервере: денежная
+ * арифметика на фронте запрещена, здесь только показ готовых значений.
+ */
+export interface IObjectKpiMyRow extends IObjectKpiReportRow {
+  my_days: number;
+  total_days: number;
+  my_share_pct: string | null;
+  my_plan_amount: string | null;
+  my_fact_amount: string | null;
+  included_in_premium: boolean;
+  exclusion_reason: 'not_assigned' | 'no_plan' | null;
+}
+
+export type PremiumMonthStatus =
+  | 'no_scale'
+  | 'not_assigned'
+  | 'data_incomplete'
+  | 'no_plan'
+  | 'calculated';
+
+export interface IPremiumMonthObject {
+  skud_object_id: string;
+  object_name: string;
+  my_days: number;
+  total_days: number;
+  my_share_pct: string | null;
+  my_plan_amount: string | null;
+  my_fact_amount: string | null;
+  included_in_premium: boolean;
+  exclusion_reason: 'not_assigned' | 'no_plan' | null;
+  data_quality: IObjectKpiReportRow['data_quality'];
+}
+
+export interface IPremiumMonth {
+  period_month: string;
+  status: PremiumMonthStatus;
+  total_plan: string | null;
+  total_fact: string | null;
+  completion_pct: string | null;
+  coefficient: string | null;
+  interpolation: {
+    lower_pct: string | null;
+    lower_coef: string | null;
+    upper_pct: string | null;
+    upper_coef: string | null;
+  } | null;
+  scale_version_id: string | null;
+  base_amount: string | null;
+  any_assignment_days: number;
+  eligible_assignment_days: number;
+  days_in_month: number;
+  base_prorated: string | null;
+  premium_amount: string | null;
+  objects: IPremiumMonthObject[];
+  incomplete_objects: Array<{ object_name: string; data_quality: IObjectKpiReportRow['data_quality'] }>;
+}
+
+export interface IPremiumPeriodTotals {
+  total_plan: string;
+  total_fact: string;
+  completion_pct: string | null;
+  total_premium: string;
+}
+
+export interface IPremiumScaleVersion {
+  id: string;
+  valid_from: string;
+  base_amount: string;
+  max_premium: string | null;
+  order_reference: string | null;
+  order_url: string | null;
+  points: Array<{ completion_pct: string; coefficient: string }>;
+}
+
+export interface IMyObjectsResponse {
+  data: IObjectKpiMyRow[];
+  premium: IPremiumMonth[];
+  period_totals: IPremiumPeriodTotals;
+  scales: IPremiumScaleVersion[];
+}
+
 export interface IObjectKpiHeadcountRow {
   skud_object_id: string;
   period_month: string;
@@ -285,7 +367,8 @@ export const objectKpiApi = {
     return res.data;
   },
 
-  async getMyObjects(period: IPeriod): Promise<{ data: IObjectKpiReportRow[]; summary: IObjectKpiSummary }> {
+  /** ЛК руководителя: свои объекты, доли и предварительный расчёт премии по месяцам. */
+  async getMyObjects(period: IPeriod): Promise<IMyObjectsResponse> {
     return apiClient.get(`/object-kpi/my/objects${periodQuery(period)}`);
   },
 

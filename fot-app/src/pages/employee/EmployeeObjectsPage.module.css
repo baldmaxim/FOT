@@ -23,15 +23,15 @@
   font-size: 16px;
   min-height: 44px;
   padding: 8px 10px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg-input, var(--bg-secondary));
+  background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
 .summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -40,7 +40,7 @@
   flex-direction: column;
   gap: 4px;
   padding: 12px 14px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-secondary);
 }
@@ -63,7 +63,7 @@
 }
 
 .card {
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-secondary);
   overflow: hidden;
@@ -74,7 +74,7 @@
   flex-direction: column;
   gap: 4px;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border);
 }
 
 .cardHeader h2 {
@@ -97,7 +97,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  min-width: 520px;
+  min-width: 720px;
 }
 
 .table th,
@@ -105,13 +105,18 @@
   padding: 8px 10px;
   text-align: left;
   white-space: nowrap;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border);
 }
 
 .table th {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
+}
+
+.rowNote {
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .empty {
@@ -122,7 +127,7 @@
 
 @media (max-width: 768px) {
   .summary {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -133,5 +138,9 @@
 
   .field input {
     width: 100%;
+  }
+
+  .summary {
+    grid-template-columns: 1fr;
   }
 }

@@ -1,0 +1,290 @@
+/* Панель премии KPI в ЛК руководителя строительства. */
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-secondary);
+}
+
+.heroTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.heroLabel {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.heroMonth {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.heroValue {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.heroValueMuted {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.heroSub {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.heroWarn {
+  font-size: 12px;
+  color: var(--warning);
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+}
+
+.tileLabel {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.tileValue {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* --- Шкала --- */
+
+.scale {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scaleTrack {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.scaleFill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.scaleFillSuccess {
+  background: var(--success);
+}
+
+.scaleFillWarning {
+  background: var(--warning);
+}
+
+.scaleFillError {
+  background: var(--error);
+}
+
+.scaleTicks {
+  position: relative;
+  height: 16px;
+}
+
+.scaleTick {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.scaleZone {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* --- Расчёт строками --- */
+
+.formula {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  font-family: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  overflow-x: auto;
+}
+
+.formula b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* --- Таблица месяцев --- */
+
+.months {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.monthsHead {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 640px;
+}
+
+.table th,
+.table td {
+  padding: 8px 10px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.table th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.row {
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--bg-tertiary);
+}
+
+.rowActive {
+  background: var(--accent-muted);
+}
+
+.status {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Шкала-справка --- */
+
+.scaleDetails {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  padding: 12px 14px;
+}
+
+.scaleSummary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-height: 24px;
+}
+
+.scaleGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.scalePoint {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.scalePoint b {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.scaleMeta {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 430px) {
+  .hero {
+    padding: 16px;
+  }
+
+  .heroValue {
+    font-size: 28px;
+  }
+
+  .tiles {
+    grid-template-columns: 1fr;
+  }
+}
