@@ -12,20 +12,35 @@ export const getEmployeeTimesheetMonthQueryKey = (employeeId: number, monthKey: 
   ['employee-timesheet-summary', employeeId, monthKey, 'with-objects'] as const
 );
 
+const getCurrentMonthKey = (): string => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+};
+
 export const useEmployeeTimesheetMonth = (
   employeeId: number | null | undefined,
   monthKey: string | null | undefined,
   enabled = true,
-) => useQuery({
-  queryKey: employeeId && monthKey
-    ? getEmployeeTimesheetMonthQueryKey(employeeId, monthKey)
-    : ['employee-timesheet-summary', 'disabled'],
-  queryFn: () => timesheetService.getAll({ month: monthKey!, employee_id: employeeId!, include_objects: true }),
-  enabled: Boolean(employeeId && monthKey && enabled),
-  staleTime: 5 * 60_000,
-  gcTime: 15 * 60_000,
-  placeholderData: previousData => previousData,
-});
+) => {
+  // Текущий месяц: сегодняшний день ещё идёт, часы растут с каждым проходом. Глобально
+  // (App.tsx) рефетч при монтировании и возврате на вкладку выключен — вкладка, открытая
+  // с утра, показывала бы часы на момент загрузки, тогда как блок проходов СКУД
+  // перезапрашивается по клику и живёт «сейчас». Для текущего месяца рефетч включаем.
+  const isCurrentMonth = monthKey === getCurrentMonthKey();
+
+  return useQuery({
+    queryKey: employeeId && monthKey
+      ? getEmployeeTimesheetMonthQueryKey(employeeId, monthKey)
+      : ['employee-timesheet-summary', 'disabled'],
+    queryFn: () => timesheetService.getAll({ month: monthKey!, employee_id: employeeId!, include_objects: true }),
+    enabled: Boolean(employeeId && monthKey && enabled),
+    staleTime: isCurrentMonth ? 60_000 : 5 * 60_000,
+    gcTime: 15 * 60_000,
+    refetchOnMount: isCurrentMonth ? 'always' : false,
+    refetchOnWindowFocus: isCurrentMonth,
+    placeholderData: previousData => previousData,
+  });
+};
 
 export const useEmployeeTimesheetMonths = (
   employeeId: number | null | undefined,

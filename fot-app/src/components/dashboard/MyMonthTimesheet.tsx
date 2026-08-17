@@ -246,23 +246,49 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
   const employeeSchedule = employeeId ? timesheetQuery.data?.schedules?.[employeeId] : undefined;
   const calendar = timesheetQuery.data?.calendar ?? null;
 
+  // Панель дня получает срез табеля в момент клика. Чтобы её «Часы» не расходились с
+  // живым итогом проходов, срез переотправляется при каждом обновлении данных месяца
+  // (React Query держит ссылку неизменной, пока содержимое то же, — лишних отправок нет).
+  const lastFocusSyncRef = useRef<{ iso: string; data: unknown } | null>(null);
+
+  const buildDayPayload = (iso: string, y: number, m: number, day: number): IDayFocusPayload => {
+    const entry = entriesByDay.get(day) || null;
+    const isScheduledDayOff = isScheduleDayOff(employeeSchedule, calendar, y, m, day);
+    const fullDayThresholdHours = getFullDayThresholdHoursForDay(employeeSchedule, calendar, y, m, day);
+    const ds = getDayStatus(entry, {
+      showActualHours,
+      fullDayThresholdHours,
+      isScheduledDayOff,
+      isFuture: iso > todayIso,
+    });
+    return {
+      entry,
+      objectEntries: objectEntriesByIso.get(iso) ?? [],
+      ds,
+      isProblematic: PROBLEMATIC_STATUSES.has(ds),
+    };
+  };
+
   // Авто-фокус текущего дня при первом рендере: блок «Проходы» сразу показывает сегодня.
   const didAutoFocusRef = useRef(false);
   useEffect(() => {
     if (didAutoFocusRef.current || !onDayFocus || offset !== 0 || timesheetQuery.isLoading) return;
-    const day = today.getDate();
-    const entry = entriesByDay.get(day) || null;
-    const isScheduledDayOff = isScheduleDayOff(employeeSchedule, calendar, currentYear, currentMonth, day);
-    const fullDayThresholdHours = getFullDayThresholdHoursForDay(employeeSchedule, calendar, currentYear, currentMonth, day);
-    const ds = getDayStatus(entry, { showActualHours, fullDayThresholdHours, isScheduledDayOff, isFuture: false });
-    onDayFocus(todayIso, {
-      entry,
-      objectEntries: objectEntriesByIso.get(todayIso) ?? [],
-      ds,
-      isProblematic: PROBLEMATIC_STATUSES.has(ds),
-    });
+    onDayFocus(todayIso, buildDayPayload(todayIso, currentYear, currentMonth, today.getDate()));
+    lastFocusSyncRef.current = { iso: todayIso, data: timesheetQuery.data };
     didAutoFocusRef.current = true;
-  }, [timesheetQuery.isLoading, offset, onDayFocus, entriesByDay, objectEntriesByIso, employeeSchedule, calendar, currentYear, currentMonth, todayIso, today, showActualHours]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timesheetQuery.isLoading, timesheetQuery.data, offset, onDayFocus, entriesByDay, objectEntriesByIso, employeeSchedule, calendar, currentYear, currentMonth, todayIso, today, showActualHours]);
+
+  // Табель обновился (рефетч текущего месяца) — отдаём панели свежий срез активного дня.
+  useEffect(() => {
+    if (!onDayFocus || !activeDayIso || timesheetQuery.isLoading) return;
+    if (activeDayIso.slice(0, 7) !== monthKey) return;
+    const prev = lastFocusSyncRef.current;
+    if (prev && prev.iso === activeDayIso && prev.data === timesheetQuery.data) return;
+    lastFocusSyncRef.current = { iso: activeDayIso, data: timesheetQuery.data };
+    onDayFocus(activeDayIso, buildDayPayload(activeDayIso, year, month, Number(activeDayIso.slice(8, 10))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timesheetQuery.data, timesheetQuery.isLoading, activeDayIso, monthKey, year, month, onDayFocus, entriesByDay, objectEntriesByIso, employeeSchedule, calendar, todayIso, showActualHours]);
 
   const daysInMonth = new Date(year, month, 0).getDate();
   const firstDow = (() => {
@@ -303,6 +329,8 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
 
   const handleCellClick = (iso: string, entry: TimesheetEntry | null, ds: DayStatus) => {
     if (ds === 'future' && !allowFuture) return;
+    // Тот же срез, что отдал бы эффект синхронизации — помечаем, чтобы он не отправил дубль.
+    lastFocusSyncRef.current = { iso, data: timesheetQuery.data };
     onDayFocus?.(iso, {
       entry,
       objectEntries: objectEntriesByIso.get(iso) ?? [],
