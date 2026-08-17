@@ -23,6 +23,7 @@ import {
   isEmployeeAssignedToDepartmentOnDate,
   listEmployeeMembershipsForDepartmentPeriod,
   listScopedMembersByDepartment,
+  resolveDepartmentIdsForEmployeesInPeriod,
   resolveTimesheetPeriodRange,
   buildMembershipWindowMap,
   isWithinMembershipWindow,
@@ -224,6 +225,63 @@ describe('timesheet-department-assignments.service', () => {
       expect(pgQuery).toHaveBeenCalledTimes(1);
       expect(pgQuery.mock.calls[0][1]).toEqual([['d1', 'd2'], '2026-05-01', '2026-05-31']);
       expect([...res.entries()]).toEqual([[10, 'd1'], [11, 'd1'], [12, 'd2']]);
+    });
+  });
+
+  /**
+   * Отменённое увольнение (`cancelled = true`) не должно тянуть человека в прежний
+   * отдел: после слияния дублей от смены карточки Sigur сотрудник снова активен,
+   * а ошибочное событие остаётся в истории. Фильтр обязан стоять во ВСЕХ чтениях
+   * employee_dismissal_events, иначе табель починится, а выгрузка/скоуп/доступ — нет.
+   */
+  describe('отменённые увольнения исключены из всех чтений истории', () => {
+    const DEPT = 'c9c64ff6-d166-4109-b23f-4bdb1bc45bd0';
+
+    it('членство отдела за период', async () => {
+      pgQuery.mockReset();
+      collectDeptIdsMock.mockResolvedValue([DEPT]);
+      pgQuery
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      await listEmployeeMembershipsForDepartmentPeriod(DEPT, '2026-08-01', '2026-08-31');
+
+      const firedSql = String(pgQuery.mock.calls[1][0]);
+      expect(firedSql).toContain('employee_dismissal_events');
+      expect(firedSql).toContain('de.cancelled = false');
+    });
+
+    it('состав скоупа по отделам', async () => {
+      pgQuery.mockReset();
+      pgQuery.mockResolvedValueOnce([]);
+
+      await listScopedMembersByDepartment([DEPT], '2026-08-01', '2026-08-31');
+
+      expect(String(pgQuery.mock.calls[0][0])).toContain('de.cancelled = false');
+    });
+
+    it('отдел сотрудников за период (выгрузки)', async () => {
+      pgQuery.mockReset();
+      pgQuery.mockResolvedValueOnce([]);
+
+      await resolveDepartmentIdsForEmployeesInPeriod([2568], '2026-08-01', '2026-08-31');
+
+      expect(String(pgQuery.mock.calls[0][0])).toContain('de.cancelled = false');
+    });
+
+    it('проверка доступа на дату', async () => {
+      collectDeptIdsMock.mockResolvedValue([DEPT]);
+      pgQueryOne.mockReset();
+      pgQueryOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ org_department_id: 'ba4f7fb1-d24c-4e7f-9c75-4b27300ef6cc' })
+        .mockResolvedValueOnce(null);
+
+      await isEmployeeAssignedToDepartmentOnDate(2568, DEPT, '2026-08-10');
+
+      expect(String(pgQueryOne.mock.calls[2][0])).toContain('cancelled = false');
     });
   });
 });

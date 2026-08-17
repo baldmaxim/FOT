@@ -149,6 +149,199 @@ export function cleanUpdateFieldsForAction(
   }
 }
 
+// ─── Смена карточки Sigur у одного человека (rebind) ───
+
+/** Карточка из выгрузки Sigur в терминах, нужных планировщику rebind. */
+export interface ISigurRebindCard {
+  sigurId: number;
+  fullName: string;
+  /** Карточка лежит в архивной папке Sigur («Уволенные»). */
+  isDismissalDept: boolean;
+  /** Локальный отдел карточки (null — отдел не смаплен). */
+  orgDepartmentId: string | null;
+}
+
+/** Состояние существующего сотрудника ФОТ, к которому привязана архивная карточка. */
+export interface ISigurRebindEmployee {
+  id: number;
+  sigur_employee_id: number;
+  employment_status: string;
+  dismissal_date: string | null;
+  department_locked: boolean;
+  org_department_id: string | null;
+}
+
+export interface ISigurCardRebind {
+  employeeId: number;
+  oldSigurId: number;
+  newSigurId: number;
+  name: string;
+  nextDeptId: string;
+  prevDeptId: string | null;
+}
+
+export interface IPlanSigurCardRebindsResult {
+  rebinds: ISigurCardRebind[];
+  /** Sigur ID обеих карточек пары — их обычные ветки синка обрабатывать не должны. */
+  handledSigurIds: Set<number>;
+  /** Новые карточки, по которым связь неоднозначна: не вставляем, отправляем в unmatched. */
+  ambiguousSigurIds: Set<number>;
+}
+
+/**
+ * Ищет пары «старая карточка ушла в архив Sigur ↔ новая карточка того же человека
+ * появилась в рабочем отделе» (инцидент 14.08.2026: Шарипов 143276→125698,
+ * Мустафаев 143271→142215). Без этого синк оформляет смену карточки как
+ * «увольнение + приём нового сотрудника» и порождает дубль в табеле.
+ *
+ * Требования к автопривязке (иначе — unmatched, решает HR):
+ * - по нормализованному ФИО ровно ОДНА архивная карточка, привязанная к сотруднику ФОТ,
+ *   и ровно ОДНА новая рабочая карточка (двусторонняя однозначность);
+ * - сотрудник ещё `active`, без назначенного увольнения (claim проверяется под FOR UPDATE
+ *   на этапе применения). Уже уволенных автоматически не реактивируем — возврат в строй
+ *   только явным rehire;
+ * - отдел новой карточки известен и не конфликтует с ручным `department_locked`.
+ */
+export function planSigurCardRebinds(
+  cards: ISigurRebindCard[],
+  employeeBySigurId: Map<number, ISigurRebindEmployee>,
+): IPlanSigurCardRebindsResult {
+  const byName = new Map<string, ISigurRebindCard[]>();
+  for (const card of cards) {
+    if (!card.sigurId || !card.fullName) continue;
+    const key = normalizeFullName(card.fullName, { collapseYo: true });
+    if (!key) continue;
+    const arr = byName.get(key);
+    if (arr) arr.push(card);
+    else byName.set(key, [card]);
+  }
+
+  const rebinds: ISigurCardRebind[] = [];
+  const handledSigurIds = new Set<number>();
+  const ambiguousSigurIds = new Set<number>();
+
+  for (const group of byName.values()) {
+    const archived = group.filter(c => c.isDismissalDept && employeeBySigurId.has(c.sigurId));
+    const fresh = group.filter(c => !c.isDismissalDept && !employeeBySigurId.has(c.sigurId));
+    if (archived.length === 0 || fresh.length === 0) continue;
+
+    // Неоднозначность с любой из сторон — не гадаем: новые карточки в unmatched,
+    // архивные обрабатываются штатной веткой увольнения.
+    if (archived.length !== 1 || fresh.length !== 1) {
+      for (const c of fresh) ambiguousSigurIds.add(c.sigurId);
+      continue;
+    }
+
+    const oldCard = archived[0];
+    const newCard = fresh[0];
+    const employee = employeeBySigurId.get(oldCard.sigurId)!;
+
+    const notActive = employee.employment_status !== 'active' || employee.dismissal_date != null;
+    const deptUnknown = newCard.orgDepartmentId == null;
+    const deptConflict = employee.department_locked === true
+      && newCard.orgDepartmentId != null
+      && newCard.orgDepartmentId !== employee.org_department_id;
+
+    if (notActive || deptUnknown || deptConflict) {
+      ambiguousSigurIds.add(newCard.sigurId);
+      continue;
+    }
+
+    rebinds.push({
+      employeeId: employee.id,
+      oldSigurId: oldCard.sigurId,
+      newSigurId: newCard.sigurId,
+      name: newCard.fullName.trim(),
+      nextDeptId: newCard.orgDepartmentId!,
+      prevDeptId: employee.org_department_id,
+    });
+    handledSigurIds.add(oldCard.sigurId);
+    handledSigurIds.add(newCard.sigurId);
+  }
+
+  return { rebinds, handledSigurIds, ambiguousSigurIds };
+}
+
+const TECHNICAL_ACCESS_SOURCES = ['sigur_sync', 'portal_lifecycle'];
+
+/**
+ * Переносит привязку Sigur со старой карточки на новую в одной транзакции.
+ * Возвращает `stale`, если состояние сотрудника разошлось с планом (увольнение
+ * применилось параллельно, карточку уже занял другой профиль) — тогда пара
+ * уходит в unmatched без изменений в БД.
+ */
+async function applySigurCardRebind(
+  plan: ISigurCardRebind,
+  positionId: string | null,
+): Promise<'applied' | 'stale'> {
+  return withTransaction(async client => {
+    const fresh = await client.query<{
+      sigur_employee_id: number | null;
+      employment_status: string;
+      dismissal_date: string | null;
+      dismissal_apply_started_at: string | null;
+      org_department_id: string | null;
+      position_id: string | null;
+      department_locked: boolean;
+    }>(
+      `SELECT sigur_employee_id, employment_status,
+              dismissal_date::text AS dismissal_date,
+              dismissal_apply_started_at, org_department_id, position_id, department_locked
+         FROM employees WHERE id = $1 FOR UPDATE`,
+      [plan.employeeId],
+    );
+    const row = fresh.rows[0];
+    if (!row) return 'stale';
+    if (Number(row.sigur_employee_id) !== plan.oldSigurId) return 'stale';
+    if (row.employment_status !== 'active') return 'stale';
+    if (row.dismissal_date != null || row.dismissal_apply_started_at != null) return 'stale';
+
+    const taken = await client.query(
+      `SELECT id FROM employees
+        WHERE sigur_employee_id = $1 AND is_archived = false AND id <> $2 LIMIT 1`,
+      [plan.newSigurId, plan.employeeId],
+    );
+    if (taken.rows.length > 0) return 'stale';
+
+    const now = new Date().toISOString();
+    const nextDeptId = row.department_locked === true
+      ? (row.org_department_id ?? null)
+      : plan.nextDeptId;
+    const nextPositionId = positionId ?? row.position_id ?? null;
+
+    await client.query(
+      `UPDATE employees
+          SET sigur_employee_id = $1, org_department_id = $2, position_id = $3, updated_at = $4
+        WHERE id = $5`,
+      [plan.newSigurId, nextDeptId, nextPositionId, now, plan.employeeId],
+    );
+
+    if (nextDeptId) {
+      const prevDeptId = row.org_department_id ?? null;
+      if (prevDeptId && prevDeptId !== nextDeptId) {
+        await client.query(
+          `UPDATE employee_department_access
+              SET is_active = false, updated_at = $1
+            WHERE employee_id = $2 AND department_id = $3 AND source = ANY($4::text[])`,
+          [now, plan.employeeId, prevDeptId, TECHNICAL_ACCESS_SOURCES],
+        );
+      }
+      // Техдоступ пишем тем же client'ом: helper ходит через глобальный пул, и его
+      // падение после коммита оставило бы активного сотрудника невидимым руководителю.
+      await client.query(
+        `INSERT INTO employee_department_access
+           (employee_id, department_id, source, is_active, created_at, updated_at)
+         VALUES ($1, $2, 'sigur_sync', true, $3, $3)
+         ON CONFLICT (employee_id, department_id)
+         DO UPDATE SET is_active = true, updated_at = EXCLUDED.updated_at`,
+        [plan.employeeId, nextDeptId, now],
+      );
+    }
+
+    return 'applied';
+  });
+}
+
 // ─── Типы результатов ───
 
 export interface ISeedPositionsResult {
@@ -186,6 +379,8 @@ export interface ISyncEmployeesResult {
   fired_mismatch_detected: number;
   /** Из них осталось нерешёнными после штатного переноса fired → архив Sigur. */
   fired_mismatch_unresolved: number;
+  /** Смен карточки Sigur, обработанных без создания дубля (rebind). */
+  rebinded: number;
 }
 
 // ─── Защита авто-fire от ложных срабатываний ───
@@ -371,7 +566,7 @@ export async function syncEmployeesLogic(
   if (sigurEmployeesRaw.length === 0) {
     return {
       imported: 0, updated: 0, skipped: 0, total: 0, errors: [], unmatched: [], auto_fired: 0,
-      fired_mismatch_detected: 0, fired_mismatch_unresolved: 0,
+      fired_mismatch_detected: 0, fired_mismatch_unresolved: 0, rebinded: 0,
     };
   }
 
@@ -566,8 +761,59 @@ export async function syncEmployeesLogic(
     }
   }
 
+  // Отдел карточки Sigur + признак архивной папки. Одна формула для основного цикла
+  // и для планировщика rebind — расхождение между ними ломало бы распознавание увольнения.
+  const resolveCardDept = (sigurDeptId: number | null | undefined): {
+    orgDepartmentId: string | null;
+    isDismissalDept: boolean;
+  } => {
+    const orgDepartmentId = sigurDeptId ? sigurDeptToDbId.get(sigurDeptId) || null : null;
+    const isDismissalDept = (archiveDepartmentId != null
+      && sigurDeptId != null
+      && sigurDeptId === archiveDepartmentId)
+      || (archiveLocalDeptId != null && orgDepartmentId === archiveLocalDeptId);
+    return { orgDepartmentId, isDismissalDept };
+  };
+
+  // Pre-pass: смена карточки Sigur у одного человека. Считаем ДО основного цикла —
+  // порядок карточек в выгрузке не гарантирует, что увольнение старой встретится
+  // раньше вставки новой, а параллельный батч updates разрешал бы конфликт гонкой.
+  const employeeBySigurId = new Map<number, ISigurRebindEmployee>();
+  for (const e of existingEmps || []) {
+    if (e.sigur_employee_id == null || employeeBySigurId.has(e.sigur_employee_id)) continue;
+    employeeBySigurId.set(e.sigur_employee_id, {
+      id: e.id,
+      sigur_employee_id: e.sigur_employee_id,
+      employment_status: e.employment_status,
+      dismissal_date: e.dismissal_date ?? null,
+      department_locked: e.department_locked === true,
+      org_department_id: e.org_department_id ?? null,
+    });
+  }
+  const rebindPlan = planSigurCardRebinds(
+    sigurEmployees
+      .filter(emp => emp.id != null && emp.name)
+      .map(emp => {
+        const { orgDepartmentId, isDismissalDept } = resolveCardDept(emp.departmentId);
+        return {
+          sigurId: emp.id as number,
+          fullName: emp.name as string,
+          isDismissalDept,
+          orgDepartmentId,
+        };
+      }),
+    employeeBySigurId,
+  );
+  const handledSigurIds = rebindPlan.handledSigurIds;
+  const ambiguousSigurIds = rebindPlan.ambiguousSigurIds;
+  const cardBySigurId = new Map<number, typeof sigurEmployees[number]>();
+  for (const emp of sigurEmployees) {
+    if (emp.id != null && !cardBySigurId.has(emp.id)) cardBySigurId.set(emp.id, emp);
+  }
+
   let imported = 0;
   let updated = 0;
+  let rebinded = 0;
   let skipped = skippedByWhitelist;
   const errors: string[] = [];
   const inserts: Record<string, unknown>[] = [];
@@ -631,6 +877,55 @@ export async function syncEmployeesLogic(
     }
   }
 
+  // Смена карточки Sigur — отдельным атомарным шагом, до сбора updates: обе карточки
+  // пары исключены из обычных веток (см. handledSigurIds ниже), поэтому увольнение
+  // старой и «приём» новой в этот тик не оформляются вовсе.
+  for (const plan of rebindPlan.rebinds) {
+    const card = cardBySigurId.get(plan.newSigurId);
+    let positionId: string | null = null;
+    if (card?.positionId) positionId = sigurPosToDbId.get(card.positionId) || null;
+    if (!positionId && card?.position) positionId = posNameToDbId.get(card.position.toLowerCase()) || null;
+
+    try {
+      const outcome = await applySigurCardRebind(plan, positionId);
+      if (outcome === 'stale') {
+        // Состояние разошлось с планом — обе карточки в unmatched, пусть решает HR.
+        handledSigurIds.delete(plan.oldSigurId);
+        handledSigurIds.delete(plan.newSigurId);
+        ambiguousSigurIds.add(plan.newSigurId);
+        console.warn(`[syncEmployees] card rebind stale: ${plan.name} (id=${plan.employeeId}) ${plan.oldSigurId} → ${plan.newSigurId}`);
+        continue;
+      }
+      rebinded++;
+      employeeCache.invalidate(plan.employeeId);
+      invalidateTimekeeperScopeCache();
+      console.log(`[syncEmployees] card rebind: ${plan.name} (id=${plan.employeeId}) sigurId ${plan.oldSigurId} → ${plan.newSigurId}`);
+      try {
+        await auditService.log({
+          user_id: null,
+          action: 'SIGUR_SYNC_CARD_REBIND',
+          entity_type: 'employee',
+          entity_id: String(plan.employeeId),
+          details: {
+            employee_id: plan.employeeId,
+            name: plan.name,
+            old_sigur_id: plan.oldSigurId,
+            new_sigur_id: plan.newSigurId,
+            department_id: plan.nextDeptId,
+            previous_department_id: plan.prevDeptId,
+          },
+        });
+      } catch (auditErr) {
+        console.warn('[syncEmployees] card rebind audit failed:', (auditErr as Error).message);
+      }
+    } catch (rebindErr) {
+      handledSigurIds.delete(plan.oldSigurId);
+      handledSigurIds.delete(plan.newSigurId);
+      ambiguousSigurIds.add(plan.newSigurId);
+      errors.push(`card rebind ${plan.employeeId}: ${(rebindErr as Error).message}`);
+    }
+  }
+
   // Собираем обновления и вставки (без DB-запросов в цикле).
   // isDismissalDept — признак архивной папки ПО SIGUR department ID (не по archiveLocalDeptId:
   // локальный маппинг может отсутствовать, а распознавание увольнения обязано работать всегда).
@@ -647,19 +942,16 @@ export async function syncEmployeesLogic(
     if (!fullName) { skipped++; continue; }
 
     const sigurEmpId = emp.id;
+    // Обе карточки уже обработанной пары «смена карточки Sigur» пропускаем целиком:
+    // ни увольнения старой, ни вставки новой в этот тик быть не должно.
+    if (sigurEmpId && handledSigurIds.has(sigurEmpId)) { skipped++; continue; }
     const sigurDeptId = emp.departmentId;
     const sigurDeptName = sigurDeptId ? (sigurDeptToName.get(sigurDeptId) ?? null) : null;
-    // Признак «уволен в Sigur» — точное совпадение с архивной папкой по id (settings.sigur_archive_department_id).
-    // Раньше тут была regex /уволен/i по имени отдела, которая ловила ложные совпадения
-    // (например, любой отдел с подстрокой «уволен» в названии).
-    const orgDepartmentId = sigurDeptId ? sigurDeptToDbId.get(sigurDeptId) || null : null;
-    // Вторая опора — локальный архивный отдел: при пустом `sigur_archive_department_id`
-    // (как было до 14.08.2026) переход в «Уволенные» иначе считался обычным переводом,
-    // и гард `skip-local-dismissal` не срабатывал.
-    const isDismissalDept = (archiveDepartmentId != null
-      && sigurDeptId != null
-      && sigurDeptId === archiveDepartmentId)
-      || (archiveLocalDeptId != null && orgDepartmentId === archiveLocalDeptId);
+    // Признак «уволен в Sigur» — точное совпадение с архивной папкой по id
+    // (settings.sigur_archive_department_id), вторая опора — локальный архивный отдел
+    // (при пустом `sigur_archive_department_id`, как было до 14.08.2026, переход в
+    // «Уволенные» иначе считался обычным переводом). Формула — в resolveCardDept.
+    const { orgDepartmentId, isDismissalDept } = resolveCardDept(sigurDeptId);
     const sigurPosId = emp.positionId;
     const positionText = emp.position;
     const tabNumber = emp.tabId ? emp.tabId.trim() : null;
@@ -741,8 +1033,12 @@ export async function syncEmployeesLogic(
         updateFields.first_name = fio.firstName || null;
         updateFields.middle_name = fio.middleName || null;
       }
-      if ((prev?.tab_number || null) !== tabNumber) {
+      // Пустой tabId из Sigur не затирает существующий табельный номер: у карточки,
+      // выданной взамен старой, поле часто пустое, и синк обнулял бы номер в ФОТ.
+      if (tabNumber && tabNumber !== (prev?.tab_number || null)) {
         updateFields.tab_number = tabNumber;
+      } else if (!tabNumber && prev?.tab_number) {
+        console.log(`[syncEmployees] keep tab_number (empty in Sigur): ${fullName} (sigurId=${sigurEmpId}, tab=${prev.tab_number})`);
       }
       // department_locked НЕ сбрасываем при синке: это ручной override «Sigur не
       // меняет отдел» (см. skip dept change (locked) выше). Снимается только вручную.
@@ -759,6 +1055,21 @@ export async function syncEmployeesLogic(
       // Whitelist ограничивает только вставку новых сотрудников, не обновление существующих.
       // Вставляем только сотрудников из реально выбранных для sync отделов.
       if (isDismissalDept) { skipped++; continue; }
+
+      // Похоже на смену карточки Sigur, но связь неоднозначна (несколько однофамильцев,
+      // кандидат уже уволен, конфликт с department_locked) — вставку не делаем, решает HR.
+      if (sigurEmpId && ambiguousSigurIds.has(sigurEmpId)) {
+        console.warn(`[syncEmployees] ambiguous card rebind: ${fullName} (sigurId=${sigurEmpId}) — skip insert, add to unmatched`);
+        unmatchedList.push({
+          sigurId: sigurEmpId,
+          name: fullName.trim(),
+          departmentName: sigurDeptName || '',
+          positionName: emp.position || '',
+          orgDepartmentId: orgDepartmentId,
+          positionId: positionId,
+        });
+        continue;
+      }
       if (whitelist && (sigurDeptId == null || !whitelist.has(sigurDeptId))) {
         const deptName = (sigurDeptId ? sigurDeptToName.get(sigurDeptId) : null) || `sigurDeptId=${sigurDeptId ?? 'null'}`;
         console.log(`[syncEmployees] skip insert (whitelist): ${fullName} | dept: ${deptName}`);
@@ -1350,11 +1661,11 @@ export async function syncEmployeesLogic(
     }
   }
 
-  console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${unmatchedList.length} unmatched, ${autoFired} auto-fired`);
+  console.log(`[syncEmployees] done: ${imported} imported, ${updated} updated, ${skipped} skipped, ${unmatchedList.length} unmatched, ${autoFired} auto-fired, ${rebinded} card-rebinds`);
 
   // Сбрасываем локальный кэш presence-polling, чтобы первые события нового/изменённого
   // сотрудника сразу привязывались к employee_id без ожидания TTL кэша (10 мин).
-  if (imported > 0 || updated > 0 || autoFired > 0) {
+  if (imported > 0 || updated > 0 || autoFired > 0 || rebinded > 0) {
     invalidatePresencePollingEmployeeCache();
   }
 
@@ -1366,6 +1677,7 @@ export async function syncEmployeesLogic(
     errors,
     unmatched: unmatchedList,
     auto_fired: autoFired,
+    rebinded,
     fired_mismatch_detected: firedMismatch.length,
     fired_mismatch_unresolved: firedMismatchUnresolved,
   };

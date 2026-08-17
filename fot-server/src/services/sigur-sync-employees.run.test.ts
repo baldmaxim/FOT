@@ -150,13 +150,18 @@ const setupQueries = (opts: {
 };
 
 /** Собирает SQL и параметры всех запросов, выполненных внутри withTransaction. */
-const collectTransactionQueries = (rowCountByFragment: Record<string, number> = {}) => {
+const collectTransactionQueries = (
+  rowCountByFragment: Record<string, number> = {},
+  rowsByFragment: Record<string, unknown[]> = {},
+) => {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
   h.withTransaction.mockImplementation(async (fn: (client: unknown) => Promise<unknown>) => fn({
     query: async (sql: string, params: unknown[]) => {
       calls.push({ sql, params });
       const fragment = Object.keys(rowCountByFragment).find(f => sql.includes(f));
-      return { rows: [], rowCount: fragment ? rowCountByFragment[fragment] : 1 };
+      const rowsFragment = Object.keys(rowsByFragment).find(f => sql.includes(f));
+      const rows = rowsFragment ? rowsByFragment[rowsFragment] : [];
+      return { rows, rowCount: fragment ? rowCountByFragment[fragment] : 1 };
     },
   }));
   return calls;
@@ -296,5 +301,243 @@ describe('syncEmployeesLogic — увольнения', () => {
 
     expect(result.auto_fired).toBe(0);
     expect(result.errors.some(e => e.includes('auto-fire 921'))).toBe(true);
+  });
+});
+
+/**
+ * Смена карточки Sigur у одного человека (инцидент 14.08.2026): старая карточка
+ * уходит в архивную папку, новая появляется в рабочем отделе. Без гарда синк
+ * оформлял это как «увольнение + приём нового» и порождал дубль в табеле.
+ */
+describe('syncEmployeesLogic — смена карточки Sigur (rebind)', () => {
+  const OLD_SIGUR = 143276;
+  const NEW_SIGUR = 125698;
+  const NAME = 'Шарипов Исмоилджон Нуруллоевич';
+
+  const employee = (over: Partial<IDbEmployee> = {}): IDbEmployee => dbEmployee({
+    id: 2568,
+    sigur_employee_id: OLD_SIGUR,
+    employment_status: 'active',
+    org_department_id: BRIGADE_LOCAL,
+    tab_number: '05919',
+    full_name: NAME,
+    last_name: 'Шарипов',
+    first_name: 'Исмоилджон',
+    middle_name: 'Нуруллоевич',
+    dismissal_date: null,
+    ...over,
+  });
+
+  const card = (sigurId: number, deptId: number, tabId: string | null = null) => ({
+    id: sigurId, name: NAME, departmentId: deptId, positionId: 501, position: 'Маляр', tabId,
+  });
+
+  /** Строка сотрудника, которую отдаёт SELECT … FOR UPDATE внутри rebind-транзакции. */
+  const freshRow = (over: Record<string, unknown> = {}) => ({
+    'FOR UPDATE': [{
+      sigur_employee_id: OLD_SIGUR,
+      employment_status: 'active',
+      dismissal_date: null,
+      dismissal_apply_started_at: null,
+      org_department_id: BRIGADE_LOCAL,
+      position_id: 'position-1',
+      department_locked: false,
+      ...over,
+    }],
+  });
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.isConfigured.mockResolvedValue(true);
+    h.getSigurSettings.mockResolvedValue({ archiveDepartmentId: ARCHIVE_SIGUR });
+    h.getKnownArchive.mockResolvedValue({ id: ARCHIVE_LOCAL, name: 'Уволенные', source: 'sigur' });
+    h.ensureLocalArchive.mockResolvedValue({ id: ARCHIVE_LOCAL, name: 'Уволенные', source: 'sigur' });
+    h.changeDepartment.mockResolvedValue('applied');
+    h.changePosition.mockResolvedValue(undefined);
+    h.batchMove.mockResolvedValue({ moved: 0, requested: 0, failedIds: [] });
+    h.execute.mockResolvedValue(1);
+    collectTransactionQueries({}, freshRow());
+  });
+
+  const insertCalls = () => h.query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO employees'));
+
+  it('переносит привязку на новую карточку, без вставки и без увольнения', async () => {
+    const txCalls = collectTransactionQueries({}, freshRow());
+    setupQueries({ employees: [employee()] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(1);
+    expect(result.imported).toBe(0);
+    expect(insertCalls()).toHaveLength(0);
+
+    const rebindUpdate = txCalls.find(c => c.sql.includes('SET sigur_employee_id'));
+    expect(rebindUpdate).toBeDefined();
+    expect(rebindUpdate!.params[0]).toBe(NEW_SIGUR);
+    expect(rebindUpdate!.params[1]).toBe(BRIGADE_LOCAL);
+    // Увольнения в этот тик нет — ни в транзакции, ни прямым update.
+    expect(txCalls.some(c => c.sql.includes("employment_status = 'fired'"))).toBe(false);
+    expect(h.execute.mock.calls.filter(([sql]) => String(sql).includes('employment_status'))).toHaveLength(0);
+    // Технический доступ пишется той же транзакцией.
+    expect(txCalls.some(c => c.sql.includes('employee_department_access'))).toBe(true);
+    expect(h.auditLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'SIGUR_SYNC_CARD_REBIND' }));
+  });
+
+  it('обратный порядок карточек в выгрузке даёт тот же результат', async () => {
+    const txCalls = collectTransactionQueries({}, freshRow());
+    setupQueries({ employees: [employee()] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(1);
+    expect(insertCalls()).toHaveLength(0);
+    expect(txCalls.some(c => c.sql.includes('SET sigur_employee_id'))).toBe(true);
+  });
+
+  it('повторный тик после rebind: изменений нет', async () => {
+    setupQueries({ employees: [employee({ sigur_employee_id: NEW_SIGUR })] });
+    h.getEmployeesCached.mockResolvedValue([card(NEW_SIGUR, BRIGADE_SIGUR)]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(result.imported).toBe(0);
+    expect(insertCalls()).toHaveLength(0);
+  });
+
+  it('две новые карточки с тем же ФИО: вставки нет, обе в unmatched', async () => {
+    setupQueries({ employees: [employee()] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+      card(NEW_SIGUR + 1, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(insertCalls()).toHaveLength(0);
+    expect(result.unmatched.map(u => u.sigurId).sort()).toEqual([NEW_SIGUR, NEW_SIGUR + 1].sort());
+  });
+
+  it('две архивные карточки с тем же ФИО: новая уходит в unmatched', async () => {
+    setupQueries({ employees: [employee(), employee({ id: 2569, sigur_employee_id: OLD_SIGUR + 1 })] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(OLD_SIGUR + 1, ARCHIVE_SIGUR),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(insertCalls()).toHaveLength(0);
+    expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+  });
+
+  it('кандидат уже уволен: автоматической реактивации нет, новая карточка в unmatched', async () => {
+    setupQueries({
+      employees: [employee({ employment_status: 'fired', org_department_id: ARCHIVE_LOCAL, dismissal_date: '2026-08-14' })],
+    });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(insertCalls()).toHaveLength(0);
+    expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+    expect(h.execute.mock.calls.filter(([sql]) => String(sql).includes("employment_status = 'active'"))).toHaveLength(0);
+  });
+
+  it('кандидат с назначенным увольнением: rebind не делаем', async () => {
+    setupQueries({ employees: [employee({ dismissal_date: '2026-08-20' })] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+  });
+
+  it('department_locked и другой отдел: в unmatched, сотрудник не остаётся в «Уволенных»', async () => {
+    setupQueries({ employees: [employee({ department_locked: true, org_department_id: 'other-dept-uuid' })] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(insertCalls()).toHaveLength(0);
+    expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+  });
+
+  it('состояние разошлось (увольнение применилось параллельно): изменений нет, карточка в unmatched', async () => {
+    collectTransactionQueries({}, freshRow({ employment_status: 'fired', dismissal_date: '2026-08-14' }));
+    setupQueries({ employees: [employee()] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(insertCalls()).toHaveLength(0);
+    expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+  });
+
+  it('ошибка транзакции rebind: пара в unmatched, прогон продолжается', async () => {
+    h.withTransaction.mockImplementation(async () => { throw new Error('deadlock detected'); });
+    setupQueries({ employees: [employee()] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(OLD_SIGUR, ARCHIVE_SIGUR, '05919'),
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(result.errors.some(e => e.includes('card rebind 2568'))).toBe(true);
+    expect(insertCalls()).toHaveLength(0);
+    expect(result.unmatched.map(u => u.sigurId)).toEqual([NEW_SIGUR]);
+  });
+
+  it('пустой tabId из Sigur не затирает табельный номер', async () => {
+    setupQueries({ employees: [employee({ sigur_employee_id: NEW_SIGUR })] });
+    h.getEmployeesCached.mockResolvedValue([card(NEW_SIGUR, BRIGADE_SIGUR, null)]);
+
+    await syncEmployeesLogic();
+
+    const tabUpdates = h.execute.mock.calls.filter(([sql]) => String(sql).includes('tab_number'));
+    expect(tabUpdates).toHaveLength(0);
+  });
+
+  it('обычный новый сотрудник без пары: вставка как раньше', async () => {
+    setupQueries({ employees: [employee({ sigur_employee_id: NEW_SIGUR })] });
+    h.getEmployeesCached.mockResolvedValue([
+      card(NEW_SIGUR, BRIGADE_SIGUR),
+      { id: 777, name: 'Иванов Иван Иванович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '1' },
+    ]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.rebinded).toBe(0);
+    expect(insertCalls()).toHaveLength(1);
   });
 });

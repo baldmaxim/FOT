@@ -54,6 +54,10 @@ export const AUDIT_ACTIONS = {
   REHIRE_EMPLOYEE: 'REHIRE_EMPLOYEE',
   /** Sigur отдал уволенного в рабочем отделе: синк только фиксирует, реактивации нет. */
   SIGUR_SYNC_FIRED_MISMATCH: 'SIGUR_SYNC_FIRED_MISMATCH',
+  /** Смена карточки Sigur у одного человека: привязка перенесена без создания дубля. */
+  SIGUR_SYNC_CARD_REBIND: 'SIGUR_SYNC_CARD_REBIND',
+  /** Слияние дубля, порождённого сменой карточки Sigur (скрипт merge-sigur-rebound-duplicates). */
+  MERGE_SIGUR_REBOUND_DUPLICATE: 'MERGE_SIGUR_REBOUND_DUPLICATE',
   /** Разбор увольнений, откаченных синком (скрипт fix-sync-reverted-dismissals). */
   FIX_SYNC_REVERTED_DISMISSAL: 'FIX_SYNC_REVERTED_DISMISSAL',
   RECONCILE_EMPLOYEE_REHIRE: 'RECONCILE_EMPLOYEE_REHIRE',

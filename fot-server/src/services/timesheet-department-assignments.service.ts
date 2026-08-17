@@ -270,6 +270,7 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
       WHERE de.from_department_id = ANY($1::uuid[])
         AND de.dismissal_date IS NOT NULL
         AND de.dismissal_date >= $2::date
+        AND de.cancelled = false
       ORDER BY de.employee_id, de.created_at DESC`,
     [deptIds, startDate],
   );
@@ -441,6 +442,7 @@ export async function listScopedMembersByDepartment(
           WHERE de.from_department_id = ANY($1::uuid[])
             AND de.dismissal_date IS NOT NULL
             AND de.dismissal_date >= $2::date
+            AND de.cancelled = false
        ) s
        JOIN employees emp ON emp.id = s.employee_id
       WHERE s.dept_id IS NOT NULL
@@ -504,6 +506,7 @@ export async function resolveDepartmentIdsForEmployeesInPeriod(
           WHERE de.employee_id = ANY($1::int[])
             AND de.dismissal_date IS NOT NULL
             AND de.dismissal_date >= $2::date
+            AND de.cancelled = false
        ) s
        JOIN employees emp ON emp.id = s.employee_id
       WHERE emp.is_archived = false
@@ -572,6 +575,7 @@ export async function isEmployeeAssignedToDepartmentOnDate(
           AND from_department_id = ANY($2::uuid[])
           AND dismissal_date IS NOT NULL
           AND $3::date <= dismissal_date
+          AND cancelled = false
         LIMIT 1`,
       [employeeId, deptIds, date],
     );
