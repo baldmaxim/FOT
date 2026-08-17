@@ -1,21 +1,33 @@
 -- ============================================================================
--- Откат миграции 245 (слияние дублей от смены карточки Sigur)
+-- Откат ручной правки 245 (слияние дублей от смены карточки Sigur)
 -- ============================================================================
 --
--- Возвращает состояние по снимкам из public.migration_245_backup. Порядок шагов
--- обязателен: сначала старому профилю возвращается прежний Sigur ID (иначе вставка
--- дубля упрётся в idx_employees_sigur_id), и только потом воссоздаётся дубль.
+-- Возвращает состояние по снимкам из public.migration_245_backup и журналу моста
+-- public.migration_245_bridge_log.
 --
--- Перед запуском бэкенд должен быть остановлен (иначе синк/поллинг вмешаются).
+-- ПОРЯДОК ОБЯЗАТЕЛЕН (иначе FK не даст вернуть строки ещё не существующему дублю):
+--   1) снять мост: триггеры, функции, восстановить штатную batch_recalculate;
+--   2) вернуть основному профилю сохранённые поля — это освобождает новый Sigur ID;
+--   3) воссоздать дубль из снимка new_employee;
+--   4) вернуть дублю его строки: снимок moved_events + весь post-commit хвост из
+--      журнала моста (события и failure-записи);
+--   5) вернуть событие увольнения из снимка;
+--   6) доступы: снести текущее состояние обоих профилей, вернуть снимок;
+--   7) сводка: снести пересчитанное, вернуть снимок, пересчитать даты из журнала
+--      для ОБОИХ профилей.
+--
+-- Бэкенд на время отката должен быть остановлен: мост снимается первым шагом, и
+-- работающий поллинг снова начал бы писать проходы на canonical-профиль.
 --
 -- ЗАПУСК:
---   предпросмотр (по умолчанию — выполняет всё внутри транзакции и делает ROLLBACK):
+--   предпросмотр (по умолчанию, завершается ROLLBACK):
 --     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f 245_rollback_merge_sigur_rebound_duplicates.sql
 --   применение:
 --     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v apply=on -f 245_rollback_merge_sigur_rebound_duplicates.sql
 --
--- Все шаги считают затронутые строки и сверяют их со снимками; при любом расхождении
--- поднимается EXCEPTION и транзакция откатывается целиком.
+-- Каждый шаг сверяет число затронутых строк со снимками и падает с EXCEPTION.
+-- После успешного отката служебные таблицы можно удалить:
+--   DROP TABLE public.migration_245_backup, public.migration_245_bridge_log, public.migration_245_bridge_map;
 -- ============================================================================
 
 \if :{?apply}
@@ -25,15 +37,44 @@
 
 BEGIN;
 
+SET LOCAL lock_timeout = '3s';
+
+-- ─── 1. Снять мост ───
+
+DROP TRIGGER IF EXISTS migration_245_redirect ON skud_events;
+DROP TRIGGER IF EXISTS migration_245_redirect ON skud_event_failures;
+DROP TRIGGER IF EXISTS migration_245_journal_ins ON skud_events;
+DROP TRIGGER IF EXISTS migration_245_journal_ins ON skud_event_failures;
+DROP TRIGGER IF EXISTS migration_245_journal_upd ON skud_events;
+DROP FUNCTION IF EXISTS public.migration_245_bridge_redirect();
+DROP FUNCTION IF EXISTS public.migration_245_bridge_journal();
+
+DO $$
+DECLARE
+  v_def text;
+BEGIN
+  SELECT row_data->>'definition' INTO v_def
+    FROM public.migration_245_backup
+   WHERE migration_name = '245' AND kind = 'batch_function';
+  IF v_def IS NULL THEN
+    RAISE EXCEPTION 'ОТКАТ 245: снимок штатной batch_recalculate_skud_daily_summary не найден';
+  END IF;
+  EXECUTE v_def;
+  RAISE NOTICE 'ОТКАТ 245: мост снят, штатная batch_recalculate восстановлена';
+END $$;
+
+-- ─── 2–7. Восстановление данных ───
+
 DO $$
 DECLARE
   c_migration CONSTANT text := '245';
 
-  v_pairs        int;
-  v_cnt          bigint;
-  v_expected     bigint;
-  v_bad          text := NULL;
-  r              record;
+  v_pairs      int;
+  v_cnt        bigint;
+  v_expected   bigint;
+  v_bad        text := NULL;
+  v_dates      date[];
+  r            record;
 BEGIN
   SELECT count(*) INTO v_pairs FROM public.migration_245_backup
    WHERE migration_name = c_migration AND kind = 'old_employee';
@@ -54,7 +95,7 @@ BEGIN
     RAISE EXCEPTION 'ОТКАТ 245: у % пар(ы) снимки неполные', v_cnt;
   END IF;
 
-  -- 1. Старый профиль: возврат полей, в т.ч. прежнего Sigur ID (освобождает новый).
+  -- 2. Основной профиль: возврат полей, в т.ч. прежнего Sigur ID (освобождает новый).
   UPDATE employees e
      SET sigur_employee_id            = (b.row_data->>'sigur_employee_id')::int,
          org_department_id            = (b.row_data->>'org_department_id')::uuid,
@@ -70,10 +111,10 @@ BEGIN
    WHERE b.migration_name = c_migration AND b.kind = 'old_employee' AND e.id = b.pair_old_id;
   GET DIAGNOSTICS v_cnt = ROW_COUNT;
   IF v_cnt <> v_pairs THEN
-    RAISE EXCEPTION 'ОТКАТ 245: обновлено % старых профилей, ожидалось %', v_cnt, v_pairs;
+    RAISE EXCEPTION 'ОТКАТ 245: обновлено % основных профилей, ожидалось %', v_cnt, v_pairs;
   END IF;
 
-  -- 2. Дубли (после освобождения Sigur ID).
+  -- 3. Дубли (после освобождения Sigur ID).
   INSERT INTO employees
   SELECT (jsonb_populate_record(NULL::employees, row_data)).*
     FROM public.migration_245_backup
@@ -83,7 +124,43 @@ BEGIN
     RAISE EXCEPTION 'ОТКАТ 245: вставлено % дублей, ожидалось %', v_cnt, v_pairs;
   END IF;
 
-  -- 3. События увольнения (id — uuid).
+  -- 4a. Проходы из снимка moved_events (skud_events.id — bigint, ключ партиции — (id, event_date)).
+  SELECT count(*) INTO v_expected
+    FROM public.migration_245_backup b, LATERAL jsonb_array_elements(b.row_data) ev
+   WHERE b.migration_name = c_migration AND b.kind = 'moved_events';
+
+  UPDATE skud_events s SET employee_id = b.pair_new_id
+    FROM public.migration_245_backup b, LATERAL jsonb_array_elements(b.row_data) ev
+   WHERE b.migration_name = c_migration AND b.kind = 'moved_events'
+     AND s.id = (ev->>'id')::bigint AND s.event_date = (ev->>'event_date')::date;
+  GET DIAGNOSTICS v_cnt = ROW_COUNT;
+  IF v_cnt <> v_expected THEN
+    RAISE EXCEPTION 'ОТКАТ 245: возвращено % проходов из снимка, ожидалось %', v_cnt, v_expected;
+  END IF;
+
+  -- 4b. Post-commit хвост из журнала моста: всё, что прилетело на canonical-профиль
+  -- после слияния, без слияния попало бы на дубль — возвращаем туда же.
+  UPDATE skud_events s SET employee_id = b.pair_new_id
+    FROM public.migration_245_bridge_log g
+    JOIN public.migration_245_backup b
+      ON b.migration_name = c_migration AND b.kind = 'old_employee' AND b.pair_old_id = g.target_id
+   WHERE g.table_name = 'skud_events'
+     AND s.id = g.row_id AND s.event_date = g.event_date
+     AND s.employee_id = g.target_id;
+  GET DIAGNOSTICS v_cnt = ROW_COUNT;
+  RAISE NOTICE 'ОТКАТ 245: возвращено дублям проходов из журнала моста: %', v_cnt;
+
+  UPDATE skud_event_failures f SET employee_id = b.pair_new_id
+    FROM public.migration_245_bridge_log g
+    JOIN public.migration_245_backup b
+      ON b.migration_name = c_migration AND b.kind = 'old_employee' AND b.pair_old_id = g.target_id
+   WHERE g.table_name = 'skud_event_failures'
+     AND f.id = g.row_id
+     AND f.employee_id = g.target_id;
+  GET DIAGNOSTICS v_cnt = ROW_COUNT;
+  RAISE NOTICE 'ОТКАТ 245: возвращено дублям failure-строк из журнала моста: %', v_cnt;
+
+  -- 5. События увольнения (id — uuid).
   UPDATE employee_dismissal_events d
      SET cancelled = (b.row_data->>'cancelled')::boolean,
          reason    =  b.row_data->>'reason'
@@ -95,21 +172,7 @@ BEGIN
     RAISE EXCEPTION 'ОТКАТ 245: восстановлено % событий увольнения, ожидалось %', v_cnt, v_pairs;
   END IF;
 
-  -- 4. Проходы: skud_events.id — bigint, ключ партиции — (id, event_date).
-  SELECT count(*) INTO v_expected
-    FROM public.migration_245_backup b, LATERAL jsonb_array_elements(b.row_data) ev
-   WHERE b.migration_name = c_migration AND b.kind = 'moved_events';
-
-  UPDATE skud_events s SET employee_id = b.pair_new_id
-    FROM public.migration_245_backup b, LATERAL jsonb_array_elements(b.row_data) ev
-   WHERE b.migration_name = c_migration AND b.kind = 'moved_events'
-     AND s.id = (ev->>'id')::bigint AND s.event_date = (ev->>'event_date')::date;
-  GET DIAGNOSTICS v_cnt = ROW_COUNT;
-  IF v_cnt <> v_expected THEN
-    RAISE EXCEPTION 'ОТКАТ 245: возвращено % проходов, в снимке %', v_cnt, v_expected;
-  END IF;
-
-  -- 5. Доступы: снести текущее состояние обоих профилей, вернуть снимок.
+  -- 6. Доступы: снести текущее состояние обоих профилей, вернуть снимок.
   DELETE FROM employee_department_access a
    USING public.migration_245_backup b
    WHERE b.migration_name = c_migration AND b.kind = 'access'
@@ -128,14 +191,14 @@ BEGIN
     RAISE EXCEPTION 'ОТКАТ 245: восстановлено % доступов, в снимке %', v_cnt, v_expected;
   END IF;
 
-  -- 6. Сводка: снести пересчитанное (по backup_dates у основного профиля и всё у дубля),
+  -- 7. Сводка: снести пересчитанное (по affected_dates основного и всё у дубля),
   --    вернуть снимок.
   DELETE FROM skud_daily_summary s
    USING public.migration_245_backup b
    WHERE b.migration_name = c_migration AND b.kind = 'summary'
      AND (s.employee_id = b.pair_new_id
           OR (s.employee_id = b.pair_old_id
-              AND s.date = ANY (ARRAY(SELECT jsonb_array_elements_text(b.row_data->'backup_dates')::date))));
+              AND s.date = ANY (ARRAY(SELECT jsonb_array_elements_text(b.row_data->'affected_dates')::date))));
 
   SELECT count(*) INTO v_expected
     FROM public.migration_245_backup b,
@@ -152,9 +215,27 @@ BEGIN
     RAISE EXCEPTION 'ОТКАТ 245: восстановлено % строк сводки, в снимке %', v_cnt, v_expected;
   END IF;
 
+  -- Пересчёт дат post-commit событий для ОБОИХ профилей пары (штатной функцией,
+  -- мост уже снят — подмены id не будет).
+  FOR r IN
+    SELECT b.pair_old_id, b.pair_new_id,
+           ARRAY(SELECT DISTINCT g.event_date
+                   FROM public.migration_245_bridge_log g
+                  WHERE g.table_name = 'skud_events' AND g.target_id = b.pair_old_id
+                    AND g.event_date IS NOT NULL) AS dates
+      FROM public.migration_245_backup b
+     WHERE b.migration_name = c_migration AND b.kind = 'old_employee'
+  LOOP
+    IF array_length(r.dates, 1) IS NOT NULL THEN
+      PERFORM public.batch_recalculate_skud_daily_summary(
+        (SELECT jsonb_agg(jsonb_build_object('emp_id', e.emp, 'date', d))
+           FROM unnest(r.dates) AS d, (VALUES (r.pair_old_id), (r.pair_new_id)) AS e(emp))
+      );
+    END IF;
+  END LOOP;
+
   -- ─── Постусловия отката ───
 
-  -- Оба профиля снова имеют исходные Sigur ID.
   FOR r IN
     SELECT b.pair_old_id, b.pair_new_id, (b.row_data->>'sigur_employee_id')::int AS old_sigur
       FROM public.migration_245_backup b
@@ -179,7 +260,21 @@ BEGIN
     JOIN skud_events s ON s.id = (ev->>'id')::bigint AND s.event_date = (ev->>'event_date')::date
    WHERE b.migration_name = c_migration AND b.kind = 'moved_events'
      AND s.employee_id IS DISTINCT FROM b.pair_new_id;
-  IF v_cnt > 0 THEN v_bad := concat_ws('; ', v_bad, format('%s проходов принадлежат не дублю', v_cnt)); END IF;
+  IF v_cnt > 0 THEN v_bad := concat_ws('; ', v_bad, format('%s проходов из снимка принадлежат не дублю', v_cnt)); END IF;
+
+  -- Журнальные строки тоже вернулись дублю.
+  SELECT count(*) INTO v_cnt
+    FROM public.migration_245_bridge_log g
+    JOIN public.migration_245_backup b
+      ON b.migration_name = c_migration AND b.kind = 'old_employee' AND b.pair_old_id = g.target_id
+    JOIN skud_events s ON s.id = g.row_id AND s.event_date = g.event_date
+   WHERE g.table_name = 'skud_events' AND s.employee_id = g.target_id;
+  IF v_cnt > 0 THEN v_bad := concat_ws('; ', v_bad, format('%s журнальных проходов остались на основном профиле', v_cnt)); END IF;
+
+  -- Мост снят полностью.
+  SELECT count(*) INTO v_cnt FROM pg_trigger
+   WHERE NOT tgisinternal AND tgname IN ('migration_245_redirect', 'migration_245_journal_ins', 'migration_245_journal_upd');
+  IF v_cnt > 0 THEN v_bad := concat_ws('; ', v_bad, format('остались триггеры моста: %s', v_cnt)); END IF;
 
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'ОТКАТ 245: постусловия не выполнены: %', v_bad;
@@ -194,8 +289,8 @@ SELECT e.id, e.full_name, e.tab_number, e.sigur_employee_id, e.employment_status
        (SELECT count(*) FROM skud_events s WHERE s.employee_id = e.id) AS events
 FROM employees e
 WHERE e.id IN (
-  SELECT pair_old_id FROM public.migration_245_backup WHERE migration_name = '245'
-  UNION SELECT pair_new_id FROM public.migration_245_backup WHERE migration_name = '245'
+  SELECT pair_old_id FROM public.migration_245_backup WHERE migration_name = '245' AND kind = 'old_employee'
+  UNION SELECT pair_new_id FROM public.migration_245_backup WHERE migration_name = '245' AND kind = 'old_employee'
 )
 ORDER BY e.id;
 

@@ -1,6 +1,11 @@
 -- ============================================================================
--- Миграция 245: слияние дублей, порождённых сменой карточки Sigur
+-- Ручная правка 245: слияние дублей, порождённых сменой карточки Sigur
 -- ============================================================================
+--
+-- ЭТОТ ФАЙЛ НЕ ПРИМЕНЯЕТСЯ АВТОМАТИЧЕСКИ. Он лежит в docs/manual-migrations/,
+-- потому что содержит psql-мета-команды и обязан выполняться осознанно —
+-- с предпросмотром, бэкапом БД и проверкой результата. Файл отката:
+-- docs/rollbacks/245_rollback_merge_sigur_rebound_duplicates.sql
 --
 -- Симптом (14.08.2026, бр.Прозорова А.В. и бр.Амонова М.Н.): человек стоит в
 -- табеле двумя строками. Один тик syncEmployees увидел старую карточку Sigur в
@@ -12,62 +17,65 @@
 --
 -- ПРАВИЛО СЛИЯНИЯ: остаётся старый FOT-профиль со всеми кадровыми данными,
 -- табельным номером и исходной hire_date. От дубля берутся ТОЛЬКО новый Sigur ID,
--- актуальный отдел и должность. Любое иное непустое отличие в дубле (документы,
--- оклад, гражданство и т.п.) останавливает миграцию — такие случаи разбираются руками.
+-- актуальный отдел и должность. Любое иное непустое отличие в дубле останавливает
+-- правку — такие случаи разбираются руками.
+--
+-- ONLINE-BRIDGE: бэкенд останавливать НЕ нужно. Presence-polling кэширует
+-- sigurId → employee_id на 10 минут (employees WHERE is_archived = false), и после
+-- удаления дубля до 10 минут продолжал бы слать вставки со старым employee_id.
+-- FK-ошибка при этом роняет ВЕСЬ батч событий всех сотрудников, а checkpoint
+-- двигается по успевшему параллельному батчу — события могли бы потеряться.
+-- Поэтому в начале той же транзакции ставится мост:
+--   1) BEFORE INSERT на skud_events и skud_event_failures — подмена 13403 → 2568,
+--      13404 → 2550 (маппинг в public.migration_245_bridge_map);
+--   2) AFTER INSERT на тех же таблицах и AFTER UPDATE OF employee_id на skud_events —
+--      журнал public.migration_245_bridge_log по РЕАЛЬНО вставленным/перепривязанным
+--      строкам canonical-профилей (нужен откату, чтобы вернуть post-commit хвост);
+--   3) временная версия public.batch_recalculate_skud_daily_summary, подменяющая
+--      emp_id по тому же маппингу: штатный пересчёт берёт ключи из исходного батча,
+--      то есть со старым id, и без подмены пытался бы писать сводку на удалённый
+--      профиль. Оригинал функции сохраняется в backup и восстанавливается на cleanup.
+-- Триггеры создаются ДО проверок и удаления профилей: CREATE TRIGGER берёт
+-- SHARE ROW EXCLUSIVE (конфликтует с INSERT/UPDATE/DELETE, но не с SELECT) и держит
+-- его до конца транзакции — это и есть граница между «старыми» и «новыми» вставками.
+-- lock_timeout = 3s: при занятой таблице лучше упасть с полным откатом и повторить,
+-- чем выстроить очередь запросов.
 --
 -- ПРЕДУСЛОВИЯ:
---   1) задеплоен бэкенд с rebind-гардом (planSigurCardRebinds/applySigurCardRebind,
---      сохранение tab_number, is_archived-гард, cancelled-фильтр) — иначе ближайший
---      тик синка пересоздаст дубли;
+--   1) задеплоен бэкенд с rebind-гардом — иначе ближайший тик синка пересоздаст дубли;
 --   2) сделан снапшот/бэкап БД;
---   3) остановлены ВСЕ экземпляры бэкенда: web/cluster-воркеры, presence-polling,
---      sigur-monitor и все планировщики. Presence-polling кэширует sigurId → employee_id
---      на 10 минут и привязал бы свежие проходы к удаляемому профилю. Проходы не
---      теряются — поллинг курсорный и доберёт их после старта;
---   4) min_total_events (619 и 1193, снято 17.08.2026) — это МИНИМУМ. Рост суммы
---      нормален (человек ходит по новой карточке), уменьшение останавливает миграцию.
---      Фактические числа печатаются в предпросмотре — зафиксировать их и сверить с
---      итогом после применения.
+--   3) min_total_events (619 и 1193, снято 17.08.2026) — это МИНИМУМ. Рост суммы
+--      нормален (человек ходит по новой карточке), уменьшение останавливает правку.
 --
 -- ЗАПУСК:
---   предпросмотр (по умолчанию): изменения выполняются ВНУТРИ транзакции и
---   откатываются ROLLBACK в конце — это не read-only прогон, запускать только
---   после остановки бэкенда:
+--   предпросмотр (по умолчанию; выполняет всё в транзакции, прогоняет самопроверку
+--   моста и завершается ROLLBACK):
 --     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f 245_merge_sigur_rebound_duplicates.sql
 --   применение:
 --     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v apply=on -f 245_merge_sigur_rebound_duplicates.sql
 --
--- Что делает (одна транзакция):
---   1) предохранители по каждой паре: полное ожидаемое состояние обоих профилей
---      (ФИО, оба Sigur ID, статус, дата увольнения, отдел, табельный, is_archived,
---      department_locked, отсутствие claim), пустая история employee_assignments,
---      ровно одно неотменённое событие увольнения нужной даты, отсутствие FK-ссылок
---      на дубль вне skud_events / skud_daily_summary / employee_department_access,
---      отсутствие в дубле «ценных» данных, сумма проходов не ниже минимума,
---      отсутствие у дубля проходов раньше дня смены карточки;
---   2) backup в public.migration_245_backup (шесть видов на пару);
---   3) перенос Sigur ID + отдел/должность на старый профиль, active, сброс
---      dismissal_date/claim и всех трёх exclusion-полей; пометка ошибочного события
---      cancelled = true (второе событие НЕ вставляется); перенос проходов; пересчёт
---      сводки по v_affected_dates; доступы; удаление дубля; аудит;
---   4) постусловия по каждой паре — иначе EXCEPTION и откат всей транзакции.
---
--- v_affected_dates = даты переносимых проходов ∪ (дата − 1) для каждой: расчёт смены
--- читает события следующих суток (см. 168_skud_night_shift_gate.sql), поэтому перенос
--- прохода за день D меняет и сводку за D−1. Для текущих пар это 13–17.08.
---
--- Повторный запуск: уже слитая пара распознаётся и пропускается, но только если
--- целевое состояние ПОЛНОЕ (см. ветку «уже слито ранее»).
---
--- ПОСЛЕ ПОДТВЕРЖДЕНИЯ РЕЗУЛЬТАТА: удалить backup-таблицу (в ней снимки кадровых
--- данных) — DROP TABLE public.migration_245_backup;
---
--- ОТКАТ ПОСЛЕ COMMIT: отдельный исполняемый файл
---   245_rollback_merge_sigur_rebound_duplicates.sql
--- Он восстанавливает состояние по снимкам в правильном порядке (старый профиль →
--- дубль → событие → проходы → доступы → сводка), сверяет число затронутых строк со
--- снимками и падает с EXCEPTION при любом расхождении. У него тот же режим запуска:
--- по умолчанию предпросмотр с ROLLBACK, применение — с -v apply=on.
+-- CLEANUP МОСТА — не «через сутки»: долгий ручной syncEvents может держать старую
+-- карту дольше TTL. Снимать только после полного рестарта ВСЕХ инстансов бэкенда:
+--   BEGIN;
+--   DROP TRIGGER IF EXISTS migration_245_redirect ON skud_events;
+--   DROP TRIGGER IF EXISTS migration_245_redirect ON skud_event_failures;
+--   DROP TRIGGER IF EXISTS migration_245_journal_ins ON skud_events;
+--   DROP TRIGGER IF EXISTS migration_245_journal_ins ON skud_event_failures;
+--   DROP TRIGGER IF EXISTS migration_245_journal_upd ON skud_events;
+--   DROP FUNCTION IF EXISTS public.migration_245_bridge_redirect();
+--   DROP FUNCTION IF EXISTS public.migration_245_bridge_journal();
+--   -- вернуть штатную batch-функцию из снимка:
+--   DO $cleanup$
+--   DECLARE v_def text;
+--   BEGIN
+--     SELECT row_data->>'definition' INTO v_def FROM public.migration_245_backup
+--      WHERE migration_name = '245' AND kind = 'batch_function';
+--     IF v_def IS NULL THEN RAISE EXCEPTION 'CLEANUP 245: снимок batch-функции не найден'; END IF;
+--     EXECUTE v_def;
+--   END $cleanup$;
+--   COMMIT;
+--   -- после подтверждения результата (в backup лежат кадровые данные):
+--   -- DROP TABLE public.migration_245_backup, public.migration_245_bridge_log, public.migration_245_bridge_map;
 -- ============================================================================
 
 -- Предпросмотр по умолчанию: apply включается только явным -v apply=on.
@@ -78,11 +86,19 @@
 
 BEGIN;
 
--- Backup-таблица (постоянная): снимки всех изменяемых данных, по записи на (пара, вид).
+-- Режим виден DO-блокам: самопроверка моста гоняется только в предпросмотре.
+SELECT set_config('migration245.apply', :'apply', true);
+
+-- CREATE TRIGGER берёт SHARE ROW EXCLUSIVE; при занятой таблице лучше упасть.
+SET LOCAL lock_timeout = '3s';
+
+-- ─── Служебные таблицы ───
+
+-- Снимки всех изменяемых данных, по записи на (пара, вид).
 CREATE TABLE IF NOT EXISTS public.migration_245_backup (
   backup_at      timestamptz NOT NULL DEFAULT now(),
   migration_name text        NOT NULL DEFAULT '245',
-  kind           text        NOT NULL,   -- old_employee | new_employee | dismissal_event | moved_events | access | summary
+  kind           text        NOT NULL,   -- old_employee | new_employee | dismissal_event | moved_events | access | summary | batch_function
   pair_old_id    bigint      NOT NULL,
   pair_new_id    bigint      NOT NULL,
   employee_id    bigint,
@@ -90,20 +106,153 @@ CREATE TABLE IF NOT EXISTS public.migration_245_backup (
   CONSTRAINT migration_245_backup_uniq UNIQUE (migration_name, pair_old_id, pair_new_id, kind)
 );
 
+-- Маппинг моста: из какого профиля в какой перенаправлять записи.
+CREATE TABLE IF NOT EXISTS public.migration_245_bridge_map (
+  source_id bigint PRIMARY KEY,
+  target_id bigint NOT NULL
+);
+
+-- Журнал моста: реально вставленные/перепривязанные строки canonical-профилей
+-- после слияния. Нужен откату, чтобы вернуть дублю post-commit хвост.
+CREATE TABLE IF NOT EXISTS public.migration_245_bridge_log (
+  id         bigserial PRIMARY KEY,
+  logged_at  timestamptz NOT NULL DEFAULT now(),
+  table_name text        NOT NULL,   -- skud_events | skud_event_failures
+  row_id     bigint      NOT NULL,
+  event_date date,
+  target_id  bigint      NOT NULL
+);
+CREATE INDEX IF NOT EXISTS migration_245_bridge_log_row_idx
+  ON public.migration_245_bridge_log (table_name, row_id);
+
 -- В снимках лежат кадровые данные: доступ только владельцу/суперпользователю.
 -- RLS включаем БЕЗ FORCE намеренно: FORCE распространяется и на владельца, из-за чего
--- повторный прогон миграции не смог бы писать собственный backup.
+-- повторный прогон не смог бы писать собственный backup.
 REVOKE ALL ON public.migration_245_backup FROM PUBLIC;
+REVOKE ALL ON public.migration_245_bridge_log FROM PUBLIC;
+REVOKE ALL ON public.migration_245_bridge_map FROM PUBLIC;
 DO $$
+DECLARE r record;
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE ALL ON public.migration_245_backup FROM anon';
-  END IF;
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE ALL ON public.migration_245_backup FROM authenticated';
-  END IF;
+  FOR r IN SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated') LOOP
+    EXECUTE format('REVOKE ALL ON public.migration_245_backup, public.migration_245_bridge_log, public.migration_245_bridge_map FROM %I', r.rolname);
+  END LOOP;
 END $$;
 ALTER TABLE public.migration_245_backup ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.migration_245_bridge_log ENABLE ROW LEVEL SECURITY;
+
+INSERT INTO public.migration_245_bridge_map (source_id, target_id)
+VALUES (13403, 2568), (13404, 2550)
+ON CONFLICT (source_id) DO UPDATE SET target_id = EXCLUDED.target_id;
+
+-- ─── Мост ───
+
+-- Снимок штатной batch-функции ДО подмены (для cleanup и отката).
+INSERT INTO public.migration_245_backup (kind, pair_old_id, pair_new_id, employee_id, row_data)
+SELECT 'batch_function', 0, 0, NULL,
+       jsonb_build_object('definition', pg_get_functiondef('public.batch_recalculate_skud_daily_summary(jsonb)'::regprocedure))
+ON CONFLICT ON CONSTRAINT migration_245_backup_uniq DO NOTHING;
+
+CREATE OR REPLACE FUNCTION public.migration_245_bridge_redirect()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $bridge$
+DECLARE
+  v_target bigint;
+BEGIN
+  SELECT target_id INTO v_target FROM public.migration_245_bridge_map WHERE source_id = NEW.employee_id;
+  IF v_target IS NOT NULL THEN
+    NEW.employee_id := v_target;
+  END IF;
+  RETURN NEW;
+END;
+$bridge$;
+
+-- Логическое имя таблицы приходит аргументом: у партиционированной skud_events
+-- клонированный триггер видит в TG_TABLE_NAME имя ПАРТИЦИИ (skud_events_2026_08),
+-- и журнал оказался бы под именем, по которому откат строки не найдёт.
+CREATE OR REPLACE FUNCTION public.migration_245_bridge_journal()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $journal$
+BEGIN
+  INSERT INTO public.migration_245_bridge_log (table_name, row_id, event_date, target_id)
+  VALUES (COALESCE(TG_ARGV[0], TG_TABLE_NAME), NEW.id, NEW.event_date, NEW.employee_id);
+  RETURN NULL;
+END;
+$journal$;
+
+-- Подмена: WHEN с литеральным списком (подзапросы в WHEN недопустимы), поэтому
+-- для не-дублей триггер не вызывается вовсе — накладных расходов на горячем пути нет.
+DROP TRIGGER IF EXISTS migration_245_redirect ON skud_events;
+CREATE TRIGGER migration_245_redirect
+  BEFORE INSERT ON skud_events
+  FOR EACH ROW WHEN (NEW.employee_id = ANY (ARRAY[13403, 13404]))
+  EXECUTE FUNCTION public.migration_245_bridge_redirect();
+
+DROP TRIGGER IF EXISTS migration_245_redirect ON skud_event_failures;
+CREATE TRIGGER migration_245_redirect
+  BEFORE INSERT ON skud_event_failures
+  FOR EACH ROW WHEN (NEW.employee_id = ANY (ARRAY[13403, 13404]))
+  EXECUTE FUNCTION public.migration_245_bridge_redirect();
+
+-- Журнал: пишем ПОСЛЕ реальной вставки (в BEFORE строка ещё может отсеяться по
+-- ON CONFLICT DO NOTHING). Логируем все вставки canonical-профилей, а не только
+-- перенаправленные: после протухания кэша события приходят сразу на canonical id,
+-- и откату нужен весь post-commit хвост.
+DROP TRIGGER IF EXISTS migration_245_journal_ins ON skud_events;
+CREATE TRIGGER migration_245_journal_ins
+  AFTER INSERT ON skud_events
+  FOR EACH ROW WHEN (NEW.employee_id = ANY (ARRAY[2568, 2550]))
+  EXECUTE FUNCTION public.migration_245_bridge_journal('skud_events');
+
+DROP TRIGGER IF EXISTS migration_245_journal_ins ON skud_event_failures;
+CREATE TRIGGER migration_245_journal_ins
+  AFTER INSERT ON skud_event_failures
+  FOR EACH ROW WHEN (NEW.employee_id = ANY (ARRAY[2568, 2550]))
+  EXECUTE FUNCTION public.migration_245_bridge_journal('skud_event_failures');
+
+-- Перепривязку делает и bulk_update_employee_ids — её тоже журналируем.
+DROP TRIGGER IF EXISTS migration_245_journal_upd ON skud_events;
+CREATE TRIGGER migration_245_journal_upd
+  AFTER UPDATE OF employee_id ON skud_events
+  FOR EACH ROW WHEN (NEW.employee_id = ANY (ARRAY[2568, 2550])
+                     AND NEW.employee_id IS DISTINCT FROM OLD.employee_id)
+  EXECUTE FUNCTION public.migration_245_bridge_journal('skud_events');
+
+-- Временная версия штатного пересчёта: отличается от оригинала только подменой
+-- emp_id по bridge_map. AFTER-триггер с пересчётом не используется намеренно —
+-- тяжёлый пересчёт внутри вставки батча грозит timeout/deadlock и откатом вставки.
+CREATE OR REPLACE FUNCTION public.batch_recalculate_skud_daily_summary(p_pairs jsonb)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_catalog'
+AS $function$
+DECLARE
+  v_rec RECORD;
+BEGIN
+  FOR v_rec IN
+    SELECT DISTINCT COALESCE(m.target_id, s.emp_id) AS emp_id, s.d
+    FROM (
+      SELECT (x->>'emp_id')::bigint AS emp_id,
+             (x->>'date')::date     AS d
+      FROM jsonb_array_elements(p_pairs) x
+      UNION ALL
+      SELECT (x->>'emp_id')::bigint,
+             (x->>'date')::date - 1
+      FROM jsonb_array_elements(p_pairs) x
+    ) s
+    LEFT JOIN public.migration_245_bridge_map m ON m.source_id = s.emp_id
+    WHERE s.emp_id IS NOT NULL
+      AND s.d IS NOT NULL
+  LOOP
+    PERFORM recalculate_skud_daily_summary(NULL::uuid, v_rec.emp_id, v_rec.d);
+  END LOOP;
+END;
+$function$;
+
+-- ─── Слияние ───
 
 DO $$
 DECLARE
@@ -152,8 +301,8 @@ DECLARE
   v_new_events    bigint;
   v_moved         bigint;
   v_total         bigint;
+  v_event_dates   date[];
   v_affected      date[];
-  v_backup_dates  date[];
   v_backup_old    jsonb;
   v_backup_new    jsonb;
   v_backup_sum    jsonb;
@@ -176,7 +325,7 @@ BEGIN
 
     SELECT * INTO v_old FROM employees WHERE id = v_old_id FOR UPDATE;
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — старый профиль не найден', v_name, v_old_id;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — старый профиль не найден', v_name, v_old_id;
     END IF;
 
     SELECT * INTO v_new FROM employees WHERE id = v_new_id FOR UPDATE;
@@ -210,7 +359,6 @@ BEGIN
         END IF;
       END IF;
 
-      -- Ровно одно ОТМЕНЁННОЕ событие нужной даты и ни одного неотменённого.
       SELECT count(*) INTO v_cnt FROM employee_dismissal_events
        WHERE employee_id = v_old_id AND dismissal_date = v_dismissal AND cancelled = true;
       IF v_cnt <> 1 THEN v_bad := concat_ws('; ', v_bad, format('отменённых событий увольнения от %s: %s', v_dismissal, v_cnt)); END IF;
@@ -233,7 +381,7 @@ BEGIN
          AND kind IN ('old_employee', 'new_employee', 'dismissal_event', 'moved_events', 'access', 'summary');
       IF v_cnt <> 6 THEN v_bad := concat_ws('; ', v_bad, format('видов backup %s из 6', v_cnt)); END IF;
 
-      -- Строка сводки должна быть за КАЖДУЮ дату из backup'а, включая дни без входа
+      -- Строка сводки должна быть за КАЖДУЮ затронутую дату, включая дни без входа
       -- (batch_recalculate пишет для них is_present = false).
       IF v_backup_sum IS NOT NULL THEN
         SELECT count(*) INTO v_cnt
@@ -261,52 +409,52 @@ BEGIN
       END LOOP;
 
       IF v_bad IS NOT NULL THEN
-        RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — дубль % отсутствует, но слияние неполное: %',
+        RAISE EXCEPTION 'ПРАВКА 245: % (%) — дубль % отсутствует, но слияние неполное: %',
           v_name, v_old_id, v_new_id, v_bad;
       END IF;
 
-      RAISE NOTICE 'МИГРАЦИЯ 245: % (%) — уже слито ранее, пропуск', v_name, v_old_id;
+      RAISE NOTICE 'ПРАВКА 245: % (%) — уже слито ранее, пропуск', v_name, v_old_id;
       CONTINUE;
     END IF;
 
     -- ─── Предохранители ───
     IF lower(regexp_replace(translate(v_old.full_name, 'ёЁ', 'еЕ'), '\s+', ' ', 'g'))
        IS DISTINCT FROM lower(regexp_replace(translate(v_name, 'ёЁ', 'еЕ'), '\s+', ' ', 'g')) THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — ФИО старого профиля не совпадает («%»)', v_name, v_old_id, v_old.full_name;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — ФИО старого профиля не совпадает («%»)', v_name, v_old_id, v_old.full_name;
     END IF;
     IF lower(regexp_replace(translate(v_new.full_name, 'ёЁ', 'еЕ'), '\s+', ' ', 'g'))
        IS DISTINCT FROM lower(regexp_replace(translate(v_name, 'ёЁ', 'еЕ'), '\s+', ' ', 'g')) THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — ФИО дубля не совпадает («%»)', v_name, v_new_id, v_new.full_name;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — ФИО дубля не совпадает («%»)', v_name, v_new_id, v_new.full_name;
     END IF;
     IF v_old.sigur_employee_id IS DISTINCT FROM v_old_sigur THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — sigur_employee_id = %, ожидался %', v_name, v_old_id, v_old.sigur_employee_id, v_old_sigur;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — sigur_employee_id = %, ожидался %', v_name, v_old_id, v_old.sigur_employee_id, v_old_sigur;
     END IF;
     IF v_old.employment_status IS DISTINCT FROM 'fired' THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — старый профиль не fired (%)', v_name, v_old_id, v_old.employment_status;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — старый профиль не fired (%)', v_name, v_old_id, v_old.employment_status;
     END IF;
     IF v_old.dismissal_date IS DISTINCT FROM v_dismissal THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — dismissal_date = %, ожидалась %', v_name, v_old_id, v_old.dismissal_date, v_dismissal;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — dismissal_date = %, ожидалась %', v_name, v_old_id, v_old.dismissal_date, v_dismissal;
     END IF;
     IF v_old.tab_number IS DISTINCT FROM v_tab THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — tab_number = %, ожидался %', v_name, v_old_id, v_old.tab_number, v_tab;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — tab_number = %, ожидался %', v_name, v_old_id, v_old.tab_number, v_tab;
     END IF;
     IF v_old.is_archived IS DISTINCT FROM false OR v_new.is_archived IS DISTINCT FROM false THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % — архивный профиль в паре (старый=%, дубль=%)', v_name, v_old.is_archived, v_new.is_archived;
+      RAISE EXCEPTION 'ПРАВКА 245: % — архивный профиль в паре (старый=%, дубль=%)', v_name, v_old.is_archived, v_new.is_archived;
     END IF;
     IF v_old.department_locked IS DISTINCT FROM false OR v_new.department_locked IS DISTINCT FROM false THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % — отдел закреплён вручную (department_locked), автоматическая смена запрещена', v_name;
+      RAISE EXCEPTION 'ПРАВКА 245: % — отдел закреплён вручную (department_locked), автоматическая смена запрещена', v_name;
     END IF;
     IF v_new.sigur_employee_id IS DISTINCT FROM v_new_sigur THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — sigur_employee_id дубля = %, ожидался %', v_name, v_new_id, v_new.sigur_employee_id, v_new_sigur;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — sigur_employee_id дубля = %, ожидался %', v_name, v_new_id, v_new.sigur_employee_id, v_new_sigur;
     END IF;
     IF v_new.employment_status IS DISTINCT FROM 'active' THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — дубль не active (%)', v_name, v_new_id, v_new.employment_status;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — дубль не active (%)', v_name, v_new_id, v_new.employment_status;
     END IF;
     IF v_new.org_department_id IS DISTINCT FROM v_dept THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — отдел дубля = %, ожидался %', v_name, v_new_id, v_new.org_department_id, v_dept;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — отдел дубля = %, ожидался %', v_name, v_new_id, v_new.org_department_id, v_dept;
     END IF;
     IF v_new.dismissal_apply_started_at IS NOT NULL OR v_old.dismissal_apply_started_at IS NOT NULL THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % — висит claim увольнения (старый=%, дубль=%)', v_name, v_old.dismissal_apply_started_at, v_new.dismissal_apply_started_at;
+      RAISE EXCEPTION 'ПРАВКА 245: % — висит claim увольнения (старый=%, дубль=%)', v_name, v_old.dismissal_apply_started_at, v_new.dismissal_apply_started_at;
     END IF;
 
     -- В дубле не должно быть ценных данных, кроме переносимых: иначе они пропадут при удалении.
@@ -320,19 +468,25 @@ BEGIN
        AND d.new_val IS DISTINCT FROM 'null'::jsonb
        AND d.new_val IS DISTINCT FROM d.old_val;
     IF v_bad IS NOT NULL THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — в дубле есть данные, которых нет в основном профиле: %', v_name, v_new_id, v_bad;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — в дубле есть данные, которых нет в основном профиле: %', v_name, v_new_id, v_bad;
     END IF;
 
-    -- История отделов: правку периодов миграция не делает, членство идёт по snapshot.
+    -- История отделов: правку периодов не делаем, членство идёт по snapshot.
     SELECT count(*) INTO v_cnt FROM employee_assignments WHERE employee_id IN (v_old_id, v_new_id);
     IF v_cnt > 0 THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — найдено % строк employee_assignments, нужно ручное решение', v_name, v_old_id, v_cnt;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — найдено % строк employee_assignments, нужно ручное решение', v_name, v_old_id, v_cnt;
+    END IF;
+
+    -- Failure-строки дубля: их перенос не предусмотрен, поэтому требуем отсутствие.
+    SELECT count(*) INTO v_cnt FROM skud_event_failures WHERE employee_id = v_new_id;
+    IF v_cnt > 0 THEN
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — у дубля % строк skud_event_failures, разобрать вручную', v_name, v_new_id, v_cnt;
     END IF;
 
     SELECT count(*) INTO v_cnt FROM employee_dismissal_events
      WHERE employee_id = v_old_id AND dismissal_date = v_dismissal AND cancelled = false;
     IF v_cnt <> 1 THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — неотменённых событий увольнения от %: % (ожидалось 1)', v_name, v_old_id, v_dismissal, v_cnt;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — неотменённых событий увольнения от %: % (ожидалось 1)', v_name, v_old_id, v_dismissal, v_cnt;
     END IF;
     SELECT id INTO v_event_id FROM employee_dismissal_events
      WHERE employee_id = v_old_id AND dismissal_date = v_dismissal AND cancelled = false;
@@ -353,7 +507,7 @@ BEGIN
       IF n > 0 THEN v_bad := concat_ws(', ', v_bad, format('%s.%s=%s', r.tbl, r.col, n)); END IF;
     END LOOP;
     IF v_bad IS NOT NULL THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — ссылки на дубль вне обрабатываемого списка: %', v_name, v_new_id, v_bad;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — ссылки на дубль вне обрабатываемого списка: %', v_name, v_new_id, v_bad;
     END IF;
 
     SELECT count(*) INTO v_old_events FROM skud_events WHERE employee_id = v_old_id;
@@ -361,37 +515,30 @@ BEGIN
     -- Контроль устойчив ко времени: новые проходы по новой карточке — норма (сумма растёт),
     -- а вот УМЕНЬШЕНИЕ относительно снятого минимума означает, что проходы куда-то делись.
     IF v_old_events + v_new_events < v_min_total THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — проходов % + % = %, минимум %: часть проходов пропала, разобраться до слияния',
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — проходов % + % = %, минимум %: часть проходов пропала, разобраться до слияния',
         v_name, v_old_id, v_old_events, v_new_events, v_old_events + v_new_events, v_min_total;
     END IF;
 
-    -- Все проходы дубля обязаны лежать не раньше дня смены карточки: иначе это не
-    -- «новый профиль от смены карточки», а что-то другое.
+    -- Все проходы дубля обязаны лежать не раньше дня смены карточки.
     SELECT count(*) INTO v_cnt FROM skud_events WHERE employee_id = v_new_id AND event_date < v_dismissal;
     IF v_cnt > 0 THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — у дубля % проходов раньше %, слияние небезопасно', v_name, v_new_id, v_cnt, v_dismissal;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — у дубля % проходов раньше %, слияние небезопасно', v_name, v_new_id, v_cnt, v_dismissal;
     END IF;
 
-    -- Затронутые даты сводки: дни переносимых проходов и предыдущий день каждого
-    -- (расчёт смены читает события следующих суток — миграция 168).
+    -- Даты переносимых проходов и полный набор затронутых дней. batch_recalculate
+    -- сама пересчитывает переданную дату И предыдущую, поэтому в неё уходят только
+    -- v_event_dates, а backup/DELETE/постусловия работают по v_affected.
+    SELECT array_agg(DISTINCT event_date ORDER BY event_date) INTO v_event_dates
+      FROM skud_events WHERE employee_id = v_new_id;
     SELECT array_agg(DISTINCT d ORDER BY d) INTO v_affected
       FROM (
-        SELECT event_date AS d FROM skud_events WHERE employee_id = v_new_id
+        SELECT unnest(COALESCE(v_event_dates, ARRAY[]::date[])) AS d
         UNION
-        SELECT event_date - 1 FROM skud_events WHERE employee_id = v_new_id
+        SELECT unnest(COALESCE(v_event_dates, ARRAY[]::date[])) - 1
       ) x;
 
-    -- Backup сводки берём на день шире: batch_recalculate пересчитывает ещё и (date − 1)
-    -- каждой переданной даты, поэтому строка за день перед набором тоже перезаписывается.
-    SELECT array_agg(DISTINCT d ORDER BY d) INTO v_backup_dates
-      FROM (
-        SELECT unnest(COALESCE(v_affected, ARRAY[]::date[])) AS d
-        UNION
-        SELECT unnest(COALESCE(v_affected, ARRAY[]::date[])) - 1
-      ) x;
-
-    RAISE NOTICE 'МИГРАЦИЯ 245: % (% ← %) — проходов % + % = %, пересчёт сводки за %',
-      v_name, v_old_id, v_new_id, v_old_events, v_new_events, v_old_events + v_new_events, v_affected;
+    RAISE NOTICE 'ПРАВКА 245: % (% ← %) — проходов % + % = %, даты проходов %, пересчёт сводки за %',
+      v_name, v_old_id, v_new_id, v_old_events, v_new_events, v_old_events + v_new_events, v_event_dates, v_affected;
 
     -- ─── Backup всех изменяемых данных (по записи на вид, даже если массив пуст) ───
     v_hire_date := v_old.hire_date;
@@ -436,15 +583,14 @@ BEGIN
     ON CONFLICT ON CONSTRAINT migration_245_backup_uniq
     DO UPDATE SET row_data = EXCLUDED.row_data, backup_at = now();
 
-    -- Сводка: у основного профиля — затронутые даты плюс день перед ними (побочный
-    -- пересчёт), у дубля — все строки.
+    -- Сводка: у основного профиля — затронутые даты, у дубля — все строки.
     INSERT INTO public.migration_245_backup (kind, pair_old_id, pair_new_id, employee_id, row_data)
     SELECT 'summary', v_old_id, v_new_id, NULL, jsonb_build_object(
              'affected_dates', COALESCE(to_jsonb(v_affected), '[]'::jsonb),
-             'backup_dates', COALESCE(to_jsonb(v_backup_dates), '[]'::jsonb),
+             'event_dates', COALESCE(to_jsonb(v_event_dates), '[]'::jsonb),
              'old', COALESCE((SELECT jsonb_agg(to_jsonb(s)) FROM skud_daily_summary s
                                WHERE s.employee_id = v_old_id
-                                 AND s.date = ANY (COALESCE(v_backup_dates, ARRAY[]::date[]))), '[]'::jsonb),
+                                 AND s.date = ANY (COALESCE(v_affected, ARRAY[]::date[]))), '[]'::jsonb),
              'new', COALESCE((SELECT jsonb_agg(to_jsonb(s)) FROM skud_daily_summary s
                                WHERE s.employee_id = v_new_id), '[]'::jsonb))
     ON CONFLICT ON CONSTRAINT migration_245_backup_uniq
@@ -457,7 +603,7 @@ BEGIN
     -- сначала снимаем его с дубля.
     UPDATE employees SET sigur_employee_id = NULL, updated_at = now() WHERE id = v_new_id;
     GET DIAGNOSTICS v_cnt = ROW_COUNT;
-    IF v_cnt <> 1 THEN RAISE EXCEPTION 'МИГРАЦИЯ 245: % — снятие sigur_employee_id с дубля затронуло % строк', v_name, v_cnt; END IF;
+    IF v_cnt <> 1 THEN RAISE EXCEPTION 'ПРАВКА 245: % — снятие sigur_employee_id с дубля затронуло % строк', v_name, v_cnt; END IF;
 
     -- Кадровые данные, табельный номер и hire_date остаются от старого профиля.
     UPDATE employees
@@ -473,7 +619,7 @@ BEGIN
            updated_at = now()
      WHERE id = v_old_id;
     GET DIAGNOSTICS v_cnt = ROW_COUNT;
-    IF v_cnt <> 1 THEN RAISE EXCEPTION 'МИГРАЦИЯ 245: % — обновление основного профиля затронуло % строк', v_name, v_cnt; END IF;
+    IF v_cnt <> 1 THEN RAISE EXCEPTION 'ПРАВКА 245: % — обновление основного профиля затронуло % строк', v_name, v_cnt; END IF;
 
     -- Ошибочное увольнение помечаем отменённым в самой строке: второе событие не
     -- вставляем, иначе в истории окажутся две отмены.
@@ -482,12 +628,12 @@ BEGIN
            reason = COALESCE(reason, 'Смена карточки Sigur — увольнение ошибочно')
      WHERE id = v_event_id;
     GET DIAGNOSTICS v_cnt = ROW_COUNT;
-    IF v_cnt <> 1 THEN RAISE EXCEPTION 'МИГРАЦИЯ 245: % — отмена увольнения затронула % строк', v_name, v_cnt; END IF;
+    IF v_cnt <> 1 THEN RAISE EXCEPTION 'ПРАВКА 245: % — отмена увольнения затронула % строк', v_name, v_cnt; END IF;
 
     UPDATE skud_events SET employee_id = v_old_id WHERE employee_id = v_new_id;
     GET DIAGNOSTICS v_moved = ROW_COUNT;
     IF v_moved <> v_new_events THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % — перенесено % проходов, ожидалось %', v_name, v_moved, v_new_events;
+      RAISE EXCEPTION 'ПРАВКА 245: % — перенесено % проходов, ожидалось %', v_name, v_moved, v_new_events;
     END IF;
 
     -- Сводка: у основного профиля сносим только затронутые даты (дни без проходов за
@@ -496,9 +642,9 @@ BEGIN
      WHERE employee_id = v_old_id AND date = ANY (COALESCE(v_affected, ARRAY[]::date[]));
     DELETE FROM skud_daily_summary WHERE employee_id = v_new_id;
 
-    IF v_affected IS NOT NULL THEN
+    IF v_event_dates IS NOT NULL THEN
       PERFORM public.batch_recalculate_skud_daily_summary(
-        (SELECT jsonb_agg(jsonb_build_object('emp_id', v_old_id, 'date', d)) FROM unnest(v_affected) AS d)
+        (SELECT jsonb_agg(jsonb_build_object('emp_id', v_old_id, 'date', d)) FROM unnest(v_event_dates) AS d)
       );
     END IF;
 
@@ -516,11 +662,10 @@ BEGIN
     ON CONFLICT (employee_id, department_id)
     DO UPDATE SET is_active = true, updated_at = EXCLUDED.updated_at;
 
-    -- Дубль удаляем: его employee_department_access уходит каскадом. Оставлять его
-    -- активным «портальным» нельзя — синк привяжет к нему первую же карточку по ФИО.
+    -- Дубль удаляем: его employee_department_access уходит каскадом.
     DELETE FROM employees WHERE id = v_new_id;
     GET DIAGNOSTICS v_cnt = ROW_COUNT;
-    IF v_cnt <> 1 THEN RAISE EXCEPTION 'МИГРАЦИЯ 245: % — удаление дубля затронуло % строк', v_name, v_cnt; END IF;
+    IF v_cnt <> 1 THEN RAISE EXCEPTION 'ПРАВКА 245: % — удаление дубля затронуло % строк', v_name, v_cnt; END IF;
 
     INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
     VALUES (NULL, 'MERGE_SIGUR_REBOUND_DUPLICATE', 'employee', v_old_id::text,
@@ -533,6 +678,7 @@ BEGIN
               'department_id', v_dept,
               'cancelled_dismissal_event_id', v_event_id,
               'moved_events', v_moved,
+              'event_dates', to_jsonb(v_event_dates),
               'affected_dates', to_jsonb(v_affected),
               'migration', '245'
             ));
@@ -585,25 +731,78 @@ BEGIN
       IF n > 0 THEN v_bad := concat_ws('; ', v_bad, format('остались ссылки %s.%s=%s', r.tbl, r.col, n)); END IF;
     END LOOP;
 
-    -- Сводка пересчитана: строка обязана быть за КАЖДУЮ затронутую дату, в том числе
-    -- за дни без входа — batch_recalculate пишет для них пустую строку is_present = false
-    -- (см. 168_skud_night_shift_gate.sql). Условие «где есть проходы» пропустило бы
-    -- потерю строк за 13 и 16 августа.
+    -- Строка сводки обязана быть за КАЖДУЮ затронутую дату, в том числе за дни без
+    -- входа: batch_recalculate пишет для них пустую строку is_present = false.
     SELECT count(*) INTO v_cnt
       FROM unnest(COALESCE(v_affected, ARRAY[]::date[])) AS d
      WHERE NOT EXISTS (SELECT 1 FROM skud_daily_summary s WHERE s.employee_id = v_old_id AND s.date = d);
     IF v_cnt > 0 THEN v_bad := concat_ws('; ', v_bad, format('нет строк сводки за %s из %s затронутых дат', v_cnt, array_length(v_affected, 1))); END IF;
 
     IF v_bad IS NOT NULL THEN
-      RAISE EXCEPTION 'МИГРАЦИЯ 245: % (%) — постусловия не выполнены: %', v_name, v_old_id, v_bad;
+      RAISE EXCEPTION 'ПРАВКА 245: % (%) — постусловия не выполнены: %', v_name, v_old_id, v_bad;
     END IF;
 
     v_merged := v_merged + 1;
-    RAISE NOTICE 'МИГРАЦИЯ 245: % (%) — готово: sigur %, перенесено проходов %, всего %',
+    RAISE NOTICE 'ПРАВКА 245: % (%) — готово: sigur %, перенесено проходов %, всего %',
       v_name, v_old_id, v_new_sigur, v_moved, v_total;
   END LOOP;
 
-  RAISE NOTICE 'МИГРАЦИЯ 245: слито пар — %', v_merged;
+  RAISE NOTICE 'ПРАВКА 245: слито пар — %', v_merged;
+END $$;
+
+-- ─── Самопроверка моста (только в предпросмотре) ───
+-- Имитирует устаревший кэш поллинга: вставки со старым employee_id и штатный
+-- пересчёт по старому id. Всё откатывается вместе с предпросмотром.
+DO $$
+DECLARE
+  v_today  date := (now() AT TIME ZONE 'Europe/Moscow')::date;
+  v_hash   text := 'migration245-selftest-' || gen_random_uuid()::text;
+  v_emp    bigint;
+  v_bad    text := NULL;
+  v_cnt    bigint;
+BEGIN
+  IF COALESCE(current_setting('migration245.apply', true), 'off') = 'on' THEN
+    RAISE NOTICE 'ПРАВКА 245: apply=on — самопроверка моста пропущена (не пишем тестовые строки)';
+    RETURN;
+  END IF;
+
+  -- 1. Событие со старым id должно лечь на canonical-профиль.
+  INSERT INTO skud_events (event_date, event_time, event_at, access_point, direction, employee_id, dedup_hash)
+  VALUES (v_today, '12:00:00', now(), 'MIGRATION-245-SELFTEST', 'entry', 13403, v_hash);
+  SELECT employee_id INTO v_emp FROM skud_events WHERE dedup_hash = v_hash AND event_date = v_today;
+  IF v_emp IS DISTINCT FROM 2568 THEN
+    v_bad := concat_ws('; ', v_bad, format('событие ушло на %s вместо 2568', coalesce(v_emp::text, 'null')));
+  END IF;
+
+  -- 2. Failure-запись со старым id — тоже.
+  INSERT INTO skud_event_failures (event_date, event_time, event_at, failure_type, dedup_hash, employee_id)
+  VALUES (v_today, '12:01:00', now(), 'selftest', v_hash || '-f', 13404);
+  SELECT employee_id INTO v_emp FROM skud_event_failures WHERE dedup_hash = v_hash || '-f';
+  IF v_emp IS DISTINCT FROM 2550 THEN
+    v_bad := concat_ws('; ', v_bad, format('failure ушёл на %s вместо 2550', coalesce(v_emp::text, 'null')));
+  END IF;
+
+  -- 3. Штатный пересчёт по старому id не падает и не пишет сводку на удалённый профиль.
+  PERFORM public.batch_recalculate_skud_daily_summary(
+    jsonb_build_array(jsonb_build_object('emp_id', 13403, 'date', v_today))
+  );
+  SELECT count(*) INTO v_cnt FROM skud_daily_summary WHERE employee_id = 13403;
+  IF v_cnt <> 0 THEN v_bad := concat_ws('; ', v_bad, 'сводка создана на удалённый профиль 13403'); END IF;
+  SELECT count(*) INTO v_cnt FROM skud_daily_summary WHERE employee_id = 2568 AND date = v_today;
+  IF v_cnt <> 1 THEN v_bad := concat_ws('; ', v_bad, 'сводка canonical-профиля за сегодня не пересчитана'); END IF;
+
+  -- 4. Журнал моста получил обе строки.
+  SELECT count(*) INTO v_cnt FROM public.migration_245_bridge_log
+   WHERE table_name = 'skud_events' AND target_id = 2568;
+  IF v_cnt = 0 THEN v_bad := concat_ws('; ', v_bad, 'событие не попало в журнал моста'); END IF;
+  SELECT count(*) INTO v_cnt FROM public.migration_245_bridge_log
+   WHERE table_name = 'skud_event_failures' AND target_id = 2550;
+  IF v_cnt = 0 THEN v_bad := concat_ws('; ', v_bad, 'failure не попал в журнал моста'); END IF;
+
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'ПРАВКА 245: самопроверка моста провалена: %', v_bad;
+  END IF;
+  RAISE NOTICE 'ПРАВКА 245: самопроверка моста пройдена (событие → 2568, failure → 2550, пересчёт по старому id безопасен)';
 END $$;
 
 -- Диагностика ВНУТРИ транзакции (до COMMIT/ROLLBACK): в предпросмотре показывает
