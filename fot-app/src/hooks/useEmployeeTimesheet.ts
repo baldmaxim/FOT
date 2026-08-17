@@ -38,6 +38,11 @@ export const useEmployeeTimesheetMonth = (
     gcTime: 15 * 60_000,
     refetchOnMount: isCurrentMonth ? 'always' : false,
     refetchOnWindowFocus: isCurrentMonth,
+    // Строка «Зачтено в табель» считается сервером; без периодического рефетча она
+    // отставала бы от живого присутствия на всё время, пока вкладка открыта.
+    // Только для текущего месяца и только при видимой вкладке.
+    refetchInterval: isCurrentMonth ? 120_000 : false,
+    refetchIntervalInBackground: false,
     placeholderData: previousData => previousData,
   });
 };

@@ -35,6 +35,7 @@ export const buildDisplayItems = (
   events: SkudEvent[],
   internalPoints: Set<string>,
   dateStr?: string,
+  nowSec?: number,
 ): DisplayItem[] => {
   const sorted = [...events].sort((a, b) => a.event_time.localeCompare(b.event_time));
   const items: DisplayItem[] = [];
@@ -70,18 +71,24 @@ export const buildDisplayItems = (
   if (pendingEntry && dateStr && isToday(dateStr)) {
     const lastItem = items[items.length - 1];
     if (lastItem && lastItem.kind === 'event' && lastItem.event.id === pendingEntry.id) {
-      lastItem.pairDurationSeconds = nowSeconds() - timeToSeconds(pendingEntry.event_time);
+      const now = nowSec ?? nowSeconds();
+      lastItem.pairDurationSeconds = Math.max(0, now - timeToSeconds(pendingEntry.event_time));
     }
   }
 
   return items;
 };
 
-/** Рабочее время в секундах: сумма внешних пар вход→выход; для «сегодня» — до now, если открыт. */
+/**
+ * Рабочее время в секундах: сумма внешних пар вход→выход; для «сегодня» — до now, если открыт.
+ * nowSec (секунды от полуночи) можно передать извне — тогда все блоки экрана считают
+ * от одного и того же «сейчас» и их цифры совпадают до секунды.
+ */
 export const calculateWorkSeconds = (
   events: SkudEvent[],
   internalPoints: Set<string>,
   dateStr?: string,
+  nowSec?: number,
 ): number => {
   const filtered = events.filter(e => !isInternalEvent(e, internalPoints));
   const sorted = [...filtered].sort((a, b) => a.event_time.localeCompare(b.event_time));
@@ -105,7 +112,7 @@ export const calculateWorkSeconds = (
   }
 
   if (entryTime !== null && dateStr && isToday(dateStr)) {
-    total += nowSeconds() - entryTime;
+    total += Math.max(0, (nowSec ?? nowSeconds()) - entryTime);
   }
 
   return total;
@@ -161,6 +168,7 @@ export const buildPresenceIntervals = (
   events: SkudEvent[],
   internalPoints: Set<string>,
   dateStr: string,
+  nowSec?: number,
 ): IPresenceInterval[] => {
   const sorted = events
     .filter(e => !isInternalEvent(e, internalPoints))
@@ -185,7 +193,7 @@ export const buildPresenceIntervals = (
   }
 
   if (entryTime !== null && isToday(dateStr)) {
-    const now = nowSeconds();
+    const now = nowSec ?? nowSeconds();
     if (now > entryTime) intervals.push({ startSec: entryTime, endSec: now, isOpen: true });
   }
 

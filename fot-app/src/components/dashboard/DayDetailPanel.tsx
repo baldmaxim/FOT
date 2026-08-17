@@ -1,7 +1,8 @@
 import { type FC, lazy, Suspense } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { selectVisibleHours, formatHoursLabel } from '../../utils/hoursDisplay';
+import { selectVisibleHours, formatHoursLabel, formatSecondsHms } from '../../utils/hoursDisplay';
 import { STATUS_LABEL_RU } from '../../utils/dayStatus';
+import { useDayPresence } from '../../hooks/useDayPresence';
 import type { IDayFocusPayload } from './MyMonthTimesheet';
 import styles from './DayDetailPanel.module.css';
 
@@ -25,6 +26,10 @@ const APPROVAL_LABEL: Record<Approval, string> = {
   approved: 'Согласовано',
   rejected: 'Отклонено',
 };
+
+/* Подсказки строк итогов — перехватывает глобальный TooltipHost (data-tooltip). */
+const PRESENCE_TIP = 'Сумма интервалов «вход → выход» по проходам СКУД; текущий незакрытый вход считается до текущей секунды. Перерывы между интервалами не входят, обед не вычтен. Та же цифра — в полосе присутствия и в плашках «Проходов СКУД».';
+const CREDITED_TIP = 'Часы, попадающие в табель: из присутствия дополнительно вычитается обед по графику. Значение считает сервер, поэтому оно обновляется не каждую секунду.';
 
 const approvalClass = (status?: string | null): string => {
   if (status === 'pending') return styles.badgePending;
@@ -64,7 +69,14 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
   // Показываем объект всегда, даже если он за день один (без подавления «избыточной» разбивки).
   const showObjects = realObjects.length > 0;
   const objectsTitle = hasRealCorrection ? 'Корректировки по объектам' : 'Часы по объектам';
+
+  // Сегодняшний день: главная цифра — сырое присутствие по проходам, посчитанное до
+  // текущей секунды из общего для экрана «сейчас». Она совпадает с итогом полосы
+  // «Интервалы присутствия» и чипом в «Проходах СКУД». Табельные часы (присутствие
+  // минус обед по графику) показываем отдельной строкой, чтобы разница была явной.
+  const presence = useDayPresence(employeeId, focusedDay);
   const breakMinutes = entry?.break_minutes ?? 0;
+  const breakSecondsFallback = breakMinutes * 60;
 
   return (
     <div className={styles.root}>
@@ -73,17 +85,34 @@ export const DayDetailPanel: FC<IDayDetailPanelProps> = ({
         <span className={styles.status}>{STATUS_LABEL_RU[ds]}</span>
       </div>
 
-      {visibleHours != null && visibleHours > 0 ? (
+      {presence.hasData ? (
+        <div className={styles.hoursRow} data-tooltip={PRESENCE_TIP}>
+          <span className={styles.hoursLabel}>
+            Присутствие
+            {presence.isLive ? <span className={styles.liveDot} aria-label="на месте сейчас" /> : null}
+          </span>
+          <span className={styles.hoursValue}>{formatSecondsHms(presence.workSeconds)}</span>
+        </div>
+      ) : visibleHours != null && visibleHours > 0 ? (
         <div className={styles.hoursRow}>
           <span className={styles.hoursLabel}>Часы</span>
           <span className={styles.hoursValue}>{formatHoursLabel(visibleHours)}</span>
         </div>
       ) : null}
 
-      {breakMinutes > 0 ? (
+      {(presence.hasData ? presence.breakSeconds : breakSecondsFallback) > 0 ? (
         <div className={styles.hoursRow}>
-          <span className={styles.hoursLabel}>Перерыв</span>
-          <span className={styles.hoursValue}>{formatHoursLabel(breakMinutes / 60)}</span>
+          <span className={styles.hoursLabel}>Перерывы</span>
+          <span className={styles.hoursValue}>
+            {formatSecondsHms(presence.hasData ? presence.breakSeconds : breakSecondsFallback)}
+          </span>
+        </div>
+      ) : null}
+
+      {presence.hasData && visibleHours != null && visibleHours > 0 ? (
+        <div className={`${styles.hoursRow} ${styles.hoursRowSecondary}`} data-tooltip={CREDITED_TIP}>
+          <span className={styles.hoursLabel}>Зачтено в табель</span>
+          <span className={styles.hoursValueSecondary}>{formatHoursLabel(visibleHours)}</span>
         </div>
       ) : null}
 

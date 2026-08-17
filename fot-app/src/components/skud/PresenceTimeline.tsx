@@ -1,9 +1,10 @@
-import { type CSSProperties, type FC, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, type FC, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { LogIn, LogOut } from 'lucide-react';
 import { skudService } from '../../services/skudService';
-import { buildPresenceIntervals, isToday } from '../../utils/skudDisplay';
-import { formatSecondsLabel } from '../../utils/hoursDisplay';
+import { buildPresenceIntervals, findUnclosedEntryId, isToday } from '../../utils/skudDisplay';
+import { formatSecondsHms } from '../../utils/hoursDisplay';
+import { useNowSeconds } from '../../hooks/useNowTick';
 import styles from './PresenceTimeline.module.css';
 
 interface IPresenceTimelineProps {
@@ -38,24 +39,27 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
     staleTime: 10 * 60_000,
   });
 
-  // Минутный тик — двигает открытый интервал «сотрудник на месте прямо сейчас».
-  const [tick, setTick] = useState(0);
+  const events = useMemo(() => eventsQuery.data ?? [], [eventsQuery.data]);
+  const internalPoints = useMemo(
+    () => new Set((accessPointsQuery.data ?? []).filter(s => s.is_internal).map(s => s.access_point_name)),
+    [accessPointsQuery.data],
+  );
 
-  const intervals = useMemo(() => {
-    void tick;
-    const events = eventsQuery.data ?? [];
-    const settings = accessPointsQuery.data ?? [];
-    const internalPoints = new Set(settings.filter(s => s.is_internal).map(s => s.access_point_name));
-    return buildPresenceIntervals(events, internalPoints, date);
-  }, [eventsQuery.data, accessPointsQuery.data, date, tick]);
+  // Наличие открытого входа определяется по событиям, без участия «сейчас» —
+  // иначе тик и интервалы зависели бы друг от друга.
+  const hasOpenEntry = useMemo(
+    () => findUnclosedEntryId(events, internalPoints) !== null,
+    [events, internalPoints],
+  );
 
-  const hasOpen = intervals.some(i => i.isOpen);
+  // Секундный тик — двигает открытый интервал «сотрудник на месте прямо сейчас».
+  // Общий на весь экран, поэтому итог здесь и чипы в «Проходах СКУД» совпадают.
+  const nowSec = useNowSeconds(today && hasOpenEntry);
 
-  useEffect(() => {
-    if (!today || !hasOpen) return;
-    const id = window.setInterval(() => setTick(t => t + 1), 60_000);
-    return () => window.clearInterval(id);
-  }, [today, hasOpen]);
+  const intervals = useMemo(
+    () => buildPresenceIntervals(events, internalPoints, date, nowSec),
+    [events, internalPoints, date, nowSec],
+  );
 
   if (intervals.length === 0) return null;
 
@@ -102,7 +106,7 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
     <div className={className ? `${styles.wrap} ${className}` : styles.wrap}>
       <div className={styles.head}>
         <span className={styles.title}>Интервалы присутствия</span>
-        <span className={styles.total}>{formatSecondsLabel(totalSeconds)}</span>
+        <span className={styles.total}>{formatSecondsHms(totalSeconds)}</span>
       </div>
 
       <div className={styles.track}>

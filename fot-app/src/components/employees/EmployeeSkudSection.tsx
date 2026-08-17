@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type FC } from 'react';
+import { useState, useEffect, useMemo, useRef, type FC } from 'react';
 import {
   LogIn, LogOut, ChevronDown, ChevronRight, ChevronLeft,
   Clock, Timer, Download, Check, XCircle,
@@ -13,12 +13,15 @@ import { triggerBlobDownload } from '../../utils/download';
 import {
   buildDisplayItems,
   calculateWorkSeconds,
+  findUnclosedEntryId,
   isToday,
   mergeFailuresIntoDisplay,
   nowSeconds,
   timeToSeconds,
   toLocalISO,
 } from '../../utils/skudDisplay';
+import { formatSecondsHms } from '../../utils/hoursDisplay';
+import { useNowSeconds } from '../../hooks/useNowTick';
 import { formatFailureType } from '../../utils/skudFailureTypes';
 import '../../styles/EmployeeCardPage.css';
 
@@ -89,22 +92,48 @@ const formatDurationCompact = (seconds: number): string => {
   return `${h}ч ${m}м`;
 };
 
-const formatDuration = (seconds: number): string => {
-  if (seconds <= 0) return '';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h === 0 && m === 0) return `${s}с`;
-  if (h === 0) return `${m}м ${s}с`;
-  if (m === 0 && s === 0) return `${h}ч`;
-  return `${h}ч ${m}м ${s}с`;
-};
+/** «3ч 42м 31с» — общий форматтер присутствия; пустая строка при нуле гасит плашку. */
+const formatDuration = (seconds: number): string => (seconds <= 0 ? '' : formatSecondsHms(seconds));
 
 /* Подсказки к плашкам итогов дня — перехватывает глобальный TooltipHost (data-tooltip). */
 const TIP_ENTRY = 'Время первого прохода на вход за день (по внешним точкам прохода).';
 const TIP_EXIT = 'Время последнего прохода на выход за день.';
-const TIP_SPAN = 'От первого входа до последнего выхода, вместе с перерывами. Если сотрудник ещё внутри — до текущего момента.';
-const TIP_TOTAL = 'Сумма закрытых пар «вход → выход», без перерывов между ними; текущий незакрытый вход считается до этой минуты. Разница со временем на объекте — суммарные перерывы. В «Часах» табеля сверху из этого времени дополнительно вычитается обед.';
+const TIP_SPAN = 'От первого входа до последнего выхода, вместе с перерывами. Если сотрудник ещё внутри — до текущей секунды. Это не рабочее время: перерывы из него не вычтены.';
+const TIP_TOTAL = 'Сумма закрытых пар «вход → выход», без перерывов между ними; текущий незакрытый вход считается до текущей секунды. Разница с размахом слева — суммарные перерывы. В «Часах» табеля сверху из этого времени дополнительно вычитается обед.';
+
+/**
+ * Итоги дня: первый вход, последний выход, рабочее время и размах.
+ * Вынесено из groupByDay, чтобы для сегодняшнего (ещё открытого) дня пересчитывать
+ * их на каждый тик секунды, а не замораживать на момент загрузки событий.
+ */
+const computeDayTotals = (
+  dayEvents: SkudEvent[],
+  internalPoints: Set<string>,
+  date: string,
+  nowSec?: number,
+): Pick<IDayGroup, 'firstEntry' | 'lastExit' | 'totalSeconds' | 'spanSeconds'> => {
+  const extEvents = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
+  const entries = extEvents.filter(e => e.direction === 'entry');
+  const exits = extEvents.filter(e => e.direction === 'exit');
+  const lastExtEvent = extEvents.length > 0 ? extEvents[extEvents.length - 1] : null;
+  const stillOnSite = lastExtEvent?.direction === 'entry' && isToday(date);
+
+  let spanSeconds = 0;
+  if (entries.length > 0) {
+    if (stillOnSite) {
+      spanSeconds = Math.max(0, (nowSec ?? nowSeconds()) - timeToSeconds(entries[0].event_time));
+    } else if (exits.length > 0) {
+      spanSeconds = timeToSeconds(exits[exits.length - 1].event_time) - timeToSeconds(entries[0].event_time);
+    }
+  }
+
+  return {
+    firstEntry: entries.length > 0 ? entries[0].event_time : null,
+    lastExit: stillOnSite ? null : (exits.length > 0 ? exits[exits.length - 1].event_time : null),
+    totalSeconds: calculateWorkSeconds(dayEvents, internalPoints, date, nowSec),
+    spanSeconds,
+  };
+};
 
 const groupByDay = (
   events: SkudEvent[],
@@ -129,29 +158,11 @@ const groupByDay = (
   for (const date of allDates) {
     const dayEvents = (map.get(date) || []).slice().sort((a, b) => a.event_time.localeCompare(b.event_time));
     const dayFailures = (failureMap.get(date) || []).slice().sort((a, b) => a.event_time.localeCompare(b.event_time));
-    const extEvents = dayEvents.filter(e => !e.access_point || !internalPoints.has(e.access_point));
-    const entries = extEvents.filter(e => e.direction === 'entry');
-    const exits = extEvents.filter(e => e.direction === 'exit');
-    const lastExtEvent = extEvents.length > 0 ? extEvents[extEvents.length - 1] : null;
-    const stillOnSite = lastExtEvent?.direction === 'entry' && isToday(date);
-
-    let spanSeconds = 0;
-    if (entries.length > 0) {
-      if (stillOnSite) {
-        spanSeconds = nowSeconds() - timeToSeconds(entries[0].event_time);
-      } else if (exits.length > 0) {
-        spanSeconds = timeToSeconds(exits[exits.length - 1].event_time) - timeToSeconds(entries[0].event_time);
-      }
-    }
-
     groups.push({
       date,
       events: dayEvents,
       failures: dayFailures,
-      firstEntry: entries.length > 0 ? entries[0].event_time : null,
-      lastExit: stillOnSite ? null : (exits.length > 0 ? exits[exits.length - 1].event_time : null),
-      totalSeconds: calculateWorkSeconds(dayEvents, internalPoints, date),
-      spanSeconds,
+      ...computeDayTotals(dayEvents, internalPoints, date),
     });
   }
 
@@ -324,7 +335,6 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
       prev.flatMap(g => g.failures),
       internalPointsRef.current,
     ));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [internalPoints]);
 
 
@@ -348,6 +358,22 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
 
   const allEvents = groups.flatMap(g => g.events).sort((a, b) => a.event_time.localeCompare(b.event_time));
   const allFailures = groups.flatMap(g => g.failures).sort((a, b) => a.event_time.localeCompare(b.event_time));
+
+  // Сотрудник ещё внутри — итоги сегодняшнего дня нельзя держать снимком на момент
+  // загрузки: они пересчитываются на каждый тик секунды от общего для экрана «сейчас».
+  const hasOpenTodayEntry = useMemo(
+    () => groups.some(g => isToday(g.date) && findUnclosedEntryId(g.events, internalPoints) !== null),
+    [groups, internalPoints],
+  );
+  const nowSec = useNowSeconds(hasOpenTodayEntry);
+  const liveGroups = useMemo(
+    () => (hasOpenTodayEntry
+      ? groups.map(g => (isToday(g.date)
+        ? { ...g, ...computeDayTotals(g.events, internalPoints, g.date, nowSec) }
+        : g))
+      : groups),
+    [groups, internalPoints, hasOpenTodayEntry, nowSec],
+  );
 
   const handleExport = async () => {
     const { startDate, endDate } = getEffectiveRange();
@@ -416,7 +442,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
         <div className="skud-loading">Загрузка событий СКУД...</div>
       ) : error ? (
         <div className="card-history-empty">{error}</div>
-      ) : groups.length === 0 ? (
+      ) : liveGroups.length === 0 ? (
         <div className="card-history-empty">Нет событий СКУД за выбранный период</div>
       ) : viewMode === 'day' ? (
         /* Day view — table */
@@ -427,7 +453,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
             <div className="skud-col-point">Точка прохода</div>
           </div>
           {mergeFailuresIntoDisplay(
-            buildDisplayItems(allEvents, internalPoints, groups[0]?.date),
+            buildDisplayItems(allEvents, internalPoints, liveGroups[0]?.date, nowSec),
             allFailures,
           ).map((item, idx) => {
             if (item.kind === 'break') {
@@ -503,26 +529,26 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
             );
           })}
           {/* Day summary */}
-          {groups.length > 0 && (
+          {liveGroups.length > 0 && (
             <div className="skud-day-summary-bar">
-              {groups[0].firstEntry && (
+              {liveGroups[0].firstEntry && (
                 <span className="skud-time-badge entry" data-tooltip={TIP_ENTRY}>
-                  <LogIn size={12} /> {formatTime(groups[0].firstEntry)}
+                  <LogIn size={12} /> {formatTime(liveGroups[0].firstEntry)}
                 </span>
               )}
-              {groups[0].lastExit && (
+              {liveGroups[0].lastExit && (
                 <span className="skud-time-badge exit" data-tooltip={TIP_EXIT}>
-                  <LogOut size={12} /> {formatTime(groups[0].lastExit)}
+                  <LogOut size={12} /> {formatTime(liveGroups[0].lastExit)}
                 </span>
               )}
-              {groups[0].spanSeconds > 0 && (
+              {liveGroups[0].spanSeconds > 0 && (
                 <span className="skud-time-badge span" data-tooltip={TIP_SPAN}>
-                  <Clock size={12} /> {formatDuration(groups[0].spanSeconds)}
+                  <Clock size={12} /> {formatDuration(liveGroups[0].spanSeconds)}
                 </span>
               )}
-              {groups[0].totalSeconds > 0 && (
+              {liveGroups[0].totalSeconds > 0 && (
                 <span className="skud-time-badge duration" data-tooltip={TIP_TOTAL}>
-                  <Timer size={12} /> {formatDuration(groups[0].totalSeconds)}
+                  <Timer size={12} /> {formatDuration(liveGroups[0].totalSeconds)}
                 </span>
               )}
             </div>
@@ -531,7 +557,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
       ) : (
         /* Week/Month view — expandable day cards */
         <div className="skud-days-list">
-          {groups.map(group => {
+          {liveGroups.map(group => {
             const expanded = expandedDays.has(group.date);
             const duration = formatDuration(group.totalSeconds);
             const span = formatDuration(group.spanSeconds);
@@ -612,7 +638,7 @@ export const EmployeeSkudSection: FC<IEmployeeSkudSectionProps> = ({
                       )}
                     </div>
                     {mergeFailuresIntoDisplay(
-                      buildDisplayItems(group.events, internalPoints, group.date),
+                      buildDisplayItems(group.events, internalPoints, group.date, nowSec),
                       group.failures,
                     ).map((item, idx) => {
                       if (item.kind === 'break') {
