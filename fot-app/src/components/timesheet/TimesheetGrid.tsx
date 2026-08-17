@@ -1097,7 +1097,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                 <div className="ts-mobile-card-header">
                   <div className="ts-mobile-card-name-row">
                     <span className="ts-employee-index">{employeeIndex}.</span>
-                    <div className="ts-mobile-card-name">{displayName}</div>
+                    <div className="ts-mobile-card-name" title={row.employee.full_name}>{displayName}</div>
                     {row.employee.transferred_out_date && (
                       <span className="ts-employee-badge ts-employee-badge--transfer" title={`Переведён ${formatBadgeDate(row.employee.transferred_out_date)}`}>
                         Переведён {formatBadgeDate(row.employee.transferred_out_date)}
@@ -1111,7 +1111,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     <span className="ts-mobile-summary">
                       {showDaysColumn && (
                         <span
-                          className="ts-mobile-days"
+                          className="ts-mobile-days-badge"
                           title="Отработанные дни: ячейки с часами больше нуля, а также УУ, РБ и УД"
                         >
                           {countWorkedDays(row, days, year, month)} дн.

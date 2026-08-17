@@ -1292,7 +1292,7 @@
 .ts-mobile-card-name-row,
 .ts-employee-select-label {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
@@ -1303,6 +1303,11 @@
   font-weight: 700;
   color: var(--text-primary);
   min-width: 0;
+  flex: 1 1 auto;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ts-mobile-exclude-btn {
@@ -1832,13 +1837,16 @@
 .ts-mobile-summary .ts-mobile-deviation {
   margin-left: 0;
 }
-.ts-mobile-days {
+/* Бейдж «N дн.» в шапке карточки. Отдельный класс от сетки дней .ts-mobile-days —
+   иначе к чипу применялся grid-шаблон на 7 колонок и он распирал строку. */
+.ts-mobile-days-badge {
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
   padding: 2px 8px;
   border-radius: 6px;
   background: var(--bg-secondary);
+  flex-shrink: 0;
 }
 @media (max-width: 480px) {
   .ts-table th.ts-col-deviation-sticky,
@@ -4938,6 +4946,12 @@
     gap: 4px;
   }
 
+  .ts-mobile-days-badge,
+  .ts-mobile-deviation {
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+
   .ts-mobile-weekdays-header {
     gap: 4px;
   }
@@ -5074,9 +5088,13 @@
   .ts-mobile-card-name {
     font-size: 13px;
   }
+  .ts-mobile-card-name-row {
+    gap: 6px;
+  }
+  .ts-mobile-days-badge,
   .ts-mobile-deviation {
     font-size: 11px;
-    padding: 2px 6px;
+    padding: 2px 5px;
   }
   .ts-employee-index {
     min-width: 16px;
