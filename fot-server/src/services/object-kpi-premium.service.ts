@@ -104,7 +104,7 @@ export interface PremiumScaleVersion {
   max_premium: string | null;
   order_reference: string | null;
   order_url: string | null;
-  points: Array<{ completion_pct: string; coefficient: string }>;
+  points: Array<{ completion_pct: string; coefficient: string; premium_amount: string }>;
 }
 
 export interface ManagerPremiumResult {
@@ -128,7 +128,9 @@ SELECT
   COALESCE((
     SELECT jsonb_agg(jsonb_build_object(
              'completion_pct', p.completion_pct::text,
-             'coefficient',    p.coefficient::text
+             'coefficient',    p.coefficient::text,
+             -- Премия точки считается здесь, а не на фронте: деньги считает SQL.
+             'premium_amount', ROUND(p.coefficient * v.base_amount)::text
            ) ORDER BY p.completion_pct)
       FROM kpi_premium_scale_points p
      WHERE p.version_id = v.id

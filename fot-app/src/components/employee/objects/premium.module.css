@@ -12,7 +12,7 @@
 
 .heroTop {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
@@ -25,12 +25,53 @@
   color: var(--text-tertiary);
 }
 
-.heroMonth {
-  font-size: 13px;
-  color: var(--text-secondary);
+/* --- Кликабельный месяц --- */
+
+.monthPicker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+
+.monthPicker:hover,
+.monthPicker:focus-within {
+  border-color: var(--accent);
+}
+
+.monthPickerText {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.monthPickerIcon {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+/* Нативный пикер растянут по подписи: свой дропдаун пришлось бы чинить под iOS и Android. */
+.monthPickerInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  font-size: 16px;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 
 .heroValue {
+  font-family: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 34px;
   font-weight: 700;
   letter-spacing: -0.5px;
@@ -57,7 +98,7 @@
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -79,13 +120,14 @@
 }
 
 .tileValue {
-  font-size: 16px;
-  font-weight: 600;
+  font-family: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 17px;
+  font-weight: 700;
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
-/* --- Шкала --- */
+/* --- Шкала-полоса --- */
 
 .scale {
   display: flex;
@@ -97,26 +139,19 @@
   position: relative;
   height: 10px;
   border-radius: 999px;
-  background: var(--bg-tertiary);
-  overflow: hidden;
+  /* Градиент как на макете: провал — жёлтая зона — выполнение. */
+  background: linear-gradient(90deg, var(--error) 0%, var(--warning) 45%, var(--success) 100%);
+  opacity: 0.35;
 }
 
-.scaleFill {
-  height: 100%;
-  border-radius: 999px;
-  background: var(--accent);
-}
-
-.scaleFillSuccess {
-  background: var(--success);
-}
-
-.scaleFillWarning {
-  background: var(--warning);
-}
-
-.scaleFillError {
-  background: var(--error);
+.scaleMarker {
+  position: absolute;
+  top: -3px;
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--text-primary);
+  transform: translateX(-50%);
 }
 
 .scaleTicks {
@@ -144,9 +179,9 @@
   flex-direction: column;
   gap: 4px;
   padding: 12px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--warning);
   border-radius: 10px;
-  background: var(--bg-tertiary);
+  background: var(--warning-bg);
   font-family: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   line-height: 1.6;
@@ -156,24 +191,40 @@
 
 .formula b {
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: 700;
 }
 
-/* --- Таблица месяцев --- */
+/* --- Таблицы --- */
 
-.months {
+.months,
+.scaleTable {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--bg-secondary);
   overflow: hidden;
 }
 
+.scaleTable {
+  padding-bottom: 4px;
+}
+
 .monthsHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.monthsRange {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary);
 }
 
 .tableWrap {
@@ -185,6 +236,10 @@
   border-collapse: collapse;
   font-size: 13px;
   min-width: 640px;
+}
+
+.scaleTable .table {
+  min-width: 320px;
 }
 
 .table th,
@@ -213,6 +268,42 @@
   background: var(--accent-muted);
 }
 
+.monthCell {
+  padding: 0 4px 0 6px;
+}
+
+/* Кнопка, а не role="button" на строке: роль на <tr> ломает табличную семантику. */
+.monthButton {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.monthButton:hover {
+  background: var(--bg-tertiary);
+}
+
+.monthButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.scaleRowActive {
+  background: var(--accent-muted);
+  font-weight: 600;
+}
+
 .status {
   font-size: 12px;
   color: var(--text-tertiary);
@@ -223,56 +314,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* --- Шкала-справка --- */
-
-.scaleDetails {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-secondary);
-  padding: 12px 14px;
-}
-
-.scaleSummary {
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-secondary);
-  min-height: 24px;
-}
-
-.scaleGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.scalePoint {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+.scaleHint {
+  margin: 10px 14px 0;
   font-size: 12px;
   color: var(--text-secondary);
-}
-
-.scalePoint b {
-  color: var(--text-primary);
-  font-size: 14px;
 }
 
 .scaleMeta {
-  margin: 10px 0 0;
+  margin: 6px 14px 10px;
   font-size: 12px;
   color: var(--text-tertiary);
   overflow-wrap: anywhere;
-}
-
-@media (max-width: 768px) {
-  .tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 430px) {
@@ -281,10 +333,15 @@
   }
 
   .heroValue {
-    font-size: 28px;
+    font-size: 26px;
   }
 
   .tiles {
     grid-template-columns: 1fr;
+  }
+
+  .monthPicker {
+    width: 100%;
+    justify-content: space-between;
   }
 }

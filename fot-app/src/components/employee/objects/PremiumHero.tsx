@@ -5,9 +5,9 @@ import {
   formatCoefficient,
   formatMoney,
   formatMoneyWhole,
-  formatMonthLabel,
   formatPercent2,
 } from '../../../utils/formatMoney';
+import { MonthPicker } from './MonthPicker';
 import { PremiumFormulaNote } from './PremiumFormulaNote';
 import { ScaleBar } from './ScaleBar';
 import styles from './premium.module.css';
@@ -17,6 +17,9 @@ interface IPremiumHeroProps {
   scale: IPremiumScaleVersion | null;
   /** Месяц ещё идёт: факт добирается подписанием актов задним числом (п. 3.1). */
   isCurrentMonth: boolean;
+  pickerValue: string;
+  pickerMax: string;
+  onMonthChange: (month: string) => void;
 }
 
 /** Текст вместо суммы: пустая плашка не объясняет, почему премии нет. */
@@ -28,39 +31,39 @@ const STATUS_TEXT: Record<IPremiumMonth['status'], string> = {
   calculated: '',
 };
 
-export const PremiumHero: FC<IPremiumHeroProps> = ({ month, scale, isCurrentMonth }) => {
-  if (!month) {
-    return (
-      <section className={styles.hero}>
-        <span className={styles.heroLabel}>Премия KPI (предварительно)</span>
-        <span className={styles.heroValueMuted}>Нет данных за выбранный период</span>
-      </section>
-    );
-  }
-
-  const calculated = month.status === 'calculated';
+export const PremiumHero: FC<IPremiumHeroProps> = ({
+  month,
+  scale,
+  isCurrentMonth,
+  pickerValue,
+  pickerMax,
+  onMonthChange,
+}) => {
+  const calculated = month?.status === 'calculated';
+  const prorated = month != null && month.eligible_assignment_days < month.days_in_month;
 
   return (
     <section className={styles.hero}>
       <div className={styles.heroTop}>
         <span className={styles.heroLabel}>Премия KPI (предварительно)</span>
-        <span className={styles.heroMonth}>{formatMonthLabel(month.period_month)}</span>
+        <MonthPicker value={pickerValue} max={pickerMax} onChange={onMonthChange} />
       </div>
 
-      {calculated ? (
+      {!month && <span className={styles.heroValueMuted}>Нет данных за выбранный месяц</span>}
+
+      {month && (calculated ? (
         <>
           <strong className={styles.heroValue}>{formatMoneyWhole(month.premium_amount)}</strong>
           <span className={styles.heroSub}>
             база {formatMoney(month.base_prorated)} × K {formatCoefficient(month.coefficient)}
-            {month.eligible_assignment_days < month.days_in_month
-              && ` · закрепление ${month.eligible_assignment_days} из ${month.days_in_month} дн.`}
+            {prorated && ` · закрепление ${month.eligible_assignment_days} из ${month.days_in_month} дн.`}
           </span>
         </>
       ) : (
         <span className={styles.heroValueMuted}>{STATUS_TEXT[month.status]}</span>
-      )}
+      ))}
 
-      {month.status === 'data_incomplete' && month.incomplete_objects.length > 0 && (
+      {month?.status === 'data_incomplete' && month.incomplete_objects.length > 0 && (
         <span className={styles.heroWarn}>
           Исключены: {month.incomplete_objects.map((item) => item.object_name).join(', ')}
         </span>
@@ -72,28 +75,30 @@ export const PremiumHero: FC<IPremiumHeroProps> = ({ month, scale, isCurrentMont
         </span>
       )}
 
-      {scale && <ScaleBar points={scale.points} completionPct={month.completion_pct} />}
+      {month && (
+        <div className={styles.tiles}>
+          <div className={styles.tile}>
+            <span className={styles.tileLabel}>План КС-2</span>
+            <span className={styles.tileValue}>{formatMoney(month.total_plan)}</span>
+          </div>
+          <div className={styles.tile}>
+            <span className={styles.tileLabel}>Факт КС-2</span>
+            <span className={styles.tileValue}>{formatMoney(month.total_fact)}</span>
+          </div>
+          <div className={styles.tile}>
+            <span className={styles.tileLabel}>Выполнение</span>
+            <span className={styles.tileValue}>{formatPercent2(month.completion_pct)}</span>
+          </div>
+          <div className={styles.tile}>
+            <span className={styles.tileLabel}>Коэффициент К</span>
+            <span className={styles.tileValue}>{formatCoefficient(month.coefficient)}</span>
+          </div>
+        </div>
+      )}
 
-      <div className={styles.tiles}>
-        <div className={styles.tile}>
-          <span className={styles.tileLabel}>План КС-2</span>
-          <span className={styles.tileValue}>{formatMoney(month.total_plan)}</span>
-        </div>
-        <div className={styles.tile}>
-          <span className={styles.tileLabel}>Факт КС-2</span>
-          <span className={styles.tileValue}>{formatMoney(month.total_fact)}</span>
-        </div>
-        <div className={styles.tile}>
-          <span className={styles.tileLabel}>Выполнение</span>
-          <span className={styles.tileValue}>{formatPercent2(month.completion_pct)}</span>
-        </div>
-        <div className={styles.tile}>
-          <span className={styles.tileLabel}>Коэффициент К</span>
-          <span className={styles.tileValue}>{formatCoefficient(month.coefficient)}</span>
-        </div>
-      </div>
+      {month && scale && <ScaleBar points={scale.points} completionPct={month.completion_pct} />}
 
-      <PremiumFormulaNote month={month} />
+      {month && <PremiumFormulaNote month={month} />}
     </section>
   );
 };

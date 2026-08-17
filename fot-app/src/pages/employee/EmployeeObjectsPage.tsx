@@ -5,7 +5,7 @@ import { objectKpiApi, type IObjectKpiMyRow } from '../../api/objectKpi';
 import { objectKpiKeys } from '../../api/queryKeys';
 import { PremiumHero } from '../../components/employee/objects/PremiumHero';
 import { PremiumMonthsTable } from '../../components/employee/objects/PremiumMonthsTable';
-import { ScaleDetails } from '../../components/employee/objects/ScaleDetails';
+import { ScaleTable } from '../../components/employee/objects/ScaleTable';
 import {
   formatDate,
   formatMoney,
@@ -23,13 +23,21 @@ import styles from './EmployeeObjectsPage.module.css';
  * на фронте запрещена (numeric приходит строкой).
  */
 
+/** Глубина истории под плашкой месяца. */
+const WINDOW_MONTHS = 12;
+
 const shiftMonth = (month: string, delta: number): string => {
-  const [year, value] = month.split('-').map(Number);
+  const [year, value] = month.slice(0, 7).split('-').map(Number);
   const total = year * 12 + (value - 1) + delta;
   return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`;
 };
 
-const currentMonth = (): string => new Date().toISOString().slice(0, 7);
+/**
+ * Текущий месяц по Москве, как везде в проекте: toISOString() отдаёт UTC и ночью по МСК
+ * показал бы предыдущий месяц.
+ */
+const currentMonth = (): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date()).slice(0, 7);
 
 /** Причина, по которой месяц объекта не участвует в премии. */
 const EXCLUSION_LABEL: Record<'not_assigned' | 'no_plan', string> = {
@@ -38,15 +46,19 @@ const EXCLUSION_LABEL: Record<'not_assigned' | 'no_plan', string> = {
 };
 
 export const EmployeeObjectsPage: FC = () => {
-  const [from, setFrom] = useState(() => shiftMonth(currentMonth(), -5));
-  const [to, setTo] = useState(currentMonth);
+  // Два состояния намеренно: anchor задаёт окно запроса, selected — раскрытый месяц.
+  // С одним состоянием клик по строке сдвигал бы окно, и таблица «прыгала» бы под курсором.
+  const [anchorMonth, setAnchorMonth] = useState(currentMonth);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
 
-  const period = useMemo(() => ({ from, to }), [from, to]);
+  const period = useMemo(
+    () => ({ from: shiftMonth(anchorMonth, -(WINDOW_MONTHS - 1)), to: anchorMonth }),
+    [anchorMonth],
+  );
+
   const query = useQuery({
-    queryKey: objectKpiKeys.myObjects(from, to),
+    queryKey: objectKpiKeys.myObjects(period.from, period.to),
     queryFn: () => objectKpiApi.getMyObjects(period),
-    enabled: from <= to,
   });
 
   const rows = useMemo(() => query.data?.data ?? [], [query.data]);
@@ -54,13 +66,13 @@ export const EmployeeObjectsPage: FC = () => {
   const totals = query.data?.period_totals;
   const scales = useMemo(() => query.data?.scales ?? [], [query.data]);
 
-  // Свежий месяц сверху: он же по умолчанию раскрыт в шапке.
+  // Свежий месяц сверху: он же по умолчанию раскрыт в плашке.
   const monthsDesc = useMemo(
     () => [...premium].sort((a, b) => b.period_month.localeCompare(a.period_month)),
     [premium],
   );
 
-  // Выбранный месяц — производная, а не состояние-копия: при смене периода прежний выбор
+  // Выбранный месяц — производная, а не состояние-копия: при смене окна прежний выбор
   // может исчезнуть из выдачи, и синхронизировать его эффектом значило бы лишний рендер.
   const activeMonth = useMemo(
     () => monthsDesc.find((month) => month.period_month === selectedMonth) ?? monthsDesc[0] ?? null,
@@ -71,6 +83,18 @@ export const EmployeeObjectsPage: FC = () => {
     () => scales.find((scale) => scale.id === activeMonth?.scale_version_id) ?? null,
     [scales, activeMonth],
   );
+
+  const calculatedCount = useMemo(
+    () => premium.filter((month) => month.status === 'calculated').length,
+    [premium],
+  );
+
+  const rangeLabel = `${formatMonthLabel(period.from)} — ${formatMonthLabel(period.to)}`;
+
+  const handleMonthChange = (month: string): void => {
+    setAnchorMonth(month.slice(0, 7));
+    setSelectedMonth(month.slice(0, 7).concat('-01'));
+  };
 
   // Группируем по объекту: карточка на объект, внутри — месяцы.
   const byObject = useMemo(() => {
@@ -85,17 +109,6 @@ export const EmployeeObjectsPage: FC = () => {
 
   return (
     <div className={styles.page}>
-      <div className={styles.filters}>
-        <label className={styles.field}>
-          <span>Период с</span>
-          <input type="month" value={from} onChange={e => setFrom(e.target.value)} />
-        </label>
-        <label className={styles.field}>
-          <span>по</span>
-          <input type="month" value={to} onChange={e => setTo(e.target.value)} />
-        </label>
-      </div>
-
       {query.isLoading && <p className={styles.empty}>Загрузка…</p>}
       {query.isError && <p className={styles.empty}>Не удалось загрузить данные</p>}
 
@@ -105,6 +118,9 @@ export const EmployeeObjectsPage: FC = () => {
             month={activeMonth}
             scale={activeScale}
             isCurrentMonth={activeMonth?.period_month.slice(0, 7) === currentMonth()}
+            pickerValue={`${anchorMonth}-01`}
+            pickerMax={currentMonth()}
+            onMonthChange={handleMonthChange}
           />
 
           <p className={styles.note}>
@@ -112,36 +128,47 @@ export const EmployeeObjectsPage: FC = () => {
             Суммы в рублях с НДС, премия — до НДФЛ.
           </p>
 
+          <ScaleTable
+            scale={activeScale}
+            interpolation={activeMonth?.interpolation ?? null}
+            completionPct={activeMonth?.completion_pct ?? null}
+          />
+
           {monthsDesc.length > 0 && (
             <PremiumMonthsTable
               months={monthsDesc}
               selected={activeMonth?.period_month ?? null}
               onSelect={setSelectedMonth}
+              rangeLabel={rangeLabel}
             />
           )}
 
           {totals && (
-            <div className={styles.summary}>
-              <div>
-                <span>План за период</span>
-                <strong>{formatMoney(totals.total_plan)}</strong>
+            <section className={styles.totals}>
+              <div className={styles.totalsHead}>
+                Итого по рассчитанным месяцам: {calculatedCount} из {premium.length}
+                <span className={styles.totalsRange}>{rangeLabel}</span>
               </div>
-              <div>
-                <span>Факт КС-2</span>
-                <strong>{formatMoney(totals.total_fact)}</strong>
+              <div className={styles.summary}>
+                <div>
+                  <span>План КС-2</span>
+                  <strong>{formatMoney(totals.total_plan)}</strong>
+                </div>
+                <div>
+                  <span>Факт КС-2</span>
+                  <strong>{formatMoney(totals.total_fact)}</strong>
+                </div>
+                <div>
+                  <span>Выполнение</span>
+                  <strong>{formatPercent2(totals.completion_pct)}</strong>
+                </div>
+                <div>
+                  <span>Премия</span>
+                  <strong>{formatMoneyWhole(totals.total_premium)}</strong>
+                </div>
               </div>
-              <div>
-                <span>Выполнение</span>
-                <strong>{formatPercent2(totals.completion_pct)}</strong>
-              </div>
-              <div>
-                <span>Премия за период</span>
-                <strong>{formatMoneyWhole(totals.total_premium)}</strong>
-              </div>
-            </div>
+            </section>
           )}
-
-          <ScaleDetails scales={scales} />
         </>
       )}
 

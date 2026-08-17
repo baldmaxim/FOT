@@ -29,8 +29,8 @@ const scale = (id: string, validFrom: string, base = '200000.00'): PremiumScaleV
   order_reference: null,
   order_url: null,
   points: [
-    { completion_pct: '80.00', coefficient: '0.00' },
-    { completion_pct: '110.00', coefficient: '1.50' },
+    { completion_pct: '80.00', coefficient: '0.00', premium_amount: '0' },
+    { completion_pct: '110.00', coefficient: '1.50', premium_amount: '300000' },
   ],
 });
 
@@ -185,5 +185,17 @@ describe('fetchManagerPremium', () => {
   it('наружу отдаются только реально применённые версии шкалы', async () => {
     const result = await fetchManagerPremium(params);
     expect(result.scales.map((s) => s.id)).toEqual(['v1']);
+  });
+
+  it('премия точки шкалы считается в SQL, а не собирается из фикстуры', async () => {
+    // Фикстура вернёт premium_amount в любом случае, поэтому проверяется сам запрос:
+    // без этого поля в SQL таблица шкалы на фронте молча осталась бы без колонки премии,
+    // а посчитать base × K на клиенте нельзя — деньги считает PostgreSQL.
+    await fetchManagerPremium(params);
+
+    const scaleQuery = queries.find((q) => q.sql.includes('kpi_premium_scale_versions'));
+    expect(scaleQuery).toBeDefined();
+    expect(scaleQuery!.sql).toContain("'premium_amount'");
+    expect(scaleQuery!.sql).toContain('ROUND(p.coefficient * v.base_amount)');
   });
 });

@@ -22,28 +22,23 @@ export const ScaleBar: FC<IScaleBarProps> = ({ points, completionPct }) => {
   const min = Math.min(...pcts);
   const max = Math.max(...pcts);
   const value = completionPct === null ? null : Number(completionPct);
-  const filled = value === null ? 0 : position(value, min, max);
-
-  const fillClass = value === null || value < min
-    ? styles.scaleFillError
-    : value >= 100
-      ? styles.scaleFillSuccess
-      : styles.scaleFillWarning;
 
   const zone = value === null
     ? 'Процент выполнения не определён'
     : value < min
-      ? `Ниже минимального порога шкалы — премия не начисляется`
+      ? 'Ниже минимального порога шкалы — премия не начисляется'
       : value >= max
         ? 'Максимум шкалы — предельный коэффициент'
         : value >= 100
-          ? 'План выполнен — повышенный коэффициент'
+          ? 'План выполнен / перевыполнен — повышенный коэффициент'
           : 'План не выполнен — пониженный коэффициент';
 
   return (
     <div className={styles.scale}>
       <div className={styles.scaleTrack}>
-        <div className={`${styles.scaleFill} ${fillClass}`} style={{ width: `${filled}%` }} />
+        {value !== null && (
+          <span className={styles.scaleMarker} style={{ left: `${position(value, min, max)}%` }} />
+        )}
       </div>
       <div className={styles.scaleTicks}>
         {points.map((point) => (

@@ -127,7 +127,8 @@ export interface IPremiumScaleVersion {
   max_premium: string | null;
   order_reference: string | null;
   order_url: string | null;
-  points: Array<{ completion_pct: string; coefficient: string }>;
+  /** premium_amount = база × коэффициент, посчитано на сервере (деньги на фронте не считаем). */
+  points: Array<{ completion_pct: string; coefficient: string; premium_amount: string }>;
 }
 
 export interface IMyObjectsResponse {

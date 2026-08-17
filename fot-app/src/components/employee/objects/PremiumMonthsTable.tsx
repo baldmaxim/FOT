@@ -14,6 +14,8 @@ interface IPremiumMonthsTableProps {
   months: IPremiumMonth[];
   selected: string | null;
   onSelect: (periodMonth: string) => void;
+  /** Подпись окна: «август 2025 — июль 2026». */
+  rangeLabel: string;
 }
 
 const STATUS_LABEL: Record<IPremiumMonth['status'], string> = {
@@ -24,9 +26,22 @@ const STATUS_LABEL: Record<IPremiumMonth['status'], string> = {
   calculated: '',
 };
 
-export const PremiumMonthsTable: FC<IPremiumMonthsTableProps> = ({ months, selected, onSelect }) => (
+/**
+ * Выбор месяца — настоящая кнопка в первой ячейке, а не role="button" на строке:
+ * роль на <tr> ломает табличную семантику для скринридера, а min-height у <td>
+ * работает непредсказуемо. Клик по остальной части строки оставлен как удобство мышью.
+ */
+export const PremiumMonthsTable: FC<IPremiumMonthsTableProps> = ({
+  months,
+  selected,
+  onSelect,
+  rangeLabel,
+}) => (
   <section className={styles.months}>
-    <div className={styles.monthsHead}>Расчёт по месяцам</div>
+    <div className={styles.monthsHead}>
+      Расчёт по месяцам
+      <span className={styles.monthsRange}>{rangeLabel}</span>
+    </div>
     <div className={styles.tableWrap}>
       <table className={styles.table}>
         <thead>
@@ -47,11 +62,18 @@ export const PremiumMonthsTable: FC<IPremiumMonthsTableProps> = ({ months, selec
               className={`${styles.row} ${month.period_month === selected ? styles.rowActive : ''}`}
               onClick={() => onSelect(month.period_month)}
             >
-              <td>
-                {formatMonthLabel(month.period_month)}
-                {month.status !== 'calculated' && (
-                  <> · <span className={styles.status}>{STATUS_LABEL[month.status]}</span></>
-                )}
+              <td className={styles.monthCell}>
+                <button
+                  type="button"
+                  className={styles.monthButton}
+                  aria-pressed={month.period_month === selected}
+                  onClick={(event) => { event.stopPropagation(); onSelect(month.period_month); }}
+                >
+                  <span>{formatMonthLabel(month.period_month)}</span>
+                  {month.status !== 'calculated' && (
+                    <span className={styles.status}>{STATUS_LABEL[month.status]}</span>
+                  )}
+                </button>
               </td>
               <td className={styles.num}>{formatMoney(month.total_plan)}</td>
               <td className={styles.num}>{formatMoney(month.total_fact)}</td>
