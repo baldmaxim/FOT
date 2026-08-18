@@ -19,7 +19,6 @@ import {
   redactAssignmentSalary,
 } from '../services/object-kpi-salary-access.service.js';
 import { fixMonthPlan, revisePlan } from '../services/object-kpi-plan.service.js';
-import { adjustMonthFact } from '../services/object-kpi-fact-adjustment.service.js';
 import { runPlanFreezerOnce } from '../services/object-kpi-plan-freezer.service.js';
 import {
   createAddendum,
@@ -508,57 +507,6 @@ export const objectKpiEntriesController = {
       res.json({ success: true, data: row });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] revisePlan');
-    }
-  },
-
-  /**
-   * Правка факта месяца — корректирующей записью КС-2, а не переписыванием числа.
-   *
-   * Факт по приказу собирается из подписанных актов (п. 3.1). Ручное переопределение
-   * оторвало бы отчёт от первички, поэтому сюда приходит ЦЕЛЕВАЯ сумма, а сервер сам
-   * заводит акт (или уменьшение) на разницу с указанной причиной.
-   */
-  async adjustFact(req: AuthenticatedRequest, res: Response): Promise<void> {
-    try {
-      const objectId = uuidSchema.parse(req.params.objectId);
-      const periodMonth = monthSchema.parse(req.params.periodMonth);
-      const body = z.object({
-        // Отрицательный факт месяца ввести нельзя: уменьшение объёма заводится
-        // отдельной записью, а не отрицательной целевой суммой.
-        target_amount: moneySchema.refine((v) => Number(v) >= 0, 'Сумма не может быть отрицательной'),
-        reason: z.string().trim().min(1, 'Укажите причину корректировки'),
-      }).parse(req.body);
-
-      if (!(await assertObjectInScope(req, objectId))) {
-        res.status(403).json({ success: false, error: 'Объект вне вашего доступа' });
-        return;
-      }
-
-      const actor = await buildActor(req);
-      const row = await withTransaction(async (client) => {
-        const entry = await adjustMonthFact(client, actor, {
-          objectId,
-          periodMonth,
-          targetAmount: body.target_amount,
-          reason: body.reason,
-        });
-        await auditService.logFromRequestWithClient(client, req, req.user.id,
-          AUDIT_ACTIONS.OBJECT_KPI_KS2_SAVED, {
-            entityType: 'object_ks2_entry',
-            entityId: entry.id,
-            details: {
-              object_id: objectId,
-              period_month: periodMonth,
-              action: 'fact_adjustment',
-              amount: entry.amount,
-              reason: body.reason,
-            },
-          });
-        return entry;
-      });
-      res.status(201).json({ success: true, data: row });
-    } catch (error) {
-      respondWithError(res, error, '[object-kpi] adjustFact');
     }
   },
 

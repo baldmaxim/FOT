@@ -22,6 +22,9 @@
 }
 
 .header {
+  /* Без flex-shrink шапка и вкладки схлопывались под длинным списком истории:
+     flex-контейнер сжимает соседей раньше, чем разрешает прокрутку .body. */
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -55,6 +58,7 @@
 }
 
 .tabs {
+  flex-shrink: 0;
   display: flex;
   gap: 4px;
   padding: 8px 12px;
@@ -83,6 +87,9 @@
 
 .body {
   flex: 1;
+  /* min-height: 0 — иначе flex-элемент не может стать меньше содержимого и вместо
+     собственной прокрутки раздавливает шапку с вкладками. */
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
 }
@@ -166,7 +173,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  min-width: 640px;
+  min-width: 720px;
 }
 
 .table th,
@@ -201,10 +208,10 @@
   font-size: 11px;
 }
 
-/* Правка строки-черновика по месту: инпут в ячейке таблицы. */
+/* Правка строки по месту: инпут в ячейке таблицы.
+   Ширина — от типа колонки (.cellInput* ниже), а не 100 % ячейки: тянущийся инпут
+   забирал под номер акта четверть таблицы и сдвигал месяц с суммой вправо. */
 .cellInput {
-  width: 100%;
-  min-width: 120px;
   min-height: 36px;
   padding: 4px 8px;
   /* 16px — иначе мобильный Chrome зумит страницу при фокусе. */
@@ -213,6 +220,31 @@
   border-radius: 6px;
   background: var(--bg-input, var(--bg-secondary));
   color: var(--text-primary);
+}
+
+.cellInputText { width: 110px; }
+.cellInputDate { width: 150px; }
+.cellInputMonth { width: 150px; }
+.cellInputMoney { width: 170px; }
+/* Комментарий под суммой — по ширине суммы, чтобы столбец не расползался. */
+.cellInputNote { width: 170px; font-size: 13px; min-height: 30px; }
+
+/* Ячейка с двумя полями (сумма и комментарий). Размечается на <div>, а НЕ на <td>:
+   ячейка с display:flex выпадает из табличного потока, и две соседние такие ячейки
+   браузер сливает в одну анонимную. */
+.cellStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.cellNote {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 200px;
 }
 
 .planCell {
@@ -246,6 +278,7 @@
 
 /* Футер модалки: «Сохранить» доступна на любой вкладке, а не только в договоре. */
 .footer {
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

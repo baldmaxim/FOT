@@ -25,6 +25,8 @@
 }
 
 .header {
+  /* Без flex-shrink шапку раздавливает длинный список закреплений. */
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -53,6 +55,8 @@
 
 .body {
   flex: 1;
+  /* min-height: 0 — иначе вместо собственной прокрутки блок распирает контейнер. */
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
 }

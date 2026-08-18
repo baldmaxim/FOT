@@ -33,11 +33,34 @@ export const ScaleBar: FC<IScaleBarProps> = ({ points, completionPct }) => {
           ? 'План выполнен / перевыполнен — повышенный коэффициент'
           : 'План не выполнен — пониженный коэффициент';
 
+  // Заливка идёт до результата, дальше полоса нейтральная: сплошной градиент на всю
+  // ширину читался как «шкала целиком пройдена».
+  const fillPct = value === null ? 0 : position(value, min, max);
+
+  // Граница красной зоны берётся из самой шкалы, а не из числа 85: премия начинает
+  // начисляться с первой точки с ненулевым коэффициентом, и зелёный обязан начинаться там же.
+  const firstPaying = points.find((point) => Number(point.coefficient) > 0);
+  const greenAt = firstPaying ? position(Number(firstPaying.completion_pct), min, max) : 0;
+  const gradient = `linear-gradient(90deg, var(--error) 0%, var(--warning) ${greenAt / 2}%,`
+    + ` var(--success) ${greenAt}%, var(--success) 100%)`;
+
   return (
     <div className={styles.scale}>
       <div className={styles.scaleTrack}>
+        {fillPct > 0 && (
+          <span
+            className={styles.scaleFill}
+            style={{
+              width: `${fillPct}%`,
+              backgroundImage: gradient,
+              // Фон растягивается на ширину ВСЕГО трека, а заливка его обрезает: иначе
+              // цвета сжимались бы вместе с полосой и «зелёный с 85 %» уезжал за маркер.
+              backgroundSize: `${(100 / fillPct) * 100}% 100%`,
+            }}
+          />
+        )}
         {value !== null && (
-          <span className={styles.scaleMarker} style={{ left: `${position(value, min, max)}%` }} />
+          <span className={styles.scaleMarker} style={{ left: `${fillPct}%` }} />
         )}
       </div>
       <div className={styles.scaleTicks}>

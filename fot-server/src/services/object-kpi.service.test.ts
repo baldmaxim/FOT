@@ -317,6 +317,24 @@ describe('КС-2', () => {
     expect(calls[1].params).toContain(200);
   });
 
+  it('комментарий подписанной записи правится вместе с суммой', async () => {
+    const signed = {
+      id: 'ks2-1', skud_object_id: OBJECT_ID, status: 'signed', version: 1,
+      entry_kind: 'act', amount: '100.00', period_month: `${PAST_MONTH}-01`,
+    };
+    const { client, calls } = makeClient([
+      { rows: [signed] },
+      { rows: [{ ...signed, version: 2 }] },
+    ]);
+
+    // Комментарий — основной способ пояснить правку суммы после переноса из «Плана месяца».
+    await updateKs2Entry(client as never, ACTOR, 'ks2-1', 1, {
+      amount: 200, notes: 'заказчик снял объём',
+    });
+
+    expect(calls[1].params).toContain('заказчик снял объём');
+  });
+
   it('у подписанной записи номер акта заблокирован', async () => {
     const { client } = makeClient([
       { rows: [{ id: 'ks2-1', skud_object_id: OBJECT_ID, status: 'signed', version: 1, entry_kind: 'act', amount: '100.00', period_month: `${PAST_MONTH}-01` }] },

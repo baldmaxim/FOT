@@ -163,6 +163,13 @@
   min-width: 0;
 }
 
+/* Премия слева, «Зарплата» и «Итого» — у правого края той же строки.
+   margin-right: auto, а не space-between: без оклада блок остался бы один и «растянулся»
+   бы в пустоту. */
+.heroAmount:first-child {
+  margin-right: auto;
+}
+
 .heroAmountLabel {
   font-size: 11px;
   letter-spacing: 0.08em;
@@ -240,16 +247,29 @@
   position: relative;
   height: 10px;
   border-radius: 999px;
-  /* Градиент как на макете: провал — жёлтая зона — выполнение. */
-  background: linear-gradient(90deg, var(--error) 0%, var(--warning) 45%, var(--success) 100%);
-  opacity: 0.35;
+  /* Непройденная часть — нейтральная: цвет несёт только заливка до результата. */
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+/* Заливка до результата. Градиент и его растяжка приходят инлайном из ScaleBar:
+   стопы привязаны к точкам шкалы, а не к длине заливки. */
+.scaleFill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 999px;
+  background-repeat: no-repeat;
+  opacity: 0.65;
 }
 
 .scaleMarker {
   position: absolute;
-  top: -3px;
-  width: 4px;
-  height: 16px;
+  /* Маркер вне overflow:hidden трека не поместился бы по высоте — держим внутри. */
+  top: 0;
+  bottom: 0;
+  width: 3px;
   border-radius: 2px;
   background: var(--text-primary);
   transform: translateX(-50%);

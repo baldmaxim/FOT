@@ -70,8 +70,6 @@ router.delete('/ks6/:id', kpiEdit, objectKpiKs6Controller.deleteKs6);
 
 // ─── План месяца ─────────────────────────────────────────────────────────────
 router.post('/objects/:objectId/plans/:periodMonth/fix', kpiEdit, objectKpiEntriesController.fixPlan);
-// Правка факта месяца: сервер заводит корректирующий акт КС-2 на разницу.
-router.post('/objects/:objectId/plans/:periodMonth/fact-adjustment', kpiEdit, objectKpiEntriesController.adjustFact);
 // Пересмотр закрытого месяца: гард страницы пропускает экономиста, а право
 // «руководитель эк. отдела / админ» перепроверяется в БД внутри транзакции.
 router.patch('/objects/:objectId/plans/:periodMonth', kpiEdit, objectKpiEntriesController.revisePlan);

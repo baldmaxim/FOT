@@ -67,11 +67,23 @@ const FIELD_LABELS: Record<string, string> = {
   months_remaining: 'Расчётных месяцев',
   control_date: 'Контрольная дата',
   revision: 'Ревизия',
+  period_month: 'Расчётный месяц',
+  salary_amount: 'Зарплата',
 };
+
+/**
+ * Служебные поля снимка. В журнал они попадают вместе со всей строкой, но человеку
+ * ничего не говорят: «version: 2 → 3» и «updated_at» занимали половину карточки и
+ * заслоняли собственно правку.
+ */
+const TECHNICAL_FIELDS = new Set([
+  'version', 'created_at', 'updated_at', 'created_by', 'updated_by', 'source',
+]);
 
 const MONEY_FIELDS = new Set([
   'base_amount', 'amount', 'amount_delta', 'plan_amount',
   'override_plan_amount', 'calculated_plan_amount', 'remainder', 'contract_total',
+  'salary_amount',
 ]);
 
 const DATE_FIELDS = new Set([
@@ -92,7 +104,7 @@ const ENTRY_STATUS_LABELS: Record<string, string> = {
 const formatFieldValue = (field: string, value: unknown): string => {
   if (value === null || value === undefined || value === '') return '—';
   if (field === 'status') return ENTRY_STATUS_LABELS[String(value)] ?? String(value);
-  if (field === 'plan_start_month') return formatMonthLabel(String(value));
+  if (field === 'plan_start_month' || field === 'period_month') return formatMonthLabel(String(value));
   if (MONEY_FIELDS.has(field)) return formatMoney(String(value));
   if (DATE_FIELDS.has(field)) return formatDate(String(value));
   if (typeof value === 'boolean') return value ? 'да' : 'нет';
@@ -122,8 +134,11 @@ export const ObjectKpiHistoryList: FC<IProps> = ({ entries, isLoading }) => {
   return (
     <div className={styles.list}>
       {entries.map(entry => {
-        // Статус показан в заголовке — в списке полей он был бы дублем.
-        const fields = entry.changed_fields.filter(field => field !== 'status');
+        // Статус показан в заголовке — в списке полей он был бы дублем; служебные поля
+        // снимка человеку не нужны вовсе.
+        const fields = entry.changed_fields.filter(
+          field => field !== 'status' && !TECHNICAL_FIELDS.has(field),
+        );
         return (
           <div key={entry.id} className={styles.item}>
             <div className={styles.head}>

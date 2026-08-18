@@ -12,7 +12,7 @@ import { ObjectKpiContractForm } from './ObjectKpiContractForm';
 import { ObjectKpiEntriesTab, type IEntryColumn, type IEntryRow } from './ObjectKpiEntriesTab';
 import { ObjectKpiEntryAddForm } from './ObjectKpiEntryAddForm';
 import { ObjectKpiHistoryList } from './ObjectKpiHistoryList';
-import { ObjectKpiPlansTab, type IFactDraft, type PlanDraft } from './ObjectKpiPlansTab';
+import { ObjectKpiPlansTab, type PlanDraft } from './ObjectKpiPlansTab';
 import styles from './ObjectKpiCardModal.module.css';
 
 /**
@@ -74,7 +74,15 @@ const KS2_COLUMNS: IEntryColumn[] = [
     kind: 'readonly',
     render: (row) => (row.entry_kind === 'act' ? 'КС-2' : 'уменьшение'),
   },
-  { key: 'amount', label: 'Сумма', kind: 'money', editableWhenSigned: true },
+  {
+    key: 'amount',
+    label: 'Сумма',
+    kind: 'money',
+    editableWhenSigned: true,
+    // Комментарий живёт в notes записи и правится вместе с суммой: пояснение к правке
+    // должно стоять там же, где сама правка, а не отдельной сущностью в «Плане месяца».
+    secondary: { key: 'notes', placeholder: 'Комментарий', editableWhenSigned: true },
+  },
 ];
 
 /** Серверный текст ошибки лежит в ApiError.message (client.ts кладёт туда body.error). */
@@ -90,8 +98,6 @@ export const ObjectKpiCardModal: FC<IProps> = ({
   const [tab, setTab] = useState<Tab>('contract');
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
   const [planEdits, setPlanEdits] = useState<PlanDraft>({});
-  /** Правка факта месяца: целевая сумма и причина; сервер заведёт акт на разницу. */
-  const [factEdit, setFactEdit] = useState<IFactDraft | null>(null);
   const [contractDirty, setContractDirty] = useState(false);
   const [contractReason, setContractReason] = useState('');
   const [saving, setSaving] = useState(false);
@@ -164,20 +170,6 @@ export const ObjectKpiCardModal: FC<IProps> = ({
     onError: (error) => toast.error(errorText(error)),
   });
 
-  const factMutation = useMutation({
-    mutationFn: (args: { periodMonth: string; amount: string; reason: string }) =>
-      objectKpiApi.adjustMonthFact(objectId, args.periodMonth, {
-        target_amount: args.amount,
-        reason: args.reason,
-      }),
-    onSuccess: () => {
-      toast.success('Факт скорректирован актом КС-2');
-      setFactEdit(null);
-      refresh();
-    },
-    onError: (error) => toast.error(errorText(error)),
-  });
-
   const fixMutation = useMutation({
     mutationFn: (periodMonth: string) => objectKpiApi.fixPlan(objectId, periodMonth),
     onSuccess: () => { toast.success('План зафиксирован'); refresh(); },
@@ -185,17 +177,6 @@ export const ObjectKpiCardModal: FC<IProps> = ({
   });
 
   const currentMonth = moscowCurrentMonth();
-
-  /** Причина последней корректировки факта по месяцам — из записей КС-2, а не из notes «наугад». */
-  const factAdjustments = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const entry of card?.ks2 ?? []) {
-      if (entry.source === 'fact_adjustment' && entry.status !== 'cancelled' && entry.notes) {
-        map.set(entry.period_month, entry.notes);
-      }
-    }
-    return map;
-  }, [card?.ks2]);
 
   /** Основание требуется, только когда правка задевает зафиксированный месяц. */
   const askReason = (): string | undefined => {
@@ -328,13 +309,6 @@ export const ObjectKpiCardModal: FC<IProps> = ({
     refresh();
   };
 
-  const submitFact = (draft: IFactDraft) => {
-    const amount = parseMoneyInput(draft.amount);
-    if (amount === null) { toast.error('Укажите сумму'); return; }
-    if (draft.reason.trim() === '') { toast.error('Укажите причину корректировки'); return; }
-    factMutation.mutate({ periodMonth: draft.month, amount, reason: draft.reason.trim() });
-  };
-
   // Мемо, а не `?? []` по месту: новый литерал каждый рендер менял бы зависимости useMemo ниже.
   const addenda = useMemo(() => (card?.addenda ?? []) as unknown as IEntryRow[], [card?.addenda]);
   const ks2 = useMemo(() => (card?.ks2 ?? []) as unknown as IEntryRow[], [card?.ks2]);
@@ -446,14 +420,8 @@ export const ObjectKpiCardModal: FC<IProps> = ({
                 card={card}
                 canEdit={canEdit}
                 canRevisePlan={canRevisePlan}
-                currentMonth={currentMonth}
-                factAdjustments={factAdjustments}
                 planEdits={planEdits}
                 setPlanEdits={setPlanEdits}
-                factEdit={factEdit}
-                setFactEdit={setFactEdit}
-                factPending={factMutation.isPending}
-                onSubmitFact={submitFact}
                 onFixMonth={(month) => fixMutation.mutate(month)}
               />
             )}

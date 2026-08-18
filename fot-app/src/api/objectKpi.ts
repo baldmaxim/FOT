@@ -539,21 +539,6 @@ export const objectKpiApi = {
     await apiClient.delete(`/object-kpi/ks6/${id}?version=${version}`);
   },
 
-  /**
-   * Правка факта месяца: на сервер уходит ЦЕЛЕВАЯ сумма, он сам заводит корректирующий
-   * акт КС-2 на разницу. Факт остаётся суммой подписанных актов (п. 3.1).
-   */
-  async adjustMonthFact(
-    objectId: string,
-    periodMonth: string,
-    payload: { target_amount: string; reason: string },
-  ): Promise<IObjectKs2Entry> {
-    const res = await apiClient.post<{ data: IObjectKs2Entry }>(
-      `/object-kpi/objects/${objectId}/plans/${periodMonth}/fact-adjustment`, payload,
-    );
-    return res.data;
-  },
-
   // ─── План ─────────────────────────────────────────────────────────────────
 
   async fixPlan(objectId: string, periodMonth: string): Promise<IObjectKpiMonthPlan> {

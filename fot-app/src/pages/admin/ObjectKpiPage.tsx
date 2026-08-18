@@ -290,10 +290,12 @@ export const ObjectKpiPage: FC = () => {
                     <th>Руководитель</th>
                     <th>Договор с ДС</th>
                     <th title="Подписано за месяц, с учётом уменьшений объёма (п. 3.1, 3.3)">КС-2</th>
-                    <th title="Накопительный итог подписанных КС-2 на начало месяца — от него считается остаток (п. 2.2)">
-                      КС-6 на начало
+                    <th title="Накопительный итог подписанных КС-2 на конец месяца">
+                      КС-6
                     </th>
-                    <th>Остаток</th>
+                    <th title="Остаток на начало месяца — из него считается план (п. 2.2), поэтому «Договор − КС-6» ему не равен">
+                      Остаток
+                    </th>
                     <th>Мес.</th>
                     <th>План месяца</th>
                     <th>%</th>
@@ -320,10 +322,11 @@ export const ObjectKpiPage: FC = () => {
                       <td>{formatMonthLabel(row.period_month)}</td>
                       <td>{row.primary_manager_name ?? '—'}</td>
                       <td>{formatMoneyShort(row.contract_total)}</td>
-                      {/* КС-2 — акты этого месяца; КС-6 — накопительный итог на его начало,
-                          только так «Договор с ДС − КС-6 = Остаток». */}
+                      {/* КС-2 — акты этого месяца; КС-6 — накопительный итог на его КОНЕЦ.
+                          Остаток при этом берётся на начало месяца (из него считается план),
+                          поэтому «Договор − КС-6» остатку намеренно не равен. */}
                       <td>{formatMoneyShort(row.fact_amount)}</td>
-                      <td>{formatMoneyShort(row.ks2_cumulative_before)}</td>
+                      <td>{formatMoneyShort(row.ks2_cumulative_after)}</td>
                       <td>{formatMoneyShort(row.remainder)}</td>
                       <td>{row.months_remaining ?? '—'}</td>
                       <td>

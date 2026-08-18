@@ -21,10 +21,19 @@ export interface IEntryColumn {
   allowNegative?: boolean;
   /**
    * Правится и у ПОДПИСАННОЙ записи. Ставится ровно тем колонкам, которые разрешает
-   * сервер (у КС-2 это месяц и сумма): расхождение дало бы форму, ввод из которой
-   * отвергается с signed_field_locked.
+   * сервер (у КС-2 это месяц, сумма и примечание): расхождение дало бы форму, ввод из
+   * которой отвергается с signed_field_locked.
    */
   editableWhenSigned?: boolean;
+  /**
+   * Второе поле в той же ячейке — комментарий под суммой. Отдельной колонкой он бы
+   * оторвался от того, что поясняет, и растянул таблицу.
+   */
+  secondary?: {
+    key: string;
+    placeholder: string;
+    editableWhenSigned?: boolean;
+  };
   /** Отображение для readonly-колонок и для нередактируемых строк. */
   render?: (row: IEntryRow) => ReactNode;
   placeholder?: string;
@@ -89,6 +98,18 @@ const INPUT_TYPES: Record<IEntryColumn['kind'], string> = {
   readonly: 'text',
 };
 
+/**
+ * Ширина поля задаётся типом колонки, а не «100 % ячейки»: тянущийся инпут строки-черновика
+ * забирал под номер акта четверть таблицы, и месяц с суммой уезжали вправо.
+ */
+const INPUT_CLASSES: Record<IEntryColumn['kind'], string> = {
+  text: styles.cellInputText,
+  date: styles.cellInputDate,
+  month: styles.cellInputMonth,
+  money: styles.cellInputMoney,
+  readonly: styles.cellInputText,
+};
+
 export const ObjectKpiEntriesTab: FC<IProps> = ({
   columns,
   rows,
@@ -117,29 +138,58 @@ export const ObjectKpiEntriesTab: FC<IProps> = ({
             const editable = canEdit && row.status !== 'cancelled';
             return (
               <tr key={row.id}>
-                {columns.map(column => (
-                  <td key={column.key}>
-                    {editable && column.kind !== 'readonly'
-                      && (row.status === 'draft' || column.editableWhenSigned) ? (
-                      <input
-                        className={styles.cellInput}
-                        type={INPUT_TYPES[column.kind]}
-                        inputMode={column.kind === 'money' ? 'decimal' : undefined}
-                        value={editValue(column, row, edits)}
-                        placeholder={column.placeholder}
-                        onChange={(event) => onEditChange(
-                          row.id,
-                          column.key,
-                          column.kind === 'money'
-                            ? formatMoneyInput(event.target.value, {
-                              allowNegative: column.allowNegative,
-                            })
-                            : event.target.value,
-                        )}
-                      />
-                    ) : displayValue(column, row)}
-                  </td>
-                ))}
+                {columns.map(column => {
+                  const cellEditable = editable && column.kind !== 'readonly'
+                    && (row.status === 'draft' || column.editableWhenSigned);
+                  const secondary = column.secondary;
+                  const secondaryEditable = secondary !== undefined && editable
+                    && (row.status === 'draft' || secondary.editableWhenSigned);
+                  const secondaryValue = secondary
+                    ? (edits[row.id]?.[secondary.key] ?? String(row[secondary.key] ?? ''))
+                    : '';
+                  return (
+                    <td key={column.key}>
+                      {/* Обёртка — <div>: display:flex прямо на <td> выбивает ячейку из
+                          табличного потока, и две соседние такие ячейки браузер сливает
+                          в одну. */}
+                      <div className={styles.cellStack}>
+                        {cellEditable ? (
+                          <input
+                            className={`${styles.cellInput} ${INPUT_CLASSES[column.kind]}`}
+                            type={INPUT_TYPES[column.kind]}
+                            inputMode={column.kind === 'money' ? 'decimal' : undefined}
+                            value={editValue(column, row, edits)}
+                            placeholder={column.placeholder}
+                            onChange={(event) => onEditChange(
+                              row.id,
+                              column.key,
+                              column.kind === 'money'
+                                ? formatMoneyInput(event.target.value, {
+                                  allowNegative: column.allowNegative,
+                                })
+                                : event.target.value,
+                            )}
+                          />
+                        ) : displayValue(column, row)}
+
+                        {secondary && (secondaryEditable ? (
+                          <input
+                            className={`${styles.cellInput} ${styles.cellInputNote}`}
+                            type="text"
+                            value={secondaryValue}
+                            placeholder={secondary.placeholder}
+                            aria-label={secondary.placeholder}
+                            onChange={(event) => onEditChange(
+                              row.id, secondary.key, event.target.value,
+                            )}
+                          />
+                        ) : secondaryValue && (
+                          <span className={styles.cellNote}>{secondaryValue}</span>
+                        ))}
+                      </div>
+                    </td>
+                  );
+                })}
                 <td>{STATUS_LABELS[row.status]}</td>
                 <td className={styles.actions}>
                   {canEdit && row.status === 'draft' && (
