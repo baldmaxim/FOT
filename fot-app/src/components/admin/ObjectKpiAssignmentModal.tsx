@@ -170,7 +170,17 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
    * Передача объекта: прежний руководитель заканчивает ВЧЕРА, новый начинает сегодня.
    * daterange в EXCLUDE замкнут с обеих сторон, поэтому стык день-в-день — пересечение
    * периодов, и назначение нового руководителя упало бы с 409.
+   *
+   * Подтверждение, а не title: на телефоне подсказки не увидеть, а действие меняет
+   * период денежной ответственности за объект.
    */
+  const requestFinish = (item: { id: string; version: number }) => {
+    if (!window.confirm(
+      'Закрепление завершится вчерашним днём — нового руководителя можно назначить с сегодня.',
+    )) return;
+    closeAssignmentMutation.mutate({ id: item.id, version: item.version, validTo: yesterday });
+  };
+
   const requestDelete = (item: { id: string; version: number; role_kind: RoleKind }) => {
     const warning = item.role_kind === 'construction_manager'
       ? ' Премия за месяцы этого закрепления будет пересчитана.'
@@ -262,7 +272,9 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
                 <tbody>
                   {(assignmentsQuery.data ?? []).map(item => {
                     const editing = edit?.id === item.id;
-                    const started = item.valid_from <= today;
+                    // Именно <= вчера: кнопка ставит valid_to = вчера, и для записи,
+                    // начавшейся сегодня, получилось бы valid_to < valid_from и отказ CHECK.
+                    const canFinish = item.valid_from <= yesterday;
                     return (
                     <tr key={item.id}>
                       <td>{item.object_name ?? '—'}</td>
@@ -319,16 +331,10 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
                             </button>
                             {/* Закрываем ВЧЕРАШНИМ днём: замкнутый daterange считает стык
                                 день-в-день пересечением, и новый руководитель с сегодня
-                                иначе не назначится. Для не начавшихся записей кнопки нет —
-                                там valid_to оказался бы раньше valid_from. */}
-                            {!item.valid_to && started && (
-                              <button
-                                type="button"
-                                onClick={() => closeAssignmentMutation.mutate({
-                                  id: item.id, version: item.version, validTo: yesterday,
-                                })}
-                              >
-                                Закрыть вчера
+                                иначе не назначился бы. */}
+                            {!item.valid_to && canFinish && (
+                              <button type="button" onClick={() => requestFinish(item)}>
+                                Завершить
                               </button>
                             )}
                             <button

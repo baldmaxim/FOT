@@ -234,22 +234,23 @@ export const ObjectKpiPage: FC = () => {
                     <th>Месяц</th>
                     <th>Руководитель</th>
                     <th>Договор с ДС</th>
-                    <th title="Подписано накопительно на начало месяца (п. 2.2)">КС-2</th>
-                    <th title="Журнал КС-6 накопительно на начало месяца, справочно">КС-6</th>
+                    <th title="Подписано за месяц, с учётом уменьшений объёма (п. 3.1, 3.3)">КС-2</th>
+                    <th title="Накопительный итог подписанных КС-2 на начало месяца — от него считается остаток (п. 2.2)">
+                      КС-6 на начало
+                    </th>
                     <th>Остаток</th>
                     <th>Мес.</th>
                     <th>План месяца</th>
-                    <th>Факт месяца</th>
                     <th>%</th>
                   </tr>
                 </thead>
                 <tbody>
                   {tableQuery.isLoading && (
-                    <tr><td colSpan={11} className={styles.empty}>Загрузка…</td></tr>
+                    <tr><td colSpan={10} className={styles.empty}>Загрузка…</td></tr>
                   )}
                   {!tableQuery.isLoading && rows.length === 0 && (
                     <tr>
-                      <td colSpan={11} className={styles.empty}>
+                      <td colSpan={10} className={styles.empty}>
                         Расчётных месяцев по договору нет
                       </td>
                     </tr>
@@ -264,9 +265,10 @@ export const ObjectKpiPage: FC = () => {
                       <td>{formatMonthLabel(row.period_month)}</td>
                       <td>{row.primary_manager_name ?? '—'}</td>
                       <td>{formatMoneyShort(row.contract_total)}</td>
-                      {/* На начало месяца: только так «Договор с ДС − КС-2 = Остаток». */}
+                      {/* КС-2 — акты этого месяца; КС-6 — накопительный итог на его начало,
+                          только так «Договор с ДС − КС-6 = Остаток». */}
+                      <td>{formatMoneyShort(row.fact_amount)}</td>
                       <td>{formatMoneyShort(row.ks2_cumulative_before)}</td>
-                      <td>{formatMoneyShort(row.ks6_cumulative_before)}</td>
                       <td>{formatMoneyShort(row.remainder)}</td>
                       <td>{row.months_remaining ?? '—'}</td>
                       <td>
@@ -281,7 +283,6 @@ export const ObjectKpiPage: FC = () => {
                           >!</span>
                         )}
                       </td>
-                      <td>{formatMoneyShort(row.fact_amount)}</td>
                       <td>{formatPercent(row.completion_pct)}</td>
                     </tr>
                   ))}

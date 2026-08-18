@@ -26,11 +26,6 @@ export interface IObjectKpiReportRow {
   contract_total: string | null;
   ks2_cumulative_before: string | null;
   ks2_cumulative_after: string | null;
-  /** КС-6 — СПРАВОЧНО: в план, остаток и факт не входит (миграция 243). */
-  ks6_cumulative_after: string | null;
-  /** На начало месяца — от неё сходится остаток (п. 2.2 приказа). */
-  ks6_cumulative_before: string | null;
-  ks6_month_amount: string;
   remainder: string | null;
   months_remaining: number | null;
   plan_amount: string | null;

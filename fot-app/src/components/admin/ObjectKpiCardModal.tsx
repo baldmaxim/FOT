@@ -13,7 +13,11 @@ import { ObjectKpiHistoryList } from './ObjectKpiHistoryList';
 import styles from './ObjectKpiCardModal.module.css';
 
 /**
- * Карточка объекта: договор и ЗОС, допсоглашения, КС-2, КС-6, месячный план, история.
+ * Карточка объекта: договор и ЗОС, допсоглашения, КС-2, месячный план, история.
+ *
+ * Вкладки КС-6 нет намеренно: в отчёте «КС-6» — накопительный итог подписанных КС-2,
+ * то есть производная от актов; ручной ввод той же величины дал бы второе, расходящееся
+ * число. Реестр object_ks6_entries на сервере остался нетронутым.
  *
  * Подписанные записи не редактируются — их аннулируют и заводят заново (правило
  * жизненного цикла, см. object-kpi.service.ts). Кнопка «Сохранить» в футере применяет
@@ -38,13 +42,12 @@ interface IProps {
   onClose: () => void;
 }
 
-type Tab = 'contract' | 'addenda' | 'ks2' | 'ks6' | 'plans' | 'history';
+type Tab = 'contract' | 'addenda' | 'ks2' | 'plans' | 'history';
 
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'contract', label: 'Договор и ЗОС' },
   { key: 'addenda', label: 'Допсоглашения' },
   { key: 'ks2', label: 'КС-2' },
-  { key: 'ks6', label: 'КС-6' },
   { key: 'plans', label: 'План месяца' },
   { key: 'history', label: 'История' },
 ];
@@ -114,8 +117,7 @@ export const ObjectKpiCardModal: FC<IProps> = ({
   const addMutation = useMutation({
     mutationFn: async (args: { kind: Tab; payload: Record<string, unknown> }): Promise<void> => {
       if (args.kind === 'addenda') await objectKpiApi.createAddendum(contract!.id, args.payload);
-      else if (args.kind === 'ks2') await objectKpiApi.createKs2(contract!.id, args.payload);
-      else await objectKpiApi.createKs6(contract!.id, args.payload);
+      else await objectKpiApi.createKs2(contract!.id, args.payload);
     },
     onSuccess: () => { toast.success('Запись добавлена'); refresh(); },
     onError: (error) => toast.error(errorText(error)),
@@ -130,13 +132,8 @@ export const ObjectKpiCardModal: FC<IProps> = ({
         else await objectKpiApi.cancelAddendum(args.id, args.version, args.reason);
         return;
       }
-      if (args.kind === 'ks2') {
-        if (args.sign) await objectKpiApi.signKs2(args.id, args.version, args.reason);
-        else await objectKpiApi.cancelKs2(args.id, args.version, args.reason);
-        return;
-      }
-      if (args.sign) await objectKpiApi.signKs6(args.id, args.version, args.reason);
-      else await objectKpiApi.cancelKs6(args.id, args.version, args.reason);
+      if (args.sign) await objectKpiApi.signKs2(args.id, args.version, args.reason);
+      else await objectKpiApi.cancelKs2(args.id, args.version, args.reason);
     },
     onSuccess: () => { toast.success('Статус изменён'); refresh(); },
     onError: (error) => toast.error(errorText(error)),
@@ -148,12 +145,9 @@ export const ObjectKpiCardModal: FC<IProps> = ({
     onError: (error) => toast.error(errorText(error)),
   });
 
-  /**
-   * Основание требуется, только когда правка задевает зафиксированный месяц. Для КС-6
-   * его не спрашиваем вовсе: справочная запись план не двигает.
-   */
-  const askReason = (kind: Tab): string | undefined => {
-    if (kind === 'ks6' || !card?.has_fixed_months) return undefined;
+  /** Основание требуется, только когда правка задевает зафиксированный месяц. */
+  const askReason = (): string | undefined => {
+    if (!card?.has_fixed_months) return undefined;
     return window.prompt('Основание (обязательно для закрытого месяца):') ?? undefined;
   };
 
@@ -214,8 +208,7 @@ export const ObjectKpiCardModal: FC<IProps> = ({
       if (kind === 'addenda' && patch.addendum_date) payload.effective_date = patch.addendum_date;
 
       if (kind === 'addenda') await objectKpiApi.updateAddendum(id, payload);
-      else if (kind === 'ks2') await objectKpiApi.updateKs2(id, payload);
-      else await objectKpiApi.updateKs6(id, payload);
+      else await objectKpiApi.updateKs2(id, payload);
       return id;
     }));
     setSaving(false);
@@ -271,21 +264,19 @@ export const ObjectKpiCardModal: FC<IProps> = ({
   // Мемо, а не `?? []` по месту: новый литерал каждый рендер менял бы зависимости useMemo ниже.
   const addenda = useMemo(() => (card?.addenda ?? []) as unknown as IEntryRow[], [card?.addenda]);
   const ks2 = useMemo(() => (card?.ks2 ?? []) as unknown as IEntryRow[], [card?.ks2]);
-  const ks6 = useMemo(() => (card?.ks6 ?? []) as unknown as IEntryRow[], [card?.ks6]);
 
   const dirty = useMemo(() => {
     if (tab === 'contract') return contractDirty;
     if (tab === 'plans') return Object.keys(planEdits).length > 0;
     if (tab === 'history') return false;
-    const rows = tab === 'addenda' ? addenda : tab === 'ks2' ? ks2 : ks6;
+    const rows = tab === 'addenda' ? addenda : ks2;
     return Object.keys(edits).some(id => rows.some(row => row.id === id));
-  }, [tab, contractDirty, planEdits, edits, addenda, ks2, ks6]);
+  }, [tab, contractDirty, planEdits, edits, addenda, ks2]);
 
   const handleSave = () => {
     if (tab === 'plans') { void savePlans(); return; }
     if (tab === 'addenda') { void saveEntries('addenda', addenda); return; }
-    if (tab === 'ks2') { void saveEntries('ks2', ks2); return; }
-    if (tab === 'ks6') { void saveEntries('ks6', ks6); }
+    if (tab === 'ks2') { void saveEntries('ks2', ks2); }
   };
 
   const ADDENDA_COLUMNS: IEntryColumn[] = [
@@ -308,12 +299,6 @@ export const ObjectKpiCardModal: FC<IProps> = ({
       kind: 'readonly',
       render: (row) => (row.entry_kind === 'act' ? 'КС-2' : 'уменьшение'),
     },
-    { key: 'amount', label: 'Сумма', kind: 'money' },
-  ];
-
-  const KS6_COLUMNS: IEntryColumn[] = [
-    { key: 'doc_number', label: '№', kind: 'text' },
-    { key: 'customer_signed_date', label: 'Дата', kind: 'date' },
     { key: 'amount', label: 'Сумма', kind: 'money' },
   ];
 
@@ -492,18 +477,12 @@ export const ObjectKpiCardModal: FC<IProps> = ({
               effective_date: date,
               amount_delta: amount,
             } });
-          } else if (kind === 'ks2') {
+          } else {
             addMutation.mutate({ kind, payload: {
               entry_kind: form.get('entry_kind'),
               act_number: String(form.get('number') ?? '').trim(),
               customer_signed_date: form.get('date'),
               // Сумма всегда положительная: знак уменьшения ставит бэкенд по entry_kind.
-              amount,
-            } });
-          } else {
-            addMutation.mutate({ kind, payload: {
-              doc_number: String(form.get('number') ?? '').trim(),
-              customer_signed_date: form.get('date'),
               amount,
             } });
           }
@@ -546,10 +525,10 @@ export const ObjectKpiCardModal: FC<IProps> = ({
         edits={edits}
         onEditChange={setEdit}
         onSign={(row) => statusMutation.mutate({
-          kind, id: row.id, version: row.version, sign: true, reason: askReason(kind),
+          kind, id: row.id, version: row.version, sign: true, reason: askReason(),
         })}
         onCancel={(row) => statusMutation.mutate({
-          kind, id: row.id, version: row.version, sign: false, reason: askReason(kind),
+          kind, id: row.id, version: row.version, sign: false, reason: askReason(),
         })}
         addForm={addFormFor(kind)}
       />
@@ -597,8 +576,6 @@ export const ObjectKpiCardModal: FC<IProps> = ({
               && entriesTab('addenda', ADDENDA_COLUMNS, addenda, 'Допсоглашений нет')}
             {!isCreate && !cardQuery.isLoading && tab === 'ks2'
               && entriesTab('ks2', KS2_COLUMNS, ks2, 'Актов нет')}
-            {!isCreate && !cardQuery.isLoading && tab === 'ks6'
-              && entriesTab('ks6', KS6_COLUMNS, ks6, 'Записей КС-6 нет')}
             {!isCreate && !cardQuery.isLoading && tab === 'plans' && renderPlans()}
             {!isCreate && tab === 'history' && (
               <ObjectKpiHistoryList

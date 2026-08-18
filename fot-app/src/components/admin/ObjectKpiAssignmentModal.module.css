@@ -12,8 +12,12 @@
 .container {
   display: flex;
   flex-direction: column;
-  width: min(860px, 100%);
-  max-height: min(90dvh, 860px);
+  /* 85 % экрана: в таблице закреплений пять колонок и три кнопки действий,
+     на 860px они уезжали в горизонтальный скролл. */
+  width: 85vw;
+  max-width: none;
+  height: 85dvh;
+  max-height: 85dvh;
   border-radius: 14px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
@@ -204,6 +208,9 @@
 
   .container {
     width: 100%;
+    /* height, а не только max-height: с фиксированной высотой выше модалка иначе
+       перестала бы быть полноэкранной на телефоне. */
+    height: 100dvh;
     max-height: 100dvh;
     border-radius: 0;
     padding-bottom: env(safe-area-inset-bottom);
