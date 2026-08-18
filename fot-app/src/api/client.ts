@@ -206,7 +206,12 @@ const shouldBypassHttpCache = (endpoint: string, method = 'GET'): boolean => {
     // «Ответ не на текущий вопрос» — ответ принимался только с третьего раза.
     || path === '/adaptive-testing/sessions/current'
     || path === '/adaptive-testing/availability'
-    || path === '/adaptive-testing/results/my';
+    || path === '/adaptive-testing/results/my'
+    // KPI объектов: правка закреплений, договоров и актов обязана быть видна сразу.
+    // max-age=30 отдавал список, снятый ДО мутации, и удалённое закрепление «оживало»
+    // в открытой модалке до перезагрузки страницы. Сервер шлёт no-store, это дубль
+    // на стороне клиента — bfcache и разогретый кэш иначе переживают деплой.
+    || path.startsWith('/object-kpi/');
 };
 
 const refreshSession = async (): Promise<boolean> => {

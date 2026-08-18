@@ -169,6 +169,60 @@ describe('КС-2', () => {
     expect(calls[1].params).toContain(-5_000_000);
   });
 
+  it('без номера берётся следующий порядковый по договору', async () => {
+    const { client, calls } = makeClient([
+      { rows: [contractRow()] },            // SELECT ... FOR UPDATE
+      { rows: [{ next_number: '8' }] },     // расчёт следующего номера
+      { rows: [{ id: 'ks2-1' }] },          // INSERT
+    ]);
+
+    await createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
+      entry_kind: 'act',
+      amount: 1_000,
+      customer_signed_date: '2026-09-10',
+    });
+
+    // Только полностью числовые номера: «КС-2 №1/2026» после вычистки нецифр дал бы
+    // 212026, и следующий акт получил бы номер 212027.
+    expect(calls[1].sql).toContain("~ '^[0-9]{1,18}$'");
+    expect(calls[2].params).toContain('8');
+  });
+
+  it('явно переданный номер не подменяется автонумерацией', async () => {
+    const { client, calls } = makeClient([
+      { rows: [contractRow()] },
+      { rows: [{ id: 'ks2-1' }] },
+    ]);
+
+    await createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
+      entry_kind: 'act',
+      amount: 1_000,
+      act_number: 'КС-2 №1/2026',
+      customer_signed_date: '2026-09-10',
+    });
+
+    // Второго запроса (за номером) нет — сразу INSERT с переданным номером.
+    expect(calls).toHaveLength(2);
+    expect(calls[1].params).toContain('КС-2 №1/2026');
+  });
+
+  it('нумерация считает и аннулированные записи: номер не переиспользуется', async () => {
+    const { client, calls } = makeClient([
+      { rows: [contractRow()] },
+      { rows: [{ next_number: '5' }] },
+      { rows: [{ id: 'ks2-1' }] },
+    ]);
+
+    await createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
+      entry_kind: 'act',
+      amount: 1_000,
+      customer_signed_date: '2026-09-10',
+    });
+
+    expect(calls[1].sql).not.toContain('status');
+    expect(calls[2].params).toContain('5');
+  });
+
   it('подписанный акт не правится — только аннулирование и новая запись', async () => {
     const { client } = makeClient([
       { rows: [{ id: 'ks2-1', skud_object_id: OBJECT_ID, status: 'signed', version: 1, entry_kind: 'act', amount: '100.00' }] },

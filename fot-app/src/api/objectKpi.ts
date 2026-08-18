@@ -215,6 +215,8 @@ export interface IObjectKs2Entry {
   customer_signed_date: string;
   period_month: string;
   status: ObjectKpiEntryStatus;
+  /** fact_adjustment — корректировка факта месяца, причина лежит в notes. */
+  source: 'manual' | 'fact_adjustment';
   notes: string | null;
   version: number;
 }
@@ -358,11 +360,15 @@ export const objectKpiApi = {
     return apiClient.get(`/object-kpi/report/premium${reportQuery(period, objectId)}`);
   },
 
-  /** Только сводка и использованное окно — без строк отчёта. */
+  /**
+   * Только сводка и использованное окно — без строк отчёта.
+   * Без периода сервер считает весь расчёт; с периодом — конкретный месяц.
+   */
   async getReportSummary(
+    period?: IPeriod | null,
     objectId?: string | null,
   ): Promise<{ summary: IObjectKpiSummary; period: IPeriod }> {
-    return apiClient.get(`/object-kpi/report/summary${reportQuery(null, objectId)}`);
+    return apiClient.get(`/object-kpi/report/summary${reportQuery(period, objectId)}`);
   },
 
   async getHeadcount(period: IPeriod): Promise<IObjectKpiHeadcountRow[]> {
@@ -522,6 +528,21 @@ export const objectKpiApi = {
 
   async deleteKs6(id: string, version: number): Promise<void> {
     await apiClient.delete(`/object-kpi/ks6/${id}?version=${version}`);
+  },
+
+  /**
+   * Правка факта месяца: на сервер уходит ЦЕЛЕВАЯ сумма, он сам заводит корректирующий
+   * акт КС-2 на разницу. Факт остаётся суммой подписанных актов (п. 3.1).
+   */
+  async adjustMonthFact(
+    objectId: string,
+    periodMonth: string,
+    payload: { target_amount: string; reason: string },
+  ): Promise<IObjectKs2Entry> {
+    const res = await apiClient.post<{ data: IObjectKs2Entry }>(
+      `/object-kpi/objects/${objectId}/plans/${periodMonth}/fact-adjustment`, payload,
+    );
+    return res.data;
   },
 
   // ─── План ─────────────────────────────────────────────────────────────────

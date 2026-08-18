@@ -2,7 +2,11 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding-bottom: env(safe-area-inset-bottom);
+  width: 100%;
+  /* EmployeeLayout даёт контенту только margin-left под меню, отступы — забота страницы.
+     Нижний padding отдельной строкой: короткая запись затёрла бы safe-area-inset-bottom. */
+  padding: 24px;
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
 }
 
 .totals {
@@ -131,6 +135,14 @@
 @media (max-width: 768px) {
   .summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .page {
+    padding: 16px 12px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    gap: 12px;
   }
 }
 

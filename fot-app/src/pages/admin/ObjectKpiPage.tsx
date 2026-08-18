@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 import { objectKpiApi, type IPeriod, type IReportPremiumRow } from '../../api/objectKpi';
 import { objectKpiKeys } from '../../api/queryKeys';
 import { PREMIUM_STATUS_SHORT, PREMIUM_STATUS_TEXT } from '../../utils/premiumStatus';
+import { shiftMonth } from '../../utils/moscowDate';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   formatDate,
@@ -38,6 +39,8 @@ export const ObjectKpiPage: FC = () => {
   const canEdit = canEditPage('/discipline/objects');
 
   const [objectFilter, setObjectFilter] = useState('');
+  /** Месяц в виджетах: пусто — весь период. Сбрасывается при смене объекта. */
+  const [selectedMonth, setSelectedMonth] = useState('');
   const [openCard, setOpenCard] = useState<{ objectId: string; mode: 'view' | 'create' } | null>(null);
   const [assignmentsOpen, setAssignmentsOpen] = useState(false);
 
@@ -113,9 +116,46 @@ export const ObjectKpiPage: FC = () => {
     enabled: !objectFilter,
   });
 
-  const summary = objectFilter ? tableQuery.data?.summary : summaryQuery.data?.summary;
-  const period = objectFilter ? tableQuery.data?.period : summaryQuery.data?.period;
+  // Базовое окно — «весь период». Список месяцев строится ИЗ НЕГО, а не из ответа на
+  // месячный запрос: тот сузился бы до одного месяца, и переключаться стало бы некуда.
+  const basePeriod = objectFilter ? tableQuery.data?.period : summaryQuery.data?.period;
+
+  const monthOptions = useMemo(() => {
+    if (!basePeriod) return [];
+    const result: string[] = [];
+    for (let month = basePeriod.to; month >= basePeriod.from; month = shiftMonth(month, -1)) {
+      result.push(month);
+      if (result.length > 240) break;  // страховка от кривого окна
+    }
+    return result;
+  }, [basePeriod]);
+
+  // Месяц вне базового окна показывать нечем — сбрасываем (окно меняется вместе с объектом).
+  const activeMonth = selectedMonth && monthOptions.includes(selectedMonth) ? selectedMonth : '';
+
+  const monthSummaryQuery = useQuery({
+    queryKey: objectKpiKeys.reportSummary(objectFilter || 'all', activeMonth),
+    queryFn: () => objectKpiApi.getReportSummary(
+      { from: activeMonth, to: activeMonth },
+      objectFilter || null,
+    ),
+    enabled: Boolean(activeMonth),
+  });
+
+  // Пока месячная сводка грузится, показываем «…», а не суммы прошлого месяца: иначе
+  // переключение выглядит так, будто у двух месяцев одинаковые деньги.
+  const summaryLoading = activeMonth
+    ? monthSummaryQuery.isLoading
+    : (objectFilter ? tableQuery.isLoading : summaryQuery.isLoading);
+  const summary = activeMonth
+    ? monthSummaryQuery.data?.summary
+    : (objectFilter ? tableQuery.data?.summary : summaryQuery.data?.summary);
+  const period = activeMonth ? monthSummaryQuery.data?.period : basePeriod;
   const periodLabel = formatPeriod(period);
+
+  /** Значение плитки: «…» на время загрузки, иначе форматированное число. */
+  const tileValue = (value: number | string | null | undefined, formatter: (v: never) => string) =>
+    (summaryLoading ? '…' : formatter(value as never));
 
   // Строки без договора не показываем: единственное действие по ним — «Создать договор»,
   // а эта кнопка живёт над таблицей.
@@ -136,11 +176,23 @@ export const ObjectKpiPage: FC = () => {
       <div className={styles.toolbar}>
         <div className={styles.summaryTile}>
           <span className={styles.summaryLabel}>План за период</span>
-          <strong>{formatMoneyShort(summary?.total_plan ?? null)}</strong>
+          <strong>{tileValue(summary?.total_plan ?? null, formatMoneyShort)}</strong>
+          {/* Переключатель прямо в плитке: он меняет все три виджета разом. */}
+          <select
+            className={styles.tileSelect}
+            value={activeMonth}
+            onChange={e => setSelectedMonth(e.target.value)}
+            aria-label="Месяц для виджетов"
+          >
+            <option value="">весь период</option>
+            {monthOptions.map(month => (
+              <option key={month} value={month}>{formatMonthLabel(`${month}-01`)}</option>
+            ))}
+          </select>
         </div>
         <div className={styles.summaryTile}>
           <span className={styles.summaryLabel}>Факт КС-2</span>
-          <strong>{formatMoneyShort(summary?.total_fact ?? null)}</strong>
+          <strong>{tileValue(summary?.total_fact ?? null, formatMoneyShort)}</strong>
           {/* Факт месяцев без плана в «Выполнение» не входит, но и потеряться не должен. */}
           {Boolean(summary?.total_fact_unplanned) && (
             <span className={styles.tileHint} title="Месяцы без плана в процент выполнения не входят">
@@ -151,7 +203,7 @@ export const ObjectKpiPage: FC = () => {
         <div className={styles.summaryTile}>
           <span className={styles.summaryLabel}>Выполнение</span>
           {/* Σфакт / Σплан, а не среднее процентов по месяцам (п. 3.5). */}
-          <strong>{formatPercent(summary?.completion_pct ?? null)}</strong>
+          <strong>{tileValue(summary?.completion_pct ?? null, formatPercent)}</strong>
         </div>
 
         <label className={styles.field}>
@@ -161,7 +213,7 @@ export const ObjectKpiPage: FC = () => {
             <select
               className={styles.select}
               value={objectFilter}
-              onChange={e => setObjectFilter(e.target.value)}
+              onChange={e => { setObjectFilter(e.target.value); setSelectedMonth(''); }}
             >
               <option value="">Все объекты</option>
               {objects.map(item => (
@@ -174,7 +226,7 @@ export const ObjectKpiPage: FC = () => {
                 className={styles.clearInside}
                 aria-label="Сбросить объект"
                 title="Все объекты"
-                onClick={() => setObjectFilter('')}
+                onClick={() => { setObjectFilter(''); setSelectedMonth(''); }}
               >
                 <X size={16} />
               </button>
@@ -216,9 +268,12 @@ export const ObjectKpiPage: FC = () => {
               <button
                 type="button"
                 className={styles.primaryBtn}
-                onClick={() => setOpenCard({ objectId: selectedObject.id, mode: 'create' })}
+                onClick={() => setOpenCard({
+                  objectId: selectedObject.id,
+                  mode: selectedObject.contract_id ? 'view' : 'create',
+                })}
               >
-                Создать договор
+                {selectedObject.contract_id ? 'Данные' : 'Создать договор'}
               </button>
             )}
           </div>

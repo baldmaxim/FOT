@@ -67,6 +67,8 @@ export interface ObjectKs2Row {
   customer_signed_date: string;
   period_month: string;
   status: EntryStatus;
+  /** manual — заведено руками; fact_adjustment — корректировка факта, причина в notes. */
+  source: 'manual' | 'fact_adjustment';
   notes: string | null;
   version: number;
   created_at: string;
@@ -91,7 +93,7 @@ const KS2_COLUMNS = `
   id, contract_id, skud_object_id, entry_kind, amount, act_number,
   to_char(customer_signed_date, 'YYYY-MM-DD') AS customer_signed_date,
   to_char(period_month, 'YYYY-MM-DD')         AS period_month,
-  status, notes, version, created_at, updated_at`;
+  status, source, notes, version, created_at, updated_at`;
 
 /** Уникальные индексы отдаются пользователю понятным текстом, а не «duplicate key». */
 const UNIQUE_VIOLATION = '23505';
@@ -524,9 +526,34 @@ export interface Ks2Input {
   entry_kind: 'act' | 'reduction';
   /** Всегда положительное число: знак ставит сервис по entry_kind. */
   amount: number | string;
-  act_number: string;
+  /** Необязателен: без номера сервер берёт следующий порядковый по договору. */
+  act_number?: string | null;
   customer_signed_date: string;
   notes?: string | null;
+  source?: 'manual' | 'fact_adjustment';
+}
+
+/**
+ * Следующий номер акта по договору.
+ *
+ * Считаются ТОЛЬКО полностью числовые номера: «КС-2 №1/2026» после вычистки нецифр дал бы
+ * 212026, и следующий акт получил бы номер 212027. Ограничение в 18 знаков защищает
+ * приведение к bigint от переполнения.
+ *
+ * Последовательность общая для актов и уменьшений — для человека это один журнал записей
+ * договора. Уникальный индекс включает entry_kind, поэтому общая нумерация ему не мешает.
+ *
+ * Гонок нет: вызывается под lockContract (FOR UPDATE по договору), внутри той же транзакции.
+ */
+async function nextActNumber(client: PoolClient, contractId: string): Promise<string> {
+  const result = await client.query<{ next_number: string }>(
+    `SELECT (COALESCE(MAX(btrim(act_number)::bigint), 0) + 1)::text AS next_number
+       FROM object_ks2_entries
+      WHERE contract_id = $1
+        AND btrim(act_number) ~ '^[0-9]{1,18}$'`,
+    [contractId],
+  );
+  return result.rows[0]?.next_number ?? '1';
 }
 
 /**
@@ -549,22 +576,26 @@ export async function createKs2Entry(
   input: Ks2Input,
 ): Promise<ObjectKs2Row> {
   const contract = await lockContract(client, contractId);
+  const actNumber = input.act_number?.trim()
+    ? input.act_number.trim()
+    : await nextActNumber(client, contractId);
 
   let row: ObjectKs2Row;
   try {
     const result = await client.query<ObjectKs2Row>(
       `INSERT INTO object_ks2_entries (
          contract_id, skud_object_id, entry_kind, amount, act_number,
-         customer_signed_date, status, notes, created_by, updated_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,'draft',$7,$8,$8)
+         customer_signed_date, status, source, notes, created_by, updated_by
+       ) VALUES ($1,$2,$3,$4,$5,$6,'draft',$7,$8,$9,$9)
        RETURNING ${KS2_COLUMNS}`,
       [
         contractId,
         contract.skud_object_id,
         input.entry_kind,
         signedAmount(input.entry_kind, input.amount),
-        input.act_number,
+        actNumber,
         input.customer_signed_date,
+        input.source ?? 'manual',
         input.notes ?? null,
         actor.userId,
       ],

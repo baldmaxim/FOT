@@ -139,7 +139,9 @@ export const objectKpiKeys = {
     [...objectKpiKeys.all, 'report', from, to, objectId] as const,
   // Окно считает сервер — дат в ключе нет, объект обязателен.
   reportAuto: (objectId: string) => [...objectKpiKeys.all, 'report-auto', objectId] as const,
-  reportSummary: (objectId: string) => [...objectKpiKeys.all, 'report-summary', objectId] as const,
+  // Месяц в ключе обязателен: без него кэш отдал бы сумму другого месяца.
+  reportSummary: (objectId: string, month: string = 'all') =>
+    [...objectKpiKeys.all, 'report-summary', objectId, month] as const,
   // Окно в ключе обязательно: премия считается за конкретный период, а не «вообще».
   reportPremium: (from: string, to: string, objectId: string) =>
     [...objectKpiKeys.all, 'report-premium', from, to, objectId] as const,

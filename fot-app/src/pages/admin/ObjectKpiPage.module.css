@@ -347,3 +347,15 @@
   color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
+
+/* Переключатель месяца внутри плитки — компактный, не спорит с суммой. */
+.tileSelect {
+  margin-top: 2px;
+  max-width: 100%;
+  padding: 2px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-secondary);
+  font-size: 12px;
+}

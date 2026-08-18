@@ -8,6 +8,7 @@ import { objectKpiKeys } from '../../api/queryKeys';
 import { useToast } from '../../contexts/ToastContext';
 import { formatDate, formatMoney, formatMonthLabel, formatPercent } from '../../utils/formatMoney';
 import { formatMoneyInput, parseMoneyInput, toMoneyInput } from '../../utils/moneyInput';
+import { moscowCurrentMonth } from '../../utils/moscowDate';
 import { ObjectKpiEntriesTab, type IEntryColumn, type IEntryRow } from './ObjectKpiEntriesTab';
 import { ObjectKpiHistoryList } from './ObjectKpiHistoryList';
 import styles from './ObjectKpiCardModal.module.css';
@@ -67,6 +68,8 @@ export const ObjectKpiCardModal: FC<IProps> = ({
   const [tab, setTab] = useState<Tab>('contract');
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
   const [planEdits, setPlanEdits] = useState<Record<string, { amount: string; reason: string }>>({});
+  /** Правка факта месяца: целевая сумма и причина; сервер заведёт акт на разницу. */
+  const [factEdit, setFactEdit] = useState<{ month: string; amount: string; reason: string } | null>(null);
   const [contractDirty, setContractDirty] = useState(false);
   const [contractReason, setContractReason] = useState('');
   const [saving, setSaving] = useState(false);
@@ -139,11 +142,38 @@ export const ObjectKpiCardModal: FC<IProps> = ({
     onError: (error) => toast.error(errorText(error)),
   });
 
+  const factMutation = useMutation({
+    mutationFn: (args: { periodMonth: string; amount: string; reason: string }) =>
+      objectKpiApi.adjustMonthFact(objectId, args.periodMonth, {
+        target_amount: args.amount,
+        reason: args.reason,
+      }),
+    onSuccess: () => {
+      toast.success('Факт скорректирован актом КС-2');
+      setFactEdit(null);
+      refresh();
+    },
+    onError: (error) => toast.error(errorText(error)),
+  });
+
   const fixMutation = useMutation({
     mutationFn: (periodMonth: string) => objectKpiApi.fixPlan(objectId, periodMonth),
     onSuccess: () => { toast.success('План зафиксирован'); refresh(); },
     onError: (error) => toast.error(errorText(error)),
   });
+
+  const currentMonth = moscowCurrentMonth();
+
+  /** Причина последней корректировки факта по месяцам — из записей КС-2, а не из notes «наугад». */
+  const factAdjustments = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of card?.ks2 ?? []) {
+      if (entry.source === 'fact_adjustment' && entry.status !== 'cancelled' && entry.notes) {
+        map.set(entry.period_month, entry.notes);
+      }
+    }
+    return map;
+  }, [card?.ks2]);
 
   /** Основание требуется, только когда правка задевает зафиксированный месяц. */
   const askReason = (): string | undefined => {
@@ -373,6 +403,10 @@ export const ObjectKpiCardModal: FC<IProps> = ({
             const fixed = row.report_status === 'fixed' || row.report_status === 'corrected';
             const editable = canEdit && canRevisePlan && fixed;
             const draft = planEdits[row.period_month];
+            const factDraft = factEdit?.month === row.period_month ? factEdit : null;
+            // Будущий месяц корректировать нечем: акт с датой подписания вперёд —
+            // ошибка ввода, сервер такой запрос тоже отклонит.
+            const factEditable = canEdit && row.period_month.slice(0, 7) <= currentMonth;
             return (
               <tr key={row.period_month}>
                 <td>{formatMonthLabel(row.period_month)}</td>
@@ -434,7 +468,72 @@ export const ObjectKpiCardModal: FC<IProps> = ({
                     </span>
                   )}
                 </td>
-                <td>{formatMoney(row.fact_amount)}</td>
+                <td className={styles.planCell}>
+                  {factDraft ? (
+                    <>
+                      <input
+                        className={styles.cellInput}
+                        inputMode="decimal"
+                        value={factDraft.amount}
+                        onChange={(event) => setFactEdit({
+                          ...factDraft,
+                          amount: formatMoneyInput(event.target.value),
+                        })}
+                      />
+                      <input
+                        className={styles.cellInput}
+                        placeholder="Причина корректировки"
+                        value={factDraft.reason}
+                        onChange={(event) => setFactEdit({ ...factDraft, reason: event.target.value })}
+                      />
+                      <span className={styles.factActions}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const amount = parseMoneyInput(factDraft.amount);
+                            if (amount === null) { toast.error('Укажите сумму'); return; }
+                            if (factDraft.reason.trim() === '') {
+                              toast.error('Укажите причину корректировки');
+                              return;
+                            }
+                            factMutation.mutate({
+                              periodMonth: row.period_month,
+                              amount,
+                              reason: factDraft.reason.trim(),
+                            });
+                          }}
+                          disabled={factMutation.isPending}
+                        >
+                          Сохранить
+                        </button>
+                        <button type="button" onClick={() => setFactEdit(null)}>Отмена</button>
+                      </span>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className={factEditable ? styles.planValueBtn : styles.planValue}
+                      disabled={!factEditable}
+                      title={factEditable
+                        ? 'Изменить факт: система заведёт корректирующий акт КС-2 на разницу'
+                        : 'Факт будущего месяца не корректируется'}
+                      onClick={() => setFactEdit({
+                        month: row.period_month,
+                        amount: toMoneyInput(row.fact_amount),
+                        reason: '',
+                      })}
+                    >
+                      {formatMoney(row.fact_amount)}
+                    </button>
+                  )}
+                  {/* Причина живёт в корректирующем акте (source='fact_adjustment'),
+                      поэтому переживает перезагрузку и видна во вкладке КС-2. */}
+                  {!factDraft && factAdjustments.get(row.period_month) && (
+                    <span className={styles.planReason}>
+                      ✎ {factAdjustments.get(row.period_month)}
+                    </span>
+                  )}
+                </td>
                 <td>{formatPercent(row.completion_pct)}</td>
                 <td>
                   {row.report_status}
@@ -480,7 +579,6 @@ export const ObjectKpiCardModal: FC<IProps> = ({
           } else {
             addMutation.mutate({ kind, payload: {
               entry_kind: form.get('entry_kind'),
-              act_number: String(form.get('number') ?? '').trim(),
               customer_signed_date: form.get('date'),
               // Сумма всегда положительная: знак уменьшения ставит бэкенд по entry_kind.
               amount,
@@ -495,7 +593,8 @@ export const ObjectKpiCardModal: FC<IProps> = ({
             <option value="reduction">Уменьшение объёма</option>
           </select>
         )}
-        <input name="number" placeholder={kind === 'addenda' ? 'Номер ДС' : '№'} required />
+        {/* У КС-2 номера в форме нет: сервер берёт следующий порядковый по договору. */}
+        {kind === 'addenda' && <input name="number" placeholder="Номер ДС" required />}
         <input type="date" name="date" required />
         <input
           name="amount"

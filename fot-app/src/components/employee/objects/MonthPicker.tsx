@@ -14,6 +14,9 @@ interface IMonthPickerProps {
   onChange: (month: string) => void;
 }
 
+/** Синхронизировано с `.pickerPanel { min-width }` в premium.module.css. */
+const PANEL_MIN_WIDTH = 240;
+
 const MONTH_NAMES = [
   'янв', 'фев', 'мар', 'апр', 'май', 'июн',
   'июл', 'авг', 'сен', 'окт', 'ноя', 'дек',
@@ -36,7 +39,9 @@ export const MonthPicker: FC<IMonthPickerProps> = ({ value, max, onChange }) => 
   const year = yearOverride ?? Number(selectedMonth.slice(0, 4));
 
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelStyle = useAnchoredPopover(open, triggerRef);
+  // 240 — min-width панели в CSS: без него хук считает ширину по узкому триггеру,
+  // и панель у правого края экрана уезжает за границу.
+  const panelStyle = useAnchoredPopover(open, triggerRef, PANEL_MIN_WIDTH);
 
   const close = (): void => {
     setOpen(false);

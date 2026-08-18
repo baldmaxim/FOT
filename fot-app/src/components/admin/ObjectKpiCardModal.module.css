@@ -324,3 +324,20 @@
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+/* Кнопки подтверждения правки факта — в столбик под полями ввода. */
+.factActions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.factActions button {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}

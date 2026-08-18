@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { noStore } from '../middleware/noStore.js';
 import { objectKpiController } from '../controllers/object-kpi.controller.js';
 import { objectKpiEntriesController } from '../controllers/object-kpi-entries.controller.js';
 import { objectKpiKs6Controller } from '../controllers/object-kpi-ks6.controller.js';
@@ -8,6 +9,11 @@ import { objectKpiKs6Controller } from '../controllers/object-kpi-ks6.controller
 const router = Router();
 
 router.use(authenticate);
+
+// no-store на весь модуль: глобальный дефолт `private, max-age=30` (app.ts) держал у
+// браузера прошлый ответ, и удалённое закрепление «оживало» в модалке до перезагрузки.
+// Денежные данные из кэша отдавать нечего — они меняются мутацией на соседнем экране.
+router.use(noStore);
 
 // Гарды именованными алиасами — их распознаёт `npm run audit:routes`.
 // Вкладка «KPI объектов» (ввод и отчёт) и раздел ЛК «Мои объекты» (только чтение)
@@ -64,6 +70,8 @@ router.delete('/ks6/:id', kpiEdit, objectKpiKs6Controller.deleteKs6);
 
 // ─── План месяца ─────────────────────────────────────────────────────────────
 router.post('/objects/:objectId/plans/:periodMonth/fix', kpiEdit, objectKpiEntriesController.fixPlan);
+// Правка факта месяца: сервер заводит корректирующий акт КС-2 на разницу.
+router.post('/objects/:objectId/plans/:periodMonth/fact-adjustment', kpiEdit, objectKpiEntriesController.adjustFact);
 // Пересмотр закрытого месяца: гард страницы пропускает экономиста, а право
 // «руководитель эк. отдела / админ» перепроверяется в БД внутри транзакции.
 router.patch('/objects/:objectId/plans/:periodMonth', kpiEdit, objectKpiEntriesController.revisePlan);
