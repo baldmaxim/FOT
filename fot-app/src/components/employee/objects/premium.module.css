@@ -29,6 +29,7 @@
 
 .monthPicker {
   position: relative;
+  font: inherit;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -57,17 +58,85 @@
   flex-shrink: 0;
 }
 
-/* Нативный пикер растянут по подписи: свой дропдаун пришлось бы чинить под iOS и Android. */
-.monthPickerInput {
-  position: absolute;
+/* Поповер выбора месяца: подложка ловит клик вне, панель висит в портале. */
+.pickerBackdrop {
+  position: fixed;
   inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  font-size: 16px;
-  border: 0;
-  padding: 0;
+  z-index: 9998;
+}
+
+.pickerPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 240px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-primary, var(--bg-secondary));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.pickerHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pickerYear {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pickerNav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
   cursor: pointer;
+}
+
+.pickerNav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.pickerGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.pickerMonth {
+  min-height: 40px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pickerMonth:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.pickerMonth:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pickerMonthActive {
+  background: var(--accent);
+  color: #fff;
 }
 
 .heroValue {
@@ -344,4 +413,9 @@
     width: 100%;
     justify-content: space-between;
   }
+}
+
+/* Месяц вне итога: факт в строке есть, но в «Итого по рассчитанным месяцам» не входит. */
+.rowMuted td {
+  color: var(--text-tertiary);
 }

@@ -19,6 +19,7 @@ import {
   resolveCalcWindow,
   summarizeCompletion,
   OBJECT_KPI_MAX_AUTO_MONTHS,
+  OBJECT_KPI_REPORT_SQL,
   type ObjectKpiReportRow,
 } from './object-kpi-report.service.js';
 
@@ -38,8 +39,9 @@ describe('summarizeCompletion', () => {
     expect(result.completion_pct).toBe(19);
   });
 
-  it('строки data_incomplete не участвуют ни в одной из сумм', () => {
-    // План NULL — данных за месяц не было. Подстановка нуля занизила бы процент.
+  it('строки без плана не входят в процент, но их факт не теряется', () => {
+    // План NULL — данных за месяц не было. Подстановка нуля занизила бы процент,
+    // а выброшенный факт спрятал бы подписанные акты: он уходит отдельным полем.
     const result = summarizeCompletion([
       row('1000000.00', '1000000.00'),
       row(null, '500000.00'),
@@ -47,6 +49,7 @@ describe('summarizeCompletion', () => {
 
     expect(result.total_plan).toBe(1_000_000);
     expect(result.total_fact).toBe(1_000_000);
+    expect(result.total_fact_unplanned).toBe(500_000);
     expect(result.completion_pct).toBe(100);
   });
 
@@ -117,5 +120,28 @@ describe('resolveCalcWindow', () => {
     // дату договора и первые акты, иначе договор 2020 года открыл бы период с 2020-го.
     expect(sql).toContain('COALESCE(');
     expect(sql.indexOf('s.plan_start_month')).toBeLessThan(sql.indexOf('LEAST('));
+  });
+});
+
+/**
+ * Структурные проверки SQL-константы. Живой БД в юнит-тестах нет, поэтому это не проверка
+ * чисел, а страховка от случайного отката двух правок, которые молча ломают отчёт.
+ */
+describe('OBJECT_KPI_REPORT_SQL', () => {
+  it('отдаёт накопительные величины на начало месяца', () => {
+    // Именно от них считается остаток (п. 2.2): без них строка отчёта не сходится
+    // сама с собой — «Договор с ДС − КС-2» не давало «Остаток».
+    expect(OBJECT_KPI_REPORT_SQL).toContain('AS ks6_cumulative_before');
+    expect(OBJECT_KPI_REPORT_SQL).toContain('ks2_cumulative_before');
+  });
+
+  it('превышение договора ловится с учётом факта текущего месяца', () => {
+    expect(OBJECT_KPI_REPORT_SQL)
+      .toContain('x.contract_total_calc < (x.ks2_cumulative_before_calc + x.fact_net)');
+  });
+
+  it('руководитель месяца выбирается детерминированно', () => {
+    // Без второго ключа при смене 15/15 победитель зависит от порядка строк в плане.
+    expect(OBJECT_KPI_REPORT_SQL).toContain('ORDER BY t.days DESC, t.valid_from DESC');
   });
 });

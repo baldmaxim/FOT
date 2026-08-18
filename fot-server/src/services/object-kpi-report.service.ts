@@ -42,6 +42,8 @@ export interface ObjectKpiReportRow {
   ks2_cumulative_after: string | null;
   /** КС-6 — СПРАВОЧНО. В план, остаток и факт не входит (см. 243_object_ks6_entries.sql). */
   ks6_cumulative_after: string | null;
+  /** На начало месяца — пара к ks2_cumulative_before, от неё сходится остаток. */
+  ks6_cumulative_before: string | null;
   ks6_month_amount: string;
   remainder: string | null;
   months_remaining: number | null;
@@ -335,6 +337,9 @@ SELECT
   -- КС-6 накопительно — пара к ks2_cumulative_after. Из снимка НИКОГДА не берётся:
   -- снимок замораживает план, а КС-6 в плане не участвует вовсе.
   x.ks6_cumulative_before_calc + x.ks6_net AS ks6_cumulative_after,
+  -- На НАЧАЛО месяца: именно от этой величины считается остаток (п. 2.2), поэтому
+  -- в отчёте показывается она — иначе «Договор с ДС − КС-2» не даёт «Остаток».
+  x.ks6_cumulative_before_calc AS ks6_cumulative_before,
   x.ks6_net         AS ks6_month_amount,
   x.fact_net        AS fact_amount,
   x.fact_acts,
@@ -373,7 +378,9 @@ SELECT
     ELSE 'ok'
   END AS data_quality,
 
-  COALESCE(x.contract_total_calc < x.ks2_cumulative_before_calc, false) AS over_contract,
+  -- Сравнение с накоплением НА КОНЕЦ месяца: с before превышение, возникшее внутри
+  -- самого месяца, оставалось незамеченным до следующей строки отчёта.
+  COALESCE(x.contract_total_calc < (x.ks2_cumulative_before_calc + x.fact_net), false) AS over_contract,
   COALESCE(x.control_date_calc < x.period_month, false)                 AS is_overdue,
 
   x.month_plan_id,
@@ -392,13 +399,17 @@ LEFT JOIN LATERAL (
       'employee_id', t.employee_id,
       'full_name',   t.full_name,
       'days',        t.days
-    ) ORDER BY t.days DESC) AS managers,
-    (array_agg(t.employee_id ORDER BY t.days DESC))[1] AS primary_manager_id,
-    (array_agg(t.full_name   ORDER BY t.days DESC))[1] AS primary_manager_name
+    ) ORDER BY t.days DESC, t.valid_from DESC) AS managers,
+    -- Тайбрейкер по valid_from: при смене ровно посередине месяца (15/15) порядок
+    -- только по days недетерминирован, и премия «прыгала» бы между двумя людьми.
+    -- Побеждает тот, кто отвечал за объект позже — он же ответственный на конец месяца.
+    (array_agg(t.employee_id ORDER BY t.days DESC, t.valid_from DESC))[1] AS primary_manager_id,
+    (array_agg(t.full_name   ORDER BY t.days DESC, t.valid_from DESC))[1] AS primary_manager_name
   FROM (
     SELECT
       a.employee_id,
       e.full_name,
+      a.valid_from,
       (LEAST(COALESCE(a.valid_to, 'infinity'::date),
              (x.period_month + INTERVAL '1 month' - INTERVAL '1 day')::date)
        - GREATEST(a.valid_from, x.period_month) + 1) AS days
@@ -490,17 +501,26 @@ export async function fetchObjectKpiReport(
  *
  * Строки data_incomplete исключаются из обеих сумм: план там NULL, и подстановка
  * нуля занизила бы процент за месяцы, где данных просто не было.
+ *
+ * Факт таких месяцев не выбрасывается, а выносится в total_fact_unplanned: подписанные
+ * акты существуют, и терять их на экране нельзя. Складывать его в total_fact запрещено —
+ * тогда показанные плитки перестали бы давать «Выполнение = Факт / План».
  */
 export function summarizeCompletion(rows: ObjectKpiReportRow[]): {
   total_plan: number;
   total_fact: number;
+  total_fact_unplanned: number;
   completion_pct: number | null;
 } {
   let totalPlan = 0;
   let totalFact = 0;
+  let totalFactUnplanned = 0;
 
   for (const row of rows) {
-    if (row.plan_amount === null) continue;
+    if (row.plan_amount === null) {
+      totalFactUnplanned += Number(row.fact_amount);
+      continue;
+    }
     totalPlan += Number(row.plan_amount);
     totalFact += Number(row.fact_amount);
   }
@@ -508,6 +528,7 @@ export function summarizeCompletion(rows: ObjectKpiReportRow[]): {
   return {
     total_plan: Number(totalPlan.toFixed(2)),
     total_fact: Number(totalFact.toFixed(2)),
+    total_fact_unplanned: Number(totalFactUnplanned.toFixed(2)),
     completion_pct: totalPlan === 0 ? null : Number(((totalFact / totalPlan) * 100).toFixed(2)),
   };
 }

@@ -22,6 +22,8 @@ const lkView = requirePageAccess('/employee/objects', 'view');
 // перехватил бы '/report/headcount' и подобные.
 router.get('/report', reportView, objectKpiController.getReport);
 router.get('/report/summary', reportView, objectKpiController.getReportSummary);
+// Премия — только для вкладки экономиста: в ЛК руководителя своя ветка /my/objects.
+router.get('/report/premium', kpiView, objectKpiController.getReportPremium);
 router.get('/report/headcount', reportView, objectKpiController.getHeadcount);
 router.get('/plans/fixation-info', reportView, objectKpiController.getFixationInfo);
 router.get('/my/objects', lkView, objectKpiController.getMyObjects);

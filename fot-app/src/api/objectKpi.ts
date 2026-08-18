@@ -28,6 +28,8 @@ export interface IObjectKpiReportRow {
   ks2_cumulative_after: string | null;
   /** КС-6 — СПРАВОЧНО: в план, остаток и факт не входит (миграция 243). */
   ks6_cumulative_after: string | null;
+  /** На начало месяца — от неё сходится остаток (п. 2.2 приказа). */
+  ks6_cumulative_before: string | null;
   ks6_month_amount: string;
   remainder: string | null;
   months_remaining: number | null;
@@ -52,6 +54,8 @@ export interface IObjectKpiReportRow {
 export interface IObjectKpiSummary {
   total_plan: number;
   total_fact: number;
+  /** Факт месяцев без плана — в total_fact не входит, иначе «Факт / План» не сойдётся. */
+  total_fact_unplanned: number;
   completion_pct: number | null;
 }
 
@@ -161,6 +165,15 @@ export interface IObjectKpiObject {
   /** Первый расчётный месяц договора — от него разворачивается «Показать все месяцы». */
   plan_start_month: string | null;
   contract_version: number | null;
+}
+
+export interface IReportPremiumRow {
+  employee_id: number;
+  period_month: string;
+  status: PremiumMonthStatus;
+  completion_pct: string | null;
+  coefficient: string | null;
+  premium_amount: string | null;
 }
 
 export interface IObjectKpiObjectsResponse {
@@ -337,6 +350,17 @@ export const objectKpiApi = {
     objectId?: string | null,
   ): Promise<{ data: IObjectKpiReportRow[]; summary: IObjectKpiSummary; period: IPeriod }> {
     return apiClient.get(`/object-kpi/report${reportQuery(period, objectId)}`);
+  },
+
+  /**
+   * Премия руководителей по месяцам — вторым запросом к отчёту.
+   * Считается совокупно по всем объектам руководителя (п. 3.5), даже если отчёт сужен.
+   */
+  async getReportPremium(
+    period?: IPeriod | null,
+    objectId?: string | null,
+  ): Promise<{ data: IReportPremiumRow[]; period: IPeriod }> {
+    return apiClient.get(`/object-kpi/report/premium${reportQuery(period, objectId)}`);
   },
 
   /** Только сводка и использованное окно — без строк отчёта. */

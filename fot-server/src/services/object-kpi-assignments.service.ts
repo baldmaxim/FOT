@@ -219,9 +219,12 @@ export async function updateAssignment(
 }
 
 /**
- * Физически удаляется только закрепление, которое ещё не началось. Начавшееся
- * закрывается датой «по»: за прошедшие месяцы человек отвечал, и удаление записи
- * оставило бы отчёт без руководителя.
+ * Удаляется закрепление за ЛЮБОЙ период, включая уже прошедший (решение пользователя).
+ *
+ * Цена решения: доли по дням (п. 6.4) пересчитываются, и премия за те месяцы меняется
+ * задним числом. Поэтому единственный след — строка в object_kpi_history с полным
+ * before_data: по ней запись восстанавливается вручную. Оптимистичная блокировка по
+ * version остаётся: параллельная правка того же закрепления даёт 409, а не тихое удаление.
  */
 export async function deleteAssignment(
   client: PoolClient,
@@ -231,14 +234,6 @@ export async function deleteAssignment(
 ): Promise<void> {
   const before = await loadAssignment(client, id);
   if (!before) failNotFound('Закрепление');
-
-  if (before!.valid_from <= moscowTodayIso()) {
-    failWith({
-      http: 409,
-      code: 'assignment_started',
-      message: 'Закрепление уже действовало — закройте его датой «по», удалить нельзя',
-    });
-  }
 
   const result = await client.query(
     'DELETE FROM object_kpi_assignments WHERE id = $1 AND version = $2',

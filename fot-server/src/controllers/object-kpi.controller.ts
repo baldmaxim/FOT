@@ -281,6 +281,65 @@ export const objectKpiController = {
     }
   },
 
+  /**
+   * Премия руководителей по месяцам для сводного отчёта — ВТОРЫМ запросом: путь тяжёлый,
+   * и таблица не должна его ждать.
+   *
+   * Считается СОВОКУПНО по всем объектам руководителя (п. 3.5), даже если отчёт сужен до
+   * одного объекта: премия по приказу — величина по человеку, а не по объекту. Поэтому
+   * набор объектов для премии берётся из его закреплений, а не из фильтра отчёта.
+   */
+  async getReportPremium(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const resolved = await resolveReportRequest(req, { requireObjectInAutoMode: false });
+      if ('error' in resolved) {
+        res.status(resolved.error.http).json({ success: false, error: resolved.error.message });
+        return;
+      }
+
+      const rows = await fetchObjectKpiReport(resolved.params);
+      const managerIds = [...new Set(
+        rows.flatMap((row) => (row.managers ?? []).map((item) => Number(item.employee_id))),
+      )].filter((id) => Number.isFinite(id) && id > 0);
+
+      const { monthFrom, monthTo } = resolved.params;
+      const data: Array<{
+        employee_id: number;
+        period_month: string;
+        status: string;
+        completion_pct: string | null;
+        coefficient: string | null;
+        premium_amount: string | null;
+      }> = [];
+
+      // Последовательно, а не Promise.all: каждый вызов открывает свою транзакцию
+      // REPEATABLE READ и строит полный отчёт по объектам руководителя.
+      for (const employeeId of managerIds) {
+        const objectIds = await loadAssignedObjectIds(employeeId, monthFrom, {
+          from: monthFrom,
+          to: monthTo,
+        });
+        if (objectIds.length === 0) continue;
+
+        const result = await fetchManagerPremium({ employeeId, objectIds, monthFrom, monthTo });
+        for (const month of result.premium) {
+          data.push({
+            employee_id: employeeId,
+            period_month: month.period_month,
+            status: month.status,
+            completion_pct: month.completion_pct,
+            coefficient: month.coefficient,
+            premium_amount: month.premium_amount,
+          });
+        }
+      }
+
+      res.json({ success: true, data, period: resolved.period });
+    } catch (error) {
+      respondWithError(res, error, '[object-kpi] getReportPremium');
+    }
+  },
+
   /** Численность — вторым запросом: путь тяжёлый (skud_events по всем сотрудникам объектов). */
   async getHeadcount(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {

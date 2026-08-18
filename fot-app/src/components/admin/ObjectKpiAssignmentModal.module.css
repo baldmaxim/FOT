@@ -209,3 +209,26 @@
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+/* Инлайн-правка периода: два поля дат в ячейке таблицы. */
+.editDates {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.editDates input {
+  min-height: 36px;
+  padding: 4px 8px;
+  /* 16px — иначе мобильный Chrome зумит страницу при фокусе. */
+  font-size: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.actions .dangerBtn {
+  color: var(--danger-color, #dc2626);
+  border-color: var(--danger-color, #dc2626);
+}

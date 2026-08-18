@@ -59,7 +59,14 @@ export const PremiumMonthsTable: FC<IPremiumMonthsTableProps> = ({
           {months.map((month) => (
             <tr
               key={month.period_month}
-              className={`${styles.row} ${month.period_month === selected ? styles.rowActive : ''}`}
+              /* Приглушаем месяцы вне итога: их факт виден в строке, но в плитку
+                 «Итого по рассчитанным месяцам» не входит — без метки это выглядит
+                 как несходящаяся сумма. */
+              className={[
+                styles.row,
+                month.period_month === selected ? styles.rowActive : '',
+                month.status === 'calculated' ? '' : styles.rowMuted,
+              ].filter(Boolean).join(' ')}
               onClick={() => onSelect(month.period_month)}
             >
               <td className={styles.monthCell}>

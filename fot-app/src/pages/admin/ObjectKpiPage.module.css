@@ -336,3 +336,14 @@
     width: 100%;
   }
 }
+
+/* Приглушённое значение в ячейке: «загружается», «нет плана», «н/д». */
+.muted {
+  color: var(--text-secondary);
+}
+
+.tileHint {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}

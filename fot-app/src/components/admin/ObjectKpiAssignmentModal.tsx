@@ -8,6 +8,7 @@ import { objectKpiKeys } from '../../api/queryKeys';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { formatDate } from '../../utils/formatMoney';
+import { moscowTodayIso, shiftDateIso } from '../../utils/moscowDate';
 import styles from './ObjectKpiAssignmentModal.module.css';
 
 /**
@@ -46,6 +47,8 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
   const [employeeTerm, setEmployeeTerm] = useState('');
   const [employee, setEmployee] = useState<{ id: number; full_name: string | null } | null>(null);
   const [suggestions, setSuggestions] = useState<Array<{ id: number; full_name: string | null }>>([]);
+  /** Правка периода по месту: id закрепления → черновик дат. */
+  const [edit, setEdit] = useState<{ id: string; validFrom: string; validTo: string } | null>(null);
 
   const objectsQuery = useQuery({
     queryKey: objectKpiKeys.objects(),
@@ -104,6 +107,24 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
     onError: (error) => toast.error(errorText(error)),
   });
 
+  const updateAssignmentMutation = useMutation({
+    mutationFn: (args: { id: string; version: number; validFrom: string; validTo: string | null }) =>
+      objectKpiApi.updateAssignment(args.id, {
+        valid_from: args.validFrom,
+        valid_to: args.validTo,
+        version: args.version,
+      }),
+    onSuccess: () => { toast.success('Период изменён'); setEdit(null); refresh(); },
+    onError: (error) => toast.error(errorText(error)),
+  });
+
+  const deleteAssignmentMutation = useMutation({
+    mutationFn: (args: { id: string; version: number }) =>
+      objectKpiApi.deleteAssignment(args.id, args.version),
+    onSuccess: () => { toast.success('Закрепление удалено'); refresh(); },
+    onError: (error) => toast.error(errorText(error)),
+  });
+
   const revokeRoleMutation = useMutation({
     mutationFn: (id: string) => objectKpiApi.revokeGlobalRole(id),
     onSuccess: () => { toast.success('Роль снята'); refresh(); },
@@ -140,7 +161,23 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
     });
   };
 
-  const today = new Date().toISOString().slice(0, 10);
+  // Дата по Москве, а не по UTC: сервер живёт в Europe/Moscow, и до 03:00 МСК
+  // toISOString() дал бы вчерашний день — сутки чужой ответственности за объект.
+  const today = moscowTodayIso();
+  const yesterday = shiftDateIso(today, -1);
+
+  /**
+   * Передача объекта: прежний руководитель заканчивает ВЧЕРА, новый начинает сегодня.
+   * daterange в EXCLUDE замкнут с обеих сторон, поэтому стык день-в-день — пересечение
+   * периодов, и назначение нового руководителя упало бы с 409.
+   */
+  const requestDelete = (item: { id: string; version: number; role_kind: RoleKind }) => {
+    const warning = item.role_kind === 'construction_manager'
+      ? ' Премия за месяцы этого закрепления будет пересчитана.'
+      : '';
+    if (!window.confirm(`Удалить закрепление?${warning}`)) return;
+    deleteAssignmentMutation.mutate({ id: item.id, version: item.version });
+  };
 
   return (
     <ModalShell onClose={onClose} overlayClassName={styles.overlay} containerClassName={styles.container}>
@@ -215,33 +252,99 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
               </button>
             </form>
 
-            <h3 className={styles.sectionTitle}>Действующие закрепления</h3>
+            {/* Не «действующие»: список приходит вместе с закрытыми периодами. */}
+            <h3 className={styles.sectionTitle}>Закрепления по объектам</h3>
             <div className={styles.tableWrap}>
               <table className={styles.table}>
                 <thead>
                   <tr><th>Объект</th><th>Сотрудник</th><th>Роль</th><th>Период</th><th /></tr>
                 </thead>
                 <tbody>
-                  {(assignmentsQuery.data ?? []).map(item => (
+                  {(assignmentsQuery.data ?? []).map(item => {
+                    const editing = edit?.id === item.id;
+                    const started = item.valid_from <= today;
+                    return (
                     <tr key={item.id}>
                       <td>{item.object_name ?? '—'}</td>
                       <td>{item.employee_name ?? item.employee_id}</td>
                       <td>{ROLE_LABELS[item.role_kind]}</td>
-                      <td>{formatDate(item.valid_from)} — {item.valid_to ? formatDate(item.valid_to) : '…'}</td>
+                      <td>
+                        {editing ? (
+                          <span className={styles.editDates}>
+                            <input
+                              type="date"
+                              value={edit.validFrom}
+                              onChange={(event) => setEdit({ ...edit, validFrom: event.target.value })}
+                              aria-label="Период с"
+                            />
+                            <input
+                              type="date"
+                              value={edit.validTo}
+                              onChange={(event) => setEdit({ ...edit, validTo: event.target.value })}
+                              aria-label="Период по (пусто — бессрочно)"
+                            />
+                          </span>
+                        ) : (
+                          <>{formatDate(item.valid_from)} — {item.valid_to ? formatDate(item.valid_to) : '…'}</>
+                        )}
+                      </td>
                       <td className={styles.actions}>
-                        {!item.valid_to && (
-                          <button
-                            type="button"
-                            onClick={() => closeAssignmentMutation.mutate({
-                              id: item.id, version: item.version, validTo: today,
-                            })}
-                          >
-                            Закрыть сегодня
-                          </button>
+                        {editing ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => updateAssignmentMutation.mutate({
+                                id: item.id,
+                                version: item.version,
+                                validFrom: edit.validFrom,
+                                validTo: edit.validTo === '' ? null : edit.validTo,
+                              })}
+                              disabled={updateAssignmentMutation.isPending}
+                            >
+                              Сохранить
+                            </button>
+                            <button type="button" onClick={() => setEdit(null)}>Отмена</button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setEdit({
+                                id: item.id,
+                                validFrom: item.valid_from,
+                                validTo: item.valid_to ?? '',
+                              })}
+                            >
+                              Изменить
+                            </button>
+                            {/* Закрываем ВЧЕРАШНИМ днём: замкнутый daterange считает стык
+                                день-в-день пересечением, и новый руководитель с сегодня
+                                иначе не назначится. Для не начавшихся записей кнопки нет —
+                                там valid_to оказался бы раньше valid_from. */}
+                            {!item.valid_to && started && (
+                              <button
+                                type="button"
+                                onClick={() => closeAssignmentMutation.mutate({
+                                  id: item.id, version: item.version, validTo: yesterday,
+                                })}
+                              >
+                                Закрыть вчера
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className={styles.dangerBtn}
+                              onClick={() => requestDelete(item)}
+                              disabled={deleteAssignmentMutation.isPending}
+                            >
+                              Удалить
+                            </button>
+                          </>
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {(assignmentsQuery.data ?? []).length === 0 && (
                     <tr><td colSpan={5} className={styles.empty}>Закреплений нет</td></tr>
                   )}

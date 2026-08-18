@@ -91,9 +91,15 @@ export const EmployeeObjectsPage: FC = () => {
 
   const rangeLabel = `${formatMonthLabel(period.from)} — ${formatMonthLabel(period.to)}`;
 
+  /**
+   * Месяц внутри уже загруженного окна только выбирается: сдвиг якоря выбросил бы из
+   * таблицы месяцы после выбранного (выбрал май — пропали июнь–август). Окно двигается
+   * лишь когда выбранный месяц за его границами.
+   */
   const handleMonthChange = (month: string): void => {
-    setAnchorMonth(month.slice(0, 7));
-    setSelectedMonth(month.slice(0, 7).concat('-01'));
+    const value = month.slice(0, 7);
+    if (value < period.from || value > period.to) setAnchorMonth(value);
+    setSelectedMonth(`${value}-01`);
   };
 
   // Группируем по объекту: карточка на объект, внутри — месяцы.
@@ -118,7 +124,8 @@ export const EmployeeObjectsPage: FC = () => {
             month={activeMonth}
             scale={activeScale}
             isCurrentMonth={activeMonth?.period_month.slice(0, 7) === currentMonth()}
-            pickerValue={`${anchorMonth}-01`}
+            // Активный месяц, а не якорь: иначе шапка показывала бы границу окна.
+            pickerValue={activeMonth?.period_month ?? selectedMonth ?? `${anchorMonth}-01`}
             pickerMax={currentMonth()}
             onMonthChange={handleMonthChange}
           />

@@ -2,8 +2,9 @@ import { useMemo, useState, type FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 
-import { objectKpiApi, type IPeriod } from '../../api/objectKpi';
+import { objectKpiApi, type IPeriod, type IReportPremiumRow } from '../../api/objectKpi';
 import { objectKpiKeys } from '../../api/queryKeys';
+import { PREMIUM_STATUS_SHORT, PREMIUM_STATUS_TEXT } from '../../utils/premiumStatus';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   formatDate,
@@ -57,6 +58,53 @@ export const ObjectKpiPage: FC = () => {
     enabled: Boolean(objectFilter),
   });
 
+  // Премия — третьим, ленивым запросом: путь тяжёлый (полный отчёт на каждого
+  // руководителя), и таблица не должна его ждать. Окно берём из ответа таблицы,
+  // чтобы премия и строки считались за один и тот же период.
+  const tablePeriod = tableQuery.data?.period;
+  const premiumQuery = useQuery({
+    queryKey: objectKpiKeys.reportPremium(
+      tablePeriod?.from ?? 'auto',
+      tablePeriod?.to ?? 'auto',
+      objectFilter || 'all',
+    ),
+    queryFn: () => objectKpiApi.getReportPremium(tablePeriod, objectFilter),
+    enabled: Boolean(objectFilter) && Boolean(tablePeriod),
+  });
+
+  // Ключ — «руководитель + месяц»: премия по приказу принадлежит человеку, а не объекту.
+  const premiumByManager = useMemo(() => {
+    const map = new Map<string, IReportPremiumRow>();
+    for (const item of premiumQuery.data?.data ?? []) {
+      map.set(`${item.employee_id}|${item.period_month}`, item);
+    }
+    return map;
+  }, [premiumQuery.data]);
+
+  /** Три состояния колонки «Премия»: считается, ошибка, не рассчитана — с причиной. */
+  const renderPremium = (managerId: number | null, periodMonth: string) => {
+    if (!managerId) return <span title="За месяц нет закреплённого руководителя">—</span>;
+    if (premiumQuery.isLoading) return <span className={styles.muted}>…</span>;
+    if (premiumQuery.isError) {
+      return <span className={styles.muted} title="Не удалось рассчитать премию">н/д</span>;
+    }
+
+    const item = premiumByManager.get(`${managerId}|${periodMonth}`);
+    if (!item) return <span title="Премия за этот месяц не рассчитывалась">—</span>;
+    if (item.status !== 'calculated') {
+      return (
+        <span className={styles.muted} title={PREMIUM_STATUS_TEXT[item.status]}>
+          {PREMIUM_STATUS_SHORT[item.status]}
+        </span>
+      );
+    }
+    return (
+      <span title="Совокупно за все объекты руководителя (п. 3.5)">
+        {formatMoneyShort(item.premium_amount)}
+      </span>
+    );
+  };
+
   // Сводка по всем объектам — отдельным лёгким запросом. При выбранном объекте она уже
   // пришла вместе с таблицей, второй запрос был бы тем же самым по нагрузке на БД.
   const summaryQuery = useQuery({
@@ -93,6 +141,12 @@ export const ObjectKpiPage: FC = () => {
         <div className={styles.summaryTile}>
           <span className={styles.summaryLabel}>Факт КС-2</span>
           <strong>{formatMoneyShort(summary?.total_fact ?? null)}</strong>
+          {/* Факт месяцев без плана в «Выполнение» не входит, но и потеряться не должен. */}
+          {Boolean(summary?.total_fact_unplanned) && (
+            <span className={styles.tileHint} title="Месяцы без плана в процент выполнения не входят">
+              + {formatMoneyShort(summary?.total_fact_unplanned ?? null)} по месяцам без плана
+            </span>
+          )}
         </div>
         <div className={styles.summaryTile}>
           <span className={styles.summaryLabel}>Выполнение</span>
@@ -180,8 +234,8 @@ export const ObjectKpiPage: FC = () => {
                     <th>Месяц</th>
                     <th>Руководитель</th>
                     <th>Договор с ДС</th>
-                    <th>КС-2</th>
-                    <th>КС-6</th>
+                    <th title="Подписано накопительно на начало месяца (п. 2.2)">КС-2</th>
+                    <th title="Журнал КС-6 накопительно на начало месяца, справочно">КС-6</th>
                     <th>Остаток</th>
                     <th>Мес.</th>
                     <th>План месяца</th>
@@ -206,13 +260,13 @@ export const ObjectKpiPage: FC = () => {
                       className={styles.row}
                       onClick={() => setOpenCard({ objectId: row.skud_object_id, mode: 'view' })}
                     >
-                      {/* Премия — Этап 2 приказа, расчёта пока нет. */}
-                      <td>—</td>
+                      <td>{renderPremium(row.primary_manager_id, row.period_month)}</td>
                       <td>{formatMonthLabel(row.period_month)}</td>
                       <td>{row.primary_manager_name ?? '—'}</td>
                       <td>{formatMoneyShort(row.contract_total)}</td>
-                      <td>{formatMoneyShort(row.ks2_cumulative_after)}</td>
-                      <td>{formatMoneyShort(row.ks6_cumulative_after)}</td>
+                      {/* На начало месяца: только так «Договор с ДС − КС-2 = Остаток». */}
+                      <td>{formatMoneyShort(row.ks2_cumulative_before)}</td>
+                      <td>{formatMoneyShort(row.ks6_cumulative_before)}</td>
                       <td>{formatMoneyShort(row.remainder)}</td>
                       <td>{row.months_remaining ?? '—'}</td>
                       <td>
