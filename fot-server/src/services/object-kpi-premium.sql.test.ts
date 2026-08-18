@@ -34,6 +34,7 @@ interface MonthInput {
   has_incomplete?: boolean;
   scale_version_id?: string | null;
   base_amount?: string | null;
+  salary?: string | null;
 }
 
 interface ShareInput {
@@ -67,6 +68,7 @@ suite('премия KPI — формулы в SQL', () => {
       has_incomplete: false,
       scale_version_id: SCALE_VERSION,
       base_amount: '200000.00',
+      salary: null,
       ...month,
     }));
     const result = await pool.query(PREMIUM_MATH_SQL, [
@@ -233,7 +235,12 @@ suite('премия KPI — формулы в SQL', () => {
   const days = async (
     monthFrom: string,
     monthTo: string,
-    assignments: Array<{ skud_object_id: string; valid_from: string; valid_to: string | null }>,
+    assignments: Array<{
+      skud_object_id: string;
+      valid_from: string;
+      valid_to: string | null;
+      salary_amount?: string | null;
+    }>,
     eligible: Array<{ period_month: string; skud_object_id: string }>,
   ) => {
     const result = await pool.query(PREMIUM_ASSIGNMENT_DAYS_SQL, [
@@ -257,8 +264,8 @@ suite('премия KPI — формулы в SQL', () => {
     );
 
     expect(rows).toEqual([
-      { period_month: '2026-08-01', days_in_month: 31, any_assignment_days: 18, eligible_assignment_days: 18 },
-      { period_month: '2026-09-01', days_in_month: 30, any_assignment_days: 30, eligible_assignment_days: 30 },
+      { period_month: '2026-08-01', days_in_month: 31, any_assignment_days: 18, eligible_assignment_days: 18, salary_prorated: null },
+      { period_month: '2026-09-01', days_in_month: 30, any_assignment_days: 30, eligible_assignment_days: 30, salary_prorated: null },
     ]);
   });
 
@@ -278,7 +285,72 @@ suite('премия KPI — формулы в SQL', () => {
       days_in_month: 31,
       any_assignment_days: 31,
       eligible_assignment_days: 10,
+      // Оклад ни в одном закреплении не задан: null, а не ноль — интерфейс по нему
+      // отличает «зарплата не ведётся» от «зарплата 0».
+      salary_prorated: null,
     });
+  });
+
+  it('оклад целиком за полный месяц и пропорционально за неполный', async () => {
+    const rows = await days(
+      '2026-08-01',
+      '2026-09-01',
+      [{ skud_object_id: OBJECT_A, valid_from: '2026-08-14', valid_to: null, salary_amount: '310000.00' }],
+      [
+        { period_month: '2026-08-01', skud_object_id: OBJECT_A },
+        { period_month: '2026-09-01', skud_object_id: OBJECT_A },
+      ],
+    );
+
+    // 18 дней из 31: 310 000 × 18 / 31.
+    expect(rows[0].salary_prorated).toBe('180000.00');
+    expect(rows[1].salary_prorated).toBe('310000.00');
+  });
+
+  it('передача объекта внутри месяца: два закрепления дают в сумме один оклад', async () => {
+    const rows = await days(
+      '2026-08-01',
+      '2026-08-01',
+      [
+        { skud_object_id: OBJECT_A, valid_from: '2026-08-01', valid_to: '2026-08-15', salary_amount: '310000.00' },
+        { skud_object_id: OBJECT_B, valid_from: '2026-08-16', valid_to: null, salary_amount: '310000.00' },
+      ],
+      [{ period_month: '2026-08-01', skud_object_id: OBJECT_A }],
+    );
+
+    expect(rows[0].salary_prorated).toBe('310000.00');
+  });
+
+  it('оклад начисляется и в месяце без плана: премию гасит статус, зарплату — нет', async () => {
+    const rows = await math(
+      [{ period_month: '2026-08-01', any_days: 31, eligible_days: 0, days_in_month: 31, salary: '310000.00' }],
+      [],
+    );
+
+    expect(rows[0].status).toBe('no_plan');
+    expect(rows[0].premium_amount).toBeNull();
+    expect(rows[0].salary_amount).toBe('310000.00');
+    expect(rows[0].total_amount).toBe('310000.00');
+  });
+
+  it('итого = премия + оклад, копейки оклада не теряются', async () => {
+    const rows = await math(
+      [{ ...fullMonth('2026-08-01', 31), salary: '310000.55' }],
+      [{ period_month: '2026-08-01', plan_exact: '100', fact_exact: '100' }],
+    );
+
+    expect(rows[0].premium_amount).toBe('200000');
+    expect(rows[0].total_amount).toBe('510000.55');
+  });
+
+  it('без оклада итого равно премии, а оклад приходит null', async () => {
+    const rows = await math(
+      [fullMonth('2026-08-01', 31)],
+      [{ period_month: '2026-08-01', plan_exact: '100', fact_exact: '100' }],
+    );
+
+    expect(rows[0].salary_amount).toBeNull();
+    expect(rows[0].total_amount).toBe('200000.00');
   });
 
   it('февраль високосного года даёт 29 дней', async () => {

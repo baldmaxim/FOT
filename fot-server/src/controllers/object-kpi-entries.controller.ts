@@ -14,6 +14,10 @@ import {
 } from './object-kpi-schemas.js';
 import type { ObjectKpiActor } from '../services/object-kpi-history.service.js';
 import { isObjectInScope } from '../services/object-kpi-scope.service.js';
+import {
+  canSeeManagerSalary,
+  redactAssignmentSalary,
+} from '../services/object-kpi-salary-access.service.js';
 import { fixMonthPlan, revisePlan } from '../services/object-kpi-plan.service.js';
 import { adjustMonthFact } from '../services/object-kpi-fact-adjustment.service.js';
 import { runPlanFreezerOnce } from '../services/object-kpi-plan-freezer.service.js';
@@ -72,15 +76,51 @@ const addendumSchema = z.object({
   notes: z.string().trim().max(2000).nullish(),
 });
 
-const ks2Schema = z.object({
+/**
+ * Поля записи КС-2. Схемы три, а не одна: в Zod 3 после .refine()/.superRefine() получается
+ * ZodEffects, у которого нет .partial(), — PATCH из такой схемы собрать нельзя.
+ */
+const ks2FieldsSchema = z.object({
   entry_kind: z.enum(['act', 'reduction']),
   amount: moneySchema,
   // Необязателен: без номера сервер берёт следующий порядковый по договору. Ручной ввод
   // остаётся возможным — он нужен при переносе реальных актов с их собственными номерами.
   act_number: z.string().trim().min(1).max(120).optional(),
-  customer_signed_date: dateSchema,
+  /** Основной способ ввода: расчётный месяц. Дату подписания сервер выводит сам. */
+  period_month: monthSchema.optional(),
+  /** Точная дата подписания — для переноса реальных актов через API. */
+  customer_signed_date: dateSchema.optional(),
   notes: z.string().trim().max(2000).nullish(),
 });
+
+/**
+ * Месяц и дата вместе не принимаются: два противоречащих периода в одном теле запроса
+ * пришлось бы разрешать молчаливым приоритетом, и клиент не узнал бы, какой месяц записан.
+ */
+const rejectBothPeriods = (
+  value: { period_month?: string; customer_signed_date?: string },
+  ctx: z.RefinementCtx,
+): void => {
+  if (value.period_month !== undefined && value.customer_signed_date !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Укажите либо месяц акта, либо дату подписания',
+    });
+  }
+};
+
+const createKs2Schema = ks2FieldsSchema.superRefine((value, ctx) => {
+  rejectBothPeriods(value, ctx);
+  if (value.period_month === undefined && value.customer_signed_date === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Укажите месяц акта' });
+  }
+});
+
+const updateKs2Schema = ks2FieldsSchema
+  .partial()
+  // Основание правки закрытого месяца — здесь же: подписанную запись без него не сохранить.
+  .extend({ reason: z.string().trim().max(2000).nullish() })
+  .superRefine(rejectBothPeriods);
 
 const assignmentSchema = z.object({
   skud_object_id: uuidSchema,
@@ -312,7 +352,7 @@ export const objectKpiEntriesController = {
   async createKs2(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const contractId = uuidSchema.parse(req.params.id);
-      const input = ks2Schema.parse(req.body);
+      const input = createKs2Schema.parse(req.body);
       const contract = await getContractById(contractId);
       if (!contract) {
         res.status(404).json({ success: false, error: 'Договор не найден' });
@@ -344,16 +384,16 @@ export const objectKpiEntriesController = {
     try {
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.body.version);
-      const patch = ks2Schema.partial().parse(req.body);
+      const { reason, ...patch } = updateKs2Schema.parse(req.body);
 
       const actor = await buildActor(req);
       const row = await withTransaction(async (client) => {
-        const updated = await updateKs2Entry(client, actor, id, version, patch);
+        const updated = await updateKs2Entry(client, actor, id, version, patch, reason);
         await auditService.logFromRequestWithClient(client, req, req.user.id,
           AUDIT_ACTIONS.OBJECT_KPI_KS2_SAVED, {
             entityType: 'object_ks2_entry',
             entityId: id,
-            details: { action: 'update' },
+            details: { action: 'update', reason },
           });
         return updated;
       });
@@ -553,7 +593,10 @@ export const objectKpiEntriesController = {
           });
         return created;
       });
-      res.status(201).json({ success: true, data: row });
+      res.status(201).json({
+        success: true,
+        data: redactAssignmentSalary(row, await canSeeManagerSalary(req.user)),
+      });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] createAssignment');
     }
@@ -567,11 +610,18 @@ export const objectKpiEntriesController = {
         valid_from: dateSchema.optional(),
         valid_to: dateSchema.nullish(),
         notes: z.string().trim().max(2000).nullish(),
+        // Право на это поле проверяется в сервисе, в БД и внутри транзакции.
+        salary_amount: moneySchema.refine((v) => Number(v) >= 0, 'Зарплата не может быть отрицательной').nullish(),
       }).parse(req.body);
 
       const actor = await buildActor(req);
       const row = await withTransaction(async (client) => {
-        const updated = await updateAssignment(client, actor, id, version, patch);
+        const updated = await updateAssignment(client, actor, id, version, patch, {
+          employeeId: req.user.employee_id,
+          isAdmin: req.user.is_admin === true,
+        });
+        // Полное значение оклада остаётся в аудите: он доступен только администратору,
+        // а денежная правка обязана быть восстановима.
         await auditService.logFromRequestWithClient(client, req, req.user.id,
           AUDIT_ACTIONS.OBJECT_KPI_ASSIGNMENT_CHANGED, {
             entityType: 'object_kpi_assignment',
@@ -580,7 +630,12 @@ export const objectKpiEntriesController = {
           });
         return updated;
       });
-      res.json({ success: true, data: row });
+      // Ответ PATCH — такой же канал выдачи, как список: без маскирования экономист объекта
+      // увидел бы оклад, правя период.
+      res.json({
+        success: true,
+        data: redactAssignmentSalary(row, await canSeeManagerSalary(req.user)),
+      });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] updateAssignment');
     }

@@ -22,16 +22,6 @@ import {
  * который ничего не меняет и выглядит как забытая запись.
  */
 
-/** Последний день месяца; для текущего месяца — сегодня. */
-function signedDateForMonth(periodMonth: string): string {
-  const today = moscowTodayIso();
-  const [year, month] = periodMonth.split('-').map(Number);
-  // Нулевой день следующего месяца = последний день текущего.
-  const lastDay = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
-  // Акт с датой подписания в будущем выглядит как ошибка ввода.
-  return lastDay > today ? today : lastDay;
-}
-
 export interface FactAdjustmentParams {
   objectId: string;
   /** YYYY-MM-01 */
@@ -82,7 +72,9 @@ export async function adjustMonthFact(
   const created = await createKs2Entry(client, actor, contract!.id, {
     entry_kind: delta > 0 ? 'act' : 'reduction',
     amount: Math.abs(delta),
-    customer_signed_date: signedDateForMonth(params.periodMonth),
+    // Месяцем, а не датой: дату подписания выводит сам createKs2Entry (последний день
+    // месяца, для текущего — сегодня), и правило остаётся в одном месте.
+    period_month: params.periodMonth,
     source: 'fact_adjustment',
     notes: params.reason,
   });

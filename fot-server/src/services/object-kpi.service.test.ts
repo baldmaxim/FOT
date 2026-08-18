@@ -34,6 +34,25 @@ import {
   updateKs6Entry,
 } from './object-kpi-ks6.service.js';
 
+/**
+ * Месяцы считаются от сегодняшнего дня, а не зашиты константами: акт с будущим месяцем
+ * теперь отвергается, и фиксированная дата протухла бы вместе с календарём.
+ */
+const monthOf = (delta: number): string => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
+  const [year, month] = today.slice(0, 7).split('-').map(Number);
+  const total = year * 12 + (month - 1) + delta;
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, '0')}`;
+};
+
+const PAST_MONTH = monthOf(-1);
+const PAST_DATE = `${PAST_MONTH}-10`;
+/** Последний день прошлого месяца — то, что подставляет сервис при вводе месяцем. */
+const PAST_MONTH_LAST_DAY = new Date(Date.UTC(
+  Number(PAST_MONTH.slice(0, 4)), Number(PAST_MONTH.slice(5, 7)), 0,
+)).toISOString().slice(0, 10);
+const FUTURE_MONTH = monthOf(1);
+
 const OBJECT_ID = '11111111-1111-1111-1111-111111111111';
 const CONTRACT_ID = '22222222-2222-2222-2222-222222222222';
 const ACTOR = { userId: 'user-1', userName: 'Экономист' };
@@ -163,7 +182,7 @@ describe('КС-2', () => {
       entry_kind: 'reduction',
       amount: 5_000_000,
       act_number: 'У-1',
-      customer_signed_date: '2026-09-10',
+      customer_signed_date: PAST_DATE,
     });
 
     expect(calls[1].params).toContain(-5_000_000);
@@ -179,7 +198,7 @@ describe('КС-2', () => {
     await createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
       entry_kind: 'act',
       amount: 1_000,
-      customer_signed_date: '2026-09-10',
+      customer_signed_date: PAST_DATE,
     });
 
     // Только полностью числовые номера: «КС-2 №1/2026» после вычистки нецифр дал бы
@@ -198,7 +217,7 @@ describe('КС-2', () => {
       entry_kind: 'act',
       amount: 1_000,
       act_number: 'КС-2 №1/2026',
-      customer_signed_date: '2026-09-10',
+      customer_signed_date: PAST_DATE,
     });
 
     // Второго запроса (за номером) нет — сразу INSERT с переданным номером.
@@ -216,20 +235,126 @@ describe('КС-2', () => {
     await createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
       entry_kind: 'act',
       amount: 1_000,
-      customer_signed_date: '2026-09-10',
+      customer_signed_date: PAST_DATE,
     });
 
     expect(calls[1].sql).not.toContain('status');
     expect(calls[2].params).toContain('5');
   });
 
-  it('подписанный акт не правится — только аннулирование и новая запись', async () => {
-    const { client } = makeClient([
-      { rows: [{ id: 'ks2-1', skud_object_id: OBJECT_ID, status: 'signed', version: 1, entry_kind: 'act', amount: '100.00' }] },
+  it('ввод месяцем: дата подписания — последний день месяца', async () => {
+    const { client, calls } = makeClient([
+      { rows: [contractRow()] },
+      { rows: [{ next_number: '1' }] },
+      { rows: [{ id: 'ks2-1' }] },
     ]);
 
-    await expect(updateKs2Entry(client as never, ACTOR, 'ks2-1', 1, { notes: 'правка' }))
-      .rejects.toMatchObject({ __save: { http: 409, code: 'not_draft' } });
+    await createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
+      entry_kind: 'act',
+      amount: 1_000,
+      period_month: `${PAST_MONTH}-01`,
+    });
+
+    expect(calls[2].params).toContain(PAST_MONTH_LAST_DAY);
+  });
+
+  it('текущий месяц подписывается сегодняшним днём, а не концом месяца', async () => {
+    const { client, calls } = makeClient([
+      { rows: [contractRow()] },
+      { rows: [{ next_number: '1' }] },
+      { rows: [{ id: 'ks2-1' }] },
+    ]);
+
+    await createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
+      entry_kind: 'act',
+      amount: 1_000,
+      period_month: `${monthOf(0)}-01`,
+    });
+
+    // Акт с датой подписания вперёд выглядит как ошибка ввода.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
+    expect(calls[2].params).toContain(today);
+  });
+
+  it('будущий месяц отвергается — и месяцем, и датой', async () => {
+    const { client } = makeClient([{ rows: [contractRow()] }]);
+    await expect(createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
+      entry_kind: 'act', amount: 1_000, period_month: `${FUTURE_MONTH}-01`,
+    })).rejects.toMatchObject({ __save: { http: 400, code: 'future_month' } });
+
+    const second = makeClient([{ rows: [contractRow()] }]);
+    await expect(createKs2Entry(second.client as never, ACTOR, CONTRACT_ID, {
+      entry_kind: 'act', amount: 1_000, customer_signed_date: `${FUTURE_MONTH}-10`,
+    })).rejects.toMatchObject({ __save: { http: 400, code: 'future_month' } });
+  });
+
+  it('месяц вместе с датой — 400, а не молчаливый приоритет одного из них', async () => {
+    const { client } = makeClient([{ rows: [contractRow()] }]);
+
+    await expect(createKs2Entry(client as never, ACTOR, CONTRACT_ID, {
+      entry_kind: 'act',
+      amount: 1_000,
+      period_month: `${PAST_MONTH}-01`,
+      customer_signed_date: PAST_DATE,
+    })).rejects.toMatchObject({ __save: { http: 400, code: 'ambiguous_period' } });
+  });
+
+  it('подписанная запись правится месяцем и суммой', async () => {
+    const signed = {
+      id: 'ks2-1', skud_object_id: OBJECT_ID, status: 'signed', version: 1,
+      entry_kind: 'act', amount: '100.00', period_month: `${PAST_MONTH}-01`,
+    };
+    const { client, calls } = makeClient([
+      { rows: [signed] },
+      { rows: [{ ...signed, version: 2 }] },
+    ]);
+
+    await updateKs2Entry(client as never, ACTOR, 'ks2-1', 1, {
+      period_month: `${PAST_MONTH}-01`, amount: 200,
+    }, 'ошибка ввода');
+
+    expect(calls[1].params).toContain(PAST_MONTH_LAST_DAY);
+    expect(calls[1].params).toContain(200);
+  });
+
+  it('у подписанной записи номер акта заблокирован', async () => {
+    const { client } = makeClient([
+      { rows: [{ id: 'ks2-1', skud_object_id: OBJECT_ID, status: 'signed', version: 1, entry_kind: 'act', amount: '100.00', period_month: `${PAST_MONTH}-01` }] },
+    ]);
+
+    await expect(updateKs2Entry(client as never, ACTOR, 'ks2-1', 1, { act_number: 'А-9' }))
+      .rejects.toMatchObject({ __save: { http: 400, code: 'signed_field_locked' } });
+  });
+
+  it('аннулированная запись не правится вовсе', async () => {
+    const { client } = makeClient([
+      { rows: [{ id: 'ks2-1', skud_object_id: OBJECT_ID, status: 'cancelled', version: 1, entry_kind: 'act', amount: '100.00' }] },
+    ]);
+
+    await expect(updateKs2Entry(client as never, ACTOR, 'ks2-1', 1, { amount: 200 }))
+      .rejects.toMatchObject({ __save: { http: 409, code: 'bad_transition' } });
+  });
+
+  it('перенос подписанного акта проверяет ОБА месяца: и старый, и новый', async () => {
+    const before = {
+      id: 'ks2-1', skud_object_id: OBJECT_ID, status: 'signed', version: 1,
+      entry_kind: 'act', amount: '100.00', period_month: `${monthOf(-2)}-01`,
+    };
+    const { client } = makeClient([
+      { rows: [before] },
+      { rows: [{ ...before, version: 2 }] },
+    ]);
+
+    await updateKs2Entry(client as never, ACTOR, 'ks2-1', 1, {
+      period_month: `${PAST_MONTH}-01`,
+    }, 'перенос акта');
+
+    expect(requireReasonIfMonthFixed).toHaveBeenCalledWith(
+      expect.anything(), OBJECT_ID, `${monthOf(-2)}-01`, 'перенос акта',
+    );
+    expect(requireReasonIfMonthFixed).toHaveBeenCalledWith(
+      expect.anything(), OBJECT_ID, `${PAST_MONTH}-01`, 'перенос акта',
+    );
   });
 
   it('нулевая сумма отвергается', async () => {
@@ -239,7 +364,7 @@ describe('КС-2', () => {
       entry_kind: 'act',
       amount: 0,
       act_number: 'А-1',
-      customer_signed_date: '2026-09-10',
+      customer_signed_date: PAST_DATE,
     })).rejects.toMatchObject({ __save: { http: 400, code: 'bad_amount' } });
   });
 });
@@ -255,7 +380,7 @@ describe('КС-6', () => {
     skud_object_id: OBJECT_ID,
     amount: '1000.00',
     doc_number: 'КС6-1',
-    customer_signed_date: '2026-09-10',
+    customer_signed_date: PAST_DATE,
     period_month: '2026-09-01',
     status: 'draft',
     version: 1,
@@ -271,7 +396,7 @@ describe('КС-6', () => {
     await createKs6Entry(client as never, ACTOR, CONTRACT_ID, {
       amount: 1_000,
       doc_number: 'КС6-1',
-      customer_signed_date: '2026-09-10',
+      customer_signed_date: PAST_DATE,
     });
 
     expect(calls[0].sql).toContain('FOR UPDATE');
@@ -288,7 +413,7 @@ describe('КС-6', () => {
       await expect(createKs6Entry(client as never, ACTOR, CONTRACT_ID, {
         amount,
         doc_number: 'КС6-1',
-        customer_signed_date: '2026-09-10',
+        customer_signed_date: PAST_DATE,
       })).rejects.toMatchObject({ __save: { http: 400, code: 'bad_amount' } });
     }
   });
@@ -323,7 +448,7 @@ describe('КС-6', () => {
     await expect(createKs6Entry(client as never, ACTOR, CONTRACT_ID, {
       amount: 1_000,
       doc_number: 'КС6-1',
-      customer_signed_date: '2026-09-10',
+      customer_signed_date: PAST_DATE,
     })).rejects.toMatchObject({ __save: { http: 409, code: 'duplicate' } });
   });
 

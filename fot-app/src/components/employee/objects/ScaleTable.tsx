@@ -30,19 +30,14 @@ export const ScaleTable: FC<IScaleTableProps> = ({ scale, interpolation, complet
   const upper = interpolation?.upper_pct ?? null;
   const exact = lower !== null && completionPct !== null && Number(lower) === Number(completionPct);
 
+  // Подсвечивается ОДНА строка — достигнутая точка шкалы. Заливка обеих границ
+  // интерполяции читалась как «премия по двум ставкам сразу»; диапазон остаётся в подписи.
   const highlighted = new Set<string>();
   if (interpolation) {
-    if (exact) highlighted.add(String(Number(lower)));
-    else {
-      if (lower !== null) highlighted.add(String(Number(lower)));
-      if (upper !== null) highlighted.add(String(Number(upper)));
-      // Ниже минимума / выше максимума: подсвечиваем крайнюю точку шкалы.
-      if (lower === null && scale.points.length > 0) {
-        highlighted.add(String(Number(scale.points[0].completion_pct)));
-      }
-      if (upper === null && scale.points.length > 0) {
-        highlighted.add(String(Number(scale.points[scale.points.length - 1].completion_pct)));
-      }
+    if (lower !== null) highlighted.add(String(Number(lower)));
+    // Ниже минимальной точки достигнута нижняя строка шкалы («80 % и менее»).
+    else if (scale.points.length > 0) {
+      highlighted.add(String(Number(scale.points[0].completion_pct)));
     }
   }
 

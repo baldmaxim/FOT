@@ -4,7 +4,10 @@ import { query } from '../config/postgres.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { failNotFound, failStaleVersion, failWith } from './object-kpi-errors.js';
 import { recordObjectKpiHistory, type ObjectKpiActor } from './object-kpi-history.service.js';
-import { invalidateObjectKpiRolesCache } from './object-kpi-roles-cache.service.js';
+import {
+  invalidateObjectKpiRolesCache,
+  isEconomicsHeadLive,
+} from './object-kpi-roles-cache.service.js';
 
 /**
  * Закрепление объектов за людьми (object_kpi_assignments) и внесистемные роли KPI
@@ -28,6 +31,12 @@ export interface ObjectKpiAssignmentRow {
   valid_from: string;
   valid_to: string | null;
   source: 'manual' | 'skud_import';
+  /**
+   * Оклад руководителя строительства за этот объект. У экономистов всегда null (CHECK в БД).
+   * Наружу отдаётся только админу и руководителю эк. отдела — маскирует
+   * object-kpi-salary-access.service.ts.
+   */
+  salary_amount: string | null;
   notes: string | null;
   version: number;
 }
@@ -48,7 +57,7 @@ const ASSIGNMENT_COLUMNS = `
   a.role_kind,
   to_char(a.valid_from, 'YYYY-MM-DD') AS valid_from,
   to_char(a.valid_to,   'YYYY-MM-DD') AS valid_to,
-  a.source, a.notes, a.version`;
+  a.source, a.salary_amount, a.notes, a.version`;
 
 const GLOBAL_ROLE_COLUMNS = `
   g.id, g.employee_id, e.full_name AS employee_name, g.role_kind,
@@ -173,20 +182,47 @@ async function loadAssignment(
 }
 
 /**
- * Правится только период и примечание. Смена объекта или человека — это другое
+ * Правится только период, оклад и примечание. Смена объекта или человека — это другое
  * закрепление: подмена «на месте» переписала бы историю ответственности задним числом.
+ *
+ * Оклад вносит тот же круг, что пересматривает закрытый месяц: администратор или
+ * руководитель экономического отдела. Право проверяется В БД внутри той же транзакции
+ * (не по кэшу ролей), и только когда патч действительно содержит salary_amount, — иначе
+ * правка периода перестала бы работать у экономиста объекта.
+ *
+ * ВНИМАНИЕ: истории ставок у строки нет. Новый оклад действует на ВЕСЬ период закрепления
+ * и пересчитывает зарплату в уже показанных руководителю месяцах. Ставка «с такого-то
+ * месяца» оформляется закрытием прежнего закрепления и заведением нового.
  */
 export async function updateAssignment(
   client: PoolClient,
   actor: ObjectKpiActor,
   id: string,
   expectedVersion: number,
-  patch: { valid_from?: string; valid_to?: string | null; notes?: string | null },
+  patch: {
+    valid_from?: string;
+    valid_to?: string | null;
+    notes?: string | null;
+    salary_amount?: string | number | null;
+  },
+  permissions?: { employeeId: number | null | undefined; isAdmin: boolean },
 ): Promise<ObjectKpiAssignmentRow> {
   const before = await loadAssignment(client, id);
   if (!before) failNotFound('Закрепление');
 
-  const fields = ['valid_from', 'valid_to', 'notes'] as const;
+  if (patch.salary_amount !== undefined) {
+    const allowed = permissions?.isAdmin === true
+      || await isEconomicsHeadLive(client, permissions?.employeeId);
+    if (!allowed) {
+      failWith({
+        http: 403,
+        code: 'salary_forbidden',
+        message: 'Зарплату руководителя вносит администратор или руководитель экономического отдела',
+      });
+    }
+  }
+
+  const fields = ['valid_from', 'valid_to', 'notes', 'salary_amount'] as const;
   const entries = fields.filter((f) => patch[f] !== undefined).map((f) => [f, patch[f]] as const);
   if (entries.length === 0) return before!;
 

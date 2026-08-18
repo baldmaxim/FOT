@@ -86,6 +86,10 @@ export interface ManagerPremiumMonth {
   days_in_month: number;
   base_prorated: string | null;
   premium_amount: string | null;
+  /** Оклад за месяц, пропорционально дням закрепления. null — оклад не задан. */
+  salary_amount: string | null;
+  /** Премия + оклад. null, когда нет ни того, ни другого. */
+  total_amount: string | null;
   objects: PremiumMonthObject[];
   incomplete_objects: Array<{ object_name: string; data_quality: ObjectKpiReportRow['data_quality'] }>;
 }
@@ -199,7 +203,8 @@ const ASSIGNMENT_PERIODS_SQL = `
 SELECT
   skud_object_id,
   to_char(valid_from, 'YYYY-MM-DD') AS valid_from,
-  to_char(valid_to,   'YYYY-MM-DD') AS valid_to
+  to_char(valid_to,   'YYYY-MM-DD') AS valid_to,
+  salary_amount
 FROM object_kpi_assignments
 WHERE employee_id = $1::bigint
   AND role_kind = 'construction_manager'
@@ -227,7 +232,8 @@ days AS (
     ) d
 ),
 asg AS (
-  SELECT * FROM jsonb_to_recordset($3::jsonb) AS a(skud_object_id uuid, valid_from date, valid_to date)
+  SELECT * FROM jsonb_to_recordset($3::jsonb)
+    AS a(skud_object_id uuid, valid_from date, valid_to date, salary_amount numeric)
 ),
 elig AS (
   SELECT * FROM jsonb_to_recordset($4::jsonb) AS e(period_month date, skud_object_id uuid)
@@ -245,7 +251,19 @@ SELECT
       JOIN elig e ON e.skud_object_id = a.skud_object_id AND e.period_month = d.period_month
      WHERE d.day >= a.valid_from
        AND (a.valid_to IS NULL OR d.day <= a.valid_to)
-  ))::int AS eligible_assignment_days
+  ))::int AS eligible_assignment_days,
+  -- Оклад месяца — по той же посуточной решётке, что и база премии (п. 4.6): принявший
+  -- объект 14 августа получает свою часть, а не полный оклад, иначе в месяце передачи
+  -- объекта оба руководителя показали бы по полной сумме.
+  --
+  -- БЕЗ COALESCE внутри: сумма по дням без единого оклада должна остаться NULL, чтобы
+  -- интерфейс отличал «оклад не задан» от «оклад ноль» и не рисовал пустые блоки.
+  ROUND(SUM((
+    SELECT SUM(a.salary_amount)
+      FROM asg a
+     WHERE d.day >= a.valid_from
+       AND (a.valid_to IS NULL OR d.day <= a.valid_to)
+  )) / COUNT(*), 2) AS salary_prorated
 FROM days d
 GROUP BY d.period_month
 ORDER BY d.period_month
@@ -266,7 +284,8 @@ WITH meta AS (
     days_in_month    int,
     has_incomplete   boolean,
     scale_version_id uuid,
-    base_amount      numeric
+    base_amount      numeric,
+    salary           numeric
   )
 ),
 shares AS (
@@ -385,6 +404,14 @@ SELECT
   f.days_in_month,
   f.base_prorated,
   f.premium_amount,
+  f.salary AS salary_amount,
+  -- Зарплата НЕ зависит от статуса месяца: no_plan и data_incomplete гасят премию, но не
+  -- оклад. ROUND со вторым аргументом обязателен — иначе копейки оклада исчезают и «Итого»
+  -- перестаёт сходиться с показанными рядом слагаемыми.
+  CASE
+    WHEN f.premium_amount IS NULL AND f.salary IS NULL THEN NULL
+    ELSE ROUND(COALESCE(f.premium_amount, 0) + COALESCE(f.salary, 0), 2)
+  END AS total_amount,
   -- Итоги периода: только месяцы, по которым расчёт состоялся. Месяцы вне закрепления
   -- и без данных в знаменатель не попадают — иначе процент за период занижается.
   ROUND(COALESCE(SUM(f.plan_rounded) FILTER (WHERE f.status = 'calculated') OVER (), 0), 2) AS period_total_plan,
@@ -409,6 +436,7 @@ interface DaysRow {
   days_in_month: number;
   any_assignment_days: number;
   eligible_assignment_days: number;
+  salary_prorated: string | null;
 }
 
 interface MathRow {
@@ -429,6 +457,8 @@ interface MathRow {
   days_in_month: number;
   base_prorated: string | null;
   premium_amount: string | null;
+  salary_amount: string | null;
+  total_amount: string | null;
   period_total_plan: string;
   period_total_fact: string;
   period_total_premium: string;
@@ -512,7 +542,12 @@ async function loadAssignmentDays(
   params: ManagerPremiumParams,
   rows: ShareRow[],
 ): Promise<Map<string, DaysRow>> {
-  const periods = await client.query<{ skud_object_id: string; valid_from: string; valid_to: string | null }>(
+  const periods = await client.query<{
+    skud_object_id: string;
+    valid_from: string;
+    valid_to: string | null;
+    salary_amount: string | null;
+  }>(
     ASSIGNMENT_PERIODS_SQL,
     [params.employeeId, params.monthFrom, params.monthTo],
   );
@@ -564,6 +599,7 @@ async function computePremium(
       has_incomplete: monthRows.some((row) => row.my_days > 0 && row.plan_amount === null),
       scale_version_id: scale?.id ?? null,
       base_amount: scale?.base_amount ?? null,
+      salary: dayRow?.salary_prorated ?? null,
     };
   });
 
@@ -615,6 +651,8 @@ async function computePremium(
       days_in_month: row.days_in_month,
       base_prorated: row.base_prorated,
       premium_amount: row.premium_amount,
+      salary_amount: row.salary_amount,
+      total_amount: row.total_amount,
       objects: monthRows
         .filter((item) => item.my_days > 0)
         .map((item) => ({

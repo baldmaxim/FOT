@@ -148,6 +148,38 @@
   overflow-wrap: anywhere;
 }
 
+/* Премия · Зарплата · Итого в одну строку. На узком экране переносятся, а не сжимаются. */
+.heroAmounts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 28px;
+}
+
+.heroAmount {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.heroAmountLabel {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* Зарплата и итог — рядом с премией, но не громче её. */
+.heroValueSecondary {
+  font-family: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
 .heroValueMuted {
   font-size: 18px;
   font-weight: 600;

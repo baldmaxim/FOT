@@ -125,6 +125,13 @@
   resize: vertical;
 }
 
+/* Пояснение под полем формы: почему месяцы до «первого расчётного» не видны в отчёте. */
+.hint {
+  font-size: 11.5px;
+  color: var(--text-tertiary, var(--text-secondary));
+  overflow-wrap: anywhere;
+}
+
 .primaryBtn {
   align-self: flex-start;
   min-height: 44px;

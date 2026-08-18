@@ -3,14 +3,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 
 import { ModalShell } from '../ui/ModalShell';
-import { objectKpiApi, type IObjectContract } from '../../api/objectKpi';
+import { objectKpiApi } from '../../api/objectKpi';
 import { objectKpiKeys } from '../../api/queryKeys';
 import { useToast } from '../../contexts/ToastContext';
-import { formatDate, formatMoney, formatMonthLabel, formatPercent } from '../../utils/formatMoney';
-import { formatMoneyInput, parseMoneyInput, toMoneyInput } from '../../utils/moneyInput';
+import { parseMoneyInput } from '../../utils/moneyInput';
 import { moscowCurrentMonth } from '../../utils/moscowDate';
+import { ObjectKpiContractForm } from './ObjectKpiContractForm';
 import { ObjectKpiEntriesTab, type IEntryColumn, type IEntryRow } from './ObjectKpiEntriesTab';
+import { ObjectKpiEntryAddForm } from './ObjectKpiEntryAddForm';
 import { ObjectKpiHistoryList } from './ObjectKpiHistoryList';
+import { ObjectKpiPlansTab, type IFactDraft, type PlanDraft } from './ObjectKpiPlansTab';
 import styles from './ObjectKpiCardModal.module.css';
 
 /**
@@ -20,9 +22,10 @@ import styles from './ObjectKpiCardModal.module.css';
  * то есть производная от актов; ручной ввод той же величины дал бы второе, расходящееся
  * число. Реестр object_ks6_entries на сервере остался нетронутым.
  *
- * Подписанные записи не редактируются — их аннулируют и заводят заново (правило
- * жизненного цикла, см. object-kpi.service.ts). Кнопка «Сохранить» в футере применяет
- * ровно то, что изменено на текущей вкладке.
+ * У КС-2 правятся месяц и сумма — в том числе у ПОДПИСАННОЙ записи: ошибочный месяц иначе
+ * исправлялся бы аннулированием и повторным заведением каждой строки. Остальные поля
+ * подписанной записи сервер блокирует (signed_field_locked), и набор колонок с
+ * editableWhenSigned совпадает с этим белым списком.
  */
 
 interface IProps {
@@ -55,6 +58,25 @@ const TABS: Array<{ key: Tab; label: string }> = [
 
 const CONTRACT_FORM_ID = 'object-kpi-contract-form';
 
+const ADDENDA_COLUMNS: IEntryColumn[] = [
+  { key: 'addendum_number', label: '№', kind: 'text' },
+  { key: 'addendum_date', label: 'Дата', kind: 'date' },
+  { key: 'amount_delta', label: 'Сумма', kind: 'money', allowNegative: true },
+];
+
+const KS2_COLUMNS: IEntryColumn[] = [
+  { key: 'act_number', label: '№', kind: 'text' },
+  // Месяц и сумма — ровно то, что сервер разрешает править у подписанной записи.
+  { key: 'period_month', label: 'Месяц', kind: 'month', editableWhenSigned: true },
+  {
+    key: 'entry_kind',
+    label: 'Вид',
+    kind: 'readonly',
+    render: (row) => (row.entry_kind === 'act' ? 'КС-2' : 'уменьшение'),
+  },
+  { key: 'amount', label: 'Сумма', kind: 'money', editableWhenSigned: true },
+];
+
 /** Серверный текст ошибки лежит в ApiError.message (client.ts кладёт туда body.error). */
 const errorText = (error: unknown): string =>
   (error as Error)?.message || 'Не удалось сохранить';
@@ -67,9 +89,9 @@ export const ObjectKpiCardModal: FC<IProps> = ({
   const isCreate = mode === 'create';
   const [tab, setTab] = useState<Tab>('contract');
   const [edits, setEdits] = useState<Record<string, Record<string, string>>>({});
-  const [planEdits, setPlanEdits] = useState<Record<string, { amount: string; reason: string }>>({});
+  const [planEdits, setPlanEdits] = useState<PlanDraft>({});
   /** Правка факта месяца: целевая сумма и причина; сервер заведёт акт на разницу. */
-  const [factEdit, setFactEdit] = useState<{ month: string; amount: string; reason: string } | null>(null);
+  const [factEdit, setFactEdit] = useState<IFactDraft | null>(null);
   const [contractDirty, setContractDirty] = useState(false);
   const [contractReason, setContractReason] = useState('');
   const [saving, setSaving] = useState(false);
@@ -224,6 +246,20 @@ export const ObjectKpiCardModal: FC<IProps> = ({
       return;
     }
 
+    // Основание спрашивается ОДИН раз на пачку и только когда правится подписанная запись
+    // в объекте с закрытыми месяцами. Отказ отменяет всё сохранение целиком: иначе часть
+    // строк уехала бы на сервер и упала там с reason_required.
+    let reason: string | undefined;
+    const touchesSigned = ids.some(id => rows.find(row => row.id === id)?.status === 'signed');
+    if (touchesSigned && card?.has_fixed_months) {
+      const answer = window.prompt('Основание правки (у объекта есть закрытые месяцы):');
+      if (answer === null || answer.trim() === '') {
+        toast.error('Правка отменена: без основания подписанную запись сохранить нельзя');
+        return;
+      }
+      reason = answer.trim();
+    }
+
     setSaving(true);
     const results = await Promise.allSettled(ids.map(async (id) => {
       const row = rows.find(item => item.id === id)!;
@@ -236,6 +272,7 @@ export const ObjectKpiCardModal: FC<IProps> = ({
       }
       // В форме ДС одна дата: дата документа она же дата вступления в силу.
       if (kind === 'addenda' && patch.addendum_date) payload.effective_date = patch.addendum_date;
+      if (reason) payload.reason = reason;
 
       if (kind === 'addenda') await objectKpiApi.updateAddendum(id, payload);
       else await objectKpiApi.updateKs2(id, payload);
@@ -291,6 +328,13 @@ export const ObjectKpiCardModal: FC<IProps> = ({
     refresh();
   };
 
+  const submitFact = (draft: IFactDraft) => {
+    const amount = parseMoneyInput(draft.amount);
+    if (amount === null) { toast.error('Укажите сумму'); return; }
+    if (draft.reason.trim() === '') { toast.error('Укажите причину корректировки'); return; }
+    factMutation.mutate({ periodMonth: draft.month, amount, reason: draft.reason.trim() });
+  };
+
   // Мемо, а не `?? []` по месту: новый литерал каждый рендер менял бы зависимости useMemo ниже.
   const addenda = useMemo(() => (card?.addenda ?? []) as unknown as IEntryRow[], [card?.addenda]);
   const ks2 = useMemo(() => (card?.ks2 ?? []) as unknown as IEntryRow[], [card?.ks2]);
@@ -309,312 +353,18 @@ export const ObjectKpiCardModal: FC<IProps> = ({
     if (tab === 'ks2') { void saveEntries('ks2', ks2); }
   };
 
-  const ADDENDA_COLUMNS: IEntryColumn[] = [
-    { key: 'addendum_number', label: '№', kind: 'text' },
-    { key: 'addendum_date', label: 'Дата', kind: 'date' },
-    { key: 'amount_delta', label: 'Сумма', kind: 'money', allowNegative: true },
-  ];
-
-  const KS2_COLUMNS: IEntryColumn[] = [
-    { key: 'act_number', label: '№', kind: 'text' },
-    {
-      key: 'period_month',
-      label: 'Месяц',
-      kind: 'readonly',
-      render: (row) => formatMonthLabel(String(row.period_month)),
-    },
-    {
-      key: 'entry_kind',
-      label: 'Вид',
-      kind: 'readonly',
-      render: (row) => (row.entry_kind === 'act' ? 'КС-2' : 'уменьшение'),
-    },
-    { key: 'amount', label: 'Сумма', kind: 'money' },
-  ];
-
-  const renderContract = (data: IObjectContract | null) => (
-    <form
-      id={CONTRACT_FORM_ID}
-      className={styles.form}
-      onSubmit={submitContract}
-      onInput={() => setContractDirty(true)}
-    >
-      <div className={styles.grid}>
-        <label className={styles.field}>
-          <span>Номер договора</span>
-          <input name="contract_number" defaultValue={data?.contract_number ?? ''} disabled={!canEdit} />
-        </label>
-        <label className={styles.field}>
-          <span>Дата договора</span>
-          <input type="date" name="contract_date" defaultValue={data?.contract_date ?? ''} disabled={!canEdit} />
-        </label>
-        <label className={styles.field}>
-          <span>Заказчик</span>
-          <input name="customer_name" defaultValue={data?.customer_name ?? ''} disabled={!canEdit} />
-        </label>
-        <label className={styles.field}>
-          <span>Стоимость договора, ₽ (с НДС)</span>
-          <input
-            name="base_amount"
-            inputMode="decimal"
-            defaultValue={toMoneyInput(data?.base_amount)}
-            disabled={!canEdit}
-            onChange={(event) => { event.target.value = formatMoneyInput(event.target.value); }}
-          />
-        </label>
-        <label className={styles.field}>
-          <span>Плановая ЗОС</span>
-          <input type="date" name="planned_zos_date" defaultValue={data?.planned_zos_date ?? ''} disabled={!canEdit} />
-        </label>
-        <label className={styles.field}>
-          <span>Фактическая ЗОС</span>
-          <input type="date" name="actual_zos_date" defaultValue={data?.actual_zos_date ?? ''} disabled={!canEdit} />
-        </label>
-        <label className={styles.field}>
-          {/* Именно месяц: в БД на колонке CHECK «день = 1». */}
-          <span>Первый расчётный месяц</span>
-          <input
-            type="month"
-            name="plan_start_month"
-            defaultValue={data?.plan_start_month?.slice(0, 7) ?? ''}
-            disabled={!canEdit}
-          />
-        </label>
-      </div>
-
-      <label className={styles.field}>
-        <span>Примечание</span>
-        <textarea name="notes" rows={2} defaultValue={data?.notes ?? ''} disabled={!canEdit} />
-      </label>
-    </form>
+  const addFormFor = (kind: 'addenda' | 'ks2') => (
+    canEdit && contract ? (
+      <ObjectKpiEntryAddForm
+        kind={kind}
+        maxMonth={currentMonth}
+        pending={addMutation.isPending}
+        onSubmit={(payload) => addMutation.mutate({ kind, payload })}
+      />
+    ) : null
   );
 
-  const renderPlans = () => (
-    <div className={styles.tableWrap}>
-      <table className={styles.table}>
-        <thead>
-          <tr>
-            <th>Месяц</th><th>Остаток</th><th>Мес.</th><th>План</th><th>Факт</th>
-            <th>%</th><th>Статус</th><th /></tr>
-        </thead>
-        <tbody>
-          {(card?.report ?? []).map(row => {
-            const plan = card?.plans.find(p => p.period_month === row.period_month && p.is_current);
-            const fixed = row.report_status === 'fixed' || row.report_status === 'corrected';
-            const editable = canEdit && canRevisePlan && fixed;
-            const draft = planEdits[row.period_month];
-            const factDraft = factEdit?.month === row.period_month ? factEdit : null;
-            // Будущий месяц корректировать нечем: акт с датой подписания вперёд —
-            // ошибка ввода, сервер такой запрос тоже отклонит.
-            const factEditable = canEdit && row.period_month.slice(0, 7) <= currentMonth;
-            return (
-              <tr key={row.period_month}>
-                <td>{formatMonthLabel(row.period_month)}</td>
-                <td>{formatMoney(row.remainder)}</td>
-                <td>{row.months_remaining ?? '—'}</td>
-                <td className={styles.planCell}>
-                  {draft ? (
-                    <>
-                      <input
-                        className={styles.cellInput}
-                        inputMode="decimal"
-                        value={draft.amount}
-                        onChange={(event) => setPlanEdits(prev => ({
-                          ...prev,
-                          [row.period_month]: {
-                            ...prev[row.period_month],
-                            amount: formatMoneyInput(event.target.value),
-                          },
-                        }))}
-                      />
-                      <input
-                        className={styles.cellInput}
-                        placeholder="Обоснование"
-                        value={draft.reason}
-                        onChange={(event) => setPlanEdits(prev => ({
-                          ...prev,
-                          [row.period_month]: {
-                            ...prev[row.period_month],
-                            reason: event.target.value,
-                          },
-                        }))}
-                      />
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className={editable ? styles.planValueBtn : styles.planValue}
-                      disabled={!editable}
-                      title={editable
-                        ? 'Изменить план месяца'
-                        : 'Правка доступна руководителю эк. отдела после фиксации месяца'}
-                      onClick={() => setPlanEdits(prev => ({
-                        ...prev,
-                        [row.period_month]: {
-                          amount: toMoneyInput(row.plan_amount),
-                          reason: '',
-                        },
-                      }))}
-                    >
-                      {formatMoney(row.plan_amount)}
-                      {row.plan_overridden && <span className={styles.mark} title="Задан вручную">✎</span>}
-                    </button>
-                  )}
-                  {plan?.correction_reason && !draft && (
-                    <span className={styles.planReason}>
-                      ✎ {plan.correction_reason}
-                      {plan.fixed_by_name ? ` · ${plan.fixed_by_name}` : ''}
-                      {plan.fixed_at ? ` · ${formatDate(plan.fixed_at.slice(0, 10))}` : ''}
-                    </span>
-                  )}
-                </td>
-                <td className={styles.planCell}>
-                  {factDraft ? (
-                    <>
-                      <input
-                        className={styles.cellInput}
-                        inputMode="decimal"
-                        value={factDraft.amount}
-                        onChange={(event) => setFactEdit({
-                          ...factDraft,
-                          amount: formatMoneyInput(event.target.value),
-                        })}
-                      />
-                      <input
-                        className={styles.cellInput}
-                        placeholder="Причина корректировки"
-                        value={factDraft.reason}
-                        onChange={(event) => setFactEdit({ ...factDraft, reason: event.target.value })}
-                      />
-                      <span className={styles.factActions}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const amount = parseMoneyInput(factDraft.amount);
-                            if (amount === null) { toast.error('Укажите сумму'); return; }
-                            if (factDraft.reason.trim() === '') {
-                              toast.error('Укажите причину корректировки');
-                              return;
-                            }
-                            factMutation.mutate({
-                              periodMonth: row.period_month,
-                              amount,
-                              reason: factDraft.reason.trim(),
-                            });
-                          }}
-                          disabled={factMutation.isPending}
-                        >
-                          Сохранить
-                        </button>
-                        <button type="button" onClick={() => setFactEdit(null)}>Отмена</button>
-                      </span>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className={factEditable ? styles.planValueBtn : styles.planValue}
-                      disabled={!factEditable}
-                      title={factEditable
-                        ? 'Изменить факт: система заведёт корректирующий акт КС-2 на разницу'
-                        : 'Факт будущего месяца не корректируется'}
-                      onClick={() => setFactEdit({
-                        month: row.period_month,
-                        amount: toMoneyInput(row.fact_amount),
-                        reason: '',
-                      })}
-                    >
-                      {formatMoney(row.fact_amount)}
-                    </button>
-                  )}
-                  {/* Причина живёт в корректирующем акте (source='fact_adjustment'),
-                      поэтому переживает перезагрузку и видна во вкладке КС-2. */}
-                  {!factDraft && factAdjustments.get(row.period_month) && (
-                    <span className={styles.planReason}>
-                      ✎ {factAdjustments.get(row.period_month)}
-                    </span>
-                  )}
-                </td>
-                <td>{formatPercent(row.completion_pct)}</td>
-                <td>
-                  {row.report_status}
-                  {plan && plan.revision > 1 && <span className={styles.mark}>ревизия {plan.revision}</span>}
-                </td>
-                <td className={styles.actions}>
-                  {canEdit && row.report_status === 'open' && (
-                    <button type="button" onClick={() => fixMutation.mutate(row.period_month)}>
-                      Зафиксировать
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-          {(card?.report ?? []).length === 0 && (
-            <tr><td colSpan={8} className={styles.empty}>Нет расчётных месяцев в периоде</td></tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  const addFormFor = (kind: Tab) => {
-    if (!canEdit || !contract) return null;
-    return (
-      <form
-        className={styles.inlineForm}
-        onSubmit={(event) => {
-          event.preventDefault();
-          const form = new FormData(event.currentTarget);
-          const amount = parseMoneyInput(String(form.get('amount') ?? ''));
-
-          if (kind === 'addenda') {
-            const date = String(form.get('date') ?? '');
-            addMutation.mutate({ kind, payload: {
-              addendum_number: String(form.get('number') ?? '').trim(),
-              addendum_date: date,
-              // Отдельного «действует с» в форме нет: дата ДС и есть дата вступления в силу.
-              effective_date: date,
-              amount_delta: amount,
-            } });
-          } else {
-            addMutation.mutate({ kind, payload: {
-              entry_kind: form.get('entry_kind'),
-              customer_signed_date: form.get('date'),
-              // Сумма всегда положительная: знак уменьшения ставит бэкенд по entry_kind.
-              amount,
-            } });
-          }
-          event.currentTarget.reset();
-        }}
-      >
-        {kind === 'ks2' && (
-          <select name="entry_kind" defaultValue="act">
-            <option value="act">КС-2</option>
-            <option value="reduction">Уменьшение объёма</option>
-          </select>
-        )}
-        {/* У КС-2 номера в форме нет: сервер берёт следующий порядковый по договору. */}
-        {kind === 'addenda' && <input name="number" placeholder="Номер ДС" required />}
-        <input type="date" name="date" required />
-        <input
-          name="amount"
-          inputMode="decimal"
-          placeholder={kind === 'addenda' ? 'Сумма (± ₽)' : 'Сумма, ₽'}
-          required
-          onChange={(event) => {
-            event.target.value = formatMoneyInput(event.target.value, {
-              allowNegative: kind === 'addenda',
-            });
-          }}
-        />
-        <button type="submit" className={styles.primaryBtn} disabled={addMutation.isPending}>
-          Добавить
-        </button>
-      </form>
-    );
-  };
-
-  const entriesTab = (kind: Tab, columns: IEntryColumn[], rows: IEntryRow[], emptyText: string) => (
+  const entriesTab = (kind: 'addenda' | 'ks2', columns: IEntryColumn[], rows: IEntryRow[], emptyText: string) => (
     contract ? (
       <ObjectKpiEntriesTab
         columns={columns}
@@ -665,17 +415,48 @@ export const ObjectKpiCardModal: FC<IProps> = ({
           )}
 
           <div className={styles.body}>
-            {isCreate && renderContract(null)}
+            {isCreate && (
+              <ObjectKpiContractForm
+                data={null}
+                canEdit={canEdit}
+                formId={CONTRACT_FORM_ID}
+                onSubmit={submitContract}
+                onInput={() => setContractDirty(true)}
+              />
+            )}
             {!isCreate && cardQuery.isLoading && <p className={styles.empty}>Загрузка…</p>}
             {!isCreate && cardQuery.isError && (
               <p className={styles.empty}>Не удалось загрузить карточку</p>
             )}
-            {!isCreate && !cardQuery.isLoading && tab === 'contract' && renderContract(contract)}
+            {!isCreate && !cardQuery.isLoading && tab === 'contract' && (
+              <ObjectKpiContractForm
+                data={contract}
+                canEdit={canEdit}
+                formId={CONTRACT_FORM_ID}
+                onSubmit={submitContract}
+                onInput={() => setContractDirty(true)}
+              />
+            )}
             {!isCreate && !cardQuery.isLoading && tab === 'addenda'
               && entriesTab('addenda', ADDENDA_COLUMNS, addenda, 'Допсоглашений нет')}
             {!isCreate && !cardQuery.isLoading && tab === 'ks2'
               && entriesTab('ks2', KS2_COLUMNS, ks2, 'Актов нет')}
-            {!isCreate && !cardQuery.isLoading && tab === 'plans' && renderPlans()}
+            {!isCreate && !cardQuery.isLoading && tab === 'plans' && (
+              <ObjectKpiPlansTab
+                card={card}
+                canEdit={canEdit}
+                canRevisePlan={canRevisePlan}
+                currentMonth={currentMonth}
+                factAdjustments={factAdjustments}
+                planEdits={planEdits}
+                setPlanEdits={setPlanEdits}
+                factEdit={factEdit}
+                setFactEdit={setFactEdit}
+                factPending={factMutation.isPending}
+                onSubmitFact={submitFact}
+                onFixMonth={(month) => fixMutation.mutate(month)}
+              />
+            )}
             {!isCreate && tab === 'history' && (
               <ObjectKpiHistoryList
                 entries={historyQuery.data ?? []}

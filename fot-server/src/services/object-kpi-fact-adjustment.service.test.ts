@@ -62,14 +62,15 @@ describe('adjustMonthFact', () => {
     });
 
     const [, , , input] = asMock(createKs2Entry).mock.calls[0] as [unknown, unknown, unknown, {
-      entry_kind: string; amount: number; source: string; notes: string; customer_signed_date: string;
+      entry_kind: string; amount: number; source: string; notes: string; period_month: string;
     }];
     expect(input.entry_kind).toBe('act');
     expect(input.amount).toBe(15_000_000);
     expect(input.source).toBe('fact_adjustment');
     expect(input.notes).toBe('Акт от 31.07 не был внесён');
-    // Прошлый месяц — дата подписания последний день месяца.
-    expect(input.customer_signed_date).toBe('2026-07-31');
+    // Запись заводится МЕСЯЦЕМ: дату подписания выводит createKs2Entry (последний день
+    // месяца, для текущего — сегодня), и правило живёт в одном месте.
+    expect(input.period_month).toBe('2026-07-01');
     // Черновик факт не двигает: запись подписывается той же транзакцией.
     expect(setKs2Status).toHaveBeenCalledWith(
       client, ACTOR, 'ks2-new', 'signed', 1, 'Акт от 31.07 не был внесён',
@@ -93,7 +94,7 @@ describe('adjustMonthFact', () => {
     expect(input.amount).toBe(5_000_000);
   });
 
-  it('текущий месяц подписывается сегодняшним днём, а не концом месяца', async () => {
+  it('текущий месяц уходит в запись тем же месяцем, дату ставит createKs2Entry', async () => {
     const client = clientWithDelta('1000.00');
 
     await adjustMonthFact(client as never, ACTOR, {
@@ -104,10 +105,11 @@ describe('adjustMonthFact', () => {
     });
 
     const [, , , input] = asMock(createKs2Entry).mock.calls[0] as [unknown, unknown, unknown, {
-      customer_signed_date: string;
+      period_month: string; customer_signed_date?: string;
     }];
-    // Акт, подписанный будущей датой, выглядит как ошибка ввода.
-    expect(input.customer_signed_date).toBe('2026-08-14');
+    // Дата не передаётся вовсе: месяц и дата вместе — 400 ambiguous_period.
+    expect(input.period_month).toBe('2026-08-01');
+    expect(input.customer_signed_date).toBeUndefined();
   });
 
   it('совпадающая сумма → 400 fact_unchanged, записи не создаются', async () => {

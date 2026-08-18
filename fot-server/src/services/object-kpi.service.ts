@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 
 import { query, queryOne } from '../config/postgres.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import { failNotFound, failStaleVersion, failWith } from './object-kpi-errors.js';
 import {
   recordObjectKpiHistory,
@@ -528,9 +529,66 @@ export interface Ks2Input {
   amount: number | string;
   /** Необязателен: без номера сервер берёт следующий порядковый по договору. */
   act_number?: string | null;
-  customer_signed_date: string;
+  /** Расчётный месяц (YYYY-MM или YYYY-MM-01) — основной способ ввода из интерфейса. */
+  period_month?: string | null;
+  /** Точная дата подписания заказчиком. Оставлена для переноса реальных актов через API. */
+  customer_signed_date?: string | null;
   notes?: string | null;
   source?: 'manual' | 'fact_adjustment';
+}
+
+/**
+ * Дата подписания для записи, заведённой месяцем: последний день месяца, а для текущего —
+ * сегодня по Москве. Акт с датой подписания в будущем выглядит как ошибка ввода.
+ *
+ * Живёт здесь, а не в fact-adjustment: месяцем заводятся и обычные акты из формы КС-2,
+ * а тот модуль уже импортирует этот — обратной зависимости не возникает.
+ */
+export function signedDateForMonth(periodMonth: string): string {
+  const today = moscowTodayIso();
+  const [year, month] = periodMonth.slice(0, 7).split('-').map(Number);
+  // Нулевой день следующего месяца = последний день текущего.
+  const lastDay = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  return lastDay > today ? today : lastDay;
+}
+
+/**
+ * Будущий месяц отклоняется ДО вставки. Без этой проверки signedDateForMonth зажал бы дату
+ * сегодняшним днём, и акт, заведённый на сентябрь, молча лёг бы в август.
+ */
+function assertNotFutureMonth(periodMonth: string): void {
+  if (periodMonth.slice(0, 7) > moscowTodayIso().slice(0, 7)) {
+    failWith({
+      http: 400,
+      code: 'future_month',
+      message: 'Месяц акта не может быть будущим',
+    });
+  }
+}
+
+/**
+ * Дата подписания из ввода: либо месяц, либо точная дата, но не оба сразу — два
+ * противоречащих периода в одном теле запроса молча разрешать нельзя.
+ */
+function resolveKs2SignedDate(input: Pick<Ks2Input, 'period_month' | 'customer_signed_date'>): string {
+  const month = input.period_month ? input.period_month.slice(0, 7) : null;
+  const exact = input.customer_signed_date ?? null;
+
+  if (month && exact) {
+    failWith({
+      http: 400,
+      code: 'ambiguous_period',
+      message: 'Укажите либо месяц акта, либо дату подписания',
+    });
+  }
+  if (!month && !exact) {
+    failWith({ http: 400, code: 'period_required', message: 'Укажите месяц акта' });
+  }
+
+  // Проверяется ЗАПРОШЕННЫЙ месяц, а не итоговая дата: signedDateForMonth зажимает будущее
+  // сегодняшним днём, и проверка после неё пропустила бы акт, заведённый на сентябрь.
+  assertNotFutureMonth(month ?? exact!.slice(0, 7));
+  return month ? signedDateForMonth(month) : exact!;
 }
 
 /**
@@ -576,6 +634,7 @@ export async function createKs2Entry(
   input: Ks2Input,
 ): Promise<ObjectKs2Row> {
   const contract = await lockContract(client, contractId);
+  const signedDate = resolveKs2SignedDate(input);
   const actNumber = input.act_number?.trim()
     ? input.act_number.trim()
     : await nextActNumber(client, contractId);
@@ -594,7 +653,7 @@ export async function createKs2Entry(
         input.entry_kind,
         signedAmount(input.entry_kind, input.amount),
         actNumber,
-        input.customer_signed_date,
+        signedDate,
         input.source ?? 'manual',
         input.notes ?? null,
         actor.userId,
@@ -626,19 +685,64 @@ async function lockKs2Entry(client: PoolClient, entryId: string): Promise<Object
   return row;
 }
 
+/**
+ * Что разрешено править у ПОДПИСАННОЙ записи: месяц, сумма и примечание.
+ *
+ * Номер акта — ссылка на бумажный документ, вид записи меняет знак суммы, source отличает
+ * корректировку факта от ручного ввода, а прямая customer_signed_date дала бы второй способ
+ * сдвинуть месяц мимо проверки будущего. Всё это у подписанной записи заблокировано.
+ */
+const KS2_SIGNED_PATCHABLE = new Set(['period_month', 'amount', 'notes']);
+
+/**
+ * Правка записи КС-2.
+ *
+ * Черновик правится целиком. Подписанная — только месяцем, суммой и примечанием, и с
+ * основанием, если задет закрытый месяц (СТАРЫЙ или НОВЫЙ: перенос акта меняет факт обоих).
+ * Аннулированная не правится вовсе.
+ */
 export async function updateKs2Entry(
   client: PoolClient,
   actor: ObjectKpiActor,
   entryId: string,
   expectedVersion: number,
   patch: Partial<Ks2Input>,
+  reason?: string | null,
 ): Promise<ObjectKs2Row> {
   const before = await lockKs2Entry(client, entryId);
-  assertDraft(before.status, 'Акт КС-2');
+  if (before.status === 'cancelled') {
+    failWith({
+      http: 409,
+      code: 'bad_transition',
+      message: 'Аннулированный акт не редактируется',
+    });
+  }
+  if (before.status === 'signed') {
+    // Молча игнорировать лишнее поле нельзя: клиент решит, что номер акта изменён.
+    const locked = Object.entries(patch)
+      .filter(([key, value]) => value !== undefined && !KS2_SIGNED_PATCHABLE.has(key))
+      .map(([key]) => key);
+    if (locked.length > 0) {
+      failWith({
+        http: 400,
+        code: 'signed_field_locked',
+        message: `У подписанной записи правятся только месяц и сумма: ${locked.join(', ')}`,
+      });
+    }
+  }
 
   const values: Array<[string, unknown]> = [];
+  let nextMonth: string | null = null;
+  if (patch.period_month !== undefined && patch.period_month !== null) {
+    nextMonth = `${patch.period_month.slice(0, 7)}-01`;
+    assertNotFutureMonth(nextMonth);
+    values.push(['customer_signed_date', signedDateForMonth(nextMonth)]);
+  } else if (patch.customer_signed_date !== undefined && patch.customer_signed_date !== null) {
+    nextMonth = `${patch.customer_signed_date.slice(0, 7)}-01`;
+    assertNotFutureMonth(nextMonth);
+    values.push(['customer_signed_date', patch.customer_signed_date]);
+  }
   if (patch.act_number !== undefined) values.push(['act_number', patch.act_number]);
-  if (patch.customer_signed_date !== undefined) values.push(['customer_signed_date', patch.customer_signed_date]);
   if (patch.notes !== undefined) values.push(['notes', patch.notes]);
   // Сумма и вид записи связаны знаком, поэтому пересчитываются вместе.
   if (patch.amount !== undefined || patch.entry_kind !== undefined) {
@@ -647,6 +751,15 @@ export async function updateKs2Entry(
     values.push(['amount', signedAmount(kind, patch.amount ?? before.amount)]);
   }
   if (values.length === 0) return before;
+
+  // Черновик в факт не входит, поэтому основания не требует. У подписанной записи проверяются
+  // ОБА месяца: перенос из закрытого февраля в открытый март меняет факт февраля тоже.
+  if (before.status === 'signed') {
+    await requireReasonIfMonthFixed(client, before.skud_object_id, before.period_month, reason);
+    if (nextMonth && nextMonth !== before.period_month) {
+      await requireReasonIfMonthFixed(client, before.skud_object_id, nextMonth, reason);
+    }
+  }
 
   const setSql = values.map(([field], i) => `${field} = $${i + 4}`).join(', ');
   let after: ObjectKs2Row | undefined;
@@ -671,6 +784,7 @@ export async function updateKs2Entry(
     action: 'update',
     before: { ...before },
     after: { ...after },
+    reason,
     actor,
   });
   return after;

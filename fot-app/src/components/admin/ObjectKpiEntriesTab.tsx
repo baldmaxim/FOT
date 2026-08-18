@@ -1,6 +1,6 @@
 import type { FC, ReactNode } from 'react';
 
-import { formatDate, formatMoney } from '../../utils/formatMoney';
+import { formatDate, formatMoney, formatMonthLabel } from '../../utils/formatMoney';
 import { formatMoneyInput, toMoneyInput } from '../../utils/moneyInput';
 import styles from './ObjectKpiCardModal.module.css';
 
@@ -16,9 +16,15 @@ export interface IEntryColumn {
   /** Имя поля в payload запроса; для readonly-колонок может быть любым уникальным. */
   key: string;
   label: string;
-  kind: 'text' | 'date' | 'money' | 'readonly';
+  kind: 'text' | 'date' | 'month' | 'money' | 'readonly';
   /** Только для money: минус разрешён допсоглашениям, у КС-2 и КС-6 знака нет. */
   allowNegative?: boolean;
+  /**
+   * Правится и у ПОДПИСАННОЙ записи. Ставится ровно тем колонкам, которые разрешает
+   * сервер (у КС-2 это месяц и сумма): расхождение дало бы форму, ввод из которой
+   * отвергается с signed_field_locked.
+   */
+  editableWhenSigned?: boolean;
   /** Отображение для readonly-колонок и для нередактируемых строк. */
   render?: (row: IEntryRow) => ReactNode;
   placeholder?: string;
@@ -56,6 +62,7 @@ const displayValue = (column: IEntryColumn, row: IEntryRow): ReactNode => {
   if (raw === null || raw === undefined || raw === '') return '—';
   if (column.kind === 'money') return formatMoney(String(raw));
   if (column.kind === 'date') return formatDate(String(raw));
+  if (column.kind === 'month') return formatMonthLabel(String(raw));
   return String(raw);
 };
 
@@ -68,7 +75,18 @@ const editValue = (
   if (edited !== undefined) return edited;
   const raw = row[column.key];
   if (raw === null || raw === undefined) return '';
-  return column.kind === 'money' ? toMoneyInput(String(raw)) : String(raw);
+  if (column.kind === 'money') return toMoneyInput(String(raw));
+  // input[type=month] понимает только YYYY-MM, а из БД приходит YYYY-MM-01.
+  if (column.kind === 'month') return String(raw).slice(0, 7);
+  return String(raw);
+};
+
+const INPUT_TYPES: Record<IEntryColumn['kind'], string> = {
+  text: 'text',
+  date: 'date',
+  month: 'month',
+  money: 'text',
+  readonly: 'text',
 };
 
 export const ObjectKpiEntriesTab: FC<IProps> = ({
@@ -94,15 +112,18 @@ export const ObjectKpiEntriesTab: FC<IProps> = ({
         </thead>
         <tbody>
           {rows.map(row => {
-            const editable = canEdit && row.status === 'draft';
+            // Аннулированная запись не правится вовсе; у подписанной — только колонки
+            // с editableWhenSigned (правило жизненного цикла из object-kpi.service.ts).
+            const editable = canEdit && row.status !== 'cancelled';
             return (
               <tr key={row.id}>
                 {columns.map(column => (
                   <td key={column.key}>
-                    {editable && column.kind !== 'readonly' ? (
+                    {editable && column.kind !== 'readonly'
+                      && (row.status === 'draft' || column.editableWhenSigned) ? (
                       <input
                         className={styles.cellInput}
-                        type={column.kind === 'date' ? 'date' : 'text'}
+                        type={INPUT_TYPES[column.kind]}
                         inputMode={column.kind === 'money' ? 'decimal' : undefined}
                         value={editValue(column, row, edits)}
                         placeholder={column.placeholder}

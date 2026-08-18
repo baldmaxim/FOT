@@ -7,7 +7,8 @@ import { objectKpiApi } from '../../api/objectKpi';
 import { objectKpiKeys } from '../../api/queryKeys';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
-import { formatDate } from '../../utils/formatMoney';
+import { formatDate, formatMoney } from '../../utils/formatMoney';
+import { formatMoneyInput, parseMoneyInput, toMoneyInput } from '../../utils/moneyInput';
 import { moscowTodayIso, shiftDateIso } from '../../utils/moscowDate';
 import styles from './ObjectKpiAssignmentModal.module.css';
 
@@ -47,13 +48,22 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
   const [employeeTerm, setEmployeeTerm] = useState('');
   const [employee, setEmployee] = useState<{ id: number; full_name: string | null } | null>(null);
   const [suggestions, setSuggestions] = useState<Array<{ id: number; full_name: string | null }>>([]);
-  /** Правка периода по месту: id закрепления → черновик дат. */
-  const [edit, setEdit] = useState<{ id: string; validFrom: string; validTo: string } | null>(null);
+  /** Правка по месту: id закрепления → черновик периода и оклада. */
+  const [edit, setEdit] = useState<
+    { id: string; validFrom: string; validTo: string; salary: string } | null
+  >(null);
 
   const objectsQuery = useQuery({
     queryKey: objectKpiKeys.objects(),
     queryFn: () => objectKpiApi.listObjects(),
   });
+
+  /**
+   * Оклад руководителя видят и правят те же, кто пересматривает закрытый месяц:
+   * администратор и руководитель эк. отдела. Экономисту объекта, который открывает эту же
+   * модалку, колонки нет — и сервер такой строке всё равно отдаёт salary_amount = null.
+   */
+  const canSeeSalary = objectsQuery.data?.scope.can_revise_plan === true;
 
   const assignmentsQuery = useQuery({
     queryKey: objectKpiKeys.assignments(objectId),
@@ -108,13 +118,21 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
   });
 
   const updateAssignmentMutation = useMutation({
-    mutationFn: (args: { id: string; version: number; validFrom: string; validTo: string | null }) =>
-      objectKpiApi.updateAssignment(args.id, {
-        valid_from: args.validFrom,
-        valid_to: args.validTo,
-        version: args.version,
-      }),
-    onSuccess: () => { toast.success('Период изменён'); setEdit(null); refresh(); },
+    mutationFn: (args: {
+      id: string;
+      version: number;
+      validFrom: string;
+      validTo: string | null;
+      salary?: string | null;
+    }) => objectKpiApi.updateAssignment(args.id, {
+      valid_from: args.validFrom,
+      valid_to: args.validTo,
+      // Поле уходит, только когда его вообще показывали: сервер отвечает 403 всем, кроме
+      // администратора и руководителя эк. отдела, — незачем ловить отказ на правке периода.
+      ...(args.salary === undefined ? {} : { salary_amount: args.salary }),
+      version: args.version,
+    }),
+    onSuccess: () => { toast.success('Закрепление изменено'); setEdit(null); refresh(); },
     onError: (error) => toast.error(errorText(error)),
   });
 
@@ -267,7 +285,11 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
             <div className={styles.tableWrap}>
               <table className={styles.table}>
                 <thead>
-                  <tr><th>Объект</th><th>Сотрудник</th><th>Роль</th><th>Период</th><th /></tr>
+                  <tr>
+                    <th>Объект</th><th>Сотрудник</th><th>Роль</th><th>Период</th>
+                    {canSeeSalary && <th>Зарплата</th>}
+                    <th />
+                  </tr>
                 </thead>
                 <tbody>
                   {(assignmentsQuery.data ?? []).map(item => {
@@ -300,6 +322,25 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
                           <>{formatDate(item.valid_from)} — {item.valid_to ? formatDate(item.valid_to) : '…'}</>
                         )}
                       </td>
+                      {canSeeSalary && (
+                        <td>
+                          {/* Оклад ведётся только руководителям строительства (CHECK в БД). */}
+                          {item.role_kind !== 'construction_manager' ? '' : editing ? (
+                            <input
+                              className={styles.salaryInput}
+                              inputMode="decimal"
+                              value={edit.salary}
+                              placeholder="Зарплата, ₽"
+                              aria-label="Зарплата руководителя строительства"
+                              title="Новая сумма действует на весь период закрепления: чтобы поднять ставку с определённого месяца, завершите это закрепление и заведите новое"
+                              onChange={(event) => setEdit({
+                                ...edit,
+                                salary: formatMoneyInput(event.target.value),
+                              })}
+                            />
+                          ) : (item.salary_amount ? formatMoney(item.salary_amount) : '—')}
+                        </td>
+                      )}
                       <td className={styles.actions}>
                         {editing ? (
                           <>
@@ -310,6 +351,9 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
                                 version: item.version,
                                 validFrom: edit.validFrom,
                                 validTo: edit.validTo === '' ? null : edit.validTo,
+                                salary: canSeeSalary && item.role_kind === 'construction_manager'
+                                  ? parseMoneyInput(edit.salary)
+                                  : undefined,
                               })}
                               disabled={updateAssignmentMutation.isPending}
                             >
@@ -325,6 +369,7 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
                                 id: item.id,
                                 validFrom: item.valid_from,
                                 validTo: item.valid_to ?? '',
+                                salary: toMoneyInput(item.salary_amount),
                               })}
                             >
                               Изменить
@@ -352,7 +397,9 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
                     );
                   })}
                   {(assignmentsQuery.data ?? []).length === 0 && (
-                    <tr><td colSpan={5} className={styles.empty}>Закреплений нет</td></tr>
+                    <tr>
+                      <td colSpan={canSeeSalary ? 6 : 5} className={styles.empty}>Закреплений нет</td>
+                    </tr>
                   )}
                 </tbody>
               </table>
