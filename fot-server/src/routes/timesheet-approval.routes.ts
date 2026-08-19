@@ -44,7 +44,9 @@ router.put('/responsibles', requirePageAccess('/admin/settings', 'edit'), timesh
 // Подать табель — нужен edit на /timesheet.
 router.post('/submit', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.submit);
 
-// Отозвать поданный табель назад в draft (только из 'submitted') — edit на /timesheet.
+// Отозвать табель назад в draft — edit на /timesheet. Из 'submitted' может руководитель,
+// из 'approved' — только админ (проверка в контроллере): иначе руководитель снимал бы
+// утверждение HR и правил закрытый период сам.
 router.post('/recall', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.recall);
 
 // Отметка табельщицы «Проверено» по табелю бригады за период.

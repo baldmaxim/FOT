@@ -41,8 +41,8 @@ interface ITimesheetGridProps {
   visibleDays?: number[];
   selectedCellKeys?: Set<string>;
   splitDayKeys?: Set<string>;
-  lockedDates?: Set<string>;
-  approvalStatusByDate?: Map<string, 'draft' | 'submitted' | 'approved' | 'returned' | 'rejected'>;
+  /** Статус закрытого периода по (сотрудник, дата). undefined = период открыт. */
+  approvalStatusFor?: (employeeId: number, isoDate: string) => 'submitted' | 'approved' | undefined;
   problemDates?: { red?: Set<string>; yellow?: Set<string> };
   outOfPeriodDates?: Set<string>;
   highlightedCell?: { employeeId: number; date: string } | null;
@@ -440,7 +440,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   visibleDays,
   selectedCellKeys = EMPTY_CELL_SELECTION,
   splitDayKeys = EMPTY_CELL_SELECTION,
-  approvalStatusByDate,
+  approvalStatusFor,
   problemDates,
   outOfPeriodDates,
   highlightedCell = null,
@@ -697,6 +697,12 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     return merged;
   }, []);
 
+  /** Дата закрытого периода для сотрудника: в bulk-диапазон такие дни не берём. */
+  const isBulkDayLocked = useCallback((employeeId: number, day: number): boolean => {
+    const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    return Boolean(approvalStatusFor?.(employeeId, isoDate));
+  }, [approvalStatusFor, year, month]);
+
   const buildBulkRangeSelection = useCallback((anchor: IBulkCellCoord, current: IBulkCellCoord): Set<string> | null => {
     const anchorDayIndex = dayIndexByValue.get(anchor.day);
     const currentDayIndex = dayIndexByValue.get(current.day);
@@ -727,6 +733,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           const day = days[dayIndex];
           if (day == null) continue;
           if (row.isSynthetic) continue;
+          if (isBulkDayLocked(row.employee.id, day)) continue;
           nextSelection.add(getObjectBulkCellKey(row.employee.id, row.object_key, day));
         }
       }
@@ -756,6 +763,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         for (let dayIndex = startDayIndex; dayIndex <= endDayIndex; dayIndex += 1) {
           const day = days[dayIndex];
           if (day == null) continue;
+          if (isBulkDayLocked(anchorParsed.employeeId, day)) continue;
           nextSelection.add(getObjectBulkCellKey(anchorParsed.employeeId, item.objectKey, day));
         }
       }
@@ -782,6 +790,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         if (day == null) continue;
         const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         if (splitDayKeys.has(`${row.employee.id}_${workDate}`)) continue;
+        if (isBulkDayLocked(row.employee.id, day)) continue;
         nextSelection.add(getEmployeeBulkCellKey(row.employee.id, day));
       }
     }
@@ -799,6 +808,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     month,
     splitDayKeys,
     year,
+    isBulkDayLocked,
   ]);
 
   const finishBulkDragSelection = useCallback(() => {
@@ -1000,7 +1010,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         // markCorrection=false: метку даёт только корректировка самого объекта,
                         // а не дневная запись — иначе течёт на «чужие» объекты (#3).
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false);
                         const objCorrected = Boolean(topEntry?.is_correction || bottomEntry?.is_correction);
                         const classes = [baseCls, 'ts-mobile-day-btn', 'ts-mobile-day-btn--dual'];
                         if (objCorrected) classes.push('ts-day--corrected');
@@ -1199,7 +1209,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const thresholdHours = getFullDayThresholdHoursForDay(sched, calendar, year, month, day);
                         const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusByDate?.get(isoDate));
+                        const baseCls = getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate));
                         const text = getDayCellTextMobile(entry, dayOff);
                         const baseTitle = getDayCellTitle(entry, dayOff);
                         const title = preHoliday
@@ -1323,10 +1333,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         // Дни вне периода работы сотрудника в отделе (до прихода / после перевода/исключения).
                         const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
                         // Bulk-выделение разрешено и в выходные — как в виде «по сотрудникам», но не для inactive-дней.
+                        const dayLocked = isBulkDayLocked(row.employee.id, day);
                         const isBulkClickable = !inactive;
-                        const isBlocked = row.isSynthetic || inactive;
+                        const isBlocked = row.isSynthetic || inactive || dayLocked;
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false);
                         const inactiveCls = inactive ? ' ts-day--inactive' : '';
                         const objectApprovalCls = objectEntry?.approval_status === 'pending' ? ' ts-day--approval-pending'
                           : objectEntry?.approval_status === 'approved' ? ' ts-day--approval-approved'
@@ -1555,7 +1566,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         && highlightedCell.date === isoDate
                         ? ' ts-day--flash'
                         : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusByDate?.get(isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive ? ' ts-day--bulk-selectable' : ''}`;
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive && !isBulkDayLocked(row.employee.id, day) ? ' ts-day--bulk-selectable' : ''}`;
                       const text = inactive ? '' : getDayCellText(entry, dayOff);
                       const baseTitle = getDayCellTitle(entry, dayOff);
                       const title = preHoliday
@@ -1578,7 +1589,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             event,
                             getEmployeeBulkRowKey(row.employee.id),
                             day,
-                            splitDayKeys.has(`${row.employee.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`),
+                            splitDayKeys.has(`${row.employee.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
+                              || isBulkDayLocked(row.employee.id, day),
                           ) : undefined}
                           onMouseEnter={bulkEditMode && !inactive ? () => handleBulkCellMouseEnter(
                             getEmployeeBulkRowKey(row.employee.id),
@@ -1642,21 +1654,22 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                           : baseTitle;
                         // Bulk-выделение разрешено и в выходные — как в виде «по сотрудникам».
                         const isBulkClickable = true;
+                        const objectDayLocked = isBulkDayLocked(row.employee.id, day);
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusByDate?.get(isoDate), false);
+                        const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false);
                         const objectApprovalCls = objectEntry?.approval_status === 'pending' ? ' ts-day--approval-pending'
                           : objectEntry?.approval_status === 'approved' ? ' ts-day--approval-approved'
                           : objectEntry?.approval_status === 'rejected' ? ' ts-day--approval-rejected' : '';
                         return (
                           <td
                             key={`${objectRow.object_key}_${day}`}
-                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode ? ' ts-day--bulk-selectable' : ''}`}
+                            className={`${baseCls}${objectEntry?.is_correction ? ' ts-day--corrected' : ''}${objectApprovalCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !objectDayLocked ? ' ts-day--bulk-selectable' : ''}`}
                             title={title}
                             onMouseDown={bulkEditMode && isBulkClickable ? (event) => handleBulkCellMouseDown(
                               event,
                               getObjectBulkRowKey(row.employee.id, objectRow.object_key),
                               day,
-                              false,
+                              objectDayLocked,
                             ) : undefined}
                             onMouseEnter={bulkEditMode && isBulkClickable ? () => handleBulkCellMouseEnter(
                               getObjectBulkRowKey(row.employee.id, objectRow.object_key),

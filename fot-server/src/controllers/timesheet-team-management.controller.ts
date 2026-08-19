@@ -19,6 +19,7 @@ import {
   formatDateShift,
   isEmployeeAssignedToDepartmentOnDate,
 } from '../services/timesheet-department-assignments.service.js';
+import { findApprovalLockForMembershipChange } from '../services/timesheet-lock.service.js';
 import {
   deleteExclusion,
   deleteTransfer,
@@ -60,6 +61,28 @@ async function requireSystemAdmin(req: AuthenticatedRequest): Promise<boolean> {
 }
 
 const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = 'timesheet-team-management';
+
+/**
+ * Гард закрытого табеля для изменения состава задним числом. Правка меняет членство
+ * на всём интервале от даты, поэтому проверяем интервал, а не одну дату, и оба отдела
+ * (исходный и целевой): перевод выполняется позже, и per-date гард увидел бы только
+ * старый отдел. Исключение — is_admin.
+ */
+async function findMembershipApprovalLock(
+  req: AuthenticatedRequest,
+  employeeId: number,
+  departmentIds: ReadonlyArray<string | null | undefined>,
+  fromDate: string,
+): Promise<{ start_date: string; end_date: string; status: string } | null> {
+  if (req.user.is_admin) return null;
+  return findApprovalLockForMembershipChange({ employeeId, departmentIds, fromDate });
+}
+
+/** Текст 409 для закрытого периода (совпадает с /api/timesheet). */
+function membershipLockMessage(lock: { start_date: string; end_date: string; status: string }): string {
+  const state = lock.status === 'approved' ? 'утверждён' : 'на проверке';
+  return `Период ${lock.start_date} – ${lock.end_date} уже ${state}. Редактирование закрыто.`;
+}
 
 // ─── Schemas ──────────────────────────────────────────────────────────────
 
@@ -270,6 +293,16 @@ export const timesheetTeamManagementController = {
 
       const fromDepartmentId = employeeRow.org_department_id;
 
+      const membershipLock = await findMembershipApprovalLock(
+        req,
+        parsed.employee_id,
+        [fromDepartmentId, targetDepartmentId],
+        parsed.effective_from,
+      );
+      if (membershipLock) {
+        return res.status(409).json({ success: false, error: membershipLockMessage(membershipLock) });
+      }
+
       let moveResult: 'sigur' | 'portal' | 'noop';
       if (isSameDeptReturn) {
         // Тот же отдел → moveEmployeeToDepartmentInternal вернул бы noop и не создал сегмент.
@@ -391,6 +424,16 @@ export const timesheetTeamManagementController = {
       const excludedAt = new Date().toISOString();
       const effectiveDate = parsed.effective_date;
       const previousDay = formatDateShift(effectiveDate, -1);
+
+      const excludeLock = await findMembershipApprovalLock(
+        req,
+        parsed.employee_id,
+        [employee.org_department_id, targetDepartmentId],
+        effectiveDate,
+      );
+      if (excludeLock) {
+        return res.status(409).json({ success: false, error: membershipLockMessage(excludeLock) });
+      }
 
       await execute(
         `UPDATE employees

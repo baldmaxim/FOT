@@ -23,16 +23,34 @@ import {
 } from '../services/timesheet-range.service.js';
 import { timesheetResponsiblesService } from '../services/timesheet-responsibles.service.js';
 import {
+  listEmployeeIdsAssignedToDepartmentPeriod,
   listEmployeeMembershipsForDepartmentPeriod,
   listScopedMembersByDepartment,
   buildMembershipWindowMap,
   isWithinMembershipWindow,
   type IMembershipWindow,
 } from '../services/timesheet-department-assignments.service.js';
+import { lockTimesheetMonthsOnClient } from '../services/timesheet-lock.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { settingsService } from '../services/settings.service.js';
 import { IS_PRODUCTION } from '../config/features.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
+
+/**
+ * Первые дни всех месяцев, попадающих в диапазон подачи. Нужны как якоря для
+ * advisory-локов (сотрудник, YYYYMM): диапазон обычно внутри одного месяца, но
+ * полагаться на это нельзя.
+ */
+function monthAnchorsInRange(startDate: string, endDate: string): string[] {
+  const anchors: string[] = [];
+  const cursor = new Date(`${startDate.slice(0, 8)}01T00:00:00Z`);
+  const stop = new Date(`${endDate.slice(0, 8)}01T00:00:00Z`);
+  while (cursor <= stop) {
+    anchors.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return anchors;
+}
 
 /**
  * Сброс серверных LRU-кэшей табеля после смены статуса согласования.
@@ -792,6 +810,19 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     try {
       approval = await withTransaction(async client => {
+        // Состав считаем ДО записи: по нему берём advisory-локи (сотрудник, месяц),
+        // иначе параллельная правка табеля успевает записаться между проверкой
+        // закрытого периода в /api/timesheet и переводом подачи в submitted.
+        const snapshotIds = personal
+          ? employeeIds
+          : await listEmployeeIdsAssignedToDepartmentPeriod(deptId!, range.startDate, range.endDate);
+        await lockTimesheetMonthsOnClient(
+          client,
+          snapshotIds.flatMap(employeeId =>
+            monthAnchorsInRange(range.startDate, range.endDate).map(workDate => ({ employeeId, workDate })),
+          ),
+        );
+
         let row: TimesheetApproval | null;
         if (reuseRow) {
           // Переиспользуем существующую строку, перезаписывая диапазон под новый
@@ -835,11 +866,6 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           );
         }
         if (row) {
-          const snapshotIds = personal
-            ? employeeIds
-            : await import('../services/timesheet-department-assignments.service.js').then(m =>
-                m.listEmployeeIdsAssignedToDepartmentPeriod(deptId!, range.startDate, range.endDate),
-              );
           await snapshotApprovalEmployees(client, row.id, snapshotIds);
         }
         return row;
@@ -1017,8 +1043,9 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         );
 
     // Отозвать можно поданный (submitted) или уже утверждённый (approved) табель.
-    // Отзыв утверждённого = руководитель сам возвращает его на доработку для переподачи,
-    // не дожидаясь HR (раньше это умел только HR через return-to-rework).
+    // Утверждённый — только админом: иначе руководитель сам снимал бы утверждение HR
+    // и правил закрытый период, обходя гард закрытого табеля в два клика. Остальным
+    // утверждённый период переоткрывает кадровая служба через return-to-rework.
     if (!existing || (existing.status !== 'submitted' && existing.status !== 'approved')) {
       res.status(409).json({
         success: false,
@@ -1027,6 +1054,14 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
     const wasApproved = existing.status === 'approved';
+    if (wasApproved && !req.user.is_admin) {
+      res.status(403).json({
+        success: false,
+        error: 'Утверждённый табель возвращает на доработку кадровая служба',
+        code: 'APPROVED_RECALL_FORBIDDEN',
+      });
+      return;
+    }
 
     const now = new Date().toISOString();
     const approval = await queryOne<TimesheetApproval>(

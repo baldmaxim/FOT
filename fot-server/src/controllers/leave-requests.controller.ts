@@ -27,6 +27,7 @@ import {
 } from '../services/leave-request-history.service.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
+import { findApprovalLocksForEmployeeDates } from '../services/timesheet-lock.service.js';
 import type { TimeStatus } from '../types/index.js';
 
 const LEAVE_REQUEST_TYPES = ['vacation', 'sick_leave', 'remote', 'certificate', 'time_correction', 'unpaid', 'work', 'educational_leave', 'sick_worked', 'dismissal'] as const;
@@ -1263,12 +1264,23 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         [req.user.id, nowIso, comment || null, id, request.request_type],
       )).rows[0] ?? null;
 
-      if (!updated) return { conflict: true as const };
+      if (!updated) return { conflict: 'stale' as const };
 
       // RETURNING * — единственный источник актуальных полей заявки: часы могли быть
       // изменены согласующим (PATCH /:id/correction-hours) уже после чтения request выше.
       // Материализуем строго из свежей строки, иначе в табель уйдут устаревшие часы.
       const approvedRequest = { ...request, ...(updated as Partial<typeof request>) };
+
+      // Закрытый табель: материализация одобренного заявления меняет засчитанные часы
+      // в уже сданном/утверждённом периоде. Гард для всех, кроме is_admin. Advisory-локи
+      // берём до проверки — иначе между ней и записью успевает пройти submit.
+      const affectedDates = collectAffectedTimesheetDates(approvedRequest as LeaveRequestDatesRow);
+      if (!req.user.is_admin && affectedDates.length > 0) {
+        await lockQuotaMonthsOnClient(client, approvedRequest.employee_id, affectedDates);
+        if (await hasLockedTimesheetDates(approvedRequest.employee_id, affectedDates, client)) {
+          return { conflict: 'timesheet_locked' as const };
+        }
+      }
 
       // Создаём attendance adjustments как канонический источник ручных статусов.
       // Для work/remote в выходной approval_status считает единый резолвер.
@@ -1354,6 +1366,13 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
       return { conflict: false as const, row: updated };
     });
 
+    if (result.conflict === 'timesheet_locked') {
+      res.status(409).json({
+        success: false,
+        error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку',
+      });
+      return;
+    }
     if (result.conflict) {
       res.status(409).json({ success: false, error: 'Заявление изменилось, обновите страницу' });
       return;
@@ -1707,20 +1726,11 @@ const updateRequestType = async (req: AuthenticatedRequest, res: Response): Prom
         }
 
         // Страховка на закрытый табель (как в revokeApproval): при будущих датах
-        // почти не срабатывает, но ловит досрочно поданный период. Членство берём
-        // из снапшота состава подачи, а не из org_department_id.
-        const lockedPeriod = (await client.query<{ ok: number }>(
-          `SELECT 1 AS ok
-             FROM unnest($2::date[]) AS d(work_date)
-             JOIN timesheet_approvals a
-               ON a.start_date <= d.work_date AND a.end_date >= d.work_date
-             JOIN timesheet_approval_employees s
-               ON s.approval_id = a.id AND s.employee_id = $1
-            WHERE a.status IN ('submitted','approved')
-            LIMIT 1`,
-          [locked.employee_id, dates],
-        )).rows;
-        if (lockedPeriod.length > 0) return { conflict: 'timesheet_locked' as const };
+        // почти не срабатывает, но ловит досрочно поданный период. Единый гард —
+        // снимок состава ИЛИ отдел сотрудника с предками.
+        if (await hasLockedTimesheetDates(Number(locked.employee_id), dates, client)) {
+          return { conflict: 'timesheet_locked' as const };
+        }
       }
 
       const updated = (await client.query(
@@ -1891,6 +1901,19 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
           RETURNING *`,
         [nowIso, id, req.user.id, reason],
       );
+      // Закрытый табель: отмена откатывает материализованные строки, поэтому в
+      // сданном/утверждённом периоде запрещена всем, кроме is_admin. Проверяем и
+      // pending, и approved, но блокируем ТОЛЬКО если строки в закрытом периоде есть.
+      const removableDates = await listLeaveRequestAdjustmentDates(
+        client, request, current.status === 'approved',
+      );
+      if (!req.user.is_admin && removableDates.length > 0) {
+        await lockQuotaMonthsOnClient(client, request.employee_id, removableDates);
+        if (await hasLockedTimesheetDates(request.employee_id, removableDates, client)) {
+          return { timesheetLocked: true as const };
+        }
+      }
+
       // Чистим корректировки и для pending-заявок: легаси work-заявки могли
       // материализовать pending-строки ещё при создании — без удаления они
       // остались бы сиротами в очереди /approvals.
@@ -1906,6 +1929,13 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     if ('forbidden' in result) {
       res.status(403).json({ success: false, error: 'Можно отменить только своё заявление' });
+      return;
+    }
+    if ('timesheetLocked' in result) {
+      res.status(409).json({
+        success: false,
+        error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку',
+      });
       return;
     }
     if (result.conflict) {
@@ -2087,23 +2117,21 @@ function collectAffectedTimesheetDates(r: LeaveRequestDatesRow): string[] {
 
 /**
  * true, если хоть одна из дат попадает в сданный/одобренный табель сотрудника.
- * Членство берём из снапшота состава подачи (timesheet_approval_employees), а не из
- * org_department_id: членство снапшотное.
+ * Делегирует единому per-employee замку: членство снапшотное (timesheet_approval_employees)
+ * ИЛИ по отделу сотрудника и его предкам — иначе сотрудник, добавленный в отдел уже
+ * после submit, проходил бы гард насквозь.
  */
-async function hasLockedTimesheetDates(employeeId: number, dates: string[]): Promise<boolean> {
+async function hasLockedTimesheetDates(
+  employeeId: number,
+  dates: string[],
+  exec?: DbExecutor,
+): Promise<boolean> {
   if (dates.length === 0) return false;
-  const locked = await query<{ ok: number }>(
-    `SELECT 1 AS ok
-       FROM unnest($2::date[]) AS d(work_date)
-       JOIN timesheet_approvals a
-         ON a.start_date <= d.work_date AND a.end_date >= d.work_date
-       JOIN timesheet_approval_employees s
-         ON s.approval_id = a.id AND s.employee_id = $1
-      WHERE a.status IN ('submitted','approved')
-      LIMIT 1`,
-    [employeeId, dates],
+  const locks = await findApprovalLocksForEmployeeDates(
+    dates.map(workDate => ({ employeeId, workDate })),
+    exec,
   );
-  return locked.length > 0;
+  return locks.size > 0;
 }
 
 /**
@@ -2118,6 +2146,36 @@ async function hasLockedTimesheetDates(employeeId: number, dates: string[]): Pro
  * approve'ом. У pending-заявки строки от неё нет, а совпадающая по (сотрудник, дата,
  * объект) может принадлежать ручной правке табеля руководителя — её удалять нельзя.
  */
+/**
+ * Даты строк табеля, которые реально удалит deleteLeaveRequestAdjustments. Нужны
+ * гарду закрытого периода: отменять заявление, у которого в закрытом табеле ничего
+ * не лежит, можно — блокируем только фактическое изменение сданных данных.
+ */
+async function listLeaveRequestAdjustmentDates(
+  client: DbExecutor,
+  request: Pick<LeaveRequestDatesRow, 'id' | 'employee_id' | 'correction_date' | 'correction_object_id'>,
+  wasMaterialized: boolean,
+): Promise<string[]> {
+  const dates = new Set<string>();
+  const bySource = await client.query<{ work_date: string }>(
+    `SELECT work_date::text AS work_date FROM attendance_adjustments
+       WHERE source_type = 'leave_request' AND source_id = ANY($1::text[])`,
+    [[String(request.id), `${request.id}:time_correction`]],
+  );
+  for (const row of bySource.rows) dates.add(row.work_date);
+
+  if (wasMaterialized && request.correction_date && request.correction_object_id) {
+    const byObject = await client.query<{ work_date: string }>(
+      `SELECT work_date::text AS work_date FROM attendance_adjustments
+         WHERE employee_id = $1 AND work_date = $2::date
+           AND source_type = $3 AND source_id = $4`,
+      [request.employee_id, request.correction_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, request.correction_object_id],
+    );
+    for (const row of byObject.rows) dates.add(row.work_date);
+  }
+  return [...dates].sort();
+}
+
 async function deleteLeaveRequestAdjustments(
   client: DbExecutor,
   request: Pick<LeaveRequestDatesRow, 'id' | 'employee_id' | 'correction_date' | 'correction_object_id'>,

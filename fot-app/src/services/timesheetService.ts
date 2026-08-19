@@ -5,6 +5,8 @@ import type {
   ManagedDepartmentTimesheetSummary,
   TimesheetEntry,
   TimesheetObjectEntry,
+  TimesheetObjectEntryBulkItem,
+  TimesheetObjectEntryBulkResult,
   TimesheetResponse,
   TimesheetStatus,
   TimesheetTeamManagementCandidate,
@@ -322,6 +324,26 @@ export const timesheetService = {
   }): Promise<TimesheetObjectEntry> {
     const res = await apiClient.put<ApiResponse<TimesheetObjectEntry>>('/timesheet/object-entry', data);
     if (!res.data) throw new Error(res.error || 'Ошибка сохранения строки объекта');
+    return res.data;
+  },
+
+  /**
+   * Массовое применение объектных правок одним запросом.
+   *
+   * Раньше фронт слал по запросу на ячейку через Promise.all — сотня
+   * одновременных PUT по HTTP/2 исчерпывала пул соединений бэкенда, и все они
+   * падали с 500. Чанкованием и таймаутом управляет вызывающий код.
+   */
+  async upsertObjectEntriesBulk(
+    items: TimesheetObjectEntryBulkItem[],
+    options?: { timeoutMs?: number },
+  ): Promise<TimesheetObjectEntryBulkResult> {
+    const res = await apiClient.put<ApiResponse<TimesheetObjectEntryBulkResult>>(
+      '/timesheet/object-entry/bulk',
+      { items },
+      { timeoutMs: options?.timeoutMs },
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка массового сохранения строк объектов');
     return res.data;
   },
 

@@ -5,6 +5,7 @@ import { timesheetTeamManagementController as tm } from '../controllers/timeshee
 import { exportTimesheetObjectsUnified } from '../controllers/timesheet-mass-export.controller.js';
 import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
+import { perUserConcurrency } from '../middleware/perUserConcurrency.js';
 import { buildTimesheetCacheKey, buildTimesheetTodayCacheKey } from './timesheet-cache-keys.js';
 import { cacheWithShortTtlForToday } from '../middleware/skipCacheForToday.js';
 import { serverTiming } from '../middleware/serverTiming.js';
@@ -327,10 +328,23 @@ router.post(
   timesheetController.bulkSave
 );
 
-// PUT /api/timesheet/object-entry
+// PUT /api/timesheet/object-entry/bulk — массовая правка одним запросом.
+// Регистрируем ДО '/object-entry', чтобы порядок маршрутов читался сверху вниз.
+router.put(
+  '/object-entry/bulk',
+  requireAnyPageAccess(['/employee/requests', '/timesheet', '/timesheet-hr'], 'edit'),
+  timesheetController.upsertObjectEntriesBulk
+);
+
+// PUT/DELETE /api/timesheet/object-entry — одиночная правка. Ограничитель
+// параллелизма защищает пул БД от вкладок со старым бандлом: те шлют массовую
+// правку как залп из десятков одиночных запросов (Promise.all по ячейкам).
+const objectEntryConcurrency = perUserConcurrency({ limit: 3, maxQueue: 300, maxWaitMs: 20_000 });
+
 router.put(
   '/object-entry',
   requireAnyPageAccess(['/employee/requests', '/timesheet', '/timesheet-hr'], 'edit'),
+  objectEntryConcurrency,
   timesheetController.upsertObjectEntry
 );
 
@@ -338,6 +352,7 @@ router.put(
 router.delete(
   '/object-entry',
   requireAnyPageAccess(['/employee/requests', '/timesheet', '/timesheet-hr'], 'edit'),
+  objectEntryConcurrency,
   timesheetController.deleteObjectEntry
 );
 

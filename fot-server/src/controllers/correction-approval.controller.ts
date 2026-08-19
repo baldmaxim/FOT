@@ -21,6 +21,52 @@ import {
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 import { listRecentSkudObjectNamesByEmployee } from '../services/employee-skud-object-access.service.js';
+import {
+  findApprovalLocksForEmployeeDates,
+  lockKey,
+  type ITimesheetLockPair,
+} from '../services/timesheet-lock.service.js';
+import type { IApprovalLockInfo } from '../services/timesheet-department-assignments.service.js';
+
+/**
+ * Решение согласующего меняет засчитанные часы, поэтому в закрытом (поданном/
+ * утверждённом) табеле оно запрещено всем, кроме is_admin. Проверять обязательно
+ * внутри транзакции записи — advisory-lock (сотрудник, месяц) там уже взят.
+ */
+async function loadCorrectionLocks(
+  req: AuthenticatedRequest,
+  pairs: readonly ITimesheetLockPair[],
+  exec?: DbExecutor,
+): Promise<Map<string, IApprovalLockInfo>> {
+  if (req.user.is_admin) return new Map();
+  return findApprovalLocksForEmployeeDates(pairs, exec);
+}
+
+/** Текст 409 для закрытого периода (совпадает с /api/timesheet). */
+function approvalLockedMessage(lock: IApprovalLockInfo): string {
+  const state = lock.status === 'approved' ? 'утверждён' : 'на проверке';
+  return `Период ${lock.start_date} – ${lock.end_date} уже ${state}. Редактирование закрыто.`;
+}
+
+/** Отсекает из набора строки, попавшие в закрытый период. Возвращает и отсечённые id. */
+async function partitionByApprovalLock(
+  req: AuthenticatedRequest,
+  rows: ReadonlyArray<{ id: number; employee_id: number; work_date: string }>,
+  exec?: DbExecutor,
+): Promise<{ allowedIds: number[]; lockedIds: number[] }> {
+  const locks = await loadCorrectionLocks(
+    req,
+    rows.map(r => ({ employeeId: Number(r.employee_id), workDate: String(r.work_date) })),
+    exec,
+  );
+  const allowedIds: number[] = [];
+  const lockedIds: number[] = [];
+  for (const row of rows) {
+    if (locks.has(lockKey(Number(row.employee_id), String(row.work_date)))) lockedIds.push(Number(row.id));
+    else allowedIds.push(Number(row.id));
+  }
+  return { allowedIds, lockedIds };
+}
 
 /**
  * SELECT через клиент транзакции, если он передан, иначе через пул. Решения согласующего
@@ -470,10 +516,18 @@ async function changeAdjustmentApproval(
   // Решение согласующего меняет занятость субботней квоты: pending → rejected освобождает
   // слот, → approved его занимает. Пишем и пересчитываем хвост месяца под общим локом.
   const now = new Date().toISOString();
-  const { updatedRows, tail } = await withEmployeeMonthQuotaLock(
+  const { updatedRows, tail, lock } = await withEmployeeMonthQuotaLock(
     adj.employee_id,
     adj.work_date,
     async exec => {
+      // Закрытый табель: решение меняет засчитанные часы задним числом.
+      const locks = await loadCorrectionLocks(
+        req, [{ employeeId: adj.employee_id, workDate: adj.work_date }], exec,
+      );
+      const lockInfo = locks.get(lockKey(adj.employee_id, adj.work_date)) ?? null;
+      if (lockInfo) {
+        return { updatedRows: [] as Array<{ id: number }>, tail: [] as IReapprovalTransition[], lock: lockInfo };
+      }
       const rows = await queryWith<{ id: number }>(
         exec,
         `UPDATE attendance_adjustments SET
@@ -485,13 +539,19 @@ async function changeAdjustmentApproval(
          RETURNING id`,
         [nextStatus, req.user.id, now, comment, adjustmentId],
       );
-      if (rows.length === 0) return { updatedRows: rows, tail: [] as IReapprovalTransition[] };
+      if (rows.length === 0) return { updatedRows: rows, tail: [] as IReapprovalTransition[], lock: null };
       return {
         updatedRows: rows,
         tail: await reapproveEmployeeMonthTail(adj.employee_id, adj.work_date, exec),
+        lock: null as IApprovalLockInfo | null,
       };
     },
   );
+
+  if (lock) {
+    res.status(409).json({ success: false, error: approvalLockedMessage(lock) });
+    return;
+  }
 
   if (updatedRows.length === 0) {
     res.status(409).json({
@@ -589,7 +649,13 @@ async function bulkChangeByIds(
   if (pending.length === 0) {
     res.json({
       success: true,
-      data: { processed_count: 0, skipped_not_pending: skippedNotPending, skipped_no_access: 0 },
+      data: {
+        processed_count: 0,
+        skipped_not_pending: skippedNotPending,
+        skipped_no_access: 0,
+        skipped_locked: 0,
+        locked_ids: [] as number[],
+      },
     });
     return;
   }
@@ -608,6 +674,8 @@ async function bulkChangeByIds(
         processed_count: 0,
         skipped_not_pending: skippedNotPending,
         skipped_no_access: skippedNoAccess,
+        skipped_locked: 0,
+        locked_ids: [] as number[],
       },
     });
     return;
@@ -619,7 +687,15 @@ async function bulkChangeByIds(
   const lockPairs = pending
     .filter(a => allowedIds.includes(Number(a.id)))
     .map(a => ({ employeeId: Number(a.employee_id), workDate: String(a.work_date) }));
-  const { updated, tail } = await withQuotaLocks(lockPairs, async exec => {
+  const bulkRows = pending
+    .filter(a => allowedIds.includes(Number(a.id)))
+    .map(a => ({ id: Number(a.id), employee_id: Number(a.employee_id), work_date: String(a.work_date) }));
+  const { updated, tail, lockedIds } = await withQuotaLocks(lockPairs, async exec => {
+    // Закрытый табель: такие строки пропускаем, остальные обрабатываем.
+    const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(req, bulkRows, exec);
+    if (writableIds.length === 0) {
+      return { updated: [] as Array<{ id: number }>, tail: [] as IReapprovalTransition[], lockedIds: skipped };
+    }
     const rows = await queryWith<{ id: number }>(
       exec,
       `UPDATE attendance_adjustments SET
@@ -629,7 +705,7 @@ async function bulkChangeByIds(
          approval_comment = $4
        WHERE id = ANY($5::bigint[]) AND approval_status = 'pending'
        RETURNING id`,
-      [nextStatus, req.user.id, now, comment, allowedIds],
+      [nextStatus, req.user.id, now, comment, writableIds],
     );
     const transitions: IReapprovalTransition[] = [];
     if (rows.length > 0) {
@@ -638,7 +714,7 @@ async function bulkChangeByIds(
         transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
       }
     }
-    return { updated: rows, tail: transitions };
+    return { updated: rows, tail: transitions, lockedIds: skipped };
   });
 
   const processedCount = updated.length;
@@ -678,6 +754,8 @@ async function bulkChangeByIds(
       processed_count: processedCount,
       skipped_not_pending: skippedNotPending,
       skipped_no_access: skippedNoAccess,
+      skipped_locked: lockedIds.length,
+      locked_ids: lockedIds,
     },
   });
 }
@@ -736,7 +814,13 @@ async function bulkRevertByIdsImpl(
   if (revertable.length === 0) {
     res.json({
       success: true,
-      data: { processed_count: 0, skipped_not_pending: skippedNotPending, skipped_no_access: 0 },
+      data: {
+        processed_count: 0,
+        skipped_not_pending: skippedNotPending,
+        skipped_no_access: 0,
+        skipped_locked: 0,
+        locked_ids: [] as number[],
+      },
     });
     return;
   }
@@ -755,6 +839,8 @@ async function bulkRevertByIdsImpl(
         processed_count: 0,
         skipped_not_pending: skippedNotPending,
         skipped_no_access: skippedNoAccess,
+        skipped_locked: 0,
+        locked_ids: [] as number[],
       },
     });
     return;
@@ -764,7 +850,14 @@ async function bulkRevertByIdsImpl(
   const revertPairs = revertable
     .filter(a => allowedIds.includes(Number(a.id)))
     .map(a => ({ employeeId: Number(a.employee_id), workDate: String(a.work_date) }));
-  const { updated, tail } = await withQuotaLocks(revertPairs, async exec => {
+  const revertRows = revertable
+    .filter(a => allowedIds.includes(Number(a.id)))
+    .map(a => ({ id: Number(a.id), employee_id: Number(a.employee_id), work_date: String(a.work_date) }));
+  const { updated, tail, lockedIds } = await withQuotaLocks(revertPairs, async exec => {
+    const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(req, revertRows, exec);
+    if (writableIds.length === 0) {
+      return { updated: [] as Array<{ id: number }>, tail: [] as IReapprovalTransition[], lockedIds: skipped };
+    }
     const rows = await queryWith<{ id: number }>(
       exec,
       `UPDATE attendance_adjustments SET
@@ -774,7 +867,7 @@ async function bulkRevertByIdsImpl(
          approval_comment = NULL
        WHERE id = ANY($1::bigint[]) AND approval_status = ANY($2::text[])
        RETURNING id`,
-      [allowedIds, ['approved', 'rejected']],
+      [writableIds, ['approved', 'rejected']],
     );
     const transitions: IReapprovalTransition[] = [];
     if (rows.length > 0) {
@@ -783,7 +876,7 @@ async function bulkRevertByIdsImpl(
         transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
       }
     }
-    return { updated: rows, tail: transitions };
+    return { updated: rows, tail: transitions, lockedIds: skipped };
   });
 
   const processedCount = updated.length;
@@ -824,6 +917,8 @@ async function bulkRevertByIdsImpl(
       processed_count: processedCount,
       skipped_not_pending: skippedNotPending,
       skipped_no_access: skippedNoAccess,
+      skipped_locked: lockedIds.length,
+      locked_ids: lockedIds,
     },
   });
 }
@@ -864,7 +959,7 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
     );
     const employeeIds = empRows.map(r => Number(r.id));
     if (employeeIds.length === 0) {
-      res.json({ success: true, data: { approved_count: 0 } });
+      res.json({ success: true, data: { approved_count: 0, skipped_locked: 0, locked_ids: [] as number[] } });
       return;
     }
 
@@ -889,8 +984,15 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
     const approvePairs = candidates
       .filter(a => allowedIds.includes(Number(a.id)))
       .map(a => ({ employeeId: Number(a.employee_id), workDate: String(a.work_date) }));
-    const { updated, tail } = allowedIds.length > 0
+    const approveRows = candidates
+      .filter(a => allowedIds.includes(Number(a.id)))
+      .map(a => ({ id: Number(a.id), employee_id: Number(a.employee_id), work_date: String(a.work_date) }));
+    const { updated, tail, lockedIds } = allowedIds.length > 0
       ? await withQuotaLocks(approvePairs, async exec => {
+        const { allowedIds: writableIds, lockedIds: skipped } = await partitionByApprovalLock(req, approveRows, exec);
+        if (writableIds.length === 0) {
+          return { updated: [] as Array<{ id: number }>, tail: [] as IReapprovalTransition[], lockedIds: skipped };
+        }
         const rows = await queryWith<{ id: number }>(
           exec,
           `UPDATE attendance_adjustments SET
@@ -901,7 +1003,7 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
            WHERE id = ANY($3::bigint[])
              AND approval_status = 'pending'
            RETURNING id`,
-          [req.user.id, now, allowedIds],
+          [req.user.id, now, writableIds],
         );
         const transitions: IReapprovalTransition[] = [];
         if (rows.length > 0) {
@@ -910,9 +1012,9 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
             transitions.push(...await reapproveEmployeeMonthTail(pair.employeeId, pair.workDate, exec));
           }
         }
-        return { updated: rows, tail: transitions };
+        return { updated: rows, tail: transitions, lockedIds: skipped };
       })
-      : { updated: [] as Array<{ id: number }>, tail: [] as IReapprovalTransition[] };
+      : { updated: [] as Array<{ id: number }>, tail: [] as IReapprovalTransition[], lockedIds: [] as number[] };
 
     const approvedIds = updated.map((r) => Number(r.id));
     await reportQuotaTailTransitions(req, tail, 'correction_approval_department');
@@ -946,7 +1048,10 @@ const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<vo
       });
     }
 
-    res.json({ success: true, data: { approved_count: approvedCount } });
+    res.json({
+      success: true,
+      data: { approved_count: approvedCount, skipped_locked: lockedIds.length, locked_ids: lockedIds },
+    });
   } catch (err) {
     console.error('correction-approval.bulkApprove error:', err);
     res.status(500).json({ success: false, error: 'Ошибка массового согласования' });
@@ -1444,10 +1549,17 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
 
     // Откат снова занимает субботний слот — под локом с пересчётом хвоста месяца.
     const prevStatus = adj.approval_status;
-    const { updatedRows, tail } = await withEmployeeMonthQuotaLock(
+    const { updatedRows, tail, lock } = await withEmployeeMonthQuotaLock(
       adj.employee_id,
       adj.work_date,
       async exec => {
+        const locks = await loadCorrectionLocks(
+          req, [{ employeeId: adj.employee_id, workDate: adj.work_date }], exec,
+        );
+        const lockInfo = locks.get(lockKey(adj.employee_id, adj.work_date)) ?? null;
+        if (lockInfo) {
+          return { updatedRows: [] as Array<{ id: number }>, tail: [] as IReapprovalTransition[], lock: lockInfo };
+        }
         const rows = await queryWith<{ id: number }>(
           exec,
           `UPDATE attendance_adjustments SET
@@ -1459,13 +1571,19 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
            RETURNING id`,
           [id, ['approved', 'rejected']],
         );
-        if (rows.length === 0) return { updatedRows: rows, tail: [] as IReapprovalTransition[] };
+        if (rows.length === 0) return { updatedRows: rows, tail: [] as IReapprovalTransition[], lock: null };
         return {
           updatedRows: rows,
           tail: await reapproveEmployeeMonthTail(adj.employee_id, adj.work_date, exec),
+          lock: null as IApprovalLockInfo | null,
         };
       },
     );
+
+    if (lock) {
+      res.status(409).json({ success: false, error: approvalLockedMessage(lock) });
+      return;
+    }
 
     if (updatedRows.length === 0) {
       res.status(409).json({

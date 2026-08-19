@@ -31,6 +31,9 @@ export interface IBulkCorrectionTarget {
 }
 
 export interface IBulkObjectCorrectionTarget {
+  /** Ключ ячейки грида: он же client_item_id в массовом сохранении объектных
+   *  правок — по нему ответ сервера сопоставляется с исходной ячейкой. */
+  cellKey: string;
   employee: TimesheetEmployee;
   day: number;
   workDate: string;
@@ -44,6 +47,16 @@ export type TimesheetViewMode = 'employees' | 'objects' | 'corrections' | 'trans
 
 export const MONTH_NAMES_RU = ['', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+/**
+ * Размер чанка массового сохранения объектных правок. Сервер обрабатывает
+ * элементы строго последовательно (advisory-lock на сотрудника и месяц),
+ * поэтому чанк должен укладываться в таймаут запроса с запасом.
+ * Серверный потолок — 200 элементов.
+ */
+export const OBJECT_BULK_CHUNK_SIZE = 50;
+/** Таймаут чанка: дефолтных 30с api-клиента мало для последовательной записи. */
+export const OBJECT_BULK_TIMEOUT_MS = 60_000;
 
 // ─── Date helpers ──────────────────────────────────────────────────────────
 

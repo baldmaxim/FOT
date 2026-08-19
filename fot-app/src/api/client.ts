@@ -67,9 +67,18 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
   __skipRefresh?: boolean;
+  /** Счётчик автоповторов перегрузки (db_pool_busy / 429). Ставится клиентом сам. */
+  __retryCount?: number;
   /** Таймаут запроса в мс; 0 — отключить. По умолчанию DEFAULT_TIMEOUT_MS. */
   timeoutMs?: number;
 }
+
+// Перегрузка сервера — не ошибка приложения: пул БД насыщен (db_pool_busy) или
+// сработал ограничитель параллелизма (429). Такой ответ повторяем сами: браузер
+// заголовок Retry-After не применяет, а React Query покрывает не все вызовы.
+// В Sentry их не шлём — иначе всплеск параллельных запросов выглядит как авария.
+const OVERLOAD_CODES = new Set(['db_pool_busy', 'too_many_requests']);
+const OVERLOAD_RETRY_DELAYS_MS = [300, 900];
 
 export const setSessionToken = (token: string | null): void => {
   sessionToken = token;
@@ -251,7 +260,7 @@ const refreshSession = async (): Promise<boolean> => {
 
 export const apiClient = {
   async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-    const { skipAuth, __skipRefresh, timeoutMs, ...fetchOptions } = options;
+    const { skipAuth, __skipRefresh, __retryCount, timeoutMs, ...fetchOptions } = options;
 
     const headers: HeadersInit = {
       ...fetchOptions.headers,
@@ -337,6 +346,18 @@ export const apiClient = {
         error.code,
         error,
       );
+
+      // Перегрузка: повторяем с задержкой, не шумим в Sentry.
+      if (typeof error.code === 'string' && OVERLOAD_CODES.has(error.code)) {
+        const attempt = __retryCount ?? 0;
+        const delay = OVERLOAD_RETRY_DELAYS_MS[attempt];
+        if (delay !== undefined) {
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return this.request<T>(endpoint, { ...options, __retryCount: attempt + 1 });
+        }
+        throw apiError;
+      }
+
       // 5xx и сетевые сбои — серверная сторона; в Sentry с тегами для фильтрации.
       // 4xx (валидация, права) — ожидаемое поведение, не шумим.
       if (response.status >= 500) {

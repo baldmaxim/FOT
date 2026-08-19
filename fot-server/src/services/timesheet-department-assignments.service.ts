@@ -649,7 +649,7 @@ export async function findApprovalLockForDate(
          AND status IN ('submitted', 'approved')
          AND start_date <= $2
          AND end_date >= $2
-       ORDER BY status DESC
+       ORDER BY (status = 'approved') DESC, start_date DESC, id DESC
        LIMIT 1`,
     [departmentId, workDate],
   );

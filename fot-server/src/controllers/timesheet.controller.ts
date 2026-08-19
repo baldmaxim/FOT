@@ -1,7 +1,9 @@
 import { Response } from 'express';
+import * as Sentry from '@sentry/node';
 import { z } from 'zod';
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query, execute, withTransaction, type DbExecutor } from '../config/postgres.js';
+import { isPoolAcquireTimeout, DB_POOL_BUSY_CODE, DB_POOL_BUSY_MESSAGE } from '../utils/pg-errors.js';
 import { auditService } from '../services/audit.service.js';
 import type {
   AuthenticatedRequest,
@@ -54,10 +56,18 @@ import {
   listEmployeeMembershipsForDepartmentPeriod,
   resolveTimesheetDateRange,
   resolveTimesheetPeriodRange,
-  findApprovalLockForDate,
   type IDepartmentEmployeeMembership,
   type IApprovalLockInfo,
 } from '../services/timesheet-department-assignments.service.js';
+import {
+  findApprovalLockForEmployeeDate,
+  findApprovalLocksForEmployeeDates,
+  flattenApprovalLockDates,
+  loadApprovalLocksForEmployeesInPeriod,
+  lockKey,
+  type IEmployeeApprovalLock,
+  type ITimesheetLockPair,
+} from '../services/timesheet-lock.service.js';
 import { fetchTimesheetDataForDepartment, fetchTimesheetDataForEmployees } from '../services/timesheet-export.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
@@ -187,6 +197,20 @@ const deleteObjectEntrySchema = z.object({
   employee_id: z.number().int().positive(),
   work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   object_key: z.string().trim().min(1).max(255),
+});
+
+/**
+ * Массовое применение объектных правок. client_item_id — обратная ссылка на
+ * элемент клиента: после дедупа и сортировки привязка ответа по индексу
+ * исходного массива неверна (фронт цепляет по нему вложения к adjustment_id).
+ * Потолок 200: батч выполняется последовательно, длинный держал бы соединение
+ * дольше клиентского таймаута — фронт режет выделение на чанки сам.
+ */
+const BULK_OBJECT_ENTRY_MAX_ITEMS = 200;
+const bulkObjectEntrySchema = z.object({
+  items: z.array(
+    upsertObjectEntrySchema.extend({ client_item_id: z.string().trim().min(1).max(128).optional() }),
+  ).min(1).max(BULK_OBJECT_ENTRY_MAX_ITEMS),
 });
 
 // Возвращает человеко-читаемое сообщение о первой проблеме валидации zod.
@@ -758,13 +782,12 @@ export async function resolveAdjustmentApprovalStatus(
 
 /**
  * ID корректировок, попадающих в уже поданный/утверждённый табель. Такие строки пересчёт
- * не трогает: редактирование этих периодов уже закрыто (ensureNotLockedForScope), и
- * переигрывать статусы задним числом нельзя.
+ * не трогает: редактирование этих периодов закрыто, и переигрывать статусы задним числом
+ * нельзя.
  *
- * Принадлежность сотрудника подаче берём из СНИМКА состава (timesheet_approval_employees),
- * а не из employees.org_department_id: снимок фиксирует, кто реально был подан, и потому
- * корректен для переведённых сотрудников, поддеревьев и подач по родительскому отделу.
- * Подачи без снимка (легаси, 8 из 697 на проде) добираем по членству отдела за период.
+ * Делегирует единому per-employee замку (снимок состава ИЛИ отдел сотрудника и его
+ * предки). Раньше ветка «по членству отдела» применялась только к подачам без снимка,
+ * и сотрудник, добавленный в отдел уже после submit, оставался незалоченным.
  */
 async function loadLockedByApprovalPeriodIds(
   rows: Array<{ id: number; employee_id: number; work_date: string }>,
@@ -773,51 +796,14 @@ async function loadLockedByApprovalPeriodIds(
   const locked = new Set<number>();
   if (rows.length === 0) return locked;
 
-  const ids = rows.map(r => r.id);
-  const snapshotRows = await queryWith<{ id: number | string }>(
+  const locks = await findApprovalLocksForEmployeeDates(
+    rows.map(row => ({ employeeId: row.employee_id, workDate: row.work_date })),
     exec,
-    `SELECT DISTINCT aa.id
-       FROM attendance_adjustments aa
-       JOIN timesheet_approval_employees tae ON tae.employee_id = aa.employee_id
-       JOIN timesheet_approvals ta ON ta.id = tae.approval_id
-      WHERE aa.id = ANY($1::bigint[])
-        AND ta.status IN ('submitted', 'approved')
-        AND aa.work_date BETWEEN ta.start_date AND ta.end_date`,
-    [ids],
   );
-  for (const row of snapshotRows) locked.add(Number(row.id));
-
-  // Fallback для подач без снимка состава. Пересекаем ПО СТРОКАМ: сотрудник должен входить
-  // в состав подачи И дата строки попадать в её диапазон — иначе подача 1–15 заморозила бы
-  // и строки 16–31.
-  const dates = rows.map(r => r.work_date).sort();
-  const legacyApprovals = await queryWith<{
-    department_id: string; start_date: string; end_date: string;
-  }>(
-    exec,
-    `SELECT ta.department_id, ta.start_date::text AS start_date, ta.end_date::text AS end_date
-       FROM timesheet_approvals ta
-      WHERE ta.status IN ('submitted', 'approved')
-        AND ta.start_date <= $2::date AND ta.end_date >= $1::date
-        AND NOT EXISTS (
-          SELECT 1 FROM timesheet_approval_employees tae WHERE tae.approval_id = ta.id
-        )`,
-    [dates[0]!, dates[dates.length - 1]!],
-  );
-  for (const approval of legacyApprovals) {
-    if (!approval.department_id) continue;
-    const candidates = rows.filter(
-      r => !locked.has(r.id) && r.work_date >= approval.start_date && r.work_date <= approval.end_date,
-    );
-    if (candidates.length === 0) continue;
-    const members = new Set(await listEmployeeIdsAssignedToDepartmentPeriod(
-      String(approval.department_id), approval.start_date, approval.end_date,
-    ));
-    for (const row of candidates) {
-      if (members.has(row.employee_id)) locked.add(row.id);
-    }
+  if (locks.size === 0) return locked;
+  for (const row of rows) {
+    if (locks.has(lockKey(row.employee_id, row.work_date))) locked.add(row.id);
   }
-
   return locked;
 }
 
@@ -1229,40 +1215,6 @@ interface IManagedDepartmentTimesheetSummary {
   direct_subordinate_employee_ids?: number[];
 }
 
-/**
- * Возвращает ISO-даты, для которых существует активный согласованный диапазон отдела сотрудника
- * в пределах [startDate..endDate]. Используется для блокировки редактирования у руководителя.
- */
-async function loadApprovalLockedDatesForDepartment(
-  departmentId: string,
-  startDate: string,
-  endDate: string,
-): Promise<string[]> {
-  const data = await query<{ start_date: string; end_date: string; status: string }>(
-    `SELECT start_date, end_date, status FROM timesheet_approvals
-       WHERE department_id = $1
-         AND status IN ('submitted', 'approved')
-         AND start_date <= $2
-         AND end_date >= $3`,
-    [departmentId, endDate, startDate],
-  );
-
-  const locked = new Set<string>();
-  const start = new Date(`${startDate}T00:00:00Z`);
-  const end = new Date(`${endDate}T00:00:00Z`);
-  for (const row of data) {
-    const aStart = new Date(`${row.start_date}T00:00:00Z`);
-    const aEnd = new Date(`${row.end_date}T00:00:00Z`);
-    const cursor = new Date(Math.max(aStart.getTime(), start.getTime()));
-    const stop = new Date(Math.min(aEnd.getTime(), end.getTime()));
-    while (cursor <= stop) {
-      locked.add(cursor.toISOString().slice(0, 10));
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
-    }
-  }
-  return [...locked].sort();
-}
-
 /** Пытается найти отдел сотрудника на дату среди managed-отделов запроса. */
 async function resolveEmployeeManagedDepartment(
   req: AuthenticatedRequest,
@@ -1278,17 +1230,62 @@ async function resolveEmployeeManagedDepartment(
   return null;
 }
 
-/** Проверяет, заблокирована ли редакция записи табеля руководителем (approved/submitted/returned диапазон). */
+/**
+ * Проверяет, закрыт ли период для записи табеля сотрудника на дату.
+ *
+ * Замок не зависит от того, как правящий добрался до сотрудника: раньше поиск шёл
+ * по managed-отделам запроса, и любой путь доступа мимо них (прямые подчинённые,
+ * бригада табельщицы, scope='all', hr) открывал закрытый период. Единственное
+ * исключение — is_admin.
+ */
 async function ensureNotLockedForScope(
   req: AuthenticatedRequest,
-  scope: string | null,
   employeeId: number,
   workDate: string,
+  exec?: DbExecutor,
 ): Promise<IApprovalLockInfo | null> {
-  if (scope !== 'department') return null;
-  const departmentId = await resolveEmployeeManagedDepartment(req, employeeId, workDate);
-  if (!departmentId) return null;
-  return findApprovalLockForDate(departmentId, workDate);
+  if (req.user.is_admin) return null;
+  return findApprovalLockForEmployeeDate(employeeId, workDate, exec);
+}
+
+/** Батч-форма ensureNotLockedForScope для bulk-путей. Пустая карта для is_admin. */
+async function loadLocksForScope(
+  req: AuthenticatedRequest,
+  pairs: readonly ITimesheetLockPair[],
+  exec?: DbExecutor,
+): Promise<Map<string, IApprovalLockInfo>> {
+  if (req.user.is_admin) return new Map();
+  return findApprovalLocksForEmployeeDates(pairs, exec);
+}
+
+/** Единый текст 409 для закрытого периода. */
+export function approvalLockMessage(lock: IApprovalLockInfo): string {
+  const state = lock.status === 'approved' ? 'утверждён' : 'на проверке';
+  return `Период ${lock.start_date} – ${lock.end_date} уже ${state}. Редактирование закрыто.`;
+}
+
+/** Замок, найденный ПОВТОРНО уже под advisory-lock: pre-check мог устареть. */
+export class ApprovalLockedError extends Error {
+  constructor(public readonly lock: IApprovalLockInfo) {
+    super(approvalLockMessage(lock));
+    this.name = 'ApprovalLockedError';
+  }
+}
+
+/**
+ * Повторная проверка замка ВНУТРИ транзакции записи. Pre-check сам по себе не
+ * защищает: между ним и записью параллельный submit успевает закрыть период.
+ * Вызывать первым делом в колбэке withEmployeeMonthQuotaLock/withQuotaLocks —
+ * advisory-lock по (сотрудник, месяц) там уже взят.
+ */
+async function assertNotLockedInTx(
+  req: AuthenticatedRequest,
+  pairs: readonly ITimesheetLockPair[],
+  exec: DbExecutor,
+): Promise<void> {
+  const locks = await loadLocksForScope(req, pairs, exec);
+  if (locks.size === 0) return;
+  throw new ApprovalLockedError([...locks.values()][0]!);
 }
 
 /** Норма часов дня с учётом графика и предпраздничного -1ч (см. getDayNormHours). */
@@ -1589,6 +1586,327 @@ async function buildManagedDepartmentTimesheetSummary(params: {
     approvals: approvalsTyped,
     is_primary: params.isPrimary,
   };
+}
+
+// ───────────────────────── объектные корректировки ─────────────────────────
+// Одиночный PUT и bulk обязаны выполнять ОДНУ И ТУ ЖЕ логику, поэтому она
+// разделена на слои: request-wide preflight → per-item мутация (транзакция под
+// advisory-lock, HTTP не трогает) → post-commit хвост (R2/вложения, уведомления
+// о пересогласовании). HTTP-адаптеры лежат в контроллере ниже.
+
+type TimesheetScope = Awaited<ReturnType<typeof resolveTimesheetScope>>;
+type QuotaTail = Awaited<ReturnType<typeof reapproveEmployeeMonthTail>>;
+
+export interface IObjectEntryInput {
+  /** Идентификатор клиента для сопоставления ответа с исходным элементом. */
+  client_item_id: string | null;
+  employee_id: number;
+  work_date: string;
+  object_key: string;
+  object_id: string | null;
+  object_name: string;
+  hours_worked: number;
+  notes: string | null;
+}
+
+interface IObjectEntryData {
+  adjustment_id: number | null;
+  employee_id: number;
+  work_date: string;
+  object_key: string;
+  object_id: string | null;
+  object_name: string;
+  hours_worked: number;
+  display_hours_worked: number;
+  base_hours_worked: number;
+  is_correction: boolean;
+  notes: string | null;
+  removed?: boolean;
+  approval_status?: string | null;
+}
+
+type ObjectEntryOutcome =
+  | {
+      kind: 'applied';
+      item: IObjectEntryInput;
+      data: IObjectEntryData;
+      /** id снятых day-level корректировок — их вложения чистим после коммита. */
+      removedManualIds: number[];
+      /** id удалённой объектной строки (при hours_worked = 0). */
+      removedIds: number[];
+      tail: QuotaTail;
+      auditApprovalStatus: string | null;
+    }
+  | {
+      kind: 'rejected';
+      item: IObjectEntryInput;
+      status: number;
+      code: string | null;
+      error: string;
+      details?: unknown;
+    };
+
+/**
+ * Request-wide проверки: одинаковы для всех элементов запроса. Бросают
+ * CorrectionRestrictionError (роль) — адаптер превращает её в 403/422.
+ */
+async function preflightObjectEntries(req: AuthenticatedRequest): Promise<TimesheetScope> {
+  // Гард роли: объектные корректировки могут быть запрещены (флаг роли).
+  await assertObjectCorrectionsAllowed(req.user.system_role_id);
+  return resolveTimesheetScope(req);
+}
+
+/**
+ * Одна объектная правка: гарды по сотруднику/дате, затем вся запись в БД под
+ * advisory-lock (employee, месяц). Ничего не пишет в res и не делает post-commit
+ * побочных эффектов — их собирает finalizeObjectEntries по всем элементам.
+ */
+async function applyObjectEntryMutation(
+  req: AuthenticatedRequest,
+  scope: TimesheetScope,
+  item: IObjectEntryInput,
+): Promise<ObjectEntryOutcome> {
+  const reject = (status: number, error: string, code: string | null = null, details?: unknown): ObjectEntryOutcome =>
+    ({ kind: 'rejected', item, status, code, error, details });
+
+  try {
+    if (!isTimesheetWindowExempt(req.user, scope)) {
+      const [yearStr, monthStr] = item.work_date.split('-');
+      if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr), monthAccessFromUser(req.user))) {
+        return reject(403, DEPARTMENT_MONTH_FORBIDDEN_MESSAGE);
+      }
+    }
+    if (!(await canAccessEmployeeForTimesheetDate(req, item.employee_id, item.work_date, true))) {
+      return reject(403, 'Нет доступа к сотруднику');
+    }
+    const approvalLockObj = await ensureNotLockedForScope(req, item.employee_id, item.work_date);
+    if (approvalLockObj) {
+      return reject(409, approvalLockMessage(approvalLockObj));
+    }
+    const allowedHours = Math.max(0, item.hours_worked);
+
+    // Defense-in-depth: для ролей, где объектные правки РАЗРЕШЕНЫ, но задан лимит/только-
+    // аномалии/не-больше-нормы — объектная правка тоже обязана подчиняться ограничениям.
+    // Для site_supervisor путь уже закрыт assertObjectCorrectionsAllowed выше; здесь — на
+    // случай будущих ролей. Проверяем ДО mutex-DELETE, чтобы при блокировке ничего не удалить.
+    // Существующую объектную строку исключаем из счётчика (повторная правка не задваивает).
+    if (allowedHours > 0) {
+      const existingObjRows = await query<{ id: number | string }>(
+        `SELECT id FROM attendance_adjustments
+          WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
+          LIMIT 1`,
+        [item.employee_id, item.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, item.object_key],
+      );
+      const scheduledNormObj = await resolveScheduledNormHours(item.employee_id, item.work_date);
+      await assertCorrectionAllowed({
+        systemRoleId: req.user.system_role_id,
+        createdBy: req.user.id,
+        employeeId: item.employee_id,
+        workDate: item.work_date,
+        hoursOverride: allowedHours,
+        scheduledNormHours: scheduledNormObj,
+        excludeAdjustmentId: existingObjRows[0] ? Number(existingObjRows[0].id) : null,
+      });
+    }
+
+    // Справочная часть резолвера (график, календарь, whitelist) — ДО захвата lock,
+    // чтобы под локом не занимать лишние соединения пула.
+    const objectPrecheck = allowedHours > 0
+      ? await resolveAdjustmentApprovalPrecheck(
+          item.employee_id, item.work_date, 'manual', allowedHours, isTimekeeper(req),
+        )
+      : null;
+
+    // Все изменения БД по (сотрудник, месяц) — под общим advisory-lock: mutex-DELETE,
+    // upsert/удаление и хвостовой пересчёт месяца. Чистка вложений и R2 — после коммита.
+    const lockOutcome = await withEmployeeMonthQuotaLock(
+      item.employee_id,
+      item.work_date,
+      async exec => {
+        // Повторно под локом: pre-check выше мог устареть (параллельный submit).
+        await assertNotLockedInTx(req, [{ employeeId: item.employee_id, workDate: item.work_date }], exec);
+
+        // Текущая объектная строка: нужна и для исключения самой себя из
+        // hasApprovedWorkOnDate, и для «изменилось ли что-то значимое».
+        const existingRow = await queryWith<{
+          id: number | string; status: string; hours_override: number | string | null;
+        }>(
+          exec,
+          `SELECT id, status, hours_override FROM attendance_adjustments
+            WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
+            LIMIT 1 FOR UPDATE`,
+          [item.employee_id, item.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, item.object_key],
+        ).then(rows => rows[0] ?? null);
+
+        // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
+        // строки на тот же (employee, work_date). RETURNING нужен, чтобы после коммита
+        // каскадно подчистить файлы и R2-объекты этих корректировок.
+        const removedManualRows = await queryWith<{ id: number | string }>(
+          exec,
+          `DELETE FROM attendance_adjustments
+             WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'
+           RETURNING id`,
+          [item.employee_id, item.work_date],
+        );
+
+        // 0 часов на объекте = снять корректировку. Иначе агрегат по дню падает в 'absent'
+        // (см. attendance.service.ts) — будет «неявка» в режиме «по сотрудникам».
+        if (allowedHours <= 0) {
+          const removedIds = await deleteAttendanceAdjustmentBySource({
+            employee_id: item.employee_id,
+            work_date: item.work_date,
+            source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+            source_id: item.object_key,
+          }, exec);
+          // Удаление освободило субботний слот — пересчитываем хвост месяца.
+          const tail = await reapproveEmployeeMonthTail(item.employee_id, item.work_date, exec);
+          return {
+            removed: true as const,
+            removedManualIds: removedManualRows.map(r => Number(r.id)),
+            removedIds,
+            tail,
+          };
+        }
+
+        // Статус согласования пересчитываем ТОЛЬКО при значимом изменении (часы/статус).
+        // Правка одного примечания или названия объекта решение согласующего не снимает:
+        // approval_status в upsert не передаём, поля решения остаются нетронутыми.
+        const prevHours = existingRow?.hours_override == null ? null : Number(existingRow.hours_override);
+        const significantChange = !existingRow
+          || String(existingRow.status) !== 'manual'
+          || prevHours !== allowedHours;
+
+        let approvalStatus: 'auto_approved' | 'pending' | undefined;
+        if (significantChange && objectPrecheck) {
+          if ('resolved' in objectPrecheck) {
+            approvalStatus = objectPrecheck.resolved;
+          } else {
+            objectPrecheck.quota.excludeAdjustmentId = existingRow ? Number(existingRow.id) : null;
+            approvalStatus = await resolveAdjustmentApprovalQuota(objectPrecheck.quota, exec);
+          }
+        }
+
+        const saved = await upsertAttendanceAdjustment({
+          employee_id: item.employee_id,
+          work_date: item.work_date,
+          status: 'manual',
+          hours_override: allowedHours,
+          source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
+          source_id: item.object_key,
+          reason: item.notes ?? null,
+          created_by: req.user.id,
+          ...(approvalStatus ? { approval_status: approvalStatus } : {}),
+          metadata: {
+            object_id: item.object_id ?? null,
+            object_name: item.object_name,
+          },
+        }, exec);
+
+        // Хвост месяца: ввод задним числом мог занять слот раньше уже сохранённых суббот.
+        const tail = significantChange
+          ? await reapproveEmployeeMonthTail(item.employee_id, item.work_date, exec)
+          : [];
+
+        // Пересчёт мог поменять статус и самой сохранённой строки — отдаём актуальный.
+        const savedAfter = tail.some(t => t.id === Number(saved.id))
+          ? (await getAttendanceAdjustmentById(Number(saved.id), exec)) ?? saved
+          : saved;
+
+        return {
+          removed: false as const,
+          removedManualIds: removedManualRows.map(r => Number(r.id)),
+          saved: savedAfter,
+          tail,
+        };
+      },
+    );
+
+    if (lockOutcome.removed) {
+      return {
+        kind: 'applied',
+        item,
+        removedManualIds: lockOutcome.removedManualIds,
+        removedIds: lockOutcome.removedIds,
+        tail: lockOutcome.tail,
+        auditApprovalStatus: null,
+        data: {
+          adjustment_id: null,
+          employee_id: item.employee_id,
+          work_date: item.work_date,
+          object_key: item.object_key,
+          object_id: item.object_id ?? null,
+          object_name: item.object_name,
+          hours_worked: 0,
+          display_hours_worked: 0,
+          base_hours_worked: 0,
+          is_correction: false,
+          notes: null,
+          removed: true,
+        },
+      };
+    }
+
+    const raw = lockOutcome.saved;
+    return {
+      kind: 'applied',
+      item,
+      removedManualIds: lockOutcome.removedManualIds,
+      removedIds: [],
+      tail: lockOutcome.tail,
+      auditApprovalStatus: (raw.approval_status ?? null) as string | null,
+      data: {
+        adjustment_id: Number(raw.id),
+        employee_id: item.employee_id,
+        work_date: item.work_date,
+        object_key: item.object_key,
+        object_id: item.object_id ?? null,
+        object_name: item.object_name,
+        hours_worked: allowedHours,
+        display_hours_worked: allowedHours,
+        base_hours_worked: allowedHours,
+        is_correction: true,
+        notes: item.notes ?? null,
+        approval_status: (raw.approval_status ?? null) as string | null,
+      },
+    };
+  } catch (err) {
+    if (err instanceof ApprovalLockedError) {
+      return reject(409, err.message);
+    }
+    if (err instanceof CorrectionRestrictionError) {
+      const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
+      return reject(status, err.message, err.code, err.details);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Post-commit хвост по всем применённым элементам: чистка вложений/R2 снятых
+ * корректировок и уведомления о пересогласовании квотных суббот.
+ */
+async function finalizeObjectEntries(
+  req: AuthenticatedRequest,
+  outcomes: ObjectEntryOutcome[],
+  source: string,
+): Promise<void> {
+  const applied = outcomes.filter((o): o is Extract<ObjectEntryOutcome, { kind: 'applied' }> => o.kind === 'applied');
+  const purgeAttachmentsSafely = async (ids: number[], context: string): Promise<void> => {
+    if (ids.length === 0) return;
+    try {
+      const r2Keys = (await Promise.all(ids.map(id => purgeCorrectionAttachments(id)))).flat();
+      if (r2Keys.length > 0 && await r2Service.isEnabledAsync()) {
+        await Promise.allSettled(r2Keys.map(key => r2Service.deleteObject(key)));
+      }
+    } catch (cleanupErr) {
+      console.warn(`timesheet.objectEntry: ${context} cleanup failed`, cleanupErr);
+    }
+  };
+
+  await purgeAttachmentsSafely(applied.flatMap(o => o.removedManualIds), 'day-level mutex');
+  await purgeAttachmentsSafely(applied.flatMap(o => o.removedIds), 'attachments');
+  const tail = applied.flatMap(o => o.tail);
+  if (tail.length > 0) await reportQuotaTailTransitions(req, tail, source);
 }
 
 export const timesheetController = {
@@ -2301,7 +2619,13 @@ export const timesheetController = {
       // Согласования, пересекающиеся с выбранным диапазоном отдела.
       // Для scope=department они дают список заблокированных дат (руководитель не может редактировать submitted/approved/returned).
       let departmentApprovals: Array<{ id: number; start_date: string; end_date: string; status: TimesheetApprovalStatus }> = [];
-      let approvalLockedDates: string[] = [];
+      // Замки по сотруднику: в смешанной выборке (табельщица, прямые подчинённые)
+      // плоский список дат пере-блокировал бы чужих. Админ не блокируется вовсе.
+      const approvalLocks: IEmployeeApprovalLock[] = req.user.is_admin
+        ? []
+        : await loadApprovalLocksForEmployeesInPeriod(employeeIds, startDate, endDate);
+      // Легаси-поле для клиентов, не знающих про approval_locks (снять через релиз).
+      const approvalLockedDates = flattenApprovalLockDates(approvalLocks);
       if (effectiveApprovalDeptId) {
         const approvalsRows = await query<{ id: number | string; start_date: string; end_date: string; status: string }>(
           `SELECT id, start_date, end_date, status FROM timesheet_approvals
@@ -2317,13 +2641,6 @@ export const timesheetController = {
           end_date: String(row.end_date),
           status: row.status as TimesheetApprovalStatus,
         }));
-        if (scope === 'department') {
-          approvalLockedDates = await loadApprovalLockedDatesForDepartment(
-            effectiveApprovalDeptId,
-            startDate,
-            endDate,
-          );
-        }
       }
       mark('approvals');
 
@@ -2366,6 +2683,7 @@ export const timesheetController = {
             deviation_hours: Math.round((value.norm_hours - value.fact_hours) * 100) / 100,
           })),
           approvals: departmentApprovals,
+          approval_locks: approvalLocks,
           approval_locked_dates: approvalLockedDates,
         },
       });
@@ -2389,12 +2707,9 @@ export const timesheetController = {
       if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date, true))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
-      const approvalLock = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
+      const approvalLock = await ensureNotLockedForScope(req, parsed.employee_id, parsed.work_date);
       if (approvalLock) {
-        return res.status(409).json({
-          success: false,
-          error: `Период ${approvalLock.start_date} – ${approvalLock.end_date} уже ${approvalLock.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
-        });
+        return res.status(409).json({ success: false, error: approvalLockMessage(approvalLock) });
       }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
@@ -2479,6 +2794,9 @@ export const timesheetController = {
         parsed.employee_id,
         parsed.work_date,
         async exec => {
+          // Повторно под локом: pre-check мог устареть (параллельный submit).
+          await assertNotLockedInTx(req, [{ employeeId: parsed.employee_id, workDate: parsed.work_date }], exec);
+
           const targetSourceType = resolvedObject ? OBJECT_ADJUSTMENT_SOURCE_TYPE : 'manual';
           const targetSourceId = resolvedObject ? resolvedObject.object_id : 'manual';
           // Строку, которую сейчас переписываем, исключаем из hasApprovedWorkOnDate:
@@ -2579,6 +2897,9 @@ export const timesheetController = {
       if (err instanceof CorrectionRestrictionError) {
         return res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
+      if (err instanceof ApprovalLockedError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
       console.error('timesheet.create error:', err);
       res.status(500).json({ success: false, error: 'Ошибка создания записи' });
     }
@@ -2633,15 +2954,11 @@ export const timesheetController = {
 	      }
 	      const approvalLockUpdate = await ensureNotLockedForScope(
 	        req,
-	        scope,
 	        Number(existing.employee_id),
 	        String(existing.work_date),
 	      );
 	      if (approvalLockUpdate) {
-	        return res.status(409).json({
-	          success: false,
-	          error: `Период ${approvalLockUpdate.start_date} – ${approvalLockUpdate.end_date} уже ${approvalLockUpdate.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
-	        });
+	        return res.status(409).json({ success: false, error: approvalLockMessage(approvalLockUpdate) });
 	      }
 
         // Notes-only правка заявки «работа в выходной/праздник»: изолированная ветка,
@@ -2775,6 +3092,13 @@ export const timesheetController = {
           Number(existing.employee_id),
           String(existing.work_date),
           async exec => {
+            // Повторно под локом: pre-check мог устареть (параллельный submit).
+            await assertNotLockedInTx(
+              req,
+              [{ employeeId: Number(existing.employee_id), workDate: String(existing.work_date) }],
+              exec,
+            );
+
             let approvalStatus: 'auto_approved' | 'pending' | undefined;
             if (updatePrecheck) {
               approvalStatus = 'resolved' in updatePrecheck
@@ -2844,6 +3168,9 @@ export const timesheetController = {
       if (err instanceof CorrectionRestrictionError) {
         return res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
+      if (err instanceof ApprovalLockedError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
       console.error('timesheet.update error:', err);
       const message = err instanceof Error ? err.message : '';
       if (/schema cache/i.test(message)) {
@@ -2887,15 +3214,14 @@ export const timesheetController = {
       if (denied) {
         return res.status(403).json({ success: false, error: 'Нет доступа к одному или нескольким сотрудникам' });
       }
-      const lockResults = await Promise.all(
-        uniqueItems.map(item => ensureNotLockedForScope(req, scope, item.employee_id, item.work_date)),
-      );
-      const lockedItem = lockResults.find(info => info !== null);
+      const bulkLockPairs: ITimesheetLockPair[] = uniqueItems.map(item => ({
+        employeeId: item.employee_id,
+        workDate: item.work_date,
+      }));
+      const bulkLocks = await loadLocksForScope(req, bulkLockPairs);
+      const lockedItem = [...bulkLocks.values()][0];
       if (lockedItem) {
-        return res.status(409).json({
-          success: false,
-          error: `Период ${lockedItem.start_date} – ${lockedItem.end_date} уже ${lockedItem.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
-        });
+        return res.status(409).json({ success: false, error: approvalLockMessage(lockedItem) });
       }
       const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
       const plannedHoursByItem = await resolvePlannedHoursByItems(uniqueItems);
@@ -2954,6 +3280,10 @@ export const timesheetController = {
         );
 
         const writeRow = async (exec: PoolClient | undefined) => {
+          if (exec) {
+            // Повторно под локом: pre-check выше мог устареть (параллельный submit).
+            await assertNotLockedInTx(req, [{ employeeId: item.employee_id, workDate: item.work_date }], exec);
+          }
           const conflictingId = exec
             ? await queryWith<{ id: number | string }>(
                 exec,
@@ -2979,7 +3309,9 @@ export const timesheetController = {
             created_by: req.user.id,
             approval_status: approvalStatus,
           }, exec);
-          if (exec) {
+          // Хвостовой пересчёт — только для квотных статусов: не-квотные раньше
+          // писались без транзакции и хвоста не запускали.
+          if (exec && isQuotaBulk) {
             bulkTail.push(...await reapproveEmployeeMonthTail(item.employee_id, item.work_date, exec));
           }
           return {
@@ -2989,9 +3321,9 @@ export const timesheetController = {
           };
         };
 
-        return isQuotaBulk
-          ? withEmployeeMonthQuotaLock(item.employee_id, item.work_date, exec => writeRow(exec))
-          : writeRow(undefined);
+        // Транзакция нужна и не-квотным статусам: без неё проверку закрытого периода
+        // невозможно выполнить в одной транзакции с записью.
+        return withEmployeeMonthQuotaLock(item.employee_id, item.work_date, exec => writeRow(exec));
       };
 
       // Возвращаем id созданных/обновлённых корректировок — фронт по ним цепляет файлы.
@@ -3005,7 +3337,14 @@ export const timesheetController = {
           savedItems.push(await buildUpsert(item));
         }
       } else {
-        savedItems.push(...await Promise.all(uniqueItems.map(buildUpsert)));
+        // Каждая строка теперь пишется в своей транзакции (гард закрытого периода
+        // обязан идти в одной транзакции с записью), поэтому параллелизм ограничен —
+        // иначе большой bulk занял бы весь пул соединений разом.
+        const BULK_WRITE_CONCURRENCY = 8;
+        for (let offset = 0; offset < uniqueItems.length; offset += BULK_WRITE_CONCURRENCY) {
+          const chunk = uniqueItems.slice(offset, offset + BULK_WRITE_CONCURRENCY);
+          savedItems.push(...await Promise.all(chunk.map(buildUpsert)));
+        }
       }
       await reportQuotaTailTransitions(req, bulkTail, 'timesheet_bulk');
 
@@ -3053,6 +3392,9 @@ export const timesheetController = {
         const status = err.code === 'bulk_disabled' ? 403 : 422;
         return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
+      if (err instanceof ApprovalLockedError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
       console.error('timesheet.bulkSave error:', err);
       res.status(500).json({ success: false, error: 'Ошибка массового обновления табеля' });
     }
@@ -3062,200 +3404,36 @@ export const timesheetController = {
   async upsertObjectEntry(req: AuthenticatedRequest, res: Response) {
     try {
       const parsed = upsertObjectEntrySchema.parse(req.body);
-      // Гард роли: объектные корректировки могут быть запрещены (флаг роли).
-      await assertObjectCorrectionsAllowed(req.user.system_role_id);
-      const scope = await resolveTimesheetScope(req);
-      if (!isTimesheetWindowExempt(req.user, scope)) {
-        const [yearStr, monthStr] = parsed.work_date.split('-');
-        if (!isDepartmentMonthAllowed(Number(yearStr), Number(monthStr), monthAccessFromUser(req.user))) {
-          return res.status(403).json({ success: false, error: DEPARTMENT_MONTH_FORBIDDEN_MESSAGE });
-        }
-      }
-      if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date, true))) {
-        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
-      }
-      const approvalLockObj = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
-      if (approvalLockObj) {
-        return res.status(409).json({
+      const scope = await preflightObjectEntries(req);
+      const outcome = await applyObjectEntryMutation(req, scope, {
+        client_item_id: null,
+        employee_id: parsed.employee_id,
+        work_date: parsed.work_date,
+        object_key: parsed.object_key,
+        object_id: parsed.object_id ?? null,
+        object_name: parsed.object_name,
+        hours_worked: parsed.hours_worked,
+        notes: parsed.notes ?? null,
+      });
+
+      if (outcome.kind === 'rejected') {
+        // Post-commit хвоста нет: до записи дело не дошло.
+        return res.status(outcome.status).json({
           success: false,
-          error: `Период ${approvalLockObj.start_date} – ${approvalLockObj.end_date} уже ${approvalLockObj.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
-        });
-      }
-      const allowedHours = Math.max(0, parsed.hours_worked);
-
-      // Defense-in-depth: для ролей, где объектные правки РАЗРЕШЕНЫ, но задан лимит/только-
-      // аномалии/не-больше-нормы — объектная правка тоже обязана подчиняться ограничениям.
-      // Для site_supervisor путь уже закрыт assertObjectCorrectionsAllowed выше; здесь — на
-      // случай будущих ролей. Проверяем ДО mutex-DELETE, чтобы при блокировке ничего не удалить.
-      // Существующую объектную строку исключаем из счётчика (повторная правка не задваивает).
-      if (allowedHours > 0) {
-        const existingObjRows = await query<{ id: number | string }>(
-          `SELECT id FROM attendance_adjustments
-            WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
-            LIMIT 1`,
-          [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, parsed.object_key],
-        );
-        const scheduledNormObj = await resolveScheduledNormHours(parsed.employee_id, parsed.work_date);
-        await assertCorrectionAllowed({
-          systemRoleId: req.user.system_role_id,
-          createdBy: req.user.id,
-          employeeId: parsed.employee_id,
-          workDate: parsed.work_date,
-          hoursOverride: allowedHours,
-          scheduledNormHours: scheduledNormObj,
-          excludeAdjustmentId: existingObjRows[0] ? Number(existingObjRows[0].id) : null,
+          error: outcome.error,
+          ...(outcome.code ? { code: outcome.code } : {}),
+          ...(outcome.details !== undefined ? { details: outcome.details } : {}),
         });
       }
 
-      // Справочная часть резолвера (график, календарь, whitelist) — ДО захвата lock,
-      // чтобы под локом не занимать лишние соединения пула.
-      const objectPrecheck = allowedHours > 0
-        ? await resolveAdjustmentApprovalPrecheck(
-            parsed.employee_id, parsed.work_date, 'manual', allowedHours, isTimekeeper(req),
-          )
-        : null;
+      await finalizeObjectEntries(req, [outcome], 'object_entry');
 
-      // Все изменения БД по (сотрудник, месяц) — под общим advisory-lock: mutex-DELETE,
-      // upsert/удаление и хвостовой пересчёт месяца. Чистка вложений и R2 — после коммита.
-      const lockOutcome = await withEmployeeMonthQuotaLock(
-        parsed.employee_id,
-        parsed.work_date,
-        async exec => {
-          // Текущая объектная строка: нужна и для исключения самой себя из
-          // hasApprovedWorkOnDate, и для «изменилось ли что-то значимое».
-          const existingRow = await queryWith<{
-            id: number | string; status: string; hours_override: number | string | null;
-          }>(
-            exec,
-            `SELECT id, status, hours_override FROM attendance_adjustments
-              WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
-              LIMIT 1 FOR UPDATE`,
-            [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, parsed.object_key],
-          ).then(rows => rows[0] ?? null);
-
-          // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
-          // строки на тот же (employee, work_date). RETURNING нужен, чтобы после коммита
-          // каскадно подчистить файлы и R2-объекты этих корректировок.
-          const removedManualRows = await queryWith<{ id: number | string }>(
-            exec,
-            `DELETE FROM attendance_adjustments
-               WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'
-             RETURNING id`,
-            [parsed.employee_id, parsed.work_date],
-          );
-
-          // 0 часов на объекте = снять корректировку. Иначе агрегат по дню падает в 'absent'
-          // (см. attendance.service.ts) — будет «неявка» в режиме «по сотрудникам».
-          if (allowedHours <= 0) {
-            const removedIds = await deleteAttendanceAdjustmentBySource({
-              employee_id: parsed.employee_id,
-              work_date: parsed.work_date,
-              source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-              source_id: parsed.object_key,
-            }, exec);
-            // Удаление освободило субботний слот — пересчитываем хвост месяца.
-            const tail = await reapproveEmployeeMonthTail(parsed.employee_id, parsed.work_date, exec);
-            return {
-              removed: true as const,
-              removedManualIds: removedManualRows.map(r => Number(r.id)),
-              removedIds,
-              tail,
-            };
-          }
-
-          // Статус согласования пересчитываем ТОЛЬКО при значимом изменении (часы/статус).
-          // Правка одного примечания или названия объекта решение согласующего не снимает:
-          // approval_status в upsert не передаём, поля решения остаются нетронутыми.
-          const prevHours = existingRow?.hours_override == null ? null : Number(existingRow.hours_override);
-          const significantChange = !existingRow
-            || String(existingRow.status) !== 'manual'
-            || prevHours !== allowedHours;
-
-          let approvalStatus: 'auto_approved' | 'pending' | undefined;
-          if (significantChange && objectPrecheck) {
-            if ('resolved' in objectPrecheck) {
-              approvalStatus = objectPrecheck.resolved;
-            } else {
-              objectPrecheck.quota.excludeAdjustmentId = existingRow ? Number(existingRow.id) : null;
-              approvalStatus = await resolveAdjustmentApprovalQuota(objectPrecheck.quota, exec);
-            }
-          }
-
-          const saved = await upsertAttendanceAdjustment({
-            employee_id: parsed.employee_id,
-            work_date: parsed.work_date,
-            status: 'manual',
-            hours_override: allowedHours,
-            source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-            source_id: parsed.object_key,
-            reason: parsed.notes ?? null,
-            created_by: req.user.id,
-            ...(approvalStatus ? { approval_status: approvalStatus } : {}),
-            metadata: {
-              object_id: parsed.object_id ?? null,
-              object_name: parsed.object_name,
-            },
-          }, exec);
-
-          // Хвост месяца: ввод задним числом мог занять слот раньше уже сохранённых суббот.
-          const tail = significantChange
-            ? await reapproveEmployeeMonthTail(parsed.employee_id, parsed.work_date, exec)
-            : [];
-
-          // Пересчёт мог поменять статус и самой сохранённой строки — отдаём актуальный.
-          const savedAfter = tail.some(t => t.id === Number(saved.id))
-            ? (await getAttendanceAdjustmentById(Number(saved.id), exec)) ?? saved
-            : saved;
-
-          return {
-            removed: false as const,
-            removedManualIds: removedManualRows.map(r => Number(r.id)),
-            saved: savedAfter,
-            tail,
-          };
-        },
-      );
-
-      // Пост-коммит: чистка вложений/R2 и побочные эффекты хвостового пересчёта.
-      const purgeAttachmentsSafely = async (ids: number[], context: string): Promise<void> => {
-        if (ids.length === 0) return;
-        try {
-          const r2Keys = (await Promise.all(ids.map(id => purgeCorrectionAttachments(id)))).flat();
-          if (r2Keys.length > 0 && await r2Service.isEnabledAsync()) {
-            await Promise.allSettled(r2Keys.map(key => r2Service.deleteObject(key)));
-          }
-        } catch (cleanupErr) {
-          console.warn(`timesheet.upsertObjectEntry: ${context} cleanup failed`, cleanupErr);
-        }
-      };
-      await purgeAttachmentsSafely(lockOutcome.removedManualIds, 'day-level mutex');
-      await reportQuotaTailTransitions(req, lockOutcome.tail, 'object_entry');
-
-      if (lockOutcome.removed) {
-        await purgeAttachmentsSafely(lockOutcome.removedIds, 'attachments');
-        res.json({
-          success: true,
-          data: {
-            adjustment_id: null,
-            employee_id: parsed.employee_id,
-            work_date: parsed.work_date,
-            object_key: parsed.object_key,
-            object_id: parsed.object_id ?? null,
-            object_name: parsed.object_name,
-            hours_worked: 0,
-            display_hours_worked: 0,
-            base_hours_worked: 0,
-            is_correction: false,
-            notes: null,
-            removed: true,
-          },
-        });
+      if (outcome.data.removed) {
+        res.json({ success: true, data: outcome.data });
         return;
       }
 
-      const raw = lockOutcome.saved;
       const auditFullNameObj = await loadEmployeeFullNameForAudit(parsed.employee_id);
-
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
         entityType: 'timesheet_object_entry',
         entityId: `${parsed.employee_id}:${parsed.work_date}:${parsed.object_key}`,
@@ -3265,26 +3443,187 @@ export const timesheetController = {
           work_date: parsed.work_date,
           object_key: parsed.object_key,
           object_name: parsed.object_name,
-          hours_worked: allowedHours,
-          approval_status: raw.approval_status ?? null,
+          hours_worked: outcome.data.hours_worked,
+          approval_status: outcome.auditApprovalStatus,
         },
       });
+
+      res.json({ success: true, data: outcome.data });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
+      }
+      if (err instanceof CorrectionRestrictionError) {
+        const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
+        return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
+      }
+      if (isPoolAcquireTimeout(err)) {
+        console.warn('timesheet.upsertObjectEntry: пул БД насыщен');
+        res.setHeader('Retry-After', '1');
+        return res.status(503).json({ success: false, error: DB_POOL_BUSY_MESSAGE, code: DB_POOL_BUSY_CODE });
+      }
+      if (err instanceof ApprovalLockedError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
+      console.error('timesheet.upsertObjectEntry error:', err);
+      Sentry.captureException(err, { tags: { route: 'timesheet.upsertObjectEntry' } });
+      res.status(500).json({ success: false, error: 'Ошибка сохранения корректировки по объекту' });
+    }
+  },
+
+  /**
+   * PUT /api/timesheet/object-entry/bulk — массовое применение объектных правок.
+   *
+   * Зачем: фронт раньше слал по запросу на ячейку через Promise.all, и выделение
+   * из сотни ячеек по HTTP/2 уходило одним залпом. Каждый обработчик держит
+   * соединение пула, пока ждёт advisory-lock (employee, месяц), поэтому пул
+   * (DATABASE_POOL_MAX) исчерпывался и запросы падали по connectionTimeoutMillis.
+   *
+   * Контракт (важно для фронта):
+   *  - 400/403 — request-wide отказ ДО первой записи (тело, лимит, роль);
+   *  - 503 — обработка не начиналась (насыщение пула);
+   *  - 200 — батч выполнен, результат каждого элемента в succeeded/failed,
+   *    даже если успешных ноль. Иначе api-клиент бросил бы ApiError и обычная
+   *    ветка разбора результата на фронте не выполнилась бы.
+   */
+  async upsertObjectEntriesBulk(req: AuthenticatedRequest, res: Response) {
+    try {
+      const parsed = bulkObjectEntrySchema.parse(req.body);
+      const scope = await preflightObjectEntries(req);
+
+      // Дедуп по (employee, дата, объект): побеждает ПОСЛЕДНИЙ элемент — это
+      // соответствует «последнему клику» в UI. Вытесненные элементы получают
+      // в ответе status 'duplicate' и ссылку на победителя, чтобы фронт мог
+      // привязать adjustment_id (файлы вложений) к каждому исходному элементу.
+      const winnerByKey = new Map<string, string | null>();
+      const uniqueItems: IObjectEntryInput[] = [];
+      const duplicates: Array<{ item: typeof parsed.items[number]; key: string }> = [];
+      for (let i = parsed.items.length - 1; i >= 0; i -= 1) {
+        const raw = parsed.items[i];
+        const key = `${raw.employee_id}:${raw.work_date}:${raw.object_key}`;
+        if (winnerByKey.has(key)) {
+          duplicates.push({ item: raw, key });
+          continue;
+        }
+        winnerByKey.set(key, raw.client_item_id ?? null);
+        uniqueItems.push({
+          client_item_id: raw.client_item_id ?? null,
+          employee_id: raw.employee_id,
+          work_date: raw.work_date,
+          object_key: raw.object_key,
+          object_id: raw.object_id ?? null,
+          object_name: raw.object_name,
+          hours_worked: raw.hours_worked,
+          notes: raw.notes ?? null,
+        });
+      }
+
+      // Детерминированный порядок захвата advisory-lock — как в bulkSave.
+      uniqueItems.sort((a, b) => (a.employee_id - b.employee_id) || a.work_date.localeCompare(b.work_date));
+
+      // Строго последовательно: одновременно занят максимум один коннект пула.
+      // Насыщение пула на любом элементе прекращает обработку: продолжать смысла
+      // нет, оставшиеся элементы помечаем db_pool_busy — фронт повторит их.
+      const outcomes: ObjectEntryOutcome[] = [];
+      const poolBusy = (item: IObjectEntryInput): ObjectEntryOutcome => ({
+        kind: 'rejected', item, status: 503, code: DB_POOL_BUSY_CODE, error: DB_POOL_BUSY_MESSAGE,
+      });
+      let poolExhausted = false;
+      for (const item of uniqueItems) {
+        if (poolExhausted) {
+          outcomes.push(poolBusy(item));
+          continue;
+        }
+        try {
+          outcomes.push(await applyObjectEntryMutation(req, scope, item));
+        } catch (itemErr) {
+          if (isPoolAcquireTimeout(itemErr)) {
+            console.warn('timesheet.upsertObjectEntriesBulk: пул БД насыщен, батч остановлен');
+            poolExhausted = true;
+            outcomes.push(poolBusy(item));
+            continue;
+          }
+          console.error('timesheet.upsertObjectEntriesBulk item error:', itemErr);
+          Sentry.captureException(itemErr, { tags: { route: 'timesheet.upsertObjectEntriesBulk' } });
+          outcomes.push({
+            kind: 'rejected',
+            item,
+            status: 500,
+            code: null,
+            error: 'Ошибка сохранения корректировки по объекту',
+          });
+        }
+      }
+
+      // Ни одна запись не прошла из-за насыщения пула — это отказ обслуживания,
+      // а не результат батча: отдаём 503, чтобы клиент повторил запрос целиком.
+      if (poolExhausted && !outcomes.some(o => o.kind === 'applied')) {
+        res.setHeader('Retry-After', '1');
+        return res.status(503).json({ success: false, error: DB_POOL_BUSY_MESSAGE, code: DB_POOL_BUSY_CODE });
+      }
+
+      await finalizeObjectEntries(req, outcomes, 'object_entry_bulk');
+
+      const succeeded = outcomes
+        .filter((o): o is Extract<ObjectEntryOutcome, { kind: 'applied' }> => o.kind === 'applied')
+        .map(o => ({
+          client_item_id: o.item.client_item_id,
+          employee_id: o.item.employee_id,
+          work_date: o.item.work_date,
+          object_key: o.item.object_key,
+          adjustment_id: o.data.adjustment_id,
+          removed: o.data.removed === true,
+          approval_status: o.data.approval_status ?? null,
+        }));
+      const failed = outcomes
+        .filter((o): o is Extract<ObjectEntryOutcome, { kind: 'rejected' }> => o.kind === 'rejected')
+        .map(o => ({
+          client_item_id: o.item.client_item_id,
+          employee_id: o.item.employee_id,
+          work_date: o.item.work_date,
+          object_key: o.item.object_key,
+          status: o.status,
+          code: o.code,
+          error: o.error,
+        }));
+
+      const appliedByKey = new Map(succeeded.map(s => [`${s.employee_id}:${s.work_date}:${s.object_key}`, s]));
+      const duplicateResults = duplicates.map(({ item, key }) => {
+        const winner = appliedByKey.get(key);
+        return {
+          client_item_id: item.client_item_id ?? null,
+          employee_id: item.employee_id,
+          work_date: item.work_date,
+          object_key: item.object_key,
+          status: 'duplicate' as const,
+          applied_client_item_id: winnerByKey.get(key) ?? null,
+          adjustment_id: winner?.adjustment_id ?? null,
+        };
+      });
+
+      // Один аудит на батч вместо N записей.
+      if (succeeded.length > 0) {
+        await auditService.logFromRequest(req, req.user.id, 'UPDATE_TIMESHEET_ENTRY', {
+          entityType: 'timesheet_object_entry_bulk',
+          entityId: `bulk:${succeeded.length}`,
+          details: {
+            total_items: parsed.items.length,
+            processed: uniqueItems.length,
+            saved: succeeded.filter(s => !s.removed).map(s => `${s.employee_id}:${s.work_date}:${s.object_key}`),
+            removed: succeeded.filter(s => s.removed).map(s => `${s.employee_id}:${s.work_date}:${s.object_key}`),
+            failed: failed.map(f => ({ key: `${f.employee_id}:${f.work_date}:${f.object_key}`, status: f.status, error: f.error })),
+          },
+        });
+      }
 
       res.json({
         success: true,
         data: {
-          adjustment_id: Number(raw.id),
-          employee_id: parsed.employee_id,
-          work_date: parsed.work_date,
-          object_key: parsed.object_key,
-          object_id: parsed.object_id ?? null,
-          object_name: parsed.object_name,
-          hours_worked: allowedHours,
-          display_hours_worked: allowedHours,
-          base_hours_worked: allowedHours,
-          is_correction: true,
-          notes: parsed.notes ?? null,
-          approval_status: (raw.approval_status ?? null) as string | null,
+          total_items: parsed.items.length,
+          processed: uniqueItems.length,
+          succeeded,
+          failed,
+          duplicates: duplicateResults,
         },
       });
     } catch (err) {
@@ -3295,8 +3634,17 @@ export const timesheetController = {
         const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
         return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
-      console.error('timesheet.upsertObjectEntry error:', err);
-      res.status(500).json({ success: false, error: 'Ошибка сохранения корректировки по объекту' });
+      if (isPoolAcquireTimeout(err)) {
+        console.warn('timesheet.upsertObjectEntriesBulk: пул БД насыщен');
+        res.setHeader('Retry-After', '1');
+        return res.status(503).json({ success: false, error: DB_POOL_BUSY_MESSAGE, code: DB_POOL_BUSY_CODE });
+      }
+      if (err instanceof ApprovalLockedError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
+      console.error('timesheet.upsertObjectEntriesBulk error:', err);
+      Sentry.captureException(err, { tags: { route: 'timesheet.upsertObjectEntriesBulk' } });
+      res.status(500).json({ success: false, error: 'Ошибка массового сохранения корректировок по объектам' });
     }
   },
 
@@ -3317,12 +3665,9 @@ export const timesheetController = {
       if (!(await canAccessEmployeeForTimesheetDate(req, parsed.employee_id, parsed.work_date, true))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
-      const approvalLockDel = await ensureNotLockedForScope(req, scope, parsed.employee_id, parsed.work_date);
+      const approvalLockDel = await ensureNotLockedForScope(req, parsed.employee_id, parsed.work_date);
       if (approvalLockDel) {
-        return res.status(409).json({
-          success: false,
-          error: `Период ${approvalLockDel.start_date} – ${approvalLockDel.end_date} уже ${approvalLockDel.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
-        });
+        return res.status(409).json({ success: false, error: approvalLockMessage(approvalLockDel) });
       }
 
       // Удаление освобождает субботний слот — делаем его и пересчёт хвоста месяца под
@@ -3331,6 +3676,9 @@ export const timesheetController = {
         parsed.employee_id,
         parsed.work_date,
         async exec => {
+          // Повторно под локом: pre-check мог устареть (параллельный submit).
+          await assertNotLockedInTx(req, [{ employeeId: parsed.employee_id, workDate: parsed.work_date }], exec);
+
           const ids = await deleteAttendanceAdjustmentBySource({
             employee_id: parsed.employee_id,
             work_date: parsed.work_date,
@@ -3375,6 +3723,9 @@ export const timesheetController = {
       if (err instanceof CorrectionRestrictionError) {
         const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
         return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
+      }
+      if (err instanceof ApprovalLockedError) {
+        return res.status(409).json({ success: false, error: err.message });
       }
       console.error('timesheet.deleteObjectEntry error:', err);
       res.status(500).json({ success: false, error: 'Ошибка удаления корректировки по объекту' });
@@ -3442,10 +3793,12 @@ export const timesheetController = {
       const editableEmps = await resolveEditableEmployeeIds(req);
       const isEmpEditable = (id: number): boolean =>
         editableEmps === 'all' || editableEmps.has(id) || periodEditableMemberIds.has(id);
+      const correctionLocks = await loadLocksForScope(
+        req,
+        adjustments.map(item => ({ employeeId: item.employee_id, workDate: item.work_date })),
+      );
       const rows = await Promise.all(adjustments.map(async (item) => {
-        const lockInfo = scope === 'department'
-          ? await ensureNotLockedForScope(req, 'department', item.employee_id, item.work_date)
-          : null;
+        const lockInfo = correctionLocks.get(lockKey(item.employee_id, item.work_date)) ?? null;
         const approvalLocked = Boolean(lockInfo);
         const [yStr, mStr] = item.work_date.split('-');
         const monthAllowed = scope === 'all'
@@ -3455,14 +3808,15 @@ export const timesheetController = {
         // (leave_request со статусом work/manual — по сути ручная work-правка).
         const isManualLike = item.source_type === 'manual'
           || (item.source_type === 'leave_request' && (item.status === 'work' || item.status === 'manual'));
-        const canEdit = req.user.is_admin || scope === 'all'
-          ? !(lockInfo && lockInfo.status === 'approved')
+        // Админ правит закрытый период — флаг должен совпадать с поведением записи.
+        const canEdit = req.user.is_admin
+          ? true
           : !approvalLocked && monthAllowed && isManualLike && isEmpEditable(item.employee_id);
         // Удаляемы: manual и ЛЮБЫЕ материализации заявления (включая отсутствия —
         // день синхронно убирается из заявления, см. deleteEntry).
         const isDeletableSource = item.source_type === 'manual' || item.source_type === 'leave_request';
-        const canDelete = req.user.is_admin || scope === 'all'
-          ? !(lockInfo && lockInfo.status === 'approved') && isDeletableSource
+        const canDelete = req.user.is_admin
+          ? isDeletableSource
           : !approvalLocked && monthAllowed && isDeletableSource && isEmpEditable(item.employee_id);
         return {
           id: item.id,
@@ -3542,15 +3896,11 @@ export const timesheetController = {
 
       const approvalLockDel = await ensureNotLockedForScope(
         req,
-        scope,
         Number(existing.employee_id),
         String(existing.work_date),
       );
       if (approvalLockDel) {
-        return res.status(409).json({
-          success: false,
-          error: `Период ${approvalLockDel.start_date} – ${approvalLockDel.end_date} уже ${approvalLockDel.status === 'approved' ? 'утверждён' : 'на проверке'}. Редактирование закрыто.`,
-        });
+        return res.status(409).json({ success: false, error: approvalLockMessage(approvalLockDel) });
       }
 
       // Числовой source_id у leave_request — это материализация отсутствия/выхода ('work').
@@ -3567,6 +3917,13 @@ export const timesheetController = {
         Number(existing.employee_id),
         String(existing.work_date),
         async (client) => {
+          // Повторно под локом: pre-check мог устареть (параллельный submit).
+          await assertNotLockedInTx(
+            req,
+            [{ employeeId: Number(existing.employee_id), workDate: String(existing.work_date) }],
+            client,
+          );
+
           const del = await client.query<{ id: number }>(
             `DELETE FROM attendance_adjustments WHERE id = $1 RETURNING id`,
             [id],
@@ -3625,6 +3982,9 @@ export const timesheetController = {
 
       res.json({ success: true });
     } catch (err) {
+      if (err instanceof ApprovalLockedError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
       console.error('timesheet.deleteEntry error:', err);
       const message = err instanceof Error ? err.message : '';
       if (/schema cache/i.test(message)) {
@@ -3721,9 +4081,11 @@ export const timesheetController = {
       const reapproved = reapprovedTransitions.length;
 
       // Шаг C — сброс легаси-часов (день начинает считаться по проходам+графику).
+      // Закрытый период не трогаем: строки в поданном/утверждённом табеле обнулять
+      // задним числом нельзя (шаги A и B фильтруются loadLockedByApprovalPeriodIds).
       const legacyParams: unknown[] = [startDate, endDate];
-      let legacySql = `UPDATE attendance_adjustments
-                          SET hours_override = NULL, updated_at = NOW()
+      let legacySql = `SELECT id, employee_id, work_date::text AS work_date
+                         FROM attendance_adjustments
                         WHERE source_type = 'legacy_tender_timesheet'
                           AND hours_override IS NOT NULL
                           AND approval_status NOT IN ('approved', 'rejected')
@@ -3732,7 +4094,24 @@ export const timesheetController = {
         legacyParams.push(empFilter);
         legacySql += ` AND employee_id = ANY($3::int[])`;
       }
-      const legacyCleared = await execute(legacySql, legacyParams);
+      const legacyCandidates = (await query<{ id: number | string; employee_id: number | string; work_date: string }>(
+        legacySql, legacyParams,
+      )).map(row => ({
+        id: Number(row.id),
+        employee_id: Number(row.employee_id),
+        work_date: row.work_date,
+      }));
+      const legacyLockedIds = await loadLockedByApprovalPeriodIds(legacyCandidates);
+      const legacyClearableIds = legacyCandidates
+        .filter(row => !legacyLockedIds.has(row.id))
+        .map(row => row.id);
+      const legacyCleared = legacyClearableIds.length > 0
+        ? await execute(
+            `UPDATE attendance_adjustments SET hours_override = NULL, updated_at = NOW()
+              WHERE id = ANY($1::bigint[])`,
+            [legacyClearableIds],
+          )
+        : 0;
 
       // Шаг D — конфликт-детекция на свежих сводках (manual absent vs СКУД>0).
       const conflicts: Array<{ employee_id: number; work_date: string; skud_minutes: number }> = [];
@@ -3805,6 +4184,9 @@ export const timesheetController = {
 
       res.json({ success: true, data: { recalculated_summaries: recalculatedSummaries, reapproved, conflicts } });
     } catch (err) {
+      if (err instanceof ApprovalLockedError) {
+        return res.status(409).json({ success: false, error: err.message });
+      }
       console.error('timesheet.refresh error:', err);
       res.status(500).json({ success: false, error: 'Ошибка обновления табеля' });
     }

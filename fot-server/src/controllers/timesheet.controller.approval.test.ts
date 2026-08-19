@@ -332,16 +332,24 @@ function mockReapprove(opts: {
   timekeeperIds?: string[];
   quotaCandidates?: Array<{ employee_id: number; work_date: string }>;
   skud?: Array<{ employee_id: number; date: string }>;
-  lockedIds?: number[];
-  legacyApprovals?: Array<{ department_id: string; start_date: string; end_date: string }>;
+  /** Закрытые (сотрудник, дата) — единый замок timesheet-lock.service. */
+  locks?: Array<{ employee_id: number; work_date: string }>;
 }): void {
   pgQuery.mockImplementation(async (sql: string) => {
     if (QUOTA_SQL_RE.test(sql)) return opts.quotaCandidates ?? [];
     if (/FROM\s+skud_daily_summary/i.test(sql)) return opts.skud ?? [];
-    // Порядок важен: запрос легаси-подач тоже упоминает timesheet_approval_employees
-    // (в NOT EXISTS), поэтому снимок ловим по SELECT DISTINCT aa.id.
-    if (/SELECT\s+DISTINCT\s+aa\.id/i.test(sql)) return (opts.lockedIds ?? []).map(id => ({ id }));
-    if (/FROM\s+timesheet_approvals/i.test(sql)) return opts.legacyApprovals ?? [];
+    // Единый замок закрытого табеля: один запрос на весь набор пар. Ловим его ПЕРВЫМ —
+    // он упоминает и employees, и employee_assignments, и timesheet_approvals.
+    if (/WITH RECURSIVE pairs/i.test(sql)) {
+      return (opts.locks ?? []).map((lock, index) => ({
+        employee_id: lock.employee_id,
+        work_date: lock.work_date,
+        id: 900 + index,
+        start_date: lock.work_date,
+        end_date: lock.work_date,
+        status: 'submitted',
+      }));
+    }
     if (/approval_status IN \('auto_approved', 'pending'\)/i.test(sql)) return opts.rows;
     if (/FROM\s+user_profiles/i.test(sql)) return (opts.timekeeperIds ?? []).map(id => ({ id }));
     if (/FROM\s+employees/i.test(sql)) return [{ id: EMP, org_department_id: 'D1' }];
@@ -548,12 +556,12 @@ describe('computeReapprovalTransitions — гард закрытых подач'
     hours_override: 8, approval_status: 'pending', created_by: null,
   });
 
-  it('строка в submitted-периоде (по снимку состава) не попадает в переходы', async () => {
+  it('строка в закрытом периоде не попадает в переходы', async () => {
     schedule.expected_saturdays_per_month = 1;
     mockReapprove({
       rows: [sat(70, '2026-05-02')],
       quotaCandidates: [{ employee_id: EMP, work_date: '2026-05-02' }],
-      lockedIds: [70],
+      locks: [{ employee_id: EMP, work_date: '2026-05-02' }],
     });
     expect(await computeReapprovalTransitions([EMP], '2026-05-01', '2026-05-31')).toEqual([]);
   });
@@ -566,13 +574,15 @@ describe('computeReapprovalTransitions — гард закрытых подач'
         { employee_id: EMP, work_date: '2026-05-02' },
         { employee_id: EMP, work_date: '2026-05-23' },
       ],
-      lockedIds: [70],
+      locks: [{ employee_id: EMP, work_date: '2026-05-02' }],
     });
     const t = await computeReapprovalTransitions([EMP], '2026-05-01', '2026-05-31');
     expect(t.map(x => x.id)).toEqual([71]);
   });
 
-  it('подача без снимка состава: fallback по членству отдела, только даты внутри периода', async () => {
+  it('замок приходит по (сотрудник, дата), а не по всей подаче', async () => {
+    // Единый гард сам решает, входит ли сотрудник в подачу (снимок ИЛИ отдел с предками),
+    // поэтому дата вне закрытого интервала остаётся пересчитываемой.
     schedule.expected_saturdays_per_month = 2;
     mockReapprove({
       rows: [sat(70, '2026-05-02'), sat(71, '2026-05-23')],
@@ -580,22 +590,19 @@ describe('computeReapprovalTransitions — гард закрытых подач'
         { employee_id: EMP, work_date: '2026-05-02' },
         { employee_id: EMP, work_date: '2026-05-23' },
       ],
-      legacyApprovals: [{ department_id: 'D1', start_date: '2026-05-01', end_date: '2026-05-15' }],
+      locks: [{ employee_id: EMP, work_date: '2026-05-02' }],
     });
-    assignedEmployeesMock.mockResolvedValue([EMP]);
     const t = await computeReapprovalTransitions([EMP], '2026-05-01', '2026-05-31');
-    // 02.05 внутри закрытой подачи → заморожена; 23.05 вне её → пересчитывается.
     expect(t.map(x => x.id)).toEqual([71]);
   });
 
-  it('подача без снимка: сотрудник не в составе → строки не блокируются', async () => {
+  it('замка нет → строки пересчитываются', async () => {
     schedule.expected_saturdays_per_month = 2;
     mockReapprove({
       rows: [sat(70, '2026-05-02')],
       quotaCandidates: [{ employee_id: EMP, work_date: '2026-05-02' }],
-      legacyApprovals: [{ department_id: 'D1', start_date: '2026-05-01', end_date: '2026-05-15' }],
+      locks: [],
     });
-    assignedEmployeesMock.mockResolvedValue([EMP + 1]);
     const t = await computeReapprovalTransitions([EMP], '2026-05-01', '2026-05-31');
     expect(t.map(x => x.id)).toEqual([70]);
   });

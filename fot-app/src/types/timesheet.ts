@@ -78,6 +78,53 @@ export interface TimesheetObjectEntry {
   corrected_at?: string | null;
 }
 
+/** Элемент массового применения объектных правок (PUT /timesheet/object-entry/bulk). */
+export interface TimesheetObjectEntryBulkItem {
+  /** Обратная ссылка на ячейку клиента: сервер дедуплицирует и сортирует элементы,
+   *  поэтому связывать ответ по индексу исходного массива нельзя. */
+  client_item_id: string;
+  employee_id: number;
+  work_date: string;
+  object_key: string;
+  object_id?: string | null;
+  object_name: string;
+  hours_worked: number;
+  notes?: string | null;
+}
+
+export interface TimesheetObjectEntryBulkResult {
+  total_items: number;
+  processed: number;
+  succeeded: Array<{
+    client_item_id: string | null;
+    employee_id: number;
+    work_date: string;
+    object_key: string;
+    adjustment_id: number | null;
+    removed: boolean;
+    approval_status: string | null;
+  }>;
+  failed: Array<{
+    client_item_id: string | null;
+    employee_id: number;
+    work_date: string;
+    object_key: string;
+    status: number;
+    code: string | null;
+    error: string;
+  }>;
+  /** Вытесненные дубли (побеждает последний элемент), с id применённой строки. */
+  duplicates: Array<{
+    client_item_id: string | null;
+    employee_id: number;
+    work_date: string;
+    object_key: string;
+    status: 'duplicate';
+    applied_client_item_id: string | null;
+    adjustment_id: number | null;
+  }>;
+}
+
 export interface TimesheetTeamManagementConfig {
   enabled: boolean;
   can_manage: boolean;
@@ -166,6 +213,14 @@ export interface ITimesheetDepartmentApprovalSummary {
   status: 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
 }
 
+/** Замок закрытого табеля по конкретному сотруднику (интервал подачи, клипнутый периодом). */
+export interface IEmployeeApprovalLock {
+  employee_id: number;
+  start_date: string;
+  end_date: string;
+  status: 'submitted' | 'approved';
+}
+
 export interface TimesheetResponse {
   employees: TimesheetEmployee[];
   entries: TimesheetEntry[];
@@ -178,6 +233,9 @@ export interface TimesheetResponse {
   daily_schedule_ids?: Record<number, Record<string, string>>;
   calendar?: IProductionCalendarMonth | null;
   approvals?: ITimesheetDepartmentApprovalSummary[];
+  /** Замки по сотруднику. Пусто для is_admin — он правит закрытый период. */
+  approval_locks?: IEmployeeApprovalLock[];
+  /** Легаси-поле: плоский список дат. Оставлено на переходный релиз, не использовать. */
   approval_locked_dates?: string[];
 }
 

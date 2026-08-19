@@ -61,6 +61,8 @@ const formatDayLabel = (iso: string): string => {
 interface IActiveCardProps {
   approval: ITimesheetApproval | null;
   canSubmitDepartment: boolean;
+  /** Возврат УТВЕРЖДЁННОГО периода в черновик — только админ (зеркалит гард бэкенда). */
+  canRecallApproved: boolean;
   canReviewApproval: boolean;
   comment: string;
   compact: boolean;
@@ -86,6 +88,7 @@ interface IActiveCardProps {
 const ActiveCard: FC<IActiveCardProps> = ({
   approval,
   canSubmitDepartment,
+  canRecallApproved,
   canReviewApproval,
   comment,
   compact,
@@ -294,7 +297,7 @@ const ActiveCard: FC<IActiveCardProps> = ({
         </button>
       )}
 
-      {canSubmitDepartment && status === 'approved' && (
+      {canRecallApproved && status === 'approved' && (
         <button
           className="ts-btn"
           onClick={onRecallApproved}
@@ -476,6 +479,10 @@ export const TimesheetApprovalBar: FC<IProps> = ({
 }) => {
   const { hasPermission, canViewPage, profile } = useAuth();
   const canSubmitDepartment = hasPermission('timesheet.workflow.submit');
+  // Утверждённый период руководитель сам не переоткрывает — иначе он снимал бы
+  // утверждение HR и правил закрытый табель. Остальным его возвращает кадровая
+  // служба через «Согласования» → «Вернуть на доработку».
+  const canRecallApproved = canSubmitDepartment && profile?.is_admin === true;
   const canReviewApproval = allowReview && hasPermission('timesheet.workflow.review');
   const weekendMemoEnabled = !!profile?.weekend_memo_required;
 
@@ -677,6 +684,7 @@ export const TimesheetApprovalBar: FC<IProps> = ({
         <ActiveCard
           approval={activeStatus.data ?? null}
           canSubmitDepartment={canSubmitDepartment}
+          canRecallApproved={canRecallApproved}
           canReviewApproval={canReviewApproval}
           comment={comment}
           compact={compact}

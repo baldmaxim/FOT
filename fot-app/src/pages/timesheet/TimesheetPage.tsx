@@ -25,7 +25,7 @@ import type {
   TimesheetStatus,
   TimesheetTeamManagementCandidate,
 } from '../../types';
-import type { TimesheetResponse, ITimesheetDepartmentApprovalSummary } from '../../types/timesheet';
+import type { TimesheetResponse, IEmployeeApprovalLock } from '../../types/timesheet';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { TimesheetReviewControl } from '../../components/timesheet/TimesheetReviewControl';
@@ -87,6 +87,8 @@ import {
   fromMonthIndex,
   getTodayDateInputValue,
   MONTH_NAMES_RU,
+  OBJECT_BULK_CHUNK_SIZE,
+  OBJECT_BULK_TIMEOUT_MS,
   parseBulkCellKey,
   parseMonthParam,
   sanitizeDownloadName,
@@ -132,6 +134,10 @@ export const TimesheetPage: FC = () => {
     enforceWhen: (isDepartmentScope || hasGlobalTimesheetRead) && canViewManagedTimesheet,
   });
   const isTimesheetDepartmentScope = monthAccess.isWindowEnforced;
+  // Замок закрытого табеля НЕ связан с окном месяцев: его обходит только is_admin.
+  // Раньше здесь стоял isTimesheetDepartmentScope, из-за чего hr и роли со scope=all
+  // редактировали сданный период.
+  const isApprovalLockEnforced = !isAdmin;
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
   const queryMonth = searchParams.get('month');
   const queryFrom = searchParams.get('from');
@@ -403,29 +409,35 @@ export const TimesheetPage: FC = () => {
     }
     return Array.from({ length: end - start + 1 }, (_, index) => start + index);
   }, [rangeStart, rangeEnd]);
-  const lockedDateStatus = useMemo(() => {
+  // Замки закрытого табеля приходят интервалами по сотруднику: в смешанной выборке
+  // (табельщица, прямые подчинённые) плоский список дат блокировал бы чужих. Приоритет
+  // статуса разрешён на сервере, здесь только поиск. Админ не блокируется — сервер
+  // отдаёт ему пустой список.
+  const approvalLocks = useMemo<IEmployeeApprovalLock[]>(() => {
     const data = timesheetQuery.data as TimesheetResponse | undefined;
-    const dates = Array.isArray(data?.approval_locked_dates) ? data.approval_locked_dates : [];
-    const approvals = Array.isArray(data?.approvals) ? data.approvals : [];
-    const statusPriority: Record<ITimesheetDepartmentApprovalSummary['status'], number> = {
-      approved: 3, submitted: 2, returned: 1, rejected: 0, draft: 0,
-    };
-    const map = new Map<string, ITimesheetDepartmentApprovalSummary['status']>();
-    for (const date of dates) {
-      let best: ITimesheetDepartmentApprovalSummary['status'] | null = null;
-      for (const a of approvals) {
-        if (a.start_date <= date && a.end_date >= date) {
-          if (!best || statusPriority[a.status] > statusPriority[best]) best = a.status;
-        }
-      }
-      map.set(date, best ?? 'submitted');
-    }
-    return map;
+    return Array.isArray(data?.approval_locks) ? data.approval_locks : [];
   }, [timesheetQuery.data]);
-  const lockedDateSet = lockedDateStatus;
-  const lockMessage = (status: ITimesheetDepartmentApprovalSummary['status'] | undefined): string => {
+  const lockStatusFor = useCallback(
+    (employeeId: number, date: string): IEmployeeApprovalLock['status'] | undefined => {
+      if (!isApprovalLockEnforced) return undefined;
+      let best: IEmployeeApprovalLock['status'] | undefined;
+      for (const lock of approvalLocks) {
+        if (lock.employee_id !== employeeId) continue;
+        if (lock.start_date > date || lock.end_date < date) continue;
+        if (lock.status === 'approved') return 'approved';
+        best = best ?? lock.status;
+      }
+      return best;
+    },
+    [approvalLocks, isApprovalLockEnforced],
+  );
+  const isDayLocked = useCallback(
+    (employeeId: number | null | undefined, date: string | null | undefined): boolean =>
+      Boolean(employeeId && date && lockStatusFor(employeeId, date)),
+    [lockStatusFor],
+  );
+  const lockMessage = (status: IEmployeeApprovalLock['status'] | undefined): string => {
     if (status === 'approved') return 'Период согласован — редактирование закрыто';
-    if (status === 'returned') return 'Период возвращён на доработку — редактирование закрыто';
     return 'Период подан — редактирование закрыто';
   };
   const entryMap = useMemo(() => {
@@ -1200,6 +1212,7 @@ export const TimesheetPage: FC = () => {
         ?.find(item => item.object_key === objectKey) || null;
 
       targets.set(cellKey, {
+        cellKey,
         employee: meta.employee,
         day,
         workDate,
@@ -1315,19 +1328,63 @@ export const TimesheetPage: FC = () => {
       try {
         if (status === 'manual') {
           // «Корректировка табеля» — почасовая, применяется к каждой объектной ячейке.
-          const saved = await Promise.all(bulkObjectTargets.map(target => timesheetService.upsertObjectEntry({
+          // Шлём чанками через bulk-эндпоинт: раньше здесь был Promise.all по всем
+          // ячейкам, и выделение из сотни клеток исчерпывало пул соединений бэкенда
+          // (все запросы падали с 500). Чанк держим коротким, чтобы уложиться в
+          // клиентский таймаут; сервер обрабатывает элементы последовательно.
+          const chunks: typeof bulkObjectTargets[] = [];
+          for (let i = 0; i < bulkObjectTargets.length; i += OBJECT_BULK_CHUNK_SIZE) {
+            chunks.push(bulkObjectTargets.slice(i, i + OBJECT_BULK_CHUNK_SIZE));
+          }
+
+          const adjustmentIdByCell = new Map<string, number | null>();
+          const failedCellKeys: string[] = [];
+          let firstError: string | null = null;
+
+          for (const chunk of chunks) {
+            const result = await timesheetService.upsertObjectEntriesBulk(
+              chunk.map(target => ({
+                client_item_id: target.cellKey,
+                employee_id: target.employee.id,
+                work_date: target.workDate,
+                object_key: target.objectTarget.object_key,
+                object_id: target.objectTarget.object_id,
+                object_name: target.objectTarget.object_name,
+                hours_worked: hours ?? 0,
+                notes,
+              })),
+              { timeoutMs: OBJECT_BULK_TIMEOUT_MS },
+            );
+            result.succeeded.forEach(item => {
+              if (item.client_item_id) adjustmentIdByCell.set(item.client_item_id, item.adjustment_id);
+            });
+            // Дубли (одна ячейка выделена дважды) получают id победителя.
+            result.duplicates.forEach(item => {
+              if (item.client_item_id) adjustmentIdByCell.set(item.client_item_id, item.adjustment_id);
+            });
+            result.failed.forEach(item => {
+              if (item.client_item_id) failedCellKeys.push(item.client_item_id);
+              if (!firstError) firstError = item.error;
+            });
+          }
+
+          const savedTargets = bulkObjectTargets.filter(target => adjustmentIdByCell.has(target.cellKey));
+          await uploadFilesTo(savedTargets.map(target => ({
+            adjustment_id: adjustmentIdByCell.get(target.cellKey) ?? null,
             employee_id: target.employee.id,
-            work_date: target.workDate,
-            object_key: target.objectTarget.object_key,
-            object_id: target.objectTarget.object_id,
-            object_name: target.objectTarget.object_name,
-            hours_worked: hours ?? 0,
-            notes,
           })));
-          await uploadFilesTo(bulkObjectTargets.map((target, i) => ({
-            adjustment_id: saved[i]?.adjustment_id ?? null,
-            employee_id: target.employee.id,
-          })));
+
+          if (failedCellKeys.length > 0) {
+            // Неуспешные ячейки оставляем выделенными — повтор одной кнопкой.
+            setBulkModalOpen(false);
+            setBulkSelectedCellKeys(new Set(failedCellKeys));
+            await invalidate();
+            toast.error(
+              `Сохранено ${savedTargets.length} из ${bulkObjectTargets.length} ячеек. `
+              + `Невыполненные остались выделены${firstError ? `: ${firstError}` : ''}`,
+            );
+            return;
+          }
           toast.success(`Корректировка по объектам применена для ${bulkObjectTargets.length} ячеек`);
         } else {
           // Статусы отсутствия (отпуск, удалёнка, больничный…) — дневная корректировка
@@ -2280,7 +2337,7 @@ export const TimesheetPage: FC = () => {
             visibleDays={visibleDays}
             selectedCellKeys={bulkSelectedCellKeys}
             splitDayKeys={splitDayKeys}
-            approvalStatusByDate={lockedDateStatus}
+            approvalStatusFor={lockStatusFor}
             canManageTeam={canManageTeam}
             pendingEmployeeId={teamPendingEmployeeId}
             departmentName={selectedDeptName}
@@ -2317,7 +2374,7 @@ export const TimesheetPage: FC = () => {
           visibleDays={visibleDays}
           selectedCellKeys={bulkSelectedCellKeys}
           splitDayKeys={splitDayKeys}
-          approvalStatusByDate={lockedDateStatus}
+          approvalStatusFor={lockStatusFor}
           canManageTeam={canManageTeam}
           pendingEmployeeId={teamPendingEmployeeId}
           departmentName={selectedDeptName}
@@ -2392,11 +2449,11 @@ export const TimesheetPage: FC = () => {
                   : undefined
             }
             infoBanner={
-              isTimesheetDepartmentScope && lockedDateSet.has(modalWorkDate)
-                ? lockMessage(lockedDateSet.get(modalWorkDate))
+              modalEmployee && lockStatusFor(modalEmployee.id, modalWorkDate)
+                ? lockMessage(lockStatusFor(modalEmployee.id, modalWorkDate))
                 : null
             }
-            readOnly={isTimesheetDepartmentScope && lockedDateSet.has(modalWorkDate)}
+            readOnly={isDayLocked(modalEmployee?.id, modalWorkDate)}
             canEditReasonText={canEditTimesheet}
             onUpdateReason={handleUpdateReason}
             allowedStatuses={
@@ -2488,7 +2545,7 @@ export const TimesheetPage: FC = () => {
               modalMode !== 'object'
               && modalEntry?.status === 'work'
               && modalEntry?.source_type === 'leave_request'
-              && !lockedDateSet.has(modalWorkDate)
+              && !isDayLocked(modalEmployee?.id, modalWorkDate)
             }
             remoteDefaultHours={modalEmployee
               ? (getWorkHoursForDay(
