@@ -50,8 +50,9 @@ export const ObjectKpiPlansTab: FC<IProps> = ({
       <tbody>
         {(card?.report ?? []).map(row => {
           const plan = card?.plans.find(p => p.period_month === row.period_month && p.is_current);
-          const fixed = row.report_status === 'fixed' || row.report_status === 'corrected';
-          const editable = canEdit && canRevisePlan && fixed;
+          // Правка доступна в любой момент, а не только после фиксации: у открытого месяца
+          // ручной становится только сумма плана, сам месяц остаётся открытым.
+          const editable = canEdit && canRevisePlan;
           const draft = planEdits[row.period_month];
           return (
             <tr key={row.period_month}>
@@ -94,7 +95,7 @@ export const ObjectKpiPlansTab: FC<IProps> = ({
                       disabled={!editable}
                       title={editable
                         ? 'Изменить план месяца'
-                        : 'Правка доступна руководителю эк. отдела после фиксации месяца'}
+                        : 'Правка плана доступна руководителю эк. отдела'}
                       onClick={() => setPlanEdits(prev => ({
                         ...prev,
                         [row.period_month]: {

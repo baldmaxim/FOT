@@ -267,7 +267,11 @@ final AS (
     -- plan_drift. Через plan_amount (= COALESCE(override, calculated)) флаг горел бы
     -- на КАЖДОМ месяце с ручной корректировкой — это и так видно по plan_overridden.
     mp.calculated_plan_amount AS snap_calculated_plan_amount,
-    COALESCE(mp.status IN ('fixed','corrected') AND mp.plan_amount IS NOT NULL, false) AS use_snapshot
+    COALESCE(mp.status IN ('fixed','corrected') AND mp.plan_amount IS NOT NULL, false) AS use_snapshot,
+    -- Ручной план ОТКРЫТОГО месяца. Флаг узкий намеренно: подменяется только сумма плана,
+    -- а остаток, число месяцев и контрольная дата продолжают считаться формулой — месяц
+    -- не закрыт, и новые ДС с актами обязаны его двигать.
+    COALESCE(mp.status = 'open' AND mp.override_plan_amount IS NOT NULL, false) AS use_open_override
   FROM computed c
   LEFT JOIN object_kpi_month_plans mp
          ON mp.skud_object_id = c.skud_object_id
@@ -291,7 +295,9 @@ SELECT
          (CASE WHEN x.use_snapshot THEN x.snap_ks2_cumulative_before ELSE x.ks2_cumulative_before_calc END) AS ks2_cumulative_before,
          (CASE WHEN x.use_snapshot THEN x.snap_remainder            ELSE x.remainder_calc              END) AS remainder,
          (CASE WHEN x.use_snapshot THEN x.snap_months_remaining     ELSE x.months_remaining_calc       END) AS months_remaining,
-         (CASE WHEN x.use_snapshot THEN x.snap_plan_amount          ELSE x.plan_amount_calc            END) AS plan_amount,
+         (CASE WHEN x.use_snapshot      THEN x.snap_plan_amount
+               WHEN x.use_open_override THEN x.snap_override_plan_amount
+               ELSE x.plan_amount_calc END) AS plan_amount,
 
   x.plan_amount_calc,
   -- Факт НИКОГДА не берётся из снимка: приказ фиксирует план, а факт по определению
@@ -305,7 +311,9 @@ SELECT
   -- иначе полностью закрытый объект выглядел бы провалившим KPI.
   ROUND(
     x.fact_net
-    / NULLIF(CASE WHEN x.use_snapshot THEN x.snap_plan_amount ELSE x.plan_amount_calc END, 0)
+    / NULLIF(CASE WHEN x.use_snapshot      THEN x.snap_plan_amount
+                  WHEN x.use_open_override THEN x.snap_override_plan_amount
+                  ELSE x.plan_amount_calc END, 0)
     * 100,
     2
   ) AS completion_pct,

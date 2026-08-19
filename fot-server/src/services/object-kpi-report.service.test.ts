@@ -145,6 +145,16 @@ describe('OBJECT_KPI_REPORT_SQL', () => {
       .toContain('x.contract_total_calc < (x.ks2_cumulative_before_calc + x.fact_net)');
   });
 
+  it('ручной план открытого месяца подменяет только сумму', () => {
+    // Флаг узкий намеренно: остаток, число месяцев и контрольная дата у открытого месяца
+    // обязаны считаться формулой, иначе правка суммы тихо закрывала бы месяц.
+    expect(OBJECT_KPI_REPORT_SQL)
+      .toContain("COALESCE(mp.status = 'open' AND mp.override_plan_amount IS NOT NULL, false) AS use_open_override");
+    // Ручная сумма попадает и в план, и в знаменатель процента выполнения.
+    const overrideUses = OBJECT_KPI_REPORT_SQL.match(/use_open_override THEN x\.snap_override_plan_amount/g);
+    expect(overrideUses).toHaveLength(2);
+  });
+
   it('руководитель месяца выбирается детерминированно', () => {
     // Без второго ключа при смене 15/15 победитель зависит от порядка строк в плане.
     expect(OBJECT_KPI_REPORT_SQL).toContain('ORDER BY t.days DESC, t.valid_from DESC');

@@ -156,7 +156,7 @@ describe('revisePlan', () => {
   it('создаёт новую ревизию и гасит предыдущую', async () => {
     (isEconomicsHeadLive as Mock).mockResolvedValue(true);
     const { client, calls } = makeClient([
-      { rows: [{ id: 'plan-1', revision: 1 }] },   // текущая ревизия FOR UPDATE
+      { rows: [{ id: 'plan-1', revision: 1, status: 'fixed' }] },  // текущая ревизия FOR UPDATE
       { rows: [reportRow()] },                      // пересчёт отчёта
       { rows: [] },                                 // UPDATE ... is_current = false
       { rows: [{ id: 'plan-2', revision: 2 }] },    // INSERT новой ревизии
@@ -174,19 +174,86 @@ describe('revisePlan', () => {
     ]));
   });
 
-  it('если месяц не зафиксирован — 409, пересматривать нечего', async () => {
+  it('открытый месяц без строки — заводится ревизия 1 со статусом open', async () => {
     (isEconomicsHeadLive as Mock).mockResolvedValue(true);
-    const { client } = makeClient([{ rows: [] }]);
+    const { client, calls } = makeClient([
+      { rows: [] },                                // текущей строки нет
+      { rows: [reportRow()] },                     // пересчёт отчёта
+      { rows: [{ id: 'plan-1', revision: 1 }] },   // INSERT
+    ]);
 
-    await expect(revisePlan(
-      client as never, ACTOR, 42, false, OBJECT_ID, '2026-09', { reason: 'правка' },
-    )).rejects.toMatchObject({ __save: { http: 409, code: 'plan_not_fixed' } });
+    await revisePlan(
+      client as never, ACTOR, 42, false, OBJECT_ID, '2026-09',
+      { reason: 'план согласован с заказчиком', override_plan_amount: '90000000.00' },
+    );
+
+    // Месяц НЕ закрывается: ручной становится только сумма плана.
+    expect(calls[2].sql).toContain("'open'");
+    expect(calls[2].sql).toContain('INSERT INTO object_kpi_month_plans');
+    expect(calls[2].params).toEqual(expect.arrayContaining([
+      '90000000.00', 'план согласован с заказчиком',
+    ]));
+    // Гашения предыдущей ревизии нет — гасить нечего.
+    expect(calls.some(call => call.sql.includes('is_current = false'))).toBe(false);
+  });
+
+  it('повторная правка открытого месяца обновляет ту же строку, ревизии не растут', async () => {
+    (isEconomicsHeadLive as Mock).mockResolvedValue(true);
+    const { client, calls } = makeClient([
+      { rows: [{ id: 'plan-1', revision: 1, status: 'open' }] },
+      { rows: [reportRow()] },
+      { rows: [{ id: 'plan-1', revision: 1 }] },   // UPDATE ... RETURNING
+    ]);
+
+    const row = await revisePlan(
+      client as never, ACTOR, 42, false, OBJECT_ID, '2026-09',
+      { reason: 'уточнение', override_plan_amount: '95000000.00' },
+    );
+
+    expect(row).toMatchObject({ revision: 1 });
+    expect(calls[2].sql).toContain('UPDATE object_kpi_month_plans');
+    expect(calls[2].params[0]).toBe('plan-1');
+    expect(calls.some(call => call.sql.includes('INSERT INTO object_kpi_month_plans'))).toBe(false);
+  });
+
+  it('пустая сумма очищает ручной план, строка остаётся', async () => {
+    (isEconomicsHeadLive as Mock).mockResolvedValue(true);
+    const { client, calls } = makeClient([
+      { rows: [{ id: 'plan-1', revision: 1, status: 'open' }] },
+      { rows: [reportRow()] },
+      { rows: [{ id: 'plan-1', revision: 1 }] },
+    ]);
+
+    await revisePlan(
+      client as never, ACTOR, 42, false, OBJECT_ID, '2026-09',
+      { reason: 'вернули расчётный план' },
+    );
+
+    expect(calls[2].sql).toContain('UPDATE object_kpi_month_plans');
+    expect(calls[2].params).toContain(null);
+  });
+
+  it('строка data_incomplete правится на месте и переходит в open', async () => {
+    (isEconomicsHeadLive as Mock).mockResolvedValue(true);
+    const { client, calls } = makeClient([
+      { rows: [{ id: 'plan-1', revision: 1, status: 'data_incomplete' }] },
+      { rows: [reportRow()] },
+      { rows: [{ id: 'plan-1', revision: 1 }] },
+    ]);
+
+    await revisePlan(
+      client as never, ACTOR, 42, false, OBJECT_ID, '2026-09',
+      { reason: 'план задан вручную', override_plan_amount: '80000000.00' },
+    );
+
+    // Иначе ручная сумма осталась бы невидимой: отчёт берёт её только у статуса open.
+    expect(calls[2].sql).toContain("status = 'open'");
   });
 
   it('админ проходит без роли economics_head', async () => {
     (isEconomicsHeadLive as Mock).mockResolvedValue(false);
     const { client } = makeClient([
-      { rows: [{ id: 'plan-1', revision: 1 }] },
+      { rows: [{ id: 'plan-1', revision: 1, status: 'corrected' }] },
       { rows: [reportRow()] },
       { rows: [] },
       { rows: [{ id: 'plan-2', revision: 2 }] },

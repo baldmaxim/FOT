@@ -211,7 +211,16 @@ export interface RevisePlanInput {
 }
 
 /**
- * Пересмотр закрытого месяца — новая ревизия, а не правка строки.
+ * Ручной план месяца: и у закрытого месяца, и у открытого.
+ *
+ * ЗАКРЫТЫЙ месяц (fixed/corrected) пересматривается новой ревизией, а не правкой строки:
+ * утверждённый расчёт обязан оставаться проверяемым постфактум.
+ *
+ * ОТКРЫТЫЙ месяц ревизий не имеет — утверждать ещё нечего, поэтому строка правится на
+ * месте и остаётся со статусом `open`. Месяц при этом НЕ закрывается: ручной становится
+ * только сумма плана, а остаток, число месяцев и контрольная дата продолжают считаться
+ * формулой и двигаются вместе с новыми ДС и актами. Отчётный SQL берёт такую сумму по
+ * флагу use_open_override.
  *
  * Право проверяется В БД внутри этой же транзакции, а не по кэшу ролей: кэш живёт
  * 5 минут и инвалидируется локально в процессе, поэтому снятая роль иначе продолжала бы
@@ -246,26 +255,35 @@ export async function revisePlan(
       FOR UPDATE`,
     [objectId, periodMonth],
   );
-  const current = currentResult.rows[0];
-  if (!current) {
-    failWith({
-      http: 409,
-      code: 'plan_not_fixed',
-      message: 'План месяца ещё не зафиксирован — пересматривать нечего',
-    });
-  }
+  const current = currentResult.rows[0] ?? null;
 
-  // Расчётная половина обновляется всегда: даже при ручном значении в снимке должно
-  // остаться видно, сколько давала формула на момент пересмотра.
+  // Расчётная половина обновляется всегда: даже при ручном значении в строке должно
+  // остаться видно, сколько давала формула на момент правки.
   const reportRow = await loadReportRow(client, objectId, periodMonth);
   const values = snapshotValues(reportRow);
   const override = input.override_plan_amount ?? null;
+
+  // Закрытым считается только fixed/corrected: у них есть утверждённый расчёт, и правка
+  // обязана стать новой ревизией. Всё остальное (строки нет, open, data_incomplete) —
+  // открытый месяц, и он правится на месте.
+  const isFrozen = current !== null && (current.status === 'fixed' || current.status === 'corrected');
+
+  if (!isFrozen) {
+    return saveOpenMonthPlan(client, actor, {
+      objectId,
+      periodMonth,
+      current,
+      values,
+      override,
+      reason: input.reason.trim(),
+    });
+  }
 
   await client.query(
     `UPDATE object_kpi_month_plans
         SET is_current = false, superseded_at = now()
       WHERE id = $1`,
-    [current!.id],
+    [current.id],
   );
 
   const inserted = await client.query<ObjectKpiMonthPlanRow>(
@@ -280,7 +298,7 @@ export async function revisePlan(
     [
       objectId,
       periodMonth,
-      current!.revision + 1,
+      current.revision + 1,
       values.contract_total,
       values.ks2_cumulative_before,
       values.remainder,
@@ -303,6 +321,77 @@ export async function revisePlan(
     before: { ...current },
     after: { ...next },
     reason: input.reason.trim(),
+    actor,
+  });
+  return next;
+}
+
+/**
+ * Ручной план ОТКРЫТОГО месяца: одна строка `open`, без ревизий.
+ *
+ * Ревизии нужны там, где расчёт уже утверждён; в открытом месяце версионировать нечего,
+ * а лишние ревизии только зашумили бы историю плана. Статус выставляется `open` даже если
+ * строка была `data_incomplete`: данные могли доехать, а ручная сумма всё равно должна
+ * быть видна в отчёте (флаг use_open_override требует именно `open`).
+ */
+async function saveOpenMonthPlan(
+  client: PoolClient,
+  actor: ObjectKpiActor,
+  params: {
+    objectId: string;
+    periodMonth: string;
+    current: ObjectKpiMonthPlanRow | null;
+    values: ReturnType<typeof snapshotValues>;
+    override: number | string | null;
+    reason: string;
+  },
+): Promise<ObjectKpiMonthPlanRow> {
+  const { objectId, periodMonth, current, values, override, reason } = params;
+  const columns = [
+    values.contract_total,
+    values.ks2_cumulative_before,
+    values.remainder,
+    values.planned_zos_date_used,
+    values.control_date,
+    values.months_remaining,
+    values.calculated_plan_amount,
+    override,
+    reason,
+  ];
+
+  const result = current
+    ? await client.query<ObjectKpiMonthPlanRow>(
+      `UPDATE object_kpi_month_plans
+          SET contract_total = $2, ks2_cumulative_before = $3, remainder = $4,
+              planned_zos_date_used = $5, control_date = $6, months_remaining = $7,
+              calculated_plan_amount = $8, override_plan_amount = $9,
+              correction_reason = $10, status = 'open',
+              fixed_at = now(), fixed_by = $11, fixed_source = 'economics_head_override'
+        WHERE id = $1
+        RETURNING ${PLAN_COLUMNS}`,
+      [current.id, ...columns, actor.userId],
+    )
+    : await client.query<ObjectKpiMonthPlanRow>(
+      `INSERT INTO object_kpi_month_plans (
+         skud_object_id, period_month, revision, is_current,
+         contract_total, ks2_cumulative_before, remainder,
+         planned_zos_date_used, control_date, months_remaining,
+         calculated_plan_amount, override_plan_amount, correction_reason,
+         status, fixed_at, fixed_by, fixed_source
+       ) VALUES ($1,$2,1,true,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open',now(),$12,'economics_head_override')
+       RETURNING ${PLAN_COLUMNS}`,
+      [objectId, periodMonth, ...columns, actor.userId],
+    );
+
+  const next = result.rows[0];
+  await recordObjectKpiHistory(client, {
+    skudObjectId: objectId,
+    entityKind: 'plan',
+    entityId: next.id,
+    action: current ? 'update' : 'create',
+    before: current ? { ...current } : null,
+    after: { ...next },
+    reason,
     actor,
   });
   return next;
