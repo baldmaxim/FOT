@@ -14,10 +14,6 @@ import {
 } from './object-kpi-schemas.js';
 import type { ObjectKpiActor } from '../services/object-kpi-history.service.js';
 import { isObjectInScope } from '../services/object-kpi-scope.service.js';
-import {
-  canSeeManagerSalary,
-  redactAssignmentSalary,
-} from '../services/object-kpi-salary-access.service.js';
 import { fixMonthPlan, revisePlan } from '../services/object-kpi-plan.service.js';
 import { runPlanFreezerOnce } from '../services/object-kpi-plan-freezer.service.js';
 import {
@@ -541,10 +537,7 @@ export const objectKpiEntriesController = {
           });
         return created;
       });
-      res.status(201).json({
-        success: true,
-        data: redactAssignmentSalary(row, await canSeeManagerSalary(req.user)),
-      });
+      res.status(201).json({ success: true, data: row });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] createAssignment');
     }
@@ -558,18 +551,11 @@ export const objectKpiEntriesController = {
         valid_from: dateSchema.optional(),
         valid_to: dateSchema.nullish(),
         notes: z.string().trim().max(2000).nullish(),
-        // Право на это поле проверяется в сервисе, в БД и внутри транзакции.
-        salary_amount: moneySchema.refine((v) => Number(v) >= 0, 'Зарплата не может быть отрицательной').nullish(),
       }).parse(req.body);
 
       const actor = await buildActor(req);
       const row = await withTransaction(async (client) => {
-        const updated = await updateAssignment(client, actor, id, version, patch, {
-          employeeId: req.user.employee_id,
-          isAdmin: req.user.is_admin === true,
-        });
-        // Полное значение оклада остаётся в аудите: он доступен только администратору,
-        // а денежная правка обязана быть восстановима.
+        const updated = await updateAssignment(client, actor, id, version, patch);
         await auditService.logFromRequestWithClient(client, req, req.user.id,
           AUDIT_ACTIONS.OBJECT_KPI_ASSIGNMENT_CHANGED, {
             entityType: 'object_kpi_assignment',
@@ -578,12 +564,7 @@ export const objectKpiEntriesController = {
           });
         return updated;
       });
-      // Ответ PATCH — такой же канал выдачи, как список: без маскирования экономист объекта
-      // увидел бы оклад, правя период.
-      res.json({
-        success: true,
-        data: redactAssignmentSalary(row, await canSeeManagerSalary(req.user)),
-      });
+      res.json({ success: true, data: row });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] updateAssignment');
     }

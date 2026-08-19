@@ -20,11 +20,9 @@ vi.mock('./object-kpi-history.service.js', () => ({
 
 vi.mock('./object-kpi-roles-cache.service.js', () => ({
   invalidateObjectKpiRolesCache: vi.fn(),
-  isEconomicsHeadLive: vi.fn(async () => false),
 }));
 
 import { recordObjectKpiHistory } from './object-kpi-history.service.js';
-import { isEconomicsHeadLive } from './object-kpi-roles-cache.service.js';
 import { deleteAssignment, updateAssignment } from './object-kpi-assignments.service.js';
 
 const OBJECT_ID = '11111111-1111-1111-1111-111111111111';
@@ -107,62 +105,6 @@ describe('updateAssignment', () => {
 
     expect(result.valid_to).toBe('2026-07-31');
     expect(recordObjectKpiHistory).toHaveBeenCalled();
-  });
-
-  it('оклад вносит админ', async () => {
-    const client = makeClient([
-      { rows: [assignmentRow()] },
-      { rows: [], rowCount: 1 },
-      { rows: [assignmentRow({ salary_amount: '350000.00', version: 2 })] },
-    ]);
-
-    const result = await updateAssignment(
-      client as never, ACTOR, 'as-1', 1, { salary_amount: '350000.00' },
-      { employeeId: 7, isAdmin: true },
-    );
-
-    expect(result.salary_amount).toBe('350000.00');
-    // Право админа не требует похода в БД за ролью.
-    expect(isEconomicsHeadLive).not.toHaveBeenCalled();
-  });
-
-  it('оклад вносит руководитель эк. отдела — проверка живая, в той же транзакции', async () => {
-    (isEconomicsHeadLive as unknown as { mockResolvedValueOnce: (v: boolean) => void })
-      .mockResolvedValueOnce(true);
-    const client = makeClient([
-      { rows: [assignmentRow()] },
-      { rows: [], rowCount: 1 },
-      { rows: [assignmentRow({ salary_amount: '350000.00', version: 2 })] },
-    ]);
-
-    await updateAssignment(
-      client as never, ACTOR, 'as-1', 1, { salary_amount: '350000.00' },
-      { employeeId: 42, isAdmin: false },
-    );
-
-    expect(isEconomicsHeadLive).toHaveBeenCalledWith(client, 42);
-  });
-
-  it('экономисту объекта оклад недоступен даже на запись', async () => {
-    const client = makeClient([{ rows: [assignmentRow()] }]);
-
-    await expect(updateAssignment(
-      client as never, ACTOR, 'as-1', 1, { salary_amount: '350000.00' },
-      { employeeId: 5, isAdmin: false },
-    )).rejects.toMatchObject({ __save: { http: 403, code: 'salary_forbidden' } });
-  });
-
-  it('патч без оклада права не требует — правка периода не сломалась', async () => {
-    const client = makeClient([
-      { rows: [assignmentRow()] },
-      { rows: [], rowCount: 1 },
-      { rows: [assignmentRow({ valid_to: '2026-07-31', version: 2 })] },
-    ]);
-
-    await updateAssignment(client as never, ACTOR, 'as-1', 1, { valid_to: '2026-07-31' },
-      { employeeId: 5, isAdmin: false });
-
-    expect(isEconomicsHeadLive).not.toHaveBeenCalled();
   });
 
   it('пересечение периодов руководителей остаётся запрещённым', async () => {

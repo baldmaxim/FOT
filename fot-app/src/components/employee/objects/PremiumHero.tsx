@@ -41,9 +41,6 @@ export const PremiumHero: FC<IPremiumHeroProps> = ({
 }) => {
   const calculated = month?.status === 'calculated';
   const prorated = month != null && month.eligible_assignment_days < month.days_in_month;
-  // Оклад не задан — плашка выглядит как раньше: пустые «Зарплата» и «Итого» = премии
-  // только шумят.
-  const hasSalary = month?.salary_amount != null;
 
   return (
     <section className={styles.hero}>
@@ -54,55 +51,17 @@ export const PremiumHero: FC<IPremiumHeroProps> = ({
 
       {!month && <span className={styles.heroValueMuted}>Нет данных за выбранный месяц</span>}
 
-      {/*
-        Премия и зарплата живут по разным правилам: план месяца может быть не определён,
-        и премия тогда не считается, а оклад начисляется всё равно. Поэтому суммы стоят
-        рядом, а причина отсутствия премии уходит отдельной строкой под ними.
-      */}
-      {month && (
+      {month && (calculated ? (
         <>
-          <div className={styles.heroAmounts}>
-            <div className={styles.heroAmount}>
-              {!hasSalary && !calculated ? (
-                <span className={styles.heroValueMuted}>{STATUS_TEXT[month.status]}</span>
-              ) : (
-                <>
-                  {hasSalary && <span className={styles.heroAmountLabel}>Премия</span>}
-                  <strong className={styles.heroValue}>
-                    {calculated ? formatMoneyWhole(month.premium_amount) : '—'}
-                  </strong>
-                </>
-              )}
-            </div>
-
-            {hasSalary && (
-              <>
-                <div className={styles.heroAmount}>
-                  <span className={styles.heroAmountLabel}>Зарплата</span>
-                  <strong className={styles.heroValueSecondary}>
-                    {formatMoneyWhole(month.salary_amount)}
-                  </strong>
-                </div>
-                <div className={styles.heroAmount}>
-                  <span className={styles.heroAmountLabel}>Итого</span>
-                  <strong className={styles.heroValueSecondary}>
-                    {formatMoneyWhole(month.total_amount)}
-                  </strong>
-                </div>
-              </>
-            )}
-          </div>
-
-          {calculated ? (
-            <span className={styles.heroSub}>
-              база {formatMoney(month.base_prorated)} × K {formatCoefficient(month.coefficient)}
-              {prorated && ` · закрепление ${month.eligible_assignment_days} из ${month.days_in_month} дн.`}
-            </span>
-          ) : hasSalary && (
-            <span className={styles.heroSub}>{STATUS_TEXT[month.status]}</span>
-          )}
+          <strong className={styles.heroValue}>{formatMoneyWhole(month.premium_amount)}</strong>
+          <span className={styles.heroSub}>
+            база {formatMoney(month.base_prorated)} × K {formatCoefficient(month.coefficient)}
+            {prorated && ` · закрепление ${month.eligible_assignment_days} из ${month.days_in_month} дн.`}
+          </span>
         </>
-      )}
+      ) : (
+        <span className={styles.heroValueMuted}>{STATUS_TEXT[month.status]}</span>
+      ))}
 
       {month?.status === 'data_incomplete' && month.incomplete_objects.length > 0 && (
         <span className={styles.heroWarn}>

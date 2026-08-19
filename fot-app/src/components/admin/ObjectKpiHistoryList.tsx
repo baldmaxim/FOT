@@ -68,7 +68,6 @@ const FIELD_LABELS: Record<string, string> = {
   control_date: 'Контрольная дата',
   revision: 'Ревизия',
   period_month: 'Расчётный месяц',
-  salary_amount: 'Зарплата',
 };
 
 /**
@@ -83,7 +82,6 @@ const TECHNICAL_FIELDS = new Set([
 const MONEY_FIELDS = new Set([
   'base_amount', 'amount', 'amount_delta', 'plan_amount',
   'override_plan_amount', 'calculated_plan_amount', 'remainder', 'contract_total',
-  'salary_amount',
 ]);
 
 const DATE_FIELDS = new Set([

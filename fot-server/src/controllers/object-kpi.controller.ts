@@ -22,11 +22,6 @@ import { getContractByObject, listAddenda, listKs2Entries } from '../services/ob
 import { listKs6Entries } from '../services/object-kpi-ks6.service.js';
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
 import { listAssignments, listGlobalRoles } from '../services/object-kpi-assignments.service.js';
-import {
-  canSeeManagerSalary,
-  redactAssignmentSalary,
-  redactHistorySalary,
-} from '../services/object-kpi-salary-access.service.js';
 
 /**
  * Чтение KPI-контура: отчёт, карточка объекта, планы, история, ЛК руководителя.
@@ -89,8 +84,6 @@ const CHECK_MESSAGES: Record<string, string> = {
   object_ks6_entries_amount_check: 'Сумма КС-6 должна быть больше нуля',
   object_ks6_entries_doc_number_check: 'Укажите номер записи КС-6',
   object_kpi_assignments_check: 'Дата «по» не может быть раньше даты «с»',
-  object_kpi_assignments_salary_check:
-    'Зарплата задаётся только руководителю строительства и не может быть отрицательной',
   object_kpi_global_roles_check: 'Дата «по» не может быть раньше даты «с»',
   object_kpi_month_plans_months_remaining_check: 'Число расчётных месяцев должно быть не меньше одного',
   // Второй безымянный CHECK таблицы планов: ручное значение требует основания.
@@ -416,7 +409,7 @@ export const objectKpiController = {
           ks2,
           ks6,
           plans,
-          assignments: redactAssignmentSalary(assignments, await canSeeManagerSalary(req.user)),
+          assignments,
           report,
           has_fixed_months: fixedFlag?.exists === true,
           period: window,
@@ -457,12 +450,7 @@ export const objectKpiController = {
         res.status(403).json({ success: false, error: 'Объект вне вашего доступа' });
         return;
       }
-      // Снимки закреплений в журнале несут оклад — редактируем так же, как список.
-      const history = await listObjectKpiHistory(objectId);
-      res.json({
-        success: true,
-        data: redactHistorySalary(history, await canSeeManagerSalary(req.user)),
-      });
+      res.json({ success: true, data: await listObjectKpiHistory(objectId) });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] getHistory');
     }
@@ -532,13 +520,7 @@ export const objectKpiController = {
       });
       // Скоуп фильтрует и общий список: руководителю чужие закрепления не показываем.
       const allowed = new Set(scope.object_ids);
-      res.json({
-        success: true,
-        data: redactAssignmentSalary(
-          rows.filter((row) => allowed.has(row.skud_object_id)),
-          await canSeeManagerSalary(req.user),
-        ),
-      });
+      res.json({ success: true, data: rows.filter((row) => allowed.has(row.skud_object_id)) });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] listAssignments');
     }

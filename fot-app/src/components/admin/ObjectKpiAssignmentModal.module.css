@@ -239,19 +239,6 @@
   color: var(--text-primary);
 }
 
-/* Правка оклада по месту — те же габариты, что у полей периода. */
-.salaryInput {
-  width: 140px;
-  min-height: 36px;
-  padding: 4px 8px;
-  /* 16px — иначе мобильный Chrome зумит страницу при фокусе. */
-  font-size: 16px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-input, var(--bg-secondary));
-  color: var(--text-primary);
-}
-
 .actions .dangerBtn {
   color: var(--danger-color, #dc2626);
   border-color: var(--danger-color, #dc2626);

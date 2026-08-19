@@ -108,10 +108,6 @@ export interface IPremiumMonth {
   days_in_month: number;
   base_prorated: string | null;
   premium_amount: string | null;
-  /** Оклад за месяц, пропорционально дням закрепления. null — оклад не задан. */
-  salary_amount: string | null;
-  /** Премия + оклад: считает сервер, деньги на фронте не складываем. */
-  total_amount: string | null;
   objects: IPremiumMonthObject[];
   incomplete_objects: Array<{ object_name: string; data_quality: IObjectKpiReportRow['data_quality'] }>;
 }
@@ -267,11 +263,6 @@ export interface IObjectKpiAssignment {
   valid_from: string;
   valid_to: string | null;
   source: 'manual' | 'skud_import';
-  /**
-   * Оклад руководителя строительства за этот объект. Приходит только админу и руководителю
-   * эк. отдела, остальным — null (маскирует сервер).
-   */
-  salary_amount: string | null;
   notes: string | null;
   version: number;
 }
