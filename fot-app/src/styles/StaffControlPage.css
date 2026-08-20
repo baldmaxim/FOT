@@ -1193,15 +1193,32 @@
   min-height: 0;
 }
 
-.sc-mode-body {
+/* Специфичность двойная: .sc-modal-body ниже по файлу ставит flex-column и иначе перебивает грид. */
+.sc-modal-body.sc-mode-body {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 3fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 18px;
+  min-height: 0;
   overflow: hidden;
 }
 
+/* Один блок (роль без прав на объекты) — на всю ширину, а не 70%. */
+.sc-modal-body.sc-mode-body--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sc-mode-body .sc-obj-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
   min-height: 0;
+}
+
+/* Тянется по высоте только список; подписи и кнопки сохраняют свою высоту. */
+.sc-mode-body .sc-obj-col > *:not(.sc-obj-list) {
+  flex: 0 0 auto;
 }
 
 /* Внутри полноэкранной модалки список тянется по высоте колонки, а не по 220px. */
@@ -1229,9 +1246,17 @@
     height: 92dvh;
   }
 
-  .sc-mode-body {
-    grid-template-columns: 1fr;
+  .sc-modal-body.sc-mode-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
     overflow-y: auto;
+  }
+
+  /* На узком экране прокручивается вся модалка целиком — без вложенных скроллов. */
+  .sc-modal--full .sc-mode-body .sc-obj-list {
+    flex: 0 0 auto;
+    max-height: none;
+    overflow-y: visible;
   }
 }
 

@@ -271,99 +271,99 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
 
   return (
     <div className="sc-overlay" {...dismiss}>
-      <div className="sc-modal" onClick={e => e.stopPropagation()}>
+      <div className="sc-modal sc-modal--full" onClick={e => e.stopPropagation()}>
         <div className="sc-modal-header">
           <h3>Объект — {employee.full_name}</h3>
           <button className="sc-modal-close" onClick={onClose}>&times;</button>
         </div>
-        <div className="sc-modal-body">
-          <div className="sc-obj-col-label">Вариант табелирования для 1С</div>
-          <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
-            Определяет колонку «Адрес объекта» в выгрузке «Единый файл для 1С». На сам табель,
-            СКУД и права не влияет. {rowReady ? effectiveHint : 'Загрузка текущей настройки…'}
-          </p>
+        <div className={`sc-modal-body sc-mode-body${canManageObjects ? '' : ' sc-mode-body--single'}`}>
+          <div className="sc-obj-col">
+            <div className="sc-obj-col-label">Вариант табелирования для 1С</div>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
+              Определяет колонку «Адрес объекта» в выгрузке «Единый файл для 1С». На сам табель,
+              СКУД и права не влияет. {rowReady ? effectiveHint : 'Загрузка текущей настройки…'}
+            </p>
 
-          <input
-            type="text"
-            className="sc-obj-search"
-            value={modeSearch}
-            onChange={e => setModeSearch(e.target.value)}
-            placeholder="Поиск объекта…"
-          />
+            <input
+              type="text"
+              className="sc-obj-search"
+              value={modeSearch}
+              onChange={e => setModeSearch(e.target.value)}
+              placeholder="Поиск объекта…"
+            />
 
-          <div className="sc-obj-list">
-            <div className="sc-obj-group-label">Режим</div>
-            <label className={`sc-obj-item ${mode === null ? 'sc-obj-item--on' : ''}`}>
-              <input
-                type="radio"
-                name="employee-timesheet-mode"
-                checked={mode === null}
-                onChange={() => { setMode(null); setObjectId(null); }}
-              />
-              <span>
-                Как у отдела
-                <span className="sc-obj-empty" style={{ display: 'block', fontSize: 12 }}>
-                  Личная настройка снимается — действует режим отдела.
-                </span>
-              </span>
-            </label>
-
-            {PLAIN_MODE_OPTIONS.map(option => (
-              <label key={option.value} className={`sc-obj-item ${mode === option.value ? 'sc-obj-item--on' : ''}`}>
+            <div className="sc-obj-list">
+              <div className="sc-obj-group-label">Режим</div>
+              <label className={`sc-obj-item ${mode === null ? 'sc-obj-item--on' : ''}`}>
                 <input
                   type="radio"
                   name="employee-timesheet-mode"
-                  checked={mode === option.value}
-                  onChange={() => { setMode(option.value); setObjectId(null); }}
+                  checked={mode === null}
+                  onChange={() => { setMode(null); setObjectId(null); }}
                 />
                 <span>
-                  {option.label}
-                  <span className="sc-obj-empty" style={{ display: 'block', fontSize: 12 }}>{option.hint}</span>
+                  Как у отдела
+                  <span className="sc-obj-empty" style={{ display: 'block', fontSize: 12 }}>
+                    Личная настройка снимается — действует режим отдела.
+                  </span>
                 </span>
               </label>
-            ))}
 
-            <div className="sc-obj-group-label">Объекты</div>
-            {modeObjectsQuery.isLoading ? (
-              <div style={{ fontSize: 14, padding: '8px 0' }}>Загрузка объектов…</div>
-            ) : selectableObjects.length === 0 ? (
-              <div className="sc-obj-empty">— объекты не найдены —</div>
-            ) : selectableObjects.map(o => (
-              <label
-                key={o.id}
-                className={`sc-obj-item ${mode === 'object' && objectId === o.id ? 'sc-obj-item--on' : ''}`}
-              >
-                <input
-                  type="radio"
-                  name="employee-timesheet-mode"
-                  checked={mode === 'object' && objectId === o.id}
-                  onChange={() => { setMode('object'); setObjectId(o.id); }}
-                />
-                <span>{o.name}</span>
-              </label>
-            ))}
-          </div>
+              {PLAIN_MODE_OPTIONS.map(option => (
+                <label key={option.value} className={`sc-obj-item ${mode === option.value ? 'sc-obj-item--on' : ''}`}>
+                  <input
+                    type="radio"
+                    name="employee-timesheet-mode"
+                    checked={mode === option.value}
+                    onChange={() => { setMode(option.value); setObjectId(null); }}
+                  />
+                  <span>
+                    {option.label}
+                    <span className="sc-obj-empty" style={{ display: 'block', fontSize: 12 }}>{option.hint}</span>
+                  </span>
+                </label>
+              ))}
 
-          {objectRequired && loadedRow?.effective_object_is_active === false
-            && objectId === loadedRow.explicit_object_id && (
-            <div className="sc-obj-empty" style={{ fontSize: 12 }}>
-              Текущий объект неактивен — выберите другой.
+              <div className="sc-obj-group-label">Объекты</div>
+              {modeObjectsQuery.isLoading ? (
+                <div style={{ fontSize: 14, padding: '8px 0' }}>Загрузка объектов…</div>
+              ) : selectableObjects.length === 0 ? (
+                <div className="sc-obj-empty">— объекты не найдены —</div>
+              ) : selectableObjects.map(o => (
+                <label
+                  key={o.id}
+                  className={`sc-obj-item ${mode === 'object' && objectId === o.id ? 'sc-obj-item--on' : ''}`}
+                >
+                  <input
+                    type="radio"
+                    name="employee-timesheet-mode"
+                    checked={mode === 'object' && objectId === o.id}
+                    onChange={() => { setMode('object'); setObjectId(o.id); }}
+                  />
+                  <span>{o.name}</span>
+                </label>
+              ))}
             </div>
-          )}
 
-          <div className="sc-modal-footer" style={{ padding: '10px 0 0', border: 0 }}>
-            <button className="sc-btn apply" onClick={() => void handleSaveMode()} disabled={!canSaveMode}>
-              <Check size={15} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-              {saving ? 'Сохранение…' : 'Сохранить вариант'}
-            </button>
+            {objectRequired && loadedRow?.effective_object_is_active === false
+              && objectId === loadedRow.explicit_object_id && (
+              <div className="sc-obj-empty" style={{ fontSize: 12 }}>
+                Текущий объект неактивен — выберите другой.
+              </div>
+            )}
+
+            <div className="sc-modal-footer" style={{ padding: '10px 0 0', border: 0 }}>
+              <button className="sc-btn apply" onClick={() => void handleSaveMode()} disabled={!canSaveMode}>
+                <Check size={15} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+                {saving ? 'Сохранение…' : 'Сохранить вариант'}
+              </button>
+            </div>
           </div>
 
           {canManageObjects && (
-            <>
-              <hr style={{ margin: '16px 0', border: 0, borderTop: '1px solid var(--border, #e2e8f0)' }} />
-
+            <div className="sc-obj-col">
               <div className="sc-obj-col-label">Объекты сотрудника для доступа табельщицы</div>
-              <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
                 Отдельная от режима настройка: от неё зависит, каких сотрудников видит табельщица.
                 Переопределяет объекты бригады. На выгрузку 1С напрямую не влияет.
               </p>
@@ -414,7 +414,7 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
                   {objSaving ? 'Сохранение…' : 'Сохранить объекты'}
                 </button>
               </div>
-            </>
+            </div>
           )}
         </div>
         <div className="sc-modal-footer">
