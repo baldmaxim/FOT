@@ -124,6 +124,7 @@ export async function findApprovalLocksForEmployeeDates(
        FROM pairs pr
        JOIN timesheet_approvals a
          ON a.status IN ('submitted', 'approved')
+        AND a.unlocked_at IS NULL
         AND a.start_date <= pr.work_date
         AND a.end_date >= pr.work_date
       WHERE EXISTS (
@@ -259,6 +260,7 @@ export async function loadApprovalLocksForEmployeesInPeriod(
        FROM emps e
        JOIN timesheet_approvals a
          ON a.status IN ('submitted', 'approved')
+        AND a.unlocked_at IS NULL
         AND a.start_date <= $3::date
         AND a.end_date >= $2::date
       WHERE EXISTS (
@@ -335,6 +337,7 @@ export async function findApprovalLockForMembershipChange(
      SELECT a.id, a.start_date::text AS start_date, a.end_date::text AS end_date, a.status
        FROM timesheet_approvals a
       WHERE a.status IN ('submitted', 'approved')
+        AND a.unlocked_at IS NULL
         AND a.end_date >= $3::date
         AND ($4::date IS NULL OR a.start_date <= $4::date)
         AND (

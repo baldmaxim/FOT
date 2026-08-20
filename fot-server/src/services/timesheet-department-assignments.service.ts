@@ -647,6 +647,7 @@ export async function findApprovalLockForDate(
     `SELECT id, start_date, end_date, status FROM timesheet_approvals
        WHERE department_id = $1
          AND status IN ('submitted', 'approved')
+         AND unlocked_at IS NULL
          AND start_date <= $2
          AND end_date >= $2
        ORDER BY (status = 'approved') DESC, start_date DESC, id DESC

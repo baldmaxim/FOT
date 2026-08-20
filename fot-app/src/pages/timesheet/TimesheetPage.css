@@ -243,6 +243,11 @@
   white-space: nowrap;
 }
 
+/* Период временно открыт кадровой службой: статус подачи прежний, замок снят. */
+.ts-header-approval-chip--unlocked {
+  color: var(--warning, #d97706);
+}
+
 .ts-header-counter {
   font-size: 13px;
   font-weight: 600;

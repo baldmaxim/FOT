@@ -2618,7 +2618,10 @@ export const timesheetController = {
 
       // Согласования, пересекающиеся с выбранным диапазоном отдела.
       // Для scope=department они дают список заблокированных дат (руководитель не может редактировать submitted/approved/returned).
-      let departmentApprovals: Array<{ id: number; start_date: string; end_date: string; status: TimesheetApprovalStatus }> = [];
+      let departmentApprovals: Array<{
+        id: number; start_date: string; end_date: string; status: TimesheetApprovalStatus;
+        unlocked_at: string | null; unlocked_by_name: string | null; unlock_reason: string | null;
+      }> = [];
       // Замки по сотруднику: в смешанной выборке (табельщица, прямые подчинённые)
       // плоский список дат пере-блокировал бы чужих. Админ не блокируется вовсе.
       const approvalLocks: IEmployeeApprovalLock[] = req.user.is_admin
@@ -2627,12 +2630,18 @@ export const timesheetController = {
       // Легаси-поле для клиентов, не знающих про approval_locks (снять через релиз).
       const approvalLockedDates = flattenApprovalLockDates(approvalLocks);
       if (effectiveApprovalDeptId) {
-        const approvalsRows = await query<{ id: number | string; start_date: string; end_date: string; status: string }>(
-          `SELECT id, start_date, end_date, status FROM timesheet_approvals
-             WHERE department_id = $1
-               AND start_date <= $2
-               AND end_date >= $3
-             ORDER BY start_date ASC`,
+        const approvalsRows = await query<{
+          id: number | string; start_date: string; end_date: string; status: string;
+          unlocked_at: string | null; unlocked_by_name: string | null; unlock_reason: string | null;
+        }>(
+          `SELECT ta.id, ta.start_date, ta.end_date, ta.status,
+                  ta.unlocked_at, ta.unlock_reason, up.full_name AS unlocked_by_name
+             FROM timesheet_approvals ta
+             LEFT JOIN user_profiles up ON up.id = ta.unlocked_by
+             WHERE ta.department_id = $1
+               AND ta.start_date <= $2
+               AND ta.end_date >= $3
+             ORDER BY ta.start_date ASC`,
           [effectiveApprovalDeptId, endDate, startDate],
         );
         departmentApprovals = approvalsRows.map(row => ({
@@ -2640,6 +2649,9 @@ export const timesheetController = {
           start_date: String(row.start_date),
           end_date: String(row.end_date),
           status: row.status as TimesheetApprovalStatus,
+          unlocked_at: row.unlocked_at ?? null,
+          unlocked_by_name: row.unlocked_by_name ?? null,
+          unlock_reason: row.unlock_reason ?? null,
         }));
       }
       mark('approvals');

@@ -18,6 +18,7 @@ const { collectDeptIdsMock } = vi.hoisted(() => ({ collectDeptIdsMock: vi.fn() }
 vi.mock('./skud-shared.service.js', () => ({ collectDeptIds: collectDeptIdsMock }));
 
 import {
+  findApprovalLockForDate,
   formatDateShift,
   isAssignmentActiveOnDateInclusive,
   isEmployeeAssignedToDepartmentOnDate,
@@ -28,6 +29,21 @@ import {
   buildMembershipWindowMap,
   isWithinMembershipWindow,
 } from './timesheet-department-assignments.service.js';
+
+describe('findApprovalLockForDate — легаси-предикат замка по отделу', () => {
+  it('игнорирует период, открытый кадровой службой, и явно ставит approved выше submitted', async () => {
+    pgQuery.mockReset();
+    pgQuery.mockResolvedValue([]);
+
+    await findApprovalLockForDate('dept-1', '2026-08-05');
+
+    const [sql] = pgQuery.mock.calls[0] as [string];
+    expect(sql).toContain("status IN ('submitted', 'approved')");
+    expect(sql).toContain('unlocked_at IS NULL');
+    // Лексикографически 'submitted' > 'approved', поэтому ORDER BY status DESC врал бы.
+    expect(sql).toContain("(status = 'approved') DESC");
+  });
+});
 
 describe('timesheet-department-assignments.service', () => {
   it('resolves FULL, H1 and H2 ranges for a month', () => {

@@ -12,13 +12,14 @@ const { pgTx, txClient } = vi.hoisted(() => {
 
 vi.mock('../config/postgres.js', () => ({ withTransaction: pgTx }));
 
-const { snapshotDeptMock, approvalLockMock } = vi.hoisted(() => ({
-  snapshotDeptMock: vi.fn(async (): Promise<string | null> => 'dep-1'),
-  approvalLockMock: vi.fn(async (): Promise<unknown> => null),
+// Замок теперь берётся единым per-employee гардом и клиентом транзакции —
+// раньше здесь мокали findApprovalLockForDate (только по department_id, по пулу).
+const { approvalLocksMock } = vi.hoisted(() => ({
+  approvalLocksMock: vi.fn(async (): Promise<Map<string, unknown>> => new Map()),
 }));
-vi.mock('./timesheet-department-assignments.service.js', () => ({
-  getEmployeeAssignmentSnapshotDepartment: snapshotDeptMock,
-  findApprovalLockForDate: approvalLockMock,
+vi.mock('./timesheet-lock.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('./timesheet-lock.service.js')>()),
+  findApprovalLocksForEmployeeDates: approvalLocksMock,
 }));
 
 import { syncLeaveRequestOnDayRemoval, syncLeaveRequestReason } from './leave-request-sync.service.js';
@@ -83,8 +84,7 @@ describe('syncLeaveRequestOnDayRemoval', () => {
 describe('syncLeaveRequestReason (контракт guarded/unguarded)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    snapshotDeptMock.mockResolvedValue('dep-1');
-    approvalLockMock.mockResolvedValue(null);
+    approvalLocksMock.mockResolvedValue(new Map());
   });
 
   it('guarded: несовпадение expectedRequestType → false, adjustments не тронуты', async () => {
@@ -128,7 +128,9 @@ describe('syncLeaveRequestReason (контракт guarded/unguarded)', () => {
   });
 
   it('день, запертый согласованием периода, остаётся замороженным (guarded-путь не меняет правило)', async () => {
-    approvalLockMock.mockResolvedValueOnce({ status: 'approved' });
+    approvalLocksMock.mockResolvedValueOnce(new Map([
+      ['247|2026-06-01', { id: 1, start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved' }],
+    ]));
     txClient.query
       .mockResolvedValueOnce({ rows: [], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{ id: 5, employee_id: 247, work_date: '2026-06-01' }], rowCount: 1 });

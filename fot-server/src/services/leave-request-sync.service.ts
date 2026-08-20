@@ -1,9 +1,6 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../config/postgres.js';
-import {
-  getEmployeeAssignmentSnapshotDepartment,
-  findApprovalLockForDate,
-} from './timesheet-department-assignments.service.js';
+import { findApprovalLocksForEmployeeDates, lockKey } from './timesheet-lock.service.js';
 
 /**
  * Синхронизирует заявление после удаления из табеля ОДНОГО материализованного дня
@@ -107,11 +104,17 @@ export async function syncLeaveRequestReason(
       [String(requestId)],
     )).rows;
 
+    // Замок проверяем единым гардом и ТЕМ ЖЕ клиентом транзакции: раньше запрос шёл по
+    // пулу и только по department_id, то есть не видел ни снимка состава, ни отделов-предков,
+    // ни собственных незакоммиченных изменений транзакции.
+    const locks = await findApprovalLocksForEmployeeDates(
+      rows.map(row => ({ employeeId: row.employee_id, workDate: row.work_date.slice(0, 10) })),
+      client,
+    );
+
     for (const row of rows) {
       const workDate = row.work_date.slice(0, 10);
-      const departmentId = await getEmployeeAssignmentSnapshotDepartment(row.employee_id, workDate);
-      const lock = departmentId ? await findApprovalLockForDate(departmentId, workDate) : null;
-      if (lock) continue; // день заперт по периоду — текст остаётся замороженным
+      if (locks.has(lockKey(row.employee_id, workDate))) continue; // день заперт — текст заморожен
 
       await client.query(
         `UPDATE attendance_adjustments SET reason = $2, updated_at = now() WHERE id = $1`,

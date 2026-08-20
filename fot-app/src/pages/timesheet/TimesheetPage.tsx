@@ -1,6 +1,6 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail } from 'lucide-react';
+import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail, Unlock } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
@@ -1870,6 +1870,16 @@ export const TimesheetPage: FC = () => {
     );
     if (!showCounter && !headerApprovalStatus && otherApprovals.length === 0) return null;
     const StatusIcon = headerApprovalStatus ? STATUS_ICONS[headerApprovalStatus] : null;
+    // Период временно открыт кадровой службой или админом: статус подачи прежний,
+    // но замок снят — показываем это отдельным чипом, иначе «Утверждён» вводит в заблуждение.
+    const unlockedAt = activeApproval?.unlocked_at ?? null;
+    const unlockTitle = unlockedAt
+      ? [
+          'Период открыт для правок',
+          activeApproval?.unlocked_by_name ? `Открыл: ${activeApproval.unlocked_by_name}` : null,
+          activeApproval?.unlock_reason ? `Причина: ${activeApproval.unlock_reason}` : null,
+        ].filter(Boolean).join(' • ')
+      : '';
     return (
       <span className="ts-header-addon">
         {showCounter && (
@@ -1884,6 +1894,14 @@ export const TimesheetPage: FC = () => {
             title="Статус согласования табеля"
           >
             <StatusIcon size={13} /> {APPROVAL_STATUS_LABELS[headerApprovalStatus]}
+          </span>
+        )}
+        {unlockedAt && (
+          <span
+            className="ts-header-approval-chip ts-header-approval-chip--unlocked"
+            title={unlockTitle}
+          >
+            <Unlock size={13} /> Открыт для правок
           </span>
         )}
         {otherApprovals.map(a => {

@@ -211,6 +211,10 @@ export interface ITimesheetDepartmentApprovalSummary {
   start_date: string;
   end_date: string;
   status: 'draft' | 'submitted' | 'approved' | 'rejected' | 'returned';
+  /** Период временно открыт для правок (null = закрыт). Статус подачи при этом не меняется. */
+  unlocked_at?: string | null;
+  unlocked_by_name?: string | null;
+  unlock_reason?: string | null;
 }
 
 /** Замок закрытого табеля по конкретному сотруднику (интервал подачи, клипнутый периодом). */

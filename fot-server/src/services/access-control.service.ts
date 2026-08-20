@@ -212,6 +212,22 @@ export async function resolveEffectivePageAccess(
   return false;
 }
 
+/**
+ * Кто вправе открывать и закрывать сданный табель: админ и кадровая служба.
+ *
+ * Роль hr намеренно не гейтится страницей /timesheet-hr — на проде этой страницы у неё
+ * нет, а выдача открыла бы заодно утверждение, отклонение и возврат. Хардкод role_code
+ * здесь — тот же приём, что в data-scope.service (read-all для hr).
+ *
+ * Чистая функция без Express: её же дёргает middleware и тесты прав.
+ */
+export function canToggleTimesheetLock(
+  user: { is_admin?: boolean | null; role_code?: string | null } | null | undefined,
+): boolean {
+  if (!user) return false;
+  return user.is_admin === true || user.role_code === 'hr';
+}
+
 export function invalidateRolePageAccessCache(): void {
   pageAccessCache = null;
   pageAccessCacheExpiresAt = 0;

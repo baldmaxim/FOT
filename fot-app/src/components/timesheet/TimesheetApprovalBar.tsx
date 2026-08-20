@@ -1,7 +1,7 @@
 import { type FC, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Check, X, Send, RotateCcw, AlertCircle,
+  Check, X, Send, RotateCcw, AlertCircle, Lock, Unlock,
   Upload, FileText, ChevronDown, MessageSquare, HelpCircle,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -64,6 +64,10 @@ interface IActiveCardProps {
   canSubmitDepartment: boolean;
   /** Возврат УТВЕРЖДЁННОГО периода в черновик — только админ (зеркалит гард бэкенда). */
   canRecallApproved: boolean;
+  /** Открыть/закрыть сданный период — админ и кадровая служба. */
+  canToggleLock: boolean;
+  /** Период сейчас открыт для правок. */
+  periodUnlocked: boolean;
   canReviewApproval: boolean;
   comment: string;
   compact: boolean;
@@ -81,6 +85,8 @@ interface IActiveCardProps {
   onSubmit: () => void;
   onRecall: () => void;
   onRecallApproved: () => void;
+  onOpenPeriod: () => void;
+  onClosePeriod: () => void;
   onToggleMemo: () => void;
   onCommentChange: (value: string) => void;
   onDismissError: () => void;
@@ -90,6 +96,8 @@ const ActiveCard: FC<IActiveCardProps> = ({
   approval,
   canSubmitDepartment,
   canRecallApproved,
+  canToggleLock,
+  periodUnlocked,
   canReviewApproval,
   comment,
   compact,
@@ -107,6 +115,8 @@ const ActiveCard: FC<IActiveCardProps> = ({
   onSubmit,
   onRecall,
   onRecallApproved,
+  onOpenPeriod,
+  onClosePeriod,
   onToggleMemo,
   onCommentChange,
   onDismissError,
@@ -298,6 +308,30 @@ const ActiveCard: FC<IActiveCardProps> = ({
         </button>
       )}
 
+      {canToggleLock && (status === 'submitted' || status === 'approved') && !periodUnlocked && (
+        <button
+          className="ts-btn"
+          onClick={onOpenPeriod}
+          disabled={loading}
+          type="button"
+          title="Временно открыть период — руководители и табельщицы смогут внести правки"
+        >
+          <Unlock size={14} /> Открыть табель
+        </button>
+      )}
+
+      {canToggleLock && periodUnlocked && (
+        <button
+          className="ts-btn ts-btn--primary"
+          onClick={onClosePeriod}
+          disabled={loading}
+          type="button"
+          title="Закрыть период — правки снова запрещены"
+        >
+          <Lock size={14} /> Закрыть табель
+        </button>
+      )}
+
       {canRecallApproved && status === 'approved' && (
         <button
           className="ts-btn"
@@ -484,6 +518,9 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   // утверждение HR и правил закрытый табель. Остальным его возвращает кадровая
   // служба через «Согласования» → «Вернуть на доработку».
   const canRecallApproved = canSubmitDepartment && profile?.is_admin === true;
+  // Открыть/закрыть сданный период — админ и кадровая служба. Зеркалит серверный
+  // canToggleTimesheetLock: гейт /timesheet-hr здесь не подходит, у роли hr этой страницы нет.
+  const canToggleLock = profile?.is_admin === true || profile?.role_code === 'hr';
   const canReviewApproval = allowReview && hasPermission('timesheet.workflow.review');
   const weekendMemoEnabled = !!profile?.weekend_memo_required;
 
@@ -517,6 +554,11 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [recallApprovedConfirmOpen, setRecallApprovedConfirmOpen] = useState(false);
   const recallApprovedOverlayHandlers = useOverlayDismiss(() => setRecallApprovedConfirmOpen(false));
+  const [openPeriodConfirmOpen, setOpenPeriodConfirmOpen] = useState(false);
+  const [openPeriodReason, setOpenPeriodReason] = useState('');
+  const openPeriodOverlayHandlers = useOverlayDismiss(() => setOpenPeriodConfirmOpen(false));
+  const [closePeriodConfirmOpen, setClosePeriodConfirmOpen] = useState(false);
+  const closePeriodOverlayHandlers = useOverlayDismiss(() => setClosePeriodConfirmOpen(false));
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const memoFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -610,6 +652,49 @@ export const TimesheetApprovalBar: FC<IProps> = ({
     }
   };
 
+  /**
+   * Открыть период: замок снимается, статус подачи не меняется. Ошибки показываем тостом —
+   * 409 приходит, если период уже открыт или его успели перевести в другой статус.
+   */
+  const handleOpenPeriod = async (reason: string) => {
+    const approvalId = activeStatus.data?.id;
+    if (!approvalId) return;
+    setLoading(true);
+    try {
+      await timesheetApprovalService.openPeriod(approvalId, reason.trim() || null);
+      toast.success('Табель открыт для правок');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        toast.error(err.message || 'Состояние периода изменилось — статус обновлён');
+      } else {
+        toast.error(err instanceof Error ? err.message : 'Ошибка открытия табеля');
+      }
+    } finally {
+      setOpenPeriodReason('');
+      await invalidate();
+      setLoading(false);
+    }
+  };
+
+  const handleClosePeriod = async () => {
+    const approvalId = activeStatus.data?.id;
+    if (!approvalId) return;
+    setLoading(true);
+    try {
+      await timesheetApprovalService.closePeriod(approvalId);
+      toast.success('Табель закрыт — правки запрещены');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        toast.error(err.message || 'Период уже закрыт — статус обновлён');
+      } else {
+        toast.error(err instanceof Error ? err.message : 'Ошибка закрытия табеля');
+      }
+    } finally {
+      await invalidate();
+      setLoading(false);
+    }
+  };
+
   const handleUploadMemoClick = () => memoFileInputRef.current?.click();
 
   const handleMemoFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -694,6 +779,8 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           approval={activeStatus.data ?? null}
           canSubmitDepartment={canSubmitDepartment}
           canRecallApproved={canRecallApproved}
+          canToggleLock={canToggleLock}
+          periodUnlocked={!!activeStatus.data?.unlocked_at}
           canReviewApproval={canReviewApproval}
           comment={comment}
           compact={compact}
@@ -717,6 +804,8 @@ export const TimesheetApprovalBar: FC<IProps> = ({
           }}
           onRecall={handleRecall}
           onRecallApproved={() => setRecallApprovedConfirmOpen(true)}
+          onOpenPeriod={() => setOpenPeriodConfirmOpen(true)}
+          onClosePeriod={() => setClosePeriodConfirmOpen(true)}
           onToggleMemo={() => setMemoOpen(o => !o)}
           onCommentChange={setComment}
           onDismissError={dismissMissing}
@@ -769,6 +858,104 @@ export const TimesheetApprovalBar: FC<IProps> = ({
                   disabled={loading}
                 >
                   <RotateCcw size={14} /> Вернуть и переподать
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {openPeriodConfirmOpen && (
+          <div className="ts-exclude-modal-overlay" {...openPeriodOverlayHandlers}>
+            <div className="ts-exclude-modal" onClick={e => e.stopPropagation()}>
+              <div className="ts-exclude-modal-header">
+                <h3>Открыть табель для правок?</h3>
+                <button
+                  type="button"
+                  className="ts-exclude-modal-close"
+                  onClick={() => setOpenPeriodConfirmOpen(false)}
+                  disabled={loading}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="ts-exclude-modal-body">
+                <p>
+                  Табель за {formatTimesheetRangeLabel(startDate, endDate)} будет временно открыт:
+                  руководители и табельщицы смогут вносить корректировки. Статус согласования
+                  не изменится. Не забудьте закрыть период после правок.
+                </p>
+                <textarea
+                  className="ts-approval-input"
+                  placeholder="Причина открытия (необязательно)"
+                  maxLength={500}
+                  rows={2}
+                  value={openPeriodReason}
+                  onChange={e => setOpenPeriodReason(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+              <div className="ts-exclude-modal-footer">
+                <button
+                  type="button"
+                  className="ts-exclude-modal-cancel"
+                  onClick={() => setOpenPeriodConfirmOpen(false)}
+                  disabled={loading}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  className="ts-exclude-modal-confirm"
+                  onClick={async () => {
+                    setOpenPeriodConfirmOpen(false);
+                    await handleOpenPeriod(openPeriodReason);
+                  }}
+                  disabled={loading}
+                >
+                  <Unlock size={14} /> Открыть табель
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {closePeriodConfirmOpen && (
+          <div className="ts-exclude-modal-overlay" {...closePeriodOverlayHandlers}>
+            <div className="ts-exclude-modal" onClick={e => e.stopPropagation()}>
+              <div className="ts-exclude-modal-header">
+                <h3>Закрыть табель?</h3>
+                <button
+                  type="button"
+                  className="ts-exclude-modal-close"
+                  onClick={() => setClosePeriodConfirmOpen(false)}
+                  disabled={loading}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="ts-exclude-modal-body">
+                <p>
+                  Табель за {formatTimesheetRangeLabel(startDate, endDate)} снова будет закрыт:
+                  корректировки и правки станут недоступны всем, кроме администратора.
+                </p>
+              </div>
+              <div className="ts-exclude-modal-footer">
+                <button
+                  type="button"
+                  className="ts-exclude-modal-cancel"
+                  onClick={() => setClosePeriodConfirmOpen(false)}
+                  disabled={loading}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  className="ts-exclude-modal-confirm"
+                  onClick={async () => {
+                    setClosePeriodConfirmOpen(false);
+                    await handleClosePeriod();
+                  }}
+                  disabled={loading}
+                >
+                  <Lock size={14} /> Закрыть табель
                 </button>
               </div>
             </div>

@@ -16,6 +16,10 @@ export interface ITimesheetApproval {
   reviewed_by: string | null;
   reviewed_at: string | null;
   review_comment: string | null;
+  /** Период временно открыт для правок (null = закрыт). Статус подачи при этом не меняется. */
+  unlocked_at?: string | null;
+  unlocked_by_name?: string | null;
+  unlock_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -241,6 +245,24 @@ export const timesheetApprovalService = {
     const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(
       '/timesheet-approvals/recall',
       buildSubmissionBody(target, { start_date, end_date }),
+    );
+    return res.data;
+  },
+
+  /** Открыть закрытый период для правок (админ / кадровая служба). Статус подачи не меняется. */
+  openPeriod: async (approvalId: number, reason?: string | null) => {
+    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(
+      `/timesheet-approvals/${approvalId}/open`,
+      { reason: reason ?? null },
+    );
+    return res.data;
+  },
+
+  /** Закрыть период обратно — правки снова запрещены. */
+  closePeriod: async (approvalId: number) => {
+    const res = await apiClient.post<ApiResponse<ITimesheetApproval>>(
+      `/timesheet-approvals/${approvalId}/close`,
+      {},
     );
     return res.data;
   },

@@ -59,13 +59,18 @@ const makeReq = (isAdmin: boolean): AuthenticatedRequest => ({
 } as unknown as AuthenticatedRequest);
 
 /** Существующая подача в заданном статусе + результат UPDATE (если до него дойдёт). */
-const mockApproval = (status: 'submitted' | 'approved' | 'draft') => {
+const mockApproval = (
+  status: 'submitted' | 'approved' | 'draft',
+  over: Record<string, unknown> = {},
+) => {
   pgQueryOne.mockReset();
   pgQueryOne
     .mockResolvedValueOnce({
       id: 521, department_id: DEPT, manager_employee_id: null,
       start_date: RANGE.start_date, end_date: RANGE.end_date, status,
       submitted_by: 'manager-uuid', reviewed_by: status === 'approved' ? 'hr-uuid' : null,
+      unlocked_at: null, unlocked_by: null, unlock_reason: null,
+      ...over,
     })
     .mockResolvedValue({
       id: 521, department_id: DEPT, manager_employee_id: null,
@@ -120,6 +125,19 @@ describe('recall — отзыв табеля', () => {
     expect((res._json as { data: { status: string; reviewed_by: string | null } }).data.status).toBe('draft');
     expect((res._json as { data: { reviewed_by: string | null } }).data.reviewed_by).toBeNull();
     expect(updateCalls()).toHaveLength(1);
+  });
+
+  it('отзыв обнуляет открытие периода: unlock-поля не переживают возврат в draft', async () => {
+    mockApproval('approved', { unlocked_at: '2026-06-20T10:00:00Z', unlocked_by: 'hr-uuid' });
+    const res = makeRes();
+
+    await timesheetApprovalController.recall(makeReq(true), res);
+
+    expect(res._status).toBe(200);
+    const sql = String(updateCalls()[0]![0]);
+    expect(sql).toContain('unlocked_at = NULL');
+    expect(sql).toContain('unlocked_by = NULL');
+    expect(sql).toContain('unlock_reason = NULL');
   });
 
   it('из draft отзывать нечего: 409 (поведение прежнее)', async () => {

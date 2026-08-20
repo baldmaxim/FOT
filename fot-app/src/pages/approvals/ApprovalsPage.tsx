@@ -1,6 +1,6 @@
 import { type FC, useState, useMemo, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, FileText, Download, Settings, Eye } from 'lucide-react';
+import { Check, RotateCcw, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Clock, FileText, Download, Settings, Eye, Unlock } from 'lucide-react';
 import type { TimesheetEntry, TimesheetEmployee } from '../../types';
 import {
   timesheetApprovalService,
@@ -624,6 +624,8 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
   const monthBounds = useMemo(() => getMonthBounds(monthStr), [monthStr]);
 
   const isPersonal = row.manager_employee_id != null;
+  /** Период временно открыт кадровой службой — менять статус до закрытия нельзя. */
+  const periodUnlocked = !!row.unlocked_at;
 
   const submittedQuery = useQuery({
     queryKey: ['approval-submitted-employees', row.id],
@@ -786,14 +788,27 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
 
       {canReview && (
         <div className="approvals-actions">
+          {/* Пока период открыт для правок, менять статус нельзя — сервер вернёт 409
+              TIMESHEET_PERIOD_UNLOCKED. Дизейблим здесь же, чтобы не гонять впустую. */}
+          {periodUnlocked && (
+            <span className="approvals-actions-hint">
+              Период открыт для правок — сначала закройте его в табеле
+            </span>
+          )}
           {row.status === 'submitted' && (
             <>
               <button
                 type="button"
                 className="approvals-action-btn approvals-action-btn--approve"
                 onClick={onApprove}
-                disabled={isApproving || hasPendingWeekend}
-                title={hasPendingWeekend ? 'Корректировки на выходных/праздниках на рассмотрении — попросите второго админа согласовать' : undefined}
+                disabled={isApproving || hasPendingWeekend || periodUnlocked}
+                title={
+                  periodUnlocked
+                    ? 'Период открыт для правок — сначала закройте его'
+                    : hasPendingWeekend
+                      ? 'Корректировки на выходных/праздниках на рассмотрении — попросите второго админа согласовать'
+                      : undefined
+                }
               >
                 <Check size={16} /> Утвердить
               </button>
@@ -801,7 +816,8 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
                 type="button"
                 className="approvals-action-btn approvals-action-btn--rework"
                 onClick={onSendToRework}
-                disabled={isRejecting}
+                disabled={isRejecting || periodUnlocked}
+                title={periodUnlocked ? 'Период открыт для правок — сначала закройте его' : undefined}
               >
                 <RotateCcw size={16} /> На доработку
               </button>
@@ -812,7 +828,8 @@ const ApprovalCardBody: FC<IApprovalCardBodyProps> = ({
               type="button"
               className="approvals-action-btn approvals-action-btn--rework"
               onClick={onReturnApproved}
-              disabled={isReturning}
+              disabled={isReturning || periodUnlocked}
+              title={periodUnlocked ? 'Период открыт для правок — сначала закройте его' : undefined}
             >
               <RotateCcw size={16} /> Вернуть на доработку
             </button>
@@ -983,6 +1000,18 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
                       <span className="approvals-card-range">{formatDate(row.start_date)} — {formatDate(row.end_date)}</span>
                     </div>
                     <span className="approvals-card-status">{APPROVAL_STATUS_LABELS[row.status]}</span>
+                    {row.unlocked_at && (
+                      <span
+                        className="approvals-card-unlocked"
+                        title={[
+                          'Период открыт для правок',
+                          row.unlocked_by_name ? `Открыл: ${row.unlocked_by_name}` : null,
+                          row.unlock_reason ? `Причина: ${row.unlock_reason}` : null,
+                        ].filter(Boolean).join(' • ')}
+                      >
+                        <Unlock size={13} /> Открыт для правок
+                      </span>
+                    )}
                     {row.department_id && (
                       <span
                         className={`approvals-card-timekeeper${row.timekeeper_checked ? ' approvals-card-timekeeper--checked' : ''}`}

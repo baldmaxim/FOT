@@ -67,13 +67,20 @@ async function emitTimesheetApprovalChanged(params: {
   submittedBy?: string | null;
   reviewerUserId?: string | null;
   action: string;
+  /**
+   * Кому рассылать. По умолчанию проверяющие и наблюдатели: смена статуса важна им.
+   * Для открытия/закрытия периода добавляется 'submit' — иначе табельщицы и руководители
+   * увидят снятие замка только после ручного обновления или истечения кэша.
+   */
+  recipientKinds?: WorkflowRecipientKind[];
 }): Promise<void> {
   try {
     const recipients = new Set<string>();
     if (params.submittedBy) recipients.add(params.submittedBy);
     if (params.reviewerUserId) recipients.add(params.reviewerUserId);
     if (params.departmentId) {
-      const reviewers = await listTimesheetWorkflowRecipientIds(params.departmentId, ['review', 'monitor']);
+      const kinds = params.recipientKinds ?? ['review', 'monitor'];
+      const reviewers = await listTimesheetWorkflowRecipientIds(params.departmentId, kinds);
       for (const uid of reviewers) recipients.add(uid);
     }
     if (recipients.size === 0) return;
@@ -87,7 +94,10 @@ async function emitTimesheetApprovalChanged(params: {
   }
 }
 import { timesheetApprovalHistoryService } from '../services/timesheet-approval-history.service.js';
-import { listTimesheetWorkflowRecipientIds } from '../services/timesheet-workflow-recipients.service.js';
+import {
+  listTimesheetWorkflowRecipientIds,
+  type WorkflowRecipientKind,
+} from '../services/timesheet-workflow-recipients.service.js';
 import {
   checkManagerObjWeekendMemoRequirement,
   checkWeekendWorkRequirement,
@@ -699,9 +709,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       res.status(409).json({
         success: false,
         code: 'SUBMISSION_PERIOD_LOCKED',
-        error: allowed
-          ? `Подать табель можно только за период ${formatTimesheetRangeLabel(allowed.startDate, allowed.endDate)} (последний завершённый расчётный период). Подача за выбранный период недоступна.`
-          : 'Подача табеля за выбранный период недоступна.',
+        error: submissionExempt ? exemptError : strictError,
         allowed_start_date: allowed?.startDate ?? null,
         allowed_end_date: allowed?.endDate ?? null,
       });
@@ -851,6 +859,9 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
                    reviewed_by = NULL,
                    reviewed_at = NULL,
                    review_comment = NULL,
+                   unlocked_at = NULL,
+                   unlocked_by = NULL,
+                   unlock_reason = NULL,
                    updated_at = $4
                WHERE id = $5
                RETURNING *`,
@@ -1079,6 +1090,8 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
 
     const now = new Date().toISOString();
     const approval = await queryOne<TimesheetApproval>(
+      // unlocked_* обнуляем здесь же: открытие не должно пережить возврат в draft
+      // (иначе CHECK timesheet_approvals_unlock_status_check отбил бы UPDATE).
       `UPDATE timesheet_approvals
          SET status = 'draft',
              submitted_by = NULL,
@@ -1086,6 +1099,9 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
              reviewed_by = NULL,
              reviewed_at = NULL,
              review_comment = NULL,
+             unlocked_at = NULL,
+             unlocked_by = NULL,
+             unlock_reason = NULL,
              updated_at = $1
          WHERE id = $2
          RETURNING *`,
@@ -1140,6 +1156,22 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
  * Статус согласования по отделу+диапазону (personal=false) или по персональной
  * подаче текущего пользователя+диапазону (personal=true).
  */
+/**
+ * Дополняет строку подачи именем того, кто открыл период. Клиенту нужно показать
+ * «Открыт для правок» с автором и причиной, а в самой таблице лежит только UUID.
+ */
+async function withUnlockAuthor(
+  approval: TimesheetApproval | null,
+): Promise<(TimesheetApproval & { unlocked_by_name: string | null }) | null> {
+  if (!approval) return null;
+  if (!approval.unlocked_by) return { ...approval, unlocked_by_name: null };
+  const author = await queryOne<{ full_name: string | null }>(
+    'SELECT full_name FROM user_profiles WHERE id = $1',
+    [approval.unlocked_by],
+  );
+  return { ...approval, unlocked_by_name: author?.full_name ?? null };
+}
+
 const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const personal = req.query.personal === 'true' || req.query.personal === '1';
@@ -1160,7 +1192,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
            LIMIT 1`,
         [req.user.employee_id, range.startDate, range.endDate],
       );
-      res.json({ success: true, data });
+      res.json({ success: true, data: await withUnlockAuthor(data) });
       return;
     }
 
@@ -1185,7 +1217,7 @@ const getStatus = async (req: AuthenticatedRequest, res: Response): Promise<void
          LIMIT 1`,
       [department_id, range.startDate, range.endDate],
     );
-    res.json({ success: true, data });
+    res.json({ success: true, data: await withUnlockAuthor(data) });
   } catch (err) {
     console.error('timesheet-approval.getStatus error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения статуса' });
@@ -1306,6 +1338,17 @@ async function changeApprovalReviewState(
 
     if (!approval) {
       res.status(404).json({ success: false, error: 'Запись не найдена' });
+      return;
+    }
+
+    // Открытый период нельзя утверждать/отклонять/возвращать: смена статуса не обнуляет
+    // unlocked_at, и замок остался бы снятым в новом статусе.
+    if (approval.unlocked_at) {
+      res.status(409).json({
+        success: false,
+        error: 'Период открыт для правок — сначала закройте его',
+        code: 'TIMESHEET_PERIOD_UNLOCKED',
+      });
       return;
     }
 
@@ -2049,7 +2092,8 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
 
     const deptIds = [...new Set(rows.map((r) => r.department_id).filter((id): id is string => !!id))];
     const userIds = [...new Set(
-      rows.flatMap((r) => [r.submitted_by, r.reviewed_by]).filter((id): id is string => Boolean(id)),
+      rows.flatMap((r) => [r.submitted_by, r.reviewed_by, r.unlocked_by])
+        .filter((id): id is string => Boolean(id)),
     )];
     const managerEmpIds = [...new Set(
       rows.map(r => r.manager_employee_id).filter((id): id is number => Number.isInteger(id) && (id ?? 0) > 0),
@@ -2273,6 +2317,7 @@ const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<
         manager_employee_name: row.manager_employee_id != null ? managerNames.get(row.manager_employee_id) ?? null : null,
         submitted_by_name: row.submitted_by ? userNames.get(row.submitted_by) ?? null : null,
         reviewed_by_name: row.reviewed_by ? userNames.get(row.reviewed_by) ?? null : null,
+        unlocked_by_name: row.unlocked_by ? userNames.get(row.unlocked_by) ?? null : null,
         parent_department_id: groupInfo.parentDeptId,
         parent_department_name: groupInfo.parentDeptName,
         group_key: groupInfo.groupKey,
@@ -2800,9 +2845,178 @@ const getSubmittedEmployees = async (req: AuthenticatedRequest, res: Response): 
   }
 };
 
+
+/** Максимальная длина причины открытия периода (как CANCEL_REASON_MAX_LENGTH в заявлениях). */
+const UNLOCK_REASON_MAX_LENGTH = 500;
+
+/**
+ * Открыть закрытый период для правок. Статус подачи НЕ меняется — снимается только замок
+ * закрытого табеля, чтобы табельщицы и руководители внесли корректировки в обычном порядке.
+ *
+ * Состояние определяем по результату условного UPDATE, а не связкой SELECT→проверка→UPDATE:
+ * два параллельных запроса иначе дали бы два аудит-события на одно фактическое открытие.
+ */
+const openPeriod = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const reasonRaw = req.body?.reason;
+    const reason = typeof reasonRaw === 'string' && reasonRaw.trim() ? reasonRaw.trim() : null;
+    if (reason && reason.length > UNLOCK_REASON_MAX_LENGTH) {
+      res.status(400).json({
+        success: false,
+        error: `Причина не может быть длиннее ${UNLOCK_REASON_MAX_LENGTH} символов`,
+      });
+      return;
+    }
+
+    const approval = await loadApprovalById(id);
+    if (!approval) {
+      res.status(404).json({ success: false, error: 'Запись не найдена' });
+      return;
+    }
+    if (!(await ensureApprovalAccess(req, approval))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к этой подаче', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
+
+    const updated = await queryOne<TimesheetApproval>(
+      `UPDATE timesheet_approvals
+          SET unlocked_at = NOW(),
+              unlocked_by = $2,
+              unlock_reason = $3,
+              updated_at = NOW()
+        WHERE id = $1
+          AND status IN ('submitted', 'approved')
+          AND unlocked_at IS NULL
+        RETURNING *`,
+      [id, req.user.id, reason],
+    );
+
+    if (!updated) {
+      // Строка не обновилась — выясняем, почему именно, уже по свежему состоянию.
+      const current = await loadApprovalById(id);
+      if (!current) {
+        res.status(404).json({ success: false, error: 'Запись не найдена' });
+        return;
+      }
+      if (current.unlocked_at) {
+        res.status(409).json({ success: false, error: 'Период уже открыт', code: 'ALREADY_UNLOCKED' });
+        return;
+      }
+      res.status(409).json({
+        success: false,
+        error: 'Открывать можно только сданный или утверждённый табель',
+        code: 'PERIOD_NOT_CLOSED',
+      });
+      return;
+    }
+
+    await logApprovalAudit(req, updated.id, 'TIMESHEET_APPROVAL_OPENED', {
+      department_id: updated.department_id,
+      manager_employee_id: updated.manager_employee_id,
+      start_date: updated.start_date,
+      end_date: updated.end_date,
+      status: updated.status,
+      reason,
+    });
+
+    void emitTimesheetApprovalChanged({
+      approvalId: updated.id,
+      departmentId: updated.department_id,
+      submittedBy: updated.submitted_by,
+      reviewerUserId: updated.reviewed_by ?? req.user.id,
+      action: 'open',
+      recipientKinds: ['submit', 'review', 'monitor'],
+    });
+
+    invalidateTimesheetGridCaches();
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('timesheet-approval.openPeriod error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка открытия табеля' });
+  }
+};
+
+/**
+ * Закрыть период обратно. Берём те же advisory-локи (сотрудник, месяц), что и пишущие пути
+ * табеля: иначе правка, начатая до закрытия, успела бы закоммититься уже после него.
+ */
+const closePeriod = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const approval = await loadApprovalById(id);
+    if (!approval) {
+      res.status(404).json({ success: false, error: 'Запись не найдена' });
+      return;
+    }
+    if (!(await ensureApprovalAccess(req, approval))) {
+      res.status(403).json({ success: false, error: 'Нет доступа к этой подаче', code: 'DEPARTMENT_ACCESS_DENIED' });
+      return;
+    }
+
+    const anchors = monthAnchorsInRange(approval.start_date, approval.end_date);
+    const updated = await withTransaction(async client => {
+      const snapshot = await client.query<{ employee_id: number | string }>(
+        `SELECT employee_id FROM timesheet_approval_employees WHERE approval_id = $1`,
+        [approval.id],
+      );
+      await lockTimesheetMonthsOnClient(
+        client,
+        snapshot.rows.flatMap(row => anchors.map(workDate => ({
+          employeeId: Number(row.employee_id),
+          workDate,
+        }))),
+      );
+
+      const result = await client.query<TimesheetApproval>(
+        `UPDATE timesheet_approvals
+            SET unlocked_at = NULL,
+                unlocked_by = NULL,
+                unlock_reason = NULL,
+                updated_at = NOW()
+          WHERE id = $1
+            AND unlocked_at IS NOT NULL
+          RETURNING *`,
+        [id],
+      );
+      return result.rows[0] ?? null;
+    });
+
+    if (!updated) {
+      res.status(409).json({ success: false, error: 'Период уже закрыт', code: 'ALREADY_LOCKED' });
+      return;
+    }
+
+    await logApprovalAudit(req, updated.id, 'TIMESHEET_APPROVAL_CLOSED', {
+      department_id: updated.department_id,
+      manager_employee_id: updated.manager_employee_id,
+      start_date: updated.start_date,
+      end_date: updated.end_date,
+      status: updated.status,
+    });
+
+    void emitTimesheetApprovalChanged({
+      approvalId: updated.id,
+      departmentId: updated.department_id,
+      submittedBy: updated.submitted_by,
+      reviewerUserId: updated.reviewed_by ?? req.user.id,
+      action: 'close',
+      recipientKinds: ['submit', 'review', 'monitor'],
+    });
+
+    invalidateTimesheetGridCaches();
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('timesheet-approval.closePeriod error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка закрытия табеля' });
+  }
+};
+
 export const timesheetApprovalController = {
   submit,
   recall,
+  openPeriod,
+  closePeriod,
   getStatus,
   listDepartmentApprovals,
   approve,

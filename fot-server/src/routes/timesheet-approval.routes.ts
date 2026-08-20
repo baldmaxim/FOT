@@ -4,7 +4,7 @@ import multer from 'multer';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
 import { timesheetReviewController } from '../controllers/timesheet-review.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
-import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { canToggleTimesheetLock, resolveEffectivePageAccess } from '../services/access-control.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const router = Router();
@@ -30,6 +30,19 @@ const requireTimesheetReviewAccess = (action: 'view' | 'edit') => (
   }
 );
 
+// Открыть/закрыть сданный период — админ и кадровая служба. Гейт /timesheet-hr здесь не
+// годится: у роли hr этой страницы нет, а выдача открыла бы ей заодно утверждение,
+// отклонение и возврат. Предикат вынесен в access-control.service — его же гоняют тесты.
+const requireTimesheetLockToggle = () => (
+  (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+    if (canToggleTimesheetLock(req.user)) {
+      next();
+      return;
+    }
+    res.status(403).json({ success: false, error: 'Insufficient permissions' });
+  }
+);
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -48,6 +61,11 @@ router.post('/submit', requirePageAccess('/timesheet', 'edit'), timesheetApprova
 // из 'approved' — только админ (проверка в контроллере): иначе руководитель снимал бы
 // утверждение HR и правил закрытый период сам.
 router.post('/recall', requirePageAccess('/timesheet', 'edit'), timesheetApprovalController.recall);
+
+// Временное открытие сданного периода: статус подачи не меняется, снимается только замок
+// закрытого табеля. Закрытие возвращает замок.
+router.post('/:id/open', requireTimesheetLockToggle(), timesheetApprovalController.openPeriod);
+router.post('/:id/close', requireTimesheetLockToggle(), timesheetApprovalController.closePeriod);
 
 // Отметка табельщицы «Проверено» по табелю бригады за период.
 // Чтение — любой со страницей табеля; запись — внутри контроллера только табельщица/админ.

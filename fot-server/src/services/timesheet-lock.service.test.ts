@@ -12,6 +12,7 @@ import {
   findApprovalLockForMembershipChange,
   findApprovalLocksForEmployeeDates,
   flattenApprovalLockDates,
+  loadApprovalLocksForEmployeesInPeriod,
   lockKey,
   lockTimesheetMonthsOnClient,
 } from './timesheet-lock.service.js';
@@ -82,6 +83,21 @@ describe('findApprovalLocksForEmployeeDates', () => {
     const [sql] = pgQuery.mock.calls[0] as [string];
     expect(sql).toContain("a.status IN ('submitted', 'approved')");
   });
+
+  it('период, открытый кадровой службой, замка не даёт', async () => {
+    await findApprovalLocksForEmployeeDates([{ employeeId: 10, workDate: '2026-08-05' }]);
+    const [sql] = pgQuery.mock.calls[0] as [string];
+    expect(sql).toContain('a.unlocked_at IS NULL');
+  });
+});
+
+describe('loadApprovalLocksForEmployeesInPeriod', () => {
+  it('подсветка в гриде тоже игнорирует открытый период', async () => {
+    await loadApprovalLocksForEmployeesInPeriod([10], '2026-08-01', '2026-08-15');
+    const [sql] = pgQuery.mock.calls[0] as [string];
+    expect(sql).toContain("a.status IN ('submitted', 'approved')");
+    expect(sql).toContain('a.unlocked_at IS NULL');
+  });
 });
 
 describe('findApprovalLockForEmployeeDate', () => {
@@ -138,6 +154,14 @@ describe('flattenApprovalLockDates', () => {
 });
 
 describe('findApprovalLockForMembershipChange', () => {
+  it('открытый период не блокирует изменение состава', async () => {
+    await findApprovalLockForMembershipChange({
+      employeeId: 10, departmentIds: ['d'], fromDate: '2026-08-05',
+    });
+    const [sql] = pgQuery.mock.calls[0] as [string];
+    expect(sql).toContain('a.unlocked_at IS NULL');
+  });
+
   it('проверяет интервал от даты и оба отдела сразу', async () => {
     pgQuery.mockResolvedValue([
       { id: 9, start_date: '2026-08-01', end_date: '2026-08-15', status: 'submitted' },

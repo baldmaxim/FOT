@@ -3,7 +3,7 @@ import { getRolePageAccess } from './access-control.service.js';
 import { loadManagedDepartmentMap } from './department-access.service.js';
 import { getRoleById } from './roles-cache.service.js';
 
-type WorkflowRecipientKind = 'submit' | 'review' | 'monitor';
+export type WorkflowRecipientKind = 'submit' | 'review' | 'monitor';
 
 interface IUserProfileLite {
   id: string;

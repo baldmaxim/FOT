@@ -637,6 +637,10 @@ export interface TimesheetApproval {
   reviewed_by: string | null;
   reviewed_at: string | null;
   review_comment: string | null;
+  /** Период временно открыт для правок (NULL = закрыт). Статус подачи при этом не меняется. */
+  unlocked_at: string | null;
+  unlocked_by: string | null;
+  unlock_reason: string | null;
   created_at: string;
   updated_at: string;
 }
