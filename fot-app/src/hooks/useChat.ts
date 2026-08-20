@@ -150,11 +150,32 @@ export const useChat = (ws: typeof wsService | null) => {
       void loadConversations().catch(() => undefined);
     });
 
+    // Реконнект даёт НОВЫЙ сокет: он ни в одной комнате не состоит, и сообщения
+    // открытой переписки перестали бы приходить. Вход в комнату — сразу.
+    const unsubRejoin = ws.onReconnect(() => {
+      const activeId = activeConvRef.current;
+      if (activeId) {
+        ws.send('join_conversation', activeId);
+      }
+    });
+
+    // Догрузка пропущенного — с общим джиттером (см. websocket.ts): это REST,
+    // и все вкладки после рестарта бэкенда пошли бы за ней одновременно.
+    const unsubResync = ws.onResync(() => {
+      const activeId = activeConvRef.current;
+      if (activeId) {
+        void loadMessages(activeId).catch(() => undefined);
+      }
+      void loadConversations().catch(() => undefined);
+    });
+
     return () => {
       unsubMessage();
       unsubNotification();
+      unsubRejoin();
+      unsubResync();
     };
-  }, [ws, loadConversations]);
+  }, [ws, loadConversations, loadMessages]);
 
   const resetActiveChat = useCallback(() => {
     setActiveConversationId(null);

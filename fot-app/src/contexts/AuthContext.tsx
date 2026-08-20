@@ -252,7 +252,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (!token || !state.isAuthenticated) return;
     wsService.connect(token, 'auth-context');
-    const unsubscribe = wsService.on('profile:access_changed', () => {
+
+    const applyAccessChanged = () => {
       void refreshProfileRef.current();
       void queryClient.invalidateQueries({ queryKey: structureKeys.all });
       void queryClient.invalidateQueries({ queryKey: employeesKeys.all });
@@ -266,9 +267,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       void queryClient.invalidateQueries({ queryKey: ['admin-direct-reports'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-employee-skud-objects'] });
       void queryClient.invalidateQueries({ queryKey: employeesKeys.departmentAccess() });
+    };
+
+    const unsubscribe = wsService.on('profile:access_changed', applyAccessChanged);
+    // Событие могло прийти, пока сокет был отключён (рестарт бэкенда). После
+    // реконнекта перечитываем профиль: точечные инвалидации тут не нужны —
+    // useRealtimeQueryInvalidation делает один общий refetch активных запросов.
+    const unsubResync = wsService.onResync(() => {
+      void refreshProfileRef.current();
     });
     return () => {
       unsubscribe();
+      unsubResync();
       wsService.disconnect('auth-context');
     };
   }, [token, state.isAuthenticated, queryClient]);

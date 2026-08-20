@@ -197,6 +197,28 @@ export const checkDbConnection = async (): Promise<boolean> => {
   }
 };
 
+export interface IPoolStats {
+  total: number;
+  idle: number;
+  waiting: number;
+  max: number;
+}
+
+/**
+ * Снимок состояния пула БЕЗ его создания. Возвращает null, пока пул не поднят
+ * или уже закрыт: closeDb() обнуляет _pool до завершения p.end(), и вызов
+ * getPool() из телеметрии поднял бы новый Pool прямо во время shutdown.
+ */
+export const getPoolStats = (): IPoolStats | null => {
+  if (!_pool) return null;
+  return {
+    total: _pool.totalCount,
+    idle: _pool.idleCount,
+    waiting: _pool.waitingCount,
+    max: Number.parseInt(env.DATABASE_POOL_MAX, 10),
+  };
+};
+
 let _telemetryTimer: NodeJS.Timeout | null = null;
 
 /**

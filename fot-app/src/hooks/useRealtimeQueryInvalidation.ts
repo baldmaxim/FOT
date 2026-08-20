@@ -169,6 +169,14 @@ export const useRealtimeQueryInvalidation = ({
       unsubscribes.push(off);
     }
 
+    // За время отключения (рестарт бэкенда, обрыв сети) domain-события просто
+    // не доехали, и какие именно — неизвестно. Поэтому после реконнекта одна
+    // общая инвалидация: активные запросы перечитываются в фоне (данные в кэше
+    // не сбрасываются, спиннеров нет), неактивные помечаются stale.
+    unsubscribes.push(wsService.onResync(() => {
+      void queryClient.invalidateQueries({ refetchType: 'active' });
+    }));
+
     return () => {
       for (const off of unsubscribes) off();
       if (flushTimerRef.current != null) {

@@ -5,6 +5,7 @@ import * as Sentry from '@sentry/node';
 import { corsAllowedOrigins } from './config/env.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { accessLog } from './middleware/accessLog.js';
+import { httpInflight } from './middleware/httpInflight.js';
 
 // Routes
 import authRoutes from './routes/auth.routes.js';
@@ -57,6 +58,11 @@ const app = express();
 // Trust local reverse proxies so rate limiting uses the real client IP.
 // Production traffic comes through rw-core -> nginx -> node on loopback.
 app.set('trust proxy', 'loopback');
+
+// Счётчик активных запросов — ПЕРВЫМ, до helmet/cors/body parsers: иначе запрос,
+// оборванный на чтении тела или отсечённый CORS, не попадёт в inflight, и
+// диагностика graceful shutdown (index.ts) недосчитается держащих его запросов.
+app.use(httpInflight);
 
 // Security middleware
 app.use(helmet());

@@ -5,7 +5,9 @@ import { Server } from 'socket.io';
 import app from './app.js';
 import { corsAllowedOrigins, env } from './config/env.js';
 import { IS_PRODUCTION } from './config/features.js';
-import { startPoolTelemetry, closeDb } from './config/postgres.js';
+import { startPoolTelemetry, closeDb, getPoolStats } from './config/postgres.js';
+import { getDbInflight } from './config/db-instrumentation.js';
+import { getHttpInflight } from './middleware/httpInflight.js';
 import { startPresencePolling, stopPresencePolling } from './services/presence-polling.service.js';
 import { initializeSKUDDailySummaryOnStartup } from './services/skud-dashboard.service.js';
 import { startSigurMonitor, stopSigurMonitor } from './services/sigur-monitor.service.js';
@@ -72,6 +74,42 @@ setInterval(() => {
   sioWs = 0;
   sioPolling = 0;
   sioUpgrades = 0;
+}, 60_000).unref();
+
+// Телеметрия памяти: 1 строка/мин. Помогает отличить рестарт по memory
+// threshold PM2 (max_memory_restart — PM2 шлёт SIGINT, в логе приложения это
+// неотличимо от ручного `pm2 restart`) от внешней команды рестарта: сам по себе
+// высокий RSS причину не доказывает, а низкий не исключает предыдущий пик.
+// Порог предупреждения — от PM2_MAX_MEMORY_MB (см. ecosystem.config.cjs).
+const MB = 1024 * 1024;
+const pm2MaxMemoryMb = Number.parseInt(process.env.PM2_MAX_MEMORY_MB ?? '', 10);
+const memoryWarnMb = Number.isFinite(pm2MaxMemoryMb) && pm2MaxMemoryMb > 0
+  ? Math.round(pm2MaxMemoryMb * 0.7)
+  : null;
+
+// Что держит процесс: сокеты, HTTP-запросы, запросы к БД, состояние пула.
+// getPoolStats() пул не создаёт — это важно во время shutdown, где closeDb()
+// уже обнулил singleton (getPool() поднял бы новый Pool на закрытии).
+const drainSnapshot = (): string => {
+  const pool = getPoolStats();
+  const poolPart = pool
+    ? `pool=${pool.total}/${pool.max} idle=${pool.idle} waiting=${pool.waiting}`
+    : 'pool=closed';
+  return `sockets=${io.engine.clientsCount} http=${getHttpInflight()} db=${getDbInflight()} ${poolPart}`;
+};
+
+setInterval(() => {
+  const m = process.memoryUsage();
+  const rssMb = Math.round(m.rss / MB);
+  const line = `[mem] rss=${rssMb}M heapUsed=${Math.round(m.heapUsed / MB)}M `
+    + `heapTotal=${Math.round(m.heapTotal / MB)}M external=${Math.round(m.external / MB)}M `
+    + `arrayBuffers=${Math.round(m.arrayBuffers / MB)}M uptime=${Math.round(process.uptime())}s `
+    + drainSnapshot();
+  if (memoryWarnMb !== null && rssMb >= memoryWarnMb) {
+    console.warn(`${line} — RSS ≥ 70% лимита PM2 (${pm2MaxMemoryMb}M, memory threshold)`);
+  } else {
+    console.log(line);
+  }
 }, 60_000).unref();
 
 httpServer.listen(PORT, HOST, () => {
@@ -157,7 +195,20 @@ let shuttingDown = false;
 const gracefulShutdown = (signal: string): void => {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[shutdown] получен ${signal} — graceful shutdown`);
+  // Замеряем фазы дренирования: пока не известно, сколько реально занимает
+  // закрытие сокетов и пула, трогать kill_timeout/форс-таймаут вслепую нельзя.
+  const shutdownStartedAt = Date.now();
+  const elapsed = (): string => `${Date.now() - shutdownStartedAt}ms`;
+  const rssMb = Math.round(process.memoryUsage().rss / MB);
+  console.log(`[shutdown] получен ${signal} — graceful shutdown rss=${rssMb}M ${drainSnapshot()}`);
+
+  // Посекундный тик, пока идёт дренирование: показывает, какая фаза упирается —
+  // сокеты, незавершённые HTTP-запросы или закрытие пула. Не больше ~10 строк
+  // (дальше форс-выход), поэтому лог не флудится.
+  const drainTicker = setInterval(() => {
+    console.log(`[shutdown] дренирование ${elapsed()} ${drainSnapshot()}`);
+  }, 1000);
+  drainTicker.unref();
 
   const stoppers = [
     stopPresencePolling, stopSigurMonitor, stopStructureSyncScheduler,
@@ -181,16 +232,21 @@ const gracefulShutdown = (signal: string): void => {
   // io.close() отключает сокеты и закрывает привязанный HTTP-сервер: перестаёт
   // принимать новые соединения и дожидается завершения текущих запросов.
   io.close(() => {
-    console.log('[shutdown] Socket.IO/HTTP закрыты');
+    console.log(`[shutdown] Socket.IO/HTTP закрыты за ${elapsed()}`);
     void closeDb()
-      .then(() => console.log('[shutdown] пул БД закрыт'))
+      .then(() => console.log(`[shutdown] пул БД закрыт, суммарно ${elapsed()}`))
       .catch(err => console.error('[shutdown] ошибка закрытия пула:', err))
-      .finally(() => process.exit(0));
+      .finally(() => {
+        clearInterval(drainTicker);
+        console.log(`[shutdown] выход, всего ${elapsed()}`);
+        process.exit(0);
+      });
   });
 
   // Страховка: если дренирование зависло — форс-выход.
   setTimeout(() => {
-    console.error('[shutdown] таймаут дренирования (10с) — форс-выход');
+    clearInterval(drainTicker);
+    console.error(`[shutdown] таймаут дренирования (10с) — форс-выход, ${drainSnapshot()}`);
     process.exit(1);
   }, 10_000).unref();
 };

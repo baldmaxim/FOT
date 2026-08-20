@@ -16,6 +16,11 @@
 
 const path = require('node:path');
 
+// Лимит памяти в одном месте: PM2 убивает процесс по нему, а приложение
+// предупреждает в логе на подходе к порогу (index.ts, телеметрия памяти).
+// Без общей константы приложению неоткуда узнать, при каком RSS его убьют.
+const MAX_MEMORY_MB = 1536;
+
 module.exports = {
   apps: [
     {
@@ -28,7 +33,7 @@ module.exports = {
       // Авто-рестарт при тихом OOM/утечке единственного процесса.
       // ПЛЕЙСХОЛДЕР: подобрать под RAM VDS (~70% от доступной) ПОСЛЕ снятия
       // baseline heap (process.memoryUsage / SystemResources). 1536M — старт.
-      max_memory_restart: '1536M',
+      max_memory_restart: `${MAX_MEMORY_MB}M`,
 
       // Дать времени graceful shutdown (index.ts: SIGTERM/SIGINT → дренирование
       // сокетов/запросов + закрытие пула; внутренний форс-выход на 10с).
@@ -42,7 +47,12 @@ module.exports = {
       listen_timeout: 10000,
 
       // NODE_ENV намеренно НЕ задаём здесь — берётся из .env (как сейчас).
-      // Если решите фиксировать в PM2 — добавьте env: { NODE_ENV: 'production' }.
+      // Если решите фиксировать в PM2 — добавьте NODE_ENV: 'production' в env ниже.
+      env: {
+        // Порог для предупреждения в телеметрии памяти (index.ts). Не влияет
+        // ни на что, кроме лога: убивает процесс сам PM2 по max_memory_restart.
+        PM2_MAX_MEMORY_MB: String(MAX_MEMORY_MB),
+      },
     },
   ],
 };

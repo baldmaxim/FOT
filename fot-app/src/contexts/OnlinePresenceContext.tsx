@@ -27,6 +27,16 @@ export const OnlinePresenceProvider: FC<{ children: ReactNode }> = ({ children }
   const [onlineEmployees, setOnlineEmployees] = useState<Set<number>>(() => new Set());
   const ownerRef = useRef('online-presence');
 
+  const loadSnapshot = useCallback((isCancelled?: () => boolean) => {
+    void presenceService.getOnlinePortal()
+      .then(snapshot => {
+        if (isCancelled?.()) return;
+        setOnlineUsers(new Set(snapshot.userIds));
+        setOnlineEmployees(new Set(snapshot.employeeIds));
+      })
+      .catch(() => undefined);
+  }, []);
+
   // Подключение сокета + начальный snapshot.
   useEffect(() => {
     if (!enabled) {
@@ -39,19 +49,20 @@ export const OnlinePresenceProvider: FC<{ children: ReactNode }> = ({ children }
     wsService.connect(token, ownerRef.current);
 
     let cancelled = false;
-    void presenceService.getOnlinePortal()
-      .then(snapshot => {
-        if (cancelled) return;
-        setOnlineUsers(new Set(snapshot.userIds));
-        setOnlineEmployees(new Set(snapshot.employeeIds));
-      })
-      .catch(() => undefined);
+    loadSnapshot(() => cancelled);
 
     return () => {
       cancelled = true;
       wsService.disconnect(ownerRef.current);
     };
-  }, [enabled, token]);
+  }, [enabled, token, loadSnapshot]);
+
+  // Дельты user_online/user_offline за время отключения потеряны — после
+  // реконнекта состояние восстанавливаем полным snapshot'ом.
+  useEffect(() => {
+    if (!enabled) return undefined;
+    return wsService.onResync(() => loadSnapshot());
+  }, [enabled, loadSnapshot]);
 
   // Инкрементальные дельты.
   useEffect(() => {
