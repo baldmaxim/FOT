@@ -123,16 +123,33 @@ export const isHalfRange = (
 };
 
 /**
+ * Текущий полупериод по московскому времени. Окно подачи на бэкенде считается в
+ * Europe/Moscow, поэтому локальное время браузера здесь использовать нельзя:
+ * около московской полуночи UI и API расходились бы на целый полупериод.
+ */
+export const getMoscowHalf = (now: Date = new Date()): { year: number; month: number; half: 'H1' | 'H2' } => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const get = (type: string): number =>
+    Number.parseInt(parts.find(part => part.type === type)?.value || '0', 10);
+  const day = get('day');
+  return { year: get('year'), month: get('month'), half: day <= 15 ? 'H1' : 'H2' };
+};
+
+/**
  * Единственный разрешённый для подачи полупериод — последний завершённый
- * относительно текущего дня. H2 текущей половины → H1 того же месяца;
+ * относительно текущего дня (МСК). H2 текущей половины → H1 того же месяца;
  * H1 → H2 предыдущего месяца (с переносом года Янв→Дек).
- * Зеркалит бэкенд getAllowedSubmissionPeriod. Использует локальное время
- * браузера — точная граница за бэкендом (фолбэк по коду SUBMISSION_PERIOD_LOCKED).
+ * Зеркалит бэкенд getAllowedSubmissionPeriod.
  */
 export const getAllowedSubmissionHalf = (
   now: Date = new Date(),
 ): { year: number; month: number; half: 'H1' | 'H2' } => {
-  const current = getCurrentHalf(now);
+  const current = getMoscowHalf(now);
   if (current.half === 'H2') {
     return { year: current.year, month: current.month, half: 'H1' };
   }
@@ -148,4 +165,28 @@ export const isAllowedSubmissionRange = (
 ): boolean => {
   const allowed = getAllowedSubmissionHalf(now);
   return isHalfRange(range, allowed.year, allowed.month, allowed.half);
+};
+
+/**
+ * Диапазон целиком лежит в завершённых полупериодах и выровнен по их границам
+ * (1/16 — начало, 15/последний день месяца — конец). Зеркалит серверный
+ * isRangeWithinCompletedPeriods: правило для ролей, освобождённых от окна подачи.
+ */
+export const isRangeWithinCompletedHalves = (
+  range: ITimesheetDateRange,
+  now: Date = new Date(),
+): boolean => {
+  const { startDate, endDate } = range;
+  if (!isIsoDate(startDate) || !isIsoDate(endDate) || endDate < startDate) return false;
+
+  const startDay = Number.parseInt(startDate.slice(8, 10), 10);
+  if (startDay !== 1 && startDay !== 16) return false;
+
+  const endYear = Number.parseInt(endDate.slice(0, 4), 10);
+  const endMonth = Number.parseInt(endDate.slice(5, 7), 10);
+  const endDay = Number.parseInt(endDate.slice(8, 10), 10);
+  if (endDay !== 15 && endDay !== getLastDayOfMonth(endYear, endMonth)) return false;
+
+  const allowed = getAllowedSubmissionHalf(now);
+  return endDate <= getHalfRange(allowed.year, allowed.month, allowed.half).endDate;
 };

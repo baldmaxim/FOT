@@ -95,7 +95,7 @@ import {
 import { validateCorrectionAttachments } from '../services/timesheet-approval-correction-validation.service.js';
 import { resolveOverlapSubmission } from '../services/timesheet-approval-overlap.service.js';
 import { loadRoleRestrictions } from '../services/correction-restrictions.service.js';
-import { getAllowedSubmissionRange, isRangeSubmittable } from '../services/timesheet-period.service.js';
+import { getAllowedSubmissionRange, isRangeSubmittable, isRangeWithinCompletedPeriods } from '../services/timesheet-period.service.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import {
   createAttachmentRecord,
@@ -678,10 +678,24 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
 
     // Блокировка периода подачи: только последний завершённый полупериод (МСК).
-    // system_admin / HR (доступ к /timesheet-hr) или роли с timesheet_show_full_period блокировку обходят.
+    // system_admin / HR (доступ к /timesheet-hr) или роли с timesheet_show_full_period
+    // не привязаны к одному окну — им разрешены и более ранние пропущенные периоды, и
+    // «весь месяц» задним числом. Но незавершённый период не подаёт никто: иначе замок
+    // закрывает дни, которые ещё ведутся (подача 01–31 в середине месяца). Экстренное
+    // открытие уже закрытого периода делается через unlocked_at, а не через подачу.
     const submissionExempt = req.user.timesheet_show_full_period || (await resolveEffectivePageAccess(req, '/timesheet-hr', 'view'));
-    if (!submissionExempt && !isRangeSubmittable(range.startDate, range.endDate)) {
+    const rangeSubmittable = submissionExempt
+      ? isRangeWithinCompletedPeriods(range.startDate, range.endDate)
+      : isRangeSubmittable(range.startDate, range.endDate);
+    if (!rangeSubmittable) {
       const allowed = getAllowedSubmissionRange();
+      const allowedLabel = allowed ? formatTimesheetRangeLabel(allowed.startDate, allowed.endDate) : null;
+      const exemptError = allowedLabel
+        ? `Диапазон должен состоять из завершённых расчётных полупериодов и быть выровнен по границам 1/16 и 15/последний день месяца. Последний завершённый период — ${allowedLabel}.`
+        : 'Подача табеля за выбранный период недоступна.';
+      const strictError = allowedLabel
+        ? `Подать табель можно только за период ${allowedLabel} (последний завершённый расчётный период). Подача за выбранный период недоступна.`
+        : 'Подача табеля за выбранный период недоступна.';
       res.status(409).json({
         success: false,
         code: 'SUBMISSION_PERIOD_LOCKED',

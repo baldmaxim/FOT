@@ -130,6 +130,43 @@ export function isRangeSubmittable(
   return startDate === allowed.startDate && endDate === allowed.endDate;
 }
 
+/** Строка вида YYYY-MM-DD, обозначающая реально существующий день. */
+function parseIsoDate(value: string): { year: number; month: number; day: number } | null {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const year = Number.parseInt(value.slice(0, 4), 10);
+  const month = Number.parseInt(value.slice(5, 7), 10);
+  const day = Number.parseInt(value.slice(8, 10), 10);
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > getLastDayOfMonth(year, month)) return null;
+  return { year, month, day };
+}
+
+/**
+ * Диапазон целиком лежит в завершённых полупериодах и выровнен по их границам.
+ *
+ * Для ролей, освобождённых от окна подачи (HR, timesheet_show_full_period): можно
+ * догнать пропущенный период или подать «весь месяц» задним числом, но не период,
+ * который ещё идёт. Иначе подача за текущий месяц закрывает замком дни, которые
+ * ещё ведутся (баг с self-personal подачей на 01–31).
+ */
+export function isRangeWithinCompletedPeriods(
+  startDate: string,
+  endDate: string,
+  date = new Date(),
+  timeZone = 'Europe/Moscow',
+): boolean {
+  const start = parseIsoDate(startDate);
+  const end = parseIsoDate(endDate);
+  if (!start || !end) return false;
+  if (startDate > endDate) return false;
+  if (start.day !== 1 && start.day !== 16) return false;
+  if (end.day !== 15 && end.day !== getLastDayOfMonth(end.year, end.month)) return false;
+
+  const allowed = getAllowedSubmissionRange(date, timeZone);
+  if (!allowed) return false;
+  return endDate <= allowed.endDate;
+}
+
 export function getZonedDateParts(date: Date, timeZone: string): IZonedDateParts {
   const formatter = new Intl.DateTimeFormat('en-GB', {
     timeZone,

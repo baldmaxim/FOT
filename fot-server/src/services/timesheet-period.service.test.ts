@@ -5,6 +5,7 @@ import {
   getAllowedSubmissionRange,
   getTimesheetReminderEventsForDate,
   isRangeSubmittable,
+  isRangeWithinCompletedPeriods,
   parseTimesheetApprovalPeriod,
 } from './timesheet-period.service.js';
 
@@ -127,6 +128,31 @@ describe('submission period lock', () => {
     expect(isRangeSubmittable('2026-05-01', '2026-05-31', today)).toBe(false);
     // custom range
     expect(isRangeSubmittable('2026-05-05', '2026-05-20', today)).toBe(false);
+  });
+
+  it('isRangeWithinCompletedPeriods allows only aligned, finished periods', () => {
+    // сегодня 2026-08-20 (H2) → последний завершённый = 2026-08-01..15
+    const today = new Date('2026-08-20T12:00:00+03:00');
+    // разрешённый полупериод
+    expect(isRangeWithinCompletedPeriods('2026-08-01', '2026-08-15', today)).toBe(true);
+    // весь прошлый месяц и его половины
+    expect(isRangeWithinCompletedPeriods('2026-07-01', '2026-07-31', today)).toBe(true);
+    expect(isRangeWithinCompletedPeriods('2026-07-16', '2026-07-31', today)).toBe(true);
+    // текущий месяц целиком — вторая половина ещё идёт (баг с подачей 01–31)
+    expect(isRangeWithinCompletedPeriods('2026-08-01', '2026-08-31', today)).toBe(false);
+    // текущая незавершённая половина
+    expect(isRangeWithinCompletedPeriods('2026-08-16', '2026-08-31', today)).toBe(false);
+    // будущий период
+    expect(isRangeWithinCompletedPeriods('2026-09-01', '2026-09-15', today)).toBe(false);
+    // невыровненные границы
+    expect(isRangeWithinCompletedPeriods('2026-07-05', '2026-07-20', today)).toBe(false);
+    expect(isRangeWithinCompletedPeriods('2026-07-01', '2026-07-20', today)).toBe(false);
+    // перевёрнутый диапазон
+    expect(isRangeWithinCompletedPeriods('2026-07-31', '2026-07-01', today)).toBe(false);
+    // невалидные даты
+    expect(isRangeWithinCompletedPeriods('2026-02-30', '2026-02-30', today)).toBe(false);
+    expect(isRangeWithinCompletedPeriods('', '2026-07-15', today)).toBe(false);
+    expect(isRangeWithinCompletedPeriods('2026-7-1', '2026-07-15', today)).toBe(false);
   });
 
   it('flips H1/H2 by Moscow calendar day around midnight', () => {

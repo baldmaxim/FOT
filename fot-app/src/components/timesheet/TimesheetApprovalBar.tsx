@@ -22,6 +22,7 @@ import {
   getAllowedSubmissionHalf,
   getHalfRange,
   isAllowedSubmissionRange,
+  isRangeWithinCompletedHalves,
 } from '../../utils/timesheetApprovalPeriod';
 import {
   TimesheetSubmitConfirmModal,
@@ -486,12 +487,20 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   const canReviewApproval = allowReview && hasPermission('timesheet.workflow.review');
   const weekendMemoEnabled = !!profile?.weekend_memo_required;
 
-  // Блокировка периода подачи (зеркалит бэкенд). HR/админ или роли с timesheet_show_full_period обходят.
+  // Блокировка периода подачи (зеркалит бэкенд). HR/админ и роли с timesheet_show_full_period
+  // не привязаны к одному окну, но незавершённый период не подаёт никто — иначе замок
+  // закрывает дни, которые ещё ведутся.
   const isHrOrAdmin = canViewPage('/timesheet-hr');
-  const periodSubmittable = isHrOrAdmin || !!profile?.timesheet_show_full_period || isAllowedSubmissionRange({ startDate, endDate });
+  const submissionExempt = isHrOrAdmin || !!profile?.timesheet_show_full_period;
+  const periodSubmittable = submissionExempt
+    ? isRangeWithinCompletedHalves({ startDate, endDate })
+    : isAllowedSubmissionRange({ startDate, endDate });
   const allowedHalf = getAllowedSubmissionHalf();
   const allowedRange = getHalfRange(allowedHalf.year, allowedHalf.month, allowedHalf.half);
-  const submitDisabledReason = `Подача доступна только за ${formatTimesheetRangeLabel(allowedRange.startDate, allowedRange.endDate)} — последний завершённый период. За «Весь месяц» подача недоступна.`;
+  const allowedLabel = formatTimesheetRangeLabel(allowedRange.startDate, allowedRange.endDate);
+  const submitDisabledReason = submissionExempt
+    ? `Диапазон должен состоять из завершённых расчётных полупериодов и быть выровнен по границам 1/16 и 15/последний день месяца. Последний завершённый период — ${allowedLabel}.`
+    : `Подача доступна только за ${allowedLabel} — последний завершённый период. За «Весь месяц» подача недоступна.`;
   const queryClient = useQueryClient();
   const toast = useToast();
   const isPersonal = submissionMode === 'personal';
