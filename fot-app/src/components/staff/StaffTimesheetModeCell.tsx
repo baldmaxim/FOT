@@ -23,7 +23,24 @@ const MODE_LABELS: Record<string, string> = {
  * приходит из персонального назначения объекта, а не от отдела.
  */
 export const StaffTimesheetModeCell: FC<IProps> = ({ row, canEdit, onEdit }) => {
-  if (!row) return <span className="sc-obj-names">—</span>;
+  // Данные могли не приехать (запрос ещё идёт или упал). Кнопку всё равно показываем:
+  // иначе режим невозможно открыть, а модалка умеет работать и без предзагруженной строки.
+  if (!row) {
+    return (
+      <span className="sc-cell-with-btn">
+        {canEdit && (
+          <button
+            className="sc-inline-btn"
+            title="Режим табелирования для 1С"
+            onClick={e => { e.stopPropagation(); onEdit(); }}
+          >
+            <CalendarCog size={12} />
+          </button>
+        )}
+        <span className="sc-obj-names">—</span>
+      </span>
+    );
+  }
 
   const label = MODE_LABELS[row.effective_mode] ?? row.effective_mode;
   const objectName = row.effective_mode === 'object' ? row.effective_object_name : null;
