@@ -25,6 +25,12 @@ import '../../pages/timesheet/TimesheetPage.css';
 
 type TimesheetViewMode = 'employees' | 'objects';
 
+/**
+ * Почему ячейку нельзя взять в массовую корректировку. Явный тип, а не boolean: текст тоста
+ * зависит от причины, и приоритет у 'locked' — закрытый табель важнее синтетической строки.
+ */
+export type BulkBlockReason = 'locked' | 'other';
+
 interface ITimesheetGridProps {
   employees: TimesheetEmployee[];
   entries: TimesheetEntry[];
@@ -50,7 +56,7 @@ interface ITimesheetGridProps {
   pendingEmployeeId?: number | null;
   departmentName?: string;
   onBulkSelectionChange?: (cellKeys: Set<string>) => void;
-  onBulkBlockedSelectionAttempt?: () => void;
+  onBulkBlockedSelectionAttempt?: (reason: BulkBlockReason) => void;
   onEmployeeClick: (employee: TimesheetEmployee) => void;
   onExcludeEmployee?: (employee: TimesheetEmployee) => void;
   onDayClick: (employee: TimesheetEmployee, day: number, entry: TimesheetEntry | null) => void;
@@ -839,11 +845,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     event: ReactMouseEvent<HTMLTableCellElement>,
     rowKey: string,
     day: number,
-    blocked = false,
+    blockReason: BulkBlockReason | null = null,
   ) => {
     if (!bulkEditMode || event.button !== 0) return;
-    if (blocked) {
-      onBulkBlockedSelectionAttempt?.();
+    if (blockReason) {
+      onBulkBlockedSelectionAttempt?.(blockReason);
       return;
     }
 
@@ -1336,6 +1342,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const dayLocked = isBulkDayLocked(row.employee.id, day);
                         const isBulkClickable = !inactive;
                         const isBlocked = row.isSynthetic || inactive || dayLocked;
+                        // Приоритет 'locked': на закрытой синтетической строке причина —
+                        // именно закрытый табель, общий текст тут вводил бы в заблуждение.
+                        const blockReason: BulkBlockReason | null = dayLocked
+                          ? 'locked'
+                          : (isBlocked ? 'other' : null);
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false);
                         const inactiveCls = inactive ? ' ts-day--inactive' : '';
@@ -1351,7 +1362,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                               event,
                               getObjectBulkRowKey(row.employee.id, row.object_key),
                               day,
-                              isBlocked,
+                              blockReason,
                             ) : undefined}
                             onMouseEnter={bulkEditMode && isBulkClickable ? () => handleBulkCellMouseEnter(
                               getObjectBulkRowKey(row.employee.id, row.object_key),
@@ -1589,8 +1600,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             event,
                             getEmployeeBulkRowKey(row.employee.id),
                             day,
-                            splitDayKeys.has(`${row.employee.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
-                              || isBulkDayLocked(row.employee.id, day),
+                            isBulkDayLocked(row.employee.id, day)
+                              ? 'locked'
+                              : (splitDayKeys.has(`${row.employee.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
+                                ? 'other'
+                                : null),
                           ) : undefined}
                           onMouseEnter={bulkEditMode && !inactive ? () => handleBulkCellMouseEnter(
                             getEmployeeBulkRowKey(row.employee.id),
@@ -1669,7 +1683,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                               event,
                               getObjectBulkRowKey(row.employee.id, objectRow.object_key),
                               day,
-                              objectDayLocked,
+                              objectDayLocked ? 'locked' : null,
                             ) : undefined}
                             onMouseEnter={bulkEditMode && isBulkClickable ? () => handleBulkCellMouseEnter(
                               getObjectBulkRowKey(row.employee.id, objectRow.object_key),

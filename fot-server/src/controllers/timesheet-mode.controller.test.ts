@@ -117,7 +117,7 @@ describe('timesheetModeController.list — скоуп', () => {
     await timesheetModeController.list(makeReq({ query: { employee_ids: '7' } }), res);
 
     expect(res.statusCode).toBe(200);
-    const payload = res.payload as { department: { id: string | null }; employees: Array<{ effective_mode: string; source: string }> };
+    const payload = (res.payload as { data: { department: { id: string | null }; employees: Array<{ effective_mode: string; source: string }> } }).data;
     // Режим отдела не запрашивался — выборка не по отделу.
     expect(payload.department.id).toBeNull();
     expect(pgQueryOne).not.toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe('timesheetModeController.list — скоуп', () => {
     const res = makeRes();
     await timesheetModeController.list(makeReq({ query: { employee_ids: '7,8' } }), res);
 
-    const payload = res.payload as { employees: Array<{ full_name: string }> };
+    const payload = (res.payload as { data: { employees: Array<{ full_name: string }> } }).data;
     expect(payload.employees.map(e => e.full_name)).toEqual(['Свой']);
   });
 
@@ -167,7 +167,7 @@ describe('timesheetModeController.list — скоуп', () => {
     const res = makeRes();
     await timesheetModeController.list(makeReq({ query: { department_id: DEPT } }), res);
 
-    const payload = res.payload as { employees: Array<{ full_name: string; source: string }> };
+    const payload = (res.payload as { data: { employees: Array<{ full_name: string; source: string }> } }).data;
     expect(payload.employees).toHaveLength(1);
     expect(payload.employees[0].full_name).toBe('Свой Сотрудник');
     // Режим не задан и legacy-признаков нет → skud из legacy_default.
@@ -187,7 +187,7 @@ describe('timesheetModeController.list — скоуп', () => {
     const res = makeRes();
     await timesheetModeController.list(makeReq({ query: { department_id: DEPT } }), res);
 
-    const payload = res.payload as { employees: Array<{ source: string; effective_mode: string }> };
+    const payload = (res.payload as { data: { employees: Array<{ source: string; effective_mode: string }> } }).data;
     expect(payload.employees[0].source).toBe('legacy_employee');
     expect(payload.employees[0].effective_mode).toBe('current_activity');
   });
@@ -226,7 +226,7 @@ describe('timesheetModeController.updateEmployee — валидация и ск�
     );
 
     expect(res.statusCode).toBe(200);
-    expect((res.payload as { object_id: string | null }).object_id).toBeNull();
+    expect((res.payload as { data: { object_id: string | null } }).data.object_id).toBeNull();
     // Блокировка берётся до чтения строки.
     expect(calls[0]).toContain('pg_advisory_xact_lock');
     expect(calls[1]).toContain('FOR UPDATE');
@@ -255,7 +255,7 @@ describe('timesheetModeController.updateEmployee — валидация и ск�
     );
 
     expect(res.statusCode).toBe(200);
-    expect((res.payload as { mode: string | null }).mode).toBeNull();
+    expect((res.payload as { data: { mode: string | null } }).data.mode).toBeNull();
     // Аудит содержит и старое, и новое значение.
     const details = audit.logFromRequestWithClient.mock.calls[0][4] as { details: Record<string, unknown> };
     expect(details.details.old_mode).toBe('skud');
@@ -293,7 +293,7 @@ describe('timesheetModeController.updateDepartment — поддерево', () =
     );
 
     expect(res.statusCode).toBe(200);
-    expect((res.payload as { affected: number }).affected).toBe(1);
+    expect((res.payload as { data: { affected: number } }).data.affected).toBe(1);
     // Дерево не разворачивалось.
     expect(pgQuery).not.toHaveBeenCalled();
   });
@@ -320,7 +320,7 @@ describe('timesheetModeController — массовая настройка под
     const res = makeRes();
     await timesheetModeController.listDepartments(makeReq({}), res);
 
-    const payload = res.payload as { departments: Array<{ name: string; effective_mode: string; source: string }> };
+    const payload = (res.payload as { data: { departments: Array<{ name: string; effective_mode: string; source: string }> } }).data;
     expect(payload.departments).toHaveLength(1);
     // Режим не задан, но ТД-назначение есть → фактически действует «текущая деятельность».
     expect(payload.departments[0].effective_mode).toBe('current_activity');
@@ -414,12 +414,55 @@ describe('timesheetModeController — массовая настройка под
     );
 
     expect(res.statusCode).toBe(200);
-    expect((res.payload as { affected: number }).affected).toBe(2);
+    expect((res.payload as { data: { affected: number } }).data.affected).toBe(2);
     // Ни одного UPDATE по employees: персональные исключения переживают массовую операцию.
     expect(calls.some(sql => sql.includes('UPDATE employees'))).toBe(false);
     expect(calls[0]).toContain('pg_advisory_xact_lock');
     // Аудит содержит старые значения по каждому подразделению.
     const auditArgs = audit.logFromRequestWithClient.mock.calls[0][4] as { details: { affected_departments: unknown[] } };
     expect(auditArgs.details.affected_departments).toHaveLength(2);
+    // И ни одного касания привязок объектов: это отдельная сущность (скоуп табельщицы).
+    expect(calls.some(sql => sql.includes('object_assignment'))).toBe(false);
+  });
+
+  /**
+   * Конверт `{ success, data }` — не косметика: клиент читает `response.data` (adminService),
+   * и «голый» объект превращался в undefined → пустые списки и «—» в колонке «Объект».
+   */
+  it('ответы приходят в конверте { success, data }, а не голым объектом', async () => {
+    pgQuery.mockResolvedValueOnce([{
+      id: DEPT, name: 'Отдел', kind: 'department',
+      mode: null, object_id: null, object_name: null, object_is_active: null,
+      dept_current_activity: false,
+    }]);
+    const listRes = makeRes();
+    await timesheetModeController.listDepartments(makeReq({}), listRes);
+
+    const listBody = listRes.payload as { success?: boolean; data?: { departments?: unknown[] }; departments?: unknown[] };
+    expect(listBody.success).toBe(true);
+    expect(listBody.data?.departments).toHaveLength(1);
+    // Старая «голая» форма не должна остаться — иначе клиент снова прочитает undefined.
+    expect(listBody.departments).toBeUndefined();
+
+    pgQuery.mockResolvedValueOnce([{ id: DEPT, kind: 'department' }]);
+    const { client } = makeTxClient([
+      { rows: [{ id: DEPT, name: 'Отдел', timesheet_export_mode: null, timesheet_export_object_id: null }], rowCount: 1 },
+      { rows: [], rowCount: 1 },
+    ]);
+    pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn(client));
+
+    const bulkRes = makeRes();
+    await timesheetModeController.updateDepartmentsBulk(
+      makeReq({ body: { department_ids: [DEPT], mode: 'skud' } }), bulkRes,
+    );
+
+    const bulkBody = bulkRes.payload as {
+      success?: boolean;
+      data?: { affected: number; mode: string | null; object_id: string | null };
+      affected?: number;
+    };
+    expect(bulkBody.success).toBe(true);
+    expect(bulkBody.data).toMatchObject({ affected: 1, mode: 'skud', object_id: null });
+    expect(bulkBody.affected).toBeUndefined();
   });
 });

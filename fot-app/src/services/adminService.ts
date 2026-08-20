@@ -392,7 +392,12 @@ export const adminService = {
     if (params.employeeIds && params.employeeIds.length > 0) {
       search.set('employee_ids', params.employeeIds.join(','));
     }
-    const response = await apiClient.get<ApiResponse<ITimesheetModes>>(`/admin/timesheet-modes?${search.toString()}`);
+    // no-store: сервер держит private, max-age=30 на всех GET /api/*, и после сохранения
+    // режима бейджи приезжали бы старыми даже при инвалидации React Query.
+    const response = await apiClient.get<ApiResponse<ITimesheetModes>>(
+      `/admin/timesheet-modes?${search.toString()}`,
+      { cache: 'no-store' },
+    );
     return response.data;
   },
 
@@ -409,6 +414,7 @@ export const adminService = {
   async listTimesheetModeDepartments(): Promise<ITimesheetModeDepartment[]> {
     const response = await apiClient.get<ApiResponse<{ departments: ITimesheetModeDepartment[] }>>(
       '/admin/timesheet-modes/departments',
+      { cache: 'no-store' },
     );
     return response.data?.departments ?? [];
   },

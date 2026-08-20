@@ -209,12 +209,15 @@ export const timesheetModeController = {
         : null;
 
       res.json({
-        department: {
-          id: departmentId || null,
-          mode: dept?.timesheet_export_mode ?? null,
-          object_id: dept?.timesheet_export_object_id ?? null,
+        success: true,
+        data: {
+          department: {
+            id: departmentId || null,
+            mode: dept?.timesheet_export_mode ?? null,
+            object_id: dept?.timesheet_export_object_id ?? null,
+          },
+          employees: items,
         },
-        employees: items,
       });
     } catch (error) {
       console.error('timesheetModeController.list error:', error);
@@ -268,20 +271,23 @@ export const timesheetModeController = {
       const scoped = accessible === 'all' ? rows : rows.filter(r => accessible.includes(r.id));
 
       res.json({
-        departments: scoped.map(row => ({
-          id: row.id,
-          name: row.name,
-          kind: row.kind,
-          mode: row.mode,
-          object_id: row.object_id,
-          object_name: row.object_name,
-          object_is_active: row.object_is_active,
-          // Режим не задан → показываем, что даёт legacy по назначениям объектов отдела.
-          effective_mode: row.mode ?? (row.dept_current_activity ? 'current_activity' : 'skud'),
-          source: row.mode
-            ? 'department_explicit'
-            : (row.dept_current_activity ? 'legacy_department' : 'legacy_default'),
-        })),
+        success: true,
+        data: {
+          departments: scoped.map(row => ({
+            id: row.id,
+            name: row.name,
+            kind: row.kind,
+            mode: row.mode,
+            object_id: row.object_id,
+            object_name: row.object_name,
+            object_is_active: row.object_is_active,
+            // Режим не задан → показываем, что даёт legacy по назначениям объектов отдела.
+            effective_mode: row.mode ?? (row.dept_current_activity ? 'current_activity' : 'skud'),
+            source: row.mode
+              ? 'department_explicit'
+              : (row.dept_current_activity ? 'legacy_department' : 'legacy_default'),
+          })),
+        },
       });
     } catch (error) {
       console.error('timesheetModeController.listDepartments error:', error);
@@ -377,7 +383,7 @@ export const timesheetModeController = {
         return before.rowCount ?? 0;
       });
 
-      res.json({ success: true, affected, mode: normalized.mode, object_id: normalized.objectId });
+      res.json({ success: true, data: { affected, mode: normalized.mode, object_id: normalized.objectId } });
     } catch (error) {
       console.error('timesheetModeController.updateDepartmentsBulk error:', error);
       res.status(500).json({ error: 'Не удалось сохранить режимы подразделений' });
@@ -448,7 +454,7 @@ export const timesheetModeController = {
         res.status(404).json({ error: 'Сотрудник не найден' });
         return;
       }
-      res.json({ success: true, mode: normalized.mode, object_id: normalized.objectId });
+      res.json({ success: true, data: { mode: normalized.mode, object_id: normalized.objectId } });
     } catch (error) {
       console.error('timesheetModeController.updateEmployee error:', error);
       res.status(500).json({ error: 'Не удалось сохранить режим табелирования' });
@@ -548,7 +554,7 @@ export const timesheetModeController = {
         res.status(404).json({ error: 'Отдел не найден' });
         return;
       }
-      res.json({ success: true, affected: changed, mode: normalized.mode, object_id: normalized.objectId });
+      res.json({ success: true, data: { affected: changed, mode: normalized.mode, object_id: normalized.objectId } });
     } catch (error) {
       console.error('timesheetModeController.updateDepartment error:', error);
       res.status(500).json({ error: 'Не удалось сохранить режим табелирования' });

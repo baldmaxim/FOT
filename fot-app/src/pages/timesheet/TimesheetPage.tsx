@@ -2,7 +2,7 @@ import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, use
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail, Unlock } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { TimesheetGrid } from '../../components/timesheet/TimesheetGrid';
+import { TimesheetGrid, type BulkBlockReason } from '../../components/timesheet/TimesheetGrid';
 import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCorrectionsList';
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
 import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
@@ -1115,7 +1115,11 @@ export const TimesheetPage: FC = () => {
     setBulkSelectedCellKeys(new Set(cellKeys));
   }, []);
 
-  const handleBulkBlockedSelectionAttempt = useCallback(() => {
+  const handleBulkBlockedSelectionAttempt = useCallback((reason: BulkBlockReason) => {
+    if (reason === 'locked') {
+      toast.info('Табель закрыт для корректировок.');
+      return;
+    }
     toast.info('Некоторые ячейки нельзя включить в массовую корректировку. Для них используйте точечное редактирование.');
   }, [toast]);
 

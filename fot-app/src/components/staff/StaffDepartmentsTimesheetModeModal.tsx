@@ -10,6 +10,7 @@ import { employeeService } from '../../services/employeeService';
 import { useToast } from '../../contexts/ToastContext';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
 import type { IFlatDepartmentOption } from '../../utils/departmentUtils';
+import { CURRENT_ACTIVITY_LABEL } from '../../utils/objectGroups';
 
 interface IProps {
   /** Плоское дерево из StaffControlPage — уже с учётом скоупа пользователя. */
@@ -20,11 +21,15 @@ interface IProps {
 /** null = «не задавать» (вернуть отдел к legacy). undefined = режим ещё не выбран. */
 type ModeChoice = TimesheetExportMode | null;
 
-const MODE_OPTIONS: Array<{ value: ModeChoice; label: string; hint: string }> = [
+/**
+ * Безобъектные варианты правой колонки. «Объект» отдельным пунктом не нужен — им становится
+ * выбор конкретного объекта ниже по списку. Сброс явного режима делает кнопка в футере,
+ * поэтому пункта «Не задавать» здесь тоже нет: случайный клик по списку не должен очищать
+ * настройку целого поддерева.
+ */
+const PLAIN_MODE_OPTIONS: Array<{ value: TimesheetExportMode; label: string; hint: string }> = [
   { value: 'current_activity', label: 'Текущая деятельность', hint: 'Одна строка, адрес «Текущая деятельность».' },
-  { value: 'object', label: 'Объект', hint: 'Одна строка с адресом закреплённого объекта.' },
   { value: 'skud', label: 'По СКУД', hint: 'Разбивка по фактическим проходам — несколько строк.' },
-  { value: null, label: 'Не задавать', hint: 'Снять явный режим: снова работают назначения объектов.' },
 ];
 
 const MODE_BADGE: Record<TimesheetExportMode, string> = {
@@ -57,6 +62,7 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
   // нажатие «Применить» молча очистило бы существующие настройки.
   const [mode, setMode] = useState<ModeChoice | undefined>(undefined);
   const [objectId, setObjectId] = useState<string | null>(null);
+  const [objectSearch, setObjectSearch] = useState('');
   const [busy, setBusy] = useState(false);
 
   const modesQuery = useQuery({
@@ -69,6 +75,22 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
     queryFn: () => employeeService.listWorkObjectOptions(),
     staleTime: 5 * 60_000,
   });
+
+  /**
+   * Объекты для правой колонки. Записи с адресом «Текущая деятельность» отфильтрованы:
+   * им соответствует отдельный режим current_activity, объект которому не нужен, а режим
+   * object требует РОВНО один UUID (инвариант миграции 249). groupObjects() их не убирает,
+   * а сворачивает в группу из нескольких id — для выбора режима это не подходит.
+   */
+  const selectableObjects = useMemo(() => {
+    const isCurrentActivity = (name: string | null | undefined): boolean =>
+      (name ?? '').toLowerCase().replace(/ё/g, 'е').trim() === CURRENT_ACTIVITY_LABEL.toLowerCase();
+    const q = normalize(objectSearch);
+    return (objectsQuery.data ?? [])
+      .filter(o => !isCurrentActivity(o.alt_name))
+      .filter(o => !q || normalize(o.name).includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  }, [objectsQuery.data, objectSearch]);
 
   const modeById = useMemo(() => {
     const map = new Map<string, ITimesheetModeDepartment>();
@@ -142,14 +164,21 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
     });
   };
 
+  // mode === undefined — режим справа ещё не выбран: «Назначить» остаётся заблокированной,
+  // иначе одно случайное нажатие применило бы null и очистило настройку поддерева.
   const objectRequired = mode === 'object';
   const canApply = selected.size > 0
     && mode !== undefined
+    && mode !== null
     && !busy
     && (!objectRequired || Boolean(objectId))
     && selected.size <= BATCH_LIMIT;
 
-  const handleApply = async (): Promise<void> => {
+  /**
+   * `nextMode: null` — сброс явного режима. Он намеренно НЕ смотрит на выбор справа:
+   * иначе «Сбросить» вело бы себя по-разному в зависимости от того, что отмечено в списке.
+   */
+  const applyMode = async (nextMode: ModeChoice): Promise<void> => {
     if (selected.size > BATCH_LIMIT) {
       toast.error(`Выбрано ${selected.size} подразделений — максимум ${BATCH_LIMIT} за раз`);
       return;
@@ -158,19 +187,33 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
     try {
       const result = await adminService.bulkUpdateDepartmentTimesheetModes(
         [...selected],
-        mode ?? null,
-        objectRequired ? objectId : null,
+        nextMode,
+        nextMode === 'object' ? objectId : null,
       );
       await queryClient.invalidateQueries({ queryKey: ['admin-timesheet-mode-departments'] });
       await queryClient.invalidateQueries({ queryKey: ['admin-timesheet-modes'] });
       await queryClient.invalidateQueries({ queryKey: ['timesheet'] });
-      toast.success(`Режим применён: подразделений ${result.affected}`);
+      toast.success(
+        nextMode === null
+          ? `Явный режим сброшен: подразделений ${result.affected}`
+          : `Режим применён: подразделений ${result.affected}`,
+      );
       setSelected(new Set());
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Не удалось применить режим');
     } finally {
       setBusy(false);
     }
+  };
+
+  /** Сброс массово возвращает подразделения к легаси-фолбэку — спрашиваем подтверждение. */
+  const handleReset = (): void => {
+    const ok = window.confirm(
+      `Сбросить явный режим у выбранных подразделений (${selected.size})?
+`
+      + 'Они вернутся к режиму по умолчанию — тому, что даёт назначение объектов.',
+    );
+    if (ok) void applyMode(null);
   };
 
   const minLevel = useMemo(
@@ -215,13 +258,19 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
 
   return (
     <div className="sc-overlay" {...dismiss}>
-      <div className="sc-modal sc-modal--full" onClick={e => e.stopPropagation()}>
+      <div className="sc-modal" onClick={e => e.stopPropagation()}>
         <div className="sc-modal-header">
-          <h3>Режим объекта для отделов и бригад</h3>
+          <h3>Режим табелирования для отделов/бригад</h3>
           <button className="sc-modal-close" onClick={onClose}>&times;</button>
         </div>
 
-        <div className="sc-modal-body sc-mode-body">
+        <div className="sc-modal-body">
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
+            Слева — отделы и бригады, справа — вариант табелирования для единой 1С-выгрузки.
+            Отметьте подразделения, выберите вариант и нажмите «Назначить».
+          </p>
+
+          <div className="sc-obj-cols">
           <div className="sc-obj-col">
             <div className="sc-obj-col-label">
               Отделы и бригады{selected.size > 0 ? ` — выбрано ${selected.size}` : ''}
@@ -255,17 +304,25 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
           </div>
 
           <div className="sc-obj-col">
-            <div className="sc-obj-col-label">Режим табелирования</div>
+            <div className="sc-obj-col-label">Вариант табелирования</div>
+            <input
+              type="text"
+              className="sc-obj-search"
+              value={objectSearch}
+              onChange={e => setObjectSearch(e.target.value)}
+              placeholder="Поиск объекта…"
+            />
             <div className="sc-obj-list">
-              {MODE_OPTIONS.map(option => (
+              {PLAIN_MODE_OPTIONS.map(option => (
                 <label
-                  key={String(option.value)}
-                  className={`sc-obj-item ${mode === option.value && mode !== undefined ? 'sc-obj-item--on' : ''}`}
+                  key={option.value}
+                  className={`sc-obj-item ${mode === option.value ? 'sc-obj-item--on' : ''}`}
                 >
                   <input
                     type="radio"
-                    checked={mode !== undefined && mode === option.value}
-                    onChange={() => { setMode(option.value); if (option.value !== 'object') setObjectId(null); }}
+                    name="bulk-timesheet-mode"
+                    checked={mode === option.value}
+                    onChange={() => { setMode(option.value); setObjectId(null); }}
                   />
                   <span>
                     {option.label}
@@ -273,32 +330,48 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
                   </span>
                 </label>
               ))}
-            </div>
 
-            {objectRequired && (
-              <div className="sc-field" style={{ marginTop: 12 }}>
-                <label htmlFor="bulk-mode-object">Закреплённый объект</label>
-                <select id="bulk-mode-object" value={objectId ?? ''} onChange={e => setObjectId(e.target.value || null)}>
-                  <option value="">— выберите объект —</option>
-                  {(objectsQuery.data ?? []).map(o => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
+              {objectsQuery.isLoading ? (
+                <div style={{ fontSize: 14, padding: '8px 0' }}>Загрузка объектов…</div>
+              ) : selectableObjects.length === 0 ? (
+                <div className="sc-obj-empty">— объекты не найдены —</div>
+              ) : selectableObjects.map(o => (
+                <label
+                  key={o.id}
+                  className={`sc-obj-item ${mode === 'object' && objectId === o.id ? 'sc-obj-item--on' : ''}`}
+                >
+                  <input
+                    type="radio"
+                    name="bulk-timesheet-mode"
+                    checked={mode === 'object' && objectId === o.id}
+                    onChange={() => { setMode('object'); setObjectId(o.id); }}
+                  />
+                  <span>{o.name}</span>
+                </label>
+              ))}
+            </div>
 
             <p style={{ marginTop: 12, fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
               Режим применяется к подразделению — сотрудники наследуют его. Персональные режимы,
               заданные отдельным людям, сохраняются и продолжают действовать.
             </p>
           </div>
+          </div>
         </div>
 
         <div className="sc-modal-footer">
           <button className="sc-btn cancel" onClick={onClose} disabled={busy}>Закрыть</button>
-          <button className="sc-btn apply" onClick={() => void handleApply()} disabled={!canApply}>
+          <button
+            className="sc-btn secondary"
+            onClick={handleReset}
+            disabled={busy || selected.size === 0}
+            title="Вернуть выбранные подразделения к режиму по умолчанию"
+          >
+            Сбросить явный режим
+          </button>
+          <button className="sc-btn apply" onClick={() => void applyMode(mode ?? null)} disabled={!canApply}>
             <Check size={15} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-            {busy ? 'Применение…' : `Применить к выбранным (${selected.size})`}
+            {busy ? 'Применение…' : `Назначить (${selected.size})`}
           </button>
         </div>
       </div>
