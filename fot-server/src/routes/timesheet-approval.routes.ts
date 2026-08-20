@@ -4,6 +4,7 @@ import multer from 'multer';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
 import { timesheetReviewController } from '../controllers/timesheet-review.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { noStore } from '../middleware/noStore.js';
 import { canToggleTimesheetLock, resolveEffectivePageAccess } from '../services/access-control.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -49,6 +50,18 @@ const upload = multer({
 });
 
 router.use(authenticate);
+
+// Весь модуль отдаёт изменяемое состояние: статус подачи, замок периода, история, списки
+// на проверку. Глобальный `private, max-age=30` из app.ts заставлял браузер 30 секунд
+// отвечать из собственного кэша, не доходя до сервера, — после «Открыть табель» рефетч
+// приносил прежний статус и кнопки перерисовывались только по F5.
+router.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    noStore(req, res, next);
+    return;
+  }
+  next();
+});
 
 router.get('/responsibles', requirePageAccess('/admin/settings', 'view'), timesheetApprovalController.getResponsibles);
 router.get('/responsibles/candidates', requirePageAccess('/admin/settings', 'view'), timesheetApprovalController.getResponsibleCandidates);
