@@ -98,10 +98,54 @@ describe('timesheetModeController.list — скоуп', () => {
     expect(pgQuery).not.toHaveBeenCalled();
   });
 
-  it('без department_id — 400', async () => {
+  it('без department_id и employee_ids — 400', async () => {
     const res = makeRes();
     await timesheetModeController.list(makeReq({ query: {} }), res);
     expect(res.statusCode).toBe(400);
+  });
+
+  it('выборка по employee_ids работает без department_id', async () => {
+    pgQuery.mockResolvedValueOnce([
+      {
+        employee_id: 7, full_name: 'Есенов Максим Николаевич', org_department_id: DEPT,
+        emp_mode: 'skud', emp_object_id: null, dept_mode: null, dept_object_id: null,
+        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: true,
+      },
+    ]);
+
+    const res = makeRes();
+    await timesheetModeController.list(makeReq({ query: { employee_ids: '7' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    const payload = res.payload as { department: { id: string | null }; employees: Array<{ effective_mode: string; source: string }> };
+    // Режим отдела не запрашивался — выборка не по отделу.
+    expect(payload.department.id).toBeNull();
+    expect(pgQueryOne).not.toHaveBeenCalled();
+    // Явный skud перекрывает legacy-ТД отдела.
+    expect(payload.employees[0].effective_mode).toBe('skud');
+    expect(payload.employees[0].source).toBe('employee_explicit');
+  });
+
+  it('выборка по employee_ids отсекает сотрудников вне скоупа', async () => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue([DEPT]);
+    pgQuery.mockResolvedValueOnce([
+      {
+        employee_id: 7, full_name: 'Свой', org_department_id: DEPT,
+        emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
+        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: false,
+      },
+      {
+        employee_id: 8, full_name: 'Чужой', org_department_id: 'other-dept',
+        emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
+        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: false,
+      },
+    ]);
+
+    const res = makeRes();
+    await timesheetModeController.list(makeReq({ query: { employee_ids: '7,8' } }), res);
+
+    const payload = res.payload as { employees: Array<{ full_name: string }> };
+    expect(payload.employees.map(e => e.full_name)).toEqual(['Свой']);
   });
 
   it('сотрудники вне доступного поддерева отфильтровываются', async () => {

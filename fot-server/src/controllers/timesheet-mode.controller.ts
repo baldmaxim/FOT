@@ -73,15 +73,22 @@ export const timesheetModeController = {
   async list(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const departmentId = typeof req.query.department_id === 'string' ? req.query.department_id : '';
-      if (!departmentId) {
-        res.status(400).json({ error: 'department_id обязателен' });
+      // Второй режим выборки — по списку сотрудников: на «Управлении кадрами» людей ищут
+      // по ФИО без выбора отдела, и колонка режима должна работать и там.
+      const employeeIds = typeof req.query.employee_ids === 'string'
+        ? [...new Set(req.query.employee_ids.split(',').map(Number).filter(id => Number.isInteger(id) && id > 0))].slice(0, 500)
+        : [];
+
+      if (!departmentId && employeeIds.length === 0) {
+        res.status(400).json({ error: 'нужен department_id или employee_ids' });
         return;
       }
-      if (!(await canAccessDepartmentInScope(req, departmentId))) {
+      if (departmentId && !(await canAccessDepartmentInScope(req, departmentId))) {
         res.status(403).json({ error: 'Нет доступа к отделу' });
         return;
       }
 
+      // Скоуп применяется в обоих режимах: строки чужих отделов отсекаются ниже.
       const accessible = await resolveAccessibleDepartmentIds(req);
       const rows = await query<{
         employee_id: number | string;
@@ -99,12 +106,18 @@ export const timesheetModeController = {
            SELECT id FROM skud_objects
             WHERE lower(btrim(coalesce(alt_name, ''))) = lower($2::text)
          ),
+         target AS (
+           SELECT e.id
+             FROM employees e
+            WHERE e.is_archived = false
+              AND ( ($1::uuid IS NOT NULL AND e.org_department_id = $1::uuid)
+                 OR ($3::int[] IS NOT NULL AND e.id = ANY($3::int[])) )
+         ),
          personal AS (
            SELECT eoa.employee_id,
                   bool_or(eoa.skud_object_id IN (SELECT id FROM ca)) AS is_current
              FROM employee_object_assignment eoa
-             JOIN employees e2 ON e2.id = eoa.employee_id
-            WHERE eoa.is_active = true AND e2.org_department_id = $1::uuid
+            WHERE eoa.is_active = true AND eoa.employee_id IN (SELECT id FROM target)
             GROUP BY eoa.employee_id
          )
          SELECT e.id                                AS employee_id,
@@ -125,10 +138,9 @@ export const timesheetModeController = {
            FROM employees e
            LEFT JOIN org_departments d ON d.id = e.org_department_id
            LEFT JOIN personal p        ON p.employee_id = e.id
-          WHERE e.org_department_id = $1::uuid
-            AND e.is_archived = false
+          WHERE e.id IN (SELECT id FROM target)
           ORDER BY e.full_name`,
-        [departmentId, CURRENT_ACTIVITY_ADDRESS],
+        [departmentId || null, CURRENT_ACTIVITY_ADDRESS, employeeIds.length > 0 ? employeeIds : null],
       );
 
       // Дополнительная страховка: сотрудник мог оказаться вне доступного поддерева.
@@ -167,17 +179,20 @@ export const timesheetModeController = {
         };
       });
 
-      const dept = await queryOne<{
-        timesheet_export_mode: TimesheetExportMode | null;
-        timesheet_export_object_id: string | null;
-      }>(
-        'SELECT timesheet_export_mode, timesheet_export_object_id::text FROM org_departments WHERE id = $1::uuid',
-        [departmentId],
-      );
+      // Режим отдела нужен только в режиме выборки по отделу (для массовой модалки).
+      const dept = departmentId
+        ? await queryOne<{
+          timesheet_export_mode: TimesheetExportMode | null;
+          timesheet_export_object_id: string | null;
+        }>(
+          'SELECT timesheet_export_mode, timesheet_export_object_id::text FROM org_departments WHERE id = $1::uuid',
+          [departmentId],
+        )
+        : null;
 
       res.json({
         department: {
-          id: departmentId,
+          id: departmentId || null,
           mode: dept?.timesheet_export_mode ?? null,
           object_id: dept?.timesheet_export_object_id ?? null,
         },

@@ -368,10 +368,17 @@ export const adminService = {
   },
 
   // ─── Режим табелирования (миграция 249) ───
-  async getTimesheetModes(departmentId: string): Promise<ITimesheetModes> {
-    const response = await apiClient.get<ApiResponse<ITimesheetModes>>(
-      `/admin/timesheet-modes?department_id=${encodeURIComponent(departmentId)}`,
-    );
+  /**
+   * Режимы либо по отделу (нужен для массовой модалки), либо по списку сотрудников —
+   * на «Управлении кадрами» людей ищут по ФИО без выбора отдела.
+   */
+  async getTimesheetModes(params: { departmentId?: string; employeeIds?: number[] }): Promise<ITimesheetModes> {
+    const search = new URLSearchParams();
+    if (params.departmentId) search.set('department_id', params.departmentId);
+    if (params.employeeIds && params.employeeIds.length > 0) {
+      search.set('employee_ids', params.employeeIds.join(','));
+    }
+    const response = await apiClient.get<ApiResponse<ITimesheetModes>>(`/admin/timesheet-modes?${search.toString()}`);
     return response.data;
   },
 

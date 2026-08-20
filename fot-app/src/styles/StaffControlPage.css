@@ -429,6 +429,9 @@
 .sc-obj-group-label {
   position: sticky;
   top: 0;
+  /* Без z-index липкий заголовок уходит ПОД строки списка: у .sc-obj-item стоит
+     position: relative, и при равном z-index выигрывает более поздний в DOM. */
+  z-index: 1;
   padding: 6px 4px 4px;
   font-size: 12px;
   font-weight: 700;

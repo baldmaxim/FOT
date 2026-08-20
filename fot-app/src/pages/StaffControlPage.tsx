@@ -1409,22 +1409,10 @@ export const StaffControlPage: FC = () => {
   const deptObjMap = objectAssignmentsQuery.data?.department_objects ?? EMPTY_OBJ_MAP;
   const empObjMap = objectAssignmentsQuery.data?.employee_objects ?? EMPTY_OBJ_MAP;
   // Режим табелирования — отдельное право (миграция 249): смотреть могут руководители
-  // и начальники участков, менять — админ и HR. Данные грузятся по выбранному отделу,
-  // поэтому колонка появляется только когда в фильтре выбран конкретный отдел.
+  // и начальники участков, менять — админ и HR. Сам запрос режимов — ниже, после
+  // объявления списка сотрудников страницы.
   const canViewTimesheetMode = isAdmin || canViewPage('/staff-control/timesheet-mode');
   const canEditTimesheetMode = isAdmin || canEditPage('/staff-control/timesheet-mode');
-  const timesheetModesQuery = useQuery({
-    queryKey: ['admin-timesheet-modes', deptId],
-    queryFn: () => adminService.getTimesheetModes(deptId),
-    enabled: canViewTimesheetMode && Boolean(deptId),
-    staleTime: 30_000,
-  });
-  const showTsMode = canViewTimesheetMode && Boolean(deptId);
-  const tsModeMap = useMemo(() => {
-    const map: Record<number, ITimesheetModeEmployee> = {};
-    for (const row of timesheetModesQuery.data?.employees ?? []) map[row.employee_id] = row;
-    return map;
-  }, [timesheetModesQuery.data]);
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
@@ -1466,6 +1454,25 @@ export const StaffControlPage: FC = () => {
   const [bulkObjectOpen, setBulkObjectOpen] = useState(false);
   const [bulkTsModeOpen, setBulkTsModeOpen] = useState(false);
   const visibleEmployeeIds = useMemo(() => employees.map(emp => emp.id), [employees]);
+  // Режимы грузим по сотрудникам ТЕКУЩЕЙ страницы: людей ищут по ФИО без выбора отдела,
+  // и колонка должна работать в обоих случаях. При выбранном отделе дополнительно шлём
+  // department_id — из него массовая модалка берёт текущий режим отдела.
+  const timesheetModesQuery = useQuery({
+    queryKey: ['admin-timesheet-modes', deptId, visibleEmployeeIds],
+    queryFn: () => adminService.getTimesheetModes({
+      departmentId: deptId || undefined,
+      employeeIds: visibleEmployeeIds,
+    }),
+    enabled: canViewTimesheetMode && visibleEmployeeIds.length > 0,
+    placeholderData: previousData => previousData,
+    staleTime: 30_000,
+  });
+  const showTsMode = canViewTimesheetMode;
+  const tsModeMap = useMemo(() => {
+    const map: Record<number, ITimesheetModeEmployee> = {};
+    for (const row of timesheetModesQuery.data?.employees ?? []) map[row.employee_id] = row;
+    return map;
+  }, [timesheetModesQuery.data]);
   const scheduleTemplatesQuery = useQuery({
     queryKey: ['schedules', 'templates'],
     queryFn: () => scheduleService.list(),
