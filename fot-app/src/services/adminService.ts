@@ -86,6 +86,41 @@ export interface IObjectAssignments {
   employee_objects: Record<string, string[]>;
 }
 
+// ─── Режим табелирования для «Единого файла 1С» (миграция 249) ───
+
+export type TimesheetExportMode = 'current_activity' | 'object' | 'skud';
+
+/**
+ * Откуда взялся эффективный режим. legacy_* — режим не задан явно и выведен из старых
+ * назначений объектов; их нельзя показывать как «наследовано от отдела».
+ */
+export type TimesheetModeSource =
+  | 'employee_explicit'
+  | 'department_explicit'
+  | 'legacy_employee'
+  | 'legacy_department'
+  | 'legacy_default';
+
+export interface ITimesheetModeEmployee {
+  employee_id: number;
+  full_name: string;
+  org_department_id: string | null;
+  explicit_mode: TimesheetExportMode | null;
+  explicit_object_id: string | null;
+  effective_mode: TimesheetExportMode;
+  effective_object_id: string | null;
+  effective_object_name: string | null;
+  effective_object_address: string | null;
+  /** null — объекта нет; false — объект стал неактивным, настройку нужно заменить. */
+  effective_object_is_active: boolean | null;
+  source: TimesheetModeSource;
+}
+
+export interface ITimesheetModes {
+  department: { id: string; mode: TimesheetExportMode | null; object_id: string | null };
+  employees: ITimesheetModeEmployee[];
+}
+
 export const adminService = {
   // User management.
   // Списки пользователей принимают signal от React Query: cancelQueries перед
@@ -330,6 +365,36 @@ export const adminService = {
       { object_ids: objectIds },
     );
     return response.data;
+  },
+
+  // ─── Режим табелирования (миграция 249) ───
+  async getTimesheetModes(departmentId: string): Promise<ITimesheetModes> {
+    const response = await apiClient.get<ApiResponse<ITimesheetModes>>(
+      `/admin/timesheet-modes?department_id=${encodeURIComponent(departmentId)}`,
+    );
+    return response.data;
+  },
+
+  /** mode: null — сбросить явный режим (вернуться к отделу / legacy). */
+  async updateEmployeeTimesheetMode(
+    employeeId: number,
+    mode: TimesheetExportMode | null,
+    objectId: string | null,
+  ): Promise<void> {
+    await apiClient.put(`/admin/timesheet-modes/employees/${employeeId}`, { mode, object_id: objectId });
+  },
+
+  async updateDepartmentTimesheetMode(
+    departmentId: string,
+    mode: TimesheetExportMode | null,
+    objectId: string | null,
+    applyToSubtree = false,
+  ): Promise<void> {
+    await apiClient.put(`/admin/timesheet-modes/departments/${departmentId}`, {
+      mode,
+      object_id: objectId,
+      apply_to_subtree: applyToSubtree,
+    });
   },
 
   async getUserTimekeeperObjects(userId: string): Promise<{ object_ids: string[] }> {

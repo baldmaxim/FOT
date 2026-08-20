@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
+import { timesheetModeController } from '../controllers/timesheet-mode.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
@@ -134,6 +135,12 @@ router.put('/users/:id/employee-access', requirePageAccess('/admin/users', 'edit
 router.get('/object-assignments', requirePageAccess('/admin/users', 'view'), adminController.getObjectAssignments);
 router.put('/departments/:id/object-assignment', requirePageAccess('/admin/users', 'edit'), adminController.updateDepartmentObjectAssignment);
 router.put('/employees/:id/object-assignment', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeObjectAssignment);
+// Режим табелирования для «Единого файла 1С» (миграция 249). Отдельное право:
+// назначения объектов выше — админская функция, а режим правит ещё и HR.
+router.get('/timesheet-modes', requirePageAccess('/staff-control/timesheet-mode', 'view'), timesheetModeController.list);
+router.put('/timesheet-modes/employees/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateEmployee);
+router.put('/timesheet-modes/departments/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateDepartment);
+
 router.get('/users/:id/timekeeper-objects', requirePageAccess('/admin/users', 'view'), adminController.getUserTimekeeperObjects);
 router.put('/users/:id/timekeeper-objects', requirePageAccess('/admin/users', 'edit'), adminController.updateUserTimekeeperObjects);
 router.get('/users/:id/timekeeper-folders', requirePageAccess('/admin/users', 'view'), adminController.getUserTimekeeperFolders);

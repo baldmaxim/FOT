@@ -2,10 +2,10 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, MapPin } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, MapPin, CalendarCog } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
-import { adminService } from '../services/adminService';
+import { adminService, type ITimesheetModeEmployee } from '../services/adminService';
 import { sigurAdminService } from '../services/sigurAdminService';
 import type { SigurEmployeeSummary, SigurDepartmentNode } from '../types';
 import { timesheetService } from '../services/timesheetService';
@@ -36,6 +36,7 @@ import {
 } from '../components/staff/BulkOperationModals';
 import { OverflowMenu, type IOverflowMenuItem } from '../components/staff/OverflowMenu';
 import { StaffObjectCell } from '../components/staff/StaffObjectCell';
+import { StaffTimesheetModeCell } from '../components/staff/StaffTimesheetModeCell';
 import type { IAddressObject } from '../utils/objectGroups';
 import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPreview } from '../types';
 import { structureApi } from '../api/structure';
@@ -46,6 +47,8 @@ import '../styles/StaffControlPage.css';
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
 const StaffObjectAssignmentModal = lazy(() => import('../components/staff/StaffObjectAssignmentModal').then(m => ({ default: m.StaffObjectAssignmentModal })));
 const StaffBulkObjectAssignmentModal = lazy(() => import('../components/staff/StaffBulkObjectAssignmentModal').then(m => ({ default: m.StaffBulkObjectAssignmentModal })));
+const StaffTimesheetModeModalLazy = lazy(() => import('../components/staff/StaffTimesheetModeModal').then(m => ({ default: m.StaffTimesheetModeModal })));
+const StaffBulkTimesheetModeModal = lazy(() => import('../components/staff/StaffBulkTimesheetModeModal').then(m => ({ default: m.StaffBulkTimesheetModeModal })));
 
 // Стабильные пустые ссылки — чтобы memo-строки таблицы не ломались при undefined-данных.
 const EMPTY_OBJECTS: IAddressObject[] = [];
@@ -84,6 +87,10 @@ interface IStaffRowProps {
   canEditSch: boolean;
   canOpenCard: boolean;
   canEditObject: boolean;
+  /** Колонка «Режим 1С»: видна при праве и выбранном отделе (данные грузятся по отделу). */
+  showTsMode: boolean;
+  canEditTsMode: boolean;
+  tsModeMap: Record<number, ITimesheetModeEmployee>;
   objects: IAddressObject[];
   deptObjMap: Record<string, string[]>;
   empObjMap: Record<string, string[]>;
@@ -97,7 +104,7 @@ interface IStaffRowProps {
   onReturn?: (emp: Employee) => void;
 }
 
-const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, isOnline, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, isOnline, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, showTsMode, canEditTsMode, tsModeMap, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
 
@@ -180,6 +187,15 @@ const StaffRow: FC<IStaffRowProps> = memo(({ emp, index, isOnline, scheduleViews
             deptObjectIds={emp.org_department_id ? (deptObjMap[emp.org_department_id] ?? EMPTY_STR_ARR) : EMPTY_STR_ARR}
             empObjectIds={empObjMap[String(emp.id)] ?? EMPTY_STR_ARR}
             onEdit={() => onOpenModal(emp, 'object_assignment')}
+          />
+        </td>
+      )}
+      {showTsMode && (
+        <td>
+          <StaffTimesheetModeCell
+            row={tsModeMap[emp.id]}
+            canEdit={canEditTsMode}
+            onEdit={() => onOpenModal(emp, 'timesheet_mode')}
           />
         </td>
       )}
@@ -869,6 +885,10 @@ interface IVirtualTableProps {
   canEditSch: boolean;
   canOpenCard: boolean;
   canEditObject: boolean;
+  /** Колонка «Режим 1С»: видна при праве и выбранном отделе (данные грузятся по отделу). */
+  showTsMode: boolean;
+  canEditTsMode: boolean;
+  tsModeMap: Record<number, ITimesheetModeEmployee>;
   objects: IAddressObject[];
   deptObjMap: Record<string, string[]>;
   empObjMap: Record<string, string[]>;
@@ -897,6 +917,9 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   canEditSch,
   canOpenCard,
   canEditObject,
+  showTsMode,
+  canEditTsMode,
+  tsModeMap,
   objects,
   deptObjMap,
   empObjMap,
@@ -912,7 +935,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
   onReturn,
 }) => {
   const { isEmployeeOnline } = useOnlinePresence();
-  const totalCols = 6 + (selectionMode ? 1 : 0) + (canEditObject ? 1 : 0);
+  const totalCols = 6 + (selectionMode ? 1 : 0) + (canEditObject ? 1 : 0) + (showTsMode ? 1 : 0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -932,6 +955,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
           <col className="sc-col-position" />
           <col className="sc-col-schedule" />
           {canEditObject && <col className="sc-col-object" />}
+          {showTsMode && <col className="sc-col-object" />}
           <col className="sc-col-actions" />
         </colgroup>
         <thead>
@@ -953,6 +977,7 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
             <th>Должность</th>
             <th>График</th>
             {canEditObject && <th>Объект</th>}
+            {showTsMode && <th title="Режим табелирования для выгрузки «Единый файл для 1С»">Режим 1С</th>}
             <th className="sc-th-hist"></th>
           </tr>
         </thead>
@@ -982,6 +1007,9 @@ const VirtualTable: FC<IVirtualTableProps> = memo(({
                     canEditSch={canEditSch}
                     canOpenCard={canOpenCard}
                     canEditObject={canEditObject}
+                    showTsMode={showTsMode}
+                    canEditTsMode={canEditTsMode}
+                    tsModeMap={tsModeMap}
                     objects={objects}
                     deptObjMap={deptObjMap}
                     empObjMap={empObjMap}
@@ -1024,6 +1052,10 @@ interface IVirtualCardsProps {
   canEditSch: boolean;
   canOpenCard: boolean;
   canEditObject: boolean;
+  /** Колонка «Режим 1С»: видна при праве и выбранном отделе (данные грузятся по отделу). */
+  showTsMode: boolean;
+  canEditTsMode: boolean;
+  tsModeMap: Record<number, ITimesheetModeEmployee>;
   objects: IAddressObject[];
   deptObjMap: Record<string, string[]>;
   empObjMap: Record<string, string[]>;
@@ -1051,6 +1083,10 @@ const MobileCard: FC<{
   canEditSch: boolean;
   canOpenCard: boolean;
   canEditObject: boolean;
+  /** Колонка «Режим 1С»: видна при праве и выбранном отделе (данные грузятся по отделу). */
+  showTsMode: boolean;
+  canEditTsMode: boolean;
+  tsModeMap: Record<number, ITimesheetModeEmployee>;
   objects: IAddressObject[];
   deptObjMap: Record<string, string[]>;
   empObjMap: Record<string, string[]>;
@@ -1062,7 +1098,7 @@ const MobileCard: FC<{
   onFire?: (emp: Employee) => void;
   onCancelDismissal?: (emp: Employee) => void;
   onReturn?: (emp: Employee) => void;
-}> = memo(({ emp, isOnline, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+}> = memo(({ emp, isOnline, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, showTsMode, canEditTsMode, tsModeMap, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const scheduleView = scheduleViews.get(emp.id);
   const isSelected = selectedIds.has(emp.id);
   const handleAuxClick = (e: ReactMouseEvent) => {
@@ -1123,6 +1159,16 @@ const MobileCard: FC<{
             deptObjectIds={emp.org_department_id ? (deptObjMap[emp.org_department_id] ?? EMPTY_STR_ARR) : EMPTY_STR_ARR}
             empObjectIds={empObjMap[String(emp.id)] ?? EMPTY_STR_ARR}
             onEdit={() => onOpenModal(emp, 'object_assignment')}
+          />
+        </div>
+      )}
+      {showTsMode && (
+        <div className="sc-card-row" onClick={e => e.stopPropagation()}>
+          <span className="sc-card-label">Режим 1С</span>
+          <StaffTimesheetModeCell
+            row={tsModeMap[emp.id]}
+            canEdit={canEditTsMode}
+            onEdit={() => onOpenModal(emp, 'timesheet_mode')}
           />
         </div>
       )}
@@ -1188,7 +1234,7 @@ const MobileCard: FC<{
   );
 });
 
-const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
+const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, selectedIds, selectionMode, canManage, canEditDept, canEditPos, canEditSch, canOpenCard, canEditObject, showTsMode, canEditTsMode, tsModeMap, objects, deptObjMap, empObjMap, onNavigate, onToggleSelect, onOpenModal, onOpenHistory, onRehire, onFire, onCancelDismissal, onReturn }) => {
   const { isEmployeeOnline } = useOnlinePresence();
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -1223,6 +1269,9 @@ const VirtualCards: FC<IVirtualCardsProps> = memo(({ filtered, scheduleViews, se
                 canEditSch={canEditSch}
                 canOpenCard={canOpenCard}
                 canEditObject={canEditObject}
+                showTsMode={showTsMode}
+                canEditTsMode={canEditTsMode}
+                tsModeMap={tsModeMap}
                 objects={objects}
                 deptObjMap={deptObjMap}
                 empObjMap={empObjMap}
@@ -1359,6 +1408,23 @@ export const StaffControlPage: FC = () => {
   const objectOptions = objectsQuery.data ?? EMPTY_OBJECTS;
   const deptObjMap = objectAssignmentsQuery.data?.department_objects ?? EMPTY_OBJ_MAP;
   const empObjMap = objectAssignmentsQuery.data?.employee_objects ?? EMPTY_OBJ_MAP;
+  // Режим табелирования — отдельное право (миграция 249): смотреть могут руководители
+  // и начальники участков, менять — админ и HR. Данные грузятся по выбранному отделу,
+  // поэтому колонка появляется только когда в фильтре выбран конкретный отдел.
+  const canViewTimesheetMode = isAdmin || canViewPage('/staff-control/timesheet-mode');
+  const canEditTimesheetMode = isAdmin || canEditPage('/staff-control/timesheet-mode');
+  const timesheetModesQuery = useQuery({
+    queryKey: ['admin-timesheet-modes', deptId],
+    queryFn: () => adminService.getTimesheetModes(deptId),
+    enabled: canViewTimesheetMode && Boolean(deptId),
+    staleTime: 30_000,
+  });
+  const showTsMode = canViewTimesheetMode && Boolean(deptId);
+  const tsModeMap = useMemo(() => {
+    const map: Record<number, ITimesheetModeEmployee> = {};
+    for (const row of timesheetModesQuery.data?.employees ?? []) map[row.employee_id] = row;
+    return map;
+  }, [timesheetModesQuery.data]);
   const { isDepartmentScope, managedDepartmentIds, managedDepartmentNameById, mode: managedMode } = useManagedDepartments({ enabled: false });
   // Руководителям (`isDepartmentScope`) фильтруем всегда — даже при пустом списке
   // назначений (тогда дропдаун пуст). Без этого header без отделов видел все отделы.
@@ -1398,6 +1464,7 @@ export const StaffControlPage: FC = () => {
   const [bulkBrigadeScheduleOpen, setBulkBrigadeScheduleOpen] = useState(false);
   const [bulkMoveDeptOpen, setBulkMoveDeptOpen] = useState(false);
   const [bulkObjectOpen, setBulkObjectOpen] = useState(false);
+  const [bulkTsModeOpen, setBulkTsModeOpen] = useState(false);
   const visibleEmployeeIds = useMemo(() => employees.map(emp => emp.id), [employees]);
   const scheduleTemplatesQuery = useQuery({
     queryKey: ['schedules', 'templates'],
@@ -2306,8 +2373,17 @@ export const StaffControlPage: FC = () => {
       onClick: () => setBulkObjectOpen(true),
       divideBefore: true,
     });
+    if (canEditTimesheetMode) {
+      items.push({
+        label: 'Режим табелирования отдела…',
+        icon: <CalendarCog size={14} />,
+        onClick: () => setBulkTsModeOpen(true),
+        // Режим задаётся конкретному отделу — без выбранного фильтра цели нет.
+        disabled: !deptId,
+      });
+    }
     return items;
-  }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total]);
+  }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total, canEditTimesheetMode, deptId]);
 
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
@@ -2452,6 +2528,9 @@ export const StaffControlPage: FC = () => {
           canEditSch={canEditSch}
           canOpenCard={canOpenCard}
           canEditObject={canEditObject}
+          showTsMode={showTsMode}
+          canEditTsMode={canEditTimesheetMode}
+          tsModeMap={tsModeMap}
           objects={objectOptions}
           deptObjMap={deptObjMap}
           empObjMap={empObjMap}
@@ -2476,6 +2555,9 @@ export const StaffControlPage: FC = () => {
           canEditSch={canEditSch}
           canOpenCard={canOpenCard}
           canEditObject={canEditObject}
+          showTsMode={showTsMode}
+          canEditTsMode={canEditTimesheetMode}
+          tsModeMap={tsModeMap}
           objects={objectOptions}
           deptObjMap={deptObjMap}
           empObjMap={empObjMap}
@@ -2536,6 +2618,26 @@ export const StaffControlPage: FC = () => {
       {modalType === 'object_assignment' && modalEmp && (
         <Suspense fallback={null}>
           <StaffObjectAssignmentModal employee={modalEmp} onClose={closeModal} />
+        </Suspense>
+      )}
+      {bulkTsModeOpen && deptId && (
+        <Suspense fallback={null}>
+          <StaffBulkTimesheetModeModal
+            departmentId={deptId}
+            departmentName={employees[0]?.department ?? 'выбранный отдел'}
+            currentMode={timesheetModesQuery.data?.department.mode ?? null}
+            currentObjectId={timesheetModesQuery.data?.department.object_id ?? null}
+            onClose={() => setBulkTsModeOpen(false)}
+          />
+        </Suspense>
+      )}
+      {modalType === 'timesheet_mode' && modalEmp && (
+        <Suspense fallback={null}>
+          <StaffTimesheetModeModalLazy
+            employee={modalEmp}
+            row={tsModeMap[modalEmp.id]}
+            onClose={closeModal}
+          />
         </Suspense>
       )}
       <BulkScheduleModal

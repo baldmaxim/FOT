@@ -62,6 +62,7 @@ export const PAGE_PATHS = {
   STAFF_CONTROL_DEPARTMENT: '/staff-control/department',
   STAFF_CONTROL_POSITION: '/staff-control/position',
   STAFF_CONTROL_SCHEDULE: '/staff-control/schedule',
+  STAFF_CONTROL_TIMESHEET_MODE: '/staff-control/timesheet-mode',
   EMPLOYEES_CARD: '/employees',
   TIMESHEET_EVENTS: '/timesheet/events',
   SKUD_SETTINGS: '/skud-settings',
@@ -128,6 +129,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/staff-control/department',   label: 'Управление кадрами — смена отдела',    group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 161, is_active: true },
   { key: '/staff-control/position',     label: 'Управление кадрами — смена должности', group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 162, is_active: true },
   { key: '/staff-control/schedule',     label: 'Управление кадрами — смена графика',   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 163, is_active: true },
+  { key: '/staff-control/timesheet-mode', label: 'Управление кадрами — режим табелирования', group_code: 'work', group_label: 'Управление',      area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 164, is_active: true },
   // ── Админка: администрирование ──
   { key: '/admin/schedules',            label: 'Графики работы',                       group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 200, is_active: true },
   { key: '/admin/schedules/templates',  label: 'Графики работы — шаблоны (вкладка)',   group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 205, is_active: true },

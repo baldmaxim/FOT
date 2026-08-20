@@ -1,6 +1,12 @@
 import type ExcelJS from 'exceljs';
 import { query } from '../config/postgres.js';
 import { resolveResponsibleEmployeeIdsByEmployee } from './approval-routing.service.js';
+import {
+  CURRENT_ACTIVITY_ADDRESS,
+  DEFAULT_EXPORT_MODE,
+  resolveExportModes,
+  type IResolvedExportMode,
+} from './timesheet-export-mode.service.js';
 import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 import {
   buildEmployeeRowsForOneC,
@@ -56,59 +62,29 @@ const isTestManagerName = (fullName: string): boolean => {
   return lower.includes('тест') || lower.includes('test');
 };
 
-// Адрес для отделов/сотрудников в режиме «текущая деятельность»: их строки не
-// дробятся по объектам — одна строка на сотрудника с этой меткой вместо адреса
-// объекта. Режим определяется назначением объекта с этим адресом (alt_name).
-const CURRENT_ACTIVITY_ADDRESS = 'Текущая деятельность';
-
-// Условие «объект-адрес = текущая деятельность» (по alt_name, регистр/пробелы — норм.).
-const CURRENT_ACTIVITY_OBJECT_PREDICATE =
-  `lower(btrim(coalesce(o.alt_name, ''))) = lower($CA$${CURRENT_ACTIVITY_ADDRESS}$CA$)`;
-
-// Отделы/бригады, которым назначен объект с адресом «Текущая деятельность».
-const fetchCurrentActivityDeptIds = async (): Promise<Set<string>> => {
-  const rows = await query<{ org_department_id: string }>(
-    `SELECT DISTINCT doa.org_department_id
-       FROM department_object_assignment doa
-       JOIN skud_objects o ON o.id = doa.skud_object_id
-      WHERE doa.is_active = true AND ${CURRENT_ACTIVITY_OBJECT_PREDICATE}`,
-  );
-  return new Set(rows.map(row => row.org_department_id));
-};
-
-// Персональные назначения объектов сотрудникам:
-//   hasPersonal     — сотрудник имеет любое активное назначение (переопределяет отдел);
-//   personalCurrent — среди его объектов есть «Текущая деятельность».
-const fetchCurrentActivityEmployeeSets = async (): Promise<{
-  hasPersonal: Set<number>;
-  personalCurrent: Set<number>;
-}> => {
-  const rows = await query<{ employee_id: number | string; is_current: boolean }>(
-    `SELECT eoa.employee_id,
-            bool_or(${CURRENT_ACTIVITY_OBJECT_PREDICATE}) AS is_current
-       FROM employee_object_assignment eoa
-       JOIN skud_objects o ON o.id = eoa.skud_object_id
-      WHERE eoa.is_active = true
-      GROUP BY eoa.employee_id`,
-  );
-  const hasPersonal = new Set<number>();
-  const personalCurrent = new Set<number>();
-  for (const row of rows) {
-    const id = Number(row.employee_id);
-    if (!Number.isInteger(id)) continue;
-    hasPersonal.add(id);
-    if (row.is_current) personalCurrent.add(id);
+// Список сотрудников выгрузки — для резолвинга режимов табелирования.
+const collectEmployeeIds = (departmentsData: IDepartmentTimesheetData[]): number[] => {
+  const ids = new Set<number>();
+  for (const data of departmentsData) {
+    for (const employee of data.employees) ids.add(employee.id);
   }
-  return { hasPersonal, personalCurrent };
+  return [...ids];
 };
 
-const collectObjectIds = (departmentsData: IDepartmentTimesheetData[]): string[] => {
+// Объекты, для которых нужен адрес: фактические (objectEntries) + закреплённые
+// в режиме «object». Без второго слагаемого адрес закреплённого объекта у сотрудника
+// без проходов не попал бы в карту и колонка осталась бы пустой.
+const collectObjectIds = (
+  departmentsData: IDepartmentTimesheetData[],
+  pinnedObjectIds: Iterable<string>,
+): string[] => {
   const ids = new Set<string>();
   for (const data of departmentsData) {
     for (const entry of data.objectEntries) {
       if (entry.object_id) ids.add(entry.object_id);
     }
   }
+  for (const id of pinnedObjectIds) ids.add(id);
   return [...ids];
 };
 
@@ -140,10 +116,9 @@ const isOneCRowEmpty = (row: IOneCExportRow): boolean => {
 const buildRowsForDepartment = (
   data: IDepartmentTimesheetData,
   objectAddressMap: Map<string, string>,
-  currentActivityDeptIds: Set<string>,
-  empSets: { hasPersonal: Set<number>; personalCurrent: Set<number> },
+  modeByEmployee: Map<number, IResolvedExportMode>,
   managerNameMap: Map<number, string>,
-  excludeCurrentActivity: boolean = false,
+  excludeAggregatedModes: boolean = false,
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
 
@@ -153,27 +128,46 @@ const buildRowsForDepartment = (
   // (build1CTimesheetWorkbook), которая fired не режет.
   const visibleData: IDepartmentTimesheetData = data;
 
-  // Сотрудники в режиме «текущая деятельность». Персональное назначение объекта
-  // полностью переопределяет отдел: есть персональные объекты → смотрим только их;
-  // иначе — назначение его отдела/бригады. Их строки не дробятся по объектам —
-  // одна строка с суммой часов за день и адресом «Текущая деятельность».
-  const isCurrentActivityEmp = (e: { id: number; org_department_id: string | null }): boolean =>
-    empSets.hasPersonal.has(e.id)
-      ? empSets.personalCurrent.has(e.id)
-      : Boolean(e.org_department_id && currentActivityDeptIds.has(e.org_department_id));
+  const modeFor = (empId: number): IResolvedExportMode =>
+    modeByEmployee.get(empId) ?? DEFAULT_EXPORT_MODE;
 
-  const currentActivityEmpIds = new Set<number>(
-    visibleData.employees.filter(isCurrentActivityEmp).map(e => e.id),
-  );
+  // Агрегированные режимы — одна строка на сотрудника, без дробления по объектам:
+  //   current_activity → адрес «Текущая деятельность»;
+  //   object           → адрес закреплённого объекта (независимо от фактических проходов).
+  // Режим skud идёт обычной разбивкой ниже.
+  const aggregatedAddressByEmpId = new Map<number, string>();
+  for (const employee of visibleData.employees) {
+    const resolved = modeFor(employee.id);
+    if (resolved.mode === 'current_activity') {
+      aggregatedAddressByEmpId.set(employee.id, CURRENT_ACTIVITY_ADDRESS);
+      continue;
+    }
+    if (resolved.mode !== 'object') continue;
+    // Инвариант БД (миграция 249) гарантирует объект у режима object. Если он всё же
+    // пуст — падаем громко, а не подменяем режим на skud: тихая подмена изменила бы
+    // число строк в файле и скрыла повреждённую настройку.
+    if (!resolved.pinnedObjectId) {
+      throw new Error(
+        `Режим «объект» без закреплённого объекта: employee_id=${employee.id}. Проверьте настройку режима табелирования.`,
+      );
+    }
+    const address = objectAddressMap.get(resolved.pinnedObjectId);
+    if (!address) {
+      throw new Error(
+        `Не найден адрес закреплённого объекта ${resolved.pinnedObjectId} (employee_id=${employee.id}).`,
+      );
+    }
+    aggregatedAddressByEmpId.set(employee.id, address);
+  }
 
-  // Данные для обычной разбивки по объектам — исключаем сотрудников «текущей
-  // деятельности» из объектных строк и из статус-fallback.
-  const splitData: IDepartmentTimesheetData = currentActivityEmpIds.size === 0
+  // Данные для обычной разбивки по объектам — исключаем сотрудников агрегированных
+  // режимов из объектных строк и из статус-fallback.
+  const splitData: IDepartmentTimesheetData = aggregatedAddressByEmpId.size === 0
     ? visibleData
     : {
       ...visibleData,
-      employees: visibleData.employees.filter(e => !currentActivityEmpIds.has(e.id)),
-      objectEntries: visibleData.objectEntries.filter(e => !currentActivityEmpIds.has(e.employee_id)),
+      employees: visibleData.employees.filter(e => !aggregatedAddressByEmpId.has(e.id)),
+      objectEntries: visibleData.objectEntries.filter(e => !aggregatedAddressByEmpId.has(e.employee_id)),
     };
 
   const positionByEmpId = new Map<number, string>(
@@ -228,25 +222,28 @@ const buildRowsForDepartment = (
     });
   }
 
-  // «Текущая деятельность»: одна строка на сотрудника, часы за день суммированы
-  // по всем объектам (buildEmployeeRowsForOneC уже агрегирует и учитывает статусы).
-  // Исключаем при экспорте по конкретным объектам — там должны быть только реальные события.
-  if (!excludeCurrentActivity && currentActivityEmpIds.size > 0) {
-    const currentActivityData: IDepartmentTimesheetData = {
+  // Агрегированные режимы: одна строка на сотрудника, часы за день суммированы по всем
+  // объектам (buildEmployeeRowsForOneC уже агрегирует и учитывает статусы). Адрес — либо
+  // «Текущая деятельность», либо закреплённый объект.
+  // Исключаем при экспорте по конкретным объектам: там должны быть только реальные события,
+  // иначе человек, попавший в выборку по одному проходу, получил бы все месячные часы.
+  if (!excludeAggregatedModes && aggregatedAddressByEmpId.size > 0) {
+    const aggregatedData: IDepartmentTimesheetData = {
       ...visibleData,
-      employees: visibleData.employees.filter(e => currentActivityEmpIds.has(e.id)),
+      employees: visibleData.employees.filter(e => aggregatedAddressByEmpId.has(e.id)),
     };
-    for (const employeeRow of buildEmployeeRowsForOneC(currentActivityData)) {
+    for (const employeeRow of buildEmployeeRowsForOneC(aggregatedData)) {
       if (isOneCRowEmpty(employeeRow)) continue;
       const empId = employeeRow.employeeId;
       const managerName = managerNameMap.get(empId) ?? '';
+      const objectAddress = aggregatedAddressByEmpId.get(empId) ?? CURRENT_ACTIVITY_ADDRESS;
       rows.push({
         departmentNameSort: data.departmentName,
         fullNameSort: employeeRow.fullName,
-        objectNameSort: CURRENT_ACTIVITY_ADDRESS,
+        objectNameSort: objectAddress,
         oneCRow: employeeRow,
         departmentName: data.departmentName,
-        objectAddress: CURRENT_ACTIVITY_ADDRESS,
+        objectAddress,
         managerName,
         position: positionForEmpId(empId),
       });
@@ -260,16 +257,21 @@ export async function buildUnified1CWorkbook(
   _month: number,
   _year: number,
   departmentsData: IDepartmentTimesheetData[],
-  excludeCurrentActivity: boolean = false,
+  excludeAggregatedModes: boolean = false,
 ): Promise<ExcelJS.Workbook> {
-  const [objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, responsibleIdsMap] = await Promise.all([
-    fetchObjectAddressMap(collectObjectIds(departmentsData)),
-    fetchCurrentActivityDeptIds(),
-    fetchCurrentActivityEmployeeSets(),
+  // Режимы резолвим первыми: закреплённые объекты нужны до сборки карты адресов.
+  const [modeByEmployee, responsibleIdsMap] = await Promise.all([
+    resolveExportModes(collectEmployeeIds(departmentsData)),
     // Приоритет: назначенный ответственный (employee_direct_reports) → иначе
     // начальник(и) отдела/участка с full-доступом по org_department_id.
     resolveResponsibleEmployeeIdsByEmployee(collectEmployeeDeptPairs(departmentsData)),
   ]);
+
+  const pinnedObjectIds = new Set<string>();
+  for (const resolved of modeByEmployee.values()) {
+    if (resolved.mode === 'object' && resolved.pinnedObjectId) pinnedObjectIds.add(resolved.pinnedObjectId);
+  }
+  const objectAddressMap = await fetchObjectAddressMap(collectObjectIds(departmentsData, pinnedObjectIds));
 
   // Раскрываем id руководителей в ФИО, отбрасываем тестовых, объединяем через запятую.
   const managerNames = await fetchEmployeeNames(
@@ -286,7 +288,7 @@ export async function buildUnified1CWorkbook(
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
-    rows.push(...buildRowsForDepartment(data, objectAddressMap, currentActivityDeptIds, currentActivityEmpSets, managerNameMap, excludeCurrentActivity));
+    rows.push(...buildRowsForDepartment(data, objectAddressMap, modeByEmployee, managerNameMap, excludeAggregatedModes));
   }
   rows.sort((a, b) => {
     const byDept = a.departmentNameSort.localeCompare(b.departmentNameSort, 'ru');

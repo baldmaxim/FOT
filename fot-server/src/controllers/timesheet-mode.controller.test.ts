@@ -1,0 +1,256 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Response } from 'express';
+import type { AuthenticatedRequest } from '../types/index.js';
+
+const { pgQuery, pgQueryOne, pgTx } = vi.hoisted(() => ({
+  pgQuery: vi.fn(),
+  pgQueryOne: vi.fn(),
+  pgTx: vi.fn(),
+}));
+
+vi.mock('../config/postgres.js', () => ({
+  query: pgQuery,
+  queryOne: pgQueryOne,
+  withTransaction: pgTx,
+}));
+
+const scope = vi.hoisted(() => ({
+  canAccessDepartmentInScope: vi.fn(async () => true),
+  canAccessEmployeeInScope: vi.fn(async () => true),
+  resolveAccessibleDepartmentIds: vi.fn(async () => 'all' as const),
+}));
+
+vi.mock('../services/data-scope.service.js', () => scope);
+
+const audit = vi.hoisted(() => ({ logFromRequestWithClient: vi.fn(async () => {}) }));
+vi.mock('../services/audit.service.js', () => ({
+  auditService: audit,
+  AUDIT_ACTIONS: {
+    TIMESHEET_MODE_UPDATED: 'TIMESHEET_MODE_UPDATED',
+    TIMESHEET_MODE_BULK_UPDATED: 'TIMESHEET_MODE_BULK_UPDATED',
+  },
+}));
+
+import { timesheetModeController } from './timesheet-mode.controller.js';
+
+const DEPT = '11111111-1111-1111-1111-111111111111';
+const OBJ = '22222222-2222-2222-2222-222222222222';
+
+function makeReq(overrides: Partial<AuthenticatedRequest>): AuthenticatedRequest {
+  return {
+    params: {},
+    query: {},
+    body: {},
+    ip: '127.0.0.1',
+    socket: { remoteAddress: '127.0.0.1' },
+    headers: {},
+    user: { id: 'user-1' },
+    ...overrides,
+  } as unknown as AuthenticatedRequest;
+}
+
+function makeRes(): Response & { statusCode: number; payload: unknown } {
+  const res = {
+    statusCode: 200,
+    payload: undefined as unknown,
+    status(code: number) { this.statusCode = code; return this; },
+    json(body: unknown) { this.payload = body; return this; },
+  };
+  return res as unknown as Response & { statusCode: number; payload: unknown };
+}
+
+/** Клиент транзакции: собирает выполненные запросы, отдаёт заготовленные ответы. */
+function makeTxClient(responses: Array<{ rows: unknown[]; rowCount: number }>) {
+  const calls: string[] = [];
+  let i = 0;
+  return {
+    calls,
+    client: {
+      query: vi.fn(async (sql: string) => {
+        calls.push(sql);
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 0 };
+        const next = responses[i];
+        i += 1;
+        return next ?? { rows: [], rowCount: 1 };
+      }),
+    },
+  };
+}
+
+beforeEach(() => {
+  pgQuery.mockReset();
+  pgQueryOne.mockReset();
+  pgTx.mockReset();
+  audit.logFromRequestWithClient.mockClear();
+  scope.canAccessDepartmentInScope.mockReset().mockResolvedValue(true);
+  scope.canAccessEmployeeInScope.mockReset().mockResolvedValue(true);
+  scope.resolveAccessibleDepartmentIds.mockReset().mockResolvedValue('all');
+});
+
+describe('timesheetModeController.list — скоуп', () => {
+  it('чужой отдел не отдаётся даже на read-only запросе', async () => {
+    scope.canAccessDepartmentInScope.mockResolvedValue(false);
+    const res = makeRes();
+
+    await timesheetModeController.list(makeReq({ query: { department_id: DEPT } }), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('без department_id — 400', async () => {
+    const res = makeRes();
+    await timesheetModeController.list(makeReq({ query: {} }), res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('сотрудники вне доступного поддерева отфильтровываются', async () => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue([DEPT]);
+    pgQuery.mockResolvedValueOnce([
+      {
+        employee_id: 1, full_name: 'Свой Сотрудник', org_department_id: DEPT,
+        emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
+        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: false,
+      },
+      {
+        employee_id: 2, full_name: 'Чужой Сотрудник', org_department_id: 'other-dept',
+        emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
+        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: false,
+      },
+    ]);
+    pgQueryOne.mockResolvedValueOnce({ timesheet_export_mode: null, timesheet_export_object_id: null });
+
+    const res = makeRes();
+    await timesheetModeController.list(makeReq({ query: { department_id: DEPT } }), res);
+
+    const payload = res.payload as { employees: Array<{ full_name: string; source: string }> };
+    expect(payload.employees).toHaveLength(1);
+    expect(payload.employees[0].full_name).toBe('Свой Сотрудник');
+    // Режим не задан и legacy-признаков нет → skud из legacy_default.
+    expect(payload.employees[0].source).toBe('legacy_default');
+  });
+
+  it('legacy от персонального назначения не выдаётся как унаследованный от отдела', async () => {
+    pgQuery.mockResolvedValueOnce([
+      {
+        employee_id: 1, full_name: 'Иванов', org_department_id: DEPT,
+        emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
+        has_personal_assignment: true, personal_current_activity: true, dept_current_activity: true,
+      },
+    ]);
+    pgQueryOne.mockResolvedValueOnce({ timesheet_export_mode: null, timesheet_export_object_id: null });
+
+    const res = makeRes();
+    await timesheetModeController.list(makeReq({ query: { department_id: DEPT } }), res);
+
+    const payload = res.payload as { employees: Array<{ source: string; effective_mode: string }> };
+    expect(payload.employees[0].source).toBe('legacy_employee');
+    expect(payload.employees[0].effective_mode).toBe('current_activity');
+  });
+});
+
+describe('timesheetModeController.updateEmployee — валидация и скоуп', () => {
+  it('режим object без object_id отклоняется', async () => {
+    const res = makeRes();
+    await timesheetModeController.updateEmployee(
+      makeReq({ params: { id: '5' }, body: { mode: 'object', object_id: null } }), res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('неактивный объект отклоняется на запись', async () => {
+    pgQueryOne.mockResolvedValueOnce({ id: OBJ, is_active: false });
+    const res = makeRes();
+    await timesheetModeController.updateEmployee(
+      makeReq({ params: { id: '5' }, body: { mode: 'object', object_id: OBJ } }), res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('object_id при режиме skud обнуляется, а не пишется', async () => {
+    const { client, calls } = makeTxClient([
+      { rows: [{ timesheet_export_mode: null, timesheet_export_object_id: null, full_name: 'Иванов' }], rowCount: 1 },
+      { rows: [], rowCount: 1 },
+    ]);
+    pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn(client));
+
+    const res = makeRes();
+    await timesheetModeController.updateEmployee(
+      makeReq({ params: { id: '5' }, body: { mode: 'skud', object_id: OBJ } }), res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { object_id: string | null }).object_id).toBeNull();
+    // Блокировка берётся до чтения строки.
+    expect(calls[0]).toContain('pg_advisory_xact_lock');
+    expect(calls[1]).toContain('FOR UPDATE');
+  });
+
+  it('чужой сотрудник — 403 без записи', async () => {
+    scope.canAccessEmployeeInScope.mockResolvedValue(false);
+    const res = makeRes();
+    await timesheetModeController.updateEmployee(
+      makeReq({ params: { id: '5' }, body: { mode: 'skud' } }), res,
+    );
+    expect(res.statusCode).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('mode: null сбрасывает режим (возврат к legacy)', async () => {
+    const { client } = makeTxClient([
+      { rows: [{ timesheet_export_mode: 'skud', timesheet_export_object_id: null, full_name: 'Иванов' }], rowCount: 1 },
+      { rows: [], rowCount: 1 },
+    ]);
+    pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn(client));
+
+    const res = makeRes();
+    await timesheetModeController.updateEmployee(
+      makeReq({ params: { id: '5' }, body: { mode: null } }), res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { mode: string | null }).mode).toBeNull();
+    // Аудит содержит и старое, и новое значение.
+    const details = audit.logFromRequestWithClient.mock.calls[0][4] as { details: Record<string, unknown> };
+    expect(details.details.old_mode).toBe('skud');
+    expect(details.details.new_mode).toBeNull();
+  });
+});
+
+describe('timesheetModeController.updateDepartment — поддерево', () => {
+  it('apply_to_subtree проверяет доступ к каждому потомку', async () => {
+    pgQuery.mockResolvedValueOnce([{ id: DEPT }, { id: 'child-1' }]);
+    scope.canAccessDepartmentInScope
+      .mockResolvedValueOnce(true)   // сам отдел
+      .mockResolvedValueOnce(true)   // DEPT в цикле
+      .mockResolvedValueOnce(false); // child-1 вне доступа
+
+    const res = makeRes();
+    await timesheetModeController.updateDepartment(
+      makeReq({ params: { id: DEPT }, body: { mode: 'skud', apply_to_subtree: true } }), res,
+    );
+
+    expect(res.statusCode).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('без apply_to_subtree пишется только сам отдел', async () => {
+    const { client } = makeTxClient([
+      { rows: [{ id: DEPT, name: 'Отдел', timesheet_export_mode: null, timesheet_export_object_id: null }], rowCount: 1 },
+      { rows: [], rowCount: 1 },
+    ]);
+    pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn(client));
+
+    const res = makeRes();
+    await timesheetModeController.updateDepartment(
+      makeReq({ params: { id: DEPT }, body: { mode: 'skud' } }), res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { affected: number }).affected).toBe(1);
+    // Дерево не разворачивалось.
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+});

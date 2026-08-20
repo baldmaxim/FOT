@@ -19,6 +19,34 @@ const COL_DAYS = 35;
 const COL_ADDRESS = 37;
 const COL_MANAGER = 38;
 
+// Строка resolveExportModes (timesheet-export-mode.service). Явные режимы + legacy-признаки
+// по назначениям объектов. Все запросы режимов узнаются по подстроке timesheet_export_mode
+// и должны проверяться в моках ПЕРВЫМИ: этот SQL содержит и skud_objects, и обе таблицы назначений.
+const modeRow = (
+  employee_id: number,
+  over: Partial<{
+    emp_mode: string | null;
+    emp_object_id: string | null;
+    dept_mode: string | null;
+    dept_object_id: string | null;
+    has_personal_assignment: boolean;
+    personal_current_activity: boolean;
+    dept_current_activity: boolean;
+  }> = {},
+): Record<string, unknown> => ({
+  employee_id,
+  emp_mode: null,
+  emp_object_id: null,
+  dept_mode: null,
+  dept_object_id: null,
+  has_personal_assignment: false,
+  personal_current_activity: false,
+  dept_current_activity: false,
+  ...over,
+});
+
+const isModeQuery = (sql: string): boolean => sql.includes('timesheet_export_mode');
+
 const makeSchedule = (): IResolvedSchedule => ({
   schedule_id: 'sched-1',
   schedule_type: 'office',
@@ -94,13 +122,12 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
   beforeEach(() => {
     queryMock.mockReset();
     queryMock.mockImplementation((sql: string) => {
-      // Отделы в режиме «текущая деятельность» (назначен объект с таким адресом).
-      if (sql.includes('FROM department_object_assignment')) {
-        return Promise.resolve([{ org_department_id: 'dept-cur' }]);
-      }
-      // Персональные назначения объектов сотрудникам (override отдела).
-      if (sql.includes('FROM employee_object_assignment')) {
-        return Promise.resolve([]);
+      // Режимы: сотрудник 1 — без признаков (skud), сотрудник 2 — legacy-ТД от отдела.
+      if (isModeQuery(sql)) {
+        return Promise.resolve([
+          modeRow(1),
+          modeRow(2, { dept_current_activity: true }),
+        ]);
       }
       // Карта адресов объектов для обычной разбивки (fetchObjectAddressMap).
       if (sql.includes('FROM skud_objects')) {
@@ -160,12 +187,12 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
 
   it('персональный обычный объект переопределяет «текущую деятельность» отдела → разбивка по объекту', async () => {
     queryMock.mockImplementation((sql: string) => {
-      if (sql.includes('FROM department_object_assignment')) {
-        return Promise.resolve([{ org_department_id: 'dept-cur' }]);
-      }
-      if (sql.includes('FROM employee_object_assignment')) {
-        // У Петра персональный обычный объект → override: НЕ «текущая деятельность».
-        return Promise.resolve([{ employee_id: 2, is_current: false }]);
+      if (isModeQuery(sql)) {
+        // У Петра персональное назначение обычного объекта → legacy-ветка смотрит только
+        // персональные объекты и «текущую деятельность» отдела не применяет.
+        return Promise.resolve([
+          modeRow(2, { has_personal_assignment: true, personal_current_activity: false, dept_current_activity: true }),
+        ]);
       }
       if (sql.includes('FROM skud_objects')) {
         return Promise.resolve([{ id: 'obj-b', alt_name: null, name: 'Склад 7' }]);
@@ -191,6 +218,7 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
 
   it('столбец «Руководитель»: прямой → иначе нач. отдела/участка; «тест» отбрасываем; несколько через запятую', async () => {
     queryMock.mockImplementation((sql: string) => {
+      if (isModeQuery(sql)) return Promise.resolve([]);
       // Назначенный ответственный (employee_direct_reports): только у Ивана.
       if (sql.includes('FROM employee_direct_reports')) {
         return Promise.resolve([
@@ -216,8 +244,6 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
           { id: 301, full_name: 'Алексеев Алексей' },
         ]);
       }
-      if (sql.includes('FROM department_object_assignment')) return Promise.resolve([]);
-      if (sql.includes('FROM employee_object_assignment')) return Promise.resolve([]);
       if (sql.includes('FROM skud_objects')) {
         return Promise.resolve([
           { id: 'obj-a', alt_name: null, name: 'ЖК Сад 69' },
@@ -254,6 +280,131 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
     expect(managerByFio.get('Петр Петров')).toBe('Реальный Начальник');
     // Двое настоящих руководителей — через запятую, отсортированы по ФИО.
     expect(managerByFio.get('Семен Семенов')).toBe('Алексеев Алексей, Борисов Борис');
+  });
+});
+
+describe('buildUnified1CWorkbook — явные режимы табелирования (миграция 249)', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+  });
+
+  const mockModes = (rows: Array<Record<string, unknown>>, objects: Array<{ id: string; alt_name: string | null; name: string }>): void => {
+    queryMock.mockImplementation((sql: string) => {
+      if (isModeQuery(sql)) return Promise.resolve(rows);
+      if (sql.includes('FROM skud_objects')) return Promise.resolve(objects);
+      return Promise.resolve([]);
+    });
+  };
+
+  const readRows = (ws: ExcelJS.Worksheet): Array<{ fio: string; address: string; total: unknown }> => {
+    const out: Array<{ fio: string; address: string; total: unknown }> = [];
+    for (let r = ONE_C_DATA_START_ROW; r <= ws.rowCount; r++) {
+      const fio = ws.getCell(r, COL_FIO).value;
+      if (typeof fio !== 'string' || !fio.trim()) continue;
+      out.push({
+        fio,
+        address: String(ws.getCell(r, COL_ADDRESS).value ?? ''),
+        total: ws.getCell(r, COL_TOTAL).value,
+      });
+    }
+    return out;
+  };
+
+  // Пётр ездил на два объекта: 8ч на «Склад 7» и 7ч на «Башня A», дневной итог 8ч.
+  const twoObjectDept = (): IDepartmentTimesheetData => makeDept('Отдел', 'dept-1',
+    { id: 2, full_name: 'Петр Петров', org_department_id: 'dept-1' },
+    8, [
+      { object_key: 'obj-b', object_id: 'obj-b', object_name: 'Склад 7', hours: 8 },
+      { object_key: 'obj-c', object_id: 'obj-c', object_name: 'Башня A', hours: 7 },
+    ]);
+
+  const OBJECTS = [
+    { id: 'obj-b', alt_name: null, name: 'Склад 7' },
+    { id: 'obj-c', alt_name: null, name: 'Башня A' },
+    { id: 'obj-pin', alt_name: 'Автозаводская ул., вл. 23/2, ЖК «ЗИЛАРТ»', name: 'ЖК Зил 18,19,27' },
+  ];
+
+  it('режим object: одна строка с адресом закреплённого объекта, без разбивки по проходам', async () => {
+    mockModes([modeRow(2, { emp_mode: 'object', emp_object_id: 'obj-pin' })], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
+    expect(rows).toHaveLength(1);
+    // В файл уходит alt_name («Адрес объекта»), а не короткое имя из справочника.
+    expect(rows[0].address).toBe('Автозаводская ул., вл. 23/2, ЖК «ЗИЛАРТ»');
+    expect(rows[0].total).toBe(8);
+    expect(rows.some(r => r.address === 'Склад 7')).toBe(false);
+  });
+
+  it('режим object: закреплённый объект без единого прохода всё равно получает адрес', async () => {
+    // objectEntries пусты — обычная разбивка не дала бы ни одной строки с адресом.
+    const dept = makeDept('Отдел', 'dept-1',
+      { id: 2, full_name: 'Петр Петров', org_department_id: 'dept-1' }, 8, []);
+    mockModes([modeRow(2, { emp_mode: 'object', emp_object_id: 'obj-pin' })], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].address).toBe('Автозаводская ул., вл. 23/2, ЖК «ЗИЛАРТ»');
+  });
+
+  it('режим object исключается из выгрузки по объектам (excludeAggregatedModes)', async () => {
+    mockModes([modeRow(2, { emp_mode: 'object', emp_object_id: 'obj-pin' })], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()], true)).getWorksheet(1)!);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('явный skud перекрывает legacy-ТД отдела → разбивка по объектам', async () => {
+    mockModes([modeRow(2, { emp_mode: 'skud', dept_current_activity: true })], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
+    expect(rows.map(r => r.address).sort()).toEqual(['Башня A', 'Склад 7']);
+    expect(rows.some(r => r.address === 'Текущая деятельность')).toBe(false);
+  });
+
+  it('явный current_activity перекрывает обычное персональное назначение объекта', async () => {
+    mockModes(
+      [modeRow(2, { emp_mode: 'current_activity', has_personal_assignment: true, personal_current_activity: false })],
+      OBJECTS,
+    );
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].address).toBe('Текущая деятельность');
+  });
+
+  it('режим сотрудника перекрывает режим отдела', async () => {
+    mockModes(
+      [modeRow(2, { emp_mode: 'current_activity', dept_mode: 'skud' })],
+      OBJECTS,
+    );
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].address).toBe('Текущая деятельность');
+  });
+
+  it('режим отдела применяется, когда у сотрудника режим не задан', async () => {
+    mockModes([modeRow(2, { dept_mode: 'current_activity' })], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].address).toBe('Текущая деятельность');
+  });
+
+  it('сброс режима в NULL возвращает legacy-поведение (ТД отдела)', async () => {
+    mockModes([modeRow(2, { emp_mode: null, dept_mode: null, dept_current_activity: true })], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()])).getWorksheet(1)!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].address).toBe('Текущая деятельность');
+  });
+
+  it('режим object без закреплённого объекта падает с внятной ошибкой, а не подменяется на skud', async () => {
+    // Инвариант БД такого не допускает; проверяем, что повреждённые данные не проходят молча.
+    mockModes([modeRow(2, { emp_mode: 'object', emp_object_id: null })], OBJECTS);
+
+    await expect(buildUnified1CWorkbook(4, 2026, [twoObjectDept()]))
+      .rejects.toThrow(/без закреплённого объекта/);
   });
 });
 
