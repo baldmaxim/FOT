@@ -258,19 +258,13 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
 
   return (
     <div className="sc-overlay" {...dismiss}>
-      <div className="sc-modal" onClick={e => e.stopPropagation()}>
+      <div className="sc-modal sc-modal--full" onClick={e => e.stopPropagation()}>
         <div className="sc-modal-header">
           <h3>Режим табелирования для отделов/бригад</h3>
           <button className="sc-modal-close" onClick={onClose}>&times;</button>
         </div>
 
-        <div className="sc-modal-body">
-          <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
-            Слева — отделы и бригады, справа — вариант табелирования для единой 1С-выгрузки.
-            Отметьте подразделения, выберите вариант и нажмите «Назначить».
-          </p>
-
-          <div className="sc-obj-cols">
+        <div className="sc-modal-body sc-mode-body">
           <div className="sc-obj-col">
             <div className="sc-obj-col-label">
               Отделы и бригады{selected.size > 0 ? ` — выбрано ${selected.size}` : ''}
@@ -313,6 +307,7 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
               placeholder="Поиск объекта…"
             />
             <div className="sc-obj-list">
+              <div className="sc-obj-group-label">Режим</div>
               {PLAIN_MODE_OPTIONS.map(option => (
                 <label
                   key={option.value}
@@ -331,6 +326,7 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
                 </label>
               ))}
 
+              <div className="sc-obj-group-label">Объекты</div>
               {objectsQuery.isLoading ? (
                 <div style={{ fontSize: 14, padding: '8px 0' }}>Загрузка объектов…</div>
               ) : selectableObjects.length === 0 ? (
@@ -355,7 +351,6 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
               Режим применяется к подразделению — сотрудники наследуют его. Персональные режимы,
               заданные отдельным людям, сохраняются и продолжают действовать.
             </p>
-          </div>
           </div>
         </div>
 

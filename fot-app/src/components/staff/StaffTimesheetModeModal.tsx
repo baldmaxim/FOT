@@ -292,6 +292,7 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
           />
 
           <div className="sc-obj-list">
+            <div className="sc-obj-group-label">Режим</div>
             <label className={`sc-obj-item ${mode === null ? 'sc-obj-item--on' : ''}`}>
               <input
                 type="radio"
@@ -322,6 +323,7 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
               </label>
             ))}
 
+            <div className="sc-obj-group-label">Объекты</div>
             {modeObjectsQuery.isLoading ? (
               <div style={{ fontSize: 14, padding: '8px 0' }}>Загрузка объектов…</div>
             ) : selectableObjects.length === 0 ? (

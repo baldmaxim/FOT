@@ -404,6 +404,7 @@
 
 .sc-obj-badge {
   margin-left: 6px;
+  white-space: nowrap;
   padding: 1px 6px;
   border-radius: 999px;
   font-size: 10px;
@@ -472,6 +473,10 @@
   gap: 8px;
   padding: 8px 10px;
   min-height: 40px;
+  /* Список — колоночный флекс с ограниченной высотой. Без flex-shrink:0 многострочные
+     пункты (название + пояснение) сжимаются НИЖЕ своей контентной высоты, и вторая строка
+     наезжает на следующий пункт. min-height от этого не защищает. */
+  flex: 0 0 auto;
   border-radius: 6px;
   cursor: pointer;
   font-size: 14px;
