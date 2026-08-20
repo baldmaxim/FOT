@@ -1175,6 +1175,61 @@
   width: min(920px, 96vw);
 }
 
+/* Массовая настройка режима: список подразделений длинный, нужен весь экран. */
+.sc-modal--full {
+  width: 90vw;
+  height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.sc-modal--full .sc-modal-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.sc-mode-body {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 18px;
+  overflow: hidden;
+}
+
+.sc-mode-body .sc-obj-col {
+  min-height: 0;
+}
+
+/* Внутри полноэкранной модалки список тянется по высоте колонки, а не по 220px. */
+.sc-modal--full .sc-obj-list {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sc-mode-kind-filter {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.sc-mode-kind-filter .sc-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .sc-modal--full {
+    width: 96vw;
+    height: 92dvh;
+  }
+
+  .sc-mode-body {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+}
+
 .sc-modal-header {
   display: flex;
   align-items: center;

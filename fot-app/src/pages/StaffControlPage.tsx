@@ -48,7 +48,7 @@ const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(
 const StaffObjectAssignmentModal = lazy(() => import('../components/staff/StaffObjectAssignmentModal').then(m => ({ default: m.StaffObjectAssignmentModal })));
 const StaffBulkObjectAssignmentModal = lazy(() => import('../components/staff/StaffBulkObjectAssignmentModal').then(m => ({ default: m.StaffBulkObjectAssignmentModal })));
 const StaffTimesheetModeModalLazy = lazy(() => import('../components/staff/StaffTimesheetModeModal').then(m => ({ default: m.StaffTimesheetModeModal })));
-const StaffBulkTimesheetModeModal = lazy(() => import('../components/staff/StaffBulkTimesheetModeModal').then(m => ({ default: m.StaffBulkTimesheetModeModal })));
+const StaffDepartmentsTimesheetModeModal = lazy(() => import('../components/staff/StaffDepartmentsTimesheetModeModal').then(m => ({ default: m.StaffDepartmentsTimesheetModeModal })));
 
 // Стабильные пустые ссылки — чтобы memo-строки таблицы не ломались при undefined-данных.
 const EMPTY_OBJECTS: IAddressObject[] = [];
@@ -2382,15 +2382,13 @@ export const StaffControlPage: FC = () => {
     });
     if (canEditTimesheetMode) {
       items.push({
-        label: 'Режим табелирования отдела…',
+        label: 'Назначить режим объекта для отделов/бригад',
         icon: <CalendarCog size={14} />,
         onClick: () => setBulkTsModeOpen(true),
-        // Режим задаётся конкретному отделу — без выбранного фильтра цели нет.
-        disabled: !deptId,
       });
     }
     return items;
-  }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total, canEditTimesheetMode, deptId]);
+  }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total, canEditTimesheetMode]);
 
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
@@ -2627,13 +2625,10 @@ export const StaffControlPage: FC = () => {
           <StaffObjectAssignmentModal employee={modalEmp} onClose={closeModal} />
         </Suspense>
       )}
-      {bulkTsModeOpen && deptId && (
+      {bulkTsModeOpen && (
         <Suspense fallback={null}>
-          <StaffBulkTimesheetModeModal
-            departmentId={deptId}
-            departmentName={employees[0]?.department ?? 'выбранный отдел'}
-            currentMode={timesheetModesQuery.data?.department.mode ?? null}
-            currentObjectId={timesheetModesQuery.data?.department.object_id ?? null}
+          <StaffDepartmentsTimesheetModeModal
+            departments={allDepts}
             onClose={() => setBulkTsModeOpen(false)}
           />
         </Suspense>

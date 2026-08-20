@@ -1,4 +1,4 @@
-import { useMemo, useState, type FC } from 'react';
+import { useEffect, useMemo, useState, type FC } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check } from 'lucide-react';
 import { adminService, type TimesheetExportMode, type ITimesheetModeEmployee } from '../../services/adminService';
@@ -52,9 +52,30 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, onClose, on
   const dismiss = useOverlayDismiss(onClose);
 
   const [saving, setSaving] = useState(false);
+
+  // Строка режима могла не приехать в таблицу (запрос ещё шёл или упал). Тогда модалка
+  // дозагружает её сама: инициализировать состояние как «наследовать», не зная реального
+  // режима, нельзя — сохранение молча снесло бы существующую настройку.
+  const selfQuery = useQuery({
+    queryKey: ['admin-timesheet-modes', 'self', employee.id],
+    queryFn: () => adminService.getTimesheetModes({ employeeIds: [employee.id] }),
+    enabled: !row,
+    staleTime: 30_000,
+  });
+  const loadedRow = row ?? selfQuery.data?.employees.find(e => e.employee_id === employee.id);
+  const rowReady = Boolean(row) || selfQuery.isSuccess;
+
   // null = «наследовать»: явный режим снимается, работает режим отдела или legacy-фолбэк.
   const [mode, setMode] = useState<TimesheetExportMode | null>(row?.explicit_mode ?? null);
   const [objectId, setObjectId] = useState<string | null>(row?.explicit_object_id ?? null);
+  // Подхватываем дозагруженное состояние ровно один раз.
+  const [hydrated, setHydrated] = useState(Boolean(row));
+  useEffect(() => {
+    if (hydrated || !loadedRow) return;
+    setMode(loadedRow.explicit_mode ?? null);
+    setObjectId(loadedRow.explicit_object_id ?? null);
+    setHydrated(true);
+  }, [hydrated, loadedRow]);
 
   const objectsQuery = useQuery({
     queryKey: ['work-object-options'],
@@ -64,9 +85,9 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, onClose, on
 
   const objects = useMemo(() => objectsQuery.data ?? [], [objectsQuery.data]);
 
-  const dirty = mode !== (row?.explicit_mode ?? null) || objectId !== (row?.explicit_object_id ?? null);
+  const dirty = mode !== (loadedRow?.explicit_mode ?? null) || objectId !== (loadedRow?.explicit_object_id ?? null);
   const objectRequired = mode === 'object';
-  const canSave = dirty && !saving && (!objectRequired || Boolean(objectId));
+  const canSave = rowReady && dirty && !saving && (!objectRequired || Boolean(objectId));
 
   const handleSave = async (): Promise<void> => {
     setSaving(true);
@@ -85,9 +106,9 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, onClose, on
     }
   };
 
-  const effectiveHint = row
-    ? `Сейчас: ${MODE_OPTIONS.find(o => o.value === row.effective_mode)?.label ?? row.effective_mode}`
-      + ` (${SOURCE_HINTS[row.source] ?? row.source})`
+  const effectiveHint = loadedRow
+    ? `Сейчас: ${MODE_OPTIONS.find(o => o.value === loadedRow.effective_mode)?.label ?? loadedRow.effective_mode}`
+      + ` (${SOURCE_HINTS[loadedRow.source] ?? loadedRow.source})`
     : '';
 
   return (
@@ -100,15 +121,17 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, onClose, on
         <div className="sc-modal-body">
           <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
             Определяет колонку «Адрес объекта» в выгрузке «Единый файл для 1С». На сам табель,
-            СКУД и права не влияет. {effectiveHint}
+            СКУД и права не влияет. {rowReady ? effectiveHint : 'Загрузка текущей настройки…'}
           </p>
 
           <div className="sc-obj-list">
             <label className={`sc-obj-item ${mode === null ? 'sc-obj-item--on' : ''}`}>
               <input type="radio" checked={mode === null} onChange={() => { setMode(null); setObjectId(null); }} />
               <span>
-                Наследовать от отдела
-                <span className="sc-obj-count" title="Явный режим сотрудника снимается">авто</span>
+                Как у отдела
+                <span className="sc-obj-empty" style={{ display: 'block', fontSize: 12 }}>
+                  Личная настройка снимается — действует режим отдела.
+                </span>
               </span>
             </label>
             {MODE_OPTIONS.map(option => (
@@ -144,7 +167,7 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, onClose, on
                   Для режима «Объект» объект обязателен.
                 </div>
               )}
-              {row?.effective_object_is_active === false && objectId === row.explicit_object_id && (
+              {loadedRow?.effective_object_is_active === false && objectId === loadedRow.explicit_object_id && (
                 <div className="sc-obj-empty" style={{ fontSize: 12 }}>
                   Текущий объект неактивен — выберите другой.
                 </div>

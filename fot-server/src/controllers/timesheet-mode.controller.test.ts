@@ -298,3 +298,128 @@ describe('timesheetModeController.updateDepartment — поддерево', () =
     expect(pgQuery).not.toHaveBeenCalled();
   });
 });
+
+describe('timesheetModeController — массовая настройка подразделений', () => {
+  const DEPT2 = '33333333-3333-3333-3333-333333333333';
+
+  it('listDepartments отдаёт effective_mode и не показывает отделы вне скоупа', async () => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue([DEPT]);
+    pgQuery.mockResolvedValueOnce([
+      {
+        id: DEPT, name: 'Геодезическая служба', kind: 'department',
+        mode: null, object_id: null, object_name: null, object_is_active: null,
+        dept_current_activity: true,
+      },
+      {
+        id: DEPT2, name: 'Чужой отдел', kind: 'department',
+        mode: null, object_id: null, object_name: null, object_is_active: null,
+        dept_current_activity: false,
+      },
+    ]);
+
+    const res = makeRes();
+    await timesheetModeController.listDepartments(makeReq({}), res);
+
+    const payload = res.payload as { departments: Array<{ name: string; effective_mode: string; source: string }> };
+    expect(payload.departments).toHaveLength(1);
+    // Режим не задан, но ТД-назначение есть → фактически действует «текущая деятельность».
+    expect(payload.departments[0].effective_mode).toBe('current_activity');
+    expect(payload.departments[0].source).toBe('legacy_department');
+  });
+
+  it('bulk: чужое подразделение в списке — 403 и ни одной записи', async () => {
+    pgQuery.mockResolvedValueOnce([
+      { id: DEPT, kind: 'department' },
+      { id: DEPT2, kind: 'brigade' },
+    ]);
+    scope.canAccessDepartmentInScope
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const res = makeRes();
+    await timesheetModeController.updateDepartmentsBulk(
+      makeReq({ body: { department_ids: [DEPT, DEPT2], mode: 'skud' } }), res,
+    );
+
+    expect(res.statusCode).toBe(403);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('bulk: несуществующее подразделение — 400 без записи', async () => {
+    pgQuery.mockResolvedValueOnce([{ id: DEPT, kind: 'department' }]);
+
+    const res = makeRes();
+    await timesheetModeController.updateDepartmentsBulk(
+      makeReq({ body: { department_ids: [DEPT, DEPT2], mode: 'skud' } }), res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('bulk: узел-объект отклоняется — режим только для отделов и бригад', async () => {
+    pgQuery.mockResolvedValueOnce([{ id: DEPT, kind: 'object' }]);
+
+    const res = makeRes();
+    await timesheetModeController.updateDepartmentsBulk(
+      makeReq({ body: { department_ids: [DEPT], mode: 'skud' } }), res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('bulk: режим object без объекта — 400', async () => {
+    const res = makeRes();
+    await timesheetModeController.updateDepartmentsBulk(
+      makeReq({ body: { department_ids: [DEPT], mode: 'object', object_id: null } }), res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('bulk: пакет больше лимита — 400, а не тихая обрезка', async () => {
+    const many = Array.from({ length: 501 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+
+    const res = makeRes();
+    await timesheetModeController.updateDepartmentsBulk(
+      makeReq({ body: { department_ids: many, mode: 'skud' } }), res,
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(pgQuery).not.toHaveBeenCalled();
+  });
+
+  it('bulk: пишет только org_departments — личные режимы сотрудников не трогает', async () => {
+    pgQuery.mockResolvedValueOnce([
+      { id: DEPT, kind: 'department' },
+      { id: DEPT2, kind: 'brigade' },
+    ]);
+    const { client, calls } = makeTxClient([
+      {
+        rows: [
+          { id: DEPT, name: 'Отдел', timesheet_export_mode: null, timesheet_export_object_id: null },
+          { id: DEPT2, name: 'Бригада', timesheet_export_mode: 'current_activity', timesheet_export_object_id: null },
+        ],
+        rowCount: 2,
+      },
+      { rows: [], rowCount: 2 },
+    ]);
+    pgTx.mockImplementation(async (fn: (c: unknown) => Promise<unknown>) => fn(client));
+
+    const res = makeRes();
+    await timesheetModeController.updateDepartmentsBulk(
+      makeReq({ body: { department_ids: [DEPT, DEPT2], mode: 'skud' } }), res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect((res.payload as { affected: number }).affected).toBe(2);
+    // Ни одного UPDATE по employees: персональные исключения переживают массовую операцию.
+    expect(calls.some(sql => sql.includes('UPDATE employees'))).toBe(false);
+    expect(calls[0]).toContain('pg_advisory_xact_lock');
+    // Аудит содержит старые значения по каждому подразделению.
+    const auditArgs = audit.logFromRequestWithClient.mock.calls[0][4] as { details: { affected_departments: unknown[] } };
+    expect(auditArgs.details.affected_departments).toHaveLength(2);
+  });
+});

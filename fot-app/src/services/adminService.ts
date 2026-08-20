@@ -121,6 +121,20 @@ export interface ITimesheetModes {
   employees: ITimesheetModeEmployee[];
 }
 
+/** Подразделение в массовой настройке режима. */
+export interface ITimesheetModeDepartment {
+  id: string;
+  name: string;
+  kind: 'department' | 'brigade';
+  mode: TimesheetExportMode | null;
+  object_id: string | null;
+  object_name: string | null;
+  object_is_active: boolean | null;
+  /** Что действует фактически, даже когда mode = null (legacy по назначениям объектов). */
+  effective_mode: TimesheetExportMode;
+  source: 'department_explicit' | 'legacy_department' | 'legacy_default';
+}
+
 export const adminService = {
   // User management.
   // Списки пользователей принимают signal от React Query: cancelQueries перед
@@ -389,6 +403,27 @@ export const adminService = {
     objectId: string | null,
   ): Promise<void> {
     await apiClient.put(`/admin/timesheet-modes/employees/${employeeId}`, { mode, object_id: objectId });
+  },
+
+  /** Отделы и бригады с их режимом — для массовой настройки. */
+  async listTimesheetModeDepartments(): Promise<ITimesheetModeDepartment[]> {
+    const response = await apiClient.get<ApiResponse<{ departments: ITimesheetModeDepartment[] }>>(
+      '/admin/timesheet-modes/departments',
+    );
+    return response.data?.departments ?? [];
+  },
+
+  /** Массовая установка режима подразделениям: одна транзакция на сервере. */
+  async bulkUpdateDepartmentTimesheetModes(
+    departmentIds: string[],
+    mode: TimesheetExportMode | null,
+    objectId: string | null,
+  ): Promise<{ affected: number }> {
+    const response = await apiClient.put<ApiResponse<{ affected: number }>>(
+      '/admin/timesheet-modes/departments',
+      { department_ids: departmentIds, mode, object_id: objectId },
+    );
+    return response.data ?? { affected: 0 };
   },
 
   async updateDepartmentTimesheetMode(

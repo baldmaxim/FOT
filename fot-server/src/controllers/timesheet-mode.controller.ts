@@ -22,6 +22,15 @@ import {
   type TimesheetExportMode,
 } from '../services/timesheet-export-mode.service.js';
 
+/** Предел на один пакет: и для чтения режимов, и для массовой записи. */
+const MODE_BATCH_LIMIT = 500;
+
+const bulkDepartmentsSchema = z.object({
+  department_ids: z.array(z.string().uuid()).min(1),
+  mode: z.enum(['current_activity', 'object', 'skud']).nullable(),
+  object_id: z.string().uuid().nullable().optional(),
+});
+
 const modeSchema = z.object({
   // null = сбросить явный режим и вернуться к режиму отдела / legacy-фолбэку.
   mode: z.enum(['current_activity', 'object', 'skud']).nullable(),
@@ -76,11 +85,17 @@ export const timesheetModeController = {
       // Второй режим выборки — по списку сотрудников: на «Управлении кадрами» людей ищут
       // по ФИО без выбора отдела, и колонка режима должна работать и там.
       const employeeIds = typeof req.query.employee_ids === 'string'
-        ? [...new Set(req.query.employee_ids.split(',').map(Number).filter(id => Number.isInteger(id) && id > 0))].slice(0, 500)
+        ? [...new Set(req.query.employee_ids.split(',').map(Number).filter(id => Number.isInteger(id) && id > 0))]
         : [];
 
       if (!departmentId && employeeIds.length === 0) {
         res.status(400).json({ error: 'нужен department_id или employee_ids' });
+        return;
+      }
+      // Явная ошибка вместо тихой обрезки: молча вернуть часть строк — значит показать
+      // пользователю неполную картину, не сообщив об этом.
+      if (employeeIds.length > MODE_BATCH_LIMIT) {
+        res.status(400).json({ error: `Слишком много сотрудников в запросе (максимум ${MODE_BATCH_LIMIT})` });
         return;
       }
       if (departmentId && !(await canAccessDepartmentInScope(req, departmentId))) {
@@ -107,11 +122,14 @@ export const timesheetModeController = {
             WHERE lower(btrim(coalesce(alt_name, ''))) = lower($2::text)
          ),
          target AS (
+           -- employee_ids приоритетнее: когда фронт прислал список сотрудников страницы,
+           -- department_id остаётся только источником метаданных отдела. Иначе OR вернул бы
+           -- весь отдел вместо запрошенной страницы.
            SELECT e.id
              FROM employees e
             WHERE e.is_archived = false
-              AND ( ($1::uuid IS NOT NULL AND e.org_department_id = $1::uuid)
-                 OR ($3::int[] IS NOT NULL AND e.id = ANY($3::int[])) )
+              AND ( CASE WHEN $3::int[] IS NOT NULL THEN e.id = ANY($3::int[])
+                         ELSE e.org_department_id = $1::uuid END )
          ),
          personal AS (
            SELECT eoa.employee_id,
@@ -201,6 +219,168 @@ export const timesheetModeController = {
     } catch (error) {
       console.error('timesheetModeController.list error:', error);
       res.status(500).json({ error: 'Не удалось получить режимы табелирования' });
+    }
+  },
+
+  /**
+   * GET /api/admin/timesheet-modes/departments
+   * Отделы и бригады в скоупе с их режимом. `effective_mode` обязателен: при mode = null
+   * пользователь должен видеть, что действует фактически (ТД или СКУД по legacy), а не
+   * только метку «режим не задан».
+   */
+  async listDepartments(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const accessible = await resolveAccessibleDepartmentIds(req);
+      const rows = await query<{
+        id: string;
+        name: string;
+        kind: string;
+        mode: TimesheetExportMode | null;
+        object_id: string | null;
+        object_name: string | null;
+        object_is_active: boolean | null;
+        dept_current_activity: boolean;
+      }>(
+        `WITH ca AS (
+           SELECT id FROM skud_objects
+            WHERE lower(btrim(coalesce(alt_name, ''))) = lower($1::text)
+         )
+         SELECT d.id::text,
+                d.name,
+                d.kind,
+                d.timesheet_export_mode            AS mode,
+                d.timesheet_export_object_id::text AS object_id,
+                o.name                             AS object_name,
+                o.is_active                        AS object_is_active,
+                EXISTS (
+                  SELECT 1 FROM department_object_assignment doa
+                   WHERE doa.org_department_id = d.id
+                     AND doa.is_active = true
+                     AND doa.skud_object_id IN (SELECT id FROM ca)
+                )                                  AS dept_current_activity
+           FROM org_departments d
+           LEFT JOIN skud_objects o ON o.id = d.timesheet_export_object_id
+          WHERE d.is_active = true AND d.kind IN ('department', 'brigade')
+          ORDER BY d.name`,
+        [CURRENT_ACTIVITY_ADDRESS],
+      );
+
+      const scoped = accessible === 'all' ? rows : rows.filter(r => accessible.includes(r.id));
+
+      res.json({
+        departments: scoped.map(row => ({
+          id: row.id,
+          name: row.name,
+          kind: row.kind,
+          mode: row.mode,
+          object_id: row.object_id,
+          object_name: row.object_name,
+          object_is_active: row.object_is_active,
+          // Режим не задан → показываем, что даёт legacy по назначениям объектов отдела.
+          effective_mode: row.mode ?? (row.dept_current_activity ? 'current_activity' : 'skud'),
+          source: row.mode
+            ? 'department_explicit'
+            : (row.dept_current_activity ? 'legacy_department' : 'legacy_default'),
+        })),
+      });
+    } catch (error) {
+      console.error('timesheetModeController.listDepartments error:', error);
+      res.status(500).json({ error: 'Не удалось получить режимы подразделений' });
+    }
+  },
+
+  /**
+   * PUT /api/admin/timesheet-modes/departments
+   * Массовая установка режима отделам и бригадам. Весь список проверяется ДО записи:
+   * любая осечка — отказ целиком, ни одной строки. Явные режимы сотрудников не трогаются —
+   * персональные исключения должны переживать массовую операцию.
+   */
+  async updateDepartmentsBulk(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const parsed = bulkDepartmentsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Некорректные данные', details: parsed.error.issues });
+        return;
+      }
+      const departmentIds = [...new Set(parsed.data.department_ids)];
+      if (departmentIds.length > MODE_BATCH_LIMIT) {
+        res.status(400).json({ error: `Слишком много подразделений (максимум ${MODE_BATCH_LIMIT})` });
+        return;
+      }
+      const normalized = await normalizeModePayload(parsed.data.mode, parsed.data.object_id);
+      if ('error' in normalized) {
+        res.status(400).json({ error: normalized.error });
+        return;
+      }
+
+      // Существование и тип — до скоупа: так пользователь получит понятную 400, а не 403.
+      const existing = await query<{ id: string; kind: string }>(
+        'SELECT id::text, kind FROM org_departments WHERE id = ANY($1::uuid[])',
+        [departmentIds],
+      );
+      const kindById = new Map(existing.map(r => [r.id, r.kind]));
+      const missing = departmentIds.filter(id => !kindById.has(id));
+      if (missing.length > 0) {
+        res.status(400).json({ error: 'Некоторые подразделения не найдены', details: missing });
+        return;
+      }
+      const wrongKind = departmentIds.filter(id => !['department', 'brigade'].includes(kindById.get(id) ?? ''));
+      if (wrongKind.length > 0) {
+        res.status(400).json({ error: 'Режим задаётся только отделам и бригадам', details: wrongKind });
+        return;
+      }
+      for (const id of departmentIds) {
+        if (!(await canAccessDepartmentInScope(req, id))) {
+          res.status(403).json({ error: 'В списке есть подразделения вне вашего доступа' });
+          return;
+        }
+      }
+
+      const affected = await withTransaction(async client => {
+        await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [TIMESHEET_MODE_LOCK_KEY]);
+        const before = await client.query<{
+          id: string;
+          name: string;
+          timesheet_export_mode: TimesheetExportMode | null;
+          timesheet_export_object_id: string | null;
+        }>(
+          `SELECT id::text, name, timesheet_export_mode, timesheet_export_object_id::text
+             FROM org_departments WHERE id = ANY($1::uuid[]) FOR UPDATE`,
+          [departmentIds],
+        );
+
+        await client.query(
+          `UPDATE org_departments
+              SET timesheet_export_mode = $1,
+                  timesheet_export_object_id = $2::uuid
+            WHERE id = ANY($3::uuid[])`,
+          [normalized.mode, normalized.objectId, departmentIds],
+        );
+
+        await auditService.logFromRequestWithClient(
+          client, req, req.user.id, AUDIT_ACTIONS.TIMESHEET_MODE_BULK_UPDATED,
+          {
+            entityType: 'org_department',
+            entityId: `bulk:${departmentIds.length}`,
+            details: {
+              new_mode: normalized.mode,
+              new_object_id: normalized.objectId,
+              affected_departments: before.rows.map(r => ({
+                id: r.id,
+                name: r.name,
+                old_mode: r.timesheet_export_mode,
+                old_object_id: r.timesheet_export_object_id,
+              })),
+            },
+          },
+        );
+        return before.rowCount ?? 0;
+      });
+
+      res.json({ success: true, affected, mode: normalized.mode, object_id: normalized.objectId });
+    } catch (error) {
+      console.error('timesheetModeController.updateDepartmentsBulk error:', error);
+      res.status(500).json({ error: 'Не удалось сохранить режимы подразделений' });
     }
   },
 

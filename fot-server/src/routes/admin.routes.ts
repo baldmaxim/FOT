@@ -138,6 +138,8 @@ router.put('/employees/:id/object-assignment', requirePageAccess('/admin/users',
 // Режим табелирования для «Единого файла 1С» (миграция 249). Отдельное право:
 // назначения объектов выше — админская функция, а режим правит ещё и HR.
 router.get('/timesheet-modes', requirePageAccess('/staff-control/timesheet-mode', 'view'), timesheetModeController.list);
+router.get('/timesheet-modes/departments', requirePageAccess('/staff-control/timesheet-mode', 'view'), timesheetModeController.listDepartments);
+router.put('/timesheet-modes/departments', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateDepartmentsBulk);
 router.put('/timesheet-modes/employees/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateEmployee);
 router.put('/timesheet-modes/departments/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateDepartment);
 
