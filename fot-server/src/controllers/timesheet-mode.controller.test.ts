@@ -22,6 +22,9 @@ const scope = vi.hoisted(() => ({
 
 vi.mock('../services/data-scope.service.js', () => scope);
 
+const { contractorRootMock } = vi.hoisted(() => ({ contractorRootMock: vi.fn() }));
+vi.mock('../config/contractor.js', () => ({ getContractorRootId: contractorRootMock }));
+
 const audit = vi.hoisted(() => ({ logFromRequestWithClient: vi.fn(async () => {}) }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: audit,
@@ -35,6 +38,7 @@ import { timesheetModeController } from './timesheet-mode.controller.js';
 
 const DEPT = '11111111-1111-1111-1111-111111111111';
 const OBJ = '22222222-2222-2222-2222-222222222222';
+const CONTRACTOR_ROOT = '44444444-4444-4444-4444-444444444444';
 
 function makeReq(overrides: Partial<AuthenticatedRequest>): AuthenticatedRequest {
   return {
@@ -85,6 +89,7 @@ beforeEach(() => {
   scope.canAccessDepartmentInScope.mockReset().mockResolvedValue(true);
   scope.canAccessEmployeeInScope.mockReset().mockResolvedValue(true);
   scope.resolveAccessibleDepartmentIds.mockReset().mockResolvedValue('all');
+  contractorRootMock.mockReset().mockResolvedValue(CONTRACTOR_ROOT);
 });
 
 describe('timesheetModeController.list — скоуп', () => {
@@ -325,6 +330,55 @@ describe('timesheetModeController — массовая настройка под
     // Режим не задан, но ТД-назначение есть → фактически действует «текущая деятельность».
     expect(payload.departments[0].effective_mode).toBe('current_activity');
     expect(payload.departments[0].source).toBe('legacy_department');
+  });
+
+  it('listDepartments размечает ветку подрядчиков и раскрывает поддерево в SQL', async () => {
+    pgQuery.mockResolvedValueOnce([
+      {
+        id: DEPT, name: 'Геодезическая служба', kind: 'department',
+        mode: null, object_id: null, object_name: null, object_is_active: null,
+        dept_current_activity: false, is_contractor: false,
+      },
+      {
+        id: DEPT2, name: 'ВОЛЬТЕКС ООО', kind: 'department',
+        mode: null, object_id: null, object_name: null, object_is_active: null,
+        dept_current_activity: false, is_contractor: true,
+      },
+    ]);
+
+    const res = makeRes();
+    await timesheetModeController.listDepartments(makeReq({}), res);
+
+    expect(contractorRootMock).toHaveBeenCalled();
+    const [sql, params] = pgQuery.mock.calls[0] as [string, unknown[]];
+    // Поддерево считает сама БД: имя корня в SQL не зашито, приходит параметром.
+    expect(sql).toContain('get_descendant_department_ids');
+    expect(params[1]).toEqual([CONTRACTOR_ROOT]);
+
+    const departments = (res.payload as { data: { departments: Array<{ name: string; is_contractor: boolean }> } })
+      .data.departments;
+    expect(departments.map(d => [d.name, d.is_contractor])).toEqual([
+      ['Геодезическая служба', false],
+      ['ВОЛЬТЕКС ООО', true],
+    ]);
+  });
+
+  it('listDepartments: корень подрядчиков не синхронизирован — пустой массив, запрос не падает', async () => {
+    contractorRootMock.mockResolvedValue(null);
+    pgQuery.mockResolvedValueOnce([
+      {
+        id: DEPT, name: 'Геодезическая служба', kind: 'department',
+        mode: null, object_id: null, object_name: null, object_is_active: null,
+        dept_current_activity: false, is_contractor: false,
+      },
+    ]);
+
+    const res = makeRes();
+    await timesheetModeController.listDepartments(makeReq({}), res);
+
+    expect(res.statusCode).toBe(200);
+    // Пустой uuid[] → ноль потомков → флаг не проставится никому.
+    expect((pgQuery.mock.calls[0] as [string, unknown[]])[1][1]).toEqual([]);
   });
 
   it('bulk: чужое подразделение в списке — 403 и ни одной записи', async () => {

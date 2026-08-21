@@ -55,9 +55,8 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
   const dismiss = useOverlayDismiss(onClose);
 
   const [search, setSearch] = useState('');
-  const [kindFilter, setKindFilter] = useState<'all' | 'department' | 'brigade'>('all');
+  const [kindFilter, setKindFilter] = useState<'department' | 'brigade'>('department');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // undefined — режим не выбран. По умолчанию НЕ «не задавать»: иначе одно неверное
   // нажатие «Применить» молча очистило бы существующие настройки.
   const [mode, setMode] = useState<ModeChoice | undefined>(undefined);
@@ -100,69 +99,50 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
 
   // В allDepts есть служебные узлы kind: 'object' и контейнеры-предки с inScope: false —
   // их нельзя ни показывать, ни выбирать. Плюс пересечение с серверным списком: только то,
-  // что реально доступно на бэкенде.
+  // что реально доступно на бэкенде. Вкладка учитывается здесь, а не в filtered: от этого
+  // набора считаются и «скрыто поиском», и страховка payload.
   const selectable = useMemo(
-    () => departments.filter(d => d.inScope && (d.kind === 'department' || d.kind === 'brigade') && modeById.has(d.id)),
-    [departments, modeById],
+    () => departments.filter(d => {
+      if (!d.inScope || d.kind !== kindFilter) return false;
+      const row = modeById.get(d.id);
+      if (!row) return false;
+      // Подрядные организации ведут не кадры — во вкладке «Отделы» они только мешают.
+      return !(kindFilter === 'department' && row.is_contractor);
+    }),
+    [departments, modeById, kindFilter],
   );
-
-  // self + потомки: смежные строки с большим level (список в depth-first порядке).
-  // Считается по ПОЛНОМУ списку, поэтому выбор родителя захватывает ветку независимо
-  // от поиска и раскрытия.
-  const subtreeIds = useMemo(() => {
-    const map = new Map<string, string[]>();
-    const allowed = new Set(selectable.map(d => d.id));
-    for (let i = 0; i < departments.length; i++) {
-      const d = departments[i];
-      const ids: string[] = [];
-      if (allowed.has(d.id)) ids.push(d.id);
-      for (let j = i + 1; j < departments.length && departments[j].level > d.level; j++) {
-        if (allowed.has(departments[j].id)) ids.push(departments[j].id);
-      }
-      map.set(d.id, [...new Set(ids)]);
-    }
-    return map;
-  }, [departments, selectable]);
-
-  const searching = search.trim().length > 0;
 
   const filtered = useMemo(() => {
     const q = normalize(search);
-    return selectable.filter(d => {
-      if (kindFilter !== 'all' && d.kind !== kindFilter) return false;
-      return !q || normalize(d.name).includes(q);
-    });
-  }, [selectable, search, kindFilter]);
+    if (!q) return selectable;
+    return selectable.filter(d => normalize(d.name).includes(q));
+  }, [selectable, search]);
 
-  const visible = useMemo(() => {
-    if (searching || kindFilter !== 'all') return filtered;
-    const out: IFlatDepartmentOption[] = [];
-    let collapseDepth = Infinity;
-    for (const d of selectable) {
-      if (d.level > collapseDepth) continue;
-      out.push(d);
-      collapseDepth = expanded.has(d.id) ? Infinity : d.level;
-    }
-    return out;
-  }, [selectable, expanded, searching, kindFilter, filtered]);
-
-  const toggleExpand = (id: string): void => {
-    setExpanded(prev => {
+  // Выбор построчный: в плоском списке связь «родитель — потомки» на экране не видна,
+  // и выделение поддерева молча накрывало бы строки, которых пользователь не видел.
+  const toggleDept = (id: string): void => {
+    setSelected(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };
 
-  const toggleDept = (id: string): void => {
-    setSelected(prev => {
-      const ids = subtreeIds.get(id) ?? [id];
-      const allOn = ids.every(x => prev.has(x));
-      const next = new Set(prev);
-      ids.forEach(x => (allOn ? next.delete(x) : next.add(x)));
-      return next;
-    });
+  /** Смена вкладки: выбор чужого типа применять нельзя — сбрасываем. */
+  const changeKindFilter = (next: 'department' | 'brigade'): void => {
+    if (next === kindFilter) return;
+    setKindFilter(next);
+    setSelected(new Set());
   };
+
+  // Поиск выбор НЕ сбрасывает (иначе «нашёл — отметил — ищу следующий» не работает),
+  // но спрятанные им строки нужно показать числом, иначе счётчик выглядит ошибкой.
+  const hiddenSelected = useMemo(() => {
+    const visibleIds = new Set(filtered.map(d => d.id));
+    let count = 0;
+    for (const id of selected) if (!visibleIds.has(id)) count++;
+    return count;
+  }, [filtered, selected]);
 
   // mode === undefined — режим справа ещё не выбран: «Назначить» остаётся заблокированной,
   // иначе одно случайное нажатие применило бы null и очистило настройку поддерева.
@@ -183,10 +163,18 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
       toast.error(`Выбрано ${selected.size} подразделений — максимум ${BATCH_LIMIT} за раз`);
       return;
     }
+    // Страховка: применяем только строки текущей вкладки, даже если сброс при её смене
+    // почему-то не отработал. Скрытые поиском строки применяются — они выбраны осознанно.
+    const allowed = new Set(selectable.map(d => d.id));
+    const targetIds = [...selected].filter(id => allowed.has(id));
+    if (targetIds.length === 0) {
+      toast.error('Нет выбранных подразделений в текущей вкладке');
+      return;
+    }
     setBusy(true);
     try {
       const result = await adminService.bulkUpdateDepartmentTimesheetModes(
-        [...selected],
+        targetIds,
         nextMode,
         nextMode === 'object' ? objectId : null,
       );
@@ -216,37 +204,18 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
     if (ok) void applyMode(null);
   };
 
-  const minLevel = useMemo(
-    () => (selectable.length ? Math.min(...selectable.map(d => d.level)) : 0),
-    [selectable],
-  );
-
   const renderRow = (d: IFlatDepartmentOption) => {
     const row = modeById.get(d.id);
     const isOn = selected.has(d.id);
-    const indent = searching || kindFilter !== 'all' ? 0 : (d.level - minLevel) * 14;
     return (
-      <label key={d.id} className={`sc-obj-item ${isOn ? 'sc-obj-item--on' : ''}`} style={{ paddingLeft: 8 + indent }}>
+      <label key={d.id} className={`sc-obj-item ${isOn ? 'sc-obj-item--on' : ''}`}>
         <input type="checkbox" checked={isOn} onChange={() => toggleDept(d.id)} />
         <span>
-          {!searching && kindFilter === 'all' && d.hasChildren && (
-            <button
-              type="button"
-              className="sc-inline-btn"
-              title={expanded.has(d.id) ? 'Свернуть' : 'Раскрыть'}
-              onClick={e => { e.preventDefault(); e.stopPropagation(); toggleExpand(d.id); }}
-            >
-              {expanded.has(d.id) ? '−' : '+'}
-            </button>
-          )}
           {d.name}
-          {row && (
-            <span
-              className="sc-obj-badge"
-              title={row.mode ? 'Режим задан явно' : 'Режим не задан — показан фактический (legacy)'}
-            >
-              {MODE_BADGE[row.effective_mode]}{row.mode ? '' : ' (legacy)'}
-            </span>
+          {/* Бейдж только у явно заданного режима: effective_mode непустой всегда и
+              пометил бы все строки подряд. */}
+          {row?.mode && (
+            <span className="sc-obj-badge" title="Режим задан явно">{MODE_BADGE[row.mode]}</span>
           )}
           {row?.mode === 'object' && row.object_name && (
             <span className="sc-obj-count">{row.object_name}</span>
@@ -268,6 +237,7 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
           <div className="sc-obj-col">
             <div className="sc-obj-col-label">
               Отделы и бригады{selected.size > 0 ? ` — выбрано ${selected.size}` : ''}
+              {hiddenSelected > 0 ? `, скрыто поиском ${hiddenSelected}` : ''}
             </div>
             <input
               type="text"
@@ -277,12 +247,12 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
               placeholder="Поиск по названию…"
             />
             <div className="sc-mode-kind-filter">
-              {([['all', 'Все'], ['department', 'Отделы'], ['brigade', 'Бригады']] as const).map(([value, label]) => (
+              {([['department', 'Отделы'], ['brigade', 'Бригады']] as const).map(([value, label]) => (
                 <button
                   key={value}
                   type="button"
                   className={`sc-btn ${kindFilter === value ? 'apply' : 'cancel'}`}
-                  onClick={() => setKindFilter(value)}
+                  onClick={() => changeKindFilter(value)}
                 >
                   {label}
                 </button>
@@ -290,10 +260,10 @@ export const StaffDepartmentsTimesheetModeModal: FC<IProps> = ({ departments, on
             </div>
             {modesQuery.isLoading ? (
               <div style={{ fontSize: 14 }}>Загрузка…</div>
-            ) : visible.length === 0 ? (
+            ) : filtered.length === 0 ? (
               <div className="sc-obj-empty">— ничего не найдено —</div>
             ) : (
-              <div className="sc-obj-list">{visible.map(renderRow)}</div>
+              <div className="sc-obj-list">{filtered.map(renderRow)}</div>
             )}
           </div>
 

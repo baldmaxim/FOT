@@ -126,6 +126,8 @@ export interface ITimesheetModeDepartment {
   id: string;
   name: string;
   kind: 'department' | 'brigade';
+  /** Узел ветки «Подрядные организации» — во вкладке «Отделы» не показывается. */
+  is_contractor: boolean;
   mode: TimesheetExportMode | null;
   object_id: string | null;
   object_name: string | null;

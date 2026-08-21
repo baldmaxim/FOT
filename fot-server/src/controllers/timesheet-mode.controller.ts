@@ -8,6 +8,7 @@
 import { Response } from 'express';
 import { z } from 'zod';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
+import { getContractorRootId } from '../config/contractor.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
 import {
@@ -234,6 +235,9 @@ export const timesheetModeController = {
   async listDepartments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const accessible = await resolveAccessibleDepartmentIds(req);
+      // Корень «Подрядные организации» может быть не синхронизирован из Sigur — тогда
+      // пустой uuid[] даёт ноль потомков и флаг у всех false. Отдельной ветки не нужно.
+      const contractorRootId = await getContractorRootId();
       const rows = await query<{
         id: string;
         name: string;
@@ -243,10 +247,14 @@ export const timesheetModeController = {
         object_name: string | null;
         object_is_active: boolean | null;
         dept_current_activity: boolean;
+        is_contractor: boolean;
       }>(
         `WITH ca AS (
            SELECT id FROM skud_objects
             WHERE lower(btrim(coalesce(alt_name, ''))) = lower($1::text)
+         ),
+         contractor AS (
+           SELECT id FROM public.get_descendant_department_ids($2::uuid[])
          )
          SELECT d.id::text,
                 d.name,
@@ -260,12 +268,13 @@ export const timesheetModeController = {
                    WHERE doa.org_department_id = d.id
                      AND doa.is_active = true
                      AND doa.skud_object_id IN (SELECT id FROM ca)
-                )                                  AS dept_current_activity
+                )                                  AS dept_current_activity,
+                (d.id IN (SELECT id FROM contractor)) AS is_contractor
            FROM org_departments d
            LEFT JOIN skud_objects o ON o.id = d.timesheet_export_object_id
           WHERE d.is_active = true AND d.kind IN ('department', 'brigade')
           ORDER BY d.name`,
-        [CURRENT_ACTIVITY_ADDRESS],
+        [CURRENT_ACTIVITY_ADDRESS, contractorRootId ? [contractorRootId] : []],
       );
 
       const scoped = accessible === 'all' ? rows : rows.filter(r => accessible.includes(r.id));
@@ -277,6 +286,8 @@ export const timesheetModeController = {
             id: row.id,
             name: row.name,
             kind: row.kind,
+            // Ветка «Подрядные организации» — фильтруется на клиенте, из выдачи не режем.
+            is_contractor: row.is_contractor,
             mode: row.mode,
             object_id: row.object_id,
             object_name: row.object_name,
