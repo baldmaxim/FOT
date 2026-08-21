@@ -51,10 +51,16 @@ const MODE_LABELS: Record<TimesheetExportMode, string> = {
 const SOURCE_HINTS: Record<string, string> = {
   employee_explicit: 'задан лично',
   department_explicit: 'унаследован от отдела',
-  legacy_employee: 'выведен из персонального назначения объекта',
   legacy_department: 'выведен из назначения объекта отделу',
   legacy_default: 'по умолчанию',
 };
+
+/**
+ * Блок «Объекты сотрудника для доступа табельщицы» временно скрыт: это управление
+ * доступом, а не выгрузкой, и ему нужен отдельный экран. Существующие назначения
+ * продолжают действовать — скрыт только редактор. Вернуть = поставить true.
+ */
+const SHOW_EMPLOYEE_OBJECT_ASSIGNMENT = false;
 
 const normalize = (s: string): string => s.toLowerCase().replace(/ё/g, 'е').trim();
 
@@ -73,19 +79,21 @@ const setIndeterminate = (el: HTMLInputElement | null, value: boolean): void => 
 };
 
 /**
- * Единая персональная модалка колонки «Объект».
+ * Персональная модалка колонки «Объект».
  *
- * Два независимых блока — у каждого своя кнопка сохранения, потому что это разные API и
- * разные сущности; общая кнопка создавала бы иллюзию атомарной операции:
+ * Блока два, и они про разное — отсюда раздельные кнопки сохранения: общая создавала бы
+ * иллюзию атомарной операции над двумя независимыми API.
  *   1. Режим табелирования 1С (employees.timesheet_export_mode) — влияет только на колонку
  *      «Адрес объекта» в выгрузке «Единый файл для 1С». Правит и HR.
  *   2. Объекты сотрудника (employee_object_assignment) — управление доступом: от них зависит
- *      скоуп табельщицы «сотрудники моих объектов». Только админ.
+ *      скоуп табельщицы «сотрудники моих объектов». Только админ, и сейчас СКРЫТ —
+ *      см. SHOW_EMPLOYEE_OBJECT_ASSIGNMENT.
  */
 export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageObjects, onClose, onSaved }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const dismiss = useOverlayDismiss(onClose);
+  const showObjects = canManageObjects && SHOW_EMPLOYEE_OBJECT_ASSIGNMENT;
 
   // ─────────────────────────── режим табелирования ───────────────────────────
 
@@ -174,13 +182,13 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
     queryKey: ['admin-skud-objects'],
     queryFn: () => adminService.listSkudObjectsForAssignment(),
     staleTime: 5 * 60_000,
-    enabled: canManageObjects,
+    enabled: showObjects,
   });
   const assignmentsQuery = useQuery({
     queryKey: ['admin-object-assignments'],
     queryFn: () => adminService.getObjectAssignments(),
     staleTime: 30_000,
-    enabled: canManageObjects,
+    enabled: showObjects,
   });
 
   const assignObjects = useMemo(() => assignObjectsQuery.data ?? [], [assignObjectsQuery.data]);
@@ -237,8 +245,8 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
         old ? { ...old, employee_objects: { ...old.employee_objects, [String(employee.id)]: saved } } : old
       ));
       void queryClient.invalidateQueries({ queryKey: ['admin-object-assignments'] });
-      // Легаси-фолбэк режима читает назначения — сбрасываем кэш табеля.
-      void queryClient.invalidateQueries({ queryKey: ['timesheet'] });
+      // Кэш табеля не трогаем: с миграции 253 назначения объектов на режим выгрузки
+      // не влияют, это только доступ табельщицы.
       toast.success('Персональные объекты обновлены');
       setDraft(null);
       onSaved?.();
@@ -273,10 +281,10 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
     <div className="sc-overlay" {...dismiss}>
       <div className="sc-modal sc-modal--full" onClick={e => e.stopPropagation()}>
         <div className="sc-modal-header">
-          <h3>Объект — {employee.full_name}</h3>
+          <h3>Режим табелирования — {employee.full_name}</h3>
           <button className="sc-modal-close" onClick={onClose}>&times;</button>
         </div>
-        <div className={`sc-modal-body sc-mode-body${canManageObjects ? '' : ' sc-mode-body--single'}`}>
+        <div className={`sc-modal-body sc-mode-body${showObjects ? '' : ' sc-mode-body--single'}`}>
           <div className="sc-obj-col">
             <div className="sc-obj-col-label">Вариант табелирования для 1С</div>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
@@ -360,7 +368,7 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
             </div>
           </div>
 
-          {canManageObjects && (
+          {showObjects && (
             <div className="sc-obj-col">
               <div className="sc-obj-col-label">Объекты сотрудника для доступа табельщицы</div>
               <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>

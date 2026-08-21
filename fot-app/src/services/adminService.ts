@@ -91,13 +91,13 @@ export interface IObjectAssignments {
 export type TimesheetExportMode = 'current_activity' | 'object' | 'skud';
 
 /**
- * Откуда взялся эффективный режим. legacy_* — режим не задан явно и выведен из старых
- * назначений объектов; их нельзя показывать как «наследовано от отдела».
+ * Откуда взялся эффективный режим. legacy_* — режим не задан явно и выведен из назначений
+ * объектов ОТДЕЛА; их нельзя показывать как «наследовано от отдела».
+ * Персональные назначения объектов в резолвинге не участвуют — см. миграцию 253.
  */
 export type TimesheetModeSource =
   | 'employee_explicit'
   | 'department_explicit'
-  | 'legacy_employee'
   | 'legacy_department'
   | 'legacy_default';
 

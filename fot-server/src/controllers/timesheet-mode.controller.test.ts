@@ -114,7 +114,7 @@ describe('timesheetModeController.list — скоуп', () => {
       {
         employee_id: 7, full_name: 'Есенов Максим Николаевич', org_department_id: DEPT,
         emp_mode: 'skud', emp_object_id: null, dept_mode: null, dept_object_id: null,
-        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: true,
+        dept_current_activity: true,
       },
     ]);
 
@@ -137,12 +137,12 @@ describe('timesheetModeController.list — скоуп', () => {
       {
         employee_id: 7, full_name: 'Свой', org_department_id: DEPT,
         emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
-        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: false,
+        dept_current_activity: false,
       },
       {
         employee_id: 8, full_name: 'Чужой', org_department_id: 'other-dept',
         emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
-        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: false,
+        dept_current_activity: false,
       },
     ]);
 
@@ -159,12 +159,12 @@ describe('timesheetModeController.list — скоуп', () => {
       {
         employee_id: 1, full_name: 'Свой Сотрудник', org_department_id: DEPT,
         emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
-        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: false,
+        dept_current_activity: false,
       },
       {
         employee_id: 2, full_name: 'Чужой Сотрудник', org_department_id: 'other-dept',
         emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
-        has_personal_assignment: false, personal_current_activity: false, dept_current_activity: false,
+        dept_current_activity: false,
       },
     ]);
     pgQueryOne.mockResolvedValueOnce({ timesheet_export_mode: null, timesheet_export_object_id: null });
@@ -179,12 +179,14 @@ describe('timesheetModeController.list — скоуп', () => {
     expect(payload.employees[0].source).toBe('legacy_default');
   });
 
-  it('legacy от персонального назначения не выдаётся как унаследованный от отдела', async () => {
+  // Миграция 253: персональные назначения объектов из резолвинга убраны — это доступ
+  // табельщицы, а не режим выгрузки. Раньше здесь возвращался source = legacy_employee.
+  it('персональные назначения объектов в резолвинге не участвуют', async () => {
     pgQuery.mockResolvedValueOnce([
       {
         employee_id: 1, full_name: 'Иванов', org_department_id: DEPT,
         emp_mode: null, emp_object_id: null, dept_mode: null, dept_object_id: null,
-        has_personal_assignment: true, personal_current_activity: true, dept_current_activity: true,
+        dept_current_activity: true,
       },
     ]);
     pgQueryOne.mockResolvedValueOnce({ timesheet_export_mode: null, timesheet_export_object_id: null });
@@ -193,8 +195,11 @@ describe('timesheetModeController.list — скоуп', () => {
     await timesheetModeController.list(makeReq({ query: { department_id: DEPT } }), res);
 
     const payload = (res.payload as { data: { employees: Array<{ source: string; effective_mode: string }> } }).data;
-    expect(payload.employees[0].source).toBe('legacy_employee');
+    // Решают только объекты отдела.
+    expect(payload.employees[0].source).toBe('legacy_department');
     expect(payload.employees[0].effective_mode).toBe('current_activity');
+    // Таблица назначений в запрос больше не входит — иначе связь вернулась бы незаметно.
+    expect(String(pgQuery.mock.calls[0][0])).not.toContain('employee_object_assignment');
   });
 });
 

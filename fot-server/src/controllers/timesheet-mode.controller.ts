@@ -114,8 +114,6 @@ export const timesheetModeController = {
         emp_object_id: string | null;
         dept_mode: TimesheetExportMode | null;
         dept_object_id: string | null;
-        has_personal_assignment: boolean;
-        personal_current_activity: boolean;
         dept_current_activity: boolean;
       }>(
         `WITH ca AS (
@@ -131,13 +129,6 @@ export const timesheetModeController = {
             WHERE e.is_archived = false
               AND ( CASE WHEN $3::int[] IS NOT NULL THEN e.id = ANY($3::int[])
                          ELSE e.org_department_id = $1::uuid END )
-         ),
-         personal AS (
-           SELECT eoa.employee_id,
-                  bool_or(eoa.skud_object_id IN (SELECT id FROM ca)) AS is_current
-             FROM employee_object_assignment eoa
-            WHERE eoa.is_active = true AND eoa.employee_id IN (SELECT id FROM target)
-            GROUP BY eoa.employee_id
          )
          SELECT e.id                                AS employee_id,
                 e.full_name,
@@ -146,8 +137,6 @@ export const timesheetModeController = {
                 e.timesheet_export_object_id::text  AS emp_object_id,
                 d.timesheet_export_mode             AS dept_mode,
                 d.timesheet_export_object_id::text  AS dept_object_id,
-                (p.employee_id IS NOT NULL)         AS has_personal_assignment,
-                COALESCE(p.is_current, false)       AS personal_current_activity,
                 EXISTS (
                   SELECT 1 FROM department_object_assignment doa
                    WHERE doa.org_department_id = e.org_department_id
@@ -156,7 +145,6 @@ export const timesheetModeController = {
                 )                                   AS dept_current_activity
            FROM employees e
            LEFT JOIN org_departments d ON d.id = e.org_department_id
-           LEFT JOIN personal p        ON p.employee_id = e.id
           WHERE e.id IN (SELECT id FROM target)
           ORDER BY e.full_name`,
         [departmentId || null, CURRENT_ACTIVITY_ADDRESS, employeeIds.length > 0 ? employeeIds : null],

@@ -29,8 +29,6 @@ const modeRow = (
     emp_object_id: string | null;
     dept_mode: string | null;
     dept_object_id: string | null;
-    has_personal_assignment: boolean;
-    personal_current_activity: boolean;
     dept_current_activity: boolean;
   }> = {},
 ): Record<string, unknown> => ({
@@ -39,8 +37,6 @@ const modeRow = (
   emp_object_id: null,
   dept_mode: null,
   dept_object_id: null,
-  has_personal_assignment: false,
-  personal_current_activity: false,
   dept_current_activity: false,
   ...over,
 });
@@ -185,13 +181,13 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
     expect(ivanRows[0].day1).toBe(5);
   });
 
-  it('персональный обычный объект переопределяет «текущую деятельность» отдела → разбивка по объекту', async () => {
+  // Миграция 253: персональные назначения объектов из резолвинга убраны. Тем, кто резолвился
+  // через них, миграция записала явный режим — этот тест проверяет его эквивалентность.
+  it('явный skud перекрывает «текущую деятельность» отдела → разбивка по объекту', async () => {
     queryMock.mockImplementation((sql: string) => {
       if (isModeQuery(sql)) {
-        // У Петра персональное назначение обычного объекта → legacy-ветка смотрит только
-        // персональные объекты и «текущую деятельность» отдела не применяет.
         return Promise.resolve([
-          modeRow(2, { has_personal_assignment: true, personal_current_activity: false, dept_current_activity: true }),
+          modeRow(2, { emp_mode: 'skud', dept_current_activity: true }),
         ]);
       }
       if (sql.includes('FROM skud_objects')) {
@@ -214,6 +210,33 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
     }
     expect(addresses).toContain('Склад 7');
     expect(addresses).not.toContain('Текущая деятельность');
+  });
+
+  // Обратная сторона той же правки: без явного режима решают ТОЛЬКО объекты отдела,
+  // даже если у человека есть персональные назначения (они в запрос уже не попадают).
+  it('без явного режима «текущая деятельность» отдела применяется → одна строка ТД', async () => {
+    queryMock.mockImplementation((sql: string) => {
+      if (isModeQuery(sql)) {
+        return Promise.resolve([modeRow(2, { dept_current_activity: true })]);
+      }
+      if (sql.includes('FROM skud_objects')) {
+        return Promise.resolve([{ id: 'obj-b', alt_name: null, name: 'Склад 7' }]);
+      }
+      return Promise.resolve([]);
+    });
+
+    const deptCurrent = makeDept('Текущий', 'dept-cur',
+      { id: 2, full_name: 'Петр Петров', org_department_id: 'dept-cur' },
+      8, [{ object_key: 'obj-b', object_id: 'obj-b', object_name: 'Склад 7', hours: 8 }]);
+
+    const ws2 = (await buildUnified1CWorkbook(4, 2026, [deptCurrent])).getWorksheet(1)!;
+    const addrs: string[] = [];
+    for (let r = ONE_C_DATA_START_ROW; r <= ws2.rowCount; r++) {
+      const fio = ws2.getCell(r, COL_FIO).value;
+      if (typeof fio !== 'string' || !fio.trim()) continue;
+      addrs.push(String(ws2.getCell(r, COL_ADDRESS).value ?? ''));
+    }
+    expect(addrs).toEqual(['Текущая деятельность']);
   });
 
   it('столбец «Руководитель»: прямой → иначе нач. отдела/участка; «тест» отбрасываем; несколько через запятую', async () => {
@@ -361,9 +384,9 @@ describe('buildUnified1CWorkbook — явные режимы табелиров�
     expect(rows.some(r => r.address === 'Текущая деятельность')).toBe(false);
   });
 
-  it('явный current_activity перекрывает обычное персональное назначение объекта', async () => {
+  it('явный current_activity перекрывает разбивку по объектам', async () => {
     mockModes(
-      [modeRow(2, { emp_mode: 'current_activity', has_personal_assignment: true, personal_current_activity: false })],
+      [modeRow(2, { emp_mode: 'current_activity', dept_current_activity: false })],
       OBJECTS,
     );
 
