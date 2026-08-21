@@ -63,6 +63,19 @@ export const ObjectKpiContractForm: FC<IProps> = ({ data, canEdit, formId, onSub
             и выглядит это как провал KPI, а не как «объект ещё не начинался». */}
         <span className={styles.hint}>Месяцы до него в отчёт и в расчёт премии не попадают</span>
       </label>
+      <label className={styles.field}>
+        {/* Точка отсчёта вместо истории актов: иначе верный остаток требует завести КС-2
+            за каждый прошедший месяц объекта. Пусто — считаем по КС-2, как обычно. */}
+        <span>Остаток на первый расчётный месяц, ₽</span>
+        <input
+          name="opening_remainder"
+          inputMode="decimal"
+          defaultValue={toMoneyInput(data?.opening_remainder)}
+          disabled={!canEdit}
+          onChange={(event) => { event.target.value = formatMoneyInput(event.target.value); }}
+        />
+        <span className={styles.hint}>Задан — КС-2 за месяцы до него в расчёт не берутся</span>
+      </label>
     </div>
 
     <label className={styles.field}>

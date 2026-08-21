@@ -155,6 +155,31 @@ describe('OBJECT_KPI_REPORT_SQL', () => {
     expect(overrideUses).toHaveLength(2);
   });
 
+  it('ручной остаток становится точкой отсчёта накопления', () => {
+    // Ветка живёт в baselines: это единственное место, где рождается «накоплено до окна».
+    expect(OBJECT_KPI_REPORT_SQL)
+      .toContain('WHEN s.opening_remainder IS NOT NULL AND s.plan_start_month IS NOT NULL THEN');
+    // Конвертация «остаток -> накопленный объём» идёт ДО слагаемого зазора: иначе акты
+    // между plan_start_month и началом окна потерялись бы.
+    const branch = OBJECT_KPI_REPORT_SQL.slice(
+      OBJECT_KPI_REPORT_SQL.indexOf('WHEN s.opening_remainder IS NOT NULL'),
+      OBJECT_KPI_REPORT_SQL.indexOf('END AS ks2_before_window'),
+    );
+    expect(branch.indexOf('- s.opening_remainder'))
+      .toBeLessThan(branch.indexOf('k.customer_signed_date >= s.plan_start_month'));
+    // GREATEST(...,0) вокруг конвертации подменил бы введённое число при остатке выше
+    // стоимости договора — таблица показала бы не то, что сохранил экономист.
+    expect(branch).not.toContain('GREATEST(COALESCE(s.base_amount');
+  });
+
+  it('решётка режется только по plan_start_month', () => {
+    // Ручной остаток не должен скрывать месяцы сам по себе: точку отсчёта задаёт
+    // первый расчётный месяц, и запрет на закрытые месяцы живёт в сервисе, не в SQL.
+    expect(OBJECT_KPI_REPORT_SQL)
+      .toContain('AND (s.plan_start_month IS NULL OR m.period_month >= s.plan_start_month)');
+    expect(OBJECT_KPI_REPORT_SQL).not.toContain('m.period_month >= s.opening_remainder');
+  });
+
   it('руководитель месяца выбирается детерминированно', () => {
     // Без второго ключа при смене 15/15 победитель зависит от порядка строк в плане.
     expect(OBJECT_KPI_REPORT_SQL).toContain('ORDER BY t.days DESC, t.valid_from DESC');

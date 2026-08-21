@@ -117,6 +117,26 @@ describe('mapDatabaseError', () => {
     expect(result?.message).toContain('месяц');
   });
 
+  it('отрицательный ручной остаток отдаёт понятный текст', () => {
+    const result = mapDatabaseError({
+      code: '23514',
+      constraint: 'object_contracts_opening_remainder_check',
+    });
+
+    expect(result).toMatchObject({ http: 400, code: 'check_violation' });
+    expect(result?.message).toContain('Остаток');
+  });
+
+  it('остаток без первого расчётного месяца отдаёт понятный текст', () => {
+    const result = mapDatabaseError({
+      code: '23514',
+      constraint: 'object_contracts_opening_remainder_month_check',
+    });
+
+    expect(result).toMatchObject({ http: 400, code: 'check_violation' });
+    expect(result?.message).toContain('первый расчётный месяц');
+  });
+
   it('незнакомый CHECK всё равно 400, а не 500', () => {
     const result = mapDatabaseError({ code: '23514', constraint: 'some_future_check' });
     expect(result).toMatchObject({ http: 400, message: 'Данные не прошли проверку базы' });

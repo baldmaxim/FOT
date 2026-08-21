@@ -14,6 +14,15 @@ import { moscowTodayIso } from '../utils/date.utils.js';
  *   fact(M)             = Σ КС-2(signed) с period_month = M                     (п. 3.1)
  *   completion(M)       = fact / plan × 100                                     (п. 3.4)
  *
+ * Ручная точка отсчёта (object_contracts.opening_remainder, NULL = считать как обычно):
+ *   ks2_cumulative(plan_start_month − 1) = contract_total(plan_start_month) − opening_remainder
+ * то есть введённый остаток становится остатком на начало первого расчётного месяца, а КС-2
+ * за более ранние месяцы в расчёт не берутся. Обрезать результат снизу нулём нельзя: остаток
+ * выше стоимости договора обязан показаться как введён, иначе таблица молча показала бы не то
+ * число, которое сохранил экономист. Сам такой ввод запрещён проверкой сервиса
+ * (assertOpeningRemainderValid); если перебор возник позже уменьшающим ДС, он виден по
+ * отрицательному ks2_cumulative — over_contract здесь не срабатывает, он про другое.
+ *
  * Обе половины остатка берутся на ОДИН момент — начало месяца M. Отсюда граница
  * ДС `<= 1-е число`, а не `<= последний день месяца`: иначе допник, заехавший
  * 25-го числа, менял бы уже зафиксированный план, и сигнал plan_drift («после
@@ -93,6 +102,7 @@ scope AS (
     c.planned_zos_date,
     c.actual_zos_date,
     c.plan_start_month,
+    c.opening_remainder,
     c.planned_headcount
   FROM skud_objects o
   -- CROSS JOIN, а не «= ANY((SELECT object_ids FROM params))». Две формы ANY пишутся
@@ -117,16 +127,46 @@ scope AS (
 -- Операторы у КС-2/КС-6 и ДС РАЗНЫЕ намеренно: акты берутся строго ДО отсечки (по конец
 -- предыдущего месяца), а ДС, действующий с 1-го числа, входит уже в этот месяц —
 -- обе половины остатка на один момент, см. шапку файла.
+--
+-- Ветка opening_remainder — ручная точка отсчёта: экономист вводит остаток по договору на
+-- первый расчётный месяц, и вся история КС-2 до него в расчёт не берётся. Хранится остаток,
+-- а не накопленный объём (иначе новое ДС двигало бы стоимость, а остаток — нет), поэтому
+-- здесь он конвертируется обратно. GREATEST(...,0) вокруг конвертации НЕТ намеренно: он
+-- подменил бы введённое число при остатке выше стоимости договора, см. шапку файла.
 baselines AS (
   SELECT
     s.skud_object_id,
-    COALESCE((
-      SELECT SUM(k.amount)
-        FROM object_ks2_entries k
-       WHERE k.skud_object_id = s.skud_object_id
-         AND k.status = 'signed'
-         AND k.customer_signed_date < GREATEST((SELECT month_from FROM params), s.plan_start_month)
-    ), 0::numeric) AS ks2_before_window,
+    CASE
+      WHEN s.opening_remainder IS NOT NULL AND s.plan_start_month IS NOT NULL THEN
+        COALESCE(s.base_amount, 0::numeric)
+        + COALESCE((
+            SELECT SUM(a.amount_delta)
+              FROM object_contract_addenda a
+             WHERE a.contract_id = s.contract_id
+               AND a.status = 'signed'
+               AND a.effective_date <= s.plan_start_month
+          ), 0::numeric)
+        - s.opening_remainder
+        -- Зазор, когда окно отчёта начинается ПОЗЖЕ первого расчётного месяца: в решётку
+        -- эти акты не попадут, а накопление обязаны увеличить. При month_from <=
+        -- plan_start_month диапазон пуст и слагаемое равно нулю.
+        + COALESCE((
+            SELECT SUM(k.amount)
+              FROM object_ks2_entries k
+             WHERE k.skud_object_id = s.skud_object_id
+               AND k.status = 'signed'
+               AND k.customer_signed_date >= s.plan_start_month
+               AND k.customer_signed_date < GREATEST((SELECT month_from FROM params), s.plan_start_month)
+          ), 0::numeric)
+      ELSE
+        COALESCE((
+          SELECT SUM(k.amount)
+            FROM object_ks2_entries k
+           WHERE k.skud_object_id = s.skud_object_id
+             AND k.status = 'signed'
+             AND k.customer_signed_date < GREATEST((SELECT month_from FROM params), s.plan_start_month)
+        ), 0::numeric)
+    END AS ks2_before_window,
     COALESCE((
       SELECT SUM(a.amount_delta)
         FROM object_contract_addenda a

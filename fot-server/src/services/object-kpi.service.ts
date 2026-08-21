@@ -36,6 +36,8 @@ export interface ObjectContractRow {
   planned_zos_date: string | null;
   actual_zos_date: string | null;
   plan_start_month: string | null;
+  /** Ручной остаток по договору на начало plan_start_month. NULL — считать по КС-2. */
+  opening_remainder: string | null;
   planned_headcount: number | null;
   is_active: boolean;
   notes: string | null;
@@ -82,6 +84,7 @@ const CONTRACT_COLUMNS = `
   to_char(planned_zos_date, 'YYYY-MM-DD') AS planned_zos_date,
   to_char(actual_zos_date, 'YYYY-MM-DD')  AS actual_zos_date,
   to_char(plan_start_month, 'YYYY-MM-DD') AS plan_start_month,
+  opening_remainder,
   planned_headcount, is_active, notes, version, created_at, updated_at`;
 
 const ADDENDUM_COLUMNS = `
@@ -149,6 +152,7 @@ export interface ContractInput {
   planned_zos_date?: string | null;
   actual_zos_date?: string | null;
   plan_start_month?: string | null;
+  opening_remainder?: number | string | null;
   planned_headcount?: number | null;
   notes?: string | null;
 }
@@ -162,14 +166,23 @@ export async function createContract(
   const objectExists = await client.query('SELECT 1 FROM skud_objects WHERE id = $1', [objectId]);
   if ((objectExists.rowCount ?? 0) === 0) failNotFound('Объект');
 
+  if (input.opening_remainder !== undefined && input.opening_remainder !== null) {
+    // Договора ещё нет, значит и ДС к нему нет — contractId = null.
+    await assertOpeningRemainderValid(client, objectId, null, {
+      baseAmount: Number(input.base_amount),
+      planStartMonth: input.plan_start_month ?? null,
+      openingRemainder: Number(input.opening_remainder),
+    });
+  }
+
   let row: ObjectContractRow;
   try {
     const result = await client.query<ObjectContractRow>(
       `INSERT INTO object_contracts (
          skud_object_id, contract_number, contract_date, customer_name, base_amount,
-         planned_zos_date, actual_zos_date, plan_start_month, planned_headcount, notes,
-         created_by, updated_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
+         planned_zos_date, actual_zos_date, plan_start_month, opening_remainder,
+         planned_headcount, notes, created_by, updated_by
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)
        RETURNING ${CONTRACT_COLUMNS}`,
       [
         objectId,
@@ -180,6 +193,7 @@ export async function createContract(
         input.planned_zos_date ?? null,
         input.actual_zos_date ?? null,
         input.plan_start_month ?? null,
+        input.opening_remainder ?? null,
         input.planned_headcount ?? null,
         input.notes ?? null,
         actor.userId,
@@ -210,6 +224,7 @@ const CONTRACT_PATCHABLE = [
   'planned_zos_date',
   'actual_zos_date',
   'plan_start_month',
+  'opening_remainder',
   'planned_headcount',
   'is_active',
   'notes',
@@ -233,6 +248,22 @@ export async function updateContract(
 
   if (patch.base_amount !== undefined) {
     await assertContractTotalNonNegative(client, contractId, Number(patch.base_amount));
+  }
+
+  // Проверяются ИТОГОВЫЕ значения, а не только присланные: снижение стоимости договора
+  // или перенос первого расчётного месяца ломает уже сохранённый остаток ровно так же,
+  // как его собственная правка.
+  const nextOpening = patch.opening_remainder !== undefined
+    ? patch.opening_remainder
+    : before.opening_remainder;
+  if (nextOpening !== null && nextOpening !== undefined) {
+    await assertOpeningRemainderValid(client, before.skud_object_id, contractId, {
+      baseAmount: Number(patch.base_amount !== undefined ? patch.base_amount : before.base_amount),
+      planStartMonth: (patch.plan_start_month !== undefined
+        ? patch.plan_start_month
+        : before.plan_start_month) as string | null,
+      openingRemainder: Number(nextOpening),
+    });
   }
 
   const entries = CONTRACT_PATCHABLE.filter((f) => patch[f] !== undefined).map((f) => [f, patch[f]] as const);
@@ -285,6 +316,68 @@ async function assertContractTotalNonNegative(
       http: 409,
       code: 'negative_contract_total',
       message: 'Стоимость договора с учётом допсоглашений стала бы отрицательной',
+    });
+  }
+}
+
+/**
+ * Ручной остаток по договору: три условия, при которых он даст неверные цифры.
+ *
+ * Проверка живёт в сервисе, а не только в CHECK таблицы: два из трёх условий требуют
+ * соседних строк (сумма подписанных ДС, наличие закрытых месяцев), а CHECK видит только
+ * свою строку.
+ */
+export async function assertOpeningRemainderValid(
+  client: PoolClient,
+  objectId: string,
+  contractId: string | null,
+  next: { baseAmount: number; planStartMonth: string | null; openingRemainder: number },
+): Promise<void> {
+  // 1. Остаток без точки отсчёта. Дублирует CHECK БД ради человеческого текста.
+  if (!next.planStartMonth) {
+    failWith({
+      http: 400,
+      code: 'opening_remainder_month_required',
+      message: 'Укажите первый расчётный месяц: остаток задаётся на него',
+    });
+  }
+
+  // 2. Остаток выше стоимости договора на эту дату. Без запрета отчёт показал бы
+  // отрицательный накопленный объём: цифра честная, но заведомо ошибочная.
+  const addenda = contractId === null
+    ? 0
+    : Number((await client.query<{ total: string }>(
+        `SELECT COALESCE(SUM(amount_delta), 0)::numeric AS total
+           FROM object_contract_addenda
+          WHERE contract_id = $1 AND status = 'signed' AND effective_date <= $2::date`,
+        [contractId, next.planStartMonth],
+      )).rows[0].total);
+
+  if (next.openingRemainder > next.baseAmount + addenda) {
+    failWith({
+      http: 409,
+      code: 'opening_remainder_above_contract',
+      message: 'Остаток больше стоимости договора с допсоглашениями на этот месяц',
+    });
+  }
+
+  // 3. Закрытые месяцы раньше точки отсчёта. Решётка отчёта режет всё до plan_start_month,
+  // и такие месяцы вместе с уже посчитанной по ним премией просто исчезли бы из отчёта.
+  const fixed = await client.query(
+    `SELECT 1
+       FROM object_kpi_month_plans
+      WHERE skud_object_id = $1
+        AND is_current
+        AND status IN ('fixed', 'corrected')
+        AND period_month < $2::date
+      LIMIT 1`,
+    [objectId, next.planStartMonth],
+  );
+  if ((fixed.rowCount ?? 0) > 0) {
+    failWith({
+      http: 409,
+      code: 'opening_remainder_over_fixed_months',
+      message: 'У объекта есть закрытые месяцы раньше первого расчётного — остаток по ним задать нельзя',
     });
   }
 }

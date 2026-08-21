@@ -77,6 +77,9 @@ const CHECK_MESSAGES: Record<string, string> = {
   object_contracts_plan_start_month_check:
     'Первый расчётный месяц задаётся месяцем — выберите месяц, а не конкретную дату',
   object_contracts_base_amount_check: 'Стоимость договора не может быть отрицательной',
+  object_contracts_opening_remainder_check: 'Остаток не может быть отрицательным',
+  object_contracts_opening_remainder_month_check:
+    'Укажите первый расчётный месяц: остаток задаётся на него',
   object_contract_addenda_amount_delta_check: 'Сумма допсоглашения не может быть нулевой',
   object_contract_addenda_addendum_number_check: 'Укажите номер допсоглашения',
   object_ks2_entries_check: 'Акт КС-2 должен быть положительным, уменьшение объёма — отрицательным',

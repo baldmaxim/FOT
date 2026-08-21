@@ -207,6 +207,8 @@ export const ObjectKpiCardModal: FC<IProps> = ({
       planned_zos_date: value('planned_zos_date'),
       actual_zos_date: value('actual_zos_date'),
       plan_start_month: value('plan_start_month'),
+      // Пустое поле — это null («считать по КС-2»), а не ноль («всё закрыто»).
+      opening_remainder: parseMoneyInput(String(form.get('opening_remainder') ?? '')),
       notes: value('notes'),
       reason: contractReason.trim() || null,
     });

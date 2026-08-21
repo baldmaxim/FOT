@@ -58,6 +58,8 @@ const contractSchema = z.object({
   planned_zos_date: dateSchema.nullish(),
   actual_zos_date: dateSchema.nullish(),
   plan_start_month: monthSchema.nullish(),
+  // Ручной остаток на первый расчётный месяц. null — считать по КС-2, как обычно.
+  opening_remainder: moneySchema.nullish(),
   planned_headcount: z.number().int().min(0).nullish(),
   notes: z.string().trim().max(2000).nullish(),
 });

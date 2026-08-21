@@ -187,6 +187,8 @@ export interface IObjectContract {
   planned_zos_date: string | null;
   actual_zos_date: string | null;
   plan_start_month: string | null;
+  /** Ручной остаток на первый расчётный месяц. null — считать по КС-2, как обычно. */
+  opening_remainder: string | null;
   planned_headcount: number | null;
   is_active: boolean;
   notes: string | null;

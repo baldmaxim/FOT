@@ -43,6 +43,7 @@ const FIELD_LABELS: Record<string, string> = {
   planned_zos_date: 'Плановая ЗОС',
   actual_zos_date: 'Фактическая ЗОС',
   plan_start_month: 'Первый расчётный месяц',
+  opening_remainder: 'Остаток на первый расчётный месяц',
   planned_headcount: 'Плановая численность',
   is_active: 'Активность',
   notes: 'Примечание',
@@ -82,6 +83,7 @@ const TECHNICAL_FIELDS = new Set([
 const MONEY_FIELDS = new Set([
   'base_amount', 'amount', 'amount_delta', 'plan_amount',
   'override_plan_amount', 'calculated_plan_amount', 'remainder', 'contract_total',
+  'opening_remainder',
 ]);
 
 const DATE_FIELDS = new Set([
