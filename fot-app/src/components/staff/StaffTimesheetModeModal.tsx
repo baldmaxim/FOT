@@ -279,19 +279,35 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
 
   return (
     <div className="sc-overlay" {...dismiss}>
-      <div className="sc-modal sc-modal--full" onClick={e => e.stopPropagation()}>
+      <div className="sc-modal sc-modal--full sc-modal--pick" onClick={e => e.stopPropagation()}>
         <div className="sc-modal-header">
           <h3>Режим табелирования — {employee.full_name}</h3>
           <button className="sc-modal-close" onClick={onClose}>&times;</button>
         </div>
-        <div className={`sc-modal-body sc-mode-body${showObjects ? '' : ' sc-mode-body--single'}`}>
+        <div className={`sc-modal-body sc-mode-body ${showObjects ? 'sc-mode-body--pick3' : 'sc-mode-body--pick'}`}>
           <div className="sc-obj-col">
-            <div className="sc-obj-col-label">Вариант табелирования для 1С</div>
-            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary, #64748b)' }}>
-              Определяет колонку «Адрес объекта» в выгрузке «Единый файл для 1С». На сам табель,
-              СКУД и права не влияет. {rowReady ? effectiveHint : 'Загрузка текущей настройки…'}
-            </p>
+            <div className="sc-obj-col-label">Сотрудник</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>{employee.full_name}</div>
+            <div style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text-secondary, #64748b)' }}>
+              <div>Отдел — {employee.department || '—'}</div>
+              <div>Должность — {employee.position_name || '—'}</div>
+              <div>Таб. номер — {employee.tab_number || '—'}</div>
+            </div>
 
+            <div style={{ fontSize: 13 }}>
+              {rowReady ? effectiveHint : 'Загрузка текущей настройки…'}
+            </div>
+
+            {objectRequired && loadedRow?.effective_object_is_active === false
+              && objectId === loadedRow.explicit_object_id && (
+              <div className="sc-obj-empty" style={{ fontSize: 12 }}>
+                Текущий объект неактивен — выберите другой.
+              </div>
+            )}
+          </div>
+
+          <div className="sc-obj-col">
+            <div className="sc-obj-col-label">Вариант табелирования</div>
             <input
               type="text"
               className="sc-obj-search"
@@ -353,19 +369,10 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
               ))}
             </div>
 
-            {objectRequired && loadedRow?.effective_object_is_active === false
-              && objectId === loadedRow.explicit_object_id && (
-              <div className="sc-obj-empty" style={{ fontSize: 12 }}>
-                Текущий объект неактивен — выберите другой.
-              </div>
-            )}
-
-            <div className="sc-modal-footer" style={{ padding: '10px 0 0', border: 0 }}>
-              <button className="sc-btn apply" onClick={() => void handleSaveMode()} disabled={!canSaveMode}>
-                <Check size={15} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
-                {saving ? 'Сохранение…' : 'Сохранить вариант'}
-              </button>
-            </div>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary, #64748b)' }}>
+              Определяет колонку «Адрес объекта» в выгрузке «Единый файл для 1С».
+              На сам табель, СКУД и права не влияет.
+            </p>
           </div>
 
           {showObjects && (
@@ -427,6 +434,10 @@ export const StaffTimesheetModeModal: FC<IProps> = ({ employee, row, canManageOb
         </div>
         <div className="sc-modal-footer">
           <button className="sc-btn cancel" onClick={onClose} disabled={saving || objSaving}>Закрыть</button>
+          <button className="sc-btn apply" onClick={() => void handleSaveMode()} disabled={!canSaveMode}>
+            <Check size={15} style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+            {saving ? 'Сохранение…' : 'Сохранить вариант'}
+          </button>
         </div>
       </div>
     </div>

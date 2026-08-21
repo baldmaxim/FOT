@@ -1208,6 +1208,23 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Персональная модалка: адресат один, 90vw ей ни к чему — колонки поровну.
+   Класс идёт рядом с --full, а не вместо: от --full нужны flex-колонка тела и правило
+   растягивания списка по высоте. */
+.sc-modal--full.sc-modal--pick {
+  width: min(1040px, 92vw); /* 92vw — потолок из базового .sc-modal, выше не поднять */
+  height: min(760px, 90vh);
+}
+
+.sc-modal-body.sc-mode-body--pick {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+/* Тот же экран с вернувшимся блоком доступа табельщицы — три колонки. */
+.sc-modal-body.sc-mode-body--pick3 {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 4fr) minmax(0, 3fr);
+}
+
 .sc-mode-body .sc-obj-col {
   display: flex;
   flex-direction: column;
@@ -1246,6 +1263,13 @@
     height: 92dvh;
   }
 
+  /* Правило .sc-modal--full.sc-modal--pick специфичнее мобильного .sc-modal--full,
+     поэтому размеры для персональной модалки задаём здесь отдельно. */
+  .sc-modal--full.sc-modal--pick {
+    width: 92vw;
+    height: 92dvh;
+  }
+
   .sc-modal-body.sc-mode-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto;
@@ -1254,6 +1278,22 @@
 
   /* На узком экране прокручивается вся модалка целиком — без вложенных скроллов. */
   .sc-modal--full .sc-mode-body .sc-obj-list {
+    flex: 0 0 auto;
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+/* Три колонки схлопываются раньше двух: при 901-1024px треки 3/4/3 внутри ~92vw дают
+   боковым колонкам 220-270px, и текст начинает рваться по словам. */
+@media (max-width: 1100px) {
+  .sc-modal-body.sc-mode-body--pick3 {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    overflow-y: auto;
+  }
+
+  .sc-modal--full .sc-mode-body--pick3 .sc-obj-list {
     flex: 0 0 auto;
     max-height: none;
     overflow-y: visible;
