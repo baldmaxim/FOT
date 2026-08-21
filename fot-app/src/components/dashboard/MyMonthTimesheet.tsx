@@ -166,6 +166,10 @@ interface IMyMonthTimesheetProps {
   onDayFocus?: (date: string, payload: IDayFocusPayload) => void;
   noCard?: boolean;
   allowFuture?: boolean;
+  /** Дни, недоступные для выбора (например, корректировка на них уже подавалась). */
+  disabledDates?: Set<string>;
+  /** Пояснение к заблокированному дню — уходит в тултип ячейки. */
+  disabledHint?: string;
 }
 
 export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
@@ -177,6 +181,8 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
   onDayFocus,
   noCard,
   allowFuture,
+  disabledDates,
+  disabledHint,
 }) => {
   const { showActualHours } = useAuth();
   const { minOffset, maxOffset } = useTimesheetMonthAccess({ ignoreExempt: true });
@@ -273,11 +279,12 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
   const didAutoFocusRef = useRef(false);
   useEffect(() => {
     if (didAutoFocusRef.current || !onDayFocus || offset !== 0 || timesheetQuery.isLoading) return;
+    if (disabledDates?.has(todayIso)) return;
     onDayFocus(todayIso, buildDayPayload(todayIso, currentYear, currentMonth, today.getDate()));
     lastFocusSyncRef.current = { iso: todayIso, data: timesheetQuery.data };
     didAutoFocusRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timesheetQuery.isLoading, timesheetQuery.data, offset, onDayFocus, entriesByDay, objectEntriesByIso, employeeSchedule, calendar, currentYear, currentMonth, todayIso, today, showActualHours]);
+  }, [timesheetQuery.isLoading, timesheetQuery.data, offset, onDayFocus, entriesByDay, objectEntriesByIso, employeeSchedule, calendar, currentYear, currentMonth, todayIso, today, showActualHours, disabledDates]);
 
   // Табель обновился (рефетч текущего месяца) — отдаём панели свежий срез активного дня.
   useEffect(() => {
@@ -329,6 +336,7 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
 
   const handleCellClick = (iso: string, entry: TimesheetEntry | null, ds: DayStatus) => {
     if (ds === 'future' && !allowFuture) return;
+    if (disabledDates?.has(iso)) return;
     // Тот же срез, что отдал бы эффект синхронизации — помечаем, чтобы он не отправил дубль.
     lastFocusSyncRef.current = { iso, data: timesheetQuery.data };
     onDayFocus?.(iso, {
@@ -419,14 +427,16 @@ export const MyMonthTimesheet: FC<IMyMonthTimesheetProps> = ({
             ? ` • ${REQUEST_TYPE_LABELS[reqInfo.request_type] || 'заявка'}: ${STATUS_LABELS[reqInfo.status]}`
             : '';
           const title = `${baseTitle}${reqTitle}`;
+          const isBlocked = disabledDates?.has(cell.iso) ?? false;
 
           return (
             <button
               key={cell.iso}
               type="button"
-              className={cellCls}
+              className={`${cellCls}${isBlocked ? ` ${styles.cellDisabled}` : ''}`}
               onClick={() => handleCellClick(cell.iso, cell.entry, cell.ds)}
-              data-tooltip={title}
+              aria-disabled={isBlocked || undefined}
+              data-tooltip={isBlocked && disabledHint ? `${title} • ${disabledHint}` : title}
             >
               <span className={styles.cellDay}>{cell.day}</span>
               {STATUS_LETTER[effectiveDs] ? (

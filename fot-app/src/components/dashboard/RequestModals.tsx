@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { leaveRequestService, type ILeaveRequest, type LeaveRequestType } from '../../services/leaveRequestService';
 import { documentService } from '../../services/documentService';
-import { getMyLeaveRequestsQueryKey } from '../../hooks/usePortalData';
+import { getMyLeaveRequestsQueryKey, useMyLeaveRequests } from '../../hooks/usePortalData';
+import { ApiError } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useOverlayDismiss } from '../../hooks/useOverlayDismiss';
@@ -100,6 +101,15 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   });
   const myObjects = objectsQuery.data ?? [];
 
+  // Корректировку на день подают один раз: pending/approved/rejected закрывают дату,
+  // cancelled — освобождает (та же логика, что в гарде бэкенда).
+  const myRequestsQuery = useMyLeaveRequests();
+  const usedCorrectionDates = useMemo(() => new Set(
+    (myRequestsQuery.data ?? [])
+      .filter(r => r.request_type === 'time_correction' && r.status !== 'cancelled' && r.correction_date)
+      .map(r => (r.correction_date as string).slice(0, 10)),
+  ), [myRequestsQuery.data]);
+
   // Объекты выбранного дня (реальные СКУД/manual_object с object_id), дедуп по object_id.
   const dayObjects = useMemo(() => {
     const src = (focusedPayload?.objectEntries ?? []).filter(o => !o.from_day_level && o.object_id);
@@ -117,6 +127,24 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   useEffect(() => {
     setCorrectionObjectId(dayObjects.length === 1 ? dayObjects[0].object_id : '');
   }, [focusedDay, dayObjects]);
+
+  // Список заявлений приезжает асинхронно, а presetDate кладётся в состояние сразу —
+  // поэтому занятые дни снимаем с выбора эффектом, а не только при инициализации.
+  useEffect(() => {
+    if (!isCorrection || usedCorrectionDates.size === 0) return;
+    setSelectedDates(prev => {
+      const next = new Set([...prev].filter(d => !usedCorrectionDates.has(d)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [isCorrection, usedCorrectionDates]);
+
+  // Зависимость от самого focusedDay: иначе автофокус календаря снова выставил бы
+  // занятый день уже после разовой очистки.
+  useEffect(() => {
+    if (!isCorrection || !focusedDay || !usedCorrectionDates.has(focusedDay)) return;
+    setFocusedDay(null);
+    setFocusedPayload(null);
+  }, [isCorrection, focusedDay, usedCorrectionDates]);
 
   const handleTypeChange = (next: LeaveRequestType) => {
     setRequestType(next);
@@ -156,10 +184,12 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
   const handleSubmit = async () => {
     if (!employeeId) return showToast('error', 'Не найден ID сотрудника');
     const parsedCorrectionHours = parseFloat(correctionHours);
-    const days = sortedDates;
+    // Подстраховка к блокировке в календаре: занятые дни до сервера не доезжают.
+    const days = isCorrection ? sortedDates.filter(d => !usedCorrectionDates.has(d)) : sortedDates;
 
     if (isCorrection) {
-      if (days.length === 0) return showToast('error', 'Выберите день(дни) на календаре');
+      if (sortedDates.length === 0) return showToast('error', 'Выберите день(дни) на календаре');
+      if (days.length === 0) return showToast('error', 'На выбранные дни корректировка уже подавалась');
       if (!correctionHours.trim() || !Number.isInteger(parsedCorrectionHours) || parsedCorrectionHours < 0) {
         return showToast('error', 'Часы — только целым числом (8, 9, 10…)');
       }
@@ -194,6 +224,9 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
 
       let failedFiles = 0;
       let firstCreated: ILeaveRequest | null = null;
+      // Успех показываем только если ни один день не отвалился — иначе тост
+      // «Заявление отправлено» перекрыл бы предупреждение о занятых днях.
+      let hadSubmitIssues = false;
 
       if (isCorrection) {
         // По одному заявлению на каждый выбранный день — одинаковые часы/объект/причина.
@@ -210,14 +243,27 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
           })),
         );
         const created = results.flatMap(r => (r.status === 'fulfilled' ? [r.value] : []));
+        const rejected = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
         if (created.length === 0) {
-          const firstErr = results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
-          throw new Error(firstErr?.reason instanceof Error ? firstErr.reason.message : 'Не удалось создать корректировку');
+          // Пробрасываем исходную ошибку, а не новый Error: иначе теряется ApiError.code
+          // и серверный текст 409 «корректировка на … уже подавалась».
+          throw rejected[0]?.reason ?? new Error('Не удалось создать корректировку');
         }
         firstCreated = created[0];
         failedFiles = await uploadFilesTo(created[0].id);
-        if (created.length < days.length) {
-          showToast('warning', `Создано ${created.length} из ${days.length} корректировок`);
+        // Дубли и реальные сбои (сеть, 500) разделены: иначе одна из причин молча тонет.
+        const isDuplicateError = (e: unknown) => e instanceof ApiError && e.code === 'CORRECTION_ALREADY_REQUESTED';
+        const dupCount = rejected.filter(r => isDuplicateError(r.reason)).length;
+        const otherErrors = rejected.filter(r => !isDuplicateError(r.reason));
+        if (dupCount > 0) {
+          hadSubmitIssues = true;
+          showToast('warning', `Создано ${created.length} из ${days.length}. Дни, где корректировка уже подавалась: ${dupCount}`);
+        }
+        if (otherErrors.length > 0) {
+          hadSubmitIssues = true;
+          const firstReason = otherErrors[0].reason;
+          const reasonText = firstReason instanceof Error ? firstReason.message : 'часть корректировок не создалась';
+          showToast('error', `Создано ${created.length} из ${days.length}. ${reasonText}`);
         }
       } else if (isSingleDateType) {
         // Одна дата: последний рабочий день (бэкенд требует start_date = end_date).
@@ -272,7 +318,7 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
         onClose();
         if (firstCreated) navigate(`/employee/requests/${firstCreated.id}`);
       } else {
-        showToast('success', 'Заявление отправлено');
+        if (!hadSubmitIssues) showToast('success', 'Заявление отправлено');
         onClose();
       }
     } catch (err) {
@@ -369,7 +415,14 @@ export const UnifiedRequestModal: FC<IUnifiedRequestModalProps> = ({ onClose, em
                 onDayFocus={handleDayFocus}
                 noCard
                 allowFuture
+                disabledDates={isCorrection ? usedCorrectionDates : undefined}
+                disabledHint={isCorrection ? 'корректировка на этот день уже подавалась' : undefined}
               />
+              {isCorrection && (
+                <p className={styles.reqCalHint}>
+                  Корректировка подаётся на день один раз: дни с уже поданным заявлением недоступны.
+                </p>
+              )}
               {selectedDates.size > 0 && (
                 <div className={styles.reqCalChips}>
                   {sortedDates.map(d => (

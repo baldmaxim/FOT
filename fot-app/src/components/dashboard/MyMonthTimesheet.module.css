@@ -103,6 +103,17 @@
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
+/* День недоступен для выбора (корректировка на него уже подавалась). */
+.cellDisabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cellDisabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
 .cellDay {
   font-size: 12px;
   line-height: 1;

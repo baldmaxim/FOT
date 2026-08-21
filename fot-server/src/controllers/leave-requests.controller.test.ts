@@ -89,7 +89,12 @@ vi.mock('../services/employee-direct-reports.service.js', () => ({ listDirectSub
 // leave-request-history.service НЕ мокаем: он пишет через client.query того же
 // tx-клиента, что и остальной код, — так тесты видят INSERT в leave_request_history.
 import { resolveAccessibleDepartmentIds, resolveManagedDepartmentIds } from '../services/data-scope.service.js';
-vi.mock('../services/employee-skud-object-access.service.js', () => ({ listSelectableObjectsForEmployee: vi.fn(async () => []) }));
+const { selectableObjectsMock } = vi.hoisted(() => ({
+  selectableObjectsMock: vi.fn(async () => [] as Array<{ object_id: string; object_name: string }>),
+}));
+vi.mock('../services/employee-skud-object-access.service.js', () => ({
+  listSelectableObjectsForEmployee: selectableObjectsMock,
+}));
 vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object' }));
 
 import {
@@ -988,6 +993,173 @@ describe('leaveRequestsController.create', () => {
     expect(resolveApprovalMock).not.toHaveBeenCalled();
     expect(txClient.query.mock.calls.some(c => String(c[0]).includes("status = 'approved'"))).toBe(false);
     expect((res._json as { data: { status: string } }).data.status).toBe('pending');
+  });
+});
+
+describe('leaveRequestsController.create (корректировка — один раз на день)', () => {
+  const CORRECTION_DAY = '2026-08-07';
+  const INSERTED_ROW = {
+    id: 901,
+    employee_id: 247,
+    request_type: 'time_correction',
+    status: 'pending',
+    start_date: CORRECTION_DAY,
+    end_date: CORRECTION_DAY,
+    correction_date: CORRECTION_DAY,
+    correction_status: 'work',
+    correction_hours: 8,
+    correction_object_id: 'obj-1',
+    correction_object_name: 'Объект 1',
+  };
+
+  // txClient отвечает по содержимому SQL: порядок вызовов проверяем отдельно,
+  // а не через цепочку mockResolvedValueOnce (она ломается, когда до INSERT не дошли).
+  const setupTx = (blockingStatus: string | null) => {
+    txClient.query.mockReset();
+    txClient.query.mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+      if (text.includes('SELECT status FROM leave_requests')) {
+        return blockingStatus
+          ? { rows: [{ status: blockingStatus }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (text.includes('INSERT INTO leave_requests')) return { rows: [INSERTED_ROW], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+  };
+
+  const makeCorrectionReq = (bodyOver: Record<string, unknown> = {}) => makeReq({
+    body: {
+      request_type: 'time_correction',
+      start_date: CORRECTION_DAY,
+      end_date: CORRECTION_DAY,
+      correction_date: CORRECTION_DAY,
+      correction_status: 'work',
+      correction_hours: 8,
+      correction_object_id: 'obj-1',
+      ...bodyOver,
+    },
+    user: { ...makeReq().user, employee_id: 247 },
+  } as Partial<AuthenticatedRequest>);
+
+  const insertCalls = () =>
+    txClient.query.mock.calls.filter(c => String(c[0]).includes('INSERT INTO leave_requests'));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveApprovalMock.mockResolvedValue('auto_approved');
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    // mockReset, а не mockResolvedValueOnce в каждом тесте: в кейсах с невалидной датой
+    // сервис не вызывается, и неизрасходованная одноразовая реализация утекла бы дальше.
+    selectableObjectsMock.mockReset();
+    selectableObjectsMock.mockResolvedValue([{ object_id: 'obj-1', object_name: 'Объект 1' }]);
+    setupTx(null);
+  });
+
+  it.each(['pending', 'approved', 'rejected'])(
+    '409 CORRECTION_ALREADY_REQUESTED, если на этот день уже есть заявление в статусе %s',
+    async (status) => {
+      setupTx(status);
+      const res = makeRes();
+
+      await leaveRequestsController.create(makeCorrectionReq(), res);
+
+      expect(res._status).toBe(409);
+      expect((res._json as { code: string }).code).toBe('CORRECTION_ALREADY_REQUESTED');
+      expect((res._json as { error: string }).error).toContain('07.08.2026');
+      expect(insertCalls()).toHaveLength(0);
+    },
+  );
+
+  it('отменённое заявление день освобождает — новая корректировка создаётся', async () => {
+    setupTx(null); // cancelled не попадает в выборку блокирующих статусов
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCorrectionReq(), res);
+
+    expect(res._status).toBe(200);
+    expect((res._json as { success: boolean }).success).toBe(true);
+    expect(insertCalls()).toHaveLength(1);
+    // В выборке блокирующих статусов cancelled отсутствует.
+    const dupCall = txClient.query.mock.calls.find(c => String(c[0]).includes('SELECT status FROM leave_requests'));
+    expect((dupCall?.[1] as unknown[])[2]).toEqual(['pending', 'approved', 'rejected']);
+  });
+
+  it('гард применяется только к time_correction: work на тот же день проходит', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeReq({
+      body: {
+        request_type: 'work',
+        start_date: CORRECTION_DAY,
+        end_date: CORRECTION_DAY,
+        selected_dates: [CORRECTION_DAY],
+        reason: 'работа в выходной',
+      },
+      user: { ...makeReq().user, employee_id: 247 },
+    } as Partial<AuthenticatedRequest>), res);
+
+    expect(res._status).toBe(200);
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('pg_advisory_xact_lock'))).toBe(false);
+  });
+
+  it('порядок в транзакции: advisory-лок → выборка дубля → INSERT', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCorrectionReq(), res);
+
+    const sqls = txClient.query.mock.calls.map(c => String(c[0]));
+    const lockIdx = sqls.findIndex(t => t.includes('pg_advisory_xact_lock'));
+    const dupIdx = sqls.findIndex(t => t.includes('SELECT status FROM leave_requests'));
+    const insIdx = sqls.findIndex(t => t.includes('INSERT INTO leave_requests'));
+    expect(lockIdx).toBe(0);
+    expect(lockIdx).toBeLessThan(dupIdx);
+    expect(dupIdx).toBeLessThan(insIdx);
+  });
+
+  it('ключ лока и выборка дубля построены на employee_id и дате YYYY-MM-DD', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCorrectionReq(), res);
+
+    const lockCall = txClient.query.mock.calls.find(c => String(c[0]).includes('pg_advisory_xact_lock'));
+    expect((lockCall?.[1] as string[])[0]).toBe(`leave_request:time_correction:247:${CORRECTION_DAY}`);
+    const dupCall = txClient.query.mock.calls.find(c => String(c[0]).includes('SELECT status FROM leave_requests'));
+    expect((dupCall?.[1] as unknown[]).slice(0, 2)).toEqual([247, CORRECTION_DAY]);
+  });
+
+  it('400 на correction_date в виде timestamp — контракт строго YYYY-MM-DD', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCorrectionReq({
+      correction_date: '2026-08-07T00:00:00.000Z',
+    }), res);
+
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+    expect(selectableObjectsMock).not.toHaveBeenCalled();
+  });
+
+  it('400, если correction_date не совпадает с периодом заявления', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCorrectionReq({ correction_date: '2026-08-08' }), res);
+
+    expect(res._status).toBe(400);
+    expect((res._json as { error: string }).error).toContain('на один день');
+    expect(pgTx).not.toHaveBeenCalled();
+    expect(selectableObjectsMock).not.toHaveBeenCalled();
+  });
+
+  it('400 (не 500) на нестроковой correction_date', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.create(makeCorrectionReq({ correction_date: 20260807 }), res);
+
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+    expect(selectableObjectsMock).not.toHaveBeenCalled();
   });
 });
 

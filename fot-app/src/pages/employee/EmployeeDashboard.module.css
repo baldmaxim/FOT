@@ -1434,6 +1434,13 @@
   margin-left: 4px;
 }
 
+.reqCalHint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 .reqCalChips {
   display: flex;
   flex-wrap: wrap;

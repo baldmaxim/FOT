@@ -355,6 +355,26 @@ export function parseStrictUtcLeaveDate(input: string): Date | null {
   return dt;
 }
 
+// Статусы заявления, которые «занимают» день: повторная корректировка на эту дату
+// невозможна. cancelled (отмена сотрудником, отзыв согласования) день освобождает.
+export type BlockingCorrectionStatus = 'pending' | 'approved' | 'rejected';
+const BLOCKING_CORRECTION_STATUSES: readonly BlockingCorrectionStatus[] = ['pending', 'approved', 'rejected'];
+const BLOCKING_CORRECTION_LABEL: Record<BlockingCorrectionStatus, string> = {
+  pending: 'на согласовании',
+  approved: 'согласована',
+  rejected: 'отклонена',
+};
+
+// Строгая каноническая дата корректировки: только точный 'YYYY-MM-DD' и реально
+// существующий день. parseStrictUtcLeaveDate сам по себе пропускает '2026-08-07T00:00:00Z'
+// и '2026-08-07garbage' (он режет первые 10 символов) — а нам нужна ровно одна
+// форма записи даты, иначе эквивалентные представления дали бы разные ключи
+// advisory-лока и разошлись мимо гарда дубля.
+export function normalizeCorrectionDate(input: unknown): string | null {
+  if (typeof input !== 'string' || !LEAVE_DATE_ISO_RE.test(input)) return null;
+  return parseStrictUtcLeaveDate(input) ? input : null;
+}
+
 // Единая валидация периода заявки для create и approve: реальная календарная дата,
 // год в пределах [текущий−1, текущий+5], start ≤ end и итоговое число материализуемых
 // дат ≤ MAX_MATERIALIZED_LEAVE_DAYS (для selected_dates считаем уникальный набор и
@@ -546,10 +566,26 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    // Валидация для time_correction
+    // Валидация для time_correction. canonicalCorrectionDate объявлена ДО блока:
+    // она нужна и в транзакции (ключ advisory-лока, гард дубля), и в ответе 409.
+    let canonicalCorrectionDate: string | null = null;
     if (request_type === 'time_correction') {
       if (!correction_date || !correction_status) {
         res.status(400).json({ success: false, error: 'correction_date и correction_status обязательны для корректировки' });
+        return;
+      }
+      canonicalCorrectionDate = normalizeCorrectionDate(correction_date);
+      if (!canonicalCorrectionDate) {
+        res.status(400).json({ success: false, error: 'Некорректная дата корректировки (ожидается формат ГГГГ-ММ-ДД)' });
+        return;
+      }
+      // Корректировка — ровно один день, и период обязан совпадать с ним. Иначе
+      // correction_date можно было бы подать мимо периода и разойтись с гардом дубля.
+      if (start_date !== canonicalCorrectionDate || end_date !== canonicalCorrectionDate) {
+        res.status(400).json({
+          success: false,
+          error: 'Корректировка подаётся на один день: даты периода должны совпадать с датой корректировки',
+        });
         return;
       }
     }
@@ -631,13 +667,36 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     // Многошаговая операция: insert заявления + связь с документами в одной TX.
     // Корректировки (attendance_adjustments) НЕ создаются здесь: work-заявка сначала
     // проходит согласование в «Заявлениях», материализация — в approve().
-    const data = await withTransaction(async (client) => {
+    const result = await withTransaction(async (client) => {
+      // Корректировку на конкретный день подают один раз: pending/approved/rejected
+      // закрывают дату навсегда, cancelled — освобождает. Advisory-лок сериализует
+      // конкурентные подачи (двойной клик, Promise.allSettled с фронта): SELECT ... FOR
+      // UPDATE несуществующую строку не держит, а уникальный индекс не поставить —
+      // на проде уже лежат исторические дубли, он бы не создался.
+      if (request_type === 'time_correction' && canonicalCorrectionDate) {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+          `leave_request:time_correction:${employeeId}:${canonicalCorrectionDate}`,
+        ]);
+        const dup = await client.query(
+          `SELECT status FROM leave_requests
+            WHERE employee_id = $1
+              AND request_type = 'time_correction'
+              AND COALESCE(correction_date, start_date) = $2::date
+              AND status = ANY($3::text[])
+            ORDER BY id DESC
+            LIMIT 1`,
+          [employeeId, canonicalCorrectionDate, BLOCKING_CORRECTION_STATUSES],
+        );
+        const existing = dup.rows[0] as { status: BlockingCorrectionStatus } | undefined;
+        if (existing) return { duplicate: true as const, duplicateStatus: existing.status };
+      }
+
       const insertCols: string[] = ['employee_id', 'request_type', 'start_date', 'end_date', 'reason'];
       const insertVals: unknown[] = [employeeId, request_type, start_date, end_date, reason || null];
       const insertCasts: string[] = ['', '', '', '', ''];
       if (request_type === 'time_correction') {
         insertCols.push('correction_date', 'correction_status', 'correction_hours', 'correction_object_id', 'correction_object_name');
-        insertVals.push(correction_date, correction_status, correction_hours ?? null, correction_object_id, correctionObjectName);
+        insertVals.push(canonicalCorrectionDate, correction_status, correction_hours ?? null, correction_object_id, correctionObjectName);
         insertCasts.push('', '', '', '::uuid', '');
       }
       if (normalizedSelectedDates) {
@@ -678,8 +737,25 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         );
       }
 
-      return row;
+      return { duplicate: false as const, row };
     });
+
+    if (result.duplicate) {
+      const dateLabel = formatLeaveDateLabel({
+        request_type: 'time_correction',
+        start_date,
+        end_date,
+        correction_date: canonicalCorrectionDate,
+        selected_dates: null,
+      });
+      res.status(409).json({
+        success: false,
+        code: 'CORRECTION_ALREADY_REQUESTED',
+        error: `Корректировка на ${dateLabel} уже подавалась (${BLOCKING_CORRECTION_LABEL[result.duplicateStatus]}). Повторная подача на этот день невозможна.`,
+      });
+      return;
+    }
+    const data = result.row;
 
     broadcastPendingChanged();
 
@@ -704,7 +780,7 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       request_type,
       start_date,
       end_date,
-      correction_date: request_type === 'time_correction' ? correction_date : null,
+      correction_date: request_type === 'time_correction' ? canonicalCorrectionDate : null,
       selected_dates: normalizedSelectedDates,
     });
     const bodyText = `Сотрудник подал заявление: ${label}${dateLabel ? ` (${dateLabel})` : ''}`;
