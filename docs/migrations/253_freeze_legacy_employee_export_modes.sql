@@ -112,15 +112,24 @@ personal AS (
     FROM employee_object_assignment eoa
    WHERE eoa.is_active = true
    GROUP BY eoa.employee_id
+),
+-- Выборка вынесена в CTE намеренно: в UPDATE ... FROM целевую таблицу нельзя
+-- упоминать в условиях джойна FROM-списка («invalid reference to FROM-clause entry»),
+-- а отдел здесь нужен именно через LEFT JOIN.
+target AS (
+  SELECT e.id,
+         CASE WHEN p.is_current THEN 'current_activity' ELSE 'skud' END AS new_mode
+    FROM employees e
+    JOIN personal p ON p.employee_id = e.id
+    LEFT JOIN org_departments d ON d.id = e.org_department_id
+   WHERE e.timesheet_export_mode IS NULL
+     AND d.timesheet_export_mode IS NULL
 )
 UPDATE employees e
-   SET timesheet_export_mode = CASE WHEN p.is_current THEN 'current_activity' ELSE 'skud' END,
+   SET timesheet_export_mode = t.new_mode,
        updated_at = now()
-  FROM personal p
-  LEFT JOIN org_departments d ON d.id = e.org_department_id
- WHERE e.id = p.employee_id
-   AND e.timesheet_export_mode IS NULL
-   AND d.timesheet_export_mode IS NULL;
+  FROM target t
+ WHERE e.id = t.id;
 
 COMMIT;
 
