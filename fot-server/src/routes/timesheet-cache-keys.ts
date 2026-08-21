@@ -19,6 +19,11 @@ const buildKey = (prefix: string, req: Request): string =>
     // employee_ids: HR-снимок персональной подачи — разные снимки одного
     // пользователя обязаны жить в разных bucket'ах.
     req.query.employee_ids ?? '',
+    // Режим «По сотруднику»: строки одного человека по разным отделам/периодам —
+    // разные ответы одного и того же (month, employee_id).
+    req.query.period_department_id ?? '',
+    req.query.period_from ?? '',
+    req.query.period_to ?? '',
     req.query.from ?? '',
     req.query.to ?? '',
     req.query.half ?? '',

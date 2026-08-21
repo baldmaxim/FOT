@@ -15,3 +15,13 @@ export const formatTimesheetEmployeeName = (fullName: string): string => {
 
   return initials ? `${lastName} ${initials}` : lastName;
 };
+
+/**
+ * Ключ СТРОКИ сетки табеля. В обычных режимах строка = сотрудник, поэтому ключ — его id.
+ * В режиме «По сотруднику» один человек занимает несколько строк (по одной на отдел
+ * за период), и они обязаны различаться. Для записи корректировок, графиков и замков
+ * по-прежнему используется настоящий employee.id, а не этот ключ.
+ */
+export const getTimesheetRowKey = (employee: { id: number; row_key?: string }): string => (
+  employee.row_key ?? String(employee.id)
+);

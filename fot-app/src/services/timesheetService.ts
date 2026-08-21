@@ -2,6 +2,8 @@ import { apiClient, buildApiUrl, buildAuthHeaders } from '../api/client';
 import type {
   IAssignedEmployeeSummary,
   IDepartmentSupervisor,
+  IEmployeeAssignmentPeriod,
+  ITimesheetEmployeeSearchResult,
   ManagedDepartmentTimesheetSummary,
   TimesheetEntry,
   TimesheetObjectEntry,
@@ -20,6 +22,13 @@ interface TimesheetFilters {
   // employee_ids: явный список сотрудников (HR-режим для персональной подачи руководителя).
   // При указании игнорируются dept/direct-reports фильтры.
   employee_ids?: number[];
+  // Режим «По сотруднику»: строка одного человека внутри конкретного отдела.
+  // Работает только вместе с employee_id и включает на бэке штатный membership-путь,
+  // поэтому диапазон from/to остаётся ПОЛНЫМ (обязательные выходные считаются помесячно),
+  // а отрезок задают period_from/period_to.
+  period_department_id?: string;
+  period_from?: string;
+  period_to?: string;
   half?: TimesheetExportHalf;
   from?: string; // YYYY-MM-DD (приоритетнее half)
   to?: string;
@@ -211,6 +220,11 @@ export const timesheetService = {
     if (filters.employee_ids && filters.employee_ids.length > 0) {
       params.append('employee_ids', filters.employee_ids.join(','));
     }
+    if (filters.period_department_id) {
+      params.append('period_department_id', filters.period_department_id);
+      if (filters.period_from) params.append('period_from', filters.period_from);
+      if (filters.period_to) params.append('period_to', filters.period_to);
+    }
     if (filters.from && filters.to) {
       params.append('from', filters.from);
       params.append('to', filters.to);
@@ -227,6 +241,29 @@ export const timesheetService = {
     const res = await apiClient.get<ApiResponse<TimesheetResponse>>(`/timesheet?${params.toString()}`);
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки табеля');
     return hydrateCompactSchedules(res.data);
+  },
+
+  /** Поиск сотрудника для режима «По сотруднику». Период обязателен: доступ считается на нём. */
+  async searchEmployees(params: { q: string; from: string; to: string }): Promise<ITimesheetEmployeeSearchResult[]> {
+    const search = new URLSearchParams({ q: params.q, from: params.from, to: params.to });
+    const res = await apiClient.get<ApiResponse<ITimesheetEmployeeSearchResult[]>>(
+      `/timesheet/search-employees?${search.toString()}`,
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка поиска сотрудников');
+    return res.data;
+  },
+
+  /** Отделы сотрудника за период — по строке табеля на каждый. */
+  async listAssignmentPeriods(
+    employeeId: number,
+    params: { from: string; to: string },
+  ): Promise<IEmployeeAssignmentPeriod[]> {
+    const search = new URLSearchParams({ from: params.from, to: params.to });
+    const res = await apiClient.get<ApiResponse<IEmployeeAssignmentPeriod[]>>(
+      `/timesheet/employees/${employeeId}/assignment-periods?${search.toString()}`,
+    );
+    if (!res.data) throw new Error(res.error || 'Ошибка загрузки периодов сотрудника');
+    return res.data;
   },
 
   async getOverview(filters: {
@@ -276,18 +313,24 @@ export const timesheetService = {
     if (res.error) throw new Error(res.error);
   },
 
-  async listCorrections(filters: { start_date: string; end_date: string; department_id?: string }): Promise<ITimesheetCorrectionRow[]> {
+  async listCorrections(filters: {
+    start_date: string;
+    end_date: string;
+    department_id?: string;
+    employee_id?: number;
+  }): Promise<ITimesheetCorrectionRow[]> {
     const params = new URLSearchParams();
     params.append('start_date', filters.start_date);
     params.append('end_date', filters.end_date);
     if (filters.department_id) params.append('department_id', filters.department_id);
+    if (filters.employee_id) params.append('employee_id', String(filters.employee_id));
     const res = await apiClient.get<ApiResponse<ITimesheetCorrectionRow[]>>(`/timesheet/corrections?${params.toString()}`);
     if (!res.data) throw new Error(res.error || 'Ошибка загрузки корректировок');
     return res.data;
   },
 
   async refresh(
-    payload: { start_date: string; end_date: string; department_id?: string },
+    payload: { start_date: string; end_date: string; department_id?: string; employee_id?: number },
     options?: ITimesheetRefreshOptions,
   ): Promise<ITimesheetRefreshResult> {
     const res = await apiClient.post<ApiResponse<ITimesheetRefreshResult>>(

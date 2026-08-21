@@ -22,7 +22,7 @@ router.use((req, res, next) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        invalidateCaches('timesheet', 'timesheet:today', 'timesheet:overview', 'timesheet:overview:today', 'timesheet:search');
+        invalidateCaches('timesheet', 'timesheet:today', 'timesheet:overview', 'timesheet:overview:today', 'timesheet:search', 'timesheet:employee-search');
       }
     });
   }
@@ -86,6 +86,15 @@ const timesheetSearchCache = registerCache(
   2 * 60_000,
 );
 
+// Поиск сотрудника для режима «По сотруднику». Отдельный кэш: другой путь и другой
+// состав ключа — период входит в ключ, иначе соседние полумесяцы делили бы bucket.
+const timesheetEmployeeSearchCache = registerCache(
+  'timesheet:employee-search',
+  (req) =>
+    `tses:${req.query.q ?? ''}:${req.query.from ?? ''}:${req.query.to ?? ''}:${req.user.id}`,
+  2 * 60_000,
+);
+
 // GET /api/timesheet?month=YYYY-MM&department_id=...
 router.get(
   '/overview',
@@ -101,6 +110,14 @@ router.get(
   serverTiming('timesheet'),
   cacheWithShortTtlForToday(timesheetCache, timesheetTodayCache),
   timesheetController.getAll
+);
+
+// GET /api/timesheet/search-employees?q&from&to — поиск для режима «По сотруднику»
+router.get(
+  '/search-employees',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  timesheetEmployeeSearchCache,
+  timesheetController.searchEmployeesForTimesheet
 );
 
 router.get(
@@ -139,6 +156,13 @@ router.get(
   '/employees/:employeeId/objects',
   requireAnyPageAccess(['/timesheet', '/timesheet-hr', 'timesheet-team-management'], 'edit'),
   timesheetController.listEmployeeObjects
+);
+
+// GET /api/timesheet/employees/:employeeId/assignment-periods — отделы сотрудника за период
+router.get(
+  '/employees/:employeeId/assignment-periods',
+  requireAnyPageAccess(['/timesheet', '/timesheet-hr'], 'view'),
+  timesheetController.listEmployeeAssignmentPeriods
 );
 
 router.get(

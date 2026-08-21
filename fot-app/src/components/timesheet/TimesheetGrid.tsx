@@ -17,7 +17,7 @@ import {
   isScheduleDayOff,
   isPreHolidayForSchedule,
 } from '../../utils/scheduleUtils';
-import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import { formatTimesheetEmployeeName, getTimesheetRowKey } from '../../utils/timesheetDisplay';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
 import { getDayStatus, STATUS_TO_GRID_CLASS, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import { useAuth } from '../../contexts/AuthContext';
@@ -204,6 +204,27 @@ const getSectionLabel = (
   if (source === 'direct_report') return 'Мои сотрудники';
   if (source === 'skud_presence') return 'ЛИНИЯ-Общестрой';
   return departmentName ?? 'Сотрудники отдела';
+};
+
+/**
+ * Заголовок секции перед строкой. Обычно секции делит `source`, но в режиме
+ * «По сотруднику» он у всех строк одинаковый, а разделять надо по отделу —
+ * иначе не видно, где закончился старый отдел и начался новый.
+ */
+const resolveSectionLabel = (
+  row: IEmployeeRowData,
+  previous: IEmployeeRowData | null,
+  departmentName?: string,
+): string | null => {
+  const source = row.employee.source ?? 'department';
+  const previousSource = previous ? (previous.employee.source ?? 'department') : null;
+  if (source !== previousSource) {
+    return getSectionLabel(source, row.employee.department_name ?? departmentName);
+  }
+  const currentDepartment = row.employee.department_name ?? null;
+  const previousDepartment = previous?.employee.department_name ?? null;
+  if (currentDepartment && currentDepartment !== previousDepartment) return currentDepartment;
+  return null;
 };
 
 const STATUS_CELL_TEXT: Record<TimesheetStatus, string> = {
@@ -473,16 +494,18 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   const days = visibleDays || Array.from({ length: daysCount }, (_, i) => i + 1);
   const compactInlineExclude = days.length > 16;
   const employeeStatsMap = useMemo(() => {
-    const map = new Map<number, IEmployeeStats>();
+    // Ключ — строка, а не сотрудник: у строк одного человека по разным отделам
+    // своя норма и свой факт, иначе «Откл.» дублировалось бы между ними.
+    const map = new Map<string, IEmployeeStats>();
     for (const stat of employeeStats) {
-      map.set(stat.employee_id, stat);
+      map.set(stat.row_key ?? String(stat.employee_id), stat);
     }
     return map;
   }, [employeeStats]);
   const showDeviationColumn = viewMode === 'employees';
   const showSumColumn = viewMode === 'employees';
   const showDaysColumn = viewMode === 'employees';
-  const [expandedEmployeeIds, setExpandedEmployeeIds] = useState<Set<number>>(new Set());
+  const [expandedEmployeeIds, setExpandedEmployeeIds] = useState<Set<string>>(new Set());
   const [bulkDragAnchor, setBulkDragAnchor] = useState<IBulkCellCoord | null>(null);
   const [bulkDragBaseKeys, setBulkDragBaseKeys] = useState<Set<string>>(new Set());
   const [bulkDragPreviewKeys, setBulkDragPreviewKeys] = useState<Set<string> | null>(null);
@@ -635,7 +658,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 
   const activeExpandedEmployeeIds = useMemo(() => (
     new Set(
-      [...expandedEmployeeIds].filter(employeeId => employeeRows.some(row => row.employee.id === employeeId)),
+      [...expandedEmployeeIds].filter(rowKey => employeeRows.some(row => getTimesheetRowKey(row.employee) === rowKey)),
     )
   ), [expandedEmployeeIds, employeeRows]);
 
@@ -651,7 +674,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
   const expandedObjectRowsByEmployee = useMemo(() => {
     const map = new Map<number, { rowKey: string; objectKey: string }[]>();
     for (const row of employeeRows) {
-      if (!activeExpandedEmployeeIds.has(row.employee.id)) continue;
+      if (!activeExpandedEmployeeIds.has(getTimesheetRowKey(row.employee))) continue;
       if (!row.hasExpandableObjects) continue;
       map.set(
         row.employee.id,
@@ -679,11 +702,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     overscan: 12,
   });
 
-  const toggleEmployeeExpanded = (employeeId: number): void => {
+  const toggleEmployeeExpanded = (rowKey: string): void => {
     setExpandedEmployeeIds(current => {
       const next = new Set(current);
-      if (next.has(employeeId)) next.delete(employeeId);
-      else next.add(employeeId);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
       return next;
     });
   };
@@ -1092,18 +1115,19 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
 
         <div className="ts-mobile-list">
           {employeeRows.map((row, index) => {
-            const expanded = activeExpandedEmployeeIds.has(row.employee.id);
+            const rowKey = getTimesheetRowKey(row.employee);
+            const expanded = activeExpandedEmployeeIds.has(rowKey);
             const employeeIndex = index + 1;
             const displayName = formatTimesheetEmployeeName(row.employee.full_name);
-            const stat = employeeStatsMap.get(row.employee.id);
-            const currentSource = row.employee.source ?? 'department';
-            const prevSource = index > 0
-              ? (employeeRows[index - 1].employee.source ?? 'department')
-              : null;
-            const sectionLabel = currentSource !== prevSource ? getSectionLabel(currentSource, departmentName) : null;
+            const stat = employeeStatsMap.get(rowKey);
+            const sectionLabel = resolveSectionLabel(
+              row,
+              index > 0 ? employeeRows[index - 1] : null,
+              departmentName,
+            );
 
             return (
-              <Fragment key={row.employee.id}>
+              <Fragment key={rowKey}>
                 {sectionLabel && (
                   <div className="ts-section-divider-mobile">{sectionLabel}</div>
                 )}
@@ -1150,7 +1174,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                     <button
                       type="button"
                       className="ts-mobile-chip-btn"
-                      onClick={() => toggleEmployeeExpanded(row.employee.id)}
+                      onClick={() => toggleEmployeeExpanded(rowKey)}
                       aria-expanded={expanded}
                       title={expanded ? 'Скрыть дни' : 'Показать дни'}
                       aria-label={expanded ? 'Скрыть дни' : 'Показать дни'}
@@ -1469,14 +1493,15 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               {virtualItems.map(virtualRow => {
               const index = virtualRow.index;
               const row = employeeRows[index];
+              const rowKey = getTimesheetRowKey(row.employee);
               const employeeIndex = index + 1;
               const displayName = formatTimesheetEmployeeName(row.employee.full_name);
-              const expanded = activeExpandedEmployeeIds.has(row.employee.id);
-              const currentSource = row.employee.source ?? 'department';
-              const prevSource = index > 0
-                ? (employeeRows[index - 1].employee.source ?? 'department')
-                : null;
-              const sectionLabel = currentSource !== prevSource ? getSectionLabel(currentSource, departmentName) : null;
+              const expanded = activeExpandedEmployeeIds.has(rowKey);
+              const sectionLabel = resolveSectionLabel(
+                row,
+                index > 0 ? employeeRows[index - 1] : null,
+                departmentName,
+              );
               // Сумма показываемых часов по строке — повтор логики ячейки, см. getDayCellHours.
               const rowSum = showSumColumn
                 ? days.reduce((acc, day) => (
@@ -1488,7 +1513,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
               const rowDays = showDaysColumn ? countWorkedDays(row, days, year, month) : 0;
 
               return (
-                <tbody key={row.employee.id} data-index={index} ref={rowVirtualizer.measureElement}>
+                <tbody key={rowKey} data-index={index} ref={rowVirtualizer.measureElement}>
                   {sectionLabel && (
                     <tr className="ts-section-divider-row">
                       <td
@@ -1511,7 +1536,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             className="ts-expand-btn"
                             onClick={(event) => {
                               event.stopPropagation();
-                              toggleEmployeeExpanded(row.employee.id);
+                              toggleEmployeeExpanded(rowKey);
                             }}
                             aria-expanded={expanded}
                           >
@@ -1627,7 +1652,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                       </td>
                     )}
                     {showDeviationColumn && (() => {
-                      const stat = employeeStatsMap.get(row.employee.id);
+                      const stat = employeeStatsMap.get(rowKey);
                       if (!stat) {
                         return <td className="ts-col-deviation-sticky ts-day--deviation-zero">—</td>;
                       }

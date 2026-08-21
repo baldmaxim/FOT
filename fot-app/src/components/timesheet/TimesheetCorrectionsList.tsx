@@ -16,6 +16,8 @@ interface IProps {
   startDate: string;
   endDate: string;
   departmentId: string | null;
+  /** Режим «По сотруднику»: список сужается до него, иначе показал бы весь скоуп. */
+  employeeId?: number | null;
   employees: TimesheetEmployee[];
 }
 
@@ -32,7 +34,7 @@ const formatHours = (hours: number | null): string => {
   return `${h}:${String(m).padStart(2, '0')}`;
 };
 
-export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, departmentId, employees }) => {
+export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, departmentId, employeeId = null, employees }) => {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [filterAuthor, setFilterAuthor] = useState<string>('');
@@ -119,8 +121,13 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
   });
 
   const query = useQuery({
-    queryKey: ['timesheet-corrections', startDate, endDate, departmentId],
-    queryFn: () => timesheetService.listCorrections({ start_date: startDate, end_date: endDate, department_id: departmentId ?? undefined }),
+    queryKey: ['timesheet-corrections', startDate, endDate, departmentId, employeeId],
+    queryFn: () => timesheetService.listCorrections({
+      start_date: startDate,
+      end_date: endDate,
+      department_id: departmentId ?? undefined,
+      employee_id: employeeId ?? undefined,
+    }),
   });
 
   const deleteMutation = useMutation({

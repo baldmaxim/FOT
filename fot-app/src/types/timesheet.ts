@@ -168,6 +168,9 @@ export interface TimesheetStats {
 
 export interface IEmployeeStats {
   employee_id: number;
+  /** Ключ строки сетки. Нужен режиму «По сотруднику»: у строк одного человека
+   *  по разным отделам своя статистика. По умолчанию = String(employee_id). */
+  row_key?: string;
   norm_hours: number;
   fact_hours: number;
   deviation_hours: number;
@@ -194,6 +197,33 @@ export interface TimesheetEmployee {
   source?: TimesheetEmployeeSource;
   /** false → сотрудник виден, но не редактируем (view-отдел, миграция 167). По умолчанию true. */
   editable?: boolean;
+  /**
+   * Уникальный ключ СТРОКИ сетки. Обычные режимы его не задают (ключ = id).
+   * В режиме «По сотруднику» один человек занимает несколько строк — по одной на
+   * отдел, — и они обязаны различаться. Для записи корректировок, графиков и
+   * замков по-прежнему используется настоящий `id`, а не этот ключ.
+   */
+  row_key?: string;
+  /** Период сотрудника в отделе недоступен по правам: строка без цифр и без правки. */
+  is_restricted_period?: boolean;
+}
+
+/** Период работы сотрудника в отделе — строка режима «По сотруднику». */
+export interface IEmployeeAssignmentPeriod {
+  org_department_id: string;
+  department_name: string | null;
+  from: string;
+  to: string;
+  accessible: boolean;
+  editable: boolean;
+}
+
+/** Найденный сотрудник в поиске режима «По сотруднику». */
+export interface ITimesheetEmployeeSearchResult {
+  id: number;
+  full_name: string;
+  department_name: string | null;
+  employment_status: string | null;
 }
 
 export interface IProductionCalendarMonth {

@@ -1,5 +1,5 @@
 import { type FC, Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRightLeft, ChevronLeft, ChevronRight, ChevronDown, Download, RefreshCw, UserPlus, Mail, Unlock } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { TimesheetGrid, type BulkBlockReason } from '../../components/timesheet/TimesheetGrid';
@@ -7,6 +7,8 @@ import { TimesheetCorrectionsList } from '../../components/timesheet/TimesheetCo
 import { TimesheetTeamManagementModal } from '../../components/timesheet/TimesheetTeamManagementModal';
 import { TimesheetTransfersTab } from '../../components/timesheet/TimesheetTransfersTab';
 import { TimesheetExcludeEmployeeModal } from '../../components/timesheet/TimesheetExcludeEmployeeModal';
+import { TimesheetEmployeePicker } from '../../components/timesheet/TimesheetEmployeePicker';
+import { buildEmployeeModeGridData } from './timesheetEmployeeMode.helpers';
 import { timesheetService } from '../../services/timesheetService';
 import { correctionAttachmentsService, uploadSharedCorrectionFiles } from '../../services/correctionAttachmentsService';
 import { ApiError } from '../../api/client';
@@ -25,7 +27,7 @@ import type {
   TimesheetStatus,
   TimesheetTeamManagementCandidate,
 } from '../../types';
-import type { TimesheetResponse, IEmployeeApprovalLock } from '../../types/timesheet';
+import type { TimesheetResponse, IEmployeeApprovalLock, IEmployeeAssignmentPeriod } from '../../types/timesheet';
 import type { IResolvedSchedule } from '../../types/schedule';
 import { TimesheetApprovalBar } from '../../components/timesheet/TimesheetApprovalBar';
 import { TimesheetReviewControl } from '../../components/timesheet/TimesheetReviewControl';
@@ -108,6 +110,21 @@ export const TimesheetPage: FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+
+  /**
+   * Сброс кэшей табеля после записи. Инвалидируем ВЕСЬ префикс ['timesheet-page'],
+   * а не только текущий отдел: правка из «По сотруднику» обязана появиться в
+   * «По отделу» и «По участкам», и наоборот. Ключ периодов сотрудника лежит там же,
+   * поэтому изменившийся перевод обновляет и состав строк.
+   */
+  const invalidateTimesheetCaches = useCallback(async (employeeId?: number | null) => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
+      queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+      ...(employeeId ? [queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', employeeId] })] : []),
+    ]);
+  }, [queryClient]);
+
   const isAdmin = profile?.is_admin === true;
   const isManagerObj = profile?.role_code === 'manager_obj';
   const showFullPeriod = profile?.timesheet_show_full_period !== false;
@@ -172,10 +189,21 @@ export const TimesheetPage: FC = () => {
       return next;
     });
   }, [showAllStorageKey]);
-  const timesheetMode: 'department' | 'assigned' =
-    (canUseAssignedMode && (queryMode === 'assigned' || (isTimekeeperRole && queryMode !== 'department')))
-      ? 'assigned'
-      : 'department';
+  // «По сотруднику» доступен всем, кто видит табель: состав поиска и данные уже
+  // ограничены скоупом роли на сервере.
+  const canUseEmployeeMode = canViewManagedTimesheet;
+  const timesheetMode: 'department' | 'assigned' | 'employee' =
+    (canUseEmployeeMode && queryMode === 'employee')
+      ? 'employee'
+      : (canUseAssignedMode && (queryMode === 'assigned' || (isTimekeeperRole && queryMode !== 'department')))
+        ? 'assigned'
+        : 'department';
+  const isEmployeeMode = timesheetMode === 'employee';
+  const selectedEmployeeModeId = useMemo(() => {
+    if (timesheetMode !== 'employee') return null;
+    const parsed = Number.parseInt(searchParams.get('emp') || '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [timesheetMode, searchParams]);
   const selectedAssigneeId = useMemo(() => {
     if (timesheetMode !== 'assigned') return null;
     const parsed = Number.parseInt(queryAssignee || '', 10);
@@ -208,6 +236,9 @@ export const TimesheetPage: FC = () => {
   const [selectedDeptId, setSelectedDeptId] = useState<string | null>(null);
 
   // Assignee selector (assigned-mode)
+  // ФИО выбранного в режиме «По сотруднику». Пустое после перезагрузки страницы —
+  // тогда подхватывается из первого загруженного ответа (см. selectedEmployeeModeName).
+  const [selectedEmployeeModeName, setSelectedEmployeeModeName] = useState('');
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState('');
   const assigneeRef = useRef<HTMLDivElement>(null);
@@ -263,11 +294,11 @@ export const TimesheetPage: FC = () => {
   const effectiveSelectedDeptId = isTimesheetDepartmentScope
     ? (selectedDeptId || primaryDepartmentId || null)
     : selectedDeptId;
-  const viewMode: TimesheetViewMode = queryView === 'objects'
+  const viewMode: TimesheetViewMode = (queryView === 'objects' && timesheetMode !== 'employee')
     ? 'objects'
     : queryView === 'corrections'
       ? 'corrections'
-      : (queryView === 'transfers' && isAdmin && timesheetMode !== 'assigned')
+      : (queryView === 'transfers' && isAdmin && timesheetMode === 'department')
         ? 'transfers'
         : 'employees';
 
@@ -351,17 +382,92 @@ export const TimesheetPage: FC = () => {
       include_empty: includeEmptyEmployees,
       schedule_payload: 'compact',
     }),
-    enabled: Boolean(activeGridDeptId),
+    enabled: Boolean(activeGridDeptId) && !isEmployeeMode,
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000,
+    // Глобально refetchOnWindowFocus выключен (App.tsx) — без точечного включения
+    // вторая вкладка не увидела бы правку, сделанную в первой.
+    refetchOnWindowFocus: 'always',
     placeholderData: previousData => previousData,
   });
+  // ── Режим «По сотруднику» ──
+  // Периоды работы по отделам: одна строка сетки на период. Ключ лежит внутри
+  // ['timesheet-page'], чтобы правка перевода инвалидировала не только часы, но и
+  // сам состав строк.
+  const employeePeriodsQuery = useQuery({
+    queryKey: ['timesheet-page', 'employee-periods', selectedEmployeeModeId ?? 0, rangeStart, rangeEnd],
+    queryFn: () => timesheetService.listAssignmentPeriods(selectedEmployeeModeId as number, {
+      from: rangeStart,
+      to: rangeEnd,
+    }),
+    enabled: isEmployeeMode && selectedEmployeeModeId != null,
+    staleTime: 5 * 60_000,
+    // Глобально refetchOnWindowFocus выключен (App.tsx): без точечного включения
+    // вторая вкладка не увидела бы чужую правку.
+    refetchOnWindowFocus: 'always',
+  });
+  const employeePeriods = useMemo<IEmployeeAssignmentPeriod[]>(
+    () => employeePeriodsQuery.data ?? [],
+    [employeePeriodsQuery.data],
+  );
+
+  // Каждый период запрашивается на ПОЛНЫЙ диапазон: обязательные выходные считаются
+  // помесячно, и обрезка from/to по границам периода отдала бы всю месячную норму
+  // поздней строке. Отрезок передаём через period_from/period_to.
+  // Недоступные периоды не запрашиваем вовсе — чужие часы не покидают сервер.
+  const employeePeriodQueries = useQueries({
+    queries: employeePeriods.map(period => ({
+      queryKey: [
+        'timesheet-page', monthStr, rangeStart, rangeEnd,
+        `emp:${selectedEmployeeModeId}`, period.org_department_id, period.from, period.to,
+      ],
+      queryFn: () => timesheetService.getAll({
+        month: monthStr,
+        employee_id: selectedEmployeeModeId as number,
+        period_department_id: period.org_department_id,
+        period_from: period.from,
+        period_to: period.to,
+        from: rangeStart,
+        to: rangeEnd,
+        include_objects: true,
+        schedule_payload: 'compact' as const,
+      }),
+      enabled: isEmployeeMode && selectedEmployeeModeId != null && period.accessible,
+      staleTime: 5 * 60_000,
+      gcTime: 15 * 60_000,
+      refetchOnWindowFocus: 'always' as const,
+    })),
+  });
+
+  const employeeModeData = useMemo(() => buildEmployeeModeGridData(
+    selectedEmployeeModeId ?? 0,
+    employeePeriods.map((period, index) => ({
+      period,
+      data: employeePeriodQueries[index]?.data,
+    })),
+    employeePeriodQueries.find(query => query.data?.employees?.length)?.data?.employees?.[0] ?? null,
+  ), [selectedEmployeeModeId, employeePeriods, employeePeriodQueries]);
+
+  // Deep-link ?mode=employee&emp=…: после F5 состояние пустое, поэтому имя берём
+  // из уже загруженной строки — отдельный запрос ради ФИО не нужен.
+  const employeeModeDisplayName = selectedEmployeeModeName
+    || employeeModeData.employees[0]?.full_name
+    || '';
+
+  const employeeModeLoading = isEmployeeMode && (
+    employeePeriodsQuery.isLoading
+    || employeePeriodQueries.some(query => query.isLoading)
+  );
+
   // Тяжёлый пересчёт грида (employeeRows + расписания) при смене отдела блокировал
   // main-thread (Sentry: long-animation-frame до 12.5с). useDeferredValue делает
   // пересборку грида прерываемым low-priority рендером — дропдаун/скролл/ввод не
   // фризятся, грид догоняет следом. Виртуализация срезала объём DOM, это — CPU-пересчёт.
   const deferredTimesheetData = useDeferredValue(timesheetQuery.data);
   const employees = useMemo<TimesheetEmployee[]>(() => {
+    // Персональный режим: строки уже собраны по периодам и упорядочены по дате входа —
+    // пересортировка по source схлопнула бы порядок отделов.
+    if (isEmployeeMode) return employeeModeData.employees;
     const raw = deferredTimesheetData?.employees || [];
     // Группировка строк табеля: supervisor → self → direct_report → department → skud_presence.
     // Начальник участка (supervisor) — первой секцией. skud_presence (ЛИНИЯ-Общестрой
@@ -375,21 +481,31 @@ export const TimesheetPage: FC = () => {
       skud_presence: 4,
     };
     return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
-  }, [deferredTimesheetData]);
+  }, [deferredTimesheetData, isEmployeeMode, employeeModeData]);
   const entries = useMemo<TimesheetEntry[]>(
-    () => deferredTimesheetData?.entries || [],
-    [deferredTimesheetData],
+    () => (isEmployeeMode ? employeeModeData.entries : (deferredTimesheetData?.entries || [])),
+    [deferredTimesheetData, isEmployeeMode, employeeModeData],
   );
   const objectEntries = useMemo<TimesheetObjectEntry[]>(
-    () => deferredTimesheetData?.object_entries || [],
-    [deferredTimesheetData],
+    () => (isEmployeeMode ? employeeModeData.objectEntries : (deferredTimesheetData?.object_entries || [])),
+    [deferredTimesheetData, isEmployeeMode, employeeModeData],
   );
   const stats = deferredTimesheetData?.stats || DEFAULT_STATS;
-  const employeeStats = deferredTimesheetData?.employee_stats || [];
-  const schedules = deferredTimesheetData?.schedules || EMPTY_SCHEDULES;
-  const dailySchedules = deferredTimesheetData?.daily_schedules || EMPTY_DAILY_SCHEDULES;
-  const calendar = deferredTimesheetData?.calendar || null;
-  const loading = (Boolean(effectiveSelectedDeptId) || isDirectReportsOnly) && timesheetQuery.isLoading;
+  const employeeStats = isEmployeeMode
+    ? employeeModeData.employeeStats
+    : (deferredTimesheetData?.employee_stats || []);
+  const schedules = isEmployeeMode
+    ? employeeModeData.schedules
+    : (deferredTimesheetData?.schedules || EMPTY_SCHEDULES);
+  const dailySchedules = isEmployeeMode
+    ? employeeModeData.dailySchedules
+    : (deferredTimesheetData?.daily_schedules || EMPTY_DAILY_SCHEDULES);
+  const calendar = isEmployeeMode
+    ? employeeModeData.calendar
+    : (deferredTimesheetData?.calendar || null);
+  const loading = isEmployeeMode
+    ? employeeModeLoading
+    : (Boolean(effectiveSelectedDeptId) || isDirectReportsOnly) && timesheetQuery.isLoading;
   const deferredTeamSearch = useDeferredValue(teamSearch.trim());
   const teamSearchQuery = useQuery({
     queryKey: ['timesheet-team-search', activeGridDeptId ?? 'none', deferredTeamSearch],
@@ -414,9 +530,10 @@ export const TimesheetPage: FC = () => {
   // статуса разрешён на сервере, здесь только поиск. Админ не блокируется — сервер
   // отдаёт ему пустой список.
   const approvalLocks = useMemo<IEmployeeApprovalLock[]>(() => {
+    if (isEmployeeMode) return employeeModeData.approvalLocks;
     const data = timesheetQuery.data as TimesheetResponse | undefined;
     return Array.isArray(data?.approval_locks) ? data.approval_locks : [];
-  }, [timesheetQuery.data]);
+  }, [timesheetQuery.data, isEmployeeMode, employeeModeData]);
   const lockStatusFor = useCallback(
     (employeeId: number, date: string): IEmployeeApprovalLock['status'] | undefined => {
       if (!isApprovalLockEnforced) return undefined;
@@ -559,7 +676,9 @@ export const TimesheetPage: FC = () => {
     // Роль без права правки вообще (hr) — модалка всё равно открывается, но в режиме
     // просмотра (hideCorrectionTab, см. рендер модалки ниже), поэтому её не блокируем здесь.
     if (emp.editable === false && canEditTimesheet) {
-      toast.info?.('Сотрудник доступен только для просмотра');
+      toast.info?.(emp.is_restricted_period
+        ? 'Этот период сотрудник работал в отделе, к которому у вас нет доступа'
+        : 'Сотрудник доступен только для просмотра');
       return;
     }
     // Заперт по периоду (submitted/approved) — модалка всё равно открывается, но в
@@ -640,9 +759,7 @@ export const TimesheetPage: FC = () => {
         setModalEntry(created);
       }
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        invalidateTimesheetCaches(modalEmployee.id),
       ]);
     } catch (err) {
       // Бэк требует явный объект корректировки (авто-привязка не сработала) — показываем пикер.
@@ -656,7 +773,7 @@ export const TimesheetPage: FC = () => {
       console.error('Save correction error:', err);
       toast.error?.(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
     }
-  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [modalEmployee, year, month, modalDay, modalEntry, closeModal, queryClient, toast, invalidateTimesheetCaches]);
 
   // Добавление ОТДЕЛЬНОЙ корректировки «Удалёнка» поверх согласованного выхода в выходной.
   // Всегда create() (не update заявки): backend сделает source_type='manual', auto_approved
@@ -683,9 +800,7 @@ export const TimesheetPage: FC = () => {
         }
       }
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        invalidateTimesheetCaches(modalEmployee.id),
       ]);
       // Свежая entry с companion_work_request (не из create()-ответа).
       const fresh = queryClient.getQueryData<TimesheetResponse>(
@@ -704,7 +819,7 @@ export const TimesheetPage: FC = () => {
       console.error('Add remote over work error:', err);
       toast.error?.(err instanceof Error ? err.message : 'Не удалось добавить удалёнку');
     }
-  }, [modalEmployee, year, month, modalDay, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [modalEmployee, year, month, modalDay, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches]);
 
   // Повторное сохранение корректировки с явно выбранным объектом (после OBJECT_REQUIRED).
   const confirmObjectPrompt = useCallback(async () => {
@@ -732,15 +847,13 @@ export const TimesheetPage: FC = () => {
       setObjectPrompt(null);
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        invalidateTimesheetCaches(modalEmployee.id),
       ]);
     } catch (err) {
       console.error('Save correction with object error:', err);
       toast.error?.(err instanceof Error ? err.message : 'Не удалось сохранить корректировку');
     }
-  }, [objectPrompt, modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [objectPrompt, modalEmployee, year, month, modalDay, closeModal, toast, invalidateTimesheetCaches]);
 
   const handleSaveObjectCorrection = useCallback(async (_status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
     if (!modalEmployee || !modalObjectTarget || hours == null) return;
@@ -766,15 +879,13 @@ export const TimesheetPage: FC = () => {
       }
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        invalidateTimesheetCaches(modalEmployee.id),
       ]);
     } catch (error) {
       console.error('Save object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, toast, invalidateTimesheetCaches]);
 
   const handleSaveModalCorrection = useCallback(
     (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
@@ -792,9 +903,7 @@ export const TimesheetPage: FC = () => {
       await timesheetService.delete(modalEntry.id);
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        invalidateTimesheetCaches(modalEmployee.id),
         // День мог быть из заявления (удалёнка/отпуск/…) — оно синхронно изменилось на бэке.
         queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
         queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
@@ -803,7 +912,7 @@ export const TimesheetPage: FC = () => {
       console.error('Delete day correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку');
     }
-  }, [modalEntry?.id, modalEmployee, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [modalEntry?.id, modalEmployee, closeModal, queryClient, toast, invalidateTimesheetCaches]);
 
   // Точечная правка текста заявки «работа в выходной/праздник» (initialNotes или
   // companion_work_request.reason) — не закрывает модалку, только обновляет отображаемый текст.
@@ -823,12 +932,11 @@ export const TimesheetPage: FC = () => {
       return prev;
     });
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-      queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+      invalidateTimesheetCaches(),
       queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
       queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
     ]);
-  }, [queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [queryClient, toast, invalidateTimesheetCaches]);
 
   const handleDeleteObjectCorrection = useCallback(async () => {
     if (objectEntriesDisabled) {
@@ -845,15 +953,13 @@ export const TimesheetPage: FC = () => {
       });
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        invalidateTimesheetCaches(modalEmployee.id),
       ]);
     } catch (error) {
       console.error('Delete object correction error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
     }
-  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [modalEmployee, modalObjectTarget, modalObjectEntry?.adjustment_id, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches]);
 
   // Сохранение/удаление per-object из «День»-модалки (modalMode='day'): таргет приходит из аргументов,
   // а не из modalObjectTarget — позволяет редактировать любой объект в списке.
@@ -880,15 +986,13 @@ export const TimesheetPage: FC = () => {
       });
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        invalidateTimesheetCaches(modalEmployee.id),
       ]);
     } catch (error) {
       console.error('Save object correction (by target) error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку по объекту');
     }
-  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches]);
 
   const handleDeleteObjectByTarget = useCallback(async (
     target: { object_key: string; object_id: string | null; object_name: string },
@@ -907,15 +1011,13 @@ export const TimesheetPage: FC = () => {
       });
       closeModal();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-        queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', modalEmployee.id] }),
+        invalidateTimesheetCaches(modalEmployee.id),
       ]);
     } catch (error) {
       console.error('Delete object correction (by target) error:', error);
       toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку по объекту');
     }
-  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast]);
+  }, [modalEmployee, year, month, modalDay, closeModal, queryClient, monthStr, rangeStart, rangeEnd, activeGridDeptId, toast, invalidateTimesheetCaches]);
 
   // Export. Во всех режимах отдаётся ЕДИНЫЙ файл для 1С — тот же, что в «Табели HR».
   // Режим «Мои сотрудники» (руководитель без назначенных отделов) идёт через
@@ -1031,8 +1133,7 @@ export const TimesheetPage: FC = () => {
       });
       toast.success(`Сотрудник ${candidate.full_name} переведён в отдел ${selectedDeptName} с ${effectiveFrom}`);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        invalidateTimesheetCaches(),
         queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
       ]);
       closeTeamManagement();
@@ -1042,7 +1143,7 @@ export const TimesheetPage: FC = () => {
     } finally {
       setTeamPendingEmployeeId(null);
     }
-  }, [rangeStart, rangeEnd, activeGridDeptId, isDirectReportsMarker, monthStr, queryClient, selectedDeptName, toast, closeTeamManagement]);
+  }, [activeGridDeptId, isDirectReportsMarker, queryClient, selectedDeptName, toast, closeTeamManagement, invalidateTimesheetCaches]);
 
   const [excludeModalEmployee, setExcludeModalEmployee] = useState<TimesheetEmployee | null>(null);
 
@@ -1068,8 +1169,7 @@ export const TimesheetPage: FC = () => {
       toast.success(`Сотрудник ${employee.full_name} исключён из табеля с ${effectiveDate}`);
       setExcludeModalEmployee(null);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        invalidateTimesheetCaches(),
         queryClient.invalidateQueries({ queryKey: ['timesheet-team-search'] }),
       ]);
     } catch (error) {
@@ -1078,7 +1178,7 @@ export const TimesheetPage: FC = () => {
     } finally {
       setTeamPendingEmployeeId(null);
     }
-  }, [excludeModalEmployee, rangeStart, rangeEnd, activeGridDeptId, isDirectReportsMarker, monthStr, panelEmployee?.id, queryClient, toast]);
+  }, [excludeModalEmployee, activeGridDeptId, isDirectReportsMarker, panelEmployee?.id, queryClient, toast, invalidateTimesheetCaches]);
 
   const modalDefaultHours = useMemo(() => {
     // Дефолт поля «Часы» в форме корректировки уважает per-role флаг
@@ -1189,13 +1289,7 @@ export const TimesheetPage: FC = () => {
   }, [
     objectEntries,
     employeeMap,
-    employees,
-    visibleDays,
-    year,
-    month,
-    entryMap,
-    objectEntriesByEmployeeDate,
-  ]);
+    ]);
 
   const bulkObjectTargets = useMemo<IBulkObjectCorrectionTarget[]>(() => {
     if (!bulkModeEnabled) return [];
@@ -1318,10 +1412,7 @@ export const TimesheetPage: FC = () => {
         toast.error(`Корректировка применена, но ${failed} файл(ов) не загрузилось`);
       }
     };
-    const invalidate = () => Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-      queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
-    ]);
+    const invalidate = () => invalidateTimesheetCaches();
 
     if (isObjectBulkOperation) {
       if (objectEntriesDisabled) {
@@ -1434,11 +1525,8 @@ export const TimesheetPage: FC = () => {
     bulkObjectTargets,
     bulkTargets,
     clearBulkState,
-    queryClient,
-    monthStr,
-    rangeStart,
-    rangeEnd,
-    activeGridDeptId,
+    invalidateTimesheetCaches,
+    objectEntriesDisabled,
     toast,
   ]);
 
@@ -1520,7 +1608,7 @@ export const TimesheetPage: FC = () => {
     handleViewModeChange(viewMode === 'corrections' ? prevGridViewRef.current : 'corrections');
   }, [viewMode, handleViewModeChange]);
 
-  const handleTimesheetModeChange = useCallback((nextMode: 'department' | 'assigned') => {
+  const handleTimesheetModeChange = useCallback((nextMode: 'department' | 'assigned' | 'employee') => {
     clearBulkState();
     closeTeamManagement();
     setPanelOpen(false);
@@ -1529,8 +1617,16 @@ export const TimesheetPage: FC = () => {
     setAssigneeSearch('');
     setSearchParams(current => {
       const next = new URLSearchParams(current);
-      if (nextMode === 'assigned') {
+      if (nextMode === 'employee') {
+        next.set('mode', 'employee');
+        next.delete('assignee');
+        next.delete('dept');
+        // «По объектам» и «Переводы» в персональном режиме недоступны — сбрасываем,
+        // иначе после переключения остался бы пустой вид.
+        if (next.get('view') === 'objects' || next.get('view') === 'transfers') next.delete('view');
+      } else if (nextMode === 'assigned') {
         next.set('mode', 'assigned');
+        next.delete('emp');
       } else {
         // Явно ставим mode=department: у табельщицы режим по умолчанию assigned,
         // пока queryMode !== 'department' (см. деривацию timesheetMode). Простое
@@ -1538,10 +1634,24 @@ export const TimesheetPage: FC = () => {
         next.set('mode', 'department');
         next.delete('assignee');
         next.delete('dept');
+        next.delete('emp');
       }
       return next;
     });
   }, [clearBulkState, closeTeamManagement, setSearchParams]);
+
+  const handleSelectModeEmployee = useCallback((employeeId: number, fullName: string) => {
+    clearBulkState();
+    setPanelOpen(false);
+    setModalOpen(false);
+    setSelectedEmployeeModeName(fullName);
+    setSearchParams(current => {
+      const next = new URLSearchParams(current);
+      next.set('mode', 'employee');
+      next.set('emp', String(employeeId));
+      return next;
+    });
+  }, [clearBulkState, setSearchParams]);
 
   const handleSelectAssignee = useCallback((employeeId: number | null) => {
     setAssigneeOpen(false);
@@ -1577,14 +1687,15 @@ export const TimesheetPage: FC = () => {
           start_date: rangeStart,
           end_date: rangeEnd,
           // Скоуп пересчёта = открытый отдел, иначе под админом сервер гонит всю компанию → таймаут.
-          department_id: (activeGridDeptId && !isDirectReportsMarker) ? activeGridDeptId : undefined,
+          // В персональном режиме отдела нет — сужаем до выбранного сотрудника.
+          department_id: (!isEmployeeMode && activeGridDeptId && !isDirectReportsMarker) ? activeGridDeptId : undefined,
+          employee_id: isEmployeeMode ? (selectedEmployeeModeId ?? undefined) : undefined,
         },
         { signal: controller.signal },
       );
       setRefreshState({ phase: 'invalidating', message: 'Обновление данных табеля…' });
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['timesheet-page', monthStr, rangeStart, rangeEnd, activeGridDeptId ?? 'none'] }),
-        queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+        invalidateTimesheetCaches(isEmployeeMode ? selectedEmployeeModeId : null),
         queryClient.invalidateQueries({ queryKey: ['schedules'] }),
         queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] }),
         queryClient.invalidateQueries({ queryKey: ['employee-timesheet'] }),
@@ -1610,7 +1721,7 @@ export const TimesheetPage: FC = () => {
     } finally {
       window.clearTimeout(timeoutId);
     }
-  }, [rangeStart, rangeEnd, refreshInFlight, queryClient, monthStr, activeGridDeptId, toast]);
+  }, [rangeStart, rangeEnd, refreshInFlight, queryClient, activeGridDeptId, isDirectReportsMarker, isEmployeeMode, selectedEmployeeModeId, toast, invalidateTimesheetCaches]);
 
   const handleSelectBrigade = useCallback((departmentId: string) => {
     clearBulkState();
@@ -1785,7 +1896,8 @@ export const TimesheetPage: FC = () => {
   // Отметка «Проверено» актуальна только для бригад (табель начальника участка).
   const isBrigadeScope = supervisorData?.kind === 'brigade';
 
-  const modeControl = canUseAssignedMode ? (
+  // Ряд режимов показываем и ролям без «По участкам»: им доступен «По сотруднику».
+  const modeControl = (canUseAssignedMode || canUseEmployeeMode) ? (
     <section className="ts-mode-switch">
       <button
         type="button"
@@ -1794,17 +1906,42 @@ export const TimesheetPage: FC = () => {
       >
         По отделу
       </button>
-      <button
-        type="button"
-        className={`ts-mode-chip ${timesheetMode === 'assigned' ? 'ts-mode-chip--active' : ''}`}
-        onClick={() => handleTimesheetModeChange('assigned')}
-      >
-        По участкам
-      </button>
+      {canUseAssignedMode && (
+        <button
+          type="button"
+          className={`ts-mode-chip ${timesheetMode === 'assigned' ? 'ts-mode-chip--active' : ''}`}
+          onClick={() => handleTimesheetModeChange('assigned')}
+        >
+          По участкам
+        </button>
+      )}
+      {canUseEmployeeMode && (
+        <button
+          type="button"
+          className={`ts-mode-chip ${timesheetMode === 'employee' ? 'ts-mode-chip--active' : ''}`}
+          onClick={() => handleTimesheetModeChange('employee')}
+        >
+          По сотруднику
+        </button>
+      )}
     </section>
   ) : null;
 
-  const selectorControl = timesheetMode === 'assigned' ? assigneeControl : departmentControl;
+  const employeeModeControl = (
+    <TimesheetEmployeePicker
+      label={employeeModeDisplayName ? formatTimesheetEmployeeName(employeeModeDisplayName) : 'Выберите сотрудника'}
+      selectedEmployeeId={selectedEmployeeModeId}
+      from={rangeStart}
+      to={rangeEnd}
+      onSelect={handleSelectModeEmployee}
+    />
+  );
+
+  const selectorControl = timesheetMode === 'assigned'
+    ? assigneeControl
+    : timesheetMode === 'employee'
+      ? employeeModeControl
+      : departmentControl;
   const isAssignedMode = timesheetMode === 'assigned';
 
   // Проблемные сотрудники/дни для модалки подтверждения подачи.
@@ -1867,12 +2004,17 @@ export const TimesheetPage: FC = () => {
   const headerEmployeeCounter = useMemo(() => {
     if (isAssignedMode) return null;
     if (!effectiveSelectedDeptId) return null;
-    const showCounter = Boolean(stats.employeeCount);
+    // В персональном режиме счётчик «N сотр.» бессмыслен — в сетке один человек,
+    // поэтому вместо него показываем его ФИО.
+    const showCounter = !isEmployeeMode && Boolean(stats.employeeCount);
     const activeApproval = headerApproval.data ?? null;
     const otherApprovals = (headerMonthApprovals.data ?? []).filter(
       a => !activeApproval || a.id !== activeApproval.id,
     );
-    if (!showCounter && !headerApprovalStatus && otherApprovals.length === 0) return null;
+    const employeeModeTitle = isEmployeeMode && employeeModeDisplayName
+      ? formatTimesheetEmployeeName(employeeModeDisplayName)
+      : null;
+    if (!showCounter && !employeeModeTitle && !headerApprovalStatus && otherApprovals.length === 0) return null;
     const StatusIcon = headerApprovalStatus ? STATUS_ICONS[headerApprovalStatus] : null;
     // Период временно открыт кадровой службой или админом: статус подачи прежний,
     // но замок снят — показываем это отдельным чипом, иначе «Утверждён» вводит в заблуждение.
@@ -1891,6 +2033,7 @@ export const TimesheetPage: FC = () => {
             {stats.employeeCount} <span className="ts-header-counter-label">сотр.</span>
           </span>
         )}
+        {employeeModeTitle && <span className="ts-header-counter">{employeeModeTitle}</span>}
         {headerApprovalStatus && StatusIcon && (
           <span
             className="ts-header-approval-chip"
@@ -1930,7 +2073,9 @@ export const TimesheetPage: FC = () => {
   ]);
   useHeaderAddon(headerEmployeeCounter);
 
-  const hasActiveScope = isAssignedMode ? selectedAssigneeId : activeGridDeptId;
+  const hasActiveScope = isEmployeeMode
+    ? selectedEmployeeModeId
+    : isAssignedMode ? selectedAssigneeId : activeGridDeptId;
   const segmentControl = hasActiveScope ? (
     <section className="ts-half-toggle" aria-label="Период табеля">
       <button
@@ -1961,20 +2106,24 @@ export const TimesheetPage: FC = () => {
 
   const viewControl = hasActiveScope ? (
     <section className="ts-view-switch">
-      <button
-        type="button"
-        className={`ts-view-chip ${viewMode === 'employees' ? ' ts-view-chip--active' : ''}`}
-        onClick={() => handleViewModeChange('employees')}
-      >
-        По сотрудникам
-      </button>
-      <button
-        type="button"
-        className={`ts-view-chip ${viewMode === 'objects' ? ' ts-view-chip--active' : ''}`}
-        onClick={() => handleViewModeChange('objects')}
-      >
-        По объектам
-      </button>
+      {!isEmployeeMode && (
+        <>
+          <button
+            type="button"
+            className={`ts-view-chip ${viewMode === 'employees' ? ' ts-view-chip--active' : ''}`}
+            onClick={() => handleViewModeChange('employees')}
+          >
+            По сотрудникам
+          </button>
+          <button
+            type="button"
+            className={`ts-view-chip ${viewMode === 'objects' ? ' ts-view-chip--active' : ''}`}
+            onClick={() => handleViewModeChange('objects')}
+          >
+            По объектам
+          </button>
+        </>
+      )}
       <button
         type="button"
         className={`ts-view-chip ${viewMode === 'corrections' ? ' ts-view-chip--active' : ''}`}
@@ -1982,7 +2131,7 @@ export const TimesheetPage: FC = () => {
       >
         Корректировки
       </button>
-      {isAdmin && !isAssignedMode && (
+      {isAdmin && !isAssignedMode && !isEmployeeMode && (
         <button
           type="button"
           className={`ts-view-chip ${viewMode === 'transfers' ? ' ts-view-chip--active' : ''}`}
@@ -1994,7 +2143,7 @@ export const TimesheetPage: FC = () => {
     </section>
   ) : null;
 
-  const viewControlPrimary = hasActiveScope ? (
+  const viewControlPrimary = (hasActiveScope && !isEmployeeMode) ? (
     <section className="ts-view-switch">
       <button
         type="button"
@@ -2016,7 +2165,7 @@ export const TimesheetPage: FC = () => {
   // Тумблер «Все сотрудники» — показывает членов ростера без активности за период.
   // Оборачиваем в ts-view-switch (flex-контейнер), чтобы на мобильном чип не растянулся
   // на всю ширину. Подпись постоянная, состояние — оформлением + aria-pressed.
-  const canShowAllEmployees = Boolean(hasActiveScope) && canUseShowAllEmployees;
+  const canShowAllEmployees = Boolean(hasActiveScope) && canUseShowAllEmployees && !isEmployeeMode;
   const showAllControl = canShowAllEmployees ? (
     <section className="ts-view-switch">
       <button
@@ -2041,7 +2190,7 @@ export const TimesheetPage: FC = () => {
     </button>
   ) : null;
 
-  const transfersChip = hasActiveScope && isAdmin && !isAssignedMode ? (
+  const transfersChip = hasActiveScope && isAdmin && !isAssignedMode && !isEmployeeMode ? (
     <button
       type="button"
       className={`ts-view-chip ${viewMode === 'transfers' ? ' ts-view-chip--active' : ''}`}
@@ -2061,7 +2210,7 @@ export const TimesheetPage: FC = () => {
             <div className="ts-mobile-header-row">
               <h1 className="ts-title">Табель</h1>
               <div className="ts-mobile-header-actions">
-                {!isAssignedMode && canUseTeamManagement && (
+                {!isAssignedMode && !isEmployeeMode && canUseTeamManagement && (
                   <button
                     type="button"
                     className="ts-btn ts-btn--chip"
@@ -2073,7 +2222,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {!isAssignedMode && (
+                {!isAssignedMode && !isEmployeeMode && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip${mobileApprovalVisible ? ' ts-btn--active' : ''}`}
@@ -2082,7 +2231,8 @@ export const TimesheetPage: FC = () => {
                     {mobileApprovalVisible ? 'Скрыть согласование' : 'Согласование'}
                   </button>
                 )}
-                {!hasGlobalTimesheetRead && (
+                {/* Экспорт и согласование — операции над отделом, в персональном режиме их нет. */}
+                {!hasGlobalTimesheetRead && !isEmployeeMode && (
                   <button
                     type="button"
                     className="ts-btn ts-btn--icon"
@@ -2110,7 +2260,7 @@ export const TimesheetPage: FC = () => {
               )}
             </div>
             {modeControl}
-            {mobileApprovalVisible && !isAssignedMode && (
+            {mobileApprovalVisible && !isAssignedMode && !isEmployeeMode && (
               <div className="ts-mobile-approval-panel">
                 <TimesheetApprovalBar
                   submissionMode={approvalSubmissionMode}
@@ -2145,14 +2295,16 @@ export const TimesheetPage: FC = () => {
                     canToggle={isTimekeeperRole}
                   />
                 )}
-                <TimesheetApprovalBar
-                  submissionMode={approvalSubmissionMode}
-                  departmentId={approvalBarDeptId}
-                  startDate={rangeStart}
-                  endDate={rangeEnd}
-                  allowReview={false}
-                  submitProblems={submitProblems}
-                />
+                {!isEmployeeMode && (
+                  <TimesheetApprovalBar
+                    submissionMode={approvalSubmissionMode}
+                    departmentId={approvalBarDeptId}
+                    startDate={rangeStart}
+                    endDate={rangeEnd}
+                    allowReview={false}
+                    submitProblems={submitProblems}
+                  />
+                )}
               </div>
             </div>
 
@@ -2164,7 +2316,7 @@ export const TimesheetPage: FC = () => {
               <div className="ts-header-toolbar-right">
                 {/* Экспорт скрыт для глобального read-флага: экспорт-эндпоинты работают
                     в старом скоупе и вернули бы 403 (follow-up: расширить read-scope). */}
-                {!hasGlobalTimesheetRead && (
+                {!hasGlobalTimesheetRead && !isEmployeeMode && (
                   <button
                     type="button"
                     className="ts-btn"
@@ -2197,7 +2349,7 @@ export const TimesheetPage: FC = () => {
                     {refreshState.message}
                   </span>
                 )}
-                {canUseTeamManagement && (
+                {canUseTeamManagement && !isEmployeeMode && (
                   <button
                     type="button"
                     className="ts-btn ts-btn--primary"
@@ -2209,7 +2361,7 @@ export const TimesheetPage: FC = () => {
                     Добавить сотрудника
                   </button>
                 )}
-                {canEditTimesheet && activeGridDeptId && (viewMode === 'employees' || viewMode === 'objects') && (
+                {canEditTimesheet && activeGridDeptId && !isEmployeeMode && (viewMode === 'employees' || viewMode === 'objects') && (
                   <button
                     type="button"
                     className={`ts-btn ts-btn--chip ts-btn--bulk-toggle${bulkModeEnabled ? ' ts-btn--active' : ''}`}
@@ -2317,10 +2469,45 @@ export const TimesheetPage: FC = () => {
           <TimesheetCorrectionsList
             startDate={rangeStart}
             endDate={rangeEnd}
-            departmentId={effectiveSelectedDeptId ?? null}
+            departmentId={isEmployeeMode ? null : (effectiveSelectedDeptId ?? null)}
+            employeeId={isEmployeeMode ? selectedEmployeeModeId : null}
             employees={employees}
           />
         </div>
+      ) : isEmployeeMode ? (
+        !selectedEmployeeModeId ? (
+          <div className="ts-table-container">
+            <div className="ts-loading">Найдите сотрудника по ФИО</div>
+          </div>
+        ) : employeeModeLoading ? (
+          <div className="ts-table-container">
+            <div className="ts-loading">Загрузка табеля...</div>
+          </div>
+        ) : employees.length === 0 ? (
+          <div className="ts-table-container">
+            <div className="ts-loading">За выбранный период сотрудник в табеле не числится</div>
+          </div>
+        ) : (
+          <TimesheetGrid
+            employees={employees}
+            entries={entries}
+            objectEntries={objectEntries}
+            employeeStats={employeeStats}
+            year={year}
+            month={month}
+            viewMode={viewMode}
+            schedules={schedules}
+            dailySchedules={dailySchedules}
+            calendar={calendar}
+            compact={isMobile}
+            visibleDays={visibleDays}
+            splitDayKeys={splitDayKeys}
+            approvalStatusFor={lockStatusFor}
+            onEmployeeClick={handleEmployeeClick}
+            onDayClick={handleDayClick}
+            onObjectDayClick={handleObjectDayClick}
+          />
+        )
       ) : isAssignedMode ? (
         !selectedAssigneeId ? (
           <div className="ts-table-container">

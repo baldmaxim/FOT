@@ -333,6 +333,16 @@ describe('кэш-ключи timesheet — include_empty и employee_ids', () => 
       .toBe(buildTimesheetTodayCacheKey(keyReq({ include_empty: '1' })));
   });
 
+  it('период отдела («По сотруднику») разводит ключи одного employee_id', () => {
+    const base = { employee_id: '7' };
+    expect(buildTimesheetCacheKey(keyReq({ ...base, period_department_id: 'dept-a' })))
+      .not.toBe(buildTimesheetCacheKey(keyReq({ ...base, period_department_id: 'dept-b' })));
+    expect(buildTimesheetCacheKey(keyReq({ ...base, period_department_id: 'dept-a', period_from: '2026-08-01' })))
+      .not.toBe(buildTimesheetCacheKey(keyReq({ ...base, period_department_id: 'dept-a', period_from: '2026-08-20' })));
+    expect(buildTimesheetCacheKey(keyReq({ ...base, period_department_id: 'dept-a', period_to: '2026-08-10' })))
+      .not.toBe(buildTimesheetCacheKey(keyReq({ ...base, period_department_id: 'dept-a', period_to: '2026-08-31' })));
+  });
+
   it('разные employee_ids (HR-снимки) → разные ключи', () => {
     expect(buildTimesheetCacheKey(keyReq({ employee_ids: '1,2,3' })))
       .not.toBe(buildTimesheetCacheKey(keyReq({ employee_ids: '1,2,4' })));

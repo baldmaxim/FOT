@@ -38,6 +38,8 @@ import {
   resolveTimesheetScopedDepartmentId,
 } from '../services/timesheet-scope.service.js';
 import { listNonHolidayWeekendDays } from '../services/timesheet-weekend-days.util.js';
+import { listEmployeeDepartmentPeriods } from '../services/timesheet-employee-periods.service.js';
+import { escapeLike } from '../utils/search.utils.js';
 import {
   buildAttendanceEntries,
   deleteAttendanceAdjustmentBySource,
@@ -51,6 +53,7 @@ import { formatDateToISO } from '../utils/date.utils.js';
 import { OBJECT_ADJUSTMENT_SOURCE_TYPE, resolveDayObjectForAdjustment } from '../services/timesheet-object.service.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
 import {
+  formatDateShift,
   isEmployeeAssignedToDepartmentOnDate,
   listEmployeeIdsAssignedToDepartmentPeriod,
   listEmployeeMembershipsForDepartmentPeriod,
@@ -2035,6 +2038,17 @@ export const timesheetController = {
           )]
         : [];
       const hasEmployeeIdsFilter = requestedEmployeeIds.length > 0;
+      // Режим «По сотруднику»: строка одного человека внутри КОНКРЕТНОГО отдела.
+      // Действует только вместе с employee_id и включает штатный membership-путь —
+      // тогда joined/transferred, обязательные выходные, editable и замки считаются
+      // ровно так же, как в обычном запросе отдела (иначе «Откл.» разъезжается).
+      const requestedPeriodDepartmentId = typeof req.query.period_department_id === 'string'
+        ? req.query.period_department_id
+        : null;
+      const isoDateParam = (value: unknown): string | null =>
+        (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) ? value : null;
+      const requestedPeriodFrom = isoDateParam(req.query.period_from);
+      const requestedPeriodTo = isoDateParam(req.query.period_to);
       const department_id = await resolveTimesheetReadableDepartmentId(req, requestedDepartmentId);
 
       if (!month) {
@@ -2083,6 +2097,21 @@ export const timesheetController = {
 
       if (hasEmployeeFilter && !(await canAccessEmployeeForTimesheetPeriod(req, requestedEmployeeId, startDate, endDate))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      // Персональный режим: доступ проверяется НА ГРАНИЦАХ ПЕРИОДА, а не всего диапазона.
+      // Иначе один свой день в начале месяца открыл бы часы за отрезок, отработанный
+      // в чужом отделе после перевода.
+      if (requestedPeriodDepartmentId && hasEmployeeFilter) {
+        const periodAccessible = await canAccessEmployeeForTimesheetPeriod(
+          req,
+          requestedEmployeeId,
+          requestedPeriodFrom ?? startDate,
+          requestedPeriodTo ?? endDate,
+        );
+        if (!periodAccessible) {
+          return res.status(403).json({ success: false, error: 'Нет доступа к периоду сотрудника' });
+        }
       }
 
       if (hasEmployeeIdsFilter && scope !== 'all') {
@@ -2138,14 +2167,24 @@ export const timesheetController = {
       // При фильтре по конкретному сотруднику доступ уже проверен в canAccessEmployeeForTimesheetPeriod;
       // дополнительный AND по авто-резолвнутому department_id ломает кейс «руководитель ведёт несколько отделов,
       // сотрудник числится не в первом».
-      const shouldApplyDeptFilter = hasDeptFilter && !hasEmployeeFilter;
+      // Персональный режим: отдел задан явно вместе с employee_id — включаем ту же
+      // ветку членства, что и обычный запрос отдела, сузив состав до одного человека.
+      const hasPeriodDeptFilter = hasEmployeeFilter && Boolean(requestedPeriodDepartmentId);
+      const shouldApplyDeptFilter = (hasDeptFilter && !hasEmployeeFilter) || hasPeriodDeptFilter;
+      // Отдел, по которому резолвится членство/согласования/editable.
+      const membershipDeptId: string | null = hasPeriodDeptFilter
+        ? (requestedPeriodDepartmentId as string)
+        : (hasDeptFilter ? (department_id as string) : null);
       // Табельщица + выбран отдел «ЛИНИЯ-Общестрой» («По отделу»): показываем НЕ весь
       // отдел (~98), а только её людей — присутствующих на её объектах в периоде.
-      const isTimekeeperLiDeptView = shouldApplyDeptFilter && isTimekeeper(req)
+      const isTimekeeperLiDeptView = shouldApplyDeptFilter && !hasPeriodDeptFilter && isTimekeeper(req)
         && department_id === LI_OBSHESTROY_DEPARTMENT_ID;
       let departmentMemberships: IDepartmentEmployeeMembership[] = shouldApplyDeptFilter
-        ? await listEmployeeMembershipsForDepartmentPeriod(department_id as string, startDate, endDate)
+        ? await listEmployeeMembershipsForDepartmentPeriod(membershipDeptId as string, startDate, endDate)
         : [];
+      if (hasPeriodDeptFilter) {
+        departmentMemberships = departmentMemberships.filter(m => m.employee_id === requestedEmployeeId);
+      }
       if (isTimekeeperLiDeptView) {
         const herLi = await resolveTimekeeperLiObshestroyPresenceIds(req, startDate, endDate);
         departmentMemberships = departmentMemberships.filter(m => herLi.has(m.employee_id));
@@ -2153,8 +2192,10 @@ export const timesheetController = {
       // Начальник(и) участка бригады — отдельной строкой «Начальник участка» первыми
       // в сетке (для табельщиц/HR/админов). Для не-бригад пусто. Резолвится на бэке
       // (site_supervisor бригады) — совпадает с руководителем, выбранным в «По участкам».
-      const supervisorIds = shouldApplyDeptFilter
-        ? await listBrigadeSupervisorEmployeeIds(department_id as string)
+      // В персональном режиме отдельная строка «Начальник участка» не нужна —
+      // в сетке ровно один сотрудник, выбранный пользователем.
+      const supervisorIds = (shouldApplyDeptFilter && !hasPeriodDeptFilter)
+        ? await listBrigadeSupervisorEmployeeIds(membershipDeptId as string)
         : [];
       const supervisorSet = new Set<number>(supervisorIds);
       // ЛИНИЯ-Общестрой больше НЕ подмешивается секцией в «По участкам»/«По объектам».
@@ -2176,6 +2217,27 @@ export const timesheetController = {
       const joinedViaTransferByEmployeeId = new Map<number, boolean>(
         departmentMemberships.map(m => [m.employee_id, m.joined_via_transfer ?? false]),
       );
+      if (hasPeriodDeptFilter) {
+        // Возврат в тот же отдел (A → B → A) membership отдаёт ОДНИМ окном с самой ранней
+        // датой входа — иначе дни, проведённые в B, не были бы серыми в строке A.
+        // Границы периода приходят из assignment-периодов (там вход уже проверен на
+        // «настоящий перевод»), поэтому нижнюю границу применяем безусловно.
+        const empId = requestedEmployeeId as number;
+        // Граница внутри диапазона: на начале диапазона она ничего не отсекает,
+        // но разошлась бы с ответом обычного запроса отдела.
+        if (requestedPeriodFrom && requestedPeriodFrom > startDate) {
+          const joined = joinedByEmployeeId.get(empId) ?? null;
+          if (!joined || requestedPeriodFrom > joined) joinedByEmployeeId.set(empId, requestedPeriodFrom);
+          joinedViaTransferByEmployeeId.set(empId, true);
+        }
+        if (requestedPeriodTo) {
+          const periodCutoff = formatDateShift(requestedPeriodTo, 1);
+          const transferred = transferredOutByEmployeeId.get(empId) ?? null;
+          if (!transferred || periodCutoff < transferred) {
+            transferredOutByEmployeeId.set(empId, periodCutoff);
+          }
+        }
+      }
 
       if (
         (shouldApplyDeptFilter || isDirectReportsOnlyScope)
@@ -2569,8 +2631,8 @@ export const timesheetController = {
       // отсекаются: фронт рисует их inactive, а create() — через isEmployeeAssignedToDepartmentOnDate.
       const editableDeptIds = await resolveEditableDepartmentIds(req);
       const displayedDeptEditable = shouldApplyDeptFilter
-        && department_id != null
-        && (editableDeptIds === 'all' || editableDeptIds.includes(department_id as string));
+        && membershipDeptId != null
+        && (editableDeptIds === 'all' || editableDeptIds.includes(membershipDeptId));
       const employeesWithNames = (employees || []).map(e => {
         const empId = Number(e.id);
         const source = resolveEmployeeTimesheetSource({
@@ -2914,6 +2976,135 @@ export const timesheetController = {
       }
       console.error('timesheet.create error:', err);
       res.status(500).json({ success: false, error: 'Ошибка создания записи' });
+    }
+  },
+
+  /**
+   * GET /api/timesheet/search-employees?q&from&to — поиск сотрудника для режима «По сотруднику».
+   *
+   * from/to обязательны: без периода уволенного не найти при просмотре прошлого месяца,
+   * а доступ к сотруднику вычисляется именно на периоде. Состав кандидатов зеркалит
+   * empWhere из getAll — показываем только тех, кого табель за этот период реально покажет.
+   */
+  async searchEmployeesForTimesheet(req: AuthenticatedRequest, res: Response) {
+    try {
+      const scope = await resolveTimesheetScope(req);
+      if (!scope) {
+        return res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
+      }
+
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      const from = typeof req.query.from === 'string' ? req.query.from : '';
+      const to = typeof req.query.to === 'string' ? req.query.to : '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || to < from) {
+        return res.status(400).json({ success: false, error: 'Некорректный диапазон дат' });
+      }
+      if (q.length < 2) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const candidates = await query<{
+        id: number | string;
+        full_name: string | null;
+        org_department_id: string | null;
+        employment_status: string | null;
+      }>(
+        `SELECT id, full_name, org_department_id, employment_status
+           FROM employees
+          WHERE full_name ILIKE $1
+            AND is_archived = false
+            AND (employment_status = 'active'
+                 OR (employment_status = 'fired'
+                     AND dismissal_date IS NOT NULL
+                     AND dismissal_date >= $2::date))
+            AND NOT (excluded_from_timesheet = true
+                     AND (excluded_from_timesheet_date IS NULL
+                          OR excluded_from_timesheet_date <= $2::date))
+          ORDER BY full_name
+          LIMIT 40`,
+        [`%${escapeLike(q)}%`, from],
+      );
+
+      // Доступ проверяем поштучно во ВСЕХ неглобальных скоупах: filterEmployeeIdsByTimesheetScope
+      // при обычном department-скоупе и при self возвращает список нетронутым — чужие ФИО утекли бы.
+      const isGlobal = scope === 'all' || await hasGlobalDepartmentReadScope(req);
+      const visible: typeof candidates = [];
+      for (const candidate of candidates) {
+        if (visible.length >= 20) break;
+        const empId = Number(candidate.id);
+        if (!Number.isFinite(empId)) continue;
+        if (!isGlobal && !(await canAccessEmployeeForTimesheetPeriod(req, empId, from, to))) continue;
+        visible.push(candidate);
+      }
+
+      const deptIds = [...new Set(visible
+        .map(e => e.org_department_id)
+        .filter((v): v is string => Boolean(v)))];
+      const deptNameById = new Map<string, string>();
+      if (deptIds.length > 0) {
+        const departments = await query<{ id: string; name: string | null }>(
+          'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+          [deptIds],
+        );
+        for (const dept of departments) deptNameById.set(String(dept.id), String(dept.name || ''));
+      }
+
+      res.json({
+        success: true,
+        data: visible.map(e => ({
+          id: Number(e.id),
+          full_name: String(e.full_name || ''),
+          department_name: e.org_department_id ? deptNameById.get(e.org_department_id) ?? null : null,
+          employment_status: e.employment_status ?? null,
+        })),
+      });
+    } catch (err) {
+      console.error('timesheet.searchEmployeesForTimesheet error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка поиска сотрудников' });
+    }
+  },
+
+  /**
+   * GET /api/timesheet/employees/:employeeId/assignment-periods?from&to — отделы сотрудника
+   * за период: по строке табеля на каждый. Отдельный гард обязателен — без него подстановкой
+   * чужого employeeId вытягивается история отделов.
+   */
+  async listEmployeeAssignmentPeriods(req: AuthenticatedRequest, res: Response) {
+    try {
+      const employeeId = Number.parseInt(req.params.employeeId, 10);
+      if (!Number.isInteger(employeeId) || employeeId <= 0) {
+        return res.status(400).json({ success: false, error: 'Некорректный ID сотрудника' });
+      }
+      const from = typeof req.query.from === 'string' ? req.query.from : '';
+      const to = typeof req.query.to === 'string' ? req.query.to : '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || to < from) {
+        return res.status(400).json({ success: false, error: 'Некорректный диапазон дат' });
+      }
+
+      if (!(await canAccessEmployeeForTimesheetPeriod(req, employeeId, from, to))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
+
+      const periods = await listEmployeeDepartmentPeriods(employeeId, from, to);
+      // Право правки страницы — общий предохранитель поверх периодного доступа.
+      const canEditPage = await hasManagedTimesheetAccess(req, 'edit');
+
+      const data = [];
+      for (const period of periods) {
+        // accessible/editable — на границах КОНКРЕТНОГО периода: канонический резолвер
+        // учитывает объектный скоуп, прямых подчинённых и табельщиц, чего не даёт
+        // простая проверка managed-отделов.
+        const accessible = await canAccessEmployeeForTimesheetPeriod(req, employeeId, period.from, period.to);
+        const editable = accessible
+          && canEditPage
+          && await canAccessEmployeeForTimesheetPeriod(req, employeeId, period.from, period.to, true);
+        data.push({ ...period, accessible, editable });
+      }
+
+      res.json({ success: true, data });
+    } catch (err) {
+      console.error('timesheet.listEmployeeAssignmentPeriods error:', err);
+      res.status(500).json({ success: false, error: 'Ошибка получения периодов сотрудника' });
     }
   },
 
@@ -3758,6 +3949,16 @@ export const timesheetController = {
       }
 
       const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
+      // Режим «По сотруднику»: без этого фильтра список показал бы правки всего
+      // ранее выбранного отдела либо всего скоупа.
+      const requestedEmployeeId = typeof req.query.employee_id === 'string'
+        ? Number.parseInt(req.query.employee_id, 10)
+        : null;
+      const hasEmployeeFilter = Number.isInteger(requestedEmployeeId) && (requestedEmployeeId as number) > 0;
+      if (hasEmployeeFilter
+        && !(await canAccessEmployeeForTimesheetPeriod(req, requestedEmployeeId, startDate, endDate))) {
+        return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+      }
       let employeeIds: number[] = [];
       // Члены editable-отделов за период: уволенные/переведённые видны через
       // dismissal_events / закрытые assignments, но их строка employee_department_access
@@ -3786,6 +3987,12 @@ export const timesheetController = {
       } else {
         const data = await query<{ id: number | string }>(`SELECT id FROM employees`);
         employeeIds = data.map((row) => Number(row.id));
+      }
+
+      if (hasEmployeeFilter) {
+        const empId = requestedEmployeeId as number;
+        // Доступ уже проверен канонически: сужаем набор, а не расширяем его.
+        employeeIds = employeeIds.includes(empId) ? [empId] : (scope === 'all' ? [empId] : []);
       }
 
       if (employeeIds.length === 0) {
@@ -4039,6 +4246,16 @@ export const timesheetController = {
       const requestedDepartmentId = typeof req.body?.department_id === 'string' && req.body.department_id
         ? req.body.department_id
         : null;
+      // Режим «По сотруднику»: отдела в шапке нет, поэтому пересчёт сужаем до одного
+      // человека — иначе под админом «Обновить» уходило бы на всю компанию.
+      const requestedEmployeeId = Number.isInteger(req.body?.employee_id)
+        ? Number(req.body.employee_id)
+        : null;
+      if (requestedEmployeeId != null && requestedEmployeeId > 0) {
+        if (!(await canAccessEmployeeForTimesheetPeriod(req, requestedEmployeeId, startDate, endDate))) {
+          return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
+        }
+      }
       let employeeIds: number[] = [];
       let scopedToDepartment = false;
       if (scope === 'department') {
@@ -4056,6 +4273,10 @@ export const timesheetController = {
       } else if (requestedDepartmentId) {
         // scope='all' (админ): сузить пересчёт до открытого отдела, доступ к нему у админа есть.
         employeeIds = await listEmployeeIdsAssignedToDepartmentPeriod(requestedDepartmentId, startDate, endDate);
+        scopedToDepartment = true;
+      }
+      if (requestedEmployeeId != null && requestedEmployeeId > 0) {
+        employeeIds = [requestedEmployeeId];
         scopedToDepartment = true;
       }
       if (scopedToDepartment && employeeIds.length === 0) {
