@@ -2230,7 +2230,12 @@ export const timesheetController = {
           if (!joined || requestedPeriodFrom > joined) joinedByEmployeeId.set(empId, requestedPeriodFrom);
           joinedViaTransferByEmployeeId.set(empId, true);
         }
-        if (requestedPeriodTo) {
+        // Симметрично нижней границе: конец диапазона переводом НЕ является. Иначе
+        // последняя строка любого сотрудника получала бы transferred_out_date =
+        // endDate + 1 — ложный бейдж «Переведён», а на первой половине месяца ещё и
+        // ложный cutoff, обрезающий окно обязательных выходных (недобор, которого
+        // нет в том же отделе).
+        if (requestedPeriodTo && requestedPeriodTo < endDate) {
           const periodCutoff = formatDateShift(requestedPeriodTo, 1);
           const transferred = transferredOutByEmployeeId.get(empId) ?? null;
           if (!transferred || periodCutoff < transferred) {

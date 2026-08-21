@@ -416,16 +416,20 @@ export const TimesheetPage: FC = () => {
   // поздней строке. Отрезок передаём через period_from/period_to.
   // Недоступные периоды не запрашиваем вовсе — чужие часы не покидают сервер.
   const employeePeriodQueries = useQueries({
-    queries: employeePeriods.map(period => ({
+    queries: employeePeriods.map((period, index) => ({
       queryKey: [
         'timesheet-page', monthStr, rangeStart, rangeEnd,
-        `emp:${selectedEmployeeModeId}`, period.org_department_id, period.from, period.to,
+        `emp:${selectedEmployeeModeId}`, period.org_department_id, period.from, period.to, index,
       ],
       queryFn: () => timesheetService.getAll({
         month: monthStr,
         employee_id: selectedEmployeeModeId as number,
         period_department_id: period.org_department_id,
-        period_from: period.from,
+        // Нижнюю границу шлём только не-первой строке: у первой начало периода —
+        // это дата приёма или начало диапазона, а не перевод. В отделе такой вход
+        // границей не считается (joined_via_transfer=false), и дни до него остаются
+        // обычными, а не серыми.
+        period_from: index > 0 ? period.from : undefined,
         period_to: period.to,
         from: rangeStart,
         to: rangeEnd,
@@ -2068,7 +2072,8 @@ export const TimesheetPage: FC = () => {
       </span>
     );
   }, [
-    isAssignedMode, effectiveSelectedDeptId, stats.employeeCount,
+    isAssignedMode, isEmployeeMode, employeeModeDisplayName,
+    effectiveSelectedDeptId, stats.employeeCount,
     headerApprovalStatus, headerApproval.data, headerMonthApprovals.data,
   ]);
   useHeaderAddon(headerEmployeeCounter);

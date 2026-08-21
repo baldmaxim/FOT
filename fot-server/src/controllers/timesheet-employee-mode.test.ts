@@ -124,7 +124,19 @@ vi.mock('../services/timesheet-department-assignments.service.js', () => ({
   listEmployeeIdsAssignedToDepartmentPeriod: vi.fn(async () => []),
   listEmployeeMembershipsForDepartmentPeriod: h.memberships,
   findApprovalLockForDate: vi.fn(async () => null),
-  resolveTimesheetDateRange: vi.fn(),
+  // Явные from/to — нужны для проверки полумесяца (там и проявляется ложный cutoff).
+  resolveTimesheetDateRange: vi.fn((month: string, from?: string | null, to?: string | null) => {
+    const [y, m] = month.split('-').map(Number);
+    if (!Number.isFinite(y) || !Number.isFinite(m)) return null;
+    const daysInMonth = new Date(y, m, 0).getDate();
+    return {
+      year: y,
+      month: m,
+      daysInMonth,
+      startDate: from || `${month}-01`,
+      endDate: to || `${month}-${String(daysInMonth).padStart(2, '0')}`,
+    };
+  }),
   // Упрощённый полный месяц — достаточно для getAll.
   resolveTimesheetPeriodRange: vi.fn((month: string) => {
     const [y, m] = month.split('-').map(Number);
@@ -350,9 +362,35 @@ describe('getAll — режим «По сотруднику»', () => {
   it('более раннее увольнение не затирается границей периода', async () => {
     h.memberships.mockResolvedValue([membership({ transferred_out_date: `${MONTH}-05` })]);
 
-    const res = await getAllWithPeriod({ period_to: `${MONTH}-31` });
+    const res = await getAllWithPeriod({ period_to: `${MONTH}-20` });
 
     expect(res._json.data.employees[0].transferred_out_date).toBe(`${MONTH}-05`);
+  });
+
+  it('период до конца диапазона не выдаёт себя за перевод', async () => {
+    // Последняя строка любого сотрудника упирается в конец диапазона. Если считать
+    // это переводом, строка получает бейдж «Переведён 01.09» на пустом месте —
+    // и ложный cutoff, который на первой половине месяца ломает «Откл.».
+    h.memberships.mockResolvedValue([membership()]);
+
+    const res = await getAllWithPeriod({
+      period_from: `${MONTH}-01`,
+      period_to: `${MONTH}-31`,
+    });
+
+    expect(res._json.data.employees[0].transferred_out_date).toBeNull();
+    expect(res._json.data.employees[0].joined_date).toBeNull();
+  });
+
+  it('без period_from нижняя граница берётся из membership', async () => {
+    // Первый период начинается датой приёма, а не переводом: фронт нижнюю границу
+    // не шлёт, и дни до неё остаются обычными — как в запросе отдела.
+    h.memberships.mockResolvedValue([membership({ joined_date: `${MONTH}-20` })]);
+
+    const res = await getAllWithPeriod({ period_to: `${MONTH}-31` });
+
+    // joined_via_transfer=false у активного → нижняя граница не применяется.
+    expect(res._json.data.employees[0].joined_date).toBeNull();
   });
 
   it('403, если доступа к сотруднику на границах периода нет', async () => {
@@ -564,6 +602,27 @@ describe('паритет статистики: «По сотруднику» п�
       .toBe(byDepartment.employees[0].transferred_out_date);
     expect(byEmployee.employees[0].joined_date)
       .toBe(byDepartment.employees[0].joined_date);
+  });
+
+  it('первая половина месяца: «Откл.» совпадает с отделом', async () => {
+    // Кейс ложного cutoff. На 1–15 недобор обязательной субботы НЕ определяется
+    // (последняя суббота месяца ещё впереди — гейт `endDate < last`). Если конец
+    // диапазона принять за перевод, окно суббот схлопывается до 1/8/15, месяц
+    // выглядит закрытым, и в персональном режиме появляется недобор, которого
+    // в том же отделе нет.
+    h.memberships.mockResolvedValue([membership()]);
+    const half = { from: `${MONTH}-01`, to: `${MONTH}-15` };
+
+    const byDepartment = await statsFor({ department_id: DEPT_A, ...half });
+    const byEmployee = await statsFor({
+      employee_id: String(EMP),
+      period_department_id: DEPT_A,
+      period_to: `${MONTH}-15`,
+      ...half,
+    });
+
+    expect(byEmployee.employee_stats).toEqual(byDepartment.employee_stats);
+    expect(byEmployee.employees[0].transferred_out_date).toBeNull();
   });
 
   it('строка после перевода совпадает со строкой нового отдела', async () => {
