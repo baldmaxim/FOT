@@ -693,6 +693,42 @@
   font-weight: 600;
 }
 
+/* Пикер сотрудника («По сотруднику»): ФИО целиком, отдел строкой ниже.
+   Отдельные классы, а не ts-assignee-*: там бейдж короткий («3 отд.») и не сжимается,
+   из-за чего полное название отдела съедало ширину и резало ФИО в многоточие. */
+.ts-emp-pick-dropdown {
+  min-width: 320px;
+  max-width: calc(100vw - 32px);
+}
+
+.ts-emp-pick-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.ts-emp-pick-name {
+  /* Перенос, а не многоточие: на узком экране длинное ФИО должно дочитываться. */
+  overflow-wrap: anywhere;
+}
+
+.ts-emp-pick-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ts-emp-pick-department {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Mode switch (department / assigned) — segment-control slider */
 .ts-mode-switch {
   display: inline-flex;
@@ -4786,6 +4822,13 @@
 
   .ts-dept-dropdown {
     min-width: 100%;
+    max-width: 100%;
+  }
+
+  /* Пикер сотрудника: своя ширина, но на мобильном — как у остальных списков. */
+  .ts-dept-dropdown.ts-emp-pick-dropdown {
+    width: 100%;
+    min-width: 0;
     max-width: 100%;
   }
 

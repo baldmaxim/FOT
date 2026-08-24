@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type FC } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { timesheetService } from '../../services/timesheetService';
-import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
 
 interface ITimesheetEmployeePickerProps {
   /** Подпись кнопки: ФИО выбранного либо приглашение к выбору. */
@@ -60,7 +59,7 @@ export const TimesheetEmployeePicker: FC<ITimesheetEmployeePickerProps> = ({
         <ChevronDown size={16} />
       </button>
       {open && (
-        <div className="ts-dept-dropdown ts-assignee-dropdown">
+        <div className="ts-dept-dropdown ts-emp-pick-dropdown">
           <input
             className="ts-dept-search"
             placeholder="Поиск по ФИО..."
@@ -79,21 +78,27 @@ export const TimesheetEmployeePicker: FC<ITimesheetEmployeePickerProps> = ({
           ) : results.map(employee => (
             <div
               key={employee.id}
-              className={`ts-dept-item ts-assignee-item ${selectedEmployeeId === employee.id ? 'ts-dept-item--active' : ''}`}
+              className={`ts-dept-item ts-emp-pick-item ${selectedEmployeeId === employee.id ? 'ts-dept-item--active' : ''}`}
               onClick={() => {
                 onSelect(employee.id, employee.full_name);
                 setOpen(false);
                 setSearch('');
               }}
             >
-              <span className="ts-assignee-name">{formatTimesheetEmployeeName(employee.full_name)}</span>
-              {employee.department_name && (
-                <span className="ts-assignee-badge" title={employee.department_name}>
-                  {employee.department_name}
+              {/* В результатах поиска ФИО полное: без отчества не отличить однофамильцев.
+                  Сокращённая форма остаётся на кнопке-триггере, где мало места. */}
+              <span className="ts-emp-pick-name">{employee.full_name}</span>
+              {(employee.department_name || employee.employment_status === 'fired') && (
+                <span className="ts-emp-pick-meta">
+                  {employee.department_name && (
+                    <span className="ts-emp-pick-department" title={employee.department_name}>
+                      {employee.department_name}
+                    </span>
+                  )}
+                  {employee.employment_status === 'fired' && (
+                    <span className="ts-assignee-badge" title="Уволен">Уволен</span>
+                  )}
                 </span>
-              )}
-              {employee.employment_status === 'fired' && (
-                <span className="ts-assignee-badge" title="Уволен">Уволен</span>
               )}
             </div>
           ))}
