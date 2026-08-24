@@ -1,0 +1,8 @@
+{
+  "name": "fot-mcp-postgres",
+  "private": true,
+  "description": "Зафиксированная версия MCP-сервера PostgreSQL для read-only доступа к FOT_Prod",
+  "dependencies": {
+    "@modelcontextprotocol/server-postgres": "0.6.2"
+  }
+}
