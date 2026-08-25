@@ -1745,6 +1745,25 @@
   border-color: var(--accent);
 }
 
+/* Сотрудник выбран — ФИО берётся из его карточки, руками не правим. */
+.pendingFioInput:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.pendingFioHint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-basis: 100%;
+  margin-left: 100px;
+}
+
+@media (max-width: 640px) {
+  .pendingFioHint {
+    margin-left: 0;
+  }
+}
+
 .roleSelectWrap {
   position: relative;
   flex: 0 1 320px;

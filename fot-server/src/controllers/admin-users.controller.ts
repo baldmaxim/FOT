@@ -2,6 +2,7 @@ import { Response } from 'express';
 import crypto from 'crypto';
 import { z } from 'zod';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
+import { syncProfileNameFromEmployee } from '../services/user-profile-name.service.js';
 import { localAuthService } from '../services/local-auth.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../types/index.js';
@@ -955,10 +956,18 @@ export const adminUsersController = {
 
       let approvedRows: Array<{ id: string }>;
       try {
-        approvedRows = await query<{ id: string }>(
-          `UPDATE user_profiles SET ${setClauses.join(', ')} WHERE id = $1::uuid RETURNING id`,
-          params,
-        );
+        const approveSql = `UPDATE user_profiles SET ${setClauses.join(', ')} WHERE id = $1::uuid RETURNING id`;
+        if (employee_id) {
+          // Одобрение с привязкой сотрудника: ФИО профиля сразу берём из карточки, иначе
+          // регистрационное имя разойдётся с Sigur уже на старте (см. user-profile-name.service.ts).
+          approvedRows = await withTransaction(async (client) => {
+            const result = await client.query<{ id: string }>(approveSql, params);
+            if (result.rows.length > 0) await syncProfileNameFromEmployee(client, employee_id);
+            return result.rows;
+          });
+        } else {
+          approvedRows = await query<{ id: string }>(approveSql, params);
+        }
       } catch (updateError) {
         console.error('Approve user error:', updateError);
         res.status(500).json({ success: false, error: 'Failed to approve user' });
@@ -1366,14 +1375,36 @@ export const adminUsersController = {
         return;
       }
 
+      // ФИО связанного профиля — зеркало карточки сотрудника, править его здесь нельзя:
+      // иначе таблицы снова разойдутся. Гард атомарный (без предварительного SELECT),
+      // чтобы не проиграть гонку с одновременной привязкой сотрудника.
+      let renamedRows: Array<{ id: string }>;
       try {
-        await execute(
-          'UPDATE user_profiles SET full_name = $1 WHERE id = $2::uuid',
+        renamedRows = await query<{ id: string }>(
+          `UPDATE user_profiles SET full_name = $1
+            WHERE id = $2::uuid AND employee_id IS NULL
+            RETURNING id`,
           [full_name.trim(), id],
         );
       } catch (error) {
         console.error('Update name error:', error);
         res.status(500).json({ success: false, error: 'Failed to update name' });
+        return;
+      }
+
+      if (renamedRows.length === 0) {
+        const target = await queryOne<{ employee_id: number | null }>(
+          'SELECT employee_id FROM user_profiles WHERE id = $1::uuid',
+          [id],
+        );
+        if (!target) {
+          res.status(404).json({ success: false, error: 'User not found' });
+          return;
+        }
+        res.status(400).json({
+          success: false,
+          error: 'ФИО связанного сотрудника меняется в карточке сотрудника',
+        });
         return;
       }
 
@@ -1421,11 +1452,17 @@ export const adminUsersController = {
         }
       }
 
+      const linkSql = 'UPDATE user_profiles SET employee_id = $1, token_version = token_version + 1 WHERE id = $2::uuid';
       try {
-        await execute(
-          'UPDATE user_profiles SET employee_id = $1, token_version = token_version + 1 WHERE id = $2::uuid',
-          [employee_id, id],
-        );
+        if (employee_id != null) {
+          // Привязка карточки — ФИО профиля приводим к ФИО сотрудника в той же транзакции.
+          await withTransaction(async (client) => {
+            await client.query(linkSql, [employee_id, id]);
+            await syncProfileNameFromEmployee(client, employee_id);
+          });
+        } else {
+          await execute(linkSql, [employee_id, id]);
+        }
       } catch (error) {
         console.error('Update employee error:', error);
         res.status(500).json({ success: false, error: 'Failed to update employee link' });

@@ -4,6 +4,8 @@ const h = vi.hoisted(() => ({
   queryOne: vi.fn(),
   query: vi.fn(),
   execute: vi.fn(),
+  withTransaction: vi.fn(),
+  syncProfileName: vi.fn(),
   canAccessEmployeeInScope: vi.fn(),
   resolveRequestDataScope: vi.fn(),
   logFromRequest: vi.fn(),
@@ -16,6 +18,10 @@ vi.mock('../config/postgres.js', () => ({
   queryOne: h.queryOne,
   query: h.query,
   execute: h.execute,
+  withTransaction: h.withTransaction,
+}));
+vi.mock('../services/user-profile-name.service.js', () => ({
+  syncProfileNameFromEmployee: h.syncProfileName,
 }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest, log: vi.fn() },
@@ -190,5 +196,75 @@ describe('updateEmployee — Sigur-связанный сотрудник', () =>
     expect(res.statusCode).toBe(400);
     expect(h.updateSigurEmployee).not.toHaveBeenCalled();
     expect(h.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateEmployee — portal-only сотрудник (без связи с Sigur)', () => {
+  /** Транзакция: UPDATE карточки идёт по client.query, зеркало — вызовом хелпера. */
+  const setupTransaction = (row: Record<string, unknown> | null = { id: 77, full_name: 'Чернышева Екатерина Андреевна' }) => {
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    h.withTransaction.mockImplementation(async (fn: (client: unknown) => Promise<unknown>) => fn({
+      query: async (sql: string, params: unknown[]) => {
+        queries.push({ sql, params });
+        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+      },
+    }));
+    return queries;
+  };
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.canAccessEmployeeInScope.mockResolvedValue(true);
+    h.resolveRequestDataScope.mockResolvedValue('all');
+    h.logFromRequest.mockResolvedValue(undefined);
+    h.syncProfileName.mockResolvedValue(1);
+    h.queryOne.mockResolvedValue({ id: 77, sigur_employee_id: null, name_locked: false });
+  });
+
+  it('правка ФИО обновляет карточку и профиль портала одной транзакцией', async () => {
+    const queries = setupTransaction();
+    const res = makeRes();
+
+    await employeesController.update(makeReq({ full_name: 'Чернышева Екатерина Андреевна' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.withTransaction).toHaveBeenCalledTimes(1);
+    expect(queries[0].sql).toContain('UPDATE employees SET');
+    expect(queries[0].sql).toContain('full_name = $2');
+    // Зеркало вызвано тем же клиентом транзакции, что и UPDATE карточки.
+    expect(h.syncProfileName).toHaveBeenCalledTimes(1);
+    expect(h.syncProfileName.mock.calls[0][1]).toBe(77);
+  });
+
+  it('правка без ФИО идёт мимо транзакции и профиль не трогает', async () => {
+    h.queryOne
+      .mockResolvedValueOnce({ id: 77, sigur_employee_id: null, name_locked: false })
+      .mockResolvedValueOnce({ id: 77, full_name: 'Иванов Иван' });
+    const res = makeRes();
+
+    await employeesController.update(makeReq({ country: 'КАЗАХСТАН' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.withTransaction).not.toHaveBeenCalled();
+    expect(h.syncProfileName).not.toHaveBeenCalled();
+  });
+
+  it('сотрудника нет: зеркало не вызывается', async () => {
+    setupTransaction(null);
+    const res = makeRes();
+
+    await employeesController.update(makeReq({ full_name: 'Чернышева Екатерина Андреевна' }), res as never);
+
+    expect(res.statusCode).toBe(404);
+    expect(h.syncProfileName).not.toHaveBeenCalled();
+  });
+
+  it('падение зеркала не даёт отдать 200 — правка откатывается', async () => {
+    h.withTransaction.mockRejectedValue(new Error('deadlock detected'));
+    const res = makeRes();
+
+    await employeesController.update(makeReq({ full_name: 'Чернышева Екатерина Андреевна' }), res as never);
+
+    expect(res.statusCode).toBe(500);
   });
 });

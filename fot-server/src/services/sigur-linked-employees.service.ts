@@ -1,4 +1,5 @@
-import { queryOne, execute } from '../config/postgres.js';
+import { queryOne, execute, withTransaction } from '../config/postgres.js';
+import { syncProfileNameFromEmployee } from './user-profile-name.service.js';
 import { parseFIO } from '../utils/fio.utils.js';
 import { employeeCache } from './employee-cache.service.js';
 import { invalidateStructureCache } from './employee-mapper.service.js';
@@ -228,10 +229,16 @@ export async function syncLinkedEmployeeFromSigur(
       setParts.push(`${key} = $${params.length}`);
     }
     params.push(employeeId);
-    await execute(
-      `UPDATE employees SET ${setParts.join(', ')} WHERE id = $${params.length}`,
-      params,
-    );
+    const updateSql = `UPDATE employees SET ${setParts.join(', ')} WHERE id = $${params.length}`;
+    if (updateData.full_name !== undefined) {
+      // ФИО и профиль портала — одной транзакцией (см. user-profile-name.service.ts).
+      await withTransaction(async (client) => {
+        await client.query(updateSql, params);
+        await syncProfileNameFromEmployee(client, employeeId);
+      });
+    } else {
+      await execute(updateSql, params);
+    }
   }
 
   employeeCache.invalidate(employeeId);

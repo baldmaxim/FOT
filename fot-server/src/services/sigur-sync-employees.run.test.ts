@@ -607,3 +607,88 @@ describe('syncEmployeesLogic — смена карточки Sigur (rebind)', ()
     expect(insertCalls()).toHaveLength(1);
   });
 });
+
+/**
+ * Смена ФИО в Sigur должна доезжать до профиля портала (user_profiles.full_name):
+ * ЛК показывает именно его, и до 25.08.2026 фамилия там оставалась девичьей.
+ */
+describe('syncEmployeesLogic — зеркалирование ФИО в профиль портала', () => {
+  const RENAMED = 'Чернышева Екатерина Андреевна';
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.isConfigured.mockResolvedValue(true);
+    h.getSigurSettings.mockResolvedValue({ archiveDepartmentId: ARCHIVE_SIGUR });
+    h.getKnownArchive.mockResolvedValue({ id: ARCHIVE_LOCAL, name: 'Уволенные', source: 'sigur' });
+    h.ensureLocalArchive.mockResolvedValue({ id: ARCHIVE_LOCAL, name: 'Уволенные', source: 'sigur' });
+    h.changeDepartment.mockResolvedValue('applied');
+    h.changePosition.mockResolvedValue(undefined);
+    h.batchMove.mockResolvedValue({ moved: 0, requested: 0, failedIds: [] });
+    h.execute.mockResolvedValue(1);
+  });
+
+  /** Активный сотрудник в бригаде, в Sigur — с новой фамилией. */
+  const setupRename = (over: Partial<IDbEmployee> = {}) => {
+    setupQueries({ employees: [dbEmployee({ employment_status: 'active', ...over })] });
+    h.getEmployeesCached.mockResolvedValue([
+      { id: 91831, name: RENAMED, departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '05510' },
+    ]);
+  };
+
+  it('новая фамилия: карточка и профиль обновляются в одной транзакции', async () => {
+    const calls = collectTransactionQueries();
+    setupRename();
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.updated).toBe(1);
+    expect(h.withTransaction).toHaveBeenCalledTimes(1);
+
+    const cardUpdate = calls.find(c => c.sql.includes('UPDATE employees SET'));
+    expect(cardUpdate?.params).toContain(RENAMED);
+    // Зеркало идёт тем же клиентом транзакции, имя берётся из employees.
+    const profileUpdate = calls.find(c => c.sql.includes('UPDATE user_profiles'));
+    expect(profileUpdate).toBeDefined();
+    expect(profileUpdate?.params).toEqual([128]);
+    // Вне транзакции UPDATE карточки не дублируется.
+    expect(h.execute.mock.calls.some(([sql]) => String(sql).includes('UPDATE employees'))).toBe(false);
+  });
+
+  it('name_locked: ФИО не трогаем, профиль тоже', async () => {
+    const calls = collectTransactionQueries();
+    setupRename({ name_locked: true });
+
+    await syncEmployeesLogic();
+
+    expect(calls.some(c => c.sql.includes('UPDATE user_profiles'))).toBe(false);
+    expect(h.execute.mock.calls.some(([, params]) => (params as unknown[])?.includes(RENAMED))).toBe(false);
+  });
+
+  it('падение зеркала откатывает правку карточки и попадает в errors', async () => {
+    h.withTransaction.mockImplementation(async (fn: (client: unknown) => Promise<unknown>) => fn({
+      query: async (sql: string) => {
+        if (sql.includes('UPDATE user_profiles')) throw new Error('deadlock detected');
+        return { rows: [], rowCount: 1 };
+      },
+    }));
+    setupRename();
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.updated).toBe(0);
+    expect(result.errors.join(' ')).toContain('deadlock detected');
+  });
+
+  it('правка без смены ФИО идёт мимо транзакции', async () => {
+    collectTransactionQueries();
+    setupQueries({ employees: [dbEmployee({ employment_status: 'active', tab_number: '00001' })] });
+    h.getEmployeesCached.mockResolvedValue([
+      { id: 91831, name: 'Аллакулов Улугбек Туракулович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '05510' },
+    ]);
+
+    await syncEmployeesLogic();
+
+    expect(h.withTransaction).not.toHaveBeenCalled();
+    expect(h.execute.mock.calls.some(([sql]) => String(sql).includes('UPDATE employees'))).toBe(true);
+  });
+});

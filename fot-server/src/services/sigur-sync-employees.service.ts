@@ -19,6 +19,7 @@ import { settingsService } from './settings.service.js';
 import { upsertTechnicalDepartmentAccess } from './employee-department-access.service.js';
 import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 import { auditService } from './audit.service.js';
+import { syncProfileNameFromEmployee } from './user-profile-name.service.js';
 
 // ─── Хелперы защиты от «осиротения» (B′) ───
 
@@ -1367,10 +1368,18 @@ export async function syncEmployeesLogic(
                 setParts.push(`${key} = $${params.length}`);
               }
               params.push(u.id);
-              await execute(
-                `UPDATE employees SET ${setParts.join(', ')} WHERE id = $${params.length}`,
-                params,
-              );
+              const updateSql = `UPDATE employees SET ${setParts.join(', ')} WHERE id = $${params.length}`;
+              if (u.fields.full_name) {
+                // Смена ФИО: карточка и профиль портала пишутся атомарно. Ошибка зеркала
+                // откатывает и UPDATE employees — иначе расхождение станет невидимым для
+                // следующего тика (full_name попадает в updateFields только при отличии от prev).
+                await withTransaction(async (client) => {
+                  await client.query(updateSql, params);
+                  await syncProfileNameFromEmployee(client, u.id);
+                });
+              } else {
+                await execute(updateSql, params);
+              }
             } catch (err) {
               return { error: { message: err instanceof Error ? err.message : 'Unknown' } };
             }

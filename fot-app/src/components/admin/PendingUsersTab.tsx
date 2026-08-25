@@ -116,7 +116,9 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
       return;
     }
     const trimmedName = draft.fullName.trim();
-    if (trimmedName.length < 2) {
+    // ФИО связанного профиля берётся из карточки сотрудника, поэтому проверяем ввод
+    // только когда сотрудник не выбран.
+    if (!draft.employeeId && trimmedName.length < 2) {
       toast.error('ФИО должно содержать минимум 2 символа');
       return;
     }
@@ -125,7 +127,9 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
       const userId = expandedUserId;
       const originalName = pendingUsers.find(u => u.id === userId)?.full_name || '';
       await cancelUserListQueries();
-      if (trimmedName !== originalName) {
+      // При выбранном сотруднике имя не отправляем: approveUser привяжет карточку и сам
+      // подтянет ФИО из неё (бэк отклонит правку имени связанного профиля).
+      if (!draft.employeeId && trimmedName !== originalName) {
         await adminService.updateUserName(userId, trimmedName);
       }
       await adminService.approveUser(userId, {
@@ -236,8 +240,14 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
                     className={styles.pendingFioInput}
                     value={draft.fullName}
                     placeholder="Иванов Иван Иванович"
+                    disabled={!!draft.employeeId}
                     onChange={(e) => setDraft(prev => ({ ...prev, fullName: e.target.value }))}
                   />
+                  {draft.employeeId != null && (
+                    <span className={styles.pendingFioHint}>
+                      ФИО берётся из карточки выбранного сотрудника
+                    </span>
+                  )}
                 </div>
 
                 <div className={styles.pendingInlineRow}>
@@ -303,7 +313,7 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
                   <button
                     className={styles.approveBtn}
                     onClick={handleApproveConfirm}
-                    disabled={!draft.positionType || draft.fullName.trim().length < 2}
+                    disabled={!draft.positionType || (!draft.employeeId && draft.fullName.trim().length < 2)}
                   >
                     Подтвердить одобрение
                   </button>

@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { z } from 'zod';
-import { execute, query, queryOne } from '../config/postgres.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
+import { syncProfileNameFromEmployee } from '../services/user-profile-name.service.js';
 import { auditService } from '../services/audit.service.js';
 import { loadStructureCache, decryptEmployee, decryptEmployeeList } from '../services/employee-mapper.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
@@ -1057,13 +1058,22 @@ export const employeesController = {
       const setSql = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
       params.push(id);
       let data: EmployeeEncrypted | null = null;
-      try {
-        data = await queryOne<EmployeeEncrypted>(
-          `UPDATE employees SET ${setSql}
+      const updateSql = `UPDATE employees SET ${setSql}
             WHERE id = $${params.length}
-            RETURNING ${EMPLOYEE_FULL_COLUMNS}`,
-          params,
-        );
+            RETURNING ${EMPLOYEE_FULL_COLUMNS}`;
+      try {
+        if (validated.full_name !== undefined) {
+          // Правка ФИО portal-only сотрудника: карточка и профиль портала пишутся
+          // одной транзакцией (см. user-profile-name.service.ts).
+          data = await withTransaction(async (client) => {
+            const result = await client.query(updateSql, params);
+            const row = (result.rows[0] ?? null) as EmployeeEncrypted | null;
+            if (row) await syncProfileNameFromEmployee(client, employeeId);
+            return row;
+          });
+        } else {
+          data = await queryOne<EmployeeEncrypted>(updateSql, params);
+        }
       } catch (err) {
         console.error('Update employee error:', err);
         res.status(500).json({ success: false, error: 'Failed to update employee' });
