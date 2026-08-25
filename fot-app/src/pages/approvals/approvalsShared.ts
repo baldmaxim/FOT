@@ -27,34 +27,16 @@ export const STATUS_ICONS: Record<string, string> = {
   educational_leave: '🎓',
 };
 
-export const WEEKDAY_SHORT_RU = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
-export const MONTH_GENITIVE_SHORT_RU = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
-
-export const formatDateCompact = (iso: string): { day: string; weekday: string } => {
-  const d = new Date(iso + 'T00:00:00');
-  return {
-    day: `${d.getDate()} ${MONTH_GENITIVE_SHORT_RU[d.getMonth()]}`,
-    weekday: WEEKDAY_SHORT_RU[d.getDay()].toLowerCase(),
-  };
-};
-
-export const formatDateTimeShort = (iso: string): string => {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const day = d.getDate();
-  const m = MONTH_GENITIVE_SHORT_RU[d.getMonth()];
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${day} ${m}, ${hh}:${mm}`;
-};
-
-export const formatHM = (decimal: number | null): string => {
-  if (decimal == null) return '—';
-  const h = Math.floor(decimal);
-  const m = Math.round((decimal - h) * 60);
-  if (m === 0) return `${h}ч`;
-  return `${h}ч ${m}м`;
-};
+// Универсальные форматтеры переехали в utils/dateCompact — их использует и
+// список заявлений, который теперь выглядит так же. Реэкспорт оставлен, чтобы
+// не трогать импорты этой страницы.
+export {
+  WEEKDAY_SHORT_RU,
+  MONTH_GENITIVE_SHORT_RU,
+  formatDateCompact,
+  formatDateTimeShort,
+  formatHM,
+} from '../../utils/dateCompact';
 
 // Оптимистичное удаление обработанных записей из кэша списка: строки пропадают
 // с экрана сразу, не дожидаясь фонового refetch'а. Пустые группы выкидываются,

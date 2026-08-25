@@ -15,7 +15,7 @@ import { useLeaveRequestBulkActions } from '../hooks/useLeaveRequestBulkActions'
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
 import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
-import { LeaveRequestCard } from '../components/leave-requests/LeaveRequestCard';
+import { LeaveRequestRow } from '../components/leave-requests/LeaveRequestRow';
 import { LeaveRequestsBulkBar } from '../components/leave-requests/LeaveRequestsBulkBar';
 import { LeaveRequestsGroup } from '../components/leave-requests/LeaveRequestsGroup';
 import { leaveRequestOverlapsPeriod } from '../utils/leaveRequestDates';
@@ -70,8 +70,7 @@ export const LeaveRequestsManagePage: FC = () => {
   const [typeFilter, setTypeFilter] = useState<LeaveRequestType | 'all'>('all');
   const [periodFrom, setPeriodFrom] = useState('');
   const [periodTo, setPeriodTo] = useState('');
-  const [commentId, setCommentId] = useState<number | null>(null);
-  const [comment, setComment] = useState('');
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [revokeId, setRevokeId] = useState<number | null>(null);
   const [revokeReason, setRevokeReason] = useState('');
   const [revoking, setRevoking] = useState(false);
@@ -145,12 +144,6 @@ export const LeaveRequestsManagePage: FC = () => {
     return Array.from(map.entries()).sort(([a], [b]) => compareGroupKeys(a, b));
   }, [filteredRequests]);
 
-  // Для админа (scope='all') заголовки отделов показываем всегда — даже если
-  // получилась 1 группа (включая «Без отдела»): админу нужен явный контекст.
-  // Для руководителя (scope='department') поведение прежнее — 1 группа →
-  // плоско, ≥2 (отдел + direct reports или несколько отделов) → группы.
-  const showGroupHeaders = scope === 'all' ? grouped.length >= 1 : grouped.length > 1;
-
   const baseRequestsRef = useRef(baseRequests);
   baseRequestsRef.current = baseRequests;
   const hasData = data !== undefined;
@@ -172,6 +165,15 @@ export const LeaveRequestsManagePage: FC = () => {
     if (queryActive) setCollapsedDepts(new Set());
   }, [queryActive]);
 
+  const toggleExpanded = (id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const toggleDept = (key: string) => {
     setCollapsedDepts(prev => {
       const next = new Set(prev);
@@ -179,53 +181,6 @@ export const LeaveRequestsManagePage: FC = () => {
       else next.add(key);
       return next;
     });
-  };
-
-  // Оптимистичное удаление: мгновенно убираем карточку из всех кэшей
-  // ['leave-requests-manage', ...] до refetch'а, иначе из-за placeholderData
-  // в useLeaveRequestsManage юзер видит «старые» данные пока запрос идёт.
-  const removeRequestFromCache = (id: number) => {
-    queryClient.setQueriesData<ILeaveRequest[] | undefined>(
-      { queryKey: ['leave-requests-manage'] },
-      (prev) => (prev ? prev.filter(r => r.id !== id) : prev),
-    );
-  };
-
-  const handleApprove = async (id: number) => {
-    try {
-      await leaveRequestService.approve(id, comment || undefined);
-      setCommentId(null);
-      setComment('');
-      removeRequestFromCache(id);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
-        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
-        // Выходные корректировки попадают в очередь админа на /approvals
-        queryClient.invalidateQueries({ queryKey: ['correction-approvals'] }),
-      ]);
-    } catch (err) {
-      console.error('Approve error:', err);
-      showToast('error', err instanceof Error ? err.message : 'Не удалось согласовать заявление');
-      // Откат оптимистичного удаления через рефетч
-      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
-    }
-  };
-
-  const handleReject = async (id: number) => {
-    try {
-      await leaveRequestService.reject(id, comment || undefined);
-      setCommentId(null);
-      setComment('');
-      removeRequestFromCache(id);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] }),
-        queryClient.invalidateQueries({ queryKey: ['my-leave-requests'] }),
-      ]);
-    } catch (err) {
-      console.error('Reject error:', err);
-      showToast('error', err instanceof Error ? err.message : 'Не удалось отклонить заявление');
-      await queryClient.invalidateQueries({ queryKey: ['leave-requests-manage'] });
-    }
   };
 
   // Правка часов корректировки: сотрудник заявил 10ч, руководитель согласовывает 9ч.
@@ -307,8 +262,8 @@ export const LeaveRequestsManagePage: FC = () => {
   // чекбоксы заблокированы: иначе можно решить по заявке, которая уже в пакете.
   const actionsLocked = bulk.bulkPending || (bulkMode && isPlaceholderData);
 
-  const renderCard = (r: ILeaveRequest) => (
-    <LeaveRequestCard
+  const renderRow = (r: ILeaveRequest) => (
+    <LeaveRequestRow
       key={r.id}
       request={r}
       isAdmin={!!profile?.is_admin}
@@ -319,6 +274,9 @@ export const LeaveRequestsManagePage: FC = () => {
       selectable={bulkMode && r.status === 'pending'}
       selected={bulk.selectedIds.has(r.id)}
       onToggleSelect={bulk.toggleId}
+      expanded={expandedIds.has(r.id)}
+      onToggleExpanded={toggleExpanded}
+      showPendingStatus={filter === 'all'}
       isEventsActive={
         !!eventsPanel
         && r.request_type === 'time_correction'
@@ -327,12 +285,6 @@ export const LeaveRequestsManagePage: FC = () => {
       }
       onOpenEvents={openEventsPanel}
       onOpenAttachment={openAttachment}
-      commentOpenId={commentId}
-      comment={comment}
-      onCommentChange={setComment}
-      onStartReject={setCommentId}
-      onApprove={handleApprove}
-      onReject={handleReject}
       editingHoursId={editingHoursId}
       hoursDraft={hoursDraft}
       savingHours={savingHours}
@@ -452,7 +404,6 @@ export const LeaveRequestsManagePage: FC = () => {
                   key={department}
                   label={isDirectReports ? DIRECT_REPORTS_TITLE : department}
                   items={items}
-                  showHeader={showGroupHeaders}
                   isCollapsed={collapsedDepts.has(department)}
                   onToggleCollapse={() => toggleDept(department)}
                   isDirectReports={isDirectReports}
@@ -461,7 +412,7 @@ export const LeaveRequestsManagePage: FC = () => {
                   onToggleGroup={bulk.toggleMany}
                   bulkMode={bulkMode}
                   disabled={actionsLocked}
-                  renderCard={renderCard}
+                  renderRow={renderRow}
                 />
               );
             })}

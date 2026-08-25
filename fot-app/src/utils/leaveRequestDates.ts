@@ -1,4 +1,5 @@
 import type { ILeaveRequest } from '../services/leaveRequestService';
+import { formatDateCompact, MONTH_GENITIVE_SHORT_RU } from './dateCompact';
 
 /**
  * Заявление в архиве: обработано и все его даты в прошлом.
@@ -60,6 +61,58 @@ export function formatLeaveRequestDatesCompact(r: ILeaveRequest): string {
   // Однодневное заявление — одна дата, а не «12.08.2026 — 12.08.2026».
   if (r.start_date === r.end_date) return fmtFull(r.start_date);
   return `${fmtFull(r.start_date)} — ${fmtFull(r.end_date)}`;
+}
+
+/** «1 авг» — короткая дата без года, для узкой колонки списка. */
+const fmtShortDay = (iso: string): string => {
+  const [, m, d] = iso.split('-').map(Number);
+  return `${d} ${MONTH_GENITIVE_SHORT_RU[m - 1]}`;
+};
+
+/**
+ * Ячейка даты в строке списка заявлений (колонка ~96px), в паре с подписью снизу:
+ *  - корректировка / однодневное заявление → «9 авг» + день недели «вс»;
+ *  - непрерывный период → «1 авг — 15 авг» + «15 дн»;
+ *  - несмежные отрезки → первый отрезок + «+N дн» (полный список — в раскрытии,
+ *    через formatLeaveRequestDatesCompact).
+ * `sub` пустой, если добавить нечего.
+ */
+export function formatLeaveRequestDateCell(r: ILeaveRequest): { day: string; sub: string } {
+  // Легаси-корректировки без correction_date опираются на start_date.
+  if (r.request_type === 'time_correction') {
+    const iso = r.correction_date || r.start_date;
+    const { day, weekday } = formatDateCompact(iso);
+    return { day, sub: weekday };
+  }
+
+  const dates = r.selected_dates && r.selected_dates.length > 0
+    ? [...new Set(r.selected_dates)].sort()
+    : null;
+
+  if (dates) {
+    if (dates.length === 1) {
+      const { day, weekday } = formatDateCompact(dates[0]);
+      return { day, sub: weekday };
+    }
+    const groups = groupConsecutive(dates);
+    const first = groups[0];
+    const day = first.length === 1
+      ? fmtShortDay(first[0])
+      : `${fmtShortDay(first[0])} — ${fmtShortDay(first[first.length - 1])}`;
+    // Считаем именно выбранные дни, а не длину календарного диапазона.
+    const rest = dates.length - first.length;
+    return { day, sub: groups.length > 1 ? `+${rest} дн` : `${dates.length} дн` };
+  }
+
+  if (r.start_date === r.end_date) {
+    const { day, weekday } = formatDateCompact(r.start_date);
+    return { day, sub: weekday };
+  }
+  const span = Math.round((isoToUtc(r.end_date) - isoToUtc(r.start_date)) / DAY_MS) + 1;
+  return {
+    day: `${fmtShortDay(r.start_date)} — ${fmtShortDay(r.end_date)}`,
+    sub: Number.isFinite(span) && span > 0 ? `${span} дн` : '',
+  };
 }
 
 /** Полный, развёрнутый список дат — для деталей. Возвращает массив форматированных строк. */

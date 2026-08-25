@@ -141,7 +141,7 @@
 .lrm-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
 /* --- Массовый выбор --- */
@@ -286,31 +286,6 @@
 .tri-check input:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-/* Чекбокс — сосед карточки, а не элемент внутри неё: карточка корректировки
-   сама по себе кликабельна (role="button"). */
-.lrm-card-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-}
-
-.lrm-card-row .lrm-card {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.lrm-card-check {
-  margin-top: 18px;
-}
-
-.lrm-group-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
 }
 
 .lrm-card {
@@ -777,6 +752,786 @@
   gap: 8px;
 }
 
+/* --- Список заявлений: тот же плотный вид, что у согласования выходных --- */
+
+.lrm-dept-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface, var(--bg-secondary));
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.04));
+}
+
+.lrm-dept-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 12px;
+  min-height: 44px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid transparent;
+}
+
+.lrm-dept-header--expanded {
+  border-bottom-color: var(--border);
+}
+
+.lrm-dept-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.lrm-dept-toggle svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.lrm-dept-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.lrm-dept-stats {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.1));
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lrm-dept-card--direct-reports {
+  border-color: var(--accent, #3b82f6);
+}
+
+.lrm-dept-card--direct-reports .lrm-dept-name {
+  color: var(--accent, #3b82f6);
+}
+
+.lrm-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.lrm-item {
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.lrm-item:first-child {
+  border-top: none;
+}
+
+.lrm-item:hover {
+  background: var(--surface-hover, rgba(127, 127, 127, 0.05));
+}
+
+.lrm-item--active {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.08));
+  box-shadow: inset 3px 0 0 var(--accent, #3b82f6);
+}
+
+.lrm-item--expanded {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.06));
+}
+
+.lrm-item-grid {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 10px 16px;
+}
+
+.lrm-item-check {
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
+.lrm-item-check--empty {
+  width: 28px;
+}
+
+.lrm-item-date {
+  flex: 0 0 104px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-primary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.lrm-item-date-day {
+  font-weight: 600;
+}
+
+.lrm-item-date-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  text-transform: lowercase;
+}
+
+.lrm-item-employee {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.lrm-item-employee-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lrm-item-position {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Ширину не фиксируем: «Корректировка» + статус дня в 130px не помещаются. */
+.lrm-item-task {
+  flex: 0 1 auto;
+  min-width: 120px;
+  max-width: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.lrm-item-task-caption {
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  line-height: 1;
+}
+
+.lrm-item-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lrm-item-status,
+.lrm-item-substatus {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-elevated, var(--bg-secondary));
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  width: fit-content;
+  white-space: nowrap;
+}
+
+.lrm-item-substatus {
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+/* Палитра — как у форматов на /approvals; типы, которых там нет, получают свои. */
+.lrm-item-status--remote {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+  border-color: rgba(37, 99, 235, 0.18);
+}
+
+.lrm-item-status--vacation,
+.lrm-item-status--educational_leave {
+  color: var(--warning);
+  background: var(--warning-muted, rgba(245, 158, 11, 0.1));
+  border-color: rgba(245, 158, 11, 0.2);
+}
+
+.lrm-item-status--sick_leave,
+.lrm-item-status--sick_worked {
+  color: var(--error);
+  background: var(--error-muted, rgba(239, 68, 68, 0.1));
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.lrm-item-status--time_correction {
+  color: #7c3aed;
+  background: rgba(124, 58, 237, 0.07);
+  border-color: rgba(124, 58, 237, 0.2);
+}
+
+.lrm-item-status--work {
+  color: #0f766e;
+  background: rgba(15, 118, 110, 0.07);
+  border-color: rgba(15, 118, 110, 0.2);
+}
+
+.lrm-item-status--dismissal {
+  color: #b91c1c;
+  background: rgba(185, 28, 28, 0.07);
+  border-color: rgba(185, 28, 28, 0.22);
+}
+
+.lrm-item-status--certificate,
+.lrm-item-status--unpaid {
+  color: var(--text-secondary);
+}
+
+.lrm-item-hours {
+  flex: 0 0 60px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: right;
+}
+
+.lrm-item-notes {
+  flex: 1 1 0;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--surface-elevated, var(--bg-secondary));
+  color: var(--text-primary);
+  word-break: break-word;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.lrm-item-notes:hover {
+  background: var(--bg-tertiary, var(--bg-secondary));
+}
+
+.lrm-item-notes--empty {
+  background: transparent;
+}
+
+.lrm-item-notes-caption {
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  line-height: 1;
+}
+
+.lrm-item-notes-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+
+.lrm-item-notes--expanded .lrm-item-notes-text {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.lrm-item-notes-placeholder {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.lrm-item-awaiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--warning, #f59e0b);
+}
+
+.lrm-item-decision {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.lrm-item-decision-label {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 9.5px;
+}
+
+.lrm-item-decision--approved .lrm-item-decision-label,
+.lrm-item-decision--approved svg {
+  color: var(--success, #22c55e);
+}
+
+.lrm-item-decision--rejected .lrm-item-decision-label,
+.lrm-item-decision--rejected svg {
+  color: var(--error, #ef4444);
+}
+
+.lrm-item-decision--pending .lrm-item-decision-label,
+.lrm-item-decision--pending svg {
+  color: var(--warning, #f59e0b);
+}
+
+.lrm-item-decision--cancelled .lrm-item-decision-label,
+.lrm-item-decision--cancelled svg {
+  color: var(--text-tertiary);
+}
+
+.lrm-item-decision-by {
+  color: var(--text-secondary);
+}
+
+.lrm-item-decision-at {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.lrm-item-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lrm-item-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lrm-item-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.lrm-item-icon-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
+  color: var(--text-primary);
+}
+
+.lrm-item-icon-btn:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 1px;
+}
+
+.lrm-item-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lrm-item-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px 14px 48px;
+  border-top: 1px dashed var(--border);
+  background: var(--bg-primary);
+  cursor: default;
+}
+
+.lrm-details-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12.5px;
+}
+
+.lrm-details-label {
+  flex: 0 0 108px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.lrm-details-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text-primary);
+}
+
+.lrm-details-value--text {
+  display: block;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.lrm-details-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  width: fit-content;
+}
+
+.lrm-details-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
+}
+
+.lrm-details-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lrm-details-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.lrm-details-btn--danger {
+  color: var(--error, #ef4444);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.lrm-revoke-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.lrm-revoke-input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.lrm-revoke-btns {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* --- Узкая колонка: строка превращается в карточку --- */
+/* Строчной сетке нужно ~770px: чекбокс 28 + дата 104 + ФИО + формат 120 + часы 60 +
+   «Задача» 180 + действия 70 и шесть гэпов по 14. Доступная ширина = окно −
+   сайдбар 240 − padding .content 48 − padding .lrm-page 48, а при открытой панели
+   событий — ещё −420, поэтому порогов два.
+   ВАЖНО: наборы правил в обоих блоках обязаны совпадать — правки вносить в ОБА. */
+
+@media (max-width: 1100px) {
+  .lrm-items {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .lrm-item {
+    border-top: none;
+    border-radius: 8px;
+    background: var(--surface, var(--bg-secondary));
+    border: 1px solid var(--border);
+  }
+
+  .lrm-item-grid {
+    display: grid;
+    grid-template-areas:
+      "head    check"
+      "emp     actions"
+      "meta    meta"
+      "notes   notes";
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 8px;
+    padding: 10px 12px;
+  }
+
+  .lrm-item-check {
+    grid-area: check;
+    align-self: center;
+    justify-self: end;
+  }
+
+  .lrm-item-check--empty {
+    display: none;
+  }
+
+  .lrm-item-date {
+    grid-area: head;
+    flex: 1 1 auto;
+    font-size: 13px;
+    flex-wrap: wrap;
+  }
+
+  .lrm-item-date::after {
+    content: attr(data-hours);
+    margin-left: auto;
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .lrm-item-employee {
+    grid-area: emp;
+    font-size: 13px;
+  }
+
+  .lrm-item-employee-name,
+  .lrm-item-position {
+    white-space: normal;
+    overflow: visible;
+  }
+
+  .lrm-item-task {
+    grid-area: meta;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .lrm-item-hours {
+    display: none;
+  }
+
+  .lrm-item-notes {
+    grid-area: notes;
+    min-width: 0;
+    font-size: 12px;
+    padding: 5px 8px;
+  }
+
+  .lrm-item-notes-caption {
+    display: none;
+  }
+
+  .lrm-item-actions {
+    grid-area: actions;
+    align-self: center;
+    justify-self: end;
+  }
+
+  .lrm-item-details {
+    padding: 10px 12px 14px;
+  }
+
+  .lrm-details-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .lrm-details-label {
+    flex: none;
+  }
+
+  .lrm-bulkbar {
+    flex-wrap: wrap;
+  }
+
+  .lrm-bulkbar-comment {
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .lrm-bulkbar-btns {
+    flex: 1 1 100%;
+    order: 4;
+  }
+}
+
+/* Панель событий СКУД занимает 420px в потоке вплоть до 1100px (ниже она
+   становится оверлеем), поэтому с ней карточная раскладка нужна дольше. */
+@media (max-width: 1600px) {
+  .lrm-shell--with-panel .lrm-items {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .lrm-shell--with-panel .lrm-item {
+    border-top: none;
+    border-radius: 8px;
+    background: var(--surface, var(--bg-secondary));
+    border: 1px solid var(--border);
+  }
+
+  .lrm-shell--with-panel .lrm-item-grid {
+    display: grid;
+    grid-template-areas:
+      "head    check"
+      "emp     actions"
+      "meta    meta"
+      "notes   notes";
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 8px;
+    padding: 10px 12px;
+  }
+
+  .lrm-shell--with-panel .lrm-item-check {
+    grid-area: check;
+    align-self: center;
+    justify-self: end;
+  }
+
+  .lrm-shell--with-panel .lrm-item-check--empty {
+    display: none;
+  }
+
+  .lrm-shell--with-panel .lrm-item-date {
+    grid-area: head;
+    flex: 1 1 auto;
+    font-size: 13px;
+    flex-wrap: wrap;
+  }
+
+  .lrm-shell--with-panel .lrm-item-date::after {
+    content: attr(data-hours);
+    margin-left: auto;
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .lrm-shell--with-panel .lrm-item-employee {
+    grid-area: emp;
+    font-size: 13px;
+  }
+
+  .lrm-shell--with-panel .lrm-item-employee-name,
+  .lrm-shell--with-panel .lrm-item-position {
+    white-space: normal;
+    overflow: visible;
+  }
+
+  .lrm-shell--with-panel .lrm-item-task {
+    grid-area: meta;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .lrm-shell--with-panel .lrm-item-hours {
+    display: none;
+  }
+
+  .lrm-shell--with-panel .lrm-item-notes {
+    grid-area: notes;
+    min-width: 0;
+    font-size: 12px;
+    padding: 5px 8px;
+  }
+
+  .lrm-shell--with-panel .lrm-item-notes-caption {
+    display: none;
+  }
+
+  .lrm-shell--with-panel .lrm-item-actions {
+    grid-area: actions;
+    align-self: center;
+    justify-self: end;
+  }
+
+  .lrm-shell--with-panel .lrm-item-details {
+    padding: 10px 12px 14px;
+  }
+
+  .lrm-shell--with-panel .lrm-details-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .lrm-shell--with-panel .lrm-details-label {
+    flex: none;
+  }
+
+  .lrm-shell--with-panel .lrm-bulkbar {
+    flex-wrap: wrap;
+  }
+
+  .lrm-shell--with-panel .lrm-bulkbar-comment {
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .lrm-shell--with-panel .lrm-bulkbar-btns {
+    flex: 1 1 100%;
+    order: 4;
+  }
+}
+
 @media (max-width: 768px) {
   .lrm-page {
     padding: 16px;
@@ -806,22 +1561,33 @@
     min-width: 0;
   }
 
-  /* Панель массовых действий в две строки: выбор и комментарий сверху,
-     кнопки — отдельной строкой на всю ширину. */
-  .lrm-bulkbar {
-    flex-wrap: wrap;
+  /* Мобильная специфика: тап-цели и высоты полей. Карточная раскладка строки и
+     перенос bulkbar живут выше — они включаются раньше (1100 / 1600px). */
+  .lrm-item-icon-btn {
+    width: 44px;
+    height: 44px;
   }
 
-  .lrm-bulkbar-comment {
-    flex: 1 1 100%;
-    order: 3;
-    height: 40px;
+  .lrm-dept-toggle {
+    min-height: 44px;
+  }
+
+  .lrm-attachment-btn {
+    min-height: 44px;
+  }
+
+  .lrm-details-btn {
+    height: 44px;
+  }
+
+  .lrm-revoke-input {
+    height: 44px;
     font-size: 16px; /* иначе Safari зумит форму при фокусе */
   }
 
-  .lrm-bulkbar-btns {
-    flex: 1 1 100%;
-    order: 4;
+  .lrm-bulkbar-comment {
+    height: 44px;
+    font-size: 16px;
   }
 
   .lrm-bulkbar-btn,
@@ -832,11 +1598,6 @@
   .tri-check {
     min-width: 44px;
     min-height: 44px;
-  }
-
-  /* Панель СКУД в этом диапазоне — оверлей поверх страницы, а не колонка. */
-  .lrm-shell--with-panel .lrm-page {
-    padding-right: 16px;
   }
 
   /* Тап-цель по часам — не меньше 44px, иначе не попасть пальцем в «10.00ч». */
@@ -895,6 +1656,18 @@
 
   .lrm-bulkbar-btns {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lrm-item-status,
+  .lrm-item-substatus {
+    height: 19px;
+    padding: 0 6px;
+    font-size: 11px;
+    white-space: normal;
+  }
+
+  .lrm-item-date {
+    font-size: 12.5px;
   }
 
   .lrm-bulkbar-summary {
