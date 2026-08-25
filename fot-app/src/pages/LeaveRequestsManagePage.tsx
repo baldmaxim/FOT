@@ -1,60 +1,27 @@
-import { type FC, type MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type FC, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-  Check,
-  X,
-  Clock,
-  CheckCircle,
-  XCircle,
-  Ban,
-  Paperclip,
-  ChevronDown,
-  ChevronUp,
-} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import {
   leaveRequestService,
   REQUEST_TYPE_LABELS,
-  CORRECTION_STATUS_LABELS,
-  formatCorrectionHours,
   isValidCorrectionHours,
-  getRequestDecision,
   type ILeaveRequest,
   type ILeaveRequestAttachment,
-  type LeaveRequestStatus,
   type LeaveRequestType,
 } from '../services/leaveRequestService';
 import { useLeaveRequestsManage } from '../hooks/usePortalData';
+import { useLeaveRequestBulkActions } from '../hooks/useLeaveRequestBulkActions';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
 import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
-import { LeaveRequestHistory } from '../components/leave-requests/LeaveRequestHistory';
-import {
-  formatLeaveRequestDatesCompact,
-  leaveRequestMinDate,
-  leaveRequestOverlapsPeriod,
-} from '../utils/leaveRequestDates';
-import { displayFileName } from '../utils/fileNameDisplay';
-import { formatFioShort } from '../utils/formatFio';
+import { LeaveRequestCard } from '../components/leave-requests/LeaveRequestCard';
+import { LeaveRequestsBulkBar } from '../components/leave-requests/LeaveRequestsBulkBar';
+import { LeaveRequestsGroup } from '../components/leave-requests/LeaveRequestsGroup';
+import { leaveRequestOverlapsPeriod } from '../utils/leaveRequestDates';
 import './LeaveRequestsManagePage.css';
 
-const STATUS_COLORS: Record<LeaveRequestStatus, string> = {
-  pending: '#f59e0b',
-  approved: '#22c55e',
-  rejected: '#ef4444',
-  cancelled: '#6b7280',
-};
-
-const STATUS_ICONS: Record<LeaveRequestStatus, FC<{ size?: number }>> = {
-  pending: Clock,
-  approved: CheckCircle,
-  rejected: XCircle,
-  cancelled: Ban,
-};
 const EMPTY_REQUESTS: ILeaveRequest[] = [];
-// Типы «отпусков», для которых доступна управленческая отмена согласованного.
-const VACATION_TYPES = new Set(['vacation', 'unpaid', 'educational_leave']);
 const NO_DEPARTMENT_KEY = 'Без отдела';
 const DIRECT_REPORTS_KEY = '__direct_reports__';
 const DIRECT_REPORTS_TITLE = 'Непосредственные подчинённые';
@@ -71,11 +38,6 @@ const compareGroupKeys = (a: string, b: string) => {
   if (b === NO_DEPARTMENT_KEY) return -1;
   return a.localeCompare(b, 'ru');
 };
-
-// Старые вложения (до Unicode-фикса sanitizeFileName) хранятся в БД как
-// «________.pdf» или с двойной UTF-8→latin1 кодировкой. Показываем им
-// fallback «Документ.ext» через общий хелпер; исходное имя остаётся в title.
-const formatAttachmentName = displayFileName;
 
 interface IPreviewState {
   documentId: number;
@@ -95,7 +57,7 @@ export const LeaveRequestsManagePage: FC = () => {
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
   const scope = isDepartmentScope ? 'department' : 'all';
   // Страница доступна и с одним лишь 'view' — правку часов показываем только редакторам.
-  // Права на конкретную заявку окончательно проверяет бэк (canManageLeaveRequest).
+  // Права на конкретную заявку окончательно проверяет бэк (canDecideLeaveRequest).
   const canEditRequests = canEditPage('/leave-requests');
   const queryClient = useQueryClient();
 
@@ -145,6 +107,17 @@ export const LeaveRequestsManagePage: FC = () => {
       && (!hasPeriod || leaveRequestOverlapsPeriod(r, periodFrom, periodTo))
       && (query === '' || (r.employee_name ?? '').toLowerCase().includes(query)));
   }, [baseRequests, isFiltering, typeFilter, deptFilter, hasPeriod, periodFrom, periodTo, query]);
+
+  // Массовый режим — только на вкладке «Ожидающие» и только у тех, кто может согласовывать.
+  const bulkMode = filter === 'pending' && canEditRequests;
+  // Единственный источник выбора: реально ожидающие решения заявления из текущего
+  // списка. Кэш отдаёт placeholderData от прошлой вкладки, где статусы уже другие.
+  const selectableRequests = useMemo(
+    () => (bulkMode ? filteredRequests.filter(r => r.status === 'pending') : EMPTY_REQUESTS),
+    [bulkMode, filteredRequests],
+  );
+  const selectableIds = useMemo(() => selectableRequests.map(r => r.id), [selectableRequests]);
+  const bulk = useLeaveRequestBulkActions({ scope, selectableIds });
 
   // Инвариант from ≤ to держим сами: min/max — лишь подсказка календарю,
   // при ручном вводе с клавиатуры перевёрнутый диапазон иначе пройдёт.
@@ -317,9 +290,6 @@ export const LeaveRequestsManagePage: FC = () => {
     }
   };
 
-  const formatDate = (date: string) =>
-    new Date(date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
   const openAttachment = (att: ILeaveRequestAttachment) => {
     setPreview({ documentId: att.id, fileName: att.file_name, mimeType: att.mime_type });
   };
@@ -333,276 +303,52 @@ export const LeaveRequestsManagePage: FC = () => {
     });
   };
 
-  const stop = (e: ReactMouseEvent) => e.stopPropagation();
+  // Во время массовой операции и на placeholder-данных одиночные действия и
+  // чекбоксы заблокированы: иначе можно решить по заявке, которая уже в пакете.
+  const actionsLocked = bulk.bulkPending || (bulkMode && isPlaceholderData);
 
-  const renderCard = (r: ILeaveRequest) => {
-    const Icon = STATUS_ICONS[r.status];
-    const decision = getRequestDecision(r);
-    const isCorrection = r.request_type === 'time_correction' && !!r.correction_date;
-    const isActive =
-      !!eventsPanel &&
-      isCorrection &&
-      eventsPanel.employeeId === r.employee_id &&
-      eventsPanel.date === r.correction_date;
-    const awaitingApproval = (isCorrection || r.request_type === 'work')
-      && r.correction_approval_status === 'pending';
-    // Решение по согласованному заявлению откатывает только тот, кто его принял, — или админ.
-    const canManageApproved = r.status === 'approved'
-      && (!!profile?.is_admin || profile?.id === r.reviewer_id);
-    // Часы правит согласующий до решения; после — только принявший решение и только
-    // пока период не сдан в табеле (окончательную проверку делает бэк).
-    const canEditHours = canEditRequests && (r.status === 'pending' || canManageApproved);
-    return (
-      <div
-        key={r.id}
-        className={`lrm-card${isCorrection ? ' lrm-card--clickable' : ''}${isActive ? ' lrm-card--active' : ''}`}
-        onClick={isCorrection ? () => openEventsPanel(r) : undefined}
-        role={isCorrection ? 'button' : undefined}
-        tabIndex={isCorrection ? 0 : undefined}
-        onKeyDown={isCorrection ? (e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            openEventsPanel(r);
-          }
-        } : undefined}
-      >
-        <div className="lrm-card-main">
-          <div className="lrm-card-top">
-            <div className="lrm-card-employee-block">
-              <span className="lrm-card-employee">{r.employee_name || `#${r.employee_id}`}</span>
-              {(r.department_name || r.position_name) && (
-                <div className="lrm-card-meta">
-                  {r.department_name}
-                  {r.department_name && r.position_name ? ' · ' : ''}
-                  {r.position_name}
-                </div>
-              )}
-            </div>
-            <div className="lrm-status-wrap">
-              <span className="lrm-status" style={{ color: STATUS_COLORS[r.status] }}>
-                <Icon size={14} /> <strong>{decision.label}</strong>
-              </span>
-              {(decision.actor || decision.at) && (
-                <div className="lrm-status-meta">
-                  {formatFioShort(decision.actor)}
-                  {decision.actor && decision.at ? ' · ' : ''}
-                  {decision.at ? formatDate(decision.at) : ''}
-                </div>
-              )}
-              {r.hr_acknowledged_at && (
-                <div className="lrm-hr-ack" title="Отдел кадров ознакомлен">
-                  <CheckCircle size={13} /> Отдел кадров ознакомлен
-                </div>
-              )}
-            </div>
-          </div>
-          {awaitingApproval && (
-            <div className="lrm-card-pending-admin" style={{ color: '#f59e0b' }}>
-              <Clock size={12} /> <strong>Ожидает согласования</strong>
-            </div>
-          )}
-          <div className="lrm-card-type">{REQUEST_TYPE_LABELS[r.request_type]}</div>
-          {r.request_type === 'time_correction' && r.correction_date ? (
-            <div className="lrm-card-dates">
-              <strong>Дата: {formatDate(r.correction_date)}</strong>
-              {' · '}
-              <strong>
-                Статус: {r.correction_status
-                  ? (CORRECTION_STATUS_LABELS[r.correction_status] ?? r.correction_status)
-                  : '—'}
-              </strong>
-              {r.correction_hours != null && (
-                editingHoursId === r.id ? (
-                  <span className="lrm-hours-edit" onClick={stop}>
-                    {' · '}
-                    <input
-                      type="number"
-                      className="lrm-hours-input"
-                      value={hoursDraft}
-                      onChange={(e) => setHoursDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        e.stopPropagation();
-                        if (e.key === 'Enter') { e.preventDefault(); void handleUpdateHours(r.id); }
-                        if (e.key === 'Escape') { e.preventDefault(); setEditingHoursId(null); }
-                      }}
-                      step="0.5"
-                      min="0"
-                      max="24"
-                      inputMode="decimal"
-                      disabled={savingHours}
-                      autoFocus
-                    />
-                    <span className="lrm-hours-unit">ч</span>
-                    <button
-                      type="button"
-                      className="lrm-action-btn approve"
-                      disabled={savingHours}
-                      onClick={(e) => { e.stopPropagation(); void handleUpdateHours(r.id); }}
-                    >
-                      Сохранить
-                    </button>
-                    <button
-                      type="button"
-                      className="lrm-action-btn ghost"
-                      disabled={savingHours}
-                      onClick={(e) => { e.stopPropagation(); setEditingHoursId(null); }}
-                    >
-                      Отмена
-                    </button>
-                  </span>
-                ) : (canEditHours ? (
-                  <>
-                    {' · '}
-                    <button
-                      type="button"
-                      className="lrm-hours-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingHoursId(r.id);
-                        setHoursDraft(String(Number(r.correction_hours)));
-                      }}
-                      title="Изменить часы"
-                    >
-                      {formatCorrectionHours(r.correction_hours)}ч
-                    </button>
-                  </>
-                ) : ` · ${formatCorrectionHours(r.correction_hours)}ч`)
-              )}
-            </div>
-          ) : (
-            <div className="lrm-card-dates">
-              <strong>{formatLeaveRequestDatesCompact(r)}</strong>
-            </div>
-          )}
-          {r.reason && <div className="lrm-card-reason">{r.reason}</div>}
-          {r.attachments && r.attachments.length > 0 && (
-            <div className="lrm-attachments" onClick={stop}>
-              {r.attachments.map(att => (
-                <button
-                  key={att.id}
-                  type="button"
-                  className="lrm-attachment-btn"
-                  onClick={(e) => { e.stopPropagation(); openAttachment(att); }}
-                  title={att.file_name}
-                >
-                  <Paperclip size={12} />
-                  <span className="lrm-attachment-name">{formatAttachmentName(att.file_name)}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {decision.comment && (
-            <div className="lrm-card-comment">
-              <span className="lrm-card-comment-label">
-                {r.status === 'cancelled' ? 'Причина:' : 'Комментарий:'}
-              </span> {decision.comment}
-            </div>
-          )}
-          <LeaveRequestHistory requestId={r.id} />
-        </div>
-
-        {r.status === 'pending' && (
-          <div className="lrm-card-actions" onClick={stop}>
-            {commentId === r.id ? (
-              <div className="lrm-comment-form">
-                <input
-                  className="lrm-comment-input"
-                  placeholder="Комментарий (необязательно)"
-                  value={comment}
-                  onChange={e => setComment(e.target.value)}
-                  onClick={stop}
-                  onKeyDown={e => e.stopPropagation()}
-                />
-                <div className="lrm-comment-btns">
-                  <button
-                    className="lrm-action-btn approve"
-                    onClick={(e) => { e.stopPropagation(); handleApprove(r.id); }}
-                  >
-                    <Check size={14} /> Согласовать
-                  </button>
-                  <button
-                    className="lrm-action-btn reject"
-                    onClick={(e) => { e.stopPropagation(); handleReject(r.id); }}
-                  >
-                    <X size={14} /> Не согласовать
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="lrm-action-row">
-                <button
-                  className="lrm-action-btn approve"
-                  onClick={(e) => { e.stopPropagation(); handleApprove(r.id); }}
-                >
-                  <Check size={14} /> Согласовать
-                </button>
-                <button
-                  className="lrm-action-btn reject"
-                  onClick={(e) => { e.stopPropagation(); setCommentId(r.id); }}
-                >
-                  <X size={14} /> Не согласовать
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {canManageApproved
-          // Отпуск руководитель отменяет только до его начала (у админа ограничения нет);
-          // для остальных типов сдерживает гард закрытого табеля на бэке.
-          && (!VACATION_TYPES.has(r.request_type) || profile?.is_admin || leaveRequestMinDate(r) > todayIso) && (
-          <div className="lrm-card-actions" onClick={stop}>
-            {revokeId === r.id ? (
-              <div className="lrm-comment-form">
-                <div className="lrm-revoke-confirm">
-                  {VACATION_TYPES.has(r.request_type) ? 'Отменить согласованный отпуск?' : 'Отменить согласование заявления?'}
-                </div>
-                <input
-                  className="lrm-comment-input"
-                  placeholder="Причина (необязательно)"
-                  value={revokeReason}
-                  onChange={e => setRevokeReason(e.target.value)}
-                  onClick={stop}
-                  onKeyDown={e => e.stopPropagation()}
-                />
-                <div className="lrm-comment-btns">
-                  <button
-                    className="lrm-action-btn reject"
-                    disabled={revoking}
-                    onClick={(e) => { e.stopPropagation(); handleRevoke(r.id); }}
-                  >
-                    <Ban size={14} /> {revoking
-                      ? 'Отменяем…'
-                      : (VACATION_TYPES.has(r.request_type) ? 'Отменить отпуск' : 'Отменить согласование')}
-                  </button>
-                  <button
-                    className="lrm-action-btn ghost"
-                    disabled={revoking}
-                    onClick={(e) => { e.stopPropagation(); setRevokeId(null); setRevokeReason(''); }}
-                  >
-                    Назад
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="lrm-action-row lrm-action-row--right">
-                <button
-                  className="lrm-action-btn revoke"
-                  onClick={(e) => { e.stopPropagation(); setRevokeId(r.id); setRevokeReason(''); }}
-                >
-                  <Ban size={14} /> {VACATION_TYPES.has(r.request_type) ? 'Отменить согласованное' : 'Отменить согласование'}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const totalEmployees = (items: ILeaveRequest[]) =>
-    new Set(items.map(i => i.employee_id)).size;
+  const renderCard = (r: ILeaveRequest) => (
+    <LeaveRequestCard
+      key={r.id}
+      request={r}
+      isAdmin={!!profile?.is_admin}
+      currentUserId={profile?.id}
+      canEditRequests={canEditRequests}
+      todayIso={todayIso}
+      actionsDisabled={actionsLocked}
+      selectable={bulkMode && r.status === 'pending'}
+      selected={bulk.selectedIds.has(r.id)}
+      onToggleSelect={bulk.toggleId}
+      isEventsActive={
+        !!eventsPanel
+        && r.request_type === 'time_correction'
+        && eventsPanel.employeeId === r.employee_id
+        && eventsPanel.date === r.correction_date
+      }
+      onOpenEvents={openEventsPanel}
+      onOpenAttachment={openAttachment}
+      commentOpenId={commentId}
+      comment={comment}
+      onCommentChange={setComment}
+      onStartReject={setCommentId}
+      onApprove={handleApprove}
+      onReject={handleReject}
+      editingHoursId={editingHoursId}
+      hoursDraft={hoursDraft}
+      savingHours={savingHours}
+      onStartEditHours={(id, hours) => { setEditingHoursId(id); setHoursDraft(String(Number(hours))); }}
+      onHoursDraftChange={setHoursDraft}
+      onSaveHours={handleUpdateHours}
+      onCancelEditHours={() => setEditingHoursId(null)}
+      revokeId={revokeId}
+      revokeReason={revokeReason}
+      revoking={revoking}
+      onStartRevoke={(id) => { setRevokeId(id); setRevokeReason(''); }}
+      onRevokeReasonChange={setRevokeReason}
+      onRevoke={handleRevoke}
+      onCancelRevoke={() => { setRevokeId(null); setRevokeReason(''); }}
+    />
+  );
 
   return (
     <div className={`lrm-shell${eventsPanel ? ' lrm-shell--with-panel' : ''}`}>
@@ -677,6 +423,20 @@ export const LeaveRequestsManagePage: FC = () => {
           </div>
         </div>
 
+        {bulkMode && selectableIds.length > 0 && (
+          <LeaveRequestsBulkBar
+            selectableCount={selectableIds.length}
+            selectedCount={bulk.selectedCount}
+            selectionState={bulk.allSelectionState}
+            onToggleAll={bulk.toggleAll}
+            comment={bulk.comment}
+            onCommentChange={bulk.setComment}
+            onApprove={bulk.approveSelected}
+            onReject={bulk.rejectSelected}
+            disabled={actionsLocked}
+          />
+        )}
+
         {isLoading ? (
           <div className="lrm-loading">Загрузка...</div>
         ) : filteredRequests.length === 0 ? (
@@ -684,30 +444,24 @@ export const LeaveRequestsManagePage: FC = () => {
         ) : (
           <div className="lrm-list">
             {grouped.map(([department, items]) => {
-              const isCollapsed = collapsedDepts.has(department);
               const isDirectReports = department === DIRECT_REPORTS_KEY;
-              const label = isDirectReports ? DIRECT_REPORTS_TITLE : department;
+              const groupSelectableIds = items.filter(i => i.status === 'pending').map(i => i.id);
               return (
-                <div
+                <LeaveRequestsGroup
                   key={department}
-                  className={`lrm-group${isCollapsed ? ' lrm-group--collapsed' : ''}${isDirectReports ? ' lrm-group--direct-reports' : ''}`}
-                >
-                  {showGroupHeaders && (
-                    <button
-                      type="button"
-                      className="lrm-group-toggle"
-                      onClick={() => toggleDept(department)}
-                      aria-expanded={!isCollapsed}
-                    >
-                      {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-                      <span className="lrm-group-name">{label}</span>
-                      <span className="lrm-group-stats">
-                        {items.length} · {totalEmployees(items)} чел
-                      </span>
-                    </button>
-                  )}
-                  {!isCollapsed && items.map(renderCard)}
-                </div>
+                  label={isDirectReports ? DIRECT_REPORTS_TITLE : department}
+                  items={items}
+                  showHeader={showGroupHeaders}
+                  isCollapsed={collapsedDepts.has(department)}
+                  onToggleCollapse={() => toggleDept(department)}
+                  isDirectReports={isDirectReports}
+                  selectableIds={groupSelectableIds}
+                  selectionState={bulk.selectionStateOf(groupSelectableIds)}
+                  onToggleGroup={bulk.toggleMany}
+                  bulkMode={bulkMode}
+                  disabled={actionsLocked}
+                  renderCard={renderCard}
+                />
               );
             })}
           </div>

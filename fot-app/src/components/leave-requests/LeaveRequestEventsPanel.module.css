@@ -212,6 +212,22 @@
   color: var(--text-secondary);
 }
 
+/* 769–1100px: сайдбар (240px) + панель (420px) не оставляют месту под карточки
+   даже строки — здесь панель становится правым drawer'ом поверх страницы.
+   Ниже header'а (z-index 50), чтобы шапка оставалась доступной. */
+@media (min-width: 769px) and (max-width: 1100px) {
+  .panel {
+    position: fixed;
+    right: 0;
+    top: calc(64px + env(safe-area-inset-top, 0px));
+    bottom: 0;
+    width: min(420px, 100vw - 32px);
+    max-height: none;
+    z-index: 45;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
+  }
+}
+
 @media (max-width: 768px) {
   .panel {
     position: fixed;

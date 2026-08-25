@@ -178,6 +178,21 @@ export interface ISelectableObject {
   object_name: string;
 }
 
+/**
+ * Итог массового решения: сумма всех категорий равна числу уникальных отправленных
+ * id, поэтому по сводке видно, что именно не прошло.
+ */
+export interface ILeaveRequestBulkResult {
+  processed_count: number;
+  processed_ids: number[];
+  skipped_not_pending: number;
+  skipped_no_access: number;
+  skipped_locked: number;
+  locked_ids: number[];
+  skipped_failed: number;
+  failed_ids: number[];
+}
+
 interface ApiResponse<T> {
   data: T;
   message?: string;
@@ -252,6 +267,25 @@ export const leaveRequestService = {
 
   reject: async (id: number, comment?: string) => {
     const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/reject`, { comment });
+    return res.data;
+  },
+
+  // Массовое согласование выбранных заявлений. Бэк проверяет доступ по каждому id
+  // и молча пропускает недоступные — итог приходит сводкой.
+  bulkApprove: async (ids: number[], comment?: string): Promise<ILeaveRequestBulkResult> => {
+    const res = await apiClient.post<ApiResponse<ILeaveRequestBulkResult>>(
+      '/leave-requests/bulk-approve',
+      comment ? { ids, comment } : { ids },
+    );
+    return res.data;
+  },
+
+  // Массовое отклонение выбранных заявлений (комментарий общий на весь пакет).
+  bulkReject: async (ids: number[], comment?: string): Promise<ILeaveRequestBulkResult> => {
+    const res = await apiClient.post<ApiResponse<ILeaveRequestBulkResult>>(
+      '/leave-requests/bulk-reject',
+      comment ? { ids, comment } : { ids },
+    );
     return res.data;
   },
 

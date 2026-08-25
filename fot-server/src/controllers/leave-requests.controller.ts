@@ -12,6 +12,7 @@ import {
   canAccessEmployeeInScope,
   canEditEmployeeInScope,
   resolveAccessibleDepartmentIds,
+  resolveEditableEmployeeIds,
   resolveManagedDepartmentIds,
   resolveScopedDepartmentId,
 } from '../services/data-scope.service.js';
@@ -1238,96 +1239,233 @@ const getHistory = async (req: AuthenticatedRequest, res: Response): Promise<voi
   }
 };
 
-/** Одобрение заявления */
-const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+/* --- Согласование заявлений: общее ядро для одиночного и массового режима --- */
+
+type DecisionFail =
+  | 'not_found' | 'already_processed' | 'forbidden'
+  | 'invalid_period' | 'timesheet_locked' | 'stale';
+
+/**
+ * Отказ внутри транзакции. Именно исключение, а не возврат значения: withTransaction
+ * коммитит любой РЕЗУЛЬТАТ колбэка и откатывает только ошибку. Раньше проверка
+ * закрытого табеля возвращала `{ conflict }` уже ПОСЛЕ UPDATE — клиент получал 409,
+ * а заявление коммитилось согласованным без строк в табеле.
+ */
+class LeaveDecisionError extends Error {
+  constructor(public readonly code: DecisionFail, message: string) {
+    super(message);
+    this.name = 'LeaveDecisionError';
+  }
+}
+
+const DECISION_HTTP_STATUS: Record<DecisionFail, number> = {
+  not_found: 404,
+  already_processed: 400,
+  invalid_period: 400,
+  forbidden: 403,
+  timesheet_locked: 409,
+  stale: 409,
+};
+
+type DecisionResult =
+  | { ok: true; row: Record<string, unknown>; employeeId: number }
+  | { ok: false; code: DecisionFail; error: string };
+
+/** Заявка в объёме, достаточном для авторизации решения. */
+interface IDecisionTarget {
+  employee_id: number;
+  request_type: string;
+}
+
+/**
+ * Предвычисленная авторизация решения: одна на весь пакет (в массовом режиме) либо
+ * на одну заявку (в одиночном). Право на ЗАПИСЬ берётся из edit-скоупа, а не из
+ * read-скоупа: `resolveAccessibleDepartmentIds` отдаёт 'all' и кадровой службе,
+ * которой согласование не положено (её page-access на /leave-requests — только view).
+ */
+interface IDecisionContext {
+  editableEmployeeIds: Set<number> | 'all';
+  responsibleByEmployee: Map<number, number[]>;
+}
+
+async function buildDecisionContext(
+  req: AuthenticatedRequest,
+  targets: IDecisionTarget[],
+): Promise<IDecisionContext> {
+  const editableEmployeeIds = await resolveEditableEmployeeIds(req);
+  const routedEmployeeIds = [...new Set(
+    targets
+      .filter(t => ROUTED_LEAVE_TYPES.has(String(t.request_type)))
+      .map(t => Number(t.employee_id))
+      .filter(Number.isFinite),
+  )];
+  if (routedEmployeeIds.length === 0) {
+    return { editableEmployeeIds, responsibleByEmployee: new Map() };
+  }
+  // Один запрос отделов и один резолв ответственных на весь пакет — вместо пары
+  // запросов на каждую заявку.
+  const rows = await query<{ id: number; org_department_id: string | null }>(
+    `SELECT id, org_department_id FROM employees WHERE id = ANY($1::bigint[])`,
+    [routedEmployeeIds],
+  );
+  const deptByEmployee = new Map<number, string | null>(
+    (rows ?? []).map(r => [Number(r.id), r.org_department_id ?? null]),
+  );
+  const responsibleByEmployee = await resolveResponsibleEmployeeIdsByEmployee(
+    routedEmployeeIds.map(id => ({ employee_id: id, org_department_id: deptByEmployee.get(id) ?? null })),
+  );
+  return { editableEmployeeIds, responsibleByEmployee };
+}
+
+/** Может ли текущий пользователь принять решение по заявке (согласовать/отклонить). */
+function canDecideLeaveRequest(
+  req: AuthenticatedRequest,
+  ctx: IDecisionContext,
+  employeeId: number,
+  requestType: string,
+): boolean {
+  if (ROUTED_LEAVE_TYPES.has(String(requestType))) {
+    const responsible = ctx.responsibleByEmployee.get(Number(employeeId)) ?? [];
+    return req.user.employee_id != null && responsible.includes(req.user.employee_id);
+  }
+  if (ctx.editableEmployeeIds === 'all') return true;
+  return ctx.editableEmployeeIds.has(Number(employeeId));
+}
+
+/** Realtime после принятого решения. Никогда не влияет на исход самой операции. */
+function emitLeaveRequestDecision(
+  employeeId: number,
+  actorUserId: string,
+  requestId: number,
+  action: 'approve' | 'reject',
+): void {
+  getLeaveRequestRecipients(employeeId, actorUserId)
+    .then((recipients) => {
+      emitDomainChange({
+        event: 'leave_request:changed',
+        targetUserIds: recipients,
+        payload: { entityId: requestId, employeeId, action },
+      });
+    })
+    .catch((e) => console.error(`[leave-requests] emit ${action} realtime error:`, e));
+}
+
+/**
+ * Одобрение заявления. Вся запись — в одной транзакции, порядок принципиален:
+ * блокирующее чтение (FOR UPDATE) → проверки статуса/периода/закрытого табеля →
+ * UPDATE → материализация дней → история. Любой отказ бросает LeaveDecisionError,
+ * то есть откатывает транзакцию целиком.
+ */
+async function approveLeaveRequestById(
+  req: AuthenticatedRequest,
+  id: number,
+  comment: string | null,
+  ctx?: IDecisionContext,
+): Promise<DecisionResult> {
+  const preread = await queryOne<{
+    id: number; employee_id: number; status: string; request_type: string;
+    start_date: string; end_date: string; selected_dates: string[] | null;
+  }>(
+    `SELECT id, employee_id, status, request_type, start_date, end_date, selected_dates
+       FROM leave_requests WHERE id = $1`,
+    [id],
+  );
+  if (!preread) return { ok: false, code: 'not_found', error: 'Заявление не найдено' };
+  if (preread.status !== 'pending') {
+    return { ok: false, code: 'already_processed', error: 'Заявление уже обработано' };
+  }
+
+  const context = ctx ?? await buildDecisionContext(req, [preread]);
+  if (!canDecideLeaveRequest(req, context, preread.employee_id, preread.request_type)) {
+    return { ok: false, code: 'forbidden', error: 'Нет доступа к заявлениям сотрудника' };
+  }
+
+  // Битые легаси-заявки (напр. год 0026 → span ~730к дней) отсекаем ДО транзакции:
+  // разворачивать такой диапазон незачем, а внутри транзакции проверка повторится
+  // уже по заблокированной строке (даты мог переписать HR сменой категории).
+  const prereadPeriod = validateLeaveRequestPeriod(preread.start_date, preread.end_date, preread.selected_dates);
+  if (!prereadPeriod.ok) {
+    return { ok: false, code: 'invalid_period', error: `Некорректный период заявления: ${prereadPeriod.error}` };
+  }
+
+  // Автором корректировки в табеле должен быть сам сотрудник-заявитель,
+  // а не одобряющий руководитель. Резолвим его user_profiles.id по employee_id.
+  const author = await queryOne<{ id: string }>(
+    `SELECT id FROM user_profiles WHERE employee_id = $1 LIMIT 1`,
+    [preread.employee_id],
+  );
+  const authorUserId = author?.id ?? req.user.id;
+
+  // Автосхлопывание 2-го этапа: если одобряющий сам является ответственным
+  // за выходные этого сотрудника («Назначение сотрудников» → «Выходные»),
+  // его одобрение закрывает оба этапа — корректировки выходных создаются
+  // сразу approved и не попадают в очередь /approvals.
+  let weekendCollapseApproverUserId: string | null = null;
+  if (req.user.employee_id != null) {
+    const empDept = await queryOne<{ org_department_id: string | null }>(
+      `SELECT org_department_id FROM employees WHERE id = $1`,
+      [preread.employee_id],
+    );
+    const weekendResponsible = await resolveResponsibleEmployeeForTarget(
+      preread.employee_id,
+      empDept?.org_department_id ?? null,
+    );
+    if (weekendResponsible != null && weekendResponsible === req.user.employee_id) {
+      weekendCollapseApproverUserId = req.user.id;
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+
   try {
-    const { id } = req.params;
-    const { comment } = req.body;
+    const row = await withTransaction(async (client) => {
+      // Блокирующее чтение — единственный источник актуальных полей: статус мог
+      // смениться (самоотмена сотрудника), тип — HR'ом, часы — согласующим
+      // (PATCH /:id/correction-hours) уже после предчтения.
+      const locked = (await client.query(
+        `SELECT * FROM leave_requests WHERE id = $1 FOR UPDATE`,
+        [id],
+      )).rows[0] as (LeaveRequestDatesRow & {
+        status: string;
+        correction_status: string | null;
+        correction_hours: number | null;
+        correction_object_name: string | null;
+        reason: string | null;
+      }) | undefined;
 
-    // Проверяем заявление
-    const request = await queryOne<{
-      id: number;
-      employee_id: number;
-      status: string;
-      request_type: string;
-      start_date: string;
-      end_date: string;
-      correction_date: string | null;
-      correction_status: string | null;
-      correction_hours: number | null;
-      correction_object_id: string | null;
-      correction_object_name: string | null;
-      selected_dates: string[] | null;
-      reason: string | null;
-    }>(
-      `SELECT * FROM leave_requests WHERE id = $1`,
-      [id],
-    );
-
-    if (!request) {
-      res.status(404).json({ success: false, error: 'Заявление не найдено' });
-      return;
-    }
-
-    if (request.status !== 'pending') {
-      res.status(400).json({ success: false, error: 'Заявление уже обработано' });
-      return;
-    }
-
-    if (!(await canManageLeaveRequest(req, request.employee_id, request.request_type, 'edit'))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
-      return;
-    }
-
-    // Валидация периода ДО транзакции: битые легаси-заявки (напр. год 0026 → span
-    // ~730к дней) иначе подвесили бы материализацию. Явный 400 — внешний catch иначе
-    // превратил бы throw в 500, а транзакция/upsert не должны стартовать вовсе.
-    const periodCheck = validateLeaveRequestPeriod(request.start_date, request.end_date, request.selected_dates);
-    if (!periodCheck.ok) {
-      res.status(400).json({ success: false, error: `Некорректный период заявления: ${periodCheck.error}` });
-      return;
-    }
-
-    // Автором корректировки в табеле должен быть сам сотрудник-заявитель,
-    // а не одобряющий руководитель. Резолвим его user_profiles.id по employee_id.
-    const author = await queryOne<{ id: string }>(
-      `SELECT id FROM user_profiles WHERE employee_id = $1 LIMIT 1`,
-      [request.employee_id],
-    );
-    const authorUserId = author?.id ?? req.user.id;
-
-    // Автосхлопывание 2-го этапа: если одобряющий сам является ответственным
-    // за выходные этого сотрудника («Назначение сотрудников» → «Выходные»),
-    // его одобрение закрывает оба этапа — корректировки выходных создаются
-    // сразу approved и не попадают в очередь /approvals.
-    let weekendCollapseApproverUserId: string | null = null;
-    if (req.user.employee_id != null) {
-      const empDept = await queryOne<{ org_department_id: string | null }>(
-        `SELECT org_department_id FROM employees WHERE id = $1`,
-        [request.employee_id],
-      );
-      const weekendResponsible = await resolveResponsibleEmployeeForTarget(
-        request.employee_id,
-        empDept?.org_department_id ?? null,
-      );
-      if (weekendResponsible != null && weekendResponsible === req.user.employee_id) {
-        weekendCollapseApproverUserId = req.user.id;
+      if (!locked) throw new LeaveDecisionError('not_found', 'Заявление не найдено');
+      // Статус сменился между предчтением и локом — это гонка (самоотмена сотрудника,
+      // параллельное решение), поэтому 409, а не 400.
+      if (locked.status !== 'pending') {
+        throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
       }
-    }
+      // Право проверено по типу из предчтения: если HR параллельно сменил категорию,
+      // согласование по уже неактуальному праву проходить не должно.
+      if (String(locked.request_type) !== String(preread.request_type)) {
+        throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
+      }
 
-    const nowIso = new Date().toISOString();
+      // Битые легаси-заявки (напр. год 0026 → span ~730к дней) иначе подвесили бы
+      // материализацию.
+      const periodCheck = validateLeaveRequestPeriod(locked.start_date, locked.end_date, locked.selected_dates);
+      if (!periodCheck.ok) {
+        throw new LeaveDecisionError('invalid_period', `Некорректный период заявления: ${periodCheck.error}`);
+      }
 
-    // Атомарность: смена статуса и материализация корректировок в одной транзакции.
-    // Раньше status='approved' проставлялся ДО создания adjustment'ов и вне транзакции —
-    // при сбое вставки заявка оставалась одобренной без строк в табеле (осиротевшие
-    // approved-заявки). Теперь падение отката → заявка остаётся pending, запрос ретраится.
-    const result = await withTransaction(async (client) => {
-      // Анти-гонка: статус мог смениться после проверки выше (сотрудник отменил заявление
-      // параллельно). Обновляем только pending — иначе откатываемся и НЕ материализуем
-      // корректировки, иначе они остались бы сиротами при отменённой заявке.
-      // request_type в условии: право canManageLeaveRequest проверено по типу из
-      // предчтения — если HR параллельно сменил категорию, согласование по уже
-      // неактуальному праву не должно пройти.
+      // Закрытый табель: материализация одобренного заявления меняет засчитанные часы
+      // в уже сданном/утверждённом периоде. Гард для всех, кроме is_admin. Advisory-локи
+      // берём до проверки — иначе между ней и записью успевает пройти submit.
+      const affectedDates = collectAffectedTimesheetDates(locked);
+      if (!req.user.is_admin && affectedDates.length > 0) {
+        await lockQuotaMonthsOnClient(client, locked.employee_id, affectedDates);
+        if (await hasLockedTimesheetDates(locked.employee_id, affectedDates, client)) {
+          throw new LeaveDecisionError(
+            'timesheet_locked',
+            'Период уже сдан/закрыт в табеле — сначала верните табель на доработку',
+          );
+        }
+      }
+
       const updated = (await client.query(
         `UPDATE leave_requests SET
            status = 'approved',
@@ -1335,28 +1473,14 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
            reviewed_at = $2,
            review_comment = $3,
            updated_at = $2
-         WHERE id = $4 AND status = 'pending' AND request_type = $5
+         WHERE id = $4 AND status = 'pending'
          RETURNING *`,
-        [req.user.id, nowIso, comment || null, id, request.request_type],
+        [req.user.id, nowIso, comment, id],
       )).rows[0] ?? null;
 
-      if (!updated) return { conflict: 'stale' as const };
+      if (!updated) throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
 
-      // RETURNING * — единственный источник актуальных полей заявки: часы могли быть
-      // изменены согласующим (PATCH /:id/correction-hours) уже после чтения request выше.
-      // Материализуем строго из свежей строки, иначе в табель уйдут устаревшие часы.
-      const approvedRequest = { ...request, ...(updated as Partial<typeof request>) };
-
-      // Закрытый табель: материализация одобренного заявления меняет засчитанные часы
-      // в уже сданном/утверждённом периоде. Гард для всех, кроме is_admin. Advisory-локи
-      // берём до проверки — иначе между ней и записью успевает пройти submit.
-      const affectedDates = collectAffectedTimesheetDates(approvedRequest as LeaveRequestDatesRow);
-      if (!req.user.is_admin && affectedDates.length > 0) {
-        await lockQuotaMonthsOnClient(client, approvedRequest.employee_id, affectedDates);
-        if (await hasLockedTimesheetDates(approvedRequest.employee_id, affectedDates, client)) {
-          return { conflict: 'timesheet_locked' as const };
-        }
-      }
+      const approvedRequest = { ...locked, ...(updated as Partial<typeof locked>) };
 
       // Создаём attendance adjustments как канонический источник ручных статусов.
       // Для work/remote в выходной approval_status считает единый резолвер.
@@ -1439,33 +1563,105 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         comment: comment || null,
       });
 
-      return { conflict: false as const, row: updated };
+      return updated as Record<string, unknown>;
     });
 
-    if (result.conflict === 'timesheet_locked') {
-      res.status(409).json({
-        success: false,
-        error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку',
+    return { ok: true, row, employeeId: preread.employee_id };
+  } catch (err) {
+    if (err instanceof LeaveDecisionError) return { ok: false, code: err.code, error: err.message };
+    throw err;
+  }
+}
+
+/** Отклонение заявления. Табель не трогает — только статус и история. */
+async function rejectLeaveRequestById(
+  req: AuthenticatedRequest,
+  id: number,
+  comment: string | null,
+  ctx?: IDecisionContext,
+): Promise<DecisionResult> {
+  const preread = await queryOne<{ id: number; employee_id: number; status: string; request_type: string }>(
+    `SELECT id, employee_id, status, request_type FROM leave_requests WHERE id = $1`,
+    [id],
+  );
+  if (!preread) return { ok: false, code: 'not_found', error: 'Заявление не найдено' };
+  if (preread.status !== 'pending') {
+    return { ok: false, code: 'already_processed', error: 'Заявление уже обработано' };
+  }
+
+  const context = ctx ?? await buildDecisionContext(req, [preread]);
+  if (!canDecideLeaveRequest(req, context, preread.employee_id, preread.request_type)) {
+    return { ok: false, code: 'forbidden', error: 'Нет доступа к заявлениям сотрудника' };
+  }
+
+  const nowIso = new Date().toISOString();
+
+  try {
+    const row = await withTransaction(async (client) => {
+      const locked = (await client.query(
+        `SELECT id, status, request_type FROM leave_requests WHERE id = $1 FOR UPDATE`,
+        [id],
+      )).rows[0] as { id: number; status: string; request_type: string } | undefined;
+
+      if (!locked) throw new LeaveDecisionError('not_found', 'Заявление не найдено');
+      if (locked.status !== 'pending') {
+        throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
+      }
+      if (String(locked.request_type) !== String(preread.request_type)) {
+        throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
+      }
+
+      const updated = (await client.query(
+        `UPDATE leave_requests SET
+           status = 'rejected',
+           reviewer_id = $1,
+           reviewed_at = $2,
+           review_comment = $3,
+           updated_at = $2
+         WHERE id = $4 AND status = 'pending'
+         RETURNING *`,
+        [req.user.id, nowIso, comment, id],
+      )).rows[0] ?? null;
+
+      if (!updated) throw new LeaveDecisionError('stale', 'Заявление изменилось, обновите страницу');
+
+      await recordLeaveRequestHistory(client, {
+        requestId: Number(id),
+        action: 'rejected',
+        actorId: req.user.id,
+        comment: comment || null,
       });
+
+      return updated as Record<string, unknown>;
+    });
+
+    return { ok: true, row, employeeId: preread.employee_id };
+  } catch (err) {
+    if (err instanceof LeaveDecisionError) return { ok: false, code: err.code, error: err.message };
+    throw err;
+  }
+}
+
+const normalizeDecisionComment = (raw: unknown): string | null => (
+  typeof raw === 'string' && raw.trim() ? raw.trim() : null
+);
+
+/** Одобрение заявления (header/hr/admin) */
+const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ success: false, error: 'Некорректный id' });
       return;
     }
-    if (result.conflict) {
-      res.status(409).json({ success: false, error: 'Заявление изменилось, обновите страницу' });
+    const result = await approveLeaveRequestById(req, id, normalizeDecisionComment(req.body?.comment));
+    if (!result.ok) {
+      res.status(DECISION_HTTP_STATUS[result.code]).json({ success: false, error: result.error });
       return;
     }
 
     broadcastPendingChanged();
-
-    // Realtime: статус заявки изменился — синхронизируем автору и остальным approvers.
-    getLeaveRequestRecipients(request.employee_id, req.user.id)
-      .then((recipients) => {
-        emitDomainChange({
-          event: 'leave_request:changed',
-          targetUserIds: recipients,
-          payload: { entityId: request.id, employeeId: request.employee_id, action: 'approve' },
-        });
-      })
-      .catch((e) => console.error('[leave-requests] emit approve realtime error:', e));
+    emitLeaveRequestDecision(result.employeeId, req.user.id, id, 'approve');
 
     res.json({ success: true, data: result.row });
   } catch (err) {
@@ -1477,80 +1673,205 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 /** Отклонение заявления */
 const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
-    const { comment } = req.body;
-
-    const request = await queryOne<{ id: number; employee_id: number; status: string; request_type: string }>(
-      `SELECT * FROM leave_requests WHERE id = $1`,
-      [id],
-    );
-
-    if (!request) {
-      res.status(404).json({ success: false, error: 'Заявление не найдено' });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ success: false, error: 'Некорректный id' });
       return;
     }
-
-    if (request.status !== 'pending') {
-      res.status(400).json({ success: false, error: 'Заявление уже обработано' });
-      return;
-    }
-
-    if (!(await canManageLeaveRequest(req, request.employee_id, request.request_type, 'edit'))) {
-      res.status(403).json({ success: false, error: 'Нет доступа к заявлениям сотрудника' });
-      return;
-    }
-
-    const nowIso = new Date().toISOString();
-    // Анти-гонка: статус мог смениться после проверки выше (самоотмена сотрудником).
-    // request_type в условии: право проверено по типу из предчтения — если HR
-    // параллельно сменил категорию, отклонение по неактуальному праву не проходит.
-    // Транзакция — ради записи истории: отклонение без следа в истории не нужно.
-    const data = await withTransaction(async (client) => {
-      const updated = (await client.query(
-        `UPDATE leave_requests SET
-           status = 'rejected',
-           reviewer_id = $1,
-           reviewed_at = $2,
-           review_comment = $3,
-           updated_at = $2
-         WHERE id = $4 AND status = 'pending' AND request_type = $5
-         RETURNING *`,
-        [req.user.id, nowIso, comment || null, id, request.request_type],
-      )).rows[0] ?? null;
-
-      if (!updated) return null;
-
-      await recordLeaveRequestHistory(client, {
-        requestId: Number(id),
-        action: 'rejected',
-        actorId: req.user.id,
-        comment: comment || null,
-      });
-      return updated;
-    });
-
-    if (!data) {
-      res.status(409).json({ success: false, error: 'Заявление изменилось, обновите страницу' });
+    const result = await rejectLeaveRequestById(req, id, normalizeDecisionComment(req.body?.comment));
+    if (!result.ok) {
+      res.status(DECISION_HTTP_STATUS[result.code]).json({ success: false, error: result.error });
       return;
     }
 
     broadcastPendingChanged();
+    emitLeaveRequestDecision(result.employeeId, req.user.id, id, 'reject');
 
-    // Realtime: статус заявки изменился — синхронизируем автору и остальным approvers.
-    getLeaveRequestRecipients(request.employee_id, req.user.id)
-      .then((recipients) => {
-        emitDomainChange({
-          event: 'leave_request:changed',
-          targetUserIds: recipients,
-          payload: { entityId: request.id, employeeId: request.employee_id, action: 'reject' },
-        });
-      })
-      .catch((e) => console.error('[leave-requests] emit reject realtime error:', e));
-
-    res.json({ success: true, data });
+    res.json({ success: true, data: result.row });
   } catch (err) {
     console.error('leave-requests.reject error:', err);
     res.status(500).json({ success: false, error: 'Ошибка отклонения заявления' });
+  }
+};
+
+/* --- Массовое согласование по чекбоксам --- */
+
+// Пакет ограничен и по числу заявок, и по числу материализуемых дней: 100 годовых
+// отпусков дали бы 36 600 upsert-ов в одном HTTP-запросе.
+const MAX_BULK_LEAVE_IDS = 100;
+const MAX_BULK_MATERIALIZED_DAYS = 1000;
+
+/** Строка пакета в объёме preflight-а. */
+type BulkPreflightRow = LeaveRequestDatesRow & { status: string };
+
+/**
+ * Во сколько дней табеля обойдётся решение по заявке. Не все типы материализуются:
+ * `certificate` в табель не пишется вовсе, `time_correction` — ровно один день.
+ */
+function estimateDecisionCost(row: BulkPreflightRow): number {
+  if (row.request_type === 'time_correction') return row.correction_date ? 1 : 0;
+  if (!Object.prototype.hasOwnProperty.call(LEAVE_TO_TIMESHEET, row.request_type)) return 0;
+  try {
+    return collectMaterializedLeaveDates(row).length;
+  } catch {
+    // Битые легаси-даты: считаем по верхней границе, такую заявку всё равно
+    // отсеет validateLeaveRequestPeriod.
+    return MAX_MATERIALIZED_LEAVE_DAYS;
+  }
+}
+
+interface IBulkDecisionSummary {
+  processed_count: number;
+  processed_ids: number[];
+  skipped_not_pending: number;
+  skipped_no_access: number;
+  skipped_locked: number;
+  locked_ids: number[];
+  skipped_failed: number;
+  failed_ids: number[];
+}
+
+async function bulkDecide(
+  req: AuthenticatedRequest,
+  res: Response,
+  decision: 'approve' | 'reject',
+): Promise<void> {
+  const rawIds = req.body?.ids;
+  if (!Array.isArray(rawIds) || rawIds.length === 0 || rawIds.length > MAX_BULK_LEAVE_IDS) {
+    res.status(400).json({
+      success: false,
+      error: `ids: непустой массив (до ${MAX_BULK_LEAVE_IDS} значений)`,
+    });
+    return;
+  }
+  const ids: number[] = [];
+  for (const value of rawIds) {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n <= 0) {
+      res.status(400).json({ success: false, error: 'Некорректный id в списке' });
+      return;
+    }
+    ids.push(n);
+  }
+  const uniqueIds = [...new Set(ids)];
+  const comment = normalizeDecisionComment(req.body?.comment);
+
+  const summary: IBulkDecisionSummary = {
+    processed_count: 0,
+    processed_ids: [],
+    skipped_not_pending: 0,
+    skipped_no_access: 0,
+    skipped_locked: 0,
+    locked_ids: [],
+    skipped_failed: 0,
+    failed_ids: [],
+  };
+
+  // 1. Одна выборка на пакет: отсутствующие и не-pending отсеиваются без транзакций.
+  const rows = await query<BulkPreflightRow>(
+    `SELECT id, employee_id, request_type, status,
+            start_date, end_date, selected_dates, correction_date, correction_object_id
+       FROM leave_requests
+      WHERE id = ANY($1::bigint[])`,
+    [uniqueIds],
+  );
+  const pending = (rows ?? []).filter(r => String(r.status) === 'pending');
+  summary.skipped_not_pending = uniqueIds.length - pending.length;
+
+  // 2. Векторная авторизация: один контекст на весь пакет.
+  const ctx = await buildDecisionContext(req, pending);
+  const allowed: BulkPreflightRow[] = [];
+  for (const row of pending) {
+    if (canDecideLeaveRequest(req, ctx, Number(row.employee_id), String(row.request_type))) allowed.push(row);
+    else summary.skipped_no_access++;
+  }
+
+  // 3. Валидность периода — до бюджета: битая легаси-дата не должна ронять весь пакет.
+  const valid: BulkPreflightRow[] = [];
+  for (const row of allowed) {
+    const check = validateLeaveRequestPeriod(row.start_date, row.end_date, row.selected_dates);
+    if (check.ok) valid.push(row);
+    else {
+      summary.skipped_failed++;
+      summary.failed_ids.push(Number(row.id));
+    }
+  }
+
+  // 4. Бюджет дней — только по тому, что реально пойдёт в обработку.
+  if (decision === 'approve') {
+    const totalDays = valid.reduce((sum, row) => sum + estimateDecisionCost(row), 0);
+    if (totalDays > MAX_BULK_MATERIALIZED_DAYS) {
+      res.status(400).json({
+        success: false,
+        error: `Слишком большой пакет: ${totalDays} дней табеля при лимите ${MAX_BULK_MATERIALIZED_DAYS} — разбейте выбор`,
+      });
+      return;
+    }
+  }
+
+  // 5. Последовательная обработка: параллельная ломала бы advisory-локи месяцев
+  // и выедала пул соединений.
+  for (const row of valid) {
+    const id = Number(row.id);
+    try {
+      const result = decision === 'approve'
+        ? await approveLeaveRequestById(req, id, comment, ctx)
+        : await rejectLeaveRequestById(req, id, comment, ctx);
+
+      if (result.ok) {
+        summary.processed_count++;
+        summary.processed_ids.push(id);
+        // Realtime не влияет на исход: решение уже закоммичено.
+        try {
+          emitLeaveRequestDecision(result.employeeId, req.user.id, id, decision);
+        } catch (emitErr) {
+          console.error('[leave-requests] bulk emit error:', emitErr);
+        }
+        continue;
+      }
+
+      if (result.code === 'not_found' || result.code === 'already_processed') {
+        summary.skipped_not_pending++;
+      } else if (result.code === 'forbidden') {
+        summary.skipped_no_access++;
+      } else if (result.code === 'timesheet_locked') {
+        summary.skipped_locked++;
+        summary.locked_ids.push(id);
+      } else {
+        summary.skipped_failed++;
+        summary.failed_ids.push(id);
+      }
+    } catch (err) {
+      // Падение на одной заявке не прерывает пакет.
+      console.error(`leave-requests.bulk-${decision} item ${id} error:`, err);
+      Sentry.captureException(err);
+      summary.skipped_failed++;
+      summary.failed_ids.push(id);
+    }
+  }
+
+  if (summary.processed_count > 0) broadcastPendingChanged();
+
+  res.json({ success: true, data: summary });
+}
+
+/** Массовое согласование выбранных заявлений */
+const bulkApprove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await bulkDecide(req, res, 'approve');
+  } catch (err) {
+    console.error('leave-requests.bulkApprove error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка массового согласования' });
+  }
+};
+
+/** Массовое отклонение выбранных заявлений */
+const bulkReject = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    await bulkDecide(req, res, 'reject');
+  } catch (err) {
+    console.error('leave-requests.bulkReject error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка массового отклонения' });
   }
 };
 
@@ -2430,6 +2751,8 @@ export const leaveRequestsController = {
   pendingCount,
   approve,
   reject,
+  bulkApprove,
+  bulkReject,
   updateCorrectionHours,
   updateRequestType,
   cancel,

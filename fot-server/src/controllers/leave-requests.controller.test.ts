@@ -38,11 +38,15 @@ vi.mock('../services/attendance.service.js', () => ({
   upsertAttendanceAdjustment: upsertSpy,
 }));
 
+const { editableEmployeesMock } = vi.hoisted(() => ({
+  editableEmployeesMock: vi.fn(async (): Promise<Set<number> | 'all'> => 'all'),
+}));
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: vi.fn(async () => true),
   canEditEmployeeInScope: vi.fn(async () => true),
   resolveAccessibleDepartmentIds: vi.fn(async () => []),
   resolveEditableDepartmentIds: vi.fn(async () => []),
+  resolveEditableEmployeeIds: editableEmployeesMock,
   resolveManagedDepartmentIds: vi.fn(async () => []),
   resolveScopedDepartmentId: vi.fn(async () => null),
 }));
@@ -136,31 +140,61 @@ function makeRes(): Response & { _status: number; _json: unknown } {
   return res as unknown as Response & { _status: number; _json: unknown };
 }
 
+// Текущая строка заявки: её отдаёт и предчтение (queryOne), и блокирующее
+// чтение внутри транзакции (SELECT ... FOR UPDATE на tx-клиенте).
+let currentRequestRow: Record<string, unknown> = {};
+
 function mockRequestRow(over: Record<string, unknown>) {
-  // 1-й queryOne → строка leave_requests; 2-й → автор (user_profiles).
+  currentRequestRow = {
+    id: 708, employee_id: 247, status: 'pending', request_type: 'remote',
+    start_date: '2026-05-30', end_date: '2026-05-30', selected_dates: null,
+    correction_date: null, correction_status: null, correction_hours: null,
+    correction_object_id: null, correction_object_name: null, reason: null,
+    ...over,
+  };
+  // queryOne: 1) предчтение заявки, 2) автор (user_profiles). Третий вызов (отдел
+  // сотрудника для схлопывания выходных) остаётся неопределённым — как и раньше.
   pgQueryOne
-    .mockResolvedValueOnce({
-      id: 708, employee_id: 247, status: 'pending', request_type: 'remote',
-      start_date: '2026-05-30', end_date: '2026-05-30', selected_dates: null,
-      correction_date: null, correction_status: null, correction_hours: null,
-      correction_object_id: null, correction_object_name: null, reason: null,
-      ...over,
-    })
+    .mockResolvedValueOnce(currentRequestRow)
     .mockResolvedValueOnce({ id: 'author-uuid' });
 }
+
+/**
+ * Дефолтное поведение tx-клиента для решения по заявке: блокирующее чтение отдаёт
+ * текущую строку, UPDATE — её же в целевом статусе, гард закрытого табеля — пусто.
+ */
+function setDecisionTxDefaults(status: 'approved' | 'rejected' = 'approved') {
+  txClient.query.mockImplementation(async (sql: string) => {
+    const text = String(sql);
+    if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
+    if (text.includes('timesheet_approvals') || text.includes('WITH RECURSIVE pairs')) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (text.includes('UPDATE leave_requests')) {
+      return { rows: [{ ...currentRequestRow, status }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+}
+
+// Очередь mockResolvedValueOnce переживает clearAllMocks: остатки теста, который
+// вышел раньше, чем успел их израсходовать, иначе съезжают в следующий describe.
+beforeEach(() => {
+  pgQueryOne.mockReset();
+  pgQuery.mockReset();
+  txClient.query.mockReset();
+});
 
 describe('leaveRequestsController.approve', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveApprovalMock.mockResolvedValue('auto_approved');
+    editableEmployeesMock.mockResolvedValue('all');
+    pgQuery.mockResolvedValue([] as never);
     pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
     // Гард закрытого табеля ходит в timesheet_approvals — на blanket-моке он бы
     // увидел «замок» в каждой строке, поэтому для него отвечаем пусто.
-    txClient.query.mockImplementation(async (sql: string) => (
-      String(sql).includes('timesheet_approvals')
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ id: 708, status: 'approved' }], rowCount: 1 }
-    ));
+    setDecisionTxDefaults('approved');
   });
 
   it('одиночная remote-заявка на субботу материализует корректировку (не теряется)', async () => {
@@ -204,15 +238,10 @@ describe('leaveRequestsController.approve', () => {
     resolveApprovalMock.mockResolvedValueOnce('pending');
     // work — routed-тип: canManageLeaveRequest резолвит ответственного (зритель 7).
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
-    pgQueryOne
-      .mockResolvedValueOnce({
-        id: 708, employee_id: 247, status: 'pending', request_type: 'work',
-        start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
-        correction_date: null, correction_status: null, correction_hours: null,
-        correction_object_id: null, correction_object_name: null, reason: null,
-      })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }) // canManageLeaveRequest
-      .mockResolvedValueOnce({ id: 'author-uuid' }); // автор корректировки
+    mockRequestRow({
+      request_type: 'work',
+      start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
+    });
     const res = makeRes();
 
     await leaveRequestsController.approve(makeReq(), res);
@@ -235,23 +264,13 @@ describe('leaveRequestsController.approve', () => {
     });
     txClient.query.mockImplementation(async (sql: string) => {
       const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
       if (text.includes('WITH RECURSIVE pairs')) {
         return {
           rows: [{
             employee_id: 247, work_date: '2026-06-01', id: 5,
             start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved',
           }],
-        };
-      }
-      if (text.includes('UPDATE leave_requests')) {
-        return {
-          rows: [{
-            id: 708, employee_id: 247, status: 'approved', request_type: 'time_correction',
-            start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
-            correction_date: '2026-06-01', correction_status: 'work', correction_hours: '8.00',
-            correction_object_id: null, correction_object_name: null, reason: null,
-          }],
-          rowCount: 1,
         };
       }
       return { rows: [], rowCount: 0 };
@@ -262,30 +281,62 @@ describe('leaveRequestsController.approve', () => {
 
     expect(res._status).toBe(409);
     expect(upsertSpy).not.toHaveBeenCalled();
+    // Ключевое: заявление не должно быть согласовано «в обмен» на 409 — раньше
+    // UPDATE шёл до гарда, а withTransaction коммитил возврат конфликта.
+    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
+    expect(updateCall).toBeUndefined();
   });
 
-  it('корректировку материализует из RETURNING: часы, изменённые параллельно, не устаревают', async () => {
-    // Гонка: approve прочитал заявку с 10ч, следом согласующий сохранил 9ч
-    // (PATCH /:id/correction-hours). В табель должны уйти 9ч из RETURNING, не 10.
+  it('админ согласовывает тот же день в закрытом табеле (гард его не касается)', async () => {
+    mockRequestRow({
+      request_type: 'time_correction',
+      start_date: '2026-06-01', end_date: '2026-06-01',
+      correction_date: '2026-06-01', correction_status: 'work', correction_hours: 8,
+    });
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
+      if (text.includes('WITH RECURSIVE pairs')) {
+        return {
+          rows: [{
+            employee_id: 247, work_date: '2026-06-01', id: 5,
+            start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved',
+          }],
+        };
+      }
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ ...currentRequestRow, status: 'approved' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const res = makeRes();
+    const req = makeReq();
+    (req.user as { is_admin?: boolean }).is_admin = true;
+
+    await leaveRequestsController.approve(req, res);
+
+    expect(res._status).toBe(200);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('корректировку материализует из блокирующего чтения: часы, изменённые параллельно, не устаревают', async () => {
+    // Гонка: предчтение увидело 10ч, следом согласующий сохранил 9ч
+    // (PATCH /:id/correction-hours). В табель должны уйти 9ч из SELECT ... FOR UPDATE.
     mockRequestRow({
       request_type: 'time_correction',
       start_date: '2026-06-01', end_date: '2026-06-01',
       correction_date: '2026-06-01', correction_status: 'work', correction_hours: 10,
       correction_object_id: 'obj-1', correction_object_name: 'Объект 1',
     });
-    txClient.query.mockImplementation(async (sql: string) => (
-      String(sql).includes('UPDATE leave_requests')
-        ? {
-          rows: [{
-            id: 708, employee_id: 247, status: 'approved', request_type: 'time_correction',
-            start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
-            correction_date: '2026-06-01', correction_status: 'work', correction_hours: '9.00',
-            correction_object_id: 'obj-1', correction_object_name: 'Объект 1', reason: null,
-          }],
-          rowCount: 1,
-        }
-        : { rows: [], rowCount: 0 }
-    ));
+    const freshRow = { ...currentRequestRow, correction_hours: '9.00' };
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [freshRow], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ ...freshRow, status: 'approved' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
     const res = makeRes();
 
     await leaveRequestsController.approve(makeReq(), res);
@@ -309,16 +360,10 @@ describe('leaveRequestsController.approve', () => {
     resolveApprovalMock.mockResolvedValueOnce('pending');
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
     weekendResponsibleMock.mockResolvedValueOnce(7); // ответственный = одобряющий (employee_id 7)
-    pgQueryOne
-      .mockResolvedValueOnce({
-        id: 708, employee_id: 247, status: 'pending', request_type: 'work',
-        start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
-        correction_date: null, correction_status: null, correction_hours: null,
-        correction_object_id: null, correction_object_name: null, reason: null,
-      })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }) // canManageLeaveRequest
-      .mockResolvedValueOnce({ id: 'author-uuid' }) // автор корректировки
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }); // отдел для схлопывания
+    mockRequestRow({
+      request_type: 'work',
+      start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
+    });
     const res = makeRes();
 
     await leaveRequestsController.approve(makeReq(), res);
@@ -902,20 +947,25 @@ describe('leaveRequestsController.approve (материализация посл
   // состоялась ДО approve. Из-за AND request_type=$5 устаревшее предчтение дало
   // бы 409, а не материализацию.
   const mockChangedRequest = (row: Record<string, unknown>) => {
+    const full = {
+      id: 708, employee_id: 247, status: 'pending',
+      correction_date: null, correction_status: null, correction_hours: null,
+      correction_object_id: null, correction_object_name: null, reason: null,
+      ...row,
+    };
+    currentRequestRow = full;
+    pgQuery.mockResolvedValue([] as never); // отделы routed-сотрудников (buildDecisionContext)
     pgQueryOne
-      .mockResolvedValueOnce({
-        id: 708, employee_id: 247, status: 'pending',
-        correction_date: null, correction_status: null, correction_hours: null,
-        correction_object_id: null, correction_object_name: null, reason: null,
-        ...row,
-      })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }) // canManageLeaveRequest (routed)
+      .mockResolvedValueOnce(full)
       .mockResolvedValueOnce({ id: 'author-uuid' }); // автор корректировок
-    txClient.query.mockImplementation(async (sql: string) => (
-      String(sql).includes('UPDATE leave_requests')
-        ? { rows: [{ id: 708, employee_id: 247, status: 'approved', ...row }], rowCount: 1 }
-        : { rows: [], rowCount: 0 }
-    ));
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [full], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ ...full, status: 'approved' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
   };
 
   it('после vacation → unpaid (диапазон 1–3 июня, selected_dates=null): три дня со статусом unpaid', async () => {
@@ -1288,12 +1338,8 @@ describe('leaveRequestsController.approve (заявление на увольн�
     pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
     // Гард закрытого табеля ходит в timesheet_approvals — на blanket-моке он бы
     // увидел «замок» в каждой строке, поэтому для него отвечаем пусто.
-    txClient.query.mockImplementation(async (sql: string) => (
-      String(sql).includes('timesheet_approvals')
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ id: 708, status: 'approved' }], rowCount: 1 }
-    ));
     vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
+    pgQuery.mockResolvedValue([] as never);
   });
 
   afterEach(() => {
@@ -1302,19 +1348,19 @@ describe('leaveRequestsController.approve (заявление на увольн�
     txClient.query.mockReset();
   });
 
+  const DISMISSAL_ROW = {
+    id: 708, employee_id: 247, status: 'pending', request_type: 'dismissal',
+    start_date: '2026-07-15', end_date: '2026-07-15', selected_dates: null,
+    correction_date: null, correction_status: null, correction_hours: null,
+    correction_object_id: null, correction_object_name: null, reason: null,
+  };
+
   const mockDismissalRow = () => {
+    currentRequestRow = DISMISSAL_ROW;
     pgQueryOne
-      // строка заявления
-      .mockResolvedValueOnce({
-        id: 708, employee_id: 247, status: 'pending', request_type: 'dismissal',
-        start_date: '2026-07-15', end_date: '2026-07-15', selected_dates: null,
-        correction_date: null, correction_status: null, correction_hours: null,
-        correction_object_id: null, correction_object_name: null, reason: null,
-      })
-      // canManageLeaveRequest → org_department_id сотрудника
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' })
-      // автор (user_profiles)
-      .mockResolvedValueOnce({ id: 'author-uuid' });
+      .mockResolvedValueOnce(DISMISSAL_ROW) // предчтение заявления
+      .mockResolvedValueOnce({ id: 'author-uuid' }); // автор (user_profiles)
+    setDecisionTxDefaults('approved');
   };
 
   it('ответственный согласовывает, табель и карточка сотрудника не меняются', async () => {
@@ -1521,15 +1567,16 @@ describe('leaveRequestsController.approve (маршрутизация прав)'
   });
 
   it('не-ответственный получает 403 на одобрение routed-заявки (vacation)', async () => {
-    // 1-й queryOne → строка заявки; внутри canManageLeaveRequest queryOne → org_department_id сотрудника.
+    // Единственный queryOne до отказа — предчтение заявки; отделы routed-сотрудников
+    // резолвятся пакетно через query.
     pgQueryOne
       .mockResolvedValueOnce({
         id: 708, employee_id: 247, status: 'pending', request_type: 'vacation',
         start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
         correction_date: null, correction_status: null, correction_hours: null,
         correction_object_id: null, correction_object_name: null, reason: null,
-      })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' });
+      });
+    pgQuery.mockResolvedValue([] as never);
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [999]]])); // ответственный ≠ зритель (7)
     const res = makeRes();
 
@@ -1546,8 +1593,8 @@ describe('leaveRequestsController.approve (маршрутизация прав)'
         start_date: '2026-06-06', end_date: '2026-06-06', selected_dates: ['2026-06-06'],
         correction_date: null, correction_status: null, correction_hours: null,
         correction_object_id: null, correction_object_name: null, reason: null,
-      })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' });
+      });
+    pgQuery.mockResolvedValue([] as never);
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [999]]])); // ответственный ≠ зритель (7)
     const res = makeRes();
 
@@ -1618,15 +1665,19 @@ describe('leaveRequestsController.approve (валидация периода д�
   });
 
   const mockVacationRow = (over: Record<string, unknown>) => {
+    const full = {
+      id: 708, employee_id: 247, status: 'pending', request_type: 'vacation',
+      start_date: '2026-07-31', end_date: '2026-07-31', selected_dates: null,
+      correction_date: null, correction_status: null, correction_hours: null,
+      correction_object_id: null, correction_object_name: null, reason: null,
+      ...over,
+    };
+    currentRequestRow = full;
+    pgQuery.mockResolvedValue([] as never);
     pgQueryOne
-      .mockResolvedValueOnce({
-        id: 708, employee_id: 247, status: 'pending', request_type: 'vacation',
-        start_date: '2026-07-31', end_date: '2026-07-31', selected_dates: null,
-        correction_date: null, correction_status: null, correction_hours: null,
-        correction_object_id: null, correction_object_name: null, reason: null,
-        ...over,
-      })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }); // canManageLeaveRequest
+      .mockResolvedValueOnce(full) // предчтение
+      .mockResolvedValueOnce({ id: 'author-uuid' }); // автор корректировок
+    setDecisionTxDefaults('approved');
   };
 
   it('заявка с годом 0026 (диапазон) → 400, без транзакции и без материализации', async () => {
@@ -2082,21 +2133,31 @@ describe('leaveRequestsController.approve/reject (анти-гонка со са�
     pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
   });
 
-  it('approve после отмены → 409, корректировки не создаются', async () => {
+  it('approve после отмены → 409, ничего не пишется', async () => {
     mockRequestRow({ start_date: '2026-05-30', end_date: '2026-05-30' });
-    // UPDATE ... WHERE status='pending' не нашёл строку (сотрудник успел отменить).
-    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    // Сотрудник успел отменить: блокирующее чтение видит cancelled.
+    txClient.query.mockImplementation(async (sql: string) => (
+      String(sql).includes('FOR UPDATE')
+        ? { rows: [{ ...currentRequestRow, status: 'cancelled' }], rowCount: 1 }
+        : { rows: [], rowCount: 0 }
+    ));
     const res = makeRes();
 
     await leaveRequestsController.approve(makeReq(), res);
 
     expect(res._status).toBe(409);
     expect(upsertSpy).not.toHaveBeenCalled();
+    // Раньше UPDATE шёл до всех проверок; теперь до записи дело не доходит.
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
   });
 
   it('reject после отмены → 409', async () => {
     pgQueryOne.mockResolvedValueOnce({ id: 708, employee_id: 247, status: 'pending', request_type: 'remote' });
-    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 }); // UPDATE ... WHERE status='pending' → 0 строк
+    txClient.query.mockImplementation(async (sql: string) => (
+      String(sql).includes('FOR UPDATE')
+        ? { rows: [{ id: 708, status: 'cancelled', request_type: 'remote' }], rowCount: 1 }
+        : { rows: [], rowCount: 0 }
+    ));
     const res = makeRes();
 
     await leaveRequestsController.reject(makeReq({ body: { comment: 'нет' } }), res);
@@ -2106,10 +2167,11 @@ describe('leaveRequestsController.approve/reject (анти-гонка со са�
     expect(txClient.query.mock.calls.some(c => String(c[0]).includes('leave_request_history'))).toBe(false);
   });
 
-  it('approve при параллельной смене категории → 409: UPDATE сверяет тип из предчтения', async () => {
+  it('approve при параллельной смене категории → 409: тип сверяется по заблокированной строке', async () => {
     // Право проверено по vacation из предчтения; HR успел сменить категорию —
-    // условный UPDATE (AND request_type=$5) бьёт мимо, материализации нет.
+    // блокирующее чтение отдаёт unpaid, решение не проходит и UPDATE не выполняется.
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
+    pgQuery.mockResolvedValue([] as never);
     pgQueryOne
       .mockResolvedValueOnce({
         id: 708, employee_id: 247, status: 'pending', request_type: 'vacation',
@@ -2117,33 +2179,323 @@ describe('leaveRequestsController.approve/reject (анти-гонка со са�
         correction_date: null, correction_status: null, correction_hours: null,
         correction_object_id: null, correction_object_name: null, reason: null,
       })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }) // canManageLeaveRequest
       .mockResolvedValueOnce({ id: 'author-uuid' });
-    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 });
+    txClient.query.mockImplementation(async (sql: string) => (
+      String(sql).includes('FOR UPDATE')
+        ? {
+          rows: [{
+            id: 708, employee_id: 247, status: 'pending', request_type: 'unpaid',
+            start_date: '2026-06-01', end_date: '2026-06-03', selected_dates: null,
+            correction_date: null, correction_status: null, correction_hours: null,
+            correction_object_id: null, correction_object_name: null, reason: null,
+          }],
+          rowCount: 1,
+        }
+        : { rows: [], rowCount: 0 }
+    ));
     const res = makeRes();
 
     await leaveRequestsController.approve(makeReq(), res);
 
     expect(res._status).toBe(409);
     expect(upsertSpy).not.toHaveBeenCalled();
-    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
-    expect(String(updateCall![0])).toContain('request_type = $5');
-    expect(updateCall![1]).toEqual(['reviewer-uuid', expect.any(String), null, '708', 'vacation']);
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
   });
 
-  it('reject при параллельной смене категории → 409: UPDATE сверяет тип из предчтения', async () => {
+  it('reject при параллельной смене категории → 409: тип сверяется по заблокированной строке', async () => {
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [7]]]));
+    pgQuery.mockResolvedValue([] as never);
     pgQueryOne
-      .mockResolvedValueOnce({ id: 708, employee_id: 247, status: 'pending', request_type: 'vacation' })
-      .mockResolvedValueOnce({ org_department_id: 'dep-1' }); // canManageLeaveRequest
-    txClient.query.mockResolvedValue({ rows: [], rowCount: 0 }); // UPDATE ... AND request_type=$5 → 0 строк
+      .mockResolvedValueOnce({ id: 708, employee_id: 247, status: 'pending', request_type: 'vacation' });
+    txClient.query.mockImplementation(async (sql: string) => (
+      String(sql).includes('FOR UPDATE')
+        ? { rows: [{ id: 708, status: 'pending', request_type: 'unpaid' }], rowCount: 1 }
+        : { rows: [], rowCount: 0 }
+    ));
     const res = makeRes();
 
     await leaveRequestsController.reject(makeReq({ body: { comment: 'нет' } }), res);
 
     expect(res._status).toBe(409);
-    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes('UPDATE leave_requests'));
-    expect(String(updateCall![0])).toContain('request_type = $5');
-    expect(updateCall![1]).toEqual(['reviewer-uuid', expect.any(String), 'нет', '708', 'vacation']);
+    expect(txClient.query.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
+  });
+});
+
+describe('leaveRequestsController.bulkApprove / bulkReject', () => {
+  // Заявки пакета: ключ — id. remote (не routed) → право по edit-скоупу.
+  const makeRow = (id: number, over: Record<string, unknown> = {}) => ({
+    id, employee_id: 240 + id, status: 'pending', request_type: 'remote',
+    start_date: '2026-06-01', end_date: '2026-06-01', selected_dates: null,
+    correction_date: null, correction_status: null, correction_hours: null,
+    correction_object_id: null, correction_object_name: null, reason: null,
+    ...over,
+  });
+
+  let rowsById: Map<number, Record<string, unknown>>;
+  let lockedTimesheetEmployeeIds: Set<number>;
+
+  const wireMocks = () => {
+    // Пакетная выборка preflight + отделы routed-сотрудников.
+    pgQuery.mockImplementation((async (sql: string, params: unknown[]) => {
+      const text = String(sql);
+      if (text.includes('FROM leave_requests')) {
+        const ids = (params?.[0] as number[]) ?? [];
+        return ids.map(id => rowsById.get(Number(id))).filter(Boolean);
+      }
+      if (text.includes('FROM employees')) {
+        const ids = (params?.[0] as number[]) ?? [];
+        return ids.map(id => ({ id, org_department_id: 'dep-1' }));
+      }
+      return [];
+    }) as never);
+
+    // Предчтение заявки внутри ядра + автор + отдел для схлопывания выходных.
+    pgQueryOne.mockImplementation((async (sql: string, params: unknown[]) => {
+      const text = String(sql);
+      if (text.includes('FROM leave_requests')) return rowsById.get(Number(params?.[0])) ?? null;
+      if (text.includes('user_profiles')) return { id: 'author-uuid' };
+      if (text.includes('FROM employees')) return { org_department_id: 'dep-1' };
+      return null;
+    }) as never);
+
+    txClient.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) {
+        const row = rowsById.get(Number(params?.[0]));
+        return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+      }
+      // Гард закрытого табеля: «замок» только для перечисленных сотрудников
+      // (запрос идёт парами employee_id[] / work_date[] в $1/$2).
+      if (text.includes('WITH RECURSIVE pairs')) {
+        const askedEmployeeIds = (params?.[0] as number[]) ?? [];
+        const locked = askedEmployeeIds
+          .filter(employeeId => lockedTimesheetEmployeeIds.has(Number(employeeId)))
+          .map(employeeId => ({
+            employee_id: employeeId, work_date: '2026-06-01', id: 5,
+            start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved',
+          }));
+        return { rows: locked, rowCount: locked.length };
+      }
+      if (text.includes('UPDATE leave_requests')) {
+        const row = rowsById.get(Number(params?.[3]));
+        return row ? { rows: [{ ...row, status: 'approved' }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rowsById = new Map([1, 2, 3].map(id => [id, makeRow(id)] as const));
+    lockedTimesheetEmployeeIds = new Set<number>();
+    resolveApprovalMock.mockResolvedValue('auto_approved');
+    editableEmployeesMock.mockResolvedValue('all');
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    weekendResponsibleMock.mockResolvedValue(null);
+    pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
+    wireMocks();
+  });
+
+  const bulkReq = (body: Record<string, unknown>) => makeReq({ body: body as AuthenticatedRequest['body'] });
+
+  const summaryOf = (res: { _json: unknown }) => (res._json as {
+    data: {
+      processed_count: number; processed_ids: number[];
+      skipped_not_pending: number; skipped_no_access: number;
+      skipped_locked: number; locked_ids: number[];
+      skipped_failed: number; failed_ids: number[];
+    };
+  }).data;
+
+  // Инвариант контракта: каждая входная заявка попала ровно в одну категорию.
+  const expectCoversInput = (s: ReturnType<typeof summaryOf>, uniqueInputCount: number) => {
+    expect(
+      s.processed_count + s.skipped_not_pending + s.skipped_no_access + s.skipped_locked + s.skipped_failed,
+    ).toBe(uniqueInputCount);
+  };
+
+  it('все заявки доступны → processed_ids совпадают со входом', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3] }), res);
+
+    const summary = summaryOf(res);
+    expect(res._status).toBe(200);
+    expect(summary.processed_count).toBe(3);
+    expect(summary.processed_ids.sort()).toEqual([1, 2, 3]);
+    expectCoversInput(summary, 3);
+    // Материализация прошла по каждой заявке, счётчик pending разослан один раз.
+    expect(upsertSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('смесь: обработанная + чужая + доступная → в processed_ids только доступная', async () => {
+    rowsById.set(1, makeRow(1, { status: 'approved' })); // уже обработана
+    rowsById.set(2, makeRow(2)); // чужая: сотрудник вне edit-скоупа
+    editableEmployeesMock.mockResolvedValue(new Set([243])); // доступен только сотрудник заявки 3
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids).toEqual([3]);
+    expect(summary.skipped_not_pending).toBe(1);
+    expect(summary.skipped_no_access).toBe(1);
+    expectCoversInput(summary, 3);
+  });
+
+  it('повторы в ids схлопываются: [1, 1, 2] — это две заявки', async () => {
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 1, 2] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids.sort()).toEqual([1, 2]);
+    expectCoversInput(summary, 2);
+  });
+
+  it('закрытый табель по одному сотруднику → skipped_locked, остальные согласованы', async () => {
+    lockedTimesheetEmployeeIds.add(242); // сотрудник заявки 2
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids.sort()).toEqual([1, 3]);
+    expect(summary.skipped_locked).toBe(1);
+    expect(summary.locked_ids).toEqual([2]);
+    expectCoversInput(summary, 3);
+  });
+
+  it('смена категории между предчтением и локом → skipped_failed, пакет не прерывается', async () => {
+    // Заявка 2 в блокирующем чтении приходит уже с другим типом.
+    txClient.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) {
+        const id = Number(params?.[0]);
+        const row = rowsById.get(id);
+        if (!row) return { rows: [], rowCount: 0 };
+        return { rows: [id === 2 ? { ...row, request_type: 'unpaid' } : row], rowCount: 1 };
+      }
+      if (text.includes('UPDATE leave_requests')) {
+        const row = rowsById.get(Number(params?.[3]));
+        return row ? { rows: [{ ...row, status: 'approved' }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids.sort()).toEqual([1, 3]);
+    expect(summary.skipped_failed).toBe(1);
+    expect(summary.failed_ids).toEqual([2]);
+    expectCoversInput(summary, 3);
+  });
+
+  it('исключение на одной заявке не прерывает остальные', async () => {
+    upsertSpy.mockRejectedValueOnce(new Error('insert failed')); // упадёт первая заявка
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_count).toBe(2);
+    expect(summary.skipped_failed).toBe(1);
+    expect(summary.failed_ids).toEqual([1]);
+    expectCoversInput(summary, 3);
+  });
+
+  it('ошибка realtime после коммита не уменьшает processed_count', async () => {
+    vi.mocked(emitDomainChange).mockImplementation(() => { throw new Error('socket down'); });
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2] }), res);
+
+    expect(summaryOf(res).processed_count).toBe(2);
+    vi.mocked(emitDomainChange).mockReset();
+  });
+
+  it('пустой ids и превышение лимита пакета → 400', async () => {
+    const empty = makeRes();
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [] }), empty);
+    expect(empty._status).toBe(400);
+
+    const tooMany = makeRes();
+    await leaveRequestsController.bulkApprove(
+      bulkReq({ ids: Array.from({ length: 101 }, (_, i) => i + 1) }),
+      tooMany,
+    );
+    expect(tooMany._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('бюджет дней табеля превышен → 400 до единой транзакции', async () => {
+    // Четыре отпуска по 366 дней — 1464 дня при лимите 1000.
+    rowsById = new Map([1, 2, 3, 4].map(id => [id, makeRow(id, {
+      request_type: 'vacation', start_date: '2026-01-01', end_date: '2026-12-31',
+    })] as const));
+    responsiblesByEmpMock.mockResolvedValue(new Map([1, 2, 3, 4].map(id => [240 + id, [7]] as const)));
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3, 4] }), res);
+
+    expect(res._status).toBe(400);
+    expect(pgTx).not.toHaveBeenCalled();
+  });
+
+  it('routed-тип: решает только назначенный ответственный', async () => {
+    rowsById = new Map([1, 2].map(id => [id, makeRow(id, { request_type: 'vacation' })] as const));
+    // Зритель (employee_id 7) ответственный только за сотрудника заявки 1.
+    responsiblesByEmpMock.mockResolvedValue(new Map([[241, [7]], [242, [999]]]));
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids).toEqual([1]);
+    expect(summary.skipped_no_access).toBe(1);
+    expectCoversInput(summary, 2);
+  });
+
+  it('без прав на запись (кадровая служба: read-скоуп ≠ право решать) → всё пропущено', async () => {
+    editableEmployeesMock.mockResolvedValue(new Set<number>());
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_count).toBe(0);
+    expect(summary.skipped_no_access).toBe(3);
+    expect(pgTx).not.toHaveBeenCalled();
+    expectCoversInput(summary, 3);
+  });
+
+  it('bulkReject: отклоняет доступные, табель не трогает, общий комментарий сохраняется', async () => {
+    rowsById.set(2, makeRow(2, { status: 'cancelled' }));
+    const res = makeRes();
+
+    await leaveRequestsController.bulkReject(bulkReq({ ids: [1, 2, 3], comment: '  не согласовано  ' }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids.sort()).toEqual([1, 3]);
+    expect(summary.skipped_not_pending).toBe(1);
+    expectCoversInput(summary, 3);
+    expect(upsertSpy).not.toHaveBeenCalled();
+    const updateCall = txClient.query.mock.calls.find(c => String(c[0]).includes("status = 'rejected'"));
+    expect(updateCall![1][2]).toBe('не согласовано'); // trim общего комментария
+  });
+
+  it('bulkReject: бюджет дней не применяется (записей в табель нет)', async () => {
+    rowsById = new Map([1, 2, 3, 4].map(id => [id, makeRow(id, {
+      request_type: 'vacation', start_date: '2026-01-01', end_date: '2026-12-31',
+    })] as const));
+    responsiblesByEmpMock.mockResolvedValue(new Map([1, 2, 3, 4].map(id => [240 + id, [7]] as const)));
+    const res = makeRes();
+
+    await leaveRequestsController.bulkReject(bulkReq({ ids: [1, 2, 3, 4] }), res);
+
+    expect(res._status).toBe(200);
+    expect(summaryOf(res).processed_count).toBe(4);
   });
 });

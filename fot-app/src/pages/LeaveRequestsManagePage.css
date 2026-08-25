@@ -144,6 +144,143 @@
   gap: 6px;
 }
 
+/* --- Массовый выбор --- */
+
+/* Панель прилипает под глобальным header'ом (64px, sticky, z-index 50):
+   свой z-index держим ниже, чтобы она уходила ПОД шапку, а не наезжала. */
+.lrm-bulkbar {
+  position: sticky;
+  top: calc(64px + env(safe-area-inset-top, 0px));
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.lrm-bulkbar-summary {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lrm-bulkbar-summary b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.lrm-bulkbar-comment {
+  flex: 1 1 180px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.lrm-bulkbar-comment:disabled {
+  opacity: 0.6;
+}
+
+.lrm-bulkbar-btns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.lrm-bulkbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lrm-bulkbar-btn--approve:not(:disabled) {
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+.lrm-bulkbar-btn--reject:not(:disabled) {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.lrm-bulkbar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Тап-зона чекбокса: сам input остаётся 18px, кликабельная область — больше. */
+.tri-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+.tri-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent, #3b82f6);
+}
+
+.tri-check input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Чекбокс — сосед карточки, а не элемент внутри неё: карточка корректировки
+   сама по себе кликабельна (role="button"). */
+.lrm-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lrm-card-row .lrm-card {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lrm-card-check {
+  margin-top: 18px;
+}
+
+.lrm-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .lrm-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -637,6 +774,38 @@
     min-width: 0;
   }
 
+  /* Панель массовых действий в две строки: выбор и комментарий сверху,
+     кнопки — отдельной строкой на всю ширину. */
+  .lrm-bulkbar {
+    flex-wrap: wrap;
+  }
+
+  .lrm-bulkbar-comment {
+    flex: 1 1 100%;
+    order: 3;
+    height: 40px;
+    font-size: 16px; /* иначе Safari зумит форму при фокусе */
+  }
+
+  .lrm-bulkbar-btns {
+    flex: 1 1 100%;
+    order: 4;
+  }
+
+  .lrm-bulkbar-btn {
+    height: 44px;
+  }
+
+  .tri-check {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Панель СКУД в этом диапазоне — оверлей поверх страницы, а не колонка. */
+  .lrm-shell--with-panel .lrm-page {
+    padding-right: 16px;
+  }
+
   /* Тап-цель по часам — не меньше 44px, иначе не попасть пальцем в «10.00ч». */
   .lrm-hours-btn {
     display: inline-flex;
@@ -689,5 +858,14 @@
 
   .lrm-group-name {
     font-size: 12px;
+  }
+
+  .lrm-bulkbar-btns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lrm-bulkbar-summary {
+    font-size: 12px;
+    white-space: normal;
   }
 }

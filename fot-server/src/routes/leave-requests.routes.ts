@@ -58,6 +58,21 @@ router.get(
   leaveRequestsController.getAll
 );
 
+// POST /api/leave-requests/bulk-approve — массовое согласование выбранных (header/hr/admin).
+// Должны идти ДО '/:id/...': точное совпадение пути важнее порядка, но так очевиднее.
+router.post(
+  '/bulk-approve',
+  requirePageAccess('/leave-requests', 'edit'),
+  leaveRequestsController.bulkApprove
+);
+
+// POST /api/leave-requests/bulk-reject — массовое отклонение выбранных
+router.post(
+  '/bulk-reject',
+  requirePageAccess('/leave-requests', 'edit'),
+  leaveRequestsController.bulkReject
+);
+
 // GET /api/leave-requests/:id — детали заявки (автор или ревьюер)
 router.get(
   '/:id',
