@@ -18,6 +18,7 @@ import {
   useWorkerLocale,
   type WorkerLocale,
 } from '../../i18n/workerCabinet';
+import { SHOW_TESTING_SECTION } from '../../config/uiFlags';
 
 const AdaptiveTestModal = lazy(() =>
   import('../../components/adaptive-testing/AdaptiveTestModal').then(m => ({ default: m.AdaptiveTestModal })),
@@ -488,13 +489,13 @@ const ObjectWorkerDashboardContent: FC = () => {
   const testAvailabilityQuery = useQuery({
     queryKey: ['adaptive-testing', 'availability'],
     queryFn: adaptiveTestingService.getAvailability,
-    enabled: hasTestingAccess,
+    enabled: SHOW_TESTING_SECTION && hasTestingAccess,
     staleTime: 30_000,
   });
   const testAvailability = testAvailabilityQuery.data ?? null;
   const hasActiveTest = Boolean(testAvailability?.activeSessionId);
   // Вне allowlist без активной сессии блок скрыт; с активной — «Продолжить тест».
-  const showTestBlock = Boolean(testAvailability && (testAvailability.available || hasActiveTest));
+  const showTestBlock = SHOW_TESTING_SECTION && Boolean(testAvailability && (testAvailability.available || hasActiveTest));
 
   const isPreview = isAdmin && searchParams.get('preview') === 'worker';
   const employeeId = profile?.employee_id ?? null;
@@ -765,7 +766,7 @@ const ObjectWorkerDashboardContent: FC = () => {
           onClose={() => setUploadStatus(null)}
         />
       )}
-      {testModalOpen && (
+      {SHOW_TESTING_SECTION && testModalOpen && (
         <Suspense fallback={null}>
           <AdaptiveTestModal
             hasActiveSession={hasActiveTest}

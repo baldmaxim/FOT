@@ -13,6 +13,7 @@ import styles from './EmployeeDashboard.module.css';
 
 import type { IDayFocusPayload } from '../../components/dashboard/MyMonthTimesheet';
 import { LeaveRequestRow } from '../../components/dashboard/LeaveRequestRow';
+import { SHOW_TESTING_SECTION, SHOW_DAILY_TASKS_CARD, SHOW_SECURITY_CARD } from '../../config/uiFlags';
 
 const EmployeeInfoCard = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.EmployeeInfoCard })));
 const SecurityCard = lazy(() => import('../../components/dashboard/EmployeeInfoCards').then(m => ({ default: m.SecurityCard })));
@@ -240,7 +241,7 @@ export const EmployeeDashboardPage: React.FC = () => {
           )}
         </div>
 
-        {/* Правая узкая колонка: Информация → Тест → Задачи → Обратная связь → Безопасность */}
+        {/* Правая узкая колонка: Информация → опросники (условно) → Тестирование (скрыто) → Задачи (скрыты) → Обратная связь → Безопасность (скрыта) */}
         <div className={styles.rightCol}>
           <Suspense fallback={DashboardCardFallback}>
             <EmployeeInfoCard
@@ -254,23 +255,29 @@ export const EmployeeDashboardPage: React.FC = () => {
           <Suspense fallback={null}>
             <TestPromptCard />
           </Suspense>
-          <Suspense fallback={null}>
-            <AdaptiveTestCard />
-          </Suspense>
-          <Suspense fallback={DashboardCardFallback}>
-            <DailyTasksCard />
-          </Suspense>
+          {SHOW_TESTING_SECTION && (
+            <Suspense fallback={null}>
+              <AdaptiveTestCard />
+            </Suspense>
+          )}
+          {SHOW_DAILY_TASKS_CARD && (
+            <Suspense fallback={DashboardCardFallback}>
+              <DailyTasksCard />
+            </Suspense>
+          )}
           <Suspense fallback={DashboardCardFallback}>
             <FeedbackCard />
           </Suspense>
-          <Suspense fallback={DashboardCardFallback}>
-            <SecurityCard
-              email={user?.email ?? undefined}
-              isTwoFactorEnabled={isTwoFactorEnabled}
-              onSetup2FA={handleSetup2FA}
-              onDisable2FA={handleDisable2FA}
-            />
-          </Suspense>
+          {SHOW_SECURITY_CARD && (
+            <Suspense fallback={DashboardCardFallback}>
+              <SecurityCard
+                email={user?.email ?? undefined}
+                isTwoFactorEnabled={isTwoFactorEnabled}
+                onSetup2FA={handleSetup2FA}
+                onDisable2FA={handleDisable2FA}
+              />
+            </Suspense>
+          )}
         </div>
       </div>
 

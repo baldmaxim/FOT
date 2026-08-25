@@ -5,6 +5,7 @@ import { useMyPresence } from '../../hooks/useMyPresence';
 import { useMyEmployee } from '../../hooks/useMyEmployee';
 import { useAdminEntryPath } from '../../hooks/useNavContext';
 import { formatFioShort } from '../../utils/formatFio';
+import { SHOW_TESTING_SECTION } from '../../config/uiFlags';
 import styles from './EmployeeSidebar.module.css';
 
 interface INavItem {
@@ -295,22 +296,25 @@ export const EmployeeSidebar: FC<IEmployeeSidebarProps> = ({ isOpen, onClose, th
         {navGroups.map(group => (
           <div key={group.label} className={styles.navGroup}>
             <div className={styles.navLabel}>{group.label}</div>
-            {group.items.filter(item => canViewPage(item.requiredPage || item.path)).map(item => (
-              <div
-                key={item.id}
-                className={`${styles.navItem} ${activeItem === item.id ? styles.active : ''}`}
-                title={item.label}
-                onClick={() => handleItemClick(item.path)}
-              >
-                <div className={styles.navIcon}>{item.icon}</div>
-                <span className={styles.navText}>{item.label}</span>
-                {item.badge !== undefined && item.badge > 0 && (
-                  <span className={`${styles.navBadge} ${styles[item.badgeType || 'new']}`}>
-                    {item.badge}
-                  </span>
-                )}
-              </div>
-            ))}
+            {group.items
+              .filter(item => item.id !== 'testing' || SHOW_TESTING_SECTION)
+              .filter(item => canViewPage(item.requiredPage || item.path))
+              .map(item => (
+                <div
+                  key={item.id}
+                  className={`${styles.navItem} ${activeItem === item.id ? styles.active : ''}`}
+                  title={item.label}
+                  onClick={() => handleItemClick(item.path)}
+                >
+                  <div className={styles.navIcon}>{item.icon}</div>
+                  <span className={styles.navText}>{item.label}</span>
+                  {item.badge !== undefined && item.badge > 0 && (
+                    <span className={`${styles.navBadge} ${styles[item.badgeType || 'new']}`}>
+                      {item.badge}
+                    </span>
+                  )}
+                </div>
+              ))}
           </div>
         ))}
       </nav>
