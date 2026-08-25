@@ -22,12 +22,8 @@ export const Avatar: FC<{ name: string | null; id?: number | null; unassigned?: 
   return <span className={styles.ava} style={{ background: gradientFor(id) }}>{initials(name)}</span>;
 };
 
-export function pluralDays(n: number): string {
-  const a = n % 10, b = n % 100;
-  if (a === 1 && b !== 11) return 'день';
-  if (a >= 2 && a <= 4 && (b < 10 || b >= 20)) return 'дня';
-  return 'дней';
-}
+// Склонение дней переехало в utils/dateCompact — им пользуется и список заявлений.
+export { pluralDays } from '../../../utils/dateCompact';
 
 export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '';

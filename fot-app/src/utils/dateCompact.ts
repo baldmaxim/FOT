@@ -28,6 +28,14 @@ export const formatDateTimeShort = (iso: string): string => {
   return `${day} ${m}, ${hh}:${mm}`;
 };
 
+/** Склонение слова «день» по числу: 1 день, 2 дня, 5 дней. */
+export function pluralDays(n: number): string {
+  const a = n % 10, b = n % 100;
+  if (a === 1 && b !== 11) return 'день';
+  if (a >= 2 && a <= 4 && (b < 10 || b >= 20)) return 'дня';
+  return 'дней';
+}
+
 /** Десятичные часы → «9ч» / «8ч 30м»; null → «—». */
 export const formatHM = (decimal: number | null): string => {
   if (decimal == null) return '—';

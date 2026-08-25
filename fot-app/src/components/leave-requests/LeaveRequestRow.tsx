@@ -130,15 +130,20 @@ export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({
   const detailsId = `lrm-details-${r.id}`;
 
   const hasSkudEvents = isCorrection && !!r.correction_date;
+  // Часы правятся прямо из строки только когда есть что править: у корректировки,
+  // с правом и с заданным значением (иначе null ушёл бы в редактор как «0»).
+  const canEditHoursInline = isCorrection && canEditHours && r.correction_hours != null;
 
-  // Клик по строке — только удобство для мыши: у корректировки открывает проходы
-  // СКУД, у остальных типов раскрывает детали. Роль и табстоп сюда не вешаем —
-  // внутри строки живут чекбокс и кнопки, а вложенные интерактивные элементы
-  // внутри role="button" ломают клавиатуру и скринридеры. Клавиатурные пути —
-  // кнопки «Проходы СКУД» и шеврон справа.
-  const handleRowClick = () => {
-    if (hasSkudEvents) onOpenEvents(r);
-    else onToggleExpanded(r.id);
+  // Клик по строке (любой тип) раскрывает детали — панель проходов СКУД теперь
+  // открывается только своей кнопкой, иначе на узкой строке она вылезала от
+  // любого промаха мимо текста. Роль и табстоп на <li> не вешаем: внутри живут
+  // чекбокс и кнопки, а интерактив внутри role="button" ломает клавиатуру и
+  // скринридеры. Клавиатурные пути — кнопки «Проходы СКУД» и шеврон справа.
+  const handleRowClick = () => onToggleExpanded(r.id);
+
+  const startHoursEdit = () => {
+    onStartEditHours(r.id, r.correction_hours as number | string);
+    if (!expanded) onToggleExpanded(r.id);
   };
 
   return (
@@ -184,7 +189,19 @@ export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({
           </span>
         </div>
 
-        <span className="lrm-item-hours">{hours}</span>
+        {canEditHoursInline ? (
+          <button
+            type="button"
+            className="lrm-item-hours lrm-item-hours-edit-btn"
+            disabled={actionsDisabled}
+            title="Изменить часы"
+            onClick={(e) => { e.stopPropagation(); startHoursEdit(); }}
+          >
+            {hours}
+          </button>
+        ) : (
+          <span className="lrm-item-hours">{hours}</span>
+        )}
 
         <div
           className={`lrm-item-notes${reason ? '' : ' lrm-item-notes--empty'}${expanded ? ' lrm-item-notes--expanded' : ''}`}
@@ -313,7 +330,7 @@ export const LeaveRequestRow: FC<ILeaveRequestRowProps> = ({
                     type="button"
                     className="lrm-hours-btn"
                     disabled={actionsDisabled}
-                    onClick={() => onStartEditHours(r.id, r.correction_hours as number | string)}
+                    onClick={startHoursEdit}
                     title="Изменить часы"
                   >
                     {formatCorrectionHours(r.correction_hours)}ч

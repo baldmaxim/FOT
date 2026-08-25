@@ -1,5 +1,5 @@
 import type { ILeaveRequest } from '../services/leaveRequestService';
-import { formatDateCompact, MONTH_GENITIVE_SHORT_RU } from './dateCompact';
+import { formatDateCompact, MONTH_GENITIVE_SHORT_RU, pluralDays } from './dateCompact';
 
 /**
  * Заявление в архиве: обработано и все его даты в прошлом.
@@ -70,9 +70,27 @@ const fmtShortDay = (iso: string): string => {
 };
 
 /**
- * Ячейка даты в строке списка заявлений (колонка ~96px), в паре с подписью снизу:
- *  - корректировка / однодневное заявление → «9 авг» + день недели «вс»;
- *  - непрерывный период → «1 авг — 15 авг» + «15 дн»;
+ * Диапазон в одну строку для узкой колонки. Внутри одного месяца схлопываем до
+ * «10–30 сен»; месяц один только тогда, когда совпали И год, И месяц — иначе
+ * сентябрь разных лет слился бы в один диапазон.
+ */
+const fmtShortRange = (fromIso: string, toIso: string): string => {
+  const [fy, fm, fd] = fromIso.split('-').map(Number);
+  const [ty, tm] = toIso.split('-').map(Number);
+  if (fy === ty && fm === tm) {
+    const [, , td] = toIso.split('-').map(Number);
+    return `${fd}–${td} ${MONTH_GENITIVE_SHORT_RU[fm - 1]}`;
+  }
+  return `${fmtShortDay(fromIso)} — ${fmtShortDay(toIso)}`;
+};
+
+/**
+ * Ячейка даты в строке списка заявлений: `day` — первая строка, `sub` — мелкая
+ * подпись под ней (день недели либо длительность), чтобы ничего не вылезало
+ * из узкой колонки:
+ *  - корректировка / однодневное заявление → «9 авг» + «вс»;
+ *  - период внутри месяца → «10–30 сен» + «21 день»;
+ *  - период через месяцы → «20 авг — 2 сен» + «14 дней»;
  *  - несмежные отрезки → первый отрезок + «+N дн» (полный список — в раскрытии,
  *    через formatLeaveRequestDatesCompact).
  * `sub` пустой, если добавить нечего.
@@ -98,10 +116,13 @@ export function formatLeaveRequestDateCell(r: ILeaveRequest): { day: string; sub
     const first = groups[0];
     const day = first.length === 1
       ? fmtShortDay(first[0])
-      : `${fmtShortDay(first[0])} — ${fmtShortDay(first[first.length - 1])}`;
+      : fmtShortRange(first[0], first[first.length - 1]);
     // Считаем именно выбранные дни, а не длину календарного диапазона.
     const rest = dates.length - first.length;
-    return { day, sub: groups.length > 1 ? `+${rest} дн` : `${dates.length} дн` };
+    return {
+      day,
+      sub: groups.length > 1 ? `+${rest} дн` : `${dates.length} ${pluralDays(dates.length)}`,
+    };
   }
 
   if (r.start_date === r.end_date) {
@@ -110,8 +131,8 @@ export function formatLeaveRequestDateCell(r: ILeaveRequest): { day: string; sub
   }
   const span = Math.round((isoToUtc(r.end_date) - isoToUtc(r.start_date)) / DAY_MS) + 1;
   return {
-    day: `${fmtShortDay(r.start_date)} — ${fmtShortDay(r.end_date)}`,
-    sub: Number.isFinite(span) && span > 0 ? `${span} дн` : '',
+    day: fmtShortRange(r.start_date, r.end_date),
+    sub: Number.isFinite(span) && span > 0 ? `${span} ${pluralDays(span)}` : '',
   };
 }
 

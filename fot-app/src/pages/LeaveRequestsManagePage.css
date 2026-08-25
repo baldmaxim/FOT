@@ -878,11 +878,14 @@
   width: 28px;
 }
 
+/* Две строки: период сверху, «N дней» / день недели — мелким снизу. В одну
+   строку «10 сен — 30 сен 21 день» не помещался и наезжал на ФИО. */
 .lrm-item-date {
-  flex: 0 0 104px;
+  flex: 0 0 132px;
   display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
   min-width: 0;
   color: var(--text-primary);
   white-space: nowrap;
@@ -891,6 +894,7 @@
 
 .lrm-item-date-day {
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .lrm-item-date-sub {
@@ -1024,6 +1028,36 @@
   font-variant-numeric: tabular-nums;
   font-weight: 500;
   text-align: right;
+}
+
+/* Часы у корректировки — кнопка запуска редактора. Сбрасываем дефолты кнопки
+   целиком, чтобы колонка не изменила ширину и выравнивание. */
+.lrm-item-hours-edit-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: right;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.lrm-item-hours-edit-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.lrm-item-hours-edit-btn:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.lrm-item-hours-edit-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: none;
 }
 
 .lrm-item-notes {
@@ -1286,13 +1320,14 @@
 }
 
 /* --- Узкая колонка: строка превращается в карточку --- */
-/* Строчной сетке нужно ~770px: чекбокс 28 + дата 104 + ФИО + формат 120 + часы 60 +
-   «Задача» 180 + действия 70 и шесть гэпов по 14. Доступная ширина = окно −
-   сайдбар 240 − padding .content 48 − padding .lrm-page 48, а при открытой панели
-   событий — ещё −420, поэтому порогов два.
+/* Строчной сетке нужно ~706px: чекбокс 28 + дата 132 + формат 120 + часы 60 +
+   «Задача» 180 + действия 70 и шесть гэпов по 14 (ФИО сжимается до нуля).
+   Доступная ширина = окно − сайдбар 240 − padding .content 48 − padding .lrm-page 48:
+   при 1200px остаётся ~158px на ФИО, при 1100px — уже ~59px, поэтому порог 1200px.
+   С открытой панелью событий вычитается ещё 420px — там порог 1700px.
    ВАЖНО: наборы правил в обоих блоках обязаны совпадать — правки вносить в ОБА. */
 
-@media (max-width: 1100px) {
+@media (max-width: 1200px) {
   .lrm-items {
     gap: 6px;
     padding: 8px;
@@ -1330,16 +1365,30 @@
   .lrm-item-date {
     grid-area: head;
     flex: 1 1 auto;
-    font-size: 13px;
+    flex-direction: row;
     flex-wrap: wrap;
+    align-items: baseline;
+    font-size: 13px;
+  }
+
+  /* Первая строка — дата и часы, вторая — «N дней» / день недели. Порядок задаём
+     явно: sub стоит в разметке перед ::after и иначе разрывал бы пару. */
+  .lrm-item-date-day {
+    order: 1;
   }
 
   .lrm-item-date::after {
+    order: 2;
     content: attr(data-hours);
     margin-left: auto;
     font-weight: 500;
     font-size: 12px;
     color: var(--text-secondary);
+  }
+
+  .lrm-item-date-sub {
+    order: 3;
+    flex-basis: 100%;
   }
 
   .lrm-item-employee {
@@ -1413,7 +1462,7 @@
 
 /* Панель событий СКУД занимает 420px в потоке вплоть до 1100px (ниже она
    становится оверлеем), поэтому с ней карточная раскладка нужна дольше. */
-@media (max-width: 1600px) {
+@media (max-width: 1700px) {
   .lrm-shell--with-panel .lrm-items {
     gap: 6px;
     padding: 8px;
@@ -1451,16 +1500,30 @@
   .lrm-shell--with-panel .lrm-item-date {
     grid-area: head;
     flex: 1 1 auto;
-    font-size: 13px;
+    flex-direction: row;
     flex-wrap: wrap;
+    align-items: baseline;
+    font-size: 13px;
+  }
+
+  /* Первая строка — дата и часы, вторая — «N дней» / день недели. Порядок задаём
+     явно: sub стоит в разметке перед ::after и иначе разрывал бы пару. */
+  .lrm-shell--with-panel .lrm-item-date-day {
+    order: 1;
   }
 
   .lrm-shell--with-panel .lrm-item-date::after {
+    order: 2;
     content: attr(data-hours);
     margin-left: auto;
     font-weight: 500;
     font-size: 12px;
     color: var(--text-secondary);
+  }
+
+  .lrm-shell--with-panel .lrm-item-date-sub {
+    order: 3;
+    flex-basis: 100%;
   }
 
   .lrm-shell--with-panel .lrm-item-employee {
