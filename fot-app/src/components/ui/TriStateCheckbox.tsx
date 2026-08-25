@@ -34,7 +34,10 @@ export const TriStateCheckbox: FC<ITriStateCheckboxProps> = ({
         ref={ref}
         type="checkbox"
         checked={state === 'all'}
-        onChange={(e) => onChange(e.target.checked)}
+        // Из состояния «выбрана часть» клик СНИМАЕТ выбор: нативный input в этот
+        // момент считается снятым и отдал бы checked=true, то есть «выбрать всё»,
+        // и снять выделение можно было бы только двумя кликами.
+        onChange={(e) => onChange(state === 'partial' ? false : e.target.checked)}
         aria-label={ariaLabel}
         disabled={disabled}
       />

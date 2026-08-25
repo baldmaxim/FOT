@@ -8,6 +8,7 @@ interface ILeaveRequestsBulkBarProps {
   selectedCount: number;
   selectionState: CheckboxSelectionState;
   onToggleAll: (checked: boolean) => void;
+  onClearSelection: () => void;
   comment: string;
   onCommentChange: (value: string) => void;
   onApprove: () => void;
@@ -25,6 +26,7 @@ export const LeaveRequestsBulkBar: FC<ILeaveRequestsBulkBarProps> = ({
   selectedCount,
   selectionState,
   onToggleAll,
+  onClearSelection,
   comment,
   onCommentChange,
   onApprove,
@@ -47,6 +49,16 @@ export const LeaveRequestsBulkBar: FC<ILeaveRequestsBulkBarProps> = ({
           ? <>Выбрано: <b>{selectedCount}</b> из <b>{selectableCount}</b></>
           : <><b>{selectableCount}</b> ожидают решения</>}
       </span>
+      {selectedCount > 0 && (
+        <button
+          type="button"
+          className="lrm-bulkbar-clear"
+          onClick={onClearSelection}
+          disabled={disabled}
+        >
+          Снять
+        </button>
+      )}
       <input
         className="lrm-bulkbar-comment"
         placeholder="Комментарий ко всем выбранным (необязательно)"

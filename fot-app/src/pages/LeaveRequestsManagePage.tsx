@@ -429,6 +429,7 @@ export const LeaveRequestsManagePage: FC = () => {
             selectedCount={bulk.selectedCount}
             selectionState={bulk.allSelectionState}
             onToggleAll={bulk.toggleAll}
+            onClearSelection={bulk.clearSelection}
             comment={bulk.comment}
             onCommentChange={bulk.setComment}
             onApprove={bulk.approveSelected}

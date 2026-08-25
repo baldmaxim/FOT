@@ -146,12 +146,13 @@
 
 /* --- Массовый выбор --- */
 
-/* Панель прилипает под глобальным header'ом (64px, sticky, z-index 50):
-   свой z-index держим ниже, чтобы она уходила ПОД шапку, а не наезжала. */
+/* Прокручивается не окно, а .content лэйаута (overflow-y: auto), и глобальная
+   шапка лежит ВНЕ него — поэтому top: 0 и означает «сразу под шапкой». Любой
+   отступ здесь опускал бы панель на середину списка. */
 .lrm-bulkbar {
   position: sticky;
-  top: calc(64px + env(safe-area-inset-top, 0px));
-  z-index: 20;
+  top: 0;
+  z-index: 6;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -161,6 +162,8 @@
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 10px;
+  /* Карточки проезжают вплотную под панелью — без тени граница теряется. */
+  box-shadow: 0 6px 12px -8px rgba(0, 0, 0, 0.35);
 }
 
 .lrm-bulkbar-summary {
@@ -175,6 +178,35 @@
 .lrm-bulkbar-summary b {
   color: var(--text-primary);
   font-weight: 600;
+}
+
+.lrm-bulkbar-clear {
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lrm-bulkbar-clear:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
+}
+
+.lrm-bulkbar-clear:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 1px;
+}
+
+.lrm-bulkbar-clear:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .lrm-bulkbar-comment {
@@ -792,7 +824,8 @@
     order: 4;
   }
 
-  .lrm-bulkbar-btn {
+  .lrm-bulkbar-btn,
+  .lrm-bulkbar-clear {
     height: 44px;
   }
 
