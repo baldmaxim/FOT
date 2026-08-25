@@ -45,15 +45,6 @@
   background: linear-gradient(90deg, var(--success), var(--primary));
 }
 
-.segmentOpen {
-  animation: presencePulse 2s ease-in-out infinite;
-}
-
-@keyframes presencePulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
-}
-
 /* Метки времени под полосой: вход/выход каждого сегмента, привязаны к его краям.
    Идут в один ряд; близкие (короткие сегменты/перерывы) прячутся, чтобы не
    загромождать полосу. */
@@ -90,8 +81,4 @@
   .title { font-size: 11px; }
   .total { font-size: 13px; }
   .scale { font-size: 10px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .segmentOpen { animation: none; }
 }

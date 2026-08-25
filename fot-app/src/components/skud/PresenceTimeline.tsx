@@ -113,7 +113,7 @@ export const PresenceTimeline: FC<IPresenceTimelineProps> = ({ employeeId, date,
         {intervals.map(iv => (
           <div
             key={`${iv.startSec}-${iv.endSec}`}
-            className={iv.isOpen ? `${styles.segment} ${styles.segmentOpen}` : styles.segment}
+            className={styles.segment}
             style={{
               left: `${((iv.startSec - windowStart) / span) * 100}%`,
               width: `${((iv.endSec - iv.startSec) / span) * 100}%`,
