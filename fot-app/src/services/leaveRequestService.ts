@@ -254,7 +254,14 @@ export const leaveRequestService = {
     return res.data;
   },
 
-  // Отметка «Отдел кадров ознакомлен» по заявлению на отпуск (admin/hr).
+  // Заявления на увольнение всей организации, включая рабочих (вкладка «Увольнения», admin/hr).
+  getDismissals: async (status?: LeaveRequestStatus) => {
+    const params = status ? `?status=${status}` : '';
+    const res = await apiClient.get<ApiResponse<ILeaveRequest[]>>(`/leave-requests/dismissals${params}`);
+    return res.data;
+  },
+
+  // Отметка «Отдел кадров ознакомлен» по заявлению на отпуск/увольнение (admin/hr).
   acknowledgeHr: async (id: number) => {
     const res = await apiClient.patch<ApiResponse<ILeaveRequest>>(`/leave-requests/${id}/hr-acknowledge`, {});
     return res.data;

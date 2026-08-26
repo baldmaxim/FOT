@@ -53,6 +53,7 @@ export const PAGE_PATHS = {
   TIMESHEET_HR: '/timesheet-hr',
   LEAVE_REQUESTS: '/leave-requests',
   LEAVE_VACATIONS: '/leave-vacations',
+  LEAVE_DISMISSALS: '/leave-dismissals',
   SALARY_RAISE_REVIEW: '/salary-raise-review',
   DISCIPLINE: '/discipline',
   DISCIPLINE_OBJECTS: '/discipline/objects',
@@ -113,6 +114,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/leave-requests',             label: 'Заявления',                            group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 30,  is_active: true },
   { key: '/salary-raise-review',        label: 'Заявления — Проверка повышений оклада', group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',   surface: 'page',      supports_edit: true,  sort_order: 31,  is_active: true },
   { key: '/leave-vacations',            label: 'Заявления — Отпуска (отдел кадров)',   group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 32,  is_active: true },
+  { key: '/leave-dismissals',           label: 'Заявления — Увольнения (отдел кадров)', group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',   surface: 'page',      supports_edit: true,  sort_order: 33,  is_active: true },
   { key: '/skud-presence',              label: 'Сотрудники на объектах',               group_code: 'overview', group_label: 'Обзор и заявления', area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 40,  is_active: true },
   // ── Админка: управление ──
   { key: '/staff-control',              label: 'Управление кадрами',                   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },

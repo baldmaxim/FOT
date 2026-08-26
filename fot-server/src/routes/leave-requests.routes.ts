@@ -51,6 +51,13 @@ router.get(
   leaveRequestsController.getVacations
 );
 
+// GET /api/leave-requests/dismissals — заявления на увольнение всей организации (admin/hr)
+router.get(
+  '/dismissals',
+  requirePageAccess('/leave-dismissals', 'view'),
+  leaveRequestsController.getDismissals
+);
+
 // GET /api/leave-requests — все заявления организации (hr/admin)
 router.get(
   '/',
@@ -126,10 +133,12 @@ router.patch(
   leaveRequestsController.revokeApproval
 );
 
-// PATCH /api/leave-requests/:id/hr-acknowledge — отметка «Отдел кадров ознакомлен» (admin/hr)
+// PATCH /api/leave-requests/:id/hr-acknowledge — отметка «Отдел кадров ознакомлен» (admin/hr).
+// Гейт — предфильтр по любому из маркеров; точное право по типу заявления
+// (отпуск → /leave-vacations, увольнение → /leave-dismissals) проверяет контроллер.
 router.patch(
   '/:id/hr-acknowledge',
-  requirePageAccess('/leave-vacations', 'edit'),
+  requireAnyPageAccess(['/leave-vacations', '/leave-dismissals'], 'edit'),
   leaveRequestsController.hrAcknowledge
 );
 

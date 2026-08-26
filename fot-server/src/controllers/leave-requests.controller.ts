@@ -7,6 +7,7 @@ import { notificationService } from '../services/notification.service.js';
 import { getIo } from '../socket/io-instance.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getLeaveRequestRecipients, getEmployeeUserId, resolveRoutedLeaveApprovers } from '../services/recipients.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import {
   canAccessEmployeeInScope,
@@ -43,6 +44,14 @@ const ROUTED_NOTIFY_TYPES = new Set<string>(['dismissal']);
 // Типы «отпусков» для вкладки «Отпуска» (отдел кадров): ежегодный, за свой счёт,
 // учебный. Больничные и прочее сюда не входят.
 const VACATION_REQUEST_TYPES: string[] = ['vacation', 'unpaid', 'educational_leave'];
+// Типы вкладки «Увольнения» (отдел кадров). Отметка «Ознакомлен» доступна обоим
+// семействам, но право проверяется по маркеру конкретного семейства.
+const DISMISSAL_REQUEST_TYPES: string[] = ['dismissal'];
+const hrAckPageForType = (requestType: string): string | null => {
+  if (VACATION_REQUEST_TYPES.includes(requestType)) return '/leave-vacations';
+  if (DISMISSAL_REQUEST_TYPES.includes(requestType)) return '/leave-dismissals';
+  return null;
+};
 // Лимит причины отмены — тот же, что у текста заявления; дублируется на фронте.
 const CANCEL_REASON_MAX_LENGTH = 500;
 const LEAVE_TYPE_LABELS: Record<string, string> = {
@@ -2371,48 +2380,82 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
  * поэтому фильтр по должности недостоверен. Все статусы. Скоуп отделов намеренно
  * не применяем — отдел кадров видит организацию целиком.
  */
-const getVacations = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  try {
-    const status = req.query.status as string | undefined;
-    const params: unknown[] = [VACATION_REQUEST_TYPES];
-    let statusSql = '';
-    if (status) {
-      params.push(status);
-      statusSql = ` AND lr.status = $${params.length}`;
-    }
+type HrRequestRow = { id: number; employee_id: number; request_type: string; status: string; reviewer_id: string | null; [k: string]: unknown };
 
-    const data = await query<{ id: number; employee_id: number; request_type: string; status: string; reviewer_id: string | null; [k: string]: unknown }>(
-      `SELECT lr.*,
-              e.full_name           AS employee_name,
-              e.org_department_id   AS org_department_id,
-              od.name               AS department_name,
-              p.name                AS position_name
-         FROM leave_requests lr
-         JOIN employees e             ON e.id = lr.employee_id
-         LEFT JOIN org_departments od ON od.id = e.org_department_id
-         LEFT JOIN positions p        ON p.id = e.position_id
-        WHERE lr.request_type = ANY($1::text[])
+/**
+ * Общая выборка вкладок отдела кадров («Отпуска»/«Увольнения»): заявления заданных
+ * типов по всей организации с отделом/должностью, вложениями и профилями решений.
+ * excludeWorkers — исключить сотрудников с системной ролью worker (см. getVacations).
+ */
+const loadHrRequests = async (
+  types: string[],
+  status: string | undefined,
+  { excludeWorkers }: { excludeWorkers: boolean },
+) => {
+  const params: unknown[] = [types];
+  let statusSql = '';
+  if (status) {
+    params.push(status);
+    statusSql = ` AND lr.status = $${params.length}`;
+  }
+  const workersSql = excludeWorkers
+    ? `
           AND NOT EXISTS (
                 SELECT 1 FROM user_profiles up
                   JOIN system_roles sr ON sr.id = up.system_role_id
                  WHERE up.employee_id = e.id AND sr.code = 'worker'
-              )${statusSql}
-        ORDER BY lr.created_at DESC`,
-      params,
-    );
+              )`
+    : '';
 
-    const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
-    const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
-    const profileMap = await loadDecisionProfiles(data);
+  const data = await query<HrRequestRow>(
+    `SELECT lr.*,
+            e.full_name           AS employee_name,
+            e.org_department_id   AS org_department_id,
+            od.name               AS department_name,
+            p.name                AS position_name
+       FROM leave_requests lr
+       JOIN employees e             ON e.id = lr.employee_id
+       LEFT JOIN org_departments od ON od.id = e.org_department_id
+       LEFT JOIN positions p        ON p.id = e.position_id
+      WHERE lr.request_type = ANY($1::text[])${workersSql}${statusSql}
+      ORDER BY lr.created_at DESC`,
+    params,
+  );
 
-    const enriched = data.map(r => ({
-      ...withDecisionProfiles(r, profileMap),
-      attachments: attachmentsMap.get(Number(r.id)) ?? [],
-    }));
-    res.json({ success: true, data: enriched });
+  const requestIds = data.map(r => Number(r.id)).filter(Number.isFinite);
+  const attachmentsMap = await loadAttachmentsByLeaveRequestIds(requestIds);
+  const profileMap = await loadDecisionProfiles(data);
+
+  return data.map(r => ({
+    ...withDecisionProfiles(r, profileMap),
+    attachments: attachmentsMap.get(Number(r.id)) ?? [],
+  }));
+};
+
+const getVacations = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const status = req.query.status as string | undefined;
+    const data = await loadHrRequests(VACATION_REQUEST_TYPES, status, { excludeWorkers: true });
+    res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.getVacations error:', err);
     res.status(500).json({ success: false, error: 'Ошибка получения отпусков' });
+  }
+};
+
+/**
+ * Вкладка «Увольнения» (отдел кадров): заявления на увольнение всей организации,
+ * включая рабочих — увольнение оформляется любому сотруднику. Все статусы,
+ * скоуп отделов не применяется.
+ */
+const getDismissals = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const status = req.query.status as string | undefined;
+    const data = await loadHrRequests(DISMISSAL_REQUEST_TYPES, status, { excludeWorkers: false });
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('leave-requests.getDismissals error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения заявлений на увольнение' });
   }
 };
 
@@ -2433,8 +2476,16 @@ const hrAcknowledge = async (req: AuthenticatedRequest, res: Response): Promise<
       res.status(404).json({ success: false, error: 'Заявление не найдено' });
       return;
     }
-    if (!VACATION_REQUEST_TYPES.includes(request.request_type)) {
-      res.status(400).json({ success: false, error: 'Отметка доступна только для отпусков' });
+    // Право проверяем по маркеру семейства конкретного заявления: роут пускает
+    // владельца любого из маркеров, но отпуск отмечает только /leave-vacations,
+    // увольнение — только /leave-dismissals.
+    const requiredPage = hrAckPageForType(request.request_type);
+    if (!requiredPage) {
+      res.status(400).json({ success: false, error: 'Отметка доступна только для отпусков и увольнений' });
+      return;
+    }
+    if (!(await resolveEffectivePageAccess(req, requiredPage, 'edit'))) {
+      res.status(403).json({ success: false, error: 'Недостаточно прав' });
       return;
     }
 
@@ -2450,11 +2501,12 @@ const hrAcknowledge = async (req: AuthenticatedRequest, res: Response): Promise<
     );
 
     // Realtime: сотрудник и его руководитель видят отметку без перезагрузки.
-    getLeaveRequestRecipients(request.employee_id, req.user.id)
-      .then((recipients) => {
+    // У маршрутизируемых типов (увольнение) согласующий — из маршрута, а не supervisor_id.
+    resolveCreateRecipients(request.request_type, request.employee_id, req.user.id)
+      .then(({ realtime }) => {
         emitDomainChange({
           event: 'leave_request:changed',
-          targetUserIds: recipients,
+          targetUserIds: realtime,
           payload: { entityId: request.id, employeeId: request.employee_id, action: 'hr_acknowledge' },
         });
       })
@@ -2748,6 +2800,7 @@ export const leaveRequestsController = {
   getDepartment,
   getAll,
   getVacations,
+  getDismissals,
   pendingCount,
   approve,
   reject,

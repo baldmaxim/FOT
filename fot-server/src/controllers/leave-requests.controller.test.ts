@@ -100,6 +100,13 @@ vi.mock('../services/employee-skud-object-access.service.js', () => ({
   listSelectableObjectsForEmployee: selectableObjectsMock,
 }));
 vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object' }));
+// hrAcknowledge проверяет право по маркеру семейства заявления (отпуск/увольнение).
+const { pageAccessMock } = vi.hoisted(() => ({
+  pageAccessMock: vi.fn(async (_req: unknown, _page: string, _action: string) => true),
+}));
+vi.mock('../services/access-control.service.js', () => ({
+  resolveEffectivePageAccess: pageAccessMock,
+}));
 
 import {
   leaveRequestsController,
@@ -2497,5 +2504,116 @@ describe('leaveRequestsController.bulkApprove / bulkReject', () => {
 
     expect(res._status).toBe(200);
     expect(summaryOf(res).processed_count).toBe(4);
+  });
+});
+
+describe('leaveRequestsController.getVacations / getDismissals (вкладки отдела кадров)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgQuery.mockReset();
+    pgQuery.mockResolvedValue([] as never);
+  });
+
+  it('getVacations: только типы отпусков, рабочие исключены', async () => {
+    const res = makeRes();
+    await leaveRequestsController.getVacations(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    const [sql, params] = pgQuery.mock.calls[0] as [string, unknown[]];
+    expect(params[0]).toEqual(['vacation', 'unpaid', 'educational_leave']);
+    expect(sql).toContain("sr.code = 'worker'");
+  });
+
+  it('getDismissals: только dismissal, рабочие включены, статус — опциональный фильтр', async () => {
+    const res = makeRes();
+    await leaveRequestsController.getDismissals(makeReq({ query: { status: 'pending' } } as never), res);
+
+    expect(res._status).toBe(200);
+    const [sql, params] = pgQuery.mock.calls[0] as [string, unknown[]];
+    expect(params).toEqual([['dismissal'], 'pending']);
+    expect(sql).not.toContain("sr.code = 'worker'");
+    expect(sql).toContain('lr.status = $2');
+  });
+});
+
+describe('leaveRequestsController.hrAcknowledge (право по типу заявления)', () => {
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pgQueryOne.mockReset();
+    pageAccessMock.mockReset();
+    routedApproversMock.mockReset();
+    routedApproversMock.mockResolvedValue([]);
+  });
+
+  const mockRow = (request_type: string) => {
+    const row = { id: 708, employee_id: 247, request_type };
+    pgQueryOne
+      .mockResolvedValueOnce(row) // чтение заявления
+      .mockResolvedValueOnce({ ...row, hr_acknowledged_at: '2026-06-29T00:00:00Z' }) // UPDATE ... RETURNING
+      .mockResolvedValueOnce({ org_department_id: 'dep-1' }); // отдел (маршрут увольнения)
+  };
+
+  it('увольнение при праве /leave-dismissals → 200, проверяется именно этот маркер', async () => {
+    pageAccessMock.mockImplementation(async (_r, page) => page === '/leave-dismissals');
+    mockRow('dismissal');
+    const res = makeRes();
+
+    await leaveRequestsController.hrAcknowledge(makeReq(), res);
+
+    expect(res._status).toBe(200);
+    expect(pageAccessMock).toHaveBeenCalledWith(expect.anything(), '/leave-dismissals', 'edit');
+    expect(pgQueryOne.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(true);
+  });
+
+  it('увольнение при праве только /leave-vacations → 403 без записи', async () => {
+    pageAccessMock.mockImplementation(async (_r, page) => page === '/leave-vacations');
+    mockRow('dismissal');
+    const res = makeRes();
+
+    await leaveRequestsController.hrAcknowledge(makeReq(), res);
+
+    expect(res._status).toBe(403);
+    expect(pgQueryOne.mock.calls.some(c => String(c[0]).includes('UPDATE leave_requests'))).toBe(false);
+  });
+
+  it('отпуск при праве только /leave-dismissals → 403', async () => {
+    pageAccessMock.mockImplementation(async (_r, page) => page === '/leave-dismissals');
+    mockRow('vacation');
+    const res = makeRes();
+
+    await leaveRequestsController.hrAcknowledge(makeReq(), res);
+
+    expect(res._status).toBe(403);
+    expect(pageAccessMock).toHaveBeenCalledWith(expect.anything(), '/leave-vacations', 'edit');
+  });
+
+  it('больничный → 400 (отметка только для отпусков и увольнений)', async () => {
+    pageAccessMock.mockResolvedValue(true);
+    mockRow('sick_leave');
+    const res = makeRes();
+
+    await leaveRequestsController.hrAcknowledge(makeReq(), res);
+
+    expect(res._status).toBe(400);
+    expect(pageAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('увольнение: realtime уходит согласующему из маршрута, а не supervisor_id', async () => {
+    pageAccessMock.mockResolvedValue(true);
+    routedApproversMock.mockResolvedValue(['routed-approver-uuid']);
+    mockRow('dismissal');
+    const res = makeRes();
+
+    await leaveRequestsController.hrAcknowledge(makeReq(), res);
+    await flush();
+
+    expect(res._status).toBe(200);
+    const emit = vi.mocked(emitDomainChange).mock.calls.find(c => c[0].payload?.action === 'hr_acknowledge');
+    expect(emit).toBeDefined();
+    expect(emit![0].targetUserIds).toEqual(
+      expect.arrayContaining(['routed-approver-uuid', 'emp-user-uuid', 'reviewer-uuid']),
+    );
   });
 });

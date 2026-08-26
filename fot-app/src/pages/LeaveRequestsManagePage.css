@@ -676,6 +676,11 @@
   line-height: 1.2;
 }
 
+/* Только просмотр (view без edit): статус «Не ознакомлен» без кнопки */
+.lrm-hr-ack.lrm-hr-ack--pending {
+  color: var(--muted, #6b7280);
+}
+
 /* Кнопка «Ознакомиться» (вкладка «Отпуска») */
 .lrm-ack-btn {
   display: inline-flex;

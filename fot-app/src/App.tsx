@@ -383,7 +383,7 @@ const AppRoutes = () => {
           element={<Navigate to="/leave-requests?tab=testing" replace />}
         />
 
-        <Route element={<ProtectedRoute requiredPage={['/leave-requests', '/salary-raise-review', '/leave-vacations', '/testing-review']} />}>
+        <Route element={<ProtectedRoute requiredPage={['/leave-requests', '/salary-raise-review', '/leave-vacations', '/leave-dismissals', '/testing-review']} />}>
           <Route
             path="/leave-requests"
             element={

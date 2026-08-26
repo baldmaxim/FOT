@@ -13,6 +13,11 @@ export const getMyDocumentsQueryKey = () => ['my-documents'] as const;
 export const getMyLeaveRequestsQueryKey = () => ['my-leave-requests'] as const;
 export const getLeaveRequestsManageQueryKey = (scope: 'department' | 'all', filter: 'pending' | 'all') => ['leave-requests-manage', scope, filter] as const;
 export const getVacationLeaveRequestsQueryKey = () => ['leave-requests-vacations'] as const;
+export const getDismissalLeaveRequestsQueryKey = () => ['leave-requests-dismissals'] as const;
+/** Вкладки отдела кадров в «Заявлениях»: отпуска (/leave-vacations) и увольнения (/leave-dismissals). */
+export type HrAckRequestsVariant = 'vacations' | 'dismissals';
+export const getHrAckLeaveRequestsQueryKey = (variant: HrAckRequestsVariant) =>
+  (variant === 'vacations' ? getVacationLeaveRequestsQueryKey() : getDismissalLeaveRequestsQueryKey());
 export const getEmployeeHistoryQueryKey = (employeeId: number | null) => ['employee-history', employeeId] as const;
 export const getMyDailyTasksQueryKey = () => ['my-daily-tasks'] as const;
 export const getTodayDailyTaskQueryKey = () => ['today-daily-task'] as const;
@@ -61,12 +66,16 @@ export const useLeaveRequestsManage = (
   placeholderData: previousData => previousData,
 });
 
-export const useVacationLeaveRequests = () => useQuery({
-  queryKey: getVacationLeaveRequestsQueryKey(),
-  queryFn: () => leaveRequestService.getVacations(),
+// Один useQuery на обе вкладки: ключ/запрос выбираются по variant, чтобы роль с
+// одним маркером не дёргала чужой эндпоинт (403) и не грузила лишнее.
+export const useHrAckLeaveRequests = (variant: HrAckRequestsVariant) => useQuery({
+  queryKey: getHrAckLeaveRequestsQueryKey(variant),
+  queryFn: () => (variant === 'vacations' ? leaveRequestService.getVacations() : leaveRequestService.getDismissals()),
   staleTime: 30_000,
   placeholderData: previousData => previousData,
 });
+
+export const useVacationLeaveRequests = () => useHrAckLeaveRequests('vacations');
 
 export const useMyDailyTasks = () => useQuery({
   queryKey: getMyDailyTasksQueryKey(),
