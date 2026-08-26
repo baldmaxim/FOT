@@ -208,3 +208,32 @@ describe('authenticateRawToken', () => {
     expect(result).toEqual({ ok: false, detail: 'Token expired' });
   });
 });
+
+describe('updateKey', () => {
+  it('включает право подтверждать выгрузку табелей', async () => {
+    await dataApiKeyService.updateKey('key-1', { allow_timesheet_ack: true });
+
+    const [sql, params] = pgExecute.mock.calls[0]!;
+    expect(String(sql)).toContain('allow_timesheet_ack =');
+    expect(params).toContain(true);
+  });
+
+  it('правка имени не трогает право — иначе оно молча слетало бы у боевого ключа', async () => {
+    await dataApiKeyService.updateKey('key-1', { name: 'OdintsovV3' });
+
+    expect(String(pgExecute.mock.calls[0]![0])).not.toContain('allow_timesheet_ack');
+  });
+
+  it('снятие права пишется явно, а не игнорируется как falsy', async () => {
+    await dataApiKeyService.updateKey('key-1', { allow_timesheet_ack: false });
+
+    const [sql, params] = pgExecute.mock.calls[0]!;
+    expect(String(sql)).toContain('allow_timesheet_ack =');
+    expect(params).toContain(false);
+  });
+
+  it('пустой патч в БД не идёт', async () => {
+    await dataApiKeyService.updateKey('key-1', {});
+    expect(pgExecute).not.toHaveBeenCalled();
+  });
+});

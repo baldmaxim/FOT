@@ -246,6 +246,9 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
   const [selection, setSelection] = useState<Map<string, Set<string>> | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
+  // Право подтверждать выгрузку табелей живёт на самом ключе, а не в списке таблиц,
+  // поэтому храним отдельно и сохраняем тем же действием, что и доступы.
+  const [allowTimesheetAck, setAllowTimesheetAck] = useState(apiKey.allow_timesheet_ack);
 
   const initialSelection = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -308,18 +311,25 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
   };
 
   const saveMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const payload: DataApiKeyTable[] = [...effectiveSelection.entries()]
         .filter(([, fields]) => fields.size > 0)
         .map(([table_name, fields]) => ({
           table_name,
           allowed_fields: [...fields].sort(),
         }));
-      return dataApiService.updateKeyTables(apiKey.id, payload);
+      await dataApiService.updateKeyTables(apiKey.id, payload);
+      // Патчим ключ только при фактическом изменении: пустой PATCH создавал бы
+      // лишнюю запись в аудите при каждом сохранении доступов.
+      if (allowTimesheetAck !== apiKey.allow_timesheet_ack) {
+        await dataApiService.updateKey(apiKey.id, { allow_timesheet_ack: allowTimesheetAck });
+      }
     },
     onSuccess: () => {
       toast.success('Доступы сохранены');
       queryClient.invalidateQueries({ queryKey: ['data-api-key', apiKey.id, 'tables'] });
+      // Иначе таблица ключей покажет прежнее состояние права.
+      queryClient.invalidateQueries({ queryKey: KEYS_QUERY_KEY });
       onClose();
     },
     onError: error => toast.error(error instanceof Error ? error.message : 'Ошибка сохранения'),
@@ -401,6 +411,25 @@ const AccessEditorModal: FC<IAccessEditorProps> = ({ apiKey, onClose }) => {
               <div className={styles.loading}>Загрузка…</div>
             ) : (
               <>
+                <div className={styles.formRow}>
+                  <label>Права</label>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minHeight: 44 }}>
+                    <input
+                      type="checkbox"
+                      checked={allowTimesheetAck}
+                      onChange={e => setAllowTimesheetAck(e.target.checked)}
+                      style={{ marginTop: 4 }}
+                    />
+                    <span>
+                      Разрешить подтверждение выгрузки табелей (POST /ack)
+                      <div className={styles.muted}>
+                        Единственный метод публичного API, который пишет данные. Без него 1С
+                        не сможет подтвердить приём, и табели будут снова и снова попадать
+                        в очередь на выгрузку.
+                      </div>
+                    </span>
+                  </label>
+                </div>
                 <div className={styles.bulkBar}>
                   <button type="button" className={styles.btn} onClick={selectFullAccess}>
                     Полный доступ
@@ -657,6 +686,7 @@ export const DataApiPage: FC = () => {
                 <th>Название</th>
                 <th>Префикс</th>
                 <th>Лимит/мин</th>
+                <th>Подтверждение 1С</th>
                 <th>Создан</th>
                 <th>Истекает</th>
                 <th>Последний запрос</th>
@@ -680,6 +710,11 @@ export const DataApiPage: FC = () => {
                     </td>
                     <td><code className={styles.mono}>{key.key_prefix}</code></td>
                     <td>{key.rate_limit_per_minute}</td>
+                    <td>
+                      {key.allow_timesheet_ack
+                        ? <span className={styles.tag}>Разрешено</span>
+                        : <span className={styles.muted}>—</span>}
+                    </td>
                     <td>{formatDate(key.created_at)}</td>
                     <td>{key.expires_at ? formatDate(key.expires_at) : <span className={styles.muted}>—</span>}</td>
                     <td>{key.last_used_at ? formatDate(key.last_used_at) : <span className={styles.muted}>никогда</span>}</td>
