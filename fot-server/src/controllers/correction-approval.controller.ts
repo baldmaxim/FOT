@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
+import { checkClosedTimesheetWriteAndMarkDirty } from '../services/timesheet-version.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   resolveAccessibleDepartmentIds,
@@ -38,6 +39,11 @@ async function loadCorrectionLocks(
   pairs: readonly ITimesheetLockPair[],
   exec?: DbExecutor,
 ): Promise<Map<string, IApprovalLockInfo>> {
+  // Внутри транзакции записи (exec передан) идём через общий метод: он разрешает
+  // админу запись и помечает версии затронутых подач устаревшими, иначе правка не
+  // дошла бы до 1С (миграция 257). Без exec это pre-check — он обязан оставаться
+  // без побочных эффектов.
+  if (exec) return checkClosedTimesheetWriteAndMarkDirty(Boolean(req.user.is_admin), pairs, exec);
   if (req.user.is_admin) return new Map();
   return findApprovalLocksForEmployeeDates(pairs, exec);
 }

@@ -85,6 +85,10 @@ paths:
         пока тот не станет `null`. Параметра `offset` нет намеренно: после ACK
         строки уходят из выборки `needs_export=true`, и смещение пропускало бы
         сдвинувшиеся записи.
+
+        Табели, для которых сейчас формируется новая редакция (например, после
+        правки администратором), в выдачу **не попадают вообще** — ни с фильтром,
+        ни без него. Они вернутся, когда пересборка закончится.
       parameters:
         - $ref: '#/components/parameters/Month'
         - $ref: '#/components/parameters/From'
@@ -224,9 +228,13 @@ paths:
         '409':
           description: |
             Табель недоступен для выгрузки: открыт для правок
-            (`TIMESHEET_UNLOCKED`), не утверждён (`TIMESHEET_NOT_APPROVED`)
-            или версия ещё не сформирована (`VERSION_NOT_AVAILABLE`).
+            (`TIMESHEET_UNLOCKED`), не утверждён (`TIMESHEET_NOT_APPROVED`),
+            версия ещё не сформирована (`VERSION_NOT_AVAILABLE`) либо идёт
+            пересборка после правки (`TIMESHEET_REBUILD_PENDING`).
             Во всех случаях — пропустить и повторить в следующем цикле.
+
+            `TIMESHEET_REBUILD_PENDING` возвращается и при запросе конкретной
+            старой редакции: пока формируется новая, отдавать прежние часы нельзя.
           content:
             application/json:
               schema:
@@ -308,6 +316,8 @@ paths:
             `REVISION_MISMATCH` — подтверждается не последняя редакция
             (в теле придут `current_revision` и `current_content_hash`);
             `TIMESHEET_UNLOCKED` — табель переоткрыли между выгрузкой и ACK;
+            `TIMESHEET_REBUILD_PENDING` — табель поправили, формируется новая
+            редакция: подтверждать прежнюю уже нечего;
             `TIMESHEET_NOT_APPROVED` — подача больше не утверждена;
             `VERSION_NOT_AVAILABLE` — указанной редакции нет.
           content:
@@ -772,7 +782,7 @@ components:
           description: Человекочитаемое описание.
         code:
           type: [string, 'null']
-          enum: [TIMESHEET_UNLOCKED, TIMESHEET_NOT_APPROVED, VERSION_NOT_AVAILABLE, REVISION_MISMATCH, TIMESHEET_VERSION_INCOMPLETE, null]
+          enum: [TIMESHEET_UNLOCKED, TIMESHEET_NOT_APPROVED, TIMESHEET_REBUILD_PENDING, VERSION_NOT_AVAILABLE, REVISION_MISMATCH, TIMESHEET_VERSION_INCOMPLETE, null]
         current_revision:
           type: integer
           description: Только для `REVISION_MISMATCH` — актуальная редакция.

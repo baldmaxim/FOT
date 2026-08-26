@@ -18,6 +18,7 @@ import { startTimesheetReminderScheduler, stopTimesheetReminderScheduler } from 
 import { startPatentExpiryReminderScheduler, stopPatentExpiryReminderScheduler } from './services/patent-expiry-reminder.service.js';
 import { startObjectKpiPlanFreezer, stopObjectKpiPlanFreezer } from './services/object-kpi-plan-freezer.service.js';
 import { startDailyTasksReminderScheduler, stopDailyTasksReminderScheduler } from './services/daily-tasks-reminder.service.js';
+import { startTimesheetVersionRebuildScheduler, stopTimesheetVersionRebuildScheduler } from './services/timesheet-version-rebuild.service.js';
 import { startDismissalScheduler, stopDismissalScheduler } from './services/dismissal-scheduler.service.js';
 import { startContractorPassSyncScheduler, stopContractorPassSyncScheduler } from './services/contractor-pass-sync.scheduler.js';
 import { startNewdbPendingPoller, stopNewdbPendingPoller } from './services/newdb-pending-poller.service.js';
@@ -147,6 +148,9 @@ httpServer.listen(PORT, HOST, () => {
   startTimesheetReminderScheduler();
   startPatentExpiryReminderScheduler();
   startDailyTasksReminderScheduler();
+  // Пересборка версий табеля после правок админа в обход штатного close (миграция 257):
+  // без неё такая правка не дошла бы до 1С.
+  startTimesheetVersionRebuildScheduler();
   startDismissalScheduler();
   startContractorPassSyncScheduler();
   // Фиксация месячного плана KPI объектов. Сам по себе не работает: включается
@@ -214,7 +218,8 @@ const gracefulShutdown = (signal: string): void => {
     stopPresencePolling, stopSigurMonitor, stopStructureSyncScheduler,
     stopSigurEventsDailyScheduler, stopSkudSummaryReconcileScheduler,
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
-    stopDailyTasksReminderScheduler, stopDismissalScheduler,
+    stopDailyTasksReminderScheduler, stopTimesheetVersionRebuildScheduler,
+    stopDismissalScheduler,
     stopContractorPassSyncScheduler, stopObjectKpiPlanFreezer,
     stopNewdbPendingPoller, stopMtsLocationPoller, stopMtsGeofenceMonitor,
     stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,

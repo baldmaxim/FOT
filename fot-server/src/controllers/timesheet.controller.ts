@@ -62,6 +62,7 @@ import {
   type IDepartmentEmployeeMembership,
   type IApprovalLockInfo,
 } from '../services/timesheet-department-assignments.service.js';
+import { checkClosedTimesheetWriteAndMarkDirty } from '../services/timesheet-version.service.js';
 import {
   findApprovalLockForEmployeeDate,
   findApprovalLocksForEmployeeDates,
@@ -1286,7 +1287,9 @@ async function assertNotLockedInTx(
   pairs: readonly ITimesheetLockPair[],
   exec: DbExecutor,
 ): Promise<void> {
-  const locks = await loadLocksForScope(req, pairs, exec);
+  // Для админа запись разрешена, но версии затронутых подач помечаются устаревшими —
+  // иначе его правка не дошла бы до 1С (см. миграцию 257).
+  const locks = await checkClosedTimesheetWriteAndMarkDirty(Boolean(req.user.is_admin), pairs, exec);
   if (locks.size === 0) return;
   throw new ApprovalLockedError([...locks.values()][0]!);
 }

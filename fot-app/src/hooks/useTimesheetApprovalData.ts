@@ -102,6 +102,12 @@ export const useTimesheet1CStatus = (
   queryFn: () => timesheetApprovalService.get1CStatus(startDate, endDate),
   enabled: enabled && !!startDate && !!endDate,
   staleTime: 30_000,
+  // Пока хоть один табель пересобирается — опрашиваем чаще, чтобы «Пересчитывается»
+  // сменилось на итоговый статус без ручного обновления страницы. Как только таких
+  // нет, учащённый опрос выключается.
+  refetchInterval: query => (
+    (query.state.data ?? []).some(row => row.version_dirty) ? 20_000 : false
+  ),
   placeholderData: previousData => previousData,
 });
 

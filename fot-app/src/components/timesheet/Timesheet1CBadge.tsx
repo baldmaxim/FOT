@@ -1,9 +1,11 @@
 import { type FC } from 'react';
-import { AlertTriangle, CheckCircle2, Circle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Circle, RefreshCw } from 'lucide-react';
 import type { Timesheet1CState } from '../../services/timesheetApprovalService';
 
 interface IProps {
   state: Timesheet1CState;
+  /** Табель поправили в обход штатного закрытия — версия пересобирается фоном. */
+  versionDirty?: boolean;
   /** false — официальная версия ещё не сформирована, выгружать нечего. */
   versionAvailable?: boolean;
   ackedAt?: string | null;
@@ -27,11 +29,12 @@ const formatDateRu = (iso: string): string => {
  * Статус выгрузки табеля в 1С.
  *
  * exported — 1С подтвердила приём текущей редакции;
- * stale — табель переоткрывали и правили, 1С приняла более раннюю редакцию;
+ * stale — табель правили после выгрузки, 1С приняла более раннюю редакцию;
  * not_exported — подтверждения ещё не было.
  */
 export const Timesheet1CBadge: FC<IProps> = ({
   state,
+  versionDirty = false,
   versionAvailable = true,
   ackedAt,
   documentRef,
@@ -39,14 +42,30 @@ export const Timesheet1CBadge: FC<IProps> = ({
   compact = false,
 }) => {
   const ackedText = ackedAt ? formatDateRu(ackedAt) : null;
+  const iconSize = compact ? 12 : 13;
 
-  let icon = <Circle size={compact ? 12 : 13} />;
+  // Пересборка важнее прочих состояний: пока она идёт, прежний статус вводит в
+  // заблуждение — 1С этот табель сейчас всё равно не видит.
+  if (versionDirty) {
+    return (
+      <span
+        className={`ts-1c-badge ts-1c-badge--pending${compact ? ' ts-1c-badge--compact' : ''}`}
+        title="Табель поправили — формируется новая редакция для 1С, обычно около минуты"
+        aria-label="Выгрузка в 1С: пересчитывается"
+      >
+        <RefreshCw size={iconSize} />
+        {!compact && 'Пересчитывается'}
+      </span>
+    );
+  }
+
+  let icon = <Circle size={iconSize} />;
   let label = 'Не выгружен';
   let modifier = 'none';
   let tooltipLines: Array<string | null> = [];
 
   if (state === 'exported') {
-    icon = <CheckCircle2 size={compact ? 12 : 13} />;
+    icon = <CheckCircle2 size={iconSize} />;
     label = 'В 1С';
     modifier = 'ok';
     tooltipLines = [
@@ -55,7 +74,7 @@ export const Timesheet1CBadge: FC<IProps> = ({
       revision != null ? `Редакция: ${revision}` : null,
     ];
   } else if (state === 'stale') {
-    icon = <AlertTriangle size={compact ? 12 : 13} />;
+    icon = <AlertTriangle size={iconSize} />;
     label = 'Изменён';
     modifier = 'stale';
     tooltipLines = [

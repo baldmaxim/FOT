@@ -120,6 +120,11 @@ export interface ITimesheet1CStatus {
   department_id: string | null;
   scope_kind: 'department' | 'personal';
   state: Timesheet1CState;
+  /**
+   * Табель поправили в обход штатного закрытия — версия пересобирается фоном.
+   * Пока так, 1С табель не видит вовсе, чтобы не забрать устаревшие часы.
+   */
+  version_dirty: boolean;
   /** false — официальная версия ещё не сформирована, выгружать нечего. */
   version_available: boolean;
   revision: number | null;

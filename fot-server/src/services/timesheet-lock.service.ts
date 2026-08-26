@@ -153,6 +153,47 @@ export async function findApprovalLocksForEmployeeDates(
   return locks;
 }
 
+/**
+ * ВСЕ закрытые утверждённые подачи, покрывающие переданные (сотрудник, дата).
+ *
+ * Отличие от findApprovalLocksForEmployeeDates принципиальное: та возвращает ОДНУ
+ * подачу на пару (DISTINCT ON с приоритетом approved) — этого хватает, чтобы отказать
+ * в правке, но не хватает, чтобы пометить версии. Сотрудник может одновременно
+ * входить и в подачу отдела, и в персональную подачу руководителя, и в пересекающиеся
+ * закрытые периоды: правка его часов меняет содержимое ВСЕХ этих версий, а метку
+ * получила бы только одна.
+ *
+ * Состав берём строго из timesheet_approval_employees — именно снимок определяет
+ * содержимое версии. Ветка динамического состава отдела (chain) здесь не нужна:
+ * подачи без снимка версии не имеют вовсе (VERSION_NOT_AVAILABLE), пересобирать нечего.
+ *
+ * Статус только 'approved': 'submitted' блокирует правку неадмину, но официальной
+ * версии для 1С у него ещё нет.
+ */
+export async function listClosedApprovalIdsForPairs(
+  pairs: readonly ITimesheetLockPair[],
+  exec?: DbExecutor,
+): Promise<number[]> {
+  const normalized = normalizePairs(pairs);
+  if (normalized.length === 0) return [];
+
+  const rows = await queryWith<{ id: number | string }>(
+    exec,
+    `SELECT DISTINCT a.id
+       FROM unnest($1::int[], $2::date[]) AS p(employee_id, work_date)
+       JOIN timesheet_approval_employees s ON s.employee_id = p.employee_id
+       JOIN timesheet_approvals a
+         ON a.id = s.approval_id
+        AND a.status = 'approved'
+        AND a.unlocked_at IS NULL
+        AND a.start_date <= p.work_date
+        AND a.end_date   >= p.work_date`,
+    [normalized.map(pair => pair.employeeId), normalized.map(pair => pair.workDate)],
+  );
+
+  return rows.map(row => Number(row.id)).filter(Number.isFinite);
+}
+
 /** Точечная проверка замка (обёртка над батчем). */
 export async function findApprovalLockForEmployeeDate(
   employeeId: number,

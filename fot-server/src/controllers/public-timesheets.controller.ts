@@ -209,6 +209,10 @@ export const publicTimesheetsController = {
     const where: string[] = [
       "a.status = 'approved'",
       'a.unlocked_at IS NULL',
+      // Табель поправили в обход штатного close — версия пересобирается. Пока это идёт,
+      // подача не видна 1С ВООБЩЕ (а не только при needs_export): иначе запрос списка
+      // без фильтра отдал бы старую revision, и 1С успела бы её забрать.
+      'a.version_dirty_at IS NULL',
       'a.start_date >= $1::date',
       'a.start_date <= $2::date',
     ];
@@ -317,8 +321,11 @@ export const publicTimesheetsController = {
 
     try {
       const approval = await queryOne<{
-        id: number; status: string; unlocked_at: string | null;
-      }>('SELECT id, status, unlocked_at FROM timesheet_approvals WHERE id = $1', [approvalId]);
+        id: number; status: string; unlocked_at: string | null; version_dirty_at: string | null;
+      }>(
+        'SELECT id, status, unlocked_at, version_dirty_at FROM timesheet_approvals WHERE id = $1',
+        [approvalId],
+      );
       if (!approval) {
         fail(res, 404, 'Табель не найден');
         return;
@@ -329,6 +336,13 @@ export const publicTimesheetsController = {
       }
       if (approval.status !== 'approved') {
         fail(res, 409, 'Табель не утверждён', 'TIMESHEET_NOT_APPROVED');
+        return;
+      }
+      // Отказ распространяется и на запрос конкретной старой редакции: иначе 1С
+      // вызовет ?revision=1, получит прежние часы и перезапишет ими документ —
+      // отклонённый позже ACK этого уже не исправит.
+      if (approval.version_dirty_at) {
+        fail(res, 409, 'Табель пересчитывается — попробуйте в следующем цикле', 'TIMESHEET_REBUILD_PENDING');
         return;
       }
 
@@ -414,13 +428,17 @@ export const publicTimesheetsController = {
     try {
       const result = await withTransaction(async client => {
         // Блокируем подачу: открытие периода не должно вклиниться между проверкой и записью.
-        const approval = (await client.query<{ id: number; status: string; unlocked_at: string | null }>(
-          'SELECT id, status, unlocked_at FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
+        const approval = (await client.query<{
+          id: number; status: string; unlocked_at: string | null; version_dirty_at: string | null;
+        }>(
+          'SELECT id, status, unlocked_at, version_dirty_at FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
           [approvalId],
         )).rows[0];
         if (!approval) return { kind: 'not_found' as const };
         if (approval.unlocked_at) return { kind: 'unlocked' as const };
         if (approval.status !== 'approved') return { kind: 'not_approved' as const };
+        // Подтверждать нечего: редакция, которую 1С держит в руках, уже устарела.
+        if (approval.version_dirty_at) return { kind: 'rebuild_pending' as const };
 
         const latest = (await client.query<{ id: number; revision: number; content_hash: string }>(
           `SELECT id, revision, content_hash FROM timesheet_versions
@@ -470,6 +488,9 @@ export const publicTimesheetsController = {
           return;
         case 'no_version':
           fail(res, 409, 'Версия табеля ещё не сформирована', 'VERSION_NOT_AVAILABLE');
+          return;
+        case 'rebuild_pending':
+          fail(res, 409, 'Табель пересчитывается — попробуйте в следующем цикле', 'TIMESHEET_REBUILD_PENDING');
           return;
         case 'mismatch':
           fail(res, 409, 'Подтверждается устаревшая редакция табеля', 'REVISION_MISMATCH', {

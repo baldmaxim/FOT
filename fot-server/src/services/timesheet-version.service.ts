@@ -9,13 +9,22 @@
 
 import crypto from 'node:crypto';
 import type { PoolClient } from 'pg';
+import type { DbExecutor } from '../config/postgres.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
 import { hasRealActivity } from './attendance.service.js';
 import { listApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-department-assignments.service.js';
 import { listBrigadeSupervisorEmployeeIdsForDepartments } from '../controllers/timesheet-assigned-export.controller.js';
+import {
+  findApprovalLocksForEmployeeDates,
+  listClosedApprovalIdsForPairs,
+  type ITimesheetLockPair,
+} from './timesheet-lock.service.js';
+import type { IApprovalLockInfo } from './timesheet-department-assignments.service.js';
 
-export type TimesheetVersionSource = 'approve' | 'close' | 'backfill';
+// 'rebuild' — пересборка фоновым воркером после правки админа в обход замка
+// закрытого периода (миграция 257).
+export type TimesheetVersionSource = 'approve' | 'close' | 'backfill' | 'rebuild';
 export type TimesheetExportState = 'not_exported' | 'stale' | 'exported';
 
 /** Подача в том виде, в каком она нужна материализации. */
@@ -373,6 +382,83 @@ export async function materializeVersion(
   )).rows[0];
 
   return { version: inserted, created: true };
+}
+
+/**
+ * Запись в закрытый период: проверка права + пометка затронутых версий.
+ *
+ * Единая точка для всех транзакционных путей записи. Раньше проверка замка была
+ * размазана по нескольким функциям, и часть путей (прямые вызовы loadCorrectionLocks
+ * в correction-approval) прошла бы мимо пометки.
+ *
+ * ДВЕ НЕЗАВИСИМЫЕ ВЫБОРКИ, подменять одну другой нельзя:
+ *  - blockingLocks (submitted + approved) — запрет записи неадмину. Если брать сюда
+ *    только approved, неадмины начнут править табели, отправленные на проверку;
+ *  - dirtyApprovalIds (только approved) — пометка версий при админской правке.
+ *
+ * Вызывать ВНУТРИ транзакции записи: метка обязана откатываться вместе с правкой.
+ */
+export async function checkClosedTimesheetWriteAndMarkDirty(
+  isAdmin: boolean,
+  pairs: readonly ITimesheetLockPair[],
+  exec: DbExecutor,
+): Promise<Map<string, IApprovalLockInfo>> {
+  if (!isAdmin) return findApprovalLocksForEmployeeDates(pairs, exec);
+
+  // Админ пишет в закрытый период штатно — но версия для 1С после этого устарела.
+  const approvalIds = await listClosedApprovalIdsForPairs(pairs, exec);
+  await markVersionDirty(exec, approvalIds);
+  return new Map();
+}
+
+/**
+ * Помечает версии подач устаревшими: их содержимое изменила правка, прошедшая мимо
+ * штатного close (админ пишет в закрытый период в обход замка).
+ *
+ * Вызывать ВНУТРИ транзакции записи — тогда метка откатится вместе с неудавшейся правкой.
+ *
+ * seq инкрементится, а не просто обновляется время: два изменения могут получить
+ * одинаковый timestamp, и правка, пришедшая во время сборки, потерялась бы. Воркер
+ * снимает метку только при совпадении seq.
+ *
+ * Счётчик неудач сбрасывается: новая правка могла устранить причину прошлой ошибки,
+ * и держать подачу под backoff'ом больше незачем.
+ */
+export async function markVersionDirty(
+  exec: DbExecutor,
+  approvalIds: readonly number[],
+): Promise<void> {
+  const ids = [...new Set(approvalIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0))];
+  if (ids.length === 0) return;
+
+  await exec.query(
+    `UPDATE timesheet_approvals
+        SET version_dirty_seq          = version_dirty_seq + 1,
+            version_dirty_at           = clock_timestamp(),
+            version_rebuild_attempts   = 0,
+            version_rebuild_after      = NULL,
+            version_rebuild_last_error = NULL
+      WHERE id = ANY($1::bigint[])
+        AND status = 'approved'
+        AND unlocked_at IS NULL`,
+    [ids],
+  );
+}
+
+/**
+ * Снимает метку — штатные approve/close уже включили изменения в свежую версию,
+ * пересобирать нечего. Вызывается в той же транзакции, что и материализация.
+ */
+export async function clearVersionDirty(exec: DbExecutor, approvalId: number): Promise<void> {
+  await exec.query(
+    `UPDATE timesheet_approvals
+        SET version_dirty_at = NULL,
+            version_rebuild_attempts = 0,
+            version_rebuild_after = NULL,
+            version_rebuild_last_error = NULL
+      WHERE id = $1`,
+    [approvalId],
+  );
 }
 
 /** Состояние выгрузки: сверяем последнюю версию с последним подтверждением. */

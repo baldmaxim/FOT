@@ -33,6 +33,7 @@ import {
 import { lockTimesheetMonthsOnClient } from '../services/timesheet-lock.service.js';
 import { withTimesheetSnapshotTransaction } from '../services/timesheet-snapshot-tx.js';
 import {
+  clearVersionDirty,
   materializeVersion,
   resolveState,
   TimesheetVersionEmptyRosterError,
@@ -1534,6 +1535,9 @@ async function changeApprovalReviewState(
 
         if (needsVersion) {
           await materializeVersion(client, toVersionApproval(row), 'approve', req.user.id);
+          // Свежая версия уже включает всё, что успели поправить, — фоновой пересборке
+          // тут делать нечего.
+          await clearVersionDirty(client, Number(row.id));
         }
         return { ok: true, row };
       });
@@ -2220,6 +2224,7 @@ const get1CStatus = async (req: AuthenticatedRequest, res: Response): Promise<vo
       version_id: number | null;
       revision: number | null;
       content_hash: string | null;
+      version_dirty_at: string | null;
       acked_version_id: number | null;
       acked_at: string | null;
       document_ref: string | null;
@@ -2228,6 +2233,7 @@ const get1CStatus = async (req: AuthenticatedRequest, res: Response): Promise<vo
       `SELECT a.id AS approval_id,
               a.department_id,
               a.manager_employee_id,
+              a.version_dirty_at::text AS version_dirty_at,
               v.id AS version_id,
               v.revision,
               v.content_hash,
@@ -2263,6 +2269,8 @@ const get1CStatus = async (req: AuthenticatedRequest, res: Response): Promise<vo
         department_id: row.department_id,
         scope_kind: row.manager_employee_id != null ? 'personal' : 'department',
         state: resolveState(row.version_id, row.acked_version_id),
+        // Табель поправили в обход штатного close — версия пересобирается фоном.
+        version_dirty: row.version_dirty_at != null,
         version_available: row.version_id != null,
         revision: row.revision != null ? Number(row.revision) : null,
         content_hash: row.content_hash,
@@ -3244,6 +3252,7 @@ const closePeriod = async (req: AuthenticatedRequest, res: Response): Promise<vo
         // ещё не согласованного периода версии для 1С не порождает.
         if (row.status === 'approved') {
           await materializeVersion(client, toVersionApproval(row), 'close', req.user.id);
+          await clearVersionDirty(client, Number(row.id));
         }
         return row;
       });

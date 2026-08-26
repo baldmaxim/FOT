@@ -80,9 +80,10 @@ interface IDeptTreeNodeProps {
   approvedDeptIds: Set<string>;
   timekeeperCheckedIds: Set<string>;
   oneCStateByDeptId: Map<string, Timesheet1CState>;
+  oneCDirtyDeptIds: Set<string>;
 }
 
-const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds, timekeeperCheckedIds, oneCStateByDeptId }) => {
+const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds, timekeeperCheckedIds, oneCStateByDeptId, oneCDirtyDeptIds }) => {
   const descendantIds = useMemo(() => collectAllIds([node]), [node]);
   const checkedCount = descendantIds.reduce((acc, id) => acc + (checkedIds.has(id) ? 1 : 0), 0);
   const isAllChecked = checkedCount === descendantIds.length;
@@ -126,7 +127,11 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
             </span>
           )}
           {oneCStateByDeptId.get(node.id) && (
-            <Timesheet1CBadge state={oneCStateByDeptId.get(node.id)!} compact />
+            <Timesheet1CBadge
+              state={oneCStateByDeptId.get(node.id)!}
+              versionDirty={oneCDirtyDeptIds.has(node.id)}
+              compact
+            />
           )}
         </span>
       </div>
@@ -143,6 +148,7 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
               approvedDeptIds={approvedDeptIds}
               timekeeperCheckedIds={timekeeperCheckedIds}
               oneCStateByDeptId={oneCStateByDeptId}
+              oneCDirtyDeptIds={oneCDirtyDeptIds}
             />
           ))}
         </div>
@@ -213,6 +219,15 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
    * подач, поэтому мержа по approval_id недостаточно. Правило — худшее побеждает:
    * stale > not_exported > exported. Узел без подач бейджа не показывает (undefined).
    */
+  /** Отделы, чьи версии сейчас пересобираются (правка мимо штатного закрытия). */
+  const oneCDirtyDeptIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of oneCStatuses ?? []) {
+      if (row.version_dirty && row.department_id) ids.add(row.department_id);
+    }
+    return ids;
+  }, [oneCStatuses]);
+
   const oneCStateByDeptId = useMemo(() => {
     const own = new Map<string, Timesheet1CState>();
     const worst = (a: Timesheet1CState | undefined, b: Timesheet1CState): Timesheet1CState => {
@@ -520,6 +535,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
               approvedDeptIds={aggregatedApprovedIds}
               timekeeperCheckedIds={timekeeperCheckedIds}
               oneCStateByDeptId={oneCStateByDeptId}
+              oneCDirtyDeptIds={oneCDirtyDeptIds}
             />
           ))
         )}

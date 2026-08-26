@@ -74,6 +74,7 @@ const approvalRow = (over: Record<string, unknown> = {}) => ({
   id: APPROVAL_ID,
   status: 'approved',
   unlocked_at: null,
+  version_dirty_at: null,
   ...over,
 });
 
@@ -208,6 +209,17 @@ describe('list', () => {
     expect(last.payload.next_cursor).toBeNull();
   });
 
+  it('dirty-подачи исключены из выборки даже без needs_export', async () => {
+    pgQuery.mockResolvedValue([]);
+    const res = makeRes();
+    await publicTimesheetsController.list(makeReq({ query: { month: currentMonth() } }), res);
+
+    // Фильтр стоит в самом SQL: иначе список без needs_export отдал бы старую revision.
+    const sql = String(pgQuery.mock.calls[0]![0]);
+    expect(sql).toContain('a.version_dirty_at IS NULL');
+    expect(res.statusCode).toBe(200);
+  });
+
   it('битый cursor — 400, а не молчаливый сброс на первую страницу', async () => {
     const res = makeRes();
     await publicTimesheetsController.list(
@@ -242,6 +254,24 @@ describe('detail', () => {
     await publicTimesheetsController.detail(makeReq(), res);
     expect(res.statusCode).toBe(409);
     expect(res.payload.code).toBe('VERSION_NOT_AVAILABLE');
+  });
+
+  it('идёт пересборка — 409 TIMESHEET_REBUILD_PENDING', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow({ version_dirty_at: '2026-08-26T10:00:00Z' }));
+    const res = makeRes();
+    await publicTimesheetsController.detail(makeReq(), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('TIMESHEET_REBUILD_PENDING');
+  });
+
+  it('во время пересборки отказ и на ЯВНУЮ старую revision', async () => {
+    // Иначе 1С запросит ?revision=1, получит прежние часы и перезапишет ими документ —
+    // отклонённый позже ACK этого уже не исправит.
+    pgQueryOne.mockResolvedValueOnce(approvalRow({ version_dirty_at: '2026-08-26T10:00:00Z' }));
+    const res = makeRes();
+    await publicTimesheetsController.detail(makeReq({ query: { revision: '1' } }), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('TIMESHEET_REBUILD_PENDING');
   });
 
   it('отдаёт весь согласованный состав, включая zero_activity — фильтра на API нет', async () => {
@@ -310,6 +340,19 @@ describe('ack', () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.payload.code).toBe('TIMESHEET_UNLOCKED');
+    expect(txCalls.some(c => /INSERT INTO timesheet_1c_exports/i.test(c.sql))).toBe(false);
+  });
+
+  it('идёт пересборка — ACK отклоняется, запись не идёт', async () => {
+    txClient.handler = (sql) => {
+      if (/FOR UPDATE/i.test(sql)) return [approvalRow({ version_dirty_at: '2026-08-26T10:00:00Z' })];
+      return [];
+    };
+    const res = makeRes();
+    await publicTimesheetsController.ack(makeReq({ body: { revision: 2 } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('TIMESHEET_REBUILD_PENDING');
     expect(txCalls.some(c => /INSERT INTO timesheet_1c_exports/i.test(c.sql))).toBe(false);
   });
 

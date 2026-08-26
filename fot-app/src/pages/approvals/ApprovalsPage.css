@@ -1845,3 +1845,12 @@
     padding: 2px 6px;
   }
 }
+
+/* Идёт фоновая пересборка версии: табель поправили в обход штатного закрытия.
+   Нейтральный тон — это не ошибка и не результат, а промежуточное состояние. */
+.ts-1c-badge--pending {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary, var(--bg-secondary));
+}
+
+.ts-1c-badge--compact.ts-1c-badge--pending { color: var(--text-secondary); }
