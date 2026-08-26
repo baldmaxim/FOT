@@ -1,4 +1,5 @@
 import { query, queryOne, execute, type DbExecutor } from '../config/postgres.js';
+import { runMaybeParallel } from '../utils/db-parallel.js';
 import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { settingsService } from './settings.service.js';
@@ -963,12 +964,13 @@ export const calculateAndSyncTravelSegments = async ({
 
   const travelLimitMinutes = await loadConfiguredTravelLimitMinutes();
 
-  const [internalPoints, mappings, events, decidedSegments] = await Promise.all([
-    getInternalAccessPoints(),
-    fetchTravelMappingsRaw(),
-    fetchEventsForEmployees({ employeeIds, startDate, endDate, exec }),
-    fetchExistingDecidedSegments({ employeeIds, startDate, endDate, exec }),
-  ]);
+  const [internalPoints, mappings, events, decidedSegments] = await runMaybeParallel(
+    exec,
+    () => getInternalAccessPoints(),
+    () => fetchTravelMappingsRaw(),
+    () => fetchEventsForEmployees({ employeeIds, startDate, endDate, exec }),
+    () => fetchExistingDecidedSegments({ employeeIds, startDate, endDate, exec }),
+  );
 
   const accessPointToObjectId = new Map<string, string>();
   for (const row of mappings) {

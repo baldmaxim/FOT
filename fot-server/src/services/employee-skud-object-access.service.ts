@@ -9,7 +9,7 @@
  * Внутри бакета объекта по-прежнему показывается фактическое
  * присутствие (skud_events за день).
  */
-import { execute, query } from '../config/postgres.js';
+import { execute, query, type DbExecutor } from '../config/postgres.js';
 import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -54,16 +54,17 @@ export async function listObjectIdsForEmployee(employeeId: number): Promise<stri
  */
 export async function listObjectIdsForEmployees(
   employeeIds: number[],
+  exec?: DbExecutor,
 ): Promise<Map<number, string[]>> {
   const result = new Map<number, string[]>();
   const ids = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
   if (ids.length === 0) return result;
   try {
-    const rows = await query<{ employee_id: number | string; skud_object_id: string }>(
-      `SELECT employee_id, skud_object_id FROM employee_skud_object_access
-       WHERE employee_id = ANY($1::bigint[]) AND is_active = true`,
-      [ids],
-    );
+    const sql = `SELECT employee_id, skud_object_id FROM employee_skud_object_access
+       WHERE employee_id = ANY($1::bigint[]) AND is_active = true`;
+    const rows = exec
+      ? (await exec.query<{ employee_id: number | string; skud_object_id: string }>(sql, [ids])).rows
+      : await query<{ employee_id: number | string; skud_object_id: string }>(sql, [ids]);
     for (const row of rows) {
       const employeeId = Number(row.employee_id);
       if (!Number.isFinite(employeeId) || !row.skud_object_id) continue;

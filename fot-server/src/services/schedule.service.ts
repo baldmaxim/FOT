@@ -3,6 +3,7 @@
  * bulk, хелперы с учётом производственного календаря.
  */
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
+import { runMaybeParallel } from '../utils/db-parallel.js';
 import type {
   IResolvedSchedule,
   IDayOverride,
@@ -663,14 +664,17 @@ export const resolveSchedule = async (
 export const resolveSchedulesBulk = async (
   employees: { id: number; org_department_id?: string | null }[],
   date: string,
+  exec?: DbExecutor,
 ): Promise<Map<number, IResolvedSchedule>> => {
   const result = new Map<number, IResolvedSchedule>();
   if (employees.length === 0) return result;
 
   const employeeIds = employees.map(e => e.id);
 
-  const [empSchedsRows, defaultSched] = await Promise.all([
-    query<Record<string, unknown>>(
+  const [empSchedsRows, defaultSched] = await runMaybeParallel(
+    exec,
+    () => schedRows<Record<string, unknown>>(
+      exec,
       `SELECT ${SCHEDULE_JOIN_SELECT(['employee_id', 'effective_from', 'anchor_date'])}
          FROM employee_schedule_assignments a
          LEFT JOIN work_schedules ws ON ws.id = a.schedule_id
@@ -680,10 +684,11 @@ export const resolveSchedulesBulk = async (
         ORDER BY a.effective_from DESC`,
       [employeeIds, date],
     ),
-    queryOne<Record<string, unknown>>(
+    () => schedOne<Record<string, unknown>>(
+      exec,
       'SELECT * FROM work_schedules WHERE is_default = true LIMIT 1',
     ),
-  ]);
+  );
 
   const employeeMap = new Map<number, { schedule: Record<string, unknown>; anchor: string | null }>();
   for (const row of empSchedsRows) {
@@ -725,8 +730,9 @@ export const resolveSchedulesForPeriod = async (
 
   const employeeIds = employees.map(e => e.id);
 
-  const [empSchedsRows, defaultSched] = await Promise.all([
-    schedRows<Record<string, unknown>>(
+  const [empSchedsRows, defaultSched] = await runMaybeParallel(
+    exec,
+    () => schedRows<Record<string, unknown>>(
       exec,
       `SELECT ${SCHEDULE_JOIN_SELECT(['employee_id', 'effective_from', 'effective_to', 'anchor_date'])}
          FROM employee_schedule_assignments a
@@ -737,11 +743,11 @@ export const resolveSchedulesForPeriod = async (
         ORDER BY a.effective_from DESC`,
       [employeeIds, endDate, startDate],
     ),
-    schedOne<Record<string, unknown>>(
+    () => schedOne<Record<string, unknown>>(
       exec,
       'SELECT * FROM work_schedules WHERE is_default = true LIMIT 1',
     ),
-  ]);
+  );
 
   const employeeRows = new Map<number, Record<string, unknown>[]>();
   for (const row of empSchedsRows) {

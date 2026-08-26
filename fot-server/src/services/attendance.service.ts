@@ -1,4 +1,5 @@
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
+import { runMaybeParallel } from '../utils/db-parallel.js';
 import type { IProductionCalendarMonth, IResolvedSchedule, TimeStatus } from '../types/index.js';
 
 /**
@@ -468,22 +469,23 @@ async function loadAdjustmentNames(adjustments: IAttendanceAdjustment[], exec?: 
   const { hits: userHits, misses: userMisses } = readUserNameCache(userIds);
   const { hits: legacyHits, misses: legacyMisses } = readLegacyEmployeeNameCache(legacyEmployeeIds);
 
-  const [userRows, employeeRows] = await Promise.all([
-    userMisses.length > 0
+  const [userRows, employeeRows] = await runMaybeParallel(
+    exec,
+    () => (userMisses.length > 0
       ? sqlRows<{ id: string; full_name: string | null }>(
         exec,
         `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
         [userMisses],
       )
-      : Promise.resolve([] as Array<{ id: string; full_name: string | null }>),
-    legacyMisses.length > 0
+      : Promise.resolve([] as Array<{ id: string; full_name: string | null }>)),
+    () => (legacyMisses.length > 0
       ? sqlRows<{ id: number; full_name: string | null }>(
         exec,
         `SELECT id, full_name FROM employees WHERE id = ANY($1::int[])`,
         [legacyMisses],
       )
-      : Promise.resolve([] as Array<{ id: number; full_name: string | null }>),
-  ]);
+      : Promise.resolve([] as Array<{ id: number; full_name: string | null }>)),
+  );
 
   const expiresAt = Date.now() + NAME_CACHE_TTL;
   const userNames = new Map(userHits);
@@ -565,16 +567,16 @@ export async function buildAttendanceEntries(params: {
   const employeeIds = employees.map((employee) => employee.id);
 
   const exec = params.exec;
-  // Под транзакционным клиентом pg сериализует запросы по одному соединению —
-  // Promise.all здесь корректен, просто теряет параллелизм. Это осознанная плата
-  // за консистентный снимок.
-  const [summaries, adjustments, travelSummaries] = await Promise.all([
-    loadDailySummaries(employeeIds, startDate, endDate, exec),
-    loadAttendanceAdjustments(employeeIds, startDate, endDate, exec),
-    getTravelHoursSummaryForRange({
+  // На пуле — параллельно, под клиентом транзакции — последовательно: конкурентные
+  // запросы на одном соединении в pg@9 помечены deprecated (см. runMaybeParallel).
+  const [summaries, adjustments, travelSummaries] = await runMaybeParallel(
+    exec,
+    () => loadDailySummaries(employeeIds, startDate, endDate, exec),
+    () => loadAttendanceAdjustments(employeeIds, startDate, endDate, exec),
+    () => getTravelHoursSummaryForRange({
       employeeIds, startDate, endDate, persist: persistTravelSegments, exec,
     }),
-  ]);
+  );
 
   // Всегда строим rawFallbackSummaries — они нужны fallback-пути для дней без skud_daily_summary
   // (см. цикл по employees ниже, ветка needsSkudCheck → rawSummary). Object-агрегация выполняется

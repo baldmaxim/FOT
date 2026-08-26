@@ -10,7 +10,7 @@
  * период на сотрудника. Закрытие предыдущего периода: effective_to = новый_from - 1.
  * См. миграцию 138_employee_object_attribution.sql.
  */
-import { query, queryOne, withTransaction } from '../config/postgres.js';
+import { query, queryOne, withTransaction, type DbExecutor } from '../config/postgres.js';
 
 let missingTableWarned = false;
 
@@ -47,6 +47,14 @@ export interface IAttributionHistoryRow extends IAttributionRow {
 }
 
 /** Привязка, активная для сотрудника на конкретную дату (point-in-time). */
+/** SELECT через клиент транзакции, если он передан, иначе через пул (см. DbExecutor). */
+async function queryAttributionRows<T extends import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
+
 export async function getAttributionObjectForEmployeeAt(
   employeeId: number,
   date: string,
@@ -85,18 +93,21 @@ export async function listAttributionRowsForEmployees(
   employeeIds: number[],
   startDate: string,
   endDate: string,
+  exec?: DbExecutor,
 ): Promise<Map<number, IAttributionRow[]>> {
   const result = new Map<number, IAttributionRow[]>();
   const ids = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
   if (ids.length === 0) return result;
   try {
-    const rows = await query<{
+    type AttributionQueryRow = {
       employee_id: number | string;
       object_id: string;
       object_name: string;
       effective_from: string;
       effective_to: string | null;
-    }>(
+    };
+    const rows = await queryAttributionRows<AttributionQueryRow>(
+      exec,
       `SELECT eoa.employee_id,
               eoa.skud_object_id::text AS object_id,
               so.name                  AS object_name,

@@ -1,4 +1,5 @@
 import { query, type DbExecutor } from '../config/postgres.js';
+import { runMaybeParallel } from '../utils/db-parallel.js';
 import type { TimeStatus } from '../types/index.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { listObjectIdsForEmployees } from './employee-skud-object-access.service.js';
@@ -673,16 +674,17 @@ export async function buildObjectAttendanceData(params: {
     };
   }
 
-  const [internalPoints, objectMappings, rawEvents, assignedObjectsByEmployee] = await Promise.all([
-    getNormalizedInternalPoints(),
-    includeObjectDetails
+  const [internalPoints, objectMappings, rawEvents, assignedObjectsByEmployee] = await runMaybeParallel(
+    exec,
+    () => getNormalizedInternalPoints(),
+    () => (includeObjectDetails
       ? fetchObjectMappings()
-      : Promise.resolve({ accessPointToObjectId: new Map<string, string>(), objectNameById: new Map<string, string>() }),
-    fetchRawEvents({ employeeIds, startDate, endDate: rawEventsEndDate, exec }),
-    includeObjectDetails
-      ? listObjectIdsForEmployees(employeeIds)
-      : Promise.resolve(new Map<number, string[]>()),
-  ]);
+      : Promise.resolve({ accessPointToObjectId: new Map<string, string>(), objectNameById: new Map<string, string>() })),
+    () => fetchRawEvents({ employeeIds, startDate, endDate: rawEventsEndDate, exec }),
+    () => (includeObjectDetails
+      ? listObjectIdsForEmployees(employeeIds, exec)
+      : Promise.resolve(new Map<number, string[]>())),
+  );
 
   // Сотрудники без приписки в employee_skud_object_access — для них day-level
   // корректировку нужно прицепить к фактическому объекту, иначе попадёт в «Не определён».
@@ -704,13 +706,13 @@ export async function buildObjectAttendanceData(params: {
   // дни без СКУД (между реальным СКУД дня и 90-дневной историей). Реальный СКУД дня
   // остаётся приоритетнее, поэтому при выходе на работу реальный объект не маскируется.
   const remoteSchedulesByEmployee = includeObjectDetails
-    ? await resolveSchedulesBulk(employeeIds.map(id => ({ id })), endDate)
+    ? await resolveSchedulesBulk(employeeIds.map(id => ({ id })), endDate, exec)
     : new Map();
   const remoteEmployeeIds = includeObjectDetails
     ? employeeIds.filter(id => remoteSchedulesByEmployee.get(id)?.schedule_type === 'remote')
     : [];
   const attributionRowsByEmployee = remoteEmployeeIds.length > 0
-    ? await listAttributionRowsForEmployees(remoteEmployeeIds, startDate, endDate)
+    ? await listAttributionRowsForEmployees(remoteEmployeeIds, startDate, endDate, exec)
     : new Map<number, IAttributionRow[]>();
 
   // Графики по дням периода — для ночного гейта окна (миграция 168): у дневной смены пара
@@ -719,6 +721,7 @@ export async function buildObjectAttendanceData(params: {
     employeeIds.map(id => ({ id })),
     startDate,
     endDate,
+    exec,
   );
 
   const rawFallbackSummaries = new Map<number, Map<string, IRawFallbackSummary>>();

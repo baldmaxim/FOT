@@ -1,4 +1,5 @@
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
+import { runMaybeParallel } from '../utils/db-parallel.js';
 import { isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 import { buildAttendanceEntries, hasRealActivity, type IAttendanceEntry } from './attendance.service.js';
@@ -296,10 +297,11 @@ export async function fetchTimesheetDataForDepartment(
   const cutoffByEmployeeId = buildFiredCutoffMap(employees, startDate);
   // Графики
   const empList = empArr.map(e => ({ id: e.id }));
-  const [dailySchedulesMap, calendarMonth] = await Promise.all([
-    resolveSchedulesForPeriod(empList, startDate, endDate, exec),
-    loadCalendarMonth(year, mon, exec),
-  ]);
+  const [dailySchedulesMap, calendarMonth] = await runMaybeParallel(
+    exec,
+    () => resolveSchedulesForPeriod(empList, startDate, endDate, exec),
+    () => loadCalendarMonth(year, mon, exec),
+  );
   const referenceDate = todayStr < startDate ? startDate : (todayStr > endDate ? endDate : todayStr);
   const schedulesMap = new Map<number, IResolvedSchedule>();
   for (const [employeeId, dailyMap] of dailySchedulesMap) {
@@ -492,10 +494,11 @@ export async function fetchTimesheetDataForEmployees(
   const cutoffByEmployeeId = buildFiredCutoffMap(employees, startDate);
 
   const empList = empArr.map(e => ({ id: e.id }));
-  const [dailySchedulesMap, calendarMonth] = await Promise.all([
-    resolveSchedulesForPeriod(empList, startDate, endDate),
-    loadCalendarMonth(year, mon),
-  ]);
+  const [dailySchedulesMap, calendarMonth] = await runMaybeParallel(
+    exec,
+    () => resolveSchedulesForPeriod(empList, startDate, endDate, exec),
+    () => loadCalendarMonth(year, mon, exec),
+  );
   const referenceDate = todayStr < startDate ? startDate : (todayStr > endDate ? endDate : todayStr);
   const schedulesMap = new Map<number, IResolvedSchedule>();
   for (const [employeeId, dailyMap] of dailySchedulesMap) {
