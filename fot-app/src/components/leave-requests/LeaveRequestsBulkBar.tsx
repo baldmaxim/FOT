@@ -34,6 +34,13 @@ export const LeaveRequestsBulkBar: FC<ILeaveRequestsBulkBarProps> = ({
   disabled,
 }) => {
   const actionsDisabled = disabled || selectedCount === 0;
+  // Серая кнопка без объяснения читается как «сломано» (кейс ОТиТБ, 26.08):
+  // подсказываем, почему она неактивна.
+  const actionsTitle = disabled
+    ? 'Данные обновляются или нет соединения — подождите'
+    : selectedCount === 0
+      ? 'Сначала отметьте заявления галочкой слева'
+      : undefined;
 
   return (
     <div className="lrm-bulkbar">
@@ -47,7 +54,7 @@ export const LeaveRequestsBulkBar: FC<ILeaveRequestsBulkBarProps> = ({
       <span className="lrm-bulkbar-summary">
         {selectedCount > 0
           ? <>Выбрано: <b>{selectedCount}</b> из <b>{selectableCount}</b></>
-          : <><b>{selectableCount}</b> ожидают решения</>}
+          : <><b>{selectableCount}</b> ожидают решения<span className="lrm-bulkbar-hint"> · отметьте заявления галочкой слева</span></>}
       </span>
       {selectedCount > 0 && (
         <button
@@ -72,6 +79,7 @@ export const LeaveRequestsBulkBar: FC<ILeaveRequestsBulkBarProps> = ({
           className="lrm-bulkbar-btn lrm-bulkbar-btn--approve"
           onClick={onApprove}
           disabled={actionsDisabled}
+          title={actionsTitle}
         >
           <Check size={15} /> Согласовать{selectedCount > 0 ? ` (${selectedCount})` : ''}
         </button>
@@ -80,6 +88,7 @@ export const LeaveRequestsBulkBar: FC<ILeaveRequestsBulkBarProps> = ({
           className="lrm-bulkbar-btn lrm-bulkbar-btn--reject"
           onClick={onReject}
           disabled={actionsDisabled}
+          title={actionsTitle}
         >
           <X size={15} /> Отклонить{selectedCount > 0 ? ` (${selectedCount})` : ''}
         </button>

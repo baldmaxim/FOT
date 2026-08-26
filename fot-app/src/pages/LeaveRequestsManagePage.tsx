@@ -80,8 +80,16 @@ export const LeaveRequestsManagePage: FC = () => {
   const [preview, setPreview] = useState<IPreviewState | null>(null);
   const [eventsPanel, setEventsPanel] = useState<IEventsPanelState | null>(null);
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
-  const { data, isLoading, isPlaceholderData } = useLeaveRequestsManage(scope, filter);
+  const {
+    data, isLoading, isPlaceholderData, isError, fetchStatus, refetch,
+  } = useLeaveRequestsManage(scope, filter);
   const requests = data ?? EMPTY_REQUESTS;
+  // placeholderData живёт только пока запрос нового ключа не завершён (status: pending).
+  // fetching — идёт загрузка; paused — Network Mode считает браузер offline и запрос
+  // не стартует вовсе. В обоих случаях на экране старые данные — действия над ними
+  // блокируем, но обязаны показать, что происходит, и дать «Повторить».
+  const stalePlaceholder = isPlaceholderData && fetchStatus !== 'idle';
+  const isPaused = fetchStatus === 'paused';
 
   const baseRequests = useMemo(
     () => (filter === 'pending' && isDepartmentScope ? requests.filter(r => r.status === 'pending') : requests),
@@ -260,7 +268,22 @@ export const LeaveRequestsManagePage: FC = () => {
 
   // Во время массовой операции и на placeholder-данных одиночные действия и
   // чекбоксы заблокированы: иначе можно решить по заявке, которая уже в пакете.
-  const actionsLocked = bulk.bulkPending || (bulkMode && isPlaceholderData);
+  const actionsLocked = bulk.bulkPending || (bulkMode && stalePlaceholder);
+
+  // Баннер состояния списка (см. матрицу: fetching / paused / ошибка с кэшем).
+  // Ошибка без данных рендерится вместо списка ниже.
+  const banner = (() => {
+    if (isPaused) {
+      return { kind: 'warn' as const, text: 'Нет соединения — действия недоступны', retry: true };
+    }
+    if (stalePlaceholder) {
+      return { kind: 'info' as const, text: 'Обновляем список…', retry: false };
+    }
+    if (isError && hasData) {
+      return { kind: 'error' as const, text: 'Не удалось обновить список', retry: true };
+    }
+    return null;
+  })();
 
   const renderRow = (r: ILeaveRequest) => (
     <LeaveRequestRow
@@ -390,8 +413,26 @@ export const LeaveRequestsManagePage: FC = () => {
           />
         )}
 
+        {banner && (
+          <div className={`lrm-banner lrm-banner--${banner.kind}`} role="status">
+            <span className="lrm-banner-text">{banner.text}</span>
+            {banner.retry && (
+              <button type="button" className="lrm-banner-retry" onClick={() => { void refetch(); }}>
+                Повторить
+              </button>
+            )}
+          </div>
+        )}
+
         {isLoading ? (
           <div className="lrm-loading">Загрузка...</div>
+        ) : isError && !hasData ? (
+          <div className="lrm-empty lrm-empty--error">
+            Не удалось загрузить заявления
+            <button type="button" className="lrm-banner-retry" onClick={() => { void refetch(); }}>
+              Повторить
+            </button>
+          </div>
         ) : filteredRequests.length === 0 ? (
           <div className="lrm-empty">{isFiltering ? 'Ничего не найдено' : 'Нет заявлений'}</div>
         ) : (

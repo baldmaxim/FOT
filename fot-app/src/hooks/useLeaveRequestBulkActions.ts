@@ -145,7 +145,8 @@ export const useLeaveRequestBulkActions = ({ scope, selectableIds }: IUseLeaveRe
     comment,
     setComment,
     bulkPending: approveMutation.isPending || rejectMutation.isPending,
-    approveSelected: () => approveMutation.mutate([...selectedIds]),
-    rejectSelected: () => rejectMutation.mutate([...selectedIds]),
+    // Защита API от пустого пакета (кнопки при пустом выборе и так disabled).
+    approveSelected: () => { if (selectedIds.size > 0) approveMutation.mutate([...selectedIds]); },
+    rejectSelected: () => { if (selectedIds.size > 0) rejectMutation.mutate([...selectedIds]); },
   };
 };
