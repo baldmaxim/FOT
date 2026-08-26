@@ -70,11 +70,13 @@ describe('createKey', () => {
 
     const [sql, params] = pgQueryOne.mock.calls[0];
     expect(sql).toMatch(/^INSERT INTO data_api_keys/);
-    // params: [name, description, prefix, hash, rate_limit, expires_at, created_by]
+    // params: [name, description, prefix, hash, rate_limit, allow_timesheet_ack, expires_at, created_by]
     expect(params[2]).toHaveLength(16); // key_prefix
     expect(params[3]).toHaveLength(64); // sha256 hex length
     expect(params[3]).not.toMatch(/^\$2[aby]\$/); // не bcrypt
-    expect(params[6]).toBe('user-1');
+    // Подтверждение выгрузки табелей (единственный write публичного API) по умолчанию закрыто.
+    expect(params[5]).toBe(false);
+    expect(params[7]).toBe('user-1');
   });
 });
 
@@ -150,6 +152,7 @@ describe('authenticateRawToken', () => {
         name: 'тест',
         key_hash: hashSecret(secret),
         rate_limit_per_minute: 60,
+        allow_timesheet_ack: false,
         expires_at: null,
         revoked_at: null,
         ...overrides,
@@ -169,7 +172,10 @@ describe('authenticateRawToken', () => {
     pgExecute.mockResolvedValueOnce(1);
 
     const result = await dataApiKeyService.authenticateRawToken(plaintext_token);
-    expect(result).toEqual({ ok: true, key: { id: 'key-1', name: 'тест', rate_limit_per_minute: 60 } });
+    expect(result).toEqual({
+      ok: true,
+      key: { id: 'key-1', name: 'тест', rate_limit_per_minute: 60, allow_timesheet_ack: false },
+    });
     expect(pgExecute.mock.calls[0][0]).toMatch(/UPDATE data_api_keys SET last_used_at/);
   });
 

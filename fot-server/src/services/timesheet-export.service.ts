@@ -1,4 +1,4 @@
-import { query, queryOne } from '../config/postgres.js';
+import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import { isWorkingDay, loadCalendarMonth, resolveSchedulesForPeriod } from './schedule.service.js';
 import type { IProductionCalendarMonth, IResolvedSchedule } from '../types/index.js';
 import { buildAttendanceEntries, hasRealActivity, type IAttendanceEntry } from './attendance.service.js';
@@ -19,6 +19,22 @@ export type TimesheetExportPresentation = 'hr' | 'manager';
 function isExportRange(value: TimesheetExportRangeArg): value is TimesheetExportRange {
   return typeof value === 'object' && value !== null
     && typeof value.startDate === 'string' && typeof value.endDate === 'string';
+}
+
+/** SELECT через клиент транзакции, если он передан, иначе через пул (см. DbExecutor). */
+async function exportRows<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
+
+/** SELECT-one через клиент транзакции, если он передан, иначе через пул. */
+async function exportOne<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T | null> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows[0] ?? null;
+  return queryOne<T>(sql, params);
 }
 
 export interface IExportEmployee {
@@ -71,6 +87,14 @@ export interface IExportRosterOptions {
   // участка» — как exempt в getAll). Только СОХРАНЯЕТ уже загруженных, ростер
   // не расширяет. Резолвит вызывающий контроллер: bulk-функция не знает отдела.
   exemptEmployeeIds?: Set<number>;
+  // 'snapshot' — состав задан снаружи и менять его нельзя: фильтр по
+  // employment_status/is_archived отключается, чтобы согласованный ростер закрытого
+  // табеля выгружался целиком (включая уволенных задним числом и архивных).
+  // По умолчанию не задан — поведение прежнее.
+  rosterMode?: 'snapshot';
+  // Клиент транзакции: все чтения расчёта идут по ОДНОМУ соединению, иначе payload
+  // официальной версии соберётся из разных снимков БД.
+  exec?: DbExecutor;
 }
 
 /**
@@ -124,6 +148,7 @@ async function computeExportWeekendExemptions(
   year: number,
   mon: number,
   calendar: IProductionCalendarMonth | null,
+  exec?: DbExecutor,
 ): Promise<Set<string>> {
   if (employeeIds.length === 0) return new Set();
   const mm = String(mon).padStart(2, '0');
@@ -136,7 +161,8 @@ async function computeExportWeekendExemptions(
   // Кандидаты — присутствия в календарные выходные (сб/вс) ИЛИ в праздники месяца
   // (праздник-будень может засчитываться в субботнюю квоту). Функция сама отфильтрует
   // лишнее по графику/календарю.
-  const skudRows = await query<{ employee_id: number; date: string }>(
+  const skudRows = await exportRows<{ employee_id: number; date: string }>(
+    exec,
     `SELECT employee_id, date::text AS date
        FROM skud_daily_summary
       WHERE employee_id = ANY($1::int[])
@@ -146,7 +172,8 @@ async function computeExportWeekendExemptions(
     [employeeIds, monthStart, monthEnd, holidayDates],
   );
   if (skudRows.length === 0) return new Set();
-  const adjRows = await query<{ employee_id: number; work_date: string }>(
+  const adjRows = await exportRows<{ employee_id: number; work_date: string }>(
+    exec,
     `SELECT employee_id, work_date::text AS work_date
        FROM attendance_adjustments
       WHERE employee_id = ANY($1::int[])
@@ -193,6 +220,7 @@ export async function fetchTimesheetDataForDepartment(
   // override displayMode на 'actual' нужен, иначе entry.hours_worked будет
   // уже урезанным.
   const effectiveDisplayMode = showActualHours ? 'actual' : displayMode;
+  const exec = options?.exec;
   const periodRange = isExportRange(rangeArg)
     ? resolveTimesheetDateRange(month, rangeArg.startDate, rangeArg.endDate)
     : resolveTimesheetPeriodRange(month, rangeArg);
@@ -210,7 +238,8 @@ export async function fetchTimesheetDataForDepartment(
   // Имя отдела
   let departmentName = 'Все отделы';
   if (departmentId) {
-    const dept = await queryOne<{ name: string }>(
+    const dept = await exportOne<{ name: string }>(
+      exec,
       `SELECT name FROM org_departments WHERE id = $1 LIMIT 1`,
       [departmentId],
     );
@@ -224,7 +253,8 @@ export async function fetchTimesheetDataForDepartment(
   let employees: Array<Record<string, unknown>> = [];
   if (!departmentId || assignedEmployeeIds.length > 0) {
     if (departmentId) {
-      employees = await query<Record<string, unknown>>(
+      employees = await exportRows<Record<string, unknown>>(
+        exec,
         `SELECT id, full_name, position_id, org_department_id, sigur_employee_id,
                 employment_status, dismissal_date, excluded_from_timesheet_date
            FROM employees
@@ -238,7 +268,8 @@ export async function fetchTimesheetDataForDepartment(
         [assignedEmployeeIds, startDate],
       );
     } else {
-      employees = await query<Record<string, unknown>>(
+      employees = await exportRows<Record<string, unknown>>(
+        exec,
         `SELECT id, full_name, position_id, org_department_id, sigur_employee_id,
                 employment_status, dismissal_date, excluded_from_timesheet_date
            FROM employees
@@ -266,8 +297,8 @@ export async function fetchTimesheetDataForDepartment(
   // Графики
   const empList = empArr.map(e => ({ id: e.id }));
   const [dailySchedulesMap, calendarMonth] = await Promise.all([
-    resolveSchedulesForPeriod(empList, startDate, endDate),
-    loadCalendarMonth(year, mon),
+    resolveSchedulesForPeriod(empList, startDate, endDate, exec),
+    loadCalendarMonth(year, mon, exec),
   ]);
   const referenceDate = todayStr < startDate ? startDate : (todayStr > endDate ? endDate : todayStr);
   const schedulesMap = new Map<number, IResolvedSchedule>();
@@ -289,11 +320,12 @@ export async function fetchTimesheetDataForDepartment(
     displayMode: effectiveDisplayMode,
     // Экспорт — read-only: не переписывать skud_travel_segments (тяжёлый write на больших выборках).
     persistTravelSegments: false,
+    exec,
   });
 
   // Плановые выходные за полный месяц — для решения, оставлять ли часы выходного дня.
   const weekendExemptions = await computeExportWeekendExemptions(
-    empArr.map(e => e.id), year, mon, calendarMonth,
+    empArr.map(e => e.id), year, mon, calendarMonth, exec,
   );
 
   const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
@@ -324,7 +356,8 @@ export async function fetchTimesheetDataForDepartment(
   const positionIds = [...new Set(empArr.map(e => e.position_id).filter(Boolean))] as string[];
   const posMap = new Map<string, string>();
   if (positionIds.length > 0) {
-    const positions = await query<{ id: string; name: string }>(
+    const positions = await exportRows<{ id: string; name: string }>(
+      exec,
       `SELECT id, name FROM positions WHERE id = ANY($1::uuid[])`,
       [positionIds],
     );
@@ -422,21 +455,30 @@ export async function fetchTimesheetDataForEmployees(
   const exportDays = Array.from({ length: endDay - startDay + 1 }, (_, i) => startDay + i);
   const exportHalf: TimesheetExportHalf = isExportRange(rangeArg) ? 'FULL' : rangeArg;
 
+  const exec = options?.exec;
+  const isSnapshotRoster = options?.rosterMode === 'snapshot';
   const uniqueIds = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
   let employees: Array<Record<string, unknown>> = [];
   if (uniqueIds.length > 0) {
-    employees = await query<Record<string, unknown>>(
+    // Обычный режим фильтрует состав по актуальному статусу занятости. Для snapshot-режима
+    // (материализация официальной версии закрытого табеля) фильтр отключён: состав уже
+    // зафиксирован снимком подачи, и терять из него людей нельзя — ни архивных, ни
+    // уволенных задним числом. Отсечка дней после увольнения (cutoffByEmployeeId) при этом
+    // сохраняется: она про дни, а не про состав.
+    employees = await exportRows<Record<string, unknown>>(
+      exec,
       `SELECT id, full_name, position_id, org_department_id, sigur_employee_id,
               employment_status, dismissal_date, excluded_from_timesheet_date
          FROM employees
          WHERE id = ANY($1::int[])
-           AND (employment_status = 'active'
-                OR (employment_status = 'fired'
-                    AND dismissal_date IS NOT NULL
-                    AND dismissal_date >= $2::date))
-           AND is_archived = false
+           AND ($3::boolean
+                OR ((employment_status = 'active'
+                     OR (employment_status = 'fired'
+                         AND dismissal_date IS NOT NULL
+                         AND dismissal_date >= $2::date))
+                    AND is_archived = false))
          ORDER BY full_name`,
-      [uniqueIds, startDate],
+      [uniqueIds, startDate, isSnapshotRoster],
     );
   }
   const empArr: IExportEmployee[] = employees.map(e => ({
@@ -474,11 +516,12 @@ export async function fetchTimesheetDataForEmployees(
     displayMode: effectiveDisplayMode,
     // Экспорт — read-only: не переписывать skud_travel_segments (тяжёлый write на больших выборках).
     persistTravelSegments: false,
+    exec,
   });
 
   // Плановые выходные за полный месяц — для решения, оставлять ли часы выходного дня.
   const weekendExemptions = await computeExportWeekendExemptions(
-    empArr.map(e => e.id), year, mon, calendarMonth,
+    empArr.map(e => e.id), year, mon, calendarMonth, exec,
   );
 
   const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
@@ -506,7 +549,8 @@ export async function fetchTimesheetDataForEmployees(
   const positionIds = [...new Set(empArr.map(e => e.position_id).filter(Boolean))] as string[];
   const posMap = new Map<string, string>();
   if (positionIds.length > 0) {
-    const positions = await query<{ id: string; name: string }>(
+    const positions = await exportRows<{ id: string; name: string }>(
+      exec,
       `SELECT id, name FROM positions WHERE id = ANY($1::uuid[])`,
       [positionIds],
     );

@@ -176,17 +176,79 @@ export async function lockTimesheetMonthsOnClient(
   client: DbExecutor,
   pairs: readonly ITimesheetLockPair[],
 ): Promise<void> {
+  for (const key of buildTimesheetLockKeys(pairs)) {
+    await client.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [key.employeeId, key.month]);
+  }
+}
+
+/**
+ * Ключи advisory-локов (сотрудник, месяц) — общая нормализация для транзакционного
+ * и session-level вариантов. Порядок детерминированный, иначе встречные
+ * многомесячные запросы получают взаимную блокировку.
+ */
+export function buildTimesheetLockKeys(
+  pairs: readonly ITimesheetLockPair[],
+): Array<{ employeeId: number; month: number }> {
   const keys = new Map<string, { employeeId: number; month: number }>();
   for (const pair of normalizePairs(pairs)) {
     const month = Number(pair.workDate.slice(0, 4)) * 100 + Number(pair.workDate.slice(5, 7));
     keys.set(`${pair.employeeId}|${month}`, { employeeId: pair.employeeId, month });
   }
-  const sorted = [...keys.values()].sort(
-    (a, b) => (a.employeeId - b.employeeId) || (a.month - b.month),
-  );
+  return [...keys.values()].sort((a, b) => (a.employeeId - b.employeeId) || (a.month - b.month));
+}
+
+/**
+ * SESSION-level advisory-локи по (сотрудник, месяц).
+ *
+ * Зачем отдельно от lockTimesheetMonthsOnClient: материализация версии табеля читает
+ * данные под REPEATABLE READ, а PostgreSQL фиксирует snapshot на ПЕРВОМ запросе
+ * транзакции. Если бы первым запросом был pg_advisory_xact_lock, ожидающий чужую
+ * корректировку, то после её коммита транзакция всё равно продолжила бы видеть
+ * состояние ДО неё — и правка не попала бы в официальную версию. Поэтому локи
+ * берутся ДО BEGIN, а значит обязаны быть session-level.
+ *
+ * Пространство ключей то же, что у транзакционного варианта, и session/xact локи
+ * конфликтуют между собой — существующие пишущие пути табеля защищены без правок.
+ *
+ * ВАЖНО: снимать обязательно (см. unlockTimesheetMonthsSession) — session-лок живёт
+ * до конца соединения, а не до конца транзакции.
+ */
+export async function lockTimesheetMonthsSession(
+  client: DbExecutor,
+  pairs: readonly ITimesheetLockPair[],
+): Promise<Array<{ employeeId: number; month: number }>> {
+  const sorted = buildTimesheetLockKeys(pairs);
+  const acquired: Array<{ employeeId: number; month: number }> = [];
   for (const key of sorted) {
-    await client.query('SELECT pg_advisory_xact_lock($1::int, $2::int)', [key.employeeId, key.month]);
+    await client.query('SELECT pg_advisory_lock($1::int, $2::int)', [key.employeeId, key.month]);
+    acquired.push(key);
   }
+  return acquired;
+}
+
+/**
+ * Снимает session-level локи. Возвращает true, только если СНЯТЫ ВСЕ: вызывающий
+ * обязан уничтожить соединение вместо возврата в пул, иначе лок утечёт следующему
+ * потребителю этого соединения.
+ */
+export async function unlockTimesheetMonthsSession(
+  client: DbExecutor,
+  keys: ReadonlyArray<{ employeeId: number; month: number }>,
+): Promise<boolean> {
+  let allReleased = true;
+  // Снимаем в обратном порядке — симметрично захвату.
+  for (const key of [...keys].reverse()) {
+    try {
+      const res = await client.query<{ released: boolean }>(
+        'SELECT pg_advisory_unlock($1::int, $2::int) AS released',
+        [key.employeeId, key.month],
+      );
+      if (res.rows[0]?.released !== true) allReleased = false;
+    } catch {
+      allReleased = false;
+    }
+  }
+  return allReleased;
 }
 
 export interface IEmployeeApprovalLock {

@@ -1800,3 +1800,48 @@
     gap: 4px;
   }
 }
+
+/* Статус выгрузки табеля в 1С. Соседствует с отметкой табельщицы, поэтому
+   геометрия та же — иначе шапка карточки «прыгает». */
+.ts-1c-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  /* Тап-цель на мобильных: сам бейдж мелкий, но область касания должна быть 44px. */
+  min-height: 24px;
+}
+
+.ts-1c-badge--ok {
+  color: #fff;
+  background: var(--success);
+}
+
+.ts-1c-badge--stale {
+  color: #fff;
+  background: var(--warning, #d97706);
+}
+
+/* В дереве отделов место ограничено — только иконка. */
+.ts-1c-badge--compact {
+  padding: 0;
+  background: none;
+  min-height: 0;
+}
+
+.ts-1c-badge--compact.ts-1c-badge--ok { color: var(--success); }
+.ts-1c-badge--compact.ts-1c-badge--stale { color: var(--warning, #d97706); }
+.ts-1c-badge--compact.ts-1c-badge--none { color: var(--text-tertiary); }
+
+@media (max-width: 480px) {
+  .ts-1c-badge {
+    font-size: 11px;
+    padding: 2px 6px;
+  }
+}

@@ -1,4 +1,4 @@
-import { query } from '../config/postgres.js';
+import { query, type DbExecutor } from '../config/postgres.js';
 import type { TimeStatus } from '../types/index.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { listObjectIdsForEmployees } from './employee-skud-object-access.service.js';
@@ -15,6 +15,14 @@ import {
   NON_WORK_ADJUSTMENT_STATUSES,
   roundHours,
 } from './time-calculation/primitives.js';
+
+/** SELECT через клиент транзакции, если он передан, иначе через пул (см. DbExecutor). */
+async function objectRows<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
 
 const BATCH_SIZE = 500;
 
@@ -388,17 +396,20 @@ const fetchRawEvents = async ({
   employeeIds,
   startDate,
   endDate,
+  exec,
 }: {
   employeeIds: number[];
   startDate: string;
   endDate: string;
+  exec?: DbExecutor;
 }): Promise<IRawEventRow[]> => {
   if (employeeIds.length === 0) return [];
 
   const rows: IRawEventRow[] = [];
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const data = await query<IRawEventRow>(
+    const data = await objectRows<IRawEventRow>(
+      exec,
       `SELECT employee_id, event_date, event_time, access_point, direction
          FROM skud_events
         WHERE employee_id = ANY($1::int[])
@@ -423,6 +434,7 @@ const fetchHistoricalPrimaryObjects = async (
   employeeIds: number[],
   windowStartDate: string,
   windowEndDate: string,
+  exec?: DbExecutor,
 ): Promise<Map<number, { object_id: string; object_name: string }>> => {
   const out = new Map<number, { object_id: string; object_name: string }>();
   if (employeeIds.length === 0) return out;
@@ -431,7 +443,8 @@ const fetchHistoricalPrimaryObjects = async (
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
     let rows: IHistoricalPrimaryRow[] = [];
     try {
-      rows = await query<IHistoricalPrimaryRow>(
+      rows = await objectRows<IHistoricalPrimaryRow>(
+        exec,
         `SELECT employee_id, object_id, object_name
            FROM (
              SELECT se.employee_id,
@@ -631,6 +644,10 @@ export async function buildObjectAttendanceData(params: {
   // в обоих режимах отображения. До фикса fallback гасился вместе с object-блоком, и день с
   // событиями, но без summary, показывался как «Н» (см. attendance.service.test 'employees view').
   includeObjectDetails?: boolean;
+  // Клиент транзакции для материализации версии табеля: чтение ФАКТОВ (события СКУД,
+  // историческая привязка по событиям) идёт через него. Справочники — маппинг точек
+  // и список объектов — читаются как обычно, они за in-memory кэшем и меняются редко.
+  exec?: DbExecutor;
 }): Promise<{
   objectEntries: IAttendanceObjectEntry[];
   objectEntriesByEmployeeDate: Map<number, Map<string, IAttendanceObjectEntry[]>>;
@@ -638,7 +655,7 @@ export async function buildObjectAttendanceData(params: {
   legacyBlockedDays: Map<string, string>;
   rawFallbackSummaries: Map<number, Map<string, IRawFallbackSummary>>;
 }> {
-  const { employeeIds, startDate, endDate, adjustments } = params;
+  const { employeeIds, startDate, endDate, adjustments, exec } = params;
   const todayStr = params.todayStr ?? formatDateToISO(new Date());
   const includeObjectDetails = params.includeObjectDetails ?? true;
   // Тянем события на 2 дня вперёд за пределы периода: утреннее закрытие ночной смены
@@ -661,7 +678,7 @@ export async function buildObjectAttendanceData(params: {
     includeObjectDetails
       ? fetchObjectMappings()
       : Promise.resolve({ accessPointToObjectId: new Map<string, string>(), objectNameById: new Map<string, string>() }),
-    fetchRawEvents({ employeeIds, startDate, endDate: rawEventsEndDate }),
+    fetchRawEvents({ employeeIds, startDate, endDate: rawEventsEndDate, exec }),
     includeObjectDetails
       ? listObjectIdsForEmployees(employeeIds)
       : Promise.resolve(new Map<number, string[]>()),
@@ -679,6 +696,7 @@ export async function buildObjectAttendanceData(params: {
         // endDate - 90д … endDate включительно
         formatDateToISO(new Date(new Date(`${endDate}T00:00:00Z`).getTime() - 90 * 86400_000)),
         endDate,
+        exec,
       )
     : new Map<number, { object_id: string; object_name: string }>();
 

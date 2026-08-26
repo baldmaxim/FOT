@@ -1,10 +1,18 @@
-import { query, queryOne, execute } from '../config/postgres.js';
+import { query, queryOne, execute, type DbExecutor } from '../config/postgres.js';
 import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
 import { getInternalAccessPoints } from './skud-shared.service.js';
 import { settingsService } from './settings.service.js';
 import { createCache } from '../utils/cache.js';
 import { SKUD_OBJECT_MAPS_BUCKET, objectMapStorageService } from './object-map-storage.service.js';
 import { minutesToHours } from './time-calculation/primitives.js';
+
+/** SELECT через клиент транзакции, если он передан, иначе через пул (см. DbExecutor). */
+async function travelRows<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
 
 const BATCH_SIZE = 500;
 const TRAVEL_SEGMENTS_CACHE_TTL_MS = 60_000;
@@ -236,6 +244,12 @@ interface IRebuildTravelParams {
   employeeIds: number[];
   startDate: string;
   endDate: string;
+  // Клиент транзакции для материализации версии табеля. Прокидывается в чтение
+  // ФАКТОВ (события СКУД, сохранённые сегменты). Справочники — внутренние точки
+  // доступа, маппинг «точка → объект», лимит «Дороги» — читаются как обычно:
+  // они меняются редко и уже живут за in-memory кэшем с TTL, так что передача
+  // клиента им ничего не дала бы.
+  exec?: DbExecutor;
 }
 
 interface ITravelFeatureErrorCandidate {
@@ -573,13 +587,15 @@ const fetchEventsForEmployees = async ({
   employeeIds,
   startDate,
   endDate,
+  exec,
 }: IRebuildTravelParams): Promise<ITravelEventRow[]> => {
   if (employeeIds.length === 0) return [];
 
   const events: ITravelEventRow[] = [];
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const data = await query<ITravelEventRow>(
+    const data = await travelRows<ITravelEventRow>(
+      exec,
       `SELECT employee_id, event_date, event_time, access_point, direction FROM skud_events
        WHERE employee_id = ANY($1::bigint[]) AND event_date >= $2 AND event_date <= $3
        ORDER BY employee_id ASC, event_date ASC, event_time ASC`,
@@ -771,6 +787,7 @@ const fetchExistingDecidedSegments = async ({
   employeeIds,
   startDate,
   endDate,
+  exec,
 }: IRebuildTravelParams): Promise<ITravelSegmentRow[]> => {
   if (employeeIds.length === 0) return [];
 
@@ -778,7 +795,8 @@ const fetchExistingDecidedSegments = async ({
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
     try {
-      const data = await query<ITravelSegmentRow>(
+      const data = await travelRows<ITravelSegmentRow>(
+        exec,
         `SELECT ${TRAVEL_SEGMENT_COLUMNS} FROM skud_travel_segments
          WHERE employee_id = ANY($1::bigint[])
            AND work_date >= $2 AND work_date <= $3
@@ -933,6 +951,7 @@ export const calculateAndSyncTravelSegments = async ({
   startDate,
   endDate,
   persist = true,
+  exec,
 }: IRebuildTravelParams & { persist?: boolean }): Promise<{
   segments: ICalculatedTravelSegment[];
   summaryByDay: Map<string, ITravelDaySummary>;
@@ -947,8 +966,8 @@ export const calculateAndSyncTravelSegments = async ({
   const [internalPoints, mappings, events, decidedSegments] = await Promise.all([
     getInternalAccessPoints(),
     fetchTravelMappingsRaw(),
-    fetchEventsForEmployees({ employeeIds, startDate, endDate }),
-    fetchExistingDecidedSegments({ employeeIds, startDate, endDate }),
+    fetchEventsForEmployees({ employeeIds, startDate, endDate, exec }),
+    fetchExistingDecidedSegments({ employeeIds, startDate, endDate, exec }),
   ]);
 
   const accessPointToObjectId = new Map<string, string>();
@@ -1644,9 +1663,12 @@ export const getTravelHoursSummaryForRange = async ({
   startDate,
   endDate,
   persist = true,
+  exec,
 }: IRebuildTravelParams & { persist?: boolean }): Promise<Map<string, ITravelDaySummary>> => {
   try {
-    const { summaryByDay } = await calculateAndSyncTravelSegments({ employeeIds, startDate, endDate, persist });
+    const { summaryByDay } = await calculateAndSyncTravelSegments({
+      employeeIds, startDate, endDate, persist, exec,
+    });
     return summaryByDay;
   } catch (error) {
     if (isMissingTableError(error)) {

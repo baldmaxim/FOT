@@ -112,6 +112,23 @@ export interface IApprovalAttachment {
   preview_url?: string;
 }
 
+/** Состояние выгрузки табеля в 1С. */
+export type Timesheet1CState = 'not_exported' | 'stale' | 'exported';
+
+export interface ITimesheet1CStatus {
+  approval_id: number;
+  department_id: string | null;
+  scope_kind: 'department' | 'personal';
+  state: Timesheet1CState;
+  /** false — официальная версия ещё не сформирована, выгружать нечего. */
+  version_available: boolean;
+  revision: number | null;
+  content_hash: string | null;
+  acked_at: string | null;
+  document_ref: string | null;
+  key_name: string | null;
+}
+
 export interface IApprovalReviewItem extends ITimesheetApproval {
   department_name: string | null;
   manager_employee_name: string | null;
@@ -402,6 +419,21 @@ export const timesheetApprovalService = {
     if (start_date) qs.set('start_date', start_date);
     if (end_date) qs.set('end_date', end_date);
     const res = await apiClient.get<ApiResponse<IApprovalReviewItem[]>>(`/timesheet-approvals/review-list?${qs.toString()}`);
+    return res.data;
+  },
+
+  /**
+   * Статус выгрузки табелей в 1С за период. Грузится отдельно от основного списка,
+   * чтобы не задерживать его отрисовку.
+   */
+  get1CStatus: async (start_date?: string, end_date?: string) => {
+    const qs = new URLSearchParams();
+    if (start_date) qs.set('start_date', start_date);
+    if (end_date) qs.set('end_date', end_date);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await apiClient.get<ApiResponse<ITimesheet1CStatus[]>>(
+      `/timesheet-approvals/1c-status${suffix}`,
+    );
     return res.data;
   },
 

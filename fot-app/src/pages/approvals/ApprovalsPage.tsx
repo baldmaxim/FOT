@@ -8,7 +8,10 @@ import {
   type TimesheetApprovalStatus,
   type IApprovalReviewItem,
   type IApprovalAttachment,
+  type ITimesheet1CStatus,
 } from '../../services/timesheetApprovalService';
+import { useTimesheet1CStatus } from '../../hooks/useTimesheetApprovalData';
+import { Timesheet1CBadge } from '../../components/timesheet/Timesheet1CBadge';
 import { ApprovalAttachmentsModal } from '../../components/timesheet/ApprovalAttachmentsModal';
 import {
   correctionApprovalService,
@@ -877,6 +880,19 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
     queryFn: () => timesheetApprovalService.getReviewList(status, period.startDate, period.endDate),
   });
 
+  // Статус выгрузки в 1С — отдельным запросом: список не должен его ждать.
+  // Актуален только для утверждённых табелей, остальные в 1С не уезжают.
+  const oneCStatusQuery = useTimesheet1CStatus(
+    period.startDate,
+    period.endDate,
+    status === 'approved',
+  );
+  const oneCByApprovalId = useMemo(() => {
+    const map = new Map<number, ITimesheet1CStatus>();
+    for (const row of oneCStatusQuery.data ?? []) map.set(row.approval_id, row);
+    return map;
+  }, [oneCStatusQuery.data]);
+
   const invalidate = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['approvals-review-list'] }),
     queryClient.invalidateQueries({ queryKey: ['timesheet-approval'] }),
@@ -1020,6 +1036,18 @@ const TimesheetsTab: FC<ITimesheetsTabProps> = ({ period }) => {
                         Табельщица: {row.timekeeper_checked ? 'Проверено' : 'Не проверено'}
                       </span>
                     )}
+                    {row.status === 'approved' && oneCByApprovalId.has(row.id) && (() => {
+                      const oneC = oneCByApprovalId.get(row.id)!;
+                      return (
+                        <Timesheet1CBadge
+                          state={oneC.state}
+                          versionAvailable={oneC.version_available}
+                          ackedAt={oneC.acked_at}
+                          documentRef={oneC.document_ref}
+                          revision={oneC.revision}
+                        />
+                      );
+                    })()}
                     {row.status === 'approved' && canReview && (
                       <span
                         className="approvals-card-return-hint"

@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import { query, queryOne, withTransaction } from '../config/postgres.js';
+import { query, queryOne, withTransaction, type DbExecutor } from '../config/postgres.js';
 import type {
   AuthenticatedRequest,
   TimesheetApproval,
@@ -31,6 +31,14 @@ import {
   type IMembershipWindow,
 } from '../services/timesheet-department-assignments.service.js';
 import { lockTimesheetMonthsOnClient } from '../services/timesheet-lock.service.js';
+import { withTimesheetSnapshotTransaction } from '../services/timesheet-snapshot-tx.js';
+import {
+  materializeVersion,
+  resolveState,
+  TimesheetVersionEmptyRosterError,
+  TimesheetVersionIncompleteError,
+  type IVersionApproval,
+} from '../services/timesheet-version.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { settingsService } from '../services/settings.service.js';
 import { IS_PRODUCTION } from '../config/features.js';
@@ -50,6 +58,93 @@ function monthAnchorsInRange(startDate: string, endDate: string): string[] {
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
   return anchors;
+}
+
+/**
+ * Сколько pending-корректировок мешает утверждению подачи.
+ *
+ * Одна реализация на два места: ранний precheck в approve (быстрый отказ до локов)
+ * и повторная проверка ВНУТРИ транзакции под FOR UPDATE — именно она авторитетна,
+ * потому что между precheck и записью статуса корректировка могла появиться.
+ *
+ * exec: undefined — через пул (precheck), клиент транзакции — внутри неё.
+ */
+async function countPendingCorrectionsForApproval(
+  exec: DbExecutor | undefined,
+  approval: Pick<TimesheetApproval, 'id' | 'department_id' | 'manager_employee_id' | 'start_date' | 'end_date'>,
+): Promise<number> {
+  // Для персональной подачи берём состав из снимка — иначе подцепим чужих сотрудников отдела.
+  let employeeIds: number[];
+  let membershipWindow: Map<number, IMembershipWindow> | null = null;
+  if (approval.manager_employee_id != null) {
+    const snap = await listApprovalEmployees(Number(approval.id), exec);
+    employeeIds = snap.map(s => s.employee_id);
+  } else if (approval.department_id) {
+    const memberships = await listEmployeeMembershipsForDepartmentPeriod(
+      approval.department_id, approval.start_date, approval.end_date, exec,
+    );
+    employeeIds = memberships.map(m => m.employee_id);
+    membershipWindow = buildMembershipWindowMap(memberships);
+  } else {
+    employeeIds = [];
+  }
+  if (employeeIds.length === 0) return 0;
+
+  // Берём pending-корректировки и отбрасываем те, что вне окна членства сотрудника
+  // в этом отделе (чужой выход после перевода не должен блокировать утверждение).
+  const sql = `SELECT employee_id, work_date::text AS work_date FROM attendance_adjustments
+             WHERE approval_status = 'pending'
+               AND employee_id = ANY($1::int[])
+               AND work_date >= $2
+               AND work_date <= $3`;
+  const params = [employeeIds, approval.start_date, approval.end_date];
+  const pendingRows: Array<{ employee_id: number; work_date: string }> = exec
+    ? (await exec.query<{ employee_id: number; work_date: string }>(sql, params)).rows
+    : await query<{ employee_id: number; work_date: string }>(sql, params);
+
+  return pendingRows.filter((r) =>
+    membershipWindow == null
+      ? true
+      : isWithinMembershipWindow(membershipWindow.get(Number(r.employee_id)), String(r.work_date).slice(0, 10), 'viaTransferOnly'),
+  ).length;
+}
+
+/** Подача в форме, которую ждёт материализация версии. */
+function toVersionApproval(row: TimesheetApproval): IVersionApproval {
+  return {
+    id: Number(row.id),
+    department_id: row.department_id ?? null,
+    manager_employee_id: row.manager_employee_id != null ? Number(row.manager_employee_id) : null,
+    start_date: row.start_date,
+    end_date: row.end_date,
+    status: row.status,
+  };
+}
+
+/**
+ * Ошибки материализации версии → HTTP. Возвращает true, если ответ отправлен.
+ * Неполная официальная версия существовать не должна: транзакция уже откатилась,
+ * пользователю сообщаем причину, а не «внутреннюю ошибку».
+ */
+function respondVersionError(res: Response, err: unknown): boolean {
+  if (err instanceof TimesheetVersionIncompleteError) {
+    res.status(409).json({
+      success: false,
+      error: 'Не удалось сформировать выгрузку табеля: часть согласованного состава не попала в расчёт',
+      code: 'TIMESHEET_VERSION_INCOMPLETE',
+      missing_employee_ids: err.missingEmployeeIds,
+    });
+    return true;
+  }
+  if (err instanceof TimesheetVersionEmptyRosterError) {
+    res.status(409).json({
+      success: false,
+      error: 'У табеля нет сохранённого состава сотрудников — обратитесь к администратору',
+      code: 'TIMESHEET_VERSION_EMPTY_ROSTER',
+    });
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -1363,22 +1458,99 @@ async function changeApprovalReviewState(
     }
 
     const now = new Date().toISOString();
-    const data = await queryOne<TimesheetApproval>(
-      `UPDATE timesheet_approvals
-         SET status = $1,
-             reviewed_by = $2,
-             reviewed_at = $3,
-             review_comment = $4,
-             updated_at = $5
-         WHERE id = $6
-         RETURNING *`,
-      [input.nextStatus, req.user.id, now, comment, now, id],
-    );
 
-    if (!data) {
-      throw new Error('Approval not found after update');
+    // Утверждение обязано быть атомарным целиком: проверки статуса, замка и pending-
+    // корректировок повторяются ВНУТРИ транзакции под FOR UPDATE, иначе между ранним
+    // precheck и записью успевает вклиниться новая корректировка. Материализация
+    // официальной версии идёт там же — версия и статус либо есть оба, либо нет обоих.
+    const needsVersion = input.nextStatus === 'approved';
+    const anchors = monthAnchorsInRange(approval.start_date, approval.end_date);
+    // Состав для локов читаем ДО транзакции: advisory-локи берутся раньше, чем
+    // фиксируется snapshot REPEATABLE READ.
+    const lockSnapshot = needsVersion
+      ? await query<{ employee_id: number | string }>(
+        `SELECT employee_id FROM timesheet_approval_employees WHERE approval_id = $1`,
+        [approval.id],
+      )
+      : [];
+    const lockPairs = lockSnapshot.flatMap(row => anchors.map(workDate => ({
+      employeeId: Number(row.employee_id),
+      workDate,
+    })));
+
+    type ReviewOutcome =
+      | { ok: true; row: TimesheetApproval }
+      | { ok: false; status: number; error: string; code?: string; pendingCount?: number };
+
+    let outcome: ReviewOutcome;
+    try {
+      outcome = await withTimesheetSnapshotTransaction<ReviewOutcome>(lockPairs, async client => {
+        const locked = await client.query<TimesheetApproval>(
+          'SELECT * FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
+          [id],
+        );
+        const current = locked.rows[0];
+        if (!current) {
+          return { ok: false, status: 404, error: 'Запись не найдена' };
+        }
+        if (current.unlocked_at) {
+          return {
+            ok: false, status: 409,
+            error: 'Период открыт для правок — сначала закройте его',
+            code: 'TIMESHEET_PERIOD_UNLOCKED',
+          };
+        }
+        if (current.status !== input.allowedFrom) {
+          return { ok: false, status: 400, error: input.invalidStatusMessage };
+        }
+
+        // Повторная проверка pending-корректировок: ранний precheck (approve) сделан
+        // до локов и мог устареть.
+        if (needsVersion) {
+          const pendingCount = await countPendingCorrectionsForApproval(client, current);
+          if (pendingCount > 0) {
+            return {
+              ok: false, status: 409,
+              error: 'Сначала согласуйте корректировки в выходные дни',
+              code: 'PENDING_CORRECTIONS_EXIST',
+              pendingCount,
+            };
+          }
+        }
+
+        const result = await client.query<TimesheetApproval>(
+          `UPDATE timesheet_approvals
+             SET status = $1,
+                 reviewed_by = $2,
+                 reviewed_at = $3,
+                 review_comment = $4,
+                 updated_at = $5
+           WHERE id = $6
+           RETURNING *`,
+          [input.nextStatus, req.user.id, now, comment, now, id],
+        );
+        const row = result.rows[0];
+        if (!row) throw new Error('Approval not found after update');
+
+        if (needsVersion) {
+          await materializeVersion(client, toVersionApproval(row), 'approve', req.user.id);
+        }
+        return { ok: true, row };
+      });
+    } catch (err) {
+      const handled = respondVersionError(res, err);
+      if (handled) return;
+      throw err;
     }
-    const updatedApproval = data;
+
+    if (!outcome.ok) {
+      const body: Record<string, unknown> = { success: false, error: outcome.error };
+      if (outcome.code) body.code = outcome.code;
+      if (outcome.pendingCount != null) body.pending_count = outcome.pendingCount;
+      res.status(outcome.status).json(body);
+      return;
+    }
+    const updatedApproval = outcome.row;
     const range: ITimesheetDateRange = {
       startDate: updatedApproval.start_date,
       endDate: updatedApproval.end_date,
@@ -1452,39 +1624,8 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
         res.status(403).json({ success: false, error: 'Нет доступа к этому табелю' });
         return;
       }
-      // Для персональной подачи берём состав из снимка — иначе подцепим чужих сотрудников отдела.
-      let employeeIds: number[];
-      let membershipWindow: Map<number, IMembershipWindow> | null = null;
-      if (approval.manager_employee_id != null) {
-        const snap = await listApprovalEmployees(approval.id);
-        employeeIds = snap.map(s => s.employee_id);
-      } else if (approval.department_id) {
-        const memberships = await listEmployeeMembershipsForDepartmentPeriod(
-          approval.department_id, approval.start_date, approval.end_date,
-        );
-        employeeIds = memberships.map(m => m.employee_id);
-        membershipWindow = buildMembershipWindowMap(memberships);
-      } else {
-        employeeIds = [];
-      }
-      let count = 0;
-      if (employeeIds.length > 0) {
-        // Берём pending-корректировки и отбрасываем те, что вне окна членства сотрудника
-        // в этом отделе (чужой выход после перевода не должен блокировать утверждение).
-        const pendingRows = await query<{ employee_id: number; work_date: string }>(
-          `SELECT employee_id, work_date::text AS work_date FROM attendance_adjustments
-             WHERE approval_status = 'pending'
-               AND employee_id = ANY($1::int[])
-               AND work_date >= $2
-               AND work_date <= $3`,
-          [employeeIds, approval.start_date, approval.end_date],
-        );
-        count = pendingRows.filter((r) =>
-          membershipWindow == null
-            ? true
-            : isWithinMembershipWindow(membershipWindow.get(Number(r.employee_id)), String(r.work_date).slice(0, 10), 'viaTransferOnly'),
-        ).length;
-      }
+      // Быстрый отказ до взятия локов. Авторитетна та же проверка внутри транзакции.
+      const count = await countPendingCorrectionsForApproval(undefined, approval);
       if (count > 0) {
         res.status(409).json({
           success: false,
@@ -2027,6 +2168,115 @@ const getAttachmentDownloadUrl = async (req: AuthenticatedRequest, res: Response
 };
 
 /** HR / Admin: список подач с флагами проблемных дней и вложениями. */
+/**
+ * GET /api/timesheet-approvals/1c-status?start_date=&end_date=
+ *
+ * Статус выгрузки табелей в 1С для интерфейса HR. Ничего не пересчитывает — читает
+ * последнюю версию подачи и подтверждение от 1С.
+ *
+ * Data-scope повторяет getReviewList один в один: иначе руководитель увидел бы
+ * состояние выгрузки по чужим отделам.
+ */
+const get1CStatus = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+    const periodStart = typeof req.query.start_date === 'string' && ISO_DATE.test(req.query.start_date)
+      ? req.query.start_date
+      : null;
+    const periodEnd = typeof req.query.end_date === 'string' && ISO_DATE.test(req.query.end_date)
+      ? req.query.end_date
+      : null;
+
+    const scope = await resolveRequestDataScope(req);
+    const whereParts: string[] = ["a.status = 'approved'"];
+    const params: unknown[] = [];
+
+    if (periodStart) {
+      params.push(periodStart);
+      whereParts.push(`a.end_date >= $${params.length}`);
+    }
+    if (periodEnd) {
+      params.push(periodEnd);
+      whereParts.push(`a.start_date <= $${params.length}`);
+    }
+
+    if (scope === 'department') {
+      const managedDepartmentIds = await resolveManagedDepartmentIds(req);
+      if (managedDepartmentIds.length === 0) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+      params.push(managedDepartmentIds);
+      whereParts.push(`(a.department_id = ANY($${params.length}::uuid[]) AND a.manager_employee_id IS NULL)`);
+    } else if (scope === 'self') {
+      res.json({ success: true, data: [] });
+      return;
+    }
+
+    const rows = await query<{
+      approval_id: number;
+      department_id: string | null;
+      manager_employee_id: number | null;
+      version_id: number | null;
+      revision: number | null;
+      content_hash: string | null;
+      acked_version_id: number | null;
+      acked_at: string | null;
+      document_ref: string | null;
+      key_name: string | null;
+    }>(
+      `SELECT a.id AS approval_id,
+              a.department_id,
+              a.manager_employee_id,
+              v.id AS version_id,
+              v.revision,
+              v.content_hash,
+              ack.version_id AS acked_version_id,
+              ack.acked_at::text AS acked_at,
+              ack.document_ref,
+              k.name AS key_name
+         FROM timesheet_approvals a
+         LEFT JOIN LATERAL (
+           SELECT id, revision, content_hash
+             FROM timesheet_versions tv
+            WHERE tv.approval_id = a.id
+            ORDER BY tv.revision DESC
+            LIMIT 1
+         ) v ON true
+         LEFT JOIN LATERAL (
+           SELECT e.version_id, e.acked_at, e.document_ref, e.key_id
+             FROM timesheet_1c_exports e
+             JOIN timesheet_versions ev ON ev.id = e.version_id
+            WHERE ev.approval_id = a.id
+            ORDER BY ev.revision DESC
+            LIMIT 1
+         ) ack ON true
+         LEFT JOIN data_api_keys k ON k.id = ack.key_id
+        WHERE ${whereParts.join(' AND ')}`,
+      params,
+    );
+
+    res.json({
+      success: true,
+      data: rows.map(row => ({
+        approval_id: Number(row.approval_id),
+        department_id: row.department_id,
+        scope_kind: row.manager_employee_id != null ? 'personal' : 'department',
+        state: resolveState(row.version_id, row.acked_version_id),
+        version_available: row.version_id != null,
+        revision: row.revision != null ? Number(row.revision) : null,
+        content_hash: row.content_hash,
+        acked_at: row.acked_at,
+        document_ref: row.document_ref,
+        key_name: row.key_name,
+      })),
+    });
+  } catch (err) {
+    console.error('timesheet-approval.get1CStatus error:', err);
+    res.status(500).json({ success: false, error: 'Ошибка получения статуса выгрузки в 1С' });
+  }
+};
+
 const getReviewList = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const requestedStatus = typeof req.query.status === 'string' ? req.query.status : 'submitted';
@@ -2955,32 +3205,53 @@ const closePeriod = async (req: AuthenticatedRequest, res: Response): Promise<vo
     }
 
     const anchors = monthAnchorsInRange(approval.start_date, approval.end_date);
-    const updated = await withTransaction(async client => {
-      const snapshot = await client.query<{ employee_id: number | string }>(
-        `SELECT employee_id FROM timesheet_approval_employees WHERE approval_id = $1`,
-        [approval.id],
-      );
-      await lockTimesheetMonthsOnClient(
-        client,
-        snapshot.rows.flatMap(row => anchors.map(workDate => ({
-          employeeId: Number(row.employee_id),
-          workDate,
-        }))),
-      );
+    // Состав для advisory-локов читаем ДО транзакции: локи должны быть взяты раньше,
+    // чем зафиксируется snapshot REPEATABLE READ (см. timesheet-snapshot-tx.ts).
+    const lockSnapshot = await query<{ employee_id: number | string }>(
+      `SELECT employee_id FROM timesheet_approval_employees WHERE approval_id = $1`,
+      [approval.id],
+    );
+    const lockPairs = lockSnapshot.flatMap(row => anchors.map(workDate => ({
+      employeeId: Number(row.employee_id),
+      workDate,
+    })));
 
-      const result = await client.query<TimesheetApproval>(
-        `UPDATE timesheet_approvals
-            SET unlocked_at = NULL,
-                unlocked_by = NULL,
-                unlock_reason = NULL,
-                updated_at = NOW()
-          WHERE id = $1
-            AND unlocked_at IS NOT NULL
-          RETURNING *`,
-        [id],
-      );
-      return result.rows[0] ?? null;
-    });
+    let updated: TimesheetApproval | null = null;
+    try {
+      updated = await withTimesheetSnapshotTransaction(lockPairs, async client => {
+        const locked = await client.query<TimesheetApproval>(
+          'SELECT * FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
+          [id],
+        );
+        const current = locked.rows[0];
+        if (!current || current.unlocked_at == null) return null;
+
+        const result = await client.query<TimesheetApproval>(
+          `UPDATE timesheet_approvals
+              SET unlocked_at = NULL,
+                  unlocked_by = NULL,
+                  unlock_reason = NULL,
+                  updated_at = NOW()
+            WHERE id = $1
+              AND unlocked_at IS NOT NULL
+            RETURNING *`,
+          [id],
+        );
+        const row = result.rows[0] ?? null;
+        if (!row) return null;
+
+        // Официальный снимок создаётся только для утверждённого табеля: закрытие
+        // ещё не согласованного периода версии для 1С не порождает.
+        if (row.status === 'approved') {
+          await materializeVersion(client, toVersionApproval(row), 'close', req.user.id);
+        }
+        return row;
+      });
+    } catch (err) {
+      const handled = respondVersionError(res, err);
+      if (handled) return;
+      throw err;
+    }
 
     if (!updated) {
       res.status(409).json({ success: false, error: 'Период уже закрыт', code: 'ALREADY_LOCKED' });
@@ -3033,6 +3304,7 @@ export const timesheetApprovalController = {
   deleteAttachment,
   getAttachmentDownloadUrl,
   getReviewList,
+  get1CStatus,
   getSubmittedEmployees,
   getDashboard,
 };

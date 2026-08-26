@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import ExcelJS from 'exceljs';
 import archiver from 'archiver';
-import { query } from '../config/postgres.js';
+import { query, type DbExecutor } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { mailerService } from '../services/mailer.service.js';
 import { localAuthService } from '../services/local-auth.service.js';
@@ -469,10 +469,16 @@ export async function listBrigadeSupervisorEmployeeIds(departmentId: string): Pr
  */
 export async function listBrigadeSupervisorEmployeeIdsForDepartments(
   departmentIds: string[],
+  exec?: DbExecutor,
 ): Promise<Set<number>> {
   if (departmentIds.length === 0) return new Set();
-  const rows = await query<{ id: number }>(
-    `SELECT DISTINCT e.id
+  const rows: Array<{ id: number }> = exec
+    ? (await exec.query<{ id: number }>(SUPERVISOR_IDS_SQL, [departmentIds])).rows
+    : await query<{ id: number }>(SUPERVISOR_IDS_SQL, [departmentIds]);
+  return new Set(rows.map(row => Number(row.id)).filter(Number.isFinite));
+}
+
+const SUPERVISOR_IDS_SQL = `SELECT DISTINCT e.id
        FROM employee_department_access eda
        INNER JOIN employees e        ON e.id = eda.employee_id
        INNER JOIN org_departments od ON od.id = eda.department_id
@@ -485,11 +491,7 @@ export async function listBrigadeSupervisorEmployeeIdsForDepartments(
         AND e.employment_status = 'active'
         AND e.is_archived = false
         AND od.is_active = true
-        AND sr.code = 'site_supervisor'`,
-    [departmentIds],
-  );
-  return new Set(rows.map(row => Number(row.id)).filter(Number.isFinite));
-}
+        AND sr.code = 'site_supervisor'`;
 
 /**
  * GET /api/timesheet/department-supervisor?department_id=UUID

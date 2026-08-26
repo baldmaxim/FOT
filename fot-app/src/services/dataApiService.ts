@@ -11,6 +11,8 @@ export interface DataApiKey {
   description: string | null;
   key_prefix: string;
   rate_limit_per_minute: number;
+  /** Разрешено ли ключу подтверждать выгрузку табелей (POST .../ack). */
+  allow_timesheet_ack: boolean;
   created_by: string | null;
   created_at: string;
   expires_at: string | null;
@@ -50,6 +52,7 @@ export interface CreateKeyInput {
   name: string;
   description?: string | null;
   rate_limit_per_minute?: number;
+  allow_timesheet_ack?: boolean;
   expires_at?: string | null;
 }
 
@@ -57,6 +60,7 @@ export interface UpdateKeyInput {
   name?: string;
   description?: string | null;
   rate_limit_per_minute?: number;
+  allow_timesheet_ack?: boolean;
   expires_at?: string | null;
 }
 

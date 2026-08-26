@@ -9,6 +9,8 @@ const createKeySchema = z.object({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(500).optional().nullable(),
   rate_limit_per_minute: z.number().int().min(1).max(10000).optional(),
+  // Единственный write-метод публичного API — по умолчанию закрыт.
+  allow_timesheet_ack: z.boolean().optional(),
   expires_at: z.string().datetime().optional().nullable(),
 });
 
@@ -16,6 +18,7 @@ const updateKeySchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   description: z.string().trim().max(500).nullable().optional(),
   rate_limit_per_minute: z.number().int().min(1).max(10000).optional(),
+  allow_timesheet_ack: z.boolean().optional(),
   expires_at: z.string().datetime().nullable().optional(),
 });
 
@@ -52,6 +55,7 @@ export const adminDataApiController = {
         name: payload.name,
         description: payload.description ?? null,
         rate_limit_per_minute: payload.rate_limit_per_minute,
+        allow_timesheet_ack: payload.allow_timesheet_ack,
         expires_at: payload.expires_at ?? null,
         created_by: req.user.id,
       });

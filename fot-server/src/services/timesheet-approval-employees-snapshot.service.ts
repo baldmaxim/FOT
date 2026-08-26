@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { query } from '../config/postgres.js';
+import { query, type DbExecutor } from '../config/postgres.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
 
 export interface IApprovalEmployeeSnapshot {
@@ -84,13 +84,21 @@ export async function snapshotApprovalEmployees(
   return ids.length;
 }
 
-/** Читает снимок состава approval_id, отсортированный по ФИО. */
-export async function listApprovalEmployees(approvalId: number): Promise<IApprovalEmployeeSnapshot[]> {
-  return query<IApprovalEmployeeSnapshot>(
-    `SELECT employee_id, full_name
+/**
+ * Читает снимок состава approval_id, отсортированный по ФИО.
+ *
+ * exec — клиент транзакции: при материализации официальной версии табеля состав
+ * обязан читаться тем же соединением, что и остальной расчёт, иначе снимок и часы
+ * могут прийти из разных состояний БД.
+ */
+export async function listApprovalEmployees(
+  approvalId: number,
+  exec?: DbExecutor,
+): Promise<IApprovalEmployeeSnapshot[]> {
+  const sql = `SELECT employee_id, full_name
        FROM timesheet_approval_employees
        WHERE approval_id = $1
-       ORDER BY full_name ASC, employee_id ASC`,
-    [approvalId],
-  );
+       ORDER BY full_name ASC, employee_id ASC`;
+  if (exec) return (await exec.query<IApprovalEmployeeSnapshot>(sql, [approvalId])).rows;
+  return query<IApprovalEmployeeSnapshot>(sql, [approvalId]);
 }

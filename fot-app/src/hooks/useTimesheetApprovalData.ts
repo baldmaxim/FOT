@@ -86,6 +86,25 @@ export const useTimesheetApprovalReviewList = (
   placeholderData: previousData => previousData,
 });
 
+export const getTimesheet1CStatusQueryKey = (startDate: string, endDate: string) =>
+  ['timesheet-1c-status', startDate, endDate] as const;
+
+/**
+ * Статус выгрузки табелей в 1С за период. Отдельный запрос, а не поле в review-list:
+ * основной список не должен ждать эти данные.
+ */
+export const useTimesheet1CStatus = (
+  startDate: string,
+  endDate: string,
+  enabled = true,
+) => useQuery({
+  queryKey: getTimesheet1CStatusQueryKey(startDate, endDate),
+  queryFn: () => timesheetApprovalService.get1CStatus(startDate, endDate),
+  enabled: enabled && !!startDate && !!endDate,
+  staleTime: 30_000,
+  placeholderData: previousData => previousData,
+});
+
 export const useTimesheetApprovalHistory = (approvalId: number | null, enabled = true) => useQuery({
   queryKey: getTimesheetApprovalHistoryQueryKey(approvalId),
   queryFn: () => timesheetApprovalService.getHistory(approvalId as number),

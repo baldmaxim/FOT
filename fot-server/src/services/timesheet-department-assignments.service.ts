@@ -1,4 +1,4 @@
-import { query, queryOne } from '../config/postgres.js';
+import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import { collectDeptIds } from './skud-shared.service.js';
 import type { TimesheetApprovalStatus } from '../types/index.js';
 
@@ -208,21 +208,32 @@ export async function listEmployeeIdsAssignedToDepartmentPeriod(
  * Также фильтрует по excluded_from_timesheet_date: если сотрудник исключён ДО начала
  * периода — отбрасываем; если позже — оставляем (фронт зачеркнёт оставшиеся дни).
  */
+/** SELECT через клиент транзакции, если он передан, иначе через пул (см. DbExecutor). */
+async function membershipRows<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
+
 export async function listEmployeeMembershipsForDepartmentPeriod(
   departmentId: string,
   startDate: string,
   endDate: string,
+  exec?: DbExecutor,
 ): Promise<IDepartmentEmployeeMembership[]> {
+  // Дерево отделов — справочник за in-memory кэшем, читается как обычно.
   const deptIds = await collectDeptIds(departmentId);
 
   // Все назначения, чей период пересекается с [startDate, endDate]:
   // effective_from <= endDate AND (effective_to IS NULL OR effective_to >= startDate).
-  const assignments = await query<{
+  const assignments = await membershipRows<{
     employee_id: number;
     effective_from: string;
     effective_to: string | null;
     org_department_id: string | null;
   }>(
+    exec,
     `SELECT employee_id, effective_from, effective_to, org_department_id
        FROM employee_assignments
       WHERE org_department_id = ANY($1::uuid[])
@@ -264,7 +275,8 @@ export async function listEmployeeMembershipsForDepartmentPeriod(
   // Уволенные сотрудники: показываем в их РЕАЛЬНОМ отделе (из which уволены) за период до увольнения.
   // Источник реального отдела — employee_dismissal_events.from_department_id (заполняется при увольнении
   // и backfill из eda). Надёжно для 100%, включая тех, у кого нет записи в employee_assignments.
-  const firedFromDept = await query<{ employee_id: number; dismissal_date: string }>(
+  const firedFromDept = await membershipRows<{ employee_id: number; dismissal_date: string }>(
+    exec,
     `SELECT DISTINCT ON (de.employee_id) de.employee_id, de.dismissal_date
        FROM employee_dismissal_events de
       WHERE de.from_department_id = ANY($1::uuid[])

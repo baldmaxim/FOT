@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import type { Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
 import { timesheetReviewController } from '../controllers/timesheet-review.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
+import { registerCache } from '../middleware/cacheResponse.js';
 import { canToggleTimesheetLock, resolveEffectivePageAccess } from '../services/access-control.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
@@ -110,6 +111,26 @@ router.delete('/attachments/:document_id', requirePageAccess('/timesheet', 'edit
 
 // Объединённый review-list для админской страницы согласований.
 router.get('/review-list', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getReviewList);
+
+// Статус выгрузки табелей в 1С — отдельным лёгким запросом, чтобы не задерживать
+// основной список согласований. Ключ кэша включает пользователя (у ролей разный
+// data-scope) и период; после ACK кэш инвалидируется из публичного контроллера.
+const timesheet1CStatusCache = registerCache(
+  'timesheet-1c-status',
+  (req: Request) => {
+    const userId = (req as AuthenticatedRequest).user?.id ?? 'anon';
+    return `1c-status:${userId}:${req.query.start_date ?? ''}:${req.query.end_date ?? ''}`;
+  },
+  30_000,
+  { staleMs: 60_000, max: 200 },
+);
+
+router.get(
+  '/1c-status',
+  requirePageAccess('/timesheet-hr', 'view'),
+  timesheet1CStatusCache,
+  timesheetApprovalController.get1CStatus,
+);
 
 // Дашборд HR: статистика подачи/утверждения + карта руководителей.
 router.get('/dashboard', requirePageAccess('/timesheet-hr', 'view'), timesheetApprovalController.getDashboard);

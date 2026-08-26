@@ -390,6 +390,7 @@ export async function loadAttendanceAdjustments(
   employeeIds: number[],
   startDate: string,
   endDate: string,
+  exec?: DbExecutor,
 ): Promise<IAttendanceAdjustment[]> {
   if (employeeIds.length === 0) return [];
 
@@ -397,7 +398,7 @@ export async function loadAttendanceAdjustments(
 
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const data = await query<{
+    const data = await sqlRows<{
       id: number;
       employee_id: number;
       work_date: string;
@@ -416,6 +417,7 @@ export async function loadAttendanceAdjustments(
       approved_by: string | null;
       approved_at: string | null;
     }>(
+      exec,
       `SELECT id, employee_id, work_date, status, hours_override, source_type, source_id, reason,
               created_by, updated_by, created_at, updated_at, metadata,
               approval_status, approval_comment, approved_by, approved_at
@@ -452,7 +454,7 @@ export async function loadAttendanceAdjustments(
   return adjustments;
 }
 
-async function loadAdjustmentNames(adjustments: IAttendanceAdjustment[]): Promise<{
+async function loadAdjustmentNames(adjustments: IAttendanceAdjustment[], exec?: DbExecutor): Promise<{
   userNames: Map<string, string>;
   legacyEmployeeNames: Map<number, string>;
 }> {
@@ -468,13 +470,15 @@ async function loadAdjustmentNames(adjustments: IAttendanceAdjustment[]): Promis
 
   const [userRows, employeeRows] = await Promise.all([
     userMisses.length > 0
-      ? query<{ id: string; full_name: string | null }>(
+      ? sqlRows<{ id: string; full_name: string | null }>(
+        exec,
         `SELECT id, full_name FROM user_profiles WHERE id = ANY($1::uuid[])`,
         [userMisses],
       )
       : Promise.resolve([] as Array<{ id: string; full_name: string | null }>),
     legacyMisses.length > 0
-      ? query<{ id: number; full_name: string | null }>(
+      ? sqlRows<{ id: number; full_name: string | null }>(
+        exec,
         `SELECT id, full_name FROM employees WHERE id = ANY($1::int[])`,
         [legacyMisses],
       )
@@ -504,13 +508,15 @@ async function loadDailySummaries(
   employeeIds: number[],
   startDate: string,
   endDate: string,
+  exec?: DbExecutor,
 ): Promise<ISummaryRow[]> {
   if (employeeIds.length === 0) return [];
 
   const rows: ISummaryRow[] = [];
   for (let index = 0; index < employeeIds.length; index += BATCH_SIZE) {
     const batch = employeeIds.slice(index, index + BATCH_SIZE);
-    const data = await query<ISummaryRow>(
+    const data = await sqlRows<ISummaryRow>(
+      exec,
       `SELECT employee_id, date, first_entry, last_exit, total_hours, total_minutes, break_hours, break_minutes
          FROM skud_daily_summary
          WHERE employee_id = ANY($1::int[])
@@ -544,6 +550,10 @@ export async function buildAttendanceEntries(params: {
   // (интерактивный табель/дашборд обновляют кэш). Read-only экспорты ставят false —
   // сводка считается в памяти, а тяжёлый DELETE+INSERT не выполняется.
   persistTravelSegments?: boolean;
+  // Клиент транзакции для материализации официальной версии табеля: все чтения
+  // обязаны идти по ОДНОМУ соединению, иначе payload соберётся из разных снимков
+  // БД. По умолчанию не задан — запросы идут через пул, поведение прежнее.
+  exec?: DbExecutor;
 }): Promise<IAttendanceBuildResult> {
   const { employees, startDate, endDate, dailySchedulesMap, calendarMonth } = params;
   const todayStr = params.todayStr ?? formatDateToISO(new Date());
@@ -554,10 +564,16 @@ export async function buildAttendanceEntries(params: {
   const nowHMS = formatNowHMS(new Date());
   const employeeIds = employees.map((employee) => employee.id);
 
+  const exec = params.exec;
+  // Под транзакционным клиентом pg сериализует запросы по одному соединению —
+  // Promise.all здесь корректен, просто теряет параллелизм. Это осознанная плата
+  // за консистентный снимок.
   const [summaries, adjustments, travelSummaries] = await Promise.all([
-    loadDailySummaries(employeeIds, startDate, endDate),
-    loadAttendanceAdjustments(employeeIds, startDate, endDate),
-    getTravelHoursSummaryForRange({ employeeIds, startDate, endDate, persist: persistTravelSegments }),
+    loadDailySummaries(employeeIds, startDate, endDate, exec),
+    loadAttendanceAdjustments(employeeIds, startDate, endDate, exec),
+    getTravelHoursSummaryForRange({
+      employeeIds, startDate, endDate, persist: persistTravelSegments, exec,
+    }),
   ]);
 
   // Всегда строим rawFallbackSummaries — они нужны fallback-пути для дней без skud_daily_summary
@@ -572,6 +588,7 @@ export async function buildAttendanceEntries(params: {
       todayStr,
       adjustments,
       includeObjectDetails,
+      exec,
     })
     : createEmptyObjectAttendanceData();
   // Суммы объектных корректировок по дню нужны в ОБОИХ режимах:
@@ -601,7 +618,7 @@ export async function buildAttendanceEntries(params: {
     || isMigratedDayLevelAdjustment(adjustment));
   // Имена авторов резолвим по ВСЕМ корректировкам (включая объектные), чтобы показывать
   // автора и у корректировок «по объекту» (#9), а не только у day-level.
-  const { userNames, legacyEmployeeNames } = await loadAdjustmentNames(adjustments);
+  const { userNames, legacyEmployeeNames } = await loadAdjustmentNames(adjustments, exec);
 
   // #9: автор/время объектных корректировок — заполняем по adjustment_id. objectEntries и
   // objectEntriesByEmployeeDate ссылаются на одни и те же объекты, мутируем один раз.

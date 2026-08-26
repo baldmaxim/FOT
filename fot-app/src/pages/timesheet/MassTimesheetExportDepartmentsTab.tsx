@@ -12,7 +12,9 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import { useStructureTree } from '../../hooks/useStructure';
-import { useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
+import { useTimesheet1CStatus, useTimesheetApprovalReviewList } from '../../hooks/useTimesheetApprovalData';
+import { Timesheet1CBadge } from '../../components/timesheet/Timesheet1CBadge';
+import type { Timesheet1CState } from '../../services/timesheetApprovalService';
 import { timesheetService } from '../../services/timesheetService';
 import { timesheetReviewService } from '../../services/timesheetReviewService';
 import type { OrgDepartmentNode } from '../../types';
@@ -77,9 +79,10 @@ interface IDeptTreeNodeProps {
   onToggleExpand: (id: string) => void;
   approvedDeptIds: Set<string>;
   timekeeperCheckedIds: Set<string>;
+  oneCStateByDeptId: Map<string, Timesheet1CState>;
 }
 
-const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds, timekeeperCheckedIds }) => {
+const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expandedIds, onToggleExpand, approvedDeptIds, timekeeperCheckedIds, oneCStateByDeptId }) => {
   const descendantIds = useMemo(() => collectAllIds([node]), [node]);
   const checkedCount = descendantIds.reduce((acc, id) => acc + (checkedIds.has(id) ? 1 : 0), 0);
   const isAllChecked = checkedCount === descendantIds.length;
@@ -122,6 +125,9 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
               <CheckCircle size={14} />
             </span>
           )}
+          {oneCStateByDeptId.get(node.id) && (
+            <Timesheet1CBadge state={oneCStateByDeptId.get(node.id)!} compact />
+          )}
         </span>
       </div>
       {hasChildren && isExpanded && (
@@ -136,6 +142,7 @@ const DeptTreeNode: FC<IDeptTreeNodeProps> = ({ node, checkedIds, onToggle, expa
               onToggleExpand={onToggleExpand}
               approvedDeptIds={approvedDeptIds}
               timekeeperCheckedIds={timekeeperCheckedIds}
+              oneCStateByDeptId={oneCStateByDeptId}
             />
           ))}
         </div>
@@ -197,6 +204,41 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
     () => new Set((reviewedDepartments ?? []).map(d => d.department_id)),
     [reviewedDepartments],
   );
+
+  // Статус выгрузки в 1С по отделам за период. Отдельный запрос — дерево не ждёт его.
+  const { data: oneCStatuses } = useTimesheet1CStatus(rangeStart, rangeEnd, !!rangeStart && !!rangeEnd);
+
+  /**
+   * Статус узла дерева. Узел адресуется department_id, а родитель агрегирует несколько
+   * подач, поэтому мержа по approval_id недостаточно. Правило — худшее побеждает:
+   * stale > not_exported > exported. Узел без подач бейджа не показывает (undefined).
+   */
+  const oneCStateByDeptId = useMemo(() => {
+    const own = new Map<string, Timesheet1CState>();
+    const worst = (a: Timesheet1CState | undefined, b: Timesheet1CState): Timesheet1CState => {
+      const rank: Record<Timesheet1CState, number> = { stale: 2, not_exported: 1, exported: 0 };
+      if (!a) return b;
+      return rank[b] > rank[a] ? b : a;
+    };
+    for (const row of oneCStatuses ?? []) {
+      // Персональные подачи в дерево отделов не попадают — они видны в «Согласованиях».
+      if (!row.department_id) continue;
+      own.set(row.department_id, worst(own.get(row.department_id), row.state));
+    }
+
+    const aggregated = new Map<string, Timesheet1CState>();
+    const walk = (node: OrgDepartmentNode): Timesheet1CState | undefined => {
+      let state = own.get(node.id);
+      for (const child of node.children ?? []) {
+        const childState = walk(child);
+        if (childState) state = worst(state, childState);
+      }
+      if (state) aggregated.set(node.id, state);
+      return state;
+    };
+    for (const root of structure?.departments ?? []) walk(root);
+    return aggregated;
+  }, [oneCStatuses, structure?.departments]);
 
   const aggregatedApprovedIds = useMemo(() => {
     const set = new Set<string>(approvedDeptIds);
@@ -477,6 +519,7 @@ export const MassTimesheetExportDepartmentsTab: FC<IMassTimesheetExportDepartmen
               onToggleExpand={handleToggleExpand}
               approvedDeptIds={aggregatedApprovedIds}
               timekeeperCheckedIds={timekeeperCheckedIds}
+              oneCStateByDeptId={oneCStateByDeptId}
             />
           ))
         )}

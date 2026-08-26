@@ -2,7 +2,7 @@
  * Сервис графиков работы: resolve (каскад employee → default),
  * bulk, хелперы с учётом производственного календаря.
  */
-import { query, queryOne } from '../config/postgres.js';
+import { query, queryOne, type DbExecutor } from '../config/postgres.js';
 import type {
   IResolvedSchedule,
   IDayOverride,
@@ -436,11 +436,28 @@ export const needsSkudCheck = (
 };
 
 /** Загружает месяц производственного календаря (null если нет записи) */
+/** SELECT-many через клиент транзакции, если он передан, иначе через пул (см. DbExecutor). */
+async function schedRows<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
+
+/** SELECT-one через клиент транзакции, если он передан, иначе через пул. */
+async function schedOne<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T | null> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows[0] ?? null;
+  return queryOne<T>(sql, params);
+}
+
 export const loadCalendarMonth = async (
   year: number,
   month: number,
+  exec?: DbExecutor,
 ): Promise<IProductionCalendarMonth | null> => {
-  const data = await queryOne<{
+  const data = await schedOne<{
     year: number;
     month: number;
     norm_days: number | string | null;
@@ -449,6 +466,7 @@ export const loadCalendarMonth = async (
     mandatory_holidays: string[] | null;
     pre_holidays: string[] | null;
   }>(
+    exec,
     `SELECT year, month, norm_days, norm_hours, holidays, mandatory_holidays, pre_holidays
        FROM production_calendar
       WHERE year = $1 AND month = $2`,
@@ -700,6 +718,7 @@ export const resolveSchedulesForPeriod = async (
   employees: { id: number; org_department_id?: string | null }[],
   startDate: string,
   endDate: string,
+  exec?: DbExecutor,
 ): Promise<Map<number, Map<string, IResolvedSchedule>>> => {
   const result = new Map<number, Map<string, IResolvedSchedule>>();
   if (employees.length === 0) return result;
@@ -707,7 +726,8 @@ export const resolveSchedulesForPeriod = async (
   const employeeIds = employees.map(e => e.id);
 
   const [empSchedsRows, defaultSched] = await Promise.all([
-    query<Record<string, unknown>>(
+    schedRows<Record<string, unknown>>(
+      exec,
       `SELECT ${SCHEDULE_JOIN_SELECT(['employee_id', 'effective_from', 'effective_to', 'anchor_date'])}
          FROM employee_schedule_assignments a
          LEFT JOIN work_schedules ws ON ws.id = a.schedule_id
@@ -717,7 +737,8 @@ export const resolveSchedulesForPeriod = async (
         ORDER BY a.effective_from DESC`,
       [employeeIds, endDate, startDate],
     ),
-    queryOne<Record<string, unknown>>(
+    schedOne<Record<string, unknown>>(
+      exec,
       'SELECT * FROM work_schedules WHERE is_default = true LIMIT 1',
     ),
   ]);

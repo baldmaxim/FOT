@@ -694,3 +694,12 @@
   flex-direction: column;
   overflow: hidden;
 }
+
+/* Статус выгрузки в 1С в дереве отделов: только иконка — в строке узла уже есть
+   бейджи бригады, табельщицы и утверждения. */
+.mte-tree-name .ts-1c-badge--compact {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  vertical-align: middle;
+}

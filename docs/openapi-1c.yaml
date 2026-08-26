@@ -1,0 +1,781 @@
+openapi: 3.1.0
+
+info:
+  title: FOT — API закрытых табелей для 1С
+  version: 1.0.0
+  description: |
+    Обмен закрытыми согласованными табелями между ФОТ и 1С.
+
+    ## Модель данных
+
+    Единица обмена — **подача табеля** (`approval_id`): отдел за период либо
+    персональная подача руководителя «по людям». Подача живёт вечно, а её
+    содержимое версионируется.
+
+    **Закрытый согласованный табель — неизменяемый официальный снимок.**
+    В момент утверждения и при каждом повторном закрытии ФОТ сохраняет версию:
+    состав сотрудников, часы по дням, итоги. API отдаёт табель только из
+    сохранённой версии и никогда не пересчитывает его на лету. Фоновый пересчёт
+    СКУД закрытую версию не меняет — чтобы правки дошли до 1С, табель нужно
+    открыть и закрыть заново.
+
+    ## Цикл обмена
+
+    1. `GET /timesheets?needs_export=true` — что нужно забрать (опрос раз в минуту).
+    2. `GET /timesheets/{approval_id}` — полный табель нужной версии.
+    3. Запись или обновление документа в 1С (свой документ ищется по `approval_id`).
+    4. `POST /timesheets/{approval_id}/ack` — подтверждение принятой `revision`.
+
+    ## revision и content_hash
+
+    - `revision` — номер официальной редакции табеля, растёт с каждой новой версией.
+    - `content_hash` — md5 содержимого версии.
+
+    Открытие и закрытие табеля **без фактических правок** новую версию не создаёт —
+    лишнего перепроведения не будет. Если `revision` вырос, а `content_hash` совпал
+    с уже принятым, документ можно не перепроводить, но **ACK новой `revision`
+    отправить обязательно** — иначе табель навсегда останется в состоянии `stale`.
+
+    ## Идентификация сотрудников
+
+    Сопоставление — **только по `identity.employee_id`** (постоянный код сотрудника
+    в ФОТ). В справочнике сотрудников 1С заводится уникальный реквизит `ID_FOT`.
+    Полные однофамильцы существуют, поэтому сопоставление по ФИО недопустимо:
+    ФИО — исключительно для отображения. `tab_number` заполнен не у всех и не
+    уникален — как ключ не использовать.
+
+    ## Аутентификация
+
+    Заголовок `Authorization: Bearer fot_<prefix>_<secret>`. Токен выдаётся один
+    раз при создании ключа в админке ФОТ «API-доступ». Ключу должна быть открыта
+    таблица `employees`, а для `ack` — включён флаг «Разрешить подтверждение
+    выгрузки табелей».
+  contact:
+    name: ФОТ, администратор API
+    url: https://fot.su10.ru
+
+servers:
+  - url: https://fot.su10.ru/api/public/v1
+    description: Прод (HTTPS)
+  - url: http://fot.su10.ru/api/public/v1
+    description: Прод (HTTP, только для старых релизов 1С без OpenSSL)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: timesheets
+    description: Закрытые согласованные табели — список, выгрузка, подтверждение.
+  - name: legacy
+    description: Ранее существовавшие методы. Расчёт на лету, без версионирования.
+
+paths:
+  /timesheets:
+    get:
+      tags: [timesheets]
+      operationId: listTimesheets
+      summary: Список закрытых согласованных табелей
+      description: |
+        Лёгкий метод для регулярного опроса — табель не собирается, всё читается
+        из сохранённых версий. Отдаёт только подачи в статусе «утверждён» и
+        закрытые (`unlocked_at IS NULL`). Открытый для правок табель из выдачи
+        исчезает и возвращается после закрытия.
+
+        Пагинация — **keyset**: повторяйте запрос с `cursor` из `next_cursor`,
+        пока тот не станет `null`. Параметра `offset` нет намеренно: после ACK
+        строки уходят из выборки `needs_export=true`, и смещение пропускало бы
+        сдвинувшиеся записи.
+      parameters:
+        - $ref: '#/components/parameters/Month'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: department_id
+          in: query
+          description: |
+            UUID отдела; несколько — через запятую. Фильтрует **только подачи
+            отдела**. Персональные подачи руководителей (`scope.kind = personal`)
+            под этот фильтр не попадают — забирайте их запросом без параметра.
+          schema:
+            type: string
+        - name: needs_export
+          in: query
+          description: |
+            `true` — только те, что нужно забрать (`not_exported` + `stale`).
+            `false` — только уже принятые (`exported`).
+            Параметр опущен — все.
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          description: Размер страницы.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: cursor
+          in: query
+          description: Значение `next_cursor` из предыдущего ответа. Непрозрачная строка.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Страница списка
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [period, data, meta, next_cursor]
+                properties:
+                  period:
+                    $ref: '#/components/schemas/Period'
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TimesheetListItem'
+                  meta:
+                    type: object
+                    required: [without_version]
+                    properties:
+                      without_version:
+                        type: integer
+                        description: |
+                          Сколько подач в выборке ещё не имеют сохранённой версии.
+                          В норме 0. Ненулевое значение — сигнал администратору
+                          ФОТ, что нужен прогон backfill; такие строки приходят
+                          с `version_available: false`.
+                  next_cursor:
+                    type: [string, 'null']
+                    description: Курсор следующей страницы; `null` — данные кончились.
+              examples:
+                page:
+                  summary: Одна подача к выгрузке
+                  value:
+                    period:
+                      month: '2026-08'
+                      start: '2026-08-01'
+                      end: '2026-08-15'
+                    data:
+                      - approval_id: 855
+                        scope:
+                          kind: department
+                          department_id: 0e2c9f3a-1b4d-4c8e-9a10-2f3b4c5d6e7f
+                          department_name: бр. Иванова
+                          manager_employee_id: null
+                        start_date: '2026-08-01'
+                        end_date: '2026-08-15'
+                        version_available: true
+                        revision: 2
+                        content_hash: d41d8cd98f00b204e9800998ecf8427e
+                        employees_count: 28
+                        total_hours: 3248.5
+                        version_created_at: '2026-08-16T09:12:44.000Z'
+                        state: stale
+                        last_export:
+                          revision: 1
+                          acked_at: '2026-08-16T06:03:11.000Z'
+                          document_ref: ТАБ-000123
+                    meta:
+                      without_version: 0
+                    next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /timesheets/{approval_id}:
+    get:
+      tags: [timesheets]
+      operationId: getTimesheetVersion
+      summary: Полный табель из сохранённой версии
+      description: |
+        Возвращает **весь согласованный состав** подачи целиком, без фильтров:
+        `employees_count` и `content_hash` всегда соответствуют отданному телу.
+
+        Решение «импортировать сотрудника или нет» принимает 1С по флагу
+        `zero_activity`: в документ попадают строки с `zero_activity: false`.
+      parameters:
+        - $ref: '#/components/parameters/ApprovalId'
+        - name: revision
+          in: query
+          description: |
+            Конкретная редакция. По умолчанию — последняя. Поле `state` всегда
+            считается по последней редакции, даже если запрошена старая.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Табель версии
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimesheetVersionPayload'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            Табель недоступен для выгрузки: открыт для правок
+            (`TIMESHEET_UNLOCKED`), не утверждён (`TIMESHEET_NOT_APPROVED`)
+            или версия ещё не сформирована (`VERSION_NOT_AVAILABLE`).
+            Во всех случаях — пропустить и повторить в следующем цикле.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                unlocked:
+                  value:
+                    success: false
+                    code: TIMESHEET_UNLOCKED
+                    error: Табель открыт для правок — выгрузка недоступна
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /timesheets/{approval_id}/ack:
+    post:
+      tags: [timesheets]
+      operationId: ackTimesheetVersion
+      summary: Подтвердить приём версии
+      description: |
+        Отправляется **после** успешной записи документа в 1С.
+
+        Идемпотентен: повторный ACK той же `revision` возвращает исходный
+        `acked_at` и не создаёт вторую запись — безопасно повторять после обрыва
+        связи. ACK на устаревшую редакцию отклоняется с `REVISION_MISMATCH`:
+        значит, табель успели переоткрыть и поправить — перечитайте его и
+        обработайте заново.
+
+        `content_hash`, `employees_count` и `total_hours` сервер берёт из своей
+        версии; передавать их не нужно.
+
+        Требует у ключа флага «Разрешить подтверждение выгрузки табелей» —
+        это единственный метод API, который пишет данные.
+      parameters:
+        - $ref: '#/components/parameters/ApprovalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AckRequest'
+            examples:
+              basic:
+                value:
+                  revision: 2
+                  document_ref: ТАБ-000123
+      responses:
+        '200':
+          description: Версия принята (или уже была принята ранее)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AckResult'
+              examples:
+                ok:
+                  value:
+                    success: true
+                    approval_id: 855
+                    revision: 2
+                    content_hash: d41d8cd98f00b204e9800998ecf8427e
+                    state: exported
+                    acked_at: '2026-08-16T10:20:31.000Z'
+                    document_ref: ТАБ-000123
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: |
+            Ключу не открыта таблица `employees` либо не включён флаг
+            «Разрешить подтверждение выгрузки табелей».
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            `REVISION_MISMATCH` — подтверждается не последняя редакция
+            (в теле придут `current_revision` и `current_content_hash`);
+            `TIMESHEET_UNLOCKED` — табель переоткрыли между выгрузкой и ACK;
+            `TIMESHEET_NOT_APPROVED` — подача больше не утверждена;
+            `VERSION_NOT_AVAILABLE` — указанной редакции нет.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                mismatch:
+                  value:
+                    success: false
+                    code: REVISION_MISMATCH
+                    error: Подтверждается устаревшая редакция табеля
+                    current_revision: 3
+                    current_content_hash: 9e107d9d372bb6826bd81d3542a419d6
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /timesheet:
+    get:
+      tags: [legacy]
+      operationId: getDepartmentTimesheetLive
+      summary: Расчётный табель отдела за произвольный период (без версионирования)
+      description: |
+        Существующий метод, оставлен без изменений для обратной совместимости.
+        Считает табель **на лету**, поэтому не даёт ни заморозки, ни признака
+        изменения. Для регулярного обмена используйте `/timesheets`.
+      parameters:
+        - name: department_id
+          in: query
+          required: true
+          description: UUID отдела; несколько — через запятую. Поддерево не раскрывается.
+          schema:
+            type: string
+        - name: month
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: ^\d{4}-\d{2}$
+        - name: half
+          in: query
+          description: Половина месяца. По умолчанию `FULL`.
+          schema:
+            type: string
+            enum: [FULL, H1, H2]
+            default: FULL
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: Расчётный табель
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period:
+                    $ref: '#/components/schemas/Period'
+                  departments:
+                    type: array
+                    items:
+                      type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /employee-events:
+    get:
+      tags: [legacy]
+      operationId: getEmployeeEvents
+      summary: События СКУД по сотруднику
+      description: |
+        Время, направление и точка доступа. ФИО и номер карты в контракт не входят.
+        Требует открытой ключу таблицы `skud_events`.
+      parameters:
+        - name: employee_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: true
+          description: Период не длиннее 366 дней.
+          schema:
+            type: string
+            format: date
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 500
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: События
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      type: object
+                  pagination:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer fot_<16 hex>_<48 hex>`.
+        Токен выдаётся один раз при создании ключа; при утере создаётся новый.
+
+  parameters:
+    ApprovalId:
+      name: approval_id
+      in: path
+      required: true
+      description: Постоянный идентификатор подачи табеля. По нему 1С находит свой документ.
+      schema:
+        type: integer
+        minimum: 1
+
+    Month:
+      name: month
+      in: query
+      description: |
+        Месяц `YYYY-MM`. **Взаимоисключающ с `from`/`to`** — передача обоих
+        вариантов даёт 400. Глубина запроса ограничена 3 месяцами от текущего.
+      schema:
+        type: string
+        pattern: ^\d{4}-\d{2}$
+
+    From:
+      name: from
+      in: query
+      description: Начало произвольного диапазона `YYYY-MM-DD`. Используется вместе с `to`.
+      schema:
+        type: string
+        format: date
+
+    To:
+      name: to
+      in: query
+      description: Конец произвольного диапазона `YYYY-MM-DD`. Используется вместе с `from`.
+      schema:
+        type: string
+        format: date
+
+  responses:
+    BadRequest:
+      description: |
+        Некорректные параметры: одновременно `month` и `from`/`to`, превышение
+        глубины запроса, битый `cursor`, отсутствие обязательного поля.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Токен отсутствует, неверен, отозван или просрочен.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Ключу не открыт нужный доступ.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Объект не найден.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: |
+        Превышен лимит запросов ключа (по умолчанию 60 в минуту, настраивается).
+        Выдержите окно и повторите.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ExportState:
+      type: string
+      enum: [not_exported, stale, exported]
+      description: |
+        `not_exported` — версия ещё не подтверждена 1С;
+        `stale` — принята более ранняя редакция, появилась новая;
+        `exported` — последняя редакция принята.
+
+    Period:
+      type: object
+      properties:
+        month:
+          type: [string, 'null']
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+
+    Scope:
+      type: object
+      description: |
+        Область подачи. `department` — табель отдела или бригады;
+        `personal` — персональная подача руководителя «по людям»,
+        у неё `department_id` пуст.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [department, personal]
+        department_id:
+          type: [string, 'null']
+          format: uuid
+        department_name:
+          type: [string, 'null']
+        manager_employee_id:
+          type: [integer, 'null']
+
+    LastExport:
+      type: [object, 'null']
+      description: Последнее подтверждение от 1С; `null`, если подтверждений не было.
+      properties:
+        revision:
+          type: integer
+        acked_at:
+          type: string
+          format: date-time
+        document_ref:
+          type: [string, 'null']
+
+    TimesheetListItem:
+      type: object
+      required: [approval_id, scope, start_date, end_date, version_available, state]
+      properties:
+        approval_id:
+          type: integer
+        scope:
+          $ref: '#/components/schemas/Scope'
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        version_available:
+          type: boolean
+          description: |
+            `false` — версия ещё не сформирована; тогда `revision`,
+            `content_hash`, `employees_count`, `total_hours`,
+            `version_created_at` и `last_export` равны `null`,
+            а `state` — `not_exported`. Такой табель выгрузить нельзя,
+            повторите в следующем цикле.
+        revision:
+          type: [integer, 'null']
+        content_hash:
+          type: [string, 'null']
+        employees_count:
+          type: [integer, 'null']
+        total_hours:
+          type: [number, 'null']
+        version_created_at:
+          type: [string, 'null']
+          format: date-time
+        state:
+          $ref: '#/components/schemas/ExportState'
+        last_export:
+          $ref: '#/components/schemas/LastExport'
+
+    EmployeeIdentity:
+      type: object
+      description: Идентификаторы сотрудника. Сопоставляйте **только по `employee_id`**.
+      required: [employee_id]
+      properties:
+        employee_id:
+          type: integer
+          description: Постоянный код сотрудника в ФОТ. Реквизит `ID_FOT` в 1С.
+        sigur_employee_id:
+          type: [integer, 'null']
+          description: Идентификатор в СКУД Sigur. Резервный, для сверки.
+        tab_number:
+          type: [string, 'null']
+          description: |
+            Табельный номер. Заполнен не у всех и не уникален —
+            **ключом сопоставления быть не может**.
+        full_name:
+          type: [string, 'null']
+          description: |
+            Только для отображения. Полные однофамильцы существуют —
+            сопоставление по ФИО приведёт к ошибке.
+
+    DayValue:
+      type: object
+      required: [status, hours]
+      properties:
+        status:
+          type: string
+          enum: [work, vacation, dayoff, remote, unpaid, absent, sick, business_trip, manual, study]
+          description: Машинный код дня.
+        hours:
+          type: number
+          description: Часы за день, как в согласованном табеле.
+        corrected:
+          type: boolean
+          description: День получен или изменён ручной корректировкой.
+        hours_overridden:
+          type: boolean
+          description: Часы заданы вручную поверх СКУД.
+
+    TimesheetEmployee:
+      type: object
+      required: [identity, total_hours, days, zero_activity]
+      properties:
+        identity:
+          $ref: '#/components/schemas/EmployeeIdentity'
+        position:
+          type: [string, 'null']
+        total_hours:
+          type: number
+        zero_activity:
+          type: boolean
+          description: |
+            `true` — за период нет ни одного реального сигнала (ни проходов,
+            ни корректировок, ни объектной активности). **В документ 1С такие
+            строки не переносятся** — это соответствует правилу «не проходящие
+            по СКУД не попадают в 1С». Строка «Начальник участка» всегда
+            приходит с `false`.
+        days:
+          type: object
+          description: Ключ — дата `YYYY-MM-DD`.
+          additionalProperties:
+            $ref: '#/components/schemas/DayValue'
+        object_rows:
+          type: array
+          description: |
+            Зарезервировано под разбивку часов по объектам. Сейчас всегда пусто;
+            заполнение появится позже и контракт не сломает.
+          items:
+            type: object
+
+    TimesheetVersionPayload:
+      type: object
+      required: [approval, revision, content_hash, employees_count, total_hours, employees, state]
+      properties:
+        approval:
+          type: object
+          properties:
+            id:
+              type: integer
+            scope:
+              $ref: '#/components/schemas/Scope'
+            start_date:
+              type: string
+              format: date
+            end_date:
+              type: string
+              format: date
+            status:
+              type: string
+        revision:
+          type: integer
+        content_hash:
+          type: string
+        version_created_at:
+          type: string
+          format: date-time
+        employees_count:
+          type: integer
+          description: Число сотрудников в этом теле — весь согласованный состав.
+        total_hours:
+          type: number
+        state:
+          $ref: '#/components/schemas/ExportState'
+        employees:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimesheetEmployee'
+
+    AckRequest:
+      type: object
+      required: [revision]
+      properties:
+        revision:
+          type: integer
+          minimum: 1
+          description: Редакция, которая записана в 1С.
+        document_ref:
+          type: string
+          maxLength: 128
+          description: Номер документа в 1С — попадает в журнал и в интерфейс ФОТ.
+        note:
+          type: string
+          maxLength: 500
+
+    AckResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        approval_id:
+          type: integer
+        revision:
+          type: integer
+        content_hash:
+          type: string
+        state:
+          $ref: '#/components/schemas/ExportState'
+        acked_at:
+          type: string
+          format: date-time
+          description: |
+            Время первого подтверждения этой редакции. При повторном ACK
+            возвращается прежнее значение.
+        document_ref:
+          type: [string, 'null']
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+        error:
+          type: string
+          description: Человекочитаемое описание.
+        code:
+          type: [string, 'null']
+          enum: [TIMESHEET_UNLOCKED, TIMESHEET_NOT_APPROVED, VERSION_NOT_AVAILABLE, REVISION_MISMATCH, TIMESHEET_VERSION_INCOMPLETE, null]
+        current_revision:
+          type: integer
+          description: Только для `REVISION_MISMATCH` — актуальная редакция.
+        current_content_hash:
+          type: string
+          description: Только для `REVISION_MISMATCH`.

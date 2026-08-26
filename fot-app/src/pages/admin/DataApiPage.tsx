@@ -66,6 +66,7 @@ const CreateKeyModal: FC<ICreateModalProps> = ({ onClose, onCreated }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [rateLimit, setRateLimit] = useState(60);
+  const [allowTimesheetAck, setAllowTimesheetAck] = useState(false);
   const [expiresAt, setExpiresAt] = useState('');
 
   const mutation = useMutation({
@@ -73,6 +74,7 @@ const CreateKeyModal: FC<ICreateModalProps> = ({ onClose, onCreated }) => {
       name: name.trim(),
       description: description.trim() || null,
       rate_limit_per_minute: rateLimit,
+      allow_timesheet_ack: allowTimesheetAck,
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
     }),
     onSuccess: result => {
@@ -129,6 +131,20 @@ const CreateKeyModal: FC<ICreateModalProps> = ({ onClose, onCreated }) => {
             value={rateLimit}
             onChange={e => setRateLimit(Number(e.target.value) || 1)}
           />
+        </div>
+        <div className={styles.formRow}>
+          <label>Подтверждение выгрузки табелей</label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44 }}>
+            <input
+              type="checkbox"
+              checked={allowTimesheetAck}
+              onChange={e => setAllowTimesheetAck(e.target.checked)}
+            />
+            <span>
+              Разрешить POST /timesheets/:id/ack
+              <span className={styles.muted}> — единственный метод API, который пишет данные</span>
+            </span>
+          </label>
         </div>
         <div className={styles.formRow}>
           <label>Действует до (необязательно)</label>

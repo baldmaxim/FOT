@@ -7,23 +7,41 @@ import type { AuthenticatedRequest } from '../types/index.js';
  * (без связки SELECT→проверка→UPDATE), а закрытие идёт под advisory-локами.
  */
 
-const { pgQuery, pgQueryOne, txQueries, txRows } = vi.hoisted(() => ({
+const { pgQuery, pgQueryOne, txQueries, txRows, lockPairsSeen, materializeMock } = vi.hoisted(() => ({
   pgQuery: vi.fn(),
   pgQueryOne: vi.fn(),
   txQueries: [] as Array<{ sql: string; params: unknown[] }>,
   txRows: { value: [] as unknown[] },
+  lockPairsSeen: { value: [] as Array<{ employeeId: number; workDate: string }> },
+  materializeMock: vi.fn(async () => ({ version: { revision: 1 }, created: true })),
 }));
 
 vi.mock('../config/postgres.js', async (importActual) => ({
   ...(await importActual<typeof import('../config/postgres.js')>()),
   query: pgQuery,
   queryOne: pgQueryOne,
-  withTransaction: async (fn: (client: unknown) => Promise<unknown>) => {
+}));
+
+/**
+ * Транзакция материализации: локи берутся ДО открытия snapshot-транзакции и потому
+ * живут не в списке её запросов, а в аргументе хелпера — его и проверяем.
+ */
+vi.mock('../services/timesheet-snapshot-tx.js', () => ({
+  withTimesheetSnapshotTransaction: async (
+    pairs: Array<{ employeeId: number; workDate: string }>,
+    fn: (client: unknown) => Promise<unknown>,
+  ) => {
+    lockPairsSeen.value = pairs;
     const client = {
       query: async (sql: string, params?: unknown[]) => {
         txQueries.push({ sql, params: params ?? [] });
-        if (/FROM timesheet_approval_employees/i.test(sql)) {
-          return { rows: [{ employee_id: 501 }, { employee_id: 502 }], rowCount: 2 };
+        if (/FOR UPDATE/i.test(sql)) {
+          // Пустой txRows моделирует «UPDATE ничего не обновил», то есть период
+          // уже закрыт — значит и под FOR UPDATE строка идёт без unlocked_at.
+          const row = txRows.value.length > 0
+            ? approvalRow({ unlocked_at: UNLOCKED_AT })
+            : approvalRow();
+          return { rows: [row], rowCount: 1 };
         }
         if (/UPDATE timesheet_approvals/i.test(sql)) {
           return { rows: txRows.value, rowCount: txRows.value.length };
@@ -33,6 +51,12 @@ vi.mock('../config/postgres.js', async (importActual) => ({
     };
     return fn(client);
   },
+  isRetryableDbError: () => false,
+}));
+
+vi.mock('../services/timesheet-version.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/timesheet-version.service.js')>()),
+  materializeVersion: materializeMock,
 }));
 
 const { resolveScopedDeptMock } = vi.hoisted(() => ({
@@ -102,7 +126,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   txQueries.length = 0;
   txRows.value = [];
-  pgQuery.mockResolvedValue([]);
+  lockPairsSeen.value = [];
+  // Состав подачи для advisory-локов читается ДО транзакции — через пул.
+  pgQuery.mockImplementation(async (sql: string) => (
+    /FROM timesheet_approval_employees/i.test(String(sql))
+      ? [{ employee_id: 501 }, { employee_id: 502 }]
+      : []
+  ));
   pgQueryOne.mockResolvedValue(null);
   resolveScopedDeptMock.mockImplementation(async (_req: unknown, deptId: string | null) => deptId);
 });
@@ -235,14 +265,22 @@ describe('closePeriod', () => {
     await timesheetApprovalController.closePeriod(makeReq(), res);
 
     expect(res._status).toBe(200);
-    // Локи взяты ДО UPDATE: иначе правка, начатая раньше, закоммитилась бы уже после закрытия.
-    const lockCalls = txQueries.filter(q => /pg_advisory_xact_lock/.test(q.sql));
-    expect(lockCalls.map(c => c.params)).toEqual([[501, 202607], [502, 202607]]);
-    const lockIdx = txQueries.findIndex(q => /pg_advisory_xact_lock/.test(q.sql));
+    // Локи берутся ДО открытия snapshot-транзакции (иначе snapshot REPEATABLE READ
+    // зафиксируется на ожидании лока и не увидит чужую корректировку), поэтому их
+    // состав проверяем по аргументу хелпера, а не по списку запросов транзакции.
+    expect(lockPairsSeen.value).toEqual([
+      { employeeId: 501, workDate: '2026-07-01' },
+      { employeeId: 502, workDate: '2026-07-01' },
+    ]);
+    // Строка блокируется FOR UPDATE до условного UPDATE.
+    const forUpdateIdx = txQueries.findIndex(q => /FOR UPDATE/i.test(q.sql));
     const updateIdx = txQueries.findIndex(q => /UPDATE timesheet_approvals/i.test(q.sql));
-    expect(lockIdx).toBeGreaterThanOrEqual(0);
-    expect(lockIdx).toBeLessThan(updateIdx);
+    expect(forUpdateIdx).toBeGreaterThanOrEqual(0);
+    expect(forUpdateIdx).toBeLessThan(updateIdx);
     expect(txQueries[updateIdx]!.sql).toContain('unlocked_at IS NOT NULL');
+    // Закрытие утверждённого периода порождает официальную версию для 1С.
+    expect(materializeMock).toHaveBeenCalledTimes(1);
+    expect(materializeMock.mock.calls[0]![2]).toBe('close');
   });
 
   it('период уже закрыт — 409 ALREADY_LOCKED', async () => {

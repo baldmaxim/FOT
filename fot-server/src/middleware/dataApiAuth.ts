@@ -5,6 +5,8 @@ export interface DataApiKeyContext {
   id: string;
   name: string;
   rate_limit_per_minute: number;
+  /** Разрешено ли ключу подтверждать выгрузку табелей (POST .../ack). */
+  allow_timesheet_ack: boolean;
 }
 
 /**
