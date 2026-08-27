@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Собирает Word-версию инструкции для 1С из API_1C.md.
+Собирает Word- и Markdown-версию инструкции для 1С из API_1C.md.
 
 Зачем скрипт, а не разовый файл: docx неизбежно устареет после правок Markdown,
 а руками переносить 400 строк никто не будет. Инструкция правится в одном месте —
@@ -9,7 +9,9 @@
 Запуск (из корня репозитория):
     python scripts/build-api-1c-docx.py
 
-Результат: docs/Инструкция_1С_обмен_табелями.docx
+Результат:
+    docs/Инструкция_1С_обмен_табелями.docx  — для человека
+    docs/Обмен_табелями_с_1С.md             — для агентов и внешних исполнителей
 
 Берётся раздел «Закрытые согласованные табели» плюс вводная часть про адрес и
 авторизацию: разработчику 1С нужен именно обмен табелями, а не generic-таблицы.
@@ -29,6 +31,10 @@ from docx.shared import Pt, RGBColor, Cm
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / 'API_1C.md'
 TARGET = ROOT / 'docs' / 'Инструкция_1С_обмен_табелями.docx'
+# Та же выдержка в Markdown. Нужна там, где Word неудобен: агенты и внешние
+# исполнители читают md заметно надёжнее. Собирается здесь же, чтобы не разошлась
+# с docx и с исходником — ровно по той причине, что описана в шапке файла.
+TARGET_MD = ROOT / 'docs' / 'Обмен_табелями_с_1С.md'
 
 # Раздел, с которого начинается обмен табелями.
 SECTION_MARKER = '# Закрытые согласованные табели — регулярный обмен с 1С'
@@ -178,14 +184,45 @@ def build(md_text: str) -> Document:
     return doc
 
 
+MD_HEADER = """<!--
+  СОБИРАЕТСЯ АВТОМАТИЧЕСКИ из API_1C.md — руками не править.
+  Пересборка: python scripts/build-api-1c-docx.py
+
+  Здесь только раздел про обмен закрытыми табелями. Первая половина исходного
+  документа описывает ДРУГОЙ API («сырые» таблицы на базовом адресе /external/v1)
+  и к обмену табелями отношения не имеет — вырезана намеренно, чтобы не путать
+  базовые адреса.
+-->
+
+**Базовый адрес:** `https://fot.su10.ru/api/public/v1`
+**Авторизация:** заголовок `Authorization: Bearer <токен>`
+
+---
+
+"""
+
+
+def extract_markdown(md_text: str) -> str:
+    """Тот же срез, что уходит в Word: от маркера раздела до конца файла."""
+    lines = md_text.splitlines()
+    start = next((i for i, l in enumerate(lines) if l.startswith(SECTION_MARKER)), None)
+    if start is None:
+        raise SystemExit(f'В {SOURCE.name} не найден раздел: {SECTION_MARKER}')
+    return MD_HEADER + '\n'.join(lines[start:]).rstrip() + '\n'
+
+
 def main() -> None:
     if not SOURCE.exists():
         raise SystemExit(f'Не найден источник: {SOURCE}')
     md_text = io.open(SOURCE, encoding='utf-8').read()
-    doc = build(md_text)
     TARGET.parent.mkdir(parents=True, exist_ok=True)
+
+    doc = build(md_text)
     doc.save(TARGET)
     print(f'Готово: {TARGET.relative_to(ROOT)}')
+
+    io.open(TARGET_MD, 'w', encoding='utf-8', newline='').write(extract_markdown(md_text))
+    print(f'Готово: {TARGET_MD.relative_to(ROOT)}')
 
 
 if __name__ == '__main__':
