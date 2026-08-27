@@ -151,10 +151,6 @@ export const TimesheetPage: FC = () => {
     enforceWhen: (isDepartmentScope || hasGlobalTimesheetRead) && canViewManagedTimesheet,
   });
   const isTimesheetDepartmentScope = monthAccess.isWindowEnforced;
-  // Замок закрытого табеля НЕ связан с окном месяцев: его обходит только is_admin.
-  // Раньше здесь стоял isTimesheetDepartmentScope, из-за чего hr и роли со scope=all
-  // редактировали сданный период.
-  const isApprovalLockEnforced = !isAdmin;
   const isMultiDepartmentManager = isTimesheetDepartmentScope && managedDepartmentIds.length > 1;
   const queryMonth = searchParams.get('month');
   const queryFrom = searchParams.get('from');
@@ -538,9 +534,19 @@ export const TimesheetPage: FC = () => {
     const data = timesheetQuery.data as TimesheetResponse | undefined;
     return Array.isArray(data?.approval_locks) ? data.approval_locks : [];
   }, [timesheetQuery.data, isEmployeeMode, employeeModeData]);
+  /**
+   * Замок закрытого табеля. Исключений НЕТ ни для кого, включая is_admin: закрытый
+   * согласованный табель правится только через «Открыть табель → правки → Закрыть».
+   *
+   * Раньше здесь стоял гейт `!isAdmin`, и админу грид приходил редактируемым — без
+   * заливки закрытых дней, без readOnly в модалке и без исключения дней из bulk. После
+   * запрета правок на бэкенде это означало бы 409 на каждый клик.
+   *
+   * Замок не связан с окном месяцев: до этого тут стоял isTimesheetDepartmentScope,
+   * из-за чего hr и роли со scope=all редактировали сданный период.
+   */
   const lockStatusFor = useCallback(
     (employeeId: number, date: string): IEmployeeApprovalLock['status'] | undefined => {
-      if (!isApprovalLockEnforced) return undefined;
       let best: IEmployeeApprovalLock['status'] | undefined;
       for (const lock of approvalLocks) {
         if (lock.employee_id !== employeeId) continue;
@@ -550,7 +556,7 @@ export const TimesheetPage: FC = () => {
       }
       return best;
     },
-    [approvalLocks, isApprovalLockEnforced],
+    [approvalLocks],
   );
   const isDayLocked = useCallback(
     (employeeId: number | null | undefined, date: string | null | undefined): boolean =>

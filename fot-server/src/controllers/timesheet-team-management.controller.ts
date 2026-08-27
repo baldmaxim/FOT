@@ -20,12 +20,14 @@ import {
   isEmployeeAssignedToDepartmentOnDate,
 } from '../services/timesheet-department-assignments.service.js';
 import { findApprovalLockForMembershipChange } from '../services/timesheet-lock.service.js';
+import { failClosedPeriod } from '../utils/timesheet-lock-response.js';
 import {
   deleteExclusion,
   deleteTransfer,
   listAllTransfersAndExclusions,
   listDepartmentTransfers,
   loadAssignmentEmployeeId,
+  loadAssignmentLockContext,
   updateExclusionDate,
   updateTransfer,
 } from '../services/timesheet-transfers.service.js';
@@ -66,22 +68,39 @@ const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = 'timesheet-team-management';
  * Гард закрытого табеля для изменения состава задним числом. Правка меняет членство
  * на всём интервале от даты, поэтому проверяем интервал, а не одну дату, и оба отдела
  * (исходный и целевой): перевод выполняется позже, и per-date гард увидел бы только
- * старый отдел. Исключение — is_admin.
+ * старый отдел.
+ *
+ * Исключений НЕТ, включая is_admin: состав закрытого табеля меняется только через
+ * «Открыть табель → правки → Закрыть табель». Раньше админ проходил насквозь, и это
+ * молча переигрывало уже сданный период — от excluded_from_timesheet_date зависят
+ * cutoff-дни в содержимом табеля.
  */
 async function findMembershipApprovalLock(
-  req: AuthenticatedRequest,
+  _req: AuthenticatedRequest,
   employeeId: number,
   departmentIds: ReadonlyArray<string | null | undefined>,
   fromDate: string,
 ): Promise<{ start_date: string; end_date: string; status: string } | null> {
-  if (req.user.is_admin) return null;
   return findApprovalLockForMembershipChange({ employeeId, departmentIds, fromDate });
 }
 
-/** Текст 409 для закрытого периода (совпадает с /api/timesheet). */
-function membershipLockMessage(lock: { start_date: string; end_date: string; status: string }): string {
-  const state = lock.status === 'approved' ? 'утверждён' : 'на проверке';
-  return `Период ${lock.start_date} – ${lock.end_date} уже ${state}. Редактирование закрыто.`;
+/**
+ * Гард закрытого табеля для правок УЖЕ существующих переводов и исключений.
+ *
+ * Правка двигает границу членства, поэтому затрагивает объединение двух интервалов —
+ * прежнего и нового. findApprovalLockForMembershipChange проверяет интервал «от даты и
+ * дальше», значит достаточно взять САМУЮ РАННЮЮ из дат: она покрывает оба интервала.
+ * Иначе сдвиг даты из открытого периода в закрытый прошёл бы мимо проверки.
+ */
+async function findMembershipLockForDateChange(
+  employeeId: number,
+  departmentIds: ReadonlyArray<string | null | undefined>,
+  dates: ReadonlyArray<string | null | undefined>,
+): Promise<{ start_date: string; end_date: string; status: string } | null> {
+  const known = dates.filter((d): d is string => typeof d === 'string' && d.length > 0);
+  if (known.length === 0) return null;
+  const earliest = known.reduce((a, b) => (a <= b ? a : b));
+  return findApprovalLockForMembershipChange({ employeeId, departmentIds, fromDate: earliest });
 }
 
 // ─── Schemas ──────────────────────────────────────────────────────────────
@@ -300,7 +319,7 @@ export const timesheetTeamManagementController = {
         parsed.effective_from,
       );
       if (membershipLock) {
-        return res.status(409).json({ success: false, error: membershipLockMessage(membershipLock) });
+        return failClosedPeriod(res, membershipLock, req.user);
       }
 
       let moveResult: 'sigur' | 'portal' | 'noop';
@@ -432,7 +451,7 @@ export const timesheetTeamManagementController = {
         effectiveDate,
       );
       if (excludeLock) {
-        return res.status(409).json({ success: false, error: membershipLockMessage(excludeLock) });
+        return failClosedPeriod(res, excludeLock, req.user);
       }
 
       await execute(
@@ -533,6 +552,17 @@ export const timesheetTeamManagementController = {
       const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
       const parsed = transferUpdateSchema.parse(req.body);
 
+      // Закрытый табель: правка даты перевода переигрывает состав задним числом.
+      const transferCtx = await loadAssignmentLockContext(assignmentId);
+      if (transferCtx) {
+        const lock = await findMembershipLockForDateChange(
+          transferCtx.employeeId,
+          [...transferCtx.departmentIds, parsed.to_department_id, parsed.from_department_id],
+          [transferCtx.fromDate, parsed.effective_from],
+        );
+        if (lock) return failClosedPeriod(res, lock, req.user);
+      }
+
       const result = await updateTransfer(assignmentId, {
         effective_from: parsed.effective_from,
         to_department_id: parsed.to_department_id,
@@ -579,6 +609,16 @@ export const timesheetTeamManagementController = {
       const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
       const employeeIdBefore = await loadAssignmentEmployeeId(assignmentId);
 
+      // Откат перевода возвращает сотрудника в прежний отдел от той же даты — для
+      // закрытого периода это такая же правка состава задним числом.
+      const revertCtx = await loadAssignmentLockContext(assignmentId);
+      if (revertCtx) {
+        const lock = await findMembershipLockForDateChange(
+          revertCtx.employeeId, revertCtx.departmentIds, [revertCtx.fromDate],
+        );
+        if (lock) return failClosedPeriod(res, lock, req.user);
+      }
+
       const result = await deleteTransfer(assignmentId);
       employeeCache.invalidate(result.employee_id);
 
@@ -620,6 +660,23 @@ export const timesheetTeamManagementController = {
       }
       const parsed = exclusionUpdateSchema.parse(req.body);
 
+      // Закрытый табель: сдвиг даты исключения меняет cutoff-дни уже сданного периода.
+      const exclusionRow = await queryOne<{
+        org_department_id: string | null; excluded_from_timesheet_date: string | null;
+      }>(
+        `SELECT org_department_id, excluded_from_timesheet_date::text AS excluded_from_timesheet_date
+           FROM employees WHERE id = $1 LIMIT 1`,
+        [employeeId],
+      );
+      if (exclusionRow) {
+        const lock = await findMembershipLockForDateChange(
+          employeeId,
+          [exclusionRow.org_department_id],
+          [exclusionRow.excluded_from_timesheet_date, parsed.effective_date],
+        );
+        if (lock) return failClosedPeriod(res, lock, req.user);
+      }
+
       const result = await updateExclusionDate(employeeId, parsed.effective_date);
       employeeCache.invalidate(employeeId);
 
@@ -655,6 +712,24 @@ export const timesheetTeamManagementController = {
       const employeeId = Number(req.params.employeeId);
       if (!Number.isFinite(employeeId) || employeeId <= 0) {
         return res.status(400).json({ success: false, error: 'Некорректный id сотрудника' });
+      }
+
+      // Отмена исключения возвращает сотрудника в табель от даты исключения — правка
+      // состава задним числом, в закрытом периоде запрещена.
+      const revertExclusionRow = await queryOne<{
+        org_department_id: string | null; excluded_from_timesheet_date: string | null;
+      }>(
+        `SELECT org_department_id, excluded_from_timesheet_date::text AS excluded_from_timesheet_date
+           FROM employees WHERE id = $1 LIMIT 1`,
+        [employeeId],
+      );
+      if (revertExclusionRow) {
+        const lock = await findMembershipLockForDateChange(
+          employeeId,
+          [revertExclusionRow.org_department_id],
+          [revertExclusionRow.excluded_from_timesheet_date],
+        );
+        if (lock) return failClosedPeriod(res, lock, req.user);
       }
 
       const result = await deleteExclusion(employeeId);

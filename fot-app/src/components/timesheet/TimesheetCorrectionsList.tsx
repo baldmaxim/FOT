@@ -118,6 +118,11 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
       await invalidateAll();
       setEditingRow(null);
     },
+    // Без onError отказ проходил молча: модалка правки просто не закрывалась, и
+    // причина (например, закрытый период — 409) до пользователя не доходила.
+    onError: (error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Не удалось сохранить корректировку');
+    },
   });
 
   const query = useQuery({
@@ -135,6 +140,9 @@ export const TimesheetCorrectionsList: FC<IProps> = ({ startDate, endDate, depar
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] });
       queryClient.invalidateQueries({ queryKey: ['timesheet'] });
+    },
+    onError: (error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Не удалось снять корректировку');
     },
   });
 

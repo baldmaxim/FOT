@@ -267,7 +267,7 @@ export interface TimesheetResponse {
   daily_schedule_ids?: Record<number, Record<string, string>>;
   calendar?: IProductionCalendarMonth | null;
   approvals?: ITimesheetDepartmentApprovalSummary[];
-  /** Замки по сотруднику. Пусто для is_admin — он правит закрытый период. */
+  /** Замки по сотруднику. Приходят ВСЕМ, включая is_admin: закрытый табель не правит никто. */
   approval_locks?: IEmployeeApprovalLock[];
   /** Легаси-поле: плоский список дат. Оставлено на переходный релиз, не использовать. */
   approval_locked_dates?: string[];

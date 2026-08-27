@@ -1,6 +1,7 @@
 import type { Response } from 'express';
 import { query, queryOne, type DbExecutor } from '../config/postgres.js';
-import { checkClosedTimesheetWriteAndMarkDirty } from '../services/timesheet-version.service.js';
+import { loadClosedTimesheetLocks } from '../services/timesheet-version.service.js';
+import { failClosedPeriod } from '../utils/timesheet-lock-response.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import {
   resolveAccessibleDepartmentIds,
@@ -31,27 +32,20 @@ import type { IApprovalLockInfo } from '../services/timesheet-department-assignm
 
 /**
  * Решение согласующего меняет засчитанные часы, поэтому в закрытом (поданном/
- * утверждённом) табеле оно запрещено всем, кроме is_admin. Проверять обязательно
+ * утверждённом) табеле оно запрещено ВСЕМ, включая is_admin: закрытый табель правится
+ * только через «Открыть → правки → Закрыть». Проверять обязательно
  * внутри транзакции записи — advisory-lock (сотрудник, месяц) там уже взят.
  */
 async function loadCorrectionLocks(
-  req: AuthenticatedRequest,
+  _req: AuthenticatedRequest,
   pairs: readonly ITimesheetLockPair[],
   exec?: DbExecutor,
 ): Promise<Map<string, IApprovalLockInfo>> {
-  // Внутри транзакции записи (exec передан) идём через общий метод: он разрешает
-  // админу запись и помечает версии затронутых подач устаревшими, иначе правка не
-  // дошла бы до 1С (миграция 257). Без exec это pre-check — он обязан оставаться
-  // без побочных эффектов.
-  if (exec) return checkClosedTimesheetWriteAndMarkDirty(Boolean(req.user.is_admin), pairs, exec);
-  if (req.user.is_admin) return new Map();
+  // Внутри транзакции записи (exec передан) идём через общий метод, чтобы правило
+  // закрытого периода было одним и тем же на всех путях. Без exec это pre-check —
+  // он обязан оставаться без побочных эффектов.
+  if (exec) return loadClosedTimesheetLocks(pairs, exec);
   return findApprovalLocksForEmployeeDates(pairs, exec);
-}
-
-/** Текст 409 для закрытого периода (совпадает с /api/timesheet). */
-function approvalLockedMessage(lock: IApprovalLockInfo): string {
-  const state = lock.status === 'approved' ? 'утверждён' : 'на проверке';
-  return `Период ${lock.start_date} – ${lock.end_date} уже ${state}. Редактирование закрыто.`;
 }
 
 /** Отсекает из набора строки, попавшие в закрытый период. Возвращает и отсечённые id. */
@@ -555,7 +549,7 @@ async function changeAdjustmentApproval(
   );
 
   if (lock) {
-    res.status(409).json({ success: false, error: approvalLockedMessage(lock) });
+    failClosedPeriod(res, lock, req.user);
     return;
   }
 
@@ -1587,7 +1581,7 @@ const revertOne = async (req: AuthenticatedRequest, res: Response): Promise<void
     );
 
     if (lock) {
-      res.status(409).json({ success: false, error: approvalLockedMessage(lock) });
+      failClosedPeriod(res, lock, req.user);
       return;
     }
 

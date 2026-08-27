@@ -73,7 +73,6 @@ function makeRes() {
 const approvalRow = (over: Record<string, unknown> = {}) => ({
   id: APPROVAL_ID,
   status: 'approved',
-  unlocked_at: null,
   version_dirty_at: null,
   ...over,
 });
@@ -217,6 +216,8 @@ describe('list', () => {
     // Фильтр стоит в самом SQL: иначе список без needs_export отдал бы старую revision.
     const sql = String(pgQuery.mock.calls[0]![0]);
     expect(sql).toContain('a.version_dirty_at IS NULL');
+    // А вот открытый период из выдачи НЕ исключается: см. detail-тесты.
+    expect(sql).not.toContain('a.unlocked_at IS NULL');
     expect(res.statusCode).toBe(200);
   });
 
@@ -230,12 +231,36 @@ describe('list', () => {
 });
 
 describe('detail', () => {
-  it('открытый для правок табель — 409 TIMESHEET_UNLOCKED', async () => {
-    pgQueryOne.mockResolvedValueOnce(approvalRow({ unlocked_at: '2026-08-20T10:00:00Z' }));
+  it('открытый для правок табель ОТДАЁТСЯ: 1С получает последнюю закрытую редакцию', async () => {
+    // Ключевой инвариант обмена: пока админ правит табель, подача не должна пропадать
+    // из 1С. Версия — замороженный снимок, незавершённые правки в неё не попадают,
+    // поэтому отдавать её безопасно. Раньше здесь был 409 TIMESHEET_UNLOCKED, и табель
+    // исчезал из обмена на всё время правки.
+    pgQueryOne
+      .mockResolvedValueOnce(approvalRow())
+      .mockResolvedValueOnce(versionRow())
+      .mockResolvedValueOnce({ id: 9001 })
+      .mockResolvedValueOnce({ version_id: 9001 });
+
     const res = makeRes();
     await publicTimesheetsController.detail(makeReq(), res);
-    expect(res.statusCode).toBe(409);
-    expect(res.payload.code).toBe('TIMESHEET_UNLOCKED');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.revision).toBe(2);
+  });
+
+  it('unlocked_at контроллером не читается — открытость на выдачу не влияет', async () => {
+    // Регрессия на возврат фильтра: если условие по unlocked_at вернут, этот SELECT
+    // снова начнёт его запрашивать.
+    pgQueryOne
+      .mockResolvedValueOnce(approvalRow())
+      .mockResolvedValueOnce(versionRow())
+      .mockResolvedValueOnce({ id: 9001 })
+      .mockResolvedValueOnce({ version_id: 9001 });
+
+    await publicTimesheetsController.detail(makeReq(), makeRes());
+
+    expect(String(pgQueryOne.mock.calls[0]![0])).not.toContain('unlocked_at');
   });
 
   it('не утверждённый табель — 409 TIMESHEET_NOT_APPROVED', async () => {
@@ -330,17 +355,20 @@ describe('ack', () => {
     expect(res.payload.current_content_hash).toBe('hash-v3');
   });
 
-  it('табель переоткрыли между выгрузкой и ACK — 409, запись не идёт', async () => {
+  it('ACK проходит и при открытом для правок табеле', async () => {
+    // 1С подтверждает ровно ту редакцию, которую ей отдали. Появление следующей
+    // переведёт подачу в stale по штатному протоколу, так что терять ACK незачем.
     txClient.handler = (sql) => {
-      if (/FOR UPDATE/i.test(sql)) return [approvalRow({ unlocked_at: '2026-08-20T10:00:00Z' })];
+      if (/FOR UPDATE/i.test(sql)) return [approvalRow()];
+      if (/FROM timesheet_versions/i.test(sql)) return [{ id: 9001, revision: 2, content_hash: 'hash-v2' }];
+      if (/FROM timesheet_1c_exports/i.test(sql)) return [{ acked_at: '2026-08-27T10:00:00Z', document_ref: null }];
       return [];
     };
     const res = makeRes();
     await publicTimesheetsController.ack(makeReq({ body: { revision: 2 } }), res);
 
-    expect(res.statusCode).toBe(409);
-    expect(res.payload.code).toBe('TIMESHEET_UNLOCKED');
-    expect(txCalls.some(c => /INSERT INTO timesheet_1c_exports/i.test(c.sql))).toBe(false);
+    expect(res.statusCode).toBe(200);
+    expect(txCalls.some(c => /INSERT INTO timesheet_1c_exports/i.test(c.sql))).toBe(true);
   });
 
   it('идёт пересборка — ACK отклоняется, запись не идёт', async () => {

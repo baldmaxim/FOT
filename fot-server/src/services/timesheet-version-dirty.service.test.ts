@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Пометка «версия устарела» при записи в закрытый период.
+ * Замок закрытого периода и аварийная пометка версии.
  *
- * Смысл: админ вправе править закрытый табель напрямую, и такая правка обязана дойти
- * до 1С так же, как правка через «Открыть → поправить → Закрыть».
+ * Смысл: закрытый согласованный табель неизменяем ДЛЯ ВСЕХ, включая is_admin — правки
+ * идут только через «Открыть → поправить → Закрыть». Пометка версии осталась, но уже
+ * не как путь для админа, а как операторская процедура восстановления после ручной
+ * правки БД (timesheet-version-maintenance.ts).
  */
 
 const { findLocks, listClosedIds } = vi.hoisted(() => ({
@@ -27,10 +29,8 @@ vi.mock('../controllers/timesheet-assigned-export.controller.js', () => ({
   listBrigadeSupervisorEmployeeIdsForDepartments: vi.fn(),
 }));
 
-import {
-  checkClosedTimesheetWriteAndMarkDirty,
-  markVersionDirty,
-} from './timesheet-version.service.js';
+import { loadClosedTimesheetLocks } from './timesheet-version.service.js';
+import { markVersionDirtyForOperatorRebuild } from './timesheet-version-maintenance.js';
 
 function makeExec() {
   const calls: Array<{ sql: string; params: unknown[] }> = [];
@@ -51,10 +51,10 @@ beforeEach(() => {
   listClosedIds.mockResolvedValue([]);
 });
 
-describe('markVersionDirty', () => {
+describe('markVersionDirtyForOperatorRebuild', () => {
   it('метит только закрытые утверждённые подачи', async () => {
     const exec = makeExec();
-    await markVersionDirty(exec as never, [855]);
+    await markVersionDirtyForOperatorRebuild(exec as never, [855]);
 
     const sql = exec.calls[0]!.sql;
     expect(sql).toContain("status = 'approved'");
@@ -64,73 +64,73 @@ describe('markVersionDirty', () => {
   it('инкрементит seq, а не просто обновляет время', async () => {
     // По одному timestamp правку, пришедшую во время сборки, отличить нельзя.
     const exec = makeExec();
-    await markVersionDirty(exec as never, [855]);
+    await markVersionDirtyForOperatorRebuild(exec as never, [855]);
     expect(exec.calls[0]!.sql).toContain('version_dirty_seq + 1');
   });
 
   it('сбрасывает счётчик неудач: новая правка могла устранить причину ошибки', async () => {
     const exec = makeExec();
-    await markVersionDirty(exec as never, [855]);
+    await markVersionDirtyForOperatorRebuild(exec as never, [855]);
     expect(exec.calls[0]!.sql).toContain('version_rebuild_attempts   = 0');
   });
 
   it('пустой список — запроса нет', async () => {
     const exec = makeExec();
-    await markVersionDirty(exec as never, []);
+    await markVersionDirtyForOperatorRebuild(exec as never, []);
     expect(exec.query).not.toHaveBeenCalled();
   });
 
   it('дубли id схлопываются', async () => {
     const exec = makeExec();
-    await markVersionDirty(exec as never, [855, 855, 900]);
+    await markVersionDirtyForOperatorRebuild(exec as never, [855, 855, 900]);
     expect(exec.calls[0]!.params[0]).toEqual([855, 900]);
   });
 });
 
-describe('checkClosedTimesheetWriteAndMarkDirty', () => {
-  it('неадмин: возвращает замки по submitted И approved, метку не ставит', async () => {
+describe('loadClosedTimesheetLocks', () => {
+  it('возвращает замки по submitted И approved', async () => {
     // Ключевая регрессия: если бы здесь использовался поиск только approved,
-    // неадмины начали бы править табели, отправленные на проверку.
+    // правки поехали бы в табели, отправленные на проверку.
     findLocks.mockResolvedValue(new Map([['501|2026-08-05', { id: 855, status: 'submitted' }]]));
     const exec = makeExec();
 
-    const locks = await checkClosedTimesheetWriteAndMarkDirty(false, PAIRS, exec as never);
+    const locks = await loadClosedTimesheetLocks(PAIRS, exec as never);
 
     expect(locks.size).toBe(1);
     expect(findLocks).toHaveBeenCalledOnce();
+  });
+
+  it('привилегий нет ни у кого: результат не зависит от роли вызывающего', async () => {
+    // Раньше здесь была ветка для is_admin, отдававшая пустую карту «замков нет».
+    // Теперь у функции нет самого параметра роли — обойти замок нечем.
+    findLocks.mockResolvedValue(new Map([['501|2026-08-05', { id: 855, status: 'approved' }]]));
+    const exec = makeExec();
+
+    const locks = await loadClosedTimesheetLocks(PAIRS, exec as never);
+
+    expect(locks.size).toBe(1);
+    expect(loadClosedTimesheetLocks.length).toBe(2);
+  });
+
+  it('штатная запись НЕ помечает версию на пересборку', async () => {
+    // Инвариант для 1С: новая редакция появляется только при approve и close.
+    // Если запись начнёт снова ставить version_dirty_at, табель станет пропадать
+    // из выдачи 1С на время фоновой пересборки.
+    findLocks.mockResolvedValue(new Map());
+    const exec = makeExec();
+
+    await loadClosedTimesheetLocks(PAIRS, exec as never);
+
     expect(listClosedIds).not.toHaveBeenCalled();
     expect(exec.query).not.toHaveBeenCalled();
   });
 
-  it('админ: замков нет, помечены ВСЕ затронутые подачи', async () => {
-    // Сотрудник может входить и в подачу отдела, и в персональную подачу
-    // руководителя — правка его часов меняет обе версии.
-    listClosedIds.mockResolvedValue([855, 900]);
+  it('открытый период правку пропускает: замков нет — записи ничего не мешает', async () => {
+    findLocks.mockResolvedValue(new Map());
     const exec = makeExec();
 
-    const locks = await checkClosedTimesheetWriteAndMarkDirty(true, PAIRS, exec as never);
+    const locks = await loadClosedTimesheetLocks(PAIRS, exec as never);
 
     expect(locks.size).toBe(0);
-    expect(exec.calls[0]!.params[0]).toEqual([855, 900]);
-    expect(exec.calls[0]!.sql).toContain('version_dirty_at');
-  });
-
-  it('админ: правка вне закрытых периодов метку не ставит', async () => {
-    listClosedIds.mockResolvedValue([]);
-    const exec = makeExec();
-
-    await checkClosedTimesheetWriteAndMarkDirty(true, PAIRS, exec as never);
-
-    expect(exec.query).not.toHaveBeenCalled();
-  });
-
-  it('пометка идёт через тот же exec, что и запись — откатится вместе с ней', async () => {
-    listClosedIds.mockResolvedValue([855]);
-    const exec = makeExec();
-
-    await checkClosedTimesheetWriteAndMarkDirty(true, PAIRS, exec as never);
-
-    expect(listClosedIds).toHaveBeenCalledWith(PAIRS, exec);
-    expect(exec.query).toHaveBeenCalledOnce();
   });
 });

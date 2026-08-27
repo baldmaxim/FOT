@@ -44,6 +44,13 @@ vi.mock('../services/timesheet-department-assignments.service.js', () => ({
   isEmployeeAssignedToDepartmentOnDate: isAssignedMock,
 }));
 
+// Гард закрытого табеля действует и на админа (привилегии сняты), поэтому в тестах
+// про сам перевод период держим открытым — иначе каждый из них отвечал бы 409.
+// Сам гард покрыт отдельно в timesheet-team-management.lock.test.ts.
+vi.mock('../services/timesheet-lock.service.js', () => ({
+  findApprovalLockForMembershipChange: vi.fn(async () => null),
+}));
+
 vi.mock('./employee-lifecycle.controller.js', () => ({
   getErrorMessage: (_e: unknown, fallback: string) => fallback,
   getHttpErrorCode: () => null,
@@ -71,6 +78,7 @@ vi.mock('../services/data-scope.service.js', () => ({
 vi.mock('../services/timesheet-transfers.service.js', () => ({
   deleteExclusion: vi.fn(), deleteTransfer: vi.fn(), listAllTransfersAndExclusions: vi.fn(),
   listDepartmentTransfers: vi.fn(), loadAssignmentEmployeeId: vi.fn(),
+  loadAssignmentLockContext: vi.fn(async () => null),
   updateExclusionDate: vi.fn(), updateTransfer: vi.fn(),
 }));
 

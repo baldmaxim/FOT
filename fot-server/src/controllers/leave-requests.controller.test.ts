@@ -294,7 +294,7 @@ describe('leaveRequestsController.approve', () => {
     expect(updateCall).toBeUndefined();
   });
 
-  it('админ согласовывает тот же день в закрытом табеле (гард его не касается)', async () => {
+  it('админ НЕ согласовывает день в закрытом табеле — гард касается и его', async () => {
     mockRequestRow({
       request_type: 'time_correction',
       start_date: '2026-06-01', end_date: '2026-06-01',
@@ -322,8 +322,12 @@ describe('leaveRequestsController.approve', () => {
 
     await leaveRequestsController.approve(req, res);
 
-    expect(res._status).toBe(200);
-    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    // Раньше здесь ожидался 200: у админа была привилегия писать в закрытый период,
+    // и материализация заявления молча меняла часы уже сданного табеля. Теперь путь
+    // один для всех — «Открыть табель → правки → Закрыть табель».
+    expect(res._status).toBe(409);
+    expect((res._json as { code?: string }).code).toBe('TIMESHEET_PERIOD_CLOSED');
+    expect(upsertSpy).not.toHaveBeenCalled();
   });
 
   it('корректировку материализует из блокирующего чтения: часы, изменённые параллельно, не устаревают', async () => {
@@ -398,13 +402,33 @@ describe('leaveRequestsController.updateCorrectionHours', () => {
     id: 708, employee_id: 247, request_type: 'time_correction', status: 'pending',
   };
 
-  // FOR UPDATE → UPDATE → INSERT audit_logs.
-  const mockTxFlow = (locked: unknown, updated: unknown) => {
+  // Диспетчер по SQL, а не позиционная очередь: между FOR UPDATE и UPDATE теперь
+  // идут advisory-лок и перепроверка замка закрытого периода, и любая новая
+  // внутритранзакционная проверка сдвигала бы жёсткую последовательность.
+  const mockTxFlow = (locked: unknown, updated: unknown, closedPeriod = false) => {
     txClient.query.mockReset();
-    txClient.query
-      .mockResolvedValueOnce({ rows: locked ? [locked] : [], rowCount: locked ? 1 : 0 })
-      .mockResolvedValueOnce({ rows: updated ? [updated] : [], rowCount: updated ? 1 : 0 })
-      .mockResolvedValue({ rows: [], rowCount: 1 });
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('pg_advisory')) return { rows: [], rowCount: 0 };
+      if (text.includes('WITH RECURSIVE pairs')) {
+        return closedPeriod
+          ? {
+            rows: [{
+              employee_id: 247, work_date: '2026-06-01', id: 5,
+              start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved',
+            }],
+            rowCount: 1,
+          }
+          : { rows: [], rowCount: 0 };
+      }
+      if (text.includes('FOR UPDATE')) {
+        return { rows: locked ? [locked] : [], rowCount: locked ? 1 : 0 };
+      }
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: updated ? [updated] : [], rowCount: updated ? 1 : 0 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
   };
 
   beforeEach(() => {
@@ -604,11 +628,23 @@ describe('leaveRequestsController.updateCorrectionHours', () => {
   it('approved: 0 строк в табеле → 409 и откат (день переписан вручную)', async () => {
     pgQueryOne.mockResolvedValueOnce(APPROVED_ROW);
     pgQuery.mockResolvedValueOnce([]);
+    // Диспетчер по SQL: позиционная очередь сломалась бы о advisory-лок и
+    // перепроверку замка, которые идут между FOR UPDATE и записью.
     txClient.query.mockReset();
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved', correction_hours: '10.00' }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [{ id: 708, correction_hours: '9.00' }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // UPDATE attendance_adjustments
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('pg_advisory')) return { rows: [], rowCount: 0 };
+      if (text.includes('WITH RECURSIVE pairs')) return { rows: [], rowCount: 0 };
+      if (text.includes('FOR UPDATE')) {
+        return { rows: [{ status: 'approved', correction_hours: '10.00' }], rowCount: 1 };
+      }
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ id: 708, correction_hours: '9.00' }], rowCount: 1 };
+      }
+      // Ключевое для теста: строки табеля нет — день переписан вручную.
+      if (text.includes('UPDATE attendance_adjustments')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 1 };
+    });
     const res = makeRes();
 
     await leaveRequestsController.updateCorrectionHours(makeHoursReq({ hours: 9 }), res);
@@ -1758,6 +1794,23 @@ describe('leaveRequestsController.revokeApproval', () => {
     pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
   });
 
+  /**
+   * Диспетчер по SQL вместо позиционной очереди: внутри транзакции появились
+   * advisory-лок и перепроверка замка закрытого периода (pre-check через пул сам по
+   * себе не защищает — между ним и удалением строк табель успевает закрыться).
+   */
+  const mockRevokeTx = (updated: Record<string, unknown> = { id: 708, status: 'cancelled' }) => {
+    txClient.query.mockReset();
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('pg_advisory')) return { rows: [], rowCount: 0 };
+      if (text.includes('WITH RECURSIVE pairs')) return { rows: [], rowCount: 0 };
+      if (text.includes('FOR UPDATE')) return { rows: [{ status: 'approved' }], rowCount: 1 };
+      if (text.includes('UPDATE leave_requests')) return { rows: [updated], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+  };
+
   // Approved-отпуск, согласованный пользователем 'reviewer-uuid' (= makeReq().user.id), будущие даты.
   const approvedVacation = (over: Record<string, unknown> = {}) => ({
     id: 708, employee_id: 247, request_type: 'vacation', status: 'approved',
@@ -1811,10 +1864,7 @@ describe('leaveRequestsController.revokeApproval', () => {
   it('успех — cancelled, cancelled_by/reason, точечный DELETE, уведомление', async () => {
     pgQueryOne.mockResolvedValueOnce(approvedVacation());
     pgQuery.mockResolvedValueOnce([]); // гард: период не закрыт
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] }) // FOR UPDATE
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] }) // UPDATE
-      .mockResolvedValueOnce({ rowCount: 2 }); // DELETE
+    mockRevokeTx();
     const res = makeRes();
 
     await leaveRequestsController.revokeApproval(makeReq({ body: { reason: 'тест' } }), res);
@@ -1846,10 +1896,7 @@ describe('leaveRequestsController.revokeApproval', () => {
       correction_date: '2026-06-01', correction_object_id: 'obj-1',
     }));
     pgQuery.mockResolvedValueOnce([]); // табель не сдан
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
-      .mockResolvedValue({ rowCount: 1 });
+    mockRevokeTx();
     const res = makeRes();
 
     await leaveRequestsController.revokeApproval(makeReq({ body: { reason: 'ошибочно согласовал' } }), res);
@@ -1878,10 +1925,7 @@ describe('leaveRequestsController.revokeApproval', () => {
   it('админ может отменить начавшийся отпуск, если период не закрыт', async () => {
     pgQueryOne.mockResolvedValueOnce(approvedVacation({ start_date: '2026-01-01', end_date: '2026-01-03' }));
     pgQuery.mockResolvedValueOnce([]); // гард: период не закрыт
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
-      .mockResolvedValueOnce({ rowCount: 1 });
+    mockRevokeTx();
     const res = makeRes();
 
     await leaveRequestsController.revokeApproval(adminReq(), res);
@@ -1893,10 +1937,7 @@ describe('leaveRequestsController.revokeApproval', () => {
   it('админ, который сам не согласовывал → cancel_source=admin', async () => {
     pgQueryOne.mockResolvedValueOnce(approvedVacation({ reviewer_id: 'someone-else' }));
     pgQuery.mockResolvedValueOnce([]);
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
-      .mockResolvedValueOnce({ rowCount: 1 });
+    mockRevokeTx();
     const res = makeRes();
 
     await leaveRequestsController.revokeApproval(adminReq(), res);
@@ -1908,10 +1949,7 @@ describe('leaveRequestsController.revokeApproval', () => {
   it('админ, который сам согласовывал → cancel_source=manager', async () => {
     pgQueryOne.mockResolvedValueOnce(approvedVacation({ reviewer_id: 'admin-uuid' }));
     pgQuery.mockResolvedValueOnce([]);
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled' }] })
-      .mockResolvedValueOnce({ rowCount: 1 });
+    mockRevokeTx();
     const res = makeRes();
 
     await leaveRequestsController.revokeApproval(adminReq(), res);
@@ -1925,10 +1963,7 @@ describe('leaveRequestsController.revokeApproval', () => {
     pgQuery
       .mockResolvedValueOnce([]) // гард периода
       .mockResolvedValueOnce([{ id: 'reviewer-uuid', full_name: 'Тихонович Юрий Витальевич' }]); // профили
-    txClient.query
-      .mockResolvedValueOnce({ rows: [{ status: 'approved' }] })
-      .mockResolvedValueOnce({ rows: [{ id: 708, status: 'cancelled', cancelled_by: 'reviewer-uuid', cancel_source: 'manager' }] })
-      .mockResolvedValueOnce({ rowCount: 1 });
+    mockRevokeTx({ id: 708, status: 'cancelled', cancelled_by: 'reviewer-uuid', cancel_source: 'manager' });
     const res = makeRes();
 
     await leaveRequestsController.revokeApproval(makeReq({ body: { reason: 'тест' } }), res);

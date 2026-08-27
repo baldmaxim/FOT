@@ -62,7 +62,8 @@ import {
   type IDepartmentEmployeeMembership,
   type IApprovalLockInfo,
 } from '../services/timesheet-department-assignments.service.js';
-import { checkClosedTimesheetWriteAndMarkDirty } from '../services/timesheet-version.service.js';
+import { loadClosedTimesheetLocks } from '../services/timesheet-version.service.js';
+import { closedPeriodMessage, failClosedPeriod, TIMESHEET_PERIOD_CLOSED } from '../utils/timesheet-lock-response.js';
 import {
   findApprovalLockForEmployeeDate,
   findApprovalLocksForEmployeeDates,
@@ -1237,35 +1238,37 @@ async function resolveEmployeeManagedDepartment(
 /**
  * Проверяет, закрыт ли период для записи табеля сотрудника на дату.
  *
- * Замок не зависит от того, как правящий добрался до сотрудника: раньше поиск шёл
- * по managed-отделам запроса, и любой путь доступа мимо них (прямые подчинённые,
- * бригада табельщицы, scope='all', hr) открывал закрытый период. Единственное
- * исключение — is_admin.
+ * Замок не зависит ни от того, как правящий добрался до сотрудника (прямые подчинённые,
+ * бригада табельщицы, scope='all', hr), ни от его роли. Исключений нет, в том числе для
+ * is_admin: закрытый табель правится только через «Открыть → правки → Закрыть».
+ *
+ * Аргумент req сохранён намеренно — сигнатура читается как «замок в контексте запроса»,
+ * и все вызовы уже написаны так.
  */
 async function ensureNotLockedForScope(
-  req: AuthenticatedRequest,
+  _req: AuthenticatedRequest,
   employeeId: number,
   workDate: string,
   exec?: DbExecutor,
 ): Promise<IApprovalLockInfo | null> {
-  if (req.user.is_admin) return null;
   return findApprovalLockForEmployeeDate(employeeId, workDate, exec);
 }
 
-/** Батч-форма ensureNotLockedForScope для bulk-путей. Пустая карта для is_admin. */
+/** Батч-форма ensureNotLockedForScope для bulk-путей. */
 async function loadLocksForScope(
-  req: AuthenticatedRequest,
+  _req: AuthenticatedRequest,
   pairs: readonly ITimesheetLockPair[],
   exec?: DbExecutor,
 ): Promise<Map<string, IApprovalLockInfo>> {
-  if (req.user.is_admin) return new Map();
   return findApprovalLocksForEmployeeDates(pairs, exec);
 }
 
-/** Единый текст 409 для закрытого периода. */
-export function approvalLockMessage(lock: IApprovalLockInfo): string {
-  const state = lock.status === 'approved' ? 'утверждён' : 'на проверке';
-  return `Период ${lock.start_date} – ${lock.end_date} уже ${state}. Редактирование закрыто.`;
+/**
+ * Текст 409 для закрытого периода. Живёт в utils/timesheet-lock-response, чтобы
+ * leave-requests и team-management отвечали ровно так же.
+ */
+export function approvalLockMessage(lock: IApprovalLockInfo, user?: AuthenticatedRequest['user']): string {
+  return closedPeriodMessage(lock, user);
 }
 
 /** Замок, найденный ПОВТОРНО уже под advisory-lock: pre-check мог устареть. */
@@ -1283,13 +1286,11 @@ export class ApprovalLockedError extends Error {
  * advisory-lock по (сотрудник, месяц) там уже взят.
  */
 async function assertNotLockedInTx(
-  req: AuthenticatedRequest,
+  _req: AuthenticatedRequest,
   pairs: readonly ITimesheetLockPair[],
   exec: DbExecutor,
 ): Promise<void> {
-  // Для админа запись разрешена, но версии затронутых подач помечаются устаревшими —
-  // иначе его правка не дошла бы до 1С (см. миграцию 257).
-  const locks = await checkClosedTimesheetWriteAndMarkDirty(Boolean(req.user.is_admin), pairs, exec);
+  const locks = await loadClosedTimesheetLocks(pairs, exec);
   if (locks.size === 0) return;
   throw new ApprovalLockedError([...locks.values()][0]!);
 }
@@ -1687,7 +1688,7 @@ async function applyObjectEntryMutation(
     }
     const approvalLockObj = await ensureNotLockedForScope(req, item.employee_id, item.work_date);
     if (approvalLockObj) {
-      return reject(409, approvalLockMessage(approvalLockObj));
+      return reject(409, approvalLockMessage(approvalLockObj, req.user), TIMESHEET_PERIOD_CLOSED);
     }
     const allowedHours = Math.max(0, item.hours_worked);
 
@@ -1877,7 +1878,7 @@ async function applyObjectEntryMutation(
     };
   } catch (err) {
     if (err instanceof ApprovalLockedError) {
-      return reject(409, err.message);
+      return reject(409, closedPeriodMessage(err.lock, req.user), TIMESHEET_PERIOD_CLOSED);
     }
     if (err instanceof CorrectionRestrictionError) {
       const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
@@ -2693,10 +2694,11 @@ export const timesheetController = {
         unlocked_at: string | null; unlocked_by_name: string | null; unlock_reason: string | null;
       }> = [];
       // Замки по сотруднику: в смешанной выборке (табельщица, прямые подчинённые)
-      // плоский список дат пере-блокировал бы чужих. Админ не блокируется вовсе.
-      const approvalLocks: IEmployeeApprovalLock[] = req.user.is_admin
-        ? []
-        : await loadApprovalLocksForEmployeesInPeriod(employeeIds, startDate, endDate);
+      // плоский список дат пере-блокировал бы чужих. Грузим всем без исключения —
+      // админ тоже не правит закрытый табель, и грид обязан показать это замком,
+      // иначе каждый его клик заканчивался бы 409.
+      const approvalLocks: IEmployeeApprovalLock[] =
+        await loadApprovalLocksForEmployeesInPeriod(employeeIds, startDate, endDate);
       // Легаси-поле для клиентов, не знающих про approval_locks (снять через релиз).
       const approvalLockedDates = flattenApprovalLockDates(approvalLocks);
       if (effectiveApprovalDeptId) {
@@ -2791,7 +2793,7 @@ export const timesheetController = {
       }
       const approvalLock = await ensureNotLockedForScope(req, parsed.employee_id, parsed.work_date);
       if (approvalLock) {
-        return res.status(409).json({ success: false, error: approvalLockMessage(approvalLock) });
+        return failClosedPeriod(res, approvalLock, req.user);
       }
       const plannedHours = (await resolvePlannedHoursByItems([{ employee_id: parsed.employee_id, work_date: parsed.work_date }]))
         .get(`${parsed.employee_id}_${parsed.work_date}`) ?? null;
@@ -2980,7 +2982,7 @@ export const timesheetController = {
         return res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
       if (err instanceof ApprovalLockedError) {
-        return res.status(409).json({ success: false, error: err.message });
+        return failClosedPeriod(res, err.lock, req.user);
       }
       console.error('timesheet.create error:', err);
       res.status(500).json({ success: false, error: 'Ошибка создания записи' });
@@ -3169,7 +3171,7 @@ export const timesheetController = {
 	        String(existing.work_date),
 	      );
 	      if (approvalLockUpdate) {
-	        return res.status(409).json({ success: false, error: approvalLockMessage(approvalLockUpdate) });
+	        return failClosedPeriod(res, approvalLockUpdate, req.user);
 	      }
 
         // Notes-only правка заявки «работа в выходной/праздник»: изолированная ветка,
@@ -3380,7 +3382,7 @@ export const timesheetController = {
         return res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
       if (err instanceof ApprovalLockedError) {
-        return res.status(409).json({ success: false, error: err.message });
+        return failClosedPeriod(res, err.lock, req.user);
       }
       console.error('timesheet.update error:', err);
       const message = err instanceof Error ? err.message : '';
@@ -3432,7 +3434,7 @@ export const timesheetController = {
       const bulkLocks = await loadLocksForScope(req, bulkLockPairs);
       const lockedItem = [...bulkLocks.values()][0];
       if (lockedItem) {
-        return res.status(409).json({ success: false, error: approvalLockMessage(lockedItem) });
+        return failClosedPeriod(res, lockedItem, req.user);
       }
       const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
       const plannedHoursByItem = await resolvePlannedHoursByItems(uniqueItems);
@@ -3604,7 +3606,7 @@ export const timesheetController = {
         return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
       if (err instanceof ApprovalLockedError) {
-        return res.status(409).json({ success: false, error: err.message });
+        return failClosedPeriod(res, err.lock, req.user);
       }
       console.error('timesheet.bulkSave error:', err);
       res.status(500).json({ success: false, error: 'Ошибка массового обновления табеля' });
@@ -3674,7 +3676,7 @@ export const timesheetController = {
         return res.status(503).json({ success: false, error: DB_POOL_BUSY_MESSAGE, code: DB_POOL_BUSY_CODE });
       }
       if (err instanceof ApprovalLockedError) {
-        return res.status(409).json({ success: false, error: err.message });
+        return failClosedPeriod(res, err.lock, req.user);
       }
       console.error('timesheet.upsertObjectEntry error:', err);
       Sentry.captureException(err, { tags: { route: 'timesheet.upsertObjectEntry' } });
@@ -3851,7 +3853,7 @@ export const timesheetController = {
         return res.status(503).json({ success: false, error: DB_POOL_BUSY_MESSAGE, code: DB_POOL_BUSY_CODE });
       }
       if (err instanceof ApprovalLockedError) {
-        return res.status(409).json({ success: false, error: err.message });
+        return failClosedPeriod(res, err.lock, req.user);
       }
       console.error('timesheet.upsertObjectEntriesBulk error:', err);
       Sentry.captureException(err, { tags: { route: 'timesheet.upsertObjectEntriesBulk' } });
@@ -3878,7 +3880,7 @@ export const timesheetController = {
       }
       const approvalLockDel = await ensureNotLockedForScope(req, parsed.employee_id, parsed.work_date);
       if (approvalLockDel) {
-        return res.status(409).json({ success: false, error: approvalLockMessage(approvalLockDel) });
+        return failClosedPeriod(res, approvalLockDel, req.user);
       }
 
       // Удаление освобождает субботний слот — делаем его и пересчёт хвоста месяца под
@@ -3936,7 +3938,7 @@ export const timesheetController = {
         return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
       }
       if (err instanceof ApprovalLockedError) {
-        return res.status(409).json({ success: false, error: err.message });
+        return failClosedPeriod(res, err.lock, req.user);
       }
       console.error('timesheet.deleteObjectEntry error:', err);
       res.status(500).json({ success: false, error: 'Ошибка удаления корректировки по объекту' });
@@ -4035,15 +4037,17 @@ export const timesheetController = {
         // (leave_request со статусом work/manual — по сути ручная work-правка).
         const isManualLike = item.source_type === 'manual'
           || (item.source_type === 'leave_request' && (item.status === 'work' || item.status === 'manual'));
-        // Админ правит закрытый период — флаг должен совпадать с поведением записи.
+        // Флаг обязан совпадать с поведением записи. Админ по-прежнему не ограничен
+        // окном месяцев, скоупом и типом источника, но закрытый период не обходит
+        // никто: там правка вернёт 409, и кнопка не должна выглядеть живой.
         const canEdit = req.user.is_admin
-          ? true
+          ? !approvalLocked
           : !approvalLocked && monthAllowed && isManualLike && isEmpEditable(item.employee_id);
         // Удаляемы: manual и ЛЮБЫЕ материализации заявления (включая отсутствия —
         // день синхронно убирается из заявления, см. deleteEntry).
         const isDeletableSource = item.source_type === 'manual' || item.source_type === 'leave_request';
         const canDelete = req.user.is_admin
-          ? isDeletableSource
+          ? !approvalLocked && isDeletableSource
           : !approvalLocked && monthAllowed && isDeletableSource && isEmpEditable(item.employee_id);
         return {
           id: item.id,
@@ -4127,7 +4131,7 @@ export const timesheetController = {
         String(existing.work_date),
       );
       if (approvalLockDel) {
-        return res.status(409).json({ success: false, error: approvalLockMessage(approvalLockDel) });
+        return failClosedPeriod(res, approvalLockDel, req.user);
       }
 
       // Числовой source_id у leave_request — это материализация отсутствия/выхода ('work').
@@ -4210,7 +4214,7 @@ export const timesheetController = {
       res.json({ success: true });
     } catch (err) {
       if (err instanceof ApprovalLockedError) {
-        return res.status(409).json({ success: false, error: err.message });
+        return failClosedPeriod(res, err.lock, req.user);
       }
       console.error('timesheet.deleteEntry error:', err);
       const message = err instanceof Error ? err.message : '';
@@ -4426,7 +4430,7 @@ export const timesheetController = {
       res.json({ success: true, data: { recalculated_summaries: recalculatedSummaries, reapproved, conflicts } });
     } catch (err) {
       if (err instanceof ApprovalLockedError) {
-        return res.status(409).json({ success: false, error: err.message });
+        return failClosedPeriod(res, err.lock, req.user);
       }
       console.error('timesheet.refresh error:', err);
       res.status(500).json({ success: false, error: 'Ошибка обновления табеля' });

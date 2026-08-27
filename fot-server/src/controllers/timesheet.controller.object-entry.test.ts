@@ -159,6 +159,10 @@ beforeEach(() => {
   deleteBySourceMock.mockResolvedValue([]);
   pgQuery.mockImplementation(async (sql: string) => {
     if (/FOR UPDATE/i.test(sql)) return existingRow ? [existingRow] : [];
+    // Замок закрытого периода: период открыт. Ветку держим ПЕРЕД проверкой на
+    // employees — SQL замка содержит подзапрос «FROM employees e», и без этого
+    // условия он получил бы чужую строку и был бы прочитан как закрытый период.
+    if (/WITH RECURSIVE pairs/i.test(sql)) return [];
     if (/FROM\s+employees/i.test(sql)) return [{ id: EMP, org_department_id: 'D1' }];
     if (/status = 'manual' AND hours_override > 0/i.test(sql)) {
       return workedSaturdays.map(d => ({ employee_id: EMP, work_date: d }));

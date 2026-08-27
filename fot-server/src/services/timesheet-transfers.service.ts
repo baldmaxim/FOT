@@ -643,6 +643,29 @@ export async function loadAssignmentEmployeeId(assignmentId: string): Promise<nu
   return a ? a.employee_id : null;
 }
 
+/**
+ * Данные назначения, нужные гарду закрытого табеля: кого, в каком отделе и с какой даты
+ * затрагивает правка. Парное (закрытое) назначение добавляем в набор отделов — правка
+ * даты перевода двигает границу между двумя отделами сразу.
+ *
+ * Возвращает null, если назначения уже нет: тогда гарду нечего проверять, а сама
+ * операция упадёт на своей проверке существования.
+ */
+export async function loadAssignmentLockContext(assignmentId: string): Promise<{
+  employeeId: number;
+  departmentIds: Array<string | null>;
+  fromDate: string;
+} | null> {
+  const open = await loadAssignmentById(assignmentId);
+  if (!open) return null;
+  const previous = await findPreviousClosedAssignment(open);
+  return {
+    employeeId: open.employee_id,
+    departmentIds: [open.org_department_id, previous?.org_department_id ?? null],
+    fromDate: open.effective_from,
+  };
+}
+
 export { loadAssignmentsByIds };
 
 export interface ITransferAdminRow extends ITransferRow {

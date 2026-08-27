@@ -23,6 +23,7 @@ import { resolveResponsibleEmployeeForTarget } from '../services/weekend-approva
 import { upsertAttendanceAdjustment, type DbExecutor } from '../services/attendance.service.js';
 import { resolveAdjustmentApprovalStatus, quotaLockKeys } from './timesheet.controller.js';
 import { auditService } from '../services/audit.service.js';
+import { TIMESHEET_PERIOD_CLOSED } from '../utils/timesheet-lock-response.js';
 import {
   recordLeaveRequestHistory,
   listLeaveRequestHistory,
@@ -1462,15 +1463,16 @@ async function approveLeaveRequestById(
       }
 
       // Закрытый табель: материализация одобренного заявления меняет засчитанные часы
-      // в уже сданном/утверждённом периоде. Гард для всех, кроме is_admin. Advisory-локи
-      // берём до проверки — иначе между ней и записью успевает пройти submit.
+      // в уже сданном/утверждённом периоде. Гард ДЛЯ ВСЕХ, включая is_admin — закрытый
+      // табель правится только через «Открыть → правки → Закрыть». Advisory-локи берём
+      // до проверки — иначе между ней и записью успевает пройти submit.
       const affectedDates = collectAffectedTimesheetDates(locked);
-      if (!req.user.is_admin && affectedDates.length > 0) {
+      if (affectedDates.length > 0) {
         await lockQuotaMonthsOnClient(client, locked.employee_id, affectedDates);
         if (await hasLockedTimesheetDates(locked.employee_id, affectedDates, client)) {
           throw new LeaveDecisionError(
             'timesheet_locked',
-            'Период уже сдан/закрыт в табеле — сначала верните табель на доработку',
+            'Период уже сдан/закрыт в табеле — откройте табель, внесите правки и закройте заново',
           );
         }
       }
@@ -1665,7 +1667,11 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
     }
     const result = await approveLeaveRequestById(req, id, normalizeDecisionComment(req.body?.comment));
     if (!result.ok) {
-      res.status(DECISION_HTTP_STATUS[result.code]).json({ success: false, error: result.error });
+      res.status(DECISION_HTTP_STATUS[result.code]).json({
+        success: false,
+        error: result.error,
+        ...(result.code === 'timesheet_locked' ? { code: TIMESHEET_PERIOD_CLOSED } : {}),
+      });
       return;
     }
 
@@ -1689,7 +1695,11 @@ const reject = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     }
     const result = await rejectLeaveRequestById(req, id, normalizeDecisionComment(req.body?.comment));
     if (!result.ok) {
-      res.status(DECISION_HTTP_STATUS[result.code]).json({ success: false, error: result.error });
+      res.status(DECISION_HTTP_STATUS[result.code]).json({
+        success: false,
+        error: result.error,
+        ...(result.code === 'timesheet_locked' ? { code: TIMESHEET_PERIOD_CLOSED } : {}),
+      });
       return;
     }
 
@@ -1941,7 +1951,7 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
         return;
       }
       if (await hasLockedTimesheetDates(request.employee_id, collectAffectedTimesheetDates(request))) {
-        res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку' });
+        res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — откройте табель, внесите правки и закройте заново' });
         return;
       }
     }
@@ -1958,6 +1968,19 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
       // Статус мог смениться между предчтением и локом (параллельный approve/cancel):
       // права и гарды выше считались по старому статусу, поэтому расхождение — конфликт.
       if (locked.status !== request.status) return { conflict: 'not_editable' as const };
+
+      // Замок закрытого периода перепроверяем ВНУТРИ транзакции и под advisory-локом:
+      // pre-check выше сам по себе не защищает — между ним и записью успевает пройти
+      // закрытие табеля, и правка легла бы уже после сформированной версии для 1С.
+      if (locked.status === 'approved') {
+        const affectedDates = collectAffectedTimesheetDates(request);
+        if (affectedDates.length > 0) {
+          await lockQuotaMonthsOnClient(client, request.employee_id, affectedDates);
+          if (await hasLockedTimesheetDates(request.employee_id, affectedDates, client)) {
+            return { conflict: 'timesheet_locked' as const };
+          }
+        }
+      }
 
       const updated = (await client.query(
         `UPDATE leave_requests SET correction_hours = $1, updated_at = now()
@@ -2037,6 +2060,14 @@ const updateCorrectionHours = async (req: AuthenticatedRequest, res: Response): 
     }
     if (result.conflict === 'no_adjustment') {
       res.status(409).json({ success: false, error: 'День уже изменён в табеле — правьте часы там' });
+      return;
+    }
+    if (result.conflict === 'timesheet_locked') {
+      res.status(409).json({
+        success: false,
+        error: 'Период уже сдан/закрыт в табеле — откройте табель, внесите правки и закройте заново',
+        code: TIMESHEET_PERIOD_CLOSED,
+      });
       return;
     }
 
@@ -2134,6 +2165,12 @@ const updateRequestType = async (req: AuthenticatedRequest, res: Response): Prom
         // Страховка на закрытый табель (как в revokeApproval): при будущих датах
         // почти не срабатывает, но ловит досрочно поданный период. Единый гард —
         // снимок состава ИЛИ отдел сотрудника с предками.
+        //
+        // Advisory-лок (сотрудник, месяц) — до проверки: без него закрытие табеля
+        // успевает вклиниться между проверкой и пере-материализацией строк ниже.
+        if (dates.length > 0) {
+          await lockQuotaMonthsOnClient(client, Number(locked.employee_id), dates);
+        }
         if (await hasLockedTimesheetDates(Number(locked.employee_id), dates, client)) {
           return { conflict: 'timesheet_locked' as const };
         }
@@ -2208,7 +2245,11 @@ const updateRequestType = async (req: AuthenticatedRequest, res: Response): Prom
       return;
     }
     if (result.conflict === 'timesheet_locked') {
-      res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку' });
+      res.status(409).json({
+        success: false,
+        error: 'Период уже сдан/закрыт в табеле — откройте табель, внесите правки и закройте заново',
+        code: TIMESHEET_PERIOD_CLOSED,
+      });
       return;
     }
     if (result.conflict === 'days_mismatch') {
@@ -2308,12 +2349,12 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         [nowIso, id, req.user.id, reason],
       );
       // Закрытый табель: отмена откатывает материализованные строки, поэтому в
-      // сданном/утверждённом периоде запрещена всем, кроме is_admin. Проверяем и
+      // сданном/утверждённом периоде запрещена ВСЕМ, включая is_admin. Проверяем и
       // pending, и approved, но блокируем ТОЛЬКО если строки в закрытом периоде есть.
       const removableDates = await listLeaveRequestAdjustmentDates(
         client, request, current.status === 'approved',
       );
-      if (!req.user.is_admin && removableDates.length > 0) {
+      if (removableDates.length > 0) {
         await lockQuotaMonthsOnClient(client, request.employee_id, removableDates);
         if (await hasLockedTimesheetDates(request.employee_id, removableDates, client)) {
           return { timesheetLocked: true as const };
@@ -2340,7 +2381,8 @@ const cancel = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     if ('timesheetLocked' in result) {
       res.status(409).json({
         success: false,
-        error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку',
+        error: 'Период уже сдан/закрыт в табеле — откройте табель, внесите правки и закройте заново',
+        code: TIMESHEET_PERIOD_CLOSED,
       });
       return;
     }
@@ -2702,8 +2744,13 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
     // Жёсткий гард: ни одна дата не должна попадать в уже сданный/одобренный табель.
     // Для отпусков у руководителя не срабатывает (даты будущие), для корректировок —
     // это единственное, что удерживает от переписывания закрытого периода.
+    // Здесь это только pre-check — решает перепроверка под advisory-локом в транзакции.
     if (await hasLockedTimesheetDates(request.employee_id, dates)) {
-      res.status(409).json({ success: false, error: 'Период уже сдан/закрыт в табеле — сначала верните табель на доработку' });
+      res.status(409).json({
+        success: false,
+        error: 'Период уже сдан/закрыт в табеле — откройте табель, внесите правки и закройте заново',
+        code: TIMESHEET_PERIOD_CLOSED,
+      });
       return;
     }
 
@@ -2717,6 +2764,14 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
       const current = locked.rows[0];
       if (!current || current.status !== 'approved') {
         return { conflict: true as const };
+      }
+      // Замок перепроверяем под advisory-локом: pre-check выше читался через пул, и
+      // между ним и удалением строк табель успевает закрыться.
+      if (dates.length > 0) {
+        await lockQuotaMonthsOnClient(client, request.employee_id, dates);
+        if (await hasLockedTimesheetDates(request.employee_id, dates, client)) {
+          return { timesheetLocked: true as const };
+        }
       }
       // Источник отмены: согласовавший — 'manager', иначе (админ, который не согласовывал) — 'admin'.
       const cancelSource = isApprover ? 'manager' : 'admin';
@@ -2739,6 +2794,14 @@ const revokeApproval = async (req: AuthenticatedRequest, res: Response): Promise
       return { conflict: false as const, row: updated.rows[0] ?? null };
     });
 
+    if ('timesheetLocked' in result && result.timesheetLocked) {
+      res.status(409).json({
+        success: false,
+        error: 'Период уже сдан/закрыт в табеле — откройте табель, внесите правки и закройте заново',
+        code: TIMESHEET_PERIOD_CLOSED,
+      });
+      return;
+    }
     if (result.conflict) {
       res.status(409).json({ success: false, error: 'Статус заявления изменился, обновите страницу' });
       return;

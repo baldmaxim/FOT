@@ -10,6 +10,7 @@ import { structureKeys, timesheetKeys, TIMESHEET_FAMILY_KEYS } from '../../api/q
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
 import { TransfersList, type ITransferEditPatch } from './TransfersList';
 import { ExclusionsList } from './ExclusionsList';
+import { useToast } from '../../contexts/ToastContext';
 
 interface IProps {
   departmentId: string | null;
@@ -18,6 +19,7 @@ interface IProps {
 
 export const TimesheetTransfersTab: FC<IProps> = ({ departmentId, departmentName }) => {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const { managedDepartments } = useManagedDepartments();
 
   const listingQuery = useQuery({
@@ -36,26 +38,38 @@ export const TimesheetTransfersTab: FC<IProps> = ({ departmentId, departmentName
     queryClient.invalidateQueries({ queryKey: structureKeys.all });
   };
 
+  // Общий onError: правки состава задним числом теперь отбиваются гардом закрытого
+  // табеля (409). Без тоста кнопка выглядела бы мёртвой — причина не доходила.
+  // Тип Error, а не unknown: иначе mutation.error расширяется до unknown, и totalError
+  // перестаёт быть валидным ReactNode в разметке ниже.
+  const failWith = (fallback: string) => (error: Error) => {
+    toast.error(error.message || fallback);
+  };
+
   const updateTransferMutation = useMutation({
     mutationFn: (vars: { assignmentId: string; patch: ITransferEditPatch & { assignment_old_id: string } }) =>
       timesheetService.updateTransfer(vars.assignmentId, vars.patch),
     onSuccess: invalidateAll,
+    onError: failWith('Не удалось изменить дату перевода'),
   });
 
   const deleteTransferMutation = useMutation({
     mutationFn: (assignmentId: string) => timesheetService.deleteTransfer(assignmentId),
     onSuccess: invalidateAll,
+    onError: failWith('Не удалось отменить перевод'),
   });
 
   const updateExclusionMutation = useMutation({
     mutationFn: (vars: { employeeId: number; effectiveDate: string }) =>
       timesheetService.updateExclusion(vars.employeeId, vars.effectiveDate),
     onSuccess: invalidateAll,
+    onError: failWith('Не удалось изменить дату исключения'),
   });
 
   const deleteExclusionMutation = useMutation({
     mutationFn: (employeeId: number) => timesheetService.deleteExclusion(employeeId),
     onSuccess: invalidateAll,
+    onError: failWith('Не удалось отменить исключение'),
   });
 
   const isPending =

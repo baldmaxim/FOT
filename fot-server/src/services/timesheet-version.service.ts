@@ -17,13 +17,13 @@ import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-departme
 import { listBrigadeSupervisorEmployeeIdsForDepartments } from '../controllers/timesheet-assigned-export.controller.js';
 import {
   findApprovalLocksForEmployeeDates,
-  listClosedApprovalIdsForPairs,
   type ITimesheetLockPair,
 } from './timesheet-lock.service.js';
 import type { IApprovalLockInfo } from './timesheet-department-assignments.service.js';
 
-// 'rebuild' — пересборка фоновым воркером после правки админа в обход замка
-// закрытого периода (миграция 257).
+// 'rebuild' — аварийная пересборка фоновым воркером. В штатном процессе не возникает:
+// закрытый табель правится только через «Открыть → Закрыть», и это даёт source='close'.
+// Остаётся для операторского восстановления после ручной правки БД (миграция 257).
 export type TimesheetVersionSource = 'approve' | 'close' | 'backfill' | 'rebuild';
 export type TimesheetExportState = 'not_exported' | 'stale' | 'exported';
 
@@ -385,64 +385,28 @@ export async function materializeVersion(
 }
 
 /**
- * Запись в закрытый период: проверка права + пометка затронутых версий.
+ * Замки закрытого периода для записи в табель.
  *
- * Единая точка для всех транзакционных путей записи. Раньше проверка замка была
- * размазана по нескольким функциям, и часть путей (прямые вызовы loadCorrectionLocks
- * в correction-approval) прошла бы мимо пометки.
+ * Единая точка для всех транзакционных путей записи. Раньше проверка была размазана
+ * по нескольким функциям, и часть путей прошла бы мимо неё.
  *
- * ДВЕ НЕЗАВИСИМЫЕ ВЫБОРКИ, подменять одну другой нельзя:
- *  - blockingLocks (submitted + approved) — запрет записи неадмину. Если брать сюда
- *    только approved, неадмины начнут править табели, отправленные на проверку;
- *  - dirtyApprovalIds (только approved) — пометка версий при админской правке.
+ * ПРИВИЛЕГИЙ НЕТ НИ У КОГО, включая is_admin. Закрытый согласованный табель правится
+ * только через «Открыть табель → правки → Закрыть табель»: тогда новая официальная
+ * редакция для 1С создаётся ровно в одной точке — в момент закрытия. Раньше здесь была
+ * ветка для админа, которая пропускала запись и помечала версию на фоновую пересборку;
+ * она убрана вместе с самой возможностью писать в закрытый период напрямую.
  *
- * Вызывать ВНУТРИ транзакции записи: метка обязана откатываться вместе с правкой.
+ * Выборка идёт по submitted И approved: если брать только approved, правки поедут
+ * в табели, отправленные на проверку.
+ *
+ * Вызывать ВНУТРИ транзакции записи, под уже взятым advisory-локом (сотрудник, месяц):
+ * иначе закрытие успевает вклиниться между проверкой и записью.
  */
-export async function checkClosedTimesheetWriteAndMarkDirty(
-  isAdmin: boolean,
+export async function loadClosedTimesheetLocks(
   pairs: readonly ITimesheetLockPair[],
   exec: DbExecutor,
 ): Promise<Map<string, IApprovalLockInfo>> {
-  if (!isAdmin) return findApprovalLocksForEmployeeDates(pairs, exec);
-
-  // Админ пишет в закрытый период штатно — но версия для 1С после этого устарела.
-  const approvalIds = await listClosedApprovalIdsForPairs(pairs, exec);
-  await markVersionDirty(exec, approvalIds);
-  return new Map();
-}
-
-/**
- * Помечает версии подач устаревшими: их содержимое изменила правка, прошедшая мимо
- * штатного close (админ пишет в закрытый период в обход замка).
- *
- * Вызывать ВНУТРИ транзакции записи — тогда метка откатится вместе с неудавшейся правкой.
- *
- * seq инкрементится, а не просто обновляется время: два изменения могут получить
- * одинаковый timestamp, и правка, пришедшая во время сборки, потерялась бы. Воркер
- * снимает метку только при совпадении seq.
- *
- * Счётчик неудач сбрасывается: новая правка могла устранить причину прошлой ошибки,
- * и держать подачу под backoff'ом больше незачем.
- */
-export async function markVersionDirty(
-  exec: DbExecutor,
-  approvalIds: readonly number[],
-): Promise<void> {
-  const ids = [...new Set(approvalIds.map(Number).filter(id => Number.isSafeInteger(id) && id > 0))];
-  if (ids.length === 0) return;
-
-  await exec.query(
-    `UPDATE timesheet_approvals
-        SET version_dirty_seq          = version_dirty_seq + 1,
-            version_dirty_at           = clock_timestamp(),
-            version_rebuild_attempts   = 0,
-            version_rebuild_after      = NULL,
-            version_rebuild_last_error = NULL
-      WHERE id = ANY($1::bigint[])
-        AND status = 'approved'
-        AND unlocked_at IS NULL`,
-    [ids],
-  );
+  return findApprovalLocksForEmployeeDates(pairs, exec);
 }
 
 /**

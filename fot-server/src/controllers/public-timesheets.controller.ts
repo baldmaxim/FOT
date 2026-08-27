@@ -208,10 +208,13 @@ export const publicTimesheetsController = {
     const params: unknown[] = [period.from, period.to];
     const where: string[] = [
       "a.status = 'approved'",
-      'a.unlocked_at IS NULL',
-      // Табель поправили в обход штатного close — версия пересобирается. Пока это идёт,
-      // подача не видна 1С ВООБЩЕ (а не только при needs_export): иначе запрос списка
-      // без фильтра отдал бы старую revision, и 1С успела бы её забрать.
+      // Открытый для правок период НЕ скрываем: версия — замороженный снимок, и пока
+      // табель правят, 1С продолжает получать последнюю официально закрытую редакцию.
+      // Прятать его означало бы терять подачу из обмена на всё время правки.
+      //
+      // А вот аварийная пересборка содержимое версии действительно меняет, поэтому на
+      // это время подача не видна 1С ВООБЩЕ (а не только при needs_export): иначе запрос
+      // списка без фильтра отдал бы старую revision, и 1С успела бы её забрать.
       'a.version_dirty_at IS NULL',
       'a.start_date >= $1::date',
       'a.start_date <= $2::date',
@@ -321,19 +324,17 @@ export const publicTimesheetsController = {
 
     try {
       const approval = await queryOne<{
-        id: number; status: string; unlocked_at: string | null; version_dirty_at: string | null;
+        id: number; status: string; version_dirty_at: string | null;
       }>(
-        'SELECT id, status, unlocked_at, version_dirty_at FROM timesheet_approvals WHERE id = $1',
+        'SELECT id, status, version_dirty_at FROM timesheet_approvals WHERE id = $1',
         [approvalId],
       );
       if (!approval) {
         fail(res, 404, 'Табель не найден');
         return;
       }
-      if (approval.unlocked_at) {
-        fail(res, 409, 'Табель открыт для правок — выгрузка недоступна', 'TIMESHEET_UNLOCKED');
-        return;
-      }
+      // unlocked_at здесь не проверяем: пока табель открыт для правок, отдаём последнюю
+      // официально закрытую редакцию. Незавершённые правки в версию физически не попадают.
       if (approval.status !== 'approved') {
         fail(res, 409, 'Табель не утверждён', 'TIMESHEET_NOT_APPROVED');
         return;
@@ -427,15 +428,16 @@ export const publicTimesheetsController = {
 
     try {
       const result = await withTransaction(async client => {
-        // Блокируем подачу: открытие периода не должно вклиниться между проверкой и записью.
+        // Блокируем подачу: смена статуса или пересборка не должны вклиниться между проверкой и записью.
         const approval = (await client.query<{
-          id: number; status: string; unlocked_at: string | null; version_dirty_at: string | null;
+          id: number; status: string; version_dirty_at: string | null;
         }>(
-          'SELECT id, status, unlocked_at, version_dirty_at FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
+          'SELECT id, status, version_dirty_at FROM timesheet_approvals WHERE id = $1 FOR UPDATE',
           [approvalId],
         )).rows[0];
         if (!approval) return { kind: 'not_found' as const };
-        if (approval.unlocked_at) return { kind: 'unlocked' as const };
+        // Подтверждение при открытом периоде допустимо: 1С подтверждает редакцию, которую
+        // ей отдали, а появление следующей переведёт подачу в stale по штатному протоколу.
         if (approval.status !== 'approved') return { kind: 'not_approved' as const };
         // Подтверждать нечего: редакция, которую 1С держит в руках, уже устарела.
         if (approval.version_dirty_at) return { kind: 'rebuild_pending' as const };
@@ -479,9 +481,6 @@ export const publicTimesheetsController = {
       switch (result.kind) {
         case 'not_found':
           fail(res, 404, 'Табель не найден');
-          return;
-        case 'unlocked':
-          fail(res, 409, 'Табель открыт для правок — подтверждение недоступно', 'TIMESHEET_UNLOCKED');
           return;
         case 'not_approved':
           fail(res, 409, 'Табель не утверждён', 'TIMESHEET_NOT_APPROVED');

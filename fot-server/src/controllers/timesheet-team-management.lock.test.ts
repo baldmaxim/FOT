@@ -122,13 +122,36 @@ describe('addEmployeeToDepartment — гард закрытого табеля',
     });
   });
 
-  it('админ гард не проходит — замок для него не запрашивается', async () => {
+  it('админ гард ПРОХОДИТ наравне со всеми — состав закрытого табеля не меняет', async () => {
+    // Раньше is_admin проходил насквозь, и это молча переигрывало уже сданный период:
+    // от членства и excluded_from_timesheet_date зависят cutoff-дни в содержимом табеля.
     lockMock.mockResolvedValue({ id: 5, start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved' });
     const res = makeRes();
 
     await timesheetTeamManagementController.addEmployeeToDepartment(makeReq(true), res);
 
-    expect(lockMock).not.toHaveBeenCalled();
-    expect(moveMock).toHaveBeenCalledTimes(1);
+    expect(lockMock).toHaveBeenCalledTimes(1);
+    expect(res._status).toBe(409);
+    expect(moveMock).not.toHaveBeenCalled();
+  });
+
+  it('админу в тексте 409 подсказан штатный путь — «Открыть табель»', async () => {
+    lockMock.mockResolvedValue({ id: 5, start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved' });
+    const res = makeRes();
+
+    await timesheetTeamManagementController.addEmployeeToDepartment(makeReq(true), res);
+
+    const payload = res._json as { error: string; code: string };
+    expect(payload.code).toBe('TIMESHEET_PERIOD_CLOSED');
+    expect(payload.error).toContain('Открыть табель');
+  });
+
+  it('руководителю подсказку про кнопку не показываем — её у него нет', async () => {
+    lockMock.mockResolvedValue({ id: 5, start_date: '2026-06-01', end_date: '2026-06-15', status: 'approved' });
+    const res = makeRes();
+
+    await timesheetTeamManagementController.addEmployeeToDepartment(makeReq(false), res);
+
+    expect((res._json as { error: string }).error).not.toContain('Открыть табель');
   });
 });
