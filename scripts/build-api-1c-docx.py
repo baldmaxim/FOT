@@ -68,7 +68,13 @@ def add_code(doc: Document, text: str) -> None:
 
 
 def add_rich_text(para, text: str) -> None:
-    """Инлайн-разметка: **жирный** и `код`. Остальное — как есть."""
+    r"""Инлайн-разметка: **жирный** и `код`. Остальное — как есть.
+
+    ДВА ОГРАНИЧЕНИЯ, о которые легко споткнуться при правке API_1C.md:
+      * разметка не переносится на следующую строку — каждая строка Markdown
+        становится отдельным абзацем, и `**` из разорванной пары уедет в текст;
+      * вложенность не разбирается: `**\`код\`**` отрендерится с кавычками.
+    """
     for chunk in re.split(r'(\*\*[^*]+\*\*|`[^`]+`)', text):
         if not chunk:
             continue
@@ -80,6 +86,19 @@ def add_rich_text(para, text: str) -> None:
             run.font.size = Pt(9.5)
         else:
             para.add_run(chunk)
+
+
+def warn_broken_markup(line: str) -> None:
+    """Ловит жирный, разорванный переносом строки.
+
+    Каждая строка Markdown становится отдельным абзацем Word, поэтому пара `**`
+    обязана открыться и закрыться в пределах одной строки. Иначе звёздочки уедут
+    в текст документа, который уходит внешнему разработчику. Молчать про это
+    нельзя — в готовом docx такое замечаешь последним.
+    """
+    if line.count('**') % 2:
+        print('ВНИМАНИЕ: непарные ** — жирный разорван переносом строки:', file=sys.stderr)
+        print(f'  {line}', file=sys.stderr)
 
 
 def flush_table(doc: Document, rows: list[list[str]]) -> None:
@@ -176,6 +195,7 @@ def build(md_text: str) -> Document:
             para = doc.add_paragraph(style='List Number')
             add_rich_text(para, re.sub(r'^\d+\.\s', '', stripped))
         else:
+            warn_broken_markup(stripped)
             add_rich_text(doc.add_paragraph(), stripped)
 
     if table_buffer:
