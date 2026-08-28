@@ -148,6 +148,19 @@ router.get('/connection-status', requirePageAccess('/skud-settings', 'view'), si
 
 // === Live admin эндпоинты ===
 
+// Live-админка Sigur: после CRUD (переименование/перенос/создание отдела) refetch
+// обязан дойти до сервера. Глобальный `private, max-age=30` (app.ts) отдавал дерево
+// из браузерного кэша — новое имя появлялось через полминуты, и его сохраняли повторно.
+// Ставится ДО кэш-middleware: на HIT контроллер не вызывается. Только GET/HEAD —
+// у мутаций остаётся глобальный `no-store`. Серверный LRU при этом сохраняется.
+const noBrowserCache = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    res.setHeader('Cache-Control', 'private, no-cache');
+  }
+  next();
+};
+router.use('/admin', noBrowserCache);
+
 router.get('/admin/departments', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsCache, sigurAdminController.listDepartments);
 router.get('/admin/departments/tree', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsTreeCache, sigurAdminController.listDepartmentsTree);
 router.get('/admin/departments/counts', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsCountsCache, sigurAdminController.listDepartmentCounts);
