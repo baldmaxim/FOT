@@ -14,7 +14,6 @@ import { useLeaveRequestsManage } from '../hooks/usePortalData';
 import { useLeaveRequestBulkActions } from '../hooks/useLeaveRequestBulkActions';
 import { FilePreviewModal } from '../components/documents/FilePreviewModal';
 import { SearchInput } from '../components/ui/SearchInput';
-import { LeaveRequestEventsPanel } from '../components/leave-requests/LeaveRequestEventsPanel';
 import { LeaveRequestRow } from '../components/leave-requests/LeaveRequestRow';
 import { LeaveRequestsBulkBar } from '../components/leave-requests/LeaveRequestsBulkBar';
 import { LeaveRequestsGroup } from '../components/leave-requests/LeaveRequestsGroup';
@@ -45,12 +44,6 @@ interface IPreviewState {
   mimeType: string | null;
 }
 
-interface IEventsPanelState {
-  employeeId: number;
-  employeeName: string;
-  date: string;
-}
-
 export const LeaveRequestsManagePage: FC = () => {
   const { hasPermission, profile, canEditPage } = useAuth();
   const { showToast } = useToast();
@@ -78,7 +71,6 @@ export const LeaveRequestsManagePage: FC = () => {
   const [hoursDraft, setHoursDraft] = useState('');
   const [savingHours, setSavingHours] = useState(false);
   const [preview, setPreview] = useState<IPreviewState | null>(null);
-  const [eventsPanel, setEventsPanel] = useState<IEventsPanelState | null>(null);
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
   const {
     data, isLoading, isPlaceholderData, isError, fetchStatus, refetch,
@@ -257,18 +249,10 @@ export const LeaveRequestsManagePage: FC = () => {
     setPreview({ documentId: att.id, fileName: att.file_name, mimeType: att.mime_type });
   };
 
-  const openEventsPanel = (r: ILeaveRequest) => {
-    if (!r.correction_date) return;
-    setEventsPanel({
-      employeeId: r.employee_id,
-      employeeName: r.employee_name || `#${r.employee_id}`,
-      date: r.correction_date,
-    });
-  };
-
-  // Во время массовой операции и на placeholder-данных одиночные действия и
-  // чекбоксы заблокированы: иначе можно решить по заявке, которая уже в пакете.
-  const actionsLocked = bulk.bulkPending || (bulkMode && stalePlaceholder);
+  // Во время массовой операции, на placeholder-данных и offline одиночные действия
+  // и чекбоксы заблокированы: иначе можно решить по заявке, которая уже в пакете,
+  // или по списку, который баннер уже объявил неактуальным.
+  const actionsLocked = bulk.bulkPending || (bulkMode && (stalePlaceholder || isPaused));
 
   // Баннер состояния списка (см. матрицу: fetching / paused / ошибка с кэшем).
   // Ошибка без данных рендерится вместо списка ниже.
@@ -300,13 +284,8 @@ export const LeaveRequestsManagePage: FC = () => {
       expanded={expandedIds.has(r.id)}
       onToggleExpanded={toggleExpanded}
       showPendingStatus={filter === 'all'}
-      isEventsActive={
-        !!eventsPanel
-        && r.request_type === 'time_correction'
-        && eventsPanel.employeeId === r.employee_id
-        && eventsPanel.date === r.correction_date
-      }
-      onOpenEvents={openEventsPanel}
+      onApprove={bulk.approveOne}
+      onReject={bulk.rejectOne}
       onOpenAttachment={openAttachment}
       editingHoursId={editingHoursId}
       hoursDraft={hoursDraft}
@@ -326,7 +305,7 @@ export const LeaveRequestsManagePage: FC = () => {
   );
 
   return (
-    <div className={`lrm-shell${eventsPanel ? ' lrm-shell--with-panel' : ''}`}>
+    <div className="lrm-shell">
       <div className="lrm-page">
         <div className="lrm-header">
           {scope === 'all' && (
@@ -460,15 +439,6 @@ export const LeaveRequestsManagePage: FC = () => {
           </div>
         )}
       </div>
-
-      {eventsPanel && (
-        <LeaveRequestEventsPanel
-          employeeId={eventsPanel.employeeId}
-          employeeName={eventsPanel.employeeName}
-          date={eventsPanel.date}
-          onClose={() => setEventsPanel(null)}
-        />
-      )}
 
       {preview && (
         <FilePreviewModal

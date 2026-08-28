@@ -1,76 +1,22 @@
-.panel {
-  width: 420px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-self: stretch;
-  background: var(--bg-secondary);
-  border-left: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  max-height: 100dvh;
-  overflow: hidden;
-}
-
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-primary);
-}
-
-.titleBlock {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.inline {
   min-width: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-.title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.subtitle {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.closeBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.closeBtn:hover {
-  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
-  color: var(--text-primary);
-}
-
-.body {
-  flex: 1;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 12px 14px 16px;
+.caption {
+  margin-bottom: 8px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .loading,
 .empty {
-  padding: 32px 8px;
+  padding: 16px 8px;
   text-align: center;
   color: var(--text-secondary);
   font-size: 13px;
@@ -210,35 +156,4 @@
   gap: 10px;
   font-size: 12px;
   color: var(--text-secondary);
-}
-
-/* 769–1100px: сайдбар (240px) + панель (420px) не оставляют месту под карточки
-   даже строки — здесь панель становится правым drawer'ом поверх страницы.
-   Ниже header'а (z-index 50), чтобы шапка оставалась доступной. */
-@media (min-width: 769px) and (max-width: 1100px) {
-  .panel {
-    position: fixed;
-    right: 0;
-    top: calc(64px + env(safe-area-inset-top, 0px));
-    bottom: 0;
-    width: min(420px, 100vw - 32px);
-    max-height: none;
-    z-index: 45;
-    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
-  }
-}
-
-@media (max-width: 768px) {
-  .panel {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    max-height: 100dvh;
-    border-left: none;
-    z-index: 1000;
-  }
-
-  .header {
-    padding-top: max(14px, env(safe-area-inset-top));
-  }
 }

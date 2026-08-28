@@ -148,5 +148,9 @@ export const useLeaveRequestBulkActions = ({ scope, selectableIds }: IUseLeaveRe
     // Защита API от пустого пакета (кнопки при пустом выборе и так disabled).
     approveSelected: () => { if (selectedIds.size > 0) approveMutation.mutate([...selectedIds]); },
     rejectSelected: () => { if (selectedIds.size > 0) rejectMutation.mutate([...selectedIds]); },
+    // Решение по одной строке (галочка/крестик) — через те же bulk-эндпоинты: единая
+    // инвалидация кэша и понятный тост о пропуске («закрыт табель», «нет доступа»).
+    approveOne: (id: number) => approveMutation.mutate([id]),
+    rejectOne: (id: number) => rejectMutation.mutate([id]),
   };
 };

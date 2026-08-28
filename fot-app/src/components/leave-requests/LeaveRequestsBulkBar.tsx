@@ -68,7 +68,7 @@ export const LeaveRequestsBulkBar: FC<ILeaveRequestsBulkBarProps> = ({
       )}
       <input
         className="lrm-bulkbar-comment"
-        placeholder="Комментарий ко всем выбранным (необязательно)"
+        placeholder="Комментарий к решению (необязательно)"
         value={comment}
         onChange={e => onCommentChange(e.target.value)}
         disabled={disabled}
