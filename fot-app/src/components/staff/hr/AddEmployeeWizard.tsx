@@ -8,7 +8,7 @@ import { employeeService } from '../../../services/employeeService';
 import type { HrProfileInput, IHrDocument, IHrDraftView, IHrDuplicateCandidate, IHrDocumentSlot } from '../../../types/hrProfile';
 import { HrProfileForm } from '../../employees/hr/HrProfileForm';
 import { HrDocumentsGrid } from '../../employees/hr/HrDocumentsGrid';
-import { documentSlotsFor, fmtDate } from '../../employees/hr/hrFormat';
+import { documentSlotsFor, fmtDate, fmtDateTime } from '../../employees/hr/hrFormat';
 import styles from '../../employees/hr/HrProfileModal.module.css';
 
 interface IAddEmployeeWizardProps {
@@ -45,6 +45,12 @@ export const AddEmployeeWizard: FC<IAddEmployeeWizardProps> = ({ onClose, onCrea
   const [candidates, setCandidates] = useState<IHrDuplicateCandidate[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ocrApplied, setOcrApplied] = useState<Record<string, string>>({});
+  // Найденная при открытии незавершённая анкета: предлагаем продолжить, чтобы уже
+  // загруженные сканы не осиротели.
+  const [resumeCandidate, setResumeCandidate] = useState<IHrDraftView | null>(null);
+  // Сотрудник создан, но сервер об этом не узнал (mark не прошёл дважды) — создавать
+  // повторно из этого окна нельзя, иначе получим дубль.
+  const [createFrozen, setCreateFrozen] = useState(false);
   // Черновик создаётся один раз даже при параллельных загрузках; id созданного
   // сотрудника помним, чтобы повтор после сбоя прикреплял, а не создавал заново.
   const draftPromiseRef = useRef<Promise<IHrDraftView> | null>(null);
@@ -65,6 +71,45 @@ export const AddEmployeeWizard: FC<IAddEmployeeWizardProps> = ({ onClose, onCrea
     }
     return draftPromiseRef.current;
   }, [draft, fullName, profile]);
+
+  const adoptDraft = useCallback((d: IHrDraftView) => {
+    setDraft(d);
+    draftPromiseRef.current = Promise.resolve(d);
+    const p = d.payload ?? {};
+    if (p.full_name) setFullName(p.full_name);
+    if (p.hire_date) setHireDate(p.hire_date);
+    if (p.org_department_id) setDepartmentId(p.org_department_id);
+    if (p.position_id) setPositionId(p.position_id);
+    if (p.tab_number) setTabNumber(p.tab_number);
+    if (p.profile) setProfile(prev => ({ ...prev, ...p.profile }));
+  }, []);
+
+  /**
+   * Восстановление после закрытия окна. `createdEmployeeIdRef` живёт только в памяти
+   * компонента, поэтому источник правды — сервер: анкета в состоянии
+   * employee_created_pending_attach означает, что сотрудник уже создан и повторное
+   * создание запрещено — остаётся только прикрепить документы.
+   */
+  useEffect(() => {
+    if (initial?.stagingId) return; // из «Несопоставленных» открывается своя предзаполненная анкета
+    let alive = true;
+    hrProfileService.listMyDrafts()
+      .then(list => {
+        if (!alive) return;
+        const pending = list.find(d => d.state === 'employee_created_pending_attach' && d.employee_id);
+        if (pending?.employee_id) {
+          adoptDraft(pending);
+          createdEmployeeIdRef.current = pending.employee_id;
+          setStep('data');
+          setError(`Сотрудник #${pending.employee_id} уже создан, но документы не прикреплены${pending.attach_error ? `: ${pending.attach_error}` : ''}. Нажмите «Повторить прикрепление» — повторного создания не будет.`);
+          return;
+        }
+        const unfinished = list.find(d => d.state === 'draft' && d.documents.length > 0);
+        if (unfinished) setResumeCandidate(unfinished);
+      })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [initial?.stagingId, adoptDraft]);
 
   // Пока есть распознающиеся файлы — опрашиваем черновик и подтягиваем ocr_patch.
   const hasPending = draft?.documents.some(d => d.recognition_status === 'pending' || d.recognition_status === 'processing') ?? false;
@@ -204,10 +249,29 @@ export const AddEmployeeWizard: FC<IAddEmployeeWizardProps> = ({ onClose, onCrea
         });
         employeeId = created.id;
         createdEmployeeIdRef.current = employeeId;
-        await hrProfileService.markDraftEmployeeCreated(d.id, employeeId).catch(() => undefined);
+        // Фиксация обязательна: без неё сервер не узнает о созданном сотруднике,
+        // и после закрытия окна восстановиться будет не из чего. Один повтор —
+        // на случай короткого сетевого сбоя.
+        try {
+          await hrProfileService.markDraftEmployeeCreated(d.id, employeeId);
+        } catch {
+          try {
+            await hrProfileService.markDraftEmployeeCreated(d.id, employeeId);
+          } catch (markErr) {
+            setCreateFrozen(true);
+            throw new Error(
+              `Сотрудник создан (#${employeeId}), но связь с анкетой не зафиксирована: ${markErr instanceof Error ? markErr.message : 'ошибка'}. `
+              + 'Не создавайте его повторно — прикрепите документы из его карточки, кнопка «Реквизиты».',
+            );
+          }
+        }
       }
 
-      await hrProfileService.patchDraft(d.id, payload()).catch(() => undefined);
+      try {
+        await hrProfileService.patchDraft(d.id, payload());
+      } catch {
+        toast.error('Поля анкеты не сохранились на сервере — после создания проверьте «Реквизиты» в карточке');
+      }
       await hrProfileService.attachDraft(d.id, employeeId);
       toast.success('Сотрудник создан, документы прикреплены');
       if (initial?.stagingId) await hrProfileService.stagingLink(initial.stagingId, employeeId, 'created').catch(() => undefined);
@@ -265,6 +329,17 @@ export const AddEmployeeWizard: FC<IAddEmployeeWizardProps> = ({ onClose, onCrea
             {!catalog && <div className={styles.muted}>Загрузка…</div>}
             {catalog && !catalog.enabled && <div className={styles.errorBox}>Кадровый модуль отключён администратором.</div>}
             {error && <div className={styles.errorBox}>{error}</div>}
+
+            {catalog && step === 'documents' && resumeCandidate && (
+              <div className={styles.resumeBox}>
+                <AlertTriangle size={15} />
+                <span>
+                  Есть незавершённая анкета от {fmtDateTime(resumeCandidate.updated_at)}, сканов: {resumeCandidate.documents.length}.
+                </span>
+                <button type="button" className={styles.smallBtn} onClick={() => { adoptDraft(resumeCandidate); setResumeCandidate(null); }}>Продолжить</button>
+                <button type="button" className={styles.smallBtnGhost} onClick={() => setResumeCandidate(null)}>Начать заново</button>
+              </div>
+            )}
 
             {catalog && step === 'documents' && (
               <div className={styles.main}>
@@ -339,7 +414,7 @@ export const AddEmployeeWizard: FC<IAddEmployeeWizardProps> = ({ onClose, onCrea
             <button type="button" className={styles.btnGhost} onClick={requestClose} disabled={committing}>Отмена</button>
             {step === 'documents' && <button type="button" className={styles.btnPrimary} onClick={() => void goData()} disabled={!catalog?.enabled}>Далее <ArrowRight size={14} /></button>}
             {step === 'data' && (
-              <button type="button" className={styles.btnPrimary} onClick={() => void commit()} disabled={committing || !catalog?.enabled}>
+              <button type="button" className={styles.btnPrimary} onClick={() => void commit()} disabled={committing || createFrozen || !catalog?.enabled}>
                 {committing
                   ? <><Loader2 size={14} className={styles.spin} /> {createdEmployeeIdRef.current ? "Прикрепляем…" : "Создаём…"}</>
                   : (createdEmployeeIdRef.current ? "Повторить прикрепление" : "Создать")}

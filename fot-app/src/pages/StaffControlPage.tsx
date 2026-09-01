@@ -54,7 +54,6 @@ const EMPTY_OBJ_MAP: Record<string, string[]> = {};
 const EMPTY_STR_ARR: string[] = [];
 const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
 const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
-const AddEmployeeWizard = lazy(() => import('../components/staff/hr/AddEmployeeWizard').then(m => ({ default: m.AddEmployeeWizard })));
 
 import {
   EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS,
@@ -1539,9 +1538,10 @@ export const StaffControlPage: FC = () => {
   // import / add
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
-  // Мастер «Добавить сотрудника» со сканами и распознаванием (кадровый модуль).
-  // Если модуль не настроен на сервере или нет права на «Кадровые данные» — старая модалка Sigur.
-  const [showWizard, setShowWizard] = useState(false);
+  // Мастер со сканами живёт на вкладке «Новый сотрудник». Пока она доступна,
+  // кнопку здесь не показываем — точка входа должна быть одна. Если модуль
+  // выключен, каталог не ответил или нет прав, кнопка остаётся со старой модалкой
+  // Sigur, чтобы «добавить негде» не случилось ни при каком раскладе.
   const canUseHrWizard = isAdmin || canEditPage('/staff-control/hr-profiles');
   const hrCatalogQuery = useQuery({
     queryKey: ['hr-catalog'],
@@ -1550,7 +1550,7 @@ export const StaffControlPage: FC = () => {
     staleTime: 30 * 60_000,
     retry: false,
   });
-  const hrWizardAvailable = canUseHrWizard && hrCatalogQuery.data?.enabled === true;
+  const hrTabAvailable = canUseHrWizard && hrCatalogQuery.data?.enabled === true;
   const [addForm, setAddForm] = useState<IAddEmployeeForm>({
     full_name: '',
     hire_date: getLocalISODate(),
@@ -2420,10 +2420,10 @@ export const StaffControlPage: FC = () => {
       )}
       {isAdmin && (
         <div className="sc-page-actions">
-          {statusFilter === 'active' && (
+          {statusFilter === 'active' && !hrTabAvailable && (
             <button
               className="sc-btn apply"
-              onClick={() => (hrWizardAvailable ? setShowWizard(true) : setShowAddModal(true))}
+              onClick={() => setShowAddModal(true)}
               title="Добавить сотрудника"
               aria-label="Добавить сотрудника"
             >
@@ -2660,15 +2660,6 @@ export const StaffControlPage: FC = () => {
       {contactsPreview && (
         <Suspense fallback={null}>
           <EnrichPreviewModal preview={contactsPreview} conflicts={contactsPreview.conflicts} loading={contactsLoading} onApply={handleContactsApply} onClose={() => { setContactsPreview(null); setContactsFile(null); }} title="Импорт email — Превью" />
-        </Suspense>
-      )}
-
-      {showWizard && (
-        <Suspense fallback={null}>
-          <AddEmployeeWizard
-            onClose={() => setShowWizard(false)}
-            onCreated={() => { setShowWizard(false); refresh(); }}
-          />
         </Suspense>
       )}
 

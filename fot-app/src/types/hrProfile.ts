@@ -221,9 +221,11 @@ export interface IHrDraftPayload {
 export interface IHrDraftView {
   id: string;
   state: HrDraftState;
-
+  /** Заполнен, когда сотрудник уже создан и осталось только прикрепить документы. */
+  employee_id: number | null;
   attach_error: string | null;
   expires_at: string;
+  updated_at: string;
   payload: IHrDraftPayload;
   documents: IHrDocument[];
   ocr_patch: Record<string, string>;

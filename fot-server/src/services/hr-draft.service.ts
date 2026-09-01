@@ -65,6 +65,8 @@ export interface IDraftView {
   employee_id: number | null;
   attach_error: string | null;
   expires_at: string;
+  /** Нужно мастеру, чтобы показать «незавершённая анкета от ЧЧ:ММ». */
+  updated_at: string;
   payload: IDraftPayload;
   documents: IHrDocumentPublic[];
   /** Слитые распознанные поля (приоритет: перевод паспорта > остальные). */
@@ -183,6 +185,7 @@ export const buildDraftView = async (row: IDraftRow): Promise<IDraftView> => {
     employee_id: row.employee_id,
     attach_error: row.attach_error,
     expires_at: row.expires_at,
+    updated_at: row.updated_at,
     payload: readPayload(row),
     documents: merged.documents,
     ocr_patch: merged.patch,

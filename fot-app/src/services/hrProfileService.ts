@@ -171,6 +171,14 @@ export const hrProfileService = {
   async getDraft(draftId: string): Promise<IHrDraftView> {
     return (await apiClient.get<ApiResponse<IHrDraftView>>(`/hr-profiles/drafts/${draftId}`)).data;
   },
+  /**
+   * Свои незавершённые анкеты (состояния `draft` и `employee_created_pending_attach`).
+   * Нужны мастеру при открытии: без них закрытие окна теряет память о созданном
+   * сотруднике и следующая попытка заводит дубль.
+   */
+  async listMyDrafts(): Promise<IHrDraftView[]> {
+    return (await apiClient.get<ApiResponse<IHrDraftView[]>>('/hr-profiles/drafts')).data;
+  },
   async patchDraft(draftId: string, payload: IHrDraftPayload): Promise<IHrDraftView> {
     return (await apiClient.patch<ApiResponse<IHrDraftView>>(`/hr-profiles/drafts/${draftId}`, payload)).data;
   },

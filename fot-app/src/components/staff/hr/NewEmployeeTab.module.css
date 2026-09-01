@@ -1,0 +1,76 @@
+/* Вкладка «Новый сотрудник» в «Управлении кадрами». Стили свои, а не из
+   styles/StaffControlPage.css: тот грузится вместе с ростером, и при прямом
+   открытии этой вкладки его в документе может не быть. */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 20px 16px calc(24px + env(safe-area-inset-bottom));
+  max-width: 720px;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.addBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 150ms ease-out;
+}
+
+.addBtn:hover { opacity: 0.9; }
+.addBtn:disabled { opacity: 0.55; cursor: default; }
+
+.done {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--success, #2e7d32);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--success, #2e7d32) 8%, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .addBtn { transition: none; }
+}
+
+@media (min-width: 768px) {
+  .wrap { padding: 24px; }
+}

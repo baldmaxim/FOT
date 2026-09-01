@@ -18,13 +18,17 @@ const state = vi.hoisted(() => ({
   attachCalls: 0,
   attachedDocsPerDraft: new Map<string, number>(),
   profilesCreated: [] as number[],
+  queries: [] as Array<{ sql: string; params: unknown[] }>,
   failAttach: false,
 }));
 
 const fakeClient = { query: vi.fn(async () => ({ rows: [], rowCount: 0 })) };
 
 vi.mock('../config/postgres.js', () => ({
-  query: vi.fn(async () => []),
+  query: vi.fn(async (sql: string, params: unknown[] = []) => {
+    state.queries.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
+    return [];
+  }),
   queryOne: vi.fn(async (sql: string, params: unknown[] = []) => {
     const s = sql.replace(/\s+/g, ' ');
     if (s.includes('FROM employee_hr_drafts WHERE id = $1')) return state.drafts.get(String(params[0])) ?? null;
@@ -81,7 +85,7 @@ vi.mock('./hr-documents.service.js', () => ({
 }));
 vi.mock('./hr-ocr/apply-employee.js', () => ({ applyOcrToEmployee: vi.fn() }));
 
-import { attachDraftToEmployee, markEmployeeCreated, HrDraftError } from './hr-draft.service.js';
+import { attachDraftToEmployee, listMyOpenDrafts, markEmployeeCreated, HrDraftError } from './hr-draft.service.js';
 import { encryptJson } from './hr-crypto.service.js';
 
 const makeDraft = (id: string): void => {
@@ -102,6 +106,7 @@ beforeEach(() => {
   state.attachCalls = 0;
   state.attachedDocsPerDraft.clear();
   state.profilesCreated = [];
+  state.queries = [];
   state.failAttach = false;
 });
 
@@ -165,5 +170,27 @@ describe('attachDraftToEmployee', () => {
   it('несуществующий сотрудник → 404', async () => {
     makeDraft('d8');
     await expect(attachDraftToEmployee('d8', 9999, { userId: 'u1' })).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+/**
+ * Фундамент восстановления в мастере: при открытии он спрашивает свои незавершённые
+ * анкеты и по состоянию решает, продолжать прикрепление или начинать заново.
+ * Проверяем сам запрос, а не мок: важно, что выборка ограничена автором и ровно
+ * двумя открытыми состояниями — иначе мастер предложит «продолжить» уже закрытую
+ * анкету либо не увидит созданного сотрудника и заведёт дубль.
+ */
+describe('listMyOpenDrafts', () => {
+  it('фильтрует по автору и только по открытым состояниям', async () => {
+    await listMyOpenDrafts('u1');
+
+    expect(state.queries).toHaveLength(1);
+    const { sql, params } = state.queries[0];
+    expect(sql).toContain('FROM employee_hr_drafts');
+    expect(sql).toContain('created_by = $1');
+    expect(params).toEqual(['u1']);
+
+    const states = [...sql.matchAll(/'([a-z_]+)'/g)].map(m => m[1]);
+    expect(states.sort()).toEqual(['draft', 'employee_created_pending_attach']);
   });
 });

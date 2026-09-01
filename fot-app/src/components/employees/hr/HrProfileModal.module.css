@@ -148,3 +148,28 @@ button.pill:disabled { cursor: default; }
 }
 @media (max-width: 430px) { .iconBtn { width: 40px; height: 40px; } .docsGrid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+/* Баннер восстановления незавершённой анкеты в мастере «Добавить сотрудника». */
+.resumeBox {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning, #d98324);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning, #d98324) 8%, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+}
+
+.smallBtnGhost {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
