@@ -47,9 +47,9 @@ const StatusIcon: FC<{ kind: CheckType; status: CheckStatus | null; at: string |
   );
 };
 
-// Все проверки, которые запускаем и ждём. Один источник — иначе легко забыть
-// новый тип в одном из мест (pending-опрос, кнопки, «без результата»).
-const RUN_TYPES: CheckType[] = ['rkl', 'patent_msk', 'patent'];
+// Проверки, которые запускаем по кнопкам «Проверить». Только РКЛ: патентные
+// проверки из этой вкладки не запускаем (см. также hasPending / hasNoResult).
+const RUN_TYPES: CheckType[] = ['rkl'];
 
 const CHECK_LABEL: Record<CheckType, string> = {
   rkl: 'РКЛ',
@@ -57,30 +57,11 @@ const CHECK_LABEL: Record<CheckType, string> = {
   patent: 'Патент РФ',
 };
 
-/** Есть ли у строки хоть одна проверка «в обработке». */
-const hasPending = (p: CheckPassRow): boolean =>
-  p.last_rkl_status === 'pending'
-  || p.last_patent_msk_status === 'pending'
-  || p.last_patent_rf_status === 'pending';
+/** РКЛ-проверка строки «в обработке». */
+const hasPending = (p: CheckPassRow): boolean => p.last_rkl_status === 'pending';
 
-/** Хоть одна проверка ни разу не запускалась. */
-const hasNoResult = (p: CheckPassRow): boolean =>
-  p.last_rkl_status === null
-  || p.last_patent_msk_status === null
-  || p.last_patent_rf_status === null;
-
-// Тултип сводной колонки: показываем ОБЕ стороны, иначе непонятно, почему итог
-// зелёный при красной Москве (частый кейс: московский патент истёк, федеральный жив).
-const overallPatentTooltip = (p: CheckPassRow): string => {
-  const side = (label: string, status: CheckStatus | null, summary: string | null): string => {
-    if (!status) return `${label}: не проверялся`;
-    return `${label}: ${summary || STATUS_LABEL[status]}`;
-  };
-  return [
-    side('Москва', p.last_patent_msk_status, p.last_patent_msk_summary),
-    side('РФ', p.last_patent_rf_status, p.last_patent_rf_summary),
-  ].join(' · ');
-};
+/** РКЛ-проверка ни разу не запускалась. */
+const hasNoResult = (p: CheckPassRow): boolean => p.last_rkl_status === null;
 
 export const ChecksPage: FC = () => {
   const { showToast } = useToast();
@@ -191,8 +172,8 @@ export const ChecksPage: FC = () => {
     prev.size === passes.length ? new Set() : new Set(passes.map(p => p.id)),
   );
 
-  // «Без результата»: хотя бы один из активных статусов (РКЛ / Патент Мск)
-  // реально пуст (null). pending считается результатом — не переотмечаем.
+  // «Без результата»: статус РКЛ реально пуст (null).
+  // pending считается результатом — не переотмечаем.
   const selectWithoutResult = () => {
     const ids = passes.filter(hasNoResult).map(p => p.id);
     setSelected(new Set(ids.slice(0, BULK_LIMIT)));
@@ -289,9 +270,6 @@ export const ChecksPage: FC = () => {
                     <th>Гражданство</th>
                     <th>Паспорт</th>
                     <th>РКЛ</th>
-                    <th>Патент</th>
-                    <th>Патент Мск</th>
-                    <th>Патент РФ</th>
                     <th />
                   </tr>
                 </thead>
@@ -306,16 +284,6 @@ export const ChecksPage: FC = () => {
                       <td>{p.citizenship ?? '—'}</td>
                       <td className={styles.mono}>{p.passport_series_number ?? '—'}</td>
                       <td><StatusIcon kind="rkl" status={p.last_rkl_status} at={p.last_rkl_at} summary={p.last_rkl_summary} /></td>
-                      <td>
-                        <StatusIcon
-                          kind="patent_msk"
-                          status={p.last_patent_overall_status}
-                          at={p.last_patent_overall_at}
-                          summary={overallPatentTooltip(p)}
-                        />
-                      </td>
-                      <td><StatusIcon kind="patent_msk" status={p.last_patent_msk_status} at={p.last_patent_msk_at} summary={p.last_patent_msk_summary} /></td>
-                      <td><StatusIcon kind="patent" status={p.last_patent_rf_status} at={p.last_patent_rf_at} summary={p.last_patent_rf_summary} /></td>
                       <td>
                         <div className={styles.rowActions}>
                           <button
