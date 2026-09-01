@@ -121,35 +121,6 @@ export const requireCritical2FA = (
   require2FA(req, res, next);
 };
 
-/**
- * Запись в кадровый модуль («Реквизиты», сканы паспортов): 2FA обязательна
- * НЕЗАВИСИМО от флага CRITICAL_2FA_ENABLED — у пользователя должна быть
- * включена и подтверждена двухфакторка. Иначе 403 с кодом HR_2FA_REQUIRED.
- */
-export const requireHr2FA = (
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction,
-): void => {
-  if (!req.user) {
-    res.status(401).json({ success: false, error: 'Authentication required' });
-    return;
-  }
-  if (!req.user.two_factor_enabled) {
-    res.status(403).json({
-      success: false,
-      error: 'Для работы с кадровыми данными включите двухфакторную аутентификацию',
-      code: 'HR_2FA_REQUIRED',
-    });
-    return;
-  }
-  if (!req.user.two_factor_verified) {
-    res.status(403).json({ success: false, error: '2FA verification required', code: 'HR_2FA_REQUIRED' });
-    return;
-  }
-  next();
-};
-
 export const requirePageAccess = (pagePath: string, action: AccessAction = 'view') => {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {

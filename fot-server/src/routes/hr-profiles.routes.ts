@@ -1,12 +1,13 @@
 /**
  * /api/hr-profiles — кадровый модуль («Реквизиты», сканы, мастер, ЗУП).
- * Чтение — view на /staff-control/hr-profiles, запись — edit + requireHr2FA
- * (2FA обязательна независимо от CRITICAL_2FA_ENABLED). Staging — только is_admin.
+ * Чтение — view на /staff-control/hr-profiles, запись — edit + require2FA
+ * (2FA не обязательна: кто её не включал — работает; у кого включена — сессия
+ * должна быть подтверждена). Staging — только is_admin.
  */
 import { Router } from 'express';
 import multer from 'multer';
 import type { NextFunction, Request, Response } from 'express';
-import { authenticate, requireAdmin, requireHr2FA, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, require2FA, requireAdmin, requirePageAccess } from '../middleware/auth.js';
 
 // Персональные данные — никакого кэширования ни в браузере, ни в прокси.
 const noStore = (_req: Request, res: Response, next: NextFunction): void => {
@@ -24,7 +25,7 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: HR_FILE_MAX_BYTES, files: 1 } });
 
 const view = requirePageAccess('/staff-control/hr-profiles', 'view');
-const edit = [requirePageAccess('/staff-control/hr-profiles', 'edit'), requireHr2FA] as const;
+const edit = [requirePageAccess('/staff-control/hr-profiles', 'edit'), require2FA] as const;
 
 router.use(authenticate);
 router.use(noStore);
@@ -65,7 +66,7 @@ router.post('/ocr-conflicts/:id/dismiss', ...edit, hrProfilesController.dismissC
 // Staging (несопоставленные из PassDesk) — только админ
 router.get('/staging', requireAdmin, hrStagingController.list);
 router.get('/staging/:id', requireAdmin, hrStagingController.get);
-router.post('/staging/:id/link', requireAdmin, requireHr2FA, hrStagingController.link);
+router.post('/staging/:id/link', requireAdmin, require2FA, hrStagingController.link);
 
 // Профиль сотрудника
 router.get('/:employeeId', view, hrProfilesController.getOne);
