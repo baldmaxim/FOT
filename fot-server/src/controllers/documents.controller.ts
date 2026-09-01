@@ -14,6 +14,13 @@ interface MulterRequest extends AuthenticatedRequest {
 }
 
 const DOCUMENT_SELECT_COLUMNS = 'id, employee_id, leave_request_id, category, file_name, file_size, mime_type, r2_key, uploaded_by, created_at, recognition_status, recognition_attempts, recognized_at';
+
+// Сканы кадрового профиля (hr_*) через общий Documents API не отдаются и не
+// удаляются — только через /api/hr-profiles (шифрование, скоуп, аудит). Soft-deleted
+// (deleted_at) тоже скрыты. См. миграцию 259.
+const NOT_HR_LIVE = `category NOT LIKE 'hr\\_%' AND deleted_at IS NULL`;
+const isHrOrDeleted = (doc: { category?: unknown; deleted_at?: unknown } | null | undefined): boolean =>
+  !doc || String(doc.category ?? '').startsWith('hr_') || doc.deleted_at != null;
 const CATEGORY_CACHE_TTL_MS = 60_000;
 let categoryCache: { codes: Set<string>; expiresAt: number } | null = null;
 
@@ -81,7 +88,7 @@ const loadDocumentsByEmployeeId = async (employeeId: number): Promise<Record<str
   let linkedDocs: Record<string, unknown>[] = [];
   if (linkedIds.length > 0) {
     linkedDocs = await query<Record<string, unknown>>(
-      `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents WHERE id = ANY($1::int[])`,
+      `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents WHERE id = ANY($1::int[]) AND ${NOT_HR_LIVE}`,
       [linkedIds],
     );
   }
@@ -89,7 +96,7 @@ const loadDocumentsByEmployeeId = async (employeeId: number): Promise<Record<str
   const linkedIdSet = new Set(linkedDocs.map(doc => Number(doc.id)));
   const legacyDocs = await query<Record<string, unknown>>(
     `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents
-       WHERE employee_id = $1
+       WHERE employee_id = $1 AND ${NOT_HR_LIVE}
        ORDER BY created_at DESC`,
     [employeeId],
   );
@@ -131,6 +138,10 @@ const uploadFile = async (req: MulterRequest, res: Response): Promise<void> => {
 
     if (!employeeId || Number.isNaN(employeeId) || !category) {
       res.status(400).json({ success: false, error: 'employee_id, category обязательны' });
+      return;
+    }
+    if (category.startsWith('hr_')) {
+      res.status(400).json({ success: false, error: 'Кадровые документы загружаются только через раздел «Реквизиты»' });
       return;
     }
     if (!(await isValidCategory(category))) {
@@ -203,12 +214,14 @@ const getDownloadUrl = async (req: AuthenticatedRequest, res: Response): Promise
       employee_id: number | null;
       r2_key: string;
       file_name: string;
+      category: string;
+      deleted_at: string | null;
     }>(
-      `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents WHERE id = $1`,
+      `SELECT ${DOCUMENT_SELECT_COLUMNS}, deleted_at FROM documents WHERE id = $1`,
       [id],
     );
 
-    if (!doc) {
+    if (!doc || isHrOrDeleted(doc)) {
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }
@@ -299,7 +312,7 @@ const getByLeaveRequest = async (req: AuthenticatedRequest, res: Response): Prom
 
     const legacyDocs = await query<Record<string, unknown>>(
       `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents
-         WHERE leave_request_id = $1
+         WHERE leave_request_id = $1 AND ${NOT_HR_LIVE}
          ORDER BY created_at DESC`,
       [leaveRequestId],
     );
@@ -314,7 +327,7 @@ const getByLeaveRequest = async (req: AuthenticatedRequest, res: Response): Prom
 
     const data = await query<Record<string, unknown>>(
       `SELECT ${DOCUMENT_SELECT_COLUMNS} FROM documents
-         WHERE id = ANY($1::int[])
+         WHERE id = ANY($1::int[]) AND ${NOT_HR_LIVE}
          ORDER BY created_at DESC`,
       [[...docIds]],
     );
@@ -352,12 +365,12 @@ const remove = async (req: AuthenticatedRequest, res: Response): Promise<void> =
   try {
     const { id } = req.params;
 
-    const doc = await queryOne<{ r2_key: string; employee_id: number | null }>(
-      `SELECT r2_key, employee_id FROM documents WHERE id = $1`,
+    const doc = await queryOne<{ r2_key: string; employee_id: number | null; category: string; deleted_at: string | null }>(
+      `SELECT r2_key, employee_id, category, deleted_at FROM documents WHERE id = $1`,
       [id],
     );
 
-    if (!doc) {
+    if (isHrOrDeleted(doc) || !doc) {
       res.status(404).json({ success: false, error: 'Документ не найден' });
       return;
     }

@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, CalendarCog } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
+import { hrProfileService } from '../services/hrProfileService';
 import { adminService, type ITimesheetModeEmployee } from '../services/adminService';
 import { sigurAdminService } from '../services/sigurAdminService';
 import type { SigurEmployeeSummary, SigurDepartmentNode } from '../types';
@@ -53,6 +54,7 @@ const EMPTY_OBJ_MAP: Record<string, string[]> = {};
 const EMPTY_STR_ARR: string[] = [];
 const ImportModal = lazy(() => import('../components/employees/ImportModal').then(m => ({ default: m.ImportModal })));
 const EnrichPreviewModal = lazy(() => import('../components/employees/EnrichPreviewModal').then(m => ({ default: m.EnrichPreviewModal })));
+const AddEmployeeWizard = lazy(() => import('../components/staff/hr/AddEmployeeWizard').then(m => ({ default: m.AddEmployeeWizard })));
 
 import {
   EMPTY_EMPLOYEE_SCHEDULE_ASSIGNMENTS,
@@ -1537,6 +1539,18 @@ export const StaffControlPage: FC = () => {
   // import / add
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  // Мастер «Добавить сотрудника» со сканами и распознаванием (кадровый модуль).
+  // Если модуль не настроен на сервере или нет права на «Кадровые данные» — старая модалка Sigur.
+  const [showWizard, setShowWizard] = useState(false);
+  const canUseHrWizard = isAdmin || canEditPage('/staff-control/hr-profiles');
+  const hrCatalogQuery = useQuery({
+    queryKey: ['hr-catalog'],
+    queryFn: () => hrProfileService.getCatalog(),
+    enabled: canUseHrWizard,
+    staleTime: 30 * 60_000,
+    retry: false,
+  });
+  const hrWizardAvailable = canUseHrWizard && hrCatalogQuery.data?.enabled === true;
   const [addForm, setAddForm] = useState<IAddEmployeeForm>({
     full_name: '',
     hire_date: getLocalISODate(),
@@ -2409,7 +2423,7 @@ export const StaffControlPage: FC = () => {
           {statusFilter === 'active' && (
             <button
               className="sc-btn apply"
-              onClick={() => setShowAddModal(true)}
+              onClick={() => (hrWizardAvailable ? setShowWizard(true) : setShowAddModal(true))}
               title="Добавить сотрудника"
               aria-label="Добавить сотрудника"
             >
@@ -2649,7 +2663,16 @@ export const StaffControlPage: FC = () => {
         </Suspense>
       )}
 
-      {/* ─── Add Employee Modal ─── */}
+      {showWizard && (
+        <Suspense fallback={null}>
+          <AddEmployeeWizard
+            onClose={() => setShowWizard(false)}
+            onCreated={() => { setShowWizard(false); refresh(); }}
+          />
+        </Suspense>
+      )}
+
+      {/* ─── Add Employee Modal (без кадрового модуля) ─── */}
       {showAddModal && (
         <div className="sc-overlay" onClick={closeAddModal}>
           <div className="sc-modal" onClick={e => e.stopPropagation()}>

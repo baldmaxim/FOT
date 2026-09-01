@@ -104,6 +104,19 @@ const envSchema = z.object({
   // одного аккаунта в одно и то же окно.
   MTS_BUSINESS_METRICS_DAILY_TARGET_HOUR_MSK: z.string().regex(/^\d+$/).default('5'),
 
+  // Кадровый модуль («Реквизиты»): шифрование полей/файлов с версией ключа и
+  // HMAC-pepper для поисковых хэшей. Формат ключей: "v1:<64 hex>,v2:<64 hex>".
+  // НЕОБЯЗАТЕЛЬНЫ: по умолчанию ключ v0 и pepper выводятся HKDF из ENCRYPTION_KEY
+  // (hr-crypto.service). Задавать только если нужен отдельный ключ для кадровых
+  // данных; тогда активной версией ставится v1, а v0 остаётся для чтения старых записей.
+  HR_FIELD_ENCRYPTION_KEYS: optionalString,
+  HR_FIELD_ENCRYPTION_ACTIVE_KEY_VERSION: optionalString,
+  HR_FIELD_HASH_PEPPER: optionalString,
+  // Параметры очереди распознавания сканов (DB-очередь hr_ocr_jobs).
+  HR_OCR_CONCURRENCY: z.string().regex(/^\d+$/).default('2'),
+  HR_OCR_MAX_ATTEMPTS: z.string().regex(/^\d+$/).default('3'),
+  HR_OCR_LEASE_MS: z.string().regex(/^\d+$/).default('300000'),
+
   // Web Push (VAPID)
   VAPID_PUBLIC_KEY: optionalString,
   VAPID_PRIVATE_KEY: optionalString,

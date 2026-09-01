@@ -1,0 +1,150 @@
+/* «Реквизиты» — большая модалка (общий модуль для формы, сетки документов, истории, конфликтов, мастера). */
+
+.overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55); padding: 16px;
+  padding-top: max(16px, env(safe-area-inset-top)); padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+.container {
+  width: min(1180px, 100%); max-height: min(92dvh, 960px);
+  display: flex; flex-direction: column;
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl);
+  overflow: hidden;
+}
+.header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.header h3 { margin: 0; font-size: 16px; }
+.subtitle { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+.headerActions { display: flex; align-items: center; gap: 12px; }
+.tabs { display: flex; gap: 4px; }
+.tab { min-height: 34px; padding: 0 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface-hover); color: var(--text-secondary); font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.tabActive { background: var(--primary-light); color: var(--primary); border-color: var(--primary); }
+.closeBtn { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); border-radius: var(--radius-sm); cursor: pointer; }
+.closeBtn:hover { color: var(--text-primary); }
+
+.body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px 18px; }
+.columns { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
+.main { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.side { position: sticky; top: 0; }
+
+.statusRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 20px; font-size: 12px; font-weight: 700; border: 1px solid transparent; background: var(--surface-hover); color: var(--text-secondary); font-family: inherit; }
+button.pill { cursor: pointer; }
+button.pill:disabled { cursor: default; }
+.pillOk { background: var(--success-muted); color: var(--success); }
+.pillWarn { background: var(--warning-bg); color: var(--warning); }
+.pillMuted { background: var(--surface-hover); color: var(--text-secondary); }
+
+.btnPrimary, .btnGhost, .smallBtn, .uploadBtn {
+  display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-weight: 600; cursor: pointer;
+  border-radius: var(--radius-md); transition: background var(--transition), border-color var(--transition);
+}
+.btnPrimary { min-height: 36px; padding: 0 14px; background: var(--primary); color: #fff; border: 1px solid var(--primary); font-size: 13px; }
+.btnPrimary:hover { background: var(--primary-hover); }
+.btnPrimary:disabled, .btnGhost:disabled, .smallBtn:disabled, .uploadBtn:disabled { opacity: 0.55; cursor: default; }
+.btnGhost { min-height: 36px; padding: 0 12px; background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border); font-size: 13px; }
+.btnGhost:hover { color: var(--text-primary); border-color: var(--border-light); }
+.smallBtn { min-height: 30px; padding: 0 10px; font-size: 12px; background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border); }
+.smallBtnOk { color: var(--success); border-color: var(--success); }
+
+.infoGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.infoCell { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; background: var(--surface); min-width: 0; }
+.infoCell span { font-size: 11.5px; color: var(--text-secondary); }
+.infoCell b { font-size: 13.5px; font-weight: 500; overflow-wrap: anywhere; }
+.infoWide { grid-column: 1 / -1; }
+.masked { letter-spacing: 1px; color: var(--text-tertiary); }
+.muted { color: var(--text-secondary); font-size: 13px; }
+.errorBox { padding: 10px 12px; border: 1px solid var(--error); background: var(--error-muted); border-radius: var(--radius-md); }
+.emptyState { padding: 40px 16px; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+
+/* Форма */
+.form { display: flex; flex-direction: column; gap: 14px; }
+.formGroup h4 { margin: 0 0 8px; font-size: 13px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em; }
+.formGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 12px; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.field input, .field select, .field textarea {
+  min-height: 38px; padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); font-size: 16px; font-family: inherit;
+}
+.field textarea { resize: vertical; }
+.field input:focus, .field select:focus, .field textarea:focus { outline: none; border-color: var(--primary); }
+.fieldWide { grid-column: 1 / -1; }
+.fieldCheck { justify-content: flex-end; }
+.checkLabel { display: flex; align-items: center; gap: 8px; font-size: 13px !important; color: var(--text-primary) !important; min-height: 38px; }
+.checkLabel input { width: 18px; height: 18px; }
+.hint { font-size: 11px; color: var(--text-tertiary); }
+.ocrTag { font-size: 10px; font-weight: 700; color: var(--primary); background: var(--primary-light); padding: 1px 6px; border-radius: 4px; }
+@media (min-width: 769px) { .field input, .field select, .field textarea { font-size: 13.5px; } }
+
+/* Документы */
+.docsGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.slot { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.slotMissing { border-color: var(--warning); }
+.slotHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.slotTitle { font-size: 13px; font-weight: 600; }
+.req { color: var(--error); margin-left: 3px; }
+.slotCount { font-size: 11.5px; font-weight: 700; color: var(--text-secondary); background: var(--surface-hover); padding: 2px 8px; border-radius: 20px; }
+.docRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--bg-tertiary); }
+.docMain { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.docName { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.docMeta { font-size: 11px; color: var(--text-tertiary); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.docStatus { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.stOk { color: var(--success); } .stErr { color: var(--error); } .stWarn { color: var(--warning); } .stBusy { color: var(--primary); }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.docActions { display: flex; gap: 4px; flex-shrink: 0; }
+.iconBtn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); border-radius: var(--radius-sm); cursor: pointer; }
+.iconBtn:hover { color: var(--text-primary); border-color: var(--border-light); }
+.iconBtn:disabled { opacity: 0.5; cursor: default; }
+.iconDanger:hover { color: var(--error); border-color: var(--error); }
+.uploadBtn { min-height: 36px; justify-content: center; border: 1px dashed var(--border-light); background: transparent; color: var(--text-secondary); font-size: 12.5px; }
+.uploadBtn:hover { color: var(--primary); border-color: var(--primary); }
+
+/* История */
+.history { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); max-height: 70dvh; overflow: auto; overscroll-behavior: contain; }
+.history h4 { margin: 0; font-size: 13px; }
+.historyItem { position: relative; padding: 8px 10px 8px 14px; border-left: 2px solid var(--border-light); font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
+.historyWhen { font-size: 11px; color: var(--text-tertiary); }
+.historyTag { align-self: flex-start; font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 4px; background: var(--surface-hover); color: var(--text-secondary); }
+.tagStatuses { background: var(--warning-bg); color: var(--warning); }
+.tagFiles { background: var(--success-muted); color: var(--success); }
+.tagOcr { background: var(--primary-light); color: var(--primary); }
+.historyTitle { font-weight: 600; }
+.historyLine { color: var(--text-secondary); }
+.historyOld { color: var(--text-tertiary); font-size: 11.5px; }
+.historyBy { color: var(--text-tertiary); font-size: 11.5px; }
+
+/* Конфликты */
+.conflicts { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--warning); background: var(--warning-bg); border-radius: var(--radius-md); }
+.conflicts h4 { margin: 0; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.conflictCount { background: var(--warning); color: #fff; font-size: 11px; padding: 1px 7px; border-radius: 20px; }
+.conflictRow { display: grid; grid-template-columns: 180px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--border); font-size: 12.5px; }
+.conflictValues { display: flex; flex-direction: column; gap: 2px; }
+.conflictActions { display: flex; gap: 6px; }
+
+/* Мастер (используется AddEmployeeWizard) */
+.wizardSteps { display: flex; gap: 6px; flex-wrap: wrap; }
+.wizardStep { font-size: 12px; font-weight: 600; color: var(--text-tertiary); padding: 4px 10px; border-radius: 20px; background: var(--surface-hover); }
+.wizardStepActive { color: var(--primary); background: var(--primary-light); }
+.wizardStepDone { color: var(--success); background: var(--success-muted); }
+.footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); background: var(--surface); flex-wrap: wrap; }
+.footer .spacer { flex: 1; }
+.candidateBox { padding: 12px; border: 1px solid var(--error); background: var(--error-muted); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 8px; }
+.candidateRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; padding: 6px 0; border-top: 1px solid var(--border); }
+.candidateRow b { flex: 1; min-width: 160px; }
+.searchList { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; }
+.searchRow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); text-align: left; cursor: pointer; font-family: inherit; color: var(--text-primary); }
+.searchRow:hover { border-color: var(--primary); }
+
+@media (max-width: 1024px) { .columns { grid-template-columns: 1fr; } .side { position: static; } .history { max-height: 40dvh; } }
+@media (max-width: 768px) {
+  .overlay { padding: 0; }
+  .container { width: 100%; max-height: 100dvh; height: 100dvh; border-radius: 0; border: 0; }
+  .header { flex-wrap: wrap; }
+  .headerActions { width: 100%; justify-content: space-between; }
+  .conflictRow { grid-template-columns: 1fr; }
+  .body { padding: 12px; }
+}
+@media (max-width: 430px) { .iconBtn { width: 40px; height: 40px; } .docsGrid { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }

@@ -34,6 +34,8 @@ import { mtsBusinessSyncLogService } from './services/mts-business-sync-log.serv
 import { startMtsBusinessStatementRollingWorker, stopMtsBusinessStatementRollingWorker } from './services/mts-business-statement-rolling.service.js';
 import { aiReceiptRecognitionService } from './services/ai-receipt-recognition.service.js';
 import { adaptiveTestingService } from './services/adaptive-testing.service.js';
+import { startHrOcrWorker, stopHrOcrWorker } from './services/hr-ocr/worker.js';
+import { startHrMaintenance, stopHrMaintenance } from './services/hr-maintenance.service.js';
 import { prewarmSigurPresenceResolver } from './services/sigur-presence-resolver.service.js';
 import { getPresenceByObject } from './services/skud-presence-by-object.service.js';
 import { sigurService } from './services/sigur.service.js';
@@ -179,6 +181,10 @@ httpServer.listen(PORT, HOST, () => {
   // (живые lease не трогаем — rolling deploy), затем периодический sweeper.
   void adaptiveTestingService.resumePendingAdaptiveTests();
   adaptiveTestingService.startSweeper();
+  // Кадровый модуль: DB-очередь распознавания сканов и чистка просроченных черновиков.
+  // Оба молчат, если ключи HR-шифрования не заданы (модуль выключен).
+  startHrOcrWorker();
+  startHrMaintenance();
 });
 
 // Глобальные ловушки — без них необработанные rejection/exception теряются.
@@ -225,6 +231,7 @@ const gracefulShutdown = (signal: string): void => {
     stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
     stopMtsBusinessMetricsDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler,
     stopMtsBusinessStatementRollingWorker,
+    stopHrOcrWorker, stopHrMaintenance,
   ];
   for (const stop of stoppers) {
     try {

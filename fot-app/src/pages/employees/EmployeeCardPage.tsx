@@ -4,9 +4,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Edit3,
   Briefcase, FolderOpen, CalendarDays, CheckCircle,
-  Clock, DollarSign, BarChart3, ShieldCheck, CalendarX,
+  Clock, DollarSign, BarChart3, ShieldCheck, CalendarX, IdCard,
 } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
+import { hrProfileService } from '../../services/hrProfileService';
 import { skudService } from '../../services/skudService';
 import { useAuth } from '../../contexts/AuthContext';
 import { useInvalidateEmployeeData } from '../../hooks/useInvalidateEmployeeData';
@@ -20,6 +21,7 @@ import type { EmployeeInput, SkudEvent } from '../../types';
 import '../../styles/EmployeeCardPage.css';
 import '../../styles/EmployeeCardV2.css';
 
+const HrProfileModal = lazy(() => import('../../components/employees/hr/HrProfileModal').then(module => ({ default: module.HrProfileModal })));
 const EmployeeAttendanceSection = lazy(() => import('../../components/employees/EmployeeAttendanceSection').then(module => ({
   default: module.EmployeeAttendanceSection,
 })));
@@ -106,7 +108,7 @@ export const EmployeeCardPage: FC = () => {
     }
     navigate('/employees', { replace: true });
   };
-  const { canEditPage, showActualHours } = useAuth();
+  const { canEditPage, canViewPage, isAdmin, showActualHours } = useAuth();
   const canEdit = canEditPage('/employees') || canEditPage('/staff-control');
 
   // Deep-link: ?date=2026-03-18 — открыть календарь на конкретный месяц
@@ -431,6 +433,18 @@ export const EmployeeCardPage: FC = () => {
   };
 
   const [rehireModalOpen, setRehireModalOpen] = useState(false);
+  // «Реквизиты» (кадровый профиль): нужно право на ключ «Реквизиты» И включённый
+  // флаг раскатки — пока модуль выключен, кнопки нет ни у кого, включая админа.
+  const [hrModalOpen, setHrModalOpen] = useState(false);
+  const hasHrRight = isAdmin || canViewPage('/staff-control/hr-profiles');
+  const hrCatalogQuery = useQuery({
+    queryKey: ['hr-catalog'],
+    queryFn: () => hrProfileService.getCatalog(),
+    enabled: hasHrRight,
+    staleTime: 30 * 60_000,
+    retry: false,
+  });
+  const canSeeHrProfile = hasHrRight && hrCatalogQuery.data?.enabled === true;
   const [rehireDeptId, setRehireDeptId] = useState('');
   const [rehireInFlight, setRehireInFlight] = useState(false);
 
@@ -564,17 +578,29 @@ export const EmployeeCardPage: FC = () => {
                 )}
               </div>
             </div>
-            {canEdit && (
+            {(canEdit || canSeeHrProfile) && (
               <div className="ec-profile-actions">
+                {canSeeHrProfile && (
+                  <button className="ec-action-btn" onClick={() => setHrModalOpen(true)} title="Кадровые данные: паспорт, ИНН, СНИЛС, патент, сканы">
+                    <IdCard size={16} /> Реквизиты
+                  </button>
+                )}
+                {canEdit && (
                 <button className="ec-action-btn" onClick={startEditing}>
                   <Edit3 size={16} /> {employee.sigur_employee_id != null ? 'Изменить ФИО' : 'Редактировать'}
                 </button>
-                {employee.employment_status === 'fired' && (
+                )}
+                {canEdit && employee.employment_status === 'fired' && (
                   <button className="ec-action-btn" onClick={openRehireModal}>
                     <ShieldCheck size={16} /> Восстановить из уволенных
                   </button>
                 )}
               </div>
+            )}
+            {hrModalOpen && (
+              <Suspense fallback={null}>
+                <HrProfileModal employeeId={employee.id} onClose={() => setHrModalOpen(false)} />
+              </Suspense>
             )}
           </div>
 
