@@ -91,7 +91,98 @@ describe('findApprovalLocksForEmployeeDates', () => {
   });
 });
 
+describe('findApprovalLocksForEmployeeDates — владение днём', () => {
+  // Кейс Ибрагимова: подача бр.Каримова (утверждена) держит его в снимке, но с
+  // 25.08 он в бр.Эрматовой — эти дни закрывать нельзя.
+  const candidates = (workDate: string) => [
+    { employee_id: 661, work_date: workDate, id: 1551, department_id: 'dept-karimov', start_date: '2026-08-16', end_date: '2026-08-31', status: 'approved' },
+    { employee_id: 661, work_date: workDate, id: 1428, department_id: 'dept-ermatova', start_date: '2026-08-16', end_date: '2026-08-31', status: 'submitted' },
+  ];
+  const intervals = [
+    { employee_id: 661, effective_from: '2026-07-30', effective_to: '2026-08-24', owning_approval_ids: [1551] },
+    { employee_id: 661, effective_from: '2026-08-25', effective_to: null, owning_approval_ids: [1428] },
+  ];
+
+  it('день после перевода не закрывает подача прежнего отдела', async () => {
+    pgQuery.mockResolvedValueOnce(candidates('2026-08-30')).mockResolvedValueOnce(intervals);
+
+    const locks = await findApprovalLocksForEmployeeDates([{ employeeId: 661, workDate: '2026-08-30' }]);
+
+    // Владеет подача новой бригады, она ещё submitted — замок от неё, не от approved-чужой.
+    expect(locks.get(lockKey(661, '2026-08-30'))).toMatchObject({ id: 1428, status: 'submitted' });
+  });
+
+  it('день до перевода остаётся за подачей прежнего отдела', async () => {
+    pgQuery.mockResolvedValueOnce(candidates('2026-08-20')).mockResolvedValueOnce(intervals);
+
+    const locks = await findApprovalLocksForEmployeeDates([{ employeeId: 661, workDate: '2026-08-20' }]);
+
+    expect(locks.get(lockKey(661, '2026-08-20'))).toMatchObject({ id: 1551, status: 'approved' });
+  });
+
+  it('когда владеющих подач нет, замка нет вовсе', async () => {
+    pgQuery
+      .mockResolvedValueOnce([candidates('2026-08-30')[0]])
+      .mockResolvedValueOnce(intervals);
+
+    const locks = await findApprovalLocksForEmployeeDates([{ employeeId: 661, workDate: '2026-08-30' }]);
+
+    expect(locks.has(lockKey(661, '2026-08-30'))).toBe(false);
+  });
+
+  it('без истории назначений замок остаётся снимочным', async () => {
+    pgQuery.mockResolvedValueOnce([candidates('2026-08-30')[0]]).mockResolvedValueOnce([]);
+
+    const locks = await findApprovalLocksForEmployeeDates([{ employeeId: 661, workDate: '2026-08-30' }]);
+
+    expect(locks.get(lockKey(661, '2026-08-30'))).toMatchObject({ id: 1551 });
+  });
+
+  it('SQL отдаёт всех кандидатов: приоритетная подача выбирается после проверки владения', async () => {
+    await findApprovalLocksForEmployeeDates([{ employeeId: 661, workDate: '2026-08-30' }]);
+    const [sql] = pgQuery.mock.calls[0] as [string];
+    expect(sql).not.toContain('DISTINCT ON');
+    expect(sql).toContain('a.department_id');
+  });
+});
+
 describe('loadApprovalLocksForEmployeesInPeriod', () => {
+  it('режет интервал по дате перевода и склеивает соседние дни', async () => {
+    pgQuery
+      .mockResolvedValueOnce([
+        { employee_id: 661, id: 1551, department_id: 'dept-karimov', start_date: '2026-08-16', end_date: '2026-08-31', status: 'approved' },
+      ])
+      .mockResolvedValueOnce([
+        { employee_id: 661, effective_from: '2026-07-30', effective_to: '2026-08-24', owning_approval_ids: [1551] },
+        { employee_id: 661, effective_from: '2026-08-25', effective_to: null, owning_approval_ids: [1428] },
+      ]);
+
+    const locks = await loadApprovalLocksForEmployeesInPeriod([661], '2026-08-16', '2026-08-31');
+
+    expect(locks).toEqual([
+      { employee_id: 661, start_date: '2026-08-16', end_date: '2026-08-24', status: 'approved' },
+    ]);
+  });
+
+  it('уход и возврат в бригаду дают два интервала замка', async () => {
+    pgQuery
+      .mockResolvedValueOnce([
+        { employee_id: 661, id: 1551, department_id: 'dept-karimov', start_date: '2026-08-01', end_date: '2026-08-15', status: 'approved' },
+      ])
+      .mockResolvedValueOnce([
+        { employee_id: 661, effective_from: '2026-08-01', effective_to: '2026-08-05', owning_approval_ids: [1551] },
+        { employee_id: 661, effective_from: '2026-08-06', effective_to: '2026-08-10', owning_approval_ids: [] },
+        { employee_id: 661, effective_from: '2026-08-11', effective_to: null, owning_approval_ids: [1551] },
+      ]);
+
+    const locks = await loadApprovalLocksForEmployeesInPeriod([661], '2026-08-01', '2026-08-15');
+
+    expect(locks).toEqual([
+      { employee_id: 661, start_date: '2026-08-01', end_date: '2026-08-05', status: 'approved' },
+      { employee_id: 661, start_date: '2026-08-11', end_date: '2026-08-15', status: 'approved' },
+    ]);
+  });
+
   it('подсветка в гриде тоже игнорирует открытый период', async () => {
     await loadApprovalLocksForEmployeesInPeriod([10], '2026-08-01', '2026-08-15');
     const [sql] = pgQuery.mock.calls[0] as [string];

@@ -19,6 +19,12 @@ import {
   findApprovalLocksForEmployeeDates,
   type ITimesheetLockPair,
 } from './timesheet-lock.service.js';
+import {
+  enumerateDatesInclusive,
+  ownershipKey,
+  ownsDay,
+  resolveDayOwnership,
+} from './timesheet-day-ownership.service.js';
 import type { IApprovalLockInfo } from './timesheet-department-assignments.service.js';
 
 // 'rebuild' — аварийная пересборка фоновым воркером. В штатном процессе не возникает:
@@ -224,6 +230,22 @@ export async function buildTimesheetPayload(
   // Период может пересекать месяцы: сборщик работает помесячно, склеиваем результаты.
   const days = new Map<number, Record<string, IVersionDayValue>>();
   const activeIds = new Set<number>();
+
+  // Владение днём: подача забирает только те даты, на которые сотрудник числился
+  // в её отделе. Иначе переведённый в середине периода уносит дни новой бригады в
+  // выгрузку старой, и одна пара (сотрудник, дата) попадает в две версии для 1С.
+  // Для персональной подачи резолвер отдаёт unknown — владение остаётся снимочным.
+  const ownership = await resolveDayOwnership(
+    [{
+      approvalId: approval.id,
+      departmentId: approval.department_id,
+      employeeIds: snapshotIds,
+      dates: enumerateDatesInclusive(approval.start_date, approval.end_date),
+    }],
+    client,
+  );
+  const ownsEmployeeDay = (employeeId: number, date: string): boolean =>
+    ownsDay(ownership.get(ownershipKey(approval.id, employeeId, date)));
   const meta = new Map<number, { full_name: string | null; sigur_employee_id: number | null; position: string | null }>();
   const seenIds = new Set<number>();
 
@@ -257,14 +279,21 @@ export async function buildTimesheetPayload(
       }
     }
 
+    // Активность — тоже только по своим дням: иначе у сотрудника с активностью
+    // лишь после перевода дни в старой версии пустые, а zero_activity = false.
     for (const entry of bulk.entries) {
+      if (!ownsEmployeeDay(entry.employee_id, entry.work_date)) continue;
       if (hasRealActivity(entry)) activeIds.add(entry.employee_id);
     }
-    for (const objectEntry of bulk.objectEntries) activeIds.add(objectEntry.employee_id);
+    for (const objectEntry of bulk.objectEntries) {
+      if (!ownsEmployeeDay(objectEntry.employee_id, objectEntry.work_date)) continue;
+      activeIds.add(objectEntry.employee_id);
+    }
 
     for (const [employeeId, dayMap] of bulk.dataMap) {
       const bucket = days.get(employeeId) ?? {};
       for (const [date, value] of dayMap) {
+        if (!ownsEmployeeDay(employeeId, date)) continue;
         bucket[date] = {
           status: value.status,
           hours: typeof value.hours === 'number' ? value.hours : 0,

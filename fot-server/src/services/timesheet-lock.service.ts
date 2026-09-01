@@ -2,6 +2,13 @@ import { query } from '../config/postgres.js';
 import type { DbExecutor } from '../config/postgres.js';
 import type { QueryResultRow } from 'pg';
 import type { IApprovalLockInfo } from './timesheet-department-assignments.service.js';
+import {
+  enumerateDatesInclusive,
+  ownershipKey,
+  ownsDay,
+  resolveDayOwnership,
+  type IOwnershipRequest,
+} from './timesheet-day-ownership.service.js';
 
 /**
  * Единый замок закрытого табеля: «этому сотруднику на эту дату период закрыт».
@@ -58,9 +65,36 @@ interface ILockRow extends QueryResultRow {
   employee_id: number | string;
   work_date: string;
   id: number | string;
+  department_id: string | null;
   start_date: string;
   end_date: string;
   status: IApprovalLockInfo['status'];
+}
+
+/**
+ * Группирует строки-кандидаты в запросы владения: по подаче — её сотрудники и даты.
+ * Одна карта на весь набор, чтобы резолвер сходил в БД ровно один раз.
+ */
+function buildOwnershipRequests(
+  rows: readonly { id: number | string; department_id: string | null; employee_id: number | string; work_date: string }[],
+): IOwnershipRequest[] {
+  const byApproval = new Map<number, { departmentId: string | null; employees: Set<number>; dates: Set<string> }>();
+  for (const row of rows) {
+    const approvalId = Number(row.id);
+    const employeeId = Number(row.employee_id);
+    if (!Number.isFinite(approvalId) || !Number.isFinite(employeeId)) continue;
+    const bucket = byApproval.get(approvalId)
+      ?? { departmentId: row.department_id ?? null, employees: new Set<number>(), dates: new Set<string>() };
+    bucket.employees.add(employeeId);
+    bucket.dates.add(String(row.work_date).slice(0, 10));
+    byApproval.set(approvalId, bucket);
+  }
+  return [...byApproval.entries()].map(([approvalId, bucket]) => ({
+    approvalId,
+    departmentId: bucket.departmentId,
+    employeeIds: [...bucket.employees],
+    dates: [...bucket.dates],
+  }));
 }
 
 /**
@@ -114,10 +148,10 @@ export async function findApprovalLocksForEmployeeDates(
          JOIN org_departments d ON d.id = c.parent_id
         WHERE c.depth < ${MAX_DEPARTMENT_DEPTH}
      )
-     SELECT DISTINCT ON (pr.employee_id, pr.work_date)
-            pr.employee_id,
+     SELECT pr.employee_id,
             pr.work_date::text AS work_date,
             a.id,
+            a.department_id,
             a.start_date::text AS start_date,
             a.end_date::text AS end_date,
             a.status
@@ -142,8 +176,18 @@ export async function findApprovalLocksForEmployeeDates(
     [normalized.map(p => p.employeeId), normalized.map(p => p.workDate)],
   );
 
+  // Владение считаем ПОСЛЕ отбора кандидатов и ДО выбора приоритетной подачи:
+  // иначе approved-подача, которая днём не владеет, вытеснила бы владеющую и день
+  // остался бы закрытым. Строки уже отсортированы по приоритету (approved первым),
+  // поэтому первая владеющая на пару и есть искомый замок.
+  const ownership = await resolveDayOwnership(buildOwnershipRequests(rows), exec);
+
   for (const row of rows) {
-    locks.set(lockKey(Number(row.employee_id), row.work_date), {
+    const employeeId = Number(row.employee_id);
+    const key = lockKey(employeeId, row.work_date);
+    if (locks.has(key)) continue;
+    if (!ownsDay(ownership.get(ownershipKey(Number(row.id), employeeId, row.work_date)))) continue;
+    locks.set(key, {
       id: Number(row.id),
       start_date: row.start_date,
       end_date: row.end_date,
@@ -299,13 +343,29 @@ export interface IEmployeeApprovalLock {
   status: IApprovalLockInfo['status'];
 }
 
+/** Схлопывает подряд идущие даты обратно в интервалы [start, end]. */
+function compressDates(dates: readonly string[]): Array<{ start: string; end: string }> {
+  const sorted = [...dates].sort();
+  const intervals: Array<{ start: string; end: string }> = [];
+  for (const date of sorted) {
+    const last = intervals[intervals.length - 1];
+    if (last && enumerateDatesInclusive(last.end, date).length === 2) {
+      last.end = date;
+      continue;
+    }
+    intervals.push({ start: date, end: date });
+  }
+  return intervals;
+}
+
 /**
  * Замки за период по набору сотрудников — для подсветки в гриде. Интервальная
  * форма вместо плоского списка дат: в смешанной выборке (табельщица, прямые
  * подчинённые) плоский массив пере-блокировал бы чужих сотрудников.
  *
- * Отдел сотрудника здесь резолвится на период целиком, а не на каждую дату:
- * это подсказка для UI, точное решение принимает per-date гард на записи.
+ * Владение считается по КАЖДОЙ дате тем же резолвером, что и write-guard, и
+ * только потом соседние даты сжимаются обратно в интервалы: иначе грид оставался
+ * бы закрытым там, где запись уже разрешена (перевод в середине периода).
  */
 export async function loadApprovalLocksForEmployeesInPeriod(
   employeeIds: readonly number[],
@@ -317,7 +377,8 @@ export async function loadApprovalLocksForEmployeesInPeriod(
   if (ids.length === 0) return [];
 
   const rows = await queryWith<{
-    employee_id: number | string; start_date: string; end_date: string; status: IApprovalLockInfo['status'];
+    employee_id: number | string; id: number | string; department_id: string | null;
+    start_date: string; end_date: string; status: IApprovalLockInfo['status'];
   }>(
     exec,
     `WITH RECURSIVE emps AS (
@@ -357,6 +418,8 @@ export async function loadApprovalLocksForEmployeesInPeriod(
         WHERE c.depth < ${MAX_DEPARTMENT_DEPTH}
      )
      SELECT e.employee_id,
+            a.id,
+            a.department_id,
             GREATEST(a.start_date, $2::date)::text AS start_date,
             LEAST(a.end_date, $3::date)::text AS end_date,
             a.status
@@ -378,12 +441,32 @@ export async function loadApprovalLocksForEmployeesInPeriod(
     [ids, startDate, endDate],
   );
 
-  return rows.map(row => ({
-    employee_id: Number(row.employee_id),
-    start_date: row.start_date,
-    end_date: row.end_date,
-    status: row.status,
-  }));
+  const ownership = await resolveDayOwnership(
+    buildOwnershipRequests(rows.flatMap(row => enumerateDatesInclusive(row.start_date, row.end_date).map(date => ({
+      id: row.id,
+      department_id: row.department_id,
+      employee_id: row.employee_id,
+      work_date: date,
+    })))),
+    exec,
+  );
+
+  const locks: IEmployeeApprovalLock[] = [];
+  for (const row of rows) {
+    const employeeId = Number(row.employee_id);
+    const approvalId = Number(row.id);
+    const ownedDates = enumerateDatesInclusive(row.start_date, row.end_date)
+      .filter(date => ownsDay(ownership.get(ownershipKey(approvalId, employeeId, date))));
+    for (const interval of compressDates(ownedDates)) {
+      locks.push({
+        employee_id: employeeId,
+        start_date: interval.start,
+        end_date: interval.end,
+        status: row.status,
+      });
+    }
+  }
+  return locks;
 }
 
 /** Разворачивает интервалы замков в плоский список ISO-дат (легаси-поле approval_locked_dates). */
