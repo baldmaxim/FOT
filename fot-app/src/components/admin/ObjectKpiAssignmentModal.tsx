@@ -60,9 +60,11 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
     queryFn: () => objectKpiApi.listAssignments(objectId),
   });
 
+  // Глобальные роли выдаёт и снимает только админ; эндпоинт закрыт requireAdmin.
   const globalRolesQuery = useQuery({
     queryKey: objectKpiKeys.globalRoles(),
     queryFn: () => objectKpiApi.listGlobalRoles(),
+    enabled: isAdmin,
   });
 
   // Автокомплит ФИО: дебаунс 250 мс, минимум 2 символа — как в EmployeeFioPicker.
@@ -358,32 +360,36 @@ export const ObjectKpiAssignmentModal: FC<IProps> = ({ onClose, objectId }) => {
               </table>
             </div>
 
-            <h3 className={styles.sectionTitle}>Руководители экономического отдела</h3>
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead>
-                  <tr><th>Сотрудник</th><th>Период</th><th /></tr>
-                </thead>
-                <tbody>
-                  {(globalRolesQuery.data ?? []).map(item => (
-                    <tr key={item.id}>
-                      <td>{item.employee_name ?? item.employee_id}</td>
-                      <td>{formatDate(item.valid_from)} — {item.valid_to ? formatDate(item.valid_to) : '…'}</td>
-                      <td className={styles.actions}>
-                        {isAdmin && !item.valid_to && (
-                          <button type="button" onClick={() => revokeRoleMutation.mutate(item.id)}>
-                            Снять
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                  {(globalRolesQuery.data ?? []).length === 0 && (
-                    <tr><td colSpan={3} className={styles.empty}>Назначений нет</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            {isAdmin && (
+              <>
+                <h3 className={styles.sectionTitle}>Руководители экономического отдела</h3>
+                <div className={styles.tableWrap}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr><th>Сотрудник</th><th>Период</th><th /></tr>
+                    </thead>
+                    <tbody>
+                      {(globalRolesQuery.data ?? []).map(item => (
+                        <tr key={item.id}>
+                          <td>{item.employee_name ?? item.employee_id}</td>
+                          <td>{formatDate(item.valid_from)} — {item.valid_to ? formatDate(item.valid_to) : '…'}</td>
+                          <td className={styles.actions}>
+                            {!item.valid_to && (
+                              <button type="button" onClick={() => revokeRoleMutation.mutate(item.id)}>
+                                Снять
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {(globalRolesQuery.data ?? []).length === 0 && (
+                        <tr><td colSpan={3} className={styles.empty}>Назначений нет</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         </>
       )}

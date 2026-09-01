@@ -173,8 +173,19 @@ export interface IReportPremiumRow {
 
 export interface IObjectKpiObjectsResponse {
   data: IObjectKpiObject[];
-  /** can_revise_plan — подсказка UI: право пересматривать зафиксированный план. */
-  scope: { is_unrestricted: boolean; can_revise_plan: boolean };
+  /**
+   * can_revise_plan — подсказка UI: право пересматривать зафиксированный план.
+   * can_manage_assignments — кнопка «Назначения»: админ и руководитель эк. отдела.
+   * is_unrestricted=false — роль видит только закреплённые объекты (миграция 262).
+   */
+  scope: { is_unrestricted: boolean; can_revise_plan: boolean; can_manage_assignments?: boolean };
+}
+
+export interface IReportPremiumResponse {
+  data: IReportPremiumRow[];
+  period: IPeriod;
+  /** Руководители, чья премия скрыта: у них есть объекты вне скоупа зрителя (п. 3.5). */
+  hidden_manager_ids?: number[];
 }
 
 export interface IObjectContract {
@@ -358,7 +369,7 @@ export const objectKpiApi = {
   async getReportPremium(
     period?: IPeriod | null,
     objectId?: string | null,
-  ): Promise<{ data: IReportPremiumRow[]; period: IPeriod }> {
+  ): Promise<IReportPremiumResponse> {
     return apiClient.get(`/object-kpi/report/premium${reportQuery(period, objectId)}`);
   },
 

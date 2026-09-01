@@ -27,6 +27,8 @@ vi.mock('../services/object-kpi-premium.service.js', () => ({
 vi.mock('../services/object-kpi-scope.service.js', () => ({
   loadAssignedObjectIds: vi.fn(),
   resolveObjectKpiScope: vi.fn(),
+  canManageObjectKpiAssignments: vi.fn(async () => false),
+  assertCanManageAssignmentsOr403: vi.fn(),
 }));
 
 import { objectKpiController } from './object-kpi.controller.js';
@@ -36,6 +38,7 @@ import { loadAssignedObjectIds, resolveObjectKpiScope } from '../services/object
 
 const OBJECT_A = '11111111-1111-1111-1111-111111111111';
 const OBJECT_B = '22222222-2222-2222-2222-222222222222';
+const OBJECT_C = '33333333-3333-3333-3333-333333333333';
 
 const asMock = (fn: unknown) => fn as unknown as {
   mockResolvedValue: (v: unknown) => void;
@@ -138,6 +141,52 @@ describe('getReportPremium', () => {
     expect(payload.body?.data).toEqual([
       expect.objectContaining({ employee_id: 7, status: 'no_plan', premium_amount: null }),
     ]);
+  });
+
+  it('ограниченный зритель A+B, выбран A, руководитель за A+B → премия видна (сравнение с полным скоупом, не с фильтром)', async () => {
+    asMock(resolveObjectKpiScope).mockResolvedValue({ is_unrestricted: false, object_ids: [OBJECT_A, OBJECT_B] });
+    asMock(fetchObjectKpiReport).mockResolvedValue([reportRow([7], '2026-08-01')]);
+    asMock(loadAssignedObjectIds).mockResolvedValue([OBJECT_A, OBJECT_B]);
+    asMock(fetchManagerPremium).mockResolvedValue({
+      premium: [premiumMonth('2026-08-01', 'calculated', '300000')],
+    });
+
+    const { res, payload } = makeRes();
+    await objectKpiController.getReportPremium(
+      request({ from: '2026-08', to: '2026-08', object_id: OBJECT_A }),
+      res as never,
+    );
+
+    expect(fetchManagerPremium).toHaveBeenCalledTimes(1);
+    expect(payload.body?.data).toEqual([expect.objectContaining({ employee_id: 7, premium_amount: '300000' })]);
+    expect(payload.body?.hidden_manager_ids).toEqual([]);
+  });
+
+  it('ограниченный зритель A+B, руководитель за A+C → премия скрыта, расчёт не вызывается, id в hidden_manager_ids', async () => {
+    asMock(resolveObjectKpiScope).mockResolvedValue({ is_unrestricted: false, object_ids: [OBJECT_A, OBJECT_B] });
+    asMock(fetchObjectKpiReport).mockResolvedValue([reportRow([7], '2026-08-01')]);
+    asMock(loadAssignedObjectIds).mockResolvedValue([OBJECT_A, OBJECT_C]);
+
+    const { res, payload } = makeRes();
+    await objectKpiController.getReportPremium(request({ from: '2026-08', to: '2026-08' }), res as never);
+
+    expect(fetchManagerPremium).not.toHaveBeenCalled();
+    expect(payload.body?.data).toEqual([]);
+    expect(payload.body?.hidden_manager_ids).toEqual([7]);
+  });
+
+  it('неограниченный зритель: объекты руководителя вне фильтра не скрывают премию', async () => {
+    asMock(fetchObjectKpiReport).mockResolvedValue([reportRow([7], '2026-08-01')]);
+    asMock(loadAssignedObjectIds).mockResolvedValue([OBJECT_A, OBJECT_C]);
+    asMock(fetchManagerPremium).mockResolvedValue({
+      premium: [premiumMonth('2026-08-01', 'calculated', '100')],
+    });
+
+    const { res, payload } = makeRes();
+    await objectKpiController.getReportPremium(request({ from: '2026-08', to: '2026-08' }), res as never);
+
+    expect(fetchManagerPremium).toHaveBeenCalledTimes(1);
+    expect(payload.body?.hidden_manager_ids).toEqual([]);
   });
 
   it('руководитель без закреплений в окне пропускается', async () => {

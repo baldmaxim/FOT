@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 
-import { query } from '../config/postgres.js';
+import { query, queryOne } from '../config/postgres.js';
 import { failNotFound, failStaleVersion, failWith } from './object-kpi-errors.js';
 import { recordObjectKpiHistory, type ObjectKpiActor } from './object-kpi-history.service.js';
 import { assertDraft, lockContract, rethrowUnique, type EntryStatus } from './object-kpi.service.js';
@@ -240,4 +240,13 @@ export async function deleteKs6Entry(
     before: { ...before },
     actor,
   });
+}
+
+/** Объект записи КС-6 по её id: null — записи нет (контроллер отвечает 404). */
+export async function loadObjectIdForKs6(entryId: string): Promise<string | null> {
+  const row = await queryOne<{ skud_object_id: string }>(
+    `SELECT skud_object_id FROM object_ks6_entries WHERE id = $1`,
+    [entryId],
+  );
+  return row?.skud_object_id ?? null;
 }

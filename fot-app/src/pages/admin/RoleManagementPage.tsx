@@ -589,6 +589,28 @@ export const RoleManagementPage: FC = () => {
     }
   };
 
+  const handleToggleObjectKpiOwnObjectsOnly = async (role: SystemRole, next: boolean) => {
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: role.show_actual_hours,
+        hide_sidebar: role.hide_sidebar,
+        object_kpi_own_objects_only: next,
+      });
+      toast.success(next
+        ? 'KPI объектов: роль видит только закреплённые объекты'
+        : 'KPI объектов: роль видит всю стройку');
+      upsertRoleInCache(updated);
+      await refreshProfile();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения скоупа KPI объектов');
+    }
+  };
+
   const handleToggleHideSidebar = async (role: SystemRole, next: boolean) => {
     try {
       const updated = await rolesService.update(role.code, {
@@ -1436,6 +1458,26 @@ export const RoleManagementPage: FC = () => {
                           : selectedRole.view_all_departments === true
                             ? 'Все отделы на чтение — по страницам, открытым роли'
                             : 'Действует обычный скоуп по назначенным отделам'}
+                      </small>
+                    </span>
+                  </label>
+
+                  <label className={styles.roleSwitch} title="В «Аналитика → KPI объектов» роль видит и правит только объекты, за которыми закреплена как «Экономист объекта» (Назначения по объектам). Премия руководителя показывается, только если все его объекты внутри этого набора. Управление закреплениями остаётся у администратора и руководителя эк. отдела. Для «Админ» не применяется.">
+                    <input
+                      type="checkbox"
+                      checked={selectedRole.object_kpi_own_objects_only === true}
+                      disabled={selectedRole.is_admin}
+                      onChange={e => void handleToggleObjectKpiOwnObjectsOnly(selectedRole, e.target.checked)}
+                    />
+                    <span className={styles.roleSwitchTrack} />
+                    <span className={styles.roleSwitchText}>
+                      <strong>KPI объектов: только закреплённые объекты</strong>
+                      <small>
+                        {selectedRole.is_admin
+                          ? 'Админ видит всю стройку'
+                          : selectedRole.object_kpi_own_objects_only === true
+                            ? 'Только объекты закреплений «Экономист объекта»'
+                            : 'Вся стройка — по праву на страницу «KPI объектов»'}
                       </small>
                     </span>
                   </label>

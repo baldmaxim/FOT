@@ -13,7 +13,12 @@ import {
   versionSchema,
 } from './object-kpi-schemas.js';
 import type { ObjectKpiActor } from '../services/object-kpi-history.service.js';
-import { isObjectInScope } from '../services/object-kpi-scope.service.js';
+import {
+  assertCanManageAssignmentsOr403,
+  assertObjectInScopeOr403,
+  isObjectInScope,
+} from '../services/object-kpi-scope.service.js';
+import { failNotFound } from '../services/object-kpi-errors.js';
 import { fixMonthPlan, revisePlan } from '../services/object-kpi-plan.service.js';
 import { runPlanFreezerOnce } from '../services/object-kpi-plan-freezer.service.js';
 import {
@@ -23,6 +28,8 @@ import {
   deleteAddendum,
   deleteKs2Entry,
   getContractById,
+  loadObjectIdForAddendum,
+  loadObjectIdForKs2,
   setAddendumStatus,
   setKs2Status,
   updateAddendum,
@@ -132,9 +139,24 @@ export async function buildActor(req: AuthenticatedRequest): Promise<ObjectKpiAc
   return { userId: req.user.id, userName: await resolveActorName(req.user.id) };
 }
 
-/** Объект вне скоупа — 403 до любой записи. Для админа и экономиста скоуп полный. */
+/** Объект вне скоупа — 403 до любой записи. Для админа и рук. эк. отдела скоуп полный. */
 async function assertObjectInScope(req: AuthenticatedRequest, objectId: string): Promise<boolean> {
   return isObjectInScope(req, objectId);
+}
+
+/**
+ * Мутации ДС/КС-2 по прямому id: объект записи резолвится lookup-ом и проверяется по скоупу
+ * ДО транзакции — нет записи → 404, чужой объект → 403, сервис и аудит не вызываются.
+ * Иначе экономист объекта мог бы править чужие документы, зная их id.
+ */
+async function assertAddendumInScope(req: AuthenticatedRequest, addendumId: string): Promise<void> {
+  const objectId = (await loadObjectIdForAddendum(addendumId)) ?? failNotFound('ДС');
+  await assertObjectInScopeOr403(req, objectId);
+}
+
+async function assertKs2InScope(req: AuthenticatedRequest, entryId: string): Promise<void> {
+  const objectId = (await loadObjectIdForKs2(entryId)) ?? failNotFound('Акт КС-2');
+  await assertObjectInScopeOr403(req, objectId);
 }
 
 /**
@@ -151,6 +173,7 @@ async function changeAddendumStatus(
     const id = uuidSchema.parse(req.params.id);
     const version = versionSchema.parse(req.body.version);
     const reason = typeof req.body.reason === 'string' ? req.body.reason : null;
+    await assertAddendumInScope(req, id);
 
     const actor = await buildActor(req);
     const row = await withTransaction(async (client) => {
@@ -178,6 +201,7 @@ async function changeKs2Status(
     const id = uuidSchema.parse(req.params.id);
     const version = versionSchema.parse(req.body.version);
     const reason = typeof req.body.reason === 'string' ? req.body.reason : null;
+    await assertKs2InScope(req, id);
 
     const actor = await buildActor(req);
     const row = await withTransaction(async (client) => {
@@ -297,6 +321,7 @@ export const objectKpiEntriesController = {
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.body.version);
       const patch = addendumSchema.partial().parse(req.body);
+      await assertAddendumInScope(req, id);
 
       const actor = await buildActor(req);
       const row = await withTransaction(async (client) => {
@@ -327,6 +352,7 @@ export const objectKpiEntriesController = {
     try {
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.query.version);
+      await assertAddendumInScope(req, id);
 
       const actor = await buildActor(req);
       await withTransaction(async (client) => {
@@ -382,6 +408,7 @@ export const objectKpiEntriesController = {
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.body.version);
       const { reason, ...patch } = updateKs2Schema.parse(req.body);
+      await assertKs2InScope(req, id);
 
       const actor = await buildActor(req);
       const row = await withTransaction(async (client) => {
@@ -412,6 +439,7 @@ export const objectKpiEntriesController = {
     try {
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.query.version);
+      await assertKs2InScope(req, id);
 
       const actor = await buildActor(req);
       await withTransaction(async (client) => {
@@ -520,8 +548,11 @@ export const objectKpiEntriesController = {
 
   // ─── Закрепления и роли ───────────────────────────────────────────────────
 
+  // Закрепления — только админ и руководитель эк. отдела (canManageObjectKpiAssignments):
+  // иначе экономист объекта расширил бы себе скоуп через собственное закрепление.
   async createAssignment(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      await assertCanManageAssignmentsOr403(req);
       const input = assignmentSchema.parse(req.body);
       if (!(await assertObjectInScope(req, input.skud_object_id))) {
         res.status(403).json({ success: false, error: 'Объект вне вашего доступа' });
@@ -547,6 +578,7 @@ export const objectKpiEntriesController = {
 
   async updateAssignment(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      await assertCanManageAssignmentsOr403(req);
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.body.version);
       const patch = z.object({
@@ -574,6 +606,7 @@ export const objectKpiEntriesController = {
 
   async deleteAssignment(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      await assertCanManageAssignmentsOr403(req);
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.query.version);
 

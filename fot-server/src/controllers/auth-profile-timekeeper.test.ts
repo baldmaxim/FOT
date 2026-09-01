@@ -223,3 +223,19 @@ describe('buildProfileResponse для табельщицы: один снимо�
     expect(mocked.listManagedDepartmentIdsForUser).not.toHaveBeenCalled();
   });
 });
+
+describe('buildProfileResponse: флаг object_kpi_own_objects_only (миграция 262)', () => {
+  it('флаг роли доезжает до профиля; для админ-роли — всегда false', async () => {
+    mocked.getRoleById.mockResolvedValue({ ...TIMEKEEPER_ROLE, object_kpi_own_objects_only: true });
+    pgQuery.mockResolvedValueOnce(scopeRows([], []));
+    let res = makeRes();
+    await authController.getMe(makeReq(), res);
+    expect((res.body?.profile as { object_kpi_own_objects_only: boolean }).object_kpi_own_objects_only).toBe(true);
+
+    mocked.getRoleById.mockResolvedValue({ ...TIMEKEEPER_ROLE, is_admin: true, object_kpi_own_objects_only: true });
+    pgQuery.mockResolvedValueOnce(scopeRows([], []));
+    res = makeRes();
+    await authController.getMe(makeReq(), res);
+    expect((res.body?.profile as { object_kpi_own_objects_only: boolean }).object_kpi_own_objects_only).toBe(false);
+  });
+});

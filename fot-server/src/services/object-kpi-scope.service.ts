@@ -2,6 +2,8 @@ import { query } from '../config/postgres.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import { resolveEffectivePageAccess } from './access-control.service.js';
 import { isEconomicsHead } from './object-kpi-roles-cache.service.js';
+import { getRoleByCode } from './roles-cache.service.js';
+import { failWith } from './object-kpi-errors.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
@@ -19,6 +21,8 @@ export interface ObjectKpiScope {
   is_unrestricted: boolean;
   object_ids: string[];
 }
+
+export type AssignmentScopeRoleKind = 'construction_manager' | 'object_economist';
 
 const EMPTY_SCOPE: ObjectKpiScope = { is_unrestricted: false, object_ids: [] };
 
@@ -43,17 +47,21 @@ async function loadAllKpiObjectIds(): Promise<string[]> {
 }
 
 /**
- * Объекты, закреплённые за руководителем строительства.
+ * Объекты, закреплённые за сотрудником в заданной роли закрепления.
  *
  * @param onDate      срез на дату (по умолчанию сегодня, МСК)
  * @param periodRange для отчёта за период — пересечение периода закрепления с окном,
  *                    иначе руководитель не увидит месяцы, за которые он отвечал,
  *                    но уже не отвечает сегодня.
+ * @param roleKind    'construction_manager' (ЛК руководителя, премия — по умолчанию,
+ *                    поведение не менялось) либо 'object_economist' (скоуп экономиста,
+ *                    миграция 262).
  */
 export async function loadAssignedObjectIds(
   employeeId: number,
   onDate: string,
   periodRange: { from: string; to: string } | null,
+  roleKind: AssignmentScopeRoleKind = 'construction_manager',
 ): Promise<string[]> {
   if (periodRange) {
     // Границы окна приходят ПЕРВЫМИ числами месяцев. Верхняя обязана раздвигаться до
@@ -65,10 +73,10 @@ export async function loadAssignedObjectIds(
       `SELECT DISTINCT skud_object_id
          FROM object_kpi_assignments
         WHERE employee_id = $1
-          AND role_kind = 'construction_manager'
+          AND role_kind = $4
           AND valid_from < ($3::date + INTERVAL '1 month')
           AND (valid_to IS NULL OR valid_to >= $2::date)`,
-      [employeeId, periodRange.from, periodRange.to],
+      [employeeId, periodRange.from, periodRange.to, roleKind],
     );
     return rows.map((row) => row.skud_object_id);
   }
@@ -77,12 +85,33 @@ export async function loadAssignedObjectIds(
     `SELECT DISTINCT skud_object_id
        FROM object_kpi_assignments
       WHERE employee_id = $1
-        AND role_kind = 'construction_manager'
+        AND role_kind = $3
         AND valid_from <= $2::date
         AND (valid_to IS NULL OR valid_to >= $2::date)`,
-    [employeeId, onDate],
+    [employeeId, onDate, roleKind],
   );
   return rows.map((row) => row.skud_object_id);
+}
+
+/**
+ * Флаг роли «KPI объектов: только закреплённые объекты» (system_roles.object_kpi_own_objects_only,
+ * миграция 262). Для админа не действует — его скоуп всегда вся стройка.
+ */
+export async function hasOwnObjectsOnlyKpiScope(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.is_admin) return false;
+  const role = await getRoleByCode(req.user.role_code);
+  return role?.object_kpi_own_objects_only === true;
+}
+
+/**
+ * Право управлять закреплениями (список, поиск сотрудников, создание/правка/удаление).
+ * Только админ и руководитель экономического отдела — НЕ `is_unrestricted`: полный скоуп
+ * получает и любая роль с правом на страницу без флага, а расширять себе доступ через
+ * закрепления она не должна.
+ */
+export async function canManageObjectKpiAssignments(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.is_admin) return true;
+  return isEconomicsHead(req.user.employee_id);
 }
 
 export async function resolveObjectKpiScope(
@@ -116,8 +145,20 @@ async function computeObjectKpiScope(
     return { is_unrestricted: true, object_ids: await loadAllKpiObjectIds() };
   }
 
-  // Экономист тоже видит всю стройку (Этап 1). Сужение до «экономиста объекта»
-  // по role_kind='object_economist' включается позже отдельным флагом роли.
+  // Экономист объекта (флаг роли, миграция 262): только объекты своих закреплений
+  // object_economist. Проверяется ДО права на страницу — иначе право дало бы всю стройку.
+  if (await hasOwnObjectsOnlyKpiScope(req)) {
+    if (!req.user.employee_id) return EMPTY_SCOPE;
+    const objectIds = await loadAssignedObjectIds(
+      req.user.employee_id,
+      options.onDate ?? moscowTodayIso(),
+      options.periodRange ?? null,
+      'object_economist',
+    );
+    return { is_unrestricted: false, object_ids: objectIds };
+  }
+
+  // Роль с правом на страницу без флага видит всю стройку (Этап 1 — как было).
   if (await resolveEffectivePageAccess(req, '/discipline/objects', 'view')) {
     return { is_unrestricted: true, object_ids: await loadAllKpiObjectIds() };
   }
@@ -147,4 +188,30 @@ export async function isObjectInScope(
 ): Promise<boolean> {
   const scope = await resolveObjectKpiScope(req, options);
   return scope.object_ids.includes(objectId);
+}
+
+export const OBJECT_OUT_OF_SCOPE_MESSAGE = 'Объект вне вашего доступа';
+export const ASSIGNMENTS_MANAGE_DENIED_MESSAGE =
+  'Управление закреплениями доступно администратору и руководителю экономического отдела';
+
+/**
+ * 403 до любой записи — для мутаций по прямому id (ДС, КС-2, КС-6): объект записи
+ * резолвится lookup-ом, и вне скоупа сервис мутации и аудит не вызываются.
+ * Бросает маркер-ошибку KPI (`failWith`), которую разбирает respondWithError.
+ */
+export async function assertObjectInScopeOr403(
+  req: AuthenticatedRequest,
+  objectId: string,
+  options: { onDate?: string; periodRange?: { from: string; to: string } } = {},
+): Promise<void> {
+  if (!(await isObjectInScope(req, objectId, options))) {
+    failWith({ http: 403, code: 'object_out_of_scope', message: OBJECT_OUT_OF_SCOPE_MESSAGE });
+  }
+}
+
+/** 403 для операций с закреплениями у всех, кроме админа и руководителя эк. отдела. */
+export async function assertCanManageAssignmentsOr403(req: AuthenticatedRequest): Promise<void> {
+  if (!(await canManageObjectKpiAssignments(req))) {
+    failWith({ http: 403, code: 'assignments_forbidden', message: ASSIGNMENTS_MANAGE_DENIED_MESSAGE });
+  }
 }

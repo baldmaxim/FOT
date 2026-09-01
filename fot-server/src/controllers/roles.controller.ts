@@ -51,6 +51,13 @@ const maxCorrectionsSchema = z.number().int().min(0).max(100000).nullable();
 const normalizeViewAllDepartments = (value: boolean, isAdmin: boolean, roleCode: string): boolean =>
   value === true && !isAdmin && roleCode !== 'timekeeper';
 
+/**
+ * Флаг «KPI объектов: только закреплённые объекты» (миграция 262) для админ-ролей не
+ * действует (скоуп админа — вся стройка) — нормализуем в false на сервере.
+ */
+const normalizeObjectKpiOwnObjectsOnly = (value: boolean, isAdmin: boolean): boolean =>
+  value === true && !isAdmin;
+
 const createRoleSchema = z.object({
   code: z.string().min(1).max(50).regex(/^[a-z_]+$/, 'Только строчные буквы и подчёркивание'),
   name: z.string().min(1).max(100),
@@ -73,6 +80,7 @@ const createRoleSchema = z.object({
   weekend_memo_required: z.boolean().optional().default(false),
   // NOT NULL-колонка: default(false) гарантирует boolean в INSERT (не NULL).
   view_all_departments: z.boolean().optional().default(false),
+  object_kpi_own_objects_only: z.boolean().optional().default(false),
 });
 
 const updateRoleSchema = z.object({
@@ -96,6 +104,7 @@ const updateRoleSchema = z.object({
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional(),
   view_all_departments: z.boolean().optional(),
+  object_kpi_own_objects_only: z.boolean().optional(),
 });
 
 const updateAccessProfileSchema = z.object({
@@ -124,6 +133,7 @@ const cloneRoleSchema = z.object({
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional(),
   view_all_departments: z.boolean().optional(),
+  object_kpi_own_objects_only: z.boolean().optional(),
 });
 
 function isMissingFunctionError(error: unknown): boolean {
@@ -322,6 +332,7 @@ export const rolesController = {
       max_corrections_per_month,
       weekend_memo_required,
       view_all_departments,
+      object_kpi_own_objects_only,
     } = parsed.data;
 
     let data: SystemRole | null;
@@ -334,8 +345,8 @@ export const rolesController = {
             corrections_allow_zero_short_attendance, corrections_disable_bulk,
             max_corrections_per_month, weekend_memo_required,
             corrections_disable_object_entries, admin_access, manager_auto_access,
-            view_all_departments, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, true)
+            view_all_departments, object_kpi_own_objects_only, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, true)
          RETURNING *`,
         [
           code,
@@ -358,6 +369,7 @@ export const rolesController = {
           !!is_admin || !!admin_access,
           manager_auto_access !== false,
           normalizeViewAllDepartments(view_all_departments === true, !!is_admin, code),
+          normalizeObjectKpiOwnObjectsOnly(object_kpi_own_objects_only === true, !!is_admin),
         ],
       );
     } catch (error) {
@@ -415,8 +427,8 @@ export const rolesController = {
               corrections_allow_zero_short_attendance, corrections_disable_bulk,
               max_corrections_per_month, weekend_memo_required, is_active,
               corrections_disable_object_entries, admin_access, manager_auto_access,
-              view_all_departments)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+              view_all_departments, object_kpi_own_objects_only)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
            RETURNING *`,
           [
             targetCode,
@@ -448,6 +460,10 @@ export const rolesController = {
               parsed.data.view_all_departments ?? sourceRole.view_all_departments ?? false,
               parsed.data.is_admin ?? sourceRole.is_admin,
               targetCode,
+            ),
+            normalizeObjectKpiOwnObjectsOnly(
+              parsed.data.object_kpi_own_objects_only ?? sourceRole.object_kpi_own_objects_only ?? false,
+              parsed.data.is_admin ?? sourceRole.is_admin,
             ),
           ],
         );
@@ -543,6 +559,16 @@ export const rolesController = {
     if (parsed.data.view_all_departments !== undefined) {
       setClauses.push(`view_all_departments = ${addParam(
         normalizeViewAllDepartments(parsed.data.view_all_departments, nextIsAdmin, code),
+      )}`);
+    }
+    // Нормализуем и при смене is_admin без поля флага: роль, ставшая админской, не должна
+    // сохранить «только закреплённые объекты» — у админа скоуп всегда вся стройка.
+    if (parsed.data.object_kpi_own_objects_only !== undefined || parsed.data.is_admin !== undefined) {
+      setClauses.push(`object_kpi_own_objects_only = ${addParam(
+        normalizeObjectKpiOwnObjectsOnly(
+          parsed.data.object_kpi_own_objects_only ?? currentRole.object_kpi_own_objects_only ?? false,
+          nextIsAdmin,
+        ),
       )}`);
     }
 

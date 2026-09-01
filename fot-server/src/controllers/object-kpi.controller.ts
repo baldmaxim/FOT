@@ -17,7 +17,13 @@ import {
 } from '../services/object-kpi-report.service.js';
 import { fetchManagerPremium, EMPTY_PREMIUM_TOTALS } from '../services/object-kpi-premium.service.js';
 import { listObjectKpiHistory } from '../services/object-kpi-history.service.js';
-import { loadAssignedObjectIds, resolveObjectKpiScope } from '../services/object-kpi-scope.service.js';
+import {
+  assertCanManageAssignmentsOr403,
+  canManageObjectKpiAssignments,
+  loadAssignedObjectIds,
+  resolveObjectKpiScope,
+  type ObjectKpiScope,
+} from '../services/object-kpi-scope.service.js';
 import { getContractByObject, listAddenda, listKs2Entries } from '../services/object-kpi.service.js';
 import { listKs6Entries } from '../services/object-kpi-ks6.service.js';
 import { isEconomicsHead } from '../services/object-kpi-roles-cache.service.js';
@@ -124,7 +130,12 @@ export function mapDatabaseError(error: unknown): { http: number; code: string; 
 }
 
 type ReportRequest =
-  | { params: ObjectKpiReportParams; period: { from: string; to: string } }
+  | {
+    params: ObjectKpiReportParams;
+    period: { from: string; to: string };
+    /** Полный скоуп зрителя — НЕ суженный фильтром «Объект»; нужен для сокрытия чужих премий. */
+    viewerScope: ObjectKpiScope;
+  }
   | { error: { http: number; message: string } };
 
 /**
@@ -170,6 +181,7 @@ async function resolveReportRequest(
   return {
     params: { monthFrom: bounds.monthFrom, monthTo: bounds.monthTo, objectIds },
     period: window,
+    viewerScope: scope,
   };
 }
 
@@ -226,11 +238,18 @@ export const objectKpiController = {
       // денежная операция всё равно перепроверяет право в БД внутри своей транзакции.
       const canRevisePlan = req.user.is_admin === true
         || await isEconomicsHead(req.user.employee_id);
+      // can_manage_assignments — подсказка UI (кнопка «Назначения»): админ и руководитель
+      // эк. отдела; бэкенд проверяет право на каждом эндпоинте закреплений отдельно.
+      const canManageAssignments = await canManageObjectKpiAssignments(req);
 
       res.json({
         success: true,
         data: rows,
-        scope: { is_unrestricted: scope.is_unrestricted, can_revise_plan: canRevisePlan },
+        scope: {
+          is_unrestricted: scope.is_unrestricted,
+          can_revise_plan: canRevisePlan,
+          can_manage_assignments: canManageAssignments,
+        },
       });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] listObjects');
@@ -291,6 +310,12 @@ export const objectKpiController = {
    * Считается СОВОКУПНО по всем объектам руководителя (п. 3.5), даже если отчёт сужен до
    * одного объекта: премия по приказу — величина по человеку, а не по объекту. Поэтому
    * набор объектов для премии берётся из его закреплений, а не из фильтра отчёта.
+   *
+   * Ограниченный зритель (экономист объекта, миграция 262): премия отдаётся только если
+   * ВСЕ объекты руководителя за период входят в полный скоуп зрителя (viewerScope, не
+   * фильтр «Объект»). Иначе руководитель попадает в hidden_manager_ids, а его премия не
+   * считается: усечённая по одному объекту сумма была бы неверной, а совокупная раскрыла
+   * бы чужие объекты. Сама формула (fetchManagerPremium) не меняется.
    */
   async getReportPremium(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -306,6 +331,9 @@ export const objectKpiController = {
       )].filter((id) => Number.isFinite(id) && id > 0);
 
       const { monthFrom, monthTo } = resolved.params;
+      const viewerObjects = resolved.viewerScope.is_unrestricted
+        ? null
+        : new Set(resolved.viewerScope.object_ids);
       const data: Array<{
         employee_id: number;
         period_month: string;
@@ -314,6 +342,7 @@ export const objectKpiController = {
         coefficient: string | null;
         premium_amount: string | null;
       }> = [];
+      const hiddenManagerIds: number[] = [];
 
       // Последовательно, а не Promise.all: каждый вызов открывает свою транзакцию
       // REPEATABLE READ и строит полный отчёт по объектам руководителя.
@@ -323,6 +352,11 @@ export const objectKpiController = {
           to: monthTo,
         });
         if (objectIds.length === 0) continue;
+
+        if (viewerObjects && objectIds.some((objectId) => !viewerObjects.has(objectId))) {
+          hiddenManagerIds.push(employeeId);
+          continue;
+        }
 
         const result = await fetchManagerPremium({ employeeId, objectIds, monthFrom, monthTo });
         for (const month of result.premium) {
@@ -337,7 +371,7 @@ export const objectKpiController = {
         }
       }
 
-      res.json({ success: true, data, period: resolved.period });
+      res.json({ success: true, data, period: resolved.period, hidden_manager_ids: hiddenManagerIds });
     } catch (error) {
       respondWithError(res, error, '[object-kpi] getReportPremium');
     }
@@ -384,10 +418,13 @@ export const objectKpiController = {
       const { monthFrom, monthTo } = explicit ?? periodBounds(window.from, window.to);
 
       const contract = await getContractByObject(objectId);
+      // Закрепления — только тем, кто ими управляет: карточка не должна обходить
+      // запрет на просмотр назначений (GET /assignments закрыт тем же правом).
+      const canManageAssignments = await canManageObjectKpiAssignments(req);
       const [report, plans, assignments, addenda, ks2, ks6, fixedFlag] = await Promise.all([
         fetchObjectKpiReport({ monthFrom, monthTo, objectIds: [objectId] }),
         listMonthPlans(objectId, monthFrom, monthTo),
-        listAssignments({ objectId }),
+        canManageAssignments ? listAssignments({ objectId }) : Promise.resolve([]),
         contract ? listAddenda(contract.id) : Promise.resolve([]),
         contract ? listKs2Entries(contract.id) : Promise.resolve([]),
         contract ? listKs6Entries(contract.id) : Promise.resolve([]),
@@ -507,9 +544,10 @@ export const objectKpiController = {
     }
   },
 
-  /** Закрепления объектов — список для модалки «Назначения». */
+  /** Закрепления объектов — список для модалки «Назначения». Только админ и рук. эк. отдела. */
   async listAssignments(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      await assertCanManageAssignmentsOr403(req);
       const scope = await resolveObjectKpiScope(req);
       const objectId = typeof req.query.object_id === 'string' ? req.query.object_id : undefined;
       if (objectId && !scope.object_ids.includes(objectId)) {
@@ -537,6 +575,8 @@ export const objectKpiController = {
    */
   async searchEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      // Нужен только для закреплений — то же право, что и на них.
+      await assertCanManageAssignmentsOr403(req);
       const term = z.string().trim().min(2, 'Введите минимум 2 символа').parse(req.query.q);
       const rows = await query<{ id: number; full_name: string | null }>(
         `SELECT id, full_name

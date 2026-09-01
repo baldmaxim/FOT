@@ -950,3 +950,26 @@ export async function deleteKs2Entry(
     actor,
   });
 }
+
+// ─── Lookup объекта по id записи — для проверки скоупа на мутациях по прямому ID ───
+
+/** Объект ДС по её id: null — записи нет (контроллер отвечает 404). */
+export async function loadObjectIdForAddendum(addendumId: string): Promise<string | null> {
+  const row = await queryOne<{ skud_object_id: string }>(
+    `SELECT c.skud_object_id
+       FROM object_contract_addenda a
+       JOIN object_contracts c ON c.id = a.contract_id
+      WHERE a.id = $1`,
+    [addendumId],
+  );
+  return row?.skud_object_id ?? null;
+}
+
+/** Объект акта КС-2 по его id: null — записи нет (контроллер отвечает 404). */
+export async function loadObjectIdForKs2(entryId: string): Promise<string | null> {
+  const row = await queryOne<{ skud_object_id: string }>(
+    `SELECT skud_object_id FROM object_ks2_entries WHERE id = $1`,
+    [entryId],
+  );
+  return row?.skud_object_id ?? null;
+}

@@ -51,14 +51,21 @@ export const ObjectKpiPage: FC = () => {
 
   const objects = useMemo(() => objectsQuery.data?.data ?? [], [objectsQuery.data]);
   const canRevisePlan = objectsQuery.data?.scope.can_revise_plan === true;
-  const selectedObject = objects.find(item => item.id === objectFilter) ?? null;
+  // Закрепления ведут админ и руководитель эк. отдела; бэкенд проверяет право сам.
+  const canManageAssignments = objectsQuery.data?.scope.can_manage_assignments === true;
+  // Ограниченный скоуп (экономист объекта): единственный объект выбран сразу и без выбора
+  // «Все объекты» — ему просто нечего сравнивать; при нескольких объектах «Все» остаётся.
+  const restrictedScope = objectsQuery.data !== undefined && objectsQuery.data.scope.is_unrestricted === false;
+  const lockedObjectId = restrictedScope && objects.length === 1 ? objects[0].id : null;
+  const effectiveObjectFilter = lockedObjectId ?? objectFilter;
+  const selectedObject = objects.find(item => item.id === effectiveObjectFilter) ?? null;
 
   // Таблица — только по выбранному объекту: без него сервер отказывает, чтобы не строить
   // решётку «все объекты × 10 лет».
   const tableQuery = useQuery({
-    queryKey: objectKpiKeys.reportAuto(objectFilter),
-    queryFn: () => objectKpiApi.getReport(null, objectFilter),
-    enabled: Boolean(objectFilter),
+    queryKey: objectKpiKeys.reportAuto(effectiveObjectFilter),
+    queryFn: () => objectKpiApi.getReport(null, effectiveObjectFilter),
+    enabled: Boolean(effectiveObjectFilter),
   });
 
   // Премия — третьим, ленивым запросом: путь тяжёлый (полный отчёт на каждого
@@ -69,10 +76,10 @@ export const ObjectKpiPage: FC = () => {
     queryKey: objectKpiKeys.reportPremium(
       tablePeriod?.from ?? 'auto',
       tablePeriod?.to ?? 'auto',
-      objectFilter || 'all',
+      effectiveObjectFilter || 'all',
     ),
-    queryFn: () => objectKpiApi.getReportPremium(tablePeriod, objectFilter),
-    enabled: Boolean(objectFilter) && Boolean(tablePeriod),
+    queryFn: () => objectKpiApi.getReportPremium(tablePeriod, effectiveObjectFilter),
+    enabled: Boolean(effectiveObjectFilter) && Boolean(tablePeriod),
   });
 
   // Ключ — «руководитель + месяц»: премия по приказу принадлежит человеку, а не объекту.
@@ -84,12 +91,26 @@ export const ObjectKpiPage: FC = () => {
     return map;
   }, [premiumQuery.data]);
 
-  /** Три состояния колонки «Премия»: считается, ошибка, не рассчитана — с причиной. */
+  // Руководители с объектами вне скоупа зрителя: премия по приказу совокупная, и её не
+  // показываем вовсе — ни усечённую, ни раскрывающую чужие объекты.
+  const hiddenManagerIds = useMemo(
+    () => new Set(premiumQuery.data?.hidden_manager_ids ?? []),
+    [premiumQuery.data],
+  );
+
+  /** Состояния колонки «Премия»: считается, ошибка, скрыта по доступу, не рассчитана. */
   const renderPremium = (managerId: number | null, periodMonth: string) => {
     if (!managerId) return <span title="За месяц нет закреплённого руководителя">—</span>;
     if (premiumQuery.isLoading) return <span className={styles.muted}>…</span>;
     if (premiumQuery.isError) {
       return <span className={styles.muted} title="Не удалось рассчитать премию">н/д</span>;
+    }
+    if (hiddenManagerIds.has(managerId)) {
+      return (
+        <span className={styles.muted} title="Недоступно: у руководителя есть объекты вне вашего доступа">
+          —
+        </span>
+      );
     }
 
     const item = premiumByManager.get(`${managerId}|${periodMonth}`);
@@ -113,12 +134,12 @@ export const ObjectKpiPage: FC = () => {
   const summaryQuery = useQuery({
     queryKey: objectKpiKeys.reportSummary('all'),
     queryFn: () => objectKpiApi.getReportSummary(),
-    enabled: !objectFilter,
+    enabled: !effectiveObjectFilter,
   });
 
   // Базовое окно — «весь период». Список месяцев строится ИЗ НЕГО, а не из ответа на
   // месячный запрос: тот сузился бы до одного месяца, и переключаться стало бы некуда.
-  const basePeriod = objectFilter ? tableQuery.data?.period : summaryQuery.data?.period;
+  const basePeriod = effectiveObjectFilter ? tableQuery.data?.period : summaryQuery.data?.period;
 
   const monthOptions = useMemo(() => {
     if (!basePeriod) return [];
@@ -134,10 +155,10 @@ export const ObjectKpiPage: FC = () => {
   const activeMonth = selectedMonth && monthOptions.includes(selectedMonth) ? selectedMonth : '';
 
   const monthSummaryQuery = useQuery({
-    queryKey: objectKpiKeys.reportSummary(objectFilter || 'all', activeMonth),
+    queryKey: objectKpiKeys.reportSummary(effectiveObjectFilter || 'all', activeMonth),
     queryFn: () => objectKpiApi.getReportSummary(
       { from: activeMonth, to: activeMonth },
-      objectFilter || null,
+      effectiveObjectFilter || null,
     ),
     enabled: Boolean(activeMonth),
   });
@@ -146,10 +167,10 @@ export const ObjectKpiPage: FC = () => {
   // переключение выглядит так, будто у двух месяцев одинаковые деньги.
   const summaryLoading = activeMonth
     ? monthSummaryQuery.isLoading
-    : (objectFilter ? tableQuery.isLoading : summaryQuery.isLoading);
+    : (effectiveObjectFilter ? tableQuery.isLoading : summaryQuery.isLoading);
   const summary = activeMonth
     ? monthSummaryQuery.data?.summary
-    : (objectFilter ? tableQuery.data?.summary : summaryQuery.data?.summary);
+    : (effectiveObjectFilter ? tableQuery.data?.summary : summaryQuery.data?.summary);
   const period = activeMonth ? monthSummaryQuery.data?.period : basePeriod;
   const periodLabel = formatPeriod(period);
 
@@ -212,15 +233,16 @@ export const ObjectKpiPage: FC = () => {
           <span className={styles.selectWrap}>
             <select
               className={styles.select}
-              value={objectFilter}
+              value={effectiveObjectFilter}
+              disabled={lockedObjectId !== null}
               onChange={e => { setObjectFilter(e.target.value); setSelectedMonth(''); }}
             >
-              <option value="">Все объекты</option>
+              {lockedObjectId === null && <option value="">Все объекты</option>}
               {objects.map(item => (
                 <option key={item.id} value={item.id}>{item.name}</option>
               ))}
             </select>
-            {objectFilter && (
+            {effectiveObjectFilter && lockedObjectId === null && (
               <button
                 type="button"
                 className={styles.clearInside}
@@ -234,7 +256,7 @@ export const ObjectKpiPage: FC = () => {
           </span>
         </label>
 
-        {canEdit && (
+        {canManageAssignments && (
           <button type="button" className={styles.secondaryBtn} onClick={() => setAssignmentsOpen(true)}>
             Назначения
           </button>

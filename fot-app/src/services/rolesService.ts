@@ -64,6 +64,8 @@ export interface CreateRoleData extends CorrectionRestrictionFields {
   hide_sidebar?: boolean;
   /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
   view_all_departments?: boolean;
+  /** KPI объектов только по закреплённым объектам (system_roles.object_kpi_own_objects_only, миграция 262). */
+  object_kpi_own_objects_only?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
   timesheet_show_full_period?: boolean;
@@ -83,6 +85,8 @@ export interface UpdateRoleData extends CorrectionRestrictionFields {
   hide_sidebar?: boolean;
   /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
   view_all_departments?: boolean;
+  /** KPI объектов только по закреплённым объектам (system_roles.object_kpi_own_objects_only, миграция 262). */
+  object_kpi_own_objects_only?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
   timesheet_show_full_period?: boolean;
@@ -103,6 +107,8 @@ export interface CloneRoleData extends CorrectionRestrictionFields {
   hide_sidebar?: boolean;
   /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
   view_all_departments?: boolean;
+  /** KPI объектов только по закреплённым объектам (system_roles.object_kpi_own_objects_only, миграция 262). */
+  object_kpi_own_objects_only?: boolean;
   timesheet_months_back?: number;
   timesheet_months_forward?: number;
   timesheet_show_full_period?: boolean;

@@ -7,15 +7,26 @@ import { AUDIT_ACTIONS, auditService } from '../services/audit.service.js';
 import { respondWithError } from './object-kpi.controller.js';
 import { buildActor } from './object-kpi-entries.controller.js';
 import { dateSchema, moneySchema, uuidSchema, versionSchema } from './object-kpi-schemas.js';
-import { isObjectInScope } from '../services/object-kpi-scope.service.js';
+import { assertObjectInScopeOr403, isObjectInScope } from '../services/object-kpi-scope.service.js';
+import { failNotFound } from '../services/object-kpi-errors.js';
 import { getContractById } from '../services/object-kpi.service.js';
 import {
   createKs6Entry,
   deleteKs6Entry,
   listKs6Entries,
+  loadObjectIdForKs6,
   setKs6Status,
   updateKs6Entry,
 } from '../services/object-kpi-ks6.service.js';
+
+/**
+ * Мутации по прямому id: объект записи резолвится lookup-ом и проверяется по скоупу
+ * ДО транзакции — нет записи → 404, чужой объект → 403, сервис и аудит не вызываются.
+ */
+async function assertKs6InScope(req: AuthenticatedRequest, entryId: string): Promise<void> {
+  const objectId = (await loadObjectIdForKs6(entryId)) ?? failNotFound('Запись КС-6');
+  await assertObjectInScopeOr403(req, objectId);
+}
 
 /**
  * Реестр КС-6 — справочные записи журнала выполненных работ.
@@ -44,6 +55,7 @@ async function changeKs6Status(
     const id = uuidSchema.parse(req.params.id);
     const version = versionSchema.parse(req.body.version);
     const reason = typeof req.body.reason === 'string' ? req.body.reason : null;
+    await assertKs6InScope(req, id);
 
     const actor = await buildActor(req);
     const row = await withTransaction(async (client) => {
@@ -117,6 +129,7 @@ export const objectKpiKs6Controller = {
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.body.version);
       const patch = ks6Schema.partial().parse(req.body);
+      await assertKs6InScope(req, id);
 
       const actor = await buildActor(req);
       const row = await withTransaction(async (client) => {
@@ -147,6 +160,7 @@ export const objectKpiKs6Controller = {
     try {
       const id = uuidSchema.parse(req.params.id);
       const version = versionSchema.parse(req.query.version);
+      await assertKs6InScope(req, id);
 
       const actor = await buildActor(req);
       await withTransaction(async (client) => {

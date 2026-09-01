@@ -35,7 +35,8 @@ router.get('/plans/fixation-info', reportView, objectKpiController.getFixationIn
 router.get('/my/objects', lkView, objectKpiController.getMyObjects);
 router.get('/assignments', kpiView, objectKpiController.listAssignments);
 router.get('/employees/search', kpiEdit, objectKpiController.searchEmployees);
-router.get('/global-roles', kpiView, objectKpiController.listGlobalRoles);
+// Глобальные роли KPI выдаёт и снимает только админ — и список тоже его.
+router.get('/global-roles', requireAdmin, objectKpiController.listGlobalRoles);
 router.get('/objects', kpiView, objectKpiController.listObjects);
 router.get('/objects/:objectId/card', reportView, objectKpiController.getObjectCard);
 router.get('/objects/:objectId/plans', kpiView, objectKpiController.listPlans);
