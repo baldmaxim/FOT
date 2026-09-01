@@ -8,14 +8,8 @@ import { loadEmployeeFullName } from '../services/audit-context.helpers.js';
 import { DomainValidationError, employeeChangesService } from '../services/employee-changes.service.js';
 import { loadStructureCache, decryptEmployee } from '../services/employee-mapper.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
-import {
-  ensureLocalArchiveDepartment,
-  isProtectedArchiveDepartment,
-} from '../services/employee-archive-department.service.js';
-import {
-  ensureArchiveSigurDepartment,
-  syncLinkedEmployeeFromSigur,
-} from '../services/sigur-linked-employees.service.js';
+import { isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
+import { syncLinkedEmployeeFromSigur } from '../services/sigur-linked-employees.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
@@ -23,10 +17,15 @@ import {
   canAccessEmployeeInScope,
   resolveRequestDataScope,
 } from '../services/data-scope.service.js';
+import { upsertTechnicalDepartmentAccess } from '../services/employee-department-access.service.js';
 import {
-  upsertTechnicalDepartmentAccess,
-  deactivateAllDepartmentAccessForEmployee,
-} from '../services/employee-department-access.service.js';
+  DismissalSigurError,
+  EMPLOYEE_LIFECYCLE_COLUMNS,
+  executeOperation,
+  openDismissOperation,
+  openRehireOperation,
+  type TLifecycleOperationSource,
+} from '../services/employee-lifecycle-operations.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 import { DISMISSAL_CUTOFF_HM, getMoscowDismissalTiming } from '../utils/date.utils.js';
@@ -59,7 +58,7 @@ async function emitEmployeeChangedBatch(employeeIds: number[], action: string): 
   }
 }
 
-const EMPLOYEE_LIFECYCLE_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, dismissal_date, excluded_from_timesheet, excluded_from_timesheet_date, created_at, updated_at';
+// EMPLOYEE_LIFECYCLE_COLUMNS — в employee-lifecycle-operations.service (общий с исполнителем операций).
 
 interface IHttpError extends Error {
   status?: number;
@@ -120,30 +119,11 @@ export async function loadEmployeeLifecycleRow(employeeId: number): Promise<Empl
   return data;
 }
 
-function addDaysIso(iso: string, days: number): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().slice(0, 10);
-}
-
 function isIsoDate(value: unknown): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
-class DismissalSigurError extends Error {
-  status: number;
-  code: string;
-  movedToArchive: boolean;
-  blocked: boolean;
-  constructor(message: string, status: number, code: string, movedToArchive: boolean, blocked: boolean) {
-    super(message);
-    this.status = status;
-    this.code = code;
-    this.movedToArchive = movedToArchive;
-    this.blocked = blocked;
-  }
-}
+export { DismissalSigurError };
 
 interface IInsertDismissalHistoryOpts {
   scheduled: boolean;
@@ -186,74 +166,19 @@ export async function insertDismissalHistory(
   await execute(sql, params);
 }
 
-/** Просроченный claim перезахватывается (процесс упал между claim и применением). */
-export const DISMISSAL_CLAIM_LEASE_MINUTES = 30;
-
 /**
- * CAS-захват claim'а немедленного увольнения: атомарно одним UPDATE ставит
- * `dismissal_apply_started_at` (маркер «увольнение в работе» для Sigur-синка)
- * И `dismissal_date` — если процесс упадёт после переноса в Sigur, но до локального
- * увольнения, сотрудник не останется «active без dismissal_date» и планировщик
- * подхватит операцию после истечения lease. Чужой свежий claim не перезаписывается.
+ * Применяет полное увольнение немедленно через durable-операцию (миграция 261):
+ * Sigur перенос в архив + блокировка, закрытие assignments, флаги в employees, событие
+ * истории — всё внутри исполнителя операции с идемпотентными шагами и CAS по
+ * lifecycle_revision. Используется веткой fire(), dismissal-scheduler-ом и contractor-admin.
  *
- * @returns точный timestamp claim'а (token для releaseOwnDismissalClaim) или null,
- *          если claim уже удерживается другим процессом (конфликт → 409 у вызывающего).
- */
-export async function acquireDismissalClaim(
-  employeeId: number,
-  dismissalDate: string,
-): Promise<string | null> {
-  const row = await queryOne<{ claimed_at: string }>(
-    `UPDATE employees
-        SET dismissal_apply_started_at = now(),
-            dismissal_date = $2
-      WHERE id = $1
-        AND employment_status = 'active'
-        AND (dismissal_apply_started_at IS NULL
-             OR dismissal_apply_started_at < now() - ($3 || ' minutes')::interval)
-      RETURNING dismissal_apply_started_at::text AS claimed_at`,
-    [employeeId, dismissalDate, String(DISMISSAL_CLAIM_LEASE_MINUTES)],
-  );
-  return row?.claimed_at ?? null;
-}
-
-/**
- * Освобождает ТОЛЬКО собственный claim (по точному timestamp) и восстанавливает
- * прежний dismissal_date. Используется исключительно когда внешние системы (Sigur)
- * не были изменены — иначе claim намеренно остаётся до истечения lease, чтобы
- * планировщик повторил операцию.
- */
-async function releaseOwnDismissalClaim(
-  employeeId: number,
-  claimedAt: string,
-  restoreDismissalDate: string | null,
-): Promise<void> {
-  try {
-    await execute(
-      `UPDATE employees
-          SET dismissal_apply_started_at = NULL,
-              dismissal_date = $3
-        WHERE id = $1
-          AND employment_status = 'active'
-          AND dismissal_apply_started_at = $2::timestamptz`,
-      [employeeId, claimedAt, restoreDismissalDate],
-    );
-  } catch (releaseError) {
-    console.error(`[dismissal] failed to release own claim for employee=${employeeId}:`, releaseError);
-  }
-}
-
-/**
- * Применяет полное увольнение немедленно: Sigur block + перевод в архивный отдел,
- * закрытие assignments, флаги в employees. Используется как ветка fire(),
- * так и dismissal-scheduler-ом для срабатывания отложенного увольнения.
+ * Claim: планировщик передаёт уже захваченный `claimedAt` — операция открывается без
+ * перезахвата (иначе ложный 409). Ручные вызовы claim не передают — CAS-claim берётся
+ * при открытии операции, до первого обращения к Sigur; при конфликте бросается 409.
  *
- * Claim: планировщик передаёт уже захваченный `claimedAt` — метод НЕ пытается
- * перезахватить его (иначе ложный 409). Ручные вызовы (fire, contractor-admin)
- * `claimedAt` не передают — метод сам берёт claim через CAS до первого обращения
- * к Sigur; при конфликте бросает 409.
- *
- * Бросает HttpError (createHttpError) или DismissalSigurError при ошибке Sigur.
+ * Ошибка Sigur: операция остаётся pending и будет повторена планировщиком по lease;
+ * наружу — DismissalSigurError с признаками частичного применения.
+ * Событие истории пишет операция — вызывающим insertDismissalHistory НЕ нужен.
  */
 export async function applyDismissalImmediately(args: {
   employeeId: number;
@@ -261,118 +186,25 @@ export async function applyDismissalImmediately(args: {
   dismissalDate: string;
   userId: string | null;
   connection?: 'external' | 'internal';
-  /** Уже захваченный claim (планировщик). Без него метод захватывает claim сам. */
+  /** Уже захваченный claim (планировщик). Без него операция захватывает claim сама. */
   claimedAt?: string | null;
+  source?: TLifecycleOperationSource;
 }): Promise<{ employee: EmployeeEncrypted; fromDepartmentId: string | null }> {
-  const { employeeId, existing, dismissalDate, userId, connection } = args;
+  const { employeeId, dismissalDate, userId, connection } = args;
+  const source: TLifecycleOperationSource = args.source ?? (args.claimedAt ? 'scheduler' : 'manual');
 
-  // Claim ДО удалённых действий: с этого момента Sigur-синк видит маркер
-  // «увольнением владеет lifecycle» и не оформляет перенос своей датой.
-  const prevDismissalDate = existing.dismissal_date ?? null;
-  let ownClaim: string | null = null;
-  if (!args.claimedAt) {
-    ownClaim = await acquireDismissalClaim(employeeId, dismissalDate);
-    if (!ownClaim) {
-      throw createHttpError(409, 'Увольнение сотрудника уже применяется другим процессом — повторите позже');
-    }
-  }
+  const operation = await openDismissOperation({
+    employeeId,
+    dismissalDate,
+    source,
+    createdBy: userId,
+    connection,
+    claimedAt: args.claimedAt ?? null,
+    sigurSteps: 'full',
+  });
 
-  let targetDepartmentId = existing.org_department_id || null;
-
-  if (existing.sigur_employee_id) {
-    if (!(await sigurService.isConfigured())) {
-      if (ownClaim) await releaseOwnDismissalClaim(employeeId, ownClaim, prevDismissalDate);
-      throw createHttpError(503, 'Sigur не настроен');
-    }
-
-    let archive: Awaited<ReturnType<typeof ensureArchiveSigurDepartment>>;
-    try {
-      archive = await ensureArchiveSigurDepartment(userId, connection);
-    } catch (archiveError) {
-      // Sigur ещё не изменён — безопасно вернуть всё как было.
-      if (ownClaim) await releaseOwnDismissalClaim(employeeId, ownClaim, prevDismissalDate);
-      throw archiveError;
-    }
-    let movedToArchive = false;
-    let blocked = false;
-
-    try {
-      await sigurService.updateEmployee(existing.sigur_employee_id, {
-        departmentId: archive.sigurDepartmentId,
-      }, connection);
-      movedToArchive = true;
-
-      await sigurService.blockEmployee(existing.sigur_employee_id, connection);
-      blocked = true;
-    } catch (error) {
-      if (!movedToArchive && ownClaim) {
-        // Sigur не изменён — операция не начиналась, снимаем СВОЙ claim и
-        // возвращаем прежний dismissal_date (иначе неудавшееся немедленное
-        // увольнение превратилось бы в отложенное).
-        await releaseOwnDismissalClaim(employeeId, ownClaim, prevDismissalDate);
-      }
-      // При частичной ошибке (movedToArchive=true) claim НЕ снимаем: после
-      // истечения lease планировщик повторит применение увольнения.
-      throw new DismissalSigurError(
-        movedToArchive
-          ? 'Сотрудник уже перемещён в архивный отдел Sigur, но блокировка не выполнена. Локальный статус не изменён.'
-          : 'Не удалось выполнить увольнение сотрудника в Sigur',
-        movedToArchive ? 502 : 500,
-        movedToArchive ? 'SIGUR_PARTIAL_FAILURE' : 'SIGUR_WRITE_FAILED',
-        movedToArchive,
-        blocked,
-      );
-    }
-
-    const localArchive = await ensureLocalArchiveDepartment(userId, { connection });
-    targetDepartmentId = archive.localDepartmentId || localArchive.id;
-  } else {
-    const archive = await ensureLocalArchiveDepartment(userId, { connection });
-    targetDepartmentId = archive.id;
-  }
-
-  // Реальный отдел до увольнения (для связности истории). Если уже архив — null.
-  const fromDepartmentId = (existing.org_department_id && existing.org_department_id !== targetDepartmentId)
-    ? existing.org_department_id
-    : null;
-
-  // День dismissalDate остаётся рабочим — переход в «Уволенные» с D+1.
-  // changeDepartment с forceHistory ведёт полную историю периодов даже при freeze_history=true:
-  // закрывает реальный отдел на dismissalDate, создаёт «Уволенные» [D+1 → null].
-  const exclusionDate = addDaysIso(dismissalDate, 1);
-
-  if (targetDepartmentId && existing.org_department_id !== targetDepartmentId) {
-    await employeeChangesService.changeDepartment(employeeId, targetDepartmentId, {
-      reason: 'Увольнение — перевод в папку "Уволенные"',
-      lockDepartment: false,
-      createdBy: userId,
-      effectiveDate: exclusionDate,
-      forceHistory: true,
-    });
-  }
-
-  // Деактивируем доступы к отделам (скоуп руководителя). department_id в eda сохраняется
-  // (is_active=false) — это источник реального отдела для отображения уволенного в табеле.
-  await deactivateAllDepartmentAccessForEmployee(employeeId);
-
-  const data = await queryOne<EmployeeEncrypted>(
-    `UPDATE employees
-        SET employment_status = 'fired',
-            org_department_id = $1,
-            department_locked = false,
-            dismissal_date = $2,
-            excluded_from_timesheet = true,
-            excluded_from_timesheet_date = $3
-      WHERE id = $4
-    RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
-    [targetDepartmentId, dismissalDate, exclusionDate, employeeId],
-  );
-
-  if (!data) {
-    throw createHttpError(500, 'Failed to update employee status');
-  }
-
-  return { employee: data, fromDepartmentId };
+  const employee = await executeOperation(operation, connection);
+  return { employee, fromDepartmentId: operation.from_department_id };
 }
 
 export async function loadTargetDepartment(id: string): Promise<ITargetDepartmentRow | null> {
@@ -557,33 +389,53 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
     if (isDeferred) {
       // CAS + одна транзакция: параллельное увольнение/применение планировщиком
       // не должно разъехаться с событием истории (и наоборот — событие без правки).
-      const data = await withTransaction(async (client) => {
+      // lifecycle_revision растёт на каждом переходе (миграция 261): решение синка Sigur,
+      // принятое по снимку до назначения даты, станет noop по CAS.
+      // Повтор с той же датой — идемпотентный noop: без события и без новой версии.
+      const outcome = await withTransaction<{ row: EmployeeEncrypted; noop: boolean } | null>(async (client) => {
         const updated = await client.query<EmployeeEncrypted>(
-          `UPDATE employees SET dismissal_date = $1
+          `UPDATE employees
+              SET dismissal_date = $1,
+                  lifecycle_revision = lifecycle_revision + 1
             WHERE id = $2
               AND employment_status = 'active'
               AND dismissal_apply_started_at IS NULL
+              AND dismissal_date IS DISTINCT FROM $1::date
             RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
           [dismissalDate, employeeId],
         );
         const row = updated.rows[0] ?? null;
-        if (!row) return null;
+        if (!row) {
+          const same = await client.query<EmployeeEncrypted>(
+            `SELECT ${EMPLOYEE_LIFECYCLE_COLUMNS} FROM employees
+              WHERE id = $1 AND employment_status = 'active'
+                AND dismissal_date = $2::date AND dismissal_apply_started_at IS NULL`,
+            [employeeId, dismissalDate],
+          );
+          const sameRow = same.rows[0] ?? null;
+          return sameRow ? { row: sameRow, noop: true } : null;
+        }
 
         await insertDismissalHistory(employeeId, dismissalDate, {
           scheduled: true,
           createdBy: req.user.id,
         }, client);
 
-        return row;
+        return { row, noop: false };
       });
 
-      if (!data) {
+      if (!outcome) {
         res.status(409).json({
           success: false,
           error: 'Сотрудник уже уволен или его увольнение применяется — обновите страницу',
         });
         return;
       }
+      if (outcome.noop) {
+        res.json({ success: true, data: decryptEmployee(outcome.row, structureCache) });
+        return;
+      }
+      const data = outcome.row;
       employeeCache.invalidate(employeeId);
 
       await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE_SCHEDULED', {
@@ -612,18 +464,14 @@ export async function fire(req: AuthenticatedRequest, res: Response): Promise<vo
       });
       employeeCache.invalidate(employeeId);
 
-      await insertDismissalHistory(employeeId, dismissalDate, {
-        scheduled: false,
-        createdBy: req.user.id,
-        fromDepartmentId,
-      });
-
+      // Событие истории записала операция (одной транзакцией с правкой employees).
       await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
         entityType: 'employee',
         entityId: id,
         details: {
           source: existing.sigur_employee_id ? 'sigur' : 'portal',
           target_department_id: data.org_department_id,
+          from_department_id: fromDepartmentId,
           dismissal_date: dismissalDate,
         },
       });
@@ -709,7 +557,8 @@ export async function cancelDismissal(req: AuthenticatedRequest, res: Response):
     // Условие в самом UPDATE — иначе гонка: отмена проходит уже после старта применения.
     const data = await queryOne<EmployeeEncrypted>(
       `UPDATE employees
-          SET dismissal_date = NULL
+          SET dismissal_date = NULL,
+              lifecycle_revision = lifecycle_revision + 1
         WHERE id = $1
           AND employment_status = 'active'
           AND dismissal_date IS NOT NULL
@@ -790,6 +639,12 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
+    // Только уволенный: повтор на уже активном не должен плодить rehired-события.
+    if (existing.employment_status !== 'fired') {
+      res.status(409).json({ success: false, error: 'Сотрудник не уволен', code: 'NOT_FIRED' });
+      return;
+    }
+
     if (await isProtectedArchiveDepartment(targetDepartment.id, connection)) {
       res.status(409).json({
         success: false,
@@ -798,15 +653,11 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
       return;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    let sigurDetached = false;
-
     if (existing.sigur_employee_id) {
       if (!(await sigurService.isConfigured())) {
         res.status(503).json({ success: false, error: 'Sigur не настроен' });
         return;
       }
-
       if (!targetDepartment.sigur_department_id) {
         res.status(409).json({
           success: false,
@@ -814,145 +665,74 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
         });
         return;
       }
-
-      try {
-        await sigurService.updateEmployee(existing.sigur_employee_id, {
-          departmentId: targetDepartment.sigur_department_id,
-        }, connection);
-
-        await sigurService.unblockEmployee(existing.sigur_employee_id, connection);
-        await syncLinkedEmployeeFromSigur(existing.id, connection);
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          const status = error.response?.status;
-          console.error('[rehire] Sigur error', {
-            status,
-            url: error.config?.url,
-            method: error.config?.method,
-            employeeId: existing.id,
-            sigurEmployeeId: existing.sigur_employee_id,
-            targetSigurDepartmentId: targetDepartment.sigur_department_id,
-            responseData: error.response?.data,
-            message: error.message,
-          });
-          if (status === 404) {
-            // Разграничиваем: 404 на сотрудника (удалён в Sigur) vs 404 на отдел.
-            let departmentAlive = false;
-            try {
-              await sigurService.getDepartmentById(targetDepartment.sigur_department_id, connection);
-              departmentAlive = true;
-            } catch (departmentProbeError) {
-              console.warn('[rehire] department probe failed', {
-                sigurDepartmentId: targetDepartment.sigur_department_id,
-                message: departmentProbeError instanceof Error ? departmentProbeError.message : String(departmentProbeError),
-              });
-            }
-
-            if (departmentAlive) {
-              // Сотрудник удалён в Sigur — отвязываем и продолжаем локальное восстановление.
-              sigurDetached = true;
-              console.warn('[rehire] auto-detach sigur_employee_id', {
-                employeeId: existing.id,
-                sigurEmployeeId: existing.sigur_employee_id,
-                reason: 'employee not found in Sigur',
-              });
-            } else {
-              res.status(409).json({
-                success: false,
-                error: `Sigur вернул 404 на ${error.config?.method?.toUpperCase() || 'запросе'} ${error.config?.url || ''}. Вероятно, отдел «${targetDepartment.name}» (sigur_department_id=${targetDepartment.sigur_department_id}) удалён в Sigur. Запустите синхронизацию структуры и попробуйте снова.`,
-              });
-              return;
-            }
-          } else {
-            throw error;
-          }
-        } else {
-          throw error;
-        }
-      }
     }
 
-    // forceHistory: закрыть запись «Уволенные» и создать новый период реального отдела
-    // (полная история, не перезапись), даже при включённом freeze_history.
-    await employeeChangesService.changeDepartment(employeeId, targetDepartment.id, {
-      reason: sigurDetached
-        ? 'Восстановление (отвязка от Sigur — сотрудник удалён в Sigur)'
-        : 'Восстановление на работу',
-      lockDepartment: sigurDetached,
+    // Durable-операция ДО обращения к Sigur: пока она pending, синк Sigur сотрудника не
+    // трогает, а crash/ошибка на любом шаге доводится планировщиком. Повторное нажатие
+    // с тем же отделом продолжает ту же операцию (см. employee-lifecycle-operations.service).
+    const operation = await openRehireOperation({
+      employeeId,
+      targetDepartmentId: targetDepartment.id,
+      targetSigurDepartmentId: targetDepartment.sigur_department_id,
       createdBy: req.user.id,
-      effectiveDate: today,
-      forceHistory: true,
     });
 
-    await upsertTechnicalDepartmentAccess(
-      employeeId,
-      targetDepartment.id,
-      null,
-      existing.sigur_employee_id && !sigurDetached ? 'sigur_sync' : 'portal_lifecycle',
-    );
-
-    let data: EmployeeEncrypted | null;
+    let data: EmployeeEncrypted;
     try {
-      const updateFields = sigurDetached
-        ? `employment_status = 'active',
-             org_department_id = $1,
-             department_locked = $2,
-             sigur_employee_id = NULL,
-             dismissal_date = NULL,
-             dismissal_apply_started_at = NULL,
-             excluded_from_timesheet = false,
-             excluded_from_timesheet_date = NULL`
-        : `employment_status = 'active',
-             org_department_id = $1,
-             department_locked = $2,
-             dismissal_date = NULL,
-             dismissal_apply_started_at = NULL,
-             excluded_from_timesheet = false,
-             excluded_from_timesheet_date = NULL`;
-      data = await queryOne<EmployeeEncrypted>(
-        `UPDATE employees
-            SET ${updateFields}
-          WHERE id = $3
-        RETURNING ${EMPLOYEE_LIFECYCLE_COLUMNS}`,
-        [targetDepartment.id, sigurDetached, id],
-      );
-    } catch (updateErr) {
-      console.error('[rehire] DB update failed:', updateErr);
-      res.status(404).json({ success: false, error: 'Employee not found' });
-      return;
-    }
-
-    if (!data) {
-      console.error('[rehire] DB update failed: no row returned');
-      res.status(404).json({ success: false, error: 'Employee not found' });
+      data = await executeOperation(operation, connection);
+    } catch (error) {
+      const message = getErrorMessage(error, 'Ошибка Sigur');
+      console.error('[rehire] operation step failed', {
+        operationId: operation.id,
+        employeeId,
+        targetDepartmentId: targetDepartment.id,
+        message,
+      });
+      try {
+        await auditService.logFromRequest(req, req.user.id, 'REHIRE_EMPLOYEE', {
+          entityType: 'employee',
+          entityId: id,
+          details: {
+            operation_id: operation.id,
+            target_department_id: targetDepartment.id,
+            pending: true,
+            error: message,
+          },
+        });
+      } catch (auditErr) {
+        console.warn('[rehire] audit log failed (non-critical):', auditErr);
+      }
+      const status = getHttpErrorStatus(error);
+      if (status) {
+        res.status(status).json({
+          success: false,
+          error: message,
+          ...(getHttpErrorCode(error) ? { code: getHttpErrorCode(error) } : {}),
+        });
+        return;
+      }
+      res.status(502).json({
+        success: false,
+        error: `Не удалось завершить восстановление: ${message}. Операция сохранена и будет повторена автоматически; можно нажать «Восстановить» ещё раз.`,
+        code: 'OPERATION_PENDING',
+      });
       return;
     }
 
     employeeCache.invalidate(id);
 
-    if (existing.dismissal_date) {
-      try {
-        await insertDismissalHistory(employeeId, existing.dismissal_date, {
-          scheduled: false,
-          rehired: true,
-          createdBy: req.user.id,
-          prevDate: existing.dismissal_date,
-        });
-      } catch (historyErr) {
-        console.warn('[rehire] dismissal history insert failed (non-critical):', historyErr);
-      }
-    }
-
+    const detachedFromSigur = existing.sigur_employee_id != null && data.sigur_employee_id == null;
     try {
       await auditService.logFromRequest(req, req.user.id, 'REHIRE_EMPLOYEE', {
         entityType: 'employee',
         entityId: id,
         details: {
-          source: existing.sigur_employee_id && !sigurDetached ? 'sigur' : 'portal',
+          source: existing.sigur_employee_id && !detachedFromSigur ? 'sigur' : 'portal',
           target_department_id: targetDepartment.id,
-          detached_from_sigur: sigurDetached,
-          previous_sigur_employee_id: sigurDetached ? existing.sigur_employee_id : undefined,
+          detached_from_sigur: detachedFromSigur,
+          previous_sigur_employee_id: detachedFromSigur ? existing.sigur_employee_id : undefined,
           prev_dismissal_date: existing.dismissal_date ?? null,
+          operation_id: operation.id,
         },
       });
     } catch (auditErr) {
@@ -963,7 +743,7 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
 
     try {
       const structureCache = await loadStructureCache();
-      const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
+      const employee = decryptEmployee(data, structureCache);
       res.json({ success: true, data: employee });
     } catch (decryptErr) {
       console.warn('[rehire] decrypt/structure cache failed, returning raw row:', decryptErr);
@@ -1000,7 +780,6 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
     res.status(500).json({ success: false, error: `Не удалось восстановить сотрудника: ${message}`, detail: message });
   }
 }
-
 export async function moveDepartment(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const { id } = req.params;

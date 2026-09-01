@@ -61,7 +61,6 @@ import { resolveAccessPointNamesToIds } from '../services/contractor-access.serv
 import { enqueueRevoke, computeSubmissionStatus } from '../services/contractor-pool.service.js';
 import {
   applyDismissalImmediately,
-  insertDismissalHistory,
   loadEmployeeLifecycleRow,
   getHttpErrorStatus,
   getHttpErrorCode,
@@ -741,22 +740,19 @@ export const contractorAdminController = {
       }
 
       if (existing.employment_status !== 'fired') {
+        // Событие истории пишет durable-операция увольнения (миграция 261).
         const { fromDepartmentId } = await applyDismissalImmediately({
           employeeId,
           existing,
           dismissalDate,
           userId: req.user.id,
+          source: 'contractor_admin',
         });
         employeeCache.invalidate(employeeId);
-        await insertDismissalHistory(employeeId, dismissalDate, {
-          scheduled: false,
-          createdBy: req.user.id,
-          fromDepartmentId,
-        });
         await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
           entityType: 'employee',
           entityId: String(employeeId),
-          details: { source: 'contractor_removal', dismissal_date: dismissalDate, roster_id: rosterId },
+          details: { source: 'contractor_removal', dismissal_date: dismissalDate, roster_id: rosterId, from_department_id: fromDepartmentId },
         });
       }
 
@@ -3067,22 +3063,19 @@ export const contractorAdminController = {
       }
       const today = new Date().toISOString().slice(0, 10);
       const dismissalDate = existing.hire_date && today < existing.hire_date ? existing.hire_date : today;
+      // Событие истории пишет durable-операция увольнения (миграция 261).
       const { fromDepartmentId } = await applyDismissalImmediately({
         employeeId,
         existing,
         dismissalDate,
         userId: req.user.id,
+        source: 'contractor_admin',
       });
       employeeCache.invalidate(employeeId);
-      await insertDismissalHistory(employeeId, dismissalDate, {
-        scheduled: false,
-        createdBy: req.user.id,
-        fromDepartmentId,
-      });
       await auditService.logFromRequest(req, req.user.id, 'FIRE_EMPLOYEE', {
         entityType: 'employee',
         entityId: String(employeeId),
-        details: { source: 'contractor_duplicate_block', dismissal_date: dismissalDate, sigur_employee_id },
+        details: { source: 'contractor_duplicate_block', dismissal_date: dismissalDate, sigur_employee_id, from_department_id: fromDepartmentId },
       });
       res.json({ success: true, data: { action: 'dismissed', dry_run: false } });
     } catch (error) {

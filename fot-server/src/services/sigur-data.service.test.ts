@@ -1,6 +1,54 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SigurDataService } from './sigur-data.service.js';
 
+/**
+ * Кэш выгрузки сотрудников: инвалидация во время загрузки (rehire перенёс карточку)
+ * не должна дать старому запросу записать устаревшую выгрузку и обнулить новый promise.
+ */
+describe('SigurDataService.getEmployeesCached — generation-token', () => {
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>(r => { resolve = r; });
+    return { promise, resolve };
+  };
+
+  it('старая загрузка, завершившаяся после инвалидации, не наполняет кэш', async () => {
+    const svc = new SigurDataService();
+    const first = deferred<Record<string, unknown>[]>();
+    const second = deferred<Record<string, unknown>[]>();
+    const getEmployees = vi.spyOn(svc, 'getEmployees')
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+
+    const p1 = svc.getEmployeesCached();
+    svc.invalidateEmployeeCache();
+    const p2 = svc.getEmployeesCached();
+    expect(getEmployees).toHaveBeenCalledTimes(2);
+
+    first.resolve([{ id: 1, departmentId: 999 }]); // устаревшая: карточка ещё в архиве
+    await p1;
+    // В кэше — только пустая заготовка новой загрузки, не устаревшая выгрузка.
+    expect(svc.getEmployeesCacheSnapshot()).toEqual([]);
+    // Старый fetch не должен обнулить ссылку на идущую новую загрузку.
+    expect(svc.isEmployeeCacheLoading()).toBe(true);
+
+    second.resolve([{ id: 1, departmentId: 42 }]);
+    await p2;
+    expect(svc.getEmployeesCacheSnapshot()).toEqual([{ id: 1, departmentId: 42 }]);
+    expect(svc.isEmployeeCacheLoading()).toBe(false);
+  });
+
+  it('без инвалидации результат кэшируется как раньше', async () => {
+    const svc = new SigurDataService();
+    vi.spyOn(svc, 'getEmployees').mockResolvedValue([{ id: 7 }]);
+
+    await svc.getEmployeesCached();
+
+    expect(svc.getEmployeesCacheSnapshot()).toEqual([{ id: 7 }]);
+    expect(svc.isEmployeeCacheLoading()).toBe(false);
+  });
+});
+
 describe('SigurDataService.buildCardNumberVariants', () => {
   it('matches W26 "fac,num" with hex equivalent', () => {
     const a = SigurDataService.buildCardNumberVariants('123,45678');

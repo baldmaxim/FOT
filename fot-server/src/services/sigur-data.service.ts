@@ -41,14 +41,30 @@ export class SigurDataService extends SigurServiceBase {
   private readonly EVENT_CHUNK_OVERLAP_MS = 60 * 1000;
   private static readonly SIGUR_TIMEZONE_OFFSET_MS = 3 * 60 * 60 * 1000;
 
+  /**
+   * Поколение кэша сотрудников. Инвалидация (rehire/перенос карточки) поднимает его:
+   * уже идущая загрузка, стартовавшая до инвалидации, не имеет права записать
+   * устаревшую выгрузку (карточка ещё в «Уволенные») поверх сброшенного кэша.
+   */
+  private employeeCacheGeneration = 0;
+
   invalidateEmployeeCache(): void {
+    this.employeeCacheGeneration += 1;
     this.employeeCache = null;
     this.employeeFetchPromise = null;
     this.employeeCountCache = null;
     this.employeeCountFetchPromise = null;
   }
 
-  private setEmployeeCache(data: Record<string, unknown>[], complete: boolean): void {
+  getEmployeeCacheGeneration(): number {
+    return this.employeeCacheGeneration;
+  }
+
+  private setEmployeeCache(data: Record<string, unknown>[], complete: boolean, generation?: number): void {
+    if (generation != null && generation !== this.employeeCacheGeneration) {
+      console.warn(`[sigur] stale employee fetch discarded (generation ${generation} < ${this.employeeCacheGeneration})`);
+      return;
+    }
     this.employeeCache = {
       data: [...data],
       fetchedAt: Date.now(),
@@ -227,6 +243,8 @@ export class SigurDataService extends SigurServiceBase {
     departmentIds: number[],
     connection?: ConnectionType,
     onProgress?: (loaded: number, deptIndex: number, totalDepts: number) => void,
+    /** Поколение кэша на момент старта загрузки: промежуточные записи после инвалидации отбрасываются. */
+    cacheGeneration?: number,
   ): Promise<Record<string, unknown>[]> {
     const allEmployees: Record<string, unknown>[] = [];
     const seen = new Set<number>();
@@ -261,7 +279,7 @@ export class SigurDataService extends SigurServiceBase {
 
         completed++;
         if (completed % 12 === 0 || items.length > 0 || completed === total) {
-          this.setEmployeeCache(allEmployees, false);
+          this.setEmployeeCache(allEmployees, false, cacheGeneration);
         }
         if (onProgress) onProgress(allEmployees.length, completed, total);
       }
@@ -304,8 +322,9 @@ export class SigurDataService extends SigurServiceBase {
     }
 
     console.log('[sigur] fetching employees (no cache)...');
-    this.setEmployeeCache([], false);
-    this.employeeFetchPromise = (async () => {
+    const generation = this.employeeCacheGeneration;
+    this.setEmployeeCache([], false, generation);
+    const fetchPromise = (async () => {
       let employees: Record<string, unknown>[] = [];
 
       // Быстрый путь: один пагинированный запрос /api/v1/employees без departmentId
@@ -335,20 +354,26 @@ export class SigurDataService extends SigurServiceBase {
         const departmentIds = await this.getDepartmentIds(connection);
         if (departmentIds.length > 0) {
           console.log(`[sigur] building employee cache from ${departmentIds.length} departments`);
-          employees = await this.getEmployeesByDepartments(departmentIds, connection);
+          employees = await this.getEmployeesByDepartments(departmentIds, connection, undefined, generation);
         } else {
           console.warn('[sigur] no departments found; employee cache will be empty');
         }
       }
 
-      this.setEmployeeCache(employees, true);
+      this.setEmployeeCache(employees, true, generation);
       console.log('[sigur] cached', employees.length, 'employees');
       return employees;
-    })().finally(() => {
-      this.employeeFetchPromise = null;
+    })();
+    this.employeeFetchPromise = fetchPromise;
+    void fetchPromise.catch(() => undefined).finally(() => {
+      // Только свой promise: старая загрузка, завершившаяся после инвалидации,
+      // не должна обнулить ссылку на уже запущенную новую.
+      if (this.employeeFetchPromise === fetchPromise) {
+        this.employeeFetchPromise = null;
+      }
     });
 
-    return this.employeeFetchPromise;
+    return fetchPromise;
   }
 
   findEmployeeInCache(id: number): Record<string, unknown> | null {

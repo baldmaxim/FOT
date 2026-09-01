@@ -6,15 +6,27 @@ const h = vi.hoisted(() => ({
   execute: vi.fn(),
   txQuery: vi.fn(),
   canAccessEmployeeInScope: vi.fn(),
+  resolveScope: vi.fn(),
   logFromRequest: vi.fn(),
-  blockEmployee: vi.fn(),
-  updateSigurEmployee: vi.fn(),
   isConfigured: vi.fn(),
-  ensureArchiveSigur: vi.fn(),
-  ensureLocalArchive: vi.fn(),
   changeDepartment: vi.fn(),
-  deactivateAccess: vi.fn(),
   invalidate: vi.fn(),
+  openDismiss: vi.fn(),
+  openRehire: vi.fn(),
+  executeOp: vi.fn(),
+  DismissalSigurError: class DismissalSigurError extends Error {
+    status: number;
+    code: string;
+    movedToArchive: boolean;
+    blocked: boolean;
+    constructor(message: string, status: number, code: string, movedToArchive: boolean, blocked: boolean) {
+      super(message);
+      this.status = status;
+      this.code = code;
+      this.movedToArchive = movedToArchive;
+      this.blocked = blocked;
+    }
+  },
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -39,38 +51,42 @@ vi.mock('../services/employee-cache.service.js', () => ({
   employeeCache: { invalidate: h.invalidate },
 }));
 vi.mock('../services/employee-archive-department.service.js', () => ({
-  ensureLocalArchiveDepartment: h.ensureLocalArchive,
   isProtectedArchiveDepartment: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('../services/sigur-linked-employees.service.js', () => ({
-  ensureArchiveSigurDepartment: h.ensureArchiveSigur,
   syncLinkedEmployeeFromSigur: vi.fn(),
 }));
 vi.mock('../services/sigur.service.js', () => ({
   sigurService: {
     isConfigured: h.isConfigured,
-    updateEmployee: h.updateSigurEmployee,
-    blockEmployee: h.blockEmployee,
+    updateEmployee: vi.fn(),
+    blockEmployee: vi.fn(),
     unblockEmployee: vi.fn(),
     getDepartmentById: vi.fn(),
   },
 }));
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: h.canAccessEmployeeInScope,
-  canAccessDepartmentInScope: vi.fn(),
-  resolveRequestDataScope: vi.fn(),
+  canAccessDepartmentInScope: vi.fn().mockResolvedValue(true),
+  resolveRequestDataScope: h.resolveScope,
 }));
 vi.mock('../services/employee-department-access.service.js', () => ({
   upsertTechnicalDepartmentAccess: vi.fn(),
-  deactivateAllDepartmentAccessForEmployee: h.deactivateAccess,
 }));
 vi.mock('../services/realtime-broadcast.service.js', () => ({ emitDomainChange: vi.fn() }));
 vi.mock('../services/recipients.service.js', () => ({
   getEmployeeOwnerAndSupervisor: vi.fn().mockResolvedValue([]),
   getUserIdsByEmployeeIds: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../services/employee-lifecycle-operations.service.js', () => ({
+  DismissalSigurError: h.DismissalSigurError,
+  EMPLOYEE_LIFECYCLE_COLUMNS: 'id, employment_status, org_department_id, sigur_employee_id, dismissal_date, hire_date',
+  openDismissOperation: h.openDismiss,
+  openRehireOperation: h.openRehire,
+  executeOperation: h.executeOp,
+}));
 
-import { applyDismissalImmediately, cancelDismissal, fire } from './employee-lifecycle.controller.js';
+import { applyDismissalImmediately, cancelDismissal, fire, rehire } from './employee-lifecycle.controller.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const makeRes = () => {
@@ -101,32 +117,36 @@ const ACTIVE_EMPLOYEE = {
   dismissal_date: null,
 };
 
+const FIRED_EMPLOYEE = {
+  ...ACTIVE_EMPLOYEE,
+  employment_status: 'fired',
+  org_department_id: 'arch-1',
+  dismissal_date: '2026-05-10',
+};
+
+const DISMISS_OP = { id: 'op-dismiss-1', kind: 'dismiss', from_department_id: 'dept-1' };
+const REHIRE_OP = { id: 'op-rehire-1', kind: 'rehire', target_department_id: 'dept-2' };
+
 const CLAIMED_AT = '2026-05-20 20:00:05.123+00';
 
-const isClaimSql = (sql: string): boolean =>
-  /UPDATE employees/i.test(sql) && sql.includes('dismissal_apply_started_at = now()');
-
-/** queryOne: SELECT сотрудника, CAS-claim увольнения, дальше — по тексту запроса. */
-const routeQueryOne = (
-  updated: Record<string, unknown> | null = { ...ACTIVE_EMPLOYEE },
-  claimResult: { claimed_at: string } | null = { claimed_at: CLAIMED_AT },
-) => {
+/** queryOne: SELECT сотрудника; остальное — по тексту запроса. */
+const routeQueryOne = (employee: Record<string, unknown> = { ...ACTIVE_EMPLOYEE }) => {
   h.queryOne.mockImplementation(async (sql: string) => {
-    if (sql.trim().startsWith('SELECT')) return { ...ACTIVE_EMPLOYEE };
-    if (isClaimSql(sql)) return claimResult;
-    return updated;
+    if (sql.includes('FROM org_departments')) return { id: 'dept-2', sigur_department_id: 42, name: 'Бригада' };
+    if (sql.trim().startsWith('SELECT')) return { ...employee };
+    return { ...employee };
   });
 };
 
 describe('fire — порог 23:00 МСК', () => {
   beforeEach(() => {
-    Object.values(h).forEach(fn => fn.mockReset());
+    Object.values(h).forEach(fn => { if (typeof fn === 'function' && 'mockReset' in fn) fn.mockReset(); });
     vi.useFakeTimers();
     h.canAccessEmployeeInScope.mockResolvedValue(true);
     h.isConfigured.mockResolvedValue(true);
-    h.ensureArchiveSigur.mockResolvedValue({ sigurDepartmentId: 9, localDepartmentId: 'arch-1' });
-    h.ensureLocalArchive.mockResolvedValue({ id: 'arch-1' });
     h.execute.mockResolvedValue(undefined);
+    h.openDismiss.mockResolvedValue({ ...DISMISS_OP });
+    h.executeOp.mockResolvedValue({ ...ACTIVE_EMPLOYEE, employment_status: 'fired', org_department_id: 'arch-1' });
     // Отложенное увольнение: CAS-UPDATE + вставка события в одной транзакции.
     h.txQuery.mockImplementation(async (sql: string) => (
       sql.includes('UPDATE employees')
@@ -137,29 +157,36 @@ describe('fire — порог 23:00 МСК', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it('сегодня до 23:00 МСК → откладывает, Sigur не трогает', async () => {
+  it('сегодня до 23:00 МСК → откладывает, операцию не открывает', async () => {
     vi.setSystemTime(new Date('2026-05-20T15:00:00Z')); // 18:00 МСК
     const res = makeRes();
     await fire(makeReq({ dismissalDate: '2026-05-20' }), res as never);
 
     expect(res.statusCode).toBe(200);
-    expect(h.blockEmployee).not.toHaveBeenCalled();
-    expect(h.updateSigurEmployee).not.toHaveBeenCalled();
+    expect(h.openDismiss).not.toHaveBeenCalled();
+    expect(h.executeOp).not.toHaveBeenCalled();
     expect(h.logFromRequest).toHaveBeenCalledWith(
       expect.anything(), 'admin-1', 'FIRE_EMPLOYEE_SCHEDULED',
       expect.objectContaining({ details: expect.objectContaining({ applies_after: '23:00 MSK' }) }),
     );
   });
 
-  it('сегодня в 23:00 МСК → применяет сразу (блокирует карту)', async () => {
+  it('сегодня в 23:00 МСК → применяет сразу через durable-операцию', async () => {
     vi.setSystemTime(new Date('2026-05-20T20:00:00Z')); // 23:00 МСК
     const res = makeRes();
     await fire(makeReq({ dismissalDate: '2026-05-20' }), res as never);
 
     expect(res.statusCode).toBe(200);
-    expect(h.blockEmployee).toHaveBeenCalledWith(555, undefined);
+    expect(h.openDismiss).toHaveBeenCalledWith(expect.objectContaining({
+      employeeId: 77, dismissalDate: '2026-05-20', source: 'manual', claimedAt: null, sigurSteps: 'full',
+    }));
+    expect(h.executeOp).toHaveBeenCalledWith(expect.objectContaining({ id: 'op-dismiss-1' }), undefined);
+    // Событие истории пишет операция — контроллер его не дублирует.
+    expect(h.execute).not.toHaveBeenCalledWith(expect.stringContaining('employee_dismissal_events'), expect.anything());
+    expect(h.txQuery).not.toHaveBeenCalled();
     expect(h.logFromRequest).toHaveBeenCalledWith(
-      expect.anything(), 'admin-1', 'FIRE_EMPLOYEE', expect.anything(),
+      expect.anything(), 'admin-1', 'FIRE_EMPLOYEE',
+      expect.objectContaining({ details: expect.objectContaining({ from_department_id: 'dept-1' }) }),
     );
   });
 
@@ -168,7 +195,7 @@ describe('fire — порог 23:00 МСК', () => {
     const res = makeRes();
     await fire(makeReq({ dismissalDate: '2026-05-19' }), res as never);
 
-    expect(h.blockEmployee).toHaveBeenCalled();
+    expect(h.executeOp).toHaveBeenCalled();
   });
 
   it('будущая дата → откладывает', async () => {
@@ -176,10 +203,10 @@ describe('fire — порог 23:00 МСК', () => {
     const res = makeRes();
     await fire(makeReq({ dismissalDate: '2026-05-25' }), res as never);
 
-    expect(h.blockEmployee).not.toHaveBeenCalled();
+    expect(h.executeOp).not.toHaveBeenCalled();
   });
 
-  it('отложенное увольнение: CAS по active + отсутствию claim, событие в той же транзакции', async () => {
+  it('отложенное увольнение: CAS по active + отсутствию claim, revision + событие в той же транзакции', async () => {
     vi.setSystemTime(new Date('2026-05-20T09:00:00Z'));
     const res = makeRes();
     await fire(makeReq({ dismissalDate: '2026-05-25' }), res as never);
@@ -188,6 +215,10 @@ describe('fire — порог 23:00 МСК', () => {
     expect(updateCall).toBeDefined();
     expect(String(updateCall![0])).toContain("employment_status = 'active'");
     expect(String(updateCall![0])).toContain('dismissal_apply_started_at IS NULL');
+    // Назначение даты — lifecycle-переход: версия растёт, stale-решение синка станет noop.
+    expect(String(updateCall![0])).toContain('lifecycle_revision = lifecycle_revision + 1');
+    // Повтор с той же датой не должен пройти как изменение.
+    expect(String(updateCall![0])).toContain('dismissal_date IS DISTINCT FROM $1::date');
     // Событие истории пишется тем же соединением — иначе правка и история разъезжаются.
     expect(h.txQuery.mock.calls.some(([sql]) => String(sql).includes('employee_dismissal_events'))).toBe(true);
     expect(h.execute).not.toHaveBeenCalledWith(
@@ -196,11 +227,24 @@ describe('fire — порог 23:00 МСК', () => {
     );
   });
 
+  it('повтор с той же датой → 200 без события и без новой версии (идемпотентно)', async () => {
+    vi.setSystemTime(new Date('2026-05-20T09:00:00Z'));
+    h.txQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('UPDATE employees')) return { rows: [], rowCount: 0 };
+      if (sql.trim().startsWith('SELECT')) return { rows: [{ ...ACTIVE_EMPLOYEE, dismissal_date: '2026-05-25' }], rowCount: 1 };
+      return { rows: [], rowCount: 1 };
+    });
+    const res = makeRes();
+    await fire(makeReq({ dismissalDate: '2026-05-25' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.txQuery.mock.calls.some(([sql]) => String(sql).includes('employee_dismissal_events'))).toBe(false);
+    expect(h.logFromRequest).not.toHaveBeenCalled();
+  });
+
   it('гонка: сотрудника уже уволили/увольняют → 409, событие не пишется', async () => {
     vi.setSystemTime(new Date('2026-05-20T09:00:00Z'));
-    h.txQuery.mockImplementation(async (sql: string) => (
-      sql.includes('UPDATE employees') ? { rows: [], rowCount: 0 } : { rows: [], rowCount: 1 }
-    ));
+    h.txQuery.mockImplementation(async () => ({ rows: [], rowCount: 0 }));
     const res = makeRes();
     await fire(makeReq({ dismissalDate: '2026-05-25' }), res as never);
 
@@ -216,19 +260,29 @@ describe('fire — порог 23:00 МСК', () => {
 
     // По UTC это «завтра», по МСК — «сегодня до 23:00»: в обоих случаях откладываем,
     // но применяться должно с 23:00 МСК 20-го, а не 19-го.
-    expect(h.blockEmployee).not.toHaveBeenCalled();
+    expect(h.executeOp).not.toHaveBeenCalled();
+  });
+
+  it('ошибка Sigur внутри операции → ответ с кодом частичного применения, операция остаётся pending', async () => {
+    vi.setSystemTime(new Date('2026-05-20T20:00:00Z'));
+    h.executeOp.mockRejectedValue(new h.DismissalSigurError('block failed', 502, 'SIGUR_PARTIAL_FAILURE', true, false));
+    const res = makeRes();
+    await fire(makeReq({ dismissalDate: '2026-05-20' }), res as never);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.body).toMatchObject({ success: false, code: 'SIGUR_PARTIAL_FAILURE' });
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'FIRE_EMPLOYEE',
+      expect.objectContaining({ details: expect.objectContaining({ partial_failure: true, movedToArchive: true }) }),
+    );
   });
 });
 
-describe('applyDismissalImmediately — CAS-claim увольнения', () => {
+describe('applyDismissalImmediately — обёртка над durable-операцией', () => {
   beforeEach(() => {
-    Object.values(h).forEach(fn => fn.mockReset());
-    h.isConfigured.mockResolvedValue(true);
-    h.ensureArchiveSigur.mockResolvedValue({ sigurDepartmentId: 9, localDepartmentId: 'arch-1' });
-    h.ensureLocalArchive.mockResolvedValue({ id: 'arch-1' });
-    h.changeDepartment.mockResolvedValue('applied');
-    h.execute.mockResolvedValue(undefined);
-    routeQueryOne();
+    Object.values(h).forEach(fn => { if (typeof fn === 'function' && 'mockReset' in fn) fn.mockReset(); });
+    h.openDismiss.mockResolvedValue({ ...DISMISS_OP });
+    h.executeOp.mockResolvedValue({ ...ACTIVE_EMPLOYEE, employment_status: 'fired' });
   });
 
   const callApply = (overrides: Record<string, unknown> = {}) =>
@@ -240,68 +294,57 @@ describe('applyDismissalImmediately — CAS-claim увольнения', () => {
       ...overrides,
     });
 
-  it('ручной вызов: claim и dismissal_date пишутся одним UPDATE через CAS', async () => {
-    await callApply();
+  it('ручной вызов: операция открывается с claim (claimedAt=null), source=manual, затем исполняется', async () => {
+    const result = await callApply();
 
-    const claimCall = h.queryOne.mock.calls.find(c => isClaimSql(String(c[0])));
-    expect(claimCall).toBeTruthy();
-    const sql = String(claimCall![0]);
-    // Атомарно: маркер + дата в одном UPDATE (падение между Sigur и локальной
-    // записью не оставит сотрудника active без dismissal_date).
-    expect(sql).toContain('dismissal_apply_started_at = now()');
-    expect(sql).toContain('dismissal_date = $2');
-    // CAS: чужой свежий claim не перезаписывается.
-    expect(sql).toContain('dismissal_apply_started_at IS NULL');
-    expect(sql).toMatch(/dismissal_apply_started_at < now\(\)/);
-    expect(claimCall![1]).toEqual([77, '2026-05-20', '30']);
+    expect(h.openDismiss).toHaveBeenCalledWith({
+      employeeId: 77,
+      dismissalDate: '2026-05-20',
+      source: 'manual',
+      createdBy: 'admin-1',
+      connection: undefined,
+      claimedAt: null,
+      sigurSteps: 'full',
+    });
+    expect(h.executeOp).toHaveBeenCalledWith(expect.objectContaining({ id: 'op-dismiss-1' }), undefined);
+    expect(result.fromDepartmentId).toBe('dept-1');
+    expect(result.employee).toMatchObject({ employment_status: 'fired' });
   });
 
-  it('claim не захвачен (чужой активный) → 409, Sigur не трогается', async () => {
-    routeQueryOne({ ...ACTIVE_EMPLOYEE }, null);
+  it('планировщик передал claimedAt → source=scheduler, claim не перезахватывается', async () => {
+    await callApply({ claimedAt: CLAIMED_AT });
 
-    await expect(callApply()).rejects.toMatchObject({ status: 409 });
-    expect(h.updateSigurEmployee).not.toHaveBeenCalled();
-    expect(h.blockEmployee).not.toHaveBeenCalled();
+    expect(h.openDismiss).toHaveBeenCalledWith(expect.objectContaining({ claimedAt: CLAIMED_AT, source: 'scheduler' }));
   });
 
-  it('планировщик передал claimedAt → метод НЕ перезахватывает claim (нет ложного 409)', async () => {
-    routeQueryOne({ ...ACTIVE_EMPLOYEE }, null); // CAS вернул бы конфликт, но он не должен вызываться
+  it('явный source (contractor_admin) сохраняется', async () => {
+    await callApply({ source: 'contractor_admin' });
 
-    await expect(callApply({ claimedAt: CLAIMED_AT })).resolves.toBeTruthy();
-    const claimCall = h.queryOne.mock.calls.find(c => isClaimSql(String(c[0])));
-    expect(claimCall).toBeUndefined();
+    expect(h.openDismiss).toHaveBeenCalledWith(expect.objectContaining({ source: 'contractor_admin' }));
   });
 
-  it('полная ошибка Sigur (перенос не выполнен) → снимает СВОЙ claim и восстанавливает прежний dismissal_date', async () => {
-    h.updateSigurEmployee.mockRejectedValue(new Error('sigur down'));
+  it('операция уже выполняется (409 при открытии) → ошибка со status, исполнение не запускается', async () => {
+    h.openDismiss.mockRejectedValue(Object.assign(new Error('уже применяется'), { status: 409, code: 'OPERATION_IN_PROGRESS' }));
 
-    await expect(callApply()).rejects.toMatchObject({ code: 'SIGUR_WRITE_FAILED' });
-
-    const release = h.execute.mock.calls.find(c => String(c[0]).includes('dismissal_apply_started_at = NULL'));
-    expect(release).toBeTruthy();
-    // Освобождение только собственного claim по точному timestamp + возврат прежней даты (null).
-    expect(String(release![0])).toContain('dismissal_apply_started_at = $2::timestamptz');
-    expect(release![1]).toEqual([77, CLAIMED_AT, null]);
+    await expect(callApply()).rejects.toMatchObject({ status: 409, code: 'OPERATION_IN_PROGRESS' });
+    expect(h.executeOp).not.toHaveBeenCalled();
   });
 
-  it('частичная ошибка Sigur (перенесён, но не заблокирован) → claim НЕ снимается (повтор после lease)', async () => {
-    h.blockEmployee.mockRejectedValue(new Error('block failed'));
+  it('ошибка Sigur при исполнении → DismissalSigurError наружу с признаками шагов', async () => {
+    h.executeOp.mockRejectedValue(new h.DismissalSigurError('sigur down', 500, 'SIGUR_WRITE_FAILED', false, false));
 
-    await expect(callApply()).rejects.toMatchObject({ code: 'SIGUR_PARTIAL_FAILURE' });
-
-    const release = h.execute.mock.calls.find(c => String(c[0]).includes('dismissal_apply_started_at = NULL'));
-    expect(release).toBeUndefined();
+    await expect(callApply()).rejects.toMatchObject({ code: 'SIGUR_WRITE_FAILED', movedToArchive: false });
   });
 });
 
 describe('cancelDismissal — гонка с планировщиком', () => {
   beforeEach(() => {
-    Object.values(h).forEach(fn => fn.mockReset());
+    Object.values(h).forEach(fn => { if (typeof fn === 'function' && 'mockReset' in fn) fn.mockReset(); });
     h.canAccessEmployeeInScope.mockResolvedValue(true);
     h.execute.mockResolvedValue(undefined);
   });
 
-  it('claim не выставлен → отменяет', async () => {
+  it('claim не выставлен → отменяет и поднимает lifecycle_revision', async () => {
     h.queryOne.mockImplementation(async (sql: string) => {
       if (sql.trim().startsWith('SELECT')) return { ...ACTIVE_EMPLOYEE, dismissal_date: '2026-05-20' };
       return { ...ACTIVE_EMPLOYEE, dismissal_date: null };
@@ -312,6 +355,7 @@ describe('cancelDismissal — гонка с планировщиком', () => {
     expect(res.statusCode).toBe(200);
     const updateSql = h.queryOne.mock.calls[1][0] as string;
     expect(updateSql).toContain('dismissal_apply_started_at IS NULL');
+    expect(updateSql).toContain('lifecycle_revision = lifecycle_revision + 1');
   });
 
   it('планировщик уже захватил запись (UPDATE вернул 0 строк) → 409', async () => {
@@ -324,5 +368,98 @@ describe('cancelDismissal — гонка с планировщиком', () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.body).toMatchObject({ success: false });
+  });
+});
+
+describe('rehire — durable-операция восстановления', () => {
+  beforeEach(() => {
+    Object.values(h).forEach(fn => { if (typeof fn === 'function' && 'mockReset' in fn) fn.mockReset(); });
+    h.canAccessEmployeeInScope.mockResolvedValue(true);
+    h.resolveScope.mockResolvedValue('all');
+    h.isConfigured.mockResolvedValue(true);
+    h.openRehire.mockResolvedValue({ ...REHIRE_OP });
+    h.executeOp.mockResolvedValue({ ...ACTIVE_EMPLOYEE, org_department_id: 'dept-2', dismissal_date: null });
+    routeQueryOne({ ...FIRED_EMPLOYEE });
+  });
+
+  it('уволенный → операция открывается ДО Sigur с целью из отдела, исполняется, аудит с operation_id', async () => {
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.openRehire).toHaveBeenCalledWith({
+      employeeId: 77,
+      targetDepartmentId: 'dept-2',
+      targetSigurDepartmentId: 42,
+      createdBy: 'admin-1',
+    });
+    expect(h.executeOp).toHaveBeenCalledWith(expect.objectContaining({ id: 'op-rehire-1' }), undefined);
+    // Контроллер сам ничего не пишет в employees/историю — всё внутри операции.
+    expect(h.execute).not.toHaveBeenCalled();
+    expect(h.changeDepartment).not.toHaveBeenCalled();
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'REHIRE_EMPLOYEE',
+      expect.objectContaining({
+        details: expect.objectContaining({
+          operation_id: 'op-rehire-1', source: 'sigur', detached_from_sigur: false, prev_dismissal_date: '2026-05-10',
+        }),
+      }),
+    );
+  });
+
+  it('сотрудник не уволен → 409, операция не открывается', async () => {
+    routeQueryOne({ ...ACTIVE_EMPLOYEE });
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'NOT_FIRED' });
+    expect(h.openRehire).not.toHaveBeenCalled();
+    expect(h.executeOp).not.toHaveBeenCalled();
+  });
+
+  it('ошибка Sigur при исполнении → 502 OPERATION_PENDING, операция сохранена, аудит pending', async () => {
+    h.executeOp.mockRejectedValue(new Error('sigur down'));
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(502);
+    expect(res.body).toMatchObject({ success: false, code: 'OPERATION_PENDING' });
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'REHIRE_EMPLOYEE',
+      expect.objectContaining({ details: expect.objectContaining({ operation_id: 'op-rehire-1', pending: true }) }),
+    );
+  });
+
+  it('операцию уже выполняет другой исполнитель → 409 из исполнителя пробрасывается', async () => {
+    h.executeOp.mockRejectedValue(Object.assign(new Error('выполняется'), { status: 409, code: 'OPERATION_IN_PROGRESS' }));
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'OPERATION_IN_PROGRESS' });
+  });
+
+  it('открытие вернуло 409 (rehire в другой отдел уже идёт) → 409, исполнение не запускается', async () => {
+    h.openRehire.mockRejectedValue(Object.assign(new Error('другой отдел'), { status: 409, code: 'OPERATION_IN_PROGRESS' }));
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.executeOp).not.toHaveBeenCalled();
+  });
+
+  it('отвязка от Sigur внутри операции отражается в аудите (detached_from_sigur)', async () => {
+    h.executeOp.mockResolvedValue({ ...ACTIVE_EMPLOYEE, org_department_id: 'dept-2', sigur_employee_id: null });
+    const res = makeRes();
+    await rehire(makeReq({ org_department_id: 'dept-2' }), res as never);
+
+    expect(res.statusCode).toBe(200);
+    expect(h.logFromRequest).toHaveBeenCalledWith(
+      expect.anything(), 'admin-1', 'REHIRE_EMPLOYEE',
+      expect.objectContaining({
+        details: expect.objectContaining({ source: 'portal', detached_from_sigur: true, previous_sigur_employee_id: 555 }),
+      }),
+    );
   });
 });

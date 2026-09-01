@@ -5,9 +5,9 @@ import { auditService } from './audit.service.js';
 import { employeeCache } from './employee-cache.service.js';
 import {
   applyDismissalImmediately,
-  insertDismissalHistory,
   loadEmployeeLifecycleRow,
 } from '../controllers/employee-lifecycle.controller.js';
+import { resumeExpiredOperations } from './employee-lifecycle-operations.service.js';
 import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js';
 
 const TICK_INTERVAL_MS = 5 * 60_000;
@@ -83,6 +83,7 @@ async function applyForEmployee(employeeId: number, claimedAt: string): Promise<
   const dismissalDate = existing.dismissal_date;
 
   try {
+    // Событие истории (applied_from_scheduled) пишет durable-операция (source='scheduler').
     const { fromDepartmentId } = await applyDismissalImmediately({
       employeeId,
       existing,
@@ -90,15 +91,9 @@ async function applyForEmployee(employeeId: number, claimedAt: string): Promise<
       userId: null,
       // Claim уже захвачен claimNextDueEmployee — метод не должен перезахватывать его (ложный 409).
       claimedAt,
+      source: 'scheduler',
     });
     employeeCache.invalidate(employeeId);
-
-    await insertDismissalHistory(employeeId, dismissalDate, {
-      scheduled: false,
-      appliedFromScheduled: true,
-      createdBy: null,
-      fromDepartmentId,
-    });
 
     await auditService.log({
       user_id: null,
@@ -109,6 +104,7 @@ async function applyForEmployee(employeeId: number, claimedAt: string): Promise<
         dismissal_date: dismissalDate,
         source: existing.sigur_employee_id ? 'sigur' : 'portal',
         triggered_by: 'scheduler',
+        from_department_id: fromDepartmentId,
       },
     });
 
@@ -141,6 +137,15 @@ async function runCycle(): Promise<void> {
             // dueCutoff: сегодня — только после 23:00 МСК, иначе вчера.
             const { dueCutoff } = getMoscowDismissalTiming();
             const startedAt = Date.now();
+
+            // Сначала — незавершённые durable-операции (увольнение/восстановление/repair),
+            // упавшие между шагами или оставшиеся без исполнителя: их lease истёк.
+            try {
+              await resumeExpiredOperations();
+            } catch (resumeErr) {
+              console.error('[dismissal-scheduler] resume lifecycle operations failed:', resumeErr);
+              Sentry.captureException(resumeErr, { tags: { service: 'dismissal-scheduler', stage: 'resume-ops' } });
+            }
 
             for (let processed = 0; processed < MAX_PER_CYCLE; processed++) {
               if (Date.now() - startedAt > CYCLE_BUDGET_MS) {

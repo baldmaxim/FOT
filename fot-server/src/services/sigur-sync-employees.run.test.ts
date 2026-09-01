@@ -21,6 +21,12 @@ const h = vi.hoisted(() => ({
   batchMove: vi.fn(),
   auditLog: vi.fn(),
   upsertAccess: vi.fn(),
+  getGuards: vi.fn(),
+  probe: vi.fn(),
+  openDismiss: vi.fn(),
+  executeOp: vi.fn(),
+  openRepair: vi.fn(),
+  resetRehireMove: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -46,12 +52,33 @@ vi.mock('./sigur-live-employees-crud.service.js', () => ({ batchMoveSigurEmploye
 vi.mock('./audit.service.js', () => ({ auditService: { log: h.auditLog } }));
 vi.mock('./employee-department-access.service.js', () => ({
   upsertTechnicalDepartmentAccess: h.upsertAccess,
+  deactivateAllDepartmentAccessForEmployee: vi.fn(),
 }));
 vi.mock('./employee-cache.service.js', () => ({ employeeCache: { invalidate: vi.fn() } }));
 vi.mock('./presence-polling-cache.service.js', () => ({
   invalidatePresencePollingEmployeeCache: vi.fn(),
 }));
 vi.mock('./timekeeper-scope.service.js', () => ({ invalidateTimekeeperScopeCache: vi.fn() }));
+vi.mock('./sigur-linked-employees.service.js', () => ({
+  ensureArchiveSigurDepartment: vi.fn(),
+  syncLinkedEmployeeFromSigur: vi.fn(),
+}));
+// Исполнитель durable-операций мокаем целиком (кроме чистых функций): синк должен лишь
+// правильно открыть/запустить операцию, сама операция тестируется отдельно.
+vi.mock('./employee-lifecycle-operations.service.js', async () => {
+  const actual = await vi.importActual<typeof import('./employee-lifecycle-operations.service.js')>(
+    './employee-lifecycle-operations.service.js',
+  );
+  return {
+    ...actual,
+    getLifecycleGuards: h.getGuards,
+    probeSigurCard: h.probe,
+    openDismissOperation: h.openDismiss,
+    executeOperation: h.executeOp,
+    openRepairOperation: h.openRepair,
+    resetPendingRehireSigurMove: h.resetRehireMove,
+  };
+});
 vi.mock('./sigur-sync-shared.js', async () => {
   const actual = await vi.importActual<typeof import('./sigur-sync-shared.js')>('./sigur-sync-shared.js');
   return {
@@ -63,6 +90,7 @@ vi.mock('./sigur-sync-shared.js', async () => {
 });
 
 import { syncEmployeesLogic } from './sigur-sync-employees.service.js';
+import { LifecycleOperationError, type ILifecycleGuard } from './employee-lifecycle-operations.service.js';
 
 const ARCHIVE_LOCAL = 'local-archive-uuid';
 const ARCHIVE_SIGUR = 142094;
@@ -84,6 +112,7 @@ interface IDbEmployee {
   middle_name?: string | null;
   dismissal_date: string | null;
   is_archived?: boolean;
+  lifecycle_revision?: number;
 }
 
 const dbEmployee = (over: Partial<IDbEmployee> = {}): IDbEmployee => ({
@@ -101,8 +130,27 @@ const dbEmployee = (over: Partial<IDbEmployee> = {}): IDbEmployee => ({
   first_name: 'Улугбек',
   middle_name: 'Туракулович',
   dismissal_date: null,
+  lifecycle_revision: 3,
   ...over,
 });
+
+/** Гард lifecycle по умолчанию: без операций, без недавнего rehire, без метки отсутствия. */
+const guardOf = (over: Partial<ILifecycleGuard> & { employee_id: number }): ILifecycleGuard => ({
+  employment_status: 'active',
+  lifecycle_revision: 3,
+  pending_kind: null,
+  pending_operation_id: null,
+  pending_target_sigur_department_id: null,
+  last_rehire_applied_at: null,
+  last_rehire_target_department_id: null,
+  last_rehire_target_sigur_department_id: null,
+  absence_revision: null,
+  absence_first_seen_at: null,
+  absence_strikes: null,
+  ...over,
+});
+
+const mskToday = (): string => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
 
 /** Роутер моков `query` по характерным фрагментам SQL. */
 const setupQueries = (opts: {
@@ -143,12 +191,25 @@ const setupQueries = (opts: {
       return {
         org_department_id: opts.freshDeptId ?? ARCHIVE_LOCAL,
         employment_status: opts.freshStatus ?? 'fired',
-        dismissal_date: '2026-08-12',
+        // Как в БД-фикстуре: у активного без назначенного увольнения — null
+        // (иначе decideDeptSyncAction уйдёт в skip-local-dismissal).
+        dismissal_date: opts.employees[0]?.dismissal_date ?? null,
         dismissal_apply_started_at: null,
+        lifecycle_revision: 3,
       };
     }
     return null;
   });
+
+  // Гарды по умолчанию — из состояния сотрудника в БД-фикстуре.
+  h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => {
+    const e = opts.employees.find(x => x.id === id);
+    return [id, guardOf({
+      employee_id: id,
+      employment_status: e?.employment_status ?? 'active',
+      lifecycle_revision: e?.lifecycle_revision ?? 3,
+    })];
+  })));
 };
 
 /** Собирает SQL и параметры всех запросов, выполненных внутри withTransaction. */
@@ -180,22 +241,33 @@ describe('syncEmployeesLogic — увольнения', () => {
     h.changePosition.mockResolvedValue(undefined);
     h.batchMove.mockResolvedValue({ moved: 1, requested: 1, failedIds: [] });
     h.execute.mockResolvedValue(1);
+    // По умолчанию точечная проба: карточки нет (404).
+    h.probe.mockResolvedValue({ state: 'deleted', departmentId: null });
+    h.openDismiss.mockImplementation(async (input: { employeeId: number }) => ({ id: `op-${input.employeeId}`, kind: 'dismiss', employee_id: input.employeeId }));
+    h.executeOp.mockResolvedValue({ id: 0 });
+    h.openRepair.mockResolvedValue(null);
+    h.resetRehireMove.mockResolvedValue(true);
     collectTransactionQueries();
   });
 
+  const sigurCard = (over: Record<string, unknown> = {}) => ({
+    id: 91831, name: 'Аллакулов Улугбек Туракулович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '05510', ...over,
+  });
+  const OTHER_CARD = { id: 777, name: 'Иванов Иван Иванович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '1' };
+
   it('уволенный, которого Sigur отдаёт в бригаде: без реактивации, с фиксацией расхождения', async () => {
     setupQueries({ employees: [dbEmployee({ employment_status: 'fired', org_department_id: ARCHIVE_LOCAL, dismissal_date: '2026-08-12' })] });
-    h.getEmployeesCached.mockResolvedValue([
-      { id: 91831, name: 'Аллакулов Улугбек Туракулович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '05510' },
-    ]);
+    h.getEmployeesCached.mockResolvedValue([sigurCard()]);
 
     const result = await syncEmployeesLogic();
 
     expect(result.fired_mismatch_detected).toBe(1);
     // Расхождение устранено переносом в архивную папку Sigur тем же прогоном.
     expect(result.fired_mismatch_unresolved).toBe(0);
+    expect(h.batchMove).toHaveBeenCalledWith([91831], ARCHIVE_SIGUR, undefined);
     expect(h.changeDepartment).not.toHaveBeenCalled();
     expect(h.changePosition).not.toHaveBeenCalled();
+    expect(h.openDismiss).not.toHaveBeenCalled();
     // Ни один UPDATE не выставляет сотруднику active.
     const statusUpdates = h.execute.mock.calls.filter(([sql]) => String(sql).includes('employment_status'));
     expect(statusUpdates).toHaveLength(0);
@@ -205,9 +277,7 @@ describe('syncEmployeesLogic — увольнения', () => {
   it('пустая архивная настройка: реактивации по-прежнему нет, расхождение остаётся нерешённым', async () => {
     h.getSigurSettings.mockResolvedValue({ archiveDepartmentId: null });
     setupQueries({ employees: [dbEmployee({ employment_status: 'fired', org_department_id: ARCHIVE_LOCAL, dismissal_date: '2026-08-12' })] });
-    h.getEmployeesCached.mockResolvedValue([
-      { id: 91831, name: 'Аллакулов Улугбек Туракулович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '05510' },
-    ]);
+    h.getEmployeesCached.mockResolvedValue([sigurCard()]);
 
     const result = await syncEmployeesLogic();
 
@@ -229,15 +299,135 @@ describe('syncEmployeesLogic — увольнения', () => {
       freshDeptId: ARCHIVE_LOCAL,
     });
     // Sigur отдаёт того же архивного отдела, но с другой должностью.
-    h.getEmployeesCached.mockResolvedValue([
-      { id: 91831, name: 'Аллакулов Улугбек Туракулович', departmentId: ARCHIVE_SIGUR, positionId: 501, position: 'Маляр', tabId: '05510' },
-    ]);
+    h.getEmployeesCached.mockResolvedValue([sigurCard({ departmentId: ARCHIVE_SIGUR })]);
 
     await syncEmployeesLogic();
 
     expect(h.changePosition).not.toHaveBeenCalled();
     expect(h.changeDepartment).not.toHaveBeenCalled();
+    expect(h.openDismiss).not.toHaveBeenCalled();
   });
+
+  // ─── Увольнение по архивной папке Sigur (archive-fire) ───
+
+  it('карточка в архивной папке: увольнение — durable-операция source=sigur_archive по свежей версии', async () => {
+    setupQueries({
+      employees: [dbEmployee({ employment_status: 'active', org_department_id: BRIGADE_LOCAL, dismissal_date: null })],
+      freshStatus: 'active',
+      freshDeptId: BRIGADE_LOCAL,
+    });
+    h.getEmployeesCached.mockResolvedValue([sigurCard({ departmentId: ARCHIVE_SIGUR })]);
+    h.probe.mockResolvedValue({ state: 'archived', departmentId: ARCHIVE_SIGUR });
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.archive_fired).toBe(1);
+    expect(h.probe).toHaveBeenCalledWith(91831, ARCHIVE_SIGUR, undefined);
+    expect(h.openDismiss).toHaveBeenCalledWith(expect.objectContaining({
+      employeeId: 128,
+      source: 'sigur_archive',
+      sigurSteps: 'access_only',
+      expectedRevision: 3,
+      dismissalDate: mskToday(),
+      effectiveDate: mskToday(),
+      createdBy: null,
+    }));
+    expect(h.executeOp).toHaveBeenCalledWith(expect.objectContaining({ id: 'op-128' }), undefined);
+    // Синк сам не трогает историю/employees/техдоступ — всё внутри операции.
+    expect(h.changeDepartment).not.toHaveBeenCalled();
+    expect(h.upsertAccess).not.toHaveBeenCalled();
+    expect(h.execute).not.toHaveBeenCalledWith(expect.stringContaining('employee_dismissal_events'), expect.anything());
+    const statusUpdates = h.execute.mock.calls.filter(([sql]) => String(sql).includes("employment_status = 'fired'"));
+    expect(statusUpdates).toHaveLength(0);
+  });
+
+  it('карточка в архиве по выгрузке, но точечно — рабочий отдел (устаревшая выгрузка): не увольняем', async () => {
+    setupQueries({
+      employees: [dbEmployee({ employment_status: 'active', org_department_id: BRIGADE_LOCAL, dismissal_date: null })],
+      freshStatus: 'active',
+      freshDeptId: BRIGADE_LOCAL,
+    });
+    h.getEmployeesCached.mockResolvedValue([sigurCard({ departmentId: ARCHIVE_SIGUR })]);
+    h.probe.mockResolvedValue({ state: 'working', departmentId: BRIGADE_SIGUR });
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.archive_fired).toBe(0);
+    expect(result.archive_fire_skipped_stale).toBe(1);
+    expect(h.openDismiss).not.toHaveBeenCalled();
+    expect(h.changeDepartment).not.toHaveBeenCalled();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('точечная проба не удалась (timeout/5xx): консервативный skip с ошибкой в отчёте', async () => {
+    setupQueries({
+      employees: [dbEmployee({ employment_status: 'active', org_department_id: BRIGADE_LOCAL, dismissal_date: null })],
+      freshStatus: 'active',
+      freshDeptId: BRIGADE_LOCAL,
+    });
+    h.getEmployeesCached.mockResolvedValue([sigurCard({ departmentId: ARCHIVE_SIGUR })]);
+    h.probe.mockResolvedValue({ state: 'unknown', departmentId: null, error: 'timeout' });
+
+    const result = await syncEmployeesLogic();
+
+    expect(h.openDismiss).not.toHaveBeenCalled();
+    expect(result.errors.some(e => e.includes('archive-fire') && e.includes('unknown'))).toBe(true);
+  });
+
+  it('pending-операция (rehire в полёте) защищает от увольнения по архивной папке', async () => {
+    setupQueries({
+      employees: [dbEmployee({ employment_status: 'active', org_department_id: BRIGADE_LOCAL, dismissal_date: null })],
+      freshStatus: 'active',
+      freshDeptId: BRIGADE_LOCAL,
+    });
+    h.getEmployeesCached.mockResolvedValue([sigurCard({ departmentId: ARCHIVE_SIGUR })]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id, pending_kind: 'rehire', pending_operation_id: 'op-rehire',
+    })])));
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.archive_fire_skipped_protected).toBe(1);
+    expect(h.probe).not.toHaveBeenCalled();
+    expect(h.openDismiss).not.toHaveBeenCalled();
+  });
+
+  it('недавний rehire (< 60 мин) защищает от увольнения по архивной папке (лаг Sigur)', async () => {
+    setupQueries({
+      employees: [dbEmployee({ employment_status: 'active', org_department_id: BRIGADE_LOCAL, dismissal_date: null })],
+      freshStatus: 'active',
+      freshDeptId: BRIGADE_LOCAL,
+    });
+    h.getEmployeesCached.mockResolvedValue([sigurCard({ departmentId: ARCHIVE_SIGUR })]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id, last_rehire_applied_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+    })])));
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.archive_fire_skipped_protected).toBe(1);
+    expect(h.openDismiss).not.toHaveBeenCalled();
+  });
+
+  it('гонка: версия ушла между решением и открытием операции (CAS) → skip без ошибки', async () => {
+    setupQueries({
+      employees: [dbEmployee({ employment_status: 'active', org_department_id: BRIGADE_LOCAL, dismissal_date: null })],
+      freshStatus: 'active',
+      freshDeptId: BRIGADE_LOCAL,
+    });
+    h.getEmployeesCached.mockResolvedValue([sigurCard({ departmentId: ARCHIVE_SIGUR })]);
+    h.probe.mockResolvedValue({ state: 'archived', departmentId: ARCHIVE_SIGUR });
+    h.openDismiss.mockRejectedValue(new LifecycleOperationError(409, 'Состояние изменилось', 'STATE_CHANGED'));
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.archive_fired).toBe(0);
+    expect(result.archive_fire_skipped_stale).toBe(1);
+    expect(h.executeOp).not.toHaveBeenCalled();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  // ─── Auto-fire: карточки нет в выгрузке ───
 
   it('auto-fire не трогает сотрудника с уже назначенным увольнением', async () => {
     setupQueries({
@@ -247,62 +437,239 @@ describe('syncEmployeesLogic — увольнения', () => {
       ],
     });
     // Обоих нет в выгрузке Sigur, но у обоих назначено увольнение.
-    h.getEmployeesCached.mockResolvedValue([
-      { id: 777, name: 'Иванов Иван Иванович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '1' },
-    ]);
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
 
     const result = await syncEmployeesLogic();
 
     expect(result.auto_fired).toBe(0);
-    expect(h.withTransaction).not.toHaveBeenCalled();
+    expect(h.probe).not.toHaveBeenCalled();
+    expect(h.openDismiss).not.toHaveBeenCalled();
   });
 
-  it('auto-fire увольняет МСК-датой, с исключением из табеля со следующего дня', async () => {
-    const txCalls = collectTransactionQueries();
+  it('auto-fire, первый такт: 404 только ставит метку отсутствия — увольнения нет', async () => {
     setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null })] });
-    h.getEmployeesCached.mockResolvedValue([
-      { id: 777, name: 'Иванов Иван Иванович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '1' },
-    ]);
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.auto_fired).toBe(0);
+    expect(result.auto_fire_deferred).toBe(1);
+    expect(h.probe).toHaveBeenCalledWith(125203, ARCHIVE_SIGUR, undefined);
+    expect(h.openDismiss).not.toHaveBeenCalled();
+    const mark = h.execute.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO employee_sigur_absence_marks'));
+    expect(mark).toBeDefined();
+    expect(mark![1]).toEqual([921, 125203, 3]);
+  });
+
+  it('auto-fire, второй такт: старая метка с той же версией + повторный 404 → увольнение операцией sigur_missing', async () => {
+    setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null })] });
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id,
+      absence_revision: 3,
+      absence_first_seen_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+      absence_strikes: 1,
+    })])));
 
     const result = await syncEmployeesLogic();
 
     expect(result.auto_fired).toBe(1);
-    const fireCall = txCalls.find(c => c.sql.includes("employment_status = 'fired'"));
-    expect(fireCall).toBeDefined();
-    // Гард: применяем только к активному без назначенного увольнения и без claim.
-    expect(fireCall!.sql).toContain("employment_status = 'active'");
-    expect(fireCall!.sql).toContain('dismissal_date IS NULL');
-    expect(fireCall!.sql).toContain('dismissal_apply_started_at IS NULL');
-
-    const [dismissalDate, exclusionDate] = fireCall!.params as string[];
-    const msk = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
-    expect(dismissalDate).toBe(msk);
-    const nextDay = new Date(`${msk}T00:00:00Z`);
-    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-    expect(exclusionDate).toBe(nextDay.toISOString().slice(0, 10));
-
-    // Доступы гасятся в той же транзакции.
-    expect(txCalls.some(c => c.sql.includes('employee_department_access'))).toBe(true);
+    expect(result.auto_fire_deferred).toBe(0);
+    expect(h.openDismiss).toHaveBeenCalledWith(expect.objectContaining({
+      employeeId: 921,
+      source: 'sigur_missing',
+      sigurSteps: 'none',
+      expectedRevision: 3,
+      dismissalDate: mskToday(),
+      effectiveDate: mskToday(),
+    }));
+    expect(h.executeOp).toHaveBeenCalledWith(expect.objectContaining({ id: 'op-921' }), undefined);
+    const del = h.execute.mock.calls.find(([sql, params]) =>
+      String(sql).includes('DELETE FROM employee_sigur_absence_marks WHERE employee_id = $1') && (params as unknown[])[0] === 921);
+    expect(del).toBeDefined();
   });
 
-  it('auto-fire: провал вставки события увольнения откатывает сотрудника целиком', async () => {
+  it('auto-fire: метка есть, но версия сменилась (был lifecycle-переход) → снова первый такт', async () => {
+    setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null, lifecycle_revision: 4 })] });
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id,
+      lifecycle_revision: 4,
+      absence_revision: 3,
+      absence_first_seen_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+    })])));
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.auto_fired).toBe(0);
+    expect(result.auto_fire_deferred).toBe(1);
+    expect(h.openDismiss).not.toHaveBeenCalled();
+  });
+
+  it('auto-fire: метка слишком свежая (тот же прогон) → ждём следующего прогона', async () => {
     setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null })] });
-    h.getEmployeesCached.mockResolvedValue([
-      { id: 777, name: 'Иванов Иван Иванович', departmentId: BRIGADE_SIGUR, positionId: 501, position: 'Маляр', tabId: '1' },
-    ]);
-    // Транзакция падает на INSERT события — наружу это должно выйти ошибкой,
-    // а сотрудник не должен попасть в auto_fired.
-    h.withTransaction.mockImplementation(async (fn: (client: unknown) => Promise<unknown>) => fn({
-      query: async (sql: string) => {
-        if (sql.includes('employee_dismissal_events')) throw new Error('insert failed');
-        return { rows: [], rowCount: 1 };
-      },
-    }));
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id, absence_revision: 3, absence_first_seen_at: new Date(Date.now() - 10_000).toISOString(),
+    })])));
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.auto_fired).toBe(0);
+    expect(result.auto_fire_deferred).toBe(1);
+  });
+
+  it('auto-fire: точечно карточка найдена (выпала из выгрузки на границе страницы) → не увольняем, метка снята', async () => {
+    setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null })] });
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+    h.probe.mockResolvedValue({ state: 'working', departmentId: BRIGADE_SIGUR });
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.auto_fired).toBe(0);
+    expect(result.auto_fire_skipped_present).toBe(1);
+    expect(h.openDismiss).not.toHaveBeenCalled();
+    expect(h.execute).toHaveBeenCalledWith(expect.stringContaining('DELETE FROM employee_sigur_absence_marks WHERE employee_id = $1'), [921]);
+  });
+
+  it('auto-fire: проба не удалась (unknown) → skip с ошибкой в отчёте, метка не ставится', async () => {
+    setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null })] });
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+    h.probe.mockResolvedValue({ state: 'unknown', departmentId: null, error: 'timeout' });
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.auto_fired).toBe(0);
+    expect(result.auto_fire_skipped_present).toBe(1);
+    expect(result.errors.some(e => e.includes('auto-fire 921'))).toBe(true);
+    expect(h.execute).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO employee_sigur_absence_marks'), expect.anything());
+  });
+
+  it('auto-fire: pending-операция защищает даже при подтверждённом 404', async () => {
+    setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null })] });
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id,
+      pending_kind: 'rehire',
+      pending_operation_id: 'op-r',
+      absence_revision: 3,
+      absence_first_seen_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+    })])));
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.auto_fire_skipped_protected).toBe(1);
+    expect(h.openDismiss).not.toHaveBeenCalled();
+  });
+
+  it('auto-fire: версия ушла при открытии операции (CAS) → skip без ошибки', async () => {
+    setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null })] });
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id, absence_revision: 3, absence_first_seen_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+    })])));
+    h.openDismiss.mockRejectedValue(new LifecycleOperationError(409, 'Состояние изменилось', 'STATE_CHANGED'));
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.auto_fired).toBe(0);
+    expect(result.auto_fire_skipped_stale).toBe(1);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('auto-fire: ошибка исполнения операции попадает в отчёт, сотрудник не считается уволенным', async () => {
+    setupQueries({ employees: [dbEmployee({ id: 921, sigur_employee_id: 125203, dismissal_date: null })] });
+    h.getEmployeesCached.mockResolvedValue([OTHER_CARD]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id, absence_revision: 3, absence_first_seen_at: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+    })])));
+    h.executeOp.mockRejectedValue(new Error('insert failed'));
 
     const result = await syncEmployeesLogic();
 
     expect(result.auto_fired).toBe(0);
     expect(result.errors.some(e => e.includes('auto-fire 921'))).toBe(true);
+  });
+
+  // ─── Перенос fired → архив Sigur: гонка с rehire ───
+
+  it('fired→archive: сотрудник с pending rehire не переносится в архив Sigur', async () => {
+    setupQueries({ employees: [dbEmployee({ employment_status: 'fired', org_department_id: ARCHIVE_LOCAL, dismissal_date: '2026-08-12' })] });
+    h.getEmployeesCached.mockResolvedValue([sigurCard()]);
+    h.getGuards.mockImplementation(async (ids: number[]) => new Map(ids.map(id => [id, guardOf({
+      employee_id: id, employment_status: 'fired', pending_kind: 'rehire', pending_operation_id: 'op-r',
+    })])));
+
+    const result = await syncEmployeesLogic();
+
+    expect(h.batchMove).not.toHaveBeenCalled();
+    expect(result.archive_move_skipped_protected).toBe(1);
+  });
+
+  it('fired→archive обогнал rehire: post-check открывает repair_sigur в цель rehire-операции, не в org_department_id', async () => {
+    setupQueries({ employees: [dbEmployee({ employment_status: 'fired', org_department_id: ARCHIVE_LOCAL, dismissal_date: '2026-08-12' })] });
+    h.getEmployeesCached.mockResolvedValue([sigurCard()]);
+    let guardCalls = 0;
+    h.getGuards.mockImplementation(async (ids: number[]) => {
+      guardCalls++;
+      return new Map(ids.map(id => [id, guardOf(guardCalls === 1
+        ? { employee_id: id, employment_status: 'fired', lifecycle_revision: 5 }
+        : {
+          employee_id: id, employment_status: 'active', lifecycle_revision: 6,
+          last_rehire_applied_at: new Date().toISOString(),
+          last_rehire_target_department_id: BRIGADE_LOCAL,
+          last_rehire_target_sigur_department_id: BRIGADE_SIGUR,
+        })]));
+    });
+    h.openRepair.mockResolvedValue({ id: 'op-repair', kind: 'repair_sigur', employee_id: 128 });
+
+    const result = await syncEmployeesLogic();
+
+    expect(h.batchMove).toHaveBeenCalledTimes(1);
+    expect(h.openRepair).toHaveBeenCalledWith({
+      employeeId: 128,
+      targetDepartmentId: BRIGADE_LOCAL,
+      targetSigurDepartmentId: BRIGADE_SIGUR,
+      createdBy: null,
+    });
+    expect(h.executeOp).toHaveBeenCalledWith(expect.objectContaining({ id: 'op-repair' }), undefined);
+    expect(result.archive_move_compensated).toBe(1);
+  });
+
+  it('fired→archive обогнал rehire, который ещё pending: сбрасываем шаг PUT у операции, repair не открываем', async () => {
+    setupQueries({ employees: [dbEmployee({ employment_status: 'fired', org_department_id: ARCHIVE_LOCAL, dismissal_date: '2026-08-12' })] });
+    h.getEmployeesCached.mockResolvedValue([sigurCard()]);
+    let guardCalls = 0;
+    h.getGuards.mockImplementation(async (ids: number[]) => {
+      guardCalls++;
+      return new Map(ids.map(id => [id, guardOf(guardCalls === 1
+        ? { employee_id: id, employment_status: 'fired', lifecycle_revision: 5 }
+        : { employee_id: id, employment_status: 'fired', lifecycle_revision: 5, pending_kind: 'rehire', pending_operation_id: 'op-r' })]));
+    });
+
+    const result = await syncEmployeesLogic();
+
+    expect(h.resetRehireMove).toHaveBeenCalledWith('op-r');
+    expect(h.openRepair).not.toHaveBeenCalled();
+    expect(result.archive_move_compensated).toBe(1);
+  });
+
+  it('fired→archive: ошибка компенсации попадает в отчёт', async () => {
+    setupQueries({ employees: [dbEmployee({ employment_status: 'fired', org_department_id: ARCHIVE_LOCAL, dismissal_date: '2026-08-12' })] });
+    h.getEmployeesCached.mockResolvedValue([sigurCard()]);
+    let guardCalls = 0;
+    h.getGuards.mockImplementation(async (ids: number[]) => {
+      guardCalls++;
+      return new Map(ids.map(id => [id, guardOf(guardCalls === 1
+        ? { employee_id: id, employment_status: 'fired', lifecycle_revision: 5 }
+        : { employee_id: id, employment_status: 'active', lifecycle_revision: 6 })]));
+    });
+    // Rehire через операции не было и текущий отдел не резолвится → компенсация невозможна.
+    h.queryOne.mockImplementation(async () => null);
+
+    const result = await syncEmployeesLogic();
+
+    expect(result.errors.some(e => e.includes('fired->archive compensation 128'))).toBe(true);
   });
 });
 

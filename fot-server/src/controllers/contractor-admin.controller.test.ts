@@ -770,8 +770,9 @@ describe('contractorAdminController.blockDuplicate', () => {
     const res = makeRes();
     await contractorAdminController.blockDuplicate(makeBlockReq({ batch_id: BATCH, sigur_employee_id: 22 }), res as never);
 
-    expect(h.applyDismissal).toHaveBeenCalled();
-    expect(h.insertDismissalHistory).toHaveBeenCalled();
+    expect(h.applyDismissal).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 500, source: 'contractor_admin' }));
+    // Событие истории пишет durable-операция увольнения (миграция 261), контроллер — нет.
+    expect(h.insertDismissalHistory).not.toHaveBeenCalled();
     const body = res.body as { data: { action: string } };
     expect(body.data.action).toBe('dismissed');
   });

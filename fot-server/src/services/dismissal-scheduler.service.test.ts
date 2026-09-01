@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   loadLifecycle: vi.fn(),
   invalidate: vi.fn(),
   auditLog: vi.fn(),
+  resumeOps: vi.fn(),
 }));
 
 vi.mock('../config/postgres.js', () => ({ query: h.query, execute: h.execute }));
@@ -15,6 +16,9 @@ vi.mock('../controllers/employee-lifecycle.controller.js', () => ({
   applyDismissalImmediately: h.applyDismissal,
   insertDismissalHistory: h.insertHistory,
   loadEmployeeLifecycleRow: h.loadLifecycle,
+}));
+vi.mock('./employee-lifecycle-operations.service.js', () => ({
+  resumeExpiredOperations: h.resumeOps,
 }));
 vi.mock('./audit.service.js', () => ({ auditService: { log: h.auditLog } }));
 vi.mock('./employee-cache.service.js', () => ({ employeeCache: { invalidate: h.invalidate } }));
@@ -52,6 +56,7 @@ describe('dismissal-scheduler', () => {
       sigur_employee_id: 555,
     });
     h.applyDismissal.mockResolvedValue({ fromDepartmentId: 'dept-1' });
+    h.resumeOps.mockResolvedValue({ resumed: 0, applied: 0, failed: 0 });
   });
   afterEach(() => {
     stopDismissalScheduler();
@@ -64,6 +69,28 @@ describe('dismissal-scheduler', () => {
 
     expect(h.query.mock.calls[0][1]).toEqual(['2026-05-20', '30']);
     expect(h.query.mock.calls[0][0]).toContain('FOR UPDATE SKIP LOCKED');
+    expect(h.applyDismissal).toHaveBeenCalledTimes(1);
+    // Событие истории пишет durable-операция, планировщик его не дублирует.
+    expect(h.insertHistory).not.toHaveBeenCalled();
+    expect(h.applyDismissal).toHaveBeenCalledWith(expect.objectContaining({ claimedAt: CLAIMED_AT, source: 'scheduler' }));
+  });
+
+  it('тик сначала доводит незавершённые durable-операции, потом берёт claim', async () => {
+    const order: string[] = [];
+    h.resumeOps.mockImplementation(async () => { order.push('resume'); return { resumed: 1, applied: 1, failed: 0 }; });
+    h.query.mockImplementation(async () => { order.push('claim'); return []; });
+    await runStartupTick();
+
+    expect(h.resumeOps).toHaveBeenCalledTimes(1);
+    expect(order[0]).toBe('resume');
+    expect(order).toContain('claim');
+  });
+
+  it('ошибка повтора операций не блокирует применение отложенных увольнений', async () => {
+    h.resumeOps.mockRejectedValue(new Error('db down'));
+    claimOnce();
+    await runStartupTick();
+
     expect(h.applyDismissal).toHaveBeenCalledTimes(1);
   });
 
