@@ -21,6 +21,15 @@ import {
   type IVersionObjectsPayload,
 } from './timesheet-object-breakdown.service.js';
 import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
+import { listDepartmentManagers } from './department-managers.service.js';
+import { listEmployeeDepartmentPeriodsBulk } from './timesheet-employee-periods.service.js';
+import {
+  buildVersionManagersSnapshot,
+  computeManagersContentHash,
+  type IEmployeeDepartmentResolution,
+  type IManagerMeta,
+  type IVersionManagersPayload,
+} from './timesheet-managers-snapshot.service.js';
 import { hasRealActivity } from './attendance.service.js';
 import { listApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-department-assignments.service.js';
@@ -174,10 +183,19 @@ export interface IVersionObjectsSnapshot {
   totalHours: number;
 }
 
+/** Снимок руководителей отдела, собранный вместе с версией. */
+export interface IVersionManagersSnapshot {
+  payload: IVersionManagersPayload;
+  hash: string;
+  employeesCount: number;
+  withoutManager: number;
+}
+
 export interface IBuiltVersion {
   payload: ITimesheetVersionPayload;
   membershipWindows: Record<string, IMembershipWindow>;
   objects: IVersionObjectsSnapshot;
+  managers: IVersionManagersSnapshot;
 }
 
 interface IMembershipWindow {
@@ -303,6 +321,102 @@ async function buildObjectsSnapshot(
     configErrors: built.configErrors,
     employeesCount: built.employeesCount,
     totalHours: built.totalHours,
+  };
+}
+
+/**
+ * Руководители отдела для состава подачи.
+ *
+ * Отдел берётся из ТАБЕЛЯ, а не из текущей карточки сотрудника:
+ *   - подача отдела  -> approval.department_id (авторитетно);
+ *   - персональная   -> периоды отделов за диапазон подачи. Простой запрос к
+ *     employee_assignments здесь не годится: он принял бы одиночный поздний
+ *     effective_from от freeze-синхронизации за перевод и подставил не тот отдел.
+ *
+ * Все чтения — через тот же client: снимок обязан собираться из одного среза БД.
+ */
+async function buildManagersSnapshot(
+  client: PoolClient,
+  approval: IVersionApproval,
+  payload: ITimesheetVersionPayload,
+): Promise<IVersionManagersSnapshot> {
+  const employees = payload.employees.map(employee => ({
+    employee_id: employee.identity.employee_id,
+    full_name: employee.identity.full_name,
+  }));
+  const employeeIds = employees.map(e => e.employee_id);
+
+  const departmentByEmployee = new Map<number, IEmployeeDepartmentResolution>();
+  if (approval.department_id) {
+    for (const id of employeeIds) {
+      departmentByEmployee.set(id, {
+        department_id: approval.department_id,
+        basis: 'approval_department',
+      });
+    }
+  } else {
+    const periods = await listEmployeeDepartmentPeriodsBulk(
+      employeeIds, approval.start_date, approval.end_date, client,
+    );
+    for (const id of employeeIds) {
+      const resolved = periods.get(id);
+      departmentByEmployee.set(id, {
+        department_id: resolved?.org_department_id ?? null,
+        basis: 'employee_assignment_period',
+        changedDuringPeriod: resolved?.changedDuringPeriod ?? false,
+        usedSnapshotFallback: resolved?.usedSnapshotFallback ?? false,
+      });
+    }
+  }
+
+  const departmentIds = [...new Set(
+    [...departmentByEmployee.values()].map(r => r.department_id).filter((id): id is string => Boolean(id)),
+  )];
+  const managersByDepartment = await listDepartmentManagers(departmentIds, client);
+
+  const departmentNameById = new Map<string, string | null>();
+  if (departmentIds.length > 0) {
+    const rows = (await client.query<{ id: string; name: string | null }>(
+      'SELECT id, name FROM org_departments WHERE id = ANY($1::uuid[])',
+      [departmentIds],
+    )).rows;
+    for (const row of rows) departmentNameById.set(String(row.id), row.name ?? null);
+  }
+
+  const managerIds = [...new Set([...managersByDepartment.values()].flat())];
+  const managerMetaById = new Map<number, IManagerMeta>();
+  if (managerIds.length > 0) {
+    // employees.id — BIGINT, поэтому bigint[].
+    const rows = (await client.query<{
+      id: string | number; full_name: string | null;
+      employment_status: string | null; is_archived: boolean | null;
+    }>(
+      `SELECT id, full_name, employment_status, is_archived
+         FROM employees WHERE id = ANY($1::bigint[])`,
+      [managerIds],
+    )).rows;
+    for (const row of rows) {
+      managerMetaById.set(Number(row.id), {
+        full_name: row.full_name,
+        employment_status: row.employment_status,
+        is_archived: row.is_archived,
+      });
+    }
+  }
+
+  const built = buildVersionManagersSnapshot({
+    employees,
+    departmentByEmployee,
+    managersByDepartment,
+    departmentNameById,
+    managerMetaById,
+  });
+
+  return {
+    payload: built.payload,
+    hash: computeManagersContentHash(built.payload),
+    employeesCount: built.employeesCount,
+    withoutManager: built.withoutManager,
   };
 }
 
@@ -486,8 +600,9 @@ export async function buildTimesheetPayload(
   };
 
   const objects = await buildObjectsSnapshot(client, payload, allObjectEntries, ownsEmployeeDay);
+  const managers = await buildManagersSnapshot(client, approval, payload);
 
-  return { payload, membershipWindows, objects };
+  return { payload, membershipWindows, objects, managers };
 }
 
 /** Записывает снимок объектной разбивки. Одна строка на редакцию (PK = version_id). */
@@ -523,6 +638,14 @@ export async function insertObjectsSnapshot(
  * разошёлся бы с официальным. Поэтому целевые часы берутся из сохранённого payload,
  * а живыми остаются только веса: объектные интервалы нигде не хранятся.
  */
+export async function buildManagersSnapshotForVersion(
+  client: PoolClient,
+  approval: IVersionApproval,
+  payload: ITimesheetVersionPayload,
+): Promise<IVersionManagersSnapshot> {
+  return buildManagersSnapshot(client, approval, payload);
+}
+
 export async function buildObjectsSnapshotForVersion(
   client: PoolClient,
   approval: IVersionApproval,
@@ -533,6 +656,30 @@ export async function buildObjectsSnapshotForVersion(
     client, approval, employeeIds,
   );
   return buildObjectsSnapshot(client, payload, objectEntries, ownsEmployeeDay);
+}
+
+/** Записывает снимок руководителей. Одна строка на редакцию (PK = version_id). */
+export async function insertManagersSnapshot(
+  client: PoolClient,
+  versionId: number,
+  managers: IVersionManagersSnapshot,
+  snapshotSource: 'materialize' | 'backfill_current_state',
+): Promise<void> {
+  await client.query(
+    `INSERT INTO timesheet_version_managers (
+       version_id, managers_content_hash, payload, employees_count, without_manager,
+       snapshot_source, resolved_at
+     ) VALUES ($1,$2,$3::jsonb,$4,$5,$6,NOW())
+     ON CONFLICT (version_id) DO NOTHING`,
+    [
+      versionId,
+      managers.hash,
+      JSON.stringify(managers.payload),
+      managers.employeesCount,
+      managers.withoutManager,
+      snapshotSource,
+    ],
+  );
 }
 
 /**
@@ -560,20 +707,23 @@ export async function materializeVersion(
   source: TimesheetVersionSource,
   actorUserId: string | null,
 ): Promise<{ version: ITimesheetVersionRow; created: boolean }> {
-  const { payload, membershipWindows, objects } = await buildTimesheetPayload(client, approval);
+  const { payload, membershipWindows, objects, managers } = await buildTimesheetPayload(client, approval);
   const contentHash = computeContentHash(payload);
 
   const latest = (await client.query<ITimesheetVersionRow & {
     objects_content_hash: string | null;
+    managers_content_hash: string | null;
     acked: boolean;
   }>(
     `SELECT v.id, v.approval_id, v.revision, v.content_hash, v.employees_count,
             v.total_hours, v.created_at,
             vo.objects_content_hash,
+            vm.managers_content_hash,
             (ack.version_id IS NOT NULL) AS acked
        FROM timesheet_versions v
-       LEFT JOIN timesheet_version_objects vo ON vo.version_id = v.id
-       LEFT JOIN timesheet_1c_exports ack     ON ack.version_id = v.id
+       LEFT JOIN timesheet_version_objects vo  ON vo.version_id = v.id
+       LEFT JOIN timesheet_version_managers vm ON vm.version_id = v.id
+       LEFT JOIN timesheet_1c_exports ack      ON ack.version_id = v.id
       WHERE v.approval_id = $1
       ORDER BY v.revision DESC
       LIMIT 1`,
@@ -581,15 +731,26 @@ export async function materializeVersion(
   )).rows[0] ?? null;
 
   if (latest && latest.content_hash === contentHash) {
-    if (latest.objects_content_hash === objects.hash) {
+    const objectsSame = latest.objects_content_hash === objects.hash;
+    const managersSame = latest.managers_content_hash === managers.hash;
+    if (objectsSame && managersSame) {
       return { version: latest, created: false };
     }
-    if (latest.objects_content_hash === null && !latest.acked) {
-      await insertObjectsSnapshot(client, latest.id, objects, 'materialize');
+
+    // Снимка ещё не было и редакцию 1С не подтверждала — дописываем на месте.
+    // Дописать к ПОДТВЕРЖДЁННОЙ нельзя: состояние выгрузки считается сравнением
+    // ack.version_id с текущим version_id, подача осталась бы exported, и 1С о новых
+    // данных не узнала бы, а старый ACK выглядел бы подтверждением того, чего не было.
+    const onlyMissingSnapshots =
+      (objectsSame || latest.objects_content_hash === null)
+      && (managersSame || latest.managers_content_hash === null);
+    if (onlyMissingSnapshots && !latest.acked) {
+      if (!objectsSame) await insertObjectsSnapshot(client, latest.id, objects, 'materialize');
+      if (!managersSame) await insertManagersSnapshot(client, latest.id, managers, 'materialize');
       return { version: latest, created: false };
     }
-    // Иначе — разбивка изменилась либо редакция уже принята: нужна новая revision
-    // с тем же payload, чтобы подача штатно стала stale.
+    // Иначе — содержимое снимка изменилось либо редакция уже принята: нужна новая
+    // revision с тем же payload, чтобы подача штатно стала stale.
   }
 
   const nextRevision = (latest?.revision ?? 0) + 1;
@@ -619,6 +780,7 @@ export async function materializeVersion(
   )).rows[0]!;
 
   await insertObjectsSnapshot(client, inserted.id, objects, 'materialize');
+  await insertManagersSnapshot(client, inserted.id, managers, 'materialize');
 
   return { version: inserted, created: true };
 }

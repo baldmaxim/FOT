@@ -1,5 +1,7 @@
 import type ExcelJS from 'exceljs';
 import { query } from '../config/postgres.js';
+// Тестовых начальников в выгрузку не пускаем; правило общее со снимком руководителей.
+import { isTestPersonName } from '../utils/person-name.utils.js';
 import { resolveResponsibleEmployeeIdsByEmployee } from './approval-routing.service.js';
 import {
   CURRENT_ACTIVITY_ADDRESS,
@@ -54,12 +56,6 @@ const fetchEmployeeNames = async (ids: number[]): Promise<Map<number, string>> =
     map.set(Number(row.id), (row.full_name ?? '').trim());
   }
   return map;
-};
-
-// Тестовых начальников (ФИО содержит «тест»/«test») в выгрузку не пускаем.
-const isTestManagerName = (fullName: string): boolean => {
-  const lower = fullName.toLowerCase();
-  return lower.includes('тест') || lower.includes('test');
 };
 
 // Список сотрудников выгрузки — для резолвинга режимов табелирования.
@@ -281,7 +277,7 @@ export async function buildUnified1CWorkbook(
   for (const [empId, managerIds] of responsibleIdsMap) {
     const names = managerIds
       .map(id => managerNames.get(id) ?? '')
-      .filter(name => name.length > 0 && !isTestManagerName(name))
+      .filter(name => name.length > 0 && !isTestPersonName(name))
       .sort((a, b) => a.localeCompare(b, 'ru'));
     if (names.length > 0) managerNameMap.set(empId, names.join(', '));
   }

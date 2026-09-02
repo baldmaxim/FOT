@@ -571,3 +571,118 @@ describe('objects', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+
+/**
+ * Руководитель отдела: тоже отдельный метод по замороженному снимку. Проверяем то, на
+ * что опирается 1С — отказы вместо догадок и явный пустой массив там, где руководителя
+ * действительно нет.
+ */
+describe('managers', () => {
+  const managersVersionRow = (over: Record<string, unknown> = {}) => ({
+    id: 9001,
+    revision: 2,
+    content_hash: 'hash-v2',
+    created_at: '2026-08-16T09:12:44.000Z',
+    start_date: '2026-08-01',
+    end_date: '2026-08-15',
+    scope: { kind: 'personal', department_id: null, manager_employee_id: 2617 },
+    managers_payload: {
+      employees: [
+        {
+          employee_id: 266,
+          full_name: 'Бегас Дмитрий Федорович',
+          department_id: '0b24809e-5f04-45e1-bbe2-8a82990d6bdd',
+          department_name: 'ЛИНИЯ-Общестрой',
+          resolution_basis: 'employee_assignment_period',
+          resolution_status: 'not_configured',
+          managers: [],
+        },
+      ],
+    },
+    managers_content_hash: 'mgrhash-v2',
+    managers_employees_count: 1,
+    without_manager: 1,
+    snapshot_source: 'materialize',
+    resolved_at: '2026-08-16T09:12:44.000Z',
+    ...over,
+  });
+
+  it('403, если ключу не открыта таблица employees', async () => {
+    getKeyTables.mockResolvedValue([]);
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq(), res);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('404 на несуществующую подачу', async () => {
+    pgQueryOne.mockResolvedValueOnce(null);
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq(), res);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('409 TIMESHEET_NOT_APPROVED, если подача больше не утверждена', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow({ status: 'submitted' }));
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq(), res);
+    expect(res.payload.code).toBe('TIMESHEET_NOT_APPROVED');
+  });
+
+  it('409 TIMESHEET_REBUILD_PENDING во время аварийной пересборки', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow({ version_dirty_at: '2026-08-16T09:00:00.000Z' }));
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq(), res);
+    expect(res.payload.code).toBe('TIMESHEET_REBUILD_PENDING');
+  });
+
+  it('409 VERSION_NOT_AVAILABLE, если редакции нет', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow()).mockResolvedValueOnce(null);
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq(), res);
+    expect(res.payload.code).toBe('VERSION_NOT_AVAILABLE');
+  });
+
+  it('409 MANAGERS_NOT_AVAILABLE у редакции старше внедрения', async () => {
+    // ACK по такой редакции слать нельзя — подача уйдёт из очереди без руководителей.
+    pgQueryOne
+      .mockResolvedValueOnce(approvalRow())
+      .mockResolvedValueOnce(managersVersionRow({ managers_content_hash: null, managers_payload: null }));
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq(), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('MANAGERS_NOT_AVAILABLE');
+  });
+
+  it('отдаёт снимок: пустой массив у отдела без руководителя, оба хэша, источник снимка', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow()).mockResolvedValueOnce(managersVersionRow());
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq(), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.revision).toBe(2);
+    expect(res.payload.timesheet_content_hash).toBe('hash-v2');
+    expect(res.payload.managers_content_hash).toBe('mgrhash-v2');
+    expect(res.payload.snapshot_source).toBe('materialize');
+    expect(res.payload.employees[0].managers).toEqual([]);
+    expect(res.payload.employees[0].resolution_status).toBe('not_configured');
+    expect(res.payload.meta.without_manager).toBe(1);
+  });
+
+  it('?revision=N адресует конкретную редакцию', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow()).mockResolvedValueOnce(managersVersionRow({ revision: 1 }));
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq({ query: { revision: '1' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    const versionCall = pgQueryOne.mock.calls[1]!;
+    expect(String(versionCall[0])).toContain('AND v.revision = $2');
+    expect(versionCall[1]).toEqual([APPROVAL_ID, 1]);
+  });
+
+  it('нечисловой revision — 400', async () => {
+    const res = makeRes();
+    await publicTimesheetsController.managers(makeReq({ query: { revision: 'abc' } }), res);
+    expect(res.statusCode).toBe(400);
+  });
+});

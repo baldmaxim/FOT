@@ -1,3 +1,4 @@
+import { DEPARTMENT_MANAGER_CONDITION_SQL } from './department-managers.service.js';
 import { query } from '../config/postgres.js';
 import { resolveSchedulesForPeriod, isWorkingDay, loadCalendarMonth } from './schedule.service.js';
 import { loadAssignmentMaps, resolveFromMaps } from './weekend-approval-assignments.service.js';
@@ -71,9 +72,7 @@ export async function listFullManagersForDepartments(
     `SELECT employee_id, department_id
        FROM employee_department_access
       WHERE department_id = ANY($1::uuid[])
-        AND is_active = true
-        AND access_level = 'full'
-        AND source <> 'sigur_sync'`,
+        AND ${DEPARTMENT_MANAGER_CONDITION_SQL}`,
     [ids],
   );
   for (const r of rows) {

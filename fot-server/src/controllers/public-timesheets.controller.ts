@@ -157,6 +157,56 @@ function toListItem(row: IVersionJoinRow): Record<string, unknown> {
   };
 }
 
+/**
+ * Общий гейт трёх табельных методов: detail / objects / managers.
+ *
+ * Возвращает null, если ответ уже отправлен. Вынесено, потому что блок был скопирован
+ * трижды дословно, и любая правка кодов отказа неизбежно разъехалась бы между методами.
+ */
+async function preflightApproval(
+  req: Request,
+  res: Response,
+): Promise<{ approvalId: number; revision: number | null } | null> {
+  if (!(await ensureEmployeesAccess(req, res))) return null;
+
+  const approvalId = Number(req.params.approval_id);
+  if (!Number.isSafeInteger(approvalId) || approvalId <= 0) {
+    fail(res, 400, 'approval_id должен быть положительным целым числом');
+    return null;
+  }
+
+  const revisionRaw = typeof req.query.revision === 'string' ? req.query.revision : '';
+  let revision: number | null = null;
+  if (revisionRaw) {
+    revision = Number(revisionRaw);
+    if (!Number.isSafeInteger(revision) || revision <= 0) {
+      fail(res, 400, 'revision должен быть положительным целым числом');
+      return null;
+    }
+  }
+
+  const approval = await queryOne<{ id: number; status: string; version_dirty_at: string | null }>(
+    'SELECT id, status, version_dirty_at FROM timesheet_approvals WHERE id = $1',
+    [approvalId],
+  );
+  if (!approval) {
+    fail(res, 404, 'Табель не найден');
+    return null;
+  }
+  // unlocked_at не проверяем: пока табель открыт для правок, отдаётся последняя
+  // официально закрытая редакция — незавершённые правки в версию физически не попадают.
+  if (approval.status !== 'approved') {
+    fail(res, 409, 'Табель не утверждён', 'TIMESHEET_NOT_APPROVED');
+    return null;
+  }
+  if (approval.version_dirty_at) {
+    fail(res, 409, 'Табель пересчитывается — попробуйте в следующем цикле', 'TIMESHEET_REBUILD_PENDING');
+    return null;
+  }
+
+  return { approvalId, revision };
+}
+
 export const publicTimesheetsController = {
   /**
    * GET /api/public/v1/timesheets
@@ -405,44 +455,11 @@ export const publicTimesheetsController = {
    */
   async objects(req: Request, res: Response): Promise<void> {
     res.setHeader('Cache-Control', 'no-store');
-    if (!(await ensureEmployeesAccess(req, res))) return;
-
-    const approvalId = Number(req.params.approval_id);
-    if (!Number.isSafeInteger(approvalId) || approvalId <= 0) {
-      fail(res, 400, 'approval_id должен быть положительным целым числом');
-      return;
-    }
-
-    const revisionRaw = typeof req.query.revision === 'string' ? req.query.revision : '';
-    let revision: number | null = null;
-    if (revisionRaw) {
-      revision = Number(revisionRaw);
-      if (!Number.isSafeInteger(revision) || revision <= 0) {
-        fail(res, 400, 'revision должен быть положительным целым числом');
-        return;
-      }
-    }
+    const pre = await preflightApproval(req, res);
+    if (!pre) return;
+    const { approvalId, revision } = pre;
 
     try {
-      const approval = await queryOne<{
-        id: number; status: string; version_dirty_at: string | null;
-      }>(
-        'SELECT id, status, version_dirty_at FROM timesheet_approvals WHERE id = $1',
-        [approvalId],
-      );
-      if (!approval) {
-        fail(res, 404, 'Табель не найден');
-        return;
-      }
-      if (approval.status !== 'approved') {
-        fail(res, 409, 'Табель не утверждён', 'TIMESHEET_NOT_APPROVED');
-        return;
-      }
-      if (approval.version_dirty_at) {
-        fail(res, 409, 'Табель пересчитывается — попробуйте в следующем цикле', 'TIMESHEET_REBUILD_PENDING');
-        return;
-      }
-
       // Разбивка и табель читаются одним запросом: отдать объекты редакции, которой
       // нет в timesheet_versions, невозможно по построению.
       const version = await queryOne<{
@@ -516,6 +533,92 @@ export const publicTimesheetsController = {
       console.error('publicTimesheets.objects error:', err);
       res.locals.dataApiError = err instanceof Error ? err.message : String(err);
       if (!res.headersSent) fail(res, 500, 'Failed to fetch timesheet object breakdown');
+    }
+  },
+
+  /**
+   * GET /api/public/v1/timesheets/:approval_id/managers[?revision=N]
+   *
+   * Руководитель отдела по каждому сотруднику той же редакции. Как и objects, читает
+   * замороженный снимок и ничего не резолвит: живой резолвинг после правки оргструктуры
+   * вернул бы для одной revision другой ответ, и документ в 1С стал бы невоспроизводимым.
+   *
+   * Руководителем считается назначенный на ЭТОТ отдел. Прямые руководители и наследование
+   * от родительских отделов не используются — они дали бы начальника из чужого отдела.
+   */
+  async managers(req: Request, res: Response): Promise<void> {
+    res.setHeader('Cache-Control', 'no-store');
+    const pre = await preflightApproval(req, res);
+    if (!pre) return;
+    const { approvalId, revision } = pre;
+
+    try {
+      const version = await queryOne<{
+        id: number; revision: number; content_hash: string; created_at: string;
+        managers_payload: unknown | null; managers_content_hash: string | null;
+        managers_employees_count: number | null; without_manager: number | null;
+        snapshot_source: string | null; resolved_at: string | null;
+        scope: unknown; start_date: string; end_date: string;
+      }>(
+        `SELECT v.id,
+                v.revision,
+                v.content_hash,
+                v.created_at::text        AS created_at,
+                v.start_date::text        AS start_date,
+                v.end_date::text          AS end_date,
+                v.payload -> 'approval' -> 'scope' AS scope,
+                vm.payload                AS managers_payload,
+                vm.managers_content_hash,
+                vm.employees_count        AS managers_employees_count,
+                vm.without_manager,
+                vm.snapshot_source,
+                vm.resolved_at::text      AS resolved_at
+           FROM timesheet_versions v
+           LEFT JOIN timesheet_version_managers vm ON vm.version_id = v.id
+          WHERE v.approval_id = $1 ${revision != null ? "AND v.revision = $2" : ""}
+          ORDER BY v.revision DESC
+          LIMIT 1`,
+        revision != null ? [approvalId, revision] : [approvalId],
+      );
+      if (!version) {
+        fail(res, 409, 'Версия табеля ещё не сформирована', 'VERSION_NOT_AVAILABLE');
+        return;
+      }
+      if (version.managers_content_hash == null) {
+        // Редакция старше внедрения и не забэкфиллена. Пропустить и НЕ подтверждать:
+        // иначе подача уйдёт из очереди без руководителей.
+        fail(
+          res, 409,
+          'Руководители для этой редакции не сформированы',
+          'MANAGERS_NOT_AVAILABLE',
+        );
+        return;
+      }
+
+      const managersPayload = (version.managers_payload ?? {}) as { employees?: unknown[] };
+      res.json({
+        approval_id: approvalId,
+        scope: version.scope,
+        start_date: version.start_date,
+        end_date: version.end_date,
+        revision: Number(version.revision),
+        timesheet_content_hash: version.content_hash,
+        managers_content_hash: version.managers_content_hash,
+        version_created_at: version.created_at,
+        // materialize — состояние на момент создания редакции; backfill_current_state —
+        // на момент прогона бэкфилла, то есть заведомо позже закрытия табеля.
+        snapshot_source: version.snapshot_source,
+        resolved_at: version.resolved_at,
+        employees: managersPayload.employees ?? [],
+        meta: {
+          employees_count: Number(version.managers_employees_count ?? 0),
+          without_manager: Number(version.without_manager ?? 0),
+        },
+      });
+    } catch (err) {
+      console.error('publicTimesheets.managers error:', err);
+      res.locals.dataApiError = err instanceof Error ? err.message : String(err);
+      if (!res.headersSent) fail(res, 500, 'Failed to fetch timesheet managers');
     }
   },
 

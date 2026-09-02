@@ -93,15 +93,41 @@ interface IStoredVersion {
 const store = {
   versions: [] as IStoredVersion[],
   objects: new Map<number, string>(),
+  managers: new Map<number, string>(),
   acked: new Set<number>(),
   nextId: 9000,
+  /** Кто числится руководителем отдела сотрудника. Меняем, чтобы двигать хэш. */
+  departmentManagerIds: [501] as number[],
 };
 
 const client = {
   async query(sql: string, params?: unknown[]) {
-    if (sql.includes('FROM org_departments')) return { rows: [] };
-    if (sql.includes('FROM employees WHERE id = ANY')) return { rows: [{ id: 1, tab_number: '01476' }] };
+    if (sql.includes('FROM org_departments')) {
+      return { rows: [{ id: 'dept-1', name: 'бр. Тестовая' }] };
+    }
+    if (sql.includes('tab_number')) return { rows: [{ id: 1, tab_number: '01476' }] };
     if (sql.includes('FROM skud_objects')) return { rows: [] };
+
+    // ── резолвинг отдела для персональной подачи ──
+    if (sql.includes('hire_date')) {
+      return { rows: [{
+        id: 1, hire_date: '2020-01-01', org_department_id: 'dept-1',
+        employment_status: 'active', dismissal_date: null,
+        excluded_from_timesheet: false, excluded_from_timesheet_date: null,
+      }] };
+    }
+    if (sql.includes('FROM employee_assignments')) return { rows: [] };
+    if (sql.includes('FROM employee_dismissal_events')) return { rows: [] };
+
+    // ── руководители отдела ──
+    if (sql.includes('FROM employee_department_access')) {
+      return { rows: store.departmentManagerIds.map(id => ({ employee_id: id, department_id: 'dept-1' })) };
+    }
+    if (sql.includes('employment_status')) {
+      return { rows: store.departmentManagerIds.map(id => ({
+        id, full_name: `Руководитель ${id}`, employment_status: 'active', is_archived: false,
+      })) };
+    }
 
     if (sql.includes('FROM timesheet_versions v')) {
       const latest = store.versions.at(-1);
@@ -114,6 +140,7 @@ const client = {
           total_hours: 8,
           created_at: '2026-08-16T09:00:00.000Z',
           objects_content_hash: store.objects.get(latest.id) ?? null,
+          managers_content_hash: store.managers.get(latest.id) ?? null,
           acked: store.acked.has(latest.id),
         }],
       };
@@ -135,6 +162,12 @@ const client = {
       return { rows: [] };
     }
 
+    if (sql.includes('INSERT INTO timesheet_version_managers')) {
+      const versionId = Number(params![0]);
+      if (!store.managers.has(versionId)) store.managers.set(versionId, String(params![1]));
+      return { rows: [] };
+    }
+
     throw new Error(`Неожиданный SQL в тесте: ${sql.slice(0, 80)}`);
   },
 } as unknown as PoolClient;
@@ -144,8 +177,10 @@ const run = () => materializeVersion(client, APPROVAL, 'close', null);
 beforeEach(() => {
   store.versions = [];
   store.objects = new Map();
+  store.managers = new Map();
   store.acked = new Set();
   store.nextId = 9000;
+  store.departmentManagerIds = [501];
   objectHours.value = 8;
 });
 
@@ -220,5 +255,48 @@ describe('materializeVersion + объектная разбивка', () => {
     expect(second.created).toBe(true);
     expect(second.version.content_hash).toBe(first.version.content_hash);
     expect(store.objects.get(second.version.id)).not.toBe(firstObjectsHash);
+  });
+  it('первая материализация пишет и снимок руководителей', async () => {
+    const { version } = await run();
+    expect(store.managers.get(version.id)).toBeTruthy();
+  });
+
+  it('часы и объекты прежние, но руководителя отдела сменили: новая редакция', async () => {
+    // content_hash табеля и objects_content_hash не меняются — заметить правку может
+    // только третий хэш. Без него документ в 1С навсегда остался бы со старым начальником.
+    const first = await run();
+    const firstManagersHash = store.managers.get(first.version.id);
+
+    store.departmentManagerIds = [777];
+    const second = await run();
+
+    expect(second.created).toBe(true);
+    expect(second.version.content_hash).toBe(first.version.content_hash);
+    expect(store.managers.get(second.version.id)).not.toBe(firstManagersHash);
+  });
+
+  it('снимка руководителей нет и версия НЕ подтверждена: дописывается без роста revision', async () => {
+    const first = await run();
+    store.managers.delete(first.version.id); // редакция, созданная до внедрения
+
+    const second = await run();
+
+    expect(second.created).toBe(false);
+    expect(store.versions).toHaveLength(1);
+    expect(store.managers.get(first.version.id)).toBeTruthy();
+  });
+
+  it('снимка руководителей нет, но версия УЖЕ подтверждена: новая редакция', async () => {
+    // Дописать к ACK-нутой нельзя: подача осталась бы exported и не вернулась в очередь.
+    const first = await run();
+    store.managers.delete(first.version.id);
+    store.acked.add(first.version.id);
+
+    const second = await run();
+
+    expect(second.created).toBe(true);
+    expect(second.version.revision).toBe(2);
+    expect(second.version.content_hash).toBe(first.version.content_hash);
+    expect(store.managers.get(second.version.id)).toBeTruthy();
   });
 });

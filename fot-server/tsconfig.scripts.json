@@ -25,6 +25,8 @@
     "scripts/set-timesheet-modes-itr.ts",
     "scripts/reconcile-1c-objects.ts",
     "scripts/backfill-version-objects.ts",
+    "scripts/backfill-version-managers.ts",
+    "scripts/lib/version-snapshot-backfill.ts",
     "src/services/old-card-block.util.ts",
     "src/services/old-card-block.collect.ts"
   ],

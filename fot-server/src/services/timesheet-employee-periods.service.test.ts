@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildEmployeeDepartmentPeriods, type IEmployeePeriodsMeta } from './timesheet-employee-periods.service.js';
+import {
+  buildEmployeeDepartmentPeriods,
+  buildEmployeeDepartmentPeriodsDetailed,
+  type IEmployeePeriodsMeta,
+} from './timesheet-employee-periods.service.js';
 import type { IEmployeeDepartmentAssignment } from './timesheet-department-assignments.service.js';
 
 const DEPT_A = 'aaaaaaaa-0000-0000-0000-000000000001';
@@ -202,5 +206,53 @@ describe('buildEmployeeDepartmentPeriods', () => {
       { org_department_id: DEPT_A, from: '2026-08-16', to: '2026-08-20' },
       { org_department_id: DEPT_B, from: '2026-08-21', to: '2026-08-31' },
     ]);
+  });
+});
+
+/**
+ * Признак fallback нужен публичному методу 1С: отдел, взятый из карточки сотрудника
+ * вместо истории назначений, помечается department_history_missing — достоверной
+ * историей он не является, и 1С должна это видеть.
+ */
+describe('buildEmployeeDepartmentPeriodsDetailed — usedSnapshotFallback', () => {
+  const detailed = (
+    assignments: IEmployeeDepartmentAssignment[],
+    meta: IEmployeePeriodsMeta = employee(),
+  ) => buildEmployeeDepartmentPeriodsDetailed({
+    assignments,
+    employee: meta,
+    dismissalFromDepartmentId: null,
+    startDate: '2026-08-01',
+    endDate: '2026-08-31',
+  });
+
+  it('назначений нет вовсе → fallback на карточку, флаг поднят', () => {
+    const result = detailed([]);
+    expect(result.periods).toHaveLength(1);
+    expect(result.periods[0]!.org_department_id).toBe(DEPT_A);
+    expect(result.usedSnapshotFallback).toBe(true);
+  });
+
+  it('назначения покрывают период → флаг не поднят', () => {
+    const result = detailed([assignment('a1', DEPT_B, '2026-01-01', null)]);
+    expect(result.periods[0]!.org_department_id).toBe(DEPT_B);
+    expect(result.usedSnapshotFallback).toBe(false);
+  });
+
+  it('назначения есть, но вне диапазона → fallback', () => {
+    const result = detailed([assignment('a1', DEPT_B, '2020-01-01', '2020-12-31')]);
+    expect(result.usedSnapshotFallback).toBe(true);
+    expect(result.periods[0]!.org_department_id).toBe(DEPT_A);
+  });
+
+  it('обёртка buildEmployeeDepartmentPeriods возвращает те же периоды', () => {
+    const assignments = [assignment('a1', DEPT_B, '2026-01-01', null)];
+    expect(buildEmployeeDepartmentPeriods({
+      assignments,
+      employee: employee(),
+      dismissalFromDepartmentId: null,
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+    })).toEqual(detailed(assignments).periods);
   });
 });

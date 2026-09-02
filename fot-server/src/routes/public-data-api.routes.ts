@@ -25,6 +25,8 @@ router.get('/timesheets/:approval_id', publicTimesheetsController.detail);
 // Объектная разбивка часов той же редакции — отдельным методом, чтобы тело табеля
 // и его content_hash остались прежними.
 router.get('/timesheets/:approval_id/objects', publicTimesheetsController.objects);
+// Руководитель отдела по каждому сотруднику той же редакции — тоже отдельным методом.
+router.get('/timesheets/:approval_id/managers', publicTimesheetsController.managers);
 router.post('/timesheets/:approval_id/ack', publicTimesheetsController.ack);
 
 export default router;

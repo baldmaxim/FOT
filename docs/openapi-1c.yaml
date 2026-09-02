@@ -349,6 +349,70 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /timesheets/{approval_id}/managers:
+    get:
+      tags: [timesheets]
+      operationId: getTimesheetManagers
+      summary: Руководитель отдела по каждому сотруднику (та же редакция)
+      description: |
+        Кто у сотрудника начальник отдела. Поле `manager_employee_id` в теле табеля для
+        этого не годится — это **подавший табель** руководитель, а не начальник человека.
+
+        Отдаётся руководитель **того отдела, к которому сотрудник относится в этом
+        табеле**. Руководители родительских отделов, «ответственные согласующие» и
+        подбор по должности не используются: они подставили бы начальника из чужого
+        подразделения.
+
+        Метод читает снимок, **замороженный вместе с редакцией**, и ничего не резолвит:
+        повторный запрос той же `revision` даёт тот же `managers_content_hash`.
+        Вызывать с той же `revision`, что и табель.
+
+        `managers: []` со статусом `not_configured` — **штатный результат**, а не ошибка:
+        на момент внедрения руководитель не назначен ни у «ЛИНИЯ», ни у «ЛИНИЯ-Общестрой».
+
+        Сопоставлять руководителя **только по `employee_id`** (реквизит `ID_FOT`).
+      parameters:
+        - $ref: '#/components/parameters/ApprovalId'
+        - name: revision
+          in: query
+          description: Конкретная редакция. По умолчанию — последняя.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Руководители отдела для редакции
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagersResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            Коды `TIMESHEET_NOT_APPROVED`, `VERSION_NOT_AVAILABLE`,
+            `TIMESHEET_REBUILD_PENDING` — как у самого табеля. Плюс свой:
+
+            `MANAGERS_NOT_AVAILABLE` — редакция старше внедрения метода и не дозаполнена.
+            Пропустить, **ACK не отправлять**: иначе подача уйдёт из очереди без
+            руководителей.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notAvailable:
+                  value:
+                    success: false
+                    code: MANAGERS_NOT_AVAILABLE
+                    error: Руководители для этой редакции не сформированы
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /timesheets/{approval_id}/ack:
     post:
       tags: [timesheets]
@@ -756,11 +820,22 @@ components:
       properties:
         status:
           type: string
-          enum: [work, vacation, dayoff, remote, unpaid, absent, sick, business_trip, manual, study]
-          description: Машинный код дня.
+          enum: [work, manual, remote, vacation, sick, dayoff, unpaid, absent, educational_leave, sick_worked, study_day]
+          description: |
+            Машинный код дня. Перечень зеркалит TimeStatus в
+            fot-server/src/types/index.ts — при добавлении статуса править оба места.
+            Отработанное время: work (СКУД или подтверждённая корректировка), manual
+            (часы проставлены вручную), remote (удалёнка). Засчитаны по норме графика:
+            sick_worked (работал на больничном), study_day (учебный день). Неявки:
+            vacation, sick, dayoff, unpaid (за свой счёт), absent, educational_leave.
+            Удалённые значения business_trip и study больше не приходят.
         hours:
           type: number
-          description: Часы за день, как в согласованном табеле.
+          description: |
+            Часы за день, как в согласованном табеле. У неявок здесь норма планового
+            графика, а НЕ отработанное время: переносить их как отработанные нельзя.
+            Отработанные часы берутся только у work, manual и remote, причём при
+            hours = 0 день не считается явкой ни при каком статусе.
         corrected:
           type: boolean
           description: День получен или изменён ручной корректировкой.
@@ -900,6 +975,120 @@ components:
           type: object
           properties:
             employees_count:
+              type: integer
+
+    ManagerRef:
+      type: object
+      required: [employee_id, source]
+      properties:
+        employee_id:
+          type: integer
+          description: |
+            **Единственный ключ сопоставления** (реквизит `ID_FOT`). Запись присутствует
+            всегда, даже если метаданные не нашлись, — пропавший id был бы неотличим от
+            «руководителя нет».
+        full_name:
+          type: [string, 'null']
+          description: Только для отображения. `null` — метаданные не найдены.
+        employment_status:
+          type: [string, 'null']
+        is_archived:
+          type: [boolean, 'null']
+        source:
+          type: string
+          enum: [department_full_access]
+          description: |
+            Активное ручное назначение доступа к отделу. Отдельного поля «руководитель
+            отдела» в системе нет, поэтому источник назван по факту, а не по смыслу.
+        data_quality_issues:
+          type: array
+          description: Проблемы записи. Непустой список = автоматически использовать нельзя.
+          items:
+            type: string
+            enum: [manager_metadata_missing, manager_dismissed, manager_archived, manager_name_looks_test]
+
+    EmployeeManagers:
+      type: object
+      required: [employee_id, resolution_status, managers]
+      properties:
+        employee_id:
+          type: integer
+        full_name:
+          type: [string, 'null']
+        department_id:
+          type: [string, 'null']
+          format: uuid
+        department_name:
+          type: [string, 'null']
+        resolution_basis:
+          type: string
+          enum: [approval_department, employee_assignment_period]
+          description: Откуда взят отдел — из подачи отдела или из истории назначений за период.
+        resolution_status:
+          type: string
+          enum: [resolved, multiple, not_configured, department_unknown, invalid_configuration]
+          description: |
+            `resolved` — один пригодный; `multiple` — несколько, **первого брать нельзя**;
+            `not_configured` — отдел известен, руководитель не назначен (норма);
+            `department_unknown` — отдел определить не удалось (проблема данных);
+            `invalid_configuration` — назначения есть, но ни одного пригодного.
+        managers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagerRef'
+        data_quality_issues:
+          type: array
+          items:
+            type: string
+            enum: [department_changed_during_period, department_history_missing, department_unknown]
+
+    ManagersResponse:
+      type: object
+      required: [approval_id, revision, timesheet_content_hash, managers_content_hash, employees]
+      properties:
+        approval_id:
+          type: integer
+        scope:
+          $ref: '#/components/schemas/Scope'
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        revision:
+          type: integer
+        timesheet_content_hash:
+          type: string
+        managers_content_hash:
+          type: string
+          description: |
+            Меняется при смене руководителя даже когда часы прежние. Такое изменение
+            всегда даёт новую `revision` — сверять нужно все три хэша.
+        version_created_at:
+          type: string
+          format: date-time
+        snapshot_source:
+          type: string
+          enum: [materialize, backfill_current_state]
+          description: |
+            `materialize` — состояние на момент создания редакции;
+            `backfill_current_state` — на момент дозаполнения старых редакций, то есть
+            заведомо позже закрытия табеля. Истории назначений руководителей в системе
+            нет, поэтому «руководитель на даты табеля» не гарантируется ни в одном случае.
+        resolved_at:
+          type: string
+          format: date-time
+        employees:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmployeeManagers'
+        meta:
+          type: object
+          properties:
+            employees_count:
+              type: integer
+            without_manager:
               type: integer
 
     TimesheetVersionPayload:
