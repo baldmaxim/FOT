@@ -47,12 +47,16 @@ Swagger UI: <http://localhost:4001/external/v1/docs>
 
 | Метод | Путь | Capability | Описание |
 |---|---|---|---|
-| GET | `/api/public/v1/timesheet` | `employees` | Табель отдела за период. |
+| GET | `/api/public/v1/timesheet` | `employees` | Табель отдела с рассчитанными дневными планами и метаданными корректировок. |
 | GET | `/api/public/v1/employee-events` | `skud_events` | Безопасные события входа/выхода конкретного сотрудника. |
 
 Для `employee-events` обязательны `employee_id`, `from=YYYY-MM-DD` и
 `to=YYYY-MM-DD`; доступны `limit` (1..1000) и `offset`. Максимальный период —
 366 дней. Endpoint намеренно не возвращает ФИО и номер карты.
+
+`timesheet` возвращает для сотрудника `days` с фактом и объектом `correction`,
+а также `plans` на каждую дату периода. План уже рассчитан FOT с учётом личного
+графика, циклов, дневных override, праздников и порога полного дня.
 
 Поддерживаемые query-параметры для чтения:
 
