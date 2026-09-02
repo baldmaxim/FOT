@@ -22,6 +22,9 @@ router.get('/timesheet', publicDataApiController.getDepartmentTimesheet);
 // Обмен закрытыми согласованными табелями: список → выгрузка версии → подтверждение.
 router.get('/timesheets', publicTimesheetsController.list);
 router.get('/timesheets/:approval_id', publicTimesheetsController.detail);
+// Объектная разбивка часов той же редакции — отдельным методом, чтобы тело табеля
+// и его content_hash остались прежними.
+router.get('/timesheets/:approval_id/objects', publicTimesheetsController.objects);
 router.post('/timesheets/:approval_id/ack', publicTimesheetsController.ack);
 
 export default router;

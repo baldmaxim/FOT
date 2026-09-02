@@ -396,6 +396,130 @@ export const publicTimesheetsController = {
   },
 
   /**
+   * GET /api/public/v1/timesheets/:approval_id/objects[?revision=N]
+   *
+   * Объектная разбивка часов той же редакции: на каком объекте и сколько часов был
+   * сотрудник. Как и detail, НИЧЕГО не пересчитывает — читает снимок, замороженный
+   * вместе с версией. Живой расчёт здесь недопустим: он зависит от текущих СКУД-событий,
+   * ростера и привязки точек к объектам, и для одной revision давал бы разные ответы.
+   */
+  async objects(req: Request, res: Response): Promise<void> {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!(await ensureEmployeesAccess(req, res))) return;
+
+    const approvalId = Number(req.params.approval_id);
+    if (!Number.isSafeInteger(approvalId) || approvalId <= 0) {
+      fail(res, 400, 'approval_id должен быть положительным целым числом');
+      return;
+    }
+
+    const revisionRaw = typeof req.query.revision === 'string' ? req.query.revision : '';
+    let revision: number | null = null;
+    if (revisionRaw) {
+      revision = Number(revisionRaw);
+      if (!Number.isSafeInteger(revision) || revision <= 0) {
+        fail(res, 400, 'revision должен быть положительным целым числом');
+        return;
+      }
+    }
+
+    try {
+      const approval = await queryOne<{
+        id: number; status: string; version_dirty_at: string | null;
+      }>(
+        'SELECT id, status, version_dirty_at FROM timesheet_approvals WHERE id = $1',
+        [approvalId],
+      );
+      if (!approval) {
+        fail(res, 404, 'Табель не найден');
+        return;
+      }
+      if (approval.status !== 'approved') {
+        fail(res, 409, 'Табель не утверждён', 'TIMESHEET_NOT_APPROVED');
+        return;
+      }
+      if (approval.version_dirty_at) {
+        fail(res, 409, 'Табель пересчитывается — попробуйте в следующем цикле', 'TIMESHEET_REBUILD_PENDING');
+        return;
+      }
+
+      // Разбивка и табель читаются одним запросом: отдать объекты редакции, которой
+      // нет в timesheet_versions, невозможно по построению.
+      const version = await queryOne<{
+        id: number; revision: number; content_hash: string; created_at: string;
+        objects_payload: unknown | null; objects_content_hash: string | null;
+        objects_employees_count: number | null; config_errors: unknown | null;
+        scope: unknown; start_date: string; end_date: string;
+      }>(
+        `SELECT v.id,
+                v.revision,
+                v.content_hash,
+                v.created_at::text        AS created_at,
+                v.start_date::text        AS start_date,
+                v.end_date::text          AS end_date,
+                v.payload -> 'approval' -> 'scope' AS scope,
+                vo.payload                AS objects_payload,
+                vo.objects_content_hash,
+                vo.employees_count        AS objects_employees_count,
+                vo.config_errors
+           FROM timesheet_versions v
+           LEFT JOIN timesheet_version_objects vo ON vo.version_id = v.id
+          WHERE v.approval_id = $1 ${revision != null ? "AND v.revision = $2" : ""}
+          ORDER BY v.revision DESC
+          LIMIT 1`,
+        revision != null ? [approvalId, revision] : [approvalId],
+      );
+      if (!version) {
+        fail(res, 409, 'Версия табеля ещё не сформирована', 'VERSION_NOT_AVAILABLE');
+        return;
+      }
+      if (version.objects_content_hash == null) {
+        // Редакция старше внедрения и не забэкфиллена. Штатная ситуация: пропустить и
+        // НЕ подтверждать — иначе подача уйдёт из очереди без объектных строк.
+        fail(
+          res, 409,
+          'Объектная разбивка для этой редакции не сформирована',
+          'OBJECT_BREAKDOWN_NOT_AVAILABLE',
+        );
+        return;
+      }
+
+      const configErrors = Array.isArray(version.config_errors) ? version.config_errors : [];
+      if (configErrors.length > 0) {
+        // Битая настройка режима «объект»: часы легли в «Не определён». Отдавать их как
+        // достоверные нельзя. Снимок заморожен, поэтому починка настройки сама редакцию
+        // не исправит — нужна повторная материализация («Открыть → Закрыть» табель).
+        fail(
+          res, 409,
+          'Разбивка по объектам недостоверна: у части сотрудников повреждён режим табелирования. '
+          + 'Сообщите администратору ФОТ — после исправления табель нужно открыть и закрыть заново.',
+          'INVALID_EXPORT_MODE_CONFIG',
+          { employees: configErrors },
+        );
+        return;
+      }
+
+      const objectsPayload = (version.objects_payload ?? {}) as { employees?: unknown[] };
+      res.json({
+        approval_id: approvalId,
+        scope: version.scope,
+        start_date: version.start_date,
+        end_date: version.end_date,
+        revision: Number(version.revision),
+        timesheet_content_hash: version.content_hash,
+        objects_content_hash: version.objects_content_hash,
+        version_created_at: version.created_at,
+        employees: objectsPayload.employees ?? [],
+        meta: { employees_count: Number(version.objects_employees_count ?? 0) },
+      });
+    } catch (err) {
+      console.error('publicTimesheets.objects error:', err);
+      res.locals.dataApiError = err instanceof Error ? err.message : String(err);
+      if (!res.headersSent) fail(res, 500, 'Failed to fetch timesheet object breakdown');
+    }
+  },
+
+  /**
    * POST /api/public/v1/timesheets/:approval_id/ack
    *
    * Подтверждение приёма версии. Идемпотентно: повторный ACK той же редакции

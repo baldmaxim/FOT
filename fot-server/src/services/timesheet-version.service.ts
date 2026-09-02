@@ -10,7 +10,17 @@
 import crypto from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { DbExecutor } from '../config/postgres.js';
+import { canonicalJson } from '../utils/canonical-json.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
+import { resolveExportModes } from './timesheet-export-mode.service.js';
+import {
+  buildVersionObjectBreakdown,
+  computeObjectsContentHash,
+  type IObjectConfigError,
+  type IObjectMeta,
+  type IVersionObjectsPayload,
+} from './timesheet-object-breakdown.service.js';
+import type { IAttendanceObjectEntry } from './timesheet-object.service.js';
 import { hasRealActivity } from './attendance.service.js';
 import { listApprovalEmployees } from './timesheet-approval-employees-snapshot.service.js';
 import { listEmployeeMembershipsForDepartmentPeriod } from './timesheet-department-assignments.service.js';
@@ -62,7 +72,12 @@ export interface IVersionEmployee {
   /** true — за период нет ни одного реального сигнала; 1С такие строки не переносит. */
   zero_activity: boolean;
   days: Record<string, IVersionDayValue>;
-  /** Зарезервировано под объектную разбивку; сейчас всегда пусто. */
+  /**
+   * Историческое зарезервированное поле контракта 1С. Остаётся пустым намеренно:
+   * объектная разбивка живёт отдельным снимком (timesheet_version_objects) и отдаётся
+   * методом /timesheets/{id}/objects. Класть её сюда нельзя — изменился бы
+   * content_hash, и все уже выгруженные табели пришлось бы перезабирать.
+   */
   object_rows: unknown[];
 }
 
@@ -123,7 +138,7 @@ export class TimesheetVersionEmptyRosterError extends Error {
 }
 
 /** Месяцы (первые числа), которые пересекает период. */
-function monthAnchorsInRange(startDate: string, endDate: string): string[] {
+export function monthAnchorsInRange(startDate: string, endDate: string): string[] {
   const anchors: string[] = [];
   const cursor = new Date(`${startDate.slice(0, 8)}01T00:00:00Z`);
   const stop = new Date(`${endDate.slice(0, 8)}01T00:00:00Z`);
@@ -142,28 +157,27 @@ function lastDayOfMonth(anchor: string): string {
 }
 
 /**
- * Каноническая сериализация: ключи объектов сортируются лексикографически,
- * массивы сохраняют свой порядок (employees заранее отсортированы по employee_id).
- * Без этого хэш «плавал» бы от порядка вставки ключей в JS-объект.
- */
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === 'object') {
-    const source = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(source).sort()) out[key] = canonicalize(source[key]);
-    return out;
-  }
-  return value;
-}
-
-/**
  * md5 всего фактического payload — включая identity, zero_activity, object_rows и итоги.
  * Хэшируется именно то, что уходит в 1С: смена табельного номера, состава или одного
  * флага zero_activity обязана менять хэш.
  */
 export function computeContentHash(payload: ITimesheetVersionPayload): string {
-  return crypto.createHash('md5').update(JSON.stringify(canonicalize(payload))).digest('hex');
+  return crypto.createHash('md5').update(canonicalJson(payload)).digest('hex');
+}
+
+/** Снимок объектной разбивки, собранный вместе с версией. */
+export interface IVersionObjectsSnapshot {
+  payload: IVersionObjectsPayload;
+  hash: string;
+  configErrors: IObjectConfigError[];
+  employeesCount: number;
+  totalHours: number;
+}
+
+export interface IBuiltVersion {
+  payload: ITimesheetVersionPayload;
+  membershipWindows: Record<string, IMembershipWindow>;
+  objects: IVersionObjectsSnapshot;
 }
 
 interface IMembershipWindow {
@@ -176,6 +190,123 @@ interface IMembershipWindow {
 }
 
 /**
+ * Объектные интервалы подачи, отфильтрованные правилом владения днём.
+ *
+ * Владение обязано быть тем же, что у основного payload: иначе переведённый в середине
+ * периода унёс бы объектные часы новой бригады в выгрузку старой.
+ */
+async function collectOwnedObjectEntries(
+  client: PoolClient,
+  approval: IVersionApproval,
+  employeeIds: number[],
+): Promise<{
+  objectEntries: IAttendanceObjectEntry[];
+  ownsEmployeeDay: (employeeId: number, date: string) => boolean;
+}> {
+  const ownership = await resolveDayOwnership(
+    [{
+      approvalId: approval.id,
+      departmentId: approval.department_id,
+      employeeIds,
+      dates: enumerateDatesInclusive(approval.start_date, approval.end_date),
+    }],
+    client,
+  );
+  const ownsEmployeeDay = (employeeId: number, date: string): boolean =>
+    ownsDay(ownership.get(ownershipKey(approval.id, employeeId, date)));
+
+  const objectEntries: IAttendanceObjectEntry[] = [];
+  for (const anchor of monthAnchorsInRange(approval.start_date, approval.end_date)) {
+    const monthEnd = lastDayOfMonth(anchor);
+    const bulk = await fetchTimesheetDataForEmployees(
+      anchor.slice(0, 7),
+      employeeIds,
+      'Объекты версии',
+      {
+        startDate: approval.start_date > anchor ? approval.start_date : anchor,
+        endDate: approval.end_date < monthEnd ? approval.end_date : monthEnd,
+      },
+      'actual',
+      true,
+      { rosterMode: 'snapshot', exec: client },
+    );
+    for (const entry of bulk.objectEntries) {
+      if (!ownsEmployeeDay(entry.employee_id, entry.work_date)) continue;
+      objectEntries.push(entry);
+    }
+  }
+
+  return { objectEntries, ownsEmployeeDay };
+}
+
+/**
+ * Объектная разбивка часов подачи.
+ *
+ * Считается ПОСЛЕ основного payload и от него же: целевые часы дня берутся из
+ * payload.days, а объектные интервалы служат лишь весами. Иначе часы разошлись бы с
+ * табелем — dataMap обнуляет несогласованный выходной, а objectEntries такого фильтра
+ * не проходят.
+ *
+ * Все чтения — через тот же client: режим табелирования и адреса объектов обязаны быть
+ * из того же снимка БД, что и часы.
+ */
+async function buildObjectsSnapshot(
+  client: PoolClient,
+  payload: ITimesheetVersionPayload,
+  objectEntries: IAttendanceObjectEntry[],
+  ownsEmployeeDay: (employeeId: number, date: string) => boolean,
+): Promise<IVersionObjectsSnapshot> {
+  const employeeIds = payload.employees.map(employee => employee.identity.employee_id);
+  const modeByEmployee = await resolveExportModes(employeeIds, client);
+
+  // Адреса нужны и фактическим объектам, и закреплённым в режиме «объект»: без второго
+  // слагаемого у сотрудника без проходов адрес не нашёлся бы и строка уехала бы в
+  // «Не определён» вместе с ложной ошибкой конфигурации.
+  const objectIds = new Set<string>();
+  for (const entry of objectEntries) {
+    if (entry.object_id) objectIds.add(entry.object_id);
+  }
+  for (const resolved of modeByEmployee.values()) {
+    if (resolved.mode === 'object' && resolved.pinnedObjectId) objectIds.add(resolved.pinnedObjectId);
+  }
+
+  const objectMetaById = new Map<string, IObjectMeta>();
+  if (objectIds.size > 0) {
+    const rows = (await client.query<{ id: string; alt_name: string | null; name: string }>(
+      'SELECT id, alt_name, name FROM skud_objects WHERE id = ANY($1::uuid[])',
+      [[...objectIds]],
+    )).rows;
+    for (const row of rows) {
+      const altName = row.alt_name?.trim();
+      objectMetaById.set(row.id, {
+        name: row.name,
+        address: altName && altName.length > 0 ? altName : row.name,
+      });
+    }
+  }
+
+  const built = buildVersionObjectBreakdown({
+    employees: payload.employees.map(employee => ({
+      employee_id: employee.identity.employee_id,
+      full_name: employee.identity.full_name,
+      days: employee.days,
+    })),
+    objectEntries,
+    ownsDay: ownsEmployeeDay,
+    modeByEmployee,
+    objectMetaById,
+  });
+
+  return {
+    payload: built.payload,
+    hash: computeObjectsContentHash(built.payload, built.configErrors),
+    configErrors: built.configErrors,
+    employeesCount: built.employeesCount,
+    totalHours: built.totalHours,
+  };
+}
+
+/**
  * Собирает канонический payload подачи.
  *
  * Состав — ТОЛЬКО из снимка timesheet_approval_employees, одинаково для подач отдела
@@ -185,7 +316,7 @@ interface IMembershipWindow {
 export async function buildTimesheetPayload(
   client: PoolClient,
   approval: IVersionApproval,
-): Promise<{ payload: ITimesheetVersionPayload; membershipWindows: Record<string, IMembershipWindow> }> {
+): Promise<IBuiltVersion> {
   const snapshot = await listApprovalEmployees(approval.id, client);
   const snapshotIds = snapshot.map(row => Number(row.employee_id)).filter(Number.isFinite);
   if (snapshotIds.length === 0) throw new TimesheetVersionEmptyRosterError(approval.id);
@@ -230,6 +361,8 @@ export async function buildTimesheetPayload(
   // Период может пересекать месяцы: сборщик работает помесячно, склеиваем результаты.
   const days = new Map<number, Record<string, IVersionDayValue>>();
   const activeIds = new Set<number>();
+  // Копим по всем месяцам периода: объектная разбивка собирается один раз, после цикла.
+  const allObjectEntries: IAttendanceObjectEntry[] = [];
 
   // Владение днём: подача забирает только те даты, на которые сотрудник числился
   // в её отделе. Иначе переведённый в середине периода уносит дни новой бригады в
@@ -288,6 +421,7 @@ export async function buildTimesheetPayload(
     for (const objectEntry of bulk.objectEntries) {
       if (!ownsEmployeeDay(objectEntry.employee_id, objectEntry.work_date)) continue;
       activeIds.add(objectEntry.employee_id);
+      allObjectEntries.push(objectEntry);
     }
 
     for (const [employeeId, dayMap] of bulk.dataMap) {
@@ -333,26 +467,72 @@ export async function buildTimesheetPayload(
 
   const totalHours = employees.reduce((sum, employee) => sum + employee.total_hours, 0);
 
-  return {
-    payload: {
-      approval: {
-        id: approval.id,
-        scope: {
-          kind: scopeKind,
-          department_id: approval.department_id,
-          department_name: departmentName,
-          manager_employee_id: approval.manager_employee_id,
-        },
-        start_date: approval.start_date,
-        end_date: approval.end_date,
-        status: approval.status,
+  const payload: ITimesheetVersionPayload = {
+    approval: {
+      id: approval.id,
+      scope: {
+        kind: scopeKind,
+        department_id: approval.department_id,
+        department_name: departmentName,
+        manager_employee_id: approval.manager_employee_id,
       },
-      employees_count: employees.length,
-      total_hours: Math.round(totalHours * 100) / 100,
-      employees,
+      start_date: approval.start_date,
+      end_date: approval.end_date,
+      status: approval.status,
     },
-    membershipWindows,
+    employees_count: employees.length,
+    total_hours: Math.round(totalHours * 100) / 100,
+    employees,
   };
+
+  const objects = await buildObjectsSnapshot(client, payload, allObjectEntries, ownsEmployeeDay);
+
+  return { payload, membershipWindows, objects };
+}
+
+/** Записывает снимок объектной разбивки. Одна строка на редакцию (PK = version_id). */
+export async function insertObjectsSnapshot(
+  client: PoolClient,
+  versionId: number,
+  objects: IVersionObjectsSnapshot,
+  source: 'materialize' | 'backfill',
+): Promise<void> {
+  await client.query(
+    `INSERT INTO timesheet_version_objects (
+       version_id, objects_content_hash, payload, employees_count, total_hours,
+       config_errors, source
+     ) VALUES ($1,$2,$3::jsonb,$4,$5,$6::jsonb,$7)
+     ON CONFLICT (version_id) DO NOTHING`,
+    [
+      versionId,
+      objects.hash,
+      JSON.stringify(objects.payload),
+      objects.employeesCount,
+      objects.totalHours,
+      JSON.stringify(objects.configErrors),
+      source,
+    ],
+  );
+}
+
+/**
+ * Собирает объектную разбивку для УЖЕ СОХРАНЁННОГО payload редакции.
+ *
+ * Путь бэкфилла: у редакций, закрытых до внедрения, снимка объектов нет. Пересобирать
+ * ради этого сам табель нельзя — фоновый пересчёт СКУД мог уехать, и живой payload
+ * разошёлся бы с официальным. Поэтому целевые часы берутся из сохранённого payload,
+ * а живыми остаются только веса: объектные интервалы нигде не хранятся.
+ */
+export async function buildObjectsSnapshotForVersion(
+  client: PoolClient,
+  approval: IVersionApproval,
+  payload: ITimesheetVersionPayload,
+): Promise<IVersionObjectsSnapshot> {
+  const employeeIds = payload.employees.map(employee => employee.identity.employee_id);
+  const { objectEntries, ownsEmployeeDay } = await collectOwnedObjectEntries(
+    client, approval, employeeIds,
+  );
+  return buildObjectsSnapshot(client, payload, objectEntries, ownsEmployeeDay);
 }
 
 /**
@@ -361,6 +541,18 @@ export async function buildTimesheetPayload(
  *
  * Если содержимое совпало с последней версией по content_hash, новая редакция не
  * создаётся: пустое открытие/закрытие не должно выглядеть как изменение.
+ *
+ * С объектной разбивкой правило шире — новая редакция нужна ещё в двух случаях:
+ *
+ *   1. objects_content_hash изменился при том же content_hash. Часы переставили между
+ *      объектами, итог дня прежний: по одному лишь content_hash 1С об этом не узнала бы.
+ *   2. у последней версии снимка объектов нет, и она УЖЕ подтверждена (ACK). Дописать
+ *      снимок к ней нельзя: состояние выгрузки считается сравнением ack.version_id с
+ *      текущим version_id, подача осталась бы exported и в needs_export не вернулась —
+ *      а старый ACK выглядел бы подтверждением данных, которых на момент ACK не было.
+ *
+ * Если снимка нет, а версия ещё НЕ подтверждена, он дописывается на месте: это переход
+ * после внедрения, и плодить редакции там незачем.
  */
 export async function materializeVersion(
   client: PoolClient,
@@ -368,20 +560,36 @@ export async function materializeVersion(
   source: TimesheetVersionSource,
   actorUserId: string | null,
 ): Promise<{ version: ITimesheetVersionRow; created: boolean }> {
-  const { payload, membershipWindows } = await buildTimesheetPayload(client, approval);
+  const { payload, membershipWindows, objects } = await buildTimesheetPayload(client, approval);
   const contentHash = computeContentHash(payload);
 
-  const latest = (await client.query<ITimesheetVersionRow>(
-    `SELECT id, approval_id, revision, content_hash, employees_count, total_hours, created_at
-       FROM timesheet_versions
-      WHERE approval_id = $1
-      ORDER BY revision DESC
+  const latest = (await client.query<ITimesheetVersionRow & {
+    objects_content_hash: string | null;
+    acked: boolean;
+  }>(
+    `SELECT v.id, v.approval_id, v.revision, v.content_hash, v.employees_count,
+            v.total_hours, v.created_at,
+            vo.objects_content_hash,
+            (ack.version_id IS NOT NULL) AS acked
+       FROM timesheet_versions v
+       LEFT JOIN timesheet_version_objects vo ON vo.version_id = v.id
+       LEFT JOIN timesheet_1c_exports ack     ON ack.version_id = v.id
+      WHERE v.approval_id = $1
+      ORDER BY v.revision DESC
       LIMIT 1`,
     [approval.id],
   )).rows[0] ?? null;
 
   if (latest && latest.content_hash === contentHash) {
-    return { version: latest, created: false };
+    if (latest.objects_content_hash === objects.hash) {
+      return { version: latest, created: false };
+    }
+    if (latest.objects_content_hash === null && !latest.acked) {
+      await insertObjectsSnapshot(client, latest.id, objects, 'materialize');
+      return { version: latest, created: false };
+    }
+    // Иначе — разбивка изменилась либо редакция уже принята: нужна новая revision
+    // с тем же payload, чтобы подача штатно стала stale.
   }
 
   const nextRevision = (latest?.revision ?? 0) + 1;
@@ -408,7 +616,9 @@ export async function materializeVersion(
       source,
       actorUserId,
     ],
-  )).rows[0];
+  )).rows[0]!;
+
+  await insertObjectsSnapshot(client, inserted.id, objects, 'materialize');
 
   return { version: inserted, created: true };
 }

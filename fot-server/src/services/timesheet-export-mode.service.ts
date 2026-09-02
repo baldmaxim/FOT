@@ -18,7 +18,15 @@
  * миграция записала их тогдашний режим явно, поэтому удаление ветки выгрузку не изменило.
  * Возвращать её нельзя: режим задаётся слева, в «Варианте табелирования».
  */
-import { query } from '../config/postgres.js';
+import { query, type DbExecutor } from '../config/postgres.js';
+
+/** SELECT через клиент транзакции, если он передан, иначе через пул (см. DbExecutor). */
+async function runQuery<T extends import('pg').QueryResultRow>(
+  exec: DbExecutor | undefined, sql: string, params?: readonly unknown[],
+): Promise<T[]> {
+  if (exec) return (await exec.query<T>(sql, params as unknown[] | undefined)).rows;
+  return query<T>(sql, params);
+}
 
 export type TimesheetExportMode = 'current_activity' | 'object' | 'skud';
 
@@ -66,15 +74,20 @@ interface IModeRow {
 /**
  * Режимы для списка сотрудников. Один запрос: явные режимы сотрудника и его отдела
  * плюс legacy-признак по объектам отдела.
+ *
+ * exec — клиент транзакции. Обязателен при сборке официальной версии табеля: режим
+ * влияет на объектную разбивку, и читать его из другого снимка БД, чем часы, нельзя.
  */
 export async function resolveExportModes(
   employeeIds: number[],
+  exec?: DbExecutor,
 ): Promise<Map<number, IResolvedExportMode>> {
   const result = new Map<number, IResolvedExportMode>();
   const ids = [...new Set(employeeIds.filter(id => Number.isInteger(id) && id > 0))];
   if (ids.length === 0) return result;
 
-  const rows = await query<IModeRow>(
+  const rows = await runQuery<IModeRow>(
+    exec,
     `WITH ca AS (
        SELECT id FROM skud_objects
         WHERE lower(btrim(coalesce(alt_name, ''))) = lower($2::text)

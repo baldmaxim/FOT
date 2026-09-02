@@ -436,3 +436,138 @@ function baseRow(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+
+/**
+ * Объектная разбивка: отдельный метод, читающий замороженный снимок редакции.
+ * Проверяем то, на что опирается 1С: без снимка и при битой настройке режима метод
+ * обязан отказать, а не отдать часы, которые нельзя проводить.
+ */
+describe('objects', () => {
+  const objectsVersionRow = (over: Record<string, unknown> = {}) => ({
+    id: 9001,
+    revision: 2,
+    content_hash: 'hash-v2',
+    created_at: '2026-08-16T09:12:44.000Z',
+    start_date: '2026-08-01',
+    end_date: '2026-08-15',
+    scope: { kind: 'personal', department_id: null, manager_employee_id: 2617 },
+    objects_payload: {
+      employees: [{
+        employee_id: 2617,
+        full_name: 'Иванов И. И.',
+        mode: 'skud',
+        total_hours: 8,
+        objects: [{
+          object_id: 'obj-a',
+          object_key: 'obj-a',
+          object_name: 'ЖК Примавера К14',
+          object_address: 'Примавера, адрес',
+          total_hours: 8,
+          days: { '2026-08-03': 8 },
+        }],
+      }],
+    },
+    objects_content_hash: 'objhash-v2',
+    objects_employees_count: 1,
+    config_errors: [],
+    ...over,
+  });
+
+  it('403, если ключу не открыта таблица employees', async () => {
+    getKeyTables.mockResolvedValue([]);
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq(), res);
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('404 на несуществующую подачу', async () => {
+    pgQueryOne.mockResolvedValueOnce(null);
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq(), res);
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('409 TIMESHEET_NOT_APPROVED, если подача больше не утверждена', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow({ status: 'submitted' }));
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq(), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('TIMESHEET_NOT_APPROVED');
+  });
+
+  it('409 TIMESHEET_REBUILD_PENDING во время аварийной пересборки', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow({ version_dirty_at: '2026-08-16T09:00:00.000Z' }));
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq(), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('TIMESHEET_REBUILD_PENDING');
+  });
+
+  it('409 VERSION_NOT_AVAILABLE, если редакции нет', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow()).mockResolvedValueOnce(null);
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq(), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('VERSION_NOT_AVAILABLE');
+  });
+
+  it('409 OBJECT_BREAKDOWN_NOT_AVAILABLE у редакции старше внедрения', async () => {
+    // Снимок не сформирован. ACK по такой редакции слать нельзя — подача уйдёт из
+    // очереди, а объектные строки в документ так и не попадут.
+    pgQueryOne
+      .mockResolvedValueOnce(approvalRow())
+      .mockResolvedValueOnce(objectsVersionRow({ objects_content_hash: null, objects_payload: null }));
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq(), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('OBJECT_BREAKDOWN_NOT_AVAILABLE');
+  });
+
+  it('409 INVALID_EXPORT_MODE_CONFIG со списком сотрудников при битой настройке', async () => {
+    pgQueryOne
+      .mockResolvedValueOnce(approvalRow())
+      .mockResolvedValueOnce(objectsVersionRow({
+        config_errors: [{ employee_id: 501, code: 'PINNED_OBJECT_MISSING', message: 'нет объекта' }],
+      }));
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq(), res);
+    expect(res.statusCode).toBe(409);
+    expect(res.payload.code).toBe('INVALID_EXPORT_MODE_CONFIG');
+    expect(res.payload.employees).toHaveLength(1);
+  });
+
+  it('отдаёт снимок с обоими хэшами и часами по объектам', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow()).mockResolvedValueOnce(objectsVersionRow());
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq(), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.revision).toBe(2);
+    expect(res.payload.timesheet_content_hash).toBe('hash-v2');
+    expect(res.payload.objects_content_hash).toBe('objhash-v2');
+    expect(res.payload.employees[0].objects[0].days).toEqual({ '2026-08-03': 8 });
+    expect(res.payload.meta.employees_count).toBe(1);
+  });
+
+  it('?revision=N адресует конкретную редакцию', async () => {
+    pgQueryOne.mockResolvedValueOnce(approvalRow()).mockResolvedValueOnce(objectsVersionRow({ revision: 1 }));
+    const res = makeRes();
+    await publicTimesheetsController.objects(
+      makeReq({ query: { revision: '1' } }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.revision).toBe(1);
+    const versionCall = pgQueryOne.mock.calls[1]!;
+    expect(String(versionCall[0])).toContain('AND v.revision = $2');
+    expect(versionCall[1]).toEqual([APPROVAL_ID, 1]);
+  });
+
+  it('нечисловой revision — 400', async () => {
+    const res = makeRes();
+    await publicTimesheetsController.objects(makeReq({ query: { revision: 'abc' } }), res);
+    expect(res.statusCode).toBe(400);
+  });
+});

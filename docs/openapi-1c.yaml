@@ -266,6 +266,89 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /timesheets/{approval_id}/objects:
+    get:
+      tags: [timesheets]
+      operationId: getTimesheetObjectBreakdown
+      summary: Часы сотрудников по объектам (та же редакция)
+      description: |
+        Отвечает на вопрос «на каком объекте и сколько часов был сотрудник».
+        Нужен там, где учёт идёт по СКУД: день складывается из проходов по
+        нескольким объектам, и в теле табеля этой разбивки нет.
+
+        Метод читает снимок, **замороженный вместе с редакцией**, и ничего не
+        пересчитывает — повторный запрос той же `revision` даёт тот же
+        `objects_content_hash`.
+
+        Вызывать **с той же `revision`**, что забрали в
+        `GET /timesheets/{approval_id}`: между двумя вызовами может появиться
+        новая редакция.
+
+        Инвариант: сумма `objects[*].days[дата]` равна `days[дата].hours` того же
+        сотрудника в теле табеля. Часы — в той же шкале, что и в табеле.
+
+        Разбивка есть не у всех отделов. Если объектной активности нет, часы
+        приходят одной строкой «Не определён» либо `objects` пуст — это не ошибка.
+      parameters:
+        - $ref: '#/components/parameters/ApprovalId'
+        - name: revision
+          in: query
+          description: Конкретная редакция. По умолчанию — последняя.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Объектная разбивка редакции
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectBreakdown'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            Разбивка недоступна. Коды `TIMESHEET_NOT_APPROVED`,
+            `VERSION_NOT_AVAILABLE`, `TIMESHEET_REBUILD_PENDING` — как у самого
+            табеля. Плюс два своих:
+
+            `OBJECT_BREAKDOWN_NOT_AVAILABLE` — редакция старше внедрения метода и
+            не забэкфиллена. Пропустить.
+
+            `INVALID_EXPORT_MODE_CONFIG` — у части сотрудников повреждён режим
+            табелирования, их часы недостоверны. В поле `employees` — список
+            `employee_id` с причиной; передать администратору ФОТ. Снимок
+            заморожен, поэтому починка настройки сама редакцию не исправит —
+            табель нужно открыть и закрыть заново.
+
+            **В обоих случаях ACK отправлять НЕЛЬЗЯ:** подача уйдёт из очереди,
+            а объектные строки в документ так и не попадут.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                notAvailable:
+                  value:
+                    success: false
+                    code: OBJECT_BREAKDOWN_NOT_AVAILABLE
+                    error: Объектная разбивка для этой редакции не сформирована
+                invalidConfig:
+                  value:
+                    success: false
+                    code: INVALID_EXPORT_MODE_CONFIG
+                    error: Разбивка по объектам недостоверна
+                    employees:
+                      - employee_id: 501
+                        code: PINNED_OBJECT_MISSING
+                        message: Режим «объект» без закреплённого объекта
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /timesheets/{approval_id}/ack:
     post:
       tags: [timesheets]
@@ -711,10 +794,113 @@ components:
         object_rows:
           type: array
           description: |
-            Зарезервировано под разбивку часов по объектам. Сейчас всегда пусто;
-            заполнение появится позже и контракт не сломает.
+            Историческое зарезервированное поле. **Всегда пусто и останется пустым.**
+            Разбивка часов по объектам живёт отдельным методом
+            `GET /timesheets/{approval_id}/objects`: класть её сюда нельзя —
+            изменился бы `content_hash`, и все уже выгруженные табели пришлось бы
+            перезабирать.
           items:
             type: object
+
+    ObjectRow:
+      type: object
+      required: [object_id, object_name, total_hours, days]
+      properties:
+        object_id:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            `null` у «Текущей деятельности» и у нераспознанного объекта
+            («Не определён») — различать по `object_name`.
+        object_key:
+          type: string
+          description: Внутренний ключ строки. Стабилен между редакциями.
+        object_name:
+          type: string
+          example: ЖК Примавера К14
+        object_address:
+          type: string
+          description: Адрес объекта (`alt_name`), иначе его название.
+        total_hours:
+          type: number
+          description: Сумма по `days` этой строки.
+        days:
+          type: object
+          description: |
+            Ключ — дата `YYYY-MM-DD`, значение — часы. Только дни с
+            положительными часами: дни-буквы (отпуск, больничный) и
+            несогласованные выходные сюда не попадают — они уже описаны в теле
+            табеля, и дублировать их значит задвоить учёт.
+          additionalProperties:
+            type: number
+
+    EmployeeObjects:
+      type: object
+      required: [employee_id, mode, total_hours, objects]
+      properties:
+        employee_id:
+          type: integer
+          description: Тот же ключ, что `identity.employee_id` в табеле (реквизит `ID_FOT`).
+        full_name:
+          type: [string, 'null']
+          description: Только для отображения.
+        mode:
+          type: string
+          enum: [skud, object, current_activity]
+          description: |
+            `skud` — разбивка по фактическим проходам; `object` — одна строка на
+            закреплённый объект; `current_activity` — одна строка «Текущая
+            деятельность».
+        total_hours:
+          type: number
+        objects:
+          type: array
+          description: Пусто, если у сотрудника нет дней с положительными часами. Не ошибка.
+          items:
+            $ref: '#/components/schemas/ObjectRow'
+
+    ObjectBreakdown:
+      type: object
+      required:
+        [approval_id, revision, timesheet_content_hash, objects_content_hash, employees]
+      properties:
+        approval_id:
+          type: integer
+        scope:
+          $ref: '#/components/schemas/Scope'
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        revision:
+          type: integer
+          description: Редакция, к которой относится разбивка.
+        timesheet_content_hash:
+          type: string
+          description: |
+            `content_hash` самой редакции — сверяется с тем, что вернул
+            `GET /timesheets/{approval_id}`.
+        objects_content_hash:
+          type: string
+          description: |
+            Хэш объектной разбивки. **Может измениться при неизменном
+            `timesheet_content_hash`** — если часы переставили между объектами,
+            а итог дня остался прежним. Такое изменение всегда даёт новую
+            `revision`, поэтому подача штатно вернётся в `needs_export`.
+        version_created_at:
+          type: string
+          format: date-time
+        employees:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmployeeObjects'
+        meta:
+          type: object
+          properties:
+            employees_count:
+              type: integer
 
     TimesheetVersionPayload:
       type: object
