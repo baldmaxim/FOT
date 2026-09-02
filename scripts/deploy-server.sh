@@ -276,35 +276,12 @@ server_preflight() {
   nginx -t >/dev/null
 }
 
-# Тянет ветку с ретраями.
-#
-# Репозиторий публичный и кред не требует, но GitHub периодически отвечает анонимному
-# запросу 401 «представьтесь» — лимит анонимных обращений общий на IP, а VPS shared, и
-# его выбирают соседи. Проявление плавающее: подряд идущие попытки дают то 401, то 200.
-#
-# GIT_TERMINAL_PROMPT=0 обязателен: без него git на 401 уходит в интерактивный вопрос
-# «Username for github.com» и деплой ВИСНЕТ — через SSH-обёртку бесконечно, потому что
-# отвечать на вопрос некому.
-fetch_with_retry() {
-  local attempt
-  for attempt in 1 2 3 4; do
-    if GIT_TERMINAL_PROMPT=0 git fetch "$FOT_REMOTE" "$FOT_BRANCH" --prune; then
-      return 0
-    fi
-    if ((attempt < 4)); then
-      log "git fetch не прошёл (попытка $attempt/4), повтор через $((attempt * 5)) с..."
-      sleep $((attempt * 5))
-    fi
-  done
-  die "git fetch $FOT_REMOTE/$FOT_BRANCH не удался после 4 попыток. Если повторяется — привязать сборочный контур к deploy key (SSH) вместо анонимного HTTPS: анонимные лимиты GitHub общие на IP, авторизованные — свои."
-}
-
 update_code() {
   log "Синхронизирую BUILD_DIR с $FOT_REMOTE/$FOT_BRANCH..."
   cd "$BUILD_DIR"
 
   BEFORE="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
-  fetch_with_retry
+  git fetch "$FOT_REMOTE" "$FOT_BRANCH" --prune
   git checkout -f -B "$FOT_BRANCH" "$FOT_REMOTE/$FOT_BRANCH"
   git reset --hard "$FOT_REMOTE/$FOT_BRANCH"
   if [[ "$BUILD_CLEAN_HARD" == "1" ]]; then
