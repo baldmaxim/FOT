@@ -1,5 +1,7 @@
 import { Response } from 'express';
 import { AxiosError } from 'axios';
+import { assertSigurDepartmentAssignable } from '../services/department-assignability.service.js';
+import { settingsService } from '../services/settings.service.js';
 import { auditService } from '../services/audit.service.js';
 import {
   getSigurEmployeeProfile,
@@ -158,6 +160,17 @@ function getErrorMessage(error: unknown, fallback: string): string {
     }
   }
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+/**
+ * Раздел Sigur подчиняется общим правилам целостности: смотреть дерево Sigur
+ * можно целиком, но заводить и переводить людей — только в отдел, который ФОТ
+ * синхронизирует. Архивная папка «Уволенные» исключена: через неё идёт сценарий
+ * увольнения и она намеренно может быть вне фильтра.
+ */
+async function assertSigurTargetDepartment(sigurDepartmentId: number): Promise<void> {
+  const { archiveDepartmentId } = await settingsService.getSigurConnectionSettings();
+  await assertSigurDepartmentAssignable(sigurDepartmentId, { archiveDepartmentId });
 }
 
 export const sigurAdminController = {
@@ -574,6 +587,7 @@ export const sigurAdminController = {
       const tabId = typeof req.body.tabId === 'string' ? req.body.tabId.trim() : null;
       const description = typeof req.body.description === 'string' ? req.body.description : null;
       const connection = parseConnection(req.body.connection);
+      await assertSigurTargetDepartment(departmentId);
 
       const data = await createSigurEmployee({
         name,
@@ -740,6 +754,7 @@ export const sigurAdminController = {
       }
 
       const connection = parseConnection(req.body.connection);
+      await assertSigurTargetDepartment(departmentId);
       const data = await moveSigurEmployee(sigurEmployeeId, departmentId, connection);
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
@@ -774,6 +789,7 @@ export const sigurAdminController = {
       }
 
       const connection = parseConnection(req.body.connection);
+      await assertSigurTargetDepartment(parsedDepartmentId);
       const data = await batchMoveSigurEmployees(parsedEmployeeIds, parsedDepartmentId, connection);
       res.json({ success: true, data });
     } catch (error) {
@@ -800,6 +816,18 @@ export const sigurAdminController = {
     }
 
     const connection = parseConnection(req.body.connection);
+
+    // Проверяем до открытия SSE: иначе ошибка ушла бы событием в поток, а клиент
+    // считал бы запрос принятым.
+    try {
+      await assertSigurTargetDepartment(parsedDepartmentId);
+    } catch (error) {
+      res.status(getErrorStatus(error)).json({
+        success: false,
+        error: getErrorMessage(error, 'Целевой отдел недоступен для назначения'),
+      });
+      return;
+    }
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

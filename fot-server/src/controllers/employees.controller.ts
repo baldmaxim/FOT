@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { syncProfileNameFromEmployee } from '../services/user-profile-name.service.js';
@@ -15,6 +16,17 @@ import {
 } from '../services/sigur-linked-employees.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import { createSigurEmployee } from '../services/sigur-live-employees-crud.service.js';
+import { loadAssignableTargetDepartment } from '../services/department-assignability.service.js';
+import {
+  buildOperationMarker,
+  claimCreateOperation,
+  findSigurEmployeeIdByMarker,
+  hashCreatePayload,
+  markCreateDone,
+  markCreateFailed,
+  markEmployeeCreatedTx,
+  markSigurCreated,
+} from '../services/employee-create-operations.service.js';
 import { isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
@@ -636,6 +648,13 @@ export const employeesController = {
    */
   async create(req: AuthenticatedRequest, res: Response): Promise<void> {
     let sigurEmployeeIdCreated: number | null = null;
+    // operation_id делает повтор безопасным: та же операция продолжается, а не
+    // создаёт вторую карточку в Sigur. Клиент без ключа получает разовый —
+    // поведение как раньше.
+    const operationId = typeof req.body.operation_id === 'string' && req.body.operation_id.trim()
+      ? req.body.operation_id.trim()
+      : randomUUID();
+    let operationClaimed = false;
     try {
       const validated = createEmployeeSchema.parse(req.body);
       const scope = await resolveRequestDataScope(req);
@@ -664,18 +683,19 @@ export const employeesController = {
         return;
       }
 
-      const departmentRow = await queryOne<{ id: string; sigur_department_id: number | null; name: string }>(
-        `SELECT id, sigur_department_id, name
-           FROM org_departments
-          WHERE id = $1 AND is_active = true`,
-        [validated.org_department_id],
-      );
-      if (!departmentRow) {
-        res.status(400).json({ success: false, error: 'Отдел не найден или неактивен' });
-        return;
-      }
-      if (!departmentRow.sigur_department_id) {
-        res.status(409).json({ success: false, error: `У отдела «${departmentRow.name}» нет привязки к Sigur` });
+      // Единая проверка назначаемости: отдел вне фильтра синхронизации остаётся
+      // видимым ради уже числящихся людей, но заводить в него новых нельзя.
+      let departmentRow;
+      try {
+        departmentRow = await loadAssignableTargetDepartment(validated.org_department_id);
+      } catch (departmentError) {
+        const status = (departmentError as { status?: number }).status ?? 400;
+        const code = (departmentError as { code?: string }).code;
+        res.status(status).json({
+          success: false,
+          error: departmentError instanceof Error ? departmentError.message : 'Отдел недоступен для назначения',
+          ...(code ? { code } : {}),
+        });
         return;
       }
 
@@ -695,46 +715,121 @@ export const employeesController = {
       const fio = parseFIO(validated.full_name);
       const tabNumber = validated.tab_number?.trim() || null;
 
-      // 1. Создаём в Sigur
-      const sigurProfile = await createSigurEmployee({
-        name: validated.full_name,
-        departmentId: departmentRow.sigur_department_id,
-        positionId: positionRow.sigur_position_id,
-        tabId: tabNumber,
-        description: null,
-        blocked: false,
-      }, connection);
-      sigurEmployeeIdCreated = sigurProfile.sigurEmployeeId;
+      // 1. Занимаем операцию: повтор продолжит её, а не создаст вторую карточку.
+      const payloadHash = hashCreatePayload({
+        full_name: validated.full_name,
+        hire_date: validated.hire_date,
+        org_department_id: validated.org_department_id,
+        position_id: validated.position_id,
+        tab_number: tabNumber,
+      });
+      const { operation } = await claimCreateOperation(operationId, req.user.id, payloadHash);
+      operationClaimed = true;
 
-      // 2. Пишем в нашу БД
+      if (operation.payload_hash !== payloadHash) {
+        res.status(409).json({
+          success: false,
+          error: 'Ключ операции уже использован с другими данными сотрудника',
+          code: 'OPERATION_PAYLOAD_MISMATCH',
+        });
+        return;
+      }
+
+      if (operation.status === 'done' && operation.employee_id) {
+        const existing = await queryOne<EmployeeEncrypted>(
+          `SELECT ${EMPLOYEE_FULL_COLUMNS} FROM employees WHERE id = $1`,
+          [operation.employee_id],
+        );
+        if (existing) {
+          const cache = await loadStructureCache();
+          res.status(200).json({
+            success: true,
+            idempotent: true,
+            data: decryptEmployee(existing, cache),
+          });
+          return;
+        }
+      }
+
+      // 2. Карточка в Sigur: сохранённая, найденная по маркеру или новая.
+      sigurEmployeeIdCreated = operation.sigur_employee_id;
+
+      if (!sigurEmployeeIdCreated && !operation.employee_id && operation.status !== 'claimed') {
+        // Операция уже была в работе, но id не сохранён — возможно, падение
+        // произошло между созданием в Sigur и записью. Ищем карточку по маркеру.
+        try {
+          const sigurEmployees = await sigurService.getEmployees(undefined, connection) as Array<Record<string, unknown>>;
+          const found = findSigurEmployeeIdByMarker(sigurEmployees ?? [], operationId);
+          if (found) {
+            sigurEmployeeIdCreated = found;
+            await markSigurCreated(operationId, found);
+            console.warn(`[createEmployee] карточка Sigur ${found} найдена по маркеру операции ${operationId}`);
+          }
+        } catch (lookupError) {
+          console.error('[createEmployee] поиск по маркеру операции не удался:', lookupError);
+        }
+      }
+
+      if (!sigurEmployeeIdCreated) {
+        const sigurProfile = await createSigurEmployee({
+          name: validated.full_name,
+          departmentId: departmentRow.sigur_department_id,
+          positionId: positionRow.sigur_position_id,
+          tabId: tabNumber,
+          // Маркер операции: по нему повтор находит уже созданную карточку,
+          // если запись id не успела произойти.
+          description: buildOperationMarker(operationId),
+          blocked: false,
+        }, connection, {
+          onCreated: async sigurEmployeeId => {
+            sigurEmployeeIdCreated = sigurEmployeeId;
+            await markSigurCreated(operationId, sigurEmployeeId);
+          },
+        });
+        sigurEmployeeIdCreated = sigurProfile.sigurEmployeeId;
+      }
+
+      // 3. Пишем в нашу БД: строка сотрудника и статус операции — одной транзакцией.
       let data: EmployeeEncrypted | null = null;
       let insertErr: unknown = null;
       try {
-        data = await queryOne<EmployeeEncrypted>(
-          `INSERT INTO employees
-             (full_name, last_name, first_name, middle_name, hire_date,
-              org_department_id, position_id, sigur_employee_id, tab_number,
-              employment_status, department_locked)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', false)
-           RETURNING ${EMPLOYEE_FULL_COLUMNS}`,
-          [
-            validated.full_name,
-            fio.lastName,
-            fio.firstName || null,
-            fio.middleName || null,
-            validated.hire_date,
-            validated.org_department_id,
-            validated.position_id,
-            sigurEmployeeIdCreated,
-            tabNumber,
-          ],
-        );
+        const createdSigurId = sigurEmployeeIdCreated;
+        data = await withTransaction(async client => {
+          const inserted = await client.query<EmployeeEncrypted>(
+            `INSERT INTO employees
+               (full_name, last_name, first_name, middle_name, hire_date,
+                org_department_id, position_id, sigur_employee_id, tab_number,
+                employment_status, department_locked)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', false)
+             RETURNING ${EMPLOYEE_FULL_COLUMNS}`,
+            [
+              validated.full_name,
+              fio.lastName,
+              fio.firstName || null,
+              fio.middleName || null,
+              validated.hire_date,
+              validated.org_department_id,
+              validated.position_id,
+              createdSigurId,
+              tabNumber,
+            ],
+          );
+          const row = inserted.rows[0] ?? null;
+          if (row) {
+            await markEmployeeCreatedTx(client, operationId, Number(row.id), createdSigurId as number);
+          }
+          return row;
+        });
       } catch (err) {
         insertErr = err;
       }
 
       if (insertErr || !data) {
         const orphanSigurId = sigurEmployeeIdCreated;
+        await markCreateFailed(
+          operationId,
+          insertErr instanceof Error ? insertErr.message : 'insert failed',
+        );
         console.error('[createEmployee] Sigur create succeeded but DB insert failed, manual cleanup needed', {
           sigurEmployeeId: orphanSigurId,
           error: insertErr,
@@ -750,8 +845,10 @@ export const employeesController = {
         const detail = insertErr instanceof Error ? insertErr.message : 'insert failed';
         res.status(500).json({
           success: false,
-          error: `Sigur-сотрудник создан (id=${orphanSigurId}), но запись в БД не создана. Заблокируйте его вручную в Sigur.`,
+          error: `Sigur-сотрудник создан (id=${orphanSigurId}), но запись в БД не создана.`
+            + ' Повторите запрос с тем же operation_id — дубль в Sigur создан не будет.',
           detail,
+          operation_id: operationId,
         });
         return;
       }
@@ -791,15 +888,26 @@ export const employeesController = {
         },
       });
 
+      // Операция закрыта: повтор с тем же ключом вернёт этого же сотрудника.
+      await markCreateDone(operationId);
+
       const structureCache = await loadStructureCache();
       const employee = decryptEmployee(data as EmployeeEncrypted, structureCache);
-      res.status(201).json({ success: true, data: employee });
+      res.status(201).json({ success: true, data: employee, operation_id: operationId });
     } catch (error) {
       if (error instanceof z.ZodError) {
         res.status(400).json({ success: false, error: error.errors[0].message });
         return;
       }
-      console.error('[createEmployee] error', { sigurEmployeeIdCreated, error });
+      if (operationClaimed) {
+        await markCreateFailed(
+          operationId,
+          error instanceof Error ? error.message : 'unknown error',
+        ).catch(markError => {
+          console.error('[createEmployee] не удалось пометить операцию failed:', markError);
+        });
+      }
+      console.error('[createEmployee] error', { operationId, sigurEmployeeIdCreated, error });
       const message = error instanceof Error && error.message ? error.message : 'Failed to create employee';
       res.status(500).json({
         success: false,

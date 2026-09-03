@@ -1,6 +1,7 @@
+import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
-import { query, execute } from '../config/postgres.js';
-import { invalidateSyncFilterCache } from './skud-shared.service.js';
+import { query } from '../config/postgres.js';
+import { saveSyncFilterWithReconciliation } from './sigur-sync-filter.service.js';
 
 /** Системные папки Sigur — больше не фильтруем, синхронизируем все */
 const SIGUR_SYSTEM_DEPARTMENTS: string[] = [];
@@ -163,6 +164,59 @@ export function isSystemDepartment(name: string): boolean {
   return SIGUR_SYSTEM_DEPARTMENTS.includes(name.toLowerCase().trim());
 }
 
+/**
+ * Единая политика зеркала отделов: что зеркало обязано содержать и куда можно
+ * назначать сотрудников. Один источник истины для синка, watcher-а и
+ * реконсиляции активности — иначе они расходятся, и watcher вечно видит
+ * «пропавшими» те отделы, которые синк намеренно не зеркалит.
+ *
+ * mirroredIds — whitelist ∪ его потомки ∪ структурные предки (путь до корня),
+ *   минус системные отделы Sigur и всё под ними.
+ * assignableIds — только whitelist ∪ потомки: структурный предок нужен, чтобы
+ *   дерево не рвалось, но назначать в него нельзя — он вне выбранного контура.
+ *
+ * whitelist = null или пустой → фильтр не настроен, зеркалим и разрешаем всё,
+ * кроме системных отделов (историческое поведение синка).
+ */
+export function resolveMirrorPolicy(
+  departments: INormalizedDept[],
+  whitelist: Set<number> | null,
+): { mirroredIds: Set<number>; assignableIds: Set<number> } {
+  const systemIds = new Set<number>();
+  for (const dept of departments) {
+    if (isSystemDepartment(dept.name)) systemIds.add(dept.id);
+  }
+  // Потомки системных отделов — тоже системные (каскад по снимку Sigur).
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const dept of departments) {
+      if (!systemIds.has(dept.id) && dept.parentId != null && systemIds.has(dept.parentId)) {
+        systemIds.add(dept.id);
+        changed = true;
+      }
+    }
+  }
+
+  const withoutSystem = (ids: Iterable<number>): Set<number> => {
+    const result = new Set<number>();
+    for (const id of ids) {
+      if (!systemIds.has(id)) result.add(id);
+    }
+    return result;
+  };
+
+  if (!whitelist || whitelist.size === 0) {
+    const all = withoutSystem(departments.map(dept => dept.id));
+    return { mirroredIds: all, assignableIds: new Set(all) };
+  }
+
+  const assignable = withoutSystem(expandDepartmentIdsToDescendants(whitelist, departments));
+  const mirrored = withoutSystem(expandDepartmentIdsToAncestors(assignable, departments));
+
+  return { mirroredIds: mirrored, assignableIds: assignable };
+}
+
 function buildDepartmentNameMap(departments: INormalizedDept[]): Map<string, INormalizedDept[]> {
   const byName = new Map<string, INormalizedDept[]>();
 
@@ -282,36 +336,31 @@ async function loadSyncFilterRows(context?: ISyncContext): Promise<ISyncFilterDe
   return rows;
 }
 
+/**
+ * Перезапись фильтра фоновым ремапом sigur-id (reconcileSyncFilterDepartments).
+ *
+ * Идёт через общий транзакционный writer: до этого здесь были DELETE-all и
+ * INSERT вне транзакции, и падение между ними обнуляло whitelist прямо из
+ * фонового синка — то есть автоматика молча выключала синхронизацию.
+ *
+ * Пустой результат ремапа при непустом текущем фильтре не применяется вовсе:
+ * автоматика не имеет права обнулить настройку пользователя.
+ */
 async function persistSyncFilterRows(
   rows: Array<{ sigur_department_id: number; sigur_department_name: string | null }>,
   context?: ISyncContext,
 ): Promise<void> {
-  try {
-    await execute(
-      "DELETE FROM skud_sync_department_filter WHERE id <> '00000000-0000-0000-0000-000000000000'::uuid",
-    );
-  } catch (deleteError) {
-    throw new Error(`Failed to rewrite sync filter: ${(deleteError as Error).message}`);
-  }
-
-  if (rows.length > 0) {
-    const params: unknown[] = [];
-    const placeholders: string[] = [];
-    for (const row of rows) {
-      params.push(row.sigur_department_id, row.sigur_department_name);
-      placeholders.push(`($${params.length - 1}, $${params.length})`);
-    }
-    try {
-      await execute(
-        `INSERT INTO skud_sync_department_filter (sigur_department_id, sigur_department_name) VALUES ${placeholders.join(', ')}`,
-        params,
-      );
-    } catch (insertError) {
-      throw new Error(`Failed to save reconciled sync filter: ${(insertError as Error).message}`);
+  if (rows.length === 0) {
+    const existing = await loadSyncFilterRows(context);
+    if (existing.length > 0) {
+      const message = '[sync-filter] ремап дал пустой набор при непустом фильтре — запись отменена';
+      console.error(message);
+      Sentry.captureMessage(message, { level: 'error', tags: { service: 'sync-filter' } });
+      return;
     }
   }
 
-  invalidateSyncFilterCache();
+  await saveSyncFilterWithReconciliation(rows, { source: 'sigur-remap', allowEmpty: true });
 
   if (context) {
     context.syncFilterRows = rows.map(row => ({ ...row }));

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Search, Save, Check, RefreshCw, Info, ChevronRight, ChevronDown, Folder, FolderOpen } from 'lucide-react';
-import { sigurService } from '../../services/sigurService';
+import { sigurService, type ISyncFilterSaveResult } from '../../services/sigurService';
 import { compareDepartmentNames } from '../../utils/departmentUtils';
 import '../../styles/SigurSettingsPage.css';
 
@@ -235,6 +235,9 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Отделы вне фильтра, которые сервер оставил активными ради числящихся людей:
+  // молчаливое «Сохранено» скрывало бы, что часть выбора не применилась буквально.
+  const [warnings, setWarnings] = useState<ISyncFilterSaveResult['warnings']>([]);
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState<SortMode>('alpha');
   const [error, setError] = useState('');
@@ -387,13 +390,16 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
       const departments = sigurDepts
         .filter(d => selectedIds.has(d.id))
         .map(d => ({ sigur_department_id: d.id, sigur_department_name: d.name }));
-      await sigurService.updateSyncFilter(departments);
+      const result = await sigurService.updateSyncFilter(departments);
+      setWarnings(result?.warnings ?? []);
       setInitialIds(new Set(selectedIds));
       onFilterCountChange?.(selectedIds.size);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
-    } catch {
-      setError('Ошибка сохранения фильтра');
+    } catch (saveError) {
+      setError(saveError instanceof Error && saveError.message
+        ? saveError.message
+        : 'Ошибка сохранения фильтра');
     } finally {
       setSaving(false);
     }
@@ -476,7 +482,10 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
             <button
               className={`sigur-btn sigur-btn-primary ${saved ? 'sigur-btn-saved' : ''}`}
               onClick={handleSave}
-              disabled={saving || !isDirty}
+              disabled={saving || !isDirty || selectedIds.size === 0}
+              title={selectedIds.size === 0
+                ? 'Пустой фильтр отключит синхронизацию с Sigur'
+                : undefined}
             >
               {saved ? <><Check size={14} /> Сохранено</> : <><Save size={14} /> Сохранить</>}
             </button>
@@ -488,10 +497,19 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
         Выбрано: <strong>{selectedIds.size}</strong> из {sigurDepts.length}
       </div>
 
+      {warnings.length > 0 && (
+        <div className="sync-filter-info">
+          <Info size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          Оставлены активными, так как в них числятся сотрудники (назначать в них нельзя):{' '}
+          {warnings.map(item => `${item.name} — ${item.employees}`).join('; ')}
+        </div>
+      )}
+
       {selectedIds.size === 0 && (
         <div className="sync-filter-info">
           <Info size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-          Если ничего не выбрано — портальные sync-процессы работают со всеми отделами Sigur
+          Пустой фильтр отключает синхронизацию с Sigur: сотрудники и события перестанут
+          загружаться, а отделы без людей будут деактивированы. Отметьте нужные отделы.
         </div>
       )}
 

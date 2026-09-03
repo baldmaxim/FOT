@@ -2,14 +2,13 @@ import * as Sentry from '@sentry/node';
 import { sigurService } from './sigur.service.js';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
 import {
-  expandDepartmentIdsToAncestors,
   getDepartmentsRaw,
   getWhitelistedDepartmentIdsCached,
-  isSystemDepartment,
   logSampleAndWarn,
   normalizeDepartment,
   normalizeDepartmentLookupName,
   normalizeEmployee,
+  resolveMirrorPolicy,
   type ISyncContext,
 } from './sigur-sync-shared.js';
 import { invalidateOrgStructureCaches } from './employee-mapper.service.js';
@@ -220,42 +219,16 @@ export async function syncDepartmentsLogic(
     }
   }
 
-  // Собираем ID системных отделов и всех их потомков (каскадная фильтрация)
-  const filteredSigurIds = new Set<number>();
-  const systemIds = new Set<number>();
-  for (const dept of departments) {
-    if (isSystemDepartment(dept.name)) {
-      systemIds.add(dept.id);
-      filteredSigurIds.add(dept.id);
-    }
-  }
-  // Каскадно добавляем потомков системных отделов
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const dept of departments) {
-      if (!filteredSigurIds.has(dept.id) && dept.parentId && filteredSigurIds.has(dept.parentId)) {
-        filteredSigurIds.add(dept.id);
-        changed = true;
-      }
-    }
-  }
-
-  // Whitelist: если задан фильтр, пропускаем отделы вне whitelist
+  // Единая политика зеркала (resolveMirrorPolicy): системные отделы Sigur и всё под
+  // ними не зеркалим, whitelist раскрываем вниз по потомкам и вверх по предкам.
+  // Структурный предок обязан быть в зеркале (иначе дерево рвётся), но назначать
+  // в него нельзя — он вне выбранного контура.
   const whitelist = await getWhitelistedDepartmentIdsCached(connection, context);
-  if (whitelist) {
-    const allowedSigurIds = expandDepartmentIdsToAncestors(new Set(whitelist), departments);
-
-    // Добавляем в filteredSigurIds всё, что не входит в выбранное subtree плюс путь к нему
-    for (const dept of departments) {
-      if (!allowedSigurIds.has(dept.id)) {
-        filteredSigurIds.add(dept.id);
-      }
-    }
-    console.log(
-      `[syncDepartments] whitelist active: ${whitelist.size} subtree departments allowed, ${allowedSigurIds.size} with ancestors`,
-    );
-  }
+  const { mirroredIds, assignableIds } = resolveMirrorPolicy(departments, whitelist);
+  console.log(
+    `[syncDepartments] mirror policy: ${mirroredIds.size} mirrored, ${assignableIds.size} assignable`
+    + ` of ${departments.length} (whitelist ${whitelist ? whitelist.size : 'off'})`,
+  );
 
   // Pass 1 + Pass 2: Upsert отделов и проставление parent_id (одна транзакция)
   const sigurToDbMap = new Map<number, string>();
@@ -269,20 +242,29 @@ export async function syncDepartmentsLogic(
     for (const dept of departments) {
       if (!dept.name) { skipped++; continue; }
 
-      if (filteredSigurIds.has(dept.id)) {
+      if (!mirroredIds.has(dept.id)) {
         filtered++;
         continue;
       }
+
+      const isAssignable = assignableIds.has(dept.id);
 
       if (sigurIdToDbId.has(dept.id)) {
         const dbId = sigurIdToDbId.get(dept.id)!;
         try {
           // is_active=true: «оживляем» бригаду, если она была помечена is_active=false
           // (например, как фантом на прошлом тике) и снова появилась в Sigur.
-          await client.query('UPDATE org_departments SET name = $1, is_active = true WHERE id = $2', [dept.name, dbId]);
+          // is_assignable пишем явно: иначе отдел, вернувшийся в whitelist, остался бы
+          // с прошлым (или миграционным DEFAULT true) значением.
+          await client.query(
+            'UPDATE org_departments SET name = $1, is_active = true, is_assignable = $2 WHERE id = $3',
+            [dept.name, isAssignable, dbId],
+          );
           updated++;
         } catch (updateError) {
-          errors.push(`update ${dept.name}: ${(updateError as Error).message}`);
+          // Транзакция уже aborted — продолжать бессмысленно, иначе дойдём до
+          // onMirrorCommitted и разошлём «зеркало обновлено» при фактическом откате.
+          throw new Error(`update ${dept.name}: ${(updateError as Error).message}`);
         }
         sigurToDbMap.set(dept.id, dbId);
       } else {
@@ -292,16 +274,21 @@ export async function syncDepartmentsLogic(
         if (reusableCandidates.length === 1) {
           const reusableDepartment = reusableCandidates[0];
           try {
+            // is_active/is_assignable обязательны: реюзится в том числе строка,
+            // погашенная прошлым reconciliation, — без них новый отдел Sigur
+            // остался бы невидимым в дереве.
             await client.query(
-              'UPDATE org_departments SET name = $1, sigur_department_id = $2 WHERE id = $3',
-              [dept.name, dept.id, reusableDepartment.id],
+              `UPDATE org_departments
+                  SET name = $1, sigur_department_id = $2, is_active = true, is_assignable = $3
+                WHERE id = $4`,
+              [dept.name, dept.id, isAssignable, reusableDepartment.id],
             );
             updated++;
             sigurIdToDbId.set(dept.id, reusableDepartment.id);
             sigurToDbMap.set(dept.id, reusableDepartment.id);
             reusableDepartmentsByName.delete(reusableKey);
           } catch (reuseError) {
-            errors.push(`rebind ${dept.name}: ${(reuseError as Error).message}`);
+            throw new Error(`rebind ${dept.name}: ${(reuseError as Error).message}`);
           }
           continue;
         }
@@ -313,12 +300,12 @@ export async function syncDepartmentsLogic(
           // плодим дубликат, а обновляем имя. Идемпотентность при повторном
           // синке/смене root, чтобы не появлялись осиротевшие копии.
           const created = await client.query(
-            `INSERT INTO org_departments (name, sigur_department_id, kind)
-             VALUES ($1, $2, $3)
+            `INSERT INTO org_departments (name, sigur_department_id, kind, is_active, is_assignable)
+             VALUES ($1, $2, $3, true, $4)
              ON CONFLICT (sigur_department_id) WHERE sigur_department_id IS NOT NULL
-             DO UPDATE SET name = EXCLUDED.name, is_active = true
+             DO UPDATE SET name = EXCLUDED.name, is_active = true, is_assignable = EXCLUDED.is_assignable
              RETURNING id`,
-            [dept.name, dept.id, detectDepartmentKindFromName(dept.name)],
+            [dept.name, dept.id, detectDepartmentKindFromName(dept.name), isAssignable],
           );
           if (created.rows.length > 0) {
             imported++;
@@ -326,7 +313,7 @@ export async function syncDepartmentsLogic(
             sigurToDbMap.set(dept.id, created.rows[0].id);
           }
         } catch (insertError) {
-          errors.push(`insert ${dept.name}: ${(insertError as Error).message}`);
+          throw new Error(`insert ${dept.name}: ${(insertError as Error).message}`);
         }
       }
     }
@@ -334,7 +321,7 @@ export async function syncDepartmentsLogic(
     // Pass 2: Проставляем parent_id связи (в той же транзакции)
     for (const dept of departments) {
       if (!sigurToDbMap.has(dept.id)) continue;
-      if (filteredSigurIds.has(dept.id)) continue;
+      if (!mirroredIds.has(dept.id)) continue;
 
       const dbId = sigurToDbMap.get(dept.id)!;
       let parentDbId: string | null;
@@ -346,12 +333,10 @@ export async function syncDepartmentsLogic(
         parentDbId = sigurToDbMap.get(dept.parentId) || null;
       }
 
-      try {
-        await client.query('UPDATE org_departments SET parent_id = $1 WHERE id = $2', [parentDbId, dbId]);
-        parentLinksSet++;
-      } catch {
-        // игнорируем ошибки связывания parent_id — суммируем только успешные
-      }
+      // Ошибку не глотаем: после неё транзакция aborted, а дерево без parent_id
+      // теряет поддерево целиком.
+      await client.query('UPDATE org_departments SET parent_id = $1 WHERE id = $2', [parentDbId, dbId]);
+      parentLinksSet++;
     }
   });
 

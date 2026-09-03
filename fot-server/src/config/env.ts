@@ -48,6 +48,9 @@ const envSchema = z.object({
   SIGUR_EVENTS_DAILY_TARGET_HOUR_MSK: z.string().regex(/^\d+$/).default('3'),
   SIGUR_EVENTS_DAILY_WINDOW_DAYS: z.string().regex(/^\d+$/).default('2'),
   SIGUR_STRUCTURE_SYNC_INTERVAL_MS: z.string().regex(/^\d+$/).default('1800000'),
+  // Лёгкий детектор внешних правок структуры прямо в Sigur: один GET /departments
+  // за тик, при расхождении с зеркалом — mirror-only refresh.
+  SIGUR_STRUCTURE_WATCH_INTERVAL_MS: z.string().regex(/^\d+$/).default('300000'),
   SIGUR_BULK_TIMEOUT_MS: z.string().regex(/^\d+$/).default('60000'),
   SIGUR_EVENT_CHUNK_MS: z.string().regex(/^\d+$/).default('1800000'),
   SIGUR_EVENT_PAGE_SIZE: z.string().regex(/^\d+$/).default('1000'),

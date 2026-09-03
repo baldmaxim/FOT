@@ -8,6 +8,10 @@ import { loadEmployeeFullName } from '../services/audit-context.helpers.js';
 import { DomainValidationError, employeeChangesService } from '../services/employee-changes.service.js';
 import { loadStructureCache, decryptEmployee } from '../services/employee-mapper.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
+import {
+  loadAssignableTargetDepartment,
+  loadDepartmentRow,
+} from '../services/department-assignability.service.js';
 import { isProtectedArchiveDepartment } from '../services/employee-archive-department.service.js';
 import { syncLinkedEmployeeFromSigur } from '../services/sigur-linked-employees.service.js';
 import { sigurService } from '../services/sigur.service.js';
@@ -207,6 +211,11 @@ export async function applyDismissalImmediately(args: {
   return { employee, fromDepartmentId: operation.from_department_id };
 }
 
+/**
+ * Отдел для отображения и аудита (в том числе исходный отдел перевода).
+ * Назначаемость здесь НЕ проверяется: для целевого отдела операции используется
+ * loadAssignableTargetDepartment из department-assignability.service.
+ */
 export async function loadTargetDepartment(id: string): Promise<ITargetDepartmentRow | null> {
   const data = await queryOne<ITargetDepartmentRow>(
     `SELECT id, sigur_department_id, name
@@ -626,7 +635,9 @@ export async function rehire(req: AuthenticatedRequest, res: Response): Promise<
 
     const [existing, targetDepartment] = await Promise.all([
       loadEmployeeLifecycleRow(employeeId),
-      loadTargetDepartment(org_department_id),
+      // Восстановление в отдел вне синхронизации Sigur запрещено: Sigur такой
+      // отдел не обслуживает, сотрудник осел бы только в ФОТ.
+      loadAssignableTargetDepartment(org_department_id, { requireSigur: false }),
     ]);
 
     if (!existing) {
@@ -799,7 +810,7 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
 
     const [employeeRow, targetDepartment] = await Promise.all([
       loadEmployeeLifecycleRow(employeeId),
-      loadTargetDepartment(org_department_id),
+      loadAssignableTargetDepartment(org_department_id, { requireSigur: false }),
     ]);
 
     if (!employeeRow) {
@@ -814,7 +825,7 @@ export async function moveDepartment(req: AuthenticatedRequest, res: Response): 
 
     const fromDepartmentId = employeeRow.org_department_id ?? null;
     const fromDepartmentName = fromDepartmentId
-      ? (await loadTargetDepartment(fromDepartmentId))?.name ?? null
+      ? (await loadDepartmentRow(fromDepartmentId))?.name ?? null
       : null;
 
     const connection = (req.body.connection as 'external' | 'internal') || undefined;
@@ -902,11 +913,7 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
 
     await assertDepartmentMoveAllowed(req, org_department_id);
 
-    const targetDepartment = await loadTargetDepartment(org_department_id);
-    if (!targetDepartment) {
-      res.status(400).json({ success: false, error: 'Целевой отдел не найден' });
-      return;
-    }
+    const targetDepartment = await loadAssignableTargetDepartment(org_department_id, { requireSigur: false });
 
     if (await isProtectedArchiveDepartment(org_department_id, connection)) {
       res.status(409).json({
@@ -934,7 +941,7 @@ export async function batchMoveEmployees(req: AuthenticatedRequest, res: Respons
 
       const fromDepartmentId = employeeRow.org_department_id ?? null;
       const fromDepartmentName = fromDepartmentId
-        ? (await loadTargetDepartment(fromDepartmentId))?.name ?? null
+        ? (await loadDepartmentRow(fromDepartmentId))?.name ?? null
         : null;
 
       try {

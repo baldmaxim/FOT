@@ -9,6 +9,18 @@ import type {
   SigurEmployeeProfileState,
 } from '../types';
 
+/** Результат сохранения фильтра синхронизации отделов. */
+export interface ISyncFilterSaveResult {
+  count: number;
+  inserted: number;
+  updated: number;
+  deleted: number;
+  activated: number;
+  deactivated: number;
+  /** Отделы вне фильтра, оставленные активными ради числящихся сотрудников. */
+  warnings: Array<{ department_id: string; name: string; employees: number }>;
+}
+
 interface ApiResponse<T> {
   data: T;
   message?: string;
@@ -224,8 +236,14 @@ export const sigurService = {
     return response.data;
   },
 
-  async updateSyncFilter(departments: { sigur_department_id: number; sigur_department_name: string }[]): Promise<void> {
-    await apiClient.put('/sigur/sync-filter', { departments });
+  async updateSyncFilter(
+    departments: { sigur_department_id: number; sigur_department_name: string }[],
+  ): Promise<ISyncFilterSaveResult> {
+    const response = await apiClient.put<ApiResponse<ISyncFilterSaveResult>>(
+      '/sigur/sync-filter',
+      { departments },
+    );
+    return response.data;
   },
 
   async matchEmployees(
