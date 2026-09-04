@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   fetchDept: vi.fn(),
   fetchEmps: vi.fn(),
   supervisorsBulk: vi.fn(),
+  buildUnified: vi.fn(async () => ({})),
 }));
 
 vi.mock('../config/postgres.js', () => ({ query: h.pgQuery, queryOne: vi.fn() }));
@@ -51,7 +52,7 @@ vi.mock('../services/timesheet-excel.service.js', () => ({
   writeTimesheetWorkbookBuffer: vi.fn(async () => Buffer.from('xlsx')),
 }));
 vi.mock('../services/timesheet-1c-unified.service.js', () => ({
-  buildUnified1CWorkbook: vi.fn(async () => ({})),
+  buildUnified1CWorkbook: h.buildUnified,
 }));
 vi.mock('../services/timesheet-objects-export.service.js', () => ({
   fetchTimesheetDataForObjectIds: vi.fn(async () => []),
@@ -60,7 +61,11 @@ vi.mock('./timesheet-assigned-export.controller.js', () => ({
   listBrigadeSupervisorEmployeeIdsForDepartments: h.supervisorsBulk,
 }));
 
-import { exportTimesheetMass, exportTimesheetMassUnified } from './timesheet-mass-export.controller.js';
+import {
+  exportTimesheetMass,
+  exportTimesheetMassUnified,
+  exportTimesheetObjectsUnified,
+} from './timesheet-mass-export.controller.js';
 
 const deptData = {
   departmentName: 'бр. Тестовая',
@@ -152,5 +157,14 @@ describe('exportTimesheetMassUnified — фильтр всегда активе�
       excludeZeroActivity: true,
       exemptEmployeeIds: new Set([9]),
     });
+  });
+});
+
+describe('exportTimesheetObjectsUnified — закреплённые за объектами попадают в файл', () => {
+  it('в сборку уходит политика с запрошенными объектами (без дублей)', async () => {
+    await exportTimesheetObjectsUnified(makeReq({ object_ids: ['O1', 'O2', 'O1'] }), makeRes());
+
+    expect(h.buildUnified).toHaveBeenCalledTimes(1);
+    expect(h.buildUnified.mock.calls[0][3]).toEqual({ pinnedObjectIds: new Set(['O1', 'O2']) });
   });
 });

@@ -369,10 +369,31 @@ describe('buildUnified1CWorkbook — явные режимы табелиров�
     expect(rows[0].address).toBe('Автозаводская ул., вл. 23/2, ЖК «ЗИЛАРТ»');
   });
 
-  it('режим object исключается из выгрузки по объектам (excludeAggregatedModes)', async () => {
+  it('выгрузка по объектам: закреплённый за запрошенным объектом → одна строка с его адресом', async () => {
     mockModes([modeRow(2, { emp_mode: 'object', emp_object_id: 'obj-pin' })], OBJECTS);
 
-    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()], true)).getWorksheet(1)!);
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()], {
+      pinnedObjectIds: new Set(['obj-pin']),
+    })).getWorksheet(1)!);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].address).toBe('Автозаводская ул., вл. 23/2, ЖК «ЗИЛАРТ»');
+  });
+
+  it('выгрузка по объектам: закреплённый за другим объектом исключается вместе с его проходами', async () => {
+    mockModes([modeRow(2, { emp_mode: 'object', emp_object_id: 'obj-pin' })], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()], {
+      pinnedObjectIds: new Set(['obj-b']),
+    })).getWorksheet(1)!);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('выгрузка по объектам: «текущая деятельность» исключается', async () => {
+    mockModes([modeRow(2, { emp_mode: 'current_activity' })], OBJECTS);
+
+    const rows = readRows((await buildUnified1CWorkbook(4, 2026, [twoObjectDept()], {
+      pinnedObjectIds: new Set(['obj-b', 'obj-c']),
+    })).getWorksheet(1)!);
     expect(rows).toHaveLength(0);
   });
 

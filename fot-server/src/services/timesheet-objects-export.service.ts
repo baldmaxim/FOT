@@ -63,6 +63,33 @@ export async function fetchEmployeeIdsForObjects(
   return rows.map(r => r.employee_id);
 }
 
+/**
+ * Сотрудники, закреплённые за объектами режимом табелирования «object» (приоритет как
+ * в resolveExportModes: явный режим сотрудника, иначе режим его отдела). В выгрузке по
+ * объектам их часы принадлежат закреплённому объекту независимо от проходов, поэтому
+ * одних СКУД-событий для отбора состава недостаточно.
+ */
+export async function fetchEmployeeIdsPinnedToObjects(objectIds: string[]): Promise<number[]> {
+  if (objectIds.length === 0) return [];
+
+  const rows = await query<{ employee_id: number | string }>(
+    `SELECT e.id AS employee_id
+       FROM employees e
+       LEFT JOIN org_departments d ON d.id = e.org_department_id
+      WHERE e.is_archived = false
+        AND (
+          (e.timesheet_export_mode = 'object'
+            AND e.timesheet_export_object_id = ANY($1::uuid[]))
+          OR (e.timesheet_export_mode IS NULL
+            AND d.timesheet_export_mode = 'object'
+            AND d.timesheet_export_object_id = ANY($1::uuid[]))
+        )`,
+    [objectIds],
+  );
+
+  return rows.map(r => Number(r.employee_id));
+}
+
 export async function fetchDeptGroupsForEmployees(
   employeeIds: number[],
 ): Promise<Map<string, IDeptGroup>> {
@@ -190,7 +217,13 @@ export async function fetchTimesheetDataForObjectIds(
   }
 
   const { startDate, endDate } = periodRange;
-  const employeeIds = await fetchEmployeeIdsForObjects(objectIds, startDate, endDate);
+  // Состав: кто реально был на объектах (СКУД / ручные объектные правки) плюс кто
+  // закреплён за ними режимом «object» — его часы принадлежат объекту без проходов.
+  const [eventEmployeeIds, pinnedEmployeeIds] = await Promise.all([
+    fetchEmployeeIdsForObjects(objectIds, startDate, endDate),
+    fetchEmployeeIdsPinnedToObjects(objectIds),
+  ]);
+  const employeeIds = [...new Set([...eventEmployeeIds, ...pinnedEmployeeIds])];
 
   if (employeeIds.length === 0) {
     return [];

@@ -360,10 +360,13 @@ export async function exportTimesheetObjectsUnified(req: AuthenticatedRequest, r
 
     const collected = await fetchTimesheetDataForObjectIds(month, requestedObjectIds, rangeArg, deptIdFilter);
 
-    // excludeAggregatedModes = true: в выгрузке по конкретным объектам нужны только реальные
-    // события. Агрегированные режимы («текущая деятельность» и закреплённый объект) дали бы
-    // сотруднику, попавшему в выборку по одному проходу, все его месячные часы одной строкой.
-    const workbook = await buildUnified1CWorkbook(mon, year, collected, true);
+    // Политика агрегированных режимов: закреплённые за запрошенными объектами (режим
+    // «object») идут одной строкой с адресом объекта — их часы принадлежат ему независимо
+    // от проходов; «текущая деятельность» и закреплённые за другими объектами исключаются,
+    // иначе человек, попавший в выборку по одному проходу, получил бы все месячные часы.
+    const workbook = await buildUnified1CWorkbook(mon, year, collected, {
+      pinnedObjectIds: new Set(requestedObjectIds),
+    });
     const buffer = await writeTimesheetWorkbookBuffer(workbook);
 
     // Получаем названия объектов для имени файла

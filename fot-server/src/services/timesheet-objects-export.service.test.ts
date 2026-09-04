@@ -14,6 +14,13 @@ vi.mock('../config/postgres.js', () => ({
   withTransaction: pgTx,
 }));
 
+const exportMocks = vi.hoisted(() => ({ fetchEmps: vi.fn() }));
+vi.mock('./timesheet-export.service.js', () => ({ fetchTimesheetDataForEmployees: exportMocks.fetchEmps }));
+vi.mock('./timesheet-department-assignments.service.js', () => ({
+  resolveTimesheetPeriodRange: vi.fn(() => ({ startDate: '2026-08-01', endDate: '2026-08-31' })),
+  resolveTimesheetDateRange: vi.fn(() => ({ startDate: '2026-08-01', endDate: '2026-08-31' })),
+}));
+
 interface IDeptRow {
   id: string;
   parent_id: string | null;
@@ -36,7 +43,12 @@ const mockedState = vi.hoisted(() => ({
   employees: [] as Array<{ id: number; is_archived: boolean; excluded_from_timesheet: boolean }>,
 }));
 
-import { fetchManagerIdsForDepartments, mergeManagerIdsIntoGroups } from './timesheet-objects-export.service.js';
+import {
+  fetchEmployeeIdsPinnedToObjects,
+  fetchManagerIdsForDepartments,
+  fetchTimesheetDataForObjectIds,
+  mergeManagerIdsIntoGroups,
+} from './timesheet-objects-export.service.js';
 
 // Эмулирует рекурсивный CTE fetchManagerIdsForDepartments в JS:
 // поднимается вверх по parent_id от каждого appearing-отдела и собирает
@@ -207,6 +219,47 @@ describe('timesheet-objects-export.service', () => {
       const groups = new Map([['B', { name: 'Бригада 1', ids: [1] }]]);
       mergeManagerIdsIntoGroups(groups, new Map());
       expect(groups.get('B')!.ids).toEqual([1]);
+    });
+  });
+
+  describe('fetchEmployeeIdsPinnedToObjects', () => {
+    it('возвращает сотрудников, закреплённых за объектами режимом object', async () => {
+      pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+        if (/timesheet_export_object_id/.test(sql)) {
+          expect(params[0]).toEqual(['O1']);
+          return [{ employee_id: 7 }, { employee_id: '8' }];
+        }
+        throw new Error(`Unexpected query SQL: ${sql}`);
+      });
+
+      await expect(fetchEmployeeIdsPinnedToObjects(['O1'])).resolves.toEqual([7, 8]);
+    });
+
+    it('пустой список объектов — без запроса в БД', async () => {
+      await expect(fetchEmployeeIdsPinnedToObjects([])).resolves.toEqual([]);
+      expect(pgQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fetchTimesheetDataForObjectIds', () => {
+    it('состав = проходы на объектах ∪ закреплённые режимом object', async () => {
+      exportMocks.fetchEmps.mockReset();
+      exportMocks.fetchEmps.mockResolvedValue({ objectEntries: [] });
+      pgQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
+        if (/FROM skud_events/.test(sql)) return [{ employee_id: 1 }];
+        if (/timesheet_export_object_id/.test(sql)) return [{ employee_id: 2 }];
+        if (/GROUP BY COALESCE\(e\.org_department_id/.test(sql)) {
+          return [{ org_department_id: 'D1', org_department_name: 'Отдел', employee_ids: params[0] }];
+        }
+        if (/WITH RECURSIVE ancestry/.test(sql)) return [];
+        throw new Error(`Unexpected query SQL: ${sql}`);
+      });
+
+      const result = await fetchTimesheetDataForObjectIds('2026-08', ['O1']);
+
+      expect(result).toHaveLength(1);
+      expect(exportMocks.fetchEmps).toHaveBeenCalledTimes(1);
+      expect([...(exportMocks.fetchEmps.mock.calls[0][1] as number[])].sort()).toEqual([1, 2]);
     });
   });
 });

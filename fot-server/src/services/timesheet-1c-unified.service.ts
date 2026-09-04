@@ -27,6 +27,23 @@ export interface IUnifiedRow extends IUnifiedOneCRow {
   objectNameSort: string;
 }
 
+/**
+ * Что делать со строками агрегированных режимов (current_activity / object):
+ *  - 'all' — единый файл по отделам: включаются все;
+ *  - { pinnedObjectIds } — выгрузка по объектам: включаются только сотрудники режима
+ *    object, чей закреплённый объект входит в набор запрошенных, — их часы принадлежат
+ *    этому объекту независимо от проходов. current_activity и закреплённые за другими
+ *    объектами исключаются: иначе человек, попавший в выборку по одному проходу,
+ *    получил бы все месячные часы одной строкой.
+ */
+export type AggregatedModesPolicy = 'all' | { pinnedObjectIds: ReadonlySet<string> };
+
+const isAggregatedRowIncluded = (policy: AggregatedModesPolicy, resolved: IResolvedExportMode): boolean =>
+  policy === 'all'
+  || (resolved.mode === 'object'
+    && resolved.pinnedObjectId !== null
+    && policy.pinnedObjectIds.has(resolved.pinnedObjectId));
+
 // Пары «сотрудник → отдел» для адресной маршрутизации руководителя.
 const collectEmployeeDeptPairs = (
   departmentsData: IDepartmentTimesheetData[],
@@ -114,7 +131,7 @@ const buildRowsForDepartment = (
   objectAddressMap: Map<string, string>,
   modeByEmployee: Map<number, IResolvedExportMode>,
   managerNameMap: Map<number, string>,
-  excludeAggregatedModes: boolean = false,
+  policy: AggregatedModesPolicy = 'all',
 ): IUnifiedRow[] => {
   const rows: IUnifiedRow[] = [];
 
@@ -220,13 +237,16 @@ const buildRowsForDepartment = (
 
   // Агрегированные режимы: одна строка на сотрудника, часы за день суммированы по всем
   // объектам (buildEmployeeRowsForOneC уже агрегирует и учитывает статусы). Адрес — либо
-  // «Текущая деятельность», либо закреплённый объект.
-  // Исключаем при экспорте по конкретным объектам: там должны быть только реальные события,
-  // иначе человек, попавший в выборку по одному проходу, получил бы все месячные часы.
-  if (!excludeAggregatedModes && aggregatedAddressByEmpId.size > 0) {
+  // «Текущая деятельность», либо закреплённый объект. Кого из них выводить, решает
+  // policy: в выгрузке по объектам — только закреплённых за запрошенными объектами.
+  const includedAggregatedIds = new Set<number>();
+  for (const empId of aggregatedAddressByEmpId.keys()) {
+    if (isAggregatedRowIncluded(policy, modeFor(empId))) includedAggregatedIds.add(empId);
+  }
+  if (includedAggregatedIds.size > 0) {
     const aggregatedData: IDepartmentTimesheetData = {
       ...visibleData,
-      employees: visibleData.employees.filter(e => aggregatedAddressByEmpId.has(e.id)),
+      employees: visibleData.employees.filter(e => includedAggregatedIds.has(e.id)),
     };
     for (const employeeRow of buildEmployeeRowsForOneC(aggregatedData)) {
       if (isOneCRowEmpty(employeeRow)) continue;
@@ -256,7 +276,7 @@ const buildRowsForDepartment = (
  */
 export async function buildUnified1CRows(
   departmentsData: IDepartmentTimesheetData[],
-  excludeAggregatedModes: boolean = false,
+  policy: AggregatedModesPolicy = 'all',
 ): Promise<IUnifiedRow[]> {
   // Режимы резолвим первыми: закреплённые объекты нужны до сборки карты адресов.
   const [modeByEmployee, responsibleIdsMap] = await Promise.all([
@@ -287,7 +307,7 @@ export async function buildUnified1CRows(
 
   const rows: IUnifiedRow[] = [];
   for (const data of departmentsData) {
-    rows.push(...buildRowsForDepartment(data, objectAddressMap, modeByEmployee, managerNameMap, excludeAggregatedModes));
+    rows.push(...buildRowsForDepartment(data, objectAddressMap, modeByEmployee, managerNameMap, policy));
   }
   rows.sort((a, b) => {
     const byDept = a.departmentNameSort.localeCompare(b.departmentNameSort, 'ru');
@@ -312,9 +332,9 @@ export async function buildUnified1CWorkbook(
   _month: number,
   _year: number,
   departmentsData: IDepartmentTimesheetData[],
-  excludeAggregatedModes: boolean = false,
+  policy: AggregatedModesPolicy = 'all',
 ): Promise<ExcelJS.Workbook> {
-  const rows = await buildUnified1CRows(departmentsData, excludeAggregatedModes);
+  const rows = await buildUnified1CRows(departmentsData, policy);
   return buildUnified1CWorkbookFromTemplate('Табель 1С', rows);
 }
 
