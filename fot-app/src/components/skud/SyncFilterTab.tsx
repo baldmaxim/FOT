@@ -240,6 +240,10 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
   const [warnings, setWarnings] = useState<ISyncFilterSaveResult['warnings']>([]);
   // Sigur не ответил при сохранении: фильтр записан, включение отделов отложено до синка.
   const [sigurNotice, setSigurNotice] = useState('');
+  // Строки фильтра, которых больше нет в Sigur (отдел удалён): в дереве их не видно и
+  // галочку не снять. Сохранение отправляет только отделы из фида — оно и убирает
+  // такие хвосты, поэтому кнопку при них разблокируем.
+  const [staleFilter, setStaleFilter] = useState<Array<{ id: number; name: string }>>([]);
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState<SortMode>('alpha');
   const [error, setError] = useState('');
@@ -273,6 +277,12 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
 
       const filterIds = new Set<number>(
         (filterRes || []).map(f => f.sigur_department_id)
+      );
+      const knownIds = new Set(depts.map(d => d.id));
+      setStaleFilter(
+        (filterRes || [])
+          .filter(f => !knownIds.has(f.sigur_department_id))
+          .map(f => ({ id: f.sigur_department_id, name: f.sigur_department_name || String(f.sigur_department_id) })),
       );
       const expandedFilterIds = expandSelectedIdsToSubtree(filterIds, deptHierarchy);
       setSelectedIds(expandedFilterIds);
@@ -397,8 +407,12 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
       setSigurNotice(result?.sigur_unavailable
         ? `Sigur не ответил: фильтр сохранён, но включение отделов (${result.deferred_activation ?? 0}) произойдёт при ближайшей синхронизации.`
         : '');
-      setInitialIds(new Set(selectedIds));
-      onFilterCountChange?.(selectedIds.size);
+      // На сервере теперь ровно то, что ушло в запросе: без хвостов вне фида Sigur.
+      const savedIds = new Set(departments.map(d => d.sigur_department_id));
+      setSelectedIds(savedIds);
+      setInitialIds(savedIds);
+      setStaleFilter([]);
+      onFilterCountChange?.(savedIds.size);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (saveError) {
@@ -487,7 +501,7 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
             <button
               className={`sigur-btn sigur-btn-primary ${saved ? 'sigur-btn-saved' : ''}`}
               onClick={handleSave}
-              disabled={saving || !isDirty || selectedIds.size === 0}
+              disabled={saving || (!isDirty && staleFilter.length === 0) || selectedIds.size === 0}
               title={selectedIds.size === 0
                 ? 'Пустой фильтр отключит синхронизацию с Sigur'
                 : undefined}
@@ -514,6 +528,14 @@ export const SyncFilterTab = ({ connected, canEdit, onFilterCountChange }: ISync
         <div className="sync-filter-info">
           <Info size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
           {sigurNotice}
+        </div>
+      )}
+
+      {staleFilter.length > 0 && (
+        <div className="sync-filter-info">
+          <Info size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          В фильтре {staleFilter.length} отделов, которых больше нет в Sigur — нажмите «Сохранить»,
+          чтобы убрать их: {staleFilter.map(item => item.name).join('; ')}
         </div>
       )}
 
