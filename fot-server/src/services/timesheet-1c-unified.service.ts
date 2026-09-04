@@ -21,7 +21,7 @@ import {
   type IUnifiedOneCRow,
 } from './timesheet-excel.service.js';
 
-interface IUnifiedRow extends IUnifiedOneCRow {
+export interface IUnifiedRow extends IUnifiedOneCRow {
   departmentNameSort: string;
   fullNameSort: string;
   objectNameSort: string;
@@ -249,12 +249,15 @@ const buildRowsForDepartment = (
   return rows;
 };
 
-export async function buildUnified1CWorkbook(
-  _month: number,
-  _year: number,
+/**
+ * Строки единого файла 1С до рендера в шаблон. Вынесено из buildUnified1CWorkbook,
+ * чтобы вызывающий мог связывать строки по oneCRow.employeeId — в самом листе id
+ * не остаётся, а ФИО не уникально (однофамильцы).
+ */
+export async function buildUnified1CRows(
   departmentsData: IDepartmentTimesheetData[],
   excludeAggregatedModes: boolean = false,
-): Promise<ExcelJS.Workbook> {
+): Promise<IUnifiedRow[]> {
   // Режимы резолвим первыми: закреплённые объекты нужны до сборки карты адресов.
   const [modeByEmployee, responsibleIdsMap] = await Promise.all([
     resolveExportModes(collectEmployeeIds(departmentsData)),
@@ -302,6 +305,16 @@ export async function buildUnified1CWorkbook(
     }
   }
 
+  return rows;
+}
+
+export async function buildUnified1CWorkbook(
+  _month: number,
+  _year: number,
+  departmentsData: IDepartmentTimesheetData[],
+  excludeAggregatedModes: boolean = false,
+): Promise<ExcelJS.Workbook> {
+  const rows = await buildUnified1CRows(departmentsData, excludeAggregatedModes);
   return buildUnified1CWorkbookFromTemplate('Табель 1С', rows);
 }
 
