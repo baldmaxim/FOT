@@ -36,9 +36,9 @@ import {
   getHttpErrorCode,
   getHttpErrorStatus,
   loadEmployeeLifecycleRow,
-  loadTargetDepartment,
   moveEmployeeToDepartmentInternal,
 } from './employee-lifecycle.controller.js';
+import { loadAssignableTargetDepartment } from '../services/department-assignability.service.js';
 import {
   loadEmployeeFullName as loadEmployeeFullNameForAudit,
   loadDepartmentName as loadDepartmentNameForAudit,
@@ -282,7 +282,9 @@ export const timesheetTeamManagementController = {
 
       const [employeeRow, targetDepartment, excludedFlagRow] = await Promise.all([
         loadEmployeeLifecycleRow(parsed.employee_id),
-        loadTargetDepartment(targetDepartmentId),
+        // Добавление в состав табеля — тоже назначение: отдел вне синхронизации
+        // Sigur не должен принимать новых людей.
+        loadAssignableTargetDepartment(targetDepartmentId, { requireSigur: false }),
         queryOne<{ excluded_from_timesheet: boolean }>(
           'SELECT excluded_from_timesheet FROM employees WHERE id = $1',
           [parsed.employee_id],

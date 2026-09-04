@@ -1,90 +1,34 @@
 import { Response } from 'express';
-import { query, execute } from '../config/postgres.js';
+import { query } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
-import { invalidateDeptTreeCache, invalidateSyncFilterCache } from '../services/skud-shared.service.js';
-
-interface ISigurDeptRow {
-  id: string;
-  sigur_department_id: number | null;
-  parent_id: string | null;
-}
+import { sigurService } from '../services/sigur.service.js';
+import { normalizeDepartment } from '../services/sigur-sync-shared.js';
+import {
+  EmptySyncFilterError,
+  saveSyncFilterWithReconciliation,
+} from '../services/sigur-sync-filter.service.js';
 
 /**
- * Приводит is_active в org_departments в соответствие с whitelist.
- * Ручные отделы (sigur_department_id IS NULL) не трогаем.
- * Пустой whitelist → все sigur-отделы деактивируются.
- * Непустой → активируются только отделы из whitelist + все их предки (включая ручных).
+ * Снимок отделов Sigur — единственное основание ВКЛЮЧИТЬ отдел при сохранении
+ * фильтра: whitelist и иерархия БД помнят строки, давно удалённые в Sigur, и без
+ * снимка реконсиляция воскрешала их (03–04.09.2026, «дубли папок»).
+ * null = Sigur не ответил или вернул пусто: включение откладывается до синка.
  */
-async function reconcileDepartmentsActivity(whitelistSigurIds: number[]): Promise<void> {
-  let rows: ISigurDeptRow[];
+async function loadAliveSigurDepartmentIds(): Promise<Set<number> | null> {
   try {
-    // ORDER BY is_active ASC → is_active=true строки идут последними и
-    // выигрывают Map.set (last-wins). Защита на случай, когда осиротевший
-    // дубликат с тем же sigur_id ещё существует (между синком, что пересоздал
-    // компанию, и шагом consolidateDuplicateDepartments / до миграции 106):
-    // whitelist→active должен якориться на АКТИВНУЮ строку, не на сироту.
-    rows = await query<ISigurDeptRow>(
-      'SELECT id, sigur_department_id, parent_id FROM org_departments ORDER BY is_active ASC, id ASC',
-    );
+    const raw = (await sigurService.getDepartments()) as Record<string, unknown>[];
+    const ids = new Set<number>();
+    for (const item of raw ?? []) {
+      const id = normalizeDepartment(item).id;
+      if (id > 0) ids.add(id);
+    }
+    return ids.size > 0 ? ids : null;
   } catch (error) {
-    throw new Error(`reconcile: failed to load departments: ${(error as Error).message}`);
-  }
-
-  const sigurIdToDbId = new Map<number, string>();
-  for (const row of rows) {
-    if (row.sigur_department_id != null) {
-      sigurIdToDbId.set(row.sigur_department_id, row.id);
-    }
-  }
-
-  const parentByDbId = new Map<string, string | null>();
-  for (const row of rows) {
-    parentByDbId.set(row.id, row.parent_id);
-  }
-
-  const activeDbIds = new Set<string>();
-  if (whitelistSigurIds.length > 0) {
-    for (const sigurId of whitelistSigurIds) {
-      const dbId = sigurIdToDbId.get(sigurId);
-      if (!dbId) continue;
-      let current: string | null = dbId;
-      while (current && !activeDbIds.has(current)) {
-        activeDbIds.add(current);
-        current = parentByDbId.get(current) ?? null;
-      }
-    }
-  }
-
-  const sigurDbIds = rows
-    .filter(row => row.sigur_department_id != null)
-    .map(row => row.id);
-  const inactiveDbIds = sigurDbIds.filter(id => !activeDbIds.has(id));
-  const activeSigurDbIds = sigurDbIds.filter(id => activeDbIds.has(id));
-
-  const BATCH = 500;
-
-  for (let i = 0; i < inactiveDbIds.length; i += BATCH) {
-    const batch = inactiveDbIds.slice(i, i + BATCH);
-    try {
-      await execute(
-        'UPDATE org_departments SET is_active = false WHERE id = ANY($1::uuid[])',
-        [batch],
-      );
-    } catch (updateError) {
-      throw new Error(`reconcile: failed to deactivate: ${(updateError as Error).message}`);
-    }
-  }
-
-  for (let i = 0; i < activeSigurDbIds.length; i += BATCH) {
-    const batch = activeSigurDbIds.slice(i, i + BATCH);
-    try {
-      await execute(
-        'UPDATE org_departments SET is_active = true WHERE id = ANY($1::uuid[])',
-        [batch],
-      );
-    } catch (updateError) {
-      throw new Error(`reconcile: failed to activate: ${(updateError as Error).message}`);
-    }
+    console.warn(
+      '[sync-filter] снимок отделов Sigur недоступен, включение отделов отложено до синка:',
+      (error as Error).message,
+    );
+    return null;
   }
 }
 
@@ -109,68 +53,65 @@ export const sigurFilterController = {
 
   /**
    * PUT /api/sigur/sync-filter
-   * Заменяет whitelist отделов целиком
+   * Заменяет whitelist отделов целиком.
+   *
+   * Запись и реконсиляция активности идут одной транзакцией
+   * (saveSyncFilterWithReconciliation): раньше DELETE-all и INSERT выполнялись
+   * вне транзакции, и обрыв между ними выключал синхронизацию целиком.
    */
   async updateFilter(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { departments } = req.body as {
+      const { departments, confirm_empty: confirmEmpty } = req.body as {
         departments: Array<{ sigur_department_id: number; sigur_department_name: string }>;
+        confirm_empty?: boolean;
       };
       if (!Array.isArray(departments)) {
         res.status(400).json({ success: false, error: 'departments должен быть массивом' });
         return;
       }
 
-      // Удаляем все текущие записи
-      try {
-        await execute(
-          "DELETE FROM skud_sync_department_filter WHERE id <> '00000000-0000-0000-0000-000000000000'::uuid",
-        );
-      } catch (deleteError) {
-        res.status(500).json({ success: false, error: (deleteError as Error).message });
-        return;
-      }
+      const aliveSigurIds = await loadAliveSigurDepartmentIds();
+      const result = await saveSyncFilterWithReconciliation(
+        departments.map(item => ({
+          sigur_department_id: item.sigur_department_id,
+          sigur_department_name: item.sigur_department_name ?? null,
+        })),
+        {
+          allowEmpty: confirmEmpty === true,
+          source: `user:${req.user?.id ?? 'unknown'}`,
+          reconcile: { aliveSigurIds },
+        },
+      );
 
-      // Вставляем новые записи
-      if (departments.length > 0) {
-        const BATCH = 500;
-        for (let i = 0; i < departments.length; i += BATCH) {
-          const batch = departments.slice(i, i + BATCH);
-          const params: unknown[] = [];
-          const placeholders: string[] = [];
-          for (const d of batch) {
-            params.push(d.sigur_department_id, d.sigur_department_name || null);
-            placeholders.push(`($${params.length - 1}, $${params.length})`);
-          }
-          try {
-            await execute(
-              `INSERT INTO skud_sync_department_filter (sigur_department_id, sigur_department_name) VALUES ${placeholders.join(', ')}`,
-              params,
-            );
-          } catch (insertError) {
-            res.status(500).json({ success: false, error: (insertError as Error).message });
-            return;
-          }
-        }
-      }
-
-      try {
-        await reconcileDepartmentsActivity(departments.map(d => d.sigur_department_id));
-      } catch (reconcileError) {
-        console.error('reconcile departments activity error:', reconcileError);
-        res.status(500).json({
+      res.json({
+        success: true,
+        data: {
+          count: departments.length,
+          inserted: result.inserted,
+          updated: result.updated,
+          deleted: result.deleted,
+          activated: result.activated,
+          deactivated: result.deactivated,
+          warnings: result.warnings,
+          deferred_activation: result.deferredActivation,
+          sigur_unavailable: aliveSigurIds === null,
+        },
+      });
+    } catch (error) {
+      if (error instanceof EmptySyncFilterError) {
+        res.status(400).json({
           success: false,
-          error: reconcileError instanceof Error ? reconcileError.message : 'Ошибка обновления активности отделов',
+          error: 'Пустой фильтр отключит синхронизацию с Sigur. Отметьте отделы или подтвердите очистку явно.',
+          code: error.code,
+          data: { current_count: error.currentCount },
         });
         return;
       }
-
-      invalidateSyncFilterCache();
-      invalidateDeptTreeCache();
-      res.json({ success: true, data: { count: departments.length } });
-    } catch (error) {
       console.error('updateSyncFilter error:', error);
-      res.status(500).json({ success: false, error: 'Ошибка сохранения фильтра синхронизации' });
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Ошибка сохранения фильтра синхронизации',
+      });
     }
   },
 };

@@ -47,6 +47,12 @@ export interface ICreateEmployeePayload {
   org_department_id: string;
   position_id: string;
   tab_number?: string | null;
+  /**
+   * Ключ идемпотентности: повтор запроса с тем же значением возвращает уже
+   * созданного сотрудника и не заводит дубль в Sigur. Клиент обязан держать
+   * ключ стабильным на всё время попытки (и менять его для нового сотрудника).
+   */
+  operation_id?: string;
 }
 
 export interface BatchMoveEmployeesResult {

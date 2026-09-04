@@ -836,6 +836,7 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
               onChange={setDeptVal}
               showAllOption={false}
               emptyLabel="Выберите отдел"
+              disableUnassignable
             />
           </div>
           <div className="sc-field">
@@ -2208,6 +2209,10 @@ export const StaffControlPage: FC = () => {
     setContactsFile(null);
   };
 
+  // Ключ идемпотентности создания: один на попытку, сбрасывается после успеха
+  // и при закрытии формы — новый сотрудник получает новый ключ.
+  const addOperationIdRef = useRef<string | null>(null);
+
   const resetAddForm = () => {
     setAddForm({
       full_name: '',
@@ -2217,6 +2222,7 @@ export const StaffControlPage: FC = () => {
       tab_number: '',
     });
     setAddError(null);
+    addOperationIdRef.current = null;
   };
 
   const closeAddModal = () => {
@@ -2232,6 +2238,9 @@ export const StaffControlPage: FC = () => {
     }
     setAddSaving(true);
     setAddError(null);
+    // Ключ живёт до успеха: повтор после ошибки продолжает ту же операцию и не
+    // создаёт второго сотрудника в Sigur.
+    if (!addOperationIdRef.current) addOperationIdRef.current = crypto.randomUUID();
     try {
       await employeeService.create({
         full_name: addForm.full_name.trim(),
@@ -2239,7 +2248,9 @@ export const StaffControlPage: FC = () => {
         org_department_id: addForm.org_department_id,
         position_id: addForm.position_id,
         tab_number: addForm.tab_number.trim() || null,
+        operation_id: addOperationIdRef.current,
       });
+      addOperationIdRef.current = null;
       setShowAddModal(false);
       resetAddForm();
       refresh();

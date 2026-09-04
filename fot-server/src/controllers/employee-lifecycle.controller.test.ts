@@ -132,7 +132,11 @@ const CLAIMED_AT = '2026-05-20 20:00:05.123+00';
 /** queryOne: SELECT сотрудника; остальное — по тексту запроса. */
 const routeQueryOne = (employee: Record<string, unknown> = { ...ACTIVE_EMPLOYEE }) => {
   h.queryOne.mockImplementation(async (sql: string) => {
-    if (sql.includes('FROM org_departments')) return { id: 'dept-2', sigur_department_id: 42, name: 'Бригада' };
+    // is_active/is_assignable нужны проверке назначаемости целевого отдела
+    // (department-assignability.service): без них отдел выглядит неактивным.
+    if (sql.includes('FROM org_departments')) {
+      return { id: 'dept-2', sigur_department_id: 42, name: 'Бригада', is_active: true, is_assignable: true };
+    }
     if (sql.trim().startsWith('SELECT')) return { ...employee };
     return { ...employee };
   });

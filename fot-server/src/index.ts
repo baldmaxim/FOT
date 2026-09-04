@@ -12,6 +12,7 @@ import { startPresencePolling, stopPresencePolling } from './services/presence-p
 import { initializeSKUDDailySummaryOnStartup } from './services/skud-dashboard.service.js';
 import { startSigurMonitor, stopSigurMonitor } from './services/sigur-monitor.service.js';
 import { startStructureSyncScheduler, stopStructureSyncScheduler } from './services/sigur-structure-scheduler.service.js';
+import { startStructureWatch, stopStructureWatch } from './services/sigur-structure-watch.service.js';
 import { startSigurEventsDailyScheduler, stopSigurEventsDailyScheduler } from './services/sigur-events-daily-scheduler.service.js';
 import { startSkudSummaryReconcileScheduler, stopSkudSummaryReconcileScheduler } from './services/skud-summary-reconcile.service.js';
 import { startTimesheetReminderScheduler, stopTimesheetReminderScheduler } from './services/timesheet-reminder.service.js';
@@ -137,6 +138,8 @@ httpServer.listen(PORT, HOST, () => {
   });
   void startSigurMonitor();
   void startStructureSyncScheduler();
+  // Детектор правок, сделанных напрямую в Sigur: без него они ждут планового синка.
+  void startStructureWatch();
   void startSigurEventsDailyScheduler();
   startSkudSummaryReconcileScheduler();
   // Прогрев тяжёлых кэшей откладываем: сразу после deploy/restart браузеры
@@ -221,7 +224,7 @@ const gracefulShutdown = (signal: string): void => {
   drainTicker.unref();
 
   const stoppers = [
-    stopPresencePolling, stopSigurMonitor, stopStructureSyncScheduler,
+    stopPresencePolling, stopSigurMonitor, stopStructureSyncScheduler, stopStructureWatch,
     stopSigurEventsDailyScheduler, stopSkudSummaryReconcileScheduler,
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopTimesheetVersionRebuildScheduler,

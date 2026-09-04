@@ -19,6 +19,10 @@ export interface OrgDepartment {
   description: string | null;
   sort_order: number;
   is_active: boolean;
+  // false — отдел виден (в нём числятся сотрудники), но назначать в него нельзя:
+  // он вне разрешённого поддерева синхронизации Sigur либо удалён в Sigur.
+  // Отсутствует — считаем как `true` (бэкенд до раскатки).
+  is_assignable?: boolean;
   kind: OrgDepartmentKind;
   created_at: string;
   updated_at: string;
