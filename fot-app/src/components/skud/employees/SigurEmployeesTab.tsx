@@ -467,16 +467,6 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
           if (created.parentId != null) next.add(created.parentId);
           return next;
         });
-        // Сервер отвечает только после зеркала. Если оно не сошлось, отдел в
-        // Sigur есть, а завести в него сотрудника пока нельзя — говорим об этом
-        // прямо, вместо молчаливого «создано».
-        if (created.mirrorReady === false) {
-          setError('Отдел создан в Sigur, синхронизация с ФОТ ещё идёт.'
-            + ' Добавлять сотрудников в него можно будет через минуту.');
-        } else if (created.mirrorReason === 'not_assignable') {
-          setError(`Отдел «${created.name}» создан, но он вне фильтра синхронизации:`
-            + ' добавлять в него сотрудников нельзя. Отметьте его в «Настройки СКУД → Фильтр синхронизации».');
-        }
       }
 
       if (departmentDialog.mode === 'rename') {

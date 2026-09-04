@@ -38,10 +38,6 @@ vi.mock('./employee-lifecycle.controller.js', async (importActual) => ({
   moveEmployeeToDepartmentInternal: moveMock,
 }));
 
-vi.mock('../services/department-assignability.service.js', () => ({
-  loadAssignableTargetDepartment: targetDeptMock,
-}));
-
 vi.mock('../services/access-control.service.js', () => ({ hasPageEdit: vi.fn(async () => true) }));
 
 const { assignedOnDateMock } = vi.hoisted(() => ({ assignedOnDateMock: vi.fn(async () => false) }));

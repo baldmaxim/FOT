@@ -11,9 +11,6 @@ interface IUseStructureRealtimeOptions {
 const STRUCTURE_QUERY_KEYS: readonly (readonly string[])[] = [
   ['sigur-admin'],
   ['structure'],
-  // Кадровый мастер держит собственный список отделов (staleTime 10 мин) —
-  // без инвалидации он не видел бы только что созданный отдел.
-  ['hr-departments'],
 ];
 
 export const useStructureRealtime = ({

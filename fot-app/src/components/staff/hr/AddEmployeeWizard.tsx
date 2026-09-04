@@ -57,14 +57,7 @@ export const AddEmployeeWizard: FC<IAddEmployeeWizardProps> = ({ onClose, onCrea
   const createdEmployeeIdRef = useRef<number | null>(null);
 
   const catalogQuery = useQuery({ queryKey: ['hr-catalog'], queryFn: () => hrProfileService.getCatalog(), staleTime: 30 * 60_000 });
-  // refetchOnMount: 'always' — иначе отдел, созданный минуту назад в разделе
-  // Sigur, не появится в мастере до истечения staleTime.
-  const deptQuery = useQuery({
-    queryKey: ['hr-departments'],
-    queryFn: () => hrProfileService.getDepartments(),
-    staleTime: 10 * 60_000,
-    refetchOnMount: 'always',
-  });
+  const deptQuery = useQuery({ queryKey: ['hr-departments'], queryFn: () => hrProfileService.getDepartments(), staleTime: 10 * 60_000 });
   const catalog = catalogQuery.data;
 
   // Черновик создаём лениво — при первой загрузке файла или переходе к данным;
@@ -253,9 +246,6 @@ export const AddEmployeeWizard: FC<IAddEmployeeWizardProps> = ({ onClose, onCrea
           org_department_id: departmentId,
           position_id: positionId,
           tab_number: tabNumber.trim() || null,
-          // Ключ идемпотентности — id черновика: он стабилен на всю попытку,
-          // поэтому повтор после сетевого сбоя не заведёт второго сотрудника.
-          operation_id: d.id,
         });
         employeeId = created.id;
         createdEmployeeIdRef.current = employeeId;

@@ -35,7 +35,6 @@ function decryptDepartment(encrypted: OrgDepartmentEncrypted): OrgDepartment {
     description: encrypted.description || null,
     sort_order: encrypted.sort_order,
     is_active: encrypted.is_active,
-    is_assignable: encrypted.is_assignable ?? true,
     kind: encrypted.kind ?? 'department',
     created_at: encrypted.created_at,
     updated_at: encrypted.updated_at,
@@ -68,57 +67,15 @@ function buildDepartmentTree(
   return recurse(parentId);
 }
 
-/**
- * Активные отделы для дерева и проверок перемещения.
- *
- * Грузим ВСЕ строки, а не только активные: дерево строится рекурсией от
- * parent_id IS NULL, поэтому активный отдел под деактивированным родителем
- * иначе выпадал бы из ответа вместе со всем своим поддеревом (а его сотрудники —
- * из сводки подачи табеля и селекторов, хотя доступ к ним сохраняется).
- * Такие узлы подвешиваем к ближайшему активному предку, иначе к корню.
- */
 async function loadAllActiveDepartments(): Promise<OrgDepartment[]> {
   const rows = await query<OrgDepartmentEncrypted>(
     `SELECT id, parent_id, sigur_department_id, name, description, sort_order,
-            is_active, is_assignable, kind, created_at, updated_at
+            is_active, kind, created_at, updated_at
        FROM org_departments
+      WHERE is_active = true
       ORDER BY sort_order`,
   );
-  return reattachOrphanedActiveDepartments(rows.map(decryptDepartment));
-}
-
-function reattachOrphanedActiveDepartments(all: OrgDepartment[]): OrgDepartment[] {
-  const byId = new Map(all.map(department => [department.id, department]));
-  const orphans: string[] = [];
-
-  const result = all
-    .filter(department => department.is_active)
-    .map(department => {
-      if (department.parent_id === null) return department;
-
-      let parentId: string | null = department.parent_id;
-      const visited = new Set<string>();
-      while (parentId !== null && !visited.has(parentId)) {
-        visited.add(parentId);
-        const parent = byId.get(parentId);
-        if (!parent) { parentId = null; break; }
-        if (parent.is_active) break;
-        parentId = parent.parent_id;
-      }
-
-      if (parentId === department.parent_id) return department;
-      orphans.push(department.id);
-      return { ...department, parent_id: parentId };
-    });
-
-  if (orphans.length > 0) {
-    console.warn(
-      `[structure] ${orphans.length} активных отделов висят под неактивным родителем,`
-      + ` подвешены к ближайшему активному предку: ${orphans.slice(0, 10).join(', ')}`,
-    );
-  }
-
-  return result;
+  return rows.map(decryptDepartment);
 }
 
 function buildDepartmentMap(departments: OrgDepartment[]): Map<string, OrgDepartment> {
@@ -403,7 +360,7 @@ export const structureController = {
         data = await queryOne<OrgDepartmentEncrypted>(
           `INSERT INTO org_departments (parent_id, name, description, kind)
            VALUES ($1, $2, $3, $4)
-           RETURNING id, parent_id, sigur_department_id, name, description, sort_order, is_assignable,
+           RETURNING id, parent_id, sigur_department_id, name, description, sort_order,
                      is_active, kind, created_at, updated_at`,
           [parentId, name, description, kind],
         );
@@ -515,7 +472,7 @@ export const structureController = {
         data = await queryOne<OrgDepartmentEncrypted>(
           `UPDATE org_departments SET ${setSql}
             WHERE id = $${params.length}
-            RETURNING id, parent_id, sigur_department_id, name, description, sort_order, is_assignable,
+            RETURNING id, parent_id, sigur_department_id, name, description, sort_order,
                       is_active, kind, created_at, updated_at`,
           params,
         );

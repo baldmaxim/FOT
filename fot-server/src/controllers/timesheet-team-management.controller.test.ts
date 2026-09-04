@@ -60,12 +60,6 @@ vi.mock('./employee-lifecycle.controller.js', () => ({
   moveEmployeeToDepartmentInternal: moveInternalMock,
 }));
 
-// Целевой отдел добавления в состав проверяется на назначаемость: отдел вне
-// синхронизации Sigur не должен принимать новых людей.
-vi.mock('../services/department-assignability.service.js', () => ({
-  loadAssignableTargetDepartment: loadTargetDeptMock,
-}));
-
 vi.mock('../services/employee-changes.service.js', () => ({
   DomainValidationError: class extends Error {},
   employeeChangesService: { changeDepartment: changeDepartmentMock },

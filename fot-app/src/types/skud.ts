@@ -216,13 +216,6 @@ export interface SigurDepartmentNode {
   employeeCount: number;
   employeeCountLoaded?: boolean;
   children?: SigurDepartmentNode[];
-  /**
-   * Ответ CRUD раздела Sigur: локальное зеркало отдела уже готово, в него можно
-   * добавлять сотрудников. false — отдел в Sigur создан, но синхронизация не
-   * завершилась, и попытка завести человека упадёт.
-   */
-  mirrorReady?: boolean;
-  mirrorReason?: string;
 }
 
 export interface SigurPositionSummary {

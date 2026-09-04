@@ -376,9 +376,6 @@ export interface OrgDepartmentEncrypted {
   description: string | null;
   sort_order: number;
   is_active: boolean;
-  // false — отдел виден (в нём числятся люди), но назначать в него нельзя:
-  // он вне разрешённого поддерева синхронизации Sigur или удалён в Sigur.
-  is_assignable: boolean;
   kind: OrgDepartmentKind;
   created_at: string;
   updated_at: string;
@@ -392,7 +389,6 @@ export interface OrgDepartment {
   description: string | null;
   sort_order: number;
   is_active: boolean;
-  is_assignable: boolean;
   kind: OrgDepartmentKind;
   created_at: string;
   updated_at: string;

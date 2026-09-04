@@ -1,10 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 /**
- * CRUD отделов Sigur: ответ отдаётся только после подтверждённого зеркала —
- * иначе сразу после «отдел создан» в него нельзя добавить сотрудника (в
- * org_departments строки ещё нет), и это выглядит как «получилось со второй
- * попытки». Гасим в зеркале только реально удалённые отделы.
+ * CRUD отделов Sigur: обновление зеркала ФОТ запускается из сервиса сразу после
+ * записи в Sigur (падение readback/аудита не должно его отменять), а гасим в
+ * зеркале только реально удалённые отделы.
  */
 
 const h = vi.hoisted(() => ({
@@ -20,12 +19,8 @@ const h = vi.hoisted(() => ({
   collectDescendants: vi.fn(),
   collectAncestors: vi.fn(),
   requestRefresh: vi.fn(),
-  refreshNow: vi.fn(),
   deactivate: vi.fn(),
-  queryOne: vi.fn(),
 }));
-
-vi.mock('../config/postgres.js', () => ({ queryOne: h.queryOne }));
 
 vi.mock('./sigur.service.js', () => ({
   sigurService: {
@@ -50,7 +45,6 @@ vi.mock('./sigur-live-admin.service.js', () => ({
 }));
 vi.mock('./sigur-structure-refresh.service.js', () => ({
   requestDepartmentsMirrorRefresh: h.requestRefresh,
-  runDepartmentsMirrorRefreshNow: h.refreshNow,
   deactivateMirroredDepartments: h.deactivate,
 }));
 
@@ -60,69 +54,32 @@ import {
   updateSigurDepartment,
 } from './sigur-live-departments-crud.service.js';
 
-const MIRRORED_ROW = { id: 'dept-uuid', is_active: true, is_assignable: true };
-
 beforeEach(() => {
   vi.clearAllMocks();
   h.getEmployeesPage.mockResolvedValue([]);
   h.deactivate.mockResolvedValue(0);
   h.collectAncestors.mockReturnValue(new Set());
-  h.refreshNow.mockResolvedValue({ ok: true });
-  h.queryOne.mockResolvedValue(MIRRORED_ROW);
 });
 
 describe('createSigurDepartment / updateSigurDepartment', () => {
-  it('дожидается зеркала и отдаёт mirrorReady=true', async () => {
+  it('запрашивает refresh зеркала даже если readback из Sigur упал', async () => {
     h.createDepartment.mockResolvedValue({ id: 150749 });
-    h.getDepartmentById.mockResolvedValue({ id: 150749, name: 'Отдел экономики строительства', parentId: 142365 });
+    h.getDepartmentById.mockRejectedValue(new Error('Sigur 500'));
 
-    const created = await createSigurDepartment(
-      { name: 'Отдел экономики строительства', parentId: 142365 },
-      'internal',
-    );
+    await expect(createSigurDepartment({ name: 'Отдел экономики строительства', parentId: 142365 }, 'internal'))
+      .rejects.toThrow('Sigur 500');
 
-    expect(h.refreshNow).toHaveBeenCalledWith('admin_crud', 'internal');
-    expect(created).toMatchObject({ id: 150749, mirrorReady: true });
+    expect(h.requestRefresh).toHaveBeenCalledTimes(1);
+    expect(h.requestRefresh).toHaveBeenCalledWith('admin_crud', 'internal');
   });
 
-  it('зеркало не сошлось → mirrorReady=false, ошибку не бросаем (в Sigur отдел уже есть)', async () => {
-    h.createDepartment.mockResolvedValue({ id: 150749 });
-    h.refreshNow.mockResolvedValue({ ok: false, reason: 'timeout' });
-    h.queryOne.mockResolvedValue(null);
-    h.getDepartmentById.mockResolvedValue({ id: 150749, name: 'Новый отдел', parentId: 142365 });
+  it('переименование: refresh запрошен до readback', async () => {
+    h.updateDepartment.mockResolvedValue(undefined);
+    h.getDepartmentById.mockRejectedValue(new Error('Sigur timeout'));
 
-    const created = await createSigurDepartment({ name: 'Новый отдел', parentId: 142365 });
-
-    expect(created).toMatchObject({ mirrorReady: false, mirrorReason: 'timeout' });
-  });
-
-  it('отдел вне фильтра синхронизации: зеркало есть, но назначать нельзя', async () => {
-    h.createDepartment.mockResolvedValue({ id: 150749 });
-    h.queryOne.mockResolvedValue({ ...MIRRORED_ROW, is_assignable: false });
-    h.getDepartmentById.mockResolvedValue({ id: 150749, name: 'Вне фильтра', parentId: null });
-
-    const created = await createSigurDepartment({ name: 'Вне фильтра', parentId: null });
-
-    expect(created).toMatchObject({ mirrorReady: true, mirrorReason: 'not_assignable' });
-  });
-
-  it('Sigur не вернул id: refresh всё равно запрошен — карточка отдела уже создана', async () => {
-    h.createDepartment.mockResolvedValue({});
-
-    await expect(createSigurDepartment({ name: 'Без id', parentId: null }))
-      .rejects.toThrow('Sigur не вернул id созданного отдела');
+    await expect(updateSigurDepartment(150749, { name: 'Новое имя' })).rejects.toThrow('Sigur timeout');
 
     expect(h.requestRefresh).toHaveBeenCalledWith('admin_crud', undefined);
-  });
-
-  it('переименование: ответ после зеркала', async () => {
-    h.updateDepartment.mockResolvedValue(undefined);
-    h.getDepartmentById.mockResolvedValue({ id: 150749, name: 'Новое имя', parentId: null });
-
-    const updated = await updateSigurDepartment(150749, { name: 'Новое имя' });
-
-    expect(h.refreshNow).toHaveBeenCalledWith('admin_crud', undefined);
-    expect(updated).toMatchObject({ name: 'Новое имя', mirrorReady: true });
   });
 });
 
@@ -144,6 +101,6 @@ describe('deleteSigurDepartmentRecursive', () => {
     expect(result.deleted).toBe(2);
     expect(h.deactivate).toHaveBeenCalledTimes(1);
     expect((h.deactivate.mock.calls[0][0] as number[]).slice().sort()).toEqual([1, 3]);
-    expect(h.refreshNow).toHaveBeenCalledWith('admin_crud', undefined);
+    expect(h.requestRefresh).toHaveBeenCalledWith('admin_crud', undefined);
   });
 });

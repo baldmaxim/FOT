@@ -47,28 +47,14 @@ async function syncSigurEmployeeBlockedState(
   }
 }
 
-/**
- * Создаёт карточку в Sigur.
- *
- * onCreated вызывается СРАЗУ после ответа Sigur, до установки блокировки и
- * контрольного чтения профиля: раньше id возвращался вызывающему только в конце,
- * и падение на любом из этих шагов теряло уже созданную карточку — повтор кнопки
- * заводил дубль. Ошибка onCreated прерывает операцию намеренно: без сохранённого
- * id повтор снова окажется небезопасным.
- */
 export async function createSigurEmployee(
   input: ISigurEmployeeUpsertInput,
   connection?: ConnectionType,
-  hooks?: { onCreated?: (sigurEmployeeId: number) => Promise<void> | void },
 ): Promise<ISigurEmployeeProfile> {
   const created = await sigurService.createEmployee(buildSigurEmployeePayload(input), connection);
   const sigurEmployeeId = normalizeInt(resolveField(created, 'id', 'ID', 'Id'));
   if (!sigurEmployeeId) {
     throw new Error('Sigur не вернул id созданного сотрудника');
-  }
-
-  if (hooks?.onCreated) {
-    await hooks.onCreated(sigurEmployeeId);
   }
 
   await syncSigurEmployeeBlockedState(sigurEmployeeId, input.blocked, false, connection);

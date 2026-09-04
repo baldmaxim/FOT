@@ -29,13 +29,6 @@ interface IDepartmentTreeSelectProps {
   showAllOption?: boolean;
   /** Текст в триггере при пустом value. Default «Все отделы». */
   emptyLabel?: string;
-  /**
-   * Форма назначения/перевода: отделы с is_assignable=false нельзя выбрать.
-   * По умолчанию false — в фильтрах и навигации такой отдел выбирается
-   * свободно, иначе сотрудников оставленного «ради людей» отдела нельзя было бы
-   * даже посмотреть.
-   */
-  disableUnassignable?: boolean;
 }
 
 const ALL_LABEL = 'Все отделы';
@@ -43,14 +36,9 @@ const ALL_LABEL = 'Все отделы';
 // Корень-компания (depth 0, есть дети) — только контейнер, не выбирается.
 // Узел вне scope пользователя (in_scope=false) — серый предок.
 // Корень без детей — выбираем (иначе по нему нельзя отфильтровать).
-const isSelectableNode = (
-  node: OrgDepartmentNode,
-  depth: number,
-  disableUnassignable = false,
-): boolean => {
+const isSelectableNode = (node: OrgDepartmentNode, depth: number): boolean => {
   const hasChildren = (node.children?.length ?? 0) > 0;
   if (depth === 0 && hasChildren) return false;
-  if (disableUnassignable && (node.is_assignable ?? true) === false) return false;
   return (node.in_scope ?? true) === true;
 };
 
@@ -65,7 +53,6 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
   placeholder = 'Поиск отдела...',
   showAllOption = true,
   emptyLabel = ALL_LABEL,
-  disableUnassignable = false,
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -92,12 +79,12 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
     const walk = (node: OrgDepartmentNode, depth: number, parentId: string | null) => {
       ids.push(node.id);
       if (parentId) pMap.set(node.id, parentId);
-      if (isSelectableNode(node, depth, disableUnassignable)) selectable += 1;
+      if (isSelectableNode(node, depth)) selectable += 1;
       node.children?.forEach(child => walk(child, depth + 1, node.id));
     };
     roots.forEach(node => walk(node, 0, null));
     return { parentMap: pMap, allNodeIds: ids, selectableCount: selectable };
-  }, [roots, disableUnassignable]);
+  }, [roots]);
 
   const computeBaseExpansion = useCallback((): Set<string> => {
     // Узкий скоуп (мало узлов) — раскрыть всё: руководитель видит отделы сразу.
@@ -196,8 +183,7 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
 
   const renderNode = (node: OrgDepartmentNode, depth: number) => {
     const hasChildren = (node.children?.length ?? 0) > 0;
-    const selectable = isSelectableNode(node, depth, disableUnassignable);
-    const notAssignable = disableUnassignable && (node.is_assignable ?? true) === false;
+    const selectable = isSelectableNode(node, depth);
     const isHeader = !selectable && hasChildren;
     const nodeExpanded = isNodeExpanded(node.id);
     const marker = getDepartmentTypeMarker(node.name);
@@ -214,7 +200,6 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
           className={`${styles.row} ${isActive ? styles.rowActive : ''} ${isHeader ? styles.rowHeader : ''}`}
           style={{ paddingLeft: 12 + depth * 16 }}
           onClick={onRowClick}
-          title={notAssignable ? 'Отдел вне синхронизации с Sigur — назначение недоступно' : undefined}
         >
           {hasChildren ? (
             <span
@@ -230,7 +215,6 @@ export const DepartmentTreeSelect: FC<IDepartmentTreeSelectProps> = memo(({
           <span className={styles.label}>
             {marker && <span className={styles.typeMarker}>{marker}</span>}
             {node.name}
-            {notAssignable && <span className={styles.typeMarker}> вне синхронизации</span>}
           </span>
         </div>
         {hasChildren && nodeExpanded && (

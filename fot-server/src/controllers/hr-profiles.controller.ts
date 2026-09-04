@@ -112,7 +112,7 @@ const departments = async (req: AuthenticatedRequest, res: Response): Promise<vo
     const rows = await query<{ id: string; name: string; parent_id: string | null; kind: string | null; sigur_department_id: number | null }>(
       `SELECT d.id, d.name, d.parent_id, d.kind, d.sigur_department_id
          FROM org_departments d
-        WHERE d.is_active = true AND d.is_assignable = true AND d.sigur_department_id IS NOT NULL
+        WHERE d.is_active = true AND d.sigur_department_id IS NOT NULL
           AND lower(d.name) <> 'уволенные' ${where}
         ORDER BY d.sort_order NULLS LAST, d.name`,
       params,
