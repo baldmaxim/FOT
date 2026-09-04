@@ -18,14 +18,18 @@ import type { PoolClient } from 'pg';
 import { sigurService, type ConnectionType } from './sigur.service.js';
 import { normalizeEmployee } from './sigur-sync-shared.js';
 
-/** Таблицы, привязанные к employee_id: отдел в них не хранится, но считаем их до/после. */
+/**
+ * Таблицы, привязанные к employee_id: отдел в них не хранится, поэтому числа до и
+ * после обязаны совпасть. `employee_department_access` сюда НЕ входит намеренно —
+ * операция сама заводит недостающую привязку на целевом отделе, и рост на единицу
+ * здесь был бы ложной тревогой; доступы проверяются отдельным пост-чеком.
+ */
 export const MERGE_INVENTORY_TABLES = [
   'skud_events',
   'skud_daily_summary',
   'attendance_adjustments',
   'employee_schedule_assignments',
   'employee_assignments',
-  'employee_department_access',
   'documents',
   'leave_requests',
   'payslips',

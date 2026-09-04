@@ -373,6 +373,26 @@ async function main(): Promise<void> {
   const approvalsAfter = await loadApprovals([source!.id, target!.id]);
   const approvalsChanged = JSON.stringify(approvalsBefore) !== JSON.stringify(approvalsAfter);
 
+  // Доступы намеренно не в инвентаре (операция сама заводит недостающую привязку),
+  // поэтому проверяем их отдельно: на источнике пусто, у каждого перенесённого — цель.
+  const accessProblems: string[] = [];
+  const activeOnSource = await query<{ count: string }>(
+    'SELECT count(*)::text AS count FROM employee_department_access WHERE department_id = $1::uuid AND is_active',
+    [source!.id],
+  );
+  if (Number(activeOnSource[0]?.count ?? '0') !== 0) {
+    accessProblems.push(`на источнике осталось ${activeOnSource[0].count} активных привязок`);
+  }
+  const activeOnTarget = await query<{ employee_id: number }>(
+    `SELECT employee_id FROM employee_department_access
+      WHERE department_id = $1::uuid AND is_active AND employee_id = ANY($2::bigint[])`,
+    [target!.id, employeeIds],
+  );
+  const covered = new Set(activeOnTarget.map(row => Number(row.employee_id)));
+  for (const id of employeeIds) {
+    if (!covered.has(id)) accessProblems.push(`у сотрудника ${id} нет активной привязки к целевому отделу`);
+  }
+
   if (inventoryDiff.length > 0) {
     console.error(`⚠ Инвентарь изменился: ${inventoryDiff.join(', ')}`);
   } else {
@@ -383,12 +403,17 @@ async function main(): Promise<void> {
   } else {
     console.log('Закрытые подачи и их версии не изменились.');
   }
+  if (accessProblems.length > 0) {
+    for (const item of accessProblems) console.error(`⚠ Доступы: ${item}`);
+  } else {
+    console.log('Доступы: на источнике активных нет, у всех перенесённых есть привязка к цели.');
+  }
 
   console.log('\nДальше вручную: раздел SIGUR → удалить пустой отдел '
     + `«${source!.name}» (${sourceSigurId}); затем СКУД → Фильтр синхронизации → Сохранить.`);
 
   await getPool().end();
-  if (inventoryDiff.length > 0 || approvalsChanged) process.exit(1);
+  if (inventoryDiff.length > 0 || approvalsChanged || accessProblems.length > 0) process.exit(1);
 }
 
 main()
