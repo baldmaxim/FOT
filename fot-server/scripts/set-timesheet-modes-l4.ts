@@ -21,15 +21,15 @@
  *
  * Запуск локально (БД — прод):
  *   cd fot-server && npx tsx scripts/set-timesheet-modes-l4.ts
- *   npx tsx scripts/set-timesheet-modes-l4.ts --apply --actor-user-id=<uuid> --snapshot=<путь>
+ *   npx tsx scripts/set-timesheet-modes-l4.ts --apply --snapshot=<путь>   # --actor-user-id опционально (аудит)
  *
  * Запуск на проде (из /opt/fot-build/fot-server, env уже задан окружением):
  *   npx tsx scripts/set-timesheet-modes-l4.ts
- *   npx tsx scripts/set-timesheet-modes-l4.ts --apply --actor-user-id=<uuid> \
+ *   npx tsx scripts/set-timesheet-modes-l4.ts --apply \
  *     --snapshot=/srv/sites/fot.su10.ru/rollback_timesheet_modes_l4.json
  *
  * Откат:
- *   npx tsx scripts/set-timesheet-modes-l4.ts --rollback <файл> --actor-user-id=<uuid>
+ *   npx tsx scripts/set-timesheet-modes-l4.ts --rollback <файл>
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -238,16 +238,15 @@ async function main(): Promise<void> {
   const rollbackFile = argValue('rollback');
   const actorUserId = argValue('actor-user-id') ?? null;
 
-  if ((apply || rollbackFile) && !actorUserId) {
-    throw new Error('--actor-user-id обязателен для --apply и --rollback');
-  }
+  // --actor-user-id необязателен: с ним пишется запись в журнал аудита, без него —
+  // изменение применяется молча (снимок для отката пишется в любом случае).
   if (actorUserId) {
     const actor = await queryOne<{ id: string }>('SELECT id FROM app_auth.users WHERE id = $1::uuid', [actorUserId]);
     if (!actor) throw new Error(`Пользователь ${actorUserId} не найден`);
   }
 
   if (rollbackFile) {
-    await runRollback(rollbackFile, actorUserId!, { withTransaction, auditService, AUDIT_ACTIONS, TIMESHEET_MODE_LOCK_KEY });
+    await runRollback(rollbackFile, actorUserId, { withTransaction, auditService, AUDIT_ACTIONS, TIMESHEET_MODE_LOCK_KEY });
     await getPool().end();
     return;
   }
@@ -332,7 +331,7 @@ async function main(): Promise<void> {
   console.log('\nPreflight пройден.');
 
   if (!apply) {
-    console.log('Режим dry-run. Для применения: --apply --actor-user-id=<uuid> [--snapshot=<путь>]');
+    console.log('Режим dry-run. Для применения: --apply [--actor-user-id=<uuid>] [--snapshot=<путь>]');
     await getPool().end();
     return;
   }
@@ -414,7 +413,7 @@ async function main(): Promise<void> {
       }
     }
 
-    await auditService.logWithClient(client, {
+    if (actorUserId) await auditService.logWithClient(client, {
       user_id: actorUserId,
       action: AUDIT_ACTIONS.TIMESHEET_MODE_BULK_UPDATED,
       entity_type: 'timesheet_export_mode',
@@ -438,13 +437,13 @@ async function main(): Promise<void> {
 
   console.log(`\nПрименено: ${written.length} сотрудников.`);
   console.log(`Снимок для отката: ${snapshotPath}`);
-  console.log(`Откат: npx tsx scripts/set-timesheet-modes-l4.ts --rollback ${snapshotPath} --actor-user-id=<uuid>`);
+  console.log(`Откат: npx tsx scripts/set-timesheet-modes-l4.ts --rollback ${snapshotPath}`);
   await getPool().end();
 }
 
 async function runRollback(
   file: string,
-  actorUserId: string,
+  actorUserId: string | null,
   deps: {
     withTransaction: typeof import('../src/config/postgres.js').withTransaction;
     auditService: typeof import('../src/services/audit.service.js').auditService;
@@ -482,7 +481,7 @@ async function runRollback(
       }
     }
 
-    await deps.auditService.logWithClient(client, {
+    if (actorUserId) await deps.auditService.logWithClient(client, {
       user_id: actorUserId,
       action: deps.AUDIT_ACTIONS.TIMESHEET_MODE_BULK_UPDATED,
       entity_type: 'timesheet_export_mode',
