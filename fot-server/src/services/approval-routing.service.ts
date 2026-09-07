@@ -1,5 +1,4 @@
-import { DEPARTMENT_MANAGER_CONDITION_SQL } from './department-managers.service.js';
-import { query } from '../config/postgres.js';
+import { listEffectiveDepartmentManagers } from './department-managers.service.js';
 import { resolveSchedulesForPeriod, isWorkingDay, loadCalendarMonth } from './schedule.service.js';
 import { loadAssignmentMaps, resolveFromMaps } from './weekend-approval-assignments.service.js';
 import { getActiveDirectManagersFor } from './employee-direct-reports.service.js';
@@ -11,13 +10,30 @@ import { getActiveDirectManagersFor } from './employee-direct-reports.service.js
  *  - `weekend` — work/remote в нерабочий по графику день (выходной/праздник,
  *    необязательная сб/вс). Согласует назначенный в «Выходных» ответственный
  *    (weekend_approval_assignments): приоритет по сотруднику → по его отделу.
- *  - `weekday_correction` — корректировка в рабочий день. Согласует
- *    непосредственный руководитель (employee_direct_reports), иначе начальник(и)
- *    отдела с full-доступом (ручное назначение, source<>'sigur_sync').
+ *  - `weekday_correction` — корректировка в рабочий день. Согласуют начальник(и)
+ *    отдела (ручной full-доступ), и только если их нет — непосредственный
+ *    руководитель из employee_direct_reports. Порядок именно такой: табель ведёт
+ *    руководитель отдела, значит и корректировки смотрит он, а личный руководитель
+ *    остаётся ответственным лишь там, где руководителя отдела нет (ЛИНИЯ и
+ *    ЛИНИЯ-Общестрой).
  *
  * Нет ответственного → пустой список (fallback на текущую scope-логику/админа,
  * решается в контроллере).
  */
+
+/**
+ * Начальники отдела как согласующие, без самого сотрудника строки: иначе руководитель
+ * согласовал бы собственную заявку. Если у отдела два руководителя — останется второй;
+ * если больше некому, вызывающий уходит на личного руководителя.
+ */
+function pickHeads(
+  deptManagers: Map<string, number[]>,
+  departmentId: string | null,
+  employeeId: number,
+): number[] {
+  if (!departmentId) return [];
+  return (deptManagers.get(String(departmentId)) ?? []).filter(id => id !== employeeId);
+}
 
 export interface IRoutableRow {
   id: number;
@@ -61,27 +77,16 @@ export async function classifyWeekendRows(rows: IRoutableRow[]): Promise<Map<num
   return result;
 }
 
-/** deptId → employee_id начальников отдела (ручной full-доступ, не sigur_sync). */
+/**
+ * deptId → employee_id начальников отдела, которые реально могут вести табель:
+ * ручной full-доступ + активный сотрудник + одобренный профиль + право edit на
+ * /timesheet. Без последнего условия «руководитель отдела» перехватил бы маршрут
+ * у личного руководителя и заявление осталось бы без согласующего.
+ */
 export async function listFullManagersForDepartments(
   departmentIds: string[],
 ): Promise<Map<string, number[]>> {
-  const ids = [...new Set(departmentIds.filter(id => typeof id === 'string' && id.length > 0))];
-  const map = new Map<string, number[]>();
-  if (ids.length === 0) return map;
-  const rows = await query<{ employee_id: number; department_id: string }>(
-    `SELECT employee_id, department_id
-       FROM employee_department_access
-      WHERE department_id = ANY($1::uuid[])
-        AND ${DEPARTMENT_MANAGER_CONDITION_SQL}`,
-    [ids],
-  );
-  for (const r of rows) {
-    const dept = String(r.department_id);
-    const list = map.get(dept) ?? [];
-    list.push(Number(r.employee_id));
-    map.set(dept, list);
-  }
-  return map;
+  return listEffectiveDepartmentManagers(departmentIds);
 }
 
 /**
@@ -112,13 +117,14 @@ export async function resolveResponsibleEmployeeIdsForRows(
       result.set(row.id, responsible != null ? [responsible] : []);
       continue;
     }
-    const dm = directMgrs.get(Number(row.employee_id));
-    if (dm) {
-      result.set(row.id, [dm.managerId]);
+    const employeeId = Number(row.employee_id);
+    const heads = pickHeads(deptManagers, row.org_department_id, employeeId);
+    if (heads.length > 0) {
+      result.set(row.id, heads);
       continue;
     }
-    const heads = row.org_department_id ? (deptManagers.get(String(row.org_department_id)) ?? []) : [];
-    result.set(row.id, heads);
+    const dm = directMgrs.get(employeeId);
+    result.set(row.id, dm ? [dm.managerId] : []);
   }
   return result;
 }
@@ -147,13 +153,13 @@ export async function resolveResponsibleEmployeeIdsByEmployee(
 
   for (const e of employees) {
     const empId = Number(e.employee_id);
-    const dm = directMgrs.get(empId);
-    if (dm) {
-      result.set(empId, [dm.managerId]);
+    const heads = pickHeads(deptManagers, e.org_department_id, empId);
+    if (heads.length > 0) {
+      result.set(empId, heads);
       continue;
     }
-    const heads = e.org_department_id ? (deptManagers.get(String(e.org_department_id)) ?? []) : [];
-    result.set(empId, heads);
+    const dm = directMgrs.get(empId);
+    result.set(empId, dm ? [dm.managerId] : []);
   }
   return result;
 }

@@ -21,6 +21,8 @@ declare global {
         __company_subtree_ids?: string[];
         __manager_subtree_ids?: string[];
         __direct_subordinates?: Set<number>;
+        /** Прямые подчинённые за вычетом ведомых руководителями их отделов (запись). */
+        __editable_direct_subordinates?: number[];
         /** Один снимок скоупа табельщицы на HTTP-запрос: seeds и direct из одного SQL. */
         __timekeeper_scope_snapshot?: { readonly departmentSeeds: readonly string[]; readonly directEmployeeIds: readonly number[] };
         __timekeeper_dept_seeds?: string[];

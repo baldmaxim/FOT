@@ -1,6 +1,7 @@
 import { query } from '../config/postgres.js';
 import type { DbExecutor } from '../config/postgres.js';
 import type { QueryResultRow } from 'pg';
+import { isCoveredOn, loadCoverage, type TCoverageMap } from './direct-report-coverage.service.js';
 
 /**
  * Владение днём: «этот день сотрудника принадлежит этой подаче табеля».
@@ -23,8 +24,12 @@ import type { QueryResultRow } from 'pg';
  * Поэтому потребители трактуют unknown как владение по снимку — иначе замок
  * снялся бы с закрытых периодов у большинства людей.
  *
- * Персональные подачи руководителей (department_id IS NULL) отдела не имеют:
- * для них всегда unknown, то есть владение остаётся строго снимочным.
+ * Персональные подачи руководителей (department_id IS NULL) отдела не имеют, поэтому
+ * отдела-владельца у них нет. Но снимочное владение им тоже нельзя отдавать целиком:
+ * подчинённый, у которого на эту дату есть действующий руководитель отдела, принадлежит
+ * подаче отдела. Такие даты помечаются not_owned — иначе один и тот же день попал бы
+ * сразу в две версии. Сам руководитель из этого правила исключён: его собственную
+ * строку персональная подача ведёт всегда.
  */
 
 export type TDayOwnership = 'owned' | 'not_owned' | 'unknown';
@@ -34,8 +39,10 @@ const MAX_DEPARTMENT_DEPTH = 32;
 
 export interface IOwnershipRequest {
   approvalId: number;
-  /** null — персональная подача: отдела нет, владение снимочное. */
+  /** null — персональная подача: отдела нет, владение считается по покрытию. */
   departmentId: string | null;
+  /** Только для персональной подачи: чью строку правило покрытия не трогает. */
+  managerEmployeeId?: number | null;
   employeeIds: readonly number[];
   dates: readonly string[];
 }
@@ -209,8 +216,9 @@ export async function loadOwnershipIntervals(
 /**
  * Владение по набору (подача, сотрудник, дата). Ключ карты — ownershipKey.
  *
- * Для персональных подач всегда unknown (владение снимочное), для остальных —
- * owned / not_owned / unknown по правилу classifyOwnership.
+ * Для подач отдела — owned / not_owned / unknown по правилу classifyOwnership.
+ * Для персональных — not_owned на датах, где у сотрудника есть действующий
+ * руководитель отдела (день принадлежит подаче отдела), иначе unknown.
  */
 export async function resolveDayOwnership(
   requests: readonly IOwnershipRequest[],
@@ -237,27 +245,40 @@ export async function resolveDayOwnership(
 
   if (employeeIds.size === 0 || minDate == null || maxDate == null) return ownership;
 
-  const intervals = await loadOwnershipIntervals(
-    [...employeeIds],
-    minDate,
-    maxDate,
-    requests.map(r => ({ approvalId: r.approvalId, departmentId: r.departmentId })),
-    exec,
-  );
+  const hasPersonal = requests.some(r => !(typeof r.departmentId === 'string' && r.departmentId));
+
+  const [intervals, coverage] = await Promise.all([
+    loadOwnershipIntervals(
+      [...employeeIds],
+      minDate,
+      maxDate,
+      requests.map(r => ({ approvalId: r.approvalId, departmentId: r.departmentId })),
+      exec,
+    ),
+    // Покрытие нужно только персональным подачам — для подач отдела запрос не делаем.
+    hasPersonal
+      ? loadCoverage([...employeeIds], minDate, maxDate, exec)
+      : Promise.resolve(new Map() as TCoverageMap),
+  ]);
 
   for (const request of requests) {
     const personal = !(typeof request.departmentId === 'string' && request.departmentId);
+    const managerEmployeeId = Number(request.managerEmployeeId ?? 0);
     for (const rawId of request.employeeIds) {
       const employeeId = Number(rawId);
       if (!Number.isInteger(employeeId) || employeeId <= 0) continue;
+      const skipCoverage = personal && employeeId === managerEmployeeId;
       for (const date of request.dates) {
         if (!isIsoDate(date)) continue;
-        ownership.set(
-          ownershipKey(request.approvalId, employeeId, date),
-          personal
-            ? 'unknown'
-            : classifyOwnership(intervals.get(employeeId), request.approvalId, date),
-        );
+        let state: TDayOwnership;
+        if (!personal) {
+          state = classifyOwnership(intervals.get(employeeId), request.approvalId, date);
+        } else if (!skipCoverage && isCoveredOn(coverage.get(employeeId), date)) {
+          state = 'not_owned';
+        } else {
+          state = 'unknown';
+        }
+        ownership.set(ownershipKey(request.approvalId, employeeId, date), state);
       }
     }
   }

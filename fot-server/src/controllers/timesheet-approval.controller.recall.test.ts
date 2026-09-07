@@ -14,12 +14,16 @@ vi.mock('../config/postgres.js', async (importActual) => ({
   queryOne: pgQueryOne,
 }));
 
-const { resolveScopedDeptMock } = vi.hoisted(() => ({
+const { resolveScopedDeptMock, resolveEditableDeptsMock } = vi.hoisted(() => ({
   resolveScopedDeptMock: vi.fn(async (_req: unknown, deptId: string | null) => deptId),
+  // Отзыв — write-действие: отдел резолвится по editable-скоупу
+  // (resolveTimesheetWritableDepartmentId), а не по видимому.
+  resolveEditableDeptsMock: vi.fn(async () => [] as string[]),
 }));
 vi.mock('../services/data-scope.service.js', async (importActual) => ({
   ...(await importActual<typeof import('../services/data-scope.service.js')>()),
   resolveScopedDepartmentId: resolveScopedDeptMock,
+  resolveEditableDepartmentIds: resolveEditableDeptsMock,
 }));
 
 vi.mock('../services/audit.service.js', () => ({
@@ -89,6 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   pgQuery.mockResolvedValue([]);
   resolveScopedDeptMock.mockImplementation(async (_req: unknown, deptId: string | null) => deptId);
+  resolveEditableDeptsMock.mockResolvedValue([DEPT]);
 });
 
 describe('recall — отзыв табеля', () => {

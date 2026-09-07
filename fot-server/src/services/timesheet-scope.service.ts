@@ -14,6 +14,7 @@ import {
 } from './data-scope.service.js';
 import { isTimekeeper, resolveTimekeeperEditableLiIds, LI_OBSHESTROY_DEPARTMENT_ID } from './timekeeper-scope.service.js';
 import { listEmployeeIdsAssignedToDepartmentPeriod } from './timesheet-department-assignments.service.js';
+import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
 
 /**
  * Скоуп табеля. Вынесено из timesheet.controller.ts, чтобы экспортные контроллеры
@@ -179,7 +180,14 @@ export async function canAccessEmployeeForTimesheetPeriod(
   // её объектные сотрудники обработаны веткой выше.
   const directSubs = await resolveEffectiveDirectSubordinates(req);
   if (directSubs.includes(employeeId)) {
-    return true;
+    if (!requireEdit) return true;
+    // Для записи: дни, на которые у сотрудника есть действующий руководитель отдела,
+    // ведёт он. Пропускаем, только если в периоде остался хоть один свой день —
+    // конкретную дату проверит canAccessEmployeeForTimesheetDate.
+    const { owned, partiallyCovered } = await splitDirectReportsByCoverage(
+      [employeeId], startDate, endDate,
+    );
+    return owned.includes(employeeId) || partiallyCovered.includes(employeeId);
   }
 
   return false;

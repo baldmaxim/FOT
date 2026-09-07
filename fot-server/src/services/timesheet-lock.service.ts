@@ -66,6 +66,7 @@ interface ILockRow extends QueryResultRow {
   work_date: string;
   id: number | string;
   department_id: string | null;
+  manager_employee_id: number | string | null;
   start_date: string;
   end_date: string;
   status: IApprovalLockInfo['status'];
@@ -76,15 +77,32 @@ interface ILockRow extends QueryResultRow {
  * Одна карта на весь набор, чтобы резолвер сходил в БД ровно один раз.
  */
 function buildOwnershipRequests(
-  rows: readonly { id: number | string; department_id: string | null; employee_id: number | string; work_date: string }[],
+  rows: readonly {
+    id: number | string;
+    department_id: string | null;
+    manager_employee_id?: number | string | null;
+    employee_id: number | string;
+    work_date: string;
+  }[],
 ): IOwnershipRequest[] {
-  const byApproval = new Map<number, { departmentId: string | null; employees: Set<number>; dates: Set<string> }>();
+  const byApproval = new Map<number, {
+    departmentId: string | null;
+    managerEmployeeId: number | null;
+    employees: Set<number>;
+    dates: Set<string>;
+  }>();
   for (const row of rows) {
     const approvalId = Number(row.id);
     const employeeId = Number(row.employee_id);
     if (!Number.isFinite(approvalId) || !Number.isFinite(employeeId)) continue;
+    const managerEmployeeId = row.manager_employee_id == null ? null : Number(row.manager_employee_id);
     const bucket = byApproval.get(approvalId)
-      ?? { departmentId: row.department_id ?? null, employees: new Set<number>(), dates: new Set<string>() };
+      ?? {
+        departmentId: row.department_id ?? null,
+        managerEmployeeId: Number.isFinite(managerEmployeeId as number) ? managerEmployeeId : null,
+        employees: new Set<number>(),
+        dates: new Set<string>(),
+      };
     bucket.employees.add(employeeId);
     bucket.dates.add(String(row.work_date).slice(0, 10));
     byApproval.set(approvalId, bucket);
@@ -92,6 +110,7 @@ function buildOwnershipRequests(
   return [...byApproval.entries()].map(([approvalId, bucket]) => ({
     approvalId,
     departmentId: bucket.departmentId,
+    managerEmployeeId: bucket.managerEmployeeId,
     employeeIds: [...bucket.employees],
     dates: [...bucket.dates],
   }));
@@ -152,6 +171,7 @@ export async function findApprovalLocksForEmployeeDates(
             pr.work_date::text AS work_date,
             a.id,
             a.department_id,
+            a.manager_employee_id,
             a.start_date::text AS start_date,
             a.end_date::text AS end_date,
             a.status
@@ -378,6 +398,7 @@ export async function loadApprovalLocksForEmployeesInPeriod(
 
   const rows = await queryWith<{
     employee_id: number | string; id: number | string; department_id: string | null;
+    manager_employee_id: number | string | null;
     start_date: string; end_date: string; status: IApprovalLockInfo['status'];
   }>(
     exec,
@@ -420,6 +441,7 @@ export async function loadApprovalLocksForEmployeesInPeriod(
      SELECT e.employee_id,
             a.id,
             a.department_id,
+            a.manager_employee_id,
             GREATEST(a.start_date, $2::date)::text AS start_date,
             LEAST(a.end_date, $3::date)::text AS end_date,
             a.status
@@ -445,6 +467,7 @@ export async function loadApprovalLocksForEmployeesInPeriod(
     buildOwnershipRequests(rows.flatMap(row => enumerateDatesInclusive(row.start_date, row.end_date).map(date => ({
       id: row.id,
       department_id: row.department_id,
+      manager_employee_id: row.manager_employee_id,
       employee_id: row.employee_id,
       work_date: date,
     })))),

@@ -8,7 +8,9 @@ import type {
 } from '../types/index.js';
 import {
   hasGlobalDepartmentReadScope,
+  normalizeUuidParam,
   resolveAccessibleDepartmentIds,
+  resolveEditableDepartmentIds,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
   resolveScopedDepartmentId,
@@ -214,12 +216,10 @@ import { r2Service } from '../services/r2.service.js';
 import {
   listApprovalEmployees,
   resolveManagerPersonalSnapshotIds,
+  resolvePersonalSubmissionComposition,
   snapshotApprovalEmployees,
 } from '../services/timesheet-approval-employees-snapshot.service.js';
-import {
-  listDirectReportDepartmentIds,
-  listDirectSubordinates,
-} from '../services/employee-direct-reports.service.js';
+import { listDirectReportDepartmentIds } from '../services/employee-direct-reports.service.js';
 import { sanitizeFileName } from '../utils/file-validation.utils.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 import path from 'path';
@@ -347,6 +347,34 @@ async function resolveTimesheetActionDepartmentId(
 }
 
 /**
+ * WRITE-вариант: подача, отзыв и загрузка служебок к подаче отдела.
+ *
+ * База — editable-отделы (access_level='full' плюс поддерево). Для админов и
+ * табельщиц resolveEditableDepartmentIds совпадает с видимым скоупом, так что их
+ * права не меняются.
+ *
+ * Fallback «есть прямой подчинённый в этом отделе → можно подать отдел» убран
+ * намеренно: подача отдела забирает ВСЕХ его сотрудников, включая тех, кто этому
+ * руководителю не назначен. Своих людей из отделов без руководителя личный
+ * руководитель подаёт через personal: true.
+ */
+async function resolveTimesheetWritableDepartmentId(
+  req: AuthenticatedRequest,
+  requestedDepartmentId: string | null,
+): Promise<string | null> {
+  const editable = await resolveEditableDepartmentIds(req);
+  const requested = normalizeUuidParam(requestedDepartmentId);
+
+  if (editable === 'all') return requested;
+  if (editable.length === 0) return null;
+  if (requested) return editable.includes(requested) ? requested : null;
+  if (req.user.department_id && editable.includes(req.user.department_id)) {
+    return req.user.department_id;
+  }
+  return editable[0] ?? null;
+}
+
+/**
  * READ-вариант: глобальный read-scope (hr / флаг view_all_departments) разрешает
  * просмотр статуса/списка согласований любого отдела. Только для GET-эндпоинтов;
  * мутации (submit/approve/attachments) остаются на resolveTimesheetActionDepartmentId.
@@ -371,42 +399,30 @@ async function ensureTimesheetActionDepartmentAccess(
 
 /**
  * Контекст персональной подачи для руководителя «по людям» (direct-reports-only).
- * Возвращает список активных подчинённых, объединение их отделов
- * (для адресации HR-уведомлений). Возвращает null, если у пользователя
- * нет employee_id или нет ни одного активного подчинённого с org_department_id.
+ *
+ * Тонкая обёртка над resolvePersonalSubmissionComposition — единым алгоритмом состава
+ * для обоих путей подачи. Здесь только резолв employee_id из токена и трактовка
+ * пустого результата.
+ *
+ * null означает «персональной подачи нет»: либо у пользователя нет employee_id, либо
+ * прямых подчинённых за период не было вовсе, либо весь состав уже уехал в подачи
+ * отделов. Сотрудников, которых ведёт руководитель их отдела, состав не содержит.
  */
-export async function resolvePersonalSubmissionContext(req: AuthenticatedRequest): Promise<{
+export async function resolvePersonalSubmissionContext(
+  req: AuthenticatedRequest,
+  range: ITimesheetDateRange,
+): Promise<{
   managerEmployeeId: number;
   employeeIds: number[];
   affectedDepartmentIds: string[];
 } | null> {
   if (!req.user.employee_id) return null;
   const managerEmployeeId = req.user.employee_id;
-  const subordinateIds = await listDirectSubordinates(managerEmployeeId);
-  if (subordinateIds.length === 0) return null;
 
-  // Сам руководитель тоже входит в персональную подачу (строка РУКОВОДИТЕЛЬ /
-  // source='self' в его сетке). Без него снимок состоит лишь из подчинённых и
-  // руководитель «теряется» у проверяющего. Зеркалит resolveManagerPersonalSnapshotIds.
-  const candidateIds = [...new Set([managerEmployeeId, ...subordinateIds])];
+  const { employeeIds, affectedDepartmentIds, hasDirectReports } =
+    await resolvePersonalSubmissionComposition(managerEmployeeId, range.startDate, range.endDate);
 
-  const rows = await query<{ id: number; org_department_id: string | null }>(
-    `SELECT id, org_department_id
-       FROM employees
-      WHERE id = ANY($1::int[])
-        AND (is_archived IS NULL OR is_archived = false)
-        AND (employment_status IS NULL OR employment_status = 'active')`,
-    [candidateIds],
-  );
-
-  const employeeIds = rows.map(r => Number(r.id)).filter(id => Number.isInteger(id) && id > 0);
-  if (employeeIds.length === 0) return null;
-
-  const affectedDepartmentIds = [...new Set(
-    rows
-      .map(r => r.org_department_id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0),
-  )];
+  if (!hasDirectReports || employeeIds.length === 0) return null;
 
   return { managerEmployeeId, employeeIds, affectedDepartmentIds };
 }
@@ -451,11 +467,15 @@ async function ensureManagerSelfApprovalForRange(
   );
 
   if (existing) {
-    // Если уже submitted/approved — статус не трогаем, но перезаписываем состав полным
-    // набором (self + активные direct reports минус покрытые dept-подачами), чтобы
+    // Утверждённую подачу не трогаем вообще: её состав — официальная редакция табеля
+    // для 1С, и переписывать его задним числом нельзя. Открыть закрытый табель можно
+    // только через «Открыть → правки → Закрыть».
+    if (existing.status === 'approved') return null;
+    // submitted — статус не трогаем, но перезаписываем состав полным набором
+    // (self + direct reports за период минус ведомые руководителями отделов), чтобы
     // назначенные сотрудники попали в snapshot. snapshotApprovalEmployees делает
     // DELETE+INSERT — передаём полный набор, не дельту.
-    if (existing.status === 'submitted' || existing.status === 'approved') {
+    if (existing.status === 'submitted') {
       await withTransaction(async client => {
         await snapshotApprovalEmployees(client, existing.id, snapshotIds);
       });
@@ -818,7 +838,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
     let affectedDepartmentIds: string[] = [];
 
     if (personal) {
-      const ctx = await resolvePersonalSubmissionContext(req);
+      const ctx = await resolvePersonalSubmissionContext(req, range);
       if (!ctx) {
         res.status(403).json({
           success: false,
@@ -834,7 +854,7 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id
         ? req.body.department_id
         : null;
-      const resolvedDeptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+      const resolvedDeptId = await resolveTimesheetWritableDepartmentId(req, requestedDeptId);
       if (requestedDeptId && !resolvedDeptId) {
         res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
         return;
@@ -917,8 +937,44 @@ const submit = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       return;
     }
 
-    // Тот же диапазон уже подан и не рассмотрен — идемпотентно возвращаем его.
+    // Тот же диапазон уже подан и не рассмотрен — новую строку не создаём, но состав
+    // пересобираем: иначе снимок замерзает на момент первой подачи, и правило «табель
+    // ведёт руководитель отдела» не доедет до уже поданного периода. Пересборка идёт
+    // внутри той же транзакции и под теми же advisory-локами, что обычная подача —
+    // иначе параллельная правка табеля успевает записаться между чтением состава и
+    // его фиксацией. Статус, автор и время подачи не трогаем: это не новая подача.
     if (exactSame?.status === 'submitted') {
+      const rosterChange = await withTransaction(async client => {
+        const nextIds = personal
+          ? employeeIds
+          : await listEmployeeIdsAssignedToDepartmentPeriod(deptId!, range.startDate, range.endDate);
+        await lockTimesheetMonthsOnClient(
+          client,
+          nextIds.flatMap(employeeId =>
+            monthAnchorsInRange(range.startDate, range.endDate).map(workDate => ({ employeeId, workDate })),
+          ),
+        );
+        const before = (await listApprovalEmployees(exactSame.id, client))
+          .map(row => Number(row.employee_id))
+          .sort((l, r) => l - r);
+        const after = [...new Set(nextIds)].sort((l, r) => l - r);
+        const changed = before.length !== after.length
+          || before.some((id, index) => id !== after[index]);
+        if (changed) await snapshotApprovalEmployees(client, exactSame.id, after);
+        return { changed, before, after };
+      });
+
+      if (rosterChange.changed) {
+        await logApprovalAudit(req, exactSame.id, 'TIMESHEET_APPROVAL_ROSTER_REBUILT', {
+          department_id: deptId,
+          manager_employee_id: managerEmployeeId,
+          start_date: range.startDate,
+          end_date: range.endDate,
+          removed_employee_ids: rosterChange.before.filter(id => !rosterChange.after.includes(id)),
+          added_employee_ids: rosterChange.after.filter(id => !rosterChange.before.includes(id)),
+        });
+      }
+
       res.json({ success: true, data: exactSame });
       return;
     }
@@ -1136,7 +1192,7 @@ const recall = async (req: AuthenticatedRequest, res: Response): Promise<void> =
       const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id
         ? req.body.department_id
         : null;
-      const resolvedDeptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+      const resolvedDeptId = await resolveTimesheetWritableDepartmentId(req, requestedDeptId);
       if (requestedDeptId && !resolvedDeptId) {
         res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
         return;
@@ -1901,7 +1957,7 @@ const uploadAttachment = async (req: MulterRequest, res: Response): Promise<void
       const requestedDeptId = typeof req.body.department_id === 'string' && req.body.department_id
         ? req.body.department_id
         : null;
-      const resolvedDeptId = await resolveTimesheetActionDepartmentId(req, requestedDeptId);
+      const resolvedDeptId = await resolveTimesheetWritableDepartmentId(req, requestedDeptId);
       if (requestedDeptId && !resolvedDeptId) {
         res.status(403).json({ success: false, error: 'Access denied to this department', code: 'DEPARTMENT_ACCESS_DENIED' });
         return;

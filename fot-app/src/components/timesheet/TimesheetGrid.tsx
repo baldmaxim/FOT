@@ -18,6 +18,7 @@ import {
   isPreHolidayForSchedule,
 } from '../../utils/scheduleUtils';
 import { formatTimesheetEmployeeName, getTimesheetRowKey } from '../../utils/timesheetDisplay';
+import { isDayCoveredByDepartment } from '../../utils/timesheetCoverage';
 import { selectVisibleHours, selectVisibleObjectHours, formatHoursLabel } from '../../utils/hoursDisplay';
 import { getDayStatus, STATUS_TO_GRID_CLASS, STATUS_LABEL_RU } from '../../utils/dayStatus';
 import { useAuth } from '../../contexts/AuthContext';
@@ -28,8 +29,9 @@ type TimesheetViewMode = 'employees' | 'objects';
 /**
  * Почему ячейку нельзя взять в массовую корректировку. Явный тип, а не boolean: текст тоста
  * зависит от причины, и приоритет у 'locked' — закрытый табель важнее синтетической строки.
+ * 'covered' — день ведёт руководитель отдела сотрудника (или вся строка read-only).
  */
-export type BulkBlockReason = 'locked' | 'other';
+export type BulkBlockReason = 'locked' | 'covered' | 'other';
 
 interface ITimesheetGridProps {
   employees: TimesheetEmployee[];
@@ -202,6 +204,7 @@ const getSectionLabel = (
   if (source === 'supervisor') return 'Начальник участка';
   if (source === 'self') return 'Руководитель';
   if (source === 'direct_report') return 'Мои сотрудники';
+  if (source === 'direct_report_covered') return 'Подаёт руководитель отдела';
   if (source === 'skud_presence') return 'ЛИНИЯ-Общестрой';
   return departmentName ?? 'Сотрудники отдела';
 };
@@ -726,11 +729,41 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     return merged;
   }, []);
 
+  /** Сотрудник по id — для проверок, которым нужна вся строка, а не только её id. */
+  const employeeByIdForBulk = useMemo(
+    () => new Map(employees.map(employee => [employee.id, employee])),
+    [employees],
+  );
+
   /** Дата закрытого периода для сотрудника: в bulk-диапазон такие дни не берём. */
   const isBulkDayLocked = useCallback((employeeId: number, day: number): boolean => {
     const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     return Boolean(approvalStatusFor?.(employeeId, isoDate));
   }, [approvalStatusFor, year, month]);
+
+  /**
+   * День нельзя править: строка только для просмотра (view-отдел или табель ведёт
+   * руководитель отдела) либо это покрытый день у частично покрытого сотрудника.
+   * Без этой проверки массовое выделение обходило бы editable — клик по дню его
+   * учитывает, а bulk раньше смотрел только на закрытый период.
+   */
+  const isBulkDayReadOnly = useCallback((employeeId: number, day: number): boolean => {
+    const employee = employeeByIdForBulk.get(employeeId);
+    if (!employee) return false;
+    if (employee.editable === false) return true;
+    return isDayCoveredByDepartment(employee, year, month, day);
+  }, [employeeByIdForBulk, year, month]);
+
+  /** Единая причина блокировки ячейки для bulk: закрытый период важнее остального. */
+  const resolveBulkBlockReason = useCallback((
+    employeeId: number,
+    day: number,
+    otherwiseBlocked: boolean,
+  ): BulkBlockReason | null => {
+    if (isBulkDayLocked(employeeId, day)) return 'locked';
+    if (isBulkDayReadOnly(employeeId, day)) return 'covered';
+    return otherwiseBlocked ? 'other' : null;
+  }, [isBulkDayLocked, isBulkDayReadOnly]);
 
   const buildBulkRangeSelection = useCallback((anchor: IBulkCellCoord, current: IBulkCellCoord): Set<string> | null => {
     const anchorDayIndex = dayIndexByValue.get(anchor.day);
@@ -763,6 +796,8 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           if (day == null) continue;
           if (row.isSynthetic) continue;
           if (isBulkDayLocked(row.employee.id, day)) continue;
+        if (isBulkDayReadOnly(row.employee.id, day)) continue;
+          if (isBulkDayReadOnly(row.employee.id, day)) continue;
           nextSelection.add(getObjectBulkCellKey(row.employee.id, row.object_key, day));
         }
       }
@@ -793,6 +828,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
           const day = days[dayIndex];
           if (day == null) continue;
           if (isBulkDayLocked(anchorParsed.employeeId, day)) continue;
+          if (isBulkDayReadOnly(anchorParsed.employeeId, day)) continue;
           nextSelection.add(getObjectBulkCellKey(anchorParsed.employeeId, item.objectKey, day));
         }
       }
@@ -820,6 +856,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
         const workDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         if (splitDayKeys.has(`${row.employee.id}_${workDate}`)) continue;
         if (isBulkDayLocked(row.employee.id, day)) continue;
+        if (isBulkDayReadOnly(row.employee.id, day)) continue;
         nextSelection.add(getEmployeeBulkCellKey(row.employee.id, day));
       }
     }
@@ -838,6 +875,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
     splitDayKeys,
     year,
     isBulkDayLocked,
+    isBulkDayReadOnly,
   ]);
 
   const finishBulkDragSelection = useCallback(() => {
@@ -1364,13 +1402,13 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         const inactive = isDayInactiveForEmployee(row.employee, year, month, day);
                         // Bulk-выделение разрешено и в выходные — как в виде «по сотрудникам», но не для inactive-дней.
                         const dayLocked = isBulkDayLocked(row.employee.id, day);
+                        const dayReadOnly = isBulkDayReadOnly(row.employee.id, day);
                         const isBulkClickable = !inactive;
-                        const isBlocked = row.isSynthetic || inactive || dayLocked;
+                        const isBlocked = row.isSynthetic || inactive || dayLocked || dayReadOnly;
                         // Приоритет 'locked': на закрытой синтетической строке причина —
                         // именно закрытый табель, общий текст тут вводил бы в заблуждение.
-                        const blockReason: BulkBlockReason | null = dayLocked
-                          ? 'locked'
-                          : (isBlocked ? 'other' : null);
+                        const blockReason: BulkBlockReason | null =
+                          resolveBulkBlockReason(row.employee.id, day, isBlocked);
                         const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                         const baseCls = getDayCellClass(dailyEntry, dayOff, today, future, threshold, approvalStatusFor?.(row.employee.id, isoDate), false);
                         const inactiveCls = inactive ? ' ts-day--inactive' : '';
@@ -1602,7 +1640,7 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                         && highlightedCell.date === isoDate
                         ? ' ts-day--flash'
                         : '';
-                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive && !isBulkDayLocked(row.employee.id, day) ? ' ts-day--bulk-selectable' : ''}`;
+                      const cls = `${getDayCellClass(entry, dayOff, today, future, thresholdHours, approvalStatusFor?.(row.employee.id, isoDate))}${inactiveCls}${preHolidayCls}${problemCls}${outCls}${flashCls}${targeted ? ' ts-day--bulk-target' : ''}${bulkEditMode && !inactive && !isBulkDayLocked(row.employee.id, day) && !isBulkDayReadOnly(row.employee.id, day) ? ' ts-day--bulk-selectable' : ''}`;
                       const text = inactive ? '' : getDayCellText(entry, dayOff);
                       const baseTitle = getDayCellTitle(entry, dayOff);
                       const title = preHoliday
@@ -1625,11 +1663,11 @@ export const TimesheetGrid: FC<ITimesheetGridProps> = ({
                             event,
                             getEmployeeBulkRowKey(row.employee.id),
                             day,
-                            isBulkDayLocked(row.employee.id, day)
-                              ? 'locked'
-                              : (splitDayKeys.has(`${row.employee.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
-                                ? 'other'
-                                : null),
+                            resolveBulkBlockReason(
+                              row.employee.id,
+                              day,
+                              splitDayKeys.has(`${row.employee.id}_${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`),
+                            ),
                           ) : undefined}
                           onMouseEnter={bulkEditMode && !inactive ? () => handleBulkCellMouseEnter(
                             getEmployeeBulkRowKey(row.employee.id),

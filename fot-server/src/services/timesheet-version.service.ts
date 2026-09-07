@@ -481,11 +481,13 @@ export async function buildTimesheetPayload(
   // Владение днём: подача забирает только те даты, на которые сотрудник числился
   // в её отделе. Иначе переведённый в середине периода уносит дни новой бригады в
   // выгрузку старой, и одна пара (сотрудник, дата) попадает в две версии для 1С.
-  // Для персональной подачи резолвер отдаёт unknown — владение остаётся снимочным.
+  // Персональная подача симметрично отдаёт дни, на которые у сотрудника есть
+  // действующий руководитель отдела: их выгружает подача отдела.
   const ownership = await resolveDayOwnership(
     [{
       approvalId: approval.id,
       departmentId: approval.department_id,
+      managerEmployeeId: approval.manager_employee_id ?? null,
       employeeIds: snapshotIds,
       dates: enumerateDatesInclusive(approval.start_date, approval.end_date),
     }],

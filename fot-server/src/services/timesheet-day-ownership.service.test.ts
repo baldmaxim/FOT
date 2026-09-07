@@ -7,6 +7,9 @@ vi.mock('../config/postgres.js', async (importActual) => ({
   query: pgQuery,
 }));
 
+// Покрытие персональных подач проверяет право роли на /timesheet:edit.
+vi.mock('./access-control.service.js', () => ({ hasPageEdit: vi.fn(async () => true) }));
+
 import {
   classifyOwnership,
   enumerateDatesInclusive,
@@ -115,7 +118,7 @@ describe('classifyOwnership', () => {
 });
 
 describe('resolveDayOwnership', () => {
-  it('персональная подача всегда unknown и в SQL по отделу не участвует', async () => {
+  it('персональная подача без покрытия — unknown, и в SQL по отделу не участвует', async () => {
     const ownership = await resolveDayOwnership(
       [{ approvalId: 256, departmentId: null, employeeIds: [661], dates: ['2026-08-30'] }],
       undefined,
@@ -125,6 +128,63 @@ describe('resolveDayOwnership', () => {
     const [, , , approvalIds, departmentIds] = pgQuery.mock.calls[0][1] as unknown[][];
     expect(approvalIds).toEqual([]);
     expect(departmentIds).toEqual([]);
+  });
+
+  it('персональная подача не владеет днём, когда у сотрудника есть руководитель отдела', async () => {
+    // Покрытие: сотрудник 661 сидит в отделе с назначенным руководителем.
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employees')) return [{ id: 661, org_department_id: 'D-MANAGED' }];
+      if (sql.includes('FROM employee_department_access')) {
+        return [{ employee_id: 900, department_id: 'D-MANAGED', role_code: 'manager', is_admin: false }];
+      }
+      return [];
+    });
+
+    const ownership = await resolveDayOwnership(
+      [{
+        approvalId: 256,
+        departmentId: null,
+        managerEmployeeId: 233,
+        employeeIds: [233, 661],
+        dates: ['2026-08-30'],
+      }],
+      undefined,
+    );
+
+    // День подчинённого забирает подача его отдела.
+    expect(ownership.get(ownershipKey(256, 661, '2026-08-30'))).toBe('not_owned');
+    // Строку самого руководителя персональная подача ведёт всегда.
+    expect(ownership.get(ownershipKey(256, 233, '2026-08-30'))).toBe('unknown');
+  });
+
+  it('перевод внутри периода: покрытые дни у отдела, непокрытые остаются персональной подаче', async () => {
+    pgQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM employee_assignments') && sql.includes('archive_tree')) {
+        return [
+          { employee_id: 661, dept_id: 'D-MANAGED', effective_from: '2026-01-01', effective_to: '2026-08-24' },
+          { employee_id: 661, dept_id: 'D-FREE', effective_from: '2026-08-25', effective_to: null },
+        ];
+      }
+      if (sql.includes('FROM employees')) return [{ id: 661, org_department_id: 'D-FREE' }];
+      if (sql.includes('FROM employee_department_access')) {
+        return [{ employee_id: 900, department_id: 'D-MANAGED', role_code: 'manager', is_admin: false }];
+      }
+      return [];
+    });
+
+    const ownership = await resolveDayOwnership(
+      [{
+        approvalId: 256,
+        departmentId: null,
+        managerEmployeeId: 233,
+        employeeIds: [661],
+        dates: ['2026-08-20', '2026-08-30'],
+      }],
+      undefined,
+    );
+
+    expect(ownership.get(ownershipKey(256, 661, '2026-08-20'))).toBe('not_owned');
+    expect(ownership.get(ownershipKey(256, 661, '2026-08-30'))).toBe('unknown');
   });
 
   it('раскладывает состояния по (подача, сотрудник, дата)', async () => {

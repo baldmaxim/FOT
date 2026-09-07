@@ -17,6 +17,11 @@ import { useToast } from '../../contexts/ToastContext';
 import { useAssignedEmployees } from '../../hooks/useAssignedEmployees';
 import { useDepartmentSupervisor } from '../../hooks/useDepartmentSupervisor';
 import { formatTimesheetEmployeeName } from '../../utils/timesheetDisplay';
+import {
+  COVERED_DAY_MESSAGE,
+  isDayCoveredByDepartment,
+  resolveReadOnlyReason,
+} from '../../utils/timesheetCoverage';
 import { getMonthLabel, formatDateRu, getDaysInMonth } from '../../utils/calendarUtils';
 import { useTimesheetMonthAccess } from '../../hooks/useTimesheetMonthAccess';
 import type {
@@ -469,16 +474,18 @@ export const TimesheetPage: FC = () => {
     // пересортировка по source схлопнула бы порядок отделов.
     if (isEmployeeMode) return employeeModeData.employees;
     const raw = deferredTimesheetData?.employees || [];
-    // Группировка строк табеля: supervisor → self → direct_report → department → skud_presence.
-    // Начальник участка (supervisor) — первой секцией. skud_presence (ЛИНИЯ-Общестрой
-    // по факту присутствия у табельщицы) — последней, после бригады. Внутри группы
-    // сохраняем порядок ответа (бэк сортирует по full_name).
+    // Группировка строк табеля: supervisor → self → direct_report → department →
+    // skud_presence → direct_report_covered. Начальник участка (supervisor) — первой
+    // секцией. Сотрудники, чей табель ведёт руководитель их отдела, — самой последней:
+    // они только для просмотра. Внутри группы сохраняем порядок ответа (бэк сортирует
+    // по full_name).
     const sourceOrder: Record<NonNullable<TimesheetEmployee['source']>, number> = {
       supervisor: 0,
       self: 1,
       direct_report: 2,
       department: 3,
       skud_presence: 4,
+      direct_report_covered: 5,
     };
     return [...raw].sort((a, b) => sourceOrder[a.source ?? 'department'] - sourceOrder[b.source ?? 'department']);
   }, [deferredTimesheetData, isEmployeeMode, employeeModeData]);
@@ -686,9 +693,13 @@ export const TimesheetPage: FC = () => {
     // Роль без права правки вообще (hr) — модалка всё равно открывается, но в режиме
     // просмотра (hideCorrectionTab, см. рендер модалки ниже), поэтому её не блокируем здесь.
     if (emp.editable === false && canEditTimesheet) {
-      toast.info?.(emp.is_restricted_period
-        ? 'Этот период сотрудник работал в отделе, к которому у вас нет доступа'
-        : 'Сотрудник доступен только для просмотра');
+      toast.info?.(resolveReadOnlyReason(emp));
+      return;
+    }
+    // Частично покрытый (перевод внутри периода): сам сотрудник редактируем, но дни,
+    // на которые у него есть руководитель отдела, ведёт он.
+    if (isDayCoveredByDepartment(emp, year, month, day) && canEditTimesheet) {
+      toast.info?.(COVERED_DAY_MESSAGE);
       return;
     }
     // Заперт по периоду (submitted/approved) — модалка всё равно открывается, но в
@@ -719,7 +730,11 @@ export const TimesheetPage: FC = () => {
       return;
     }
     if (emp.editable === false && canEditTimesheet) {
-      toast.info?.('Сотрудник доступен только для просмотра');
+      toast.info?.(resolveReadOnlyReason(emp));
+      return;
+    }
+    if (isDayCoveredByDepartment(emp, year, month, day) && canEditTimesheet) {
+      toast.info?.(COVERED_DAY_MESSAGE);
       return;
     }
     // Заперт по периоду — модалка открывается в readOnly-режиме (см. handleDayClick выше).
@@ -1228,6 +1243,10 @@ export const TimesheetPage: FC = () => {
   const handleBulkBlockedSelectionAttempt = useCallback((reason: BulkBlockReason) => {
     if (reason === 'locked') {
       toast.info('Табель закрыт для корректировок.');
+      return;
+    }
+    if (reason === 'covered') {
+      toast.info(COVERED_DAY_MESSAGE);
       return;
     }
     toast.info('Некоторые ячейки нельзя включить в массовую корректировку. Для них используйте точечное редактирование.');

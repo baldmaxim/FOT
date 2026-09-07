@@ -176,7 +176,8 @@ export interface IEmployeeStats {
   deviation_hours: number;
 }
 
-export type TimesheetEmployeeSource = 'department' | 'direct_report' | 'self' | 'supervisor' | 'skud_presence';
+export type TimesheetEmployeeSource =
+  | 'department' | 'direct_report' | 'direct_report_covered' | 'self' | 'supervisor' | 'skud_presence';
 
 export interface TimesheetEmployee {
   id: number;
@@ -197,6 +198,13 @@ export interface TimesheetEmployee {
   source?: TimesheetEmployeeSource;
   /** false → сотрудник виден, но не редактируем (view-отдел, миграция 167). По умолчанию true. */
   editable?: boolean;
+  /**
+   * Даты, за которые табель ведёт руководитель отдела сотрудника, а не текущий
+   * пользователь. У полностью покрытых строка и так `editable: false`; массив нужен
+   * частично покрытым — переведённым внутри периода: их непокрытые дни правятся
+   * как обычно, покрытые заблокированы.
+   */
+  covered_dates?: string[] | null;
   /**
    * Уникальный ключ СТРОКИ сетки. Обычные режимы его не задают (ключ = id).
    * В режиме «По сотруднику» один человек занимает несколько строк — по одной на

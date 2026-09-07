@@ -75,6 +75,7 @@ import {
 } from '../services/timesheet-lock.service.js';
 import { fetchTimesheetDataForDepartment, fetchTimesheetDataForEmployees } from '../services/timesheet-export.service.js';
 import { listDirectSubordinates } from '../services/employee-direct-reports.service.js';
+import { splitDirectReportsByCoverage } from '../services/direct-report-coverage.service.js';
 import { listExplicitDepartmentIdsForUser } from '../services/department-access.service.js';
 import { correctionApprovalSettingsService } from '../services/correction-approval-settings.service.js';
 import {
@@ -320,15 +321,18 @@ export const guardsRestriction = (status: TimeStatus, explicitHours: number | nu
   return true;
 };
 
-export type TimesheetEmployeeSource = 'department' | 'direct_report' | 'self' | 'supervisor' | 'skud_presence';
+export type TimesheetEmployeeSource =
+  | 'department' | 'direct_report' | 'direct_report_covered' | 'self' | 'supervisor' | 'skud_presence';
 
 /**
  * Приоритет источника строки сотрудника в гриде Табеля:
- * self > supervisor > department > skud_presence > direct_report.
+ * self > supervisor > department > skud_presence > direct_report_covered > direct_report.
  * Начальник участка (supervisor) — секция «Начальник участка», первой.
  * skud_presence (ЛИНИЯ-Общестрой по факту присутствия на объектах табельщицы) —
  * секцией после department (см. sourceOrder на фронте), НЕ должна перетягивать
  * на себя реального члена выбранного отдела — department проверяется раньше.
+ * direct_report_covered (весь период ведёт руководитель отдела) проверяется ДО
+ * direct_report — иначе ветка была бы недостижима.
  */
 export const resolveEmployeeTimesheetSource = (params: {
   empId: number;
@@ -337,12 +341,17 @@ export const resolveEmployeeTimesheetSource = (params: {
   departmentMembershipSet: Set<number>;
   liPresenceSet: Set<number>;
   directReportSet: Set<number>;
+  coveredDirectReportSet?: Set<number>;
 }): TimesheetEmployeeSource => {
-  const { empId, isSelf, supervisorSet, departmentMembershipSet, liPresenceSet, directReportSet } = params;
+  const {
+    empId, isSelf, supervisorSet, departmentMembershipSet, liPresenceSet,
+    directReportSet, coveredDirectReportSet,
+  } = params;
   if (isSelf) return 'self';
   if (supervisorSet.has(empId)) return 'supervisor';
   if (departmentMembershipSet.has(empId)) return 'department';
   if (liPresenceSet.has(empId)) return 'skud_presence';
+  if (coveredDirectReportSet?.has(empId)) return 'direct_report_covered';
   if (directReportSet.has(empId)) return 'direct_report';
   return 'department';
 };
@@ -1403,7 +1412,11 @@ async function canAccessEmployeeForTimesheetDate(
   // её объектные сотрудники обработаны веткой выше.
   const directSubs = await resolveEffectiveDirectSubordinates(req);
   if (directSubs.includes(employeeId)) {
-    return true;
+    if (!requireEdit) return true;
+    // Главный write-гейт корректировок: на дату, где у сотрудника есть действующий
+    // руководитель отдела, табель ведёт он — личный руководитель только смотрит.
+    const { owned } = await splitDirectReportsByCoverage([employeeId], workDate, workDate);
+    return owned.includes(employeeId);
   }
 
   return false;
@@ -1958,11 +1971,19 @@ export const timesheetController = {
         })),
       );
 
+      // Карточка «Прямые подчинённые» показывает только тех, кого руководитель ведёт
+      // сам: покрытые руководителем отдела считаются в карточке его отдела.
+      const ownedSubordinateIds = managerEmployeeId && directSubordinateIds.length > 0
+        ? (await splitDirectReportsByCoverage(
+            directSubordinateIds, periodRange.startDate, periodRange.endDate,
+          )).owned
+        : [];
+
       const virtualSummaries: IManagedDepartmentTimesheetSummary[] = [];
-      if (managerEmployeeId && directSubordinateIds.length > 0) {
+      if (managerEmployeeId && ownedSubordinateIds.length > 0) {
         virtualSummaries.push(await buildVirtualDirectReportsTimesheetSummary({
           managerEmployeeId,
-          subordinateIds: directSubordinateIds,
+          subordinateIds: ownedSubordinateIds,
           month,
           startDate: periodRange.startDate,
           endDate: periodRange.endDate,
@@ -2628,6 +2649,15 @@ export const timesheetController = {
 
       const departmentMembershipSet = new Set<number>(departmentEmployeeIds);
       const directReportSet = new Set<number>(directReportIds);
+      // Прямые подчинённые, за которых отвечает руководитель их отдела: строку
+      // показываем (руководитель видит посещаемость), но правку и подачу забираем.
+      // Полностью покрытые уходят отдельной секцией вниз; частично покрытые остаются
+      // среди своих, а их покрытые дни приходят в covered_dates и гасятся на фронте.
+      const coverageSplit = directReportIds.length > 0
+        ? await splitDirectReportsByCoverage(directReportIds, startDate, endDate)
+        : null;
+      const coveredDirectReportSet = new Set<number>(coverageSplit?.fullyCovered ?? []);
+      const coveredDatesByEmployee = coverageSplit?.coveredDates ?? new Map<number, string[]>();
       // Редактируемость per-employee: view-отделы (миграция 167) видны, но не
       // редактируемы. Фронт по флагу editable прячет правку дня/кнопки.
       const editableEmpsForList = await resolveEditableEmployeeIds(req);
@@ -2651,7 +2681,9 @@ export const timesheetController = {
           departmentMembershipSet,
           liPresenceSet,
           directReportSet,
+          coveredDirectReportSet,
         });
+        const coveredDates = coveredDatesByEmployee.get(empId) ?? null;
         return {
           ...e,
           position_name: e.position_id ? posMap.get(e.position_id) || null : null,
@@ -2661,8 +2693,13 @@ export const timesheetController = {
           joined_date: joinedCutoffByEmployeeId.get(empId) ?? null,
           excluded_from_timesheet_date: (e.excluded_from_timesheet_date as string | null) ?? null,
           source,
+          // Даты, которые ведёт руководитель отдела: фронт гасит их у частично
+          // покрытых (клик и bulk). У полностью покрытых строка и так read-only.
+          covered_dates: coveredDates,
           // Строка начальника участка — только для показа: его табель ведётся в его участке.
-          editable: source === 'supervisor'
+          // direct_report_covered — то же самое, но причина другая: весь период ведёт
+          // руководитель отдела сотрудника.
+          editable: (source === 'supervisor' || source === 'direct_report_covered')
             ? false
             : (isListEmpEditable(empId) || (departmentMembershipSet.has(empId) && displayedDeptEditable)),
         };
@@ -4264,7 +4301,9 @@ export const timesheetController = {
         ? Number(req.body.employee_id)
         : null;
       if (requestedEmployeeId != null && requestedEmployeeId > 0) {
-        if (!(await canAccessEmployeeForTimesheetPeriod(req, requestedEmployeeId, startDate, endDate))) {
+        // requireEdit=true: пересчёт переписывает сводки и переоткрывает согласования —
+        // это запись, а не просмотр.
+        if (!(await canAccessEmployeeForTimesheetPeriod(req, requestedEmployeeId, startDate, endDate, true))) {
           return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         }
       }

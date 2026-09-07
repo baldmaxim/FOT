@@ -5,6 +5,7 @@ import { withDbSlot } from '../config/db-instrumentation.js';
 import { listEditableDepartmentIdsForUser, listExplicitDepartmentIdsForUser, loadEmployeeAccessMap } from './department-access.service.js';
 import { listObjectIdsForEmployee } from './employee-skud-object-access.service.js';
 import { listDirectSubordinates } from './employee-direct-reports.service.js';
+import { splitDirectReportsByCoverage } from './direct-report-coverage.service.js';
 import {
   isTimekeeper,
   resolveTimekeeperDepartmentSeeds,
@@ -292,6 +293,9 @@ export async function canAccessEmployeeInScope(
   // документам, расчёткам, СКУД его прямых подчинённых. Симметрично
   // getDepartment/getAll в leave-requests.controller и
   // resolveRequestDataScopeWithDirectReports.
+  //
+  // Это ПРОСМОТР: список полный, включая тех, чей табель ведёт руководитель их
+  // отдела. Сужается только запись — см. canEditEmployeeInScope.
   if (req.user.employee_id) {
     if (req.user.__direct_subordinates === undefined) {
       req.user.__direct_subordinates = new Set(
@@ -511,7 +515,9 @@ export async function resolveEditableEmployeeIds(
     for (const id of await resolveTimekeeperDirectEmployeeIds(req)) ids.add(id);
   }
 
-  for (const id of await resolveEffectiveDirectSubordinates(req)) ids.add(id);
+  // Только «свои» прямые подчинённые: тех, кого ведёт руководитель их отдела,
+  // личный руководитель видит, но не правит.
+  for (const id of await resolveEditableDirectSubordinates(req)) ids.add(id);
 
   if (req.user.employee_id != null) ids.add(req.user.employee_id);
 
@@ -549,12 +555,8 @@ export async function canEditEmployeeInScope(
   }
 
   if (req.user.employee_id) {
-    if (req.user.__direct_subordinates === undefined) {
-      req.user.__direct_subordinates = new Set(
-        await listDirectSubordinates(req.user.employee_id),
-      );
-    }
-    if (req.user.__direct_subordinates.has(employeeId)) return true;
+    const editableDirect = await resolveEditableDirectSubordinates(req);
+    if (editableDirect.includes(employeeId)) return true;
   }
 
   return false;
@@ -634,6 +636,36 @@ export async function resolveEffectiveDirectSubordinates(req: AuthenticatedReque
   if (isTimekeeper(req)) return [];
   if (!req.user.employee_id) return [];
   return listDirectSubordinates(req.user.employee_id);
+}
+
+/**
+ * Прямые подчинённые, которых руководитель ведёт САМ: без тех, за кого отвечает
+ * руководитель их отдела (см. direct-report-coverage.service).
+ *
+ * Просмотр не сужаем — resolveAccessibleEmployeeIds по-прежнему берёт полный список,
+ * покрытых руководитель видит read-only отдельной секцией. Сужается только запись.
+ *
+ * Периода у скоуповых функций нет, поэтому покрытие считается на сегодня: это грубый
+ * фильтр, точную дату проверяют date-level гейты табеля
+ * (canAccessEmployeeForTimesheetDate / canAccessEmployeeForTimesheetPeriod).
+ */
+export async function resolveEditableDirectSubordinates(req: AuthenticatedRequest): Promise<number[]> {
+  if (req.user.__editable_direct_subordinates) return req.user.__editable_direct_subordinates;
+
+  const all = await resolveEffectiveDirectSubordinates(req);
+  if (all.length === 0) {
+    req.user.__editable_direct_subordinates = [];
+    return [];
+  }
+
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const { owned, partiallyCovered } = await splitDirectReportsByCoverage(all, today, today);
+  // partiallyCovered на однодневном окне пуст, но включаем его явно: инвариант
+  // «owned ∪ partiallyCovered = кого ведёт сам» не должен зависеть от длины окна.
+  const editable = [...new Set([...owned, ...partiallyCovered])];
+  req.user.__editable_direct_subordinates = editable;
+  return editable;
 }
 
 /**

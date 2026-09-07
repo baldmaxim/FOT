@@ -7,6 +7,9 @@ import type { IDepartmentTimesheetData } from './timesheet-export.service.js';
 // Мокаем postgres: buildUnified1CWorkbook читает адреса объектов и список отделов
 // в режиме «текущая деятельность» из БД. vi.hoisted — чтобы mock-фабрика видела queryMock.
 const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+// listEffectiveDepartmentManagers проверяет can_edit роли на /timesheet.
+vi.mock('./access-control.service.js', () => ({ hasPageEdit: vi.fn(async () => true) }));
+
 vi.mock('../config/postgres.js', () => ({
   query: (sql: string, params?: unknown[]) => queryMock(sql, params),
 }));
@@ -248,13 +251,15 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
           { subordinate_employee_id: 1, manager_employee_id: 100, manager_full_name: 'Сидоров Сидор' },
         ]);
       }
-      // Начальники отделов/участков с full-доступом.
+      // Начальники отделов/участков с full-доступом. role_code/is_admin приходят
+      // из JOIN'а с ролью: listEffectiveDepartmentManagers отбрасывает тех, у кого
+      // нет права edit на /timesheet.
       if (sql.includes('FROM employee_department_access')) {
         return Promise.resolve([
-          { employee_id: 200, department_id: 'dept-brig' }, // реальный нач. участка
-          { employee_id: 201, department_id: 'dept-brig' }, // тестовый — игнорируем
-          { employee_id: 300, department_id: 'dept-two' },
-          { employee_id: 301, department_id: 'dept-two' },
+          { employee_id: 200, department_id: 'dept-brig', role_code: 'manager', is_admin: false }, // реальный нач. участка
+          { employee_id: 201, department_id: 'dept-brig', role_code: 'manager', is_admin: false }, // тестовый — игнорируем
+          { employee_id: 300, department_id: 'dept-two', role_code: 'manager', is_admin: false },
+          { employee_id: 301, department_id: 'dept-two', role_code: 'manager', is_admin: false },
         ]);
       }
       // Раскрытие ФИО руководителей по id.
@@ -297,7 +302,7 @@ describe('buildUnified1CWorkbook — режим «текущая деятель�
       managerByFio.set(fio, String(ws.getCell(r, COL_MANAGER).value ?? ''));
     }
 
-    // Прямой руководитель имеет приоритет.
+    // У отдела нет назначенного руководителя → остаётся прямой («Человек»).
     expect(managerByFio.get('Иван Иванов')).toBe('Сидоров Сидор');
     // Бригада: тестовый начальник отброшен, остаётся реальный.
     expect(managerByFio.get('Петр Петров')).toBe('Реальный Начальник');

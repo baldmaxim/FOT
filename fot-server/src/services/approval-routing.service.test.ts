@@ -25,6 +25,14 @@ vi.mock('./employee-direct-reports.service.js', () => ({
   getActiveDirectManagersFor: directMgrsMock,
 }));
 
+// listEffectiveDepartmentManagers проверяет право роли на /timesheet:edit —
+// в юнит-тесте маршрутизации считаем, что право есть у всех.
+vi.mock('./access-control.service.js', () => ({ hasPageEdit: vi.fn(async () => true) }));
+
+/** Строка employee_department_access в форме, которую отдаёт запрос руководителей. */
+const head = (employeeId: number, departmentId: string) =>
+  ({ employee_id: employeeId, department_id: departmentId, role_code: 'manager', is_admin: false });
+
 import {
   resolveResponsibleEmployeeIdsForRows,
   resolveResponsibleEmployeeIdsByEmployee,
@@ -97,12 +105,10 @@ describe('resolveResponsibleEmployeeIdsForRows', () => {
     expect(res.get(66)).toEqual([600]);
   });
 
-  it('будний день: приоритет непосредственного руководителя («Человек»)', async () => {
+  it('будний день: руководитель отдела важнее «Человека»', async () => {
     pgQuery.mockImplementation(async (sql: string) => {
-      // даже если у отдела есть начальники — direct manager важнее.
-      if (sql.includes('employee_department_access')) {
-        return [{ employee_id: 999, department_id: 'D3' }];
-      }
+      // Табель ведёт руководитель отдела — корректировку смотрит он, а не личный.
+      if (sql.includes('employee_department_access')) return [head(999, 'D3')];
       return [];
     });
     schedMock.mockResolvedValue(buildSchedules([{ emp: 3, date: WEEKDAY, weekend: false }]));
@@ -111,17 +117,47 @@ describe('resolveResponsibleEmployeeIdsForRows', () => {
     const res = await resolveResponsibleEmployeeIdsForRows([
       { id: 33, employee_id: 3, work_date: WEEKDAY, org_department_id: 'D3' },
     ]);
-    expect(res.get(33)).toEqual([300]);
+    expect(res.get(33)).toEqual([999]);
+  });
+
+  it('будний день: у отдела нет руководителя → «Человек»', async () => {
+    pgQuery.mockImplementation(async () => []);
+    schedMock.mockResolvedValue(buildSchedules([{ emp: 3, date: WEEKDAY, weekend: false }]));
+    directMgrsMock.mockResolvedValue(new Map([[3, { managerId: 300, managerFullName: 'M' }]]));
+
+    const res = await resolveResponsibleEmployeeIdsForRows([
+      { id: 34, employee_id: 3, work_date: WEEKDAY, org_department_id: 'D3' },
+    ]);
+    expect(res.get(34)).toEqual([300]);
+  });
+
+  it('руководитель отдела не согласует сам себя: остаётся второй руководитель', async () => {
+    pgQuery.mockImplementation(async (sql: string) =>
+      sql.includes('employee_department_access') ? [head(400, 'D4'), head(401, 'D4')] : []);
+    schedMock.mockResolvedValue(buildSchedules([{ emp: 400, date: WEEKDAY, weekend: false }]));
+    directMgrsMock.mockResolvedValue(new Map());
+
+    const res = await resolveResponsibleEmployeeIdsForRows([
+      { id: 45, employee_id: 400, work_date: WEEKDAY, org_department_id: 'D4' },
+    ]);
+    expect(res.get(45)).toEqual([401]);
+  });
+
+  it('единственный руководитель отдела = автор строки → падаем на «Человека»', async () => {
+    pgQuery.mockImplementation(async (sql: string) =>
+      sql.includes('employee_department_access') ? [head(400, 'D4')] : []);
+    schedMock.mockResolvedValue(buildSchedules([{ emp: 400, date: WEEKDAY, weekend: false }]));
+    directMgrsMock.mockResolvedValue(new Map([[400, { managerId: 300, managerFullName: 'M' }]]));
+
+    const res = await resolveResponsibleEmployeeIdsForRows([
+      { id: 46, employee_id: 400, work_date: WEEKDAY, org_department_id: 'D4' },
+    ]);
+    expect(res.get(46)).toEqual([300]);
   });
 
   it('будний день без «Человека» → начальники отдела (full), их может быть несколько', async () => {
     pgQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes('employee_department_access')) {
-        return [
-          { employee_id: 400, department_id: 'D4' },
-          { employee_id: 401, department_id: 'D4' },
-        ];
-      }
+      if (sql.includes('employee_department_access')) return [head(400, 'D4'), head(401, 'D4')];
       return [];
     });
     schedMock.mockResolvedValue(buildSchedules([{ emp: 4, date: WEEKDAY, weekend: false }]));
@@ -146,10 +182,18 @@ describe('resolveResponsibleEmployeeIdsForRows', () => {
 });
 
 describe('resolveResponsibleEmployeeIdsByEmployee (заявления, без даты)', () => {
-  it('есть непосредственный руководитель → он, начальник отдела игнорируется', async () => {
+  it('есть начальник отдела → он, «Человек» игнорируется', async () => {
     pgQuery.mockImplementation(async (sql: string) =>
-      sql.includes('employee_department_access') ? [{ employee_id: 999, department_id: 'D1' }] : [],
+      sql.includes('employee_department_access') ? [head(999, 'D1')] : [],
     );
+    directMgrsMock.mockResolvedValue(new Map([[1, { managerId: 300, managerFullName: 'M' }]]));
+
+    const res = await resolveResponsibleEmployeeIdsByEmployee([{ employee_id: 1, org_department_id: 'D1' }]);
+    expect(res.get(1)).toEqual([999]);
+  });
+
+  it('нет начальника отдела → непосредственный руководитель', async () => {
+    pgQuery.mockImplementation(async () => []);
     directMgrsMock.mockResolvedValue(new Map([[1, { managerId: 300, managerFullName: 'M' }]]));
 
     const res = await resolveResponsibleEmployeeIdsByEmployee([{ employee_id: 1, org_department_id: 'D1' }]);
@@ -158,9 +202,7 @@ describe('resolveResponsibleEmployeeIdsByEmployee (заявления, без д
 
   it('нет руководителя → начальники отдела (full), их может быть несколько', async () => {
     pgQuery.mockImplementation(async (sql: string) =>
-      sql.includes('employee_department_access')
-        ? [{ employee_id: 400, department_id: 'D4' }, { employee_id: 401, department_id: 'D4' }]
-        : [],
+      sql.includes('employee_department_access') ? [head(400, 'D4'), head(401, 'D4')] : [],
     );
     directMgrsMock.mockResolvedValue(new Map());
 
