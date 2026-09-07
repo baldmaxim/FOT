@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { patentReceiptsController } from '../controllers/patent-receipts.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { noStore } from '../middleware/noStore.js';
 
 const router = Router();
 
@@ -11,6 +12,10 @@ const upload = multer({
 });
 
 router.use(authenticate);
+// Списки чеков меняются мутациями админа (удаление, отметка «проверено») и загрузками
+// из ЛК рабочего. Глобальный max-age=30 из app.ts отдавал тело, снятое ДО мутации:
+// удалённый чек возвращался в таблицу на ~30 сек, и его удаляли повторно.
+router.use(noStore);
 
 // Self-scope: контроллер фильтрует patent_payment_receipts по req.user.employee_id.
 router.get('/my', patentReceiptsController.getMy); // audit:self-scoped
