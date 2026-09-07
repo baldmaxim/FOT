@@ -1334,11 +1334,15 @@ function canDecideLeaveRequest(
   employeeId: number,
   requestType: string,
 ): boolean {
+  // Полный edit-скоуп (админ) решает по любой заявке, включая routed-типы: маршрут
+  // может быть пустым (нет ни руководителя отдела, ни личного) — без этой ветки такую
+  // заявку не провести никому. Кадровой службе сюда не попасть: 'all' она получает
+  // только на чтение, resolveEditableDepartmentIds её не расширяет.
+  if (ctx.editableEmployeeIds === 'all') return true;
   if (ROUTED_LEAVE_TYPES.has(String(requestType))) {
     const responsible = ctx.responsibleByEmployee.get(Number(employeeId)) ?? [];
     return req.user.employee_id != null && responsible.includes(req.user.employee_id);
   }
-  if (ctx.editableEmployeeIds === 'all') return true;
   return ctx.editableEmployeeIds.has(Number(employeeId));
 }
 

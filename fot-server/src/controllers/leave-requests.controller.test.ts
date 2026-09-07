@@ -1424,6 +1424,8 @@ describe('leaveRequestsController.approve (заявление на увольн�
   });
 
   it('посторонний руководитель получает 403', async () => {
+    // Не админ: dismissal — routed-тип, право даёт только маршрут.
+    editableEmployeesMock.mockResolvedValue(new Set([247]));
     responsiblesByEmpMock.mockResolvedValue(new Map([[247, [999]]]));
     mockDismissalRow();
     const res = makeRes();
@@ -1598,6 +1600,9 @@ describe('leaveRequestsController.approve (маршрутизация прав)'
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue([]);
+    // Не админ: edit-скоуп покрывает сотрудника заявки, но для routed-типа этого мало —
+    // решает только маршрут. Без явного Set сработал бы дефолт 'all' (админ).
+    editableEmployeesMock.mockResolvedValue(new Set([247]));
     responsiblesByEmpMock.mockResolvedValue(new Map());
     pgTx.mockImplementation(async (fn: (c: typeof txClient) => Promise<unknown>) => fn(txClient));
     // Гард закрытого табеля ходит в timesheet_approvals — на blanket-моке он бы
@@ -2488,6 +2493,8 @@ describe('leaveRequestsController.bulkApprove / bulkReject', () => {
 
   it('routed-тип: решает только назначенный ответственный', async () => {
     rowsById = new Map([1, 2].map(id => [id, makeRow(id, { request_type: 'vacation' })] as const));
+    // Не админ: edit-скоуп покрывает обоих сотрудников, но routed-тип решает маршрут.
+    editableEmployeesMock.mockResolvedValue(new Set([241, 242]));
     // Зритель (employee_id 7) ответственный только за сотрудника заявки 1.
     responsiblesByEmpMock.mockResolvedValue(new Map([[241, [7]], [242, [999]]]));
     const res = makeRes();
@@ -2511,6 +2518,111 @@ describe('leaveRequestsController.bulkApprove / bulkReject', () => {
     expect(summary.skipped_no_access).toBe(3);
     expect(pgTx).not.toHaveBeenCalled();
     expectCoversInput(summary, 3);
+  });
+
+  it('кадровая служба на routed-типе тоже пропускается (отсечение не зависит от типа)', async () => {
+    rowsById = new Map([1, 2].map(id => [id, makeRow(id, { request_type: 'vacation' })] as const));
+    editableEmployeesMock.mockResolvedValue(new Set<number>());
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_count).toBe(0);
+    expect(summary.skipped_no_access).toBe(2);
+    expect(pgTx).not.toHaveBeenCalled();
+    expectCoversInput(summary, 2);
+  });
+
+  // Сценарий зелёной иконки на карточке: она шлёт тот же bulkApprove с одним id.
+  it('админ согласует routed-заявку сотрудника без ответственного (одна заявка)', async () => {
+    rowsById = new Map([[1, makeRow(1, { request_type: 'vacation' })]]);
+    editableEmployeesMock.mockResolvedValue('all');
+    responsiblesByEmpMock.mockResolvedValue(new Map()); // маршрут пуст: ни отдела, ни личного
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids).toEqual([1]);
+    expect(summary.skipped_no_access).toBe(0);
+    expectCoversInput(summary, 1);
+  });
+
+  // Сценарий чекбоксов: несколько заявок разных сотрудников одним пакетом.
+  it('админ согласует несколько routed-заявок без ответственных', async () => {
+    rowsById = new Map([1, 2, 3].map(id => [id, makeRow(id, { request_type: 'vacation' })] as const));
+    editableEmployeesMock.mockResolvedValue('all');
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1, 2, 3] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids.sort()).toEqual([1, 2, 3]);
+    expect(summary.skipped_no_access).toBe(0);
+    expectCoversInput(summary, 3);
+  });
+
+  it('админ отклоняет routed-заявки без ответственных', async () => {
+    rowsById = new Map([1, 2].map(id => [id, makeRow(id, { request_type: 'vacation' })] as const));
+    editableEmployeesMock.mockResolvedValue('all');
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    const res = makeRes();
+
+    await leaveRequestsController.bulkReject(bulkReq({ ids: [1, 2] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_ids.sort()).toEqual([1, 2]);
+    expect(summary.skipped_no_access).toBe(0);
+    expectCoversInput(summary, 2);
+  });
+
+  it('повторное согласование той же routed-заявки админом ничего не переписывает', async () => {
+    rowsById = new Map([[1, makeRow(1, { request_type: 'vacation', status: 'approved' })]]);
+    editableEmployeesMock.mockResolvedValue('all');
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_count).toBe(0);
+    expect(summary.skipped_not_pending).toBe(1);
+    expect(pgTx).not.toHaveBeenCalled();
+    expectCoversInput(summary, 1);
+  });
+
+  it('табельщица без маршрута не решает routed-заявку (edit-скоуп не "all")', async () => {
+    rowsById = new Map([[1, makeRow(1, { request_type: 'vacation' })]]);
+    editableEmployeesMock.mockResolvedValue(new Set([241]));
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_count).toBe(0);
+    expect(summary.skipped_no_access).toBe(1);
+    expectCoversInput(summary, 1);
+  });
+
+  // Админ компании (user_company_access непустой) получает ограниченный Set, а не 'all',
+  // поэтому routed-заявку без ответственного не проводит. В проде таких аккаунтов нет —
+  // тест фиксирует текущее поведение, чтобы смена его была осознанной.
+  it('админ компании с ограниченным скоупом не решает routed-заявку без ответственного', async () => {
+    rowsById = new Map([[1, makeRow(1, { request_type: 'vacation' })]]);
+    editableEmployeesMock.mockResolvedValue(new Set([241, 999]));
+    responsiblesByEmpMock.mockResolvedValue(new Map());
+    const res = makeRes();
+
+    await leaveRequestsController.bulkApprove(bulkReq({ ids: [1] }), res);
+
+    const summary = summaryOf(res);
+    expect(summary.processed_count).toBe(0);
+    expect(summary.skipped_no_access).toBe(1);
+    expectCoversInput(summary, 1);
   });
 
   it('bulkReject: отклоняет доступные, табель не трогает, общий комментарий сохраняется', async () => {
