@@ -801,3 +801,137 @@ describe('buildUnified1CWorkbook — строки связываются по em
     expect(addresses.sort()).toEqual(['ЖК Сад 69', 'Склад 7']);
   });
 });
+
+// Дни, существующие ТОЛЬКО как объектная корректировка (нет прохода СКУД). После включения
+// синтеза в экспортном слое они приходят в dataMap и обязаны попадать в файл 1С — в том числе
+// в агрегированных режимах, где строка строится ИСКЛЮЧИТЕЛЬНО из dataMap.
+describe('buildUnified1CWorkbook — object-only день (суббота без прохода СКУД)', () => {
+  // 04.04.2026 — суббота; график 5/2, поэтому норма дня 0 и часы не режутся под неё.
+  const SATURDAY = '2026-04-04';
+  const SATURDAY_DAY = 4;
+  const COL_SATURDAY = COL_DAY1 + SATURDAY_DAY - 1;
+
+  const makeObjectOnlyDept = (
+    employeeId: number,
+    fullName: string,
+    withObjectEntry: boolean,
+  ): IDepartmentTimesheetData => {
+    const schedule = makeSchedule();
+    return {
+      departmentName: 'Отдел табельного учёта',
+      departmentId: 'dept-ta',
+      isBrigade: false,
+      employees: [{
+        id: employeeId,
+        full_name: fullName,
+        position_id: null,
+        org_department_id: 'dept-ta',
+        sigur_employee_id: null,
+      }],
+      schedulesMap: new Map([[employeeId, schedule]]),
+      dailySchedulesMap: new Map([[employeeId, new Map([[SATURDAY, schedule]])]]),
+      calendarMonth: null,
+      entries: [],
+      // Синтезированный день: свои часы, явная правка, статус согласования уже учтён фильтром.
+      dataMap: new Map([[employeeId, new Map([[SATURDAY, {
+        status: 'work', hours: 8, corrected: true, hoursOverridden: true, hoursDropped: false,
+      }]])]]),
+      objectEntries: withObjectEntry ? [{
+        adjustment_id: 1090038,
+        employee_id: employeeId,
+        work_date: SATURDAY,
+        object_key: 'obj-wave',
+        object_id: 'obj-wave',
+        object_name: 'ЖК Wave',
+        hours_worked: 8,
+        display_hours_worked: 8,
+        base_hours_worked: 8,
+        is_correction: true,
+      }] : [],
+      skudMap: new Map(),
+      posMap: new Map(),
+      year: 2026,
+      mon: 4,
+      daysInMonth: 30,
+      exportHalf: 'FULL',
+      exportDays: [SATURDAY_DAY],
+      showActualHours: false,
+    } as unknown as IDepartmentTimesheetData;
+  };
+
+  const readRows = (ws: ExcelJS.Worksheet) => {
+    const rows: Array<{ fio: string; address: string; total: unknown; days: unknown; saturday: unknown }> = [];
+    for (let r = ONE_C_DATA_START_ROW; r <= ws.rowCount; r++) {
+      const fio = ws.getCell(r, COL_FIO).value;
+      if (typeof fio !== 'string' || !fio.trim()) continue;
+      rows.push({
+        fio,
+        address: String(ws.getCell(r, COL_ADDRESS).value ?? ''),
+        total: ws.getCell(r, COL_TOTAL).value,
+        days: ws.getCell(r, COL_DAYS).value,
+        saturday: ws.getCell(r, COL_SATURDAY).value,
+      });
+    }
+    return rows;
+  };
+
+  const mockModes = (rows: Array<Record<string, unknown>>) => {
+    queryMock.mockReset();
+    queryMock.mockImplementation((sql: string) => {
+      if (isModeQuery(sql)) return Promise.resolve(rows);
+      if (sql.includes('FROM skud_objects')) {
+        return Promise.resolve([{ id: 'obj-wave', alt_name: null, name: 'ЖК Wave' }]);
+      }
+      return Promise.resolve([]);
+    });
+  };
+
+  it('режим «объект»: часы субботы попадают в строку и в колонку «Дни»', async () => {
+    mockModes([modeRow(8926, { emp_mode: 'object', emp_object_id: 'obj-wave' })]);
+    const dept = makeObjectOnlyDept(8926, 'Алесина Светлана Михайловна', true);
+
+    const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
+    const rows = readRows(ws);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].saturday).toBe(8);
+    expect(rows[0].total).toBe(8);
+    expect(rows[0].days).toBe(1);
+    expect(rows[0].address).toBe('ЖК Wave');
+  });
+
+  it('режим «текущая деятельность»: тот же день с адресом «Текущая деятельность»', async () => {
+    mockModes([modeRow(8926, { dept_current_activity: true })]);
+    const dept = makeObjectOnlyDept(8926, 'Алесина Светлана Михайловна', true);
+
+    const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
+    const rows = readRows(ws);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].saturday).toBe(8);
+    expect(rows[0].total).toBe(8);
+    expect(rows[0].address).toBe('Текущая деятельность');
+  });
+
+  it('режим skud: день есть и в dataMap, и в objectEntries → ровно одна строка, часы не задваиваются', async () => {
+    mockModes([modeRow(8926)]);
+    const dept = makeObjectOnlyDept(8926, 'Алесина Светлана Михайловна', true);
+
+    const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
+    const rows = readRows(ws);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].saturday).toBe(8);
+    expect(rows[0].total).toBe(8);
+    expect(rows[0].address).toBe('ЖК Wave');
+  });
+
+  it('строка с единственным object-only днём не выбрасывается как пустая', async () => {
+    mockModes([modeRow(8926, { emp_mode: 'object', emp_object_id: 'obj-wave' })]);
+    // Даже без объектной записи агрегированная строка держится на dataMap.
+    const dept = makeObjectOnlyDept(8926, 'Алесина Светлана Михайловна', false);
+
+    const ws = (await buildUnified1CWorkbook(4, 2026, [dept])).getWorksheet(1)!;
+    expect(readRows(ws)).toHaveLength(1);
+  });
+});

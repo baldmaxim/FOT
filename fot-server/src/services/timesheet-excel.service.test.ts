@@ -734,3 +734,62 @@ describe('timesheet-excel.service — колонка «Дни» единого �
     expect(rows[0].totalHours).toBe(5);
   });
 });
+
+// Часы объектной строки берутся из objectEntries, минуя includeExportDayHours. Для дня,
+// который держится на корректировке и был обнулён фильтром выходных, объектная строка
+// обязана показать тот же ноль, что и общая строка сотрудника.
+describe('timesheet-excel.service — объектные строки уважают обнуление выходного', () => {
+  // 04.04.2026 — суббота; график 5/2, норма дня 0.
+  const SATURDAY = '2026-04-04';
+
+  const makeWeekendData = (
+    day: { hours: number; corrected: boolean; hoursDropped: boolean },
+  ): IDepartmentTimesheetData => {
+    const data = makeBaseData();
+    data.exportDays = [4];
+    data.dailySchedulesMap = new Map([[1, new Map([[SATURDAY, makeSchedule()]])]]);
+    data.employees = [data.employees[0]];
+    data.dataMap = new Map([[1, new Map([[SATURDAY, {
+      status: 'work', hours: day.hours, corrected: day.corrected,
+      hoursOverridden: day.corrected, hoursDropped: day.hoursDropped,
+    }]])]]);
+    data.objectEntries = [{
+      adjustment_id: day.corrected ? 1090038 : null,
+      employee_id: 1,
+      work_date: SATURDAY,
+      object_key: 'obj-a',
+      object_id: 'obj-a',
+      object_name: 'ЖК Сад 69',
+      hours_worked: 8,
+      display_hours_worked: 8,
+      base_hours_worked: 8,
+      is_correction: day.corrected,
+    }];
+    return data;
+  };
+
+  const objectRowFor = (data: IDepartmentTimesheetData) => {
+    const target = listObjectExportTargets(data).find(item => item.object_key === 'obj-a');
+    return buildObjectRowsForOneC(data, target!)[0];
+  };
+
+  it('согласованная объектная правка в субботу → часы на объекте выгружаются', () => {
+    const row = objectRowFor(makeWeekendData({ hours: 8, corrected: true, hoursDropped: false }));
+    expect(row.dayValues.get(4)?.hours).toBe(8);
+    expect(row.totalHours).toBe(8);
+    expect(row.workedDays).toBe(1);
+  });
+
+  it('несогласованная объектная правка в субботу → объектная строка тоже даёт ноль', () => {
+    const row = objectRowFor(makeWeekendData({ hours: 0, corrected: true, hoursDropped: true }));
+    expect(row.dayValues.get(4)?.hours ?? 0).toBe(0);
+    expect(row.totalHours).toBe(0);
+    expect(row.workedDays).toBe(0);
+  });
+
+  it('сырое СКУД-присутствие в выходной guard НЕ трогает (отдельный, более широкий случай)', () => {
+    const row = objectRowFor(makeWeekendData({ hours: 0, corrected: false, hoursDropped: true }));
+    expect(row.dayValues.get(4)?.hours).toBe(8);
+    expect(row.totalHours).toBe(8);
+  });
+});

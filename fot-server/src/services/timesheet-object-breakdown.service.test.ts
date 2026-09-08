@@ -110,6 +110,23 @@ describe('buildVersionObjectBreakdown', () => {
     expect(objects.reduce((acc, row) => acc + row.total_hours, 0)).toBe(8);
   });
 
+  it('object-only день: часы из корректировки попадают в объектный снимок версии', () => {
+    // Суббота без прохода СКУД, часы заведены объектной правкой. После включения синтеза
+    // в экспортном слое день есть в payload.days — значит и объектная разбивка версии
+    // обязана его показать (раньше target был 0 и строка терялась).
+    const correction = { ...objectEntry(8926, '2026-08-08', OBJ_A, 8), adjustment_id: 1090038, is_correction: true };
+    const result = build({
+      employees: [employeeDays(8926, { '2026-08-08': 8 }, 'Алесина Светлана Михайловна')],
+      objectEntries: [correction],
+      modeByEmployee: new Map([[8926, skudMode]]),
+    });
+
+    const employee = result.payload.employees[0]!;
+    expect(employee.objects).toHaveLength(1);
+    expect(employee.objects[0]!.days['2026-08-08']).toBe(8);
+    expect(employee.total_hours).toBe(8);
+  });
+
   it('несогласованный выходной: часы в табеле обнулены — объектных строк нет', () => {
     // dataMap гасит такой день через includeExportDayHours, а objectEntries остаются.
     // Наивная группировка дала бы часы там, где в табеле ноль.

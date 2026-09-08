@@ -49,6 +49,20 @@ export interface IExportEmployee {
   employment_status?: string | null;
 }
 
+/**
+ * Значение дня в `dataMap` — то, что видят Excel-билдеры и сборщик официальной версии.
+ * `hoursDropped` выставляется, когда часы обнулил фильтр выходных
+ * (см. includeExportDayHours): сами часы уже 0, но объектным строкам нужен признак,
+ * что это именно решение фильтра, а не пустой день.
+ */
+export interface IExportDayValue {
+  status: string;
+  hours: number;
+  corrected?: boolean;
+  hoursOverridden?: boolean;
+  hoursDropped?: boolean;
+}
+
 export interface IDepartmentTimesheetData {
   departmentName: string;
   departmentId: string | null;
@@ -58,7 +72,7 @@ export interface IDepartmentTimesheetData {
   dailySchedulesMap: Map<number, Map<string, IResolvedSchedule>>;
   calendarMonth: IProductionCalendarMonth | null;
   entries: IAttendanceEntry[];
-  dataMap: Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>;
+  dataMap: Map<number, Map<string, IExportDayValue>>;
   objectEntries: IAttendanceObjectEntry[];
   skudMap: Map<number, Map<string, { hours: number; corrected: boolean }>>;
   posMap: Map<string, string>;
@@ -100,9 +114,10 @@ export interface IExportRosterOptions {
 
 /**
  * Пост-фильтр «пустых» сотрудников для 1С-выгрузок. Активность считается по
- * entries (hasRealActivity) И objectEntries совместно — экспорт строит attendance
- * без synthesizeObjectOnlyDays, поэтому сотрудник только с объектной корректировкой
- * виден лишь в objectEntries. Фильтрация — через sliceTimesheetDataByEmployees.
+ * entries (hasRealActivity) И objectEntries совместно: объектная запись остаётся
+ * доказательством активности и для дней, которые синтез в attendance пропустил
+ * (будущие — см. synthesizeObjectOnlyDaysUpTo). Фильтрация — через
+ * sliceTimesheetDataByEmployees.
  */
 function applyZeroActivityFilter(
   data: IDepartmentTimesheetData,
@@ -322,6 +337,16 @@ export async function fetchTimesheetDataForDepartment(
     displayMode: effectiveDisplayMode,
     // Экспорт — read-only: не переписывать skud_travel_segments (тяжёлый write на больших выборках).
     persistTravelSegments: false,
+    // День, существующий ТОЛЬКО как объектная корректировка (нет прохода СКУД, нет
+    // day-level записи), обязан попасть в dataMap: иначе агрегированные режимы
+    // «Единого файла для 1С» теряют его целиком, а payload официальной версии, её
+    // объектная разбивка и Data API — во всех режимах. Фильтр выходных
+    // (includeExportDayHours ниже) применяется к таким дням на общих основаниях.
+    synthesizeObjectOnlyDays: true,
+    // Будущее не выгружаем: паритет с основным циклом сборки, который отсекает
+    // `workDate > todayStr`. Иначе правка, внесённая заранее, попала бы в файл 1С
+    // до наступления дня.
+    synthesizeObjectOnlyDaysUpTo: todayStr,
     exec,
   });
 
@@ -330,7 +355,7 @@ export async function fetchTimesheetDataForDepartment(
     empArr.map(e => e.id), year, mon, calendarMonth, exec,
   );
 
-  const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
+  const dataMap = new Map<number, Map<string, IExportDayValue>>();
   for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
     dataMap.set(employeeId, new Map());
     for (const [date, entry] of dateMap) {
@@ -348,6 +373,7 @@ export async function fetchTimesheetDataForDepartment(
         hours: keepHours ? visibleHours : 0,
         corrected: entry.is_correction,
         hoursOverridden: entry.hours_overridden ?? false,
+        hoursDropped: !keepHours,
       });
     }
   }
@@ -519,6 +545,16 @@ export async function fetchTimesheetDataForEmployees(
     displayMode: effectiveDisplayMode,
     // Экспорт — read-only: не переписывать skud_travel_segments (тяжёлый write на больших выборках).
     persistTravelSegments: false,
+    // День, существующий ТОЛЬКО как объектная корректировка (нет прохода СКУД, нет
+    // day-level записи), обязан попасть в dataMap: иначе агрегированные режимы
+    // «Единого файла для 1С» теряют его целиком, а payload официальной версии, её
+    // объектная разбивка и Data API — во всех режимах. Фильтр выходных
+    // (includeExportDayHours ниже) применяется к таким дням на общих основаниях.
+    synthesizeObjectOnlyDays: true,
+    // Будущее не выгружаем: паритет с основным циклом сборки, который отсекает
+    // `workDate > todayStr`. Иначе правка, внесённая заранее, попала бы в файл 1С
+    // до наступления дня.
+    synthesizeObjectOnlyDaysUpTo: todayStr,
     exec,
   });
 
@@ -527,7 +563,7 @@ export async function fetchTimesheetDataForEmployees(
     empArr.map(e => e.id), year, mon, calendarMonth, exec,
   );
 
-  const dataMap = new Map<number, Map<string, { status: string; hours: number; corrected?: boolean; hoursOverridden?: boolean }>>();
+  const dataMap = new Map<number, Map<string, IExportDayValue>>();
   for (const [employeeId, dateMap] of attendance.byEmployeeDate) {
     dataMap.set(employeeId, new Map());
     for (const [date, entry] of dateMap) {
@@ -545,6 +581,7 @@ export async function fetchTimesheetDataForEmployees(
         hours: keepHours ? visibleHours : 0,
         corrected: entry.is_correction,
         hoursOverridden: entry.hours_overridden ?? false,
+        hoursDropped: !keepHours,
       });
     }
   }

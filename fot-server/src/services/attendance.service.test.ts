@@ -658,9 +658,50 @@ describe('attendance.service', () => {
     });
   });
 
-  it('does NOT synthesize the object-only correction day on the default path (payroll/export untouched, #3 guard)', async () => {
-    // Тот же день, но без synthesizeObjectOnlyDays (как у payslip/export/dashboard):
+  it('does NOT synthesize an object-only day past synthesizeObjectOnlyDaysUpTo (экспорт не выгружает будущее)', async () => {
+    // Правка внесена заранее, на дату позже отсечки: интерактивный табель её показывает
+    // (отсечки не передаёт), экспорт — нет, иначе часы уехали бы в 1С до наступления дня.
+    mockedState.isWorkingDay = false;
+    mockedState.summaryRows = [];
+    mockedState.adjustmentRows = [{
+      id: 78,
+      employee_id: 548,
+      work_date: '2026-09-14',
+      status: 'manual',
+      hours_override: 8,
+      source_type: 'manual_object',
+      source_id: 'obj-alia',
+      reason: 'Диспансеризация',
+      created_by: 'user-1',
+      created_at: '2026-09-01T07:00:00.000Z',
+      updated_at: '2026-09-01T07:05:00.000Z',
+      metadata: { object_id: 'obj-alia', object_name: 'ЖК Alia' },
+    }];
+
+    const params = {
+      employees: [{ id: 548, full_name: 'Дмитриев Александр Александрович' }],
+      startDate: '2026-09-14',
+      endDate: '2026-09-14',
+      dailySchedulesMap: new Map(),
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-09-08',
+      includeObjectDetails: true,
+      synthesizeObjectOnlyDays: true,
+    };
+
+    const exported = await buildAttendanceEntries({ ...params, synthesizeObjectOnlyDaysUpTo: '2026-09-08' });
+    expect(exported.entries).toEqual([]);
+
+    // Без отсечки (интерактивный табель) день остаётся видимым.
+    const interactive = await buildAttendanceEntries(params);
+    expect(interactive.entries).toHaveLength(1);
+    expect(interactive.entries[0]).toMatchObject({ work_date: '2026-09-14', hours_worked: 8 });
+  });
+
+  it('does NOT synthesize the object-only correction day on the default path (payroll/dashboard untouched, #3 guard)', async () => {
+    // Тот же день, но без synthesizeObjectOnlyDays (как у payslip/salary-raise/dashboard):
     // дневной записи быть не должно — иначе день начал бы считаться отработанным в зарплате.
+    // Экспортный слой флаг включает осознанно (timesheet-export.service).
     mockedState.isWorkingDay = false;
     mockedState.summaryRows = [];
     mockedState.adjustmentRows = [{

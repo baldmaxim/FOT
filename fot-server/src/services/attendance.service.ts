@@ -543,11 +543,19 @@ export async function buildAttendanceEntries(params: {
   displayMode?: 'actual' | 'capped_to_schedule';
   includeObjectDetails?: boolean;
   // Синтезировать day-level запись для дней, где есть ТОЛЬКО объектная корректировка
-  // (без СКУД и без day-level записи). Включается ЯВНО лишь для интерактивного табеля
-  // (режим «по сотрудникам»), чтобы такие дни были видны (#3). Потребители расчёта
-  // зарплаты / Excel-экспорта / дашборда вызывают сервис напрямую без этого флага и
-  // НЕ должны затрагиваться (иначе object-only день начал бы считаться отработанным).
+  // (без СКУД и без day-level записи). Включают интерактивный табель (режим «по
+  // сотрудникам», #3) и экспортный слой (timesheet-export.service): без синтеза
+  // агрегированные режимы «Единого файла для 1С» теряли такой день целиком, а payload
+  // официальной версии, её объектная разбивка и Data API — во всех режимах.
+  // Расчёт зарплаты (payslip-generation), salary-raise и дашборд зовут сервис напрямую
+  // и остаются на дефолте false — иначе object-only день начал бы считаться отработанным.
   synthesizeObjectOnlyDays?: boolean;
+  // Верхняя граница синтеза (дата включительно, YYYY-MM-DD). Основной цикл сборки
+  // отсекает будущее (`workDate > todayStr`), блок синтеза — нет, поэтому экспорт
+  // передаёт сюда todayStr: объектная правка, внесённая заранее, не должна попадать
+  // в файл 1С до наступления дня. Интерактивный табель параметр не задаёт — там
+  // будущая правка обязана оставаться видимой табельщице.
+  synthesizeObjectOnlyDaysUpTo?: string;
   // Персистить пересчитанные сегменты «Дороги» в skud_travel_segments. По умолчанию true
   // (интерактивный табель/дашборд обновляют кэш). Read-only экспорты ставят false —
   // сводка считается в памяти, а тяжёлый DELETE+INSERT не выполняется.
@@ -562,6 +570,7 @@ export async function buildAttendanceEntries(params: {
   const displayMode = params.displayMode ?? 'actual';
   const includeObjectDetails = params.includeObjectDetails ?? true;
   const synthesizeObjectOnlyDays = params.synthesizeObjectOnlyDays ?? false;
+  const synthesizeObjectOnlyDaysUpTo = params.synthesizeObjectOnlyDaysUpTo ?? null;
   const persistTravelSegments = params.persistTravelSegments ?? true;
   const nowHMS = formatNowHMS(new Date());
   const employeeIds = employees.map((employee) => employee.id);
@@ -1181,10 +1190,17 @@ export async function buildAttendanceEntries(params: {
       }
 
       // Дня нет в byEmployeeDate (объектная корректировка без СКУД/day-level). Синтезируем:
-      //  • !includeObjectDetails — как и раньше (свод для экспортных/расчётных потребителей);
-      //  • includeObjectDetails  — ТОЛЬКО для интерактивного табеля (synthesizeObjectOnlyDays),
-      //    иначе расчёт зарплаты/Excel-экспорт начали бы считать такой день отработанным (#3).
+      //  • !includeObjectDetails — как и раньше (свод для расчётных потребителей);
+      //  • includeObjectDetails  — только по флагу synthesizeObjectOnlyDays (интерактивный
+      //    табель и экспортный слой), иначе расчёт зарплаты начал бы считать такой день
+      //    отработанным (#3).
       if (includeObjectDetails && !synthesizeObjectOnlyDays) {
+        continue;
+      }
+      // Будущее: основной цикл сборки отсекает `workDate > todayStr` (см. выше), здесь
+      // отсечка задаётся вызывающим. Экспорт передаёт todayStr — заранее внесённая
+      // объектная правка не должна выгружаться до наступления дня.
+      if (synthesizeObjectOnlyDaysUpTo && workDate > synthesizeObjectOnlyDaysUpTo) {
         continue;
       }
 
@@ -1369,6 +1385,34 @@ export type AdjustmentApprovalStatus = 'auto_approved' | 'pending' | 'approved' 
 // Должны совпадать с correction-attachments.service (CORRECTION_ATTACHMENT_ENTITY_TYPE/PURPOSE).
 const CORRECTION_ATTACHMENT_ENTITY_LITERAL = 'attendance_adjustment';
 const CORRECTION_ATTACHMENT_PURPOSE_LITERAL = 'timesheet_correction';
+
+/**
+ * Переносит вложения корректировки с одной строки на другую и снимает ссылки исходной.
+ * Порядок важен: сначала копируем (ON CONFLICT DO NOTHING — у document_links есть
+ * UNIQUE (document_id, entity_type, entity_id, purpose), и общий для обеих строк документ
+ * иначе уронил бы вставку), только потом удаляем исходные ссылки. Прямой UPDATE entity_id
+ * на таком общем документе падает с 23505.
+ *
+ * Вызывать внутри той же транзакции, что и удаление исходной строки.
+ */
+export async function moveCorrectionAttachments(
+  fromAdjustmentId: number,
+  toAdjustmentId: number,
+  exec?: DbExecutor,
+): Promise<void> {
+  if (fromAdjustmentId === toAdjustmentId) return;
+  await sqlRows(exec,
+    `INSERT INTO document_links (document_id, entity_type, entity_id, purpose)
+       SELECT document_id, $1, $2, $3 FROM document_links
+        WHERE entity_type = $1 AND entity_id = $4 AND purpose = $3
+     ON CONFLICT (document_id, entity_type, entity_id, purpose) DO NOTHING`,
+    [CORRECTION_ATTACHMENT_ENTITY_LITERAL, String(toAdjustmentId), CORRECTION_ATTACHMENT_PURPOSE_LITERAL, String(fromAdjustmentId)],
+  );
+  await sqlRows(exec,
+    `DELETE FROM document_links WHERE entity_type = $1 AND entity_id = $2`,
+    [CORRECTION_ATTACHMENT_ENTITY_LITERAL, String(fromAdjustmentId)],
+  );
+}
 
 /**
  * «Работа в выходной» (leave_request/work — факт согласованного выхода) и «Удалёнка»
@@ -1576,6 +1620,10 @@ export async function updateAttendanceAdjustmentById(
     created_by?: string | null;
     updated_by?: string | null;
     approval_status?: AdjustmentApprovalStatus;
+    // Смена объекта у дневной корректировки: строка переезжает на другой source_id
+    // ВНУТРИ себя (id не меняется), поэтому вложения document_links остаются на месте.
+    source_id?: string;
+    metadata?: Record<string, unknown>;
   },
   exec?: DbExecutor,
 ): Promise<Record<string, unknown> | null> {
@@ -1585,6 +1633,8 @@ export async function updateAttendanceAdjustmentById(
     ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
     ...(patch.created_by !== undefined ? { created_by: patch.created_by } : {}),
     ...(patch.updated_by !== undefined ? { updated_by: patch.updated_by } : {}),
+    ...(patch.source_id !== undefined ? { source_id: patch.source_id } : {}),
+    ...(patch.metadata !== undefined ? { metadata: JSON.stringify(patch.metadata) } : {}),
     updated_at: new Date().toISOString(),
   };
   if (patch.approval_status) {

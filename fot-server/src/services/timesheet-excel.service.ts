@@ -485,7 +485,15 @@ export const buildObjectRowsForOneC = (
           continue;
         }
 
-        const hours = employeeDays.get(dateStr) ?? 0;
+        // Часы объектной строки берутся из objectEntries, минуя includeExportDayHours.
+        // Для дня, который держится на КОРРЕКТИРОВКЕ и был обнулён фильтром выходных
+        // (несогласованный выход вне квоты плановых суббот), объектная строка обязана
+        // показать тот же ноль, что и общая строка сотрудника. Сырые СКУД-присутствия
+        // (corrected = false) намеренно не трогаем — это отдельный, гораздо более
+        // широкий случай, и менять его молча нельзя.
+        const hoursDroppedByWeekendFilter = Boolean(statusEntry?.hoursDropped && statusEntry?.corrected);
+
+        const hours = hoursDroppedByWeekendFilter ? 0 : (employeeDays.get(dateStr) ?? 0);
         let exportedHours = 0;
         if (hasPositiveHours(hours)) {
           const dayNormHours = getDayNormForEmployeeOnDate(data, employee.id, dateStr, schedule);
