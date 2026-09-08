@@ -2,6 +2,10 @@ import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import * as Sentry from '@sentry/node';
 import { env } from '../config/env.js';
+import {
+  DISMISSED_ACCOUNT_ERROR,
+  isProfileAllowedToSignIn,
+} from '../services/account-status.service.js';
 import { chatService } from '../services/chat.service.js';
 import { isChatError } from '../services/chat.errors.js';
 import { dispatchChatMessage } from '../services/chat-delivery.service.js';
@@ -21,7 +25,7 @@ const MAX_SOCKETS_PER_USER = Number(process.env.SOCKET_IO_MAX_PER_USER) || 10;
 
 export const setupChatSocket = (io: Server) => {
   // JWT auth middleware
-  io.use((socket: IAuthenticatedSocket, next) => {
+  io.use(async (socket: IAuthenticatedSocket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) {
       return next(new Error('Authentication required'));
@@ -31,6 +35,12 @@ export const setupChatSocket = (io: Server) => {
       const decoded = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] }) as JWTPayload;
       if (!decoded.is_approved) {
         return next(new Error('Account not approved'));
+      }
+      // Access-токен живёт 7 дней и уже открытое соединение не перепроверяется,
+      // поэтому статус читаем из БД на каждом подключении. Уволенного не пускаем
+      // (его живые сокеты рвёт runDismiss сразу после увольнения).
+      if (!(await isProfileAllowedToSignIn(decoded.sub))) {
+        return next(new Error(DISMISSED_ACCOUNT_ERROR));
       }
       socket.userId = decoded.sub;
       socket.employeeId = decoded.employee_id ?? null;

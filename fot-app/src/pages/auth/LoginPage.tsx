@@ -1,9 +1,20 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { ApiError } from '../../api/client';
 import styles from './Auth.module.css';
+
+/** Куда AuthContext кладёт причину принудительного выхода. */
+const AUTH_NOTICE_KEY = 'auth_notice';
+
+const readAuthNotice = (): string => {
+  try {
+    return sessionStorage.getItem(AUTH_NOTICE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+};
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -14,8 +25,19 @@ export const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
-  const [error, setError] = useState('');
+  // Причина принудительного выхода — например когда сотрудника уволили посреди
+  // сессии. Читаем при инициализации, иначе человек попадал бы на форму входа
+  // без объяснений; сам ключ гасим эффектом, чтобы сообщение не всплыло повторно.
+  const [error, setError] = useState(readAuthNotice);
   const [errorNonce, setErrorNonce] = useState(0);
+
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(AUTH_NOTICE_KEY);
+    } catch {
+      // приватный режим — ключа всё равно нет
+    }
+  }, []);
   const [loading, setLoading] = useState(false);
   const submittingRef = useRef(false);
 

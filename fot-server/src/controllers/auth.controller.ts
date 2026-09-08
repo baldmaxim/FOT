@@ -4,6 +4,12 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { execute, query, queryOne } from '../config/postgres.js';
 import { localAuthService, LocalAuthError } from '../services/local-auth.service.js';
+import {
+  DISMISSED_ACCOUNT_CODE,
+  DISMISSED_ACCOUNT_ERROR,
+  getProfileEmploymentStatus,
+  isDismissedEmploymentStatus,
+} from '../services/account-status.service.js';
 import { auditService } from '../services/audit.service.js';
 import { mailerService } from '../services/mailer.service.js';
 import { notificationService } from '../services/notification.service.js';
@@ -292,6 +298,17 @@ async function login(req: Request, res: Response): Promise<void> {
     }
 
     const profile = profileRow;
+
+    // До сборки полного профиля: уволенному вход закрыт, строить ответ незачем.
+    if (isDismissedEmploymentStatus(await getProfileEmploymentStatus(profile.id))) {
+      res.status(403).json({
+        success: false,
+        error: DISMISSED_ACCOUNT_ERROR,
+        code: DISMISSED_ACCOUNT_CODE,
+      });
+      return;
+    }
+
     const { role, response, departmentId } = await buildProfileResponse(profile);
 
     if (!profile.is_approved) {
@@ -319,7 +336,7 @@ async function login(req: Request, res: Response): Promise<void> {
     }
 
     const accessToken = generateAccessToken(profile, role, email, true, departmentId);
-    const refreshToken = generateRefreshToken(profile.id, email);
+    const refreshToken = generateRefreshToken(profile.id, email, profile.token_version);
     setSessionCookies(res, accessToken, refreshToken);
 
     await auditService.logFromRequest(req, profile.id, 'LOGIN');
@@ -583,11 +600,41 @@ async function refresh(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    // Refresh-токены живут 30 дней. Без этой сверки увольнение (token_version + 1)
+    // отзывало бы только access-токен, а старый refresh продолжал бы выпускать
+    // новые сессии.
+    //
+    // Токены, выпущенные до появления поля, приходят без него — такие НЕ отбиваем:
+    // на момент выкатки у 1245 профилей из 1915 token_version уже больше нуля
+    // (роль меняли), и нормализация отсутствующего поля в 0 разлогинила бы их всех
+    // разом. Сверяем только те токены, где версия действительно есть; старые
+    // доживают свои 30 дней, а уволенных отсекает проверка статуса ниже.
+    const decodedRefreshVersion = (decoded as { token_version?: number }).token_version;
+    if (Number.isFinite(decodedRefreshVersion)) {
+      const profileVersion = Number.isFinite(profileRow.token_version) ? Number(profileRow.token_version) : 0;
+      if (Number(decodedRefreshVersion) !== profileVersion) {
+        clearSessionCookies(res);
+        res.status(401).json({ success: false, error: 'Session is no longer valid' });
+        return;
+      }
+    }
+
+    // Уволенному новую сессию не выдаём — иначе блокировка обходится обновлением токена.
+    if (isDismissedEmploymentStatus(await getProfileEmploymentStatus(profileRow.id))) {
+      clearSessionCookies(res);
+      res.status(403).json({
+        success: false,
+        error: DISMISSED_ACCOUNT_ERROR,
+        code: DISMISSED_ACCOUNT_CODE,
+      });
+      return;
+    }
+
     const profile = profileRow;
     const { role, response, departmentId } = await buildProfileResponse(profile);
 
     const accessToken = generateAccessToken(profile, role, decoded.email, true, departmentId);
-    const nextRefreshToken = generateRefreshToken(profile.id, decoded.email);
+    const nextRefreshToken = generateRefreshToken(profile.id, decoded.email, profile.token_version);
 
     setSessionCookies(res, accessToken, nextRefreshToken);
 

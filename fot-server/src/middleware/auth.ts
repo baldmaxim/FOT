@@ -8,6 +8,11 @@ import type { AuthenticatedRequest, JWTPayload } from '../types/index.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { getAccessTokenFromRequest } from '../utils/auth-session.js';
 import { queryOne } from '../config/postgres.js';
+import {
+  DISMISSED_ACCOUNT_CODE,
+  DISMISSED_ACCOUNT_ERROR,
+  isDismissedEmploymentStatus,
+} from '../services/account-status.service.js';
 
 export const authenticate = async (
   req: AuthenticatedRequest,
@@ -39,8 +44,13 @@ export const authenticate = async (
     // Старые JWT без поля (выпущенные до миграции 095) приходят как undefined →
     // нормализуются в 0, fresh.token_version тоже 0 (DEFAULT) → совпадают.
     const decodedVersion = Number.isFinite(decoded.token_version) ? decoded.token_version : 0;
-    const fresh = await queryOne<{ token_version: number }>(
-      'SELECT token_version FROM user_profiles WHERE id = $1::uuid',
+    // employment_status тянем тем же запросом: отдельного похода в БД не появляется.
+    // LEFT JOIN — профиль без employee_id (подрядчики, сервисные) даёт NULL и проходит.
+    const fresh = await queryOne<{ token_version: number; employment_status: string | null }>(
+      `SELECT up.token_version, e.employment_status
+         FROM user_profiles up
+         LEFT JOIN employees e ON e.id = up.employee_id
+        WHERE up.id = $1::uuid`,
       [decoded.sub],
     );
     if (!fresh) {
@@ -50,6 +60,16 @@ export const authenticate = async (
     const freshVersion = Number.isFinite(fresh.token_version) ? fresh.token_version : 0;
     if (freshVersion !== decodedVersion) {
       res.status(401).json({ success: false, error: 'Token revoked' });
+      return;
+    }
+    // Уволенный на портал не допускается. 403, а не 401: у клиента валидный токен,
+    // обновлять его незачем — api/client.ts повторяет запрос только на 401.
+    if (isDismissedEmploymentStatus(fresh.employment_status)) {
+      res.status(403).json({
+        success: false,
+        error: DISMISSED_ACCOUNT_ERROR,
+        code: DISMISSED_ACCOUNT_CODE,
+      });
       return;
     }
 

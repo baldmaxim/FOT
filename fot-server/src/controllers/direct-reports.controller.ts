@@ -97,6 +97,12 @@ export const directReportsController = {
           existing_manager_employee_id: result.existingManagerEmployeeId,
         });
       }
+      if (result.reason === 'manager_not_active') {
+        return res.status(400).json({
+          success: false,
+          error: 'Нельзя назначить руководителем уволенного сотрудника',
+        });
+      }
       if (result.reason === 'self_report') {
         return res.status(400).json({ success: false, error: 'Сотрудник не может быть подчинённым самому себе' });
       }

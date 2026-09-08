@@ -13,9 +13,20 @@ import { sigurService } from './sigur.service.js';
 import { settingsService } from './settings.service.js';
 import {
   upsertTechnicalDepartmentAccess,
-  deactivateAllDepartmentAccessForEmployee,
 } from './employee-department-access.service.js';
+import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
+import {
+  findLastAppliedDismissOperationId,
+  restoreFromSnapshot,
+  revokeDepartmentAccessWithSnapshot,
+  revokeDirectReportsWithSnapshot,
+  type IRestoreConflict,
+} from './lifecycle-revocations.service.js';
 import { employeeCache } from './employee-cache.service.js';
+import { getIo } from '../socket/io-instance.js';
+import { getUserIdsByEmployeeIds } from './recipients.service.js';
+import { listEffectiveDepartmentManagers } from './department-managers.service.js';
+import { auditService, AUDIT_ACTIONS } from './audit.service.js';
 import { normalizeEmployee } from './sigur-sync-shared.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 import type { ConnectionType } from './sigur-base.service.js';
@@ -563,10 +574,12 @@ async function runDismiss(op: ILifecycleOperation, owner: string, connection?: C
     });
   }
 
-  await deactivateAllDepartmentAccessForEmployee(op.employee_id);
-
   const dismissalDate = op.dismissal_date ?? op.effective_date;
   const exclusionDate = addDaysIso(dismissalDate, 1);
+
+  // Подчинённые, оставшиеся без личного руководителя: заполняется внутри транзакции,
+  // предупреждаем уже после коммита.
+  let orphanedSubordinateIds: number[] = [];
 
   const result = await withTransaction<EmployeeEncrypted | 'applied_elsewhere'>(async (client) => {
     const updated = await client.query<EmployeeEncrypted>(
@@ -599,17 +612,92 @@ async function runDismiss(op: ILifecycleOperation, owner: string, connection?: C
        VALUES ($1, $2, false, false, false, $3, NULL, NULL, $4, $5, $6)`,
       [op.employee_id, dismissalDate, op.source === 'scheduler', op.created_by, op.from_department_id, op.id],
     );
+
+    // Полномочия снимаем здесь же, под тем же CAS: при конфликте (STATE_CHANGED,
+    // конкурентное восстановление) откатится всё, а не только смена статуса.
+    // Снимок пишется до деактивации — по нему восстановление вернёт ровно эти строки.
+    await revokeDepartmentAccessWithSnapshot(client, op.id, op.employee_id);
+    orphanedSubordinateIds = await revokeDirectReportsWithSnapshot(client, op.id, op.employee_id);
+
+    // Отзыв выданных сессий: access-токен живёт 7 дней, refresh — 30, и без этого
+    // уволенный доработал бы на старом токене. Счётчик, а не удаление: после
+    // восстановления человек просто входит заново прежними реквизитами.
+    await client.query(
+      'UPDATE user_profiles SET token_version = token_version + 1, updated_at = now() WHERE employee_id = $1',
+      [op.employee_id],
+    );
+
     await markApplied(client, op, owner);
     return row;
   });
 
   employeeCache.invalidate(op.employee_id);
+  // Кэши сбрасываем после коммита: до него данные ещё могли откатиться.
+  invalidateTimekeeperScopeCache();
+  await disconnectEmployeeSockets(op.employee_id);
+  await warnAboutOrphanedSubordinates(op.employee_id, orphanedSubordinateIds);
   if (result === 'applied_elsewhere') {
     const row = await loadEmployeeRow(op.employee_id);
     if (!row) throw new LifecycleOperationError(404, 'Employee not found', 'NOT_FOUND');
     return row;
   }
   return result;
+}
+
+/**
+ * Рвёт живые сокеты уволенного. Handshake статус проверяет, но уже открытое
+ * соединение его не перепроверяет — без этого чат продолжал бы работать до
+ * переподключения. Best-effort: сбой не должен валить применённое увольнение.
+ */
+async function disconnectEmployeeSockets(employeeId: number): Promise<void> {
+  try {
+    const io = getIo();
+    if (!io) return;
+    const userIds = await getUserIdsByEmployeeIds([employeeId]);
+    for (const userId of userIds) {
+      io.in(`user:${userId}`).disconnectSockets(true);
+    }
+  } catch (error) {
+    console.warn('[lifecycle-ops] disconnect sockets failed', {
+      employeeId, message: errorText(error),
+    });
+  }
+}
+
+/**
+ * Предупреждает, если после увольнения руководителя его подчинённые остались вовсе
+ * без ответственного. Шлём только по тем, у кого нет и руководителя отдела: иначе
+ * маршрут просто переключится на него и повода для тревоги нет.
+ */
+async function warnAboutOrphanedSubordinates(managerEmployeeId: number, subordinateIds: number[]): Promise<void> {
+  if (subordinateIds.length === 0) return;
+  try {
+    const rows = await query<{ id: number; org_department_id: string | null }>(
+      'SELECT id, org_department_id FROM employees WHERE id = ANY($1::int[])',
+      [subordinateIds],
+    );
+    const departmentIds = [...new Set(rows.map(r => r.org_department_id).filter((v): v is string => !!v))];
+    const heads = await listEffectiveDepartmentManagers(departmentIds);
+    const orphans = rows
+      .filter(r => !r.org_department_id || (heads.get(String(r.org_department_id))?.length ?? 0) === 0)
+      .map(r => Number(r.id));
+    if (orphans.length === 0) return;
+
+    const message = `[lifecycle-ops] увольнение ${managerEmployeeId}: подчинённые остались без ответственного — ${orphans.join(', ')}`;
+    console.warn(message);
+    Sentry.captureMessage(message, 'warning');
+    await auditService.log({
+      user_id: null,
+      action: AUDIT_ACTIONS.DIRECT_REPORT_UNASSIGN,
+      entity_type: 'employee_direct_report',
+      entity_id: String(managerEmployeeId),
+      details: { reason: 'dismissal', manager_employee_id: managerEmployeeId, orphaned_employee_ids: orphans },
+    });
+  } catch (error) {
+    console.warn('[lifecycle-ops] orphan warning failed', {
+      managerEmployeeId, message: errorText(error),
+    });
+  }
 }
 
 async function runRehire(op: ILifecycleOperation, owner: string, connection?: ConnectionType): Promise<EmployeeEncrypted> {
@@ -680,6 +768,9 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
     op.sigur_employee_id != null && !op.sigur_detached ? 'sigur_sync' : 'portal_lifecycle',
   );
 
+  // Конфликты восстановления подчинённых: заполняется внутри транзакции, сообщаем после.
+  let restoreConflicts: IRestoreConflict[] = [];
+
   const result = await withTransaction<EmployeeEncrypted | 'applied_elsewhere'>(async (client) => {
     const updated = await client.query<EmployeeEncrypted>(
       `UPDATE employees
@@ -712,17 +803,60 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
        VALUES ($1, $2, false, false, true, false, $3, NULL, $4, NULL, $5)`,
       [op.employee_id, op.dismissal_date ?? op.effective_date, op.dismissal_date, op.created_by, op.id],
     );
+
+    // Возвращаем полномочия, снятые именно тем увольнением, которое отменяем:
+    // доступы к отделам и личных подчинённых. Ручное переназначение подчинённого
+    // за время увольнения имеет приоритет — такие случаи уходят в конфликты.
+    const dismissOperationId = await findLastAppliedDismissOperationId(client, op.employee_id);
+    if (dismissOperationId) {
+      const restored = await restoreFromSnapshot(client, dismissOperationId, op.employee_id);
+      restoreConflicts = restored.conflicts;
+      if (restored.departmentAccessRestored > 0 || restored.directReportsRestored > 0) {
+        console.log('[lifecycle-ops] rehire: восстановлены полномочия', {
+          employeeId: op.employee_id,
+          dismissOperationId,
+          departmentAccess: restored.departmentAccessRestored,
+          directReports: restored.directReportsRestored,
+        });
+      }
+    }
+
     await markApplied(client, op, owner);
     return row;
   });
 
   employeeCache.invalidate(op.employee_id);
+  invalidateTimekeeperScopeCache();
+  await reportRehireConflicts(op, restoreConflicts);
   if (result === 'applied_elsewhere') {
     const row = await loadEmployeeRow(op.employee_id);
     if (!row) throw new LifecycleOperationError(404, 'Employee not found', 'NOT_FOUND');
     return row;
   }
   return result;
+}
+
+/**
+ * Конфликты восстановления: подчинённого за время увольнения отдали другому
+ * руководителю. Это не ошибка операции — ручное назначение имеет приоритет,
+ * поэтому связь не перетираем, а показываем администратору.
+ */
+async function reportRehireConflicts(op: ILifecycleOperation, conflicts: IRestoreConflict[]): Promise<void> {
+  if (conflicts.length === 0) return;
+  const message = `[lifecycle-ops] восстановление ${op.employee_id}: подчинённые остались у других руководителей`;
+  console.warn(message, conflicts);
+  Sentry.captureMessage(message, 'warning');
+  try {
+    await auditService.log({
+      user_id: op.created_by,
+      action: AUDIT_ACTIONS.DIRECT_REPORT_UNASSIGN,
+      entity_type: 'employee_direct_report',
+      entity_id: String(op.employee_id),
+      details: { reason: 'rehire_conflict', manager_employee_id: op.employee_id, conflicts },
+    });
+  } catch (error) {
+    console.warn('[lifecycle-ops] rehire conflict audit failed', { message: errorText(error) });
+  }
 }
 
 async function runRepair(op: ILifecycleOperation, owner: string, connection?: ConnectionType): Promise<EmployeeEncrypted> {

@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import * as Sentry from '@sentry/react';
 import { useQueryClient } from '@tanstack/react-query';
-import { apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
+import { ACCOUNT_DISMISSED_EVENT, apiClient, ApiError, getSessionToken, setSessionToken, subscribeSessionToken } from '../api/client';
 import {
   dashboardKeys,
   employeesKeys,
@@ -197,6 +197,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     sessionStorage.removeItem('2fa_verified');
     setRoles([]);
     setState({ ...initialState, loading: false });
+  }, []);
+
+  // Сотрудника уволили во время работы: бэкенд начинает отдавать 403
+  // EMPLOYEE_DISMISSED на каждый запрос. Без сброса состояния человек остался бы
+  // в интерфейсе, где не работает ничего, и без объяснения причины.
+  useEffect(() => {
+    const onDismissed = (event: Event) => {
+      const message = (event as CustomEvent<{ message?: string }>).detail?.message;
+      setSessionToken(null);
+      setToken(null);
+      sessionStorage.removeItem('2fa_verified');
+      setRoles([]);
+      // AuthState причину не хранит — кладём её для формы входа, она покажет
+      // сообщение вместо молчаливого выброса на логин.
+      try {
+        sessionStorage.setItem('auth_notice', message || 'Учётная запись отключена: сотрудник уволен');
+      } catch {
+        // приватный режим — переживём без пояснения
+      }
+      setState({ ...initialState, loading: false });
+    };
+    window.addEventListener(ACCOUNT_DISMISSED_EVENT, onDismissed);
+    return () => window.removeEventListener(ACCOUNT_DISMISSED_EVENT, onDismissed);
   }, []);
 
   const refreshProfile = useCallback(async (): Promise<void> => {

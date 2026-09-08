@@ -51,7 +51,7 @@ export const verify2FA = async (req: AuthenticatedRequest, res: Response): Promi
 
     const departmentId = await resolveDepartmentId(profile.employee_id);
     const token = generateAccessToken(profile, role, req.user.email, true, departmentId);
-    const refreshToken = generateRefreshToken(profile.id, req.user.email);
+    const refreshToken = generateRefreshToken(profile.id, req.user.email, profile.token_version);
     setSessionCookies(res, token, refreshToken);
 
     await auditService.logFromRequest(req, req.user.id, '2FA_VERIFIED');
@@ -122,7 +122,7 @@ export const useRecoveryCode = async (req: AuthenticatedRequest, res: Response):
 
     const departmentId = await resolveDepartmentId(profile.employee_id);
     const token = generateAccessToken(profile, role, req.user.email, true, departmentId);
-    const refreshToken = generateRefreshToken(profile.id, req.user.email);
+    const refreshToken = generateRefreshToken(profile.id, req.user.email, profile.token_version);
     setSessionCookies(res, token, refreshToken);
 
     await auditService.logFromRequest(req, req.user.id, '2FA_VERIFIED', {

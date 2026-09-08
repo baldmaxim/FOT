@@ -336,6 +336,13 @@ describe('acquireLease', () => {
 describe('runOperation — dismiss', () => {
   const finalizeOk = () => routeTx((sql) => {
     if (sql.includes("employment_status = 'fired'")) return { rows: [{ id: 77, employment_status: 'fired' }], rowCount: 1 };
+    // Снятые полномочия: по ним пишется снимок для последующего восстановления.
+    if (sql.includes('UPDATE employee_department_access')) {
+      return { rows: [{ id: 'acc-1', department_id: 'dept-1', source: 'manual_admin_ui' }], rowCount: 1 };
+    }
+    if (sql.includes('UPDATE employee_direct_reports')) {
+      return { rows: [{ id: 'dr-1', subordinate_employee_id: 1684, note: null }], rowCount: 1 };
+    }
     return undefined;
   });
 
@@ -351,7 +358,13 @@ describe('runOperation — dismiss', () => {
     expect(h.changeDepartment).toHaveBeenCalledWith(77, 'arch-1', expect.objectContaining({
       effectiveDate: '2026-05-21', forceHistory: true, skipIfScheduledToTarget: true, createdBy: 'admin-1',
     }));
-    expect(h.deactivateAccess).toHaveBeenCalledWith(77);
+    // Доступы и подчинённые снимаются внутри той же CAS-транзакции, а не отдельным
+    // вызовом сервиса: при конфликте они не должны исчезать без применённого увольнения.
+    expect(tx.some(c => c.sql.includes('UPDATE employee_department_access'))).toBe(true);
+    expect(tx.some(c => c.sql.includes('UPDATE employee_direct_reports'))).toBe(true);
+    expect(tx.some(c => c.sql.includes('employee_lifecycle_revocations'))).toBe(true);
+    // Выданные токены отзываются — иначе уволенный доработал бы на старом access.
+    expect(tx.some(c => c.sql.includes('token_version = token_version + 1'))).toBe(true);
 
     // Шаги пишутся под lease-token.
     const stepWrites = h.queryOne.mock.calls.filter(([sql]) => String(sql).includes('UPDATE employee_lifecycle_operations'));
@@ -374,6 +387,24 @@ describe('runOperation — dismiss', () => {
     const applied = tx.find(c => c.sql.includes("status = 'applied'"))!;
     expect(applied.params).toEqual(['op-1', OWNER]);
     expect(h.invalidate).toHaveBeenCalledWith(77);
+  });
+
+  it('CAS не прошёл → полномочия остаются: снимать их без применённого увольнения нельзя', async () => {
+    // Строка не обновилась (конкурентное изменение) → внутри транзакции всё
+    // откатывается, и до снятия доступов дело не доходит.
+    const tx = routeTx((sql) => {
+      if (sql.includes("employment_status = 'fired'")) return { rows: [], rowCount: 0 };
+      if (sql.includes('SELECT') && sql.includes('employee_lifecycle_operations')) {
+        return { rows: [{ status: 'pending' }], rowCount: 1 };
+      }
+      return undefined;
+    });
+
+    await expect(runOperation(baseOp(), OWNER)).rejects.toThrow();
+
+    expect(tx.some(c => c.sql.includes('UPDATE employee_department_access'))).toBe(false);
+    expect(tx.some(c => c.sql.includes('UPDATE employee_direct_reports'))).toBe(false);
+    expect(tx.some(c => c.sql.includes('token_version = token_version + 1'))).toBe(false);
   });
 
   it('повтор после падения: выполненные шаги Sigur не повторяются (читается payload операции)', async () => {

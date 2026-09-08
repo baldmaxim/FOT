@@ -1,4 +1,4 @@
-import { execute, query, queryOne } from '../config/postgres.js';
+import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 
 export interface IDirectReportRow {
   id: string;
@@ -183,6 +183,11 @@ export async function listDirectReportDepartments(
 /**
  * Активный руководитель для подчинённого (или null, если не назначен).
  * Используется в UI для проверки эксклюзивности перед назначением.
+ *
+ * Фильтра по статусу руководителя здесь НЕТ намеренно: это guard уникального
+ * индекса uniq_direct_reports_active_subordinate. Спрятав строку уволенного,
+ * мы бы получили INSERT → 23505 вместо внятного already_assigned, и HR не смог
+ * бы переназначить человека. Маршрутизацию фильтрует getActiveDirectManagersFor.
  */
 export async function getActiveDirectManagerFor(
   subordinateEmployeeId: number,
@@ -216,6 +221,12 @@ export interface IActiveDirectManagerInfo {
  * возвращает его активного руководителя с раскрытым ФИО.
  * Используется в админ-списке «Назначения сотрудников» для подсветки
  * уже назначенных людей в селекторе.
+ *
+ * Уволенные и архивные руководители отсеиваются — то же правило, что и для
+ * начальников отделов (department-managers.service.ts). Иначе после увольнения
+ * заявления подчинённых продолжают маршрутизироваться на уволенного: строка
+ * связи сама по себе не гаснет. Строку не трогаем — при восстановлении
+ * сотрудника связь оживает.
  */
 export async function getActiveDirectManagersFor(
   subordinateEmployeeIds: number[],
@@ -236,6 +247,8 @@ export async function getActiveDirectManagersFor(
          FROM employee_direct_reports dr
          JOIN employees e ON e.id = dr.manager_employee_id
         WHERE dr.is_active = true
+          AND e.is_archived = false
+          AND e.employment_status = 'active'
           AND dr.subordinate_employee_id = ANY($1::int[])`,
       [ids],
     );
@@ -336,7 +349,8 @@ export type AssignDirectReportResult =
   | { ok: true; row: IDirectReportRow }
   | { ok: false; reason: 'already_assigned'; existingManagerEmployeeId: number }
   | { ok: false; reason: 'self_report' }
-  | { ok: false; reason: 'employee_not_found' };
+  | { ok: false; reason: 'employee_not_found' }
+  | { ok: false; reason: 'manager_not_active' };
 
 export async function assignDirectReport(
   input: IAssignDirectReportInput,
@@ -356,6 +370,24 @@ export async function assignDirectReport(
   );
   if (employees.length < 2) {
     return { ok: false, reason: 'employee_not_found' };
+  }
+
+  // Уволенного нельзя поставить руководителем: маршрут его всё равно отфильтрует
+  // (getActiveDirectManagersFor), и подчинённый остался бы без ответственного при
+  // видимой в админке связи. Блокирующее чтение строки менеджера закрывает гонку
+  // assign ↔ увольнение: runDismiss гасит связи под тем же локом.
+  const managerState = await withTransaction(async (client) => {
+    const locked = await client.query<{ employment_status: string | null; is_archived: boolean | null }>(
+      'SELECT employment_status, is_archived FROM employees WHERE id = $1 FOR UPDATE',
+      [managerId],
+    );
+    return locked.rows[0] ?? null;
+  });
+  if (!managerState) {
+    return { ok: false, reason: 'employee_not_found' };
+  }
+  if (managerState.employment_status !== 'active' || managerState.is_archived === true) {
+    return { ok: false, reason: 'manager_not_active' };
   }
 
   const existingManager = await getActiveDirectManagerFor(subId);

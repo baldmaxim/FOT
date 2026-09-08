@@ -41,6 +41,11 @@ export const API_ORIGIN = typeof window !== 'undefined'
   ? new URL(API_URL, window.location.origin).origin
   : new URL(API_URL).origin;
 
+/** Код 403, которым бэкенд сообщает: владелец учётки уволен, доступ закрыт. */
+export const DISMISSED_ACCOUNT_CODE = 'EMPLOYEE_DISMISSED';
+/** Событие для AuthContext: сбросить состояние и показать причину. */
+export const ACCOUNT_DISMISSED_EVENT = 'fot:account-dismissed';
+
 let sessionToken: string | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 const tokenListeners = new Set<(token: string | null) => void>();
@@ -357,6 +362,19 @@ export const apiClient = {
         error.code,
         error,
       );
+
+      // Сотрудника уволили посреди сессии. Обычный 403 сессию не роняет, и человек
+      // остался бы в интерфейсе, где не работает ничего. Токен сбрасываем сразу,
+      // а AuthContext по событию очищает состояние и уводит на форму входа.
+      if (response.status === 403 && error.code === DISMISSED_ACCOUNT_CODE) {
+        setSessionToken(null);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent(ACCOUNT_DISMISSED_EVENT, {
+            detail: { message: apiError.message },
+          }));
+        }
+        throw apiError;
+      }
 
       // Перегрузка: повторяем с задержкой, не шумим в Sentry.
       if (typeof error.code === 'string' && OVERLOAD_CODES.has(error.code)) {

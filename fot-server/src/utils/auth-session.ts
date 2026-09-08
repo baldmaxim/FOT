@@ -10,6 +10,10 @@ interface RefreshTokenPayload {
   sub: string;
   email: string;
   token_type: 'refresh';
+  // Версия сессии на момент выпуска. Инкремент token_version в user_profiles
+  // (например при увольнении) делает выпущенные refresh-токены недействительными:
+  // /auth/refresh сверяет это поле с профилем.
+  token_version?: number;
   iat: number;
   exp: number;
 }
@@ -86,13 +90,14 @@ export function generateAccessToken(
   return jwt.sign(payload, env.JWT_SECRET, { expiresIn: env.JWT_EXPIRES_IN } as jwt.SignOptions);
 }
 
-export function generateRefreshToken(userId: string, email: string): string {
+export function generateRefreshToken(userId: string, email: string, tokenVersion = 0): string {
   const refreshSecret = env.JWT_REFRESH_SECRET || env.JWT_SECRET;
   return jwt.sign(
     {
       sub: userId,
       email,
       token_type: 'refresh',
+      token_version: Number.isFinite(tokenVersion) ? tokenVersion : 0,
     },
     refreshSecret,
     { expiresIn: env.JWT_REFRESH_EXPIRES_IN } as jwt.SignOptions,
