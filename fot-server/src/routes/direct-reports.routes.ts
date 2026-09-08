@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { directReportsController } from '../controllers/direct-reports.controller.js';
-import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 
 const router = Router();
@@ -27,8 +27,13 @@ router.use((req, res, next) => {
   next();
 });
 
+// Назначение подчинённых — кадровая операция, а не админская: отдельный ключ
+// /staff-control/direct-reports (миграция 270). Не '/staff-control' edit, чтобы
+// право не разошлось по всем ролям с доступом к кадрам.
+// GET остаётся под authenticate: обычный пользователь читает своих подчинённых
+// (self-service), а чужого руководителя контроллер отдаёт только по этому ключу.
 router.get('/', directReportsController.list);
-router.post('/', requireAdmin, directReportsController.assign);
-router.delete('/:id', requireAdmin, directReportsController.unassign);
+router.post('/', requirePageAccess('/staff-control/direct-reports', 'edit'), directReportsController.assign);
+router.delete('/:id', requirePageAccess('/staff-control/direct-reports', 'edit'), directReportsController.unassign);
 
 export default router;

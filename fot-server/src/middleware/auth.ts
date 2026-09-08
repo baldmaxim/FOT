@@ -6,6 +6,7 @@ import { CRITICAL_2FA_ENABLED } from '../config/features.js';
 import type { AccessAction } from '../config/access-control.js';
 import type { AuthenticatedRequest, JWTPayload } from '../types/index.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
+import { canToggleTimesheetLock } from '../utils/timesheet-lock-toggle.js';
 import { getAccessTokenFromRequest } from '../utils/auth-session.js';
 import { queryOne } from '../config/postgres.js';
 import {
@@ -203,4 +204,36 @@ export const requireAnyPageAccess = (pagePaths: string[], action: AccessAction =
       res.status(500).json({ success: false, error: 'Authorization check failed' });
     }
   };
+};
+
+/**
+ * Предвычисляет право открывать/закрывать сданный табель и кладёт его в
+ * req.user.__can_toggle_timesheet_lock.
+ *
+ * Нужен, потому что решение зависит от асинхронного page-access ключа
+ * /timesheet/lock-toggle, а читает его синхронный canToggleTimesheetLock —
+ * им пользуются и route-гард, и текст 409 «Откройте табель кнопкой…», который
+ * формируется в двух десятках мест. Один раз на запрос вместо двадцати await'ов.
+ *
+ * Ставится на роутер ПОСЛЕ authenticate. Не гейт: доступ никому не закрывает.
+ */
+export const resolveTimesheetLockToggle = async (
+  req: AuthenticatedRequest,
+  _res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  if (!req.user) {
+    next();
+    return;
+  }
+  try {
+    req.user.__can_toggle_timesheet_lock = canToggleTimesheetLock({
+      is_admin: req.user.is_admin,
+      role_code: req.user.role_code,
+    }) || await resolveEffectivePageAccess(req, '/timesheet/lock-toggle', 'edit');
+  } catch (error) {
+    console.error('resolveTimesheetLockToggle error:', error);
+    // Падение проверки не должно рушить запрос: остаётся legacy-предикат.
+  }
+  next();
 };

@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { timesheetApprovalController } from '../controllers/timesheet-approval.controller.js';
 import { timesheetReviewController } from '../controllers/timesheet-review.controller.js';
-import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess, resolveTimesheetLockToggle } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
 import { registerCache } from '../middleware/cacheResponse.js';
 import { canToggleTimesheetLock, resolveEffectivePageAccess } from '../services/access-control.service.js';
@@ -32,9 +32,10 @@ const requireTimesheetReviewAccess = (action: 'view' | 'edit') => (
   }
 );
 
-// Открыть/закрыть сданный период — админ и кадровая служба. Гейт /timesheet-hr здесь не
-// годится: у роли hr этой страницы нет, а выдача открыла бы ей заодно утверждение,
-// отклонение и возврат. Предикат вынесен в access-control.service — его же гоняют тесты.
+// Открыть/закрыть сданный период — админ, кадровая служба и роли с ключом
+// /timesheet/lock-toggle (миграция 270). Гейт /timesheet-hr здесь не годится: у роли hr
+// этой страницы нет, а выдача открыла бы ей заодно утверждение, отклонение и возврат.
+// Значение уже посчитано resolveTimesheetLockToggle — предикат читает его синхронно.
 const requireTimesheetLockToggle = () => (
   (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     if (canToggleTimesheetLock(req.user)) {
@@ -51,6 +52,8 @@ const upload = multer({
 });
 
 router.use(authenticate);
+// Право снимать замок периода нужно и гарду, и тексту 409 — считаем один раз.
+router.use(resolveTimesheetLockToggle);
 
 // Весь модуль отдаёт изменяемое состояние: статус подачи, замок периода, история, списки
 // на проверку. Глобальный `private, max-age=30` из app.ts заставлял браузер 30 секунд

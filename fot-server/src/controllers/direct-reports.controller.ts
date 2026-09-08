@@ -8,6 +8,7 @@ import {
 } from '../services/employee-direct-reports.service.js';
 import { AUDIT_ACTIONS, auditService } from '../services/audit.service.js';
 import { canAccessEmployeeInScope, resolveAccessibleDepartmentIds } from '../services/data-scope.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { queryOne } from '../config/postgres.js';
 
 const assignSchema = z.object({
@@ -27,8 +28,14 @@ export const directReportsController = {
 
       const accessible = await resolveAccessibleDepartmentIds(req);
 
+      // Смотреть подчинённых ЧУЖОГО руководителя вправе админ и роли с ключом
+      // /staff-control/direct-reports. Без этого кадровый админ видел бы только
+      // собственных подчинённых и не смог бы вести чужие назначения.
+      const canManageOthers = req.user.is_admin
+        || await resolveEffectivePageAccess(req, '/staff-control/direct-reports', 'view');
+
       let managerEmployeeId: number | undefined;
-      if (req.user.is_admin) {
+      if (canManageOthers) {
         if (managerParam && Number.isFinite(managerParam) && managerParam > 0) {
           if (accessible !== 'all') {
             const allowed = await canAccessEmployeeInScope(req, managerParam);
@@ -47,7 +54,7 @@ export const directReportsController = {
 
       const data = await listDirectReports({
         managerEmployeeId,
-        includeInactive: req.user.is_admin ? includeInactive : false,
+        includeInactive: canManageOthers ? includeInactive : false,
       });
       return res.json({ success: true, data });
     } catch (err) {

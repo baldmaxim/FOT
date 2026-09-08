@@ -567,6 +567,28 @@ export const RoleManagementPage: FC = () => {
     }
   };
 
+  const handleToggleAllDepartmentsScope = async (role: SystemRole, next: boolean) => {
+    try {
+      const updated = await rolesService.update(role.code, {
+        name: role.name,
+        description: role.description,
+        is_admin: role.is_admin,
+        employee_variant: role.employee_variant,
+        is_active: role.is_active,
+        show_actual_hours: role.show_actual_hours,
+        hide_sidebar: role.hide_sidebar,
+        all_departments_scope: next,
+      });
+      toast.success(next
+        ? 'Роль работает со всеми отделами организации — в пределах открытых ей страниц'
+        : 'Скоуп всех отделов выключен: действует обычный скоуп роли');
+      upsertRoleInCache(updated);
+      await refreshProfile();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Ошибка изменения скоупа отделов');
+    }
+  };
+
   const handleToggleViewAllDepartments = async (role: SystemRole, next: boolean) => {
     try {
       const updated = await rolesService.update(role.code, {
@@ -1457,6 +1479,26 @@ export const RoleManagementPage: FC = () => {
                           ? 'Для этой роли действует собственная логика доступа'
                           : selectedRole.view_all_departments === true
                             ? 'Все отделы на чтение — по страницам, открытым роли'
+                            : 'Действует обычный скоуп по назначенным отделам'}
+                      </small>
+                    </span>
+                  </label>
+
+                  <label className={styles.roleSwitch} title="СКОУП ДАННЫХ, а не набор прав: роль работает со всеми отделами организации на чтение И запись, но только на тех страницах, которые ей открыты в матрице ниже. Новых разделов и технических операций флаг не добавляет. Для «Админ» и табельщицы не применяется.">
+                    <input
+                      type="checkbox"
+                      checked={selectedRole.all_departments_scope === true}
+                      disabled={selectedRole.is_admin || selectedRole.code === 'timekeeper'}
+                      onChange={e => void handleToggleAllDepartmentsScope(selectedRole, e.target.checked)}
+                    />
+                    <span className={styles.roleSwitchTrack} />
+                    <span className={styles.roleSwitchText}>
+                      <strong>Все отделы: просмотр и редактирование</strong>
+                      <small>
+                        {selectedRole.is_admin || selectedRole.code === 'timekeeper'
+                          ? 'Для этой роли действует собственная логика доступа'
+                          : selectedRole.all_departments_scope === true
+                            ? 'Вся организация — в пределах страниц, открытых роли'
                             : 'Действует обычный скоуп по назначенным отделам'}
                       </small>
                     </span>

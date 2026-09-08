@@ -13,14 +13,18 @@ import { readSseResponse } from './sigur-settings.utils';
 
 interface IEventsSyncSectionProps {
   connected: boolean | null;
+  /** «Очистить события» — техника СКУД (/skud-settings edit). */
+  canClearEvents: boolean;
   setError: (error: string) => void;
-  setActiveTab: (tab: SettingsTab) => void;
+  /** Переход на вкладку фильтра. Отсутствует там, где такой вкладки нет (страница SIGUR). */
+  setActiveTab?: (tab: SettingsTab) => void;
   syncFilterSummary: string;
   externalBusy: boolean;
 }
 
 export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
   connected,
+  canClearEvents,
   setError,
   setActiveTab,
   syncFilterSummary,
@@ -192,13 +196,15 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
       </div>
       <div className="sigur-sync-summary">
         <span className="sigur-sync-summary-pill">{syncFilterSummary}</span>
-        <button
-          type="button"
-          className="sigur-sync-summary-link"
-          onClick={() => setActiveTab('sync-filter')}
-        >
-          Настроить фильтр
-        </button>
+        {setActiveTab && (
+          <button
+            type="button"
+            className="sigur-sync-summary-link"
+            onClick={() => setActiveTab('sync-filter')}
+          >
+            Настроить фильтр
+          </button>
+        )}
       </div>
       <div className="sigur-sync-controls">
         <label>
@@ -225,14 +231,16 @@ export const EventsSyncSection: FC<IEventsSyncSectionProps> = ({
           <RefreshCw size={14} className={syncing ? 'sigur-spin' : ''} />
           {syncing ? 'Синхронизация...' : 'Синхронизировать'}
         </button>
-        <button
-          className="sigur-btn sigur-btn-danger"
-          onClick={handleClearEvents}
-          disabled={busy || !connected || !syncStartDate || !syncEndDate}
-        >
-          <Trash2 size={14} />
-          {clearing ? 'Удаление...' : 'Очистить события'}
-        </button>
+        {canClearEvents && (
+          <button
+            className="sigur-btn sigur-btn-danger"
+            onClick={handleClearEvents}
+            disabled={busy || !connected || !syncStartDate || !syncEndDate}
+          >
+            <Trash2 size={14} />
+            {clearing ? 'Удаление...' : 'Очистить события'}
+          </button>
+        )}
       </div>
 
       {syncing && (

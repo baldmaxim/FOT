@@ -28,9 +28,16 @@ interface IEmployeeAssignmentPanelProps {
   allEmployees: EmployeeDepartmentAssignmentFromApi[];
   onClose: () => void;
   onSaved: () => void;
+  /**
+   * Какие вкладки показывать. По умолчанию все. «Управление кадрами» открывает
+   * панель только со вкладкой 'person' — по ключу /staff-control/direct-reports.
+   */
+  allowedTabs?: readonly Tab[];
 }
 
 type Tab = 'department' | 'brigade' | 'person' | 'object' | 'weekend';
+
+const ALL_TABS: readonly Tab[] = ['department', 'brigade', 'person', 'object', 'weekend'];
 
 const normalizeText = (value: string | null | undefined): string => (
   String(value || '')
@@ -61,11 +68,17 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   allEmployees,
   onClose,
   onSaved,
+  allowedTabs = ALL_TABS,
 }) => {
+  // Панель открывается из двух мест с разными правами: из «Назначений сотрудников»
+  // (/admin/users/access) со всеми вкладками и из «Управления кадрами» только со
+  // вкладкой «Человек» (/staff-control/direct-reports). Запросы скрытых вкладок не
+  // запускаем — часть их эндпоинтов кадровой роли закрыта и вернула бы 403.
+  const tabAllowed = useCallback((tab: Tab) => allowedTabs.includes(tab), [allowedTabs]);
   const toast = useToast();
   const queryClient = useQueryClient();
   const structureQuery = useStructureTree();
-  const [activeTab, setActiveTab] = useState<Tab>('department');
+  const [activeTab, setActiveTab] = useState<Tab>(allowedTabs[0] ?? 'department');
   const [searchQuery, setSearchQuery] = useState('');
   const [draftDepartmentIds, setDraftDepartmentIds] = useState<string[]>([]);
   // Подмножество draftDepartmentIds, помеченное «только просмотр» (миграция 167).
@@ -90,7 +103,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const skudObjectsQuery = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ['admin-skud-objects-list'],
     queryFn: () => adminService.listSkudObjectsForAssignment(),
-    enabled: isOpen,
+    enabled: isOpen && tabAllowed('object'),
     staleTime: 5 * 60_000,
   });
 
@@ -100,7 +113,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     queryFn: () => (employee
       ? adminService.getEmployeeSkudObjects(employee.employee_id)
       : Promise.resolve({ object_ids: [] })),
-    enabled: !!employee && isOpen,
+    enabled: !!employee && isOpen && tabAllowed('object'),
     staleTime: 30_000,
   });
 
@@ -108,7 +121,7 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
   const whitelistQuery = useQuery<string[]>({
     queryKey: ['correction-approval-whitelist'],
     queryFn: () => correctionApprovalService.getSettings().then(s => s.requiredDepartmentIds),
-    enabled: isOpen,
+    enabled: isOpen && tabAllowed('weekend'),
     staleTime: 5 * 60_000,
   });
   const weekendQueryKey = ['admin-weekend-approvals', employee?.employee_id ?? 0];
@@ -117,13 +130,13 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
     queryFn: () => (employee
       ? weekendApprovalService.getByResponsible(employee.employee_id)
       : Promise.resolve({ department_ids: [], employee_ids: [], assignments: { departments: {}, employees: {} } })),
-    enabled: !!employee && isOpen,
+    enabled: !!employee && isOpen && tabAllowed('weekend'),
     staleTime: 30_000,
   });
   const weekendEligibleQuery = useQuery<IWeekendEligibleEmployee[]>({
     queryKey: ['admin-weekend-eligible'],
     queryFn: () => weekendApprovalService.listEligible(false),
-    enabled: isOpen,
+    enabled: isOpen && tabAllowed('weekend'),
     staleTime: 60_000,
   });
 
@@ -467,41 +480,51 @@ export const EmployeeAssignmentPanel: FC<IEmployeeAssignmentPanelProps> = ({
         </header>
 
         <nav className={styles.assignmentPanelTabs}>
-          <button
-            type="button"
-            className={`${styles.assignmentPanelTab} ${activeTab === 'department' ? styles.assignmentPanelTabActive : ''}`}
-            onClick={() => { setActiveTab('department'); setSearchQuery(''); }}
-          >
-            Отдел ({draftDepartmentIds.filter(id => departmentsByKind.departments.some(d => d.id === id)).length})
-          </button>
-          <button
-            type="button"
-            className={`${styles.assignmentPanelTab} ${activeTab === 'brigade' ? styles.assignmentPanelTabActive : ''}`}
-            onClick={() => { setActiveTab('brigade'); setSearchQuery(''); }}
-          >
-            Бригада ({draftDepartmentIds.filter(id => departmentsByKind.brigades.some(d => d.id === id)).length})
-          </button>
-          <button
-            type="button"
-            className={`${styles.assignmentPanelTab} ${activeTab === 'person' ? styles.assignmentPanelTabActive : ''}`}
-            onClick={() => { setActiveTab('person'); setSearchQuery(''); }}
-          >
-            Человек ({draftDirectIds.length})
-          </button>
-          <button
-            type="button"
-            className={`${styles.assignmentPanelTab} ${activeTab === 'object' ? styles.assignmentPanelTabActive : ''}`}
-            onClick={() => { setActiveTab('object'); setSearchQuery(''); }}
-          >
-            Объекты ({draftObjectIds.length})
-          </button>
-          <button
-            type="button"
-            className={`${styles.assignmentPanelTab} ${activeTab === 'weekend' ? styles.assignmentPanelTabActive : ''}`}
-            onClick={() => { setActiveTab('weekend'); setSearchQuery(''); }}
-          >
-            Выходные ({draftWeekendDeptIds.length + draftWeekendEmpIds.length})
-          </button>
+          {tabAllowed('department') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'department' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('department'); setSearchQuery(''); }}
+            >
+              Отдел ({draftDepartmentIds.filter(id => departmentsByKind.departments.some(d => d.id === id)).length})
+            </button>
+          )}
+          {tabAllowed('brigade') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'brigade' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('brigade'); setSearchQuery(''); }}
+            >
+              Бригада ({draftDepartmentIds.filter(id => departmentsByKind.brigades.some(d => d.id === id)).length})
+            </button>
+          )}
+          {tabAllowed('person') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'person' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('person'); setSearchQuery(''); }}
+            >
+              Человек ({draftDirectIds.length})
+            </button>
+          )}
+          {tabAllowed('object') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'object' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('object'); setSearchQuery(''); }}
+            >
+              Объекты ({draftObjectIds.length})
+            </button>
+          )}
+          {tabAllowed('weekend') && (
+            <button
+              type="button"
+              className={`${styles.assignmentPanelTab} ${activeTab === 'weekend' ? styles.assignmentPanelTabActive : ''}`}
+              onClick={() => { setActiveTab('weekend'); setSearchQuery(''); }}
+            >
+              Выходные ({draftWeekendDeptIds.length + draftWeekendEmpIds.length})
+            </button>
+          )}
         </nav>
 
         <div className={styles.assignmentPanelBody}>

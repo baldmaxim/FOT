@@ -17,7 +17,15 @@ interface IEmployeeDepartmentAssignmentsTabProps {
   allUsers: IUserSlim[];
   allUsersLoading?: boolean;
   onReload: () => Promise<void>;
+  /** Только вкладка «Человек»: у роли есть /staff-control/direct-reports, но нет /admin/users/access. */
+  directReportsOnly?: boolean;
 }
+
+/**
+ * Кадровый админ ведёт только прямых подчинённых: отделы, объекты и ответственность
+ * за выходные — настройка чужих доступов, она за /admin/users/access.
+ */
+const DIRECT_REPORTS_ONLY_TABS = ['person'] as const;
 
 const normalizeAdditionalDepartmentIds = (departmentIds: string[]): string[] => (
   [...new Set(departmentIds.filter(Boolean))]
@@ -33,7 +41,12 @@ const normalizeText = (value: string | null | undefined): string => (
     .toLowerCase()
 );
 
-export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignmentsTabProps> = ({ allUsers, allUsersLoading = false, onReload }) => {
+export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignmentsTabProps> = ({
+  allUsers,
+  allUsersLoading = false,
+  onReload,
+  directReportsOnly = false,
+}) => {
   const toast = useToast();
   const structureQuery = useStructureTree();
   // Поиск и фильтры в URL — переживают F5 (replace: true, чтобы не засорять history).
@@ -293,6 +306,7 @@ export const EmployeeDepartmentAssignmentsTab: FC<IEmployeeDepartmentAssignments
         allEmployees={employees}
         onClose={() => setSelectedEmployeeId(null)}
         onSaved={() => void handleSaved()}
+        allowedTabs={directReportsOnly ? DIRECT_REPORTS_ONLY_TABS : undefined}
       />
     </div>
   );

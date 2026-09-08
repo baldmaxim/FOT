@@ -512,15 +512,19 @@ export const TimesheetApprovalBar: FC<IProps> = ({
   allowReview = true,
   submitProblems = [],
 }) => {
-  const { hasPermission, canViewPage, profile } = useAuth();
+  const { hasPermission, canViewPage, canEditPage, canManageAsHrAdmin, profile } = useAuth();
   const canSubmitDepartment = hasPermission('timesheet.workflow.submit');
   // Утверждённый период руководитель сам не переоткрывает — иначе он снимал бы
   // утверждение HR и правил закрытый табель. Остальным его возвращает кадровая
   // служба через «Согласования» → «Вернуть на доработку».
-  const canRecallApproved = canSubmitDepartment && profile?.is_admin === true;
-  // Открыть/закрыть сданный период — админ и кадровая служба. Зеркалит серверный
-  // canToggleTimesheetLock: гейт /timesheet-hr здесь не подходит, у роли hr этой страницы нет.
-  const canToggleLock = profile?.is_admin === true || profile?.role_code === 'hr';
+  const canRecallApproved = canSubmitDepartment
+    && (profile?.is_admin === true || canManageAsHrAdmin('/timesheet-hr'));
+  // Открыть/закрыть сданный период. Зеркалит серверный canToggleTimesheetLock:
+  // отдельный ключ /timesheet/lock-toggle (гейт /timesheet-hr не подходит — у роли hr
+  // этой страницы нет), плюс прежние админ и кадровая служба как fallback.
+  const canToggleLock = profile?.is_admin === true
+    || profile?.role_code === 'hr'
+    || canEditPage('/timesheet/lock-toggle');
   const canReviewApproval = allowReview && hasPermission('timesheet.workflow.review');
   const weekendMemoEnabled = !!profile?.weekend_memo_required;
 

@@ -140,11 +140,20 @@ router.use((req, res, next) => {
   next();
 });
 
+// Кадровые операции SIGUR (страница /sigur) гейтятся парой ['/sigur','/skud-settings']:
+// кадровый админ ходит по своему ключу, админ — по прежнему, поведение не меняется.
+// Под ОДНИМ '/skud-settings' намеренно остаётся техника, которой кадровику быть не должно:
+// параметры подключения, диагностика и preview, события и их очистка, зоны, фильтр
+// синхронизации на запись, справочники должностей, физические точки и правила прохода,
+// массовая раздача точек доступа, импорт табельных номеров и рекурсивное удаление отдела.
+// Разбиение опирается на фактический журнал: CRUD отделов и сотрудников Sigur кадровики
+// ведут сами (≈1300 операций за год), а перечисленной техникой не пользуются.
+
 // === Read-only эндпоинты ===
 
 // GET /api/sigur/connection-settings — текущие параметры подключения и архивного отдела
 router.get('/connection-settings', requirePageAccess('/skud-settings', 'view'), sigurController.getConnectionSettings);
-router.get('/connection-status', requirePageAccess('/skud-settings', 'view'), sigurController.getConnectionStatus);
+router.get('/connection-status', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurController.getConnectionStatus);
 
 // === Live admin эндпоинты ===
 
@@ -161,36 +170,36 @@ const noBrowserCache = (req: Request, res: Response, next: NextFunction): void =
 };
 router.use('/admin', noBrowserCache);
 
-router.get('/admin/departments', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsCache, sigurAdminController.listDepartments);
-router.get('/admin/departments/tree', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsTreeCache, sigurAdminController.listDepartmentsTree);
-router.get('/admin/departments/counts', requirePageAccess('/skud-settings', 'view'), sigurAdminDeptsCountsCache, sigurAdminController.listDepartmentCounts);
-router.get('/admin/positions', requirePageAccess('/skud-settings', 'view'), sigurAdminPositionsCache, sigurAdminController.listPositions);
-router.get('/admin/employees', requirePageAccess('/skud-settings', 'view'), sigurAdminEmployeesCache, sigurAdminController.listEmployees);
-router.get('/admin/employees/card-statuses', requirePageAccess('/skud-settings', 'view'), sigurAdminCardStatusesCache, sigurAdminController.getEmployeeCardStatuses);
-router.get('/admin/access-points/options', requirePageAccess('/skud-settings', 'view'), sigurAdminAccessPointOptionsCache, sigurAdminController.listAccessPointOptions);
-router.get('/admin/employees/:sigurEmployeeId/profile', requirePageAccess('/skud-settings', 'view'), sigurAdminEmployeeProfileMiddleware, sigurAdminController.getEmployeeProfile);
+router.get('/admin/departments', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurAdminDeptsCache, sigurAdminController.listDepartments);
+router.get('/admin/departments/tree', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurAdminDeptsTreeCache, sigurAdminController.listDepartmentsTree);
+router.get('/admin/departments/counts', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurAdminDeptsCountsCache, sigurAdminController.listDepartmentCounts);
+router.get('/admin/positions', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurAdminPositionsCache, sigurAdminController.listPositions);
+router.get('/admin/employees', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurAdminEmployeesCache, sigurAdminController.listEmployees);
+router.get('/admin/employees/card-statuses', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurAdminCardStatusesCache, sigurAdminController.getEmployeeCardStatuses);
+router.get('/admin/access-points/options', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurAdminAccessPointOptionsCache, sigurAdminController.listAccessPointOptions);
+router.get('/admin/employees/:sigurEmployeeId/profile', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurAdminEmployeeProfileMiddleware, sigurAdminController.getEmployeeProfile);
 
 router.post(
   '/admin/departments',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.createDepartment,
 );
 router.post(
   '/admin/departments/batch-move',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.batchMoveDepartments,
 );
 router.put(
   '/admin/departments/:sigurDepartmentId',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.updateDepartment,
 );
 router.delete(
   '/admin/departments/:sigurDepartmentId',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.deleteDepartment,
 );
@@ -221,49 +230,49 @@ router.delete(
 
 router.post(
   '/admin/employees',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.createEmployee,
 );
 router.put(
   '/admin/employees/:sigurEmployeeId',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.updateEmployee,
 );
 router.delete(
   '/admin/employees/:sigurEmployeeId',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.deleteEmployee,
 );
 router.post(
   '/admin/employees/:sigurEmployeeId/block',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.blockEmployee,
 );
 router.post(
   '/admin/employees/:sigurEmployeeId/unblock',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.unblockEmployee,
 );
 router.post(
   '/admin/employees/:sigurEmployeeId/move',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.moveEmployee,
 );
 router.post(
   '/admin/employees/batch-move',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.batchMoveEmployees,
 );
 router.post(
   '/admin/employees/batch-move-stream',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.batchMoveEmployeesStream,
 );
@@ -287,12 +296,12 @@ router.post(
 // живого состояния карт, устаревшая выборка привела бы к записи не того состава.
 router.get(
   '/admin/employees/bulk-extend-cards/preview',
-  requirePageAccess('/skud-settings', 'view'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'),
   sigurAdminController.previewBulkExtendCards,
 );
 router.post(
   '/admin/employees/bulk-extend-cards-stream',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.bulkExtendCardsStream,
 );
@@ -310,32 +319,32 @@ router.put(
 );
 router.put(
   '/admin/employees/:sigurEmployeeId/cards/:cardId/expiration',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.updateEmployeeCardExpiration,
 );
 router.patch(
   '/admin/employees/:sigurEmployeeId/cards/:cardId/binding',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.updateEmployeeCardBinding,
 );
 router.post(
   '/admin/employees/:sigurEmployeeId/cards/binding',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.assignEmployeeCardBinding,
 );
 router.delete(
   '/admin/employees/:sigurEmployeeId/cards/:cardId/binding',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'),
   requireCritical2FA,
   sigurAdminController.deleteEmployeeCardBinding,
 );
 
 // === Monitor эндпоинты (admin+) ===
 
-router.get('/monitor/status', requirePageAccess('/skud-settings', 'view'), noStore, serverTiming('sigur_monitor_status'), sigurMonitorController.getStatus);
+router.get('/monitor/status', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), noStore, serverTiming('sigur_monitor_status'), sigurMonitorController.getStatus);
 router.get('/monitor/incidents', requirePageAccess('/skud-settings', 'view'), noStore, serverTiming('sigur_monitor_incidents'), sigurMonitorController.getIncidents);
 router.get('/monitor/incidents/:id', requirePageAccess('/skud-settings', 'view'), sigurMonitorController.getIncidentById);
 router.get('/monitor/checks', requirePageAccess('/skud-settings', 'view'), noStore, serverTiming('sigur_monitor_checks'), sigurMonitorController.getChecks);
@@ -362,7 +371,7 @@ router.get('/events', requirePageAccess('/skud-settings', 'view'), sigurControll
 router.get('/events/types', requirePageAccess('/skud-settings', 'view'), sigurController.getEventTypes);
 
 // GET /api/sigur/cards — карты доступа
-router.get('/cards', requirePageAccess('/skud-settings', 'view'), sigurController.getCards);
+router.get('/cards', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurController.getCards);
 
 // GET /api/sigur/zones — зоны доступа
 router.get('/zones', requirePageAccess('/skud-settings', 'view'), sigurController.getZones);
@@ -393,10 +402,10 @@ router.get(
 // === Sync эндпоинты ===
 
 // POST /api/sigur/sync-all — полная синхронизация структуры (SSE)
-router.post('/sync-all', requirePageAccess('/skud-settings', 'edit'), sigurSyncController.syncAll);
+router.post('/sync-all', requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'), sigurSyncController.syncAll);
 
 // POST /api/sigur/sync — синхронизация событий из Sigur в БД
-router.post('/sync', requirePageAccess('/skud-settings', 'edit'), sigurSyncController.sync);
+router.post('/sync', requireAnyPageAccess(['/sigur', '/skud-settings'], 'edit'), sigurSyncController.sync);
 
 // POST /api/sigur/clear-events — удаление событий за период
 router.post('/clear-events', requirePageAccess('/skud-settings', 'edit'), sigurSyncController.clearEvents);
@@ -454,7 +463,7 @@ router.put(
 // === Фильтр синхронизации ===
 
 // GET /api/sigur/sync-filter — текущий whitelist отделов для синхронизации
-router.get('/sync-filter', requirePageAccess('/skud-settings', 'view'), sigurFilterController.getFilter);
+router.get('/sync-filter', requireAnyPageAccess(['/sigur', '/skud-settings'], 'view'), sigurFilterController.getFilter);
 
 // PUT /api/sigur/sync-filter — замена whitelist отделов
 router.put('/sync-filter', requirePageAccess('/skud-settings', 'edit'), sigurFilterController.updateFilter);

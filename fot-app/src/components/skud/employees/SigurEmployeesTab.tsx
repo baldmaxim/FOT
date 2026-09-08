@@ -60,7 +60,14 @@ import {
 } from './sigurEmployeesTab.helpers';
 
 interface ISigurEmployeesTabProps {
+  /** Кадровые операции Sigur: карточки, отделы, перенос, карты, продление (/sigur edit). */
   canEdit: boolean;
+  /** Массовая раздача точек доступа — техника СКУД (/skud-settings edit). */
+  canManageAccessPoints: boolean;
+  /** Импорт табельных номеров из Excel — техника СКУД (/skud-settings edit). */
+  canImportTabNumbers: boolean;
+  /** Удаление отдела вместе с вложенными — техника СКУД (/skud-settings edit). */
+  canDeleteDepartmentRecursive: boolean;
   setError: (error: string) => void;
   headerActionSlot?: ReactNode;
   /** Внешний триггер открытия сотрудника по Sigur ID (через считыватель пропусков). key должен меняться, чтобы повторный пинг с тем же id срабатывал. */
@@ -69,7 +76,15 @@ interface ISigurEmployeesTabProps {
 
 const SIGUR_ADMIN_QUERY_KEY = ['sigur-admin'] as const;
 
-export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setError, headerActionSlot, pendingOpen }) => {
+export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({
+  canEdit,
+  canManageAccessPoints,
+  canImportTabNumbers,
+  canDeleteDepartmentRecursive,
+  setError,
+  headerActionSlot,
+  pendingOpen,
+}) => {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile(768);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -545,6 +560,12 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
     try {
       setError('');
       if (dialog.hasChildren) {
+        // Рекурсивное удаление сносит поддерево целиком — оставлено администратору СКУД.
+        // Показываем причину здесь, иначе кнопка молча падала бы в 403.
+        if (!canDeleteDepartmentRecursive) {
+          setError('Удаление отдела вместе с вложенными доступно только администратору СКУД');
+          return;
+        }
         for (const id of dialog.departmentIds) {
           await sigurAdminService.deleteDepartmentRecursive(id);
         }
@@ -1059,7 +1080,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <span>Переместить</span>
               </button>
             )}
-            {canEdit && selectedEmployeeIds.size > 0 && (
+            {canManageAccessPoints && selectedEmployeeIds.size > 0 && (
               <button className="ep-toolbar-btn secondary" onClick={() => setBulkAccessPointsEmployeeIds([...selectedEmployeeIds])}>
                 <DoorOpen size={16} />
                 <span>Точки доступа</span>
@@ -1084,7 +1105,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({ canEdit, setErr
                 <span>Новый сотрудник</span>
               </button>
             )}
-            {canEdit && (
+            {canImportTabNumbers && (
               <button className="ep-toolbar-btn secondary" onClick={() => setImportTabsOpen(true)}>
                 <span>Импорт таб. № (врем.)</span>
               </button>

@@ -61,6 +61,12 @@ interface IUserRowExpandedProps {
   assignableRoles: IRoleOption[];
   /** true, если viewer — системный админ. Только он может править companies. */
   canManageCompanies: boolean;
+  /**
+   * Право настраивать ЧУЖИЕ доступы (/admin/users/access, миграция 270): роль
+   * пользователя, объекты и папки табельщицы, чужая 2FA. У кадрового админа его
+   * нет — иначе кнопки были бы видны и упирались в 403.
+   */
+  canManageAccess: boolean;
   onUpdateName: (userId: string, name: string) => Promise<void>;
   onChangePosition: (userId: string, position: EmployeePositionType) => Promise<void>;
   onChangeChatMode: (userId: string, mode: ChatInboundMode) => Promise<void>;
@@ -76,6 +82,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   user,
   assignableRoles,
   canManageCompanies,
+  canManageAccess,
   onUpdateName,
   onChangePosition,
   onChangeChatMode,
@@ -194,21 +201,23 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
         )}
       </div>
 
-      <div className={styles.controlGroup}>
-        <label>Должность:</label>
-        <select
-          value={user.position_type}
-          onChange={(e) => onChangePosition(user.id, e.target.value as EmployeePositionType)}
-        >
-          {assignableRoles
-            .slice()
-            .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'))
-            .map(role => (
-              <option key={role.code} value={role.code}>{role.name}</option>
-            ))
-          }
-        </select>
-      </div>
+      {canManageAccess && (
+        <div className={styles.controlGroup}>
+          <label>Должность:</label>
+          <select
+            value={user.position_type}
+            onChange={(e) => onChangePosition(user.id, e.target.value as EmployeePositionType)}
+          >
+            {assignableRoles
+              .slice()
+              .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'))
+              .map(role => (
+                <option key={role.code} value={role.code}>{role.name}</option>
+              ))
+            }
+          </select>
+        </div>
+      )}
 
       <div className={styles.controlGroup}>
         <label>Входящий чат:</label>
@@ -276,18 +285,20 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
         <UserCompanyAccessSection userId={user.id} isUserAdmin={isUserAdmin} compact />
       )}
 
-      {userRole?.code === 'contractor' && (
+      {/* Привязка подрядной организации остаётся за системным админом:
+          контроллер за ней (contractor-admin) гейтится ensureSystemAdmin. */}
+      {canManageCompanies && userRole?.code === 'contractor' && (
         <div className={styles.controlGroup}>
           <label>Подрядная организация:</label>
           <ContractorOrgAccessSection userId={user.id} />
         </div>
       )}
 
-      {userRole?.code === 'timekeeper' && (
+      {canManageAccess && userRole?.code === 'timekeeper' && (
         <TimekeeperObjectAccessSection userId={user.id} />
       )}
 
-      {userRole?.code === 'timekeeper' && (
+      {canManageAccess && userRole?.code === 'timekeeper' && (
         <TimekeeperFolderAccessSection userId={user.id} />
       )}
 
@@ -301,7 +312,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
           </button>
         )}
 
-        {user.two_factor_enabled ? (
+        {canManageAccess && (user.two_factor_enabled ? (
           <button
             className={styles.dangerBtn}
             onClick={() => onDisable2FA(user.id)}
@@ -315,7 +326,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
           >
             Выдать 2FA
           </button>
-        )}
+        ))}
 
         <button
           className={styles.primaryBtn}
@@ -340,7 +351,7 @@ UserRowExpanded.displayName = 'UserRowExpanded';
 export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { getRoleLabel, profile, refreshProfile } = useAuth();
+  const { getRoleLabel, profile, refreshProfile, canEditPage } = useAuth();
   const { isUserOnline } = useOnlinePresence();
   // Полный список ролей нужен админу для approval-формы (employee_variant,
   // is_active и т.п.). Endpoint /roles защищён requireAnyPageAccess(/admin/users,
@@ -392,6 +403,8 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
   // Привязку компаний может править только системный админ (без скоупа).
   const canManageCompanies = !!profile?.is_admin
     && (profile?.company_scope?.roots === 'all' || profile?.company_scope === undefined);
+  // Настройка чужих доступов вынесена в отдельный ключ (миграция 270).
+  const canManageAccess = canEditPage('/admin/users/access');
 
   // Порядок ролей не зависит от counts (сортировка по is_admin + label),
   // поэтому считаем его только из списка ролей — без цикла с pageQuery.
@@ -833,6 +846,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
                   user={user}
                   assignableRoles={buildAssignableRoles(user)}
                   canManageCompanies={canManageCompanies}
+                  canManageAccess={canManageAccess}
                   onUpdateName={handleNameSave}
                   onChangePosition={handlePositionChange}
                   onChangeChatMode={handleChatInboundModeChange}

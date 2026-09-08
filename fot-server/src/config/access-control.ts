@@ -24,7 +24,28 @@ export interface PageAccessEntry {
   can_edit: boolean;
 }
 
-export const CRITICAL_ADMIN_PAGE_KEYS = ['/admin/roles', '/admin/users'] as const;
+export const CRITICAL_ADMIN_PAGE_KEYS = ['/admin/roles', '/admin/users', '/admin/users/access'] as const;
+
+/**
+ * Роли, которые не-админ (кадровый админ) вправе назначать при одобрении заявки и
+ * смене должности. Allowlist, а не denylist: новая роль по умолчанию НЕ назначаема,
+ * пока её сюда явно не добавят. Иначе очередная чувствительная техническая роль
+ * молча стала бы доступной для выдачи. Дополнительная runtime-страховка (is_admin,
+ * all_departments_scope) — в assignable-roles.service.
+ */
+export const HR_ASSIGNABLE_ROLE_CODES = [
+  'office',
+  'worker',
+  'contractor',
+  'manager',
+  'manager_obj',
+  'site_supervisor',
+  'timekeeper',
+  'hr',
+  'economist',
+  'otitb',
+  'mts_manager',
+] as const;
 
 /**
  * Тип-сейфтные константы путей страниц. Используются как единый источник
@@ -61,13 +82,16 @@ export const PAGE_PATHS = {
   STAFF_CONTROL_HIRING: '/staff-control/hiring',
   STAFF_CONTROL_INDUCTION: '/staff-control/induction',
   STAFF_CONTROL_HR_PROFILES: '/staff-control/hr-profiles',
+  STAFF_CONTROL_DIRECT_REPORTS: '/staff-control/direct-reports',
   STAFF_CONTROL_DEPARTMENT: '/staff-control/department',
   STAFF_CONTROL_POSITION: '/staff-control/position',
   STAFF_CONTROL_SCHEDULE: '/staff-control/schedule',
   STAFF_CONTROL_TIMESHEET_MODE: '/staff-control/timesheet-mode',
   EMPLOYEES_CARD: '/employees',
   TIMESHEET_EVENTS: '/timesheet/events',
+  TIMESHEET_LOCK_TOGGLE: '/timesheet/lock-toggle',
   SKUD_SETTINGS: '/skud-settings',
+  SIGUR: '/sigur',
   SKUD_CARD_READER: '/skud-card-reader',
   MTS: '/mts',
   MTS_BUSINESS: '/mts-business',
@@ -77,6 +101,7 @@ export const PAGE_PATHS = {
   ADMIN_CONTRACTOR_APPROVALS_SUBMISSIONS: '/admin/contractor-approvals/submissions',
   ADMIN_CONTRACTOR_APPROVALS_OTITB: '/admin/contractor-approvals/otitb',
   ADMIN_USERS: '/admin/users',
+  ADMIN_USERS_ACCESS: '/admin/users/access',
   ADMIN_AUDIT: '/admin/audit',
   ADMIN_ACTION_HISTORY: '/admin/action-history',
   ADMIN_ROLES: '/admin/roles',
@@ -121,6 +146,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/staff-control',              label: 'Управление кадрами',                   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 100, is_active: true },
   { key: '/timesheet',                  label: 'Табель',                               group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 110, is_active: true },
   { key: '/timesheet/events',           label: 'Табель — события СКУД (вкладка дня)',  group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: false, sort_order: 115, is_active: true },
+  { key: '/timesheet/lock-toggle',      label: 'Табель — открыть/закрыть сданный период', group_code: 'work', group_label: 'Управление',        area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 116, is_active: true },
   { key: '/timesheet-hr',               label: 'Согласования / Табели HR',             group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 120, is_active: true },
   { key: '/discipline',                 label: 'Аналитика',                            group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 130, is_active: true },
   { key: '/discipline/objects',         label: 'Аналитика — KPI объектов (вкладка)',   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 133, is_active: true },
@@ -130,6 +156,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/staff-control/hiring',       label: 'Управление кадрами — Заявки на поиск сотрудников',   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 105, is_active: true },
   { key: '/staff-control/induction',    label: 'Управление кадрами — Вводный инструктаж (вкладка)', group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 106, is_active: true },
   { key: '/staff-control/hr-profiles',  label: 'Управление кадрами — Реквизиты (кадровые данные)',   group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 107, is_active: true },
+  { key: '/staff-control/direct-reports', label: 'Управление кадрами — Прямые подчинённые',           group_code: 'work', group_label: 'Управление',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 108, is_active: true },
   { key: '/staff-control/department',   label: 'Управление кадрами — смена отдела',    group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 161, is_active: true },
   { key: '/staff-control/position',     label: 'Управление кадрами — смена должности', group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 162, is_active: true },
   { key: '/staff-control/schedule',     label: 'Управление кадрами — смена графика',   group_code: 'work',  group_label: 'Управление',           area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 163, is_active: true },
@@ -140,6 +167,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/admin/patent-receipts',      label: 'Чеки за патент',                       group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 210, is_active: true },
   { key: '/admin/timesheet-transfers',  label: 'Переводы и исключения',                group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 220, is_active: true },
   { key: '/skud-settings',              label: 'СКУД',                                 group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 230, is_active: true },
+  { key: '/sigur',                      label: 'SIGUR — сотрудники и пропуска',        group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 231, is_active: true },
   { key: '/skud-card-reader',           label: 'Пропуск',                              group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 240, is_active: true },
   { key: '/mts',                        label: 'Мобильные сотрудники МТС',             group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 245, is_active: true },
   { key: '/mts-business',               label: 'МТС Бизнес — звонки',                  group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 246, is_active: true },
@@ -147,6 +175,7 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/admin/contractor-approvals/submissions', label: 'Подрядчики — Заявки на согласование (вкладка)', group_code: 'admin', group_label: 'Администрирование', area: 'admin', surface: 'technical', supports_edit: true, sort_order: 243, is_active: true },
   { key: '/admin/contractor-approvals/otitb',       label: 'Подрядчики — ОТиТБ (вкладка)',                  group_code: 'admin', group_label: 'Администрирование', area: 'admin', surface: 'technical', supports_edit: true, sort_order: 244, is_active: true },
   { key: '/admin/users',                label: 'Система — Управление пользователями',  group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 250, is_active: true },
+  { key: '/admin/users/access',         label: 'Система — Пользователи: права доступа', group_code: 'admin', group_label: 'Администрирование',   area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 250, is_active: true },
   { key: '/admin/roles',                label: 'Система — Управление ролями',          group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 251, is_active: true },
   { key: '/admin/audit',                label: 'Система — Аудит данных',               group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 252, is_active: true },
   { key: '/admin/action-history',       label: 'Система — История действий',           group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: false, sort_order: 253, is_active: true },

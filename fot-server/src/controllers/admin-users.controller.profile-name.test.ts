@@ -75,6 +75,13 @@ vi.mock('../services/audit-context.helpers.js', () => ({
   loadUserFullName: vi.fn(),
 }));
 vi.mock('../socket/io-instance.js', () => ({ getIo: () => null }));
+vi.mock('../services/assignable-roles.service.js', () => ({
+  checkRoleAssignable: vi.fn(async () => null),
+  checkTargetUserManageable: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock('../services/access-control.service.js', () => ({
+  hasPageEdit: vi.fn(async () => false),
+}));
 
 import { adminUsersController } from './admin-users.controller.js';
 import type { AuthenticatedRequest } from '../types/index.js';

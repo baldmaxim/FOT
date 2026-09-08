@@ -44,6 +44,7 @@ vi.mock('../services/critical-admin-access.service.js', () => ({
 
 vi.mock('../services/scope-cache.service.js', () => ({
   invalidateGlobalReadScopeCaches: vi.fn(),
+  invalidateDepartmentScopeCaches: vi.fn(),
 }));
 
 vi.mock('../socket/io-instance.js', () => ({

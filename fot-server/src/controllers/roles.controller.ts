@@ -15,7 +15,8 @@ import {
   validatePageAccessModes,
 } from '../services/access-catalog.service.js';
 import { ensureCriticalAdminAccess } from '../services/critical-admin-access.service.js';
-import { invalidateGlobalReadScopeCaches } from '../services/scope-cache.service.js';
+import { isRoleAssignableByNonAdmin } from '../services/assignable-roles.service.js';
+import { invalidateDepartmentScopeCaches, invalidateGlobalReadScopeCaches } from '../services/scope-cache.service.js';
 import { getIo } from '../socket/io-instance.js';
 
 // Правки роли (окно табеля, is_admin, доступ страниц) зашиты в JWT/state.profile
@@ -58,6 +59,14 @@ const normalizeViewAllDepartments = (value: boolean, isAdmin: boolean, roleCode:
 const normalizeObjectKpiOwnObjectsOnly = (value: boolean, isAdmin: boolean): boolean =>
   value === true && !isAdmin;
 
+/**
+ * Флаг «Все отделы: просмотр и редактирование» (миграция 270) — СКОУП ДАННЫХ.
+ * Для is_admin не применяется (у него свой company-scope), у табельщицы editable
+ * равен accessible — флаг открыл бы ей запись по всей организации.
+ */
+const normalizeAllDepartmentsScope = (value: boolean, isAdmin: boolean, roleCode: string): boolean =>
+  value === true && !isAdmin && roleCode !== 'timekeeper';
+
 const createRoleSchema = z.object({
   code: z.string().min(1).max(50).regex(/^[a-z_]+$/, 'Только строчные буквы и подчёркивание'),
   name: z.string().min(1).max(100),
@@ -80,6 +89,7 @@ const createRoleSchema = z.object({
   weekend_memo_required: z.boolean().optional().default(false),
   // NOT NULL-колонка: default(false) гарантирует boolean в INSERT (не NULL).
   view_all_departments: z.boolean().optional().default(false),
+  all_departments_scope: z.boolean().optional().default(false),
   object_kpi_own_objects_only: z.boolean().optional().default(false),
 });
 
@@ -104,6 +114,7 @@ const updateRoleSchema = z.object({
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional(),
   view_all_departments: z.boolean().optional(),
+  all_departments_scope: z.boolean().optional(),
   object_kpi_own_objects_only: z.boolean().optional(),
 });
 
@@ -133,6 +144,7 @@ const cloneRoleSchema = z.object({
   max_corrections_per_month: maxCorrectionsSchema.optional(),
   weekend_memo_required: z.boolean().optional(),
   view_all_departments: z.boolean().optional(),
+  all_departments_scope: z.boolean().optional(),
   object_kpi_own_objects_only: z.boolean().optional(),
 });
 
@@ -258,12 +270,19 @@ export const rolesController = {
   // структуры прав. Доступ — любой authenticated (см. roles.routes.ts).
   async getLabels(_req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const data = await query<{ code: string; name: string; is_admin: boolean; show_actual_hours: boolean }>(
+      const rows = await query<{ code: string; name: string; is_admin: boolean; show_actual_hours: boolean }>(
         `SELECT code, name, is_admin, show_actual_hours
            FROM system_roles
           WHERE is_active = true
           ORDER BY is_admin DESC, name ASC`,
       );
+      // assignable — какие роли вправе выдавать не-админ (кадровый админ). Фронт
+      // фильтрует по нему селекторы «Должность» в карточке и при одобрении заявки,
+      // чтобы не показывать вариант, который сервер всё равно отвергнет с 403.
+      const data = await Promise.all(rows.map(async row => ({
+        ...row,
+        assignable: await isRoleAssignableByNonAdmin(row.code),
+      })));
       res.json({ success: true, data });
     } catch (error) {
       res.status(500).json({
@@ -333,6 +352,7 @@ export const rolesController = {
       weekend_memo_required,
       view_all_departments,
       object_kpi_own_objects_only,
+      all_departments_scope,
     } = parsed.data;
 
     let data: SystemRole | null;
@@ -345,8 +365,8 @@ export const rolesController = {
             corrections_allow_zero_short_attendance, corrections_disable_bulk,
             max_corrections_per_month, weekend_memo_required,
             corrections_disable_object_entries, admin_access, manager_auto_access,
-            view_all_departments, object_kpi_own_objects_only, is_active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, true)
+            view_all_departments, object_kpi_own_objects_only, all_departments_scope, is_active)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, true)
          RETURNING *`,
         [
           code,
@@ -370,6 +390,7 @@ export const rolesController = {
           manager_auto_access !== false,
           normalizeViewAllDepartments(view_all_departments === true, !!is_admin, code),
           normalizeObjectKpiOwnObjectsOnly(object_kpi_own_objects_only === true, !!is_admin),
+          normalizeAllDepartmentsScope(all_departments_scope === true, !!is_admin, code),
         ],
       );
     } catch (error) {
@@ -427,8 +448,8 @@ export const rolesController = {
               corrections_allow_zero_short_attendance, corrections_disable_bulk,
               max_corrections_per_month, weekend_memo_required, is_active,
               corrections_disable_object_entries, admin_access, manager_auto_access,
-              view_all_departments, object_kpi_own_objects_only)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+              view_all_departments, object_kpi_own_objects_only, all_departments_scope)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
            RETURNING *`,
           [
             targetCode,
@@ -464,6 +485,11 @@ export const rolesController = {
             normalizeObjectKpiOwnObjectsOnly(
               parsed.data.object_kpi_own_objects_only ?? sourceRole.object_kpi_own_objects_only ?? false,
               parsed.data.is_admin ?? sourceRole.is_admin,
+            ),
+            normalizeAllDepartmentsScope(
+              parsed.data.all_departments_scope ?? sourceRole.all_departments_scope ?? false,
+              parsed.data.is_admin ?? sourceRole.is_admin,
+              targetCode,
             ),
           ],
         );
@@ -556,6 +582,11 @@ export const rolesController = {
     if (parsed.data.corrections_disable_object_entries !== undefined) setClauses.push(`corrections_disable_object_entries = ${addParam(parsed.data.corrections_disable_object_entries)}`);
     if (parsed.data.max_corrections_per_month !== undefined) setClauses.push(`max_corrections_per_month = ${addParam(parsed.data.max_corrections_per_month)}`);
     if (parsed.data.weekend_memo_required !== undefined) setClauses.push(`weekend_memo_required = ${addParam(parsed.data.weekend_memo_required)}`);
+    if (parsed.data.all_departments_scope !== undefined) {
+      setClauses.push(`all_departments_scope = ${addParam(
+        normalizeAllDepartmentsScope(parsed.data.all_departments_scope, nextIsAdmin, code),
+      )}`);
+    }
     if (parsed.data.view_all_departments !== undefined) {
       setClauses.push(`view_all_departments = ${addParam(
         normalizeViewAllDepartments(parsed.data.view_all_departments, nextIsAdmin, code),
@@ -628,6 +659,12 @@ export const rolesController = {
     invalidateRolePageAccessCache();
     invalidateCorrectionRestrictionsCache(data.id);
     if (data.view_all_departments !== currentRole.view_all_departments) {
+      invalidateGlobalReadScopeCaches();
+    }
+    // all_departments_scope меняет и READ-кеши, и подсчитанный subtree отделов
+    // (resolveAccessibleDepartmentIds), поэтому сбрасываем оба набора.
+    if (data.all_departments_scope !== currentRole.all_departments_scope) {
+      invalidateDepartmentScopeCaches();
       invalidateGlobalReadScopeCaches();
     }
     await emitRoleAccessChanged(data.id);

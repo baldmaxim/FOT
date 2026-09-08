@@ -15,7 +15,9 @@ import { runWithCronMonitor, type CronRunStatus } from '../utils/sentry-cron.js'
 
 const REMINDER_INTERVAL_MS = 15 * 60_000;
 const STARTUP_DELAY_MS = 45_000;
-const REMINDER_EXCLUDED_ROLE_CODES = ['admin'] as const;
+// hr_admin ведёт табели всей организации и закрывает периоды сам — напоминание
+// «сдайте табель» для него такой же шум, как и для админа.
+const REMINDER_EXCLUDED_ROLE_CODES = ['admin', 'hr_admin'] as const;
 
 let reminderTimer: ReturnType<typeof setInterval> | null = null;
 let startupTimeout: ReturnType<typeof setTimeout> | null = null;

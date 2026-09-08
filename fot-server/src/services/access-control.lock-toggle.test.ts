@@ -30,3 +30,30 @@ describe('canToggleTimesheetLock', () => {
     expect(canToggleTimesheetLock({ is_admin: null, role_code: 'manager' })).toBe(false);
   });
 });
+
+/**
+ * Ключ /timesheet/lock-toggle (миграция 270) асинхронный, а предикат обязан остаться
+ * синхронным: результат кладёт в req.user middleware resolveTimesheetLockToggle.
+ */
+describe('canToggleTimesheetLock: предвычисленный ключ /timesheet/lock-toggle', () => {
+  it('роль с ключом получает право, хотя по коду его бы не было', () => {
+    expect(canToggleTimesheetLock({
+      is_admin: false,
+      role_code: 'hr_admin',
+      __can_toggle_timesheet_lock: true,
+    })).toBe(true);
+  });
+
+  it('снятый ключ перекрывает legacy-хардкод: false побеждает', () => {
+    expect(canToggleTimesheetLock({
+      is_admin: false,
+      role_code: 'hr',
+      __can_toggle_timesheet_lock: false,
+    })).toBe(false);
+  });
+
+  it('без предвычисленного значения работает прежняя логика', () => {
+    expect(canToggleTimesheetLock({ is_admin: false, role_code: 'hr_admin' })).toBe(false);
+    expect(canToggleTimesheetLock({ is_admin: false, role_code: 'hr' })).toBe(true);
+  });
+});

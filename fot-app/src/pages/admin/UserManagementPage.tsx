@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminService, type IUserSlim, type IPasswordResetRequest } from '../../services/adminService';
 import { useToast } from '../../contexts/ToastContext';
+import { useAuth } from '../../contexts/AuthContext';
 import type { IPendingUser } from '../../components/admin/PendingUsersTab';
 import styles from './Admin.module.css';
 
@@ -24,12 +25,21 @@ type UserManagementTab = 'pending' | 'all' | 'employee-access' | 'password-reset
 const VALID_TABS: readonly UserManagementTab[] = ['pending', 'all', 'employee-access', 'password-reset'];
 
 export const UserManagementPage: React.FC = () => {
+  const { canViewPage, canEditPage } = useAuth();
+  // Вкладка «Назначения сотрудников» — настройка ЧУЖИХ прав, отдельный ключ
+  // (миграция 270). Скрыть кнопку мало: ?utab=employee-access открыл бы её напрямую.
+  const canManageAccess = canViewPage('/admin/users/access');
+  // Кадровый админ ведёт только прямых подчинённых: вкладка ему нужна, но панель
+  // открывается с одной вкладкой «Человек».
+  const canManageDirectReports = canEditPage('/staff-control/direct-reports');
+  const canOpenAssignments = canManageAccess || canManageDirectReports;
   const toast = useToast();
   const queryClient = useQueryClient();
   // Вкладка в URL (?utab=...), чтобы переживать F5; `tab` занят внешним HubShell.
   const [searchParams, setSearchParams] = useSearchParams();
   const utabParam = searchParams.get('utab');
-  const activeTab: UserManagementTab = VALID_TABS.includes(utabParam as UserManagementTab)
+  const visibleTabs = VALID_TABS.filter(tab => tab !== 'employee-access' || canOpenAssignments);
+  const activeTab: UserManagementTab = visibleTabs.includes(utabParam as UserManagementTab)
     ? utabParam as UserManagementTab
     : 'pending';
   const setActiveTab = (tab: UserManagementTab) => {
@@ -59,7 +69,7 @@ export const UserManagementPage: React.FC = () => {
     staleTime: 60_000,
   });
   // Полный slim-список нужен только вкладке assignments — лениво.
-  const needsSlim = activeTab === 'employee-access';
+  const needsSlim = activeTab === 'employee-access' && canOpenAssignments;
   const allUsersSlimQuery = useQuery<IUserSlim[]>({
     queryKey: ['admin-users', 'slim'],
     queryFn: ({ signal }) => adminService.getAllUsersSlim(signal),
@@ -114,12 +124,14 @@ export const UserManagementPage: React.FC = () => {
         >
           Все пользователи ({allCountLoading ? '…' : allUsersCount})
         </button>
-        <button
-          className={`${styles.tab} ${activeTab === 'employee-access' ? styles.active : ''}`}
-          onClick={() => setActiveTab('employee-access')}
-        >
-          Назначения сотрудников
-        </button>
+        {canOpenAssignments && (
+          <button
+            className={`${styles.tab} ${activeTab === 'employee-access' ? styles.active : ''}`}
+            onClick={() => setActiveTab('employee-access')}
+          >
+            {canManageAccess ? 'Назначения сотрудников' : 'Прямые подчинённые'}
+          </button>
+        )}
         <button
           className={`${styles.tab} ${activeTab === 'password-reset' ? styles.active : ''}`}
           onClick={() => setActiveTab('password-reset')}
@@ -145,12 +157,13 @@ export const UserManagementPage: React.FC = () => {
         </Suspense>
       )}
 
-      {activeTab === 'employee-access' && (
+      {activeTab === 'employee-access' && canOpenAssignments && (
         <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
           <EmployeeDepartmentAssignmentsTab
             allUsers={allUsersSlim}
             allUsersLoading={allSlimLoading}
             onReload={reloadUsers}
+            directReportsOnly={!canManageAccess}
           />
         </Suspense>
       )}

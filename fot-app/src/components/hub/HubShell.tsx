@@ -37,7 +37,11 @@ export const HubShell: FC<IHubShellProps> = ({ tabs, defaultTab, persistInUrl = 
     [tabs, canViewPage],
   );
 
-  const fallbackTab = defaultTab ?? visibleTabs[0]?.key;
+  // defaultTab может быть недоступен по правам — иначе в URL уедет ?tab= вкладки,
+  // которой у роли нет.
+  const fallbackTab = visibleTabs.some(tab => tab.key === defaultTab)
+    ? defaultTab
+    : visibleTabs[0]?.key;
 
   // Локальное состояние вкладки (для persistInUrl=false). Seed из `?tab=` один
   // раз при маунте — только если запрошенная вкладка доступна по правам.

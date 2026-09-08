@@ -60,6 +60,15 @@ interface AuthContextType extends AuthState {
   refreshProfile: () => Promise<void>;
   canViewPage: (pagePath: string) => boolean;
   canEditPage: (pagePath: string) => boolean;
+  /**
+   * Кадровые действия, которые исторически были зашиты под is_admin (увольнение,
+   * приём, замок табеля, правка согласованного отпуска).
+   *
+   * Обязательный аргумент — ключ страницы этого действия: флаг all_departments_scope
+   * сам по себе прав не даёт, он только СКОУП данных. Роль с флагом, но без edit
+   * нужной страницы, кнопку не увидит и на сервере получит 403.
+   */
+  canManageAsHrAdmin: (pagePath: string) => boolean;
   getRoleLabel: (code: string) => string;
   /**
    * @deprecated Используйте canViewPage/canEditPage или isAdmin.
@@ -360,6 +369,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return state.profile?.page_access?.[pagePath]?.can_edit === true;
   }, [ready, state.profile]);
 
+  const canManageAsHrAdmin = useCallback((pagePath: string): boolean => {
+    if (!ready) return false;
+    if (state.profile?.is_admin) return true;
+    return state.profile?.all_departments_scope === true && canEditPage(pagePath);
+  }, [ready, state.profile, canEditPage]);
+
   const hasPermission = useCallback((permission: string): boolean => {
     if (!ready) return false;
     if (state.profile?.is_admin) return true;
@@ -381,11 +396,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return state.profile?.page_access?.['/timesheet-hr']?.can_view === true
           || state.profile?.role_code === 'hr';
       case 'data.scope.all':
-        // Кадровая служба (hr) видит всю организацию на чтение (как админ по данным,
-        // но без админ-доступа к страницам). Зеркалит бэк resolveAccessibleDepartmentIds.
-        return !!state.profile?.is_admin || state.profile?.role_code === 'hr';
+        // Кадровая служба (hr) и роли с all_departments_scope (миграция 270) видят всю
+        // организацию по данным, но без админ-доступа к страницам.
+        // Зеркалит бэк resolveAccessibleDepartmentIds.
+        return !!state.profile?.is_admin
+          || state.profile?.role_code === 'hr'
+          || state.profile?.all_departments_scope === true;
       case 'data.scope.department':
-        return !state.profile?.is_admin && state.profile?.role_code !== 'hr';
+        return !state.profile?.is_admin
+          && state.profile?.role_code !== 'hr'
+          && state.profile?.all_departments_scope !== true;
       default:
         return false;
     }
@@ -409,6 +429,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshProfile,
     canViewPage,
     canEditPage,
+    canManageAsHrAdmin,
     getRoleLabel,
     hasPermission,
   };

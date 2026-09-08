@@ -111,7 +111,7 @@ import {
 const DIRECT_REPORTS_DEPT = '__direct_reports__';
 
 export const TimesheetPage: FC = () => {
-  const { hasPermission, profile, canEditPage, canViewPage, showActualHours } = useAuth();
+  const { hasPermission, profile, canEditPage, canViewPage, canManageAsHrAdmin, showActualHours } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -140,6 +140,9 @@ export const TimesheetPage: FC = () => {
   const objectEntriesDisabled = profile?.corrections_disable_object_entries === true;
   const OBJECT_ENTRIES_DISABLED_MESSAGE = 'Корректировки по объектам недоступны для вашей роли. Используйте режим «По сотрудникам».';
   const canEditTeamManagement = isAdmin || canEditPage('timesheet-team-management');
+  // «Переводы» — просмотр и откат кадровых перемещений: право даёт edit смены отдела,
+  // а не сам по себе глобальный скоуп (см. canManageAsHrAdmin).
+  const canViewTransfers = canManageAsHrAdmin('/staff-control/department');
   // Флаг роли view_all_departments (миграция 237): просмотр всех отделов ТОЛЬКО в табеле.
   // Глобальные примитивы (data.scope.*, useManagedDepartments) намеренно не расширены —
   // обрабатываем локально, окно месяцев роли при этом остаётся включённым.
@@ -299,7 +302,7 @@ export const TimesheetPage: FC = () => {
     ? 'objects'
     : queryView === 'corrections'
       ? 'corrections'
-      : (queryView === 'transfers' && isAdmin && timesheetMode === 'department')
+      : (queryView === 'transfers' && canViewTransfers && timesheetMode === 'department')
         ? 'transfers'
         : 'employees';
 
@@ -2161,7 +2164,7 @@ export const TimesheetPage: FC = () => {
       >
         Корректировки
       </button>
-      {isAdmin && !isAssignedMode && !isEmployeeMode && (
+      {canViewTransfers && !isAssignedMode && !isEmployeeMode && (
         <button
           type="button"
           className={`ts-view-chip ${viewMode === 'transfers' ? ' ts-view-chip--active' : ''}`}
@@ -2220,7 +2223,7 @@ export const TimesheetPage: FC = () => {
     </button>
   ) : null;
 
-  const transfersChip = hasActiveScope && isAdmin && !isAssignedMode && !isEmployeeMode ? (
+  const transfersChip = hasActiveScope && canViewTransfers && !isAssignedMode && !isEmployeeMode ? (
     <button
       type="button"
       className={`ts-view-chip ${viewMode === 'transfers' ? ' ts-view-chip--active' : ''}`}

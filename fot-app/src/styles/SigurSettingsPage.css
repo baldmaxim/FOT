@@ -1820,3 +1820,20 @@
     flex-direction: column;
   }
 }
+
+/* Вкладка «Синхронизация» на странице SIGUR: те же блоки, что на странице СКУД,
+   но со своей шапкой «Назад» — отдельной панели вкладок здесь нет. */
+.sigur-fullpage__sync {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.sigur-fullpage__sync-header {
+  display: flex;
+  justify-content: flex-end;
+}

@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { timesheetModeController } from '../controllers/timesheet-mode.controller.js';
-import { authenticate, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -96,6 +96,13 @@ router.use((req, res, next) => {
 // ответ из HTTP-кеша, строка «возвращалась», и админ жал «Удалить» повторно,
 // хотя в БД он уже удалён с первого раза. Серверный LRU-кеш ниже остаётся.
 // Заодно списки с ПДн (ФИО, email) перестают оседать в кеше браузера.
+// Раздел «Пользователи» разбит на два ключа (миграция 270):
+//   /admin/users        — работа с учётной записью: очередь заявок, одобрение,
+//                         отклонение, удаление, email, сброс пароля, ФИО, привязка
+//                         карточки СКУД;
+//   /admin/users/access — настройка ЧУЖИХ прав: роль пользователя, отделы, объекты,
+//                         скоуп табельщицы, компании администратора, чужая 2FA.
+// Второй ключ критичный (CRITICAL_ADMIN_PAGE_KEYS) — снять его у последней роли нельзя.
 router.get('/users', requirePageAccess('/admin/users', 'view'), noStore, usersListCache, adminController.getAllUsers);
 router.get('/users/pending', requirePageAccess('/admin/users', 'view'), noStore, pendingUsersCache, adminController.getPendingUsers);
 // Запросы на сброс пароля — должен быть выше /users/:id/..., иначе Express
@@ -107,34 +114,36 @@ router.get(
   passwordResetRequestsCache,
   adminController.getPasswordResetRequests,
 );
-router.get('/employees/department-access', requirePageAccess('/admin/users', 'view'), adminController.getEmployeeDepartmentAssignments);
+// Список назначений читают оба: администратор доступов и тот, кто ведёт только
+// прямых подчинённых (кадровый админ) — без него экран «Прямые подчинённые» пуст.
+router.get('/employees/department-access', requireAnyPageAccess(['/admin/users/access', '/staff-control/direct-reports'], 'view'), adminController.getEmployeeDepartmentAssignments);
 // Обратное представление: по бригаде/отделу — назначенные на неё сотрудники с должностями.
-router.get('/departments/:id/assigned-employees', requirePageAccess('/admin/users', 'view'), adminController.getDepartmentAssignedEmployees);
+router.get('/departments/:id/assigned-employees', requireAnyPageAccess(['/admin/users/access', '/staff-control/direct-reports'], 'view'), adminController.getDepartmentAssignedEmployees);
 router.post('/users/:id/approve', requirePageAccess('/admin/users', 'edit'), adminController.approveUser);
 router.post('/users/:id/reject', requirePageAccess('/admin/users', 'edit'), adminController.rejectUser);
 router.delete('/users/:id', requirePageAccess('/admin/users', 'edit'), adminController.deleteUser);
 router.post('/users/:id/confirm-email', requirePageAccess('/admin/users', 'edit'), adminController.confirmUserEmail);
 router.post('/users/:id/reset-link', requirePageAccess('/admin/users', 'edit'), adminController.generatePasswordResetLink);
 router.get('/users/:id/peek', requirePageAccess('/admin/users', 'view'), adminController.peekUser);
-router.patch('/users/:id/position', requirePageAccess('/admin/users', 'edit'), adminController.updateUserPosition);
+router.patch('/users/:id/position', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserPosition);
 router.patch('/users/:id/name', requirePageAccess('/admin/users', 'edit'), adminController.updateUserName);
 router.patch('/users/:id/chat-inbound-mode', requirePageAccess('/admin/users', 'edit'), adminController.updateUserChatInboundMode);
 router.patch('/users/:id/employee', requirePageAccess('/admin/users', 'edit'), adminController.updateUserEmployee);
-router.put('/users/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserDepartmentAccess);
-router.put('/employees/:id/department-access', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeDepartmentAccess);
+router.put('/users/:id/department-access', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserDepartmentAccess);
+router.put('/employees/:id/department-access', requirePageAccess('/admin/users/access', 'edit'), adminController.updateEmployeeDepartmentAccess);
 
 // Приписка сотрудника к объектам строительства (миграция 092).
-router.get('/skud-objects', requirePageAccess('/admin/users', 'view'), adminController.listSkudObjectsForAssignment);
-router.get('/employees/:id/skud-objects', requirePageAccess('/admin/users', 'view'), adminController.getEmployeeSkudObjects);
-router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeSkudObjectAccess);
+router.get('/skud-objects', requirePageAccess('/admin/users/access', 'view'), adminController.listSkudObjectsForAssignment);
+router.get('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'view'), adminController.getEmployeeSkudObjects);
+router.put('/employees/:id/skud-objects', requirePageAccess('/admin/users/access', 'edit'), adminController.updateEmployeeSkudObjectAccess);
 
 // Начальник участка — это роль site_supervisor (миграция 133); прямые назначения сотрудников ниже (миграция 090).
-router.put('/users/:id/employee-access', requirePageAccess('/admin/users', 'edit'), adminController.updateUserEmployeeAccess);
+router.put('/users/:id/employee-access', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserEmployeeAccess);
 
 // Назначение «объектов входа» сущностям для скоупа табельщицы (миграция 150).
-router.get('/object-assignments', requirePageAccess('/admin/users', 'view'), adminController.getObjectAssignments);
-router.put('/departments/:id/object-assignment', requirePageAccess('/admin/users', 'edit'), adminController.updateDepartmentObjectAssignment);
-router.put('/employees/:id/object-assignment', requirePageAccess('/admin/users', 'edit'), adminController.updateEmployeeObjectAssignment);
+router.get('/object-assignments', requirePageAccess('/admin/users/access', 'view'), adminController.getObjectAssignments);
+router.put('/departments/:id/object-assignment', requirePageAccess('/admin/users/access', 'edit'), adminController.updateDepartmentObjectAssignment);
+router.put('/employees/:id/object-assignment', requirePageAccess('/admin/users/access', 'edit'), adminController.updateEmployeeObjectAssignment);
 // Режим табелирования для «Единого файла 1С» (миграция 249). Отдельное право:
 // назначения объектов выше — админская функция, а режим правит ещё и HR.
 router.get('/timesheet-modes', requirePageAccess('/staff-control/timesheet-mode', 'view'), timesheetModeController.list);
@@ -143,19 +152,19 @@ router.put('/timesheet-modes/departments', requirePageAccess('/staff-control/tim
 router.put('/timesheet-modes/employees/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateEmployee);
 router.put('/timesheet-modes/departments/:id', requirePageAccess('/staff-control/timesheet-mode', 'edit'), timesheetModeController.updateDepartment);
 
-router.get('/users/:id/timekeeper-objects', requirePageAccess('/admin/users', 'view'), adminController.getUserTimekeeperObjects);
-router.put('/users/:id/timekeeper-objects', requirePageAccess('/admin/users', 'edit'), adminController.updateUserTimekeeperObjects);
-router.get('/users/:id/timekeeper-folders', requirePageAccess('/admin/users', 'view'), adminController.getUserTimekeeperFolders);
-router.put('/users/:id/timekeeper-folders', requirePageAccess('/admin/users', 'edit'), adminController.updateUserTimekeeperFolders);
+router.get('/users/:id/timekeeper-objects', requirePageAccess('/admin/users/access', 'view'), adminController.getUserTimekeeperObjects);
+router.put('/users/:id/timekeeper-objects', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserTimekeeperObjects);
+router.get('/users/:id/timekeeper-folders', requirePageAccess('/admin/users/access', 'view'), adminController.getUserTimekeeperFolders);
+router.put('/users/:id/timekeeper-folders', requirePageAccess('/admin/users/access', 'edit'), adminController.updateUserTimekeeperFolders);
 
 // Привязка администраторов к «компаниям» (корневым узлам Sigur). Только системный админ.
-router.get('/companies', requirePageAccess('/admin/users', 'view'), adminController.listCompanies);
-router.get('/users/:id/companies', requirePageAccess('/admin/users', 'view'), adminController.getUserCompanies);
-router.put('/users/:id/companies', requirePageAccess('/admin/users', 'edit'), adminController.replaceUserCompanies);
+router.get('/companies', requirePageAccess('/admin/users/access', 'view'), adminController.listCompanies);
+router.get('/users/:id/companies', requirePageAccess('/admin/users/access', 'view'), adminController.getUserCompanies);
+router.put('/users/:id/companies', requirePageAccess('/admin/users/access', 'edit'), adminController.replaceUserCompanies);
 
 // 2FA управление
-router.post('/users/:id/generate-2fa', requirePageAccess('/admin/users', 'edit'), adminController.generate2FA);
-router.post('/users/:id/disable-2fa', requirePageAccess('/admin/users', 'edit'), adminController.disable2FA);
+router.post('/users/:id/generate-2fa', requirePageAccess('/admin/users/access', 'edit'), adminController.generate2FA);
+router.post('/users/:id/disable-2fa', requirePageAccess('/admin/users/access', 'edit'), adminController.disable2FA);
 
 // Поиск сотрудников (для привязки при одобрении)
 router.get('/employees/search', requirePageAccess('/admin/users', 'view'), adminController.searchUnlinkedEmployees);

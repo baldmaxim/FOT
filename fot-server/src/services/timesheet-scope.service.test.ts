@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 vi.mock('./data-scope.service.js', () => ({
+  hasAllDepartmentsScope: vi.fn(async () => false),
   hasGlobalDepartmentReadScope: vi.fn().mockResolvedValue(false),
   hasObjectViewScope: vi.fn().mockResolvedValue(false),
   normalizeUuidParam: (value: unknown): string | null => {
@@ -44,7 +45,9 @@ import {
   resolveTimesheetScope,
 } from './timesheet-scope.service.js';
 import {
+  hasAllDepartmentsScope,
   hasGlobalDepartmentReadScope,
+  resolveAccessibleDepartmentIds,
   resolveScopedDepartmentId,
 } from './data-scope.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -66,6 +69,7 @@ function buildReq(overrides: Partial<AuthenticatedRequest['user']> = {}): Authen
 
 beforeEach(() => {
   vi.mocked(hasGlobalDepartmentReadScope).mockReset().mockResolvedValue(false);
+  vi.mocked(hasAllDepartmentsScope).mockReset().mockResolvedValue(false);
   vi.mocked(resolveScopedDepartmentId).mockReset().mockResolvedValue(null);
 });
 
@@ -125,5 +129,27 @@ describe('resolveTimesheetReadableDepartmentId', () => {
   it('флаг выключен → делегирует обычному резолверу (scope=self → null)', async () => {
     const result = await resolveTimesheetReadableDepartmentId(buildReq(), 'dept-any');
     expect(result).toBeNull();
+  });
+});
+
+/**
+ * all_departments_scope (миграция 270) — единственный не-админский путь к scope='all'.
+ * Именно 'all', а не 'department': на 'department' запись в табель закрыта
+ * (canAccessEmployeeForTimesheet* пускает правку только при 'all') и включается
+ * окно месяцев роли, из-за чего кадровый админ не смог бы править прошлые периоды.
+ */
+describe('resolveTimesheetScope — all_departments_scope', () => {
+  it("флаг включён и виден весь скоуп → 'all' (wide-edit открыт)", async () => {
+    vi.mocked(hasAllDepartmentsScope).mockResolvedValue(true);
+    vi.mocked(resolveAccessibleDepartmentIds).mockResolvedValue('all');
+    const req = { user: { role_code: 'hr_admin', is_admin: false, employee_id: 148 } } as unknown as AuthenticatedRequest;
+    expect(await resolveTimesheetScope(req)).toBe('all');
+  });
+
+  it("read-only флаг (hr, security) по-прежнему даёт 'department', а не 'all'", async () => {
+    vi.mocked(hasAllDepartmentsScope).mockResolvedValue(false);
+    vi.mocked(hasGlobalDepartmentReadScope).mockResolvedValue(true);
+    const req = { user: { role_code: 'security', is_admin: false, employee_id: 2 } } as unknown as AuthenticatedRequest;
+    expect(await resolveTimesheetScope(req)).toBe('department');
   });
 });

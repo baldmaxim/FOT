@@ -4,11 +4,20 @@ import { localAuthService } from '../services/local-auth.service.js';
 import { totpService } from '../services/totp.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AuthenticatedRequest, UserProfile } from '../types/index.js';
+import { checkTargetUserManageable } from '../services/assignable-roles.service.js';
 
 export const admin2faController = {
   async generate2FA(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+
+      // Выдача и снятие чужой 2FA живёт под /admin/users/access, но page-access
+      // не защищает конкретную цель: не-админ не должен трогать учётку админа.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
+        return;
+      }
 
       const profile = await queryOne<UserProfile>(
         'SELECT * FROM user_profiles WHERE id = $1::uuid',
@@ -67,6 +76,14 @@ export const admin2faController = {
   async disable2FA(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+
+      // Выдача и снятие чужой 2FA живёт под /admin/users/access, но page-access
+      // не защищает конкретную цель: не-админ не должен трогать учётку админа.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
+        return;
+      }
 
       try {
         await execute(

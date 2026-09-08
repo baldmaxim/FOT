@@ -24,9 +24,15 @@ import { SigurMatchModal } from './SigurMatchModal';
 
 interface IStructureSyncSectionProps {
   connected: boolean | null;
+  /** Право запускать синхронизацию структуры (/sigur edit или /skud-settings edit). */
   canEdit: boolean;
+  /** «Очистить структуру» — техника СКУД (/skud-settings edit). */
+  canClearStructure: boolean;
+  /** Сопоставление несопоставленных сотрудников — техника СКУД (/skud-settings edit). */
+  canMatchEmployees: boolean;
   setError: (error: string) => void;
-  setActiveTab: (tab: SettingsTab) => void;
+  /** Переход на вкладку фильтра. Отсутствует там, где такой вкладки нет (страница SIGUR). */
+  setActiveTab?: (tab: SettingsTab) => void;
   syncFilterSummary: string;
   externalBusy: boolean;
 }
@@ -34,6 +40,8 @@ interface IStructureSyncSectionProps {
 export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
   connected,
   canEdit,
+  canClearStructure,
+  canMatchEmployees,
   setError,
   setActiveTab,
   syncFilterSummary,
@@ -144,7 +152,9 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
           const unmatchedArr = empResult?.unmatched as IUnmatchedSigurEmployee[] | undefined;
           if (unmatchedArr && unmatchedArr.length > 0) {
             setUnmatchedEmployees(unmatchedArr);
-            setShowMatchModal(true);
+            // Сопоставление бьёт в /sigur/match-employees, закрытый для кадровой роли.
+            // Без права молча показываем счётчик вместо модалки, которая дала бы 403.
+            if (canMatchEmployees) setShowMatchModal(true);
           }
 
           setSyncAllSummary({
@@ -200,13 +210,15 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
       </h2>
       <div className="sigur-sync-summary">
         <span className="sigur-sync-summary-pill">{syncFilterSummary}</span>
-        <button
-          type="button"
-          className="sigur-sync-summary-link"
-          onClick={() => setActiveTab('sync-filter')}
-        >
-          Настроить фильтр
-        </button>
+        {setActiveTab && (
+          <button
+            type="button"
+            className="sigur-sync-summary-link"
+            onClick={() => setActiveTab('sync-filter')}
+          >
+            Настроить фильтр
+          </button>
+        )}
       </div>
       <div className="sigur-sync-summary-note" style={{ marginBottom: '0.75rem' }}>
         Этот блок синхронизирует в портал только рабочую структуру: отделы, должности и сотрудников. Live-вкладка «Сотрудники» выше показывает весь Sigur независимо от этого фильтра.
@@ -228,14 +240,14 @@ export const StructureSyncSection: FC<IStructureSyncSectionProps> = ({
         <button
           className="sigur-btn sigur-btn-primary"
           onClick={handleSyncAll}
-          disabled={busy || !connected || selectedSyncAllSteps.length === 0}
+          disabled={busy || !canEdit || !connected || selectedSyncAllSteps.length === 0}
         >
           <RefreshCw size={14} className={syncAllRunning ? 'sigur-spin' : ''} />
           {syncAllRunning
             ? (syncAllWaitingMessage ? 'Ожидание...' : 'Синхронизация...')
             : 'Запустить выбранные шаги'}
         </button>
-        {canEdit && (
+        {canClearStructure && (
           <button
             className="sigur-btn sigur-btn-danger"
             onClick={handleClearStructure}

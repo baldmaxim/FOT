@@ -52,7 +52,7 @@ const EMPTY_DRAFT: IApprovalDraft = {
 
 export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loading = false, onReload, patchPendingCache }) => {
   const toast = useToast();
-  const { roles } = useAuth();
+  const { roles, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
   const [draft, setDraft] = useState<IApprovalDraft>(EMPTY_DRAFT);
@@ -73,7 +73,10 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
   };
 
   // /roles/labels уже отдаёт только активные роли — дополнительный фильтр не нужен.
+  // Не-админ выдаёт только роли из allowlist (флаг assignable с сервера): иначе
+  // список предлагал бы варианты, которые approve отвергнет с 403.
   const availableRoles = [...roles]
+    .filter(role => isAdmin || role.assignable === true)
     .sort((a, b) => Number(b.is_admin) - Number(a.is_admin) || a.name.localeCompare(b.name, 'ru'));
 
   // Debounce поиска сотрудника (250 мс) + защита от устаревших ответов.
@@ -136,7 +139,9 @@ export const PendingUsersTab: FC<IPendingUsersTabProps> = ({ pendingUsers, loadi
         position_type: draft.positionType,
         employee_id: draft.employeeId || undefined,
       });
-      toast.success('Пользователь одобрен. Теперь выдайте ему 2FA.');
+      // 2FA пользователь подключает себе сам в личном кабинете; административная
+      // выдача живёт под /admin/users/access и доступна не всем, кто одобряет.
+      toast.success('Пользователь одобрен.');
       patchPendingCache((prev) => prev.filter((u) => u.id !== userId));
       cancelApproval();
       await onReload();

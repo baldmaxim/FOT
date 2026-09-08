@@ -460,7 +460,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/skud-settings" />}>
+        <Route element={<ProtectedRoute requiredPage="/sigur" />}>
           <Route
             path="/sigur"
             element={

@@ -185,6 +185,7 @@ async function buildProfileResponse(
     hide_sidebar: !!role.hide_sidebar,
     view_all_departments: !!role.view_all_departments,
     object_kpi_own_objects_only: !role.is_admin && !!role.object_kpi_own_objects_only,
+    all_departments_scope: !role.is_admin && !!role.all_departments_scope,
     timesheet_months_back: Number.isFinite(role.timesheet_months_back) ? role.timesheet_months_back : 1,
     timesheet_months_forward: Number.isFinite(role.timesheet_months_forward) ? role.timesheet_months_forward : 1,
     timesheet_show_full_period: role.timesheet_show_full_period !== false,

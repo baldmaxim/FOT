@@ -24,6 +24,8 @@ export interface SystemRole {
   view_all_departments: boolean;
   /** true → в KPI объектов роль видит и правит только объекты своих закреплений object_economist (миграция 262). Для is_admin не действует. */
   object_kpi_own_objects_only: boolean;
+  /** СКОУП ДАННЫХ: все отделы на чтение и запись (миграция 270). НЕ разрешение на действие — право проверяется page-access страницы. Не действует для is_admin. */
+  all_departments_scope: boolean;
   /** Окно доступных месяцев табеля: сколько месяцев назад от текущего. Применяется когда is_admin=false. Дефолт 1. */
   timesheet_months_back: number;
   /** Окно доступных месяцев табеля: сколько месяцев вперёд от текущего. Применяется когда is_admin=false. Дефолт 1. */
@@ -72,6 +74,8 @@ export interface UserProfileResponse {
   view_all_departments: boolean;
   /** true → KPI объектов только по закреплённым объектам (миграция 262). */
   object_kpi_own_objects_only: boolean;
+  /** СКОУП ДАННЫХ: все отделы на чтение и запись (миграция 270). НЕ разрешение на действие — право проверяется page-access страницы. Не действует для is_admin. */
+  all_departments_scope: boolean;
   timesheet_months_back: number;
   timesheet_months_forward: number;
   timesheet_show_full_period: boolean;
@@ -139,6 +143,10 @@ export interface AuthenticatedRequest extends Request {
     is_approved: boolean;
     two_factor_enabled: boolean;
     two_factor_verified: boolean;
+    /** Предвычисленное право открывать/закрывать сданный табель (/timesheet/lock-toggle). */
+    __can_toggle_timesheet_lock?: boolean;
+    /** Кеш флага роли all_departments_scope на время запроса (миграция 270). */
+    __all_departments_scope?: boolean;
     company_scope?: CompanyScope;
     __company_subtree_ids?: string[];
     __manager_subtree_ids?: string[];

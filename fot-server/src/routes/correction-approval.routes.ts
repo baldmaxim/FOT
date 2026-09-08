@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Response, NextFunction } from 'express';
 import { correctionApprovalController } from '../controllers/correction-approval.controller.js';
-import { authenticate, requirePageAccess, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requirePageAccess, requireAdmin, resolveTimesheetLockToggle } from '../middleware/auth.js';
 import { invalidateCaches } from '../middleware/cacheResponse.js';
 import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { isActiveWeekendResponsible } from '../services/weekend-approval-assignments.service.js';
@@ -10,6 +10,8 @@ import type { AuthenticatedRequest } from '../types/index.js';
 const router = Router();
 
 router.use(authenticate);
+// Право снимать замок периода нужно и гарду, и тексту 409 — считаем один раз.
+router.use(resolveTimesheetLockToggle);
 
 // Доступ к очереди согласований: обычное право /timesheet-hr ЛИБО «по назначению» —
 // сотрудник, назначенный ответственным за выходные (decision 10). Контроллер далее

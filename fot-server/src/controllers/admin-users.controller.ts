@@ -2,6 +2,7 @@ import { Response } from 'express';
 import crypto from 'crypto';
 import { z } from 'zod';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
+import type { PoolClient } from 'pg';
 import { syncProfileNameFromEmployee } from '../services/user-profile-name.service.js';
 import { localAuthService } from '../services/local-auth.service.js';
 import { auditService } from '../services/audit.service.js';
@@ -34,6 +35,31 @@ import { escapeLike } from '../utils/search.utils.js';
 import { getActiveDirectManagersFor } from '../services/employee-direct-reports.service.js';
 import { listFullManagersForDepartments } from '../services/approval-routing.service.js';
 import { getIo } from '../socket/io-instance.js';
+import { hasPageEdit } from '../services/access-control.service.js';
+import {
+  checkRoleAssignable,
+  checkTargetUserManageable,
+} from '../services/assignable-roles.service.js';
+
+/**
+ * Кто вправе работать с очередью заявок на регистрацию (список, одобрение,
+ * отклонение, запросы на сброс пароля).
+ *
+ * Системный админ — как раньше. Админ КОМПАНИИ намеренно исключён: у pending
+ * обычно нет employee_id, scope-фильтр их не видит, и getPendingUsers отдаёт ему
+ * пустой список — это поведение сохраняем. Проверять просто «page-access edit»
+ * нельзя: любой is_admin обходит матрицу и прошёл бы вместе с company-admin.
+ * Поэтому третья ветка — строго НЕ-админская роль с глобальным скоупом данных
+ * и явным edit на /admin/users (кадровый админ).
+ */
+async function canManagePendingUsers(req: AuthenticatedRequest): Promise<boolean> {
+  const scope = await resolveCompanyScope(req);
+  if (scope.roots === 'all') return true;
+  if (req.user.is_admin) return false;
+  const role = await getRoleByCode(req.user.role_code);
+  if (!role?.all_departments_scope) return false;
+  return hasPageEdit(req.user.role_code, '/admin/users');
+}
 
 function emitDepartmentAccessChanged(targetUserId: string | null | undefined): void {
   if (!targetUserId) return;
@@ -497,23 +523,31 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   });
 }
 
-async function hardDeleteUserCascade(id: string): Promise<void> {
-  await withTransaction(async (client) => {
-    // user_profiles.id → app_auth.users CASCADE + миграция 097 каскадят
-    // user_profiles → дочерние. Одно удаление чистит всё.
-    const r = await client.query(
-      'DELETE FROM app_auth.users WHERE id = $1::uuid',
+/**
+ * Каскадное удаление на УЖЕ открытой транзакции. Вынесено из hardDeleteUserCascade,
+ * чтобы rejectUser мог проверить is_approved и удалить в одной транзакции: между
+ * отдельным SELECT и отдельным DELETE заявку успевает одобрить другой админ, и
+ * «отклонение» снесло бы рабочий аккаунт.
+ */
+async function hardDeleteUserCascadeIn(client: PoolClient, id: string): Promise<void> {
+  // user_profiles.id → app_auth.users CASCADE + миграция 097 каскадят
+  // user_profiles → дочерние. Одно удаление чистит всё.
+  const r = await client.query(
+    'DELETE FROM app_auth.users WHERE id = $1::uuid',
+    [id],
+  );
+  if (r.rowCount === 0) {
+    // legacy-профиль без app_auth.users — добиваем напрямую (дочерние
+    // всё равно каскадят после 097).
+    await client.query(
+      'DELETE FROM user_profiles WHERE id = $1::uuid',
       [id],
     );
-    if (r.rowCount === 0) {
-      // legacy-профиль без app_auth.users — добиваем напрямую (дочерние
-      // всё равно каскадят после 097).
-      await client.query(
-        'DELETE FROM user_profiles WHERE id = $1::uuid',
-        [id],
-      );
-    }
-  });
+  }
+}
+
+async function hardDeleteUserCascade(id: string): Promise<void> {
+  await withTransaction(client => hardDeleteUserCascadeIn(client, id));
 }
 
 export const adminUsersController = {
@@ -846,11 +880,10 @@ export const adminUsersController = {
       }
 
       // Pending-пользователи могут ещё не иметь employee_id — для company-admin
-      // не фильтруем их по employee, иначе вообще ничего не увидит. Pending-список
-      // показываем системному админу в полном виде, для company-admin — пустой.
+      // не фильтруем их по employee, иначе вообще ничего не увидит. Список видят
+      // системный админ и кадровый админ; company-admin — пустой (см. предикат).
       // Альтернатива (на будущее): pending → company через явное pre-assign.
-      const companyScope = await resolveCompanyScope(req);
-      if (companyScope.roots !== 'all') {
+      if (!(await canManagePendingUsers(req))) {
         res.json({ success: true, data: [] });
         return;
       }
@@ -905,11 +938,18 @@ export const adminUsersController = {
       const { id } = req.params;
       const { position_type, employee_id } = approveUserSchema.parse(req.body);
 
-      // Подтверждать новых пользователей может только системный админ:
-      // у pending обычно нет employee_id, scope-фильтр их не видит.
-      const companyScope = await resolveCompanyScope(req);
-      if (companyScope.roots !== 'all') {
-        res.status(403).json({ success: false, error: 'Подтверждение пользователей доступно только системному администратору' });
+      // Подтверждают заявки системный админ и кадровый админ; company-admin — нет:
+      // у pending обычно нет employee_id, и scope-фильтр их всё равно не видит.
+      if (!(await canManagePendingUsers(req))) {
+        res.status(403).json({ success: false, error: 'Подтверждение пользователей вам недоступно' });
+        return;
+      }
+
+      // Не-админ выдаёт только роли из allowlist — иначе через одобрение можно
+      // было бы назначить админскую роль (себе в том числе, повторным approve).
+      const roleError = await checkRoleAssignable(req, position_type);
+      if (roleError) {
+        res.status(403).json({ success: false, error: roleError });
         return;
       }
 
@@ -956,7 +996,9 @@ export const adminUsersController = {
 
       let approvedRows: Array<{ id: string }>;
       try {
-        const approveSql = `UPDATE user_profiles SET ${setClauses.join(', ')} WHERE id = $1::uuid RETURNING id`;
+        // WHERE ... AND is_approved = false — иначе повторный approve по уже
+        // одобренному пользователю молча сменил бы ему роль (эскалация прав).
+        const approveSql = `UPDATE user_profiles SET ${setClauses.join(', ')} WHERE id = $1::uuid AND is_approved = false RETURNING id`;
         if (employee_id) {
           // Одобрение с привязкой сотрудника: ФИО профиля сразу берём из карточки, иначе
           // регистрационное имя разойдётся с Sigur уже на старте (см. user-profile-name.service.ts).
@@ -974,7 +1016,8 @@ export const adminUsersController = {
         return;
       }
       if (approvedRows.length === 0) {
-        res.status(404).json({ success: false, error: 'User not found' });
+        // Профиль существует (проверен выше) — значит он уже одобрен.
+        res.status(409).json({ success: false, error: 'Пользователь уже одобрен' });
         return;
       }
 
@@ -1038,14 +1081,39 @@ export const adminUsersController = {
     try {
       const { id } = req.params;
 
-      const companyScope = await resolveCompanyScope(req);
-      if (companyScope.roots !== 'all') {
-        res.status(403).json({ success: false, error: 'Отклонение заявок доступно только системному администратору' });
+      if (!(await canManagePendingUsers(req))) {
+        res.status(403).json({ success: false, error: 'Отклонение заявок вам недоступно' });
+        return;
+      }
+
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
         return;
       }
 
       try {
-        await hardDeleteUserCascade(id);
+        const rejected = await withTransaction(async (client) => {
+          const locked = await client.query<{ is_approved: boolean }>(
+            'SELECT is_approved FROM user_profiles WHERE id = $1::uuid FOR UPDATE',
+            [id],
+          );
+          if (locked.rows.length === 0) return 'not_found' as const;
+          if (locked.rows[0].is_approved) return 'already_approved' as const;
+          await hardDeleteUserCascadeIn(client, id);
+          return 'ok' as const;
+        });
+        if (rejected === 'not_found') {
+          res.status(404).json({ success: false, error: 'Пользователь не найден' });
+          return;
+        }
+        if (rejected === 'already_approved') {
+          res.status(409).json({
+            success: false,
+            error: 'Заявка уже одобрена. Используйте удаление пользователя.',
+          });
+          return;
+        }
       } catch (deleteError) {
         console.error('Reject user delete error:', deleteError);
         res.status(500).json({ success: false, error: 'Failed to reject user' });
@@ -1070,6 +1138,14 @@ export const adminUsersController = {
       const scopeCheck = await assertTargetUserInScope(req, id);
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      // Отдельно от scope-проверки: при all_departments_scope accessible === 'all',
+      // и assertTargetUserInScope пропустил бы любую учётку, включая админскую.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
         return;
       }
       try {
@@ -1110,6 +1186,14 @@ export const adminUsersController = {
       const scopeCheck = await assertTargetUserInScope(req, id);
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      // Отдельно от scope-проверки: при all_departments_scope accessible === 'all',
+      // и assertTargetUserInScope пропустил бы любую учётку, включая админскую.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
         return;
       }
 
@@ -1187,6 +1271,14 @@ export const adminUsersController = {
         return;
       }
 
+      // Отдельно от scope-проверки: при all_departments_scope accessible === 'all',
+      // и assertTargetUserInScope пропустил бы любую учётку, включая админскую.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
+        return;
+      }
+
       const authRow = await queryOne<{ id: string; email: string | null }>(
         'SELECT id, email FROM app_auth.users WHERE id = $1::uuid',
         [id],
@@ -1251,8 +1343,7 @@ export const adminUsersController = {
       // и список содержит юзеров из любой компании — показывать его компанийному
       // админу некорректно. Для не-системного админа возвращаем пустой массив,
       // как в getPendingUsers.
-      const companyScope = await resolveCompanyScope(req);
-      if (companyScope.roots !== 'all') {
+      if (!(await canManagePendingUsers(req))) {
         res.json({ success: true, data: [] });
         return;
       }
@@ -1293,9 +1384,25 @@ export const adminUsersController = {
         position_type: z.string().min(1)
       }).parse(req.body);
 
+      // Не-админ выдаёт только роли из allowlist: иначе кадровый админ смог бы
+      // назначить админскую роль себе или коллеге.
+      const roleError = await checkRoleAssignable(req, position_type);
+      if (roleError) {
+        res.status(403).json({ success: false, error: roleError });
+        return;
+      }
+
       const scopeCheck = await assertTargetUserInScope(req, id);
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      // Отдельно от scope-проверки: при all_departments_scope accessible === 'all',
+      // и assertTargetUserInScope пропустил бы любую учётку, включая админскую.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
         return;
       }
 
@@ -1348,7 +1455,7 @@ export const adminUsersController = {
       });
 
       invalidateDepartmentScopeCaches();
-      // Смена роли меняет и глобальный read-скоуп (view_all_departments) —
+      // Смена роли меняет и глобальный скоуп (view_all_departments, all_departments_scope) —
       // сбрасываем кеши табеля, чтобы не отдать stale-ответы прежней роли.
       invalidateGlobalReadScopeCaches();
       emitDepartmentAccessChanged(id);
@@ -1372,6 +1479,14 @@ export const adminUsersController = {
       const scopeCheck = await assertTargetUserInScope(req, id);
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      // Отдельно от scope-проверки: при all_departments_scope accessible === 'all',
+      // и assertTargetUserInScope пропустил бы любую учётку, включая админскую.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
         return;
       }
 
@@ -1431,6 +1546,12 @@ export const adminUsersController = {
       const { employee_id } = z.object({
         employee_id: z.number().int().positive().nullable(),
       }).parse(req.body);
+
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
+        return;
+      }
 
       // Привязка карточки СКУД для company-admin: целевой employee_id (если задан)
       // должен быть в его scope. Существующая привязка пользователя проверяется
@@ -1493,6 +1614,14 @@ export const adminUsersController = {
       const scopeCheck = await assertTargetUserInScope(req, id);
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
+        return;
+      }
+
+      // Отдельно от scope-проверки: при all_departments_scope accessible === 'all',
+      // и assertTargetUserInScope пропустил бы любую учётку, включая админскую.
+      const manageable = await checkTargetUserManageable(req, id);
+      if (!manageable.ok) {
+        res.status(manageable.status).json({ success: false, error: manageable.error });
         return;
       }
 

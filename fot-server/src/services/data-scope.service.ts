@@ -37,6 +37,27 @@ export function invalidateAccessibleScopeCache(): void {
  * - timekeeper — исключён: для него editable=accessible, флаг открыл бы запись;
  * - hr — легаси-хардкод read-all (follow-up: перевести на флаг).
  */
+/**
+ * Флаг роли all_departments_scope (миграция 270): вся организация на чтение И запись.
+ * Единственная точка чтения флага — вызывающие модули идут сюда, а не в roles-cache,
+ * иначе тесты, мокающие скоуп, обходили бы мок.
+ *
+ * Считается один раз на запрос. Недоступный кеш ролей не должен превращать любую
+ * проверку скоупа в 500: fail-closed — без флага, как у обычной роли.
+ */
+export async function hasAllDepartmentsScope(req: AuthenticatedRequest): Promise<boolean> {
+  if (req.user.is_admin) return false;
+  if (typeof req.user.__all_departments_scope === 'boolean') return req.user.__all_departments_scope;
+  let value = false;
+  try {
+    value = (await getRoleByCode(req.user.role_code))?.all_departments_scope === true;
+  } catch (error) {
+    console.error('[hasAllDepartmentsScope] roles cache unavailable', error);
+  }
+  req.user.__all_departments_scope = value;
+  return value;
+}
+
 export async function hasGlobalDepartmentReadScope(req: AuthenticatedRequest): Promise<boolean> {
   if (req.user.is_admin || isTimekeeper(req)) return false;
   if (req.user.role_code === 'hr') return true;
@@ -132,7 +153,14 @@ export async function resolveAccessibleDepartmentIds(
   // Кадровая служба (hr) видит всю организацию на ЧТЕНИЕ. Не через is_admin —
   // чтобы page-access оставался ограниченным. Редактирование остаётся закрытым
   // (resolveEditableDepartmentIds для hr не расширяется).
-  if (!req.user.is_admin && req.user.role_code === 'hr') return 'all';
+  //
+  // Роли с флагом all_departments_scope (миграция 270) видят организацию целиком
+  // и на чтение, и на запись. Флаг — только скоуп ДАННЫХ: набор страниц у роли
+  // остаётся своим, и право на каждое действие по-прежнему решает page-access.
+  if (!req.user.is_admin) {
+    if (req.user.role_code === 'hr') return 'all';
+    if (await hasAllDepartmentsScope(req)) return 'all';
+  }
   if (req.user.is_admin) {
     const scope = await resolveCompanyScope(req);
     if (scope.roots === 'all') return 'all';
@@ -446,6 +474,12 @@ export async function resolveEditableDepartmentIds(
   req: AuthenticatedRequest,
 ): Promise<string[] | 'all'> {
   if (req.user.is_admin || isTimekeeper(req)) {
+    return resolveAccessibleDepartmentIds(req);
+  }
+
+  // all_departments_scope расширяет и запись — в отличие от view_all_departments,
+  // который остаётся строго read-only предикатом (hasGlobalDepartmentReadScope).
+  if (await hasAllDepartmentsScope(req)) {
     return resolveAccessibleDepartmentIds(req);
   }
 

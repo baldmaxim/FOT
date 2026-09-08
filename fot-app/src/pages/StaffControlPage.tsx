@@ -1343,13 +1343,17 @@ export const StaffControlPage: FC = () => {
   const debouncedSearch = useDebouncedValue(search, 300);
   const queryClient = useQueryClient();
   const toast = useToast();
-  const { isAdmin, canEditPage, canViewPage } = useAuth();
+  const { isAdmin, canEditPage, canViewPage, canManageAsHrAdmin } = useAuth();
+  // Приём, увольнение, восстановление и массовые операции исторически были зашиты
+  // под is_admin. Право на них даёт edit «Управления кадрами» — сам по себе
+  // all_departments_scope это только скоуп данных (см. canManageAsHrAdmin).
+  const canManageStaff = canManageAsHrAdmin('/staff-control');
   const canEditDept = isAdmin || canEditPage('/staff-control/department');
   const canEditPos = isAdmin || canEditPage('/staff-control/position');
   const canEditSch = isAdmin || canEditPage('/staff-control/schedule');
   const canOpenCard = isAdmin || canViewPage('/employees');
   // Назначение «объектов входа» отделам/бригадам и персонально — только админ.
-  const canEditObject = isAdmin;
+  const canEditObject = canManageStaff;
   const objectsQuery = useQuery({
     queryKey: ['admin-skud-objects'],
     queryFn: () => adminService.listSkudObjectsForAssignment(),
@@ -2325,7 +2329,7 @@ export const StaffControlPage: FC = () => {
   };
 
   const overflowItems = useMemo<IOverflowMenuItem[]>(() => {
-    if (!isAdmin) return [];
+    if (!canManageStaff) return [];
     const items: IOverflowMenuItem[] = [];
     if (statusFilter === 'active') {
       items.push({
@@ -2361,7 +2365,7 @@ export const StaffControlPage: FC = () => {
       });
     }
     return items;
-  }, [isAdmin, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total, canEditTimesheetMode]);
+  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total, canEditTimesheetMode]);
 
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
@@ -2397,7 +2401,7 @@ export const StaffControlPage: FC = () => {
           <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
         ))}
       </select>
-      {isAdmin && (
+      {canManageStaff && (
         <div className="sc-segmented" role="tablist" aria-label="Статус сотрудников">
           <button
             type="button"
@@ -2429,7 +2433,7 @@ export const StaffControlPage: FC = () => {
           </button>
         </div>
       )}
-      {isAdmin && (
+      {canManageStaff && (
         <div className="sc-page-actions">
           {statusFilter === 'active' && !hrTabAvailable && (
             <button
@@ -2500,7 +2504,7 @@ export const StaffControlPage: FC = () => {
           scheduleViews={scheduleViews}
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
-          canManage={isAdmin}
+          canManage={canManageStaff}
           canEditDept={canEditDept}
           canEditPos={canEditPos}
           canEditSch={canEditSch}
@@ -2513,9 +2517,9 @@ export const StaffControlPage: FC = () => {
           onToggleSelect={toggleSelectEmployee}
           onOpenModal={openModal}
           onOpenHistory={openHistory}
-          onRehire={statusFilter === 'fired' && isAdmin ? handleRehire : undefined}
-          onFire={statusFilter === 'active' && isAdmin ? handleFire : undefined}
-          onCancelDismissal={statusFilter === 'active' && isAdmin ? handleCancelDismissal : undefined}
+          onRehire={statusFilter === 'fired' && canManageStaff ? handleRehire : undefined}
+          onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
+          onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
           onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
         />
       ) : (
@@ -2524,7 +2528,7 @@ export const StaffControlPage: FC = () => {
           scheduleViews={scheduleViews}
           selectedIds={selectedEmployeeIdSet}
           selectionMode={selectionMode}
-          canManage={isAdmin}
+          canManage={canManageStaff}
           canEditDept={canEditDept}
           canEditPos={canEditPos}
           canEditSch={canEditSch}
@@ -2539,9 +2543,9 @@ export const StaffControlPage: FC = () => {
           allSelected={allVisibleSelected}
           onOpenModal={openModal}
           onOpenHistory={openHistory}
-          onRehire={statusFilter === 'fired' && isAdmin ? handleRehire : undefined}
-          onFire={statusFilter === 'active' && isAdmin ? handleFire : undefined}
-          onCancelDismissal={statusFilter === 'active' && isAdmin ? handleCancelDismissal : undefined}
+          onRehire={statusFilter === 'fired' && canManageStaff ? handleRehire : undefined}
+          onFire={statusFilter === 'active' && canManageStaff ? handleFire : undefined}
+          onCancelDismissal={statusFilter === 'active' && canManageStaff ? handleCancelDismissal : undefined}
           onReturn={statusFilter === 'excluded' ? handleReturnToTimesheet : undefined}
         />
       )}

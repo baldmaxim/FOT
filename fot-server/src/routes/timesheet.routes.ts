@@ -3,7 +3,7 @@ import { query as dbQuery } from '../config/postgres.js';
 import { timesheetController } from '../controllers/timesheet.controller.js';
 import { timesheetTeamManagementController as tm } from '../controllers/timesheet-team-management.controller.js';
 import { exportTimesheetObjectsUnified } from '../controllers/timesheet-mass-export.controller.js';
-import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess, resolveTimesheetLockToggle } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { perUserConcurrency } from '../middleware/perUserConcurrency.js';
 import { buildTimesheetCacheKey, buildTimesheetTodayCacheKey } from './timesheet-cache-keys.js';
@@ -15,6 +15,8 @@ import correctionAttachmentsRouter from './correction-attachments.routes.js';
 const router = Router();
 
 router.use(authenticate);
+// Право снимать замок периода нужно и гарду, и тексту 409 — считаем один раз.
+router.use(resolveTimesheetLockToggle);
 
 // Write-through invalidation: любой успешный POST/PUT/PATCH/DELETE на /api/timesheet/*
 // сбрасывает серверные LRU-кэши табеля, чтобы корректировки появлялись сразу.

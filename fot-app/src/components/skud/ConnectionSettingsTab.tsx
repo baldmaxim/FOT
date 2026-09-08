@@ -416,6 +416,8 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
       <StructureSyncSection
         connected={connected}
         canEdit={canEdit}
+        canClearStructure={canEdit}
+        canMatchEmployees={canEdit}
         setError={setError}
         setActiveTab={setActiveTab}
         syncFilterSummary={syncFilterSummary}
@@ -574,6 +576,7 @@ export const ConnectionSettingsTab: FC<IConnectionSettingsTabProps> = ({
       {/* Секция 5: Синхронизация событий */}
       <EventsSyncSection
         connected={connected}
+        canClearEvents={canEdit}
         setError={setError}
         setActiveTab={setActiveTab}
         syncFilterSummary={syncFilterSummary}

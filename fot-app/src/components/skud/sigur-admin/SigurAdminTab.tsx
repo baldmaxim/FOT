@@ -19,14 +19,32 @@ const resolveSubTab = (value: string | null): SigurAdminSubTab => (
 
 interface ISigurAdminTabProps {
   canEdit: boolean;
+  /**
+   * Технические справочники СКУД: должности, точки доступа, режимы доступа.
+   * Кадровому админу не нужны — у него из этих подвкладок остаются только «Карты».
+   */
+  canViewSkudTechnical: boolean;
   selectedConnection: SigurConnectionScope;
   setError: (message: string) => void;
   headerActionSlot?: ReactNode;
 }
 
-export const SigurAdminTab: FC<ISigurAdminTabProps> = ({ canEdit, selectedConnection, setError, headerActionSlot }) => {
+export const SigurAdminTab: FC<ISigurAdminTabProps> = ({
+  canEdit,
+  canViewSkudTechnical,
+  selectedConnection,
+  setError,
+  headerActionSlot,
+}) => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeSub = resolveSubTab(searchParams.get('sub'));
+  const requestedSub = resolveSubTab(searchParams.get('sub'));
+  const isSubVisible = useCallback(
+    (sub: SigurAdminSubTab) => canViewSkudTechnical || sub === 'cards',
+    [canViewSkudTechnical],
+  );
+  // Без прав на технические справочники остаются только «Карты» — прямая ссылка
+  // ?sub=access-rules не должна открывать раздел, которого у роли нет.
+  const activeSub = isSubVisible(requestedSub) ? requestedSub : 'cards';
 
   const setActiveSub = useCallback((sub: SigurAdminSubTab) => {
     setSearchParams(prev => {
@@ -44,20 +62,24 @@ export const SigurAdminTab: FC<ISigurAdminTabProps> = ({ canEdit, selectedConnec
   return (
     <div className="sigur-admin-root">
       <div className="sigur-admin-subtabs">
-        <button
-          className={`sigur-admin-subtab ${activeSub === 'positions' ? 'active' : ''}`}
-          onClick={() => setActiveSub('positions')}
-        >
-          <Briefcase size={14} />
-          Должности
-        </button>
-        <button
-          className={`sigur-admin-subtab ${activeSub === 'access-points' ? 'active' : ''}`}
-          onClick={() => setActiveSub('access-points')}
-        >
-          <MapPin size={14} />
-          Точки доступа
-        </button>
+        {canViewSkudTechnical && (
+          <button
+            className={`sigur-admin-subtab ${activeSub === 'positions' ? 'active' : ''}`}
+            onClick={() => setActiveSub('positions')}
+          >
+            <Briefcase size={14} />
+            Должности
+          </button>
+        )}
+        {canViewSkudTechnical && (
+          <button
+            className={`sigur-admin-subtab ${activeSub === 'access-points' ? 'active' : ''}`}
+            onClick={() => setActiveSub('access-points')}
+          >
+            <MapPin size={14} />
+            Точки доступа
+          </button>
+        )}
         <button
           className={`sigur-admin-subtab ${activeSub === 'cards' ? 'active' : ''}`}
           onClick={() => setActiveSub('cards')}
@@ -65,13 +87,15 @@ export const SigurAdminTab: FC<ISigurAdminTabProps> = ({ canEdit, selectedConnec
           <CreditCard size={14} />
           Карты
         </button>
-        <button
-          className={`sigur-admin-subtab ${activeSub === 'access-rules' ? 'active' : ''}`}
-          onClick={() => setActiveSub('access-rules')}
-        >
-          <ShieldCheck size={14} />
-          Режимы доступа
-        </button>
+        {canViewSkudTechnical && (
+          <button
+            className={`sigur-admin-subtab ${activeSub === 'access-rules' ? 'active' : ''}`}
+            onClick={() => setActiveSub('access-rules')}
+          >
+            <ShieldCheck size={14} />
+            Режимы доступа
+          </button>
+        )}
         {headerActionSlot && (
           <div className="sigur-admin-subtabs__action">
             {headerActionSlot}
@@ -80,16 +104,16 @@ export const SigurAdminTab: FC<ISigurAdminTabProps> = ({ canEdit, selectedConnec
       </div>
 
       <Suspense fallback={sectionFallback}>
-        {activeSub === 'positions' && (
+        {activeSub === 'positions' && canViewSkudTechnical && (
           <SigurPositionsSection canEdit={canEdit} selectedConnection={selectedConnection} setError={setError} />
         )}
-        {activeSub === 'access-points' && (
+        {activeSub === 'access-points' && canViewSkudTechnical && (
           <SigurAccessPointsSection selectedConnection={selectedConnection} setError={setError} />
         )}
         {activeSub === 'cards' && (
           <SigurCardsSection selectedConnection={selectedConnection} setError={setError} />
         )}
-        {activeSub === 'access-rules' && (
+        {activeSub === 'access-rules' && canViewSkudTechnical && (
           <SigurAccessRulesSection selectedConnection={selectedConnection} setError={setError} />
         )}
       </Suspense>

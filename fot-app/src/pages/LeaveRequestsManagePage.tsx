@@ -45,7 +45,7 @@ interface IPreviewState {
 }
 
 export const LeaveRequestsManagePage: FC = () => {
-  const { hasPermission, profile, canEditPage } = useAuth();
+  const { hasPermission, profile, canEditPage, canManageAsHrAdmin } = useAuth();
   const { showToast } = useToast();
   const isDepartmentScope = hasPermission('data.scope.department') && !hasPermission('data.scope.all');
   const scope = isDepartmentScope ? 'department' : 'all';
@@ -273,7 +273,7 @@ export const LeaveRequestsManagePage: FC = () => {
     <LeaveRequestRow
       key={r.id}
       request={r}
-      isAdmin={!!profile?.is_admin}
+      isAdmin={!!profile?.is_admin || canManageAsHrAdmin('/leave-requests')}
       currentUserId={profile?.id}
       canEditRequests={canEditRequests}
       todayIso={todayIso}

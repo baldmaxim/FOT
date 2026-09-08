@@ -39,6 +39,8 @@ export interface RoleLabel {
   name: string;
   is_admin: boolean;
   show_actual_hours: boolean;
+  /** Роль вправе назначать не-админ (кадровый админ). Считается на сервере по allowlist. */
+  assignable?: boolean;
 }
 
 /** Блок «Ограничения корректировок табеля» (см. миграцию 132). */
@@ -64,6 +66,8 @@ export interface CreateRoleData extends CorrectionRestrictionFields {
   hide_sidebar?: boolean;
   /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
   view_all_departments?: boolean;
+  /** СКОУП ДАННЫХ: все отделы на чтение и запись (system_roles.all_departments_scope, миграция 270). */
+  all_departments_scope?: boolean;
   /** KPI объектов только по закреплённым объектам (system_roles.object_kpi_own_objects_only, миграция 262). */
   object_kpi_own_objects_only?: boolean;
   timesheet_months_back?: number;
@@ -85,6 +89,8 @@ export interface UpdateRoleData extends CorrectionRestrictionFields {
   hide_sidebar?: boolean;
   /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
   view_all_departments?: boolean;
+  /** СКОУП ДАННЫХ: все отделы на чтение и запись (system_roles.all_departments_scope, миграция 270). */
+  all_departments_scope?: boolean;
   /** KPI объектов только по закреплённым объектам (system_roles.object_kpi_own_objects_only, миграция 262). */
   object_kpi_own_objects_only?: boolean;
   timesheet_months_back?: number;
@@ -107,6 +113,8 @@ export interface CloneRoleData extends CorrectionRestrictionFields {
   hide_sidebar?: boolean;
   /** Просмотр всех табелей и СКУД-проходов на чтение (system_roles.view_all_departments, миграция 237). */
   view_all_departments?: boolean;
+  /** СКОУП ДАННЫХ: все отделы на чтение и запись (system_roles.all_departments_scope, миграция 270). */
+  all_departments_scope?: boolean;
   /** KPI объектов только по закреплённым объектам (system_roles.object_kpi_own_objects_only, миграция 262). */
   object_kpi_own_objects_only?: boolean;
   timesheet_months_back?: number;

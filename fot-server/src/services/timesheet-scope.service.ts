@@ -2,6 +2,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 import type { DataScope } from '../config/access-control.js';
 import { hasPageEdit, hasPageView } from './access-control.service.js';
 import {
+  hasAllDepartmentsScope,
   hasGlobalDepartmentReadScope,
   hasObjectViewScope,
   normalizeUuidParam,
@@ -38,6 +39,15 @@ export async function resolveTimesheetScope(req: AuthenticatedRequest): Promise<
     if (accessible === 'all') return 'all';
     if (accessible.length > 0) return 'department';
     // is_admin со scope=[] (теоретически не возникает: company_scope=[] только если не is_admin)
+  }
+
+  // Роль с all_departments_scope (миграция 270) ведёт табель всей организации —
+  // как админ. Ветка обязана стоять ДО hasGlobalDepartmentReadScope: тот отдаёт
+  // 'department', что закрыло бы запись (canAccessEmployeeForTimesheet* пускает
+  // правку только при scope==='all') и включило бы окно месяцев ±N.
+  if (await hasAllDepartmentsScope(req)) {
+    const accessible = await resolveAccessibleDepartmentIds(req);
+    if (accessible === 'all') return 'all';
   }
 
   // hr и роли с флагом view_all_departments: полный ПРОСМОТР организации в табеле.

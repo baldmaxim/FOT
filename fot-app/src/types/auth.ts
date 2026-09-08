@@ -25,6 +25,8 @@ export interface SystemRole {
   view_all_departments?: boolean;
   /** true → в KPI объектов роль видит и правит только объекты своих закреплений (миграция 262). Для is_admin не действует. */
   object_kpi_own_objects_only?: boolean;
+  /** СКОУП ДАННЫХ: все отделы на чтение и запись (миграция 270). Не разрешение на действие — оно всегда за page-access. */
+  all_departments_scope?: boolean;
   /** Окно доступных месяцев табеля: сколько месяцев назад от текущего. Применяется когда is_admin=false. */
   timesheet_months_back: number;
   /** Окно доступных месяцев табеля: сколько месяцев вперёд от текущего. Применяется когда is_admin=false. */
@@ -83,6 +85,8 @@ export interface UserProfile {
   view_all_departments?: boolean;
   /** true → KPI объектов только по закреплённым объектам (миграция 262). Optional — совместимость со старым кэшем профиля. */
   object_kpi_own_objects_only?: boolean;
+  /** СКОУП ДАННЫХ: все отделы на чтение и запись (миграция 270). Не разрешение на действие — оно всегда за page-access. */
+  all_departments_scope?: boolean;
   timesheet_months_back: number;
   timesheet_months_forward: number;
   timesheet_show_full_period: boolean;
