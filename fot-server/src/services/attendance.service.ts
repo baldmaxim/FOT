@@ -743,6 +743,15 @@ export async function buildAttendanceEntries(params: {
     if (NON_WORK_ADJUSTMENT_STATUSES.has(adjustment.status) && !isAdjWorkingDay && !isRemoteWithHours) {
       effectiveHours = 0;
       hoursAuthoritative = true;
+    } else if (adjustment.status === 'absent') {
+      // Неявка/отстранение — рабочее время не начисляется, даже если карта проходила турникет
+      // (человек на объекте был, но не работал). Раньше 'absent' лежал в
+      // ABSENCE_STATUSES_AS_WORKED и получал норму графика — полная смена за нерабочий день.
+      // Ветка стоит ДО hours_override: фронт для этого статуса часы не шлёт, а значение,
+      // оставшееся от прежнего статуса, не должно воскресать. Без ветки день ушёл бы в
+      // финальный else (null) и подхватил бы часы СКУД — то есть стало бы хуже.
+      effectiveHours = 0;
+      hoursAuthoritative = true;
     } else if (adjustment.status === 'work' && !isAdjWorkingDay && adjustment.hours_override === 0) {
       // 'work' в выходной с hours_override=0 → не обнулять, взять часы из СКУД (обязательная суббота)
       const notApproved = adjustment.approval_status === 'pending' || adjustment.approval_status === 'rejected';

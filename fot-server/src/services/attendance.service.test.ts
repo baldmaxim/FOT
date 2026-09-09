@@ -371,6 +371,222 @@ describe('attendance.service', () => {
     expect(result.entries[0]).toMatchObject({ id: 6101, status: 'study_day', hours_worked: 0 });
   });
 
+  // «Неявка» (absent) — отстранение/прогул: рабочего времени не даёт никогда. Раньше
+  // статус лежал в ABSENCE_STATUSES_AS_WORKED и получал норму графика, из-за чего за
+  // нерабочий день начислялась полная смена (кейс Икромова, 26–27.08.2026).
+  it('absent в рабочий день без hours_override → 0 часов, а не норма графика', async () => {
+    mockedState.isWorkingDay = true;
+    mockedState.adjustmentRows = [{
+      id: 6200,
+      employee_id: 810,
+      work_date: '2026-08-26',
+      status: 'absent',
+      hours_override: null,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Отстранён от работы',
+      created_by: 'user-1',
+      approval_status: 'auto_approved',
+      created_at: '2026-08-26T07:00:00.000Z',
+      updated_at: '2026-08-26T07:00:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [810, new Map([['2026-08-26', { work_hours: 11, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 810, full_name: 'Отстранённый Иван' }],
+      startDate: '2026-08-26',
+      endDate: '2026-08-26',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-08-28',
+    });
+
+    expect(result.entries[0]).toMatchObject({
+      id: 6200,
+      status: 'absent',
+      hours_worked: 0,
+      display_hours_worked: 0,
+    });
+  });
+
+  // Отстранённый сотрудник может физически находиться на объекте: карта проходит турникет,
+  // СКУД пишет полную смену. Часы всё равно не начисляются.
+  it('absent при наличии СКУД-присутствия → 0 часов (проходы не воскрешают день)', async () => {
+    mockedState.isWorkingDay = true;
+    mockedState.summaryRows = [{
+      employee_id: 811,
+      date: '2026-08-27',
+      first_entry: '06:12:41',
+      last_exit: '19:17:51',
+      total_hours: 12.84,
+      total_minutes: 785,
+    }];
+    mockedState.adjustmentRows = [{
+      id: 6201,
+      employee_id: 811,
+      work_date: '2026-08-27',
+      status: 'absent',
+      hours_override: null,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'не работал',
+      created_by: 'user-1',
+      approval_status: 'auto_approved',
+      created_at: '2026-08-27T07:00:00.000Z',
+      updated_at: '2026-08-27T07:00:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [811, new Map([['2026-08-27', { work_hours: 11, lunch_minutes: 60 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 811, full_name: 'Икромов Улмас' }],
+      startDate: '2026-08-27',
+      endDate: '2026-08-27',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-08-29',
+    });
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: 6201,
+      status: 'absent',
+      hours_worked: 0,
+      display_hours_worked: 0,
+      is_correction: true,
+    });
+  });
+
+  // Наследие смены статуса: manual (5 ч) → absent мог оставить чужие часы в записи.
+  // resolveWriteHours чистит их при записи, но расчёт обязан быть устойчив и к уже
+  // сохранённым значениям — ветка absent стоит до проверки hours_override.
+  it('absent с унаследованным hours_override → 0 часов', async () => {
+    mockedState.isWorkingDay = true;
+    mockedState.adjustmentRows = [{
+      id: 6202,
+      employee_id: 812,
+      work_date: '2026-08-26',
+      status: 'absent',
+      hours_override: 5,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Смена статуса с корректировки',
+      created_by: 'user-1',
+      approval_status: 'auto_approved',
+      created_at: '2026-08-26T07:00:00.000Z',
+      updated_at: '2026-08-26T09:00:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [812, new Map([['2026-08-26', { work_hours: 11, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 812, full_name: 'Смена Статуса' }],
+      startDate: '2026-08-26',
+      endDate: '2026-08-26',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-08-28',
+    });
+
+    expect(result.entries[0]).toMatchObject({ id: 6202, status: 'absent', hours_worked: 0 });
+  });
+
+  it('absent в нерабочий по графику день → 0 часов (поведение не изменилось)', async () => {
+    mockedState.isWorkingDay = false;
+    mockedState.adjustmentRows = [{
+      id: 6203,
+      employee_id: 813,
+      work_date: '2026-08-30',
+      status: 'absent',
+      hours_override: null,
+      source_type: 'manual',
+      source_id: 'manual',
+      reason: 'Неявка в выходной',
+      created_by: 'user-1',
+      approval_status: 'auto_approved',
+      created_at: '2026-08-30T07:00:00.000Z',
+      updated_at: '2026-08-30T07:00:00.000Z',
+      metadata: {},
+    }];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [813, new Map([['2026-08-30', { work_hours: 11, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [{ id: 813, full_name: 'Выходной Пётр' }],
+      startDate: '2026-08-30',
+      endDate: '2026-08-30',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-09-01',
+    });
+
+    expect(result.entries[0]).toMatchObject({ id: 6203, status: 'absent', hours_worked: 0 });
+  });
+
+  // Контроль, что фикс не задел оплачиваемые отсутствия: им норма графика по-прежнему нужна.
+  it('vacation и sick в рабочий день без hours_override → норма графика', async () => {
+    mockedState.isWorkingDay = true;
+    mockedState.adjustmentRows = [
+      {
+        id: 6204,
+        employee_id: 814,
+        work_date: '2026-08-26',
+        status: 'vacation',
+        hours_override: null,
+        source_type: 'leave_request',
+        source_id: '6215',
+        reason: 'Отпуск',
+        created_by: 'user-1',
+        approval_status: 'auto_approved',
+        created_at: '2026-08-26T07:00:00.000Z',
+        updated_at: '2026-08-26T07:00:00.000Z',
+        metadata: {},
+      },
+      {
+        id: 6205,
+        employee_id: 815,
+        work_date: '2026-08-26',
+        status: 'sick',
+        hours_override: null,
+        source_type: 'manual',
+        source_id: 'manual',
+        reason: 'Больничный',
+        created_by: 'user-1',
+        approval_status: 'auto_approved',
+        created_at: '2026-08-26T07:00:00.000Z',
+        updated_at: '2026-08-26T07:00:00.000Z',
+        metadata: {},
+      },
+    ];
+    const dailySchedulesMap = new Map<number, Map<string, IResolvedSchedule>>([
+      [814, new Map([['2026-08-26', { work_hours: 10, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+      [815, new Map([['2026-08-26', { work_hours: 8, lunch_minutes: 0 } as unknown as IResolvedSchedule]])],
+    ]);
+
+    const result = await buildAttendanceEntries({
+      employees: [
+        { id: 814, full_name: 'Отпускник Пётр' },
+        { id: 815, full_name: 'Больной Иван' },
+      ],
+      startDate: '2026-08-26',
+      endDate: '2026-08-26',
+      dailySchedulesMap,
+      calendarMonth: { holidays: [], mandatory_holidays: [], pre_holidays: [], norm_days: 22 } as unknown as IProductionCalendarMonth,
+      todayStr: '2026-08-28',
+    });
+
+    expect(result.entries.find(entry => entry.id === 6204)).toMatchObject({ status: 'vacation', hours_worked: 10 });
+    expect(result.entries.find(entry => entry.id === 6205)).toMatchObject({ status: 'sick', hours_worked: 8 });
+  });
+
   it('не зачитывает remote-корректировку в выходной, пока она на согласовании (pending → 0)', async () => {
     mockedState.isWorkingDay = false;
     mockedState.adjustmentRows = [{
@@ -817,7 +1033,9 @@ describe('attendance.service', () => {
     });
   });
 
-  it('keeps absent adjustment intact when day has object entries (does not overwrite status/hours)', async () => {
+  // Объектные записи дня не перезаписывают ручную неявку: статус остаётся 'absent',
+  // часы — 0 (неявка рабочего времени не даёт, даже когда СКУД показывает присутствие).
+  it('keeps absent adjustment intact when day has object entries (status kept, hours = 0)', async () => {
     const objectEntry = {
       adjustment_id: null,
       employee_id: 1,
@@ -884,8 +1102,8 @@ describe('attendance.service', () => {
       employee_id: 1,
       work_date: '2026-04-01',
       status: 'absent',
-      hours_worked: 8,
-      display_hours_worked: 8,
+      hours_worked: 0,
+      display_hours_worked: 0,
       is_correction: true,
     });
   });

@@ -288,6 +288,17 @@ describe('resolveWriteHours — что реально пишется в hours_ov
     expect(resolveWriteHours('sick_worked', undefined, 8)).toBeNull();
   });
 
+  // Неявка рабочего времени не даёт (attendance.service считает её как 0), поэтому часам
+  // в записи взяться неоткуда. Проверка отдельная от SCHEDULE_NORM_STATUSES: там смысл
+  // «часы из нормы графика», у неявки норма ни при чём. Ключевой сценарий — PATCH со
+  // сменой manual (5 ч) → absent: старые часы обязаны быть вычищены.
+  it('absent: часы не пишутся никогда → null', () => {
+    expect(resolveWriteHours('absent', 5, 8)).toBeNull();
+    expect(resolveWriteHours('absent', undefined, 8)).toBeNull();
+    expect(resolveWriteHours('absent', null, 8)).toBeNull();
+    expect(resolveWriteHours('absent', 0, 8)).toBeNull();
+  });
+
   it('remote/manual: поведение не изменилось', () => {
     expect(resolveWriteHours('remote', null, 11)).toBe(11);
     expect(resolveWriteHours('remote', 4, 11)).toBe(4);

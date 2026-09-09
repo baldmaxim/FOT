@@ -34,10 +34,11 @@ export const NON_WORK_ADJUSTMENT_STATUSES = new Set<TimeStatus>([
   'absent', 'sick', 'vacation', 'dayoff', 'unpaid', 'educational_leave', 'remote', 'sick_worked', 'study_day',
 ]);
 
-// Статусы отсутствия, которые засчитываются как полный рабочий день при
-// пустом hours_override: часы берутся из планового графика. Для удалёнки
-// исторически уже работало; то же распространено на отпуск/больничный и т.п. —
-// иначе в табеле они показывались как недоработка.
+// Статусы отсутствия, которым при пустом hours_override подставляется норма
+// планового графика. Для удалёнки исторически уже работало; то же распространено
+// на отпуск/больничный и т.п. — иначе в табеле они показывались как недоработка.
+// 'absent' сюда НЕ входит: неявка/отстранение рабочего времени не даёт, часы
+// считаются отдельной веткой в attendance.service (всегда 0).
 export const ABSENCE_STATUSES_AS_WORKED = new Set<TimeStatus>([
-  'vacation', 'sick', 'dayoff', 'remote', 'educational_leave', 'unpaid', 'absent', 'sick_worked', 'study_day',
+  'vacation', 'sick', 'dayoff', 'remote', 'educational_leave', 'unpaid', 'sick_worked', 'study_day',
 ]);

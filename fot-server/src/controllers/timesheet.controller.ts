@@ -389,15 +389,19 @@ export const SCHEDULE_NORM_STATUSES = new Set<TimeStatus>(['sick_worked', 'study
 
 /**
  * Часы для записи в hours_override (POST/bulk; в PATCH — та же логика плюс безусловная
- * запись, см. ниже). Единая точка нормализации: SCHEDULE_NORM_STATUSES → всегда null,
- * remote → присланные или полный день по графику (в выходной work_hours=0, поэтому `|| 8`),
- * остальные → строго присланные.
+ * запись, см. ниже). Единая точка нормализации: absent и SCHEDULE_NORM_STATUSES → всегда
+ * null, remote → присланные или полный день по графику (в выходной work_hours=0, поэтому
+ * `|| 8`), остальные → строго присланные.
  */
 export const resolveWriteHours = (
   status: TimeStatus,
   requestedHours: number | null | undefined,
   plannedHours: number | null,
 ): number | null | undefined => {
+  // Неявка — всегда 0 часов (attendance.service), поэтому в записи часам взяться неоткуда.
+  // Отдельно от SCHEDULE_NORM_STATUSES: там смысл «часы из нормы графика», у неявки норма
+  // ни при чём. Без этого PATCH manual(5 ч) → absent оставил бы чужие 5 ч в hours_override.
+  if (status === 'absent') return null;
   if (SCHEDULE_NORM_STATUSES.has(status)) return null;
   if (status === 'remote') return requestedHours ?? (plannedHours || 8);
   return requestedHours;
