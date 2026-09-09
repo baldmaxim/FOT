@@ -945,7 +945,19 @@ export const TimesheetPage: FC = () => {
   }, [modalEmployee, modalObjectTarget, year, month, modalDay, closeModal, toast, invalidateTimesheetCaches]);
 
   const handleSaveModalCorrection = useCallback(
-    (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
+    (
+      status: TimesheetStatus,
+      hours: number | null,
+      notes: string,
+      files?: File[],
+      allocations?: Array<{ object_id: string; hours: number }> | null,
+    ) => {
+      // Дневная форма с распределением сохраняется дневным путём даже открытая из
+      // режима «По объектам»: иначе выбранный объект отбрасывался бы, часы уходили на
+      // объект кликнутой строки, а дневная строка удалялась бы мьютексом вместе с файлами.
+      if (allocations && allocations.length > 0) {
+        return handleSaveCorrection(status, hours, notes, files, allocations);
+      }
       if (modalMode === 'object' && (status === 'work' || status === 'manual')) {
         return handleSaveObjectCorrection(status, hours, notes, files);
       }
