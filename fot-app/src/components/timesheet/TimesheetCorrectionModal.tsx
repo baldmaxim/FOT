@@ -26,7 +26,13 @@ import { CREATABLE_STATUS_META, getStatusMeta, HOURS_EDITABLE_STATUSES } from '.
 interface ICorrectionModalProps {
   open: boolean;
   onClose: () => void;
-  onSave: (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => void;
+  onSave: (
+    status: TimesheetStatus,
+    hours: number | null,
+    notes: string,
+    files?: File[],
+    allocations?: Array<{ object_id: string; hours: number }> | null,
+  ) => void;
   onDelete?: () => void;
   initialStatus?: TimesheetStatus;
   initialHours?: number | null;
@@ -62,6 +68,8 @@ interface ICorrectionModalProps {
   } | null;
   // Открытие из «По объектам» — какой объект подсветить/раскрыть справа.
   preselectedObjectKey?: string | null;
+  // Выбор объекта для дневной формы: список доступных + серверная подсказка.
+  objectChoice?: IObjectChoice | null;
   // Контекст дня для рендера чипа со статусом в шапке. Если не передан — чип не рисуется.
   // Прокидывает родитель: те же значения, что считают TimesheetGrid и TimesheetSidePanel
   // через scheduleUtils, чтобы цвет/подпись совпадали с табелем и боковой панелью.
@@ -145,6 +153,73 @@ const formatDuration = (seconds: number): string => {
 
 // Источник опций статусов в пикерах — общий CREATABLE_STATUS_META (utils/correctionStatus).
 const TYPE_OPTIONS = CREATABLE_STATUS_META;
+
+/**
+ * Объекты корректировки: доступный список, СОХРАНЁННОЕ распределение и подсказка СКУД.
+ *
+ * suggestedDistribution приходит в МИНУТАХ — сервер не знает, сколько часов введёт
+ * человек, поэтому форма раскладывает введённый итог пропорционально этим весам.
+ * requiresAllocation=true — надёжного распределения нет (непарный проход, отказы,
+ * спорные сигналы): объект обязан подтвердить человек.
+ */
+export interface IObjectChoice {
+  objects: Array<{ object_id: string; object_name: string }>;
+  currentAllocations: Array<{ object_id: string; object_name: string; hours: number }>;
+  suggestedDistribution: Array<{ object_id: string; object_name: string; minutes: number }>;
+  resolutionSource: string | null;
+  requiresAllocation: boolean;
+  ambiguous: boolean;
+  objectEntriesAllowed: boolean;
+}
+
+/** Строка распределения в форме. */
+interface IAllocationDraft {
+  object_id: string;
+  hours: number;
+}
+
+/**
+ * Раскладывает введённые часы по весам подсказки методом наибольшего остатка:
+ * сумма долей точно равна итогу, копейки не теряются. Нулевые веса (объект известен,
+ * минут нет) делят часы поровну.
+ */
+const distributeHours = (
+  slices: Array<{ object_id: string; minutes: number }>,
+  hours: number,
+): IAllocationDraft[] => {
+  if (slices.length === 0) return [];
+  const total = Math.round(hours * 100);
+  const weights = slices.map(slice => Math.max(0, slice.minutes));
+  const weightSum = weights.reduce((sum, value) => sum + value, 0);
+  const effective = weightSum > 0 ? weights : slices.map(() => 1);
+  const effectiveSum = effective.reduce((sum, value) => sum + value, 0);
+
+  const exact = effective.map(value => (total * value) / effectiveSum);
+  const centi = exact.map(value => Math.floor(value));
+  let distributed = centi.reduce((sum, value) => sum + value, 0);
+  const byFraction = exact
+    .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+    .sort((left, right) => right.frac - left.frac);
+  for (let k = 0; distributed < total; k += 1) {
+    centi[byFraction[k % centi.length].index] += 1;
+    distributed += 1;
+  }
+  return slices.map((slice, index) => ({ object_id: slice.object_id, hours: centi[index] / 100 }));
+};
+
+// Откуда взялся предложенный объект. Догадка по истории помечается явно, чтобы
+// табельщица понимала: здесь нужно её решение, а не молчаливое согласие.
+const RESOLUTION_SOURCE_LABEL: Record<string, string> = {
+  skud_day: 'по событиям СКУД',
+  failure_day: 'по отказам доступа',
+  remote_attribution: 'по привязке к объекту',
+  history_90d: 'предположение по истории за 90 дней',
+  manual_choice: 'выбрано вручную',
+};
+
+// Статусы, у которых корректировка относится к объекту. remote сюда НЕ входит:
+// у удалёнки объект не запрашивается (HOURS_EDITABLE_STATUSES = manual + remote).
+const OBJECT_AWARE_STATUSES = new Set<TimesheetStatus>(['manual', 'work']);
 
 const EventsTab: FC<{
   employeeId: number;
@@ -390,7 +465,16 @@ const EditableReasonLine: FC<{
 
 const CorrectionTab: FC<{
   onClose: () => void;
-  onSave: (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => void;
+  onSave: (
+    status: TimesheetStatus,
+    hours: number | null,
+    notes: string,
+    files?: File[],
+    allocations?: Array<{ object_id: string; hours: number }> | null,
+  ) => void;
+  // Выбор объекта для корректировки с часами. Показывается, когда у дня нет
+  // объектной детализации (иначе объект задаётся в ObjectCorrectionsList).
+  objectChoice?: IObjectChoice | null;
   onDelete?: () => void;
   initialStatus: TimesheetStatus;
   initialHours: number;
@@ -435,6 +519,7 @@ const CorrectionTab: FC<{
 }> = ({
   onClose,
   onSave,
+  objectChoice,
   onDelete,
   initialStatus,
   initialHours,
@@ -488,12 +573,87 @@ const CorrectionTab: FC<{
 
   const trimmedNotes = notes.trim();
   const needsHoursForStatus = HOURS_EDITABLE_STATUSES.has(selectedStatus);
+  // Приоритет инициализации: СОХРАНЁННОЕ распределение → подсказка → пусто.
+  // Иначе открытие корректировки ради правки комментария молча переназначило бы
+  // вручную выбранный объект на свежую подсказку СКУД.
+  const initialAllocations = useMemo<IAllocationDraft[]>(() => {
+    const saved = objectChoice?.currentAllocations ?? [];
+    if (saved.length > 0) return saved.map(item => ({ object_id: item.object_id, hours: item.hours }));
+    return distributeHours(objectChoice?.suggestedDistribution ?? [], hours);
+    // hours намеренно вне зависимостей: пересчёт при вводе часов — отдельным эффектом.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectChoice?.currentAllocations, objectChoice?.suggestedDistribution]);
+
+  const [allocations, setAllocations] = useState<IAllocationDraft[]>(initialAllocations);
+  const [allocationMode, setAllocationMode] = useState<'single' | 'split'>(
+    initialAllocations.length > 1 ? 'split' : 'single',
+  );
+  const [allocationsTouched, setAllocationsTouched] = useState(false);
+
+  useEffect(() => {
+    setAllocations(initialAllocations);
+    setAllocationMode(initialAllocations.length > 1 ? 'split' : 'single');
+    setAllocationsTouched(false);
+  }, [initialAllocations]);
+
+  // Часы изменились, а распределение человек ещё не правил — пересчитываем:
+  // «весь день на объекте» просто следует за итогом, разбивка — по весам подсказки.
+  useEffect(() => {
+    if (allocationsTouched) return;
+    setAllocations(prev => {
+      if (prev.length === 0) return prev;
+      if (prev.length === 1) return [{ ...prev[0], hours }];
+      const slices = prev.map(item => {
+        const suggested = objectChoice?.suggestedDistribution.find(s => s.object_id === item.object_id);
+        return { object_id: item.object_id, minutes: suggested?.minutes ?? Math.round(item.hours * 60) };
+      });
+      return distributeHours(slices, hours);
+    });
+  }, [hours, allocationsTouched, objectChoice?.suggestedDistribution]);
   const exceedsMax = needsHoursForStatus && maxHours != null && hours > maxHours;
   const canSave = trimmedNotes.length > 0 && !exceedsMax;
 
+  // Объекты показываем для статусов с часами по объекту, когда есть из чего выбрать
+  // и роль вправе их задавать (иначе поле скрыто, а сервер его не требует).
+  const showObjectPicker = !!objectChoice
+    && objectChoice.objectEntriesAllowed
+    && objectChoice.objects.length > 0
+    && OBJECT_AWARE_STATUSES.has(selectedStatus)
+    && hours > 0;
+  const objectHint = objectChoice?.ambiguous
+    ? 'События дня указывают на несколько объектов — распределите часы вручную.'
+    : (objectChoice?.resolutionSource
+      ? RESOLUTION_SOURCE_LABEL[objectChoice.resolutionSource] ?? null
+      : null);
+
+  const filledAllocations = allocations.filter(item => item.object_id && item.hours > 0);
+  const allocatedCenti = filledAllocations.reduce((sum, item) => sum + Math.round(item.hours * 100), 0);
+  const targetCenti = Math.round(hours * 100);
+  const allocationSumOk = allocatedCenti === targetCenti;
+  const hasDuplicateObject = new Set(filledAllocations.map(item => item.object_id)).size
+    !== filledAllocations.length;
+  // Подтверждение обязательно там, где надёжного распределения нет: сервер ответит
+  // 422, поэтому не даём отправить заведомо отклоняемый запрос.
+  const allocationRequired = showObjectPicker && !!objectChoice?.requiresAllocation;
+  const allocationsValid = !showObjectPicker
+    || (filledAllocations.length === 0 && !allocationRequired)
+    || (filledAllocations.length > 0 && allocationSumOk && !hasDuplicateObject);
+  const canSaveWithObject = canSave && allocationsValid;
+
+  const updateAllocation = (index: number, patch: Partial<IAllocationDraft>) => {
+    setAllocationsTouched(true);
+    setAllocations(prev => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  };
+
   const handleSave = () => {
-    if (!canSave) return;
-    onSave(selectedStatus, needsHoursForStatus ? hours : null, trimmedNotes, stagedFiles);
+    if (!canSaveWithObject) return;
+    onSave(
+      selectedStatus,
+      needsHoursForStatus ? hours : null,
+      trimmedNotes,
+      stagedFiles,
+      showObjectPicker ? filledAllocations : null,
+    );
   };
 
   // Период заперт согласованием — редактирование недоступно. Если корректировки за
@@ -684,6 +844,116 @@ const CorrectionTab: FC<{
           <div className="ts-hours-hint">Время рассчитается автоматически по событиям СКУД.</div>
         )}
 
+        {showObjectPicker && (
+          <div className="ts-form-group">
+            <label className="ts-form-label">
+              Объект {allocationRequired && <span className="ts-form-required">*</span>}
+            </label>
+            <div className="ts-alloc-modes">
+              <button
+                type="button"
+                className={`ts-alloc-mode ${allocationMode === 'single' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setAllocationMode('single');
+                  setAllocationsTouched(true);
+                  setAllocations(prev => (prev.length > 0
+                    ? [{ object_id: prev[0].object_id, hours }]
+                    : [{ object_id: '', hours }]));
+                }}
+              >
+                Весь день на одном объекте
+              </button>
+              <button
+                type="button"
+                className={`ts-alloc-mode ${allocationMode === 'split' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setAllocationMode('split');
+                  setAllocationsTouched(true);
+                  setAllocations(prev => (prev.length > 0 ? prev : [{ object_id: '', hours }]));
+                }}
+              >
+                Распределить по объектам
+              </button>
+            </div>
+
+            {allocationMode === 'single' ? (
+              <select
+                className="ts-form-select"
+                value={allocations[0]?.object_id ?? ''}
+                onChange={e => {
+                  setAllocationsTouched(true);
+                  setAllocations([{ object_id: e.target.value, hours }]);
+                }}
+              >
+                <option value="">— выберите объект —</option>
+                {objectChoice!.objects.map(obj => (
+                  <option key={obj.object_id} value={obj.object_id}>{obj.object_name}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="ts-alloc-rows">
+                {allocations.map((row, index) => (
+                  <div className="ts-alloc-row" key={`${row.object_id}-${index}`}>
+                    <select
+                      className="ts-form-select"
+                      value={row.object_id}
+                      onChange={e => updateAllocation(index, { object_id: e.target.value })}
+                    >
+                      <option value="">— выберите объект —</option>
+                      {objectChoice!.objects.map(obj => (
+                        <option key={obj.object_id} value={obj.object_id}>{obj.object_name}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      className="ts-form-input ts-form-input--hm"
+                      value={row.hours}
+                      min={0}
+                      max={24}
+                      step={0.5}
+                      onChange={e => updateAllocation(index, { hours: Number(e.target.value) || 0 })}
+                    />
+                    <span className="ts-hours-separator">ч</span>
+                    <button
+                      type="button"
+                      className="ts-btn"
+                      onClick={() => {
+                        setAllocationsTouched(true);
+                        setAllocations(prev => prev.filter((_, i) => i !== index));
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="ts-btn"
+                  onClick={() => {
+                    setAllocationsTouched(true);
+                    setAllocations(prev => [...prev, { object_id: '', hours: 0 }]);
+                  }}
+                >
+                  + Добавить объект
+                </button>
+                <div className={`ts-form-hint ${allocationSumOk ? '' : 'ts-form-hint--error'}`}>
+                  Распределено {allocatedCenti / 100} из {hours} ч
+                </div>
+                {hasDuplicateObject && (
+                  <div className="ts-form-hint ts-form-hint--error">Один объект указан дважды</div>
+                )}
+              </div>
+            )}
+
+            {objectHint && <div className="ts-form-hint">{objectHint}</div>}
+            {allocationRequired && filledAllocations.length === 0 && (
+              <div className="ts-form-hint ts-form-hint--error">
+                События СКУД не подтверждают объект — укажите его явно.
+              </div>
+            )}
+          </div>
+        )}
+
         {HOURS_EDITABLE_STATUSES.has(selectedStatus) && (() => {
           const wholeHours = Math.floor(hours);
           const minutes = Math.round((hours - wholeHours) * 60);
@@ -759,7 +1029,7 @@ const CorrectionTab: FC<{
         <button
           className="ts-btn ts-btn--primary"
           type="submit"
-          disabled={!canSave}
+          disabled={!canSaveWithObject}
           title={
             exceedsMax && maxHours != null
               ? `Часы превышают длительность смены (${formatHM(maxHours)})`
@@ -1354,6 +1624,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
   dayStatusContext,
   infoBanner,
   objectEntries,
+  objectChoice,
   disableObjectEntries,
   plannedHours,
   hasDayLevelCorrection,
@@ -1376,11 +1647,11 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
     && Array.isArray(objectEntries) && objectEntries.length > 0 && !!onSaveObject && !!onDeleteObject;
   const dayHasObjectAdjustments = hasObjectsBlock && objectEntries!.some(entry => entry.is_correction && entry.adjustment_id != null);
   // Save «День» при наличии объектных корректировок предупреждает: бэк их снимет.
-  const wrappedOnSave: ICorrectionModalProps['onSave'] = (status, hours, notes, files) => {
+  const wrappedOnSave: ICorrectionModalProps['onSave'] = (status, hours, notes, files, objectId) => {
     if (dayHasObjectAdjustments && !window.confirm(
       'Сохранение общей корректировки дня снимет все корректировки по объектам. Продолжить?',
     )) return;
-    onSave(status, hours, notes, files);
+    onSave(status, hours, notes, files, objectId);
   };
   // Статус дня — общий для чипа и правила показа вкладки событий (utils/dayStatus.ts).
   const dayStatus = dayStatusContext
@@ -1544,6 +1815,7 @@ const ModalContent: FC<Omit<ICorrectionModalProps, 'open'>> = ({
         <CorrectionTab
           onClose={onClose}
           onSave={wrappedOnSave}
+          objectChoice={objectChoice}
           onDelete={onDelete}
           initialStatus={initialStatus}
           initialHours={initialHours ?? 8}

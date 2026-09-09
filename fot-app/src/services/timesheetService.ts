@@ -81,9 +81,21 @@ export interface IWeekendMemoPreview {
 }
 
 interface BulkTimesheetCorrectionResult {
+  /** Реально применённые элементы, а не размер входа. */
   processed: number;
   employees: number;
   items?: Array<{ employee_id: number; work_date: string; adjustment_id: number }>;
+  /**
+   * Ячейки, которые массовая правка сознательно не тронула: день распределён по
+   * нескольким объектам, и общая сумма часов не говорит, как его перераспределить.
+   */
+  skipped?: Array<{
+    client_item_id?: string;
+    employee_id: number;
+    work_date: string;
+    code: string;
+    error: string;
+  }>;
 }
 
 function hydrateCompactSchedules(data: TimesheetResponse): TimesheetResponse {
@@ -211,6 +223,22 @@ export interface ICorrectionEligibilityResponse {
   by_employee: Record<string, ICorrectionEligibilityForEmployee>;
 }
 
+/** Объект, доступный сотруднику на дату корректировки. */
+export interface IObjectOption {
+  object_id: string;
+  object_name: string;
+}
+
+/** Строка распределения часов корректировки по объекту. */
+export interface IObjectAllocation extends IObjectOption {
+  hours: number;
+}
+
+/** Подсказка СКУД: минуты присутствия по объекту (0 — объект известен, длительность нет). */
+export interface IObjectDistributionSlice extends IObjectOption {
+  minutes: number;
+}
+
 export const timesheetService = {
   async getAll(filters: TimesheetFilters): Promise<TimesheetResponse> {
     const params = new URLSearchParams();
@@ -291,8 +319,10 @@ export const timesheetService = {
     status: TimesheetStatus;
     hours_worked?: number | null;
     notes?: string | null;
-    // Явный объект корректировки — присылается после ответа OBJECT_REQUIRED.
+    // Объект корректировки: короткая форма (весь день на одном объекте)
+    // либо явное распределение часов по объектам.
     object_id?: string | null;
+    object_allocations?: Array<{ object_id: string; hours: number }>;
   }): Promise<TimesheetEntry> {
     const res = await apiClient.post<ApiResponse<TimesheetEntry>>('/timesheet', data);
     if (!res.data) throw new Error(res.error || 'Ошибка создания записи');
@@ -301,7 +331,12 @@ export const timesheetService = {
 
   async update(
     id: number,
-    data: Partial<Pick<TimesheetEntry, 'status' | 'hours_worked' | 'notes'>>,
+    // Смена распределения по объектам: отсутствие поля сохраняет текущее,
+    // пустой массив — снимает.
+    data: Partial<Pick<TimesheetEntry, 'status' | 'hours_worked' | 'notes'>> & {
+      object_id?: string | null;
+      object_allocations?: Array<{ object_id: string; hours: number }>;
+    },
   ): Promise<TimesheetEntry> {
     const res = await apiClient.put<ApiResponse<TimesheetEntry>>(`/timesheet/${id}`, data);
     if (!res.data) throw new Error(res.error || 'Ошибка обновления записи');
@@ -550,6 +585,50 @@ export const timesheetService = {
     );
     if (!response.ok) throw new Error('Ошибка единого экспорта для 1С');
     return response.blob();
+  },
+
+  /**
+   * Объекты сотрудника для привязки корректировки на КОНКРЕТНУЮ дату + серверная
+   * подсказка с источником («по отказам доступа», «по событиям СКУД», …).
+   * Дата обязательна: и доступ, и окно истории считаются именно на неё.
+   */
+  /**
+   * Объекты сотрудника для дневной корректировки: сохранённое распределение,
+   * подсказка по СКУД (в МИНУТАХ — часы вводит человек) и признак «объект обязателен».
+   *
+   * adjustmentId нужен, чтобы current_allocations относились именно к этой записи:
+   * на дне может быть несколько строк, и без него вернулось бы чужое распределение.
+   */
+  async listEmployeeObjects(employeeId: number, workDate: string, adjustmentId?: number | null): Promise<{
+    objects: IObjectOption[];
+    currentAllocations: IObjectAllocation[];
+    suggestedDistribution: IObjectDistributionSlice[];
+    resolutionSource: string | null;
+    requiresAllocation: boolean;
+    ambiguous: boolean;
+    objectEntriesAllowed: boolean;
+  }> {
+    const params = new URLSearchParams({ work_date: workDate });
+    if (adjustmentId) params.set('adjustment_id', String(adjustmentId));
+    const res = await apiClient.get<{
+      success: boolean;
+      data: IObjectOption[];
+      current_allocations: IObjectAllocation[];
+      suggested_distribution: IObjectDistributionSlice[];
+      resolution_source: string | null;
+      requires_allocation: boolean;
+      ambiguous: boolean;
+      object_entries_allowed: boolean;
+    }>(`/timesheet/employees/${employeeId}/objects?${params.toString()}`);
+    return {
+      objects: Array.isArray(res.data) ? res.data : [],
+      currentAllocations: Array.isArray(res.current_allocations) ? res.current_allocations : [],
+      suggestedDistribution: Array.isArray(res.suggested_distribution) ? res.suggested_distribution : [],
+      resolutionSource: res.resolution_source ?? null,
+      requiresAllocation: !!res.requires_allocation,
+      ambiguous: !!res.ambiguous,
+      objectEntriesAllowed: res.object_entries_allowed !== false,
+    };
   },
 
   async listObjects(): Promise<Array<{ id: string; name: string; alt_name: string | null }>> {

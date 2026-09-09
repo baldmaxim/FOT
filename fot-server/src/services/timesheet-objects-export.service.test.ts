@@ -263,3 +263,29 @@ describe('timesheet-objects-export.service', () => {
     });
   });
 });
+
+// ───────────── состав по объектам: дневная правка с распределением ─────────────
+describe('fetchEmployeeIdsForObjects — дневное распределение по объектам', () => {
+  beforeEach(() => {
+    pgQuery.mockReset();
+  });
+
+  it('сотрудник попадает в состав объекта по metadata.object_allocations', async () => {
+    // Случай Сайфуллаева: успешных проходов на объекте нет (только отказы и один выход),
+    // поэтому СКУД-ветки его не находят — состав держится на распределении из корректировки.
+    pgQuery.mockResolvedValue([{ employee_id: 1575 }]);
+
+    const { fetchEmployeeIdsForObjects } = await import('./timesheet-objects-export.service.js');
+    const ids = await fetchEmployeeIdsForObjects(
+      ['9f240764-c8b8-401d-9c92-d257b30afc23'],
+      '2026-09-01',
+      '2026-09-15',
+    );
+
+    expect(ids).toEqual([1575]);
+    const sql = String(pgQuery.mock.calls[0]![0]);
+    expect(sql).toContain("metadata->'object_allocations'");
+    // Битую metadata запрос обязан пропускать, а не ронять выгрузку приведением типа.
+    expect(sql).toContain('jsonb_typeof');
+  });
+});

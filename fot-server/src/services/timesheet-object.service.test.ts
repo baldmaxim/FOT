@@ -33,9 +33,15 @@ const mockedState = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('./skud-shared.service.js', () => ({
-  getInternalAccessPoints: vi.fn(async () => mockedState.internalPoints),
-}));
+// Подменяем только getInternalAccessPoints; остальное берём из настоящего модуля,
+// иначе теряется PRESENCE_FAILURE_TYPE_IDS (whitelist типов отказов живёт там же).
+vi.mock('./skud-shared.service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./skud-shared.service.js')>();
+  return {
+    ...actual,
+    getInternalAccessPoints: vi.fn(async () => mockedState.internalPoints),
+  };
+});
 
 // Ночной гейт окна (миграция 168) резолвит график на дату. Мокаем только
 // resolveSchedulesForPeriod, отдавая дневной/ночной график по флагу mockedState.isNightShift;
@@ -72,6 +78,13 @@ vi.mock('./schedule.service.js', async (importOriginal) => {
 
 import {
   buildObjectAttendanceData,
+  PRESENCE_FAILURE_TYPE_IDS,
+  allocationsEqual,
+  canonicalizeAllocations,
+  hasObjectAllocations,
+  readObjectAllocations,
+  resolveDayAllocationSuggestion,
+  resolveDayObjectDetailed,
   UNKNOWN_OBJECT_NAME,
 } from './timesheet-object.service.js';
 
@@ -390,6 +403,75 @@ describe('timesheet-object.service', () => {
         hours_worked: 4,
         is_correction: true,
       }),
+    ]);
+  });
+
+  it('явное распределение по объектам перекрывает приписку и раскладывает часы', async () => {
+    // Приписка ведёт на obj-a, но табельщица указала распределение 7 + 4 — оно сильнее
+    // любых сигналов: именно человек знает, где сотрудник работал в этот день.
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-13',
+      endDate: '2026-04-13',
+      todayStr: '2026-04-13',
+      adjustments: [
+        {
+          id: 91,
+          employee_id: 1,
+          work_date: '2026-04-13',
+          hours_override: 11,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'manual',
+          reason: 'Работал на двух объектах',
+          updated_at: '2026-04-13T10:00:00.000Z',
+          metadata: {
+            object_allocations: [
+              { object_id: 'obj-b', object_name: 'Объект B', hours: 7 },
+              { object_id: 'obj-c', object_name: 'Объект C', hours: 4 },
+            ],
+            allocation_source: 'manual_choice',
+          },
+        },
+      ],
+    });
+
+    const byObject = new Map(result.objectEntries.map(entry => [entry.object_id, entry.hours_worked]));
+    expect(byObject.get('obj-b')).toBe(7);
+    expect(byObject.get('obj-c')).toBe(4);
+    expect(byObject.has('obj-a')).toBe(false);
+    // Сумма долей точно равна часам корректировки — день не задваивается.
+    expect(result.objectEntries.reduce((sum, entry) => sum + entry.hours_worked, 0)).toBe(11);
+  });
+
+  it('битые аллокации трактуются как их отсутствие: работает прежний фолбэк', async () => {
+    mockedState.tables.employee_skud_object_access = [{ employee_id: 1, skud_object_id: 'obj-a' }];
+
+    const result = await buildObjectAttendanceData({
+      employeeIds: [1],
+      startDate: '2026-04-13',
+      endDate: '2026-04-13',
+      todayStr: '2026-04-13',
+      adjustments: [
+        {
+          id: 92,
+          employee_id: 1,
+          work_date: '2026-04-13',
+          hours_override: 8,
+          source_type: 'manual',
+          source_id: 'manual',
+          status: 'manual',
+          reason: 'Битая metadata',
+          updated_at: '2026-04-13T10:00:00.000Z',
+          metadata: { object_allocations: 'сломано' as unknown as [] },
+        },
+      ],
+    });
+
+    expect(result.objectEntries).toEqual([
+      expect.objectContaining({ object_id: 'obj-a', hours_worked: 8 }),
     ]);
   });
 
@@ -1006,5 +1088,233 @@ describe('timesheet-object.service', () => {
     expect(summary?.total_minutes).toBe(150);
     // перерыв 10:00→10:30 = 30 мин (открытый интервал трактуется как пара)
     expect(summary?.break_minutes).toBe(30);
+  });
+});
+
+// ───────────────── подбор объекта дня для корректировки ─────────────────
+// Резолвер бьёт по трём разным агрегатам, поэтому у него своя маршрутизация SQL:
+// общий routeQuery выше отдаёт «сырые» таблицы, а здесь запросы уже сгруппированы
+// (object_id + object_name + event_count).
+const resolverState = vi.hoisted(() => ({
+  sameDayVotes: [] as Array<{ object_id: string; object_name: string; event_count: number }>,
+  failureVotes: [] as Array<{ object_id: string; object_name: string; event_count: number }>,
+  historyVotes: [] as Array<{ object_id: string; object_name: string; event_count: number }>,
+  failureQueryParams: null as unknown[] | null,
+}));
+
+function routeResolverQuery(sql: string, params?: unknown[]): unknown[] {
+  const s = sql.toLowerCase();
+  if (s.includes('skud_event_failures')) {
+    resolverState.failureQueryParams = params ?? null;
+    return resolverState.failureVotes;
+  }
+  if (s.includes("interval '90 days'")) return resolverState.historyVotes;
+  if (s.includes('skud_events')) return resolverState.sameDayVotes;
+  throw new Error(`Unexpected SQL routing: ${sql}`);
+}
+
+describe('resolveDayObjectDetailed', () => {
+  beforeEach(() => {
+    pgQuery.mockReset();
+    resolverState.sameDayVotes = [];
+    resolverState.failureVotes = [];
+    resolverState.historyVotes = [];
+    resolverState.failureQueryParams = null;
+    pgQuery.mockImplementation(async (sql: string, params?: unknown[]) => routeResolverQuery(sql, params));
+  });
+
+  // scheduleType задаём явно: иначе резолвер полезет за графиком (шаг «удалёнщик»),
+  // а resolveSchedule в этом файле не замокан.
+  const resolve = (overrides: Record<string, unknown> = {}) => resolveDayObjectDetailed({
+    employeeId: 1,
+    workDate: '2026-08-16',
+    scheduleType: 'standard',
+    ...overrides,
+  });
+
+  it('отказ доступа побеждает 90-дневную историю: кейс Журакулова 16.08', async () => {
+    // Проходов в этот день нет, отказы — на ЗилАрте, а в истории лидирует Дом 56
+    // (478 событий, последнее месяц назад). Должен победить ЗилАрт.
+    resolverState.failureVotes = [{ object_id: 'obj-zil', object_name: 'ЖК Зил 18,19,27', event_count: 2 }];
+    resolverState.historyVotes = [{ object_id: 'obj-dom56', object_name: 'ЖК Дом 56', event_count: 478 }];
+
+    expect(await resolve()).toEqual({
+      kind: 'resolved',
+      object_id: 'obj-zil',
+      object_name: 'ЖК Зил 18,19,27',
+      source: 'failure_day',
+    });
+  });
+
+  it('успешный проход приоритетнее отказа', async () => {
+    resolverState.sameDayVotes = [{ object_id: 'obj-b', object_name: 'Объект B', event_count: 4 }];
+    resolverState.failureVotes = [{ object_id: 'obj-a', object_name: 'Объект A', event_count: 9 }];
+
+    expect(await resolve()).toEqual({
+      kind: 'resolved',
+      object_id: 'obj-b',
+      object_name: 'Объект B',
+      source: 'skud_day',
+    });
+  });
+
+  it('ничья по отказам терминальна: ambiguous, без падения в историю', async () => {
+    resolverState.failureVotes = [
+      { object_id: 'obj-a', object_name: 'Объект A', event_count: 3 },
+      { object_id: 'obj-b', object_name: 'Объект B', event_count: 3 },
+    ];
+    resolverState.historyVotes = [{ object_id: 'obj-c', object_name: 'Объект C', event_count: 100 }];
+
+    expect(await resolve()).toEqual({
+      kind: 'ambiguous',
+      candidates: [
+        { object_id: 'obj-a', object_name: 'Объект A' },
+        { object_id: 'obj-b', object_name: 'Объект B' },
+      ],
+    });
+  });
+
+  it('лидер с отрывом выигрывает, несмотря на второй объект с отказами', async () => {
+    resolverState.failureVotes = [
+      { object_id: 'obj-a', object_name: 'Объект A', event_count: 5 },
+      { object_id: 'obj-b', object_name: 'Объект B', event_count: 1 },
+    ];
+
+    expect(await resolve()).toMatchObject({ kind: 'resolved', object_id: 'obj-a', source: 'failure_day' });
+  });
+
+  it('запрашивает только типы присутствия человека (whitelist 7 и 24)', async () => {
+    await resolve();
+    // apOnlineStatus (12) и прочий служебный мусор в выборку попасть не должен:
+    // в skud_event_failures пишется всё, кроме PASS_DETECTED.
+    expect(resolverState.failureQueryParams?.[2]).toEqual([...PRESENCE_FAILURE_TYPE_IDS]);
+  });
+
+  it('нет ни проходов, ни отказов — остаётся история за 90 дней', async () => {
+    resolverState.historyVotes = [{ object_id: 'obj-c', object_name: 'Объект C', event_count: 12 }];
+
+    expect(await resolve()).toEqual({
+      kind: 'resolved',
+      object_id: 'obj-c',
+      object_name: 'Объект C',
+      source: 'history_90d',
+    });
+  });
+
+  it('нет вообще никаких сигналов — none', async () => {
+    expect(await resolve()).toEqual({ kind: 'none' });
+  });
+
+});
+
+
+describe('object allocations helpers', () => {
+  it('мусор в metadata не роняет чтение: возвращается пустой список', () => {
+    expect(readObjectAllocations(null)).toEqual([]);
+    expect(readObjectAllocations({ object_allocations: 'нет' })).toEqual([]);
+    expect(readObjectAllocations({ object_allocations: [{ object_id: '', hours: 5 }] })).toEqual([]);
+    expect(readObjectAllocations({ object_allocations: [{ object_id: 'obj-a', hours: 0 }] })).toEqual([]);
+    expect(hasObjectAllocations({ object_allocations: [{ object_id: 'obj-a', hours: 3 }] })).toBe(true);
+  });
+
+  it('перестановка строк не считается изменением', () => {
+    const left = [
+      { object_id: 'obj-b', object_name: 'B', hours: 4 },
+      { object_id: 'obj-a', object_name: 'A', hours: 7 },
+    ];
+    const right = [
+      { object_id: 'obj-a', object_name: 'Другое имя', hours: 7 },
+      { object_id: 'obj-b', object_name: 'B', hours: 4 },
+    ];
+    expect(allocationsEqual(left, right)).toBe(true);
+    expect(canonicalizeAllocations(left).map(item => item.object_id)).toEqual(['obj-a', 'obj-b']);
+  });
+
+  it('другие часы — это изменение', () => {
+    expect(allocationsEqual(
+      [{ object_id: 'obj-a', object_name: 'A', hours: 7 }],
+      [{ object_id: 'obj-a', object_name: 'A', hours: 8 }],
+    )).toBe(false);
+  });
+});
+
+// ───────────── подсказка распределения для модалки ─────────────
+const suggestionState = vi.hoisted(() => ({
+  events: [] as Array<{ event_time: string; direction: string; access_point: string; object_id: string; object_name: string }>,
+  failures: [] as Array<{ object_id: string; object_name: string; event_count: number }>,
+}));
+
+describe('resolveDayAllocationSuggestion', () => {
+  beforeEach(() => {
+    pgQuery.mockReset();
+    suggestionState.events = [];
+    suggestionState.failures = [];
+    mockedState.internalPoints = new Set();
+    pgQuery.mockImplementation(async (sql: string) => {
+      const text = sql.toLowerCase();
+      if (text.includes('from skud_events se')) return suggestionState.events;
+      if (text.includes('skud_event_failures')) return suggestionState.failures;
+      return [];
+    });
+  });
+
+  const suggest = () => resolveDayAllocationSuggestion({
+    employeeId: 1,
+    workDate: '2026-09-01',
+    scheduleType: 'standard',
+  });
+
+  it('кейс Сайфуллаева: один непарный выход — объект предложен, но подтверждение обязательно', async () => {
+    suggestionState.events = [
+      { event_time: '18:49:53', direction: 'exit', access_point: 'Борисовские пруды', object_id: 'obj-wave', object_name: 'ЖК Wave' },
+    ];
+
+    const result = await suggest();
+
+    expect(result.distribution).toEqual([{ object_id: 'obj-wave', object_name: 'ЖК Wave', minutes: 0 }]);
+    expect(result.resolution_source).toBe('skud_day_unpaired');
+    expect(result.requires_allocation).toBe(true);
+    expect(result.ambiguous).toBe(false);
+  });
+
+  it('полные пары на двух объектах — распределение по фактическим минутам', async () => {
+    suggestionState.events = [
+      { event_time: '08:00:00', direction: 'entry', access_point: 'КПП A', object_id: 'obj-a', object_name: 'Объект A' },
+      { event_time: '12:00:00', direction: 'exit', access_point: 'КПП A', object_id: 'obj-a', object_name: 'Объект A' },
+      { event_time: '13:00:00', direction: 'entry', access_point: 'КПП B', object_id: 'obj-b', object_name: 'Объект B' },
+      { event_time: '18:00:00', direction: 'exit', access_point: 'КПП B', object_id: 'obj-b', object_name: 'Объект B' },
+    ];
+
+    const result = await suggest();
+
+    expect(result.distribution).toEqual([
+      { object_id: 'obj-a', object_name: 'Объект A', minutes: 240 },
+      { object_id: 'obj-b', object_name: 'Объект B', minutes: 300 },
+    ]);
+    expect(result.requires_allocation).toBe(false);
+  });
+
+  it('вход на одном объекте, выход на другом — пару не строим, решает человек', async () => {
+    suggestionState.events = [
+      { event_time: '08:00:00', direction: 'entry', access_point: 'КПП A', object_id: 'obj-a', object_name: 'Объект A' },
+      { event_time: '18:00:00', direction: 'exit', access_point: 'КПП B', object_id: 'obj-b', object_name: 'Объект B' },
+    ];
+
+    const result = await suggest();
+
+    expect(result.ambiguous).toBe(true);
+    expect(result.requires_allocation).toBe(true);
+    expect(result.distribution).toEqual([]);
+    expect(result.candidates.map(item => item.object_id).sort()).toEqual(['obj-a', 'obj-b']);
+  });
+
+  it('успешных событий нет — объект берётся из отказов доступа', async () => {
+    suggestionState.failures = [{ object_id: 'obj-wave', object_name: 'ЖК Wave', event_count: 2 }];
+
+    const result = await suggest();
+
+    expect(result.distribution).toEqual([{ object_id: 'obj-wave', object_name: 'ЖК Wave', minutes: 0 }]);
+    expect(result.resolution_source).toBe('failure_day');
+    expect(result.requires_allocation).toBe(true);
   });
 });

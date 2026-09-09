@@ -43,6 +43,19 @@ export async function fetchEmployeeIdsForObjects(
          AND (aa.metadata->>'object_id')::uuid = ANY($1::uuid[])
          AND aa.work_date BETWEEN $2::date AND $3::date
       UNION
+      -- Дневная корректировка с распределением по объектам: объект задан человеком в
+      -- metadata, и успешных проходов на нём может не быть вовсе (сработал только выход
+      -- или одни отказы) — по СКУД-веткам такой сотрудник в состав не попал бы.
+      -- jsonb_typeof + маска uuid: битую metadata пропускаем, а не роняем выгрузку.
+      SELECT DISTINCT aa.employee_id
+        FROM attendance_adjustments aa
+        CROSS JOIN LATERAL jsonb_array_elements(aa.metadata->'object_allocations') alloc
+       WHERE aa.source_type = 'manual'
+         AND jsonb_typeof(aa.metadata->'object_allocations') = 'array'
+         AND aa.work_date BETWEEN $2::date AND $3::date
+         AND alloc->>'object_id' ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+         AND (alloc->>'object_id')::uuid = ANY($1::uuid[])
+      UNION
       SELECT DISTINCT aa.employee_id
         FROM attendance_adjustments aa
        WHERE aa.source_type IN ('manual', 'leave_request')

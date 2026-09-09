@@ -126,6 +126,9 @@ export const TimesheetPage: FC = () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['timesheet-page'] }),
       queryClient.invalidateQueries({ queryKey: ['timesheet-corrections'] }),
+      // Распределение по объектам показывается из этого запроса (staleTime 60 с):
+      // без инвалидации модалка минуту отдавала бы прежние объекты.
+      queryClient.invalidateQueries({ queryKey: ['timesheet-employee-objects'] }),
       ...(employeeId ? [queryClient.invalidateQueries({ queryKey: ['employee-timesheet-summary', employeeId] })] : []),
     ]);
   }, [queryClient]);
@@ -265,6 +268,19 @@ export const TimesheetPage: FC = () => {
   const [modalMode, setModalMode] = useState<'day' | 'object'>('day');
   const [modalObjectEntry, setModalObjectEntry] = useState<TimesheetObjectEntry | null>(null);
   const [modalObjectTarget, setModalObjectTarget] = useState<IObjectModalTarget | null>(null);
+  // Объекты сотрудника + серверная подсказка на дату модалки. Грузим только когда
+  // модалка открыта: запрос на каждую клетку грида был бы лишним.
+  // Дата модалки нужна раньше объявления modalWorkDate ниже — считаем ту же строку.
+  const modalDayIso = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
+  // adjustment_id в ключе и в запросе: «текущее распределение» относится к КОНКРЕТНОЙ
+  // записи, а после сохранения кэш инвалидируется — иначе минуту показывалось бы старое.
+  const modalObjectsQuery = useQuery({
+    queryKey: ['timesheet-employee-objects', modalEmployee?.id ?? null, modalDayIso, modalEntry?.id ?? null],
+    queryFn: () => timesheetService.listEmployeeObjects(modalEmployee!.id, modalDayIso, modalEntry?.id ?? null),
+    enabled: modalOpen && !!modalEmployee && !!modalDay,
+    staleTime: 60_000,
+  });
+
   // Пикер объекта: бэк вернул OBJECT_REQUIRED (авто-привязка не определила объект).
   const [objectPrompt, setObjectPrompt] = useState<{
     candidates: Array<{ object_id: string; object_name: string }>;
@@ -751,12 +767,24 @@ export const TimesheetPage: FC = () => {
   }, [entryMap, year, month]);
 
   // Save correction
-  const handleSaveCorrection = useCallback(async (status: TimesheetStatus, hours: number | null, notes: string, files?: File[]) => {
+  const handleSaveCorrection = useCallback(async (
+    status: TimesheetStatus,
+    hours: number | null,
+    notes: string,
+    files?: File[],
+    allocations?: Array<{ object_id: string; hours: number }> | null,
+  ) => {
     if (!modalEmployee) return;
     try {
       const workDate = `${year}-${String(month).padStart(2, '0')}-${String(modalDay).padStart(2, '0')}`;
       if (modalEntry?.id) {
-        await timesheetService.update(modalEntry.id, { status, hours_worked: hours, notes });
+        await timesheetService.update(modalEntry.id, {
+          status,
+          hours_worked: hours,
+          notes,
+          // Отсутствие поля = «не трогать распределение»; пустой массив снимает его.
+          ...(allocations ? { object_allocations: allocations } : {}),
+        });
         closeModal();
       } else {
         const created = await timesheetService.create({
@@ -765,6 +793,7 @@ export const TimesheetPage: FC = () => {
           status,
           hours_worked: hours,
           notes,
+          ...(allocations && allocations.length > 0 ? { object_allocations: allocations } : {}),
         });
         // Прикреплённые в форме создания файлы грузим на свежий adjustment_id.
         // Корректировка уже создана — ошибку загрузки показываем, но не откатываем.
@@ -1521,6 +1550,15 @@ export const TimesheetPage: FC = () => {
           ).values()];
           const result = await timesheetService.bulkCorrect({ items: dayItems, status, hours_worked: hours, notes });
           await uploadFilesTo((result.items ?? []).map(i => ({ adjustment_id: i.adjustment_id, employee_id: i.employee_id })));
+      const skipped = result.skipped ?? [];
+      if (skipped.length > 0) {
+        // Эти ячейки НЕ записаны: день распределён по нескольким объектам, и общая
+        // сумма часов не говорит, как его перераспределить. Молчать нельзя.
+        toast.error(
+          `${skipped.length} ячеек не сохранено: часы распределены по нескольким объектам. `
+          + 'Откройте такие дни по одному и поправьте распределение.',
+        );
+      }
           toast.success(`Корректировка применена для ${result.processed} дней`);
         }
 
@@ -1545,6 +1583,15 @@ export const TimesheetPage: FC = () => {
       });
 
       await uploadFilesTo((result.items ?? []).map(i => ({ adjustment_id: i.adjustment_id, employee_id: i.employee_id })));
+      const skipped = result.skipped ?? [];
+      if (skipped.length > 0) {
+        // Эти ячейки НЕ записаны: день распределён по нескольким объектам, и общая
+        // сумма часов не говорит, как его перераспределить. Молчать нельзя.
+        toast.error(
+          `${skipped.length} ячеек не сохранено: часы распределены по нескольким объектам. `
+          + 'Откройте такие дни по одному и поправьте распределение.',
+        );
+      }
       clearBulkState();
       await invalidate();
       toast.success(`Корректировка применена для ${result.processed} ячеек`);
@@ -2761,6 +2808,10 @@ export const TimesheetPage: FC = () => {
                 showActualHours,
               };
             })() : undefined}
+            // Выбор объекта в дневной форме: список + серверная подсказка с источником.
+            // Показывается, когда у дня нет объектной детализации (иначе объект
+            // задаётся в списке объектов).
+            objectChoice={modalObjectsQuery.data ?? null}
             objectEntries={modalEmployee
               // Прячем «эхо» day-level корректировки, размазанное на объект (#8): такая запись
               // дублирует day-level «Корректировка табеля», которая показывается отдельно.

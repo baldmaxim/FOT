@@ -29,7 +29,21 @@ import {
   listLeaveRequestHistory,
 } from '../services/leave-request-history.service.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
-import { OBJECT_ADJUSTMENT_SOURCE_TYPE } from '../services/timesheet-object.service.js';
+import {
+  hasObjectAllocations,
+  OBJECT_ADJUSTMENT_SOURCE_TYPE,
+} from '../services/timesheet-object.service.js';
+
+/**
+ * Согласование заявления с объектом пришло на день, размеченный дневной корректировкой
+ * с распределением по объектам. Бросается ДО записей, чтобы транзакция откатилась целиком.
+ */
+class DayAllocationConflictError extends Error {
+  constructor() {
+    super('За этот день часы уже распределены по объектам в корректировке дня. Согласование заявления изменило бы её — снимите распределение в табеле.');
+    this.name = 'DayAllocationConflictError';
+  }
+}
 import { findApprovalLocksForEmployeeDates } from '../services/timesheet-lock.service.js';
 import type { TimeStatus } from '../types/index.js';
 
@@ -654,7 +668,9 @@ const create = async (req: AuthenticatedRequest, res: Response): Promise<void> =
         res.status(400).json({ success: false, error: 'Выберите объект для корректировки' });
         return;
       }
-      const selectable = await listSelectableObjectsForEmployee(employeeId);
+      // Окно списка привязано к дате корректировки, а не к сегодня: иначе при заявлении
+      // за прошлый месяц объект, где человек реально был, может не попасть в выборку.
+      const selectable = await listSelectableObjectsForEmployee(employeeId, canonicalCorrectionDate ?? undefined);
       const match = selectable.find((o) => o.object_id === correction_object_id);
       if (!match) {
         res.status(400).json({ success: false, error: 'Объект недоступен для этого сотрудника' });
@@ -864,7 +880,9 @@ const getMyObjects = async (req: AuthenticatedRequest, res: Response): Promise<v
       res.json({ success: true, data: [] });
       return;
     }
-    const data = await listSelectableObjectsForEmployee(employeeId);
+    // ?date=YYYY-MM-DD — якорь окна ±90 дней; без него считаем от сегодняшнего дня.
+    const dateParam = typeof req.query.date === 'string' ? req.query.date : undefined;
+    const data = await listSelectableObjectsForEmployee(employeeId, dateParam);
     res.json({ success: true, data });
   } catch (err) {
     console.error('leave-requests.getMyObjects error:', err);
@@ -1528,6 +1546,18 @@ async function approveLeaveRequestById(
         const approvalStatus = collapsed ? ('approved' as const) : resolvedApproval;
         const approvedBy = collapsed ? weekendCollapseApproverUserId : undefined;
         if (approvedRequest.correction_object_id) {
+          // Дневная корректировка с распределением по объектам — осознанная разметка дня.
+          // Удалять её нельзя (унесли бы вложения), поэтому проверяем ДО любых побочных
+          // эффектов: транзакция откатится целиком, заявление не станет approved, история
+          // и уведомления не появятся — согласующий разбирается вручную.
+          const dayAllocationRows = await client.query<{ metadata: Record<string, unknown> | null }>(
+            `SELECT metadata FROM attendance_adjustments
+              WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'`,
+            [approvedRequest.employee_id, approvedRequest.correction_date],
+          );
+          if (dayAllocationRows.rows.some(row => hasObjectAllocations(row.metadata))) {
+            throw new DayAllocationConflictError();
+          }
           // Корректировка привязана к конкретному объекту → создаём manual_object
           // (как табель руководителя), а не day-level «Не определён». Снимаем конфликтующие
           // day-level записи дня (мьютекс day-level ↔ per-object).
@@ -1684,6 +1714,16 @@ const approve = async (req: AuthenticatedRequest, res: Response): Promise<void> 
 
     res.json({ success: true, data: result.row });
   } catch (err) {
+    if (err instanceof DayAllocationConflictError) {
+      // Транзакция откатилась: заявление осталось на согласовании, дневная корректировка
+      // и её вложения не тронуты.
+      res.status(409).json({
+        success: false,
+        code: 'DAY_ALLOCATION_CONFLICT',
+        error: err.message,
+      });
+      return;
+    }
     console.error('leave-requests.approve error:', err);
     res.status(500).json({ success: false, error: 'Ошибка одобрения заявления' });
   }

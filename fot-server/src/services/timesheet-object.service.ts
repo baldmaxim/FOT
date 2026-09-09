@@ -1,8 +1,12 @@
 import { query, type DbExecutor } from '../config/postgres.js';
 import { runMaybeParallel } from '../utils/db-parallel.js';
 import type { TimeStatus } from '../types/index.js';
-import { getInternalAccessPoints } from './skud-shared.service.js';
-import { listObjectIdsForEmployees } from './employee-skud-object-access.service.js';
+import { getInternalAccessPoints, PRESENCE_FAILURE_TYPE_IDS } from './skud-shared.service.js';
+import {
+  listObjectIdsForEmployees,
+  listSelectableObjectsForEmployee,
+  type ISelectableObject,
+} from './employee-skud-object-access.service.js';
 import {
   getAttributionObjectForEmployeeAt,
   listAttributionRowsForEmployees,
@@ -28,6 +32,78 @@ async function objectRows<T extends import('pg').QueryResultRow = import('pg').Q
 const BATCH_SIZE = 500;
 
 export const OBJECT_ADJUSTMENT_SOURCE_TYPE = 'manual_object';
+
+/**
+ * Распределение часов дневной корректировки по объектам. Живёт в metadata той же
+ * строки attendance_adjustments (source_type='manual'): id, автор, вложения и
+ * согласование при смене объектов не трогаются — в отличие от конверсии в
+ * manual_object, которая пересоздавала запись и уносила файлы.
+ */
+export const OBJECT_ALLOCATIONS_KEY = 'object_allocations';
+export const ALLOCATION_SOURCE_KEY = 'allocation_source';
+/** Больше десяти объектов за день — заведомо ошибка ввода, а не реальный маршрут. */
+export const MAX_OBJECT_ALLOCATIONS = 10;
+
+export interface IObjectAllocation {
+  object_id: string;
+  object_name: string;
+  /** Часы с точностью до сотых — тот же домен, что hours_override. */
+  hours: number;
+}
+
+const roundHours2 = (value: number): number => Math.round(value * 100) / 100;
+
+/**
+ * Читает аллокации из metadata. Любой мусор (не массив, битые элементы, hours <= 0)
+ * трактуется как «аллокаций нет»: выгрузки и табель не должны падать 500 из-за
+ * руками поправленной строки.
+ */
+export const readObjectAllocations = (
+  metadata: Record<string, unknown> | null | undefined,
+): IObjectAllocation[] => {
+  const raw = metadata?.[OBJECT_ALLOCATIONS_KEY];
+  if (!Array.isArray(raw)) return [];
+
+  const out: IObjectAllocation[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const row = item as Record<string, unknown>;
+    const objectId = typeof row.object_id === 'string' ? row.object_id.trim() : '';
+    const hours = Number(row.hours);
+    if (!objectId || !Number.isFinite(hours) || hours <= 0) continue;
+    out.push({
+      object_id: objectId,
+      object_name: typeof row.object_name === 'string' ? row.object_name : '',
+      hours: roundHours2(hours),
+    });
+  }
+  return out;
+};
+
+/**
+ * Канонический вид: сортировка по object_id и округление часов. Нужен, чтобы
+ * перестановка строк в форме не считалась изменением и не плодила аудит.
+ */
+export const canonicalizeAllocations = (list: IObjectAllocation[]): IObjectAllocation[] =>
+  [...list]
+    .map(item => ({ ...item, hours: roundHours2(item.hours) }))
+    .sort((left, right) => left.object_id.localeCompare(right.object_id));
+
+/** Сравнение по бизнес-смыслу (объект + часы), имя объекта не участвует. */
+export const allocationsEqual = (left: IObjectAllocation[], right: IObjectAllocation[]): boolean => {
+  const a = canonicalizeAllocations(left);
+  const b = canonicalizeAllocations(right);
+  if (a.length !== b.length) return false;
+  return a.every((item, index) =>
+    item.object_id === b[index].object_id
+    && Math.round(item.hours * 100) === Math.round(b[index].hours * 100));
+};
+
+/** Есть ли у дневной корректировки явное распределение по объектам. */
+export const hasObjectAllocations = (
+  metadata: Record<string, unknown> | null | undefined,
+): boolean => readObjectAllocations(metadata).length > 0;
+
 export const UNKNOWN_OBJECT_KEY = '__unknown_object__';
 export const UNKNOWN_OBJECT_NAME = 'Не определён';
 
@@ -481,12 +557,105 @@ const fetchHistoricalPrimaryObjects = async (
   return out;
 };
 
-export async function resolveDayObjectForAdjustment(params: {
+// Whitelist типов отказов живёт в skud-shared, чтобы список объектов для выбора
+// (employee-skud-object-access) и резолвер брали ровно один набор типов.
+export { PRESENCE_FAILURE_TYPE_IDS };
+
+export type ObjectResolutionSource =
+  | 'skud_day'
+  | 'failure_day'
+  | 'remote_attribution'
+  | 'history_90d';
+
+/**
+ * Результат подбора объекта дня.
+ * 'ambiguous' — ТЕРМИНАЛЬНЫЙ исход: по отказам доступа лидируют несколько объектов
+ * с одинаковым числом событий. Выбирать по алфавиту нельзя — это была бы та же
+ * тихая догадка, из-за которой день уезжал на «Дом 56». Решает человек, поэтому
+ * в history_90d не проваливаемся.
+ */
+export type ObjectResolution =
+  | { kind: 'resolved'; object_id: string; object_name: string; source: ObjectResolutionSource }
+  | { kind: 'ambiguous'; candidates: ISelectableObject[] }
+  | { kind: 'none' };
+
+interface IObjectVoteRow {
+  object_id: string;
+  object_name: string;
+  event_count: number;
+}
+
+/**
+ * Объект дня по ОТКАЗАМ доступа (skud_event_failures): человек приложил карту на
+ * объекте — значит он там был, независимо от того, открылся турникет или нет.
+ * Часов такое событие не даёт НИКОГДА, только объект.
+ */
+export async function resolveObjectFromFailuresAt(
+  employeeId: number,
+  workDate: string,
+): Promise<ObjectResolution> {
+  try {
+    const rows = await query<IObjectVoteRow>(
+      `SELECT sap.object_id::text AS object_id,
+              so.name             AS object_name,
+              COUNT(*)::int       AS event_count
+         FROM skud_event_failures f
+         JOIN skud_object_access_points sap
+           ON BTRIM(sap.access_point_name) = BTRIM(f.access_point)
+         JOIN skud_objects so
+           ON so.id = sap.object_id AND so.is_active = TRUE
+        WHERE f.employee_id = $1
+          AND f.event_date = $2::date
+          AND f.access_point IS NOT NULL
+          AND f.failure_type_id = ANY($3::int[])
+        GROUP BY sap.object_id, so.name
+        ORDER BY event_count DESC, so.name ASC`,
+      [employeeId, workDate, [...PRESENCE_FAILURE_TYPE_IDS]],
+    );
+    if (rows.length === 0) return { kind: 'none' };
+
+    const topCount = Number(rows[0].event_count);
+    const leaders = rows.filter(row => Number(row.event_count) === topCount);
+    if (leaders.length > 1) {
+      return {
+        kind: 'ambiguous',
+        candidates: leaders.map(row => ({
+          object_id: row.object_id,
+          object_name: row.object_name,
+        })),
+      };
+    }
+
+    return {
+      kind: 'resolved',
+      object_id: rows[0].object_id,
+      object_name: rows[0].object_name,
+      source: 'failure_day',
+    };
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    return { kind: 'none' };
+  }
+}
+
+/**
+ * Подбор объекта для дневной корректировки с указанием ИСТОЧНИКА.
+ * Порядок (первый сработавший выигрывает):
+ *   1. успешные проходы дня             → skud_day            (факт)
+ *   2. отказы доступа дня               → failure_day (факт) | ambiguous
+ *   3. датированная привязка удалёнщика → remote_attribution
+ *   4. максимум событий за 90 дней      → history_90d          (догадка)
+ *
+ * Успешный проход приоритетнее отказа: реальный вход надёжнее неудачной попытки.
+ * Шаг 4 остаётся последним и намеренно самым слабым — он считает КОЛИЧЕСТВО, а не
+ * свежесть, поэтому объект месячной давности может перевесить вчерашний.
+ */
+export async function resolveDayObjectDetailed(params: {
   employeeId: number;
   workDate: string;
   /** Если известен — избегаем лишнего resolveSchedule; иначе резолвим внутри. */
   scheduleType?: string;
-}): Promise<{ object_id: string; object_name: string } | null> {
+}): Promise<ObjectResolution> {
   const { employeeId, workDate } = params;
 
   // 1) Объект с максимумом СКУД-событий за этот день.
@@ -509,14 +678,25 @@ export async function resolveDayObjectForAdjustment(params: {
       [employeeId, workDate],
     );
     if (sameDay.length > 0) {
-      return { object_id: sameDay[0].object_id, object_name: sameDay[0].object_name };
+      return {
+        kind: 'resolved',
+        object_id: sameDay[0].object_id,
+        object_name: sameDay[0].object_name,
+        source: 'skud_day',
+      };
     }
   } catch (err) {
     if (!isMissingTableError(err)) throw err;
-    return null;
+    return { kind: 'none' };
   }
 
-  // 1.5) Удалёнщик без СКУД в этот день: явная датированная привязка к объекту.
+  // 2) Отказы доступа этого дня — факт присутствия на объекте: карта приложена,
+  // турникет не пустил. Стоит ВЫШЕ привязки и 90-дневной истории, но НИЖЕ
+  // реального прохода. Ничья по объектам терминальна (ambiguous), см. тип.
+  const byFailures = await resolveObjectFromFailuresAt(employeeId, workDate);
+  if (byFailures.kind !== 'none') return byFailures;
+
+  // 3) Удалёнщик без СКУД в этот день: явная датированная привязка к объекту.
   // Стоит ВЫШЕ 90-дневной истории (человеческое решение приоритетнее устаревших
   // проходов), но НИЖЕ реального СКУД дня — поэтому реальный объект не маскируется.
   let isRemote = params.scheduleType === 'remote';
@@ -530,10 +710,18 @@ export async function resolveDayObjectForAdjustment(params: {
   }
   if (isRemote) {
     const pinned = await getAttributionObjectForEmployeeAt(employeeId, workDate);
-    if (pinned) return pinned;
+    if (pinned) {
+      return {
+        kind: 'resolved',
+        object_id: pinned.object_id,
+        object_name: pinned.object_name,
+        source: 'remote_attribution',
+      };
+    }
   }
 
-  // 2) Объект с максимумом СКУД-событий за 90 дней до даты.
+  // 4) Объект с максимумом СКУД-событий за 90 дней до даты. Самый слабый источник:
+  // считает количество, а не свежесть, поэтому стоит последним.
   try {
     const history = await query<{ object_id: string; object_name: string }>(
       `SELECT sap.object_id::text AS object_id,
@@ -554,14 +742,275 @@ export async function resolveDayObjectForAdjustment(params: {
       [employeeId, workDate],
     );
     if (history.length > 0) {
-      return { object_id: history[0].object_id, object_name: history[0].object_name };
+      return {
+        kind: 'resolved',
+        object_id: history[0].object_id,
+        object_name: history[0].object_name,
+        source: 'history_90d',
+      };
     }
   } catch (err) {
     if (!isMissingTableError(err)) throw err;
   }
 
-  return null;
+  return { kind: 'none' };
 }
+
+export type AllocationValidationError =
+  | { code: 'ALLOCATION_SUM_MISMATCH'; expected: number; actual: number }
+  | { code: 'ALLOCATION_DUPLICATE_OBJECT'; object_id: string }
+  | { code: 'ALLOCATION_TOO_MANY' }
+  | { code: 'OBJECT_NOT_ALLOWED'; object_id: string; candidates: ISelectableObject[] };
+
+/**
+ * Проверяет присланное человеком распределение и подставляет имена объектов С СЕРВЕРА
+ * (клиентскому object_name не доверяем — он попал бы в metadata и в выгрузки).
+ *
+ * keepObjectIds — объекты, уже сохранённые в этой корректировке: их разрешаем оставить,
+ * даже если объект успели деактивировать, иначе старую правку нельзя было бы пересохранить.
+ */
+export async function validateRequestedAllocations(params: {
+  employeeId: number;
+  workDate: string;
+  hours: number;
+  requested: Array<{ object_id: string; hours: number }>;
+  keepObjectIds?: string[];
+}): Promise<
+  | { ok: true; allocations: IObjectAllocation[] }
+  | { ok: false; error: AllocationValidationError }
+> {
+  const { employeeId, workDate, hours, requested } = params;
+  const keep = new Set(params.keepObjectIds ?? []);
+
+  if (requested.length > MAX_OBJECT_ALLOCATIONS) {
+    return { ok: false, error: { code: 'ALLOCATION_TOO_MANY' } };
+  }
+
+  const seen = new Set<string>();
+  for (const item of requested) {
+    if (seen.has(item.object_id)) {
+      return { ok: false, error: { code: 'ALLOCATION_DUPLICATE_OBJECT', object_id: item.object_id } };
+    }
+    seen.add(item.object_id);
+  }
+
+  // Сравниваем в центичасах: домен hours_override — два знака после запятой.
+  const expected = Math.round(hours * 100);
+  const actual = requested.reduce((sum, item) => sum + Math.round(item.hours * 100), 0);
+  if (expected !== actual) {
+    return { ok: false, error: { code: 'ALLOCATION_SUM_MISMATCH', expected, actual } };
+  }
+
+  const selectable = await listSelectableObjectsForEmployee(employeeId, workDate);
+  const nameById = new Map(selectable.map(item => [item.object_id, item.object_name]));
+
+  const missingNames = requested
+    .map(item => item.object_id)
+    .filter(objectId => !nameById.has(objectId) && keep.has(objectId));
+  if (missingNames.length > 0) {
+    // Сохранённый ранее объект мог стать неактивным — имя берём напрямую из справочника.
+    const rows = await query<{ id: string; name: string }>(
+      `SELECT id::text AS id, name FROM skud_objects WHERE id = ANY($1::uuid[])`,
+      [missingNames],
+    );
+    for (const row of rows) nameById.set(row.id, row.name);
+  }
+
+  const allocations: IObjectAllocation[] = [];
+  for (const item of requested) {
+    const name = nameById.get(item.object_id);
+    if (!name) {
+      return {
+        ok: false,
+        error: { code: 'OBJECT_NOT_ALLOWED', object_id: item.object_id, candidates: selectable },
+      };
+    }
+    allocations.push({ object_id: item.object_id, object_name: name, hours: item.hours });
+  }
+
+  return { ok: true, allocations: canonicalizeAllocations(allocations) };
+}
+
+/** Один объект в предложении: сколько минут присутствия за ним подтверждено СКУД. */
+export interface IAllocationSuggestionSlice {
+  object_id: string;
+  object_name: string;
+  /** 0 — объект известен (непарный проход/отказ), но длительность из событий не выводится. */
+  minutes: number;
+}
+
+export interface IDayAllocationSuggestion {
+  distribution: IAllocationSuggestionSlice[];
+  resolution_source: ObjectResolutionSource | 'skud_day_unpaired' | null;
+  /** true — человек обязан подтвердить распределение: надёжных минут нет либо сигналы спорят. */
+  requires_allocation: boolean;
+  /** true — объект однозначно не определяется (вход на одном объекте, выход на другом; ничья). */
+  ambiguous: boolean;
+  candidates: ISelectableObject[];
+}
+
+interface IDayObjectEventRow {
+  event_time: string;
+  direction: 'entry' | 'exit' | null;
+  access_point: string | null;
+  object_id: string;
+  object_name: string;
+}
+
+/**
+ * ЧИТАЮЩИЙ резолвер ПОДСКАЗКИ для модалки корректировки. Умышленно отдельный от
+ * buildObjectAttendanceData: тот считает весь объектный табель, и правка его правил
+ * сдвинула бы исторические часы других сотрудников.
+ *
+ * Правило пары строже общего: вход и выход должны быть на ОДНОМ объекте. Вход на A и
+ * выход на B не доказывают, сколько человек провёл на каждом (между ними дорога, обед,
+ * пропущенные события) — такой день уходит в ambiguous, распределение задаёт человек.
+ */
+export async function resolveDayAllocationSuggestion(params: {
+  employeeId: number;
+  workDate: string;
+  scheduleType?: string;
+}): Promise<IDayAllocationSuggestion> {
+  const { employeeId, workDate } = params;
+  const empty: IDayAllocationSuggestion = {
+    distribution: [],
+    resolution_source: null,
+    requires_allocation: true,
+    ambiguous: false,
+    candidates: [],
+  };
+
+  let rows: IDayObjectEventRow[] = [];
+  try {
+    rows = await query<IDayObjectEventRow>(
+      `SELECT se.event_time::text AS event_time,
+              se.direction,
+              se.access_point,
+              sap.object_id::text  AS object_id,
+              so.name              AS object_name
+         FROM skud_events se
+         JOIN skud_object_access_points sap
+           ON BTRIM(sap.access_point_name) = BTRIM(se.access_point)
+         JOIN skud_objects so
+           ON so.id = sap.object_id AND so.is_active = TRUE
+        WHERE se.employee_id = $1
+          AND se.event_date = $2::date
+          AND se.access_point IS NOT NULL
+        ORDER BY se.event_time ASC`,
+      [employeeId, workDate],
+    );
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    return empty;
+  }
+
+  const internalPoints = await getNormalizedInternalPoints();
+  const events = rows.filter(row => {
+    const point = normalizeAccessPoint(row.access_point);
+    return point !== null && !internalPoints.has(point);
+  });
+
+  const nameById = new Map<string, string>();
+  for (const row of events) nameById.set(row.object_id, row.object_name);
+
+  const secondsOfDay = (value: string): number => {
+    const [h, m, sec] = value.split(':');
+    return (Number(h) || 0) * 3600 + (Number(m) || 0) * 60 + (Number(sec) || 0);
+  };
+
+  // Пары строим только внутри одного объекта; выход на другом объекте закрывает
+  // открытый вход БЕЗ начисления минут и помечает день спорным.
+  const minutesByObject = new Map<string, number>();
+  let openObjectId: string | null = null;
+  let openSeconds = 0;
+  let crossObjectPair = false;
+
+  for (const event of events) {
+    if (event.direction === 'entry') {
+      openObjectId = event.object_id;
+      openSeconds = secondsOfDay(event.event_time);
+      continue;
+    }
+    if (event.direction !== 'exit') continue;
+    if (openObjectId === null) continue;
+
+    if (openObjectId === event.object_id) {
+      const seconds = Math.max(0, secondsOfDay(event.event_time) - openSeconds);
+      minutesByObject.set(event.object_id, (minutesByObject.get(event.object_id) ?? 0) + Math.round(seconds / 60));
+    } else {
+      crossObjectPair = true;
+    }
+    openObjectId = null;
+  }
+
+  const pairedObjects = [...minutesByObject.entries()].filter(([, minutes]) => minutes > 0);
+  const objectsWithEvents = [...nameById.keys()];
+
+  if (pairedObjects.length > 0 && !crossObjectPair) {
+    const unpaired = objectsWithEvents.filter(objectId => !minutesByObject.has(objectId));
+    return {
+      distribution: pairedObjects.map(([objectId, minutes]) => ({
+        object_id: objectId,
+        object_name: nameById.get(objectId) ?? UNKNOWN_OBJECT_NAME,
+        minutes,
+      })),
+      resolution_source: 'skud_day',
+      // Есть объект, где человек отметился, но пары нет — часы по нему знает только человек.
+      requires_allocation: unpaired.length > 0,
+      ambiguous: false,
+      candidates: [],
+    };
+  }
+
+  // Пар нет (или вход/выход на разных объектах): минут не выводим, объект подтверждает человек.
+  const candidatesFromEvents: ISelectableObject[] = objectsWithEvents.map(objectId => ({
+    object_id: objectId,
+    object_name: nameById.get(objectId) ?? UNKNOWN_OBJECT_NAME,
+  }));
+
+  if (crossObjectPair || candidatesFromEvents.length > 1) {
+    return {
+      distribution: [],
+      resolution_source: null,
+      requires_allocation: true,
+      ambiguous: true,
+      candidates: candidatesFromEvents,
+    };
+  }
+
+  if (candidatesFromEvents.length === 1) {
+    return {
+      distribution: [{ ...candidatesFromEvents[0], minutes: 0 }],
+      resolution_source: 'skud_day_unpaired',
+      requires_allocation: true,
+      ambiguous: false,
+      candidates: candidatesFromEvents,
+    };
+  }
+
+  // Событий нет вовсе: отказы доступа → привязка удалёнщика → история 90 дней.
+  const fallback = await resolveDayObjectDetailed({ employeeId, workDate, scheduleType: params.scheduleType });
+  if (fallback.kind === 'ambiguous') {
+    return {
+      distribution: [],
+      resolution_source: null,
+      requires_allocation: true,
+      ambiguous: true,
+      candidates: fallback.candidates,
+    };
+  }
+  if (fallback.kind === 'resolved') {
+    return {
+      distribution: [{ object_id: fallback.object_id, object_name: fallback.object_name, minutes: 0 }],
+      resolution_source: fallback.source,
+      requires_allocation: true,
+      ambiguous: false,
+      candidates: [{ object_id: fallback.object_id, object_name: fallback.object_name }],
+    };
+  }
+  return empty;
+}
+
 
 const fetchObjectMappings = async (): Promise<{
   accessPointToObjectId: Map<string, string>;
@@ -983,8 +1432,23 @@ export async function buildObjectAttendanceData(params: {
     // 5) основной объект за 90 дней (historicalPrimaryByEmployee);
     // 6) нет сигнала — поровну по приписке (≥2 объектов);
     // 7) совсем ничего — UNKNOWN (редкий тру-фоллбек).
+    // 0) Явное распределение, заданное человеком в дневной форме (metadata.object_allocations).
+    // Сильнее любых сигналов СКУД и приписки: табельщица подтвердила, где человек работал.
+    // Веса — сами часы аллокаций, поэтому деление ниже вернёт ровно введённые значения.
+    const explicitAllocations = readObjectAllocations(adjustment.metadata);
+
     let targets: Array<{ objectKey: string; objectId: string | null; objectName: string; weight: number }>;
-    if (assigned.length === 1) {
+    if (explicitAllocations.length > 0) {
+      targets = explicitAllocations.map(allocation => ({
+        objectKey: allocation.object_id,
+        objectId: allocation.object_id,
+        // Имя из справочника: сохранённое в metadata могло устареть после переименования.
+        objectName: objectMappings.objectNameById.get(allocation.object_id)
+          || allocation.object_name
+          || UNKNOWN_OBJECT_NAME,
+        weight: Math.max(0, Math.round(allocation.hours * 100)),
+      }));
+    } else if (assigned.length === 1) {
       const objectId = assigned[0];
       targets = [{
         objectKey: objectId,

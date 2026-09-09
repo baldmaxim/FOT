@@ -4,6 +4,20 @@
 import { query } from '../config/postgres.js';
 import { normalizeMatchName } from './name-match.utils.js';
 
+/**
+ * Типы неуспешных СКУД-событий (skud_event_failures), означающих ФИЗИЧЕСКОЕ
+ * присутствие человека у считывателя объекта: карта приложена, но проход не состоялся.
+ *    7 = passDeny2     — карта отклонена (нет прав, истёк пропуск, чужая зона);
+ *   24 = accessAborted — доступ разрешён, но проход прерван (не прошёл турникет).
+ *
+ * Whitelist ОБЯЗАТЕЛЕН: в skud_event_failures пишется всё, кроме PASS_DETECTED
+ * (см. sigur.mapper.ts). Например apOnlineStatus (12) — это статус связи с точкой
+ * доступа, к человеку он не относится и приходит вообще без employee_id.
+ *
+ * Такое событие даёт ОБЪЕКТ, но никогда не даёт ЧАСОВ.
+ */
+export const PRESENCE_FAILURE_TYPE_IDS = [7, 24] as const;
+
 // ─── Кэш дерева отделов ───
 
 export interface IDeptTreeRow {

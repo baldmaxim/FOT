@@ -50,7 +50,20 @@ import {
   upsertAttendanceAdjustment,
 } from '../services/attendance.service.js';
 import { formatDateToISO } from '../utils/date.utils.js';
-import { OBJECT_ADJUSTMENT_SOURCE_TYPE, resolveDayObjectForAdjustment } from '../services/timesheet-object.service.js';
+import {
+  ALLOCATION_SOURCE_KEY,
+  allocationsEqual,
+  MAX_OBJECT_ALLOCATIONS,
+  OBJECT_ADJUSTMENT_SOURCE_TYPE,
+  OBJECT_ALLOCATIONS_KEY,
+  hasObjectAllocations,
+  readObjectAllocations,
+  resolveDayAllocationSuggestion,
+  validateRequestedAllocations,
+  type AllocationValidationError,
+  type IObjectAllocation,
+} from '../services/timesheet-object.service.js';
+import { areObjectCorrectionsAllowed } from '../services/correction-restrictions.service.js';
 import { listSelectableObjectsForEmployee } from '../services/employee-skud-object-access.service.js';
 import {
   formatDateShift,
@@ -162,27 +175,128 @@ function buildCompactDailySchedules(
   };
 }
 
+const allocationInputSchema = z.object({
+  object_id: z.string().trim().min(1).max(255),
+  hours: z.number().min(0).max(24),
+});
+
+/** Объектная правка пришла на день, размеченный дневным распределением по объектам. */
+class DayAllocationConflictError extends Error {
+  constructor() {
+    super('За этот день часы распределены по объектам в корректировке дня. Измените её в режиме «По сотрудникам».');
+    this.name = 'DayAllocationConflictError';
+  }
+}
+
+/** Конфликт «дневное распределение ↔ объектные строки того же дня». */
+class ObjectAdjustmentsConflictError extends Error {
+  constructor() {
+    super('За этот день есть корректировки по объектам. Измените их во вкладке «По объектам».');
+    this.name = 'ObjectAdjustmentsConflictError';
+  }
+}
+
+/**
+ * Приводит вход к списку {object_id, hours}. Короткая форма object_id = весь день на
+ * одном объекте, поэтому часы берём из самой корректировки.
+ */
+function normalizeAllocationInput(
+  allocations: Array<{ object_id: string; hours: number }> | undefined,
+  objectId: string | null,
+  hours: number,
+): Array<{ object_id: string; hours: number }> {
+  if (allocations !== undefined) return allocations;
+  if (objectId) return [{ object_id: objectId, hours }];
+  return [];
+}
+
+function respondAllocationError(res: Response, error: AllocationValidationError): Response {
+  if (error.code === 'OBJECT_NOT_ALLOWED') {
+    return res.status(422).json({
+      success: false,
+      code: 'OBJECT_NOT_ALLOWED',
+      error: 'Объект недоступен для этого сотрудника на эту дату.',
+      candidates: error.candidates,
+    });
+  }
+  if (error.code === 'ALLOCATION_SUM_MISMATCH') {
+    return res.status(422).json({
+      success: false,
+      code: 'ALLOCATION_SUM_MISMATCH',
+      error: `Сумма часов по объектам (${error.actual / 100}) не совпадает с часами корректировки (${error.expected / 100}).`,
+    });
+  }
+  if (error.code === 'ALLOCATION_DUPLICATE_OBJECT') {
+    return res.status(422).json({
+      success: false,
+      code: 'ALLOCATION_DUPLICATE_OBJECT',
+      error: 'Один объект указан дважды — объедините строки.',
+    });
+  }
+  return res.status(422).json({
+    success: false,
+    code: 'ALLOCATION_TOO_MANY',
+    error: `Слишком много объектов за один день (максимум ${MAX_OBJECT_ALLOCATIONS}).`,
+  });
+}
+
+/**
+ * Merge metadata для дневной корректировки: посторонние ключи сохраняются, массив
+ * аллокаций заменяется целиком. При переходе в необъектный статус (отпуск/больничный)
+ * или обнулении часов ключи распределения снимаются — иначе остались бы часы по
+ * объектам у дня, где часов нет.
+ */
+function buildAllocationMetadata(
+  existing: Record<string, unknown> | null,
+  allocations: IObjectAllocation[],
+  eligible: boolean,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...(existing ?? {}) };
+  if (!eligible) {
+    delete next[OBJECT_ALLOCATIONS_KEY];
+    delete next[ALLOCATION_SOURCE_KEY];
+    return next;
+  }
+  if (allocations.length === 0) return next;
+  next[OBJECT_ALLOCATIONS_KEY] = allocations;
+  // Присланное человеком распределение всегда «ручной выбор», даже если совпало с
+  // подсказкой: иначе один и тот же запрос менял бы происхождение вслед за СКУД.
+  next[ALLOCATION_SOURCE_KEY] = 'manual_choice';
+  return next;
+}
+
 const createEntrySchema = z.object({
   employee_id: z.number().int().positive(),
   work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   status: z.enum(validStatuses),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
-  // Явный объект корректировки — присылается фронтом после ответа OBJECT_REQUIRED,
-  // когда авто-привязка (resolveDayObjectForAdjustment) не определила объект.
+  // Объект корректировки. object_id — короткая форма «весь день на одном объекте»,
+  // object_allocations — распределение часов по объектам. Пустой массив снимает
+  // распределение; отсутствие поля означает «не трогать текущее».
   object_id: z.string().trim().min(1).max(255).nullable().optional(),
+  object_allocations: z.array(allocationInputSchema).max(MAX_OBJECT_ALLOCATIONS).optional(),
 });
 
 const updateEntrySchema = z.object({
   status: z.enum(validStatuses).optional(),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
   notes: z.string().max(500).nullable().optional(),
+  // Смена объекта/распределения у дневной корректировки. Отсутствие поля сохраняет
+  // текущее распределение, пустой массив — снимает его.
+  object_id: z.string().trim().min(1).max(255).optional(),
+  object_allocations: z.array(allocationInputSchema).max(MAX_OBJECT_ALLOCATIONS).optional(),
 });
 
 const bulkCorrectionSchema = z.object({
   items: z.array(z.object({
     employee_id: z.number().int().positive(),
     work_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    // Идентификатор ячейки на клиенте — чтобы сопоставить ответ (applied/needs_object)
+    // с конкретной клеткой грида и переотправить только нерешённые.
+    client_item_id: z.string().trim().min(1).max(128).optional(),
+    // Явный объект для этой ячейки (второй шаг после needs_object).
+    object_id: z.string().trim().min(1).max(255).optional(),
   })).min(1).max(1000),
   status: z.enum(validStatuses),
   hours_worked: z.number().min(0).max(24).nullable().optional(),
@@ -1758,6 +1872,19 @@ async function applyObjectEntryMutation(
           [item.employee_id, item.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE, item.object_key],
         ).then(rows => rows[0] ?? null);
 
+        // Дневная корректировка с распределением по объектам — не «противоположный тип»,
+        // а осознанная разметка дня. Удалять её нельзя (унесли бы вложения), поэтому
+        // конфликтуем ДО DELETE и до постановки файлов в очередь на чистку.
+        const dayRows = await queryWith<{ metadata: Record<string, unknown> | null }>(
+          exec,
+          `SELECT metadata FROM attendance_adjustments
+            WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual'`,
+          [item.employee_id, item.work_date],
+        );
+        if (dayRows.some(row => hasObjectAllocations(row.metadata))) {
+          throw new DayAllocationConflictError();
+        }
+
         // Per-object корректировка взаимоисключающа с day-level: снимаем все 'manual'
         // строки на тот же (employee, work_date). RETURNING нужен, чтобы после коммита
         // каскадно подчистить файлы и R2-объекты этих корректировок.
@@ -1892,6 +2019,9 @@ async function applyObjectEntryMutation(
   } catch (err) {
     if (err instanceof ApprovalLockedError) {
       return reject(409, closedPeriodMessage(err.lock, req.user), TIMESHEET_PERIOD_CLOSED);
+    }
+    if (err instanceof DayAllocationConflictError) {
+      return reject(409, err.message, 'DAY_ALLOCATION_CONFLICT');
     }
     if (err instanceof CorrectionRestrictionError) {
       const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
@@ -2416,8 +2546,10 @@ export const timesheetController = {
         displayMode: effectiveDisplayMode,
         includeObjectDetails,
         // Интерактивный табель: показываем дни, где есть только объектная корректировка
-        // (без СКУД), в режиме «по сотрудникам» (#3). Расчёт зарплаты/экспорт сервис
-        // вызывают напрямую без этого флага — их числа не меняются.
+        // (без СКУД), в режиме «по сотрудникам» (#3). Расчёт зарплаты вызывает сервис
+        // напрямую без этого флага — его числа не меняются. Экспорт флаг тоже включает,
+        // но с отсечкой synthesizeObjectOnlyDaysUpTo; здесь отсечки нет намеренно —
+        // правка, внесённая заранее, должна быть видна табельщице сразу.
         synthesizeObjectOnlyDays: true,
       });
       mark(includeObjectDetails ? 'attendance_with_objects' : 'attendance');
@@ -2874,38 +3006,58 @@ export const timesheetController = {
         isTimekeeper(req),
       );
 
-      // Если день рабочий и часы заданы — корректировка обязана быть привязана к
-      // конкретному объекту, иначе попадёт в группу «Не определён» в режиме «По объектам».
-      // 1) авто-привязка (СКУД-объект дня → исторический primary);
-      // 2) явный object_id от клиента (после ответа OBJECT_REQUIRED);
-      // 3) если не определён и у сотрудника есть объекты — требуем выбор (422).
-      const isWorkHours = parsed.status === 'work' && typeof normalizedHours === 'number' && normalizedHours > 0;
-      let resolvedObject = isWorkHours
-        ? await resolveDayObjectForAdjustment({
+      // Объекты дневной корректировки. Строка ВСЕГДА остаётся day-level ('manual'):
+      // распределение живёт в metadata.object_allocations, поэтому id, автор, вложения и
+      // согласование переживают смену объекта (конверсия в manual_object пересоздавала
+      // запись и уносила файлы).
+      const hasExplicitHours = typeof normalizedHours === 'number' && normalizedHours > 0;
+      const allocationsEligible = parsed.status === 'manual' && hasExplicitHours;
+      // Роль с запретом объектных правок распределение не задаёт, и требовать его нельзя:
+      // поле у неё скрыто, иначе корректировку стало бы невозможно сохранить.
+      const roleAllowsObjects = allocationsEligible
+        ? await areObjectCorrectionsAllowed(req.user.system_role_id)
+        : false;
+
+      let allocations: IObjectAllocation[] = [];
+      if (allocationsEligible && roleAllowsObjects) {
+        const requested = normalizeAllocationInput(
+          parsed.object_allocations,
+          parsed.object_id ?? null,
+          normalizedHours as number,
+        );
+        if (requested.length > 0) {
+          const validated = await validateRequestedAllocations({
             employeeId: parsed.employee_id,
             workDate: parsed.work_date,
-          })
-        : null;
-      if (isWorkHours) {
-        if (parsed.object_id) {
-          const selectable = await listSelectableObjectsForEmployee(parsed.employee_id);
-          const match = selectable.find((o) => o.object_id === parsed.object_id);
-          resolvedObject = {
-            object_id: parsed.object_id,
-            object_name: match?.object_name ?? resolvedObject?.object_name ?? 'Объект',
-          };
-        }
-        if (!resolvedObject) {
-          const candidates = await listSelectableObjectsForEmployee(parsed.employee_id);
-          // Есть из чего выбрать → требуем явный объект. Нет объектов вовсе — редкий
-          // тру-фоллбек: оставляем day-level (ниже), блокировать ввод нечем.
-          if (candidates.length > 0) {
-            return res.status(422).json({
-              success: false,
-              code: 'OBJECT_REQUIRED',
-              error: 'Не удалось определить объект. Выберите объект для корректировки.',
-              candidates,
-            });
+            hours: normalizedHours as number,
+            requested,
+          });
+          if (!validated.ok) return respondAllocationError(res, validated.error);
+          allocations = validated.allocations;
+        } else {
+          // Клиент объект не прислал: требуем подтверждение только там, где надёжного
+          // распределения по минутам нет (непарный проход, отказы, спорные сигналы).
+          const suggestion = await resolveDayAllocationSuggestion({
+            employeeId: parsed.employee_id,
+            workDate: parsed.work_date,
+          });
+          if (suggestion.requires_allocation) {
+            const candidates = suggestion.candidates.length > 0
+              ? suggestion.candidates
+              : await listSelectableObjectsForEmployee(parsed.employee_id, parsed.work_date);
+            // Объектов у сотрудника нет вовсе — блокировать ввод нечем, пишем как раньше.
+            if (candidates.length > 0) {
+              return res.status(422).json({
+                success: false,
+                code: suggestion.ambiguous ? 'MULTI_OBJECT_REQUIRED' : 'OBJECT_REQUIRED',
+                error: suggestion.ambiguous
+                  ? 'События дня указывают на несколько объектов. Распределите часы по объектам.'
+                  : 'Не удалось определить объект. Укажите, где сотрудник работал.',
+                candidates,
+                suggested_distribution: suggestion.distribution,
+                resolution_source: suggestion.resolution_source,
+              });
+            }
           }
         }
       }
@@ -2918,17 +3070,33 @@ export const timesheetController = {
           // Повторно под локом: pre-check мог устареть (параллельный submit).
           await assertNotLockedInTx(req, [{ employeeId: parsed.employee_id, workDate: parsed.work_date }], exec);
 
-          const targetSourceType = resolvedObject ? OBJECT_ADJUSTMENT_SOURCE_TYPE : 'manual';
-          const targetSourceId = resolvedObject ? resolvedObject.object_id : 'manual';
           // Строку, которую сейчас переписываем, исключаем из hasApprovedWorkOnDate:
           // иначе её старая work-версия сработала бы «основанием» для самой себя.
-          const conflictingId = await queryWith<{ id: number | string }>(
+          // Читаем и metadata: посторонние ключи обязаны пережить запись, а общий
+          // upsertAttendanceAdjustment заменяет metadata целиком.
+          const conflictingRow = await queryWith<{ id: number | string; metadata: Record<string, unknown> | null }>(
             exec,
-            `SELECT id FROM attendance_adjustments
-              WHERE employee_id = $1 AND work_date = $2 AND source_type = $3 AND source_id = $4
+            `SELECT id, metadata FROM attendance_adjustments
+              WHERE employee_id = $1 AND work_date = $2 AND source_type = 'manual' AND source_id = 'manual'
               LIMIT 1 FOR UPDATE`,
-            [parsed.employee_id, parsed.work_date, targetSourceType, targetSourceId],
-          ).then(rows => (rows[0] ? Number(rows[0].id) : null));
+            [parsed.employee_id, parsed.work_date],
+          ).then(rows => rows[0] ?? null);
+          const conflictingId = conflictingRow ? Number(conflictingRow.id) : null;
+
+          // Явное распределение несовместимо с объектными строками того же дня. Раньше
+          // day-level запись их удаляла; теперь при аллокациях отказываемся ДО любых
+          // побочных эффектов — иначе снесли бы правку из вкладки «По объектам» или
+          // материализацию согласованного заявления вместе с её вложениями.
+          if (allocations.length > 0) {
+            const occupied = await queryWith<{ id: number | string }>(
+              exec,
+              `SELECT id FROM attendance_adjustments
+                WHERE employee_id = $1 AND work_date = $2 AND source_type = $3
+                LIMIT 1`,
+              [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE],
+            );
+            if (occupied.length > 0) throw new ObjectAdjustmentsConflictError();
+          }
 
           const approvalStatus = 'resolved' in entryPrecheck
             ? entryPrecheck.resolved
@@ -2936,42 +3104,33 @@ export const timesheetController = {
                 { ...entryPrecheck.quota, excludeAdjustmentId: conflictingId }, exec,
               );
 
-          // Мьютекс day-level ↔ per-object: снимаем строки противоположного типа.
-          await executeWith(
-            exec,
-            `DELETE FROM attendance_adjustments
-               WHERE employee_id = $1 AND work_date = $2 AND source_type = $3`,
-            [parsed.employee_id, parsed.work_date, resolvedObject ? 'manual' : OBJECT_ADJUSTMENT_SOURCE_TYPE],
-          );
+          // Мьютекс day-level ↔ per-object: без аллокаций поведение прежнее — дневная
+          // строка снимает объектные. С аллокациями сюда не доходим (конфликт выше).
+          if (allocations.length === 0) {
+            await executeWith(
+              exec,
+              `DELETE FROM attendance_adjustments
+                 WHERE employee_id = $1 AND work_date = $2 AND source_type = $3`,
+              [parsed.employee_id, parsed.work_date, OBJECT_ADJUSTMENT_SOURCE_TYPE],
+            );
+          }
 
-          const saved = resolvedObject
-            ? await upsertAttendanceAdjustment({
-                employee_id: parsed.employee_id,
-                work_date: parsed.work_date,
-                status: parsed.status,
-                hours_override: normalizedHours,
-                source_type: OBJECT_ADJUSTMENT_SOURCE_TYPE,
-                source_id: resolvedObject.object_id,
-                reason: parsed.notes ?? null,
-                created_by: req.user.id,
-                approval_status: approvalStatus,
-                metadata: {
-                  object_id: resolvedObject.object_id,
-                  object_name: resolvedObject.object_name,
-                  auto_resolved: true,
-                },
-              }, exec)
-            : await upsertAttendanceAdjustment({
-                employee_id: parsed.employee_id,
-                work_date: parsed.work_date,
-                status: parsed.status,
-                hours_override: normalizedHours,
-                source_type: 'manual',
-                source_id: 'manual',
-                reason: parsed.notes ?? null,
-                created_by: req.user.id,
-                approval_status: approvalStatus,
-              }, exec);
+          const saved = await upsertAttendanceAdjustment({
+            employee_id: parsed.employee_id,
+            work_date: parsed.work_date,
+            status: parsed.status,
+            hours_override: normalizedHours,
+            source_type: 'manual',
+            source_id: 'manual',
+            reason: parsed.notes ?? null,
+            created_by: req.user.id,
+            approval_status: approvalStatus,
+            metadata: buildAllocationMetadata(
+              (conflictingRow?.metadata ?? null) as Record<string, unknown> | null,
+              allocations,
+              allocationsEligible,
+            ),
+          }, exec);
 
           return {
             raw: saved,
@@ -2997,16 +3156,14 @@ export const timesheetController = {
 	      const auditFullName = await loadEmployeeFullNameForAudit(parsed.employee_id);
 
 	      await auditService.logFromRequest(req, req.user.id, 'CREATE_TIMESHEET_ENTRY', {
-	        entityType: resolvedObject ? 'timesheet_object_entry' : 'timesheet',
-	        entityId: resolvedObject
-            ? `${parsed.employee_id}:${parsed.work_date}:${resolvedObject.object_id}`
-            : String(data.id),
+	        entityType: 'timesheet',
+	        entityId: String(data.id),
 	        details: {
 	          employee_id: parsed.employee_id,
           employee_full_name: auditFullName,
           work_date: parsed.work_date,
           status: parsed.status,
-          ...(resolvedObject ? { object_id: resolvedObject.object_id, object_name: resolvedObject.object_name, auto_resolved: true } : {}),
+          ...(allocations.length > 0 ? { object_allocations: allocations } : {}),
         },
       });
 
@@ -3014,6 +3171,13 @@ export const timesheetController = {
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
+      }
+      if (err instanceof ObjectAdjustmentsConflictError) {
+        return res.status(409).json({
+          success: false,
+          code: 'OBJECT_ADJUSTMENTS_CONFLICT',
+          error: err.message,
+        });
       }
       if (err instanceof CorrectionRestrictionError) {
         return res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
@@ -3155,19 +3319,66 @@ export const timesheetController = {
     }
   },
 
-  /** GET /api/timesheet/employees/:employeeId/objects — объекты сотрудника для привязки корректировки */
+  /**
+   * GET /api/timesheet/employees/:employeeId/objects?work_date=YYYY-MM-DD&adjustment_id=123
+   * Объекты сотрудника + текущее распределение корректировки + подсказка по СКУД.
+   *
+   * work_date НЕобязателен (fallback — сегодня): бэкенд деплоится раньше фронта, и
+   * старый бандл без этого параметра не должен получать 400. Когда дата есть — и доступ,
+   * и окно списка объектов считаются именно на неё.
+   *
+   * adjustment_id привязывает current_allocations к КОНКРЕТНОЙ записи: на дне может
+   * лежать несколько строк, и без него вернулось бы распределение не той корректировки.
+   */
   async listEmployeeObjects(req: AuthenticatedRequest, res: Response) {
     try {
       const employeeId = Number.parseInt(req.params.employeeId, 10);
       if (!Number.isInteger(employeeId) || employeeId <= 0) {
         return res.status(400).json({ success: false, error: 'Некорректный ID сотрудника' });
       }
-      const todayStr = formatDateToISO(new Date());
-      if (!(await canAccessEmployeeForTimesheetDate(req, employeeId, todayStr))) {
+      const workDateRaw = typeof req.query.work_date === 'string'
+        && /^\d{4}-\d{2}-\d{2}$/.test(req.query.work_date)
+        ? req.query.work_date
+        : formatDateToISO(new Date());
+      if (!(await canAccessEmployeeForTimesheetDate(req, employeeId, workDateRaw))) {
         return res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
       }
-      const data = await listSelectableObjectsForEmployee(employeeId);
-      res.json({ success: true, data });
+
+      const adjustmentIdRaw = typeof req.query.adjustment_id === 'string'
+        ? Number.parseInt(req.query.adjustment_id, 10)
+        : NaN;
+      const adjustmentId = Number.isInteger(adjustmentIdRaw) && adjustmentIdRaw > 0 ? adjustmentIdRaw : null;
+
+      const [candidates, suggestion, roleAllowsObjects, existing] = await Promise.all([
+        listSelectableObjectsForEmployee(employeeId, workDateRaw),
+        resolveDayAllocationSuggestion({ employeeId, workDate: workDateRaw }),
+        areObjectCorrectionsAllowed(req.user.system_role_id),
+        adjustmentId ? getAttendanceAdjustmentById(adjustmentId) : Promise.resolve(null),
+      ]);
+
+      // Распределение отдаём только если запись действительно принадлежит этому дню
+      // и сотруднику: иначе модалка показала бы объекты чужой корректировки.
+      const belongsToDay = existing
+        && Number(existing.employee_id) === employeeId
+        && String(existing.work_date ?? '').slice(0, 10) === workDateRaw;
+      const currentAllocations = belongsToDay
+        ? readObjectAllocations(existing.metadata as Record<string, unknown> | null)
+        : [];
+
+      res.json({
+        success: true,
+        data: candidates,
+        current_allocations: currentAllocations,
+        // Минуты, а не часы: эндпоинт не знает, сколько часов человек введёт в форме.
+        // Фронт раскладывает введённый итог пропорционально этим весам.
+        suggested_distribution: suggestion.distribution,
+        resolution_source: suggestion.resolution_source,
+        // Роль без права на объектные правки распределение не задаёт — и требовать его
+        // нельзя, иначе она не сможет сохранить обычную дневную корректировку.
+        requires_allocation: roleAllowsObjects && candidates.length > 0 && suggestion.requires_allocation,
+        ambiguous: suggestion.ambiguous,
+        object_entries_allowed: roleAllowsObjects,
+      });
     } catch (err) {
       console.error('timesheet.listEmployeeObjects error:', err);
       res.status(500).json({ success: false, error: 'Ошибка получения объектов' });
@@ -3185,6 +3396,8 @@ export const timesheetController = {
 	      if (!existing) {
 	        return res.status(404).json({ success: false, error: 'Запись не найдена' });
 	      }
+	      // Объектные строки правятся только во вкладке «По объектам»: дневная форма их
+	      // не создаёт (объекты дневной корректировки живут в metadata.object_allocations).
 	      if (String(existing.source_type) === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
 	        return res.status(409).json({
 	          success: false,
@@ -3326,6 +3539,86 @@ export const timesheetController = {
           || (hoursPatch.hours_override !== undefined
             && Number(hoursPatch.hours_override ?? 0) !== Number(existing.hours_override ?? 0));
 
+        // Распределение по объектам живёт в metadata ЭТОЙ ЖЕ строки, поэтому id, автор,
+        // вложения и решение согласующего смену объекта переживают без изменений.
+        const existingAllocations = readObjectAllocations(existing.metadata as Record<string, unknown> | null);
+        const previousHours = Number(existing.hours_override ?? 0);
+        const finalHours = hoursPatch.hours_override !== undefined
+          ? Number(hoursPatch.hours_override ?? 0)
+          : previousHours;
+        const allocationsEligible = nextStatus === 'manual' && finalHours > 0;
+        const allocationsRequested = parsed.object_allocations !== undefined || parsed.object_id !== undefined;
+        const roleAllowsObjects = allocationsRequested || allocationsEligible
+          ? await areObjectCorrectionsAllowed(req.user.system_role_id)
+          : false;
+
+        // null = «клиент распределение не трогает».
+        let nextAllocations: IObjectAllocation[] | null = null;
+        if (!allocationsEligible) {
+          // Отпуск/больничный/ноль часов: часов по объектам быть не может.
+          nextAllocations = existingAllocations.length > 0 ? [] : null;
+        } else if (allocationsRequested) {
+          if (!roleAllowsObjects) {
+            return res.status(403).json({
+              success: false,
+              code: 'OBJECT_ENTRIES_DISABLED',
+              error: 'Корректировки по объектам недоступны для вашей роли.',
+            });
+          }
+          const requested = normalizeAllocationInput(
+            parsed.object_allocations,
+            parsed.object_id ?? null,
+            finalHours,
+          );
+          if (requested.length === 0) {
+            // Пустой массив = явное снятие. Мимо обязательного подтверждения не пускаем.
+            const suggestion = await resolveDayAllocationSuggestion({
+              employeeId: Number(existing.employee_id),
+              workDate: String(existing.work_date),
+            });
+            if (suggestion.requires_allocation) {
+              return res.status(422).json({
+                success: false,
+                code: 'ALLOCATION_REQUIRED',
+                error: 'Для этого дня объект нужно указать явно — события СКУД его не подтверждают.',
+                candidates: suggestion.candidates,
+                suggested_distribution: suggestion.distribution,
+              });
+            }
+            nextAllocations = [];
+          } else {
+            const validated = await validateRequestedAllocations({
+              employeeId: Number(existing.employee_id),
+              workDate: String(existing.work_date),
+              hours: finalHours,
+              requested,
+              keepObjectIds: existingAllocations.map(item => item.object_id),
+            });
+            if (!validated.ok) return respondAllocationError(res, validated.error);
+            nextAllocations = validated.allocations;
+          }
+        } else if (existingAllocations.length > 0 && finalHours !== previousHours) {
+          // Часы поменяли, распределение не прислали.
+          if (existingAllocations.length === 1) {
+            // Весь день на одном объекте — часы единственной строки просто следуют за итогом.
+            nextAllocations = [{ ...existingAllocations[0], hours: finalHours }];
+          } else {
+            return res.status(422).json({
+              success: false,
+              code: 'ALLOCATION_REQUIRED',
+              error: 'Часы распределены по нескольким объектам — укажите новое распределение.',
+              current_allocations: existingAllocations,
+            });
+          }
+        }
+
+        // Одинаковое распределение (в т.ч. переставленное местами) — не изменение.
+        const allocationsChanged = nextAllocations !== null
+          && !allocationsEqual(nextAllocations, existingAllocations);
+        // Правка ТОЛЬКО распределения не должна перебивать автора в реестре корректировок
+        // (там показывается updated_by ?? created_by) — редактор виден в аудите.
+        const allocationOnlyUpdate = allocationsChanged && !significantUpdate && parsed.notes === undefined;
+
         // Справочная часть резолвера — до lock; квотная и запись — внутри него.
         const updatePrecheck = significantUpdate
           ? await resolveAdjustmentApprovalPrecheck(
@@ -3349,6 +3642,30 @@ export const timesheetController = {
               exec,
             );
 
+            // Явное распределение несовместимо с объектными строками того же дня:
+            // проверяем ДО записи и ничего не удаляем — чужая строка и её вложения целы.
+            if (allocationsChanged && (nextAllocations?.length ?? 0) > 0) {
+              const occupiedRows = await queryWith<{ id: number | string }>(
+                exec,
+                `SELECT id FROM attendance_adjustments
+                  WHERE employee_id = $1 AND work_date = $2 AND source_type = $3
+                  LIMIT 1`,
+                [Number(existing.employee_id), String(existing.work_date), OBJECT_ADJUSTMENT_SOURCE_TYPE],
+              );
+              if (occupiedRows.length > 0) throw new ObjectAdjustmentsConflictError();
+            }
+
+            // metadata мержим из ЗАБЛОКИРОВАННОЙ строки: параллельное сохранение иначе
+            // затёрло бы чужие ключи (общий upsert пишет metadata целиком).
+            const lockedRows = allocationsChanged
+              ? await queryWith<{ metadata: Record<string, unknown> | null }>(
+                  exec,
+                  `SELECT metadata FROM attendance_adjustments WHERE id = $1 FOR UPDATE`,
+                  [id],
+                )
+              : [];
+            const lockedMetadata = lockedRows[0]?.metadata ?? null;
+
             let approvalStatus: 'auto_approved' | 'pending' | undefined;
             if (updatePrecheck) {
               approvalStatus = 'resolved' in updatePrecheck
@@ -3361,7 +3678,17 @@ export const timesheetController = {
               // пережить смену статуса, даже если клиент не прислал hours_worked.
               ...hoursPatch,
               ...(parsed.notes !== undefined ? { reason: parsed.notes ?? null } : {}),
-              updated_by: req.user.id,
+              // approval_status здесь НЕ передаётся при незначимой правке (см. significantUpdate),
+              // поэтому смена одного лишь объекта сохраняет approved_by/approved_at.
+              ...(allocationsChanged ? {
+                metadata: buildAllocationMetadata(
+                  lockedMetadata,
+                  nextAllocations ?? [],
+                  allocationsEligible,
+                ),
+              } : {}),
+              // Автора не перебиваем, когда меняется только распределение по объектам.
+              ...(allocationOnlyUpdate ? {} : { updated_by: req.user.id }),
               ...(approvalStatus ? { approval_status: approvalStatus } : {}),
             }, exec);
             if (!row) return { updated: null, tail: [] as IReapprovalTransition[] };
@@ -3414,6 +3741,13 @@ export const timesheetController = {
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
+      }
+      if (err instanceof ObjectAdjustmentsConflictError) {
+        return res.status(409).json({
+          success: false,
+          code: 'OBJECT_ADJUSTMENTS_CONFLICT',
+          error: err.message,
+        });
       }
       if (err instanceof CorrectionRestrictionError) {
         return res.status(422).json({ success: false, error: err.message, code: err.code, details: err.details });
@@ -3475,6 +3809,52 @@ export const timesheetController = {
       }
       const employeeIds = [...new Set(uniqueItems.map(item => item.employee_id))];
       const plannedHoursByItem = await resolvePlannedHoursByItems(uniqueItems);
+
+      // Объекты в bulk не задаются: одна общая сумма часов не говорит, как разложить их
+      // между объектами. Дневные строки с распределением по НЕСКОЛЬКИМ объектам массовая
+      // правка не трогает — пропускаем такие ячейки и сообщаем об этом явно.
+      const skippedItems: Array<{
+        client_item_id?: string; employee_id: number; work_date: string; code: string; error: string;
+      }> = [];
+      const existingAllocationRows = await query<{
+        employee_id: number; work_date: string; metadata: Record<string, unknown> | null;
+      }>(
+        `SELECT employee_id, work_date::text AS work_date, metadata
+           FROM attendance_adjustments
+          WHERE source_type = 'manual'
+            AND employee_id = ANY($1::int[])
+            AND work_date = ANY($2::date[])`,
+        [
+          [...new Set(uniqueItems.map(item => item.employee_id))],
+          [...new Set(uniqueItems.map(item => item.work_date))],
+        ],
+      );
+      const multiObjectKeys = new Set(
+        existingAllocationRows
+          .filter(row => readObjectAllocations(row.metadata).length > 1)
+          .map(row => `${Number(row.employee_id)}_${String(row.work_date).slice(0, 10)}`),
+      );
+      const allocationByKey = new Map(
+        existingAllocationRows.map(row => [
+          `${Number(row.employee_id)}_${String(row.work_date).slice(0, 10)}`,
+          { metadata: row.metadata, allocations: readObjectAllocations(row.metadata) },
+        ]),
+      );
+      let itemsToWrite = uniqueItems;
+      if (multiObjectKeys.size > 0) {
+        itemsToWrite = uniqueItems.filter(item => {
+          const key = `${item.employee_id}_${item.work_date}`;
+          if (!multiObjectKeys.has(key)) return true;
+          skippedItems.push({
+            client_item_id: item.client_item_id,
+            employee_id: item.employee_id,
+            work_date: item.work_date,
+            code: 'ALLOCATION_REQUIRED',
+            error: 'Часы за этот день распределены по нескольким объектам — измените их в корректировке дня.',
+          });
+          return false;
+        });
+      }
 
       // PREFLIGHT: ограничения роли (только-аномалии / не-больше-нормы / лимит N-в-месяц)
       // для bulk проверяем ЦЕЛИКОМ до единой записи. Иначе sequential-upsert дал бы частичный
@@ -3543,6 +3923,22 @@ export const timesheetController = {
                 [item.employee_id, item.work_date],
               ).then(rows => (rows[0] ? Number(rows[0].id) : null))
             : null;
+          // День на ОДНОМ объекте: распределение остаётся, часы единственной строки следуют
+          // за новым итогом. Многообъектные дни сюда не попадают (отфильтрованы выше).
+          const existingForItem = allocationByKey.get(`${item.employee_id}_${item.work_date}`);
+          const itemAllocations = existingForItem?.allocations ?? [];
+          const allocationsStillEligible = parsed.status === 'manual'
+            && typeof itemHoursOverride === 'number' && itemHoursOverride > 0;
+          const nextItemAllocations = itemAllocations.length === 1 && allocationsStillEligible
+            ? [{ ...itemAllocations[0], hours: itemHoursOverride }]
+            : [];
+          const itemMetadata = itemAllocations.length > 0
+            ? buildAllocationMetadata(
+                existingForItem?.metadata ?? null,
+                nextItemAllocations,
+                allocationsStillEligible,
+              )
+            : null;
           const approvalStatus = 'resolved' in precheck
             ? precheck.resolved
             : await resolveAdjustmentApprovalQuota(
@@ -3558,6 +3954,7 @@ export const timesheetController = {
             reason: parsed.notes ?? null,
             created_by: req.user.id,
             approval_status: approvalStatus,
+            ...(itemMetadata ? { metadata: itemMetadata } : {}),
           }, exec);
           // Хвостовой пересчёт — только для квотных статусов: не-квотные раньше
           // писались без транзакции и хвоста не запускали.
@@ -3579,7 +3976,7 @@ export const timesheetController = {
       // Возвращаем id созданных/обновлённых корректировок — фронт по ним цепляет файлы.
       const savedItems: Array<{ employee_id: number; work_date: string; adjustment_id: number }> = [];
       if (isQuotaBulk) {
-        const sortedItems = [...uniqueItems].sort((a, b) => {
+        const sortedItems = [...itemsToWrite].sort((a, b) => {
           if (a.employee_id !== b.employee_id) return a.employee_id - b.employee_id;
           return a.work_date.localeCompare(b.work_date);
         });
@@ -3591,8 +3988,8 @@ export const timesheetController = {
         // обязан идти в одной транзакции с записью), поэтому параллелизм ограничен —
         // иначе большой bulk занял бы весь пул соединений разом.
         const BULK_WRITE_CONCURRENCY = 8;
-        for (let offset = 0; offset < uniqueItems.length; offset += BULK_WRITE_CONCURRENCY) {
-          const chunk = uniqueItems.slice(offset, offset + BULK_WRITE_CONCURRENCY);
+        for (let offset = 0; offset < itemsToWrite.length; offset += BULK_WRITE_CONCURRENCY) {
+          const chunk = itemsToWrite.slice(offset, offset + BULK_WRITE_CONCURRENCY);
           savedItems.push(...await Promise.all(chunk.map(buildUpsert)));
         }
       }
@@ -3629,14 +4026,26 @@ export const timesheetController = {
       res.json({
         success: true,
         data: {
-          processed: uniqueItems.length,
+          // processed — реально применённые элементы, а не размер входа: ячейки
+          // с неоднозначным объектом ждут выбора человека и не записаны.
+          processed: savedItems.length,
           employees: employeeIds.length,
           items: savedItems,
+          // Ячейки, которые массовая правка сознательно не тронула (день распределён по
+          // нескольким объектам) — фронт обязан показать их, а не общий «успешно».
+          skipped: skippedItems,
         },
       });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
+      }
+      if (err instanceof ObjectAdjustmentsConflictError) {
+        return res.status(409).json({
+          success: false,
+          code: 'OBJECT_ADJUSTMENTS_CONFLICT',
+          error: err.message,
+        });
       }
       if (err instanceof CorrectionRestrictionError) {
         const status = err.code === 'bulk_disabled' ? 403 : 422;
@@ -3702,6 +4111,13 @@ export const timesheetController = {
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
+      }
+      if (err instanceof ObjectAdjustmentsConflictError) {
+        return res.status(409).json({
+          success: false,
+          code: 'OBJECT_ADJUSTMENTS_CONFLICT',
+          error: err.message,
+        });
       }
       if (err instanceof CorrectionRestrictionError) {
         const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
@@ -3880,6 +4296,13 @@ export const timesheetController = {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
       }
+      if (err instanceof ObjectAdjustmentsConflictError) {
+        return res.status(409).json({
+          success: false,
+          code: 'OBJECT_ADJUSTMENTS_CONFLICT',
+          error: err.message,
+        });
+      }
       if (err instanceof CorrectionRestrictionError) {
         const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
         return res.status(status).json({ success: false, error: err.message, code: err.code, details: err.details });
@@ -3969,6 +4392,13 @@ export const timesheetController = {
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ success: false, error: formatZodErrorMessage(err), details: err.errors });
+      }
+      if (err instanceof ObjectAdjustmentsConflictError) {
+        return res.status(409).json({
+          success: false,
+          code: 'OBJECT_ADJUSTMENTS_CONFLICT',
+          error: err.message,
+        });
       }
       if (err instanceof CorrectionRestrictionError) {
         const status = err.code === 'bulk_disabled' || err.code === 'object_entries_disabled' ? 403 : 422;
@@ -4133,15 +4563,16 @@ export const timesheetController = {
       if (!existing) return res.status(404).json({ success: false, error: 'Запись не найдена' });
 
       const sourceType = String(existing.source_type ?? '');
+      // Объектные строки снимаются во вкладке «По объектам»: дневная форма их не создаёт.
       if (sourceType === OBJECT_ADJUSTMENT_SOURCE_TYPE) {
         return res.status(409).json({
           success: false,
           error: 'Часы за этот день заданы корректировкой по объекту. Удалите часы в детализации по объектам.',
         });
       }
-      // Удаляемы: ручные корректировки (manual) и любые материализации заявления
-      // (leave_request — включая отсутствия отпуск/больничный/удалёнка/за свой счёт).
-      // Для leave_request день синхронно убирается из самого заявления (см. ниже).
+      // Удаляемы: ручные корректировки (manual), объектные строки дневной формы и любые
+      // материализации заявления (leave_request — включая отсутствия отпуск/больничный/
+      // удалёнка/за свой счёт). Для leave_request день синхронно убирается из заявления (см. ниже).
       const isDeletableSource = sourceType === 'manual' || sourceType === 'leave_request';
       if (!isDeletableSource) {
         return res.status(409).json({ success: false, error: 'Эта корректировка не удаляется' });

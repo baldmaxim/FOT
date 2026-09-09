@@ -5871,3 +5871,51 @@
   background: #22c55e;
 }
 
+
+/* ── Распределение корректировки по объектам ─────────────────────────────── */
+/* Два режима: весь день на одном объекте либо разбивка «объект + часы». */
+.ts-alloc-modes {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.ts-alloc-mode {
+  flex: 1 1 160px;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+}
+
+.ts-alloc-mode:hover { background: var(--surface-hover, var(--surface)); }
+
+.ts-alloc-mode.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.ts-alloc-rows { display: flex; flex-direction: column; gap: 8px; }
+
+.ts-alloc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ts-alloc-row .ts-form-select { flex: 1 1 auto; min-width: 0; }
+.ts-alloc-row .ts-form-input--hm { width: 72px; flex: 0 0 auto; }
+
+@media (max-width: 480px) {
+  .ts-alloc-mode { flex: 1 1 100%; }
+  /* Тап-цели ≥ 44px и 16px в инпутах — иначе Safari зумит форму при фокусе. */
+  .ts-alloc-row .ts-form-input--hm { font-size: 16px; min-height: 44px; }
+  .ts-alloc-row .ts-form-select { font-size: 16px; min-height: 44px; }
+}

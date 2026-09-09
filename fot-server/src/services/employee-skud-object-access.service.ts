@@ -11,6 +11,7 @@
  */
 import { execute, query, type DbExecutor } from '../config/postgres.js';
 import { invalidateTimekeeperScopeCache } from './timekeeper-scope.service.js';
+import { PRESENCE_FAILURE_TYPE_IDS } from './skud-shared.service.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 let missingTableWarned = false;
@@ -135,15 +136,22 @@ export async function listRecentSkudObjectNamesByEmployee(
 /**
  * Объекты, доступные сотруднику для привязки корректировки табеля:
  *   1) приписка employee_skud_object_access (его «место работы»);
- *   2) фактические объекты по СКУД-проходам за последние 90 дней;
- *   3) (удалёнка) датированная привязка employee_object_attribution.
+ *   2) фактические объекты по СКУД-проходам в окне ±90 дней вокруг даты правки;
+ *   3) объекты по ОТКАЗАМ доступа в том же окне — человек приложил карту, значит
+ *      был на объекте, даже если ни одного успешного прохода там нет;
+ *   4) (удалёнка) датированная привязка employee_object_attribution.
  * Только активные skud_objects, отсортировано по имени. Каждый источник
  * отказоустойчив к отсутствию таблицы (42P01) — фича остаётся рабочей частично.
+ *
+ * workDate — дата правки (якорь окна). Без неё окно считается от сегодняшнего дня,
+ * и при правке старого месяца список объектов уезжает мимо реальной истории.
  */
 export async function listSelectableObjectsForEmployee(
   employeeId: number,
+  workDate?: string,
 ): Promise<ISelectableObject[]> {
   if (!Number.isInteger(employeeId) || employeeId <= 0) return [];
+  const anchorDate = workDate && /^\d{4}-\d{2}-\d{2}$/.test(workDate) ? workDate : null;
   const ids = new Set<string>();
 
   for (const id of await listObjectIdsForEmployee(employeeId)) ids.add(id);
@@ -155,9 +163,30 @@ export async function listSelectableObjectsForEmployee(
          JOIN skud_object_access_points sap
            ON BTRIM(sap.access_point_name) = BTRIM(se.access_point)
         WHERE se.employee_id = $1
-          AND se.event_date >= (CURRENT_DATE - INTERVAL '90 days')
+          AND se.event_date BETWEEN (COALESCE($2::date, CURRENT_DATE) - INTERVAL '90 days')::date
+                                AND (COALESCE($2::date, CURRENT_DATE) + INTERVAL '90 days')::date
           AND se.access_point IS NOT NULL`,
-      [employeeId],
+      [employeeId, anchorDate],
+    );
+    for (const row of rows) if (row.object_id) ids.add(row.object_id);
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+  }
+
+  // Отказы доступа: единственный источник объекта, когда карта на объекте не сработала
+  // ни разу (см. PRESENCE_FAILURE_TYPE_IDS — берём только типы «человек был у считывателя»).
+  try {
+    const rows = await query<{ object_id: string }>(
+      `SELECT DISTINCT sap.object_id::text AS object_id
+         FROM skud_event_failures f
+         JOIN skud_object_access_points sap
+           ON BTRIM(sap.access_point_name) = BTRIM(f.access_point)
+        WHERE f.employee_id = $1
+          AND f.event_date BETWEEN (COALESCE($2::date, CURRENT_DATE) - INTERVAL '90 days')::date
+                               AND (COALESCE($2::date, CURRENT_DATE) + INTERVAL '90 days')::date
+          AND f.access_point IS NOT NULL
+          AND f.failure_type_id = ANY($3::int[])`,
+      [employeeId, anchorDate, [...PRESENCE_FAILURE_TYPE_IDS]],
     );
     for (const row of rows) if (row.object_id) ids.add(row.object_id);
   } catch (err) {

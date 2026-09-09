@@ -99,7 +99,10 @@ const { selectableObjectsMock } = vi.hoisted(() => ({
 vi.mock('../services/employee-skud-object-access.service.js', () => ({
   listSelectableObjectsForEmployee: selectableObjectsMock,
 }));
-vi.mock('../services/timesheet-object.service.js', () => ({ OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object' }));
+vi.mock('../services/timesheet-object.service.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/timesheet-object.service.js')>()),
+  OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object',
+}));
 // hrAcknowledge проверяет право по маркеру семейства заявления (отпуск/увольнение).
 const { pageAccessMock } = vi.hoisted(() => ({
   pageAccessMock: vi.fn(async (_req: unknown, _page: string, _action: string) => true),
@@ -202,6 +205,52 @@ describe('leaveRequestsController.approve', () => {
     // Гард закрытого табеля ходит в timesheet_approvals — на blanket-моке он бы
     // увидел «замок» в каждой строке, поэтому для него отвечаем пусто.
     setDecisionTxDefaults('approved');
+  });
+
+  it('заявка с объектом на день с распределением: 409, дневная строка не удаляется', async () => {
+    // Согласование объектной заявки раньше удаляло все дневные 'manual' строки за дату.
+    // Если день размечен распределением по объектам, это унесло бы корректировку вместе
+    // с вложениями — теперь конфликт возникает ДО любых записей, транзакция откатывается.
+    mockRequestRow({
+      request_type: 'time_correction',
+      start_date: '2026-09-01',
+      end_date: '2026-09-01',
+      correction_date: '2026-09-01',
+      correction_hours: 8,
+      correction_object_id: 'obj-wave',
+      correction_object_name: 'ЖК Wave',
+    });
+    txClient.query.mockImplementation(async (sql: string) => {
+      const text = String(sql);
+      if (text.includes('FOR UPDATE')) return { rows: [currentRequestRow], rowCount: 1 };
+      if (text.includes('timesheet_approvals') || text.includes('WITH RECURSIVE pairs')) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes('SELECT metadata FROM attendance_adjustments')) {
+        return {
+          rows: [{
+            metadata: {
+              object_allocations: [{ object_id: 'obj-citybay', object_name: 'ЖК Ситибэй', hours: 11 }],
+            },
+          }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes('UPDATE leave_requests')) {
+        return { rows: [{ ...currentRequestRow, status: 'approved' }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    const res = makeRes();
+
+    await leaveRequestsController.approve(makeReq(), res);
+
+    expect(res._status).toBe(409);
+    expect(res._json).toMatchObject({ code: 'DAY_ALLOCATION_CONFLICT' });
+    // Ни материализации, ни удаления дневной строки.
+    expect(upsertSpy).not.toHaveBeenCalled();
+    const deleteCall = txClient.query.mock.calls.find(c => String(c[0]).includes('DELETE FROM attendance_adjustments'));
+    expect(deleteCall).toBeUndefined();
   });
 
   it('одиночная remote-заявка на субботу материализует корректировку (не теряется)', async () => {

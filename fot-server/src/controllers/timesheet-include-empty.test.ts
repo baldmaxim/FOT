@@ -104,8 +104,17 @@ vi.mock('../services/skud-travel.service.js', () => ({
 vi.mock('../services/timesheet-object.service.js', () => ({
   buildObjectAttendanceData: vi.fn(),
   isMigratedDayLevelAdjustment: vi.fn(() => false),
-  resolveDayObjectForAdjustment: vi.fn(),
+  resolveDayAllocationSuggestion: vi.fn(async () => ({
+    distribution: [], resolution_source: null, requires_allocation: false, ambiguous: false, candidates: [],
+  })),
+  validateRequestedAllocations: vi.fn(async () => ({ ok: true, allocations: [] })),
+  readObjectAllocations: vi.fn(() => []),
+  hasObjectAllocations: vi.fn(() => false),
+  allocationsEqual: vi.fn(() => true),
   OBJECT_ADJUSTMENT_SOURCE_TYPE: 'manual_object',
+  OBJECT_ALLOCATIONS_KEY: 'object_allocations',
+  ALLOCATION_SOURCE_KEY: 'allocation_source',
+  MAX_OBJECT_ALLOCATIONS: 10,
 }));
 
 vi.mock('../services/employee-skud-object-access.service.js', () => ({

@@ -316,6 +316,16 @@ export async function assertBulkAllowed(systemRoleId: string): Promise<void> {
  * Вызывается в начале PUT/DELETE /api/timesheet/object-entry — закрывает все
  * UI-входы объектных правок (вкладка, объектный bulk, дневная модалка).
  */
+/**
+ * Не-бросающая проверка того же флага: нужна дневной форме, где объект — необязательное
+ * поле. Роли с запретом объектных правок мы просто не требуем распределение (иначе поле
+ * скрыто в UI, а сервер его требует — сохранить корректировку стало бы невозможно).
+ */
+export async function areObjectCorrectionsAllowed(systemRoleId: string): Promise<boolean> {
+  const r = await loadRoleRestrictions(systemRoleId);
+  return !r.corrections_disable_object_entries;
+}
+
 export async function assertObjectCorrectionsAllowed(systemRoleId: string): Promise<void> {
   const r = await loadRoleRestrictions(systemRoleId);
   if (r.corrections_disable_object_entries) {
