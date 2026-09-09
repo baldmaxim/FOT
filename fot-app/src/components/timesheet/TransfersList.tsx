@@ -20,6 +20,8 @@ interface IProps {
   isPending: boolean;
   onEdit: (assignmentNewId: string, assignmentOldId: string, patch: ITransferEditPatch) => void;
   onDelete: (row: IAdminTransferRow) => void;
+  /** Право менять записи. false — режим «Просмотр»: строки читаются, кнопки скрыты. */
+  canEdit?: boolean;
   /** Показывать ли колонку «откуда → куда» (true для админа) или просто «куда» (false для tab внутри отдела). */
   showFromDepartment?: boolean;
   /** Показывать должность сотрудника отдельной строкой. */
@@ -39,6 +41,7 @@ export const TransfersList: FC<IProps> = ({
   isPending,
   onEdit,
   onDelete,
+  canEdit = true,
   showFromDepartment = false,
   showPosition = false,
 }) => {
@@ -117,7 +120,7 @@ export const TransfersList: FC<IProps> = ({
               <span>{formatDateLabel(row.transfer_date)}</span>
             </div>
             <div className="ts-transfers-row-actions">
-              {!isEditing && (
+              {canEdit && !isEditing && (
                 <>
                   <button
                     type="button"

@@ -3,7 +3,7 @@ import { query as dbQuery } from '../config/postgres.js';
 import { timesheetController } from '../controllers/timesheet.controller.js';
 import { timesheetTeamManagementController as tm } from '../controllers/timesheet-team-management.controller.js';
 import { exportTimesheetObjectsUnified } from '../controllers/timesheet-mass-export.controller.js';
-import { authenticate, requireAdmin, requireAnyPageAccess, requirePageAccess, resolveTimesheetLockToggle } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requirePageAccess, resolveTimesheetLockToggle } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { perUserConcurrency } from '../middleware/perUserConcurrency.js';
 import { buildTimesheetCacheKey, buildTimesheetTodayCacheKey } from './timesheet-cache-keys.js';
@@ -147,9 +147,12 @@ router.post(
   tm.excludeEmployeeFromDepartment
 );
 
+// Список переводов и исключений — страница «Переводы и исключения». Гард по её
+// ключу, а не requireAdmin: контроллер сверх этого требует глобальный скоуп роли
+// и сам отсекает админа компании (canManageTransfers).
 router.get(
   '/admin/transfers',
-  requireAdmin,
+  requirePageAccess('/admin/timesheet-transfers', 'view'),
   tm.listAdminTransfers
 );
 

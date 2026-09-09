@@ -8,6 +8,7 @@ import {
   type IAdminTransfersFilters,
 } from '../../services/timesheetService';
 import { useManagedDepartments } from '../../hooks/useManagedDepartments';
+import { useAuth } from '../../contexts/AuthContext';
 import { TransfersList, type ITransferEditPatch } from '../../components/timesheet/TransfersList';
 import { ExclusionsList } from '../../components/timesheet/ExclusionsList';
 import '../timesheet/TimesheetPage.css';
@@ -25,6 +26,10 @@ const monthAgoIso = (): string => {
 
 export const TimesheetTransfersAdminPage: FC = () => {
   const queryClient = useQueryClient();
+  const { canEditPage } = useAuth();
+  // «Просмотр» — честный режим: список читается, кнопки правки и удаления скрыты.
+  // Иначе роль с view-доступом видела бы их и ловила 403.
+  const canEdit = canEditPage('/admin/timesheet-transfers');
   const { managedDepartments } = useManagedDepartments();
 
   const [from, setFrom] = useState<string>(monthAgoIso());
@@ -204,6 +209,7 @@ export const TimesheetTransfersAdminPage: FC = () => {
                 rows={transfers}
                 deptOptions={deptOptions}
                 isPending={isPending}
+                canEdit={canEdit}
                 showFromDepartment
                 showPosition
                 onEdit={(assignmentId, assignmentOldId, patch) => {
@@ -225,6 +231,7 @@ export const TimesheetTransfersAdminPage: FC = () => {
               <ExclusionsList
                 rows={exclusions}
                 isPending={isPending}
+                canEdit={canEdit}
                 showDepartment
                 showPosition
                 onEdit={(employeeId, effectiveDate) =>

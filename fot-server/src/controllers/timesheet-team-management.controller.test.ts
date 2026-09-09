@@ -79,6 +79,7 @@ vi.mock('./timesheet.controller.js', () => ({
 
 vi.mock('../services/data-scope.service.js', () => ({
   resolveCompanyScope: vi.fn(async () => ({ roots: 'all' })),
+  hasAllDepartmentsScope: vi.fn(async () => false),
 }));
 
 vi.mock('../services/timesheet-transfers.service.js', () => ({
@@ -103,6 +104,7 @@ vi.mock('../services/employee-cache.service.js', () => ({
 
 vi.mock('../services/access-control.service.js', () => ({
   hasPageEdit: vi.fn(async () => true),
+  resolveEffectivePageAccess: vi.fn(async () => false),
 }));
 
 const { timesheetTeamManagementController } = await import('./timesheet-team-management.controller.js');

@@ -8,6 +8,8 @@ interface IProps {
   isPending: boolean;
   onEdit: (employeeId: number, effectiveDate: string) => void;
   onDelete: (row: IAdminExclusionRow) => void;
+  /** Право менять записи. false — режим «Просмотр»: строки читаются, кнопки скрыты. */
+  canEdit?: boolean;
   /** Показывать ли отдел сотрудника (true для админа). */
   showDepartment?: boolean;
   /** Показывать должность сотрудника отдельной строкой. */
@@ -28,6 +30,7 @@ export const ExclusionsList: FC<IProps> = ({
   isPending,
   onEdit,
   onDelete,
+  canEdit = true,
   showDepartment = false,
   showPosition = false,
 }) => {
@@ -112,7 +115,7 @@ export const ExclusionsList: FC<IProps> = ({
                     Отмена
                   </button>
                 </>
-              ) : (
+              ) : canEdit && (
                 <>
                   <button
                     type="button"

@@ -14,7 +14,7 @@ import { auditService } from '../services/audit.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 import { employeeChangesService } from '../services/employee-changes.service.js';
-import { hasPageEdit } from '../services/access-control.service.js';
+import { hasPageEdit, resolveEffectivePageAccess } from '../services/access-control.service.js';
 import {
   formatDateShift,
   isEmployeeAssignedToDepartmentOnDate,
@@ -48,18 +48,42 @@ import {
   resolveTimesheetScope,
   resolveTimesheetScopedDepartmentId,
 } from './timesheet.controller.js';
-import { resolveCompanyScope } from '../services/data-scope.service.js';
+import { hasAllDepartmentsScope, resolveCompanyScope } from '../services/data-scope.service.js';
+import { PAGE_PATHS } from '../config/access-control.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
- * Низкоуровневые ручки управления переводами/исключениями доступны только
- * системному админу (без company-scope). Админу компании эти операции
- * недоступны напрямую — он управляет назначениями через /admin/users.
+ * Системный админ: is_admin без company-scope. Одна из веток canManageTransfers,
+ * а также самостоятельный гард там, где раздел остаётся чисто админским.
  */
 async function requireSystemAdmin(req: AuthenticatedRequest): Promise<boolean> {
   if (!req.user.is_admin) return false;
   const scope = await resolveCompanyScope(req);
   return scope.roots === 'all';
+}
+
+/**
+ * Кто ведёт «Переводы и исключения» (страница /admin/timesheet-transfers).
+ *
+ * Ручки правят членство в отделах напрямую и НЕ фильтруют выборку по скоупу:
+ * кто сюда допущен, тот видит и правит любого сотрудника организации. Поэтому
+ * page-access сам по себе доступа не даёт — нужен ещё и глобальный скоуп данных
+ * роли (all_departments_scope, миграция 270). Роль с узким скоупом, которой ключ
+ * выдали по ошибке, правку по всей организации не получит.
+ *
+ * Системный админ — первой веткой и без зависимости от ключей: его путь не
+ * меняется. Админ КОМПАНИИ намеренно остаётся без доступа: его company-scope
+ * здесь не проверяется, а page-access он обходит по is_admin, поэтому простая
+ * проверка страницы молча открыла бы ему раздел.
+ */
+async function canManageTransfers(
+  req: AuthenticatedRequest,
+  action: 'view' | 'edit',
+): Promise<boolean> {
+  if (await requireSystemAdmin(req)) return true;
+  if (req.user.is_admin) return false;
+  if (!(await hasAllDepartmentsScope(req))) return false;
+  return resolveEffectivePageAccess(req, PAGE_PATHS.ADMIN_TIMESHEET_TRANSFERS, action);
 }
 
 const TIMESHEET_TEAM_MANAGEMENT_PAGE_KEY = 'timesheet-team-management';
@@ -512,8 +536,8 @@ export const timesheetTeamManagementController = {
   /** GET /api/timesheet/admin/transfers?from=&to=&department_id=&employee_query= */
   async listAdminTransfers(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!(await requireSystemAdmin(req))) {
-        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+      if (!(await canManageTransfers(req, 'view'))) {
+        return res.status(403).json({ success: false, error: 'Недостаточно прав' });
       }
       const parsed = adminTransfersListQuerySchema.parse(req.query);
       const data = await listAllTransfersAndExclusions(parsed);
@@ -530,8 +554,8 @@ export const timesheetTeamManagementController = {
   /** GET /api/timesheet/team-management/transfers?department_id=... */
   async listTransfers(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!(await requireSystemAdmin(req))) {
-        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+      if (!(await canManageTransfers(req, 'view'))) {
+        return res.status(403).json({ success: false, error: 'Недостаточно прав' });
       }
       const parsed = transfersListQuerySchema.parse(req.query);
       const data = await listDepartmentTransfers(parsed.department_id);
@@ -548,8 +572,8 @@ export const timesheetTeamManagementController = {
   /** PATCH /api/timesheet/team-management/transfers/:assignmentId */
   async patchTransfer(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!(await requireSystemAdmin(req))) {
-        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+      if (!(await canManageTransfers(req, 'edit'))) {
+        return res.status(403).json({ success: false, error: 'Недостаточно прав' });
       }
       const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
       const parsed = transferUpdateSchema.parse(req.body);
@@ -605,8 +629,8 @@ export const timesheetTeamManagementController = {
   /** DELETE /api/timesheet/team-management/transfers/:assignmentId */
   async deleteTransferEntry(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!(await requireSystemAdmin(req))) {
-        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+      if (!(await canManageTransfers(req, 'edit'))) {
+        return res.status(403).json({ success: false, error: 'Недостаточно прав' });
       }
       const assignmentId = uuidParamSchema.parse(req.params.assignmentId);
       const employeeIdBefore = await loadAssignmentEmployeeId(assignmentId);
@@ -653,8 +677,8 @@ export const timesheetTeamManagementController = {
   /** PATCH /api/timesheet/team-management/exclusions/:employeeId */
   async patchExclusion(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!(await requireSystemAdmin(req))) {
-        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+      if (!(await canManageTransfers(req, 'edit'))) {
+        return res.status(403).json({ success: false, error: 'Недостаточно прав' });
       }
       const employeeId = Number(req.params.employeeId);
       if (!Number.isFinite(employeeId) || employeeId <= 0) {
@@ -708,8 +732,8 @@ export const timesheetTeamManagementController = {
   /** DELETE /api/timesheet/team-management/exclusions/:employeeId */
   async deleteExclusionEntry(req: AuthenticatedRequest, res: Response) {
     try {
-      if (!(await requireSystemAdmin(req))) {
-        return res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+      if (!(await canManageTransfers(req, 'edit'))) {
+        return res.status(403).json({ success: false, error: 'Недостаточно прав' });
       }
       const employeeId = Number(req.params.employeeId);
       if (!Number.isFinite(employeeId) || employeeId <= 0) {

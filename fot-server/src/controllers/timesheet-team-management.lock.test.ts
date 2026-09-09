@@ -42,7 +42,10 @@ vi.mock('../services/department-assignability.service.js', () => ({
   loadAssignableTargetDepartment: targetDeptMock,
 }));
 
-vi.mock('../services/access-control.service.js', () => ({ hasPageEdit: vi.fn(async () => true) }));
+vi.mock('../services/access-control.service.js', () => ({
+  hasPageEdit: vi.fn(async () => true),
+  resolveEffectivePageAccess: vi.fn(async () => false),
+}));
 
 const { assignedOnDateMock } = vi.hoisted(() => ({ assignedOnDateMock: vi.fn(async () => false) }));
 vi.mock('../services/timesheet-department-assignments.service.js', async (importActual) => ({
