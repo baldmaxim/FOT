@@ -12,6 +12,7 @@ import type { PoolClient } from 'pg';
 import type { DbExecutor } from '../config/postgres.js';
 import { canonicalJson } from '../utils/canonical-json.js';
 import { fetchTimesheetDataForEmployees } from './timesheet-export.service.js';
+import { buildFiredCutoffMap } from './timesheet-fired-cutoff.service.js';
 import { resolveExportModes } from './timesheet-export-mode.service.js';
 import {
   buildVersionObjectBreakdown,
@@ -467,10 +468,27 @@ export async function buildTimesheetPayload(
     ? await listBrigadeSupervisorEmployeeIdsForDepartments([approval.department_id], client)
     : new Set<number>();
 
-  const tabRows = (await client.query<{ id: number; tab_number: string | null }>(
-    'SELECT id, tab_number FROM employees WHERE id = ANY($1::int[])', [snapshotIds],
+  const tabRows = (await client.query<{
+    id: number;
+    tab_number: string | null;
+    employment_status: string | null;
+    // pg отдаёт DATE как Date; buildFiredCutoffMap принимает оба вида.
+    dismissal_date: string | Date | null;
+    excluded_from_timesheet_date: string | Date | null;
+  }>(
+    `SELECT id, tab_number, employment_status, dismissal_date, excluded_from_timesheet_date
+       FROM employees WHERE id = ANY($1::int[])`,
+    [snapshotIds],
   )).rows;
   const tabById = new Map(tabRows.map(row => [Number(row.id), row.tab_number]));
+
+  // Граница увольнения — та же формула, что в Excel-выгрузке для 1С (одна реализация,
+  // иначе выгрузки разойдутся), и тот же гейт: карта строится ТОЛЬКО для
+  // employment_status = 'fired'. По одному наличию dismissal_date отсекать нельзя —
+  // при отложенном увольнении дата стоит у ещё действующего сотрудника, а редакция
+  // неизменяема: срезанное не вернуть. Считаем один раз на весь период подачи, а не на
+  // месячный чанк, — иначе граница поехала бы у подачи через стык месяцев.
+  const firedCutoff = buildFiredCutoffMap(tabRows, approval.start_date);
 
   // Период может пересекать месяцы: сборщик работает помесячно, склеиваем результаты.
   const days = new Map<number, Record<string, IVersionDayValue>>();
@@ -495,6 +513,26 @@ export async function buildTimesheetPayload(
   );
   const ownsEmployeeDay = (employeeId: number, date: string): boolean =>
     ownsDay(ownership.get(ownershipKey(approval.id, employeeId, date)));
+
+  /**
+   * Пустой день после увольнения — тот, из-за которого 1С писала «сотрудник не оформлен
+   * в ЗУП»: неявка с нулём часов у человека, которого в этот день уже нет в штате.
+   *
+   * Режем ТОЛЬКО такие. Полная отсечка по cutoff (как в Excel-выгрузке) выкинула бы и
+   * реально отработанные дни: по срезу июль–август это 288 ч у пяти человек, уволенных
+   * задним числом либо продолжавших ходить после даты увольнения. Редакция неизменяема,
+   * поэтому терять часы нельзя — пусть 1С видит их и разбирается с кадрами.
+   *
+   * cutoff — дата ВКЛЮЧИТЕЛЬНО, с которой дни не считаются, поэтому сравнение нестрогое:
+   * день увольнения остаётся в выгрузке при любом статусе.
+   */
+  const isBlankDayAfterDismissal = (
+    employeeId: number, date: string, value: { status: string; hours?: unknown },
+  ): boolean => {
+    const cutoff = firedCutoff.get(employeeId);
+    if (!cutoff || date < cutoff) return false;
+    return value.status === 'absent' && !(typeof value.hours === 'number' && value.hours > 0);
+  };
   const meta = new Map<number, { full_name: string | null; sigur_employee_id: number | null; position: string | null }>();
   const seenIds = new Set<number>();
 
@@ -544,6 +582,7 @@ export async function buildTimesheetPayload(
       const bucket = days.get(employeeId) ?? {};
       for (const [date, value] of dayMap) {
         if (!ownsEmployeeDay(employeeId, date)) continue;
+        if (isBlankDayAfterDismissal(employeeId, date, value)) continue;
         bucket[date] = {
           status: value.status,
           hours: typeof value.hours === 'number' ? value.hours : 0,

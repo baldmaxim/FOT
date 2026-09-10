@@ -44,11 +44,18 @@ const approval = {
   status: 'approved',
 };
 
+/** Карточка сотрудника: активный без увольнения, если тест не сказал иначе. */
+const activeRow = {
+  employment_status: 'active',
+  dismissal_date: null,
+  excluded_from_timesheet_date: null,
+};
+
 /**
  * exec транзакции: назначения отдаёт резолвер владения (бр.Каримов до 24.08,
  * дальше другой отдел), остальные запросы сборщика — пустые/справочные.
  */
-function makeClient() {
+function makeClient(employeeRow: Record<string, unknown> = activeRow) {
   return {
     query: vi.fn(async (sql: string) => {
       if (sql.includes('FROM employee_assignments ea')) {
@@ -70,7 +77,22 @@ function makeClient() {
         };
       }
       if (sql.includes('FROM org_departments')) return { rows: [{ name: 'бр.Каримов О.М.' }] };
-      if (sql.includes('tab_number')) return { rows: [{ id: EMPLOYEE, tab_number: '05123' }] };
+      if (sql.includes('tab_number')) return { rows: [{ id: EMPLOYEE, tab_number: '05123', ...employeeRow }] };
+      return { rows: [] };
+    }),
+  };
+}
+
+
+/**
+ * exec без истории назначений: владение днём остаётся снимочным, поэтому единственный
+ * фильтр в этих тестах — отсечка по увольнению.
+ */
+function makeClientNoHistory(employeeRow: Record<string, unknown>) {
+  return {
+    query: vi.fn(async (sql: string) => {
+      if (sql.includes('FROM org_departments')) return { rows: [{ name: 'бр.Каримов О.М.' }] };
+      if (sql.includes('tab_number')) return { rows: [{ id: EMPLOYEE, tab_number: '05123', ...employeeRow }] };
       return { rows: [] };
     }),
   };
@@ -129,7 +151,7 @@ describe('buildTimesheetPayload — владение днём', () => {
   it('без истории назначений дни остаются за подачей (снимочное владение)', async () => {
     const client = { query: vi.fn(async (sql: string) => {
       if (sql.includes('FROM org_departments')) return { rows: [{ name: 'бр.Каримов О.М.' }] };
-      if (sql.includes('tab_number')) return { rows: [{ id: EMPLOYEE, tab_number: '05123' }] };
+      if (sql.includes('tab_number')) return { rows: [{ id: EMPLOYEE, tab_number: '05123', ...activeRow }] };
       return { rows: [] };
     }) };
 
@@ -147,5 +169,142 @@ describe('buildTimesheetPayload — владение днём', () => {
     expect(Object.keys(employee.days)).toEqual(['2026-08-20', '2026-08-30']);
     expect(employee.total_hours).toBe(20);
     expect(employee.zero_activity).toBe(false);
+  });
+});
+
+/**
+ * Пустые дни ПОСЛЕ увольнения не должны попадать в редакцию: 1С видела их как
+ * «сотрудник не оформлен в ЗУП». Режем только неявку с нулём часов — реально
+ * отработанное после даты увольнения обязано доехать до 1С, иначе часы уволенного
+ * задним числом молча пропадут из неизменяемой редакции.
+ */
+describe('buildTimesheetPayload — пустые дни после увольнения', () => {
+  const fired = (dismissal: string | null, excluded: string | null = null) => ({
+    employment_status: 'fired',
+    dismissal_date: dismissal,
+    excluded_from_timesheet_date: excluded,
+  });
+
+  const absent = () => ({ status: 'absent', hours: 0, corrected: false, hoursOverridden: false });
+  const zeroed = () => ({ status: 'manual', hours: 0, corrected: true, hoursOverridden: true });
+
+  const bulk = (dataMap: Map<number, Map<string, ReturnType<typeof day>>>, extra: {
+    entries?: Array<{ employee_id: number; work_date: string }>;
+    objectEntries?: Array<{ employee_id: number; work_date: string; object_id?: string | null }>;
+  } = {}) => ({
+    employees: [{ id: EMPLOYEE, full_name: 'Ибрагимов А. М.', sigur_employee_id: 100751, position_id: null }],
+    posMap: new Map(),
+    entries: extra.entries ?? [],
+    objectEntries: extra.objectEntries ?? [],
+    dataMap,
+  });
+
+  it('неявка с нулём часов после увольнения выпадает, день увольнения остаётся', async () => {
+    fetchBulk.mockResolvedValue(bulk(new Map([[EMPLOYEE, new Map([
+      ['2026-08-20', day(11)],
+      ['2026-08-25', absent()],
+      ['2026-08-26', absent()],
+      ['2026-08-27', absent()],
+      ['2026-08-31', absent()],
+    ])]])));
+
+    const { payload } = await buildTimesheetPayload(
+      makeClientNoHistory(fired('2026-08-25')) as never, approval as never,
+    );
+    const employee = payload.employees[0]!;
+
+    expect(Object.keys(employee.days)).toEqual(['2026-08-20', '2026-08-25']);
+    expect(employee.total_hours).toBe(11);
+  });
+
+  it('отработанные дни после увольнения СОХРАНЯЮТСЯ (уволен задним числом)', async () => {
+    fetchBulk.mockResolvedValue(bulk(
+      new Map([[EMPLOYEE, new Map([
+        ['2026-08-26', day(11.27)],
+        ['2026-08-27', absent()],
+        ['2026-08-28', zeroed()],
+        ['2026-08-31', day(11.8)],
+      ])]]),
+      // Проходы СКУД после даты увольнения — именно они и делают день реальным.
+      { entries: [{ employee_id: EMPLOYEE, work_date: '2026-08-26' }] },
+    ));
+
+    const { payload } = await buildTimesheetPayload(
+      makeClientNoHistory(fired('2026-08-25')) as never, approval as never,
+    );
+    const employee = payload.employees[0]!;
+
+    // Пустая неявка ушла; часы и осознанно обнулённый день (manual) остались.
+    expect(Object.keys(employee.days)).toEqual(['2026-08-26', '2026-08-28', '2026-08-31']);
+    expect(employee.total_hours).toBe(23.07);
+    expect(employee.zero_activity).toBe(false);
+  });
+
+  it('отложенное увольнение действующего сотрудника ничего не режет', async () => {
+    fetchBulk.mockResolvedValue(bulk(new Map([[EMPLOYEE, new Map([
+      ['2026-08-20', day(11)],
+      ['2026-08-26', absent()],
+      ['2026-08-31', absent()],
+    ])]])));
+
+    // Дата увольнения проставлена заранее, перевод в fired ещё не применён.
+    const { payload } = await buildTimesheetPayload(
+      makeClientNoHistory({ ...activeRow, dismissal_date: '2026-08-25' }) as never, approval as never,
+    );
+
+    expect(Object.keys(payload.employees[0]!.days)).toEqual(['2026-08-20', '2026-08-26', '2026-08-31']);
+  });
+
+  it('excluded_from_timesheet_date раньше dismissal+1 — граница по ней', async () => {
+    fetchBulk.mockResolvedValue(bulk(new Map([[EMPLOYEE, new Map([
+      ['2026-08-18', absent()],
+      ['2026-08-20', absent()],
+      ['2026-08-25', absent()],
+    ])]])));
+
+    const { payload } = await buildTimesheetPayload(
+      makeClientNoHistory(fired('2026-08-25', '2026-08-20')) as never, approval as never,
+    );
+
+    // 18.08 — до границы: неявка легитимна (прогул при живом трудоустройстве).
+    expect(Object.keys(payload.employees[0]!.days)).toEqual(['2026-08-18']);
+  });
+
+  it('после увольнения только пустые дни: days пуст, zero_activity true, состав сохранён', async () => {
+    fetchBulk.mockResolvedValue(bulk(
+      new Map([[EMPLOYEE, new Map([['2026-08-26', absent()], ['2026-08-31', absent()]])]]),
+    ));
+
+    const { payload } = await buildTimesheetPayload(
+      makeClientNoHistory(fired('2026-08-25')) as never, approval as never,
+    );
+    const employee = payload.employees[0]!;
+
+    expect(employee.days).toEqual({});
+    expect(employee.total_hours).toBe(0);
+    expect(employee.zero_activity).toBe(true);
+    // Уволенный остаётся строкой выгрузки — как в Excel: состав подачи не меняется.
+    expect(payload.employees).toHaveLength(1);
+    expect(payload.employees_count).toBe(1);
+  });
+
+  it('объектная разбивка идёт по оставшимся дням: пустого дня в ней нет, рабочий есть', async () => {
+    fetchBulk.mockResolvedValue(bulk(
+      new Map([[EMPLOYEE, new Map([['2026-08-26', absent()], ['2026-08-27', day(9)]])]]),
+      {
+        objectEntries: [
+          { employee_id: EMPLOYEE, work_date: '2026-08-26', object_id: null },
+          { employee_id: EMPLOYEE, work_date: '2026-08-27', object_id: null },
+        ],
+      },
+    ));
+
+    const { objects } = await buildTimesheetPayload(
+      makeClientNoHistory(fired('2026-08-25')) as never, approval as never,
+    );
+    const serialized = JSON.stringify(objects.payload);
+
+    expect(serialized).not.toContain('2026-08-26');
+    expect(serialized).toContain('2026-08-27');
   });
 });
