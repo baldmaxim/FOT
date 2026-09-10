@@ -365,71 +365,77 @@ export const MonitorTab: FC = () => {
       )}
 
       {(searchActive || orgId) && passes.length > 0 && (
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>№</th>
-              {searchActive && <th>Подрядчик</th>}
-              <th>W26</th><th>ФИО</th><th>Статус</th><th>Согласование</th>
-              <th>Активен</th><th>Объекты</th><th>Точки</th><th>Срок</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {passes.map(p => (
-              <tr key={p.id}>
-                <td>{p.pass_number}</td>
-                {searchActive && <td>{p.org_name ?? '—'}</td>}
-                <td title={p.card_uid ?? ''}>{p.w26 ?? formatCardW26(p.card_uid)}</td>
-                <td>
-                  {p.holder_name ?? '—'}
-                  <button
-                    className="btn-secondary"
-                    style={{ marginLeft: 8 }}
-                    onClick={() => setDocRow(p)}
-                    title={canEdit ? 'Документы держателя (просмотр и правка)' : 'Просмотр документов'}
-                  >
-                    Документы
-                  </button>
-                </td>
-                <td>{p.status}</td>
-                <td>{p.approval_status}</td>
-                <td>
-                  <span className={`${styles.badge} ${p.is_active ? styles.badgeActive : styles.badgeRemove}`}>
-                    {p.is_active ? 'активен' : 'не активен'}
-                  </span>
-                </td>
-                <td>{p.object_label || '—'}</td>
-                <td>{(p.access_point_names ?? []).join(', ') || '—'}</td>
-                <td>{p.expires_at ?? '—'}</td>
-                <td>
-                  {p.holder_name && (
-                    <button
-                      className="btn-secondary"
-                      style={{ marginRight: 8 }}
-                      onClick={() => setEventsRow(p)}
-                      title="Входы и выходы держателя по данным СКУД"
-                    >
-                      Проходы
-                    </button>
-                  )}
-                  <button className="btn-secondary" onClick={() => setHistoryPassId(p.id)}>
-                    История
-                  </button>
-                  {canEdit && p.holder_name && p.status !== 'revoked' && (
-                    <button
-                      className="btn-secondary"
-                      style={{ marginLeft: 8, color: 'var(--error)' }}
-                      onClick={() => setClearRow(p)}
-                      title="Обнулить ФИО и освободить пропуск для повторной выдачи"
-                    >
-                      Освободить
-                    </button>
-                  )}
-                </td>
+        <div className={styles.monitorTableScroll}>
+          <table className={`${styles.table} ${styles.monitorTable}`}>
+            <thead>
+              <tr>
+                <th>№</th>
+                {searchActive && <th>Подрядчик</th>}
+                <th>W26</th><th>ФИО</th><th>Статус</th><th>Согласование</th>
+                <th>Активен</th><th>Объекты</th><th>Точки</th><th>Срок</th><th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {passes.map(p => (
+                <tr key={p.id}>
+                  <td>{p.pass_number}</td>
+                  {searchActive && <td>{p.org_name ?? '—'}</td>}
+                  <td title={p.card_uid ?? ''}>{p.w26 ?? formatCardW26(p.card_uid)}</td>
+                  <td>
+                    <div className={styles.nameCell}>
+                      <span className={styles.nameText}>{p.holder_name ?? '—'}</span>
+                      <button
+                        type="button"
+                        className={styles.rowBtn}
+                        onClick={() => setDocRow(p)}
+                        title={canEdit ? 'Документы держателя (просмотр и правка)' : 'Просмотр документов'}
+                      >
+                        Документы
+                      </button>
+                    </div>
+                  </td>
+                  <td>{p.status}</td>
+                  <td>{p.approval_status}</td>
+                  <td>
+                    <span className={`${styles.badge} ${p.is_active ? styles.badgeActive : styles.badgeRemove}`}>
+                      {p.is_active ? 'активен' : 'не активен'}
+                    </span>
+                  </td>
+                  <td>{p.object_label || '—'}</td>
+                  <td>{(p.access_point_names ?? []).join(', ') || '—'}</td>
+                  <td>{p.expires_at ?? '—'}</td>
+                  <td>
+                    <div className={styles.rowActions}>
+                      {p.holder_name && (
+                        <button
+                          type="button"
+                          className={styles.rowBtn}
+                          onClick={() => setEventsRow(p)}
+                          title="Входы и выходы держателя по данным СКУД"
+                        >
+                          Проходы
+                        </button>
+                      )}
+                      <button type="button" className={styles.rowBtn} onClick={() => setHistoryPassId(p.id)}>
+                        История
+                      </button>
+                      {canEdit && p.holder_name && p.status !== 'revoked' && (
+                        <button
+                          type="button"
+                          className={`${styles.rowBtn} ${styles.rowBtnDanger}`}
+                          onClick={() => setClearRow(p)}
+                          title="Обнулить ФИО и освободить пропуск для повторной выдачи"
+                        >
+                          Освободить
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {historyPassId && (

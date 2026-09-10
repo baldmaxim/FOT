@@ -970,3 +970,76 @@
     padding-bottom: 8px;
   }
 }
+
+/* ===== Таблица вкладки «Мониторинг»: ровные кнопки в строках ===== */
+
+/* Таблица шире рабочей области: свой горизонтальный скролл,
+   т.к. .content лейаута режет overflow-x. */
+.monitorTableScroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+/* Только таблица мониторинга: содержимое ячеек по центру строки. */
+.monitorTable td { vertical-align: middle; }
+
+/* Ячейка ФИО: имя слева, «Документы» прижата к правому краю колонки. */
+.nameCell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 320px;
+}
+
+.nameText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Кнопки действий строки: один ряд, прижаты к правому краю. */
+.rowActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+/* Компактная кнопка строки таблицы (самодостаточная, без глобального .btn-secondary,
+   чтобы не зависеть от порядка подключения index.css и CSS-модуля). */
+.rowBtn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  min-height: 32px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+
+.rowBtn:hover:not(:disabled) { background: var(--bg-secondary); }
+.rowBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.rowBtnDanger { color: var(--error); border-color: var(--error); }
+
+/* На тач-экранах тап-цель ≥44px, кнопки могут переноситься. */
+@media (max-width: 768px) {
+  .nameCell { min-width: 0; flex-wrap: wrap; }
+  .rowActions { flex-wrap: wrap; justify-content: flex-start; }
+  .rowBtn { min-height: 44px; padding: 10px 14px; }
+}
