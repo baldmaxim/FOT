@@ -2,7 +2,7 @@ import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, memo
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, CalendarCog } from 'lucide-react';
+import { Pencil, ArrowRightLeft, History, Upload, UserPlus, Calendar, UserRoundX, ShieldCheck, CheckSquare, CalendarX, X, CalendarCog, Download } from 'lucide-react';
 import { SearchInput } from '../components/ui/SearchInput';
 import { employeeService } from '../services/employeeService';
 import { hrProfileService } from '../services/hrProfileService';
@@ -42,6 +42,7 @@ import type { Employee, EmployeeHistoryEvent, EnrichPreview, ContactsEnrichPrevi
 import { structureApi } from '../api/structure';
 import type { OrgDepartmentNode } from '../types/organization';
 import { filterDepartmentTreeByIds, getTreeFlatDepartments } from '../utils/departmentUtils';
+import { triggerBlobDownload } from '../utils/download';
 import '../styles/StaffControlPage.css';
 
 const HistoryPanel = lazy(() => import('../components/staff/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
@@ -1348,6 +1349,10 @@ export const StaffControlPage: FC = () => {
   // под is_admin. Право на них даёт edit «Управления кадрами» — сам по себе
   // all_departments_scope это только скоуп данных (см. canManageAsHrAdmin).
   const canManageStaff = canManageAsHrAdmin('/staff-control');
+  // Экспорт — отдельно от canManageStaff: серверный guard у выгрузки view, и
+  // руководителю отдела кнопка тоже нужна (canManageStaff даёт только админ/HR-админ).
+  const canExportEmployees = isAdmin || canViewPage('/staff-control');
+  const [isExporting, setIsExporting] = useState(false);
   const canEditDept = isAdmin || canEditPage('/staff-control/department');
   const canEditPos = isAdmin || canEditPage('/staff-control/position');
   const canEditSch = isAdmin || canEditPage('/staff-control/schedule');
@@ -2328,10 +2333,23 @@ export const StaffControlPage: FC = () => {
     }
   };
 
+  const handleExportEmployees = useCallback(async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    toast.info('Готовим файл со списком сотрудников…');
+    try {
+      const { blob, filename } = await employeeService.exportEmployees();
+      triggerBlobDownload(blob, filename);
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Не удалось выгрузить сотрудников');
+    } finally {
+      setIsExporting(false);
+    }
+  }, [isExporting, toast]);
+
   const overflowItems = useMemo<IOverflowMenuItem[]>(() => {
-    if (!canManageStaff) return [];
     const items: IOverflowMenuItem[] = [];
-    if (statusFilter === 'active') {
+    if (canManageStaff && statusFilter === 'active') {
       items.push({
         label: selectionMode ? 'Выйти из режима выбора' : 'Выбрать нескольких',
         icon: <CheckSquare size={14} />,
@@ -2356,6 +2374,17 @@ export const StaffControlPage: FC = () => {
         divideBefore: true,
       });
     }
+    // Рядом с «Импорт…» — парное действие. Когда импорт скрыт (статус не
+    // «Активные»), экспорт сам открывает группу разделителем.
+    if (canExportEmployees) {
+      items.push({
+        label: 'Экспорт сотрудников…',
+        icon: <Download size={14} />,
+        onClick: () => { void handleExportEmployees(); },
+        disabled: isExporting,
+        divideBefore: !(canManageStaff && statusFilter === 'active'),
+      });
+    }
     if (canEditTimesheetMode) {
       items.push({
         label: 'Режим табелирования для отделов/бригад…',
@@ -2365,7 +2394,7 @@ export const StaffControlPage: FC = () => {
       });
     }
     return items;
-  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total, canEditTimesheetMode]);
+  }, [canManageStaff, statusFilter, selectionMode, toggleSelectionMode, brigadeOptions.length, meta.total, canEditTimesheetMode, canExportEmployees, isExporting, handleExportEmployees]);
 
   const headerCounter = useMemo(() => (
     <span className="sc-page-counter sc-page-counter--in-header">
@@ -2433,9 +2462,9 @@ export const StaffControlPage: FC = () => {
           </button>
         </div>
       )}
-      {canManageStaff && (
+      {(canManageStaff || overflowItems.length > 0) && (
         <div className="sc-page-actions">
-          {statusFilter === 'active' && !hrTabAvailable && (
+          {canManageStaff && statusFilter === 'active' && !hrTabAvailable && (
             <button
               className="sc-btn apply"
               onClick={() => setShowAddModal(true)}

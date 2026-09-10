@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/react';
+import { parseContentDispositionFilename } from '../utils/download';
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
 const isLocalHostname = (hostname: string): boolean =>
@@ -76,6 +77,8 @@ interface RequestOptions extends RequestInit {
   __retryCount?: number;
   /** Таймаут запроса в мс; 0 — отключить. По умолчанию DEFAULT_TIMEOUT_MS. */
   timeoutMs?: number;
+  /** Вернуть сырой Response вместо разбора JSON (выгрузки файлов, см. download). */
+  __raw?: boolean;
 }
 
 // Перегрузка сервера — не ошибка приложения: пул БД насыщен (db_pool_busy) или
@@ -276,7 +279,7 @@ const refreshSession = async (): Promise<boolean> => {
 
 export const apiClient = {
   async request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
-    const { skipAuth, __skipRefresh, __retryCount, timeoutMs, ...fetchOptions } = options;
+    const { skipAuth, __skipRefresh, __retryCount, timeoutMs, __raw, ...fetchOptions } = options;
 
     const headers: HeadersInit = {
       ...fetchOptions.headers,
@@ -401,6 +404,11 @@ export const apiClient = {
       throw apiError;
     }
 
+    // Бинарные выгрузки: тело разбирает вызывающий (см. download).
+    if (__raw) {
+      return response as unknown as T;
+    }
+
     // Handle empty response
     const contentType = response.headers.get('content-type');
     if (!contentType || !contentType.includes('application/json')) {
@@ -412,6 +420,29 @@ export const apiClient = {
 
   get<T>(endpoint: string, options?: RequestOptions): Promise<T> {
     return this.request<T>(endpoint, { ...options, method: 'GET' });
+  },
+
+  /**
+   * Скачивание файла. Идёт через request, а не голый fetch, чтобы не терять
+   * refresh сессии на 401, таймаут, ApiError и повтор при перегрузке.
+   */
+  async download(
+    endpoint: string,
+    fallbackName: string,
+    options?: RequestOptions,
+  ): Promise<{ blob: Blob; filename: string }> {
+    const response = await this.request<Response>(endpoint, {
+      ...options,
+      method: options?.method ?? 'GET',
+      __raw: true,
+    });
+    return {
+      blob: await response.blob(),
+      filename: parseContentDispositionFilename(
+        response.headers.get('Content-Disposition'),
+        fallbackName,
+      ),
+    };
   },
 
   post<T>(endpoint: string, body?: unknown, options?: RequestOptions): Promise<T> {

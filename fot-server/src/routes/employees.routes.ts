@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { employeesController } from '../controllers/employees.controller.js';
+import { employeesExportController } from '../controllers/employees-export.controller.js';
 import { employeeInductionController } from '../controllers/employee-induction.controller.js';
 import { employeeObjectAttributionController } from '../controllers/employee-object-attribution.controller.js';
 import { employeeEnrichController } from '../controllers/employee-enrich.controller.js';
@@ -9,6 +10,7 @@ import { employeeSalaryHistoryController } from '../controllers/employee-enrich-
 import { employeeEnrichContactsController } from '../controllers/employee-enrich-contacts.controller.js';
 import { authenticate, requireAnyPageAccess, requirePageAccess, requireCritical2FA, requireAdmin } from '../middleware/auth.js';
 import { importLimiter } from '../middleware/rateLimit.js';
+import { noStore } from '../middleware/noStore.js';
 import { isExcelBuffer, sanitizeFileName } from '../utils/file-validation.utils.js';
 import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
 
@@ -123,6 +125,16 @@ router.get(
   '/counts',
   requirePageAccess('/staff-control', 'view'),
   employeesController.getCounts
+);
+
+// GET /api/employees/export - xlsx со списком сотрудников по иерархии подразделений.
+// Статический путь объявлен до '/:id'. noStore обязателен: глобальный middleware
+// ставит на GET Cache-Control: max-age=30, и браузер отдавал бы старый файл.
+router.get(
+  '/export',
+  requirePageAccess('/staff-control', 'view'),
+  noStore,
+  employeesExportController.exportEmployees
 );
 
 // Вводный инструктаж (вкладка «Управление кадрами → Вводный инструктаж»).

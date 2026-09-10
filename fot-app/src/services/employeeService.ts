@@ -117,6 +117,15 @@ export const employeeService = {
     return Array.from(new Set(ids));
   },
 
+  /**
+   * xlsx со списком сотрудников по иерархии подразделений.
+   * Охват фиксирован на сервере: все не уволенные в пределах прав пользователя —
+   * фильтры экрана (отдел, поиск, график, статус) на файл не влияют.
+   */
+  async exportEmployees(): Promise<{ blob: Blob; filename: string }> {
+    return apiClient.download('/employees/export', 'Сотрудники.xlsx');
+  },
+
   /** Счётчики сотрудников — дешёвый отдельный эндпоинт, серверный кэш 60с */
   async getCounts(archived = false): Promise<EmployeeCounts> {
     const qs = archived ? '?archived=true' : '';
