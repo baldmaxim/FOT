@@ -24,32 +24,32 @@
   box-sizing: border-box;
 }
 
-.title { margin: 0 0 4px; font-size: 17px; color: var(--text); }
-.subtitle { margin: 0 0 12px; font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.title { margin: 0 0 4px; font-size: 17px; color: var(--text-primary); }
+.subtitle { margin: 0 0 12px; font-size: 14px; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .form { display: flex; flex-direction: column; gap: 12px; }
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.label { font-size: 12px; color: var(--muted); }
+.label { font-size: 12px; color: var(--text-secondary); }
 
 .input {
   font-size: 16px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--bg-primary);
+  color: var(--text-primary);
   min-height: 44px;
   width: 100%;
   box-sizing: border-box;
 }
 
 .radioGroup { display: flex; flex-direction: column; gap: 6px; border: none; margin: 0; padding: 0; }
-.radio { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); min-height: 44px; }
+.radio { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-primary); min-height: 44px; }
 
 .row { display: grid; grid-template-columns: 1fr; gap: 12px; }
 
-.hint { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-.error { margin: 0; font-size: 13px; color: var(--danger); }
+.hint { margin: 0; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.error { margin: 0; font-size: 13px; color: var(--error); }
 
 .footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
@@ -62,9 +62,9 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
-.primaryButton { border: none; background: var(--accent); color: #fff; }
+.primaryButton { border: none; background: var(--primary); color: #fff; }
 .primaryButton:disabled { opacity: 0.5; cursor: default; }
-.secondaryButton { border: 1px solid var(--border); background: transparent; color: var(--text); }
+.secondaryButton { border: 1px solid var(--border); background: transparent; color: var(--text-primary); }
 
 @media (min-width: 768px) {
   .overlay { align-items: center; padding: 24px; }

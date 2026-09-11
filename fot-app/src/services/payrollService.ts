@@ -72,7 +72,26 @@ export interface IAssignResult {
   skipped: Array<{ employee_id: number; reason: string; message: string }>;
 }
 
-interface IApiResponse<T> { success: boolean; data: T; meta?: { date: string } }
+interface IApiResponse<T> { success: boolean; data: T }
+
+/** Итоги считаются сервером по всей отфильтрованной выборке, а не по странице. */
+export interface IPayrollTermsListMeta {
+  date: string;
+  page: number;
+  page_size: number;
+  total: number;
+  /** Сотрудники без условий в своём штате — независимо от фильтров категории и вида оплаты. */
+  without_terms_total: number;
+  /** false — узел «Подрядные организации» не найден, в списке могут быть их сотрудники. */
+  contractors_excluded: boolean;
+}
+
+export interface IPayrollTermsListResult {
+  rows: IPayrollTermsRow[];
+  meta: IPayrollTermsListMeta;
+}
+
+export const PAYROLL_TERMS_PAGE_SIZE = 100;
 
 export const payrollService = {
   listTerms: async (params: {
@@ -81,16 +100,24 @@ export const payrollService = {
     staffCategory?: StaffCategory;
     calcType?: PayrollCalcType;
     withoutTerms?: boolean;
-  } = {}): Promise<IPayrollTermsRow[]> => {
+    /** Поиск по ФИО и табельному — на сервере, по всему штату. */
+    q?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}): Promise<IPayrollTermsListResult> => {
     const search = new URLSearchParams();
     if (params.date) search.set('date', params.date);
     if (params.departmentId) search.set('department_id', params.departmentId);
     if (params.staffCategory) search.set('staff_category', params.staffCategory);
     if (params.calcType) search.set('calc_type', params.calcType);
     if (params.withoutTerms) search.set('without_terms', 'true');
-    const qs = search.toString();
-    const res = await apiClient.get<IApiResponse<IPayrollTermsRow[]>>(`/payroll/terms${qs ? `?${qs}` : ''}`);
-    return res.data;
+    if (params.q) search.set('q', params.q);
+    search.set('page', String(params.page ?? 1));
+    search.set('page_size', String(params.pageSize ?? PAYROLL_TERMS_PAGE_SIZE));
+    const res = await apiClient.get<IApiResponse<IPayrollTermsRow[]> & { meta: IPayrollTermsListMeta }>(
+      `/payroll/terms?${search.toString()}`,
+    );
+    return { rows: res.data, meta: res.meta };
   },
 
   getHistory: async (employeeId: number): Promise<IPayrollTermsHistoryRow[]> => {

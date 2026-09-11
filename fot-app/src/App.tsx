@@ -664,7 +664,7 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage={['/salary/payments', '/salary/terms']} />}>
+        <Route element={<ProtectedRoute requiredPage={['/salary/payments', '/salary/terms', '/salary/sick-leaves', '/salary/vacations', '/salary/deductions']} />}>
           <Route
             path="/salary"
             element={

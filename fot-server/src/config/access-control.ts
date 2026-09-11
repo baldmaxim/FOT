@@ -115,6 +115,9 @@ export const PAGE_PATHS = {
   SALARY_PAYMENTS_CALCULATE: '/salary/payments/calculate',
   SALARY_PAYMENTS_APPROVE: '/salary/payments/approve',
   SALARY_TERMS: '/salary/terms',
+  SALARY_SICK_LEAVES: '/salary/sick-leaves',
+  SALARY_VACATIONS: '/salary/vacations',
+  SALARY_DEDUCTIONS: '/salary/deductions',
   ADMIN_PATENT_RECEIPTS: '/admin/patent-receipts',
   ADMIN_TIMESHEET_TRANSFERS: '/admin/timesheet-transfers',
   ADMIN_DATA_API: '/admin/data-api',
@@ -202,6 +205,9 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/salary/payments/calculate',  label: 'Зарплата — запуск расчёта',            group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 271, is_active: true },
   { key: '/salary/payments/approve',    label: 'Зарплата — проверка расчёта',          group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 272, is_active: true },
   { key: '/salary/terms',               label: 'Зарплата — условия оплаты',            group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 274, is_active: true },
+  { key: '/salary/sick-leaves',         label: 'Зарплата — Больничные',                group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 275, is_active: true },
+  { key: '/salary/vacations',           label: 'Зарплата — Отпуска',                   group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 276, is_active: true },
+  { key: '/salary/deductions',          label: 'Зарплата — Удержания',                 group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 277, is_active: true },
   // Технический ключ без route-страницы
   { key: 'timesheet-team-management',   label: 'Управление составом табеля',           group_code: 'technical', group_label: 'Технические доступы', area: 'admin',  surface: 'technical', supports_edit: true, sort_order: 285, is_active: true },
 ];

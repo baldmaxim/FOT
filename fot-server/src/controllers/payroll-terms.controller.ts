@@ -10,8 +10,13 @@ import type { Response } from 'express';
 import { z } from 'zod';
 
 import type { AuthenticatedRequest } from '../types/index.js';
-import { query } from '../config/postgres.js';
-import { canAccessEmployeeInScope, canEditEmployeeInScope } from '../services/data-scope.service.js';
+import { queryOne } from '../config/postgres.js';
+import { getContractorRootId } from '../config/contractor.js';
+import {
+  canAccessEmployeeInScope,
+  canEditEmployeeInScope,
+  resolveAccessibleDepartmentIds,
+} from '../services/data-scope.service.js';
 import { auditService } from '../services/audit.service.js';
 import {
   assignTerms,
@@ -78,11 +83,82 @@ const getByEmployee = async (req: AuthenticatedRequest, res: Response): Promise<
   }
 };
 
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
+
+/** Экранирует %, _ и \ — иначе ввод «50%» в поиске работал бы как шаблон. */
+const toIlikePattern = (value: string): string => `%${value.replace(/[\\%_]/g, char => `\\${char}`)}%`;
+
 /**
- * GET /api/payroll/terms?date=YYYY-MM-DD — список действующих условий.
+ * Один запрос — одна согласованная выборка: страница, всего и «без условий» считаются
+ * по одним и тем же данным.
  *
- * Отдаёт и тех, у кого условий нет: без них сотрудник просто не попадёт в расчёт,
+ * scoped   — свой штат в скоупе пользователя (без фильтров по условиям оплаты);
+ * filtered — scoped + фильтры по категории / виду оплаты / «только без условий».
+ *
+ * «Без условий» считается по scoped, а не по filtered: при фильтре «Категория: Офис»
+ * сотрудники без условий в выборку не попадают по определению, и счётчик показал бы 0,
+ * хотя люди, которые не попадут в расчёт, есть.
+ *
+ * Подрядчики исключаются через NOT EXISTS, а не NOT IN: у сотрудника без отдела
+ * `NULL IN (...)` даёт NULL, и он молча выпал бы из списка.
+ */
+const LIST_SQL = `
+  WITH contractor_depts AS (
+    SELECT id FROM public.get_descendant_department_ids(ARRAY[$6::uuid])
+     WHERE $6::uuid IS NOT NULL
+  ),
+  scoped AS (
+    SELECT e.id   AS employee_id,
+           e.full_name,
+           e.tab_number,
+           d.id   AS department_id,
+           d.name AS department_name,
+           t.id   AS terms_id,
+           t.staff_category,
+           t.calc_type,
+           t.monthly_salary,
+           t.hourly_rate,
+           t.staff_units,
+           t.effective_from,
+           t.effective_to
+      FROM employees e
+      LEFT JOIN org_departments d ON d.id = e.org_department_id
+      LEFT JOIN payroll_compensation_terms t
+             ON t.employee_id = e.id
+            AND t.effective_from <= $1::date
+            AND (t.effective_to IS NULL OR t.effective_to >= $1::date)
+     WHERE e.employment_status = 'active'
+       AND e.is_archived IS NOT TRUE
+       AND ($2::uuid IS NULL OR e.org_department_id = $2::uuid)
+       AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id)
+       AND ($7::uuid[] IS NULL OR e.org_department_id = ANY($7::uuid[]))
+       AND ($8::text IS NULL OR e.full_name ILIKE $8::text OR e.tab_number ILIKE $8::text)
+  ),
+  filtered AS (
+    SELECT * FROM scoped
+     WHERE ($3::text IS NULL OR staff_category = $3::text)
+       AND ($4::text IS NULL OR calc_type = $4::text)
+       AND ($5::boolean IS NOT TRUE OR terms_id IS NULL)
+  )
+  SELECT
+    (SELECT count(*) FROM filtered)                      AS total,
+    (SELECT count(*) FROM scoped WHERE terms_id IS NULL) AS without_terms_total,
+    COALESCE((
+      SELECT json_agg(p)
+        FROM (SELECT * FROM filtered
+               ORDER BY full_name, employee_id
+               LIMIT $9 OFFSET $10) p
+    ), '[]'::json) AS rows`;
+
+/**
+ * GET /api/payroll/terms — список условий оплаты своего штата.
+ *
+ * Отдаёт и тех, у кого условий нет: без них сотрудник не попадёт в расчёт,
  * и такой пропуск должен быть виден на экране, а не обнаружиться в день выплаты.
+ *
+ * Поиск и пагинация — на сервере. Раньше список обрезался на 2000 строках по алфавиту,
+ * и поиск в браузере не находил никого после буквы «Д» (~80% сотрудников).
  */
 const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
@@ -92,48 +168,51 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
       staff_category: z.enum(['office', 'itr', 'worker']).optional(),
       calc_type: z.enum(['salary', 'hourly']).optional(),
       without_terms: z.enum(['true', 'false']).optional(),
+      q: z.string().trim().max(100).optional(),
+      page: z.coerce.number().int().min(1).default(1),
+      page_size: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE, `Не больше ${MAX_PAGE_SIZE} строк на страницу`)
+        .default(DEFAULT_PAGE_SIZE),
     }).parse(req.query);
 
     const onDate = parsed.date ?? new Date().toISOString().slice(0, 10);
 
-    const rows = await query(
-      `SELECT e.id AS employee_id,
-              e.full_name,
-              e.tab_number,
-              d.id   AS department_id,
-              d.name AS department_name,
-              t.id   AS terms_id,
-              t.staff_category,
-              t.calc_type,
-              t.monthly_salary,
-              t.hourly_rate,
-              t.staff_units,
-              t.effective_from,
-              t.effective_to
-         FROM employees e
-         LEFT JOIN org_departments d ON d.id = e.org_department_id
-         LEFT JOIN payroll_compensation_terms t
-                ON t.employee_id = e.id
-               AND t.effective_from <= $1::date
-               AND (t.effective_to IS NULL OR t.effective_to >= $1::date)
-        WHERE e.employment_status = 'active'
-          AND e.is_archived IS NOT TRUE
-          AND ($2::uuid IS NULL OR e.org_department_id = $2::uuid)
-          AND ($3::text IS NULL OR t.staff_category = $3::text)
-          AND ($4::text IS NULL OR t.calc_type = $4::text)
-          AND ($5::boolean IS NOT TRUE OR t.id IS NULL)
-        ORDER BY e.full_name
-        LIMIT 2000`,
-      [
-        onDate,
-        parsed.department_id ?? null,
-        parsed.staff_category ?? null,
-        parsed.calc_type ?? null,
-        parsed.without_terms === 'true',
-      ],
-    );
+    const accessible = await resolveAccessibleDepartmentIds(req);
+    // Корень «Подрядные организации» не найден — подрядчиков не исключаем, но говорим
+    // об этом экрану: молча показать лишних людей в зарплатном списке нельзя.
+    const contractorRootId = await getContractorRootId();
 
-    res.json({ success: true, data: rows, meta: { date: onDate } });
+    const search = parsed.q ? toIlikePattern(parsed.q) : null;
+    const offset = (parsed.page - 1) * parsed.page_size;
+
+    const result = await queryOne<{
+      total: string | number;
+      without_terms_total: string | number;
+      rows: unknown[];
+    }>(LIST_SQL, [
+      onDate,
+      parsed.department_id ?? null,
+      parsed.staff_category ?? null,
+      parsed.calc_type ?? null,
+      parsed.without_terms === 'true',
+      contractorRootId,
+      accessible === 'all' ? null : accessible,
+      search,
+      parsed.page_size,
+      offset,
+    ]);
+
+    res.json({
+      success: true,
+      data: result?.rows ?? [],
+      meta: {
+        date: onDate,
+        page: parsed.page,
+        page_size: parsed.page_size,
+        total: Number(result?.total ?? 0),
+        without_terms_total: Number(result?.without_terms_total ?? 0),
+        contractors_excluded: contractorRootId !== null,
+      },
+    });
   } catch (err) {
     if (handleZodError(err, res)) return;
     console.error('payrollTerms.list error:', err);

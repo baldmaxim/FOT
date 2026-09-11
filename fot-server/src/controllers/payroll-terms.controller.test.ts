@@ -23,9 +23,16 @@ vi.mock('../config/postgres.js', () => ({
 const scope = vi.hoisted(() => ({
   canAccessEmployeeInScope: vi.fn(async () => true),
   canEditEmployeeInScope: vi.fn(async () => true),
+  resolveAccessibleDepartmentIds: vi.fn(async (): Promise<string[] | 'all'> => 'all'),
 }));
 
 vi.mock('../services/data-scope.service.js', () => scope);
+
+const contractor = vi.hoisted(() => ({
+  getContractorRootId: vi.fn(async (): Promise<string | null> => 'contractor-root'),
+}));
+
+vi.mock('../config/contractor.js', () => contractor);
 
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: vi.fn(async () => undefined) },
@@ -204,31 +211,145 @@ describe('payrollTermsController.assignBulk', () => {
 });
 
 describe('payrollTermsController.list', () => {
+  /** Параметры запроса списка по позициям в LIST_SQL. */
+  const listParams = () => {
+    const params = pgQueryOne.mock.calls[0][1] as unknown[];
+    return {
+      sql: String(pgQueryOne.mock.calls[0][0]),
+      date: params[0],
+      contractorRoot: params[5],
+      departments: params[6],
+      search: params[7],
+      limit: params[8],
+      offset: params[9],
+    };
+  };
+
+  beforeEach(() => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue('all');
+    contractor.getContractorRootId.mockResolvedValue('contractor-root');
+    pgQueryOne.mockResolvedValue({ total: '1710', without_terms_total: '1708', rows: [] });
+  });
+
   it('сотрудники без условий остаются в выдаче: молча пропасть из расчёта они не должны', async () => {
-    pgQuery.mockResolvedValueOnce([
-      { employee_id: 1, full_name: 'А', terms_id: 9, calc_type: 'salary' },
-      { employee_id: 2, full_name: 'Б', terms_id: null, calc_type: null },
-    ]);
+    pgQueryOne.mockResolvedValueOnce({
+      total: '2',
+      without_terms_total: '1',
+      rows: [
+        { employee_id: 1, full_name: 'А', terms_id: 9, calc_type: 'salary' },
+        { employee_id: 2, full_name: 'Б', terms_id: null, calc_type: null },
+      ],
+    });
 
-    const req = makeReq({ query: { date: '2026-08-01' } } as Partial<AuthenticatedRequest>);
     const res = makeRes();
-
-    await payrollTermsController.list(req, res);
+    await payrollTermsController.list(makeReq({ query: { date: '2026-08-01' } } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(200);
     expect(res.body.data).toHaveLength(2);
     expect(res.body.meta.date).toBe('2026-08-01');
     // LEFT JOIN, а не INNER: иначе сотрудники без условий исчезли бы с экрана.
-    expect(String(pgQuery.mock.calls[0][0])).toMatch(/LEFT JOIN payroll_compensation_terms/i);
+    expect(listParams().sql).toMatch(/LEFT JOIN payroll_compensation_terms/i);
+  });
+
+  it('подрядчики исключаются поддеревом их корня, а не по названию отдела', async () => {
+    const res = makeRes();
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
+
+    const { sql, contractorRoot } = listParams();
+    expect(contractorRoot).toBe('contractor-root');
+    expect(sql).toMatch(/get_descendant_department_ids\(ARRAY\[\$6::uuid\]\)/);
+    // NOT EXISTS, а не NOT IN: сотрудник без отдела не должен молча пропасть.
+    expect(sql).toMatch(/NOT EXISTS \(SELECT 1 FROM contractor_depts/);
+    expect(res.body.meta.contractors_excluded).toBe(true);
+  });
+
+  it('корень подрядчиков не найден — фильтра нет, и экран об этом узнаёт', async () => {
+    contractor.getContractorRootId.mockResolvedValue(null);
+    const res = makeRes();
+
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
+
+    expect(listParams().contractorRoot).toBeNull();
+    expect(res.body.meta.contractors_excluded).toBe(false);
+  });
+
+  it('итоги берутся из запроса подсчёта по всей выборке, а не из длины страницы', async () => {
+    pgQueryOne.mockResolvedValueOnce({
+      total: '1710',
+      without_terms_total: '1708',
+      rows: [{ employee_id: 1 }, { employee_id: 2 }],
+    });
+    const res = makeRes();
+
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), res);
+
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.meta.total).toBe(1710);
+    expect(res.body.meta.without_terms_total).toBe(1708);
+  });
+
+  it('пагинация: страница 3 по 50 строк → LIMIT 50 OFFSET 100', async () => {
+    const res = makeRes();
+    await payrollTermsController.list(
+      makeReq({ query: { page: '3', page_size: '50' } } as Partial<AuthenticatedRequest>),
+      res,
+    );
+
+    const { limit, offset } = listParams();
+    expect(limit).toBe(50);
+    expect(offset).toBe(100);
+    expect(res.body.meta).toMatchObject({ page: 3, page_size: 50 });
+  });
+
+  it('по умолчанию 100 строк; больше 500 на страницу — отказ до похода в БД', async () => {
+    const resDefault = makeRes();
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), resDefault);
+    expect(listParams().limit).toBe(100);
+
+    pgQueryOne.mockClear();
+    const resTooBig = makeRes();
+    await payrollTermsController.list(
+      makeReq({ query: { page_size: '501' } } as Partial<AuthenticatedRequest>),
+      resTooBig,
+    );
+    expect(resTooBig.statusCode).toBe(400);
+    expect(pgQueryOne).not.toHaveBeenCalled();
+  });
+
+  it('поиск уходит в БД по всему штату, спецсимволы шаблона экранируются', async () => {
+    const res = makeRes();
+    await payrollTermsController.list(
+      makeReq({ query: { q: '  есенов  ' } } as Partial<AuthenticatedRequest>),
+      res,
+    );
+    expect(listParams().search).toBe('%есенов%');
+    expect(listParams().sql).toMatch(/full_name ILIKE \$8::text OR e\.tab_number ILIKE \$8::text/);
+
+    pgQueryOne.mockClear();
+    await payrollTermsController.list(
+      makeReq({ query: { q: '50%_\\' } } as Partial<AuthenticatedRequest>),
+      makeRes(),
+    );
+    expect(listParams().search).toBe('%50\\%\\_\\\\%');
+  });
+
+  it('скоуп: у бухгалтера подразделения список сужен до его отделов, у admin — без фильтра', async () => {
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue(['dept-a', 'dept-b']);
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), makeRes());
+    expect(listParams().departments).toEqual(['dept-a', 'dept-b']);
+    expect(listParams().sql).toMatch(/e\.org_department_id = ANY\(\$7::uuid\[\]\)/);
+
+    pgQueryOne.mockClear();
+    scope.resolveAccessibleDepartmentIds.mockResolvedValue('all');
+    await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), makeRes());
+    expect(listParams().departments).toBeNull();
   });
 
   it('некорректная дата отклоняется', async () => {
-    const req = makeReq({ query: { date: '01.08.2026' } } as Partial<AuthenticatedRequest>);
     const res = makeRes();
-
-    await payrollTermsController.list(req, res);
+    await payrollTermsController.list(makeReq({ query: { date: '01.08.2026' } } as Partial<AuthenticatedRequest>), res);
 
     expect(res.statusCode).toBe(400);
-    expect(pgQuery).not.toHaveBeenCalled();
+    expect(pgQueryOne).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,7 @@
 }
 
 .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.fieldLabel { font-size: 12px; color: var(--muted); }
+.fieldLabel { font-size: 12px; color: var(--text-secondary); }
 
 .input {
   /* >= 16px — иначе Safari и Chrome на смартфонах зумят форму при фокусе */
@@ -20,8 +20,8 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--bg-primary);
+  color: var(--text-primary);
   min-height: 44px;
   width: 100%;
   box-sizing: border-box;
@@ -32,30 +32,30 @@
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: var(--text);
+  color: var(--text-primary);
   min-height: 44px;
 }
 
 .warning {
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--danger);
+  border-left: 3px solid var(--error);
   border-radius: 8px;
   background: var(--surface);
-  color: var(--text);
+  color: var(--text-primary);
   font-size: 14px;
   overflow-wrap: anywhere;
 }
 
 .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.counter { font-size: 13px; color: var(--muted); }
+.counter { font-size: 13px; color: var(--text-secondary); }
 
 .primaryButton {
   min-height: 44px;
   padding: 0 16px;
   border: none;
   border-radius: 8px;
-  background: var(--accent);
+  background: var(--primary);
   color: #fff;
   font-size: 14px;
   cursor: pointer;
@@ -69,18 +69,22 @@
   padding: 0 8px;
   border: none;
   background: none;
-  color: var(--accent);
+  color: var(--primary);
   font-size: 14px;
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Широкая таблица скроллится внутри себя: горизонтального скролла страницы на 360px быть не должно */
+/*
+ * Широкая таблица скроллится внутри себя ТОЛЬКО по горизонтали: горизонтального скролла страницы
+ * на 360px быть не должно. Вертикально страницу скроллит общий Layout .content.
+ * overscroll-behavior: contain здесь НЕЛЬЗЯ: overflow-x: auto делает обёртку скролл-контейнером,
+ * вертикально ей прокручивать нечего, а contain обрывает передачу колеса родителю — таблица
+ * «не скроллится». Так же, как в ChecksPage.module.css.
+ */
 .tableWrap {
   overflow-x: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -88,15 +92,42 @@
 
 .table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 860px; }
 .table th, .table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
-.table th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.table th { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
 .table tbody tr:last-child td { border-bottom: none; }
 
 .checkboxCell { width: 36px; }
-.rowMissing { background: color-mix(in srgb, var(--danger) 7%, transparent); }
-.missing { color: var(--danger); }
+.rowMissing { background: color-mix(in srgb, var(--error) 7%, transparent); }
+.missing { color: var(--error); }
 
-.state { padding: 20px; text-align: center; color: var(--muted); font-size: 14px; }
-.stateError { padding: 20px; text-align: center; color: var(--danger); font-size: 14px; }
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  /* Последняя строка не должна уходить под нижнюю панель Safari iOS 26 */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.pageButton {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.pageButton:disabled { opacity: 0.5; cursor: default; }
+
+.pageInfo { font-size: 14px; color: var(--text-secondary); }
+
+.state { padding: 20px; text-align: center; color: var(--text-secondary); font-size: 14px; }
+.stateError { padding: 20px; text-align: center; color: var(--error); font-size: 14px; }
 
 @media (min-width: 768px) {
   .toolbar { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; }

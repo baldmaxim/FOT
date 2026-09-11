@@ -1,0 +1,39 @@
+.tab { display: flex; flex-direction: column; gap: 12px; }
+
+.switch {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.switch::-webkit-scrollbar { display: none; }
+
+.switchButton {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s ease-out, color 0.15s ease-out, border-color 0.15s ease-out;
+}
+.switchButton:hover { color: var(--text-primary); }
+
+.switchActive,
+.switchActive:hover {
+  border-color: var(--primary);
+  color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+.loading { padding: 20px; text-align: center; color: var(--text-secondary); font-size: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .switchButton { transition: none; }
+}
