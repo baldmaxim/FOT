@@ -268,7 +268,25 @@ export const CompensationTermsPage: FC = () => {
       {termsQuery.isLoading && <div className={styles.state}>Загрузка…</div>}
       {termsQuery.isError && <div className={styles.stateError}>Не удалось загрузить условия оплаты</div>}
 
-      {!termsQuery.isLoading && !termsQuery.isError && (
+      {/*
+        Объяснение — состояние экрана, а не строка данных, поэтому оно вне таблицы. Внутри <td>
+        текст не переносился: `.table td { white-space: nowrap }` специфичнее одиночного класса,
+        и строка растягивала таблицу за край экрана с горизонтальной прокруткой.
+      */}
+      {!termsQuery.isLoading && !termsQuery.isError && emptyBecauseNoTerms && (
+        <div className={styles.explain}>
+          <p className={styles.explainText}>
+            Категория и вид оплаты появляются после назначения условий. В этой выборке
+            условия пока не назначены никому — снимите фильтр и выберите подразделение,
+            чтобы назначить.
+          </p>
+          <button type="button" className={styles.secondaryButton} onClick={resetTermsFilters}>
+            Сбросить фильтры
+          </button>
+        </div>
+      )}
+
+      {!termsQuery.isLoading && !termsQuery.isError && !emptyBecauseNoTerms && (
         <div className={styles.tableWrap}>
           <table className={styles.table}>
             <thead>
@@ -320,23 +338,9 @@ export const CompensationTermsPage: FC = () => {
                   </td>
                 </tr>
               ))}
-              {rows.length === 0 && !emptyBecauseNoTerms && (
+              {rows.length === 0 && (
                 <tr>
                   <td colSpan={9} className={styles.state}>Сотрудники не найдены</td>
-                </tr>
-              )}
-              {rows.length === 0 && emptyBecauseNoTerms && (
-                <tr>
-                  <td colSpan={9} className={styles.explain}>
-                    <p className={styles.explainText}>
-                      Категория и вид оплаты появляются после назначения условий. В этой выборке
-                      условия пока не назначены никому — снимите фильтр и выберите подразделение,
-                      чтобы назначить.
-                    </p>
-                    <button type="button" className={styles.secondaryButton} onClick={resetTermsFilters}>
-                      Сбросить фильтры
-                    </button>
-                  </td>
                 </tr>
               )}
             </tbody>
