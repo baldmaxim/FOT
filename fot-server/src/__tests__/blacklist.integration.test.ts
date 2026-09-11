@@ -61,6 +61,17 @@ describeIf('чёрный список: гарантии СУБД', () => {
     }
   });
 
+  it('условие на держателя пропуска отсекает чужие документы, но терпит регистр и ё', async () => {
+    // На нём держится автозаполнение паспорта штатного сотрудника из пропуска:
+    // профиль пропуска переиспользуется из пула и хранит паспорт прежнего держателя.
+    const res = await pool.query<{ same: boolean; other: boolean }>(
+      `SELECT public.norm_person_name('Королёв  Пётр') = public.norm_person_name('КОРОЛЕВ ПЕТР') AS same,
+              public.norm_person_name('Королёв Пётр')  = public.norm_person_name('Петров Иван')  AS other`,
+    );
+    expect(res.rows[0].same).toBe(true);
+    expect(res.rows[0].other).toBe(false);
+  });
+
   it('full_name_norm генерируется БД — нарушить канон записью нельзя', async () => {
     const id = await insert({ birth_date: '1990-01-01' });
     const res = await pool.query<{ full_name_norm: string }>(

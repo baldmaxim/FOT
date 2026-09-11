@@ -193,6 +193,8 @@ export interface IBlacklistResolved {
     email: string | null;
     passport_series_number: string | null;
     employee_id: number | null;
+    /** Откуда подтянуты документы: «из пропуска №442 · ООО …» / «из карточки сотрудника». */
+    source_note: string | null;
   };
   strong: IBlacklistTarget[];
   weak: IBlacklistTarget[];

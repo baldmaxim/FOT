@@ -44,7 +44,11 @@ export const BlacklistRemoveModal: FC<IBlacklistRemoveModalProps> = ({ entry, on
   };
 
   return (
-    <ModalShell onClose={onClose} containerClassName={styles.blacklistModal}>
+    <ModalShell
+      onClose={onClose}
+      overlayClassName={styles.modalOverlay}
+      containerClassName={styles.blacklistModal}
+    >
       {({ requestClose }) => (
         <>
           <div className={styles.blacklistModalHeader}>

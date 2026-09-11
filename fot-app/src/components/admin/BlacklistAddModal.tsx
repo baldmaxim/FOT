@@ -21,6 +21,15 @@ interface IBlacklistAddModalProps {
 
 type Mode = 'search' | 'manual';
 
+interface IAutofill {
+  birthDate: boolean;
+  passport: boolean;
+  snils: boolean;
+  note: string | null;
+}
+
+const EMPTY_AUTOFILL: IAutofill = { birthDate: false, passport: false, snils: false, note: null };
+
 /**
  * Добавление в чёрный список. Главный путь — выбор человека поиском: тогда
  * идентификаторы приезжают из БД (сервер читает их сам по ref_id), а не с
@@ -46,7 +55,23 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
   const [email, setEmail] = useState('');
   const [passport, setPassport] = useState('');
 
+  // Поля, подставленные из базы по выбранному человеку. Они заблокированы: при
+  // сохранении сервер всё равно берёт значения из БД, а ручной ввод лишь
+  // заполняет пустые поля — редактируемое, но игнорируемое поле сбивало бы с толку.
+  const [autofilled, setAutofilled] = useState<IAutofill>(EMPTY_AUTOFILL);
+  // Номер последнего выбора: ответ по устаревшему выбору игнорируем.
+  const pickSeq = useRef(0);
+
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Снимает подставленные значения; введённое вручную не трогаем. */
+  const clearAutofill = () => {
+    pickSeq.current += 1;
+    if (autofilled.birthDate) setBirthDate('');
+    if (autofilled.passport) setPassport('');
+    if (autofilled.snils) setSnils('');
+    setAutofilled(EMPTY_AUTOFILL);
+  };
 
   useEffect(() => {
     if (mode !== 'search') return;
@@ -92,6 +117,8 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
   };
 
   const handlePick = async (person: IBlacklistPerson) => {
+    clearAutofill();
+    const seq = pickSeq.current;
     setPicked(person);
     setResults([]);
     setSearch(person.full_name);
@@ -100,9 +127,24 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
         person: { kind: person.kind, ref_id: person.ref_id },
         reason: 'предпросмотр',
       });
+      // Пока ждали ответ, выбрали другого человека или начали новый поиск.
+      if (seq !== pickSeq.current) return;
       setResolved(data);
       setConfirmedWeak([]);
+
+      // Подставляем документы выбранного человека, если они в базе есть.
+      const found = data.person;
+      if (found.birth_date) setBirthDate(found.birth_date);
+      if (found.passport_series_number) setPassport(found.passport_series_number);
+      if (found.snils) setSnils(found.snils);
+      setAutofilled({
+        birthDate: !!found.birth_date,
+        passport: !!found.passport_series_number,
+        snils: !!found.snils,
+        note: found.birth_date || found.passport_series_number || found.snils ? found.source_note : null,
+      });
     } catch (e) {
+      if (seq !== pickSeq.current) return;
       toast.error(errMsg(e, 'Не удалось определить, что будет заблокировано'));
     }
   };
@@ -139,14 +181,25 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
 
   // Без паспорта и даты рождения запрет не сработает при подаче через подрядчика:
   // у подрядного пропуска нет ни СНИЛС, ни почты, а одно ФИО только предупреждает.
-  const person = resolved?.person;
+  // Поля уже содержат и подставленные, и вписанные вручную значения.
   const weakIdentification = mode === 'manual'
     ? !birthDate && !passport.trim() && !snils.trim() && !email.trim()
-    : !!picked && !(person?.passport_series_number || passport.trim())
-      && !(person?.birth_date || birthDate);
+    : !!resolved && !passport.trim() && !birthDate;
+
+  const switchMode = (next: Mode) => {
+    if (next === mode) return;
+    clearAutofill();
+    setPicked(null);
+    setResolved(null);
+    setMode(next);
+  };
 
   return (
-    <ModalShell onClose={onClose} containerClassName={styles.blacklistModal}>
+    <ModalShell
+      onClose={onClose}
+      overlayClassName={styles.modalOverlay}
+      containerClassName={styles.blacklistModal}
+    >
       {({ requestClose }) => (
         <>
           <div className={styles.blacklistModalHeader}>
@@ -156,13 +209,13 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
           <div className={styles.blacklistModalTabs}>
             <button
               className={`${styles.tab} ${mode === 'search' ? styles.active : ''}`}
-              onClick={() => setMode('search')}
+              onClick={() => switchMode('search')}
             >
               Выбрать человека
             </button>
             <button
               className={`${styles.tab} ${mode === 'manual' ? styles.active : ''}`}
-              onClick={() => setMode('manual')}
+              onClick={() => switchMode('manual')}
             >
               Ввести вручную
             </button>
@@ -179,6 +232,7 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
                     placeholder="Начните вводить фамилию"
                     onChange={e => {
                       setSearch(e.target.value);
+                      if (picked) clearAutofill();
                       setPicked(null);
                       setResolved(null);
                     }}
@@ -230,13 +284,19 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
             <div className={styles.blacklistFieldRow}>
               <label className={styles.blacklistField}>
                 <span>Дата рождения</span>
-                <input type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)} />
+                <input
+                  type="date"
+                  value={birthDate}
+                  readOnly={autofilled.birthDate}
+                  onChange={e => setBirthDate(e.target.value)}
+                />
               </label>
               <label className={styles.blacklistField}>
                 <span>Паспорт</span>
                 <input
                   type="text"
                   value={passport}
+                  readOnly={autofilled.passport}
                   onChange={e => setPassport(e.target.value)}
                   placeholder="серия и номер"
                 />
@@ -249,6 +309,7 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
                 <input
                   type="text"
                   value={snils}
+                  readOnly={autofilled.snils}
                   onChange={e => setSnils(e.target.value)}
                   placeholder="123-456-789 00"
                 />
@@ -260,6 +321,12 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
                 </label>
               )}
             </div>
+
+            {autofilled.note && (
+              <div className={styles.blacklistHint}>
+                Данные подставлены {autofilled.note}. Пустые поля можно заполнить вручную.
+              </div>
+            )}
 
             <label className={styles.blacklistField}>
               <span>Причина</span>

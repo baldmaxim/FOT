@@ -64,6 +64,49 @@ interface IPersonSource {
   passport_series_number: string | null;
   employee_id: number | null;
   user_profile_id: string | null;
+  /** Откуда подтянуты документы — показывается в форме под заполненными полями. */
+  source_note: string | null;
+}
+
+const passNote = (passNumber: string | null, orgName: string | null): string =>
+  `из пропуска №${passNumber ?? '—'}${orgName ? ` · ${orgName}` : ''}`;
+
+/**
+ * Паспорт и дата рождения штатного сотрудника из его подрядного пропуска.
+ *
+ * В карточке сотрудника паспорта нет вообще, а даты рождения нет у 97% — зато
+ * держатели пропусков продублированы как сотрудники с тем же профилем Sigur.
+ * Совпадение ФИО текущего держателя обязательно: профиль пропуска
+ * переиспользуется из пула и может хранить паспорт ПРЕЖНЕГО держателя.
+ * Нашлось больше одного пропуска — не угадываем.
+ */
+async function loadDocsFromLinkedPass(
+  sigurEmployeeId: number,
+  fullName: string,
+): Promise<{ birth_date: string | null; passport_series_number: string; note: string } | null> {
+  const rows = await query<{
+    birth_date: string | null; passport_series_number: string;
+    pass_number: string | null; org_name: string | null;
+  }>(
+    `SELECT p.birth_date::text AS birth_date, p.passport_series_number,
+            p.pass_number, od.name AS org_name
+       FROM contractor_passes p
+       LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
+       LEFT JOIN org_departments od ON od.id = p.org_department_id
+      WHERE p.sigur_employee_id = $1
+        AND p.passport_series_number IS NOT NULL
+        AND p.status IN ('assigned','submitted','applied','blocked')
+        AND public.norm_person_name(COALESCE(h.holder_name, p.holder_name)) = public.norm_person_name($2)
+      LIMIT 2`,
+    [sigurEmployeeId, fullName],
+  );
+  if (!rows || rows.length !== 1) return null;
+  const row = rows[0];
+  return {
+    birth_date: row.birth_date,
+    passport_series_number: row.passport_series_number,
+    note: passNote(row.pass_number, row.org_name),
+  };
 }
 
 /** Читает данные выбранного человека из БД (клиенту доверяем только ref_id). */
@@ -77,16 +120,18 @@ async function loadPersonSource(
     const row = await queryOne<{
       full_name: string; birth_date: string | null; pension_number: string | null;
       email: string | null; id: number; profile_id: string | null;
+      sigur_employee_id: number | null;
     }>(
       `SELECT e.id, e.full_name, e.birth_date::text AS birth_date, e.pension_number,
-              e.email, up.id AS profile_id
+              e.email, e.sigur_employee_id, up.id AS profile_id
          FROM employees e
          LEFT JOIN user_profiles up ON up.employee_id = e.id
         WHERE e.id = $1`,
       [employeeId],
     );
     if (!row) return null;
-    return {
+
+    const source: IPersonSource = {
       full_name: row.full_name,
       birth_date: row.birth_date,
       snils: row.pension_number,
@@ -94,17 +139,33 @@ async function loadPersonSource(
       passport_series_number: null,
       employee_id: row.id,
       user_profile_id: row.profile_id,
+      source_note: 'из карточки сотрудника',
     };
+
+    // Паспорта в карточке не бывает, поэтому пропуск смотрим всегда, когда есть
+    // профиль Sigur. Значения карточки приоритетнее: пропуск только дополняет.
+    if (row.sigur_employee_id != null) {
+      const docs = await loadDocsFromLinkedPass(Number(row.sigur_employee_id), row.full_name);
+      if (docs) {
+        source.passport_series_number = docs.passport_series_number;
+        source.birth_date = source.birth_date ?? docs.birth_date;
+        source.source_note = docs.note;
+      }
+    }
+    return source;
   }
 
   const row = await queryOne<{
     holder_name: string | null; birth_date: string | null;
     passport_series_number: string | null;
+    pass_number: string | null; org_name: string | null;
   }>(
     `SELECT COALESCE(h.holder_name, p.holder_name) AS holder_name,
-            p.birth_date::text AS birth_date, p.passport_series_number
+            p.birth_date::text AS birth_date, p.passport_series_number,
+            p.pass_number, od.name AS org_name
        FROM contractor_passes p
        LEFT JOIN contractor_pass_holders h ON h.pass_id = p.id AND h.valid_until IS NULL
+       LEFT JOIN org_departments od ON od.id = p.org_department_id
       WHERE p.id = $1::uuid`,
     [refId],
   );
@@ -117,6 +178,7 @@ async function loadPersonSource(
     passport_series_number: row.passport_series_number,
     employee_id: null,
     user_profile_id: null,
+    source_note: passNote(row.pass_number, row.org_name),
   };
 }
 
@@ -455,6 +517,7 @@ async function resolveEntrySource(
       passport_series_number: body.manual.passport_series_number ?? null,
       employee_id: null,
       user_profile_id: null,
+      source_note: null,
     };
   }
 

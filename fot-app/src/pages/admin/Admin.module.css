@@ -2894,7 +2894,8 @@
 
 .blacklistModal {
   width: min(720px, 100%);
-  max-height: 90dvh;
+  /* Оверлей (.modalOverlay) даёт 20px отступа — вычитаем, чтобы не резать кнопки. */
+  max-height: calc(100dvh - 40px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -2957,6 +2958,13 @@
   background: var(--bg);
   color: var(--text);
   font-family: inherit;
+}
+
+/* Подставлено из базы — видно, что поле не для ввода. */
+.blacklistField input:read-only {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: default;
 }
 
 .blacklistFieldRow {

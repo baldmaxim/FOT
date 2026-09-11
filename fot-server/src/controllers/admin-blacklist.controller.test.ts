@@ -211,6 +211,102 @@ describe('добавление', () => {
   });
 });
 
+describe('автозаполнение документов выбранного человека', () => {
+  const resolve = async (person: { kind: string; ref_id: string }) => {
+    const res = makeRes();
+    await adminBlacklistController.resolveTargets(req({ person }), res as never);
+    return res as { statusCode: number; body: { data: { person: Record<string, unknown> } } };
+  };
+
+  it('подрядный пропуск: дата рождения, паспорт и источник с номером пропуска', async () => {
+    h.queryOne.mockResolvedValueOnce({
+      holder_name: 'Исмаилов Отабек Уктамович', birth_date: '1990-05-01',
+      passport_series_number: 'AB1234567', pass_number: '442', org_name: 'ИНЖКАБСТРОЙ ООО',
+    });
+
+    const res = await resolve({ kind: 'contractor_pass', ref_id: '11111111-1111-1111-1111-111111111111' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data.person).toMatchObject({
+      birth_date: '1990-05-01',
+      passport_series_number: 'AB1234567',
+      source_note: 'из пропуска №442 · ИНЖКАБСТРОЙ ООО',
+    });
+  });
+
+  it('штатный сотрудник без ДР: паспорт и ДР подтягиваются из его пропуска', async () => {
+    h.queryOne.mockResolvedValueOnce({
+      id: 42, full_name: 'Исмаилов Отабек Уктамович', birth_date: null,
+      pension_number: null, email: null, profile_id: null, sigur_employee_id: 777,
+    });
+    h.query.mockResolvedValueOnce([{
+      birth_date: '1990-05-01', passport_series_number: 'AB1234567',
+      pass_number: '442', org_name: 'ИНЖКАБСТРОЙ ООО',
+    }]);
+
+    const res = await resolve({ kind: 'employee', ref_id: '42' });
+
+    expect(res.body.data.person).toMatchObject({
+      birth_date: '1990-05-01',
+      passport_series_number: 'AB1234567',
+      source_note: 'из пропуска №442 · ИНЖКАБСТРОЙ ООО',
+    });
+    // Без совпадения ФИО держателя подтянули бы паспорт прежнего держателя пула.
+    const sql = String(h.query.mock.calls[0][0]);
+    expect(sql).toContain('norm_person_name(COALESCE(h.holder_name, p.holder_name)) = public.norm_person_name($2)');
+    expect(h.query.mock.calls[0][1]).toEqual([777, 'Исмаилов Отабек Уктамович']);
+  });
+
+  it('нашлось два пропуска — не угадываем, поля остаются пустыми', async () => {
+    h.queryOne.mockResolvedValueOnce({
+      id: 42, full_name: 'Иванов Иван', birth_date: null,
+      pension_number: null, email: null, profile_id: null, sigur_employee_id: 777,
+    });
+    h.query.mockResolvedValueOnce([
+      { birth_date: '1990-01-01', passport_series_number: 'A1', pass_number: '1', org_name: 'ООО 1' },
+      { birth_date: '1991-01-01', passport_series_number: 'B2', pass_number: '2', org_name: 'ООО 2' },
+    ]);
+
+    const res = await resolve({ kind: 'employee', ref_id: '42' });
+
+    expect(res.body.data.person).toMatchObject({
+      birth_date: null,
+      passport_series_number: null,
+      source_note: 'из карточки сотрудника',
+    });
+  });
+
+  it('дата рождения из карточки не перетирается пропуском', async () => {
+    h.queryOne.mockResolvedValueOnce({
+      id: 42, full_name: 'Иванов Иван', birth_date: '1985-03-03',
+      pension_number: '123-456-789 00', email: null, profile_id: null, sigur_employee_id: 777,
+    });
+    h.query.mockResolvedValueOnce([
+      { birth_date: '1999-09-09', passport_series_number: 'C3', pass_number: '3', org_name: 'ООО' },
+    ]);
+
+    const res = await resolve({ kind: 'employee', ref_id: '42' });
+
+    expect(res.body.data.person).toMatchObject({
+      birth_date: '1985-03-03',
+      passport_series_number: 'C3',
+      snils: '123-456-789 00',
+    });
+  });
+
+  it('сотрудник без профиля Sigur — пропуск не ищем', async () => {
+    h.queryOne.mockResolvedValueOnce({
+      id: 42, full_name: 'Иванов Иван', birth_date: null,
+      pension_number: null, email: null, profile_id: null, sigur_employee_id: null,
+    });
+
+    const res = await resolve({ kind: 'employee', ref_id: '42' });
+
+    expect(h.query).not.toHaveBeenCalled();
+    expect(res.body.data.person).toMatchObject({ passport_series_number: null, source_note: 'из карточки сотрудника' });
+  });
+});
+
 describe('снятие', () => {
   it('без причины — 400', async () => {
     const res = makeRes();
