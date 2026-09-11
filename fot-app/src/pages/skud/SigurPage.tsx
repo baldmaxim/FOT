@@ -37,6 +37,8 @@ export const SigurPage = () => {
   // /skud-settings: у кадровой роли этих кнопок быть не должно.
   const canEdit = canEditPage('/sigur');
   const canSkudTechnical = canEditPage('/skud-settings');
+  // Точки и режимы доступа сотрудника — свой ключ, без остальной техники СКУД.
+  const canManageAccessPoints = canSkudTechnical || canEditPage('/sigur/access-points');
   const canViewSkudTechnical = canViewPage('/skud-settings');
   const canUseReader = canViewPage('/skud-card-reader');
 
@@ -142,7 +144,7 @@ export const SigurPage = () => {
           <Suspense fallback={tabFallback}>
             <SigurEmployeesTab
               canEdit={canEdit}
-              canManageAccessPoints={canSkudTechnical}
+              canManageAccessPoints={canManageAccessPoints}
               canImportTabNumbers={canSkudTechnical}
               canDeleteDepartmentRecursive={canSkudTechnical}
               setError={setError}

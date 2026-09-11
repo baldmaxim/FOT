@@ -20,6 +20,9 @@ const h = vi.hoisted(() => ({
   hasPageEdit: vi.fn(),
   checkRoleAssignable: vi.fn(),
   checkTargetUserManageable: vi.fn(),
+  hasOrgWideAccountAccess: vi.fn(),
+  resolveAccessibleDepartmentIds: vi.fn(),
+  updateUserById: vi.fn(),
 }));
 
 vi.mock('../services/blacklist.service.js', () => ({
@@ -42,17 +45,20 @@ vi.mock('../services/roles-cache.service.js', () => ({
   getAllRoles: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../services/local-auth.service.js', () => ({
-  localAuthService: { getUserById: h.getUserById },
+  localAuthService: { getUserById: h.getUserById, updateUserById: h.updateUserById },
 }));
 vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequest: h.logFromRequest, log: vi.fn() },
 }));
 vi.mock('../services/data-scope.service.js', () => ({
   canAccessEmployeeInScope: vi.fn(),
-  resolveAccessibleDepartmentIds: vi.fn(async () => 'all'),
+  resolveAccessibleDepartmentIds: h.resolveAccessibleDepartmentIds,
   resolveCompanyScope: h.resolveCompanyScope,
 }));
 vi.mock('../services/access-control.service.js', () => ({ hasPageEdit: h.hasPageEdit }));
+vi.mock('../services/org-wide-account-access.service.js', () => ({
+  hasOrgWideAccountAccess: h.hasOrgWideAccountAccess,
+}));
 vi.mock('../services/assignable-roles.service.js', () => ({
   checkRoleAssignable: h.checkRoleAssignable,
   checkTargetUserManageable: h.checkTargetUserManageable,
@@ -126,6 +132,9 @@ beforeEach(() => {
   h.query.mockResolvedValue([{ id: 'profile-1' }]);
   // Не системный админ: у кадрового админа company_scope пустой.
   h.resolveCompanyScope.mockResolvedValue({ roots: [] });
+  h.resolveAccessibleDepartmentIds.mockResolvedValue('all');
+  h.hasOrgWideAccountAccess.mockResolvedValue(false);
+  h.updateUserById.mockResolvedValue(undefined);
 });
 
 describe('очередь заявок: кто её видит', () => {
@@ -217,5 +226,66 @@ describe('rejectUser: одна транзакция вместо чтения и
     await adminUsersController.rejectUser(makeReq(HR_ADMIN), res as never);
     expect(res.statusCode).toBe(403);
     expect(h.withTransaction).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Ключ /admin/users/accounts (роль «Отдел безопасности»): учётки всей организации
+ * без all_departments_scope. Скоуп отделов у такой роли узкий, флага нет.
+ */
+describe('ключ /admin/users/accounts без глобального скоупа', () => {
+  const SECURITY = { id: 'actor-3', is_admin: false, role_code: 'security' };
+
+  beforeEach(() => {
+    h.getRoleByCode.mockResolvedValue({ code: 'security', all_departments_scope: false });
+    h.resolveAccessibleDepartmentIds.mockResolvedValue(['dept-own']);
+    // Цель — новая регистрация без привязки к сотруднику.
+    h.queryOne.mockResolvedValue({ id: 'profile-1', employee_id: null });
+  });
+
+  it('с ключом — одобрение регистрации проходит', async () => {
+    h.hasOrgWideAccountAccess.mockResolvedValue(true);
+    const res = makeRes();
+    await adminUsersController.approveUser(makeReq(SECURITY, { position_type: 'contractor' }), res as never);
+    expect(res.statusCode).not.toBe(403);
+    expect(h.hasOrgWideAccountAccess).toHaveBeenCalledWith(expect.anything(), 'edit');
+  });
+
+  it('без ключа и без флага — одобрение 403', async () => {
+    const res = makeRes();
+    await adminUsersController.approveUser(makeReq(SECURITY, { position_type: 'contractor' }), res as never);
+    expect(res.statusCode).toBe(403);
+    expect(h.query).not.toHaveBeenCalled();
+  });
+
+  it('с ключом — email подтверждается учётке без сотрудника (скоуп отделов не мешает)', async () => {
+    h.hasOrgWideAccountAccess.mockResolvedValue(true);
+    const res = makeRes();
+    await adminUsersController.confirmUserEmail(makeReq(SECURITY), res as never);
+    expect(res.statusCode).toBe(200);
+    expect(h.updateUserById).toHaveBeenCalledWith(TARGET_ID, { emailConfirm: true });
+  });
+
+  it('без ключа — учётка без сотрудника вне скоупа → 403', async () => {
+    const res = makeRes();
+    await adminUsersController.confirmUserEmail(makeReq(SECURITY), res as never);
+    expect(res.statusCode).toBe(403);
+    expect(h.updateUserById).not.toHaveBeenCalled();
+  });
+
+  it('ключ не открывает админскую учётку: checkTargetUserManageable → 403', async () => {
+    h.hasOrgWideAccountAccess.mockResolvedValue(true);
+    h.checkTargetUserManageable.mockResolvedValue({ ok: false, status: 403, error: 'нельзя' });
+    const res = makeRes();
+    await adminUsersController.confirmUserEmail(makeReq(SECURITY), res as never);
+    expect(res.statusCode).toBe(403);
+    expect(h.updateUserById).not.toHaveBeenCalled();
+  });
+
+  it('ключ не открывает смену роли (/admin/users/access): скоуп отделов действует', async () => {
+    h.hasOrgWideAccountAccess.mockResolvedValue(true);
+    const res = makeRes();
+    await adminUsersController.updateUserPosition(makeReq(SECURITY, { position_type: 'worker' }), res as never);
+    expect(res.statusCode).toBe(403);
   });
 });

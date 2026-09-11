@@ -30,6 +30,11 @@ const h = vi.hoisted(() => ({
   listAllInducted: vi.fn(),
   countInductionByOrg: vi.fn(),
   getContractorOrgs: vi.fn(),
+  hasOrgWideAccountAccess: vi.fn(),
+}));
+
+vi.mock('../services/org-wide-account-access.service.js', () => ({
+  hasOrgWideAccountAccess: h.hasOrgWideAccountAccess,
 }));
 
 vi.mock('../config/postgres.js', () => ({
@@ -1884,5 +1889,47 @@ describe('contractorAdminController — статистика пропусков 
     await contractorAdminController.exportPassStats(statsReq(), allOrgs as never);
     expect(allOrgs.statusCode).toBe(200);
     expect(h.query.mock.calls[4][1]).toEqual([[ORG]]);
+  });
+});
+
+describe('contractorAdminController — привязка подрядчика к организации', () => {
+  const orgReq = (body: Record<string, unknown> = {}) => ({
+    user: { id: 'u-1', role_code: 'security', is_admin: false },
+    params: { id: '3ffe0987-39b1-48b0-af45-2dddf8ccd907' },
+    body,
+    ip: '127.0.0.1',
+    headers: {},
+    socket: {},
+  }) as never;
+
+  beforeEach(() => {
+    Object.values(h).forEach(fn => fn.mockReset());
+    h.logFromRequest.mockResolvedValue(undefined);
+  });
+
+  it('без ключа учёток — 403 до чтения и записи', async () => {
+    h.hasOrgWideAccountAccess.mockResolvedValue(false);
+    const res = makeRes();
+    await contractorAdminController.replaceUserOrg(orgReq({ org_department_id: null }), res as never);
+    expect(res.statusCode).toBe(403);
+    expect(h.queryOne).not.toHaveBeenCalled();
+    expect(h.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('с ключом учёток — гейт пройден (дальше обычные проверки: профиля нет → 404)', async () => {
+    h.hasOrgWideAccountAccess.mockResolvedValue(true);
+    h.queryOne.mockResolvedValue(null);
+    const res = makeRes();
+    await contractorAdminController.replaceUserOrg(orgReq({ org_department_id: null }), res as never);
+    expect(h.hasOrgWideAccountAccess).toHaveBeenCalledWith(expect.anything(), 'edit');
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('список подрядчиков — проверка с действием view', async () => {
+    h.hasOrgWideAccountAccess.mockResolvedValue(false);
+    const res = makeRes();
+    await contractorAdminController.listContractorUsers(orgReq(), res as never);
+    expect(h.hasOrgWideAccountAccess).toHaveBeenCalledWith(expect.anything(), 'view');
+    expect(res.statusCode).toBe(403);
   });
 });

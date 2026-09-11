@@ -67,6 +67,8 @@ interface IUserRowExpandedProps {
    * нет — иначе кнопки были бы видны и упирались в 403.
    */
   canManageAccess: boolean;
+  /** Привязка подрядчика к организации: системный админ или ключ /admin/users/accounts. */
+  canManageContractorOrg: boolean;
   onUpdateName: (userId: string, name: string) => Promise<void>;
   onChangePosition: (userId: string, position: EmployeePositionType) => Promise<void>;
   onChangeChatMode: (userId: string, mode: ChatInboundMode) => Promise<void>;
@@ -83,6 +85,7 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
   assignableRoles,
   canManageCompanies,
   canManageAccess,
+  canManageContractorOrg,
   onUpdateName,
   onChangePosition,
   onChangeChatMode,
@@ -285,9 +288,9 @@ const UserRowExpanded: FC<IUserRowExpandedProps> = memo(({
         <UserCompanyAccessSection userId={user.id} isUserAdmin={isUserAdmin} compact />
       )}
 
-      {/* Привязка подрядной организации остаётся за системным админом:
-          контроллер за ней (contractor-admin) гейтится ensureSystemAdmin. */}
-      {canManageCompanies && userRole?.code === 'contractor' && (
+      {/* Привязка подрядной организации: системный админ или ключ /admin/users/accounts
+          (контроллер contractor-admin — ensureOrgWideAccountAccess). */}
+      {canManageContractorOrg && userRole?.code === 'contractor' && (
         <div className={styles.controlGroup}>
           <label>Подрядная организация:</label>
           <ContractorOrgAccessSection userId={user.id} />
@@ -405,6 +408,9 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
     && (profile?.company_scope?.roots === 'all' || profile?.company_scope === undefined);
   // Настройка чужих доступов вынесена в отдельный ключ (миграция 270).
   const canManageAccess = canEditPage('/admin/users/access');
+  // Админ компании обходит матрицу в canEditPage, но бэкенд его не пускает — поэтому !is_admin.
+  const canManageContractorOrg = canManageCompanies
+    || (!profile?.is_admin && canEditPage('/admin/users/accounts'));
 
   // Порядок ролей не зависит от counts (сортировка по is_admin + label),
   // поэтому считаем его только из списка ролей — без цикла с pageQuery.
@@ -847,6 +853,7 @@ export const AllUsersTab: FC<IAllUsersTabProps> = ({ onReload }) => {
                   assignableRoles={buildAssignableRoles(user)}
                   canManageCompanies={canManageCompanies}
                   canManageAccess={canManageAccess}
+                  canManageContractorOrg={canManageContractorOrg}
                   onUpdateName={handleNameSave}
                   onChangePosition={handlePositionChange}
                   onChangeChatMode={handleChatInboundModeChange}

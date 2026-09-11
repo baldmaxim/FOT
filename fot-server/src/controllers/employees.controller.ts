@@ -32,6 +32,8 @@ import { isProtectedArchiveDepartment } from '../services/employee-archive-depar
 import type { AuthenticatedRequest, EmployeeEncrypted } from '../types/index.js';
 import {
   canAccessEmployeeInScope,
+  hasGlobalDepartmentReadScope,
+  normalizeUuidParam,
   resolveManagedDepartmentIds,
   resolveRequestDataScope,
   resolveRequestDataScopeWithDirectReports,
@@ -114,6 +116,23 @@ async function resolveDepartmentFilterIds(departmentId: string | undefined | nul
   return ids.length > 0 ? ids : [departmentId];
 }
 
+/**
+ * Скоуп ЧТЕНИЯ списка сотрудников. Флаг роли view_all_departments («Просмотр всех
+ * табелей и проходов») открывает всю организацию на чтение — только здесь, а не в
+ * resolveAccessibleDepartmentIds: тот скоуп решает и запись (canAccessEmployeeInScope
+ * в увольнении, правке карточки, документах). globalRead=true — фильтр отдела берётся
+ * из запроса как есть, без сужения до назначенных отделов.
+ */
+async function resolveEmployeeListReadScope(
+  req: AuthenticatedRequest,
+): Promise<{ scope: Awaited<ReturnType<typeof resolveRequestDataScopeWithDirectReports>>; globalRead: boolean }> {
+  const scope = await resolveRequestDataScopeWithDirectReports(req);
+  if (scope !== 'all' && await hasGlobalDepartmentReadScope(req)) {
+    return { scope: 'all', globalRead: true };
+  }
+  return { scope, globalRead: false };
+}
+
 export const employeesController = {
   /**
    * GET /api/employees/work-object-options
@@ -142,14 +161,16 @@ export const employeesController = {
   async getAll(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const t0 = Date.now();
-      const scope = await resolveRequestDataScopeWithDirectReports(req);
+      const { scope, globalRead } = await resolveEmployeeListReadScope(req);
       if (!scope) {
         res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
         return;
       }
       const showArchived = req.query.archived === 'true';
       const requestedDepartmentId = typeof req.query.department_id === 'string' ? req.query.department_id : null;
-      const departmentId = await resolveScopedDepartmentId(req, requestedDepartmentId);
+      const departmentId = globalRead
+        ? normalizeUuidParam(requestedDepartmentId)
+        : await resolveScopedDepartmentId(req, requestedDepartmentId);
       // Если пользователь явно запросил отдел, к которому у него нет доступа — отказ.
       // Иначе фильтр «тихо» обнулялся и возвращался полный список (утечка).
       if (requestedDepartmentId && !departmentId) {
@@ -452,7 +473,7 @@ export const employeesController = {
    */
   async getCounts(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const scope = await resolveRequestDataScopeWithDirectReports(req);
+      const { scope, globalRead } = await resolveEmployeeListReadScope(req);
       if (!scope) {
         res.status(403).json({ success: false, error: 'Data scope не настроен для роли' });
         return;
@@ -468,7 +489,9 @@ export const employeesController = {
 
       const scopedDepartmentFilterIds = scope === 'department'
         ? await resolveManagedDepartmentIds(req)
-        : await resolveDepartmentFilterIds(await resolveScopedDepartmentId(req, null));
+        : globalRead
+          ? null
+          : await resolveDepartmentFilterIds(await resolveScopedDepartmentId(req, null));
 
       // Сам руководитель + прямые подчинённые — чтобы счётчики совпадали со списком getAll.
       let additionalEmployeeIds: number[] = [];
@@ -560,7 +583,8 @@ export const employeesController = {
         res.status(400).json({ success: false, error: 'Invalid employee id' });
         return;
       }
-      if (!(await canAccessEmployeeInScope(req, idNum))) {
+      // Чтение карточки: скоуп отделов ИЛИ «все отделы на чтение» (view_all_departments).
+      if (!(await canAccessEmployeeInScope(req, idNum)) && !(await hasGlobalDepartmentReadScope(req))) {
         res.status(403).json({ success: false, error: 'Нет доступа к сотруднику' });
         return;
       }

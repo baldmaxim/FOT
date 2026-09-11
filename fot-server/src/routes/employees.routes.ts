@@ -112,9 +112,12 @@ router.post(
   employeeEnrichContactsController.enrichContacts
 );
 
-// DELETE /api/employees/all - удаление ВСЕХ (admin, только для разработки)
+// DELETE /api/employees/all - удаление ВСЕХ (admin, только для разработки).
+// requireAdmin обязателен: page-ключ + скоуп 'all' пропускали и не-админа
+// с all_departments_scope (кадровый админ), а 2FA на проде выключена.
 router.delete(
   '/all',
+  requireAdmin,
   requirePageAccess('/staff-control', 'edit'),
   requireCritical2FA,
   employeesController.deleteAll

@@ -1300,6 +1300,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({
             sigurEmployeeId={selectedEmployeeId}
             employee={employees.find(item => item.id === selectedEmployeeId) || null}
             canEdit={canEdit}
+            canEditAccess={canManageAccessPoints}
             departments={departments}
             positions={positions}
             positionsLoading={positionsQuery.isLoading}
@@ -1429,6 +1430,7 @@ export const SigurEmployeesTab: FC<ISigurEmployeesTabProps> = ({
               sigurEmployeeId={selectedEmployeeId}
               employee={employees.find(item => item.id === selectedEmployeeId) || null}
               canEdit={canEdit}
+              canEditAccess={canManageAccessPoints}
               departments={departments}
               positions={positions}
               positionsLoading={positionsQuery.isLoading}

@@ -41,6 +41,7 @@ import {
   checkRoleAssignable,
   checkTargetUserManageable,
 } from '../services/assignable-roles.service.js';
+import { hasOrgWideAccountAccess } from '../services/org-wide-account-access.service.js';
 
 /**
  * Кто вправе работать с очередью заявок на регистрацию (список, одобрение,
@@ -51,15 +52,25 @@ import {
  * пустой список — это поведение сохраняем. Проверять просто «page-access edit»
  * нельзя: любой is_admin обходит матрицу и прошёл бы вместе с company-admin.
  * Поэтому третья ветка — строго НЕ-админская роль с глобальным скоупом данных
- * и явным edit на /admin/users (кадровый админ).
+ * и явным edit на /admin/users (кадровый админ). Четвёртая — технический ключ
+ * /admin/users/accounts (учётки без скоупа отделов, см. org-wide-account-access).
  */
 async function canManagePendingUsers(req: AuthenticatedRequest): Promise<boolean> {
   const scope = await resolveCompanyScope(req);
   if (scope.roots === 'all') return true;
   if (req.user.is_admin) return false;
   const role = await getRoleByCode(req.user.role_code);
-  if (!role?.all_departments_scope) return false;
-  return hasPageEdit(req.user.role_code, '/admin/users');
+  if (role?.all_departments_scope && await hasPageEdit(req.user.role_code, '/admin/users')) return true;
+  return hasOrgWideAccountAccess(req, 'edit');
+}
+
+/**
+ * Скоуп списков пользователей: ключ /admin/users/accounts видит учётки всей
+ * организации (в т.ч. без привязки к сотруднику), остальные — как раньше.
+ */
+async function resolveUserListScope(req: AuthenticatedRequest): Promise<string[] | 'all'> {
+  if (await hasOrgWideAccountAccess(req, 'view')) return 'all';
+  return resolveAccessibleDepartmentIds(req);
 }
 
 function emitDepartmentAccessChanged(targetUserId: string | null | undefined): void {
@@ -171,6 +182,21 @@ async function assertTargetUserInScope(
 }
 
 /**
+ * Скоуп для операций над САМОЙ учётной записью (email, пароль, ФИО, удаление):
+ * ключ /admin/users/accounts снимает department-скоуп. Для настройки чужих прав
+ * (/admin/users/access) не использовать — там остаётся assertTargetUserInScope.
+ * checkTargetUserManageable вызывающий код делает отдельно.
+ */
+async function assertTargetAccountInScope(
+  req: AuthenticatedRequest,
+  targetUserId: string,
+  action: 'view' | 'edit',
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  if (await hasOrgWideAccountAccess(req, action)) return { ok: true };
+  return assertTargetUserInScope(req, targetUserId);
+}
+
+/**
  * Фильтрует список user_profiles по company-scope: оставляет только тех, чей
  * employee.org_department_id попадает в scope. Системный админ (scope='all')
  * получает исходный список как есть.
@@ -179,7 +205,7 @@ async function filterUsersByCompanyScope<T extends { employee_id: number | null 
   req: AuthenticatedRequest,
   users: T[],
 ): Promise<T[]> {
-  const accessible = await resolveAccessibleDepartmentIds(req);
+  const accessible = await resolveUserListScope(req);
   if (accessible === 'all') return users;
   const accessibleSet = new Set(accessible);
 
@@ -296,7 +322,7 @@ async function replaceExplicitDepartmentAccess(params: {
  */
 async function respondUsersCount(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const accessible = await resolveAccessibleDepartmentIds(req);
+    const accessible = await resolveUserListScope(req);
     let row: { count: number } | null;
     // Ожидающие заявки считаются отдельно в /admin/users/pending — здесь
     // только одобренные, чтобы бейдж «Все пользователи (N)» не включал pending.
@@ -373,7 +399,7 @@ async function respondPaginatedUsers(req: AuthenticatedRequest, res: Response): 
   const roleCode = ((req.query.role as string) || '').trim();
   const offset = (page - 1) * pageSize;
 
-  const accessible = await resolveAccessibleDepartmentIds(req);
+  const accessible = await resolveUserListScope(req);
 
   const allRoles = await getAllRoles();
   const roleCodeById = new Map(allRoles.map(r => [r.id, r.code]));
@@ -1191,7 +1217,7 @@ export const adminUsersController = {
   async deleteUser(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const scopeCheck = await assertTargetUserInScope(req, id);
+      const scopeCheck = await assertTargetAccountInScope(req, id, 'edit');
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
         return;
@@ -1239,7 +1265,7 @@ export const adminUsersController = {
   async confirmUserEmail(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const scopeCheck = await assertTargetUserInScope(req, id);
+      const scopeCheck = await assertTargetAccountInScope(req, id, 'edit');
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
         return;
@@ -1276,7 +1302,7 @@ export const adminUsersController = {
   async peekUser(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const scopeCheck = await assertTargetUserInScope(req, id);
+      const scopeCheck = await assertTargetAccountInScope(req, id, 'view');
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
         return;
@@ -1321,7 +1347,7 @@ export const adminUsersController = {
   async generatePasswordResetLink(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
-      const scopeCheck = await assertTargetUserInScope(req, id);
+      const scopeCheck = await assertTargetAccountInScope(req, id, 'edit');
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
         return;
@@ -1532,7 +1558,7 @@ export const adminUsersController = {
       const { id } = req.params;
       const { full_name } = z.object({ full_name: z.string().min(2).max(255) }).parse(req.body);
 
-      const scopeCheck = await assertTargetUserInScope(req, id);
+      const scopeCheck = await assertTargetAccountInScope(req, id, 'edit');
       if (!scopeCheck.ok) {
         res.status(scopeCheck.status).json({ success: false, error: scopeCheck.error });
         return;

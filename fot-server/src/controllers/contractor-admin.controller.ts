@@ -11,7 +11,7 @@ import ExcelJS from 'exceljs';
 import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
-import { resolveCompanyScope } from '../services/data-scope.service.js';
+import { hasOrgWideAccountAccess } from '../services/org-wide-account-access.service.js';
 import {
   ensureContractorSectionAccess,
   ensureSubmissionsAccess,
@@ -192,14 +192,17 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
-/** Только системный админ (как approveUser/replaceUserCompanies). */
-const ensureSystemAdmin = async (
+/**
+ * Привязка подрядчика к организации — операция над учётной записью без скоупа
+ * отделов: системный админ или ключ /admin/users/accounts. Админ компании — нет.
+ */
+const ensureOrgWideAccountAccess = async (
   req: AuthenticatedRequest,
   res: Response,
+  action: 'view' | 'edit',
 ): Promise<boolean> => {
-  const scope = await resolveCompanyScope(req);
-  if (scope.roots !== 'all') {
-    res.status(403).json({ success: false, error: 'Доступно только системному администратору' });
+  if (!(await hasOrgWideAccountAccess(req, action))) {
+    res.status(403).json({ success: false, error: 'Доступно только администратору учётных записей' });
     return false;
   }
   return true;
@@ -1042,7 +1045,7 @@ export const contractorAdminController = {
   /** GET /users — пользователи с ролью «Подрядчик» + их привязка к организации. */
   async listContractorUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureOrgWideAccountAccess(req, res, 'view'))) return;
       const role = await getRoleByCode('contractor');
       if (!role) {
         res.json({ success: true, data: [] });
@@ -1070,7 +1073,7 @@ export const contractorAdminController = {
   /** GET /users/:id/org — текущая привязка подрядчика к организации. */
   async getUserOrg(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureOrgWideAccountAccess(req, res, 'view'))) return;
       const row = await queryOne<{ org_department_id: string }>(
         'SELECT org_department_id FROM contractor_org_access WHERE user_id = $1::uuid',
         [req.params.id],
@@ -1085,7 +1088,7 @@ export const contractorAdminController = {
   /** PUT /users/:id/org — замена привязки. Body: { org_department_id: string|null }. */
   async replaceUserOrg(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      if (!(await ensureSystemAdmin(req, res))) return;
+      if (!(await ensureOrgWideAccountAccess(req, res, 'edit'))) return;
       const { id } = req.params;
       const { org_department_id } = z.object({
         org_department_id: z.string().uuid().nullable(),

@@ -90,6 +90,9 @@ vi.mock('../services/assignable-roles.service.js', () => ({
 vi.mock('../services/access-control.service.js', () => ({
   hasPageEdit: vi.fn(async () => false),
 }));
+vi.mock('../services/org-wide-account-access.service.js', () => ({
+  hasOrgWideAccountAccess: vi.fn(async () => false),
+}));
 
 import { adminUsersController } from './admin-users.controller.js';
 import type { AuthenticatedRequest } from '../types/index.js';

@@ -33,6 +33,8 @@ interface ISigurLiveEmployeeSidebarProps {
   sigurEmployeeId: number | null;
   employee: SigurEmployeeSummary | null;
   canEdit: boolean;
+  /** Точки и режимы доступа (бэкенд: /skud-settings или /sigur/access-points edit). По умолчанию = canEdit. */
+  canEditAccess?: boolean;
   departments: SigurDepartmentNode[];
   positions: SigurPositionSummary[];
   positionsLoading: boolean;
@@ -358,6 +360,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
   sigurEmployeeId,
   employee,
   canEdit,
+  canEditAccess = canEdit,
   departments,
   positions,
   positionsLoading,
@@ -1297,7 +1300,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                               enabled={item.hasMapPreview}
                             />
                           )}
-                          {canEdit && (
+                          {canEditAccess && (
                             <button
                               className="ep-sigur-access-remove-btn"
                               type="button"
@@ -1317,7 +1320,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
             </div>
           )}
 
-          {canEdit && profile && (
+          {canEditAccess && profile && (
             <div className="ep-sigur-access-add-wrap" ref={accessPointPickerRef}>
               <button
                 className="ep-sigur-access-add-btn"
@@ -1402,7 +1405,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
                 <div key={rule.accessRuleId} className="ep-sigur-access-item">
                   <span>{rule.accessRuleName || `Режим #${rule.accessRuleId}`}</span>
                   <div className="ep-sigur-access-item-actions">
-                    {canEdit && (
+                    {canEditAccess && (
                       <button
                         className="ep-sigur-access-remove-btn"
                         type="button"
@@ -1421,7 +1424,7 @@ export const SigurLiveEmployeeSidebar: FC<ISigurLiveEmployeeSidebarProps> = ({
             </div>
           )}
 
-          {canEdit && profile && availableAccessRuleOptions.length > 0 && (
+          {canEditAccess && profile && availableAccessRuleOptions.length > 0 && (
             <div className="ep-sigur-access-add-wrap" ref={accessRulesPickerRef}>
               <button
                 className="ep-sigur-access-add-btn"

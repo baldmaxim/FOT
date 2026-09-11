@@ -286,9 +286,11 @@ router.post(
   validateExcelUpload,
   sigurAdminController.importTabNumbers,
 );
+// Точки и режимы доступа сотрудника — отдельный ключ /sigur/access-points: выдаётся
+// без технических настроек СКУД (подключение, фильтр синхронизации, очистка).
 router.post(
   '/admin/employees/bulk-access-points-stream',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/skud-settings', '/sigur/access-points'], 'edit'),
   requireCritical2FA,
   sigurAdminController.bulkAddEmployeeAccessPointsStream,
 );
@@ -307,13 +309,13 @@ router.post(
 );
 router.put(
   '/admin/employees/:sigurEmployeeId/access-points',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/skud-settings', '/sigur/access-points'], 'edit'),
   requireCritical2FA,
   sigurAdminController.saveEmployeeAccessPoints,
 );
 router.put(
   '/admin/employees/:sigurEmployeeId/access-rules',
-  requirePageAccess('/skud-settings', 'edit'),
+  requireAnyPageAccess(['/skud-settings', '/sigur/access-points'], 'edit'),
   requireCritical2FA,
   sigurAdminController.saveEmployeeAccessRules,
 );
