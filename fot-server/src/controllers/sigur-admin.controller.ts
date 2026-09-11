@@ -3,6 +3,7 @@ import { AxiosError } from 'axios';
 import { assertSigurDepartmentAssignable } from '../services/department-assignability.service.js';
 import { settingsService } from '../services/settings.service.js';
 import { auditService } from '../services/audit.service.js';
+import { BlacklistBlockedError, withSigurProfileGuard } from '../services/blacklist.service.js';
 import {
   getSigurEmployeeProfile,
   getSigurEmployeeCardStatuses,
@@ -728,7 +729,12 @@ export const sigurAdminController = {
       }
 
       const connection = parseConnection(req.body.connection);
-      const data = await updateSigurEmployee(sigurEmployeeId, { blocked: false }, connection);
+      // Чёрный список (273): вручную разблокировать человека из списка нельзя —
+      // сначала снимают запись. Проверка идёт под локом профиля.
+      const data = await withSigurProfileGuard(
+        sigurEmployeeId,
+        () => updateSigurEmployee(sigurEmployeeId, { blocked: false }, connection),
+      );
 
       await auditService.logFromRequest(req, req.user.id, 'UPDATE_EMPLOYEE', {
         entityType: 'sigur_employee',
@@ -738,6 +744,10 @@ export const sigurAdminController = {
 
       res.json({ success: true, data });
     } catch (error) {
+      if (error instanceof BlacklistBlockedError) {
+        res.status(409).json({ success: false, error: error.message });
+        return;
+      }
       const status = getErrorStatus(error);
       console.error('Sigur admin unblockEmployee error:', error);
       res.status(status).json({ success: false, error: getErrorMessage(error, 'Ошибка разблокировки сотрудника Sigur') });

@@ -14,6 +14,14 @@ const h = vi.hoisted(() => ({
   invalidate: vi.fn(),
 }));
 
+vi.mock('../services/blacklist.service.js', () => ({
+  // Чёрный список пуст — проверяем, что поведение прежнее (миграция 273).
+  findActive: vi.fn(async () => ({ strong: [], weak: [] })),
+  assertNotBlacklisted: vi.fn(async () => ({ strong: [], weak: [] })),
+  addEntryIn: vi.fn(async () => ({ entry: { id: 'b1' }, created: true })),
+  withSigurProfileGuard: vi.fn(async (_id: number, action: () => Promise<unknown>) => action()),
+  BlacklistBlockedError: class extends Error {},
+}));
 vi.mock('../config/postgres.js', () => ({
   queryOne: h.queryOne,
   query: h.query,

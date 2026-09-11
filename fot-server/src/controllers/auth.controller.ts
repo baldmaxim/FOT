@@ -5,12 +5,16 @@ import { z } from 'zod';
 import { execute, query, queryOne } from '../config/postgres.js';
 import { localAuthService, LocalAuthError } from '../services/local-auth.service.js';
 import {
+  DISABLED_ACCOUNT_CODE,
+  DISABLED_ACCOUNT_ERROR,
   DISMISSED_ACCOUNT_CODE,
   DISMISSED_ACCOUNT_ERROR,
+  getProfileAccessState,
   getProfileEmploymentStatus,
   isDismissedEmploymentStatus,
 } from '../services/account-status.service.js';
 import { auditService } from '../services/audit.service.js';
+import { findActive as findActiveBlacklist } from '../services/blacklist.service.js';
 import { mailerService } from '../services/mailer.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
@@ -212,6 +216,23 @@ async function register(req: Request, res: Response): Promise<void> {
   try {
     const { email, password, full_name } = registerSchema.parse(req.body);
 
+    // Чёрный список (273): регистрация с этого адреса закрыта. Текст нейтральный —
+    // иначе форма регистрации становится оракулом «этот человек в списке» для
+    // любого анонима. Причина видна только в аудите.
+    const blacklisted = await findActiveBlacklist({ email });
+    if (blacklisted.strong.length > 0) {
+      await auditService.logFromRequest(req, null, 'BLACKLIST_BLOCKED_ATTEMPT', {
+        entityType: 'person_blacklist',
+        entityId: blacklisted.strong[0].id,
+        details: { kind: 'register', email_lower: email.trim().toLowerCase() },
+      });
+      res.status(403).json({
+        success: false,
+        error: 'Регистрация с этого адреса недоступна. Обратитесь к администратору.',
+      });
+      return;
+    }
+
     let authUser;
     try {
       authUser = await localAuthService.createUser({
@@ -227,6 +248,24 @@ async function register(req: Request, res: Response): Promise<void> {
       console.error('Auth creation error:', authError);
       const msg = authError instanceof Error ? authError.message : 'Registration failed';
       res.status(400).json({ success: false, error: msg });
+      return;
+    }
+
+    // Гонка: между проверкой выше и createUser email мог попасть в ЧС.
+    // createUser выполняется отдельным запросом, общей транзакции нет, поэтому
+    // компенсируем удалением учётки — тем же приёмом, что ниже при отсутствии роли.
+    const blacklistedAfter = await findActiveBlacklist({ email });
+    if (blacklistedAfter.strong.length > 0) {
+      try { await localAuthService.deleteUser(authUser.id); } catch { /* ignore */ }
+      await auditService.logFromRequest(req, null, 'BLACKLIST_BLOCKED_ATTEMPT', {
+        entityType: 'person_blacklist',
+        entityId: blacklistedAfter.strong[0].id,
+        details: { kind: 'register_race', email_lower: email.trim().toLowerCase() },
+      });
+      res.status(403).json({
+        success: false,
+        error: 'Регистрация с этого адреса недоступна. Обратитесь к администратору.',
+      });
       return;
     }
 
@@ -618,6 +657,19 @@ async function refresh(req: Request, res: Response): Promise<void> {
         res.status(401).json({ success: false, error: 'Session is no longer valid' });
         return;
       }
+    }
+
+    // Отключённой учётке (чёрный список) новую сессию не выдаём: без этого старый
+    // refresh продолжал бы выпускать сессии в обход is_disabled.
+    const accessState = await getProfileAccessState(profileRow.id);
+    if (accessState.isDisabled) {
+      clearSessionCookies(res);
+      res.status(403).json({
+        success: false,
+        error: DISABLED_ACCOUNT_ERROR,
+        code: DISABLED_ACCOUNT_CODE,
+      });
+      return;
     }
 
     // Уволенному новую сессию не выдаём — иначе блокировка обходится обновлением токена.

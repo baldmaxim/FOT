@@ -22,6 +22,14 @@ const h = vi.hoisted(() => ({
   checkTargetUserManageable: vi.fn(),
 }));
 
+vi.mock('../services/blacklist.service.js', () => ({
+  // Чёрный список пуст — проверяем, что поведение прежнее (миграция 273).
+  findActive: vi.fn(async () => ({ strong: [], weak: [] })),
+  assertNotBlacklisted: vi.fn(async () => ({ strong: [], weak: [] })),
+  addEntryIn: vi.fn(async () => ({ entry: { id: 'b1' }, created: true })),
+  withSigurProfileGuard: vi.fn(async (_id: number, action: () => Promise<unknown>) => action()),
+  BlacklistBlockedError: class extends Error {},
+}));
 vi.mock('../config/postgres.js', () => ({
   query: h.query,
   queryOne: h.queryOne,
@@ -177,7 +185,7 @@ describe('rejectUser: одна транзакция вместо чтения и
     h.withTransaction.mockImplementation(async (fn: (client: unknown) => Promise<unknown>) => fn({
       query: async (sql: string) => {
         queries.push(sql);
-        if (sql.includes('SELECT is_approved')) {
+        if (sql.includes('is_approved')) {
           return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
         }
         return { rows: [], rowCount: 1 };

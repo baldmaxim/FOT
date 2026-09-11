@@ -6,6 +6,7 @@ import type { PoolClient } from 'pg';
 import { syncProfileNameFromEmployee } from '../services/user-profile-name.service.js';
 import { localAuthService } from '../services/local-auth.service.js';
 import { auditService } from '../services/audit.service.js';
+import { addEntryIn as addBlacklistEntryIn, findActive as findActiveBlacklist } from '../services/blacklist.service.js';
 import type { AuthenticatedRequest, ChatInboundMode, UserProfile } from '../types/index.js';
 import { logSupabaseError } from './admin-helpers.js';
 import { PASSWORD_RESET_TOKEN_TTL_MS } from '../config/password-reset.js';
@@ -959,6 +960,26 @@ export const adminUsersController = {
         return;
       }
 
+      // Чёрный список (273): человек мог зарегистрироваться ДО внесения, поэтому
+      // проверяем и на одобрении. Схема принимает employee_id — значит через
+      // одобрение можно было бы привязать учётку к сотруднику из списка.
+      {
+        const authUser = await localAuthService.getUserById(id).catch(() => null);
+        const blacklisted = await findActiveBlacklist({
+          email: authUser?.email ?? null,
+          userProfileId: id,
+          employeeId: employee_id ?? null,
+        });
+        if (blacklisted.strong.length > 0) {
+          const entry = blacklisted.strong[0];
+          res.status(409).json({
+            success: false,
+            error: `Пользователь в чёрном списке (внёс ${entry.created_by_name}): ${entry.reason}`,
+          });
+          return;
+        }
+      }
+
       const profile = await queryOne<UserProfile>(
         'SELECT * FROM user_profiles WHERE id = $1::uuid',
         [id],
@@ -1080,6 +1101,14 @@ export const adminUsersController = {
   async rejectUser(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+      // Опционально: отклонить и сразу внести в чёрный список. Без этого поля
+      // поведение прежнее 1:1.
+      const rejectBody = z.object({
+        blacklist: z.object({
+          reason: z.string().trim().min(3).max(1000),
+          snils: z.string().trim().max(50).nullable().optional(),
+        }).optional(),
+      }).parse(req.body ?? {});
 
       if (!(await canManagePendingUsers(req))) {
         res.status(403).json({ success: false, error: 'Отклонение заявок вам недоступно' });
@@ -1094,12 +1123,38 @@ export const adminUsersController = {
 
       try {
         const rejected = await withTransaction(async (client) => {
-          const locked = await client.query<{ is_approved: boolean }>(
-            'SELECT is_approved FROM user_profiles WHERE id = $1::uuid FOR UPDATE',
+          // FOR UPDATE OF up обязателен: без OF Postgres пытается заблокировать и
+          // nullable-сторону LEFT JOIN и падает с ошибкой.
+          const locked = await client.query<{
+            is_approved: boolean; full_name: string | null; email: string | null;
+          }>(
+            `SELECT up.is_approved, up.full_name, au.email
+               FROM user_profiles up
+               LEFT JOIN app_auth.users au ON au.id = up.id
+              WHERE up.id = $1::uuid
+                FOR UPDATE OF up`,
             [id],
           );
           if (locked.rows.length === 0) return 'not_found' as const;
           if (locked.rows[0].is_approved) return 'already_approved' as const;
+
+          // Запись в ЧС — ДО удаления: hardDeleteUserCascadeIn уносит email
+          // безвозвратно, и после отклонения опознать человека будет нечем.
+          if (rejectBody.blacklist) {
+            const row = locked.rows[0];
+            const actorName = (await loadUserFullName(req.user.id)) ?? 'Администратор';
+            await addBlacklistEntryIn(client, {
+              fullName: row.full_name || row.email || 'Без имени',
+              reason: rejectBody.blacklist.reason,
+              email: row.email,
+              snils: rejectBody.blacklist.snils ?? null,
+              userProfileId: null,
+              source: 'user_reject',
+              createdBy: req.user.id,
+              createdByName: actorName,
+            });
+          }
+
           await hardDeleteUserCascadeIn(client, id);
           return 'ok' as const;
         });
@@ -1123,6 +1178,7 @@ export const adminUsersController = {
       await auditService.logFromRequest(req, req.user.id, 'USER_REJECTED', {
         entityType: 'user',
         entityId: id,
+        details: { blacklisted: !!rejectBody.blacklist },
       });
 
       res.json({ success: true, message: 'User rejected and removed' });
@@ -1551,6 +1607,20 @@ export const adminUsersController = {
       if (!manageable.ok) {
         res.status(manageable.status).json({ success: false, error: manageable.error });
         return;
+      }
+
+      // Чёрный список (273): нельзя привязать учётку к сотруднику из списка —
+      // иначе запрет обходится регистрацией нового email и привязкой к карточке.
+      if (employee_id != null) {
+        const blacklisted = await findActiveBlacklist({ employeeId: employee_id });
+        if (blacklisted.strong.length > 0) {
+          const entry = blacklisted.strong[0];
+          res.status(409).json({
+            success: false,
+            error: `Сотрудник в чёрном списке (внёс ${entry.created_by_name}): ${entry.reason}`,
+          });
+          return;
+        }
       }
 
       // Привязка карточки СКУД для company-admin: целевой employee_id (если задан)

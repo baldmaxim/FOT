@@ -2773,3 +2773,301 @@
 }
 
 
+
+
+/* ── Чёрный список (миграция 271) ─────────────────────────────────────────── */
+
+.blacklistToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.blacklistToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.blacklistList {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.blacklistHeader,
+.blacklistRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) 130px minmax(150px, 1fr) 150px minmax(160px, 1.2fr) 150px 150px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+}
+
+.blacklistHeader {
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.blacklistHeader span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.blacklistRow {
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.blacklistRow:last-child {
+  border-bottom: none;
+}
+
+.blacklistRowRemoved {
+  opacity: 0.55;
+}
+
+.blacklistName {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.blacklistCell {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.blacklistSub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.blacklistChip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.blacklistChipOk {
+  background: color-mix(in srgb, var(--success, #16a34a) 15%, transparent);
+  color: var(--success, #16a34a);
+}
+
+.blacklistChipDanger {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
+.blacklistChipMuted {
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+}
+
+.blacklistActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ── Модалка ── */
+
+.blacklistModal {
+  width: min(720px, 100%);
+  max-height: 90dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.blacklistModalHeader {
+  padding: 16px 18px 0;
+}
+
+.blacklistModalHeader h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.blacklistModalTabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px 0;
+}
+
+.blacklistModalBody {
+  padding: 14px 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.blacklistModalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+.blacklistField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.blacklistField > span {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.blacklistField input,
+.blacklistField textarea {
+  /* 16px — иначе Safari зумит форму при фокусе */
+  font-size: 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+}
+
+.blacklistFieldRow {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.blacklistHint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.blacklistWarning {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--warning, #d97706) 12%, transparent);
+  color: var(--warning, #d97706);
+}
+
+.blacklistResults {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.blacklistResultRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.blacklistResultRow:last-child {
+  border-bottom: none;
+}
+
+.blacklistResultRow:hover {
+  background: var(--bg-tertiary);
+}
+
+.blacklistResultName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.blacklistResultMeta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.blacklistPicked {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  font-size: 13px;
+}
+
+.blacklistTargets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.blacklistTargetRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 960px) {
+  .blacklistHeader {
+    display: none;
+  }
+
+  .blacklistRow {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 12px 14px;
+  }
+
+  .blacklistActions {
+    justify-content: flex-start;
+  }
+
+  .blacklistCell:empty {
+    display: none;
+  }
+}

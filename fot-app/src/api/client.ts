@@ -44,6 +44,8 @@ export const API_ORIGIN = typeof window !== 'undefined'
 
 /** Код 403, которым бэкенд сообщает: владелец учётки уволен, доступ закрыт. */
 export const DISMISSED_ACCOUNT_CODE = 'EMPLOYEE_DISMISSED';
+/** Учётка отключена (чёрный список, миграция 273) — выкидываем на форму входа. */
+export const ACCOUNT_DISABLED_CODE = 'ACCOUNT_DISABLED';
 /** Событие для AuthContext: сбросить состояние и показать причину. */
 export const ACCOUNT_DISMISSED_EVENT = 'fot:account-dismissed';
 
@@ -369,7 +371,9 @@ export const apiClient = {
       // Сотрудника уволили посреди сессии. Обычный 403 сессию не роняет, и человек
       // остался бы в интерфейсе, где не работает ничего. Токен сбрасываем сразу,
       // а AuthContext по событию очищает состояние и уводит на форму входа.
-      if (response.status === 403 && error.code === DISMISSED_ACCOUNT_CODE) {
+      // ACCOUNT_DISABLED — то же поведение: учётку отключил чёрный список.
+      if (response.status === 403
+          && (error.code === DISMISSED_ACCOUNT_CODE || error.code === ACCOUNT_DISABLED_CODE)) {
         setSessionToken(null);
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent(ACCOUNT_DISMISSED_EVENT, {

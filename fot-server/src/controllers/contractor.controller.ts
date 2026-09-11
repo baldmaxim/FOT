@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { query, queryOne, execute, withTransaction } from '../config/postgres.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 import { auditService, AUDIT_ACTIONS } from '../services/audit.service.js';
+import { findActive as findActiveBlacklist } from '../services/blacklist.service.js';
 import { resolveContractorOrgForUser } from '../services/contractor-scope.service.js';
 import { syncRosterFromSigur, getRoster, getPasses } from '../services/contractor-roster.service.js';
 import { sigurService } from '../services/sigur.service.js';
@@ -711,6 +712,31 @@ export const contractorController = {
           success: false,
           code: CONTRACTOR_DOCUMENTS_INCOMPLETE,
           error: `Заполните документы у всех пропусков перед отправкой: ${list}${more}`,
+        });
+        return;
+      }
+
+      // Чёрный список (273): человека из списка не проводим ни под какой
+      // организацией. Отбиваем всю отправку целиком — тем же приёмом, что гейт
+      // документов выше (без частичного применения). Текст нейтральный:
+      // подрядчику факт наличия в списке не раскрываем.
+      const blacklisted: string[] = [];
+      for (const row of eligibleRows) {
+        const matches = await findActiveBlacklist({
+          fullName: row.holder_name,
+          birthDate: row.birth_date,
+          passport: row.passport_series_number,
+        });
+        if (matches.strong.length > 0) {
+          blacklisted.push(`№${row.pass_number}${row.holder_name ? ` (${row.holder_name})` : ''}`);
+        }
+      }
+      if (blacklisted.length > 0) {
+        const list = blacklisted.slice(0, 10).join(', ');
+        const more = blacklisted.length > 10 ? ` и ещё ${blacklisted.length - 10}` : '';
+        res.status(409).json({
+          success: false,
+          error: `Эти пропуска отправить нельзя, обратитесь к администратору: ${list}${more}`,
         });
         return;
       }

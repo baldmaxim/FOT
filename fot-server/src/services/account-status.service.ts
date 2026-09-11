@@ -45,3 +45,33 @@ export async function getProfileEmploymentStatus(profileId: string): Promise<str
 export async function isProfileAllowedToSignIn(profileId: string): Promise<boolean> {
   return !isDismissedEmploymentStatus(await getProfileEmploymentStatus(profileId));
 }
+
+// ─── Отключённая учётная запись (чёрный список, миграция 273) ───────────────
+
+export const DISABLED_ACCOUNT_ERROR = 'Учётная запись отключена администратором';
+export const DISABLED_ACCOUNT_CODE = 'ACCOUNT_DISABLED';
+
+/**
+ * Читает статус доступа профиля одним запросом: увольнение и флаг отключения.
+ *
+ * is_disabled в authenticate НЕ проверяется намеренно — это hot path на каждый
+ * запрос. Активную сессию рвёт token_version (его authenticate уже сверяет),
+ * повторный вход закрывает verifyPassword, а выпуск новой сессии — проверка
+ * здесь, в /auth/refresh.
+ */
+export async function getProfileAccessState(
+  profileId: string,
+): Promise<{ employmentStatus: string | null; isDisabled: boolean }> {
+  const row = await queryOne<{ employment_status: string | null; is_disabled: boolean | null }>(
+    `SELECT e.employment_status, au.is_disabled
+       FROM user_profiles up
+       LEFT JOIN employees e ON e.id = up.employee_id
+       LEFT JOIN app_auth.users au ON au.id = up.id
+      WHERE up.id = $1::uuid`,
+    [profileId],
+  );
+  return {
+    employmentStatus: row?.employment_status ?? null,
+    isDisabled: row?.is_disabled === true,
+  };
+}

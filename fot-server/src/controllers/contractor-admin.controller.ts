@@ -28,6 +28,8 @@ import {
 import { notificationService } from '../services/notification.service.js';
 import { pushService } from '../services/push.service.js';
 import { isContractorSigurDryRun } from '../config/contractor.js';
+import { withSigurProfileGuard } from '../services/blacklist.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { escapeLike } from '../utils/search.utils.js';
 import { sigurService } from '../services/sigur.service.js';
 import {
@@ -1315,6 +1317,8 @@ export const contractorAdminController = {
   async getSubmissionDetail(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       if (!(await ensureSubmissionsAccess(req, res, 'view'))) return;
+      // Причину внесения видит только тот, у кого есть доступ к реестру ЧС.
+      const canSeeBlacklistReason = await resolveEffectivePageAccess(req, '/admin/users', 'view');
       const rows = await query(
         `SELECT p.id,
                 p.pass_number,
@@ -1334,6 +1338,29 @@ export const contractorAdminController = {
                 p.patent_blank_number,
                 p.has_residence_permit,
                 p.residence_permit_number,
+                -- Чёрный список (273). Причину и автора отдаём ТОЛЬКО тому, у кого
+                -- есть доступ к самому реестру: вкладка заявок открыта и узкой роли
+                -- ОТиТБ по техническому ключу. Остальным — лишь факт и сила совпадения.
+                COALESCE((
+                  SELECT jsonb_agg(jsonb_build_object(
+                           'strength', CASE WHEN b.passport_norm IS NOT NULL
+                                                 AND b.passport_norm = ${normalizeDocSql('p.passport_series_number')}
+                                            THEN 'strong'
+                                            WHEN b.birth_date IS NOT NULL AND b.birth_date = p.birth_date
+                                            THEN 'strong'
+                                            ELSE 'weak' END,
+                           'full_name', CASE WHEN $2::boolean THEN b.full_name ELSE NULL END,
+                           'reason', CASE WHEN $2::boolean THEN b.reason ELSE NULL END,
+                           'created_by_name', CASE WHEN $2::boolean THEN b.created_by_name ELSE NULL END)
+                         ORDER BY b.created_at DESC)
+                    FROM public.person_blacklist b
+                   WHERE b.removed_at IS NULL
+                     AND (
+                          (b.passport_norm IS NOT NULL
+                           AND b.passport_norm = ${normalizeDocSql('p.passport_series_number')})
+                       OR (b.full_name_norm = public.norm_person_name(COALESCE(h.holder_name, p.holder_name)))
+                     )
+                ), '[]'::jsonb) AS blacklist_hits,
                 -- Список патентных гражданств продублирован из CITIZENSHIP_PATENT_SET
                 -- (contractor-docs.service) — держать в синхроне. Патент ИЛИ ВНЖ(номер).
                 (p.passport_series_number IS NOT NULL AND p.passport_issue_date IS NOT NULL
@@ -1379,7 +1406,7 @@ export const contractorAdminController = {
              ON h.pass_id = p.id AND h.valid_until IS NULL
           WHERE p.submission_id = $1::uuid
           ORDER BY p.pass_number ASC`,
-        [req.params.id],
+        [req.params.id, canSeeBlacklistReason],
       );
       res.json({ success: true, data: rows });
     } catch (error) {
@@ -1796,11 +1823,14 @@ export const contractorAdminController = {
               reassignPolicy: 'safe-only',
             });
 
-            await updateSigurEmployee(
-              row.pass_sigur_id,
-              { name: row.holder_name, blocked: false },
+            // Разблокировка — только под локом профиля и с проверкой ЧС внутри него:
+            // иначе одобрение сняло бы блокировку только что внесённого человека.
+            const passSigurId = row.pass_sigur_id as number;
+            await withSigurProfileGuard(passSigurId, () => updateSigurEmployee(
+              passSigurId,
+              { name: row.holder_name ?? undefined, blocked: false },
               connection,
-            );
+            ));
             const names = row.access_point_names ?? [];
             if (names.length > 0) {
               const resolved = await resolveAccessPointNamesToIds(names, connection);
@@ -2743,11 +2773,13 @@ export const contractorAdminController = {
                 );
               }
 
-              await updateSigurEmployee(
-                pass.sigur_employee_id,
-                { name: pass.holder_name, blocked: false },
+              // См. комментарий в approveSubmission: лок профиля + проверка ЧС.
+              const passSigurId = pass.sigur_employee_id as number;
+              await withSigurProfileGuard(passSigurId, () => updateSigurEmployee(
+                passSigurId,
+                { name: pass.holder_name ?? undefined, blocked: false },
                 connection,
-              );
+              ));
               // Пустой выбор точек → очищаем все (resolvedIds=[]). Непустой с сопоставленными →
               // ставим ровно их. Непустой, но всё не сопоставилось (names>0, resolvedIds=0) →
               // НЕ трогаем текущие, остаётся только warning выше.

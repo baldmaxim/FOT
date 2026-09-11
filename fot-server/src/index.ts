@@ -22,6 +22,7 @@ import { startDailyTasksReminderScheduler, stopDailyTasksReminderScheduler } fro
 import { startTimesheetVersionRebuildScheduler, stopTimesheetVersionRebuildScheduler } from './services/timesheet-version-rebuild.service.js';
 import { startDismissalScheduler, stopDismissalScheduler } from './services/dismissal-scheduler.service.js';
 import { startContractorPassSyncScheduler, stopContractorPassSyncScheduler } from './services/contractor-pass-sync.scheduler.js';
+import { startBlacklistSigurScheduler, stopBlacklistSigurScheduler } from './services/blacklist-sigur.scheduler.js';
 import { startNewdbPendingPoller, stopNewdbPendingPoller } from './services/newdb-pending-poller.service.js';
 import { startMtsLocationPoller, stopMtsLocationPoller } from './services/mts-location-poller.service.js';
 import { startMtsGeofenceMonitor, stopMtsGeofenceMonitor } from './services/mts-geofence-monitor.service.js';
@@ -158,6 +159,7 @@ httpServer.listen(PORT, HOST, () => {
   startTimesheetVersionRebuildScheduler();
   startDismissalScheduler();
   startContractorPassSyncScheduler();
+  startBlacklistSigurScheduler();
   // Фиксация месячного плана KPI объектов. Сам по себе не работает: включается
   // в настройках (system_settings.object_kpi_freezer_enabled, по умолчанию false).
   startObjectKpiPlanFreezer();
@@ -229,7 +231,7 @@ const gracefulShutdown = (signal: string): void => {
     stopTimesheetReminderScheduler, stopPatentExpiryReminderScheduler,
     stopDailyTasksReminderScheduler, stopTimesheetVersionRebuildScheduler,
     stopDismissalScheduler,
-    stopContractorPassSyncScheduler, stopObjectKpiPlanFreezer,
+    stopContractorPassSyncScheduler, stopBlacklistSigurScheduler, stopObjectKpiPlanFreezer,
     stopNewdbPendingPoller, stopMtsLocationPoller, stopMtsGeofenceMonitor,
     stopMtsBusinessStatusPoller, stopMtsBusinessMailIngest, stopMtsBusinessCdrDailyScheduler,
     stopMtsBusinessMetricsDailyScheduler, stopMtsBusinessRefreshAllDailyScheduler,

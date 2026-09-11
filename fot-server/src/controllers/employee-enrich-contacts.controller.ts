@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { readExcelRows } from '../utils/excel-reader.js';
 import { execute, query } from '../config/postgres.js';
+import { findActive as findActiveBlacklist } from '../services/blacklist.service.js';
 import { auditService } from '../services/audit.service.js';
 import { normalizeFullName } from '../utils/fio.utils.js';
 import { cleanCell } from '../utils/import-cells.utils.js';
@@ -202,6 +203,15 @@ export const employeeEnrichContactsController = {
 
         // Skip if same email
         if (match.email === row.email) continue;
+
+        // Чёрный список (273): этот импорт пишет email напрямую, минуя карточку
+        // и кадровый профиль. Без проверки через него можно было бы вернуть
+        // человеку из списка рабочую почту.
+        const blacklisted = await findActiveBlacklist({ email: row.email, employeeId: match.id });
+        if (blacklisted.strong.length > 0) {
+          errors.push(`${row.fullName}: адрес принадлежит человеку из чёрного списка — пропущено`);
+          continue;
+        }
 
         try {
           await execute(

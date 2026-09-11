@@ -137,7 +137,127 @@ export interface ITimesheetModeDepartment {
   source: 'department_explicit' | 'legacy_department' | 'legacy_default';
 }
 
+
+// ─── Чёрный список (миграция 273) ───────────────────────────────────────────
+
+export interface IBlacklistRow {
+  id: string;
+  full_name: string;
+  birth_date: string | null;
+  snils: string | null;
+  email: string | null;
+  passport_series_number: string | null;
+  employee_id: number | null;
+  reason: string;
+  created_by_name: string;
+  created_at: string;
+  removed_at: string | null;
+  removed_by_name: string | null;
+  removal_reason: string | null;
+  source: string;
+  targets_total: number;
+  targets_done: number;
+  targets_pending: number;
+  targets_failed: number;
+}
+
+export interface IBlacklistPerson {
+  kind: 'employee' | 'contractor_pass';
+  ref_id: string;
+  full_name: string;
+  birth_date: string | null;
+  has_snils: boolean;
+  has_email: boolean;
+  has_passport: boolean;
+  pass_number: string | null;
+  org_name: string | null;
+  extra: string | null;
+}
+
+export interface IBlacklistTarget {
+  kind: 'employee' | 'contractor_pass';
+  employee_id: number | null;
+  pass_id: string | null;
+  sigur_employee_id: number;
+  match_reason: string;
+  label: string;
+  org_name: string | null;
+  pass_number: string | null;
+}
+
+export interface IBlacklistResolved {
+  person: {
+    full_name: string;
+    birth_date: string | null;
+    snils: string | null;
+    email: string | null;
+    passport_series_number: string | null;
+    employee_id: number | null;
+  };
+  strong: IBlacklistTarget[];
+  weak: IBlacklistTarget[];
+}
+
+export interface IBlacklistAddInput {
+  person?: { kind: 'employee' | 'contractor_pass'; ref_id: string };
+  manual?: {
+    full_name: string;
+    birth_date?: string | null;
+    snils?: string | null;
+    email?: string | null;
+    passport_series_number?: string | null;
+  };
+  extra?: {
+    birth_date?: string | null;
+    snils?: string | null;
+    passport_series_number?: string | null;
+  };
+  reason: string;
+  confirmed_weak_sigur_ids?: number[];
+}
+
 export const adminService = {
+  // Чёрный список: данные записи формирует сервер по ref_id, клиент их не присылает.
+  async getBlacklist(includeRemoved = false, signal?: AbortSignal): Promise<IBlacklistRow[]> {
+    const qs = includeRemoved ? '?include_removed=1' : '';
+    const response = await apiClient.get<ApiResponse<IBlacklistRow[]>>(
+      `/admin/users/blacklist${qs}`,
+      { signal },
+    );
+    return response.data || [];
+  },
+
+  async searchBlacklistPersons(q: string, signal?: AbortSignal): Promise<IBlacklistPerson[]> {
+    const response = await apiClient.get<ApiResponse<IBlacklistPerson[]>>(
+      `/admin/users/blacklist/persons?q=${encodeURIComponent(q)}`,
+      { signal },
+    );
+    return response.data || [];
+  },
+
+  async resolveBlacklistTargets(input: IBlacklistAddInput): Promise<IBlacklistResolved> {
+    const response = await apiClient.post<ApiResponse<IBlacklistResolved>>(
+      '/admin/users/blacklist/resolve',
+      input,
+    );
+    return response.data as IBlacklistResolved;
+  },
+
+  async addToBlacklist(input: IBlacklistAddInput): Promise<{ created: boolean; data: IBlacklistRow }> {
+    return apiClient.post<{ success: boolean; created: boolean; data: IBlacklistRow }>(
+      '/admin/users/blacklist',
+      input,
+    );
+  },
+
+  async removeFromBlacklist(entryId: string, reason: string): Promise<void> {
+    await apiClient.post(`/admin/users/blacklist/${entryId}/remove`, { reason });
+  },
+
+  async retryBlacklistSigur(entryId: string): Promise<void> {
+    await apiClient.post(`/admin/users/blacklist/${entryId}/retry-sigur`);
+  },
+
   // User management.
   // Списки пользователей принимают signal от React Query: cancelQueries перед
   // мутацией должен обрывать сам HTTP-запрос, а не только игнорировать его

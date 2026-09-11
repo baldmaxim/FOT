@@ -19,10 +19,13 @@ const EmployeeDepartmentAssignmentsTab = lazy(() => import('../../components/adm
 const PasswordResetRequestsTab = lazy(() => import('../../components/admin/PasswordResetRequestsTab').then(module => ({
   default: module.PasswordResetRequestsTab,
 })));
+const BlacklistTab = lazy(() => import('../../components/admin/BlacklistTab').then(module => ({
+  default: module.BlacklistTab,
+})));
 
-type UserManagementTab = 'pending' | 'all' | 'employee-access' | 'password-reset';
+type UserManagementTab = 'pending' | 'all' | 'employee-access' | 'password-reset' | 'blacklist';
 
-const VALID_TABS: readonly UserManagementTab[] = ['pending', 'all', 'employee-access', 'password-reset'];
+const VALID_TABS: readonly UserManagementTab[] = ['pending', 'all', 'employee-access', 'password-reset', 'blacklist'];
 
 export const UserManagementPage: React.FC = () => {
   const { canViewPage, canEditPage } = useAuth();
@@ -75,6 +78,11 @@ export const UserManagementPage: React.FC = () => {
     queryFn: ({ signal }) => adminService.getAllUsersSlim(signal),
     staleTime: 30_000,
     enabled: needsSlim,
+  });
+  const blacklistCountQuery = useQuery<number>({
+    queryKey: ['admin-users', 'blacklist', 'count'],
+    queryFn: async ({ signal }) => (await adminService.getBlacklist(false, signal)).length,
+    staleTime: 60_000,
   });
   const pendingUsers = pendingUsersQuery.data || [];
   const allUsersSlim = allUsersSlimQuery.data || [];
@@ -138,6 +146,12 @@ export const UserManagementPage: React.FC = () => {
         >
           Запросы на сброс пароля ({passwordResetLoading ? '…' : passwordResetRequests.length})
         </button>
+        <button
+          className={`${styles.tab} ${activeTab === 'blacklist' ? styles.active : ''}`}
+          onClick={() => setActiveTab('blacklist')}
+        >
+          Чёрный список ({blacklistCountQuery.isPending ? '…' : blacklistCountQuery.data ?? 0})
+        </button>
       </div>
 
       {activeTab === 'pending' && (
@@ -165,6 +179,12 @@ export const UserManagementPage: React.FC = () => {
             onReload={reloadUsers}
             directReportsOnly={!canManageAccess}
           />
+        </Suspense>
+      )}
+
+      {activeTab === 'blacklist' && (
+        <Suspense fallback={<div className={styles.loading}>Загрузка вкладки...</div>}>
+          <BlacklistTab />
         </Suspense>
       )}
 

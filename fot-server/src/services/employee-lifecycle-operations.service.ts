@@ -10,6 +10,7 @@ import {
   syncLinkedEmployeeFromSigur,
 } from './sigur-linked-employees.service.js';
 import { sigurService } from './sigur.service.js';
+import { withSigurProfileGuard } from './blacklist.service.js';
 import { settingsService } from './settings.service.js';
 import {
   upsertTechnicalDepartmentAccess,
@@ -739,7 +740,12 @@ async function runRehire(op: ILifecycleOperation, owner: string, connection?: Co
       }
     }
     if (op.sigur_access_required && !op.sigur_access_toggled) {
-      await sigurService.unblockEmployee(op.sigur_employee_id, connection);
+      // Чёрный список (273): проверяем ЗДЕСЬ, непосредственно перед внешним вызовом.
+      // Операция durable — её могли поставить в очередь до внесения человека в
+      // список, поэтому проверки на входе в эндпоинт недостаточно. Лок профиля не
+      // даёт разблокировке и добавлению в список идти параллельно.
+      const sigurId = op.sigur_employee_id;
+      await withSigurProfileGuard(sigurId, () => sigurService.unblockEmployee(sigurId, connection));
       await writeStep(op, owner, { sigur_access_toggled: true });
     }
     // Выгрузка сотрудников в памяти могла быть снята до переноса — синк не должен

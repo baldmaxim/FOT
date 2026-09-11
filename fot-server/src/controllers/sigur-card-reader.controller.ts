@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AxiosError } from 'axios';
 import { queryOne } from '../config/postgres.js';
+import { assertNotBlacklisted, BlacklistBlockedError } from '../services/blacklist.service.js';
 import { auditService } from '../services/audit.service.js';
 import { sigurService } from '../services/sigur.service.js';
 import { resolveField } from '../services/sigur-sync-shared.js';
@@ -337,6 +338,18 @@ export const sigurCardReaderController = {
       if (!emp.sigur_employee_id) {
         res.status(400).json({ success: false, error: 'Сотрудник не связан с Sigur — сначала синхронизируйте структуру' });
         return;
+      }
+
+      // Чёрный список (273): человеку из списка пропуск не выдаём. Матч по
+      // employee_id — strong, ложных срабатываний по однофамильцам здесь нет.
+      try {
+        await assertNotBlacklisted({ employeeId: emp.id, fullName: emp.full_name });
+      } catch (error) {
+        if (error instanceof BlacklistBlockedError) {
+          res.status(409).json({ success: false, error: error.message });
+          return;
+        }
+        throw error;
       }
 
       const { matches, tried, sample } = await sigurService.findCardByCandidates(candidates);

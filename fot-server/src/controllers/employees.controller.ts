@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { syncProfileNameFromEmployee } from '../services/user-profile-name.service.js';
 import { auditService } from '../services/audit.service.js';
+import { findActive as findActiveBlacklist } from '../services/blacklist.service.js';
 import { loadStructureCache, decryptEmployee, decryptEmployeeList } from '../services/employee-mapper.service.js';
 import { employeeCache } from '../services/employee-cache.service.js';
 import { getKnownArchiveDepartment, reconcileFiredEmployeesArchiveDepartment } from '../services/employee-archive-department.service.js';
@@ -671,6 +672,22 @@ export const employeesController = {
         validated.org_department_id = scopedDepartmentId;
       }
 
+      // Чёрный список (273): при создании карточки доступно только ФИО, поэтому
+      // жёстко не блокируем (однофамильцы) — требуем осознанного подтверждения.
+      if (req.body.blacklist_confirmed !== true) {
+        const matches = await findActiveBlacklist({ fullName: validated.full_name });
+        const hits = [...matches.strong, ...matches.weak];
+        if (hits.length > 0) {
+          res.status(409).json({
+            success: false,
+            code: 'BLACKLIST_NAME_MATCH',
+            error: `Совпадение с чёрным списком по ФИО: ${hits[0].full_name} — ${hits[0].reason}. Подтвердите, если это другой человек.`,
+            data: { matches: hits.map(h => ({ full_name: h.full_name, reason: h.reason, created_by_name: h.created_by_name })) },
+          });
+          return;
+        }
+      }
+
       const connection = (req.body.connection as 'external' | 'internal') || undefined;
 
       if (!(await sigurService.isConfigured())) {
@@ -939,14 +956,42 @@ export const employeesController = {
         }
       }
 
-      const existing = await queryOne<{ id: number; sigur_employee_id: number | null; name_locked: boolean | null }>(
-        `SELECT id, sigur_employee_id, name_locked FROM employees WHERE id = $1`,
+      const existing = await queryOne<{
+        id: number; sigur_employee_id: number | null; name_locked: boolean | null;
+        full_name?: string | null; pension_number?: string | null;
+        email?: string | null; birth_date?: string | null;
+      }>(
+        `SELECT id, sigur_employee_id, name_locked, full_name, pension_number, email,
+                birth_date::text AS birth_date
+           FROM employees WHERE id = $1`,
         [id],
       );
 
       if (!existing) {
         res.status(404).json({ success: false, error: 'Employee not found' });
         return;
+      }
+
+      // Чёрный список (273): нельзя записать сотруднику ПДн человека из списка.
+      // Проверяем ИТОГОВОЕ состояние карточки (текущие значения + приходящие),
+      // иначе запрет обходится записью ключей по одному в разных запросах.
+      if (validated.pension_number !== undefined || validated.email !== undefined
+          || validated.birth_date !== undefined || validated.full_name !== undefined) {
+        const matches = await findActiveBlacklist({
+          snils: validated.pension_number !== undefined ? validated.pension_number : existing.pension_number ?? null,
+          email: validated.email !== undefined ? validated.email : existing.email ?? null,
+          fullName: validated.full_name ?? existing.full_name ?? null,
+          birthDate: validated.birth_date !== undefined ? validated.birth_date : existing.birth_date ?? null,
+        });
+        // Запись по ЭТОЙ же карточке не мешает править её служебные поля.
+        const blocking = matches.strong.filter(e => e.employee_id !== employeeId);
+        if (blocking.length > 0) {
+          res.status(409).json({
+            success: false,
+            error: `Эти данные принадлежат человеку из чёрного списка (внёс ${blocking[0].created_by_name}): ${blocking[0].reason}`,
+          });
+          return;
+        }
       }
 
       if (existing.sigur_employee_id) {

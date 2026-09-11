@@ -8,6 +8,7 @@
  */
 import type { PoolClient } from 'pg';
 import { query, queryOne, withTransaction } from '../config/postgres.js';
+import { BlacklistBlockedError, findActive as findActiveBlacklist, type IBlacklistEntry } from './blacklist.service.js';
 import {
   HR_PROFILE_FIELDS,
   ZUP_RELEVANT_FIELDS,
@@ -530,6 +531,25 @@ export const applyProfilePatch = async (
   const current = await loadProfileRow(employeeId, client);
   if (!current) throw new Error('HR-профиль не найден');
   const currentPlain = rowToPlainFields(current);
+
+  // Чёрный список (273): единая точка записи кадровых данных. Здесь появляются
+  // сильные идентификаторы (СНИЛС, паспорт), поэтому отказ жёсткий — в отличие
+  // от создания карточки, где известно только ФИО.
+  const incomingSnils = typeof input.snils === 'string' ? input.snils : null;
+  const incomingPassport = typeof input.passport_number === 'string' ? input.passport_number : null;
+  if (incomingSnils || incomingPassport) {
+    const matches = await findActiveBlacklist(
+      { snils: incomingSnils, passport: incomingPassport },
+      client,
+    );
+    const blocking = matches.strong.filter((e: IBlacklistEntry) => e.employee_id !== employeeId);
+    if (blocking.length > 0) {
+      throw new BlacklistBlockedError(
+        `Эти документы принадлежат человеку из чёрного списка (внёс ${blocking[0].created_by_name}): ${blocking[0].reason}`,
+        blocking,
+      );
+    }
+  }
 
   const changed: string[] = [];
   const oldValues: Record<string, unknown> = {};

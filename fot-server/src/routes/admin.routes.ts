@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 import { adminController } from '../controllers/admin.controller.js';
 import { adminSystemResourcesController } from '../controllers/admin-system-resources.controller.js';
 import { timesheetModeController } from '../controllers/timesheet-mode.controller.js';
-import { authenticate, requireAnyPageAccess, requirePageAccess } from '../middleware/auth.js';
+import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
 import type { AuthenticatedRequest } from '../types/index.js';
@@ -114,6 +114,16 @@ router.get(
   passwordResetRequestsCache,
   adminController.getPasswordResetRequests,
 );
+// Чёрный список (миграция 273). Объявлен ВЫШЕ /users/:id/..., иначе Express
+// смэтчит как `:id = 'blacklist'` (та же причина, что у password-reset-requests).
+// DELETE намеренно не используем — конфликтовал бы с DELETE /users/:id.
+router.get('/users/blacklist', requirePageAccess('/admin/users', 'view'), noStore, adminController.listBlacklist);
+router.get('/users/blacklist/persons', requirePageAccess('/admin/users', 'view'), noStore, adminController.searchPersons);
+router.post('/users/blacklist/resolve', requirePageAccess('/admin/users', 'view'), adminController.resolveTargets);
+router.post('/users/blacklist', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, adminController.addEntry);
+router.post('/users/blacklist/:entryId/remove', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, adminController.removeEntry);
+router.post('/users/blacklist/:entryId/retry-sigur', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, adminController.retrySigur);
+
 // Список назначений читают оба: администратор доступов и тот, кто ведёт только
 // прямых подчинённых (кадровый админ) — без него экран «Прямые подчинённые» пуст.
 router.get('/employees/department-access', requireAnyPageAccess(['/admin/users/access', '/staff-control/direct-reports'], 'view'), adminController.getEmployeeDepartmentAssignments);

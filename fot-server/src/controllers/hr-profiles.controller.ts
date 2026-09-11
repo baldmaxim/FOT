@@ -30,6 +30,7 @@ import {
   getHrDocumentType,
 } from '../config/hr-documents.js';
 import { decryptFieldSafe, hashForSearch, isHrCryptoConfigured, maskValue, normalizeDigits, normalizeDocNumber } from '../services/hr-crypto.service.js';
+import { BlacklistBlockedError } from '../services/blacklist.service.js';
 import {
   IdentityClaimConflictError,
   applyProfilePatch,
@@ -63,6 +64,10 @@ const canEdit = (req: AuthenticatedRequest): Promise<boolean> => resolveEffectiv
 const fail = (res: Response, err: unknown, fallback: string): void => {
   if (err instanceof z.ZodError) {
     res.status(400).json({ success: false, error: err.errors[0]?.message ?? 'Некорректные данные' });
+    return;
+  }
+  if (err instanceof BlacklistBlockedError) {
+    res.status(409).json({ success: false, error: err.message, code: 'blacklisted' });
     return;
   }
   if (err instanceof IdentityClaimConflictError) {
