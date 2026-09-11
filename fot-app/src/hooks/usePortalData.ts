@@ -1,14 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { documentService } from '../services/documentService';
 import { leaveRequestService, type LeaveRequestStatus } from '../services/leaveRequestService';
-import { paymentService } from '../services/paymentService';
-import { payslipService } from '../services/payslipService';
 import { employeeService } from '../services/employeeService';
 import { dailyTaskService } from '../services/dailyTaskService';
 import { testsService } from '../services/testsService';
 
-export const getMyPayslipsQueryKey = () => ['my-payslips'] as const;
-export const getMyPaymentsQueryKey = () => ['my-payments'] as const;
 export const getMyDocumentsQueryKey = () => ['my-documents'] as const;
 export const getMyLeaveRequestsQueryKey = () => ['my-leave-requests'] as const;
 export const getLeaveRequestsManageQueryKey = (scope: 'department' | 'all', filter: 'pending' | 'all') => ['leave-requests-manage', scope, filter] as const;
@@ -22,18 +18,6 @@ export const getEmployeeHistoryQueryKey = (employeeId: number | null) => ['emplo
 export const getMyDailyTasksQueryKey = () => ['my-daily-tasks'] as const;
 export const getTodayDailyTaskQueryKey = () => ['today-daily-task'] as const;
 export const getAvailableTestsQueryKey = () => ['available-tests'] as const;
-
-export const useMyPayslips = () => useQuery({
-  queryKey: getMyPayslipsQueryKey(),
-  queryFn: () => payslipService.getMy(),
-  staleTime: 5 * 60_000,
-});
-
-export const useMyPayments = () => useQuery({
-  queryKey: getMyPaymentsQueryKey(),
-  queryFn: () => paymentService.getMy(),
-  staleTime: 5 * 60_000,
-});
 
 export const useMyDocuments = () => useQuery({
   queryKey: getMyDocumentsQueryKey(),

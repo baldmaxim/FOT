@@ -20,10 +20,9 @@ import timesheetRoutes from './routes/timesheet.routes.js';
 import chatRoutes from './routes/chat.routes.js';
 import pushRoutes from './routes/push.routes.js';
 import leaveRequestsRoutes from './routes/leave-requests.routes.js';
+import payrollRoutes from './routes/payroll.routes.js';
 import officialMemosRoutes from './routes/official-memos.routes.js';
 import documentsRoutes from './routes/documents.routes.js';
-import payslipsRoutes from './routes/payslips.routes.js';
-import paymentsRoutes from './routes/payments.routes.js';
 import productionCalendarRoutes from './routes/production-calendar.routes.js';
 import timesheetApprovalRoutes from './routes/timesheet-approval.routes.js';
 import correctionApprovalRoutes from './routes/correction-approval.routes.js';
@@ -124,11 +123,13 @@ app.use('/api/sigur', sigurRoutes);
 app.use('/api/timesheet', timesheetRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/push', pushRoutes);
+// /api/payslips и /api/payments сняты: расчёт по формуле salary/norm_days*worked_days
+// с НДФЛ хардкодом неверен для сменных графиков. Домен переехал в раздел «Зарплата»
+// (fot-server/src/routes/payroll.routes.ts). Таблицы payslips/payments пусты.
 app.use('/api/leave-requests', leaveRequestsRoutes);
+app.use('/api/payroll', payrollRoutes);
 app.use('/api/official-memos', officialMemosRoutes);
 app.use('/api/documents', documentsRoutes);
-app.use('/api/payslips', payslipsRoutes);
-app.use('/api/payments', paymentsRoutes);
 app.use('/api/production-calendar', productionCalendarRoutes);
 app.use('/api/timesheet-approvals', timesheetApprovalRoutes);
 app.use('/api/correction-approvals', correctionApprovalRoutes);

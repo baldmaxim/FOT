@@ -64,7 +64,6 @@ const UserManagementPage = lazy(() => import('./pages/admin/UserManagementPage')
 const DataAuditPage = lazy(() => import('./pages/admin/DataAuditPage').then(m => ({ default: m.DataAuditPage })));
 const RoleManagementPage = lazy(() => import('./pages/admin/RoleManagementPage').then(m => ({ default: m.RoleManagementPage })));
 const SystemSettingsPage = lazy(() => import('./pages/admin/SystemSettingsPage').then(m => ({ default: m.SystemSettingsPage })));
-const PayslipManagePage = lazy(() => import('./pages/admin/PayslipManagePage').then(m => ({ default: m.PayslipManagePage })));
 const SchedulesPage = lazy(() => import('./pages/admin/SchedulesPage').then(m => ({ default: m.SchedulesPage })));
 const PatentReceiptsPage = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsPage })));
 const PatentReceiptsEncryptionBadge = lazy(() => import('./pages/admin/PatentReceiptsPage').then(m => ({ default: m.PatentReceiptsEncryptionBadge })));
@@ -122,6 +121,7 @@ const LeaveRequestsHubPage = lazy(() => import('./pages/hubs/LeaveRequestsHubPag
 const DisciplineHubPage = lazy(() => import('./pages/hubs/DisciplineHubPage').then(m => ({ default: m.DisciplineHubPage })));
 const EmployeeObjectsPage = lazy(() => import('./pages/employee/EmployeeObjectsPage').then(m => ({ default: m.EmployeeObjectsPage })));
 const SystemAdminPage = lazy(() => import('./pages/hubs/SystemAdminPage').then(m => ({ default: m.SystemAdminPage })));
+const SalaryHubPage = lazy(() => import('./pages/hubs/SalaryHubPage').then(m => ({ default: m.SalaryHubPage })));
 
 // Компонент для умного редиректа на основе должности
 const PositionBasedRedirect = () => {
@@ -664,12 +664,12 @@ const AppRoutes = () => {
           />
         </Route>
 
-        <Route element={<ProtectedRoute requiredPage="/admin/payslips" />}>
+        <Route element={<ProtectedRoute requiredPage={['/salary/payments', '/salary/terms']} />}>
           <Route
-            path="/admin/payslips"
+            path="/salary"
             element={
-              <Layout title="Расчётные листки" theme={theme} onToggleTheme={toggleTheme}>
-                <PayslipManagePage />
+              <Layout title="Зарплата" theme={theme} onToggleTheme={toggleTheme}>
+                <SalaryHubPage />
               </Layout>
             }
           />

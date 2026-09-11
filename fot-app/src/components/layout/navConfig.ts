@@ -87,6 +87,10 @@ export const navGroups: INavGroup[] = [
     area: 'admin',
     items: [
       { id: 'payroll-hub', path: '/admin/schedules', label: 'Графики работы', icon: DollarIcon, requiredPage: ['/admin/schedules', '/admin/schedules/templates'] },
+      // Раздел «Зарплата». Доступ ограничен ролью admin через role_page_access
+      // (миграция 272), а НЕ systemAdminOnly: флаг скрыл бы пункт от админа со скоупом
+      // компании — именно такой роли (бухгалтеру подразделения) доступ понадобится первым.
+      { id: 'salary', path: '/salary', label: 'Зарплата', icon: DollarIcon, requiredPage: ['/salary/payments', '/salary/terms'] },
       { id: 'patent-receipts', path: '/admin/patent-receipts', label: 'Чеки за патент', icon: FileTextIcon, requiredPage: '/admin/patent-receipts' },
       { id: 'timesheet-transfers', path: '/admin/timesheet-transfers', label: 'Переводы и исключения', icon: CalendarIcon, requiredPage: '/admin/timesheet-transfers' },
       { id: 'skud-hub', path: '/skud-settings', label: 'СКУД', icon: DatabaseIcon, requiredPage: '/skud-settings' },

@@ -13,8 +13,6 @@ export const DOMAIN_EVENTS = [
   'schedule:changed',
   'employee:changed',
   'salary_raise:changed',
-  'payslip:changed',
-  'payment:changed',
   'patent_receipt:changed',
   'production_calendar:changed',
   'contractor_induction:changed',

@@ -226,6 +226,10 @@ export const AUDIT_ACTIONS = {
   OBJECT_KPI_PLAN_REVISED: 'OBJECT_KPI_PLAN_REVISED',
   OBJECT_KPI_ASSIGNMENT_CHANGED: 'OBJECT_KPI_ASSIGNMENT_CHANGED',
   OBJECT_KPI_GLOBAL_ROLE_CHANGED: 'OBJECT_KPI_GLOBAL_ROLE_CHANGED',
+  // Зарплата: условия оплаты (категория, «по графику» / «по часам», сумма).
+  // Кадровое основание, а не секрет — суммы пишем в details.
+  PAYROLL_TERMS_ASSIGNED: 'PAYROLL_TERMS_ASSIGNED',
+  PAYROLL_TERMS_BULK_ASSIGNED: 'PAYROLL_TERMS_BULK_ASSIGNED',
 } as const;
 
 export type AuditAction = typeof AUDIT_ACTIONS[keyof typeof AUDIT_ACTIONS];

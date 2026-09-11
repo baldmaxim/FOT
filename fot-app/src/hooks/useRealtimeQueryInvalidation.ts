@@ -77,8 +77,6 @@ const EVENT_TO_KEYS: Record<DomainEvent, EventToKeysFn> = {
     return keys;
   },
   'salary_raise:changed': () => [['salary-raise']],
-  'payslip:changed': () => [['my-payslips']],
-  'payment:changed': () => [['my-payments']],
   'patent_receipt:changed': (payload) => {
     const keys: QueryKey[] = [patentReceiptsKeys.all];
     if (payload.entityId != null) {

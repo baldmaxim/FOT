@@ -111,6 +111,10 @@ export const PAGE_PATHS = {
   ADMIN_SCHEDULES: '/admin/schedules',
   ADMIN_SCHEDULES_TEMPLATES: '/admin/schedules/templates',
   ADMIN_PAYSLIPS: '/admin/payslips',
+  SALARY_PAYMENTS: '/salary/payments',
+  SALARY_PAYMENTS_CALCULATE: '/salary/payments/calculate',
+  SALARY_PAYMENTS_APPROVE: '/salary/payments/approve',
+  SALARY_TERMS: '/salary/terms',
   ADMIN_PATENT_RECEIPTS: '/admin/patent-receipts',
   ADMIN_TIMESHEET_TRANSFERS: '/admin/timesheet-transfers',
   ADMIN_DATA_API: '/admin/data-api',
@@ -189,7 +193,15 @@ export const DEFAULT_ACCESS_PAGE_CATALOG: PageCatalogItem[] = [
   { key: '/admin/settings',             label: 'Система — Системные настройки',        group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 254, is_active: true },
   { key: '/admin/data-api',             label: 'Система — API-доступ к данным',        group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 255, is_active: true },
   { key: '/admin/checks',               label: 'Система — Проверки (РКЛ / Патент)',    group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 256, is_active: true },
-  { key: '/admin/payslips',             label: 'Управление расчётными листками',       group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 260, is_active: true },
+  // Legacy: расчёт по формуле salary/norm_days*worked_days с НДФЛ 0.13 неверен для сменных
+  // графиков. Таблицы payslips/payments пусты, роуты сняты. Ключ оставлен: на него ссылается
+  // structure.routes.ts, а удаление сломало бы выданные права.
+  { key: '/admin/payslips',             label: 'Управление расчётными листками (не используется)', group_code: 'admin', group_label: 'Администрирование', area: 'admin', surface: 'page', supports_edit: true, sort_order: 260, is_active: false },
+  // ── Зарплата ── На этапе 1 права выданы только роли admin (миграция 272).
+  { key: '/salary/payments',            label: 'Зарплата — Выплаты',                   group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'page',      supports_edit: true,  sort_order: 270, is_active: true },
+  { key: '/salary/payments/calculate',  label: 'Зарплата — запуск расчёта',            group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 271, is_active: true },
+  { key: '/salary/payments/approve',    label: 'Зарплата — проверка расчёта',          group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 272, is_active: true },
+  { key: '/salary/terms',               label: 'Зарплата — условия оплаты',            group_code: 'admin', group_label: 'Администрирование',    area: 'admin',    surface: 'technical', supports_edit: true,  sort_order: 274, is_active: true },
   // Технический ключ без route-страницы
   { key: 'timesheet-team-management',   label: 'Управление составом табеля',           group_code: 'technical', group_label: 'Технические доступы', area: 'admin',  surface: 'technical', supports_edit: true, sort_order: 285, is_active: true },
 ];
