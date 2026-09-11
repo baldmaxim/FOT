@@ -108,6 +108,11 @@ const LIST_SQL = `
     SELECT id FROM public.get_descendant_department_ids(ARRAY[$6::uuid])
      WHERE $6::uuid IS NOT NULL
   ),
+  -- Фильтр подразделения — поддерево: выбрали департамент, видны все его бригады.
+  filter_depts AS (
+    SELECT id FROM public.get_descendant_department_ids(ARRAY[$2::uuid])
+     WHERE $2::uuid IS NOT NULL
+  ),
   scoped AS (
     SELECT e.id   AS employee_id,
            e.full_name,
@@ -130,7 +135,7 @@ const LIST_SQL = `
             AND (t.effective_to IS NULL OR t.effective_to >= $1::date)
      WHERE e.employment_status = 'active'
        AND e.is_archived IS NOT TRUE
-       AND ($2::uuid IS NULL OR e.org_department_id = $2::uuid)
+       AND ($2::uuid IS NULL OR e.org_department_id IN (SELECT id FROM filter_depts))
        AND NOT EXISTS (SELECT 1 FROM contractor_depts c WHERE c.id = e.org_department_id)
        AND ($7::uuid[] IS NULL OR e.org_department_id = ANY($7::uuid[]))
        AND ($8::text IS NULL OR e.full_name ILIKE $8::text OR e.tab_number ILIKE $8::text)
@@ -142,8 +147,9 @@ const LIST_SQL = `
        AND ($5::boolean IS NOT TRUE OR terms_id IS NULL)
   )
   SELECT
-    (SELECT count(*) FROM filtered)                      AS total,
-    (SELECT count(*) FROM scoped WHERE terms_id IS NULL) AS without_terms_total,
+    (SELECT count(*) FROM filtered)                          AS total,
+    (SELECT count(*) FROM scoped WHERE terms_id IS NULL)     AS without_terms_total,
+    (SELECT count(*) FROM scoped WHERE terms_id IS NOT NULL) AS with_terms_total,
     COALESCE((
       SELECT json_agg(p)
         FROM (SELECT * FROM filtered
@@ -187,6 +193,7 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
     const result = await queryOne<{
       total: string | number;
       without_terms_total: string | number;
+      with_terms_total: string | number;
       rows: unknown[];
     }>(LIST_SQL, [
       onDate,
@@ -210,7 +217,13 @@ const list = async (req: AuthenticatedRequest, res: Response): Promise<void> => 
         page_size: parsed.page_size,
         total: Number(result?.total ?? 0),
         without_terms_total: Number(result?.without_terms_total ?? 0),
+        // Сколько в выборке уже имеют условия. 0 при фильтре по категории — значит,
+        // фильтровать не по чему: категория появляется только после назначения.
+        with_terms_total: Number(result?.with_terms_total ?? 0),
         contractors_excluded: contractorRootId !== null,
+        // Фронт убирает этот узел из дерева подразделений: подрядчики исключены из списка,
+        // и выбор их ветки всегда давал бы пустой результат.
+        contractor_root_id: contractorRootId,
       },
     });
   } catch (err) {

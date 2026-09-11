@@ -7,7 +7,7 @@ export type PayrollCalcType = 'salary' | 'hourly';
 
 export const STAFF_CATEGORY_LABELS: Record<StaffCategory, string> = {
   office: 'Офис',
-  itr: 'Стройка: ИТР',
+  itr: 'ИТР на объектах',
   worker: 'Рабочие',
 };
 
@@ -82,8 +82,12 @@ export interface IPayrollTermsListMeta {
   total: number;
   /** Сотрудники без условий в своём штате — независимо от фильтров категории и вида оплаты. */
   without_terms_total: number;
+  /** Сколько в выборке уже имеют условия. 0 — фильтр по категории / виду оплаты пуст по определению. */
+  with_terms_total: number;
   /** false — узел «Подрядные организации» не найден, в списке могут быть их сотрудники. */
   contractors_excluded: boolean;
+  /** id узла «Подрядные организации» — его ветку убираем из дерева подразделений. */
+  contractor_root_id: string | null;
 }
 
 export interface IPayrollTermsListResult {

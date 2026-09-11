@@ -126,6 +126,34 @@
 
 .pageInfo { font-size: 14px; color: var(--text-secondary); }
 
+.explain {
+  padding: 24px 16px;
+  text-align: center;
+  white-space: normal;
+}
+
+.explainText {
+  margin: 0 auto 12px;
+  max-width: 560px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.secondaryButton {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
 .state { padding: 20px; text-align: center; color: var(--text-secondary); font-size: 14px; }
 .stateError { padding: 20px; text-align: center; color: var(--error); font-size: 14px; }
 
@@ -134,5 +162,8 @@
 }
 
 @media (min-width: 1280px) {
-  .toolbar { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  /* Дата, подразделение (шире — длинные названия), категория, вид оплаты, поиск, «только без условий» */
+  .toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) repeat(3, minmax(0, 1fr)) auto;
+  }
 }

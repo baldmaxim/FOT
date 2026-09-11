@@ -217,6 +217,7 @@ describe('payrollTermsController.list', () => {
     return {
       sql: String(pgQueryOne.mock.calls[0][0]),
       date: params[0],
+      department: params[1],
       contractorRoot: params[5],
       departments: params[6],
       search: params[7],
@@ -343,6 +344,39 @@ describe('payrollTermsController.list', () => {
     scope.resolveAccessibleDepartmentIds.mockResolvedValue('all');
     await payrollTermsController.list(makeReq({ query: {} } as Partial<AuthenticatedRequest>), makeRes());
     expect(listParams().departments).toBeNull();
+  });
+
+  it('подразделение фильтрует всё поддерево: департамент показывает все свои бригады', async () => {
+    const departmentId = '11111111-1111-1111-1111-111111111111';
+    await payrollTermsController.list(
+      makeReq({ query: { department_id: departmentId } } as Partial<AuthenticatedRequest>),
+      makeRes(),
+    );
+
+    const { sql, department } = listParams();
+    expect(department).toBe(departmentId);
+    expect(sql).toMatch(/filter_depts AS \(\s*SELECT id FROM public\.get_descendant_department_ids\(ARRAY\[\$2::uuid\]\)/);
+    expect(sql).toMatch(/e\.org_department_id IN \(SELECT id FROM filter_depts\)/);
+    // Прежнее точное совпадение отдела отсекало бы бригады внутри департамента.
+    expect(sql).not.toMatch(/e\.org_department_id = \$2::uuid/);
+  });
+
+  it('meta: сколько уже с условиями и id корня подрядчиков для дерева подразделений', async () => {
+    pgQueryOne.mockResolvedValueOnce({ total: '0', without_terms_total: '32', with_terms_total: '0', rows: [] });
+    const res = makeRes();
+
+    await payrollTermsController.list(
+      makeReq({ query: { staff_category: 'office' } } as Partial<AuthenticatedRequest>),
+      res,
+    );
+
+    expect(res.body.meta).toMatchObject({
+      total: 0,
+      without_terms_total: 32,
+      with_terms_total: 0,
+      contractor_root_id: 'contractor-root',
+    });
+    expect(listParams().sql).toMatch(/count\(\*\) FROM scoped WHERE terms_id IS NOT NULL\) AS with_terms_total/);
   });
 
   it('некорректная дата отклоняется', async () => {

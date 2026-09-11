@@ -13,8 +13,20 @@ import {
 } from '../../services/payrollService';
 import { useToast } from '../../contexts/ToastContext';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
+import { useStructureTree } from '../../hooks/useStructure';
 import { AssignTermsModal } from '../../components/salary/AssignTermsModal';
+import { DepartmentTreeSelect } from '../../components/staff/DepartmentTreeSelect';
+import type { OrgDepartmentNode } from '../../types';
 import styles from './CompensationTermsPage.module.css';
+
+/** Дерево без ветки подрядчиков: они исключены из списка, выбор их узла всегда давал бы 0. */
+const withoutNode = (nodes: OrgDepartmentNode[], excludedId: string | null): OrgDepartmentNode[] => (
+  excludedId
+    ? nodes
+      .filter(node => node.id !== excludedId)
+      .map(node => ({ ...node, children: withoutNode(node.children ?? [], excludedId) }))
+    : nodes
+);
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -46,6 +58,9 @@ export const CompensationTermsPage: FC = () => {
   const queryClient = useQueryClient();
 
   const [date, setDate] = useState(today);
+  // Подразделение — основной способ найти людей для назначения: категория появляется
+  // только после назначения условий, до этого по ней фильтровать нечего.
+  const [departmentId, setDepartmentId] = useState('');
   const [category, setCategory] = useState<StaffCategory | ''>('');
   const [calcType, setCalcType] = useState<PayrollCalcType | ''>('');
   const [onlyWithout, setOnlyWithout] = useState(false);
@@ -66,9 +81,10 @@ export const CompensationTermsPage: FC = () => {
   };
 
   const termsQuery = useQuery({
-    queryKey: ['payroll-terms', date, category, calcType, onlyWithout, debouncedSearch, page],
+    queryKey: ['payroll-terms', date, departmentId, category, calcType, onlyWithout, debouncedSearch, page],
     queryFn: () => payrollService.listTerms({
       date,
+      departmentId: departmentId || undefined,
       staffCategory: category || undefined,
       calcType: calcType || undefined,
       withoutTerms: onlyWithout || undefined,
@@ -84,6 +100,24 @@ export const CompensationTermsPage: FC = () => {
   const meta = termsQuery.data?.meta;
   const total = meta?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PAYROLL_TERMS_PAGE_SIZE));
+
+  const structureTree = useStructureTree();
+  const contractorRootId = meta?.contractor_root_id ?? null;
+  const departments = useMemo(
+    () => withoutNode(structureTree.data?.departments ?? [], contractorRootId),
+    [structureTree.data, contractorRootId],
+  );
+
+  // Пустой результат из-за фильтра по свойствам условий, когда условия ещё никому не назначали, —
+  // объясняем, а не пишем «не найдены»: люди есть, просто категории у них пока нет.
+  const filtersByAssignedTerms = Boolean(category || calcType);
+  const emptyBecauseNoTerms = filtersByAssignedTerms && total === 0 && meta?.with_terms_total === 0;
+
+  const resetTermsFilters = () => {
+    setCategory('');
+    setCalcType('');
+    resetPaging();
+  };
 
   const assignMutation = useMutation({
     mutationFn: async (payload: Parameters<typeof payrollService.assignBulk>[1] & { ids: number[] }) => {
@@ -142,6 +176,18 @@ export const CompensationTermsPage: FC = () => {
             onChange={event => { setDate(event.target.value); resetPaging(); }}
           />
         </label>
+
+        <div className={styles.field}>
+          <span className={styles.fieldLabel}>Подразделение</span>
+          <DepartmentTreeSelect
+            departments={departments}
+            value={departmentId}
+            onChange={(id) => { setDepartmentId(id); resetPaging(); }}
+            isLoading={structureTree.isPending}
+            isError={structureTree.isError}
+            onRetry={() => { void structureTree.refetch(); }}
+          />
+        </div>
 
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Категория</span>
@@ -274,9 +320,23 @@ export const CompensationTermsPage: FC = () => {
                   </td>
                 </tr>
               ))}
-              {rows.length === 0 && (
+              {rows.length === 0 && !emptyBecauseNoTerms && (
                 <tr>
                   <td colSpan={9} className={styles.state}>Сотрудники не найдены</td>
+                </tr>
+              )}
+              {rows.length === 0 && emptyBecauseNoTerms && (
+                <tr>
+                  <td colSpan={9} className={styles.explain}>
+                    <p className={styles.explainText}>
+                      Категория и вид оплаты появляются после назначения условий. В этой выборке
+                      условия пока не назначены никому — снимите фильтр и выберите подразделение,
+                      чтобы назначить.
+                    </p>
+                    <button type="button" className={styles.secondaryButton} onClick={resetTermsFilters}>
+                      Сбросить фильтры
+                    </button>
+                  </td>
                 </tr>
               )}
             </tbody>
