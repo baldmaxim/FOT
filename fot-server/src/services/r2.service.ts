@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import type { PutObjectCommandInput } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { settingsService } from './settings.service.js';
@@ -75,6 +75,29 @@ export const r2Service = {
     cachedHash = '';
   },
 
+  /**
+   * Read-only листинг объектов по префиксу (все страницы). Нужен диагностическим
+   * отчётам, например поиску сирот служебных записок; ничего не изменяет.
+   */
+  listObjects: async (prefix: string): Promise<Array<{ key: string; size: number; lastModified: Date | null }>> => {
+    const { client, bucket } = await getR2();
+    if (!client) throw new Error('R2 не настроен');
+    const out: Array<{ key: string; size: number; lastModified: Date | null }> = [];
+    let token: string | undefined;
+    do {
+      const page = await client.send(new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: token,
+      }));
+      for (const item of page.Contents ?? []) {
+        if (item.Key) out.push({ key: item.Key, size: item.Size ?? 0, lastModified: item.LastModified ?? null });
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return out;
+  },
+
   isEnabledAsync: async (): Promise<boolean> => {
     const { enabled } = await getR2();
     return enabled;
@@ -88,6 +111,16 @@ export const r2Service = {
   generateChatKey: (conversationId: string, fileName: string): string => {
     const ext = path.extname(fileName) || '.bin';
     return `chat/${conversationId}/${randomUUID()}${ext}`;
+  },
+
+  /**
+   * Служебная записка к записи чёрного списка. Ключ ДЕТЕРМИНИРОВАН (sha256
+   * содержимого, а не randomUUID): тот же файл к той же записи всегда ложится в
+   * один объект, поэтому повтор загрузки перезаписывает его тем же содержимым.
+   */
+  generateBlacklistMemoKey: (entryId: string, sha256: string, fileName: string): string => {
+    const ext = path.extname(fileName).toLowerCase() || '.bin';
+    return `blacklist/${entryId}/${sha256}${ext}`;
   },
 
   generateHiringRequestKey: (requestId: number | string, fileName: string): string => {

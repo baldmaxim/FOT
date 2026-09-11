@@ -5,6 +5,7 @@ import { timesheetModeController } from '../controllers/timesheet-mode.controlle
 import { authenticate, requireAnyPageAccess, requireCritical2FA, requirePageAccess } from '../middleware/auth.js';
 import { registerCache, invalidateCaches } from '../middleware/cacheResponse.js';
 import { noStore } from '../middleware/noStore.js';
+import { acceptMemoFile } from '../middleware/blacklistMemoUpload.js';
 import type { AuthenticatedRequest } from '../types/index.js';
 
 const router = Router();
@@ -123,6 +124,11 @@ router.post('/users/blacklist/resolve', requirePageAccess('/admin/users', 'view'
 router.post('/users/blacklist', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, adminController.addEntry);
 router.post('/users/blacklist/:entryId/remove', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, adminController.removeEntry);
 router.post('/users/blacklist/:entryId/retry-sigur', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, adminController.retrySigur);
+// Служебные записки (миграция 274). requireCritical2FA стоит ДО multer: без
+// подтверждённой 2FA файл даже не читается в память — как у самой записи ЧС.
+router.get('/users/blacklist/:entryId/memos', requirePageAccess('/admin/users', 'view'), noStore, adminController.listMemos);
+router.post('/users/blacklist/:entryId/memos', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, acceptMemoFile, adminController.uploadMemo);
+router.post('/users/blacklist/:entryId/memos/:memoId/remove', requirePageAccess('/admin/users', 'edit'), requireCritical2FA, adminController.removeMemo);
 
 // Список назначений читают оба: администратор доступов и тот, кто ведёт только
 // прямых подчинённых (кадровый админ) — без него экран «Прямые подчинённые» пуст.

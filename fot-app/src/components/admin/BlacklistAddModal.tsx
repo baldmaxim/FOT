@@ -9,6 +9,7 @@ import {
   type IBlacklistPerson,
   type IBlacklistResolved,
 } from '../../services/adminService';
+import { MEMO_ACCEPT, formatFileSize, uploadMemoFiles } from './blacklistMemoUpload';
 import styles from '../../pages/admin/Admin.module.css';
 
 const errMsg = (e: unknown, fallback: string): string =>
@@ -47,6 +48,9 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
   const [confirmedWeak, setConfirmedWeak] = useState<number[]>([]);
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
+  // Служебные записки (необязательно). Загружаются ПОСЛЕ создания записи отдельными
+  // запросами: запрет не должен ждать файл, а повтор загрузки безопасен.
+  const [memoFiles, setMemoFiles] = useState<File[]>([]);
 
   // Ручной ввод и дополнения к выбранному человеку.
   const [manualName, setManualName] = useState('');
@@ -171,6 +175,20 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
       });
       if (result.created) toast.success('Внесён в чёрный список');
       else toast.info('Этот человек уже в чёрном списке');
+
+      // Две независимые операции: запись уже создана (или переиспользована), файлы
+      // прикладываются к ней. Сбой загрузки запись не отменяет.
+      if (memoFiles.length > 0) {
+        const summary = await uploadMemoFiles(result.data.id, memoFiles);
+        if (summary.added.length > 0) toast.success(`Приложено служебных записок: ${summary.added.length}`);
+        if (summary.duplicates.length > 0) toast.info(`Уже приложены ранее: ${summary.duplicates.join(', ')}`);
+        if (summary.failed.length > 0) {
+          toast.error(
+            `Запись в чёрном списке, но не приложены: ${summary.failed.map(f => `${f.name} (${f.error})`).join('; ')}. `
+            + 'Приложите их через «Записки» в строке — дубля не будет.',
+          );
+        }
+      }
       await onDone();
     } catch (e) {
       toast.error(errMsg(e, 'Не удалось добавить в чёрный список'));
@@ -337,6 +355,47 @@ export const BlacklistAddModal: FC<IBlacklistAddModalProps> = ({ onClose, onDone
                 placeholder="Почему человек внесён в чёрный список"
               />
             </label>
+
+            <div className={styles.blacklistField}>
+              <span>Служебная записка (необязательно)</span>
+              <input
+                type="file"
+                multiple
+                accept={MEMO_ACCEPT}
+                onChange={e => {
+                  const picked = e.target.files ? Array.from(e.target.files) : [];
+                  // Повторный выбор добавляет файлы, одинаковые по имени и размеру не дублирует.
+                  setMemoFiles(prev => [
+                    ...prev,
+                    ...picked.filter(f => !prev.some(p => p.name === f.name && p.size === f.size)),
+                  ]);
+                  e.target.value = '';
+                }}
+              />
+              {memoFiles.length > 0 && (
+                <ul className={styles.blacklistMemoList}>
+                  {memoFiles.map(file => (
+                    <li key={`${file.name}:${file.size}`} className={styles.blacklistMemoItem}>
+                      <div className={styles.blacklistMemoInfo}>
+                        <span className={styles.blacklistMemoName}>{file.name}</span>
+                        <span className={styles.blacklistSub}>{formatFileSize(file.size)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.cancelBtn}
+                        onClick={() => setMemoFiles(prev => prev.filter(p => p !== file))}
+                        disabled={saving}
+                      >
+                        Убрать
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <span className={styles.blacklistSub}>
+                PDF, JPEG, PNG, WebP, DOC или DOCX до 25 МБ. Можно приложить и позже — через «Записки» в строке.
+              </span>
+            </div>
 
             {weakIdentification && (
               <div className={styles.blacklistWarning}>

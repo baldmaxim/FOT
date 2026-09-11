@@ -20,6 +20,100 @@ export function isExcelBuffer(buffer: Buffer): boolean {
   return isXlsxBuffer(buffer) || isXlsBuffer(buffer);
 }
 
+// ─── Служебные записки: тип по содержимому ──────────────────────────────────
+//
+// file.mimetype присылает клиент, а `image/*` пропустил бы SVG со скриптом.
+// Поэтому тип определяется по первым байтам, и он обязан совпасть с расширением
+// и присланным MIME. Явный список — всё остальное (SVG, HTML, текст) отклоняется.
+
+export type MemoFileKind = 'pdf' | 'jpeg' | 'png' | 'webp' | 'doc' | 'docx';
+
+export interface IMemoFileType {
+  kind: MemoFileKind;
+  /** MIME, который сохраняется в БД и в ContentType объекта R2. */
+  mime: string;
+  /** Можно ли отдавать inline (предпросмотр в браузере). */
+  previewable: boolean;
+}
+
+interface IMemoTypeRule {
+  kind: MemoFileKind;
+  mime: string;
+  extensions: readonly string[];
+  /** Какие MIME от клиента считаются согласованными с этим типом. */
+  declared: readonly string[];
+  previewable: boolean;
+  matches: (buffer: Buffer) => boolean;
+}
+
+const startsWith = (buffer: Buffer, bytes: readonly number[], offset = 0): boolean =>
+  buffer.length >= offset + bytes.length && bytes.every((b, i) => buffer[offset + i] === b);
+
+// Браузеры и ОС нередко присылают для офисных файлов общий тип — это не подделка.
+const GENERIC_DECLARED = ['', 'application/octet-stream'];
+
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+const MEMO_TYPE_RULES: readonly IMemoTypeRule[] = [
+  {
+    kind: 'pdf', mime: 'application/pdf', extensions: ['.pdf'], previewable: true,
+    declared: ['application/pdf', 'application/x-pdf'],
+    matches: b => startsWith(b, [0x25, 0x50, 0x44, 0x46, 0x2d]), // %PDF-
+  },
+  {
+    kind: 'jpeg', mime: 'image/jpeg', extensions: ['.jpg', '.jpeg'], previewable: true,
+    declared: ['image/jpeg', 'image/jpg', 'image/pjpeg'],
+    matches: b => startsWith(b, [0xff, 0xd8, 0xff]),
+  },
+  {
+    kind: 'png', mime: 'image/png', extensions: ['.png'], previewable: true,
+    declared: ['image/png'],
+    matches: b => startsWith(b, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  },
+  {
+    kind: 'webp', mime: 'image/webp', extensions: ['.webp'], previewable: true,
+    declared: ['image/webp'],
+    // RIFF....WEBP
+    matches: b => startsWith(b, [0x52, 0x49, 0x46, 0x46]) && startsWith(b, [0x57, 0x45, 0x42, 0x50], 8),
+  },
+  {
+    kind: 'doc', mime: 'application/msword', extensions: ['.doc'], previewable: false,
+    declared: ['application/msword'],
+    // OLE2 — тот же контейнер у .xls, поэтому расширение обязано быть .doc.
+    matches: b => isXlsBuffer(b),
+  },
+  {
+    kind: 'docx', mime: DOCX_MIME, extensions: ['.docx'], previewable: false,
+    declared: [DOCX_MIME],
+    // ZIP сам по себе ничего не доказывает: в DOCX обязательно есть word/document.xml.
+    // Имена записей хранятся в ZIP несжатыми, поэтому достаточно поиска байтов.
+    matches: b => isXlsxBuffer(b) && b.includes('word/document.xml', 0, 'latin1'),
+  },
+];
+
+/**
+ * Определяет тип служебной записки по байтам. Возвращает null, если сигнатура не
+ * из разрешённого списка или не совпадает с расширением либо присланным MIME
+ * (например, `.pdf` с байтами HTML или `image/png` при байтах PDF).
+ */
+export function detectMemoFileType(
+  buffer: Buffer,
+  fileName: string,
+  declaredMime: string | null | undefined,
+): IMemoFileType | null {
+  const rule = MEMO_TYPE_RULES.find(r => r.matches(buffer));
+  if (!rule) return null;
+
+  const dot = fileName.lastIndexOf('.');
+  const ext = dot >= 0 ? fileName.slice(dot).toLowerCase() : '';
+  if (!rule.extensions.includes(ext)) return null;
+
+  const declared = (declaredMime ?? '').trim().toLowerCase();
+  if (!GENERIC_DECLARED.includes(declared) && !rule.declared.includes(declared)) return null;
+
+  return { kind: rule.kind, mime: rule.mime, previewable: rule.previewable };
+}
+
 // Очищает имя файла от управляющих и опасных символов перед сохранением в
 // БД/R2. Защищает от: path traversal (`../`), null-byte, контрольных символов,
 // CSV-injection префиксов в Excel-export (`=`, `+`, `-`, `@`, табуляция).

@@ -159,6 +159,20 @@ export interface IBlacklistRow {
   targets_done: number;
   targets_pending: number;
   targets_failed: number;
+  /** Активные служебные записки (миграция 274). */
+  memo_count: number;
+}
+
+export interface IBlacklistMemo {
+  id: string;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  uploaded_by_name: string;
+  created_at: string;
+  download_url: string;
+  /** null — тип не показывается в браузере (DOC/DOCX), только скачивание. */
+  preview_url: string | null;
 }
 
 export interface IBlacklistPerson {
@@ -258,6 +272,30 @@ export const adminService = {
 
   async retryBlacklistSigur(entryId: string): Promise<void> {
     await apiClient.post(`/admin/users/blacklist/${entryId}/retry-sigur`);
+  },
+
+  // Служебные записки. Повторная загрузка того же файла безопасна: сервер
+  // сравнивает содержимое и вернёт уже приложенную записку (created=false).
+  async getBlacklistMemos(entryId: string, signal?: AbortSignal): Promise<IBlacklistMemo[]> {
+    const response = await apiClient.get<ApiResponse<IBlacklistMemo[]>>(
+      `/admin/users/blacklist/${entryId}/memos`,
+      { signal },
+    );
+    return response.data || [];
+  },
+
+  async uploadBlacklistMemo(entryId: string, file: File): Promise<{ created: boolean }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await apiClient.request<{ success: boolean; created: boolean }>(
+      `/admin/users/blacklist/${entryId}/memos`,
+      { method: 'POST', body: formData },
+    );
+    return { created: response.created };
+  },
+
+  async removeBlacklistMemo(entryId: string, memoId: string): Promise<void> {
+    await apiClient.post(`/admin/users/blacklist/${entryId}/memos/${memoId}/remove`);
   },
 
   // User management.

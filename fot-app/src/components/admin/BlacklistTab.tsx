@@ -5,6 +5,7 @@ import { adminService, type IBlacklistRow } from '../../services/adminService';
 import { ApiError } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { BlacklistAddModal } from './BlacklistAddModal';
+import { BlacklistMemosModal } from './BlacklistMemosModal';
 import { BlacklistRemoveModal } from './BlacklistRemoveModal';
 import styles from '../../pages/admin/Admin.module.css';
 
@@ -32,6 +33,7 @@ export const BlacklistTab: FC = () => {
   const [includeRemoved, setIncludeRemoved] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<IBlacklistRow | null>(null);
+  const [memosTarget, setMemosTarget] = useState<IBlacklistRow | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const listQuery = useQuery<IBlacklistRow[]>({
@@ -124,6 +126,10 @@ export const BlacklistTab: FC = () => {
                   <span className={`${styles.blacklistChip} ${status.className}`}>{status.text}</span>
                 </div>
                 <div className={styles.blacklistActions}>
+                  {/* Записки доступны и у снятых записей — это история решения. */}
+                  <button className={styles.cancelBtn} onClick={() => setMemosTarget(row)}>
+                    {row.memo_count > 0 ? `Записки (${row.memo_count})` : 'Приложить записку'}
+                  </button>
                   {row.removed_at ? (
                     <span className={styles.blacklistSub} title={row.removal_reason ?? ''}>
                       снял {row.removed_by_name}
@@ -159,6 +165,10 @@ export const BlacklistTab: FC = () => {
             await reload();
           }}
         />
+      )}
+
+      {memosTarget && (
+        <BlacklistMemosModal entry={memosTarget} onClose={() => setMemosTarget(null)} />
       )}
 
       {removeTarget && (

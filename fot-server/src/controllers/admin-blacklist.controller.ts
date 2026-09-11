@@ -17,7 +17,26 @@ import {
 } from '../services/blacklist.service.js';
 import { disconnectUserSockets } from '../socket/io-instance.js';
 import { kickBlacklistSigur } from '../services/blacklist-sigur.scheduler.js';
+import {
+  attachMemoIn,
+  blacklistEntryExists,
+  listMemos as listMemoRows,
+  softDeleteMemoIn,
+} from '../services/blacklist-memos.service.js';
+import { r2Service } from '../services/r2.service.js';
+import { detectMemoFileType, sanitizeFileName } from '../utils/file-validation.utils.js';
+import { decodeMulterFilename } from '../utils/multer-filename.utils.js';
+import { createHash } from 'node:crypto';
 import type { AuthenticatedRequest } from '../types/index.js';
+
+export interface IMemoUploadRequest extends AuthenticatedRequest {
+  file?: Express.Multer.File;
+}
+
+const PREVIEWABLE_MIME = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+
+const MEMO_TYPE_ERROR = 'Можно приложить только PDF, JPEG, PNG, WebP, DOC или DOCX. '
+  + 'Тип файла определяется по содержимому — переименованный файл не пройдёт.';
 
 /**
  * Чёрный список: вкладка «Система» → «Пользователи» → «Чёрный список».
@@ -207,7 +226,9 @@ export const adminBlacklistController = {
                 COALESCE(t.total, 0)   AS targets_total,
                 COALESCE(t.done, 0)    AS targets_done,
                 COALESCE(t.pending, 0) AS targets_pending,
-                COALESCE(t.failed, 0)  AS targets_failed
+                COALESCE(t.failed, 0)  AS targets_failed,
+                (SELECT count(*)::int FROM public.person_blacklist_memos m
+                  WHERE m.blacklist_id = b.id AND m.deleted_at IS NULL) AS memo_count
            FROM public.person_blacklist b
            LEFT JOIN (
              SELECT blacklist_id,
@@ -495,6 +516,161 @@ export const adminBlacklistController = {
       }
       console.error('retrySigur error:', error);
       res.status(500).json({ success: false, error: 'Не удалось повторить блокировку' });
+    }
+  },
+
+  // ─── Служебные записки (миграция 274) ─────────────────────────────────────
+
+  /** GET /api/admin/users/blacklist/:entryId/memos */
+  async listMemos(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const entryId = z.string().uuid().parse(req.params.entryId);
+      if (!(await r2Service.isEnabledAsync())) {
+        res.status(503).json({ success: false, error: 'Хранилище файлов не настроено' });
+        return;
+      }
+      const memos = await listMemoRows(entryId);
+      // Ссылки подписываются на час в момент запроса — постоянных ссылок на файлы нет.
+      const data = await Promise.all(memos.map(async memo => ({
+        id: memo.id,
+        file_name: memo.file_name,
+        file_size: memo.file_size,
+        mime_type: memo.mime_type,
+        uploaded_by_name: memo.uploaded_by_name,
+        created_at: memo.created_at,
+        download_url: await r2Service.generateDownloadUrl(memo.r2_key, memo.file_name),
+        // Предпросмотр только для типов, которые браузер безопасно показывает сам.
+        preview_url: PREVIEWABLE_MIME.has(memo.mime_type)
+          ? await r2Service.generateDownloadUrl(memo.r2_key, memo.file_name, 'inline')
+          : null,
+      })));
+      res.json({ success: true, data });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный идентификатор записи' });
+        return;
+      }
+      console.error('listMemos error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось загрузить служебные записки' });
+    }
+  },
+
+  /**
+   * POST /api/admin/users/blacklist/:entryId/memos (multipart `file`)
+   *
+   * Порядок важен для сохранности данных:
+   *  1. тип файла проверяется по байтам ДО любых записей;
+   *  2. объект уходит в R2 по детерминированному ключу ДО транзакции — сетевой
+   *     вызов не держит соединение пула и лок, а повтор перезаписывает тот же объект;
+   *  3. в транзакции: лок entryId+sha256 → перечитать → вставить → аудит тем же
+   *     клиентом. Не записался аудит — откатывается и строка.
+   * При сбое транзакции объект в R2 не удаляется: он мог уже принадлежать активной
+   * записке с тем же файлом. Повтор запроса безопасен.
+   */
+  async uploadMemo(req: IMemoUploadRequest, res: Response): Promise<void> {
+    try {
+      const entryId = z.string().uuid().parse(req.params.entryId);
+      const file = req.file;
+      if (!file || !file.buffer || file.size === 0) {
+        res.status(400).json({ success: false, error: 'Файл не передан' });
+        return;
+      }
+      if (!(await r2Service.isEnabledAsync())) {
+        res.status(503).json({ success: false, error: 'Хранилище файлов не настроено' });
+        return;
+      }
+      if (!(await blacklistEntryExists(entryId))) {
+        res.status(404).json({ success: false, error: 'Запись чёрного списка не найдена' });
+        return;
+      }
+
+      const fileName = sanitizeFileName(decodeMulterFilename(file.originalname));
+      const fileType = detectMemoFileType(file.buffer, fileName, file.mimetype);
+      if (!fileType) {
+        res.status(400).json({ success: false, error: MEMO_TYPE_ERROR });
+        return;
+      }
+
+      const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+      const r2Key = r2Service.generateBlacklistMemoKey(entryId, sha256, fileName);
+      // Сохраняем определённый сервером MIME, а не присланный клиентом.
+      await r2Service.uploadObject(r2Key, file.buffer, fileType.mime);
+
+      const actorName = (await loadUserFullName(req.user.id)) ?? 'Администратор';
+      const result = await withTransaction(async (client) => {
+        const attached = await attachMemoIn(client, {
+          entryId,
+          fileName,
+          fileSize: file.size,
+          mimeType: fileType.mime,
+          sha256,
+          r2Key,
+          uploadedBy: req.user.id,
+          uploadedByName: actorName,
+        });
+        if (attached.created) {
+          await auditService.logFromRequestWithClient(client, req, req.user.id, 'BLACKLIST_MEMO_ADDED', {
+            entityType: 'person_blacklist',
+            entityId: entryId,
+            details: { memo_id: attached.memo.id, file_name: fileName, file_size: file.size, mime_type: fileType.mime },
+          });
+        }
+        return attached;
+      });
+
+      res.json({
+        success: true,
+        created: result.created,
+        data: {
+          id: result.memo.id,
+          file_name: result.memo.file_name,
+          file_size: result.memo.file_size,
+          mime_type: result.memo.mime_type,
+          uploaded_by_name: result.memo.uploaded_by_name,
+          created_at: result.memo.created_at,
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный идентификатор записи' });
+        return;
+      }
+      console.error('uploadMemo error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось приложить служебную записку. Повторите — дубля не будет.' });
+    }
+  },
+
+  /** POST /api/admin/users/blacklist/:entryId/memos/:memoId/remove */
+  async removeMemo(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const entryId = z.string().uuid().parse(req.params.entryId);
+      const memoId = z.string().uuid().parse(req.params.memoId);
+      const actorName = (await loadUserFullName(req.user.id)) ?? 'Администратор';
+
+      const result = await withTransaction(async (client) => {
+        const removed = await softDeleteMemoIn(client, entryId, memoId, { id: req.user.id, name: actorName });
+        if (removed.status === 'deleted') {
+          await auditService.logFromRequestWithClient(client, req, req.user.id, 'BLACKLIST_MEMO_REMOVED', {
+            entityType: 'person_blacklist',
+            entityId: entryId,
+            details: { memo_id: memoId, file_name: removed.memo.file_name },
+          });
+        }
+        return removed;
+      });
+
+      if (result.status === 'not_found') {
+        res.status(404).json({ success: false, error: 'Служебная записка не найдена' });
+        return;
+      }
+      res.json({ success: true, changed: result.status === 'deleted' });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ success: false, error: 'Некорректный идентификатор' });
+        return;
+      }
+      console.error('removeMemo error:', error);
+      res.status(500).json({ success: false, error: 'Не удалось удалить служебную записку' });
     }
   },
 };

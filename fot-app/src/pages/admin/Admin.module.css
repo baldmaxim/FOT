@@ -2805,7 +2805,7 @@
 .blacklistHeader,
 .blacklistRow {
   display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) 130px minmax(150px, 1fr) 150px minmax(160px, 1.2fr) 150px 150px;
+  grid-template-columns: minmax(180px, 1.4fr) 130px minmax(150px, 1fr) 150px minmax(160px, 1.2fr) 150px 220px;
   gap: 12px;
   align-items: center;
   padding: 10px 14px;
@@ -2888,6 +2888,73 @@
   justify-content: flex-end;
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* ── Служебные записки ── */
+
+.blacklistMemoList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.blacklistMemoItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.blacklistMemoItem:last-child {
+  border-bottom: none;
+}
+
+.blacklistMemoInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.blacklistMemoName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.blacklistMemoActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Ссылки-кнопки «Открыть» / «Скачать» выглядят как кнопки. */
+.blacklistMemoActions a {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+@media (max-width: 600px) {
+  .blacklistMemoActions {
+    width: 100%;
+  }
+
+  .blacklistMemoActions > * {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 44px;
+  }
 }
 
 /* ── Модалка ── */

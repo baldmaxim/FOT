@@ -1,5 +1,9 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
+import { readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Integration-набор чёрного списка (миграция 273) на РЕАЛЬНОМ PostgreSQL.
@@ -143,5 +147,170 @@ describeIf('чёрный список: гарантии СУБД', () => {
        VALUES ($1::uuid, 'contractor_pass', 123, 111222333, 'passport')`,
       [id],
     )).rejects.toMatchObject({ code: '23514' });
+  });
+});
+
+/**
+ * Служебные записки (миграция 274). R2 здесь не участвует: объект хранилища —
+ * забота контроллера, а гарантии сохранности строк даёт сама СУБД.
+ */
+describeIf('служебные записки: гарантии СУБД', () => {
+  let pool: Pool;
+  const entryIds: string[] = [];
+  const authUserIds: string[] = [];
+
+  const sha = (seed: string): string => createHash('sha256').update(seed).digest('hex');
+
+  beforeAll(() => {
+    pool = new Pool({ connectionString: CONNECTION });
+  });
+
+  afterAll(async () => {
+    // RESTRICT: сначала записки, потом записи, потом тестовые учётки.
+    if (entryIds.length > 0) {
+      await pool.query('DELETE FROM public.person_blacklist_memos WHERE blacklist_id = ANY($1::uuid[])', [entryIds]);
+      await pool.query('DELETE FROM public.person_blacklist WHERE id = ANY($1::uuid[])', [entryIds]);
+    }
+    if (authUserIds.length > 0) {
+      await pool.query('DELETE FROM app_auth.users WHERE id = ANY($1::uuid[])', [authUserIds]);
+    }
+    await pool.end();
+  });
+
+  const createEntry = async (): Promise<string> => {
+    const res = await pool.query<{ id: string }>(
+      `INSERT INTO public.person_blacklist (full_name, reason, created_by_name, birth_date)
+       VALUES ('Тест Записки Интеграция', 'integration test', 'test', '1990-01-01') RETURNING id`,
+    );
+    entryIds.push(res.rows[0].id);
+    return res.rows[0].id;
+  };
+
+  const insertMemo = (entryId: string, fileSha: string, uploadedBy: string | null = null) => pool.query<{ id: string }>(
+    `INSERT INTO public.person_blacklist_memos
+       (blacklist_id, file_name, file_size, mime_type, sha256, r2_key, uploaded_by, uploaded_by_name)
+     VALUES ($1::uuid, 'записка.pdf', 100, 'application/pdf', $2, $3, $4::uuid, 'Тестовый загрузивший')
+     RETURNING id`,
+    [entryId, fileSha, `blacklist/${entryId}/${fileSha}.pdf`, uploadedBy],
+  );
+
+  it('миграция 274 применяется повторно без ошибок', async () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const sql = readFileSync(path.resolve(here, '../../../docs/migrations/274_person_blacklist_memos.sql'), 'utf8');
+    await pool.query(sql);
+    await pool.query(sql);
+  });
+
+  it('вторая активная записка с тем же файлом → 23505; после мягкого удаления — можно снова', async () => {
+    const entryId = await createEntry();
+    const fileSha = sha('один и тот же файл');
+    const first = await insertMemo(entryId, fileSha);
+
+    await expect(insertMemo(entryId, fileSha)).rejects.toMatchObject({ code: '23505' });
+
+    await pool.query(
+      `UPDATE public.person_blacklist_memos SET deleted_at = now(), deleted_by_name = 'test' WHERE id = $1::uuid`,
+      [first.rows[0].id],
+    );
+    const again = await insertMemo(entryId, fileSha);
+    expect(again.rows[0].id).not.toBe(first.rows[0].id);
+  });
+
+  it('формат sha256 и согласованность полей удаления проверяются CHECK', async () => {
+    const entryId = await createEntry();
+    await expect(insertMemo(entryId, 'не-хэш')).rejects.toMatchObject({ code: '23514' });
+
+    const memo = await insertMemo(entryId, sha('check deleted'));
+    await expect(pool.query(
+      'UPDATE public.person_blacklist_memos SET deleted_at = now() WHERE id = $1::uuid',
+      [memo.rows[0].id],
+    )).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('удалить запись ЧС вместе с записками нельзя (RESTRICT)', async () => {
+    const entryId = await createEntry();
+    await insertMemo(entryId, sha('restrict'));
+    await expect(pool.query('DELETE FROM public.person_blacklist WHERE id = $1::uuid', [entryId]))
+      .rejects.toMatchObject({ code: '23503' });
+  });
+
+  it('удаление учётки загрузившего: записка остаётся, автор и файл сохраняются', async () => {
+    const role = await pool.query<{ id: string }>('SELECT id FROM public.system_roles LIMIT 1');
+    const userId = randomUUID();
+    authUserIds.push(userId);
+    await pool.query(
+      `INSERT INTO app_auth.users (id, email, password_hash) VALUES ($1::uuid, $2, 'x')`,
+      [userId, `memo-test-${userId}@example.invalid`],
+    );
+    await pool.query(
+      'INSERT INTO public.user_profiles (id, system_role_id) VALUES ($1::uuid, $2::uuid)',
+      [userId, role.rows[0].id],
+    );
+
+    const entryId = await createEntry();
+    const fileSha = sha('uploader deleted');
+    const memo = await insertMemo(entryId, fileSha, userId);
+
+    // Так удаляет учётку портал: app_auth.users → каскадом user_profiles.
+    await pool.query('DELETE FROM app_auth.users WHERE id = $1::uuid', [userId]);
+
+    const after = await pool.query<{ uploaded_by: string | null; uploaded_by_name: string; r2_key: string }>(
+      'SELECT uploaded_by, uploaded_by_name, r2_key FROM public.person_blacklist_memos WHERE id = $1::uuid',
+      [memo.rows[0].id],
+    );
+    expect(after.rows).toHaveLength(1);
+    expect(after.rows[0].uploaded_by).toBeNull();
+    expect(after.rows[0].uploaded_by_name).toBe('Тестовый загрузивший');
+    expect(after.rows[0].r2_key).toBe(`blacklist/${entryId}/${fileSha}.pdf`);
+  });
+
+  it('полный повтор сценария: та же запись, первый файл без дубля, второй дозагружается', async () => {
+    const { addEntryIn } = await import('../services/blacklist.service.js');
+    const { attachMemoIn } = await import('../services/blacklist-memos.service.js');
+    const passport = `ИНТ${Date.now()}`;
+
+    const inTx = async <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await fn(client);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
+    const addPerson = () => inTx(client => addEntryIn(client, {
+      fullName: 'Тест Сценарий Повтор', reason: 'integration', passport,
+      source: 'manual', createdBy: null, createdByName: 'test',
+    }));
+    const attach = (entryId: string, seed: string) => inTx(client => attachMemoIn(client, {
+      entryId, fileName: `${seed}.pdf`, fileSize: 10, mimeType: 'application/pdf',
+      sha256: sha(seed), r2Key: `blacklist/${entryId}/${sha(seed)}.pdf`,
+      uploadedBy: null, uploadedByName: 'test',
+    }));
+
+    // Первый проход: запись создана, первый файл приложен, второй «упал» до БД
+    // (сбой R2 означает, что attach для него просто не вызывался).
+    const firstRun = await addPerson();
+    entryIds.push(firstRun.entry.id);
+    expect(firstRun.created).toBe(true);
+    expect((await attach(firstRun.entry.id, 'файл-1')).created).toBe(true);
+
+    // Повтор всего сценария.
+    const secondRun = await addPerson();
+    expect(secondRun.created).toBe(false);
+    expect(secondRun.entry.id).toBe(firstRun.entry.id);
+    expect((await attach(secondRun.entry.id, 'файл-1')).created).toBe(false);
+    expect((await attach(secondRun.entry.id, 'файл-2')).created).toBe(true);
+
+    const memos = await pool.query<{ file_name: string }>(
+      'SELECT file_name FROM public.person_blacklist_memos WHERE blacklist_id = $1::uuid AND deleted_at IS NULL',
+      [firstRun.entry.id],
+    );
+    expect(memos.rows.map(r => r.file_name).sort()).toEqual(['файл-1.pdf', 'файл-2.pdf']);
   });
 });
