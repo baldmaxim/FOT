@@ -6,8 +6,13 @@ import '../../styles/EmployeesPage.css';
 interface IImportModalProps {
   onClose: () => void;
   onEnrichFile: (file: File) => void;
-  onSalaryFile: (file: File) => void;
-  onSalaryHistoryFile: (file: File) => void;
+  /**
+   * Импорт окладов показывается только при переданном обработчике. Родитель передаёт его
+   * лишь пользователю с правом на раздел «Зарплата» (/salary/terms edit): сервер без этого
+   * права всё равно вернёт 403, а карточка без действия не должна висеть в окне.
+   */
+  onSalaryFile?: (file: File) => void;
+  onSalaryHistoryFile?: (file: File) => void;
   onContactsFile: (file: File) => void;
 }
 
@@ -35,22 +40,22 @@ export const ImportModal: FC<IImportModalProps> = ({ onClose, onEnrichFile, onSa
       icon: FileText,
       onFile: onEnrichFile,
     },
-    {
+    ...(onSalaryFile ? [{
       id: 'salary',
       title: 'Импорт окладов и ставок',
       description: 'Загрузка окладов (по программе и по договору) и коэффициентов ставок',
       columns: 'ФИО, дата приёма, отдел, должность, оклад (программа), ставка, оклад (договор)',
       icon: Coins,
       onFile: onSalaryFile,
-    },
-    {
+    }] : []),
+    ...(onSalaryHistoryFile ? [{
       id: 'salary-history',
       title: 'Импорт истории окладов',
       description: 'История изменений окладов по сотрудникам: от оклада при приёме до текущего. Матчинг по фамилии и инициалам',
       columns: 'Отдел → Должность → ФИО (Фамилия И.О.) → записи окладов (Текущий оклад / Изменение оклада / Оклад при приёме)',
       icon: History,
       onFile: onSalaryHistoryFile,
-    },
+    }] : []),
     {
       id: 'contacts',
       title: 'Импорт email сотрудников',

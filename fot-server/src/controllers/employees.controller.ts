@@ -45,7 +45,7 @@ import { collectDeptIds } from '../services/skud-shared.service.js';
 import { moscowTodayIso } from '../utils/date.utils.js';
 
 // Полный список колонок employees для getById / lifecycle-хэндлеров
-const EMPLOYEE_FULL_COLUMNS = 'id, full_name, last_name, first_name, middle_name, current_salary, salary_actual, salary_calculated, staff_units, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
+const EMPLOYEE_FULL_COLUMNS = 'id, full_name, last_name, first_name, middle_name, birth_date, hire_date, country, pension_number, patent_issue_date, patent_expiry_date, email, org_department_id, position_id, sigur_employee_id, tab_number, current_status, permit_expiry_date, registration_cat1, registration_cat4, doc_receipt_date, work_object, employment_status, department_locked, is_archived, archived_at, created_at, updated_at';
 
 // Кэш счётчиков /api/employees/counts вынесен в сервис, чтобы мутации могли
 // инвалидировать его рядом с employeeCache.invalidate(id).
@@ -78,10 +78,6 @@ const fullEmployeeSchema = z.object({
   full_name: z.string().min(2).max(255).trim(),
   hire_date: z.string().regex(ISO_DATE_REGEX),
   birth_date: z.string().regex(ISO_DATE_REGEX).nullable().optional(),
-  current_salary: z.number().min(0).max(999999999).nullable().optional(),
-  salary_actual: z.number().min(0).max(999999999).nullable().optional(),
-  salary_calculated: z.number().min(0).max(999999999).nullable().optional(),
-  staff_units: z.number().min(0).max(1).nullable().optional(),
   country: z.string().trim().max(100).nullable().optional(),
   pension_number: z.string().max(50).nullable().optional(),
   patent_issue_date: z.string().regex(ISO_DATE_REGEX).nullable().optional(),
@@ -109,6 +105,23 @@ const createEmployeeSchema = z.object({
 });
 
 const updateEmployeeSchema = fullEmployeeSchema.partial();
+
+/**
+ * Поля оклада в карточке сотрудника больше не принимаются. Оклады и ставки ведутся
+ * в разделе «Зарплата» (payroll_compensation_terms, ключ /salary/terms) с историей
+ * «действует с — по». Через «Управление кадрами» их меняли без истории и без права
+ * на зарплатный раздел.
+ *
+ * Отказ явный, а не тихий пропуск: zod-схема не strict и молча отбросила бы ключ —
+ * клиент получил бы «сохранено», а оклад потерялся бы.
+ */
+const LEGACY_SALARY_KEYS = ['current_salary', 'salary_actual', 'salary_calculated', 'staff_units'] as const;
+
+const findLegacySalaryKeys = (body: unknown): string[] => (
+  body && typeof body === 'object'
+    ? LEGACY_SALARY_KEYS.filter(key => Object.prototype.hasOwnProperty.call(body, key))
+    : []
+);
 
 async function resolveDepartmentFilterIds(departmentId: string | undefined | null): Promise<string[] | null> {
   if (!departmentId) return null;
@@ -209,7 +222,8 @@ export const employeesController = {
       ])];
       const isListView = req.query.view === 'list';
       const listColumns = 'id, full_name, position_id, email, org_department_id, employment_status, department_locked, is_archived, archived_at, created_at, updated_at, excluded_from_timesheet, excluded_from_timesheet_at';
-      const staffColumns = listColumns + ', salary_actual, salary_calculated, current_salary';
+      // Оклады в списке «Управления кадрами» не отдаются: они под ключом /salary/terms.
+      const staffColumns = listColumns;
 
       // --- Paginated mode ---
       const pageParam = req.query.page as string | undefined;
@@ -965,6 +979,18 @@ export const employeesController = {
   async update(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { id } = req.params;
+      // До любых проверок и побочных эффектов: запрос с окладом не должен дойти ни до
+      // Sigur, ни до частичной записи остальных полей.
+      const salaryKeys = findLegacySalaryKeys(req.body);
+      if (salaryKeys.length > 0) {
+        res.status(400).json({
+          success: false,
+          code: 'SALARY_MOVED_TO_PAYROLL',
+          error: 'Оклад и ставка меняются в разделе «Зарплата» → «Условия оплаты»',
+          data: { fields: salaryKeys },
+        });
+        return;
+      }
       const validated = updateEmployeeSchema.parse(req.body);
       const employeeId = Number(id);
       if (!(await canAccessEmployeeInScope(req, employeeId))) {
@@ -1030,7 +1056,6 @@ export const employeesController = {
         const linkedLocalAllowedKeys = new Set([
           'birth_date',
           'hire_date',
-          'staff_units',
           'country',
           'pension_number',
           'patent_issue_date',
@@ -1079,9 +1104,6 @@ export const employeesController = {
         }
         if (validated.hire_date !== undefined) {
           localUpdateData.hire_date = validated.hire_date;
-        }
-        if (validated.staff_units !== undefined) {
-          localUpdateData.staff_units = validated.staff_units ?? null;
         }
         if (validated.country !== undefined) {
           localUpdateData.country = validated.country || null;
@@ -1172,14 +1194,6 @@ export const employeesController = {
         updateData.last_name = fio.lastName;
         updateData.first_name = fio.firstName || null;
         updateData.middle_name = fio.middleName || null;
-      }
-      if (validated.current_salary !== undefined || validated.salary_actual !== undefined) {
-        const canonicalSalary = validated.current_salary ?? validated.salary_actual ?? null;
-        updateData.current_salary = canonicalSalary;
-        updateData.salary_actual = canonicalSalary;
-      }
-      if (validated.salary_calculated !== undefined) {
-        updateData.salary_calculated = validated.salary_calculated ?? null;
       }
       if (validated.birth_date !== undefined) {
         updateData.birth_date = validated.birth_date || null;

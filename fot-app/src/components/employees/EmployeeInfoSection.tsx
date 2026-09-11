@@ -38,11 +38,6 @@ const calculateTenure = (hireDate: string) => {
   return years > 0 ? `${years} ${pluralYears(years)} ${rem} мес.` : `${rem} мес.`;
 };
 
-const formatSalary = (salary: number | null) => {
-  if (!salary) return '—';
-  return salary.toLocaleString('ru-RU') + ' ₽';
-};
-
 export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
   employee,
   isEditing,
@@ -210,18 +205,6 @@ export const EmployeeInfoSection: FC<IEmployeeInfoSectionProps> = ({
           <div className="ec-info-row">
             <span className="ec-info-label">Объект</span>
             <span className="ec-info-val">{employee.work_object}</span>
-          </div>
-        )}
-        {employee.staff_units != null && (
-          <div className="ec-info-row">
-            <span className="ec-info-label">Ставка</span>
-            <span className="ec-info-val">{employee.staff_units}</span>
-          </div>
-        )}
-        {employee.current_salary != null && (
-          <div className="ec-info-row">
-            <span className="ec-info-label">Оклад</span>
-            <span className="ec-info-val">{formatSalary(employee.current_salary)}</span>
           </div>
         )}
       </div>

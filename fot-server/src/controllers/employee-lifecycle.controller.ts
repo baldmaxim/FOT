@@ -31,6 +31,7 @@ import {
   type TLifecycleOperationSource,
 } from '../services/employee-lifecycle-operations.service.js';
 import { emitDomainChange } from '../services/realtime-broadcast.service.js';
+import { resolveEffectivePageAccess } from '../services/access-control.service.js';
 import { getEmployeeOwnerAndSupervisor, getUserIdsByEmployeeIds } from '../services/recipients.service.js';
 import { DISMISSAL_CUTOFF_HM, getMoscowDismissalTiming } from '../utils/date.utils.js';
 
@@ -1026,13 +1027,20 @@ export async function getHistory(req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
+    // События оклада в общей ленте истории видны только с правом на раздел «Зарплата».
+    // Доступ к карточке сотрудника (кадры, руководитель, «все отделы на чтение») сам
+    // по себе права на оклады не даёт. Фильтруем в SQL, а не после выборки, чтобы
+    // суммы вообще не покидали БД для такого пользователя.
+    const canViewSalary = await resolveEffectivePageAccess(req, '/salary/terms', 'view');
+
     let data: Record<string, unknown>[];
     try {
       data = await query<Record<string, unknown>>(
         `SELECT * FROM employee_history
           WHERE employee_id = $1
+            AND ($2::boolean OR event_type <> 'salary')
           ORDER BY event_date DESC`,
-        [id],
+        [id, canViewSalary],
       );
     } catch (historyErr) {
       console.error('Get employee history error:', historyErr);

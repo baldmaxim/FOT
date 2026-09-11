@@ -243,7 +243,6 @@ interface IStaffModalsProps {
   scheduleViews: Map<number, IEmployeeScheduleView>;
   baseScheduleViews: Map<number, IEmployeeScheduleView>;
   onClose: () => void;
-  onSaveSalary: (empId: number, val: number, type: ModalType, reason?: string, date?: string) => Promise<void>;
   onSavePosition: (empId: number, val: string, reason?: string, date?: string) => Promise<void>;
   onSaveDepartment: (empId: number, deptId: string, effectiveDate?: string, reason?: string) => Promise<void>;
   onSaveSchedule: (empId: number, scheduleId: string | null, effectiveFrom: string, anchorDate: string | null, mergeIntoNext?: boolean) => Promise<void>;
@@ -259,7 +258,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   scheduleViews,
   baseScheduleViews,
   onClose,
-  onSaveSalary,
   onSavePosition,
   onSaveDepartment,
   onSaveSchedule,
@@ -267,9 +265,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   onDeleteAssignmentRow,
 }) => {
   const currentSchedule = modalEmp ? scheduleViews.get(modalEmp.id) : undefined;
-  const [salaryVal, setSalaryVal] = useState('');
-  const [salaryDate, setSalaryDate] = useState(() => getLocalISODate());
-  const [salaryReason, setSalaryReason] = useState('');
   const [positionVal, setPositionVal] = useState('');
   const [positionDate, setPositionDate] = useState(() => getLocalISODate());
   const [positionReason, setPositionReason] = useState('');
@@ -320,13 +315,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
   const isCycleTemplate = selectedScheduleTemplate?.pattern_type === 'cycle';
 
   if (!modalType || !modalEmp) return null;
-
-  const handleSalary = async () => {
-    if (!salaryVal) return;
-    setSaving(true);
-    await onSaveSalary(modalEmp.id, Number(salaryVal), modalType, salaryReason || undefined, salaryDate || undefined);
-    setSaving(false);
-  };
 
   const handlePosition = async () => {
     if (!positionVal) return;
@@ -436,41 +424,6 @@ const StaffModals: FC<IStaffModalsProps> = memo(({
       setDeletingId(null);
     }
   };
-
-  if (modalType === 'salary' || modalType === 'salary_actual') {
-    const title = modalType === 'salary' ? 'Изменить оклад+премию' : 'Изменить оклад (договор)';
-    const placeholder = modalType === 'salary' ? 'Повышение, пересмотр...' : 'Изменение договора...';
-    return (
-      <div className="sc-overlay" onClick={onClose}>
-        <div className="sc-modal" onClick={e => e.stopPropagation()}>
-          <div className="sc-modal-header">
-            <h3>{title} — {modalEmp.full_name}</h3>
-            <button className="sc-modal-close" onClick={onClose}>&times;</button>
-          </div>
-          <div className="sc-modal-body">
-            <div className="sc-field">
-              <label>Новый оклад (₽)</label>
-              <input type="number" value={salaryVal} onChange={e => setSalaryVal(e.target.value)} placeholder="150 000" autoFocus />
-            </div>
-            <div className="sc-field">
-              <label>Дата вступления в силу</label>
-              <input type="date" value={salaryDate} onChange={e => setSalaryDate(e.target.value)} />
-            </div>
-            <div className="sc-field">
-              <label>Причина</label>
-              <input value={salaryReason} onChange={e => setSalaryReason(e.target.value)} placeholder={placeholder} />
-            </div>
-          </div>
-          <div className="sc-modal-footer">
-            <button className="sc-btn cancel" onClick={onClose}>Отмена</button>
-            <button className="sc-btn apply" onClick={handleSalary} disabled={!salaryVal || saving}>
-              {saving ? 'Сохранение...' : 'Применить'}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   if (modalType === 'position') {
     return (
@@ -1790,16 +1743,6 @@ export const StaffControlPage: FC = () => {
 
   /* ─── modal save handlers ─── */
 
-  const handleSaveSalary = useCallback(async (empId: number, val: number, type: ModalType, reason?: string, date?: string) => {
-    await employeeService.changeSalary(empId, val, reason, date);
-    closeModal();
-    if (type === 'salary_actual') {
-      patchEmployee(empId, { salary_actual: val });
-    } else {
-      patchEmployee(empId, { salary_calculated: val });
-    }
-  }, [closeModal, patchEmployee]);
-
   const handleSavePosition = useCallback(async (empId: number, val: string, reason?: string, date?: string) => {
     await employeeService.changePosition(empId, val, reason, date);
     closeModal();
@@ -2613,7 +2556,6 @@ export const StaffControlPage: FC = () => {
         scheduleViews={scheduleViews}
         baseScheduleViews={baseScheduleViews}
         onClose={closeModal}
-        onSaveSalary={handleSaveSalary}
         onSavePosition={handleSavePosition}
         onSaveDepartment={handleSaveDepartment}
         onSaveSchedule={handleSaveSchedule}
@@ -2679,8 +2621,9 @@ export const StaffControlPage: FC = () => {
           <ImportModal
             onClose={() => setShowImportModal(false)}
             onEnrichFile={handleEnrichFile}
-            onSalaryFile={handleSalaryFile}
-            onSalaryHistoryFile={handleSalaryHistoryFile}
+            // Импорт окладов — только с правом на раздел «Зарплата»: сервер без него вернёт 403.
+            onSalaryFile={canEditPage('/salary/terms') ? handleSalaryFile : undefined}
+            onSalaryHistoryFile={canEditPage('/salary/terms') ? handleSalaryHistoryFile : undefined}
             onContactsFile={handleContactsFile}
           />
         </Suspense>

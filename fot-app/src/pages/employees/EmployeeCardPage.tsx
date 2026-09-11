@@ -379,7 +379,6 @@ export const EmployeeCardPage: FC = () => {
       country: employee.country ?? undefined,
       ...(isSigurLinked ? {} : {
         birth_date: employee.birth_date || undefined,
-        current_salary: employee.current_salary,
         org_department_id: employee.org_department_id || undefined,
       }),
     });
@@ -410,9 +409,6 @@ export const EmployeeCardPage: FC = () => {
         const birthDate = dateOnly(editData.birth_date);
         if (birthDate !== dateOnly(employee.birth_date)) {
           payload.birth_date = birthDate;
-        }
-        if ((editData.current_salary ?? null) !== (employee.current_salary ?? null)) {
-          payload.current_salary = editData.current_salary ?? null;
         }
         if (nullableText(editData.org_department_id) !== nullableText(employee.org_department_id)) {
           payload.org_department_id = nullableText(editData.org_department_id);

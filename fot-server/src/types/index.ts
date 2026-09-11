@@ -176,10 +176,9 @@ export interface EmployeeEncrypted {
   last_name: string | null;
   first_name: string | null;
   middle_name: string | null;
-  current_salary: string | null;
-  salary_actual: string | null;
-  salary_calculated: string | null;
-  staff_units: string | null;
+  // current_salary / salary_actual / salary_calculated / staff_units в карточку сотрудника
+  // НЕ читаются: оклады живут в payroll_compensation_terms под ключом /salary/terms.
+  // Колонки в таблице остались (legacy), но отдавать их через «Управление кадрами» нельзя.
   birth_date: string | null;
   hire_date: string;
   country: string | null;
@@ -219,10 +218,6 @@ export interface Employee {
   position_name: string | null;
   position_id: string | null;
   sigur_employee_id: number | null;
-  current_salary: number | null;
-  salary_actual: number | null;
-  salary_calculated: number | null;
-  staff_units: number | null;
   birth_date: string | null;
   hire_date: string;
   country: string | null;

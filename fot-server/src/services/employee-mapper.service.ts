@@ -75,12 +75,6 @@ export async function loadStructureCache(): Promise<StructureCache> {
   return cache;
 }
 
-const parseOptionalNumber = (value: string | number | null | undefined): number | null => {
-  if (value === null || value === undefined || value === '') return null;
-  const parsed = typeof value === 'number' ? value : parseFloat(value);
-  return Number.isNaN(parsed) ? null : parsed;
-};
-
 /**
  * Лёгкая расшифровка для списка — только full_name + lookup из кэша
  */
@@ -94,10 +88,6 @@ export function decryptEmployeeList(encrypted: EmployeeEncrypted, structureCache
     position_name: encrypted.position_id ? structureCache.positions.get(encrypted.position_id) || null : null,
     position_id: encrypted.position_id,
     sigur_employee_id: encrypted.sigur_employee_id,
-    current_salary: parseOptionalNumber(encrypted.current_salary),
-    salary_actual: parseOptionalNumber(encrypted.salary_actual),
-    salary_calculated: parseOptionalNumber(encrypted.salary_calculated),
-    staff_units: parseOptionalNumber(encrypted.staff_units),
     birth_date: null,
     hire_date: encrypted.hire_date || '',
     country: null,
@@ -140,10 +130,6 @@ export function decryptEmployee(encrypted: EmployeeEncrypted, structureCache: St
     position_name: encrypted.position_id ? structureCache.positions.get(encrypted.position_id) || null : null,
     position_id: encrypted.position_id,
     sigur_employee_id: encrypted.sigur_employee_id,
-    current_salary: parseOptionalNumber(encrypted.current_salary),
-    salary_actual: parseOptionalNumber(encrypted.salary_actual),
-    salary_calculated: parseOptionalNumber(encrypted.salary_calculated),
-    staff_units: parseOptionalNumber(encrypted.staff_units),
     birth_date: encrypted.birth_date || null,
     hire_date: encrypted.hire_date || '',
     country: encrypted.country || null,

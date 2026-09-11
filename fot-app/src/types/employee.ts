@@ -13,10 +13,7 @@ export interface Employee {
   sigur_employee_id: number | null;
   hire_date: string;
   birth_date: string | null;
-  current_salary: number | null;
-  salary_actual: number | null;
-  salary_calculated: number | null;
-  staff_units: number | null;
+  // Оклад и ставка в карточке не приходят: они в разделе «Зарплата» (/salary/terms).
   country: string | null;
   pension_number: string | null;
   patent_issue_date: string | null;
@@ -83,10 +80,6 @@ export interface EmployeeInput {
   full_name: string;
   hire_date: string;
   birth_date?: string | null;
-  current_salary?: number | null;
-  salary_actual?: number | null;
-  salary_calculated?: number | null;
-  staff_units?: number | null;
   country?: string | null;
   pension_number?: string | null;
   patent_issue_date?: string | null;

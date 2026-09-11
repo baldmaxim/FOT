@@ -10,7 +10,8 @@ import type { IWorkSchedule, IEmployeeScheduleAssignment, PatternType, ScheduleT
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-export type ModalType = 'salary' | 'salary_actual' | 'position' | 'department' | 'schedule' | 'object_assignment' | 'timesheet_mode';
+// Модалок оклада здесь нет: оклады ведутся в разделе «Зарплата» (/salary/terms).
+export type ModalType = 'position' | 'department' | 'schedule' | 'object_assignment' | 'timesheet_mode';
 export type StaffStatusFilter = 'active' | 'fired' | 'excluded';
 export type ScheduleSource = 'employee' | 'default';
 

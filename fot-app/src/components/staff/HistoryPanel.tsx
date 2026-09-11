@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, memo, type FC } from 'react';
 import { Pencil, X, TrendingUp, Briefcase, Trash2, Check } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
 import { useToast } from '../../contexts/ToastContext';
+import { useAuth } from '../../contexts/AuthContext';
 import type { Employee, EmployeeHistoryEvent } from '../../types';
 
 type EditableHistoryEvent = EmployeeHistoryEvent & { event_type: 'salary' | 'assignment' };
@@ -24,6 +25,9 @@ interface IHistoryPanelProps {
 
 export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, loading, canEdit, onClose, onRefresh, onDataChanged }) => {
   const toast = useToast();
+  // Добавить оклад можно только с правом на раздел «Зарплата»: сервер без него вернёт 403.
+  const { canEditPage } = useAuth();
+  const canEditSalary = canEditPage('/salary/terms');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSalary, setEditSalary] = useState('');
   const [editDate, setEditDate] = useState('');
@@ -130,9 +134,11 @@ export const HistoryPanel: FC<IHistoryPanelProps> = memo(({ employee, history, l
         </div>
 
         <div className="sc-panel-add-bar">
-          <button className="sc-panel-add-btn" onClick={() => openAdd('salary')}>
-            <TrendingUp size={13} /> Оклад
-          </button>
+          {canEditSalary && (
+            <button className="sc-panel-add-btn" onClick={() => openAdd('salary')}>
+              <TrendingUp size={13} /> Оклад
+            </button>
+          )}
           <button className="sc-panel-add-btn" onClick={() => openAdd('position')}>
             <Briefcase size={13} /> Должность
           </button>

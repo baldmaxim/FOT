@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, type FC } from 'react';
 import { TrendingUp, TrendingDown, Minus, Briefcase, Pencil, Trash2, Check, X, Plus } from 'lucide-react';
 import { employeeService } from '../../services/employeeService';
+import { useAuth } from '../../contexts/AuthContext';
 import type { EmployeeHistoryEvent } from '../../types';
 
 type EditableHistoryEvent = EmployeeHistoryEvent & { event_type: 'salary' | 'assignment' };
@@ -33,6 +34,9 @@ const getAssignmentTitle = (data: Record<string, unknown>): string => {
 };
 
 export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ employeeId, history, loading, onRefresh }) => {
+  // Добавить оклад можно только с правом на раздел «Зарплата»: сервер без него вернёт 403.
+  const { canEditPage } = useAuth();
+  const canEditSalary = canEditPage('/salary/terms');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSalary, setEditSalary] = useState('');
   const [editDate, setEditDate] = useState('');
@@ -130,9 +134,11 @@ export const EmployeeHistorySection: FC<IEmployeeHistorySectionProps> = ({ emplo
   return (
     <div className="ec-history-wrap">
       <div className="ec-history-add-bar">
-        <button type="button" className="ec-history-add-btn" onClick={() => openAdd('salary')}>
-          <Plus size={13} /> Оклад
-        </button>
+        {canEditSalary && (
+          <button type="button" className="ec-history-add-btn" onClick={() => openAdd('salary')}>
+            <Plus size={13} /> Оклад
+          </button>
+        )}
         <button type="button" className="ec-history-add-btn" onClick={() => openAdd('position')}>
           <Plus size={13} /> Должность
         </button>

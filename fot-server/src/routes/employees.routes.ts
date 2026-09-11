@@ -79,10 +79,13 @@ router.post(
   employeeEnrichController.enrich
 );
 
-// POST /api/employees/enrich-salary - импорт окладов и ставок из Excel (header+, требуется 2FA)
+// Запись окладов — только с правом на раздел «Зарплата» (/salary/terms), а не
+// «Управление кадрами»: иначе оклады меняла бы любая роль с доступом к кадрам.
+
+// POST /api/employees/enrich-salary - импорт окладов и ставок из Excel (требуется 2FA)
 router.post(
   '/enrich-salary',
-  requirePageAccess('/staff-control', 'edit'),
+  requirePageAccess('/salary/terms', 'edit'),
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
@@ -90,10 +93,10 @@ router.post(
   employeeSalaryEnrichController.enrichSalary
 );
 
-// POST /api/employees/enrich-salary-history - импорт истории окладов из Excel (header+, требуется 2FA)
+// POST /api/employees/enrich-salary-history - импорт истории окладов из Excel (требуется 2FA)
 router.post(
   '/enrich-salary-history',
-  requirePageAccess('/staff-control', 'edit'),
+  requirePageAccess('/salary/terms', 'edit'),
   requireCritical2FA,
   importLimiter,
   upload.single('file'),
@@ -290,10 +293,10 @@ router.post(
   employeesController.moveDepartment
 );
 
-// POST /api/employees/:id/change-salary - изменить оклад (admin+, требуется 2FA)
+// POST /api/employees/:id/change-salary - изменить оклад (право на /salary/terms, требуется 2FA)
 router.post(
   '/:id/change-salary',
-  requirePageAccess('/staff-control', 'edit'),
+  requirePageAccess('/salary/terms', 'edit'),
   requireCritical2FA,
   employeesController.changeSalary
 );
