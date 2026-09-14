@@ -4,7 +4,7 @@ import type { AuthenticatedRequest } from '../types/index.js';
 
 /**
  * Контроллер выгрузки сотрудников: охват по скоупу (без фильтров экрана),
- * строгий аудит до отдачи файла и явные 400 вместо общего 500.
+ * единый период для уволенных и объектов, строгий аудит до отдачи файла.
  */
 
 const scope = vi.hoisted(() => ({
@@ -38,6 +38,7 @@ const withTransactionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../config/postgres.js', () => ({
   query: queryMock,
+  queryOne: vi.fn(),
   withTransaction: withTransactionMock,
 }));
 
@@ -47,7 +48,13 @@ vi.mock('../services/audit.service.js', () => ({
   auditService: { logFromRequestWithClient: auditMock },
 }));
 
-const { employeesExportController } = await import('./employees-export.controller.js');
+const mainObjectMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../services/employees-export-objects.service.js', () => ({
+  loadMainObjectByEmployee: mainObjectMock,
+}));
+
+const { employeesExportController, resolveExportPeriod } = await import('./employees-export.controller.js');
 const { MAX_EXPORT_EMPLOYEES } = await import('../services/employees-export.service.js');
 
 type MockResponse = Response & {
@@ -78,6 +85,18 @@ const req = (employeeId: number | null = 10): AuthenticatedRequest => ({
   headers: {},
 } as unknown as AuthenticatedRequest);
 
+const employeeRow = (id: number, overrides: Record<string, unknown> = {}) => ({
+  id,
+  full_name: `Сотрудник ${id}`,
+  employment_status: 'active',
+  birth_date: '1990-03-05',
+  hire_date: '2024-01-15',
+  position_name: 'Монтажник',
+  effective_department_id: 'd1',
+  in_department_scope: true,
+  ...overrides,
+});
+
 /** SQL-вызовы к таблице employees (второй запрос — за отделами). */
 const employeeCalls = (): Array<[string, unknown[]]> =>
   queryMock.mock.calls.filter(call => String(call[0]).includes('FROM employees')) as Array<[string, unknown[]]>;
@@ -91,27 +110,51 @@ beforeEach(() => {
   scope.directSubordinates = [];
 
   queryMock.mockImplementation(async (sql: string) => {
-    if (String(sql).includes('FROM employees')) {
-      return [{ id: 1, full_name: 'Петров П. П.', org_department_id: 'd1' }];
-    }
-    return [{ id: 'd1', parent_id: null, name: 'Отдел', sort_order: 0 }];
+    if (String(sql).includes('FROM employees')) return [employeeRow(1)];
+    return [{ id: 'd1', parent_id: null, name: 'Отдел', kind: 'department' }];
   });
+  mainObjectMock.mockResolvedValue(new Map([[1, 'ЖК Север']]));
   withTransactionMock.mockImplementation(async (fn: (client: unknown) => Promise<void>) => fn({}));
 });
 
+describe('resolveExportPeriod', () => {
+  it('ровно 30 дат включительно, по московскому календарю', () => {
+    // 21:30 UTC 13.09 — в Москве уже 14.09.
+    const period = resolveExportPeriod(new Date('2026-09-13T21:30:00Z'));
+    expect(period).toEqual({ start: '2026-08-16', end: '2026-09-14' });
+  });
+
+  it('переход через границу года', () => {
+    expect(resolveExportPeriod(new Date('2026-01-10T12:00:00Z')))
+      .toEqual({ start: '2025-12-12', end: '2026-01-10' });
+  });
+});
+
 describe('employeesExportController.exportEmployees', () => {
-  it('scope=all — в запросе нет предиката по отделам', async () => {
+  it('scope=all — без предиката по отделам, фильтр увольнения по периоду, все в скоупе отделов', async () => {
     const res = makeRes();
     await employeesExportController.exportEmployees(req(), res);
 
-    const [sql] = employeeCalls()[0];
-    expect(sql).not.toContain('org_department_id = ANY');
-    expect(sql).toContain(`employment_status <> 'fired'`);
-    expect(sql).toContain('is_archived = false');
+    const [sql, params] = employeeCalls()[0];
+    expect(sql).not.toContain('effective_department_id = ANY');
+    expect(sql).toContain(`e.dismissal_date BETWEEN $1::date AND $2::date`);
+    expect(sql).not.toContain('current_date');
+    expect(sql).toContain('TRUE AS in_department_scope');
+    expect(params.slice(0, 2)).toEqual([expect.any(String), expect.any(String)]);
     expect(res.statusCode).toBe(200);
   });
 
-  it('scope=department — фильтр по отделам и по прямым подчинённым', async () => {
+  it('один и тот же период уходит в выборку сотрудников и в расчёт объектов', async () => {
+    const res = makeRes();
+    await employeesExportController.exportEmployees(req(), res);
+
+    const [, params] = employeeCalls()[0];
+    const [ids, period] = mainObjectMock.mock.calls[0];
+    expect(ids).toEqual([1]);
+    expect(period).toEqual({ start: params[0], end: params[1] });
+  });
+
+  it('scope=department — отделы и подчинённые в одних скобках после фильтра статуса', async () => {
     scope.dataScope = 'department';
     scope.managedDepartmentIds = ['d1', 'd2'];
     scope.directSubordinates = [77];
@@ -120,29 +163,27 @@ describe('employeesExportController.exportEmployees', () => {
     await employeesExportController.exportEmployees(req(), res);
 
     const [sql, params] = employeeCalls()[0];
-    expect(sql).toContain('org_department_id = ANY');
-    expect(sql).toContain('id = ANY');
-    expect(params[0]).toEqual(['d1', 'd2']);
+    expect(sql).toMatch(
+      /WHERE \(\(b\.effective_department_id IS NOT NULL AND b\.effective_department_id = ANY\(\$3::uuid\[\]\)\) OR b\.id = ANY\(\$4::int\[\]\)\)/,
+    );
+    expect(params[2]).toEqual(['d1', 'd2']);
     // Сам руководитель добавлен: у него есть прямые подчинённые.
-    expect(params[1]).toEqual([77, 10]);
+    expect(params[3]).toEqual([77, 10]);
   });
 
   it('department-scope без explicit-назначений и подчинённых — сам пользователь не добавляется', async () => {
     scope.dataScope = 'department';
     scope.managedDepartmentIds = ['d1'];
-    scope.explicitDepartmentIds = [];
-    scope.directSubordinates = [];
 
     const res = makeRes();
     await employeesExportController.exportEmployees(req(), res);
 
     const [sql, params] = employeeCalls()[0];
-    expect(sql).not.toContain('OR id = ANY');
-    // Параметры: только отделы и LIMIT — списка сотрудников нет.
-    expect(params).toEqual([['d1'], 50001]);
+    expect(sql).not.toContain('b.id = ANY');
+    expect(params.slice(2)).toEqual([['d1'], 50001]);
   });
 
-  it('scope=self без employee_id — 400 и тяжёлый запрос не выполняется', async () => {
+  it('scope=self без employee_id — 400 и тяжёлые запросы не выполняются', async () => {
     scope.dataScope = 'self';
 
     const res = makeRes();
@@ -151,22 +192,21 @@ describe('employeesExportController.exportEmployees', () => {
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatchObject({ code: 'NO_DATA' });
     expect(employeeCalls()).toHaveLength(0);
+    expect(mainObjectMock).not.toHaveBeenCalled();
   });
 
-  it('department-scope без отделов и подчинённых — 400 и ни одного запроса к employees', async () => {
-    scope.dataScope = 'department';
-    scope.managedDepartmentIds = [];
-    scope.scopedDepartmentId = null;
+  it('пустая выборка — 400 NO_DATA, объекты не считаются', async () => {
+    queryMock.mockImplementation(async () => []);
 
     const res = makeRes();
     await employeesExportController.exportEmployees(req(), res);
 
     expect(res.statusCode).toBe(400);
     expect(res.body).toMatchObject({ code: 'NO_DATA' });
-    expect(employeeCalls()).toHaveLength(0);
+    expect(mainObjectMock).not.toHaveBeenCalled();
   });
 
-  it('успех — xlsx-заголовки, имя файла в UTF-8 и запись аудита', async () => {
+  it('успех — xlsx-заголовки, имя файла в UTF-8 и запись аудита с разделами и периодом', async () => {
     const res = makeRes();
     await employeesExportController.exportEmployees(req(), res);
 
@@ -179,7 +219,9 @@ describe('employeesExportController.exportEmployees', () => {
     const [, , userId, action, options] = auditMock.mock.calls[0];
     expect(userId).toBe('user-1');
     expect(action).toBe('EXPORT_EMPLOYEES');
-    expect(options).toMatchObject({ details: { count: 1 } });
+    expect(options).toMatchObject({
+      details: { count: 1, sections: { other: 1 }, scope: 'all', period: mainObjectMock.mock.calls[0][1] },
+    });
   });
 
   it('сбой записи аудита — 500 и файл не отдан', async () => {
@@ -196,13 +238,9 @@ describe('employeesExportController.exportEmployees', () => {
   it('превышение лимита строк — 400 EXPORT_TOO_LARGE', async () => {
     queryMock.mockImplementation(async (sql: string) => {
       if (String(sql).includes('FROM employees')) {
-        return Array.from({ length: MAX_EXPORT_EMPLOYEES + 1 }, (_, index) => ({
-          id: index + 1,
-          full_name: `Сотрудник ${index + 1}`,
-          org_department_id: 'd1',
-        }));
+        return Array.from({ length: MAX_EXPORT_EMPLOYEES + 1 }, (_, index) => employeeRow(index + 1));
       }
-      return [{ id: 'd1', parent_id: null, name: 'Отдел', sort_order: 0 }];
+      return [];
     });
 
     const res = makeRes();

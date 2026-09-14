@@ -1,259 +1,221 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
-  buildExportTree,
-  countTreeEmployees,
-  DIRECT_REPORTS_GROUP_NAME,
-  NO_DEPARTMENT_GROUP_NAME,
+  buildExportSections,
+  countSectionRows,
   type IExportDepartmentRow,
   type IExportEmployeeRow,
-  type IExportNode,
+  type IExportSection,
 } from './employees-export.service.js';
+
+const SM_ROOT_ID = '6c4a3726-4ba9-4550-9978-c5ff50e4f77b';
+const SU10_ROOT_ID = '2cd8a403-6454-408b-9c2b-8a2db65c7511';
 
 const dept = (
   id: string,
   name: string,
-  parent_id: string | null = null,
-  sort_order = 0,
-): IExportDepartmentRow => ({ id, name, parent_id, sort_order });
+  parent_id: string | null,
+  kind: string = 'department',
+): IExportDepartmentRow => ({ id, name, parent_id, kind });
 
-const emp = (id: number, full_name: string, org_department_id: string | null): IExportEmployeeRow =>
-  ({ id, full_name, org_department_id });
+/** Структура как в проде: «Объект» → компании/папки → отделы. */
+const DEPARTMENTS: IExportDepartmentRow[] = [
+  dept('root', 'Объект', null, 'object'),
+  dept(SM_ROOT_ID, '(СМ) Служба Механизации', 'root'),
+  dept('sm-auto', 'Отдел автотехники', SM_ROOT_ID),
+  dept(SU10_ROOT_ID, '(СУ-10) ООО СУ-10', 'root'),
+  dept('su-vent', 'Отдел вентиляции', SU10_ROOT_ID),
+  dept('su-vent-site', 'Участок 1', 'su-vent'),
+  dept('su-decret', 'Декрет', SU10_ROOT_ID),
+  dept('su-site', 'Строительный участок', SU10_ROOT_ID),
+  dept('brigades', 'Бригады', 'su-site'),
+  dept('br-ivanov', 'бр.Иванов', 'brigades', 'brigade'),
+  dept('br-petrov', 'бр.Петров', 'su-vent', 'brigade'),
+  dept('ctr-brigade', 'бр.Подрядная', 'ctr-alfa', 'brigade'),
+  dept('contractors', 'Подрядные организации', 'root'),
+  dept('ctr-alfa', 'ООО Альфа', 'contractors'),
+  dept('fired', 'Уволенные', 'root'),
+  dept('test', 'test', 'root'),
+];
 
-/** Плоский список всех узлов дерева. */
-const flatten = (nodes: IExportNode[]): IExportNode[] =>
-  nodes.flatMap(node => [node, ...flatten(node.children)]);
+const emp = (
+  id: number,
+  full_name: string,
+  effective_department_id: string | null,
+  overrides: Partial<IExportEmployeeRow> = {},
+): IExportEmployeeRow => ({
+  id,
+  full_name,
+  employment_status: 'active',
+  birth_date: null,
+  hire_date: null,
+  position_name: null,
+  effective_department_id,
+  in_department_scope: true,
+  ...overrides,
+});
 
-const findNode = (nodes: IExportNode[], name: string): IExportNode | undefined =>
-  flatten(nodes).find(node => node.name === name);
+const build = (
+  employees: IExportEmployeeRow[],
+  mainObjectByEmployee = new Map<number, string>(),
+  departments = DEPARTMENTS,
+): IExportSection[] => buildExportSections({ employees, departments, mainObjectByEmployee });
 
-/** Все id сотрудников в дереве, с повторами — для проверки «никто не задвоился». */
-const collectEmployeeIds = (nodes: IExportNode[]): number[] =>
-  flatten(nodes).flatMap(node => node.employees.map(employee => employee.id));
+const section = (sections: IExportSection[], key: IExportSection['key']): IExportSection | undefined =>
+  sections.find(item => item.key === key);
 
-describe('buildExportTree', () => {
-  it('строит уровни компания → отдел → бригада и считает total по поддереву', () => {
-    const departments = [
-      dept('company', 'СУ-10'),
-      dept('dept', 'Отдел вентиляции', 'company'),
-      dept('brigade', 'бр.Иванов', 'dept'),
-    ];
-    const employees = [
-      emp(1, 'Петров П. П.', 'dept'),
-      emp(2, 'Сидоров С. С.', 'brigade'),
-      emp(3, 'Абрамов А. А.', 'brigade'),
-    ];
+describe('buildExportSections', () => {
+  it('раскладывает по разделам в фиксированном порядке и пропускает пустые', () => {
+    const sections = build([
+      emp(1, 'Подрядчиков П.', 'ctr-alfa'),
+      emp(2, 'Вентиляцин В.', 'su-vent'),
+      emp(3, 'Бригадин Б.', 'br-ivanov'),
+      emp(4, 'Тестов Т.', 'test'),
+    ]);
 
-    const roots = buildExportTree({ employees, departments });
-
-    expect(roots).toHaveLength(1);
-    const company = roots[0];
-    expect(company.depth).toBe(0);
-    expect(company.total).toBe(3);
-    expect(company.ownCount).toBe(0);
-
-    const department = company.children[0];
-    expect(department.depth).toBe(1);
-    expect(department.total).toBe(3);
-    expect(department.ownCount).toBe(1);
-
-    const brigade = department.children[0];
-    expect(brigade.depth).toBe(2);
-    expect(brigade.total).toBe(2);
-    expect(brigade.ownCount).toBe(2);
-    expect(countTreeEmployees(roots)).toBe(3);
+    expect(sections.map(item => item.key)).toEqual(['su10', 'brigades', 'contractors', 'other']);
+    expect(sections.map(item => item.tableName))
+      .toEqual(['Employees_SU10', 'Employees_Brigades', 'Employees_Contractors', 'Employees_Other']);
   });
 
-  it('не выводит подразделения без сотрудников, включая вложенные', () => {
-    const departments = [
-      dept('company', 'СУ-10'),
-      dept('full', 'Отдел с людьми', 'company'),
-      dept('empty', 'Пустой отдел', 'company'),
-      dept('empty-child', 'Пустая бригада', 'empty'),
-    ];
-    const employees = [emp(1, 'Петров П. П.', 'full')];
+  it('бригады СУ-10 — отдельный раздел: и под папкой «Бригады», и вложенные в отдел', () => {
+    const sections = build([
+      emp(1, 'Иванов И.', 'br-ivanov'),
+      emp(2, 'Петров П.', 'br-petrov'),
+      emp(3, 'Участков У.', 'su-site'),
+    ]);
 
-    const roots = buildExportTree({ employees, departments });
-
-    expect(findNode(roots, 'Отдел с людьми')).toBeDefined();
-    expect(findNode(roots, 'Пустой отдел')).toBeUndefined();
-    expect(findNode(roots, 'Пустая бригада')).toBeUndefined();
+    expect(section(sections, 'brigades')?.rows.map(row => [row.fullName, row.departmentPath])).toEqual([
+      ['Иванов И.', 'бр.Иванов'],
+      ['Петров П.', 'Отдел вентиляции / бр.Петров'],
+    ]);
+    expect(section(sections, 'su10')?.rows.map(row => row.fullName)).toEqual(['Участков У.']);
   });
 
-  it('оставляет промежуточный узел без своих людей, если поддерево непустое', () => {
-    const departments = [
-      dept('company', 'СУ-10'),
-      dept('middle', 'Участок', 'company'),
-      dept('brigade', 'бр.Иванов', 'middle'),
-    ];
-    const roots = buildExportTree({ employees: [emp(1, 'Петров П. П.', 'brigade')], departments });
+  it('бригада внутри подрядной организации остаётся в «Подрядных»', () => {
+    const sections = build([emp(1, 'Подрядный П.', 'ctr-brigade')]);
 
-    const middle = findNode(roots, 'Участок');
-    expect(middle?.ownCount).toBe(0);
-    expect(middle?.total).toBe(1);
+    expect(sections.map(item => item.key)).toEqual(['contractors']);
+    expect(sections[0].rows[0].departmentPath).toBe('ООО Альфа / бр.Подрядная');
   });
 
-  it('сортирует сиблингов по имени, когда sort_order одинаковый', () => {
-    const departments = [
-      dept('root', 'Компания'),
-      dept('b', 'Яблоко', 'root', 0),
-      dept('a', 'Ёлка', 'root', 0),
-      dept('c', 'Берёза', 'root', 0),
-    ];
-    const employees = [
-      emp(1, 'Первый', 'a'),
-      emp(2, 'Второй', 'b'),
-      emp(3, 'Третий', 'c'),
-    ];
+  it('путь подразделения — без названия компании в известных разделах, с корнем в «Прочих»', () => {
+    const sections = build([
+      emp(1, 'Участков У.', 'su-vent-site'),
+      emp(2, 'Механиков М.', 'sm-auto'),
+      emp(3, 'Компанейцев К.', SU10_ROOT_ID),
+      emp(4, 'Тестов Т.', 'test'),
+    ]);
 
-    const roots = buildExportTree({ employees, departments });
-
-    expect(roots[0].children.map(node => node.name)).toEqual(['Берёза', 'Ёлка', 'Яблоко']);
+    expect(section(sections, 'su10')?.rows.map(row => [row.fullName, row.departmentPath])).toEqual([
+      ['Компанейцев К.', ''],
+      ['Участков У.', 'Отдел вентиляции / Участок 1'],
+    ]);
+    expect(section(sections, 'sm')?.rows[0].departmentPath).toBe('Отдел автотехники');
+    expect(section(sections, 'other')?.rows[0].departmentPath).toBe('test');
   });
 
-  it('sort_order важнее имени', () => {
-    const departments = [
-      dept('root', 'Компания'),
-      dept('a', 'Ёлка', 'root', 5),
-      dept('b', 'Яблоко', 'root', 1),
-    ];
-    const employees = [emp(1, 'Первый', 'a'), emp(2, 'Второй', 'b')];
+  it('уволенный попадает в раздел отдела до увольнения с признаком «Уволен»', () => {
+    const sections = build([
+      emp(1, 'Уволенный У.', 'su-vent', { employment_status: 'fired' }),
+    ]);
 
-    const roots = buildExportTree({ employees, departments });
-
-    expect(roots[0].children.map(node => node.name)).toEqual(['Яблоко', 'Ёлка']);
+    expect(sections.map(item => item.key)).toEqual(['su10']);
+    expect(sections[0].rows[0]).toMatchObject({ sign: 'Уволен', departmentPath: 'Отдел вентиляции' });
   });
 
-  it('сортирует сотрудников внутри узла по ФИО', () => {
-    const departments = [dept('root', 'Компания')];
-    const employees = [
-      emp(1, 'Яковлев Я. Я.', 'root'),
-      emp(2, 'Абрамов А. А.', 'root'),
-      emp(3, 'Ёлкин Ё. Ё.', 'root'),
-    ];
+  it('уволенный без события увольнения (отдел «Уволенные») уходит в «Прочие»', () => {
+    const sections = build([emp(1, 'Уволенный У.', 'fired', { employment_status: 'fired' })]);
 
-    const roots = buildExportTree({ employees, departments });
-
-    expect(roots[0].employees.map(employee => employee.full_name))
-      .toEqual(['Абрамов А. А.', 'Ёлкин Ё. Ё.', 'Яковлев Я. Я.']);
+    expect(sections.map(item => item.key)).toEqual(['other']);
+    expect(sections[0].rows[0]).toMatchObject({ sign: 'Уволен', departmentPath: 'Уволенные' });
   });
 
-  it('сотрудники без отдела и с несуществующим отделом уходят в «Без подразделения»', () => {
-    const departments = [dept('root', 'Компания')];
-    const employees = [
-      emp(1, 'Петров П. П.', 'root'),
-      emp(2, 'Ничейный Н. Н.', null),
-      emp(3, 'Потерянный П. П.', 'departed-dept'),
-    ];
+  it('приоритет признака: Уволен > Декрет > Работает', () => {
+    const sections = build([
+      emp(1, 'Декретная Д.', 'su-decret'),
+      emp(2, 'Уволенная из декрета У.', 'su-decret', { employment_status: 'fired' }),
+      emp(3, 'Работник Р.', 'su-vent'),
+    ]);
 
-    const roots = buildExportTree({ employees, departments });
-
-    const orphans = roots[roots.length - 1];
-    expect(orphans.name).toBe(NO_DEPARTMENT_GROUP_NAME);
-    expect(orphans.id).toBeNull();
-    expect(orphans.employees.map(employee => employee.id)).toEqual([2, 3]);
+    const signs = Object.fromEntries(section(sections, 'su10')!.rows.map(row => [row.employeeId, row.sign]));
+    expect(signs).toEqual({ 1: 'Декрет', 2: 'Уволен', 3: 'Работает' });
   });
 
-  it('отдел с несуществующим parent_id становится корнем, сотрудники не теряются', () => {
-    const departments = [
-      dept('root', 'Компания'),
-      dept('orphan', 'Осиротевший отдел', 'missing-parent'),
-    ];
-    const employees = [emp(1, 'Петров П. П.', 'root'), emp(2, 'Сидоров С. С.', 'orphan')];
+  it('«Декрет» распознаётся и на вложенном отделе', () => {
+    const departments = [...DEPARTMENTS, dept('decret-child', 'Группа 1', 'su-decret')];
+    const sections = build([emp(1, 'Декретная Д.', 'decret-child')], new Map(), departments);
 
-    const roots = buildExportTree({ employees, departments });
+    expect(sections[0].rows[0].sign).toBe('Декрет');
+  });
 
-    const orphan = findNode(roots, 'Осиротевший отдел');
-    expect(orphan?.depth).toBe(0);
-    expect(collectEmployeeIds(roots).sort()).toEqual([1, 2]);
+  it('прямой подчинённый вне скоупа отделов — «Прочие» без пути', () => {
+    const sections = build([
+      emp(1, 'Свой С.', 'su-vent'),
+      emp(2, 'Подчинённый П.', 'ctr-alfa', { in_department_scope: false }),
+    ]);
+
+    expect(sections.map(item => item.key)).toEqual(['su10', 'other']);
+    expect(section(sections, 'other')?.rows[0]).toMatchObject({ employeeId: 2, departmentPath: '' });
+  });
+
+  it('без отдела и с неизвестным отделом — «Прочие» без пути', () => {
+    const sections = build([emp(1, 'Ничейный Н.', null), emp(2, 'Потерянный П.', 'deleted-dept')]);
+
+    expect(sections).toHaveLength(1);
+    expect(sections[0].key).toBe('other');
+    expect(sections[0].rows.map(row => row.departmentPath)).toEqual(['', '']);
+  });
+
+  it('подставляет объект, должность и даты; нет объекта — пустая строка', () => {
+    const sections = build(
+      [
+        emp(1, 'Первый П.', 'su-vent', { position_name: 'Монтажник', birth_date: '1990-03-05', hire_date: '2024-01-15' }),
+        emp(2, 'Юрьев Ю.', 'su-vent'),
+      ],
+      new Map([[1, 'ЖК Север']]),
+    );
+
+    expect(sections[0].rows).toEqual([
+      {
+        employeeId: 1, fullName: 'Первый П.', departmentPath: 'Отдел вентиляции', positionName: 'Монтажник',
+        birthDate: '1990-03-05', hireDate: '2024-01-15', objectName: 'ЖК Север', sign: 'Работает',
+      },
+      {
+        employeeId: 2, fullName: 'Юрьев Ю.', departmentPath: 'Отдел вентиляции', positionName: '',
+        birthDate: null, hireDate: null, objectName: '', sign: 'Работает',
+      },
+    ]);
+  });
+
+  it('сортирует по пути подразделения, затем по ФИО', () => {
+    const sections = build([
+      emp(1, 'Яковлев Я.', 'su-vent'),
+      emp(2, 'Абрамов А.', 'su-vent-site'),
+      emp(3, 'Ёлкин Ё.', 'su-vent'),
+    ]);
+
+    expect(sections[0].rows.map(row => row.fullName)).toEqual(['Ёлкин Ё.', 'Яковлев Я.', 'Абрамов А.']);
   });
 
   it('цикл parent_id не вешает сборку и не теряет сотрудников', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const departments = [
-      dept('a', 'Отдел А', 'b'),
-      dept('b', 'Отдел Б', 'a'),
-    ];
-    const employees = [emp(1, 'Петров П. П.', 'a'), emp(2, 'Сидоров С. С.', 'b')];
+    const departments = [dept('a', 'Отдел А', 'b'), dept('b', 'Отдел Б', 'a')];
+    const sections = build([emp(1, 'Петров П.', 'a'), emp(2, 'Сидоров С.', 'b')], new Map(), departments);
 
-    const roots = buildExportTree({ employees, departments });
-
-    expect(collectEmployeeIds(roots).sort()).toEqual([1, 2]);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+    expect(countSectionRows(sections)).toBe(2);
+    expect(sections.map(item => item.key)).toEqual(['other']);
   });
 
-  it('неактивный отдел с людьми остаётся в выгрузке', () => {
-    const departments = [dept('root', 'Компания'), dept('legacy', 'Старый отдел', 'root')];
-    const roots = buildExportTree({ employees: [emp(1, 'Петров П. П.', 'legacy')], departments });
-
-    expect(findNode(roots, 'Старый отдел')?.total).toBe(1);
-  });
-
-  it('подчинённый из отдела вне скоупа уходит в отдельную группу без чужой ветки', () => {
-    const departments = [
-      dept('mine', 'Мой отдел'),
-      dept('foreign-root', 'Чужая компания'),
-      dept('foreign', 'Чужой отдел', 'foreign-root'),
-    ];
+  it('каждый сотрудник появляется ровно один раз', () => {
     const employees = [
-      emp(1, 'Петров П. П.', 'mine'),
-      emp(2, 'Подчинённый П. П.', 'foreign'),
+      emp(1, 'А', 'sm-auto'), emp(2, 'Б', 'su-vent'), emp(3, 'В', 'br-ivanov'),
+      emp(4, 'Г', 'ctr-alfa'), emp(5, 'Д', null), emp(6, 'Е', 'su-decret', { employment_status: 'fired' }),
     ];
+    const ids = build(employees).flatMap(item => item.rows.map(row => row.employeeId));
 
-    const roots = buildExportTree({ employees, departments, scopeDepartmentIds: ['mine'] });
-
-    expect(findNode(roots, 'Чужой отдел')).toBeUndefined();
-    expect(findNode(roots, 'Чужая компания')).toBeUndefined();
-    const directGroup = findNode(roots, DIRECT_REPORTS_GROUP_NAME);
-    expect(directGroup?.employees.map(employee => employee.id)).toEqual([2]);
+    expect(ids.sort()).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
-  it('технический корень «Объект» не выводится, компании поднимаются наверх', () => {
-    const departments: IExportDepartmentRow[] = [
-      { id: 'root', name: 'Объект', parent_id: null, sort_order: 0, kind: 'object' },
-      { id: 'company', name: 'СУ-10', parent_id: 'root', sort_order: 0, kind: 'department' },
-      { id: 'dept', name: 'Отдел вентиляции', parent_id: 'company', sort_order: 0, kind: 'department' },
-    ];
-    const employees = [emp(1, 'Петров П. П.', 'dept')];
-
-    const roots = buildExportTree({ employees, departments });
-
-    expect(roots.map(node => node.name)).toEqual(['СУ-10']);
-    expect(roots[0].depth).toBe(0);
-    expect(roots[0].children[0].depth).toBe(1);
-    expect(countTreeEmployees(roots)).toBe(1);
-  });
-
-  it('обычный корень без kind=object остаётся в выгрузке', () => {
-    const departments: IExportDepartmentRow[] = [
-      { id: 'company', name: 'СУ-10', parent_id: null, sort_order: 0, kind: 'department' },
-    ];
-
-    const roots = buildExportTree({ employees: [emp(1, 'Петров П. П.', 'company')], departments });
-
-    expect(roots.map(node => node.name)).toEqual(['СУ-10']);
-  });
-
-  it('каждый сотрудник появляется в дереве ровно один раз', () => {
-    const departments = [
-      dept('company', 'СУ-10'),
-      dept('dept', 'Отдел', 'company'),
-      dept('brigade', 'Бригада', 'dept'),
-      dept('orphan', 'Сирота', 'missing'),
-    ];
-    const employees = [
-      emp(1, 'Первый', 'dept'),
-      emp(2, 'Второй', 'brigade'),
-      emp(3, 'Третий', 'orphan'),
-      emp(4, 'Четвёртый', null),
-      emp(5, 'Пятый', 'unknown-dept'),
-    ];
-
-    const roots = buildExportTree({ employees, departments });
-
-    const ids = collectEmployeeIds(roots);
-    expect(ids.sort()).toEqual([1, 2, 3, 4, 5]);
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(countTreeEmployees(roots)).toBe(5);
+  it('пустой список — пустой результат', () => {
+    expect(build([])).toEqual([]);
   });
 });

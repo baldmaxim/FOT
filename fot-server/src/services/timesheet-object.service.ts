@@ -220,8 +220,17 @@ const dateStrToEpochDay = (value: string): number => {
   const [year, month, day] = value.slice(0, 10).split('-').map(Number);
   return Date.UTC(year, month - 1, day) / 86_400_000;
 };
-const eventEpochSeconds = (event: IRawEventRow): number =>
-  dateStrToEpochDay(String(event.event_date)) * 86_400 + timeToSeconds(event.event_time);
+// Кэш epoch на объекте события: sliceShiftWindow проходит поток сотрудника на каждый
+// день смены, и разбор строк даты/времени заново давал ~5 млн split на 2000 человек
+// за месяц (секунды блокировки event loop). Строки событий после загрузки не меняются.
+const eventEpochCache = new WeakMap<IRawEventRow, number>();
+const eventEpochSeconds = (event: IRawEventRow): number => {
+  const cached = eventEpochCache.get(event);
+  if (cached !== undefined) return cached;
+  const epoch = dateStrToEpochDay(String(event.event_date)) * 86_400 + timeToSeconds(event.event_time);
+  eventEpochCache.set(event, epoch);
+  return epoch;
+};
 const nowEpochSeconds = (dateStr: string): number =>
   dateStrToEpochDay(dateStr) * 86_400 + timeToSeconds(formatTimeValue(new Date()));
 

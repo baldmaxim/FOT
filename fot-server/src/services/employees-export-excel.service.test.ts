@@ -1,145 +1,164 @@
 import { describe, it, expect } from 'vitest';
 import ExcelJS from 'exceljs';
-import { buildEmployeesExportWorkbook } from './employees-export-excel.service.js';
-import type { IExportNode, IExportEmployeeRow } from './employees-export.service.js';
+import {
+  buildEmployeesExportWorkbook,
+  DATE_NUM_FMT,
+  isoDateToExcelDate,
+} from './employees-export-excel.service.js';
+import type { IExportFlatRow, IExportSection } from './employees-export.service.js';
 
-const emp = (id: number, full_name: string): IExportEmployeeRow =>
-  ({ id, full_name, org_department_id: null });
-
-const node = (partial: Partial<IExportNode> & { name: string; depth: number }): IExportNode => ({
-  id: partial.id ?? partial.name,
-  name: partial.name,
-  depth: partial.depth,
-  ownCount: partial.employees?.length ?? 0,
-  total: partial.total ?? partial.employees?.length ?? 0,
-  employees: partial.employees ?? [],
-  children: partial.children ?? [],
-});
-
-const META = { total: 3, generatedAt: new Date('2026-09-10T12:34:00') };
-
-/** Компания → отдел → сотрудники. */
-const sampleTree = (): IExportNode[] => [
-  node({
-    name: 'СУ-10',
-    depth: 0,
-    total: 2,
-    children: [
-      node({
-        name: 'Отдел вентиляции',
-        depth: 1,
-        total: 2,
-        employees: [emp(1, 'Петров П. П.'), emp(2, 'Сидоров С. С.')],
-      }),
-    ],
-  }),
+const HEADERS = [
+  '№', 'ФИО', 'Подразделение', 'Должность', 'Дата рождения',
+  'Дата трудоустройства', 'Объект', 'Признак', 'Статья затрат',
 ];
 
-const loadBack = async (workbook: ExcelJS.Workbook): Promise<ExcelJS.Worksheet> => {
+const row = (partial: Partial<IExportFlatRow> & { employeeId: number; fullName: string }): IExportFlatRow => ({
+  departmentPath: '',
+  positionName: '',
+  birthDate: null,
+  hireDate: null,
+  objectName: '',
+  sign: 'Работает',
+  ...partial,
+});
+
+const SECTIONS: IExportSection[] = [
+  {
+    key: 'sm',
+    title: 'СМ',
+    tableName: 'Employees_SM',
+    rows: [row({ employeeId: 1, fullName: 'Механиков М. М.', departmentPath: 'Отдел автотехники' })],
+  },
+  {
+    key: 'su10',
+    title: 'СУ-10',
+    tableName: 'Employees_SU10',
+    rows: [
+      row({
+        employeeId: 2,
+        fullName: 'Петров П. П.',
+        departmentPath: 'Отдел вентиляции',
+        positionName: 'Монтажник',
+        birthDate: '2026-03-05',
+        hireDate: '2024-12-31',
+        objectName: 'ЖК Север',
+        sign: 'Уволен',
+      }),
+      row({ employeeId: 3, fullName: '=cmd|calc', departmentPath: '+1+1', objectName: '@SUM(A1)' }),
+    ],
+  },
+  {
+    key: 'contractors',
+    title: 'Подрядные организации',
+    tableName: 'Employees_Contractors',
+    rows: [row({ employeeId: 4, fullName: 'Подрядчиков П. П.' })],
+  },
+];
+
+const META = {
+  period: { start: '2026-08-16', end: '2026-09-14' },
+  generatedAt: new Date('2026-09-14T12:34:00'),
+};
+
+const loadBack = async (workbook: ExcelJS.Workbook): Promise<ExcelJS.Workbook> => {
   const buffer = await workbook.xlsx.writeBuffer();
   const reloaded = new ExcelJS.Workbook();
   await reloaded.xlsx.load(buffer as ArrayBuffer);
-  const ws = reloaded.getWorksheet('Сотрудники');
-  if (!ws) throw new Error('Лист «Сотрудники» не найден');
-  return ws;
+  return reloaded;
 };
 
+interface ITableModelLike {
+  name: string;
+  tableRef?: string;
+  ref?: string;
+  columns: Array<{ name: string; filterButton?: boolean }>;
+}
+
+const tableOf = (ws: ExcelJS.Worksheet): ITableModelLike => {
+  const tables = (ws as unknown as { tables: Record<string, { model?: ITableModelLike } & ITableModelLike> }).tables;
+  const [first] = Object.values(tables);
+  if (!first) throw new Error(`Нет таблицы на листе ${ws.name}`);
+  return first.model ?? first;
+};
+
+describe('isoDateToExcelDate', () => {
+  it('UTC-полночь без сдвига дня', () => {
+    expect(isoDateToExcelDate('2026-03-05')?.toISOString()).toBe('2026-03-05T00:00:00.000Z');
+  });
+
+  it('null и мусор — null', () => {
+    expect(isoDateToExcelDate(null)).toBeNull();
+    expect(isoDateToExcelDate('05.03.2026')).toBeNull();
+  });
+});
+
 describe('buildEmployeesExportWorkbook', () => {
-  it('пишет шапку из трёх строк, данные начинаются с четвёртой', () => {
-    const ws = buildEmployeesExportWorkbook(sampleTree(), META).getWorksheet('Сотрудники')!;
-
-    expect(String(ws.getRow(1).getCell(2).value)).toContain('Сотрудники по подразделениям');
-    expect(String(ws.getRow(2).getCell(2).value)).toContain('Всего сотрудников: 3');
-    expect(String(ws.getRow(2).getCell(2).value)).toContain('независимо от фильтров');
-    expect(ws.getRow(3).getCell(2).value).toBe('Подразделение / ФИО');
-    expect(ws.getRow(3).getCell(3).value).toBe('Сотрудников');
-    expect(ws.getRow(4).getCell(2).value).toBe('СУ-10');
+  it('лист на раздел в переданном порядке', () => {
+    const workbook = buildEmployeesExportWorkbook(SECTIONS, META);
+    expect(workbook.worksheets.map(ws => ws.name)).toEqual(['СМ', 'СУ-10', 'Подрядные организации']);
   });
 
-  it('раскладывает уровни группировки и скрывает всё глубже компаний', () => {
-    const ws = buildEmployeesExportWorkbook(sampleTree(), META).getWorksheet('Сотрудники')!;
-
-    const company = ws.getRow(4);
-    const department = ws.getRow(5);
-    const employee = ws.getRow(6);
-
-    expect(company.outlineLevel).toBe(0);
-    expect(department.outlineLevel).toBe(1);
-    expect(employee.outlineLevel).toBe(2);
-
-    expect(company.hidden).toBeFalsy();
-    expect(department.hidden).toBeFalsy();
-    expect(employee.hidden).toBe(true);
+  it('заголовок и пояснение с периодом над таблицей', () => {
+    const ws = buildEmployeesExportWorkbook(SECTIONS, META).getWorksheet('СУ-10')!;
+    expect(ws.getCell(1, 1).value).toBe('Сотрудники: СУ-10');
+    const meta = String(ws.getCell(2, 1).value);
+    expect(meta).toContain('Всего: 2');
+    expect(meta).toContain('16.08.2026–14.09.2026');
   });
 
-  it('счётчик в колонке C у групп, ФИО в колонке B у сотрудников', () => {
-    const ws = buildEmployeesExportWorkbook(sampleTree(), META).getWorksheet('Сотрудники')!;
+  it('round-trip: умные таблицы с фиксированными именами, заголовками и кнопками фильтра', async () => {
+    const workbook = await loadBack(buildEmployeesExportWorkbook(SECTIONS, META));
 
-    expect(ws.getRow(4).getCell(3).value).toBe(2);
-    expect(ws.getRow(5).getCell(3).value).toBe(2);
-    expect(ws.getRow(6).getCell(2).value).toBe('Петров П. П.');
-    expect(ws.getRow(6).getCell(3).value).toBeFalsy();
-  });
+    const names = workbook.worksheets.map(ws => tableOf(ws).name);
+    expect(names).toEqual(['Employees_SM', 'Employees_SU10', 'Employees_Contractors']);
 
-  it('round-trip: outline, dyDescent и hidden переживают запись/чтение (баг ExcelJS 4.4.0)', async () => {
-    const ws = await loadBack(buildEmployeesExportWorkbook(sampleTree(), META));
-
-    expect(ws.properties.outlineProperties).toMatchObject({ summaryBelow: false, summaryRight: false });
-    expect(ws.properties.dyDescent).toBe(0.25);
-    expect(ws.getRow(4).outlineLevel).toBe(0);
-    expect(ws.getRow(5).outlineLevel).toBe(1);
-    expect(ws.getRow(6).outlineLevel).toBe(2);
-    expect(ws.getRow(6).hidden).toBe(true);
-  });
-
-  it('ограничивает уровень 7 и не даёт сотруднику уровень его подразделения', () => {
-    // Цепочка глубиной 10 — глубже, чем Excel умеет группировать.
-    let deepest = node({ name: 'Уровень 9', depth: 9, total: 1, employees: [emp(1, 'Петров П. П.')] });
-    for (let depth = 8; depth >= 0; depth -= 1) {
-      deepest = node({ name: `Уровень ${depth}`, depth, total: 1, children: [deepest] });
+    for (const ws of workbook.worksheets) {
+      const table = tableOf(ws);
+      expect(table.columns.map(column => column.name)).toEqual(HEADERS);
+      expect(table.columns.every(column => column.filterButton === true)).toBe(true);
+      expect(ws.getRow(3).values).toEqual([undefined, ...HEADERS]);
     }
 
-    const ws = buildEmployeesExportWorkbook([deepest], META).getWorksheet('Сотрудники')!;
-
-    const groupLevels: number[] = [];
-    let employeeLevel = -1;
-    let deepestGroupLevel = -1;
-    ws.eachRow((row, rowNumber) => {
-      if (rowNumber <= 3) return;
-      const level = row.outlineLevel ?? 0;
-      if (row.getCell(3).value === null || row.getCell(3).value === undefined) {
-        employeeLevel = level; // строка сотрудника — без счётчика
-      } else {
-        groupLevels.push(level);
-        deepestGroupLevel = level;
-      }
-    });
-
-    expect(Math.max(...groupLevels)).toBeLessThanOrEqual(7);
-    expect(employeeLevel).toBeLessThanOrEqual(7);
-    expect(employeeLevel).toBeGreaterThan(deepestGroupLevel);
+    const su10 = tableOf(workbook.getWorksheet('СУ-10')!);
+    expect(su10.tableRef ?? su10.ref).toMatch(/^A3:I5$/);
   });
 
-  it('обезвреживает формулы в ФИО и названиях подразделений', () => {
-    const tree = [
-      node({
-        name: '=cmd|calc',
-        depth: 0,
-        total: 1,
-        employees: [emp(1, '+1+1')],
-      }),
-    ];
+  it('round-trip: строки данных, даты — конкретный день с форматом dd.mm.yyyy', async () => {
+    const workbook = await loadBack(buildEmployeesExportWorkbook(SECTIONS, META));
+    const ws = workbook.getWorksheet('СУ-10')!;
+    const data = ws.getRow(4);
 
-    const ws = buildEmployeesExportWorkbook(tree, META).getWorksheet('Сотрудники')!;
+    expect(data.getCell(1).value).toBe(1);
+    expect(data.getCell(2).value).toBe('Петров П. П.');
+    expect(data.getCell(3).value).toBe('Отдел вентиляции');
+    expect(data.getCell(4).value).toBe('Монтажник');
+    expect(data.getCell(7).value).toBe('ЖК Север');
+    expect(data.getCell(8).value).toBe('Уволен');
 
-    expect(String(ws.getRow(4).getCell(2).value)).not.toMatch(/^=/);
-    expect(String(ws.getRow(5).getCell(2).value)).not.toMatch(/^\+/);
+    const birth = data.getCell(5);
+    expect(birth.value).toBeInstanceOf(Date);
+    expect((birth.value as Date).toISOString().slice(0, 10)).toBe('2026-03-05');
+    expect(birth.numFmt).toBe(DATE_NUM_FMT);
+
+    const hire = data.getCell(6);
+    expect((hire.value as Date).toISOString().slice(0, 10)).toBe('2024-12-31');
+    expect(hire.numFmt).toBe(DATE_NUM_FMT);
+
+    // Пустые даты остаются пустыми ячейками.
+    expect(ws.getRow(5).getCell(5).value).toBeNull();
   });
 
-  it('пустое дерево даёт книгу с одной шапкой', () => {
-    const ws = buildEmployeesExportWorkbook([], { total: 0, generatedAt: META.generatedAt })
-      .getWorksheet('Сотрудники')!;
+  it('обезвреживает формулы в текстовых ячейках', async () => {
+    const ws = (await loadBack(buildEmployeesExportWorkbook(SECTIONS, META))).getWorksheet('СУ-10')!;
+    const suspicious = ws.getRow(5);
 
-    expect(ws.rowCount).toBe(3);
+    expect(String(suspicious.getCell(2).value)).not.toMatch(/^=/);
+    expect(String(suspicious.getCell(3).value)).not.toMatch(/^\+/);
+    expect(String(suspicious.getCell(7).value)).not.toMatch(/^@/);
+    expect(suspicious.getCell(2).formula).toBeUndefined();
+  });
+
+  it('без разделов — книга без листов', () => {
+    expect(buildEmployeesExportWorkbook([], META).worksheets).toHaveLength(0);
   });
 });

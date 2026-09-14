@@ -1,24 +1,38 @@
 /**
- * «Управление кадрами → Экспорт сотрудников»: xlsx со списком людей,
- * сгруппированным по иерархии подразделений.
+ * «Управление кадрами → Экспорт сотрудников»: xlsx, лист на раздел
+ * (СМ, СУ-10, Бригады, Подрядные организации, Прочие) с умными таблицами.
  *
- * GET /api/employees/export — охват фиксирован (все не уволенные в пределах
- * прав пользователя), параметров нет: фильтры экрана на файл не влияют.
+ * GET /api/employees/export — охват фиксирован (работающие + уволенные за
+ * последние 30 дней в пределах прав пользователя), параметров нет.
  */
 import { Response } from 'express';
 import { withTransaction } from '../config/postgres.js';
 import { auditService } from '../services/audit.service.js';
 import { resolveEmployeeListScopeFilter } from '../services/employee-scope-filter.service.js';
 import {
-  buildExportTree,
-  countTreeEmployees,
+  buildExportSections,
+  countSectionRows,
   EmployeesExportError,
   loadExportDepartments,
   loadExportEmployees,
+  type IExportPeriod,
 } from '../services/employees-export.service.js';
+import { loadMainObjectByEmployee } from '../services/employees-export-objects.service.js';
 import { buildEmployeesExportWorkbook } from '../services/employees-export-excel.service.js';
 import { sanitizeExportFileName } from '../services/skud-export.service.js';
+import { moscowTodayIso } from '../utils/date.utils.js';
 import type { AuthenticatedRequest } from '../types/index.js';
+
+/** Длина периода выгрузки в календарных днях, включая сегодня. */
+export const EXPORT_PERIOD_DAYS = 30;
+
+/** Период [сегодня − 29; сегодня] по московскому календарю. */
+export function resolveExportPeriod(now: Date = new Date()): IExportPeriod {
+  const end = moscowTodayIso(now);
+  const startDate = new Date(`${end}T00:00:00Z`);
+  startDate.setUTCDate(startDate.getUTCDate() - (EXPORT_PERIOD_DAYS - 1));
+  return { start: startDate.toISOString().slice(0, 10), end };
+}
 
 function formatFileStamp(date: Date): string {
   const pad = (value: number): string => String(value).padStart(2, '0');
@@ -28,8 +42,9 @@ function formatFileStamp(date: Date): string {
 export const employeesExportController = {
   async exportEmployees(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      const period = resolveExportPeriod();
       const scope = await resolveEmployeeListScopeFilter(req);
-      const employees = await loadExportEmployees(scope);
+      const employees = await loadExportEmployees(scope, period);
 
       if (employees.length === 0) {
         res.status(400).json({
@@ -40,16 +55,15 @@ export const employeesExportController = {
         return;
       }
 
-      const departments = await loadExportDepartments();
-      const roots = buildExportTree({
-        employees,
-        departments,
-        scopeDepartmentIds: scope.departmentIds,
-      });
-      const total = countTreeEmployees(roots);
+      const [departments, mainObjectByEmployee] = await Promise.all([
+        loadExportDepartments(),
+        loadMainObjectByEmployee(employees.map(employee => employee.id), period),
+      ]);
+      const sections = buildExportSections({ employees, departments, mainObjectByEmployee });
+      const total = countSectionRows(sections);
 
       const generatedAt = new Date();
-      const workbook = buildEmployeesExportWorkbook(roots, { total, generatedAt });
+      const workbook = buildEmployeesExportWorkbook(sections, { period, generatedAt });
       const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
       const fileName = sanitizeExportFileName(`Сотрудники_${formatFileStamp(generatedAt)}.xlsx`);
 
@@ -62,7 +76,14 @@ export const employeesExportController = {
           req,
           req.user.id,
           'EXPORT_EMPLOYEES',
-          { details: { count: total, groups: roots.length, scope: scope.mode } },
+          {
+            details: {
+              count: total,
+              sections: Object.fromEntries(sections.map(section => [section.key, section.rows.length])),
+              period,
+              scope: scope.mode,
+            },
+          },
         );
       });
 
