@@ -81,6 +81,39 @@ export const matchesForwardingIntent = (
     && (!checkTimer || Number(r.noReplyTimer) === timer));
 };
 
+const isActiveRule = (r: ForwardingRuleLike): boolean => Boolean(normalizeMsisdn(r.forwardingAddress ?? ''));
+
+/**
+ * Активные правила поддерживаемых типов, кроме keep — они мешают выбранному режиму
+ * (при активном CFU МТС не применяет условную переадресацию; модалка — один режим).
+ * Неподдерживаемые типы (CFB и прочие) не возвращаются: их не снимаем.
+ */
+export const conflictingRuleTypes = (
+  rules: ReadonlyArray<ForwardingRuleLike> | null | undefined,
+  keep: ForwardingType | null,
+): ForwardingType[] => {
+  const out: ForwardingType[] = [];
+  for (const r of Array.isArray(rules) ? rules : []) {
+    const type = (r.forwardingType ?? '').trim().toUpperCase();
+    if (!isForwardingType(type) || type === keep || !isActiveRule(r) || out.includes(type)) continue;
+    out.push(type);
+  }
+  return out;
+};
+
+/** Итоговый режим целиком: нужное правило есть (адрес, таймер CFNRY) и нет мешающих правил других типов. */
+export const matchesForwardingMode = (
+  rules: ReadonlyArray<ForwardingRuleLike> | null | undefined,
+  type: ForwardingType,
+  target: string,
+  timer?: number,
+): boolean =>
+  matchesForwardingIntent(rules, 'create', type, target, timer) && conflictingRuleTypes(rules, type).length === 0;
+
+/** Переадресация выключена: нет активных правил поддерживаемых типов (CFB не учитываем). */
+export const matchesForwardingOff = (rules: ReadonlyArray<ForwardingRuleLike> | null | undefined): boolean =>
+  conflictingRuleTypes(rules, null).length === 0;
+
 /**
  * Активное правило = первое с поддерживаемым типом и непустым адресом
  * (МТС отдаёт и «пустые» правила-заглушки). Тип — для бейджа в списке абонентов.

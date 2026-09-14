@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { mySimService, type ForwardingType } from '../services/mySimService';
+import { mySimService, type ForwardingType, type IMyForwardingChangeResult } from '../services/mySimService';
 
 // Хуки ЛК сотрудника: «Моя SIM» и «Телефонная книга». Данные из БД (обновляются
 // ночным прогоном МТС) — длинные staleTime уместны.
@@ -43,8 +43,8 @@ export const getForwardingOperationKey = (msisdn: string) => ['my-sim', 'forward
 
 const OPERATION_POLL_MS = 15_000;
 
-// Операция включения переадресации: пока не завершена — опрашиваем сервер
-// (МТС подключает услугу и применяет правило за несколько минут).
+// Операция переадресации (включение, смена режима, отключение): пока не завершена —
+// опрашиваем сервер (МТС подключает услугу и применяет правила за несколько минут).
 export const useForwardingOperation = (msisdn: string, enabled = true) => useQuery({
   queryKey: getForwardingOperationKey(msisdn),
   queryFn: () => mySimService.getForwardingOperation(msisdn),
@@ -53,27 +53,31 @@ export const useForwardingOperation = (msisdn: string, enabled = true) => useQue
   refetchInterval: query => (query.state.data && !query.state.data.final ? OPERATION_POLL_MS : false),
 });
 
-// Включение возвращает IMyForwardingSetResult: applied — включено сразу,
-// operation_pending — сервер доводит операцию (модалка следит за её статусом).
-export const useSetForwarding = () => {
+/**
+ * Общая обработка ответа изменения: успех — сразу кладём операцию в кэш; при ЛЮБОМ
+ * исходе (в т.ч. 422/429/409 прямо в первом запросе, когда прежнее правило уже могло
+ * быть снято) перечитываем правила и операцию номера.
+ */
+const useForwardingChange = <TInput extends { msisdn: string }>(
+  mutationFn: (input: TInput) => Promise<IMyForwardingChangeResult>,
+) => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }) =>
-      mySimService.setForwarding(input),
+    mutationFn,
     onSuccess: (result, input) => {
       qc.setQueryData(getForwardingOperationKey(input.msisdn), result.operation);
-      void qc.invalidateQueries({ queryKey: ['my-sim', 'forwarding'], exact: true });
     },
-    onError: (_error, input) => {
+    onSettled: (_result, _error, input) => {
+      void qc.invalidateQueries({ queryKey: ['my-sim', 'forwarding'], exact: true });
       void qc.invalidateQueries({ queryKey: getForwardingOperationKey(input.msisdn) });
     },
   });
 };
 
-export const useDeleteForwarding = () => {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { msisdn: string; type: ForwardingType }) => mySimService.deleteForwarding(input),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['my-sim', 'forwarding'] }); },
-  });
-};
+// applied — режим уже подтверждён; operation_pending — сервер доводит операцию.
+export const useSetForwarding = () =>
+  useForwardingChange((input: { msisdn: string; type: ForwardingType; target: string; timer?: number }) =>
+    mySimService.setForwarding(input));
+
+export const useDeleteForwarding = () =>
+  useForwardingChange((input: { msisdn: string; type: ForwardingType }) => mySimService.deleteForwarding(input));

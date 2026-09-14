@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchesForwardingIntent, pickActiveForwardingType, validateForwardingTarget } from './mts-forwarding.shared.js';
+import { conflictingRuleTypes, matchesForwardingIntent, matchesForwardingMode, matchesForwardingOff, pickActiveForwardingType, validateForwardingTarget } from './mts-forwarding.shared.js';
 
 // Сверка «что просили» с «что реально в МТС» — единственный способ узнать исход,
 // когда ChangeCallForwarding отвечает 2xx без eventID (Sentry FOT-SERVER-4K).
@@ -50,5 +50,29 @@ describe('pickActiveForwardingType / validateForwardingTarget', () => {
   it('8-800 и номер сам на себя запрещены', () => {
     expect(validateForwardingTarget('88005553535', '79150000001').ok).toBe(false);
     expect(validateForwardingTarget('89150000001', '79150000001').ok).toBe(false);
+  });
+});
+
+describe('matchesForwardingMode / matchesForwardingOff / conflictingRuleTypes', () => {
+  const r = (forwardingType: string, forwardingAddress: string | null, noReplyTimer: number | null = 0) =>
+    ({ forwardingType, forwardingAddress, noReplyTimer });
+
+  it('лишнее активное CFU мешает режиму «не отвечаю»', () => {
+    const rules = [r('CFU', '79161234567'), r('CFNRY', '79161234567', 20)];
+    expect(matchesForwardingMode(rules, 'CFNRY', '79161234567', 20)).toBe(false);
+    expect(conflictingRuleTypes(rules, 'CFNRY')).toEqual(['CFU']);
+  });
+
+  it('CFB и пустые заглушки не мешают и не снимаются', () => {
+    const rules = [r('CFB', '79160000000'), r('CFU', null), r('CFNRC', '79161234567')];
+    expect(matchesForwardingMode(rules, 'CFNRC', '79161234567')).toBe(true);
+    expect(conflictingRuleTypes(rules, 'CFNRC')).toEqual([]);
+    expect(matchesForwardingOff([r('CFB', '79160000000'), r('CFU', null)])).toBe(true);
+  });
+
+  it('таймер CFNRY должен совпасть; выключено — нет активных поддерживаемых правил', () => {
+    expect(matchesForwardingMode([r('CFNRY', '79161234567', 30)], 'CFNRY', '79161234567', 20)).toBe(false);
+    expect(matchesForwardingOff([r('CFNRY', '79161234567', 20)])).toBe(false);
+    expect(conflictingRuleTypes([r('cfnry', '79161234567'), r('CFNRC', '79161234567')], null)).toEqual(['CFNRY', 'CFNRC']);
   });
 });

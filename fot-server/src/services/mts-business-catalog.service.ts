@@ -590,13 +590,21 @@ class MtsBusinessCatalogService extends MtsBusinessServiceBase {
     action: 'create' | 'delete',
     opts: { forwardingType: ForwardingType; forwardingAddress?: string; noReplyTimer?: number },
   ): Promise<IMtsForwardingRule[] | null> {
+    return this.verifyCallForwardingWith(accountId, msisdn, rules =>
+      matchesForwardingIntent(rules, action, opts.forwardingType, opts.forwardingAddress, opts.noReplyTimer));
+  }
+
+  /** Как verifyCallForwarding, но с произвольной проверкой правил (режим целиком, выключено). */
+  async verifyCallForwardingWith(
+    accountId: string,
+    msisdn: string,
+    predicate: (rules: IMtsForwardingRule[]) => boolean,
+  ): Promise<IMtsForwardingRule[] | null> {
     for (const delayMs of FORWARDING_VERIFY_DELAYS_MS) {
       if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
       try {
         const rules = await this.getCallForwarding(accountId, msisdn);
-        if (matchesForwardingIntent(rules, action, opts.forwardingType, opts.forwardingAddress, opts.noReplyTimer)) {
-          return rules;
-        }
+        if (predicate(rules)) return rules;
       } catch (error) {
         console.warn(`[mts-forwarding] проверка правил не удалась: ${error instanceof Error ? error.message : 'unknown'}`);
       }

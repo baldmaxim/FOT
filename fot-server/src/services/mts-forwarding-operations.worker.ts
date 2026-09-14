@@ -2,7 +2,7 @@ import * as Sentry from '@sentry/node';
 import { queryOne } from '../config/postgres.js';
 import { getSigurRuntimeOwner } from './sigur-runtime-state.service.js';
 import { mtsForwardingOperationsService as ops } from './mts-forwarding-operations.service.js';
-import { processOperation } from './mts-forwarding-operations.runner.js';
+import { processOperation } from './mts-forwarding-operations.flow.js';
 
 // Фоновое продолжение операций переадресации «Моя SIM»: подключение PE0250 →
 // правило → подтверждение. Не зависит от открытого окна и не проходит

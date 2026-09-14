@@ -2,7 +2,6 @@ import { Router } from 'express';
 import { employeeSimController } from '../controllers/employee-sim.controller.js';
 import { authenticate, requirePageAccess } from '../middleware/auth.js';
 import { noStore } from '../middleware/noStore.js';
-import { forwardingLimiter } from '../middleware/rateLimit.js';
 
 // ЛК сотрудника «Моя SIM»: данные только по СВОИМ номерам (req.user.employee_id),
 // телефонные данные не кэшируются (noStore).
@@ -18,11 +17,12 @@ router.get('/', requirePageAccess('/employee/sim', 'view'), employeeSimControlle
 router.get('/usage', requirePageAccess('/employee/sim', 'view'), employeeSimController.getMyUsage);
 
 // Переадресация: чтение — под view, запись (write-вызов в МТС) — под edit
-// (право edit = рубильник самообслуживания) + лимит 5/час на пользователя.
+// (право edit = рубильник самообслуживания). Лимит изменений — квота в БД на
+// уровне операции (5/час на пользователя, общая на включение и отключение).
 router.get('/forwarding', requirePageAccess('/employee/sim', 'view'), employeeSimController.getMyForwarding);
 router.get('/forwarding/status', requirePageAccess('/employee/sim', 'view'), employeeSimController.getMyForwardingStatus);
 router.get('/forwarding/operation', requirePageAccess('/employee/sim', 'view'), employeeSimController.getMyForwardingOperation);
-router.post('/forwarding', requirePageAccess('/employee/sim', 'edit'), forwardingLimiter, employeeSimController.setMyForwarding);
-router.post('/forwarding/delete', requirePageAccess('/employee/sim', 'edit'), forwardingLimiter, employeeSimController.deleteMyForwarding);
+router.post('/forwarding', requirePageAccess('/employee/sim', 'edit'), employeeSimController.setMyForwarding);
+router.post('/forwarding/delete', requirePageAccess('/employee/sim', 'edit'), employeeSimController.deleteMyForwarding);
 
 export default router;

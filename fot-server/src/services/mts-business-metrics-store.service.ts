@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { execute, query, queryOne, withTransaction } from '../config/postgres.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
 import { extractTariffNameFromServices } from './mts-business-catalog.service.js';
@@ -69,6 +70,17 @@ export interface ISnapshotUpsert {
   metric: MtsBusinessSnapshotMetric;
   payload: unknown;
 }
+
+const SNAPSHOT_UPSERT_SQL = `INSERT INTO mts_business_metric_snapshot
+   (account_id, scope, account_no, msisdn_hash, metric, payload, captured_date, captured_at)
+ VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, NOW())
+ ON CONFLICT (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, captured_date)
+ DO UPDATE SET payload = EXCLUDED.payload, captured_date = CURRENT_DATE, captured_at = NOW()`;
+
+const snapshotUpsertParams = (input: ISnapshotUpsert): unknown[] => [
+  input.accountId, input.scope, input.accountNo ?? null, input.msisdn ? msisdnHash(input.msisdn) : null,
+  input.metric, JSON.stringify(input.payload),
+];
 
 export interface IEmployeeCatalogRow {
   employeeId: number | null;
@@ -295,15 +307,12 @@ class MtsBusinessMetricsStoreService {
 
   /** Один ряд/сутки/метрику/цель — как upsertDaily, но для JSONB-структур (тариф/услуги/пакеты/иерархия). */
   async upsertSnapshot(input: ISnapshotUpsert): Promise<void> {
-    const hash = input.msisdn ? msisdnHash(input.msisdn) : null;
-    await execute(
-      `INSERT INTO mts_business_metric_snapshot
-         (account_id, scope, account_no, msisdn_hash, metric, payload, captured_date, captured_at)
-       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_DATE, NOW())
-       ON CONFLICT (scope, COALESCE(account_no, ''), COALESCE(msisdn_hash, ''), metric, captured_date)
-       DO UPDATE SET payload = EXCLUDED.payload, captured_date = CURRENT_DATE, captured_at = NOW()`,
-      [input.accountId, input.scope, input.accountNo ?? null, hash, input.metric, JSON.stringify(input.payload)],
-    );
+    await execute(SNAPSHOT_UPSERT_SQL, snapshotUpsertParams(input));
+  }
+
+  /** То же, что upsertSnapshot, но в транзакции вызывающего: снимок пишется только вместе с её остальными записями. */
+  async upsertSnapshotWithClient(client: PoolClient, input: ISnapshotUpsert): Promise<void> {
+    await client.query(SNAPSHOT_UPSERT_SQL, snapshotUpsertParams(input));
   }
 
   /** Последний снапшот структуры абонента по аккаунту (для идентификации в карточке). */

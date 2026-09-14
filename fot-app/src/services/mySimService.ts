@@ -1,5 +1,4 @@
 import { apiClient } from '../api/client';
-import type { IForwardingResult } from './mtsBusinessSubscriberService';
 import type { IMtsUsageRow, IUsageTotals, IMtsPackageRow } from './mtsBusinessSubscribersService';
 import type { IMtsSubTariffFee } from './mtsBusinessSubscriberService';
 
@@ -67,29 +66,31 @@ export interface IMyForwardingNumber {
   capturedAt: string | null;
 }
 
-export type ForwardingStatus = 'completed' | 'in_progress' | 'faulted' | 'unknown';
-
 /**
- * Серверная операция включения переадресации: при необходимости портал сам
- * подключает услугу «Переадресация вызова», ставит правило и подтверждает его.
+ * Серверная операция переадресации: включение/смена режима (kind=set) — при
+ * необходимости портал сам подключает услугу «Переадресация вызова», снимает
+ * мешающие правила и ставит выбранное; отключение (kind=remove) снимает все правила.
  */
 export type ForwardingOperationState =
   | 'service_reserved' | 'service_sending' | 'service_accepted' | 'service_unknown'
   | 'rule_ready' | 'rule_sending' | 'rule_verifying' | 'rule_confirmed'
+  | 'rule_clear_sending' | 'rule_clear_verifying'
   | 'unconfirmed' | 'done' | 'failed' | 'cancelled' | 'expired';
 
 export interface IForwardingOperation {
   id: string;
+  kind: 'set' | 'remove';
   state: ForwardingOperationState;
   final: boolean;
   type: ForwardingType;
-  targetTail: string;
+  targetTail: string | null;
   timer: number | null;
+  errorCode: string | null;
   errorMessage: string | null;
   updatedAt: string;
 }
 
-export interface IMyForwardingSetResult {
+export interface IMyForwardingChangeResult {
   outcome: 'applied' | 'operation_pending' | 'operation_failed';
   operationId: string;
   state: ForwardingOperationState;
@@ -131,13 +132,13 @@ export const mySimService = {
     return res.data.numbers;
   },
 
-  /** Включить/изменить переадресацию: applied — включено; operation_pending — доводится на сервере. */
-  setForwarding: async (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }): Promise<IMyForwardingSetResult> => {
-    const res = await apiClient.post<ApiResponse<IMyForwardingSetResult>>('/my-sim/forwarding', input);
+  /** Включить/сменить режим: applied — режим подтверждён; operation_pending — доводится на сервере. */
+  setForwarding: async (input: { msisdn: string; type: ForwardingType; target: string; timer?: number }): Promise<IMyForwardingChangeResult> => {
+    const res = await apiClient.post<ApiResponse<IMyForwardingChangeResult>>('/my-sim/forwarding', input);
     return res.data;
   },
 
-  /** Операция включения по номеру: незавершённая или последняя за сутки. */
+  /** Операция переадресации по номеру: незавершённая или последняя за сутки. */
   getForwardingOperation: async (msisdn: string): Promise<IForwardingOperation | null> => {
     const res = await apiClient.get<ApiResponse<IForwardingOperation | null>>(
       `/my-sim/forwarding/operation?msisdn=${encodeURIComponent(msisdn)}`,
@@ -145,15 +146,9 @@ export const mySimService = {
     return res.data;
   },
 
-  deleteForwarding: async (input: { msisdn: string; type: ForwardingType }): Promise<IForwardingResult> => {
-    const res = await apiClient.post<ApiResponse<IForwardingResult>>('/my-sim/forwarding/delete', input);
+  /** Отключить переадресацию — та же серверная операция, исход как у setForwarding. */
+  deleteForwarding: async (input: { msisdn: string; type: ForwardingType }): Promise<IMyForwardingChangeResult> => {
+    const res = await apiClient.post<ApiResponse<IMyForwardingChangeResult>>('/my-sim/forwarding/delete', input);
     return res.data;
-  },
-
-  getForwardingStatus: async (eventId: string): Promise<ForwardingStatus> => {
-    const res = await apiClient.get<ApiResponse<{ status: ForwardingStatus }>>(
-      `/my-sim/forwarding/status?eventId=${encodeURIComponent(eventId)}`,
-    );
-    return res.data.status;
   },
 };

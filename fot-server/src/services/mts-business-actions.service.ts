@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { execute, query, queryOne } from '../config/postgres.js';
 import { encryptionService } from './encryption.service.js';
 import { msisdnHash } from './mts-business-cdr.service.js';
@@ -39,6 +40,24 @@ export interface IPendingActionRequest {
 }
 
 class MtsBusinessActionsService {
+  /**
+   * Запись уже подтверждённой заявки в транзакции вызывающего (операции переадресации
+   * «Моя SIM»): статус сразу completed — поллеру проверять нечего.
+   */
+  async createCompletedWithClient(client: PoolClient, input: IActionRequestCreate): Promise<void> {
+    const hash = input.msisdn ? msisdnHash(input.msisdn) : null;
+    await client.query(
+      `INSERT INTO mts_business_action_requests
+         (event_id, account_id, scope, msisdn_hash, account_no, action_type, request_payload_enc, status, requested_by, requested_at, checked_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', $8, NOW(), NOW())
+       ON CONFLICT (event_id) DO UPDATE SET status = 'completed', checked_at = NOW()`,
+      [
+        input.eventId, input.accountId, input.scope, hash, input.accountNo ?? null,
+        input.actionType, encryptionService.encrypt(JSON.stringify(input.payload)), input.requestedBy,
+      ],
+    );
+  }
+
   async create(input: IActionRequestCreate): Promise<void> {
     const hash = input.msisdn ? msisdnHash(input.msisdn) : null;
     await execute(

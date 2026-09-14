@@ -32,6 +32,9 @@ function emailKeyGenerator(req: Request): string {
   return email ? `email:${email}` : `ip:${ip}`;
 }
 
+/** Хвост IP для лога: весь адрес не пишем. */
+const maskIp = (ip: string | undefined): string => (ip ? `***${ip.slice(-4)}` : 'unknown');
+
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: API_RATE_LIMIT_MAX,
@@ -39,6 +42,11 @@ export const apiLimiter = rateLimit({
   message: { success: false, error: 'Слишком много запросов, попробуйте позже' },
   standardHeaders: true,
   legacyHeaders: false,
+  // Диагностика: какой лимитер и на каком пути отбил запрос (без токенов и ПДн).
+  handler: (req, res, _next, options) => {
+    console.warn(`[rate-limit] limiter=api ${req.method} ${req.originalUrl.split('?')[0]} key=ip:${maskIp(req.ip)}`);
+    res.status(options.statusCode).json({ success: false, error: 'Слишком много запросов, попробуйте позже', code: 'rate_limited_api' });
+  },
 });
 
 export const authLimiter = rateLimit({
@@ -71,20 +79,10 @@ export const twoFactorLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Переадресация в ЛК: каждая запись — реальный write-вызов в МТС. Ключ — сам
-// пользователь (роут под authenticate), а не IP: за NAT офиса один IP на всех.
-export const forwardingLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: FORWARDING_RATE_LIMIT_MAX,
-  skip: skipInDev,
-  keyGenerator: (req: Request): string => {
-    const userId = (req as Request & { user?: { id?: string } }).user?.id;
-    return userId ? `user:${userId}` : `ip:${req.ip ?? 'unknown'}`;
-  },
-  message: { success: false, error: 'Слишком много изменений переадресации, попробуйте через час' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// Переадресация в ЛК: in-memory лимитер заменён квотой в БД на уровне операции
+// (mts-forwarding-operations.service.consumeQuota): засчитывается один раз перед
+// первой реальной мутацией МТС, общая на включение/смену режима/отключение.
+export const FORWARDING_CHANGES_PER_HOUR = FORWARDING_RATE_LIMIT_MAX;
 
 export const importLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
